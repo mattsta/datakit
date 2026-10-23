@@ -1,4 +1,5 @@
 #include "stringPool.h"
+#include "atomPersist.h"
 #include "cleaner.h"
 #include "databox.h"
 #include "datakit.h"
@@ -315,9 +316,12 @@ uint64_t stringPoolIntern(stringPool *pool, const databox *str) {
     /* Check if already interned */
     databox existingId;
     if (multidictFind(pool->strToId, str, &existingId)) {
-        /* Already exists - increment refcount and return */
+        /* Already exists: one reference more, except in a permanent pool,
+         * where counts never change (as Retain) */
         uint64_t id = existingId.data.u;
-        pool->entries[id].refcount++;
+        if (pool->ids != STRING_POOL_IDS_PERMANENT) {
+            pool->entries[id].refcount++;
+        }
         return id;
     }
 
@@ -483,6 +487,327 @@ size_t stringPoolBytes(const stringPool *pool) {
 }
 
 /* ====================================================================
+ * Persistence (atomPersist.h)
+ * ==================================================================== */
+/* The id the pool hands out next, without taking it */
+static uint64_t stringPoolPeekId_(const stringPool *pool) {
+    uint64_t id = 0;
+    if (pool->ids == STRING_POOL_IDS_REUSE && pool->freeCount) {
+        return pool->freeList[pool->freeCount - 1];
+    }
+
+    if (pool->ids == STRING_POOL_IDS_LOWEST && pool->freeHoles &&
+        multiroarMin(pool->freeHoles, &id)) {
+        return id;
+    }
+
+    return pool->nextId;
+}
+
+static uint8_t *stringPoolPersistSnapshot_(const void *structure, size_t *len) {
+    const stringPool *pool = structure;
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    const databox mode = DATABOX_UNSIGNED(pool->ids);
+    const databox next = DATABOX_UNSIGNED(pool->nextId);
+    const databox live = DATABOX_UNSIGNED(pool->count);
+    const databox *header[3] = {&mode, &next, &live};
+    flexAppendMultipleExact(&f, 3, header);
+
+    /* Live strings in id order, 21 at a time */
+    enum { BATCH = 21 };
+    databox boxes[BATCH * 3];
+    const databox *ptrs[BATCH * 3];
+    size_t used = 0;
+    for (uint64_t id = 1; id < pool->nextId; id++) {
+        const poolEntry *e = &pool->entries[id];
+        if (e->refcount) {
+            boxes[used * 3] = DATABOX_UNSIGNED(id);
+            boxes[used * 3 + 1] = (databox){.type = DATABOX_BYTES,
+                                            .len = e->len,
+                                            .data.bytes.start = e->data};
+            boxes[used * 3 + 2] = DATABOX_UNSIGNED(e->refcount);
+            for (size_t i = 0; i < 3; i++) {
+                ptrs[used * 3 + i] = &boxes[used * 3 + i];
+            }
+            used++;
+        }
+
+        if (used == BATCH || (used && id + 1 == pool->nextId)) {
+            flexAppendMultipleExact(&f, (uint_fast32_t)(used * 3), ptrs);
+            used = 0;
+        }
+    }
+
+    /* Every free id below the next id, so a snapshot's length bounds what
+     * restore allocates: REUSE's stack bottom to top (it hands out the
+     * most recently freed first), LOWEST's free ids ascending */
+    if (pool->ids == STRING_POOL_IDS_REUSE) {
+        for (size_t i = 0; i < pool->freeCount; i++) {
+            const databox free = DATABOX_UNSIGNED(pool->freeList[i]);
+            flexPushByTypeExact(&f, &free, FLEX_ENDPOINT_TAIL);
+        }
+    } else if (pool->ids == STRING_POOL_IDS_LOWEST) {
+        for (uint64_t id = 1; id < pool->nextId; id++) {
+            if (!pool->entries[id].refcount) {
+                const databox free = DATABOX_UNSIGNED(id);
+                flexPushByTypeExact(&f, &free, FLEX_ENDPOINT_TAIL);
+            }
+        }
+    }
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+/* The next entry as an unsigned 64-bit value */
+static bool stringPoolPersistUnsigned_(const flex *f, flexEntry **fe,
+                                       uint64_t *out) {
+    databoxBig box;
+    flexGetByTypeBig(*fe, &box);
+    *fe = flexNext(f, *fe);
+    *out = box.data.u64;
+    return box.type == DATABOX_UNSIGNED_64;
+}
+
+/* A new string with one reference under 'id' */
+static bool stringPoolPersistPlace_(stringPool *pool, uint64_t id,
+                                    const databox *str, uint64_t refcount) {
+    if (!ensureCapacity(pool, id)) {
+        return false;
+    }
+
+    /* @own: container; free=stringPoolFree */
+    uint8_t *data = zmalloc(str->len ? str->len : 1);
+    memcpy(data, databoxBytes(str), str->len);
+    databox keyBox = {
+        .type = DATABOX_BYTES, .len = str->len, .data.bytes.start = data};
+    const databox valBox = databoxNewUnsigned(id);
+
+    /* One search: a string listed twice is refused */
+    if (multidictAddNX(pool->strToId, &keyBox, &valBox) !=
+        MULTIDICT_OK_INSERTED) {
+        zfree(data);
+        return false;
+    }
+
+    pool->entries[id] =
+        (poolEntry){.data = data, .len = str->len, .refcount = refcount};
+    pool->count++;
+    return true;
+}
+
+static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    flexEntry *fe = flexHead(f);
+    uint64_t mode;
+    uint64_t next;
+    uint64_t live;
+    if (n < 3 || !stringPoolPersistUnsigned_(f, &fe, &mode) ||
+        !stringPoolPersistUnsigned_(f, &fe, &next) ||
+        !stringPoolPersistUnsigned_(f, &fe, &live) ||
+        mode > STRING_POOL_IDS_LOWEST || next == 0 || live >= next ||
+        (n - 3) / 3 < live) {
+        return NULL;
+    }
+
+    /* Every id below the next id is a row or a listed free id (PERMANENT
+     * frees none), so 'next' is bounded by the snapshot's length */
+    const uint64_t gaps = next - 1 - live;
+    if (n - 3 - live * 3 != gaps ||
+        (mode == STRING_POOL_IDS_PERMANENT && gaps)) {
+        return NULL;
+    }
+
+    cleaner(stringPoolFree) stringPool *pool =
+        stringPoolNewWithIds((stringPoolIds)mode);
+    /* Sized once for every string ('live' is bounded by the snapshot's
+     * length), and the id array for every id */
+    multidictExpand(pool->strToId, live);
+    if (!ensureCapacity(pool, next)) {
+        return NULL;
+    }
+
+    uint64_t prevId = 0;
+    for (uint64_t r = 0; r < live; r++) {
+        uint64_t id;
+        uint64_t refcount;
+        databoxBig str;
+        if (!stringPoolPersistUnsigned_(f, &fe, &id)) {
+            return NULL;
+        }
+
+        flexGetByTypeBig(fe, &str);
+        fe = flexNext(f, fe);
+        if (!stringPoolPersistUnsigned_(f, &fe, &refcount) || id <= prevId ||
+            id >= next || !DATABOX_IS_BYTES((const databox *)&str) ||
+            refcount == 0 ||
+            (mode == STRING_POOL_IDS_PERMANENT && refcount != 1) ||
+            !stringPoolPersistPlace_(pool, id, (const databox *)&str,
+                                     refcount)) {
+            return NULL;
+        }
+
+        prevId = id;
+    }
+
+    pool->nextId = next;
+    if (!ensureCapacity(pool, next)) {
+        return NULL;
+    }
+
+    /* LOWEST keeps no free id at the top: its highest id is live, and an
+     * empty one starts over at 1 */
+    if (mode == STRING_POOL_IDS_LOWEST && prevId + 1 != next) {
+        return NULL;
+    }
+
+    /* The listed free ids are exactly the ids below 'next' with no row:
+     * each one free, listed once (marked by a SIZE_MAX length until the
+     * list is read), ascending for LOWEST */
+    uint64_t prevFree = 0;
+    bool ok = true;
+    for (uint64_t i = 0; ok && i < gaps; i++) {
+        uint64_t id;
+        ok = stringPoolPersistUnsigned_(f, &fe, &id) && id && id < next &&
+             !pool->entries[id].refcount && pool->entries[id].len != SIZE_MAX &&
+             (mode != STRING_POOL_IDS_LOWEST || id > prevFree);
+        if (!ok) {
+            break;
+        }
+
+        prevFree = id;
+        pool->entries[id].len = SIZE_MAX;
+        if (mode == STRING_POOL_IDS_REUSE) {
+            pushFreeId(pool, id);
+        } else {
+            if (!pool->freeHoles) {
+                /* @own: container; free=stringPoolFree */
+                pool->freeHoles = multiroarBitNew();
+            }
+            multiroarBitSet(pool->freeHoles, id);
+        }
+    }
+
+    for (uint64_t id = 1; id < next; id++) {
+        if (pool->entries[id].len == SIZE_MAX) {
+            pool->entries[id].len = 0;
+        }
+    }
+
+    if (!ok) {
+        return NULL;
+    }
+
+    stringPool *out = pool;
+    pool = NULL;
+    return out;
+}
+
+static uint8_t *stringPoolPersistEncodeOp_(persistOp op, const void *args,
+                                           size_t argc, size_t *len) {
+    *len = 0;
+    const bool shaped = (op == PERSIST_OP_INSERT && argc == 2) ||
+                        (op == PERSIST_OP_NUM_INCR && argc == 2);
+    if (!shaped || !args) {
+        /* CLEAR carries no operand */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(args, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool stringPoolPersistApplyOp_(void *structure, persistOp op,
+                                      const uint8_t *data, size_t len) {
+    stringPool *pool = *(stringPool **)structure;
+    if (op == PERSIST_OP_CLEAR) {
+        stringPoolReset(pool);
+        return true;
+    }
+
+    databoxBig a;
+    databoxBig b;
+    if ((op != PERSIST_OP_INSERT && op != PERSIST_OP_NUM_INCR) ||
+        !flexGetTwoDataboxesBig(data, len, &a, &b) ||
+        a.type != DATABOX_UNSIGNED_64) {
+        return false;
+    }
+
+    const uint64_t id = a.data.u64;
+    if (op == PERSIST_OP_INSERT) {
+        /* A new string under the id the pool hands out next: the writer's
+         * pool gave it the same one */
+        if (!DATABOX_IS_BYTES((const databox *)&b) ||
+            stringPoolExists(pool, (const databox *)&b) ||
+            stringPoolPeekId_(pool) != id) {
+            return false;
+        }
+
+        return stringPoolIntern(pool, (const databox *)&b) == id;
+    }
+
+    /* One reference more (+1) or fewer (-1; the last one frees) */
+    if (stringPoolRefcount(pool, id) == 0 ||
+        (b.type != DATABOX_SIGNED_64 && b.type != DATABOX_UNSIGNED_64)) {
+        return false;
+    }
+
+    if (b.data.i64 == 1) {
+        stringPoolRetain(pool, id);
+        return true;
+    }
+
+    if (b.type == DATABOX_SIGNED_64 && b.data.i64 == -1) {
+        stringPoolRelease(pool, id);
+        return true;
+    }
+
+    return false;
+}
+
+static void *stringPoolPersistNewEmpty_(void) {
+    /* @own: caller; free=stringPoolFree */
+    return stringPoolNew();
+}
+
+static size_t stringPoolPersistCount_(const void *structure) {
+    return stringPoolCount(structure);
+}
+
+static size_t stringPoolPersistBytes_(const void *structure) {
+    return stringPoolBytes(structure);
+}
+
+static void stringPoolPersistFree_(void *structure) {
+    stringPoolFree(structure);
+}
+
+const persistOps persistOpsStringPool = {
+    .type = PERSIST_TYPE_STRING_POOL,
+    .name = "stringPool",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = stringPoolPersistSnapshot_,
+    .restore = stringPoolPersistRestore_,
+    .newEmpty = stringPoolPersistNewEmpty_,
+    .count = stringPoolPersistCount_,
+    .estimateSize = stringPoolPersistBytes_,
+    .encodeOp = stringPoolPersistEncodeOp_,
+    .applyOp = stringPoolPersistApplyOp_,
+    .free = stringPoolPersistFree_,
+};
+
+/* ====================================================================
  * Testing
  * ==================================================================== */
 
@@ -519,6 +844,21 @@ int stringPoolTest(int argc, char *argv[]) {
         if (stringPoolIdsOf(reuse) != STRING_POOL_IDS_REUSE ||
             stringPoolIdsOf(permanent) != STRING_POOL_IDS_PERMANENT) {
             ERRR("stringPoolIdsOf misreports the id behaviour");
+        }
+    }
+
+    TEST("permanent: interning a present string changes no count") {
+        /* Counts never change in a permanent pool: a repeated intern is
+         * no retain (as atomPool's TREE backend reports 1 too) */
+        cleaner(stringPoolFree) stringPool *pool =
+            stringPoolNewWithIds(STRING_POOL_IDS_PERMANENT);
+        const databox s = databoxNewBytesString("kept");
+        const uint64_t id = stringPoolIntern(pool, &s);
+        if (stringPoolIntern(pool, &s) != id ||
+            stringPoolIntern(pool, &s) != id ||
+            stringPoolRefcount(pool, id) != 1) {
+            ERR("re-interned permanent string has count %" PRIu64,
+                stringPoolRefcount(pool, id));
         }
     }
 

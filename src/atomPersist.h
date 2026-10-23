@@ -22,13 +22,26 @@
  *             id (one past the highest) and the free set (every id below
  *             it not in use).  Restore refuses a permanent base.
  *   WAL: the same ops; INSERT takes exactly its id out of the free set
- *        (ids it skips over become free). */
+ *        (ids it skips over become free).
+ *
+ * stringPool (PERSIST_TYPE_STRING_POOL):
+ *   snapshot: flex [id behaviour, next id, live count, then per string in
+ *             id order: id, bytes, count, then every free id below the
+ *             next id: REUSE's stack bottom to top (it hands out the most
+ *             recently freed first), LOWEST's ascending, none for
+ *             PERMANENT].  Every id below the next id is a row or a free
+ *             id, so a snapshot's length bounds what restore allocates.
+ *   WAL: INSERT [id, bytes]   a new string under the id the pool hands out
+ *                             next (refused otherwise, or when present)
+ *        NUM_INCR [id, +1|-1] Retain / Release (the last one frees)
+ *        CLEAR                Reset */
 
 #include "databox.h"
 #include "persist.h"
 
 extern const persistOps persistOpsMultimapAtom;
 extern const persistOps persistOpsMultimapAtomDense;
+extern const persistOps persistOpsStringPool;
 
 /* Whether a persisted value is one an atom may hold: a number, true,
  * false, null or bytes (shared by the atom descriptors) */

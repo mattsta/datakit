@@ -624,6 +624,14 @@ and the same WAL ops: the IDs in use determine the next ID and the free set,
 so the holes cost no bytes in the snapshot.  Replaying an `INSERT` takes
 exactly its ID out of the free set.
 
+`persistOpsStringPool` (type id 142) snapshots the ID behaviour, the next ID,
+each string's (ID, bytes, count) and every free ID below the next ID (the
+reusing stack in order, since it hands out the most recently freed ID first),
+so a snapshot's length bounds what restore allocates.  WAL ops: `INSERT [id,
+bytes]` (refused unless it is the ID the pool hands out next), `NUM_INCR [id,
++1 | -1]`, `CLEAR` (Reset).  Perf preset, 100k strings: snapshot 40 ns,
+restore 270 ns per string.
+
 ### Using an Atom Container With a multimap
 
 The `*WithReference` and `*WithSurrogateKey` multimap entry points take the atom

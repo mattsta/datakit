@@ -28,6 +28,7 @@
 #include "multimapAtomDense.h"
 #include "rapidhash.h"
 #include "sha256.h"
+#include "stringPool.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -594,6 +595,7 @@ defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(multimapAtomDense *, multimapAtomDenseFree);
+defcleaner(stringPool *, stringPoolFree);
 
 /* PERF_CONTAINER_N keys, each PERF_CONTAINER_KEY bytes plus a NUL */
 static char *perfContainerKeys(void) {
@@ -917,6 +919,25 @@ static void benchMultimapAtom(void) {
         persistOpsMultimapAtomDense.restore(denseSnap, denseLen);
     emitRow("multimapAtomDense", "restore", 0, n, monoNowSec() - t0);
     sink += multimapAtomDenseCount(denseRestored);
+
+    /* The hash-backed pool of the same strings */
+    cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        sink += stringPoolIntern(pool, &k);
+    }
+
+    size_t poolLen = 0;
+    t0 = monoNowSec();
+    cleanerName(zfree, U8Buf) uint8_t *poolSnap =
+        persistOpsStringPool.snapshot(pool, &poolLen);
+    emitRow("stringPool", "snapshot", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    cleaner(stringPoolFree) stringPool *poolRestored =
+        persistOpsStringPool.restore(poolSnap, poolLen);
+    emitRow("stringPool", "restore", 0, n, monoNowSec() - t0);
+    sink += stringPoolCount(poolRestored);
 
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {
