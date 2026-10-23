@@ -172,6 +172,15 @@
  * For tiny allocations, consider using a slab allocator instead. */
 #define MEMBOUND_MIN_ATOM 256
 
+/* log2(MEMBOUND_MIN_ATOM).  Every STANDARD/ENTERPRISE extent's atom is
+ * MEMBOUND_MIN_ATOM, a constant of the build, so code that runs without
+ * the pool lock (the thread cache, memboundGoodSize) takes the atom from
+ * here: an extent it read through m->primary could be swapped out and
+ * destroyed by another thread meanwhile. */
+#define MEMBOUND_MIN_ATOM_SHIFT 8
+_Static_assert((1 << MEMBOUND_MIN_ATOM_SHIFT) == MEMBOUND_MIN_ATOM,
+               "MEMBOUND_MIN_ATOM_SHIFT must be log2(MEMBOUND_MIN_ATOM)");
+
 /* MICRO tier constants:
  * - Reduced freelist for ultra-compact metadata
  * - Max pool size limited to 64KB to use 16-bit indices
@@ -719,6 +728,8 @@ typedef struct MemboundLink {
 } MemboundLink;
 
 _Static_assert(sizeof(MemboundLink) == 16, "MemboundLink must be 16 bytes");
+_Static_assert(sizeof(MemboundLink) <= MEMBOUND_MIN_ATOM,
+               "a free atom must hold its MemboundLink");
 
 /* Masks used for aCtrl[] elements */
 enum memboundCtrl {

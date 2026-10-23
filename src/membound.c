@@ -66,6 +66,7 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
 
     /* Bounds check */
     if (iBlock < 0 || iBlock >= owner->nBlock) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
         return false;
@@ -73,6 +74,7 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
 
     /* Alignment check */
     if (((uint8_t *)pOld - owner->zPool) % owner->szAtom != 0) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
         return false;
@@ -80,6 +82,7 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
 
     /* Double-free check */
     if (owner->aCtrl[iBlock] & MEMBOUND_CTRL_FREE) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
         return false;
@@ -575,14 +578,9 @@ bool memboundExtentInit(memboundExtent *extent, void *space, size_t len) {
         return false;
     }
 
-    /* Calculate minimum allocation size */
-    int nMinLog = memboundLog(MEMBOUND_MIN_ATOM);
-    extent->szAtom = (1LL << nMinLog);
-    while ((int64_t)sizeof(MemboundLink) > extent->szAtom) {
-        extent->szAtom <<= 1;
-        nMinLog++;
-    }
-    extent->atomShift = nMinLog;
+    /* The atom holds a MemboundLink (asserted with the constants). */
+    extent->szAtom = MEMBOUND_MIN_ATOM;
+    extent->atomShift = MEMBOUND_MIN_ATOM_SHIFT;
 
     /* Setup pool */
     extent->nBlock = (len / (extent->szAtom + sizeof(uint8_t)));
@@ -1268,6 +1266,7 @@ static void memboundEnter(membound *m) {
     /* Fast path: try to acquire immediately without syscall overhead */
     if (pthread_mutex_trylock(&m->mutex) == 0) {
         /* Got lock on first try - no contention, skip all profiling overhead */
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->lockAcquisitions, 1,
                                   memory_order_relaxed);
         return;
@@ -1280,6 +1279,7 @@ static void memboundEnter(membound *m) {
         MEMBOUND_SPIN_PAUSE();
         if (pthread_mutex_trylock(&m->mutex) == 0) {
             /* Got lock after spinning - still fast path */
+            /* @sync: relaxed counter */
             atomic_fetch_add_explicit(&m->lockAcquisitions, 1,
                                       memory_order_relaxed);
             return;
@@ -1287,13 +1287,16 @@ static void memboundEnter(membound *m) {
     }
 
     /* Slow path: must block. Record contention stats. */
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&m->lockAcquisitions, 1, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&m->lockContentions, 1, memory_order_relaxed);
 
     /* Time the blocking wait */
     uint64_t startNs = timeUtilMonotonicNs();
     pthread_mutex_lock(&m->mutex);
     uint64_t endNs = timeUtilMonotonicNs();
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&m->lockWaitTimeNs, endNs - startNs,
                               memory_order_relaxed);
 }
@@ -1957,6 +1960,11 @@ static void memboundTLSDetach(const membound *m) {
  * On an epoch bump for the same pool (a reset), the held blocks were already
  * wiped by the reset, so they are dropped, not freed. */
 static bool memboundTLSBind(membound *m, memboundTLSCache *c) {
+    /* Nothing is read through the epoch: a thread that sees a bump only
+     * drops its own pointers, and every later pool access takes the lock.
+     * A reset that happens-before this load is seen by coherence alone; a
+     * reset concurrent with it orders this allocation before the reset. */
+    /* @sync: relaxed hint */
     const uint64_t epoch =
         atomic_load_explicit(&m->enterprise->cacheEpoch, memory_order_acquire);
     if (c->owner == m && c->epoch == epoch) {
@@ -1979,18 +1987,15 @@ static bool memboundTLSBind(membound *m, memboundTLSCache *c) {
 }
 
 /* Map a request to its cache class (== buddy logsize), or -1 if not cacheable.
- */
-static int memboundCacheClass(const membound *m, size_t nBytes) {
-    const memboundExtent *pri = m->primary;
-    if (!pri) {
-        return -1;
-    }
+ * Runs without the pool lock, so it reads no extent: the atom is the build
+ * constant every extent shares. */
+static int memboundCacheClass(size_t nBytes) {
     int cls;
-    if ((int64_t)nBytes <= pri->szAtom) {
+    if (nBytes <= MEMBOUND_MIN_ATOM) {
         cls = 0;
     } else {
-        cls = memboundLog(
-            (int64_t)((nBytes + (size_t)pri->szAtom - 1) >> pri->atomShift));
+        cls = memboundLog((int64_t)((nBytes + MEMBOUND_MIN_ATOM - 1) >>
+                                    MEMBOUND_MIN_ATOM_SHIFT));
     }
     return (cls >= 0 && cls < MEMBOUND_TLS_CLASSES) ? cls : -1;
 }
@@ -1999,7 +2004,7 @@ static int memboundCacheClass(const membound *m, size_t nBytes) {
  * Returns NULL when the cache can't serve (caller falls back to locked alloc).
  */
 static void *memboundThreadCacheAlloc(membound *m, size_t nBytes) {
-    const int cls = memboundCacheClass(m, nBytes);
+    const int cls = memboundCacheClass(nBytes);
     if (cls < 0) {
         return NULL;
     }
@@ -2016,7 +2021,7 @@ static void *memboundThreadCacheAlloc(membound *m, size_t nBytes) {
         return p;
     }
 
-    const size_t blockSize = (size_t)m->primary->szAtom << cls;
+    const size_t blockSize = (size_t)MEMBOUND_MIN_ATOM << cls;
     const int batchN = m->enterprise->threadCacheBatch;
     void *batch[MEMBOUND_TLS_BATCH_MAX];
     int n = 0;
@@ -2297,10 +2302,8 @@ size_t memboundGoodSize(const membound *m, size_t size) {
         return memboundRoundupSize(cp->szAtom, cp->atomShift, size,
                                    MEMBOUND_COMPACT_LOGMAX);
     }
-    if (!m->primary) {
-        return 0;
-    }
-    return memboundRoundupSize(m->primary->szAtom, m->primary->atomShift, size,
+    /* Without the pool lock: the build-constant atom, not m->primary's. */
+    return memboundRoundupSize(MEMBOUND_MIN_ATOM, MEMBOUND_MIN_ATOM_SHIFT, size,
                                MEMBOUND_LOGMAX);
 }
 
@@ -2358,6 +2361,7 @@ void *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment) {
 static void memboundFreeLockedStandard(membound *m, void *pPrior) {
     memboundExtent *owner = memboundIndexLookup(&m->index, pPrior);
     if (!owner) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
         return;
@@ -2411,6 +2415,7 @@ void memboundFree(membound *m, void *pPrior) {
     memboundExtent *owner = memboundIndexLookup(&m->index, pPrior);
     if (!owner) {
         /* Pointer doesn't belong to any extent - invalid free */
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
         memboundLeave(m);
@@ -2494,6 +2499,7 @@ void memboundReset(membound *m) {
     /* Invalidate any thread-local caches: their blocks were just freed, so a
      * stale cache must self-discard (not double-free) on next use. */
     if (m->enterprise) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->enterprise->cacheEpoch, 1,
                                   memory_order_release);
     }
@@ -3200,10 +3206,13 @@ void memboundGetStats(const membound *m, memboundStats *stats) {
             : 0.0f;
 
     /* Lock contention profiling - use atomic loads for consistency */
+    /* @sync: relaxed counter */
     stats->lockAcquisitions =
         atomic_load_explicit(&m->lockAcquisitions, memory_order_relaxed);
+    /* @sync: relaxed counter */
     stats->lockContentions =
         atomic_load_explicit(&m->lockContentions, memory_order_relaxed);
+    /* @sync: relaxed counter */
     stats->lockWaitTimeNs =
         atomic_load_explicit(&m->lockWaitTimeNs, memory_order_relaxed);
     stats->contentionPercent = (stats->lockAcquisitions > 0)
@@ -3212,6 +3221,7 @@ void memboundGetStats(const membound *m, memboundStats *stats) {
                                    : 0.0f;
 
     /* Safety violation tracking */
+    /* @sync: relaxed counter */
     stats->safetyViolations =
         atomic_load_explicit(&m->safetyViolations, memory_order_relaxed);
 
@@ -4210,7 +4220,10 @@ typedef struct {
 static void *mtAllocFreeWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
-    /* Wait for start signal */
+    /* Wait for start signal.  Everything a worker reads was written
+     * before pthread_create, which already orders it; the flag only
+     * times the start. */
+    /* @sync: relaxed hint */
     while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
         /* spin */
     }
@@ -4264,6 +4277,7 @@ static void *mtReallocWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
     /* Wait for start signal */
+    /* @sync: relaxed hint */
     while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
         /* spin */
     }
@@ -4309,6 +4323,7 @@ static void *mtReallocWorker(void *arg) {
 static void *mtQueryWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
+    /* @sync: relaxed hint */
     while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
         /* spin */
     }
@@ -4416,6 +4431,28 @@ static void *tcStressWorker(void *arg) {
             assert(((unsigned char *)p[i])[0] == tag); /* no shared block */
             memboundFree(m, p[i]);
         }
+    }
+    return NULL;
+}
+
+/* Blocks past the largest cache class take the locked path; each needs an
+ * extent of its own, so every round creates extents (each new one becomes
+ * primary) and frees them (an emptied non-primary extent is released). */
+static void *tcExtentChurnWorker(void *arg) {
+    membound *m = (membound *)arg;
+    enum { BIG = 3 };
+    void *p[BIG];
+    for (int r = 0; r < 60; r++) {
+        for (int i = 0; i < BIG; i++) {
+            p[i] = memboundAlloc(m, (size_t)768 << 10);
+            assert(p[i]);
+            ((unsigned char *)p[i])[0] = (unsigned char)i;
+        }
+        for (int i = 0; i < BIG; i++) {
+            assert(((unsigned char *)p[i])[0] == (unsigned char)i);
+            memboundFree(m, p[i]);
+        }
+        memboundFlushThreadCache(m);
     }
     return NULL;
 }
@@ -6532,6 +6569,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Start all threads at once */
+        /* @sync: relaxed hint */
         atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         /* Wait for completion */
@@ -6569,6 +6607,7 @@ int memboundTest(int argc, char *argv[]) {
             assert(rc == 0);
         }
 
+        /* @sync: relaxed hint */
         atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -6601,6 +6640,7 @@ int memboundTest(int argc, char *argv[]) {
             assert(rc == 0);
         }
 
+        /* @sync: relaxed hint */
         atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         int totalErrors = 0;
@@ -6673,6 +6713,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Start all threads simultaneously */
+        /* @sync: relaxed hint */
         atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         /* Wait for completion */
@@ -6727,6 +6768,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Start all threads simultaneously */
+        /* @sync: relaxed hint */
         atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         /* Wait for completion */
@@ -7124,6 +7166,41 @@ int memboundTest(int argc, char *argv[]) {
         }
         /* every worker drained its cache at exit */
         assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST("ThreadCache: cached allocs while extents come and go") {
+        /* The cache path runs without the pool lock; another thread keeps
+         * moving m->primary and destroying extents.  The cache must not
+         * read either (TSan reports a read of m->primary, ASan a read of
+         * a destroyed extent). */
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 20,
+                              .tier = MEMBOUND_TIER_ENTERPRISE,
+                              .threadSafe = true,
+                              .growthSize = 1 << 20,
+                              .shrinkThreshold = 0.5f,
+                              .threadCache = true,
+                              .threadCacheBatch = 4};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        enum { NCACHE = 2 };
+        pthread_t cache[NCACHE];
+        pthread_t churn;
+        for (int i = 0; i < NCACHE; i++) {
+            assert(pthread_create(&cache[i], NULL, tcStressWorker, m) == 0);
+        }
+        assert(pthread_create(&churn, NULL, tcExtentChurnWorker, m) == 0);
+        for (int i = 0; i < NCACHE; i++) {
+            pthread_join(cache[i], NULL);
+        }
+        pthread_join(churn, NULL);
+        assert(memboundCurrentAllocationCount(m) == 0);
+        if (memboundGoodSize(m, 1) != MEMBOUND_MIN_ATOM ||
+            memboundGoodSize(m, MEMBOUND_MIN_ATOM + 1) !=
+                2 * MEMBOUND_MIN_ATOM) {
+            ERRR("GoodSize disagrees with the extent atom");
+        }
         memboundShutdown(m);
     }
 
