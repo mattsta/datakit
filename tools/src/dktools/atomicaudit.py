@@ -58,7 +58,8 @@ And per EDGE, across the tree:
 
 Implicit-order forms (``atomic_load(p)``, ``__sync_*``) count as
 seq_cst.  Plain operators on ``_Atomic`` objects (``x++``, ``x = v``) are
-seq_cst too but cannot be found lexically; the audit does not see them.
+seq_cst too but cannot be found lexically; clang builds reject them
+instead, through ``-Watomic-implicit-seq-cst`` (src/CMakeLists.txt).
 
 Discovery is lexical (comments and string literals stripped, line
 continuations joined), so operations inside macro definitions are

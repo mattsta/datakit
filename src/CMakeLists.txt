@@ -315,6 +315,11 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")
 # We know we're using computed gotos on clang and it's really okay
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-gnu-label-as-value")
+    # Every atomic operation states its order (and carries a @sync tag
+    # that `dktools atomicaudit` checks against it); this catches the
+    # implicit seq_cst forms the lexical audit cannot see, such as `++`
+    # or `=` on an _Atomic object.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Watomic-implicit-seq-cst")
 endif()
 
 # ============================================================================
