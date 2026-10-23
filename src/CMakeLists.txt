@@ -374,11 +374,15 @@ endif()
 
 # Source-based coverage: every function gets execution counters, written
 # to LLVM_PROFILE_FILE at exit; `dktools coverage` merges and reports them.
+# Counters update atomically: plain increments lose counts when tests run
+# threads, and a branch count llvm derives by subtracting two counters
+# then comes out off by one or wrapped (4294967295), so the ratchet sees
+# coverage gained or lost that no test changed.
 if(EnableCoverage)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         message(STATUS "Coverage: clang source coverage enabled")
         set(CMAKE_C_FLAGS
-            "${CMAKE_C_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+            "${CMAKE_C_FLAGS} -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic")
         set(CMAKE_EXE_LINKER_FLAGS
             "${CMAKE_EXE_LINKER_FLAGS} -fprofile-instr-generate")
         set(CMAKE_SHARED_LINKER_FLAGS
