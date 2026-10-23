@@ -235,7 +235,6 @@ void FENWICK_D_FN_(Clear)(void *fw) {
 
 defcleanerName(FENWICK_VALUE_TYPE *, zfree, FenwickValues);
 
-#define FENWICK_D_SIGNED_ ((FENWICK_VALUE_TYPE) - 1 < (FENWICK_VALUE_TYPE)0)
 #define FENWICK_D_OPS_ FENWICK_CAT(persistOpsFenwick, FENWICK_SUFFIX)
 
 /* True when a tree of 'capacity' cells fits the Small tier */
@@ -317,125 +316,10 @@ void FENWICK_D_FN_(CopyTo)(const void *fw, FENWICK_VALUE_TYPE *out) {
  *   float:   flex [capacity, count, cell 0, ..., cell capacity-1]
  * WAL (args: const databox *const *): NUM_INCR [index, delta] (Update),
  * UPDATE [index, value] (Set), CLEAR. */
-static void FENWICK_D_FN_(PersistBox_)(FENWICK_VALUE_TYPE v, databoxBig *out) {
-    memset(out, 0, sizeof(*out));
-#if FENWICK_IS_FLOATING
-    if (sizeof(v) == sizeof(float)) {
-        out->type = DATABOX_FLOAT_32;
-        out->data.f32 = (float)v;
-    } else {
-        out->type = DATABOX_DOUBLE_64;
-        out->data.d64 = (double)v;
-    }
-#else
-    if (sizeof(v) == 16) {
-        DATABOX_BIG_INIT(out);
-        if (FENWICK_D_SIGNED_) {
-            out->type = DATABOX_SIGNED_128;
-            *out->data.i128 = (__int128_t)v;
-        } else {
-            out->type = DATABOX_UNSIGNED_128;
-            *out->data.u128 = (__uint128_t)v;
-        }
-    } else if (FENWICK_D_SIGNED_) {
-        out->type = DATABOX_SIGNED_64;
-        out->data.i64 = (int64_t)v;
-    } else {
-        out->type = DATABOX_UNSIGNED_64;
-        out->data.u64 = (uint64_t)v;
-    }
-#endif
-}
-
-/* A value of the tree's type, exactly: any integer box whose value fits
- * the type; a Float tree takes FLOAT_32, a Double tree DOUBLE_64 or
- * FLOAT_32 */
-static bool FENWICK_D_FN_(PersistUnbox_)(const databoxBig *b,
-                                         FENWICK_VALUE_TYPE *out) {
-#if FENWICK_IS_FLOATING
-    if (b->type == DATABOX_FLOAT_32) {
-        *out = (FENWICK_VALUE_TYPE)b->data.f32;
-        return true;
-    }
-
-    if (b->type == DATABOX_DOUBLE_64 &&
-        sizeof(FENWICK_VALUE_TYPE) == sizeof(double)) {
-        *out = (FENWICK_VALUE_TYPE)b->data.d64;
-        return true;
-    }
-
-    return false;
-#else
-    const __uint128_t int128Max = ~(__uint128_t)0 >> 1;
-    __int128_t s;
-    __uint128_t u;
-    switch (b->type) {
-    case DATABOX_SIGNED_64:
-        s = b->data.i64;
-        u = (__uint128_t)s;
-        break;
-    case DATABOX_UNSIGNED_64:
-        u = b->data.u64;
-        s = (__int128_t)u;
-        break;
-    case DATABOX_SIGNED_128:
-        s = *b->data.i128;
-        u = (__uint128_t)s;
-        break;
-    case DATABOX_UNSIGNED_128:
-        u = *b->data.u128;
-        s = u > int128Max ? -1 : (__int128_t)u; /* -1: no signed fit */
-        if (FENWICK_D_SIGNED_ && u > int128Max) {
-            return false;
-        }
-        break;
-    default:
-        return false;
-    }
-
-    if (FENWICK_D_SIGNED_) {
-        const __int128_t max =
-            (__int128_t)((((__uint128_t)1)
-                          << (8 * sizeof(FENWICK_VALUE_TYPE) - 1)) -
-                         1);
-        if (s > max || s < -max - 1) {
-            return false;
-        }
-
-        *out = (FENWICK_VALUE_TYPE)s;
-    } else {
-        const bool negative =
-            (b->type == DATABOX_SIGNED_64 || b->type == DATABOX_SIGNED_128) &&
-            s < 0;
-        if (negative ||
-            u > (__uint128_t)(FENWICK_VALUE_TYPE) ~(FENWICK_VALUE_TYPE)0) {
-            return false;
-        }
-
-        *out = (FENWICK_VALUE_TYPE)u;
-    }
-
-    return true;
-#endif
-}
-
-/* Append values[0, n) exactly, 64 entries per flex growth */
-static void FENWICK_D_FN_(PersistAppend_)(flex **f,
-                                          const FENWICK_VALUE_TYPE *values,
-                                          uint64_t n) {
-    enum { BATCH = 64 };
-    databoxBig boxes[BATCH];
-    const databox *ptrs[BATCH];
-    for (uint64_t at = 0; at < n; at += BATCH) {
-        const uint64_t len = n - at < BATCH ? n - at : BATCH;
-        for (uint64_t i = 0; i < len; i++) {
-            FENWICK_D_FN_(PersistBox_)(values[at + i], &boxes[i]);
-            ptrs[i] = (const databox *)&boxes[i];
-        }
-
-        flexAppendMultipleExact(f, (uint_fast32_t)len, ptrs);
-    }
-}
+#define FPV_T FENWICK_VALUE_TYPE
+#define FPV_IS_FLOATING FENWICK_IS_FLOATING
+#define FPV_FN(name) FENWICK_D_FN_(FENWICK_CAT(Persist, name))
+#include "fenwickPersistValueImpl.h"
 
 static uint8_t *FENWICK_D_FN_(PersistSnapshot_)(const void *structure,
                                                 size_t *len) {
@@ -621,7 +505,6 @@ void FENWICK_D_FN_(Repr)(const void *fw) {
 }
 #endif
 
-#undef FENWICK_D_SIGNED_
 #undef FENWICK_D_OPS_
 #undef FENWICK_PERSIST_TYPE
 #undef FENWICK_D_FN_

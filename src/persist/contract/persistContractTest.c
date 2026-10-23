@@ -45,21 +45,53 @@ extern const persistContractType persistContractFenwickU64;
 extern const persistContractType persistContractFenwickU128;
 extern const persistContractType persistContractFenwickFloat;
 extern const persistContractType persistContractFenwickDouble;
+extern const persistContractType persistContractFenwick2dI16;
+extern const persistContractType persistContractFenwick2dI32;
+extern const persistContractType persistContractFenwick2dI64;
+extern const persistContractType persistContractFenwick2dI128;
+extern const persistContractType persistContractFenwick2dU16;
+extern const persistContractType persistContractFenwick2dU32;
+extern const persistContractType persistContractFenwick2dU64;
+extern const persistContractType persistContractFenwick2dU128;
+extern const persistContractType persistContractFenwick2dFloat;
+extern const persistContractType persistContractFenwick2dDouble;
 
 static const persistContractType *const pcRegistry[] = {
-    &persistContractFlex,           &persistContractMultimap,
-    &persistContractMultiroar,      &persistContractIntset,
-    &persistContractIntsetBig,      &persistContractHyperloglog,
-    &persistContractMultiarray,     &persistContractMultilist,
-    &persistContractMultidict,      &persistContractMultiOrderedSet,
-    &persistContractMultiLRU,       &persistContractHmacKeyring,
-    &persistContractClusterMailbox, &persistContractClusterRing,
-    &persistContractAeadNonceLog,   &persistContractFenwickI16,
-    &persistContractFenwickI32,     &persistContractFenwickI64,
-    &persistContractFenwickI128,    &persistContractFenwickU16,
-    &persistContractFenwickU32,     &persistContractFenwickU64,
-    &persistContractFenwickU128,    &persistContractFenwickFloat,
+    &persistContractFlex,
+    &persistContractMultimap,
+    &persistContractMultiroar,
+    &persistContractIntset,
+    &persistContractIntsetBig,
+    &persistContractHyperloglog,
+    &persistContractMultiarray,
+    &persistContractMultilist,
+    &persistContractMultidict,
+    &persistContractMultiOrderedSet,
+    &persistContractMultiLRU,
+    &persistContractHmacKeyring,
+    &persistContractClusterMailbox,
+    &persistContractClusterRing,
+    &persistContractAeadNonceLog,
+    &persistContractFenwickI16,
+    &persistContractFenwickI32,
+    &persistContractFenwickI64,
+    &persistContractFenwickI128,
+    &persistContractFenwickU16,
+    &persistContractFenwickU32,
+    &persistContractFenwickU64,
+    &persistContractFenwickU128,
+    &persistContractFenwickFloat,
     &persistContractFenwickDouble,
+    &persistContractFenwick2dI16,
+    &persistContractFenwick2dI32,
+    &persistContractFenwick2dI64,
+    &persistContractFenwick2dI128,
+    &persistContractFenwick2dU16,
+    &persistContractFenwick2dU32,
+    &persistContractFenwick2dU64,
+    &persistContractFenwick2dU128,
+    &persistContractFenwick2dFloat,
+    &persistContractFenwick2dDouble,
 };
 
 /* ====================================================================

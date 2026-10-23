@@ -178,9 +178,63 @@ static size_t f2tIndex_(uint64_t *s) {
         return err;                                                            \
     }
 
+/* NewFromArray and CopyTo against the source grid and a tree built with
+ * one Set per element, over shapes from empty to non-square and past a
+ * power of two; float values are small integers (every sum exact) */
+#define F2T_BULK(T, VT, IS_FLOAT)                                              \
+    static int f2tBulk##T(uint64_t seed) {                                     \
+        int err = 0;                                                           \
+        static const size_t shapes[][2] = {{0, 0}, {1, 1},   {1, 9},           \
+                                           {7, 3}, {33, 65}, {64, 64}};        \
+        for (size_t s = 0; s < COUNT_ARRAY(shapes); s++) {                     \
+            const size_t rows = shapes[s][0];                                  \
+            const size_t cols = shapes[s][1];                                  \
+            const size_t n = rows * cols;                                      \
+            cleaner(zfree) void *bufA = zcalloc(n + 1, sizeof(VT));            \
+            cleaner(zfree) void *bufB = zcalloc(n + 1, sizeof(VT));            \
+            VT *values = bufA;                                                 \
+            VT *copied = bufB;                                                 \
+            fenwick2d##T *bySet = NULL;                                        \
+            for (size_t i = 0; i < n; i++) {                                   \
+                const uint64_t r = f2tRand_(&seed);                            \
+                values[i] = IS_FLOAT ? (VT)((int64_t)(r % 21) - 10) : (VT)r;   \
+                (void)fenwick2d##T##Set(&bySet, i / cols, i % cols,            \
+                                        values[i]);                            \
+            }                                                                  \
+                                                                               \
+            fenwick2d##T *t =                                                  \
+                fenwick2d##T##NewFromArray(n ? values : NULL, rows, cols);     \
+            fenwick2d##T##CopyTo(t, copied);                                   \
+            if (!t || fenwick2d##T##Rows(t) != rows ||                         \
+                fenwick2d##T##Cols(t) != cols ||                               \
+                memcmp(copied, values, n * sizeof(VT)) != 0) {                 \
+                ERR(#T ": NewFromArray/CopyTo of %zu x %zu", rows, cols);      \
+            }                                                                  \
+                                                                               \
+            for (size_t i = 0; i < n; i += 1 + n / 40) {                       \
+                const size_t r = i / cols;                                     \
+                const size_t c = i % cols;                                     \
+                if (fenwick2d##T##Get(t, r, c) != values[i] ||                 \
+                    fenwick2d##T##Query(t, r, c) !=                            \
+                        fenwick2d##T##Query(bySet, r, c)) {                    \
+                    ERR(#T ": (%zu, %zu) of %zu x %zu differs from the Set "   \
+                           "tree",                                             \
+                        r, c, rows, cols);                                     \
+                    break;                                                     \
+                }                                                              \
+            }                                                                  \
+                                                                               \
+            fenwick2d##T##Free(t);                                             \
+            fenwick2d##T##Free(bySet);                                         \
+        }                                                                      \
+                                                                               \
+        return err;                                                            \
+    }
+
 #define F2T_TYPE(T, VT, UT, VMIN, VMAX, IS_FLOAT, FITS_ADD)                    \
     F2T_DIFF(T, VT, UT, VMIN, VMAX, IS_FLOAT, FITS_ADD)                        \
-    F2T_EDGES(T, VT, VMAX, IS_FLOAT)
+    F2T_EDGES(T, VT, VMAX, IS_FLOAT)                                           \
+    F2T_BULK(T, VT, IS_FLOAT)
 
 F2T_TYPE(I16, int16_t, uint16_t, INT16_MIN, INT16_MAX, 0, F2T_INT_FITS)
 F2T_TYPE(I32, int32_t, uint32_t, INT32_MIN, INT32_MAX, 0, F2T_INT_FITS)
@@ -232,6 +286,21 @@ int fenwick2dTest(int argc, char *argv[]) {
 #ifdef __SIZEOF_INT128__
         err += f2tEdgesI128();
         err += f2tEdgesU128();
+#endif
+    }
+
+    TEST("every type: NewFromArray and CopyTo") {
+        err += f2tBulkI16(21);
+        err += f2tBulkI32(22);
+        err += f2tBulkI64(23);
+        err += f2tBulkU16(24);
+        err += f2tBulkU32(25);
+        err += f2tBulkU64(26);
+        err += f2tBulkFloat(27);
+        err += f2tBulkDouble(28);
+#ifdef __SIZEOF_INT128__
+        err += f2tBulkI128(29);
+        err += f2tBulkU128(30);
 #endif
     }
 

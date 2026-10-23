@@ -23,3 +23,9 @@ size_t fenwick2dI64Rows(const fenwick2dI64 *t);
 size_t fenwick2dI64Cols(const fenwick2dI64 *t);
 size_t fenwick2dI64Bytes(const fenwick2dI64 *t);
 void fenwick2dI64Clear(fenwick2dI64 *t);
+/* A rows x cols tree of row-major elements in O(cells) (either extent 0
+ * or NULL: an empty tree; NULL past the cell limit) */
+fenwick2dI64 *fenwick2dI64NewFromArray(const int64_t *values, size_t rows,
+                                       size_t cols);
+/* Every element, as Get returns it, row-major into out[Rows * Cols] */
+void fenwick2dI64CopyTo(const fenwick2dI64 *t, int64_t *out);

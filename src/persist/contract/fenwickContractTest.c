@@ -5,6 +5,7 @@
 
 #ifdef DATAKIT_TEST
 
+#include "../../fenwick/fenwick2d.h"
 #include "../../fenwick/fenwickDouble.h"
 #include "../../fenwick/fenwickFloat.h"
 #include "../../fenwick/fenwickI128.h"
@@ -113,6 +114,84 @@ static double pcFenwickReal(uint64_t *rng) {
         .ops = &persistOpsFenwick##T,                                          \
         .build = pcFenwick##T##Build,                                          \
     };
+
+/* The value box for C (floats as FLOAT_32 / DOUBLE_64) */
+#define PC_FENWICK_VALUE(C, FLOAT, rng, v, vb)                                 \
+    do {                                                                       \
+        if (FLOAT) {                                                           \
+            (v) = (C)pcFenwickReal(rng);                                       \
+            memset(&(vb), 0, sizeof(vb));                                      \
+            if (sizeof(C) == sizeof(float)) {                                  \
+                (vb).type = DATABOX_FLOAT_32;                                  \
+                (vb).data.f32 = (float)(v);                                    \
+            } else {                                                           \
+                (vb).type = DATABOX_DOUBLE_64;                                 \
+                (vb).data.d64 = (double)(v);                                   \
+            }                                                                  \
+        } else {                                                               \
+            (v) = (C)pcFenwickBits(rng);                                       \
+            pcFenwickIntBox(&(vb), (C) - 1 < (C)0, sizeof(C),                  \
+                            (__uint128_t)(v));                                 \
+        }                                                                      \
+    } while (0)
+
+/* 2D: rows and columns over a side of about sqrt(size), so the grid
+ * grows in both directions */
+#define PC_FENWICK2D(T, C, FLOAT)                                              \
+    static void *pcFenwick2d##T##Build(const persistContractBuild *b) {        \
+        fenwick2d##T *t = fenwick2d##T##New();                                 \
+        persistContractStart(b->log, t);                                       \
+                                                                               \
+        uint64_t rng = b->seed;                                                \
+        size_t side = 1;                                                       \
+        while (side * side < b->size) {                                        \
+            side++;                                                            \
+        }                                                                      \
+                                                                               \
+        for (size_t i = 0; i < b->size; i++) {                                 \
+            const bool isUpdate = splitmix64(&rng) % 8 < 5;                    \
+            const size_t row = (size_t)(splitmix64(&rng) % (side + 1));        \
+            const size_t col = (size_t)(splitmix64(&rng) % (side + 1));        \
+            const databox rb = DATABOX_UNSIGNED(row);                          \
+            const databox cb = DATABOX_UNSIGNED(col);                          \
+            databoxBig vb;                                                     \
+            C v;                                                               \
+            PC_FENWICK_VALUE(C, FLOAT, &rng, v, vb);                           \
+                                                                               \
+            const bool ok = isUpdate ? fenwick2d##T##Update(&t, row, col, v)   \
+                                     : fenwick2d##T##Set(&t, row, col, v);     \
+            if (ok) {                                                          \
+                const databox *args[] = {&rb, &cb, (const databox *)&vb};      \
+                persistContractRecord(b->log,                                  \
+                                      isUpdate ? PERSIST_OP_NUM_INCR           \
+                                               : PERSIST_OP_UPDATE,            \
+                                      args, 3);                                \
+            }                                                                  \
+                                                                               \
+            if (b->size >= 100 && i == b->size / 3) {                          \
+                fenwick2d##T##Clear(t);                                        \
+                persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);      \
+            }                                                                  \
+        }                                                                      \
+                                                                               \
+        return t;                                                              \
+    }                                                                          \
+                                                                               \
+    const persistContractType persistContractFenwick2d##T = {                  \
+        .ops = &persistOpsFenwick2d##T,                                        \
+        .build = pcFenwick2d##T##Build,                                        \
+    };
+
+PC_FENWICK2D(I16, int16_t, 0)
+PC_FENWICK2D(I32, int32_t, 0)
+PC_FENWICK2D(I64, int64_t, 0)
+PC_FENWICK2D(U16, uint16_t, 0)
+PC_FENWICK2D(U32, uint32_t, 0)
+PC_FENWICK2D(U64, uint64_t, 0)
+PC_FENWICK2D(Float, float, 1)
+PC_FENWICK2D(Double, double, 1)
+PC_FENWICK2D(I128, __int128_t, 0)
+PC_FENWICK2D(U128, __uint128_t, 0)
 
 PC_FENWICK(I16, int16_t, 0)
 PC_FENWICK(I32, int32_t, 0)

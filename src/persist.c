@@ -1924,6 +1924,26 @@ const char *persistTypeName(persistType type) {
         return "fenwickFloat";
     case PERSIST_TYPE_FENWICK_DOUBLE:
         return "fenwickDouble";
+    case PERSIST_TYPE_FENWICK2D_I16:
+        return "fenwick2dI16";
+    case PERSIST_TYPE_FENWICK2D_I32:
+        return "fenwick2dI32";
+    case PERSIST_TYPE_FENWICK2D_I64:
+        return "fenwick2dI64";
+    case PERSIST_TYPE_FENWICK2D_I128:
+        return "fenwick2dI128";
+    case PERSIST_TYPE_FENWICK2D_U16:
+        return "fenwick2dU16";
+    case PERSIST_TYPE_FENWICK2D_U32:
+        return "fenwick2dU32";
+    case PERSIST_TYPE_FENWICK2D_U64:
+        return "fenwick2dU64";
+    case PERSIST_TYPE_FENWICK2D_U128:
+        return "fenwick2dU128";
+    case PERSIST_TYPE_FENWICK2D_FLOAT:
+        return "fenwick2dFloat";
+    case PERSIST_TYPE_FENWICK2D_DOUBLE:
+        return "fenwick2dDouble";
     default:
         return "unknown";
     }

@@ -273,10 +273,13 @@ fenwick2dU64Free(heat);
 
 `fenwick<T>NewFromArray(values, count)` builds a tree in O(n), and
 `fenwick<T>CopyTo(fw, out)` writes every element, exactly as `Get` returns
-it, in O(n).
+it, in O(n).  The 2D trees have the same pair over a row-major grid:
+`fenwick2d<T>NewFromArray(values, rows, cols)` and
+`fenwick2d<T>CopyTo(t, out)`.
 
-`persistOpsFenwick<T>` (`fenwick/fenwickPersist.h`) persist every typed 1D
-tree (see [PERSIST.md](../persist/PERSIST.md)):
+`persistOpsFenwick<T>` and `persistOpsFenwick2d<T>`
+(`fenwick/fenwickPersist.h`) persist every typed tree (see
+[PERSIST.md](../persist/PERSIST.md)).  Snapshots are dense:
 
 - Integer trees snapshot their elements and restore through
   `NewFromArray`; the elements determine the tree.
@@ -284,22 +287,24 @@ tree (see [PERSIST.md](../persist/PERSIST.md)):
   restore them bit for bit: the cells are rounded sums, so the elements
   alone would rebuild a different tree.
 - WAL: `NUM_INCR [index, delta]` replays `Update`, `UPDATE [index, value]`
-  replays `Set`, `CLEAR` replays `Clear`.  Log only the writes the tree
-  accepted.
+  replays `Set`, `CLEAR` replays `Clear` (2D: `[row, col, value]`).  Log
+  only the writes the tree accepted.
 
-All ten pass the persistence contract (`persistContract`).
+All twenty pass the persistence contract (`persistContract`).
 
 ## Testing
 
 - `fenwickTypes`: every typed tree against a naive array (refusals, wrapping
   sums, tier crossings, LowerBound, Clear, NewFromArray and CopyTo).
-- `persistContract`: the ten `persistOpsFenwick<T>` descriptors.
+- `persistContract`: the twenty `persistOpsFenwick<T>` and
+  `persistOpsFenwick2d<T>` descriptors.
 - `fenwickI64`: the original I64 suite (tiers, edge cases, smoke benchmarks).
 - `multiFenwick`, `multiFenwickFlat`: exact arithmetic, limits, refusals,
   growth; Flat is checked call by call against `multiFenwick`.
 - `fenwick2d`, `multiFenwick2d`: against dense grid oracles, growth in rows,
   columns and both, sums past 64 bits; `fenwick2d` runs every one of the ten
-  types, plus per-type limits, refusals and cell size.
+  types, plus per-type limits, refusals, cell size, NewFromArray and
+  CopyTo.
 - `fenwickBench`: the workload tables above (perf preset; validate skips it).
 
 ## See Also

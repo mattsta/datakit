@@ -23,3 +23,9 @@ size_t fenwick2dU32Rows(const fenwick2dU32 *t);
 size_t fenwick2dU32Cols(const fenwick2dU32 *t);
 size_t fenwick2dU32Bytes(const fenwick2dU32 *t);
 void fenwick2dU32Clear(fenwick2dU32 *t);
+/* A rows x cols tree of row-major elements in O(cells) (either extent 0
+ * or NULL: an empty tree; NULL past the cell limit) */
+fenwick2dU32 *fenwick2dU32NewFromArray(const uint32_t *values, size_t rows,
+                                       size_t cols);
+/* Every element, as Get returns it, row-major into out[Rows * Cols] */
+void fenwick2dU32CopyTo(const fenwick2dU32 *t, uint32_t *out);

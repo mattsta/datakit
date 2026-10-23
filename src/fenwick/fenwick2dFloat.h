@@ -23,3 +23,10 @@ size_t fenwick2dFloatRows(const fenwick2dFloat *t);
 size_t fenwick2dFloatCols(const fenwick2dFloat *t);
 size_t fenwick2dFloatBytes(const fenwick2dFloat *t);
 void fenwick2dFloatClear(fenwick2dFloat *t);
+/* A rows x cols tree of row-major elements in O(cells) (either extent 0
+ * or NULL: an empty tree; NULL past the cell limit or for a value that is
+ * not finite) */
+fenwick2dFloat *fenwick2dFloatNewFromArray(const float *values, size_t rows,
+                                           size_t cols);
+/* Every element, as Get returns it, row-major into out[Rows * Cols] */
+void fenwick2dFloatCopyTo(const fenwick2dFloat *t, float *out);

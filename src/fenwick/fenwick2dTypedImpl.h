@@ -224,6 +224,370 @@ void F2D_PUB_(Clear)(F2D_T_ *t) {
     }
 }
 
+/* ====================================================================
+ * Bulk build, element copy and persistence
+ * ==================================================================== */
+#include "../cleaner.h"
+#include "../flex.h"
+#include "../persist.h"
+
+defcleanerName(F2D_VALUE_T *, zfree, F2dValues);
+
+#define FPV_T F2D_VALUE_T
+#define FPV_IS_FLOATING F2D_IS_FLOATING
+#define FPV_FN(name) F2D_PUB_(F2D_CAT_(Persist, name))
+#include "fenwickPersistValueImpl.h"
+
+/* The largest cell count (rowCap * colCap) a tree reaches */
+#define F2D_P_MAX_CELLS_ (UINT64_C(1) << 32)
+#define F2D_P_STR2_(x) #x
+#define F2D_P_STR_(x) F2D_P_STR2_(x)
+
+/* A tree whose extents are rows x cols (both zero or neither), its cells
+ * zero, at the capacities writes would have grown it to; NULL past the
+ * cell limit */
+static F2D_T_ *F2D_PUB_(NewExtents_)(uint64_t rows, uint64_t cols) {
+    /* @own: caller */
+    F2D_T_ *t = F2D_PUB_(New)();
+    if (rows == 0 || cols == 0) {
+        return t;
+    }
+
+    uint64_t rowCap;
+    uint64_t colCap;
+    if (!F2D_PUB_(CapsFor_)(t, rows - 1, cols - 1, &rowCap, &colCap)) {
+        F2D_PUB_(Free)(t);
+        return NULL;
+    }
+
+    /* @own: container; free=zfree */
+    t->store.cells = zcalloc(rowCap * colCap, sizeof(F2D_VALUE_T));
+    t->rowCap = rowCap;
+    t->colCap = colCap;
+    t->rows = rows;
+    t->cols = cols;
+    return t;
+}
+
+F2D_T_ *F2D_PUB_(NewFromArray)(const F2D_VALUE_T *values, size_t rows,
+                               size_t cols) {
+    if (!values || rows == 0 || cols == 0) {
+        return F2D_PUB_(New)();
+    }
+
+#if F2D_IS_FLOATING
+    for (size_t i = 0; i < rows * cols; i++) {
+        if (!isfinite(values[i])) {
+            return NULL;
+        }
+    }
+#endif
+
+    F2D_T_ *t = F2D_PUB_(NewExtents_)(rows, cols);
+    if (!t) {
+        return NULL;
+    }
+
+    F2D_VALUE_T *cells = t->store.cells;
+    const uint64_t rowCap = t->rowCap;
+    const uint64_t colCap = t->colCap;
+    for (uint64_t r = 0; r < rows; r++) {
+        memcpy(&cells[r * colCap], &values[r * cols], cols * sizeof(*cells));
+    }
+
+    /* The 1D build along every row, then along the columns (each row,
+     * final once reached in order, is added into its parent row) */
+    for (uint64_t i = 0; i < rowCap; i++) {
+        F2D_VALUE_T *row = &cells[i * colCap];
+        for (uint64_t j = 1; j <= colCap; j++) {
+            const uint64_t p = fenwickParent(j);
+            if (p <= colCap) {
+                row[p - 1] = F2D_PUB_(Add_)(row[p - 1], row[j - 1]);
+            }
+        }
+    }
+
+    for (uint64_t i = 1; i <= rowCap; i++) {
+        const uint64_t p = fenwickParent(i);
+        if (p > rowCap) {
+            continue;
+        }
+
+        F2D_VALUE_T *dst = &cells[(p - 1) * colCap];
+        const F2D_VALUE_T *src = &cells[(i - 1) * colCap];
+        for (uint64_t j = 0; j < colCap; j++) {
+            dst[j] = F2D_PUB_(Add_)(dst[j], src[j]);
+        }
+    }
+
+    return t;
+}
+
+void F2D_PUB_(CopyTo)(const F2D_T_ *t, F2D_VALUE_T *out) {
+    if (!t || t->rows == 0 || t->cols == 0) {
+        return;
+    }
+
+    const uint64_t rows = t->rows;
+    const uint64_t cols = t->cols;
+#if F2D_IS_FLOATING
+    /* Float cells round, so read each element as Get does */
+    for (uint64_t r = 0; r < rows; r++) {
+        for (uint64_t c = 0; c < cols; c++) {
+            out[r * cols + c] = F2D_PUB_(Element_)(t, r, c);
+        }
+    }
+#else
+    /* Undo the column pass, then the row pass, over the rows x cols
+     * corner of the cells: every child of a cell there is there too */
+    for (uint64_t r = 0; r < rows; r++) {
+        memcpy(&out[r * cols], &t->store.cells[r * t->colCap],
+               cols * sizeof(*out));
+    }
+
+    for (uint64_t i = rows; i >= 1; i--) {
+        const uint64_t p = fenwickParent(i);
+        if (p <= rows) {
+            F2D_VALUE_T *dst = &out[(p - 1) * cols];
+            const F2D_VALUE_T *src = &out[(i - 1) * cols];
+            for (uint64_t c = 0; c < cols; c++) {
+                dst[c] = F2D_PUB_(Sub_)(dst[c], src[c]);
+            }
+        }
+    }
+
+    for (uint64_t r = 0; r < rows; r++) {
+        F2D_VALUE_T *row = &out[r * cols];
+        for (uint64_t j = cols; j >= 1; j--) {
+            const uint64_t p = fenwickParent(j);
+            if (p <= cols) {
+                row[p - 1] = F2D_PUB_(Sub_)(row[p - 1], row[j - 1]);
+            }
+        }
+    }
+#endif
+}
+
+/* Persistence, dense, like the 1D trees: integer trees snapshot their
+ * elements, float trees their capacities, extents and every cell.
+ *   integer: flex [rows, cols, element (0,0), (0,1), ... row-major]
+ *   float:   flex [rowCap, colCap, rows, cols, cell 0 ... row-major]
+ * WAL (args: const databox *const *, three of them): NUM_INCR [row, col,
+ * delta] (Update), UPDATE [row, col, value] (Set), CLEAR. */
+static void F2D_PUB_(PersistPushUnsigned_)(flex **f, uint64_t v) {
+    const databox box = DATABOX_UNSIGNED(v);
+    flexPushByTypeExact(f, &box, FLEX_ENDPOINT_TAIL);
+}
+
+/* The next entry as an unsigned 64-bit value */
+static bool F2D_PUB_(PersistNextUnsigned_)(const flex *f, flexEntry **fe,
+                                           uint64_t *out) {
+    databoxBig box;
+    flexGetByTypeBig(*fe, &box);
+    *fe = flexNext(f, *fe);
+    *out = box.data.u64;
+    return box.type == DATABOX_UNSIGNED_64;
+}
+
+static uint8_t *F2D_PUB_(PersistSnapshot_)(const void *structure, size_t *len) {
+    const F2D_T_ *t = structure;
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+#if F2D_IS_FLOATING
+    F2D_PUB_(PersistPushUnsigned_)(&f, t->rowCap);
+    F2D_PUB_(PersistPushUnsigned_)(&f, t->colCap);
+    F2D_PUB_(PersistPushUnsigned_)(&f, t->rows);
+    F2D_PUB_(PersistPushUnsigned_)(&f, t->cols);
+    F2D_PUB_(PersistAppend_)(&f, t->store.cells, t->rowCap * t->colCap);
+#else
+    F2D_PUB_(PersistPushUnsigned_)(&f, t->rows);
+    F2D_PUB_(PersistPushUnsigned_)(&f, t->cols);
+    if (t->rows) {
+        cleanerName(zfree, F2dValues) F2D_VALUE_T *values =
+            zmalloc(t->rows * t->cols * sizeof(*values));
+        F2D_PUB_(CopyTo)(t, values);
+        F2D_PUB_(PersistAppend_)(&f, values, t->rows * t->cols);
+    }
+#endif
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    flexEntry *fe = flexHead(f);
+    databoxBig box;
+#if F2D_IS_FLOATING
+    uint64_t rowCap;
+    uint64_t colCap;
+    uint64_t rows;
+    uint64_t cols;
+    if (n < 4 || !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rowCap) ||
+        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &colCap) ||
+        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rows) ||
+        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &cols)) {
+        return NULL;
+    }
+
+    /* Empty, or power-of-two capacities holding the extents, with
+     * exactly one entry per cell */
+    const bool empty = rowCap == 0;
+    if (empty != (colCap == 0) || empty != (rows == 0) ||
+        empty != (cols == 0) || (rowCap & (rowCap - 1)) ||
+        (colCap & (colCap - 1)) || rows > rowCap || cols > colCap ||
+        (!empty && (colCap > (n - 4) / rowCap || rowCap * colCap != n - 4 ||
+                    rowCap * colCap > F2D_P_MAX_CELLS_)) ||
+        (empty && n != 4)) {
+        return NULL;
+    }
+
+    /* @own: caller */
+    F2D_T_ *t = F2D_PUB_(New)();
+    if (empty) {
+        return t;
+    }
+
+    /* @own: container; free=zfree */
+    t->store.cells = zcalloc(rowCap * colCap, sizeof(F2D_VALUE_T));
+    t->rowCap = rowCap;
+    t->colCap = colCap;
+    t->rows = rows;
+    t->cols = cols;
+    for (uint64_t i = 0; i < rowCap * colCap; i++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        if (!F2D_PUB_(PersistUnbox_)(&box, &t->store.cells[i])) {
+            F2D_PUB_(Free)(t);
+            return NULL;
+        }
+    }
+
+    return t;
+#else
+    uint64_t rows;
+    uint64_t cols;
+    if (n < 2 || !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rows) ||
+        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &cols) ||
+        (rows == 0) != (cols == 0) ||
+        (rows && (cols > (n - 2) / rows || rows * cols != n - 2)) ||
+        (!rows && n != 2)) {
+        return NULL;
+    }
+
+    const size_t count = n - 2;
+    cleanerName(zfree, F2dValues) F2D_VALUE_T *values =
+        zmalloc((count ? count : 1) * sizeof(*values));
+    for (size_t i = 0; i < count; i++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        if (!F2D_PUB_(PersistUnbox_)(&box, &values[i])) {
+            return NULL;
+        }
+    }
+
+    return F2D_PUB_(NewFromArray)(values, rows, cols);
+#endif
+}
+
+static uint8_t *F2D_PUB_(PersistEncodeOp_)(persistOp op, const void *args,
+                                           size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3 ||
+        !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool F2D_PUB_(PersistApplyOp_)(void *structure, persistOp op,
+                                      const uint8_t *data, size_t len) {
+    F2D_T_ **t = structure;
+    if (op == PERSIST_OP_CLEAR) {
+        F2D_PUB_(Clear)(*t);
+        return true;
+    }
+
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
+        !flexValidateBufferDeep(data, len)) {
+        return false;
+    }
+
+    const flex *f = (const flex *)data;
+    if (flexCount(f) != 3) {
+        return false;
+    }
+
+    flexEntry *fe = flexHead(f);
+    uint64_t row;
+    uint64_t col;
+    databoxBig value;
+    F2D_VALUE_T v;
+    if (!F2D_PUB_(PersistNextUnsigned_)(f, &fe, &row) ||
+        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &col) || row > SIZE_MAX ||
+        col > SIZE_MAX) {
+        return false;
+    }
+
+    flexGetByTypeBig(fe, &value);
+    if (!F2D_PUB_(PersistUnbox_)(&value, &v)) {
+        return false;
+    }
+
+    return op == PERSIST_OP_NUM_INCR
+               ? F2D_PUB_(Update)(t, (size_t)row, (size_t)col, v)
+               : F2D_PUB_(Set)(t, (size_t)row, (size_t)col, v);
+}
+
+static void *F2D_PUB_(PersistNewEmpty_)(void) {
+    return F2D_PUB_(New)();
+}
+
+static size_t F2D_PUB_(PersistCount_)(const void *structure) {
+    const F2D_T_ *t = structure;
+    return t ? (size_t)(t->rows * t->cols) : 0;
+}
+
+static size_t F2D_PUB_(PersistBytes_)(const void *structure) {
+    return F2D_PUB_(Bytes)(structure);
+}
+
+static void F2D_PUB_(PersistFree_)(void *structure) {
+    F2D_PUB_(Free)(structure);
+}
+
+const persistOps F2D_CAT_(persistOpsFenwick2d, F2D_SUFFIX) = {
+    .type = F2D_PERSIST_TYPE,
+    .name = "fenwick2d" F2D_P_STR_(F2D_SUFFIX),
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = F2D_PUB_(PersistSnapshot_),
+    .restore = F2D_PUB_(PersistRestore_),
+    .newEmpty = F2D_PUB_(PersistNewEmpty_),
+    .count = F2D_PUB_(PersistCount_),
+    .estimateSize = F2D_PUB_(PersistBytes_),
+    .encodeOp = F2D_PUB_(PersistEncodeOp_),
+    .applyOp = F2D_PUB_(PersistApplyOp_),
+    .free = F2D_PUB_(PersistFree_),
+};
+
+#undef F2D_P_MAX_CELLS_
+#undef F2D_P_STR_
+#undef F2D_P_STR2_
+#undef F2D_PERSIST_TYPE
 #undef F2D_CAT2_
 #undef F2D_CAT_
 #undef F2D_PUB_

@@ -30,3 +30,20 @@ extern const persistOps persistOpsFenwickDouble;
 extern const persistOps persistOpsFenwickI128;
 extern const persistOps persistOpsFenwickU128;
 #endif
+
+/* The 2D trees (fenwick2dTypedImpl.h), dense in the same way:
+ *   integer: flex [rows, cols, element (0,0), (0,1), ... row-major]
+ *   float:   flex [rowCap, colCap, rows, cols, every cell row-major]
+ * WAL as above with [row, col, value] operands (three boxes). */
+extern const persistOps persistOpsFenwick2dI16;
+extern const persistOps persistOpsFenwick2dI32;
+extern const persistOps persistOpsFenwick2dI64;
+extern const persistOps persistOpsFenwick2dU16;
+extern const persistOps persistOpsFenwick2dU32;
+extern const persistOps persistOpsFenwick2dU64;
+extern const persistOps persistOpsFenwick2dFloat;
+extern const persistOps persistOpsFenwick2dDouble;
+#ifdef __SIZEOF_INT128__
+extern const persistOps persistOpsFenwick2dI128;
+extern const persistOps persistOpsFenwick2dU128;
+#endif
