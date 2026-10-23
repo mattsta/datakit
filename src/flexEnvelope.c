@@ -2581,6 +2581,120 @@ int flexEnvelopeTest(int argc, char *argv[]) {
     (void)argv;
     int err = 0;
 
+    TEST("envelope: every algorithm streams as it wraps, in any chunking") {
+        /* For each checksum and keyed algorithm and each payload size
+         * around the hash block sizes: the stream's header + payload +
+         * digest is the one-shot envelope byte for byte, the verify
+         * stream accepts it fed in any chunk size, and a byte flipped in
+         * the payload (or, for tiny ones, the digest) fails both
+         * verifiers */
+        /* Every algorithm the stream offers (it refuses XXH3; see the
+         * "wrap stream refuses XXH3" test) */
+        static const flexEnvelopeAlgo algos[] = {
+            FLEX_ENV_ALGO_XXH64,        FLEX_ENV_ALGO_RAPIDHASH,
+            FLEX_ENV_ALGO_BLAKE3_KEYED, FLEX_ENV_ALGO_HMAC_SHA256,
+            FLEX_ENV_ALGO_HMAC_BLAKE3,
+        };
+        static const size_t sizes[] = {0, 1, 63, 64, 65, 1000, 4099};
+        static const size_t chunks[] = {1, 7, 64, 5000};
+        uint8_t key[32];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(0xa5 ^ (i * 11));
+        }
+        static uint8_t payload[4099];
+        for (size_t i = 0; i < sizeof(payload); i++) {
+            payload[i] = (uint8_t)(i * 31 + 7);
+        }
+        static uint8_t oneShot[4099 + 256];
+        static uint8_t streamed[4099 + 256];
+        for (size_t a = 0; a < sizeof(algos) / sizeof(*algos); a++) {
+            const bool keyed = FLEX_ENV_ALGO_IS_KEYED(algos[a]);
+            const flexEnvelopeWrapParams wp = {.key = keyed ? key : NULL,
+                                               .key_len =
+                                                   keyed ? sizeof(key) : 0,
+                                               .algo = algos[a]};
+            const flexEnvelopeVerifyParams vp = {
+                .max_payload_len = sizeof(payload),
+                .key = keyed ? key : NULL,
+                .key_len = keyed ? sizeof(key) : 0};
+            for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+                const size_t n = sizes[s];
+                size_t envLen = 0;
+                if (!flexEnvelopeWrap(oneShot, sizeof(oneShot), payload, n, &wp,
+                                      &envLen) ||
+                    envLen != flexEnvelopeWrappedSize(n, algos[a], 0)) {
+                    ERR("algo %d size %zu: wrap failed", (int)algos[a], n);
+                    continue;
+                }
+                for (size_t c = 0; c < sizeof(chunks) / sizeof(*chunks); c++) {
+                    const size_t step = chunks[c];
+                    flexEnvelopeWrapStream ws;
+                    size_t at = 0;
+                    size_t got = 0;
+                    bool ok = flexEnvelopeWrapStreamInit(
+                        &ws, n, &wp, streamed, sizeof(streamed), &got);
+                    at = got;
+                    for (size_t k = 0; ok && k < n; k += step) {
+                        const size_t take = n - k < step ? n - k : step;
+                        ok = flexEnvelopeWrapStreamUpdate(&ws, payload + k,
+                                                          take);
+                        memcpy(streamed + at, payload + k, take);
+                        at += take;
+                    }
+                    ok = ok &&
+                         flexEnvelopeWrapStreamFinal(
+                             &ws, streamed + at, sizeof(streamed) - at, &got);
+                    at += got;
+                    if (!ok || at != envLen ||
+                        memcmp(streamed, oneShot, envLen) != 0) {
+                        ERR("algo %d size %zu chunk %zu: stream differs",
+                            (int)algos[a], n, step);
+                        continue;
+                    }
+
+                    /* Verify, streamed, intact then with a flipped byte */
+                    for (int flip = 0; flip < 2; flip++) {
+                        if (flip && n == 0) {
+                            break;
+                        }
+                        /* In the payload, or the digest for tiny ones */
+                        uint8_t *env = streamed;
+                        const size_t flipAt = envLen - 1 - (n / 2);
+                        if (flip) {
+                            env[flipAt] ^= 0x10;
+                        }
+                        flexEnvelopeVerifyStream vs;
+                        size_t used = 0;
+                        uint64_t plen = 0;
+                        flexEnvelopeAlgo seen = FLEX_ENV_ALGO_NONE;
+                        bool vok = flexEnvelopeVerifyStreamInit(
+                            &vs, &vp, env, envLen, &used, &plen, &seen);
+                        for (size_t k = used; vok && k < envLen; k += step) {
+                            const size_t take =
+                                envLen - k < step ? envLen - k : step;
+                            vok = flexEnvelopeVerifyStreamUpdate(&vs, env + k,
+                                                                 take);
+                        }
+                        vok = vok && flexEnvelopeVerifyStreamFinal(&vs);
+                        const uint8_t *out = NULL;
+                        uint64_t outLen = 0;
+                        const bool once =
+                            flexEnvelopeVerify(env, envLen, &vp, &out, &outLen);
+                        if (flip) {
+                            env[flipAt] ^= 0x10;
+                        }
+                        if (vok == (bool)flip || once == (bool)flip ||
+                            (!flip && (plen != n || seen != algos[a]))) {
+                            ERR("algo %d size %zu chunk %zu: verify %d/%d "
+                                "with flip %d",
+                                (int)algos[a], n, step, vok, once, flip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     TEST("envelope: every wrap entry point agrees on the params it refuses") {
         /* One-shot Wrap, Reserve/Finalize and the stream each validate
          * the params themselves; each invalid change must be refused by
