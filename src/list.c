@@ -138,7 +138,7 @@ list *listAddNodeTail(list *l, void *value) {
     return l;
 }
 
-list *lInsertNode(list *l, listNode *oldNode, void *value, int after) {
+list *listInsertNode(list *l, listNode *oldNode, void *value, bool after) {
     listNode *node;
 
     /* @own: container; free=zfree */
@@ -829,6 +829,49 @@ int listTest(int argc, char *argv[]) {
             idx++;
         }
         listReleaseIterator(iter);
+    }
+
+    printf("Testing listInsertNode...\n");
+    {
+        /* 1 2 3, then insert at both ends and in the middle, from both
+         * sides; both walks must give the same order and the ends must
+         * follow */
+        cleaner(listRelease) list *l = listCreate();
+        int32_t v[] = {1, 2, 3, 0, 15, 25, 4};
+        listAddNodeTail(l, &v[0]);
+        listAddNodeTail(l, &v[1]);
+        listAddNodeTail(l, &v[2]);
+        listInsertNode(l, listFirst(l), &v[3], false);
+        listInsertNode(l, listFirst(l)->next, &v[4], true);
+        listInsertNode(l, listLast(l), &v[5], false);
+        listInsertNode(l, listLast(l), &v[6], true);
+
+        const int32_t want[] = {0, 1, 15, 2, 25, 3, 4};
+        const size_t n = COUNT_ARRAY(want);
+        size_t forward = 0;
+        for (listNode *node = listFirst(l); node; node = node->next) {
+            if (forward >= n ||
+                *(int32_t *)listNodeValue(node) != want[forward]) {
+                ERR("forward position %zu is wrong", forward);
+                break;
+            }
+            forward++;
+        }
+
+        size_t backward = 0;
+        for (listNode *node = listLast(l); node; node = node->prev) {
+            if (backward >= n ||
+                *(int32_t *)listNodeValue(node) != want[n - 1 - backward]) {
+                ERR("backward position %zu is wrong", backward);
+                break;
+            }
+            backward++;
+        }
+
+        if (forward != n || backward != n || listLength(l) != n ||
+            listFirst(l)->prev || listLast(l)->next) {
+            ERR("insert walks %zu/%zu of %zu", forward, backward, n);
+        }
     }
 
     TEST_FINAL_RESULT;

@@ -48,5 +48,4 @@ void segmentDoubleRangeUpdate(void *seg, size_t left, size_t right,
 
 #ifdef DATAKIT_TEST
 void segmentDoubleRepr(const void *seg);
-int segmentDoubleTest(int argc, char *argv[]);
 #endif

@@ -48,5 +48,4 @@ void fenwickU64Clear(void *fw);
 
 #ifdef DATAKIT_TEST
 void fenwickU64Repr(const void *fw);
-int fenwickU64Test(int argc, char *argv[]);
 #endif

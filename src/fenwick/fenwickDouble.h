@@ -48,5 +48,4 @@ void fenwickDoubleClear(void *fw);
 
 #ifdef DATAKIT_TEST
 void fenwickDoubleRepr(const void *fw);
-int fenwickDoubleTest(int argc, char *argv[]);
 #endif

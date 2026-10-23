@@ -47,5 +47,4 @@ void segmentFloatRangeUpdate(void *seg, size_t left, size_t right, float value);
 
 #ifdef DATAKIT_TEST
 void segmentFloatRepr(const void *seg);
-int segmentFloatTest(int argc, char *argv[]);
 #endif

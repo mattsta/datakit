@@ -2152,6 +2152,16 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             if ((a > 0) != (b > 0) || (a < 0) != (b < 0)) {
                 ERR("StrICmp(\"%s\", \"%s\")", pairs[i][0], pairs[i][1]);
             }
+
+            /* The bounded form agrees with strncasecmp at every bound */
+            for (int32_t n = 0; n <= 6; n++) {
+                const int32_t an = StrNICmp(pairs[i][0], pairs[i][1], n);
+                const int bn = strncasecmp(pairs[i][0], pairs[i][1], (size_t)n);
+                if ((an > 0) != (bn > 0) || (an < 0) != (bn < 0)) {
+                    ERR("StrNICmp(\"%s\", \"%s\", %d)", pairs[i][0],
+                        pairs[i][1], n);
+                }
+            }
         }
     }
 

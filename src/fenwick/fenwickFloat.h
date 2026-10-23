@@ -48,5 +48,4 @@ void fenwickFloatClear(void *fw);
 
 #ifdef DATAKIT_TEST
 void fenwickFloatRepr(const void *fw);
-int fenwickFloatTest(int argc, char *argv[]);
 #endif

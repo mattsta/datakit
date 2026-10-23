@@ -237,7 +237,7 @@ int32_t StrICmp(const char *zLeft, const char *zRight) {
 #endif
 }
 
-int32_t StrNIcmp(const char *zLeft, const char *zRight, int32_t N) {
+int32_t StrNICmp(const char *zLeft, const char *zRight, int32_t N) {
     register uint8_t *a, *b;
     if (zLeft == 0) {
         return zRight ? -1 : 0;

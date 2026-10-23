@@ -50,7 +50,6 @@ void fenwickI128Clear(void *fw);
 
 #ifdef DATAKIT_TEST
 void fenwickI128Repr(const void *fw);
-int fenwickI128Test(int argc, char *argv[]);
 #endif
 
 #endif /* __SIZEOF_INT128__ */

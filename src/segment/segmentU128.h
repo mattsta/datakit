@@ -50,7 +50,6 @@ void segmentU128RangeUpdate(void *seg, size_t left, size_t right,
 
 #ifdef DATAKIT_TEST
 void segmentU128Repr(const void *seg);
-int segmentU128Test(int argc, char *argv[]);
 #endif
 
 #endif /* __SIZEOF_INT128__ */

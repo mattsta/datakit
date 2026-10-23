@@ -84,8 +84,10 @@ extern const unsigned char StrUpperToLower[];
 #define StrIsIdChar(C)                                                         \
     (((c = (C)) & 0x80) != 0 || (c > 0x1f && StrIdChar[c - 0x20]))
 
-int StrICmp(const char *zLeft, const char *zRight);
-int StrNICmp(const char *zLeft, const char *zRight, int N);
+/* ASCII case-insensitive comparison: negative, zero or positive.  The N
+ * form compares at most N bytes. */
+int32_t StrICmp(const char *zLeft, const char *zRight);
+int32_t StrNICmp(const char *zLeft, const char *zRight, int32_t N);
 
 /* These positions matter because StrAtoi64 does math based on them */
 typedef enum strEnc {
@@ -439,7 +441,6 @@ size_t StrInt128ToBuf(void *dst, size_t dstLen, __int128_t svalue);
 
 size_t StrUInt64ToBufTable(void *dst, size_t dstLen, uint64_t value);
 size_t StrInt64ToBufTable(void *dst, size_t dstLen, int64_t svalue);
-int32_t StrDoubleToBuf(void *buf, size_t len, double value);
 /* Canonical decimal parses of exactly slen bytes: "0", or a nonzero digit
  * followed by digits (StrBufToInt64 also takes one leading '-' before a
  * nonzero digit).  No '+', blanks, leading zeros or "-0".  Returns false,
@@ -447,7 +448,6 @@ int32_t StrDoubleToBuf(void *buf, size_t len, double value);
  * (INT64_MIN..INT64_MAX, or 0..UINT64_MAX). */
 bool StrBufToInt64(const void *s, size_t slen, int64_t *value);
 bool StrBufToUInt64(const void *s, size_t slen, uint64_t *value);
-bool StrBufToLongDouble(const void *s, size_t slen, long double *dp);
 /* Unchecked: len bytes that must all be digits, value at most UINT64_MAX */
 uint64_t StrBufToUInt64Fast(const void *buf, size_t len);
 uint64_t StrBufToUInt64Scalar(const void *buf,

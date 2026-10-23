@@ -47,5 +47,4 @@ void segmentI16RangeUpdate(void *seg, size_t left, size_t right, int16_t value);
 
 #ifdef DATAKIT_TEST
 void segmentI16Repr(const void *seg);
-int segmentI16Test(int argc, char *argv[]);
 #endif

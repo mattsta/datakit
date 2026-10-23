@@ -79,7 +79,9 @@ list *listCreate(void);
 void listRelease(list *l);
 list *listAddNodeHead(list *l, void *value);
 list *listAddNodeTail(list *l, void *value);
-list *listInsertNode(list *list, listNode *oldNode, void *value, int after);
+/* Insert 'value' next to 'oldNode' (after it, or before it), moving the
+ * head or tail when 'oldNode' was the end.  NULL on allocation failure. */
+list *listInsertNode(list *list, listNode *oldNode, void *value, bool after);
 void listDelNode(list *l, listNode *node);
 listIter *listGetIterator(list *list, bool headToTail);
 listNode *listNext(listIter *iter);
