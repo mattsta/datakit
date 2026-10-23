@@ -96,6 +96,20 @@ typedef struct benchRow {
 
 static uint64_t benchCheck_; /* checksum every operation feeds */
 
+/* Feed one result into the checksum by its bytes: an unsigned sum, so no
+ * element type (narrow signed, real, 128-bit) can overflow it */
+static void benchSink_(const void *value, size_t len) {
+    uint64_t bits = 0;
+    memcpy(&bits, value, len < sizeof(bits) ? len : sizeof(bits));
+    benchCheck_ += bits;
+}
+
+#define BENCH_SINK(v)                                                          \
+    do {                                                                       \
+        const __typeof__(v) sinkValue_ = (v);                                  \
+        benchSink_(&sinkValue_, sizeof(sinkValue_));                           \
+    } while (0)
+
 static void benchHeader_(const char *title) {
     printf("\n### %s\n\n", title);
     printf("| tree | N | build | update | query | get | range | lower | "
@@ -134,20 +148,19 @@ static void benchPrint_(const char *name, size_t n, const benchRow *r) {
             fenwick##T##Update(&fw, i, (VT)(i % 7));                           \
         }                                                                      \
         r.build = (benchNow_() - t0) / (double)n;                              \
-        VT acc = 0;                                                            \
         BENCH_TIMED(r.update,                                                  \
                     fenwick##T##Update(&fw, benchRand_(&seed) % n, (VT)1));    \
         BENCH_TIMED(r.query,                                                   \
-                    acc += fenwick##T##Query(fw, benchRand_(&seed) % n));      \
-        BENCH_TIMED(r.get, acc += fenwick##T##Get(fw, benchRand_(&seed) % n)); \
+                    BENCH_SINK(fenwick##T##Query(fw, benchRand_(&seed) % n))); \
+        BENCH_TIMED(r.get,                                                     \
+                    BENCH_SINK(fenwick##T##Get(fw, benchRand_(&seed) % n)));   \
         BENCH_TIMED(r.range, {                                                 \
             const size_t a = benchRand_(&seed) % n;                            \
-            acc += fenwick##T##RangeQuery(fw, a / 2, a);                       \
+            BENCH_SINK(fenwick##T##RangeQuery(fw, a / 2, a));                  \
         });                                                                    \
         BENCH_TIMED(r.lower, benchCheck_ += fenwick##T##LowerBound(            \
                                  fw, (VT)(benchRand_(&seed) % (3 * n))));      \
         r.bytesPerElem = (double)fenwick##T##Bytes(fw) / (double)n;            \
-        benchCheck_ += (uint64_t)acc;                                          \
         fenwick##T##Free(fw);                                                  \
         return r;                                                              \
     }
@@ -227,22 +240,20 @@ BENCH_MULTI(Flat, multiFenwickFlat)
             segment##T##Update(&seg, i, (VT)(i % 7));                          \
         }                                                                      \
         r.build = (benchNow_() - t0) / (double)n;                              \
-        VT acc = 0;                                                            \
         BENCH_TIMED(r.update, {                                                \
             const size_t i = benchRand_(&seed) % n;                            \
             segment##T##Update(&seg, i, segment##T##Get(seg, i) + (VT)1);      \
         });                                                                    \
-        BENCH_TIMED(r.query,                                                   \
-                    acc += segment##T##Query(seg, 0, benchRand_(&seed) % n));  \
+        BENCH_TIMED(r.query, BENCH_SINK(segment##T##Query(                     \
+                                 seg, 0, benchRand_(&seed) % n)));             \
         BENCH_TIMED(r.get,                                                     \
-                    acc += segment##T##Get(seg, benchRand_(&seed) % n));       \
+                    BENCH_SINK(segment##T##Get(seg, benchRand_(&seed) % n)));  \
         BENCH_TIMED(r.range, {                                                 \
             const size_t a = benchRand_(&seed) % n;                            \
-            acc += segment##T##Query(seg, a / 2, a);                           \
+            BENCH_SINK(segment##T##Query(seg, a / 2, a));                      \
         });                                                                    \
         r.lower = NAN;                                                         \
         r.bytesPerElem = (double)segment##T##Bytes(seg) / (double)n;           \
-        benchCheck_ += (uint64_t)acc;                                          \
         segment##T##Free(seg);                                                 \
         return r;                                                              \
     }
@@ -323,25 +334,23 @@ static benchRow benchGrowSegmentI64(size_t n) {
             }                                                                  \
         }                                                                      \
         r.build = (benchNow_() - t0) / (double)(side * side);                  \
-        VT acc = 0;                                                            \
         BENCH_TIMED(r.update,                                                  \
                     fenwick2d##T##Update(&t, benchRand_(&seed) % side,         \
                                          benchRand_(&seed) % side, (VT)1));    \
-        BENCH_TIMED(r.query,                                                   \
-                    acc += fenwick2d##T##Query(t, benchRand_(&seed) % side,    \
-                                               benchRand_(&seed) % side));     \
+        BENCH_TIMED(r.query, BENCH_SINK(fenwick2d##T##Query(                   \
+                                 t, benchRand_(&seed) % side,                  \
+                                 benchRand_(&seed) % side)));                  \
         BENCH_TIMED(r.get,                                                     \
-                    acc += fenwick2d##T##Get(t, benchRand_(&seed) % side,      \
-                                             benchRand_(&seed) % side));       \
+                    BENCH_SINK(fenwick2d##T##Get(t, benchRand_(&seed) % side,  \
+                                                 benchRand_(&seed) % side)));  \
         BENCH_TIMED(r.range, {                                                 \
             const size_t a = benchRand_(&seed) % side;                         \
             const size_t b = benchRand_(&seed) % side;                         \
-            acc += fenwick2d##T##RangeQuery(t, a / 2, b / 2, a, b);            \
+            BENCH_SINK(fenwick2d##T##RangeQuery(t, a / 2, b / 2, a, b));       \
         });                                                                    \
         r.lower = NAN;                                                         \
         r.bytesPerElem =                                                       \
             (double)fenwick2d##T##Bytes(t) / (double)(side * side);            \
-        benchCheck_ += (uint64_t)acc;                                          \
         fenwick2d##T##Free(t);                                                 \
         return r;                                                              \
     }
