@@ -256,28 +256,38 @@ void ownedArenaDrain(ownedArena *arena) {
         return;
     }
     /* Sample the gate once, under the lock, so every row present was
-     * retired before the sample.
+     * retired before the sample.  Why a zero sample makes a row safe
+     * (both rules), for a reader R that could hold the row's cargo O:
      *
-     * Default rule: the sample is an acquire load. It is not ordered
-     * against a concurrent Enter on its own, which is one reason the
-     * default rule also requires the grace period.
-     *
-     * READERS_ONLY: SampleLatest is an RMW, so zero means every earlier
-     * scope has exited (its exit is in this RMW's release sequence) and
-     * every later Enter reads from this RMW and so observes the unpublish
-     * that preceded the retire.
+     *   The sample is an RMW (add 0), so it reads the LAST value in the
+     *   count's modification order, and R's Enter (also an RMW) is either
+     *   before or after it in that order.
+     *   - Before: the sample's value includes R's increment unless R's
+     *     Exit is also before it; a zero therefore means R has exited,
+     *     and R reads O only inside its scope.
+     *   - After: R's Enter reads from the sample or a later RMW, all in
+     *     the release sequence headed by the seq_cst sample, so the
+     *     sample synchronizes with R's Enter.  The unpublish of O (the
+     *     cell exchange) and its retire are sequenced before this Drain's
+     *     lock, hence before the sample; so they happen before R's cell
+     *     load, which by coherence reads O's successor or later, never O.
+     *   A plain acquire load would not do: it may read an older count, and
+     *   "reader increments then loads the cell / writer swaps the cell then
+     *   loads the count" is the store-buffering pattern C11 permits to miss
+     *   on both sides.  The default rule used such a load and leaned on its
+     *   grace period; the grace now only covers readers that skip the gate.
      *
      * Both rules also accept the epoch: an exiter read retireEpoch >=
      * row.epoch (acquire) before a decrement that reached zero, so the
      * gate was empty at an instant after the row's retire, and every
-     * scope entered before that instant has exited; idleEpoch carries
-     * this here by release/acquire. Only the default rule's grace and
-     * both rules' hold reports read the clock. */
+     * scope entered before that instant has exited; a scope entered after
+     * it reads from that decrement's release sequence and sees the
+     * unpublish, as above.  idleEpoch carries this here by
+     * release/acquire.  Only the default rule's grace and both rules'
+     * hold reports read the clock. */
     const bool readers_only =
         arena->decl->release == OWNED_RELEASE_READERS_ONLY;
-    const bool gate_idle_now =
-        readers_only ? (inflightGateSampleLatest(&arena->readers) == 0)
-                     : (inflightGateDepth(&arena->readers) == 0);
+    const bool gate_idle_now = inflightGateSampleLatest(&arena->readers) == 0;
     const uint64_t idle_epoch =
         atomic_load_explicit(&arena->idleEpoch, memory_order_acquire);
     const uint64_t now = arena->decl->nowUs();

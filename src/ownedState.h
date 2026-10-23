@@ -30,10 +30,11 @@
  * ownedArena release rules
  *   GRACE_AND_READERS (default): a row is released when graceUs has
  *   elapsed since it was retired AND the reader gate has been observed
- *   empty at some instant after the retire (sampled at zero by Drain, or
- *   brought to zero by an exit that had already observed the row's
- *   retire epoch). The grace covers short readers that never enter the
- *   gate; the idle observation covers readers that do. A row still held
+ *   empty at some instant after the retire (sampled at zero by Drain with
+ *   an RMW, or brought to zero by an exit that had already observed the
+ *   row's retire epoch). The grace covers short readers that never enter
+ *   the gate; the idle observation covers readers that do, by itself
+ *   (the argument is at ownedArenaDrain). A row still held
  *   after holdMultiple * graceUs (saturating; 0 reports as soon as the
  *   grace has passed) is reported once through noteHold and kept, never
  *   freed.
