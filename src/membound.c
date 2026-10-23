@@ -6090,6 +6090,60 @@ int memboundTest(int argc, char *argv[]) {
         memboundShutdown(m);
     }
 
+    TEST("Strategy: shrink threshold set at run time; max size reported") {
+        membound *m = memboundCreateDynamic(1 << 14, 1 << 18, 1 << 14);
+        assert(m != NULL);
+        if (memboundMaxSize(m) != (1 << 18)) {
+            ERR("dynamic max size %zu, want %d", memboundMaxSize(m), 1 << 18);
+        }
+
+        membound *fixed = memboundCreateFixed(1 << 14);
+        assert(fixed != NULL);
+        if (memboundMaxSize(fixed) != 0 || memboundMaxSize(NULL) != 0) {
+            ERRR("a fixed pool or NULL reports a max size");
+        }
+        memboundShutdown(fixed);
+
+        /* Round 0 allocates until a third extent exists; every round
+         * allocates that many blocks, so each round spans three extents,
+         * then frees them all.  The default threshold (0) and a negative
+         * one (clamped to 0) keep the emptied extents; 0.5 releases every
+         * one but the primary. */
+        void *ptrs[100];
+        int count = 0;
+        while (memboundExtentCount(m) < 3 && count < 100) {
+            ptrs[count] = memboundAlloc(m, 4096);
+            assert(ptrs[count] != NULL);
+            count++;
+        }
+        for (int round = 0; round < 3; round++) {
+            if (round == 1) {
+                memboundSetShrinkThreshold(m, 0.5f);
+            } else if (round == 2) {
+                memboundSetShrinkThreshold(m, -1.0f);
+            }
+            if (round > 0) {
+                for (int i = 0; i < count; i++) {
+                    ptrs[i] = memboundAlloc(m, 4096);
+                    assert(ptrs[i] != NULL);
+                }
+            }
+            const size_t full = memboundExtentCount(m);
+            for (int i = 0; i < count; i++) {
+                memboundFree(m, ptrs[i]);
+            }
+            const size_t after = memboundExtentCount(m);
+            const size_t want = round == 1 ? 1 : 3;
+            if (full != 3 || after != want) {
+                ERR("round %d: %zu extents full, %zu after freeing, want 3 "
+                    "and %zu",
+                    round, full, after, want);
+            }
+        }
+
+        memboundShutdown(m);
+    }
+
     TEST("Strategy: fragmentation ratio calculation") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
         assert(m != NULL);

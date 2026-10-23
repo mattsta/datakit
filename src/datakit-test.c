@@ -1164,6 +1164,7 @@ typedef struct dkTestGateCtl {
     bool release;  /* holder may drop gate->mu */
     bool exitDone; /* the no-waiter Exit returned */
     bool armed;    /* the waiter is about to park */
+    bool waitDone; /* the waiter's await returned */
     inflightGateVerdict verdict;
 } dkTestGateCtl;
 
@@ -1238,6 +1239,7 @@ static void *dkTestGateWaiterMain(void *arg) {
     dkTestGateCtl *c = arg;
     dkTestGateSet(c, &c->armed);
     c->verdict = inflightGateAwaitZeroMs(c->gate, DK_TEST_GATE_GENEROUS_MS);
+    dkTestGateSet(c, &c->waitDone);
     return NULL;
 }
 
@@ -1351,6 +1353,45 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
         pthread_join(waiter, NULL);
         GEXPECT(ctl.verdict == INFLIGHT_GATE_IDLE,
                 "the last exit woke the waiter");
+    }
+
+    /* --- A broadcast while the gate is busy only makes the waiter
+     * re-check: it parks again and returns at the last exit. --- */
+    {
+        inflightGate fresh = INFLIGHT_GATE_INIT;
+        inflightGateWakeAllWaiters(&fresh);
+        GEXPECT(atomic_load(&fresh.ready) && inflightGateDepth(&fresh) == 0,
+                "a wake on a fresh gate constructs it and changes no depth");
+        pthread_mutex_destroy(&fresh.mu);
+        pthread_cond_destroy(&fresh.cv);
+
+        inflightGateEnter(&gate);
+        pthread_mutex_lock(&ctl.mu);
+        ctl.armed = false;
+        ctl.waitDone = false;
+        ctl.verdict = INFLIGHT_GATE_EXPIRED;
+        pthread_mutex_unlock(&ctl.mu);
+
+        pthread_t waiter;
+        GEXPECT(pthread_create(&waiter, NULL, dkTestGateWaiterMain, &ctl) == 0,
+                "wake-all waiter started");
+        /* Registration happens under the gate mutex and the park releases
+         * it, so once the count is visible the broadcast below (which
+         * takes the mutex) reaches a parked waiter. */
+        const uint64_t startMs = timeUtilMonotonicMs();
+        while (atomic_load(&gate.waiters) == 0 &&
+               timeUtilMonotonicMs() - startMs < DK_TEST_GATE_GENEROUS_MS) {
+            sched_yield();
+        }
+        GEXPECT(atomic_load(&gate.waiters) == 1, "wake-all waiter registered");
+        inflightGateWakeAllWaiters(&gate);
+        inflightGateWakeAllWaiters(&gate);
+        GEXPECT(!dkTestGateAwait(&ctl, &ctl.waitDone, DK_TEST_GATE_SHORT_MS),
+                "a wake while busy does not release the waiter");
+        inflightGateExit(&gate);
+        pthread_join(waiter, NULL);
+        GEXPECT(ctl.waitDone && ctl.verdict == INFLIGHT_GATE_IDLE,
+                "and the last exit after the wakes releases it");
     }
 
     /* --- Property 4: the exit lands in the waiter's own window. --- */
@@ -1706,6 +1747,14 @@ static void dkSeqInsideFillFn_(ownedSeqVersionRef *v, void *ctx) {
         ownedSeqReadAt(f->seq, f->number, out, sizeof(out), &outLen);
     f->assignedInside = ownedSeqAssigned(f->seq);
     f->cursorInside = ownedSeqCursor(f->seq);
+}
+
+/* Fill a one-word version through the word setter: word 0 gets the
+ * value, word 1 is past the payload and must be ignored. */
+static void dkSeqWordFillFn_(ownedSeqVersionRef *v, void *ctx) {
+    const uint64_t *w = ctx;
+    ownedSeqPutWord(v, 0, *w);
+    ownedSeqPutWord(v, 1, ~*w);
 }
 
 /* Publish B from inside A's fill on N == 1. */
@@ -2466,6 +2515,26 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
         OEXPECT(ownedStateRowCount() == rowsNow && g_dkSlotNotes == 0,
                 "and enrols no row and fires no note");
 
+        /* The runtime initialiser gives what the static one gives, over
+         * whatever the storage held. */
+        {
+            ownedSlot si;
+            memset(&si, 0x5A, sizeof(si));
+            ownedSlotInit(&si, &dkSlotDeclB_);
+            const ownedSlot ss = OWNED_SLOT_INIT(&dkSlotDeclB_);
+            OEXPECT(ownedSlotLoad(&si) == ownedSlotLoad(&ss) &&
+                        ownedSlotLoad(&si) == OWNED_SLOT_EMPTY &&
+                        si.decl == ss.decl,
+                    "slot: ownedSlotInit matches OWNED_SLOT_INIT");
+            OEXPECT(
+                !strcmp(ownedStateKindName(OWNED_ROW_ARENA), "arena") &&
+                    !strcmp(ownedStateKindName(OWNED_ROW_CELL), "cell") &&
+                    !strcmp(ownedStateKindName(OWNED_ROW_SLOT), "slot") &&
+                    !strcmp(ownedStateKindName(OWNED_ROW_SEQ), "seq") &&
+                    !strcmp(ownedStateKindName((ownedStateKind)99), "unknown"),
+                "row kinds: each kind has its name, others are unknown");
+        }
+
         /* Publish without a claim is a misuse: it returns false and
          * leaves the state and the cargo alone. */
         ownedSlot sm = OWNED_SLOT_INIT(NULL);
@@ -2630,6 +2699,19 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                     ownedSeqColumnTotal(&wordDecl, OWNED_SEQ_C_TORN_READS) == 1,
                 "seq word: recycled reads OVERWRITTEN, counted on the row "
                 "as ReadAt counts");
+            /* Numbers 2..5 are live. Publishing 6 recycles 2's version;
+             * 3's version is the next stride, so a word written past the
+             * payload would land on its stamp. */
+            const uint64_t three = UINT64_C(0x3333333333333333);
+            uint64_t filled = three;
+            OEXPECT(ownedSeqPublishWith(&sw, sizeof(three), dkSeqWordFillFn_,
+                                        &filled) &&
+                        ownedSeqReadWordAt(&sw, 6, &w) == OWNED_SEQ_VALID &&
+                        w == three,
+                    "seq word: a fill through PutWord reads back VALID");
+            OEXPECT(ownedSeqReadWordAt(&sw, 3, &w) == OWNED_SEQ_VALID &&
+                        w == two,
+                    "seq word: PutWord past the payload is ignored");
             uint64_t wide = 0;
             OEXPECT(ownedSeqReadWordAt(&sa, ownedSeqAssigned(&sa), &wide) ==
                         OWNED_SEQ_OVERWRITTEN,
