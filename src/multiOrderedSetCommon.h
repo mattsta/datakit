@@ -241,9 +241,17 @@ DK_INLINE_ALWAYS void mosReadEntry(const flex *f, const flexEntry *entry,
     flexGetByType(memberEntry, member);
 }
 
-/* Get entry for member (linear scan) - returns entry pointing to score */
-DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
-                                                const databox *member) {
+/* Get entry for member (linear scan) - returns entry pointing to score.
+ * Byte strings compare equal only when their bytes are identical (the
+ * natural-order compare never equates different bytes), so a stored
+ * string member is matched by length and memcmp alone.  'rowOut', when
+ * not NULL, receives the found row's index (its rank in 'f'). */
+DK_INLINE_ALWAYS flexEntry *
+mosFindMemberLinearRow(const flex *f, const databox *member, size_t *rowOut) {
+    size_t row = 0;
+    const bool wantBytes = DATABOX_IS_BYTES(member);
+    const void *want = wantBytes ? databoxCBytes(member) : NULL;
+    const size_t wantLen = wantBytes ? databoxLen(member) : 0;
     flexEntry *entry = flexHead(f);
     while (entry) {
         /* entry points to score, next is member */
@@ -256,14 +264,29 @@ DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
         databoxWide currentMemberWide;
         flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
 
-        if (databoxCompare(&currentMember, member) == 0) {
+        const bool match =
+            (wantBytes && currentMember.type == DATABOX_BYTES)
+                ? currentMember.len == wantLen &&
+                      memcmp(currentMember.data.bytes.start, want, wantLen) == 0
+                : databoxCompare(&currentMember, member) == 0;
+        if (match) {
+            if (rowOut) {
+                *rowOut = row;
+            }
+
             return entry; /* Found: return pointer to score */
         }
 
         /* Move to next entry (skip member, go to next score) */
         entry = flexNext(f, memberEntry);
+        row++;
     }
     return NULL;
+}
+
+DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
+                                                const databox *member) {
+    return mosFindMemberLinearRow(f, member, NULL);
 }
 
 /* Whether row (aScore, aMember) sorts before row (bScore, bMember): rows

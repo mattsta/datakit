@@ -1576,6 +1576,17 @@ static int mosUpdateOracleCheck_(const multiOrderedSet *mos, uint32_t n,
             step, at, n);
     }
 
+    /* One member's rank per step, walking every rank over the steps */
+    const uint32_t rankAt = step % n;
+    char name[16];
+    snprintf(name, sizeof(name), "u%04" PRIu32, order[rankAt]);
+    const databox m = databoxNewBytesString(name);
+    if (multiOrderedSetGetRank(mos, &m) != (int64_t)rankAt) {
+        ERR("update oracle: step %" PRIu32 " rank of %s is %" PRId64
+            ", expected %" PRIu32,
+            step, name, multiOrderedSetGetRank(mos, &m), rankAt);
+    }
+
     return err;
 }
 
@@ -1658,6 +1669,26 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
             ERR("update oracle: step %" PRIu32 " moved to tier %d", step,
                 mosType_(mos));
         }
+    }
+
+    /* A string member and an integer member that spell the same number
+     * are two members: each lookup finds its own */
+    const databox asString = databoxNewBytesString("22");
+    const databox asInteger = databoxNewSigned(22);
+    const databox scoreA = databoxNewSigned(-5);
+    const databox scoreB = databoxNewSigned(-6);
+    multiOrderedSetAdd(&mos, &scoreA, &asString);
+    multiOrderedSetAdd(&mos, &scoreB, &asInteger);
+    databox gotA = {{0}};
+    databox gotB = {{0}};
+    if (multiOrderedSetCount(mos) != n + 2 ||
+        !multiOrderedSetGetScore(mos, &asString, &gotA) ||
+        !multiOrderedSetGetScore(mos, &asInteger, &gotB) || gotA.data.i != -5 ||
+        gotB.data.i != -6) {
+        ERR("update oracle: \"22\" and 22 are not two members (count %zu, "
+            "scores %" PRId64 " %" PRId64 ")",
+            multiOrderedSetCount(mos), (int64_t)gotA.data.i,
+            (int64_t)gotB.data.i);
     }
 
     return err;

@@ -63,24 +63,7 @@ static int getMapIndexForScore(const multiOrderedSetMedium *m,
 /* Find member in a specific map (linear scan), returns entry pointing to score
  */
 static flexEntry *findMemberInMap(const flex *map, const databox *member) {
-    flexEntry *entry = flexHead(map);
-    while (entry) {
-        flexEntry *memberEntry = flexNext(map, entry);
-        if (!memberEntry) {
-            break;
-        }
-
-        databox currentMember;
-        databoxWide currentMemberWide;
-        flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
-
-        if (databoxCompare(&currentMember, member) == 0) {
-            return entry;
-        }
-
-        entry = flexNext(map, memberEntry);
-    }
-    return NULL;
+    return mosFindMemberLinear(map, member);
 }
 
 /* Find member across all maps, returns map index and entry */
@@ -602,27 +585,14 @@ bool multiOrderedSetMediumGetScore(const multiOrderedSetMedium *m,
 
 int64_t multiOrderedSetMediumGetRank(const multiOrderedSetMedium *m,
                                      const databox *member) {
-    /* Search in map[0] first */
-    int64_t rank = 0;
-    for (int mapIdx = 0; mapIdx < 2; mapIdx++) {
-        flexEntry *entry = flexHead(m->map[mapIdx]);
-        while (entry) {
-            flexEntry *memberEntry = flexNext(m->map[mapIdx], entry);
-            if (!memberEntry) {
-                break;
-            }
+    /* map[0]'s rows rank first */
+    size_t row;
+    if (mosFindMemberLinearRow(m->map[0], member, &row)) {
+        return (int64_t)row;
+    }
 
-            databox currentMember;
-            databoxWide currentMemberWide;
-            flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
-
-            if (databoxCompare(&currentMember, member) == 0) {
-                return rank;
-            }
-
-            rank++;
-            entry = flexNext(m->map[mapIdx], memberEntry);
-        }
+    if (mosFindMemberLinearRow(m->map[1], member, &row)) {
+        return (int64_t)(mapCount(m->map[0]) + row);
     }
 
     return -1;

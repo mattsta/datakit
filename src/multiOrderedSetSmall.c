@@ -387,25 +387,9 @@ bool multiOrderedSetSmallGetScore(const multiOrderedSetSmall *m,
 
 int64_t multiOrderedSetSmallGetRank(const multiOrderedSetSmall *m,
                                     const databox *member) {
-    int64_t rank = 0;
-    flexEntry *entry = flexHead(m->map);
-
-    while (entry) {
-        flexEntry *memberEntry = flexNext(m->map, entry);
-        if (!memberEntry) {
-            break;
-        }
-
-        databox currentMember;
-        databoxWide currentMemberWide;
-        flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
-
-        if (databoxCompare(&currentMember, member) == 0) {
-            return rank;
-        }
-
-        rank++;
-        entry = flexNext(m->map, memberEntry);
+    size_t row;
+    if (mosFindMemberLinearRow(m->map, member, &row)) {
+        return (int64_t)row;
     }
 
     return -1; /* Not found */
