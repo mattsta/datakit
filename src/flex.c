@@ -105,6 +105,7 @@ defcleanerName(int64_t *, zfree, I64);
 defcleanerName(char *, zfree, Chars);
 defcleaner(flex *, flexFree);
 #ifdef DATAKIT_TEST
+defcleanerName(flexBytesMember *, zfree, BulkMembers);
 defcleaner(multimapAtom *, multimapAtomFree);
 #endif
 #include <math.h> /* isfinite (container math) */
@@ -9488,6 +9489,47 @@ int32_t flexTest(int32_t argc, char **argv) {
                           FLEX_ENDPOINT_TAIL);
         }
         FLEX_API_CHECK_(flexEqual(bulk, loop), "the bulk byte push");
+
+        /* Past one chunk of 16 members the bulk push builds chunks and
+         * merges them (spilling the chunk list to the heap past 31
+         * chunks); every count must still give the loop's exact bytes,
+         * with member lengths crossing the length-encoding widths */
+        static const size_t bulkCounts[] = {16, 17, 32, 33, 496, 497, 1100};
+        static const size_t memberLens[] = {0, 1, 7, 63, 64, 300, 4100};
+        static char memberBytes[4100 + 8];
+        for (size_t i = 0; i < sizeof(memberBytes); i++) {
+            memberBytes[i] = (char)('a' + i % 26);
+        }
+        for (size_t c = 0; c < sizeof(bulkCounts) / sizeof(bulkCounts[0]);
+             c++) {
+            const size_t n = bulkCounts[c];
+            cleanerName(zfree, BulkMembers) flexBytesMember *many =
+                zcalloc(n, sizeof(*many));
+            for (size_t i = 0; i < n; i++) {
+                const size_t len = memberLens[i % (sizeof(memberLens) /
+                                                   sizeof(memberLens[0]))];
+                many[i] = (flexBytesMember){memberBytes + (i % 7), len};
+            }
+            cleaner(flexFree) flex *bulkN = flexNew();
+            cleaner(flexFree) flex *loopN = flexNew();
+            flexPushSigned(&bulkN, -5, FLEX_ENDPOINT_TAIL);
+            flexPushSigned(&loopN, -5, FLEX_ENDPOINT_TAIL);
+            flexBulkPushBytesMembers(&bulkN, many, n);
+            for (size_t i = 0; i < n; i++) {
+                flexPushBytes(&loopN, many[i].data, many[i].len,
+                              FLEX_ENDPOINT_TAIL);
+            }
+            if (!flexEqual(bulkN, loopN) || flexCount(bulkN) != n + 1) {
+                printf("  FAIL: bulk byte push of %zu members differs from "
+                       "the loop (%zu vs %zu entries)\n",
+                       n, flexCount(bulkN), flexCount(loopN));
+                bad++;
+            }
+        }
+
+        /* The factory's own self-test (round trips and defensive
+         * unwraps), public and otherwise never run */
+        FLEX_API_CHECK_(flexFactorySelfTest() == 0, "flexFactorySelfTest");
 
         /* The header's total-bytes field widens as the flex grows */
         cleaner(flexFree) flex *wide = flexNew();
