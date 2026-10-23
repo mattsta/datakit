@@ -55,6 +55,9 @@ extern const persistContractType persistContractFenwick2dU64;
 extern const persistContractType persistContractFenwick2dU128;
 extern const persistContractType persistContractFenwick2dFloat;
 extern const persistContractType persistContractFenwick2dDouble;
+extern const persistContractType persistContractMultiFenwick;
+extern const persistContractType persistContractMultiFenwickFlat;
+extern const persistContractType persistContractMultiFenwick2d;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,
@@ -92,6 +95,9 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractFenwick2dU128,
     &persistContractFenwick2dFloat,
     &persistContractFenwick2dDouble,
+    &persistContractMultiFenwick,
+    &persistContractMultiFenwickFlat,
+    &persistContractMultiFenwick2d,
 };
 
 /* ====================================================================

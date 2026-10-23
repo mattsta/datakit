@@ -1944,6 +1944,12 @@ const char *persistTypeName(persistType type) {
         return "fenwick2dFloat";
     case PERSIST_TYPE_FENWICK2D_DOUBLE:
         return "fenwick2dDouble";
+    case PERSIST_TYPE_MULTIFENWICK:
+        return "multiFenwick";
+    case PERSIST_TYPE_MULTIFENWICK_FLAT:
+        return "multiFenwickFlat";
+    case PERSIST_TYPE_MULTIFENWICK_2D:
+        return "multiFenwick2d";
     default:
         return "unknown";
     }

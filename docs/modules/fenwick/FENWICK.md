@@ -290,14 +290,21 @@ it, in O(n).  The 2D trees have the same pair over a row-major grid:
   replays `Set`, `CLEAR` replays `Clear` (2D: `[row, col, value]`).  Log
   only the writes the tree accepted.
 
-All twenty pass the persistence contract (`persistContract`).
+The databox trees persist through `persistOpsMultiFenwick`,
+`persistOpsMultiFenwickFlat` and `persistOpsMultiFenwick2d` (declared in
+their headers).  Their snapshots keep the capacity, the count (or the 2D
+capacities and extents) and every cell as stored: a cell that took a double
+holds rounding the elements do not record.  The WAL is the same as the typed
+trees'.
+
+All twenty-three pass the persistence contract (`persistContract`).
 
 ## Testing
 
 - `fenwickTypes`: every typed tree against a naive array (refusals, wrapping
   sums, tier crossings, LowerBound, Clear, NewFromArray and CopyTo).
-- `persistContract`: the twenty `persistOpsFenwick<T>` and
-  `persistOpsFenwick2d<T>` descriptors.
+- `persistContract`: the twenty typed descriptors and the three databox
+  ones.
 - `fenwickI64`: the original I64 suite (tiers, edge cases, smoke benchmarks).
 - `multiFenwick`, `multiFenwickFlat`: exact arithmetic, limits, refusals,
   growth; Flat is checked call by call against `multiFenwick`.

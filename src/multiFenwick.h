@@ -260,6 +260,13 @@ size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target);
  * Time: O(n) */
 void multiFenwickClear(multiFenwick *mfw);
 
+/* Persistence (persist.h).  Snapshots keep the capacity, the count and
+ * every cell as stored (a cell that took a double holds rounding the
+ * elements do not record).  WAL (args: const databox *const *):
+ * NUM_INCR [index, delta] replays Update, UPDATE [index, value] replays
+ * Set, CLEAR replays Clear; log only the writes the tree accepted. */
+extern const struct persistOps persistOpsMultiFenwick;
+
 /* ====================================================================
  * TESTING & DEBUG
  * ==================================================================== */

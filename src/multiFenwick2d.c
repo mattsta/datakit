@@ -1,7 +1,9 @@
 #include "multiFenwick2d.h"
 #include "datakit.h"
+#include "flex.h"
 #include "multiFenwickCells.h"
 #include "multiFenwickCommon.h"
+#include "persist.h"
 
 /* The cells are the adaptive store multiFenwickFlat uses
  * (multiFenwickCells.h): 8 bytes per cell while every cell is an int64,
@@ -159,3 +161,206 @@ void multiFenwick2dClear(multiFenwick2d *t) {
         multiFenwick2dClear_(t);
     }
 }
+
+/* ====================================================================
+ * Persistence
+ * ====================================================================
+ * Snapshot: flex [rowCap, colCap, rows, cols, every cell row-major],
+ * cells as multiFenwickFlat writes them (rounding in double cells is
+ * kept).  WAL (args: const databox *const *, three of them): NUM_INCR
+ * [row, col, delta] (Update), UPDATE [row, col, value] (Set), CLEAR. */
+
+/* The largest cell count a tree reaches (fenwick2dCoreImpl.h) */
+#define MF2D_P_MAX_CELLS_ (UINT64_C(1) << 32)
+
+static uint8_t *multiFenwick2dPersistSnapshot_(const void *structure,
+                                               size_t *len) {
+    const multiFenwick2d *t = structure;
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    const uint64_t header[4] = {t->rowCap, t->colCap, t->rows, t->cols};
+    for (size_t h = 0; h < 4; h++) {
+        const databox box = DATABOX_UNSIGNED(header[h]);
+        flexPushByTypeExact(&f, &box, FLEX_ENDPOINT_TAIL);
+    }
+
+    /* 64 cells per flex growth */
+    enum { BATCH = 64 };
+    databox boxes[BATCH];
+    const databox *ptrs[BATCH];
+    const uint64_t cells = t->rowCap * t->colCap;
+    for (uint64_t at = 0; at < cells; at += BATCH) {
+        const uint64_t n = cells - at < BATCH ? cells - at : BATCH;
+        for (uint64_t i = 0; i < n; i++) {
+            /* A stored cell always boxes */
+            const bool ok = multiFenwickNumBox_(
+                multiFenwickCellsGet(&t->store, at + i), &boxes[i]);
+            assert(ok);
+            (void)ok;
+            ptrs[i] = &boxes[i];
+        }
+
+        flexAppendMultipleExact(&f, (uint_fast32_t)n, ptrs);
+    }
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    if (n < 4) {
+        return NULL;
+    }
+
+    flexEntry *fe = flexHead(f);
+    databoxBig box;
+    uint64_t header[4];
+    for (size_t h = 0; h < 4; h++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        if (box.type != DATABOX_UNSIGNED_64) {
+            return NULL;
+        }
+
+        header[h] = box.data.u64;
+    }
+
+    const uint64_t rowCap = header[0];
+    const uint64_t colCap = header[1];
+    const uint64_t rows = header[2];
+    const uint64_t cols = header[3];
+    const bool empty = rowCap == 0;
+    if (empty != (colCap == 0) || empty != (rows == 0) ||
+        empty != (cols == 0) || (rowCap & (rowCap - 1)) ||
+        (colCap & (colCap - 1)) || rows > rowCap || cols > colCap ||
+        (empty && n != 4) ||
+        (!empty && (colCap > (n - 4) / rowCap || rowCap * colCap != n - 4 ||
+                    rowCap * colCap > MF2D_P_MAX_CELLS_))) {
+        return NULL;
+    }
+
+    /* @own: caller; free=multiFenwick2dFree */
+    multiFenwick2d *t = multiFenwick2dNew();
+    if (empty) {
+        return t;
+    }
+
+    const uint64_t cells = rowCap * colCap;
+    multiFenwickCellsGrow(&t->store, 0, cells);
+    t->rowCap = rowCap;
+    t->colCap = colCap;
+    t->rows = rows;
+    t->cols = cols;
+    for (uint64_t i = 0; i < cells; i++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        multiFenwickNum num;
+        multiFenwickCell cell;
+        if (!multiFenwickNumFrom_((const databox *)&box, &num) ||
+            !multiFenwickCellEncode(num, &cell)) {
+            multiFenwick2dFree(t);
+            return NULL;
+        }
+
+        multiFenwickCellsPut(&t->store, cells, i, cell);
+    }
+
+    return t;
+}
+
+static uint8_t *multiFenwick2dPersistEncodeOp_(persistOp op, const void *args,
+                                               size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3 ||
+        !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool multiFenwick2dPersistApplyOp_(void *structure, persistOp op,
+                                          const uint8_t *data, size_t len) {
+    multiFenwick2d **t = structure;
+    if (op == PERSIST_OP_CLEAR) {
+        multiFenwick2dClear(*t);
+        return true;
+    }
+
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
+        !flexValidateBufferDeep(data, len)) {
+        return false;
+    }
+
+    const flex *f = (const flex *)data;
+    if (flexCount(f) != 3) {
+        return false;
+    }
+
+    flexEntry *fe = flexHead(f);
+    databoxBig args[3];
+    for (size_t i = 0; i < 3; i++) {
+        flexGetByTypeBig(fe, &args[i]);
+        fe = flexNext(f, fe);
+    }
+
+    if (args[0].type != DATABOX_UNSIGNED_64 ||
+        args[1].type != DATABOX_UNSIGNED_64 || args[0].data.u64 > SIZE_MAX ||
+        args[1].data.u64 > SIZE_MAX) {
+        return false;
+    }
+
+    const size_t row = (size_t)args[0].data.u64;
+    const size_t col = (size_t)args[1].data.u64;
+    const databox *value = (const databox *)&args[2];
+    return op == PERSIST_OP_NUM_INCR ? multiFenwick2dUpdate(t, row, col, value)
+                                     : multiFenwick2dSet(t, row, col, value);
+}
+
+static void *multiFenwick2dPersistNewEmpty_(void) {
+    /* @own: caller; free=multiFenwick2dFree */
+    return multiFenwick2dNew();
+}
+
+static size_t multiFenwick2dPersistCount_(const void *structure) {
+    const multiFenwick2d *t = structure;
+    return t ? (size_t)(t->rows * t->cols) : 0;
+}
+
+static size_t multiFenwick2dPersistBytes_(const void *structure) {
+    return multiFenwick2dBytes(structure);
+}
+
+static void multiFenwick2dPersistFree_(void *structure) {
+    multiFenwick2dFree(structure);
+}
+
+const persistOps persistOpsMultiFenwick2d = {
+    .type = PERSIST_TYPE_MULTIFENWICK_2D,
+    .name = "multiFenwick2d",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = multiFenwick2dPersistSnapshot_,
+    .restore = multiFenwick2dPersistRestore_,
+    .newEmpty = multiFenwick2dPersistNewEmpty_,
+    .count = multiFenwick2dPersistCount_,
+    .estimateSize = multiFenwick2dPersistBytes_,
+    .encodeOp = multiFenwick2dPersistEncodeOp_,
+    .applyOp = multiFenwick2dPersistApplyOp_,
+    .free = multiFenwick2dPersistFree_,
+};
+
+#undef MF2D_P_MAX_CELLS_

@@ -1,8 +1,10 @@
 #include "multiFenwickFlat.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "flex.h"
 #include "multiFenwickCells.h"
 #include "multiFenwickCommon.h"
+#include "persist.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
@@ -453,6 +455,169 @@ void multiFenwickFlatClear(multiFenwickFlat *mfw) {
     /* Every cell becomes the int64 0, so the kinds array is not needed */
     multiFenwickCellsClear(&mfw->cells, mfw->capacity);
 }
+
+/* ====================================================================
+ * Persistence
+ * ====================================================================
+ * As multiFenwick's: flex [capacity, count, cell 0, ..., cell
+ * capacity-1], every cell as its value (SIGNED/UNSIGNED_64 by value, a
+ * double cell as a float).  WAL: NUM_INCR / UPDATE [index, value],
+ * CLEAR. */
+
+static uint8_t *multiFenwickFlatPersistSnapshot_(const void *structure,
+                                                 size_t *len) {
+    const multiFenwickFlat *mfw = structure;
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    const databox capacity = DATABOX_UNSIGNED(mfw->capacity);
+    const databox count = DATABOX_UNSIGNED(mfw->count);
+    flexPushByTypeExact(&f, &capacity, FLEX_ENDPOINT_TAIL);
+    flexPushByTypeExact(&f, &count, FLEX_ENDPOINT_TAIL);
+
+    /* 64 cells per flex growth */
+    enum { BATCH = 64 };
+    databox boxes[BATCH];
+    const databox *ptrs[BATCH];
+    for (uint64_t at = 0; at < mfw->capacity; at += BATCH) {
+        const uint64_t n =
+            mfw->capacity - at < BATCH ? mfw->capacity - at : BATCH;
+        for (uint64_t i = 0; i < n; i++) {
+            /* A stored cell always boxes */
+            const bool ok = multiFenwickNumBox_(
+                multiFenwickCellsGet(&mfw->cells, at + i), &boxes[i]);
+            assert(ok);
+            (void)ok;
+            ptrs[i] = &boxes[i];
+        }
+
+        flexAppendMultipleExact(&f, (uint_fast32_t)n, ptrs);
+    }
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *multiFenwickFlatPersistRestore_(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    flexEntry *fe = flexHead(f);
+    databoxBig box;
+    uint64_t header[2];
+    for (size_t h = 0; h < 2 && h < n; h++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        header[h] = box.type == DATABOX_UNSIGNED_64 ? box.data.u64 : UINT64_MAX;
+    }
+
+    const uint64_t capacity = n >= 2 ? header[0] : UINT64_MAX;
+    const uint64_t count = n >= 2 ? header[1] : UINT64_MAX;
+    if (n < 2 || capacity != n - 2 || count > capacity ||
+        (capacity & (capacity - 1)) || (count == 0) != (capacity == 0) ||
+        capacity > MULTIFENWICK_FLAT_INDEX_MAX + 1) {
+        return NULL;
+    }
+
+    cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = multiFenwickFlatNew();
+    if (capacity) {
+        multiFenwickCellsGrow(&mfw->cells, 0, capacity);
+    }
+
+    mfw->capacity = capacity;
+    mfw->count = count;
+    for (uint64_t i = 0; i < capacity; i++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        multiFenwickNum num;
+        multiFenwickCell cell;
+        if (!multiFenwickNumFrom_((const databox *)&box, &num) ||
+            !multiFenwickCellEncode(num, &cell)) {
+            return NULL;
+        }
+
+        multiFenwickCellsPut(&mfw->cells, capacity, i, cell);
+    }
+
+    multiFenwickFlat *out = mfw;
+    mfw = NULL;
+    return out;
+}
+
+static uint8_t *multiFenwickFlatPersistEncodeOp_(persistOp op, const void *args,
+                                                 size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2 ||
+        !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool multiFenwickFlatPersistApplyOp_(void *structure, persistOp op,
+                                            const uint8_t *data, size_t len) {
+    multiFenwickFlat **mfw = structure;
+    if (op == PERSIST_OP_CLEAR) {
+        multiFenwickFlatClear(*mfw);
+        return true;
+    }
+
+    databoxBig idx;
+    databoxBig value;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
+        !flexGetTwoDataboxesBig(data, len, &idx, &value) ||
+        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX) {
+        return false;
+    }
+
+    return op == PERSIST_OP_NUM_INCR
+               ? multiFenwickFlatUpdate(mfw, (size_t)idx.data.u64,
+                                        (const databox *)&value)
+               : multiFenwickFlatSet(mfw, (size_t)idx.data.u64,
+                                     (const databox *)&value);
+}
+
+static void *multiFenwickFlatPersistNewEmpty_(void) {
+    /* @own: caller; free=multiFenwickFlatFree */
+    return multiFenwickFlatNew();
+}
+
+static size_t multiFenwickFlatPersistCount_(const void *structure) {
+    return multiFenwickFlatCount(structure);
+}
+
+static size_t multiFenwickFlatPersistBytes_(const void *structure) {
+    return multiFenwickFlatBytes(structure);
+}
+
+static void multiFenwickFlatPersistFree_(void *structure) {
+    multiFenwickFlatFree(structure);
+}
+
+const persistOps persistOpsMultiFenwickFlat = {
+    .type = PERSIST_TYPE_MULTIFENWICK_FLAT,
+    .name = "multiFenwickFlat",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = multiFenwickFlatPersistSnapshot_,
+    .restore = multiFenwickFlatPersistRestore_,
+    .newEmpty = multiFenwickFlatPersistNewEmpty_,
+    .count = multiFenwickFlatPersistCount_,
+    .estimateSize = multiFenwickFlatPersistBytes_,
+    .encodeOp = multiFenwickFlatPersistEncodeOp_,
+    .applyOp = multiFenwickFlatPersistApplyOp_,
+    .free = multiFenwickFlatPersistFree_,
+};
 
 #ifdef DATAKIT_TEST
 static void multiFenwickFlatReprBox_(bool ok, const databox *box) {

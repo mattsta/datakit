@@ -64,6 +64,11 @@ size_t multiFenwick2dCols(const multiFenwick2d *t);
 size_t multiFenwick2dBytes(const multiFenwick2d *t);
 void multiFenwick2dClear(multiFenwick2d *t);
 
+/* Persistence (persist.h).  Snapshots keep the capacities, the extents
+ * and every cell.  WAL (args: const databox *const *): NUM_INCR [row,
+ * col, delta] (Update), UPDATE [row, col, value] (Set), CLEAR. */
+extern const struct persistOps persistOpsMultiFenwick2d;
+
 #ifdef DATAKIT_TEST
 int multiFenwick2dTest(int argc, char *argv[]);
 #endif

@@ -164,6 +164,11 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
  * Time: O(n) */
 void multiFenwickFlatClear(multiFenwickFlat *mfw);
 
+/* Persistence (persist.h), as multiFenwick's: snapshots keep the
+ * capacity, the count and every cell; WAL NUM_INCR [index, delta]
+ * (Update), UPDATE [index, value] (Set), CLEAR. */
+extern const struct persistOps persistOpsMultiFenwickFlat;
+
 /* ====================================================================
  * TESTING & DEBUG
  * ==================================================================== */

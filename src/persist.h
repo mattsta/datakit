@@ -198,6 +198,11 @@ typedef enum persistType {
     PERSIST_TYPE_FENWICK2D_FLOAT = 118,
     PERSIST_TYPE_FENWICK2D_DOUBLE = 119,
 
+    /* Databox Fenwick trees */
+    PERSIST_TYPE_MULTIFENWICK = 120,
+    PERSIST_TYPE_MULTIFENWICK_FLAT = 121,
+    PERSIST_TYPE_MULTIFENWICK_2D = 122,
+
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
 } persistType;

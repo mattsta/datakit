@@ -218,8 +218,10 @@ Built-in descriptors: `persistOpsFlex`, `persistOpsIntset`,
 `persistOpsMultilist`, `persistOpsMultimap`, `persistOpsMultidict`,
 `persistOpsMultiarray`, `persistOpsMultiOrderedSet`, `persistOpsMultiLRU`
 (plus the keyring, cluster ring, mailbox watermark and AEAD nonce log
-states), and `persistOpsFenwick<T>` / `persistOpsFenwick2d<T>` for the
-typed Fenwick trees (`fenwick/fenwickPersist.h`; see FENWICK.md).
+states), `persistOpsFenwick<T>` / `persistOpsFenwick2d<T>` for the typed
+Fenwick trees (`fenwick/fenwickPersist.h`) and `persistOpsMultiFenwick`,
+`persistOpsMultiFenwickFlat`, `persistOpsMultiFenwick2d` for the databox
+ones (see FENWICK.md).
 
 ## Writing a persistOps Descriptor
 

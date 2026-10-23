@@ -5,9 +5,12 @@
 #include "mflexInternal.h"
 #include "multiFenwickCommon.h"
 #include "multilist.h"
+#include "persist.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(multiFenwick *, multiFenwickFree);
+defcleaner(mflexState *, mflexStateFree);
+defcleaner(flex *, flexFree);
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -498,6 +501,202 @@ void multiFenwickClear(multiFenwick *mfw) {
         (void)replaced;
     }
 }
+
+/* ====================================================================
+ * Persistence
+ * ====================================================================
+ * Snapshot: flex [capacity, count, cell 0, ..., cell capacity-1], each
+ * cell as stored.  Cells, not elements: a cell that has taken a double
+ * holds rounding the elements do not record, so restore keeps every
+ * cell as it was.  WAL (args: const databox *const *, two of them):
+ * NUM_INCR [index, delta] (Update), UPDATE [index, value] (Set), CLEAR. */
+
+static uint8_t *multiFenwickPersistSnapshot_(const void *structure,
+                                             size_t *len) {
+    const multiFenwick *mfw = structure;
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    const databox capacity = DATABOX_UNSIGNED(mfw->capacity);
+    const databox count = DATABOX_UNSIGNED(mfw->count);
+    flexPushByTypeExact(&f, &capacity, FLEX_ENDPOINT_TAIL);
+    flexPushByTypeExact(&f, &count, FLEX_ENDPOINT_TAIL);
+
+    if (mfw->capacity) {
+        cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
+        cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
+        mflexState *s[2] = {s0, s1};
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(mfw->tree, s, &iter);
+
+        /* 64 cells per flex growth */
+        enum { BATCH = 64 };
+        databox boxes[BATCH];
+        const databox *ptrs[BATCH];
+        size_t used = 0;
+        multilistEntry entry;
+        while (multilistNext(&iter, &entry)) {
+            boxes[used] = entry.box;
+            ptrs[used] = &boxes[used];
+            if (++used == BATCH) {
+                flexAppendMultipleExact(&f, (uint_fast32_t)used, ptrs);
+                used = 0;
+            }
+        }
+
+        if (used) {
+            flexAppendMultipleExact(&f, (uint_fast32_t)used, ptrs);
+        }
+
+        multilistIteratorRelease(&iter);
+    }
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+/* The next entry as an unsigned 64-bit value */
+static bool multiFenwickPersistUnsigned_(const flex *f, flexEntry **fe,
+                                         uint64_t *out) {
+    databoxBig box;
+    flexGetByTypeBig(*fe, &box);
+    *fe = flexNext(f, *fe);
+    *out = box.data.u64;
+    return box.type == DATABOX_UNSIGNED_64;
+}
+
+static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    flexEntry *fe = flexHead(f);
+    uint64_t capacity;
+    uint64_t count;
+    if (n < 2 || !multiFenwickPersistUnsigned_(f, &fe, &capacity) ||
+        !multiFenwickPersistUnsigned_(f, &fe, &count) || capacity != n - 2 ||
+        count > capacity || (capacity & (capacity - 1)) ||
+        (count == 0) != (capacity == 0) ||
+        capacity > MULTIFENWICK_INDEX_MAX + 1) {
+        return NULL;
+    }
+
+    cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
+    if (!mfw) {
+        return NULL;
+    }
+
+    /* Every cell must be a value a cell can hold, stored as the tree
+     * stores it.  The cells are gathered 64 at a time into one flex, then
+     * cut into the multilist's nodes in one pass. */
+    cleaner(flexFree) flex *cells = flexNew();
+    enum { BATCH = 64 };
+    databox boxes[BATCH];
+    const databox *ptrs[BATCH];
+    for (uint64_t at = 0; at < capacity; at += BATCH) {
+        const uint64_t batch = capacity - at < BATCH ? capacity - at : BATCH;
+        for (uint64_t i = 0; i < batch; i++) {
+            databoxBig box;
+            flexGetByTypeBig(fe, &box);
+            fe = flexNext(f, fe);
+            multiFenwickNum num;
+            if (!multiFenwickNumFrom_((const databox *)&box, &num) ||
+                !multiFenwickNumBox_(num, &boxes[i])) {
+                return NULL;
+            }
+
+            ptrs[i] = &boxes[i];
+        }
+
+        flexAppendMultiple(&cells, (uint_fast32_t)batch, ptrs);
+    }
+
+    multilistFree(mfw->tree);
+    /* @own: container; free=multilistFree */
+    mfw->tree = multilistNewFromDump(FLEX_CAP_LEVEL_8192, 0, mfw->state, cells);
+    cells = NULL; /* taken by the multilist */
+    mfw->capacity = capacity;
+    mfw->count = count;
+
+    multiFenwick *out = mfw;
+    mfw = NULL;
+    return out;
+}
+
+static uint8_t *multiFenwickPersistEncodeOp_(persistOp op, const void *args,
+                                             size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2 ||
+        !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool multiFenwickPersistApplyOp_(void *structure, persistOp op,
+                                        const uint8_t *data, size_t len) {
+    multiFenwick **mfw = structure;
+    if (op == PERSIST_OP_CLEAR) {
+        multiFenwickClear(*mfw);
+        return true;
+    }
+
+    databoxBig idx;
+    databoxBig value;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
+        !flexGetTwoDataboxesBig(data, len, &idx, &value) ||
+        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX) {
+        return false;
+    }
+
+    /* Update and Set refuse every value a tree does not take */
+    return op == PERSIST_OP_NUM_INCR
+               ? multiFenwickUpdate(mfw, (size_t)idx.data.u64,
+                                    (const databox *)&value)
+               : multiFenwickSet(mfw, (size_t)idx.data.u64,
+                                 (const databox *)&value);
+}
+
+static void *multiFenwickPersistNewEmpty_(void) {
+    /* @own: caller; free=multiFenwickFree */
+    return multiFenwickNew();
+}
+
+static size_t multiFenwickPersistCount_(const void *structure) {
+    return multiFenwickCount(structure);
+}
+
+static size_t multiFenwickPersistBytes_(const void *structure) {
+    return multiFenwickBytes(structure);
+}
+
+static void multiFenwickPersistFree_(void *structure) {
+    multiFenwickFree(structure);
+}
+
+const persistOps persistOpsMultiFenwick = {
+    .type = PERSIST_TYPE_MULTIFENWICK,
+    .name = "multiFenwick",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = multiFenwickPersistSnapshot_,
+    .restore = multiFenwickPersistRestore_,
+    .newEmpty = multiFenwickPersistNewEmpty_,
+    .count = multiFenwickPersistCount_,
+    .estimateSize = multiFenwickPersistBytes_,
+    .encodeOp = multiFenwickPersistEncodeOp_,
+    .applyOp = multiFenwickPersistApplyOp_,
+    .free = multiFenwickPersistFree_,
+};
 
 #ifdef DATAKIT_TEST
 /* Print debug representation */
