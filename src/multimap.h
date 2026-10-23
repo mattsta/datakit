@@ -86,11 +86,11 @@ bool multimapExistsWithReference(const multimap *m, const databox *key,
  * allocated = 1).  BYTES of 8 bytes or less come back embedded
  * (DATABOX_BYTES_EMBED, nothing owned) and longer ones as heap copies.
  * Release each box with databoxFreeData, and initialize 'big' as for any
- * read.  Two removing
+ * read.  Three removing
  * paths are documented exceptions that report a 96/128-bit value
  * type-only (data.ptr NULL, big = 0) whatever the box holds:
- * InsertReplacing's replacedOut and DeleteWithFound / DeleteWithReference's
- * foundReference. */
+ * InsertReplacing's replacedOut, DeleteReporting's removedOut and
+ * DeleteWithFound / DeleteWithReference's foundReference. */
 bool multimapLookup(const multimap *m, const databox *key, databox *elements[]);
 
 /* NOTE: despite the scalar-looking `databox **found`, this fills a
@@ -106,6 +106,20 @@ bool multimapRandomValue(multimap *m, bool fromTail, databox **found,
  * rows alone, never by how the map is laid out, so replaying the same
  * operations always touches the same rows. */
 bool multimapDelete(multimap **m, const databox *key);
+/* multimapDelete that also reports the deleted row's value entries through
+ * 'removedOut' (NULL, or 'elementsPerEntry - 1' slots in tuple order after
+ * the key) under InsertReplacing's replacedOut rules: numbers by value, a
+ * BYTES or container slot with its type and length but pointing into the
+ * rewritten map (not to be read), a 96/128-bit value type-only.  One
+ * search, where Lookup then Delete is two. */
+bool multimapDeleteReporting(multimap **m, const databox *key,
+                             databox *removedOut);
+/* multimapDelete that hands the deleted row's value entries back through
+ * 'takenOut' (NULL, or 'elementsPerEntry - 1' slots) as DeleteRandomValue
+ * does (see "Removing reads"): self-contained and owned by the caller,
+ * each released with databoxFreeData.  One search, where Lookup, copy,
+ * then Delete is two. */
+bool multimapDeleteTaking(multimap **m, const databox *key, databox *takenOut);
 bool multimapDeleteFullWidth(multimap **m, const databox *elements[]);
 /* foundReference, when non-NULL, receives the deleted row's key as stored
  * (the reference id in a surrogate-keyed map).  A BYTES key points into

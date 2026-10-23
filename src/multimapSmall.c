@@ -309,11 +309,11 @@ bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
     return true;
 }
 
-DK_INLINE_ALWAYS bool abstractDelete(multimapSmall *m, const databox **elements,
-                                     const bool fullWidth,
-                                     const bool useReference,
-                                     const multimapAtom *referenceContainer,
-                                     databox *foundReference) {
+DK_INLINE_ALWAYS bool
+abstractDelete(multimapSmall *m, const databox **elements, const bool fullWidth,
+               const bool useReference, const multimapAtom *referenceContainer,
+               databox *foundReference, databox *removedOut,
+               const bool takeRemoved) {
     flexEntry *middle = GET_MIDDLE(m);
     const databox *key = elements[0];
 
@@ -340,6 +340,8 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapSmall *m, const databox **elements,
             flexGetByTypeInto(foundP, foundReference, NULL);
         }
 
+        multimapRemovedOutFill_(m->map, foundP, m->elementsPerEntry, removedOut,
+                                takeRemoved);
         flexDeleteSortedValueWithMiddle(&m->map, m->elementsPerEntry, foundP,
                                         &middle);
         SET_MIDDLE(m, middle);
@@ -350,11 +352,25 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapSmall *m, const databox **elements,
 
 bool multimapSmallDelete(multimapSmall *m, const databox *key) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, false, NULL, NULL);
+    return abstractDelete(m, elements, false, false, NULL, NULL, NULL, false);
+}
+
+bool multimapSmallDeleteReporting(multimapSmall *m, const databox *key,
+                                  databox *removedOut) {
+    const databox *elements[1] = {key};
+    return abstractDelete(m, elements, false, false, NULL, NULL, removedOut,
+                          false);
+}
+
+bool multimapSmallDeleteTaking(multimapSmall *m, const databox *key,
+                               databox *takenOut) {
+    const databox *elements[1] = {key};
+    return abstractDelete(m, elements, false, false, NULL, NULL, takenOut,
+                          true);
 }
 
 bool multimapSmallDeleteFullWidth(multimapSmall *m, const databox *elements[]) {
-    return abstractDelete(m, elements, true, false, NULL, NULL);
+    return abstractDelete(m, elements, true, false, NULL, NULL, NULL, false);
 }
 
 bool multimapSmallDeleteWithReference(multimapSmall *m, const databox *key,
@@ -362,20 +378,21 @@ bool multimapSmallDeleteWithReference(multimapSmall *m, const databox *key,
                                       databox *foundReference) {
     const databox *elements[1] = {key};
     return abstractDelete(m, elements, false, true, referenceContainer,
-                          foundReference);
+                          foundReference, NULL, false);
 }
 
 bool multimapSmallDeleteWithFound(multimapSmall *m, const databox *key,
                                   databox *foundReference) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, true, NULL, foundReference);
+    return abstractDelete(m, elements, false, true, NULL, foundReference, NULL,
+                          false);
 }
 
 bool multimapSmallDeleteFullWidthWithReference(
     multimapSmall *m, const databox *elements[],
     const multimapAtom *referenceContainer, databox *foundReference) {
     return abstractDelete(m, elements, true, true, referenceContainer,
-                          foundReference);
+                          foundReference, NULL, false);
 }
 
 /* Row entry at position 'keyIndex' (0-based forward; negative =

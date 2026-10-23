@@ -1075,7 +1075,8 @@ DK_STATIC bool multimapFullFlexInsertWithSurrogateKey(
 DK_INLINE_ALWAYS bool abstractFlexDelete(
     multimapFull *m, const multimapFullIdx mapIdx, const databox *elements[],
     const bool useFullWidth, const bool useReference,
-    const multimapAtom *referenceContainer, databox *foundReference) {
+    const multimapAtom *referenceContainer, databox *foundReference,
+    databox *removedOut, const bool takeRemoved) {
     flex **map = getMapPtr(m, mapIdx);
     flexEntry *middle = GET_MIDDLE(m, mapIdx, *map);
 
@@ -1103,6 +1104,8 @@ DK_INLINE_ALWAYS bool abstractFlexDelete(
             flexGetByTypeInto(foundP, foundReference, NULL);
         }
 
+        multimapRemovedOutFill_(*map, foundP, m->elementsPerEntry, removedOut,
+                                takeRemoved);
         flexDeleteSortedValueWithMiddle(map, m->elementsPerEntry, foundP,
                                         &middle);
         m->values--;
@@ -1123,29 +1126,30 @@ DK_INLINE_ALWAYS bool multimapFullFlexDeleteWithReference(
     const multimapAtom *referenceContainer, databox *foundReference) {
     const databox *elements[1] = {key};
     return abstractFlexDelete(m, mapIdx, elements, false, true,
-                              referenceContainer, foundReference);
+                              referenceContainer, foundReference, NULL, false);
 }
 
 DK_INLINE_ALWAYS bool
 multimapFullFlexDeleteWithFound(multimapFull *m, const multimapFullIdx mapIdx,
-                                const databox *key, databox *foundReference) {
+                                const databox *key, databox *foundReference,
+                                databox *removedOut, const bool takeRemoved) {
     const databox *elements[1] = {key};
     return abstractFlexDelete(m, mapIdx, elements, false, false, NULL,
-                              foundReference);
+                              foundReference, removedOut, takeRemoved);
 }
 
 DK_INLINE_ALWAYS bool multimapFullFlexDeleteFullWidthWithFound(
     multimapFull *m, const multimapFullIdx mapIdx, const databox *elements[],
     databox *foundReference) {
     return abstractFlexDelete(m, mapIdx, elements, true, false, NULL,
-                              foundReference);
+                              foundReference, NULL, false);
 }
 
 DK_INLINE_ALWAYS bool multimapFullFlexDeleteFullWidthWithReference(
     multimapFull *m, const multimapFullIdx mapIdx, const databox *elements[],
     const multimapAtom *referenceContainer, databox *foundReference) {
     return abstractFlexDelete(m, mapIdx, elements, true, true,
-                              referenceContainer, foundReference);
+                              referenceContainer, foundReference, NULL, false);
 }
 
 /* Locate the row at position 'keyIndex' (0-based forward; negative =
@@ -1982,11 +1986,11 @@ bool multimapFullLookupWithReference(multimapFull *m, const databox *key,
 /* ====================================================================
  * Delete API
  * ==================================================================== */
-DK_INLINE_ALWAYS bool abstractDelete(multimapFull *m, const databox **elements,
-                                     const bool fullWidth,
-                                     const bool useReference,
-                                     const multimapAtom *referenceContainer,
-                                     databox *foundReference) {
+DK_INLINE_ALWAYS bool
+abstractDelete(multimapFull *m, const databox **elements, const bool fullWidth,
+               const bool useReference, const multimapAtom *referenceContainer,
+               databox *foundReference, databox *removedOut,
+               const bool takeRemoved) {
     assert(!useReference || (useReference && referenceContainer));
 
     /* Step 1: find matching map for range. */
@@ -2016,8 +2020,8 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapFull *m, const databox **elements,
             deleted = multimapFullFlexDeleteWithReference(
                 m, mapIdx, key, referenceContainer, foundReference);
         } else {
-            deleted =
-                multimapFullFlexDeleteWithFound(m, mapIdx, key, foundReference);
+            deleted = multimapFullFlexDeleteWithFound(
+                m, mapIdx, key, foundReference, removedOut, takeRemoved);
         }
     }
 
@@ -2121,7 +2125,21 @@ void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me) {
 
 bool multimapFullDelete(multimapFull *m, const databox *key) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, false, NULL, NULL);
+    return abstractDelete(m, elements, false, false, NULL, NULL, NULL, false);
+}
+
+bool multimapFullDeleteReporting(multimapFull *m, const databox *key,
+                                 databox *removedOut) {
+    const databox *elements[1] = {key};
+    return abstractDelete(m, elements, false, false, NULL, NULL, removedOut,
+                          false);
+}
+
+bool multimapFullDeleteTaking(multimapFull *m, const databox *key,
+                              databox *takenOut) {
+    const databox *elements[1] = {key};
+    return abstractDelete(m, elements, false, false, NULL, NULL, takenOut,
+                          true);
 }
 
 bool multimapFullDeleteNMapsIterate(multimapFull *m, const size_t n,
@@ -2156,13 +2174,14 @@ bool multimapFullDeleteNMaps(multimapFull *m, const size_t n) {
 }
 
 bool multimapFullDeleteFullWidth(multimapFull *m, const databox *elements[]) {
-    return abstractDelete(m, elements, true, false, NULL, NULL);
+    return abstractDelete(m, elements, true, false, NULL, NULL, NULL, false);
 }
 
 bool multimapFullDeleteFullWidthWithFound(multimapFull *m,
                                           const databox *elements[],
                                           databox *foundReference) {
-    return abstractDelete(m, elements, true, false, NULL, foundReference);
+    return abstractDelete(m, elements, true, false, NULL, foundReference, NULL,
+                          false);
 }
 
 bool multimapFullDeleteWithReference(multimapFull *m, const databox *key,
@@ -2170,20 +2189,21 @@ bool multimapFullDeleteWithReference(multimapFull *m, const databox *key,
                                      databox *foundReference) {
     const databox *elements[1] = {key};
     return abstractDelete(m, elements, false, true, referenceContainer,
-                          foundReference);
+                          foundReference, NULL, false);
 }
 
 bool multimapFullDeleteWithFound(multimapFull *m, const databox *key,
                                  databox *foundReference) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, false, NULL, foundReference);
+    return abstractDelete(m, elements, false, false, NULL, foundReference, NULL,
+                          false);
 }
 
 bool multimapFullDeleteFullWidthWithReference(
     multimapFull *m, const databox *elements[],
     const multimapAtom *referenceContainer, databox *foundReference) {
     return abstractDelete(m, elements, true, true, referenceContainer,
-                          foundReference);
+                          foundReference, NULL, false);
 }
 
 bool multimapFullRandomValue(multimapFull *m, const bool fromTail,

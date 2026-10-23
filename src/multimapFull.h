@@ -97,6 +97,10 @@ bool multimapFullRegularizeMapWithReference(
     const struct multimapAtom *referenceContainer);
 
 bool multimapFullDelete(multimapFull *m, const databox *key);
+bool multimapFullDeleteReporting(multimapFull *m, const databox *key,
+                                 databox *removedOut);
+bool multimapFullDeleteTaking(multimapFull *m, const databox *key,
+                              databox *takenOut);
 
 /* Drop the lowest 'n' maps whole (their rows leave the count; the last map
  * empties in place, as a multimapFull keeps one), handing each to

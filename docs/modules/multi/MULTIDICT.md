@@ -101,8 +101,11 @@ typedef struct multidictClass {
     void *(*operationSlotGetOrCreate)(struct multidictClass *qdc,
                                       multidictSlot **slot,
                                       const databox *keybox);
-    void *(*operationRemove)(struct multidictClass *qdc, multidictSlot **slot,
-                             const databox *keybox);
+    /* One search; 'removedVal' (may be NULL) gets the removed value:
+     * type and length only, or an owned copy with 'take' */
+    bool (*operationRemove)(struct multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox, databox *removedVal,
+                            bool take);
     bool (*findValueByKey)(struct multidictClass *qdc, multidictSlot *slot,
                            const databox *keybox, databox *valbox);
     void *(*createSlot)(void);
@@ -123,10 +126,9 @@ typedef struct multidictClass {
     void (*iterateAll)(struct multidictClass *qdc, multidictSlot *slot,
                        multidictIterProcess process, void *privdata);
 
-    /* Rehashing support: read the last entry, then move exactly it */
-    bool (*lastEntry)(multidictSlot *slot, databox *keybox, databox *valbox);
-    bool (*migrateLast)(multidictSlot **dst, multidictSlot **src,
-                        const databox *keybox, const databox *valbox);
+    /* Rehash reads each old slot with getIter/iterNext, inserts every row
+     * into its new slot with insertByType (which copies what the row
+     * borrows) and frees the old slot whole with freeSlot. */
 
     /* Cleanup */
     void (*free)(struct multidictClass *qdc);
@@ -1047,7 +1049,7 @@ entries on average, so `k` below is small but never guaranteed to be 1.
 | ---------------- | ------------- | ---------- | ------------------------------------------------------ |
 | Insert           | O(1) + O(k)   | O(n)       | Amortized; also removes any `ht[0]` twin during rehash |
 | Lookup           | O(1) + O(k)   | O(n)       | k depends on the slot implementation                   |
-| Delete           | O(1) + O(k)   | O(n)       | Must find the key inside the slot                      |
+| Delete           | O(1) + O(k)   | O(n)       | One slot search per table (GetAndDelete, PopRandom too) |
 | AddNX/AddXX      | O(1) + O(k)   | O(n)       | Existence probe followed by an Add                     |
 | IncrBy           | O(1) + O(k)   | O(n)       | Find, then Add - two slot walks                        |
 | Iteration        | O(n)          | O(n)       | Iterates all slots and entries                         |

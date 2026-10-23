@@ -172,9 +172,11 @@ struct multidict {
  * storage set up for it:
  *   - iteration decodes straight into the slots (the slot iterator's
  *     'wide', or a stack pair) through multimapIteratorNextWithSlots;
- *   - a slot class or multidict read that fills a box in place (lastEntry,
- *     findValueByKey, findKeyByPosition, multidictFind) gets a box aimed
- *     at a stack slot with mdBoxAim_ first.
+ *   - a slot class or multidict read that fills a box in place
+ *     (findValueByKey, findKeyByPosition, multidictFind) gets a box aimed
+ *     at a stack slot with mdBoxAim_ first;
+ *   - a removal reports a 96/128-bit value type-only (or, taking, as an
+ *     owned copy).
  * Narrow values never touch the slot. */
 DK_INLINE_ALWAYS bool mdBoxIsWide_(const databox *box) {
     return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
@@ -312,6 +314,10 @@ typedef struct mdLRUCandidates {
 static void multidictLRUOnInsert(multidict *d, const databox *keybox);
 static void multidictLRUOnAccess(multidict *d, const databox *keybox);
 static void multidictLRUOnDelete(multidict *d, const databox *keybox);
+static bool multidictRemoveFromTable_(multidict *d, int htidx,
+                                      const databox *keybox, uint32_t hash,
+                                      size_t keySize, databox *removedVal,
+                                      bool take);
 static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
                                      databox *keybox, databoxWide *slot);
 DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
@@ -550,11 +556,12 @@ uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
             multidictRehash(d, 1);                                             \
     } while (0)
 
-/* Hot path: called on every lookup/insert/delete. Optimize for common case. */
-DK_INLINE_ALWAYS multidictSlot **multidictSlotForKey(multidict *d,
-                                                     bool onlyLatest,
-                                                     const databox *keybox,
-                                                     int *htidx) {
+/* Hot path: called on every lookup/insert/delete. Optimize for common case.
+ * 'knownHash', when not NULL, is the key's hash already computed by the
+ * caller (it does not depend on the table). */
+DK_INLINE_ALWAYS multidictSlot **
+multidictSlotForKey(multidict *d, bool onlyLatest, const databox *keybox,
+                    const uint32_t *knownHash, int *htidx) {
     bool rehashing = d->rehashing; /* Direct access for performance */
 
     /* If our SIZE is 1, then we only have one hash slot and
@@ -571,7 +578,8 @@ DK_INLINE_ALWAYS multidictSlot **multidictSlotForKey(multidict *d,
 
     /* else, we look up the slot by hash value first by checking the
      * 'rehashing' table then by checking the other table (if requested) */
-    uint32_t hash = multidictHashOfKey_(d, keybox);
+    const uint32_t hash =
+        knownHash ? *knownHash : multidictHashOfKey_(d, keybox);
 
     /* Initial search is always the new table if we are rehashing. */
     int useSlot = rehashing;
@@ -592,11 +600,11 @@ DK_INLINE_ALWAYS multidictSlot **multidictSlotForKey(multidict *d,
     return foundSlot;
 }
 
-DK_STATIC void *multidictOperate(multidict *d, multidictOp *op,
-                                 const databox *keybox, bool onlyLatest,
-                                 void *(*operate)(multidictClass *qdc,
-                                                  multidictSlot **slot,
-                                                  const databox *keybox)) {
+DK_STATIC void *
+multidictOperate(multidict *d, multidictOp *op, const databox *keybox,
+                 const uint32_t *knownHash, bool onlyLatest,
+                 void *(*operate)(multidictClass *qdc, multidictSlot **slot,
+                                  const databox *keybox)) {
     multidictRehashStep(d);
 
     /* Ensure hash table is initialized (expand if empty after multidictEmpty)
@@ -613,7 +621,7 @@ DK_STATIC void *multidictOperate(multidict *d, multidictOp *op,
      * table 0, then we search (and optionally create) in table 1. */
     int htidx;
     multidictSlot **foundSlot =
-        multidictSlotForKey(d, onlyLatest, keybox, &htidx);
+        multidictSlotForKey(d, onlyLatest, keybox, knownHash, &htidx);
     void *result = operate(d->shared, foundSlot, keybox);
 
     if (op) {
@@ -626,17 +634,18 @@ DK_STATIC void *multidictOperate(multidict *d, multidictOp *op,
     return result;
 }
 
-DK_STATIC multidictSlot *multidictFindSlotForKeyNewest(multidict *d,
-                                                       multidictOp *op,
-                                                       const databox *keybox) {
-    return multidictOperate(d, op, keybox, true,
+DK_STATIC multidictSlot *
+multidictFindSlotForKeyNewest(multidict *d, multidictOp *op,
+                              const databox *keybox,
+                              const uint32_t *knownHash) {
+    return multidictOperate(d, op, keybox, knownHash, true,
                             d->shared->operationSlotGetOrCreate);
 }
 
 __attribute__((unused)) DK_STATIC multidictSlot *
 multidictFindSlotForKeyAny(multidict *d, multidictOp *op,
                            const databox *keybox) {
-    return multidictOperate(d, op, keybox, false,
+    return multidictOperate(d, op, keybox, NULL, false,
                             d->shared->operationSlotGetOrCreate);
 }
 
@@ -1072,91 +1081,58 @@ bool multidictRehash(multidict *d, int32_t n) {
         }
         /* At this point, we are *guaranteed* 'current' is NOT null */
 
-        /* Now migrate the last entry of 'current' into its new slot in
-         * HT 1.  Repeat until 'current' has no remaining elements.
-         * This should be efficient since, on a well behaved multidict class,
-         * 'current' will fit entirely into L1 cache. */
-        databox keybox;
-        databox valbox;
-        databoxWide keyWide;
-        databoxWide valWide;
-        bool freeCurrentContainer = true;
+        /* Move every row of 'current' to its slot in HT 1 in one pass:
+         * each row is read in place and inserted into its target (a slot
+         * of a grown table takes rows from this one slot only), and
+         * 'current' is then freed whole, with no per-row delete.  A
+         * one-row slot whose target is still empty moves as it is. */
+        const size_t currentBytes = shared->sizeBytes(current);
+        const bool single = shared->countSlot(current) == 1;
+        bool movedWhole = false;
+        multidictSlotIterator slotIter;
+        multidictEntry row;
+        if (shared->getIter(&slotIter, current)) {
+            while (shared->iterNext(&slotIter, &row)) {
+                multidictSlot **target = SLOT_BY_HASH_PTR_PTR(
+                    d, 1, multidictHashOfKey_(d, &row.key));
 
-        /* We check 'current' in the while condition because if we move
-         * the entire slot, we need to abort the while loop with no cleanup. */
-        while (current) {
-            mdBoxAim_(&keybox, &keyWide);
-            mdBoxAim_(&valbox, &valWide);
-            if (!shared->lastEntry(current, &keybox, &valbox)) {
-                break;
-            }
+                /* Counts and the key and value bytes move row by row */
+                const size_t keySize = mdBoxSize_(&row.key);
+                const size_t valSize = mdBoxSize_(&row.val);
+                HTCOUNT(d, 0)--;
+                HTCOUNT(d, 1)++;
+                HTKEYBYTES(d, 0) -= keySize;
+                HTKEYBYTES(d, 1) += keySize;
+                HTVALBYTES(d, 0) -= valSize;
+                HTVALBYTES(d, 1) += valSize;
 
-            /* Get target multimap for new hash slot; created on-demand below */
-            multidictSlot **target =
-                SLOT_BY_HASH_PTR_PTR(d, 1, multidictHashOfKey_(d, &keybox));
+                if (single && !*target) {
+                    *target = current;
+                    HTBYTES(d, 1) += currentBytes;
+                    movedWhole = true;
+                    break;
+                }
 
-            /* All slots should be previously allocated. Target must exist. */
-            assert(target);
-
-            /* Key and value sizes for the byte tracking transfer */
-            const size_t keySize = mdBoxSize_(&keybox);
-            const size_t valSize = mdBoxSize_(&valbox);
-
-            /* Update HT counts and byte tracking; elements migrate one-by-one
-             */
-            HTCOUNT(d, 0)--;
-            HTCOUNT(d, 1)++;
-            HTKEYBYTES(d, 0) -= keySize;
-            HTKEYBYTES(d, 1) += keySize;
-            HTVALBYTES(d, 0) -= valSize;
-            HTVALBYTES(d, 1) += valSize;
-
-            uint32_t slotCount = shared->countSlot(current);
-
-            /* If our slotCount is somehow zero, we're broken, beacuse
-             * we just read a key from this slot! */
-            assert(slotCount > 0);
-
-            /* If current slot ONLY has one entry AND target
-             * also doesn't exist yet, just move entire HT 0 slot
-             * instead of {create, copy, free original} into HT 1. */
-            if ((slotCount == 1) && (!*target)) {
-                /* Transfer entire slot's usedBytes */
-                size_t slotBytes = shared->sizeBytes(current);
-                HTBYTES(d, 0) -= slotBytes;
-                HTBYTES(d, 1) += slotBytes;
-
-                *target = current;
-                freeCurrentContainer = false;
-                current = NULL; /* breaks loop next time around */
-            } else {
-                /* Else, if target doesn't exist, materialize a new slot. */
-                uint32_t targetBefore = 0,
-                         currentBefore = shared->sizeBytes(current);
+                size_t targetBefore = 0;
                 if (!*target) {
                     *target = shared->createSlot();
                 } else {
                     targetBefore = shared->sizeBytes(*target);
                 }
 
-                /* Move the last entry (as read above) to 'target' */
-                shared->migrateLast(target, &current, &keybox, &valbox);
-
-                /* Update usedBytes based on size changes */
-                size_t targetAfter = shared->sizeBytes(*target);
-                size_t currentAfter = shared->sizeBytes(current);
-                HTBYTES(d, 0) -= (currentBefore - currentAfter);
-                HTBYTES(d, 1) += (targetAfter - targetBefore);
+                /* The insert copies anything the row borrows from
+                 * 'current', which stays untouched until it is freed */
+                shared->insertByType(shared, target, &row.key, &row.val, NULL);
+                HTBYTES(d, 1) += shared->sizeBytes(*target) - targetBefore;
             }
         }
 
-        /* Only free 'current' if we completely emptied it.
-         * Otherwise, we just moved 'current' and don't want to delete it. */
-        if (freeCurrentContainer) {
-            /* 'current' is now empty because the while loop exited. */
+        HTBYTES(d, 0) -= currentBytes;
+        if (!movedWhole) {
             shared->freeSlot(shared, current);
-            current = NULL;
         }
+
+        current = NULL;
 
         /* Update totalBytes for both HTs after processing this slot */
         HT_UPDATE_TOTAL(HT(d, 0));
@@ -1221,37 +1197,19 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
      * multidictSlotForKey, because multidictSlotForKey will return ht[1] if
      * that slot exists, even if the key hasn't been removed from ht[0] yet. */
     bool removedFromOldTable = false;
+    uint32_t hash = 0;
+    const uint32_t *knownHash = NULL;
     if (multidictIsRehashing(d)) {
-        /* Directly get the ht[0] slot by hash - bypass multidictSlotForKey */
-        uint32_t hash = multidictHashOfKey_(d, keybox);
-        multidictSlot **ht0Slot = SLOT_BY_HASH_PTR_PTR(d, 0, hash);
-
-        if (ht0Slot && *ht0Slot) {
-            /* Slot exists in ht[0] - check if this specific key is there.
-             * The value is only measured, so its type is enough. */
-            databox existingVal = {{0}};
-            if (d->shared->findValueByKey(d->shared, *ht0Slot, keybox,
-                                          &existingVal)) {
-                /* Key exists in ht[0] - remove it to prevent duplicate */
-                const size_t oldKeySize = mdBoxSize_(keybox);
-                const size_t oldValSize = mdBoxSize_(&existingVal);
-                size_t lenBefore = d->shared->sizeBytes(*ht0Slot);
-
-                d->shared->operationRemove(d->shared, ht0Slot, keybox);
-
-                size_t lenAfter = d->shared->sizeBytes(*ht0Slot);
-                d->ht[0].count--;
-                d->ht[0].usedBytes -= (lenBefore - lenAfter);
-                d->ht[0].keyBytes -= oldKeySize;
-                d->ht[0].valBytes -= oldValSize;
-                HT_UPDATE_TOTAL(&d->ht[0]);
-                removedFromOldTable = true;
-            }
-        }
+        /* Remove the key from ht[0] in one search (bypassing
+         * multidictSlotForKey); the hash serves the slot lookup below */
+        hash = multidictHashOfKey_(d, keybox);
+        knownHash = &hash;
+        removedFromOldTable = multidictRemoveFromTable_(
+            d, 0, keybox, hash, mdBoxSize_(keybox), NULL, false);
     }
 
     multidictOp op;
-    multidictFindSlotForKeyNewest(d, &op, keybox);
+    multidictFindSlotForKeyNewest(d, &op, keybox, knownHash);
 
     /* The insert may reallocate the slot: read it through its cell */
     const size_t lenBefore = d->shared->sizeBytes(*op.slot);
@@ -1383,103 +1341,94 @@ multidictResult multidictReplace(multidict *d, const databox *keybox,
     return multidictAddXX(d, keybox, valbox);
 }
 
-/* Helper: attempt delete from a specific hash table slot */
-static bool multidictDeleteFromSlot_(multidict *d, int htidx,
-                                     const databox *keybox) {
-    uint32_t hash = multidictHashOfKey_(d, keybox);
-
+/* Remove 'keybox' from table 'htidx' in one slot search ('hash' is the
+ * key's hash, 'keySize' its tracked size), keeping the table's counts.
+ * 'removedVal' and 'take' are operationRemove's; the removed value is
+ * measured either way. */
+static bool multidictRemoveFromTable_(multidict *d, int htidx,
+                                      const databox *keybox, uint32_t hash,
+                                      size_t keySize, databox *removedVal,
+                                      bool take) {
     multidictSlot **slotPtr = SLOT_BY_HASH_PTR_PTR(d, htidx, hash);
-    if (!slotPtr || !*slotPtr) {
+    if (!*slotPtr) {
         return false;
     }
 
-    multidictSlot *slot = *slotPtr;
-
-    /* Check if key actually exists in this slot.  The value is only
-     * measured, so its type is enough. */
-    databox val = {{0}};
-    if (!d->shared->findValueByKey(d->shared, slot, keybox, &val)) {
-        return false; /* Key not in this slot */
+    const size_t lenBefore = d->shared->sizeBytes(*slotPtr);
+    databox measured = {{0}};
+    databox *val = removedVal ? removedVal : &measured;
+    if (!d->shared->operationRemove(d->shared, slotPtr, keybox, val,
+                                    take && removedVal)) {
+        return false;
     }
 
-    /* Key exists - proceed with deletion */
     multidictHT *ht = HT(d, htidx);
-    const size_t lenBefore = d->shared->sizeBytes(slot);
-
-    const size_t keySize = mdBoxSize_(keybox);
-    const size_t valSize = mdBoxSize_(&val);
-
-    /* LRU tracking: remove from LRU BEFORE deleting key */
-    multidictLRUOnDelete(d, keybox);
-
-    /* Perform the deletion */
-    void *result = d->shared->operationRemove(d->shared, slotPtr, keybox);
-    bool deleted = !!(uintptr_t)result;
-
-    if (deleted) {
-        const size_t lenAfter = d->shared->sizeBytes(*slotPtr);
-        ht->count--;
-        ht->usedBytes -= (lenBefore - lenAfter);
-        ht->keyBytes -= keySize;
-        ht->valBytes -= valSize;
-        HT_UPDATE_TOTAL(ht);
-    }
-
-    return deleted;
+    ht->count--;
+    ht->usedBytes -= lenBefore - d->shared->sizeBytes(*slotPtr);
+    ht->keyBytes -= keySize;
+    ht->valBytes -= mdBoxSize_(val);
+    HT_UPDATE_TOTAL(ht);
+    return true;
 }
 
-/* multidictDelete for a key the slot layer can match by its exact bytes */
-DK_STATIC bool multidictDeleteExact_(multidict *d, const databox *keybox) {
+/* Remove a key the slot layer can match by its exact bytes: one hash and
+ * one slot search per table.  'removedVal' and 'take' as for
+ * multidictRemoveFromTable_. */
+DK_STATIC bool multidictRemoveExact_(multidict *d, const databox *keybox,
+                                     databox *removedVal, bool take) {
     if (unlikely(HTSIZE(d, 0) == 0)) {
         return false; /* d->ht[0].table is NULL */
     }
 
     multidictRehashStep(d);
 
-    /* During rehashing, we must search BOTH tables. The slot lookup may return
-     * a non-NULL slot in ht[1] that doesn't contain our key, while our key is
-     * still in ht[0] awaiting migration. This is the same fix as multidictFind.
-     */
-    if (unlikely(d->rehashing)) {
-        /* Try ht[1] first (newer table) */
-        if (multidictDeleteFromSlot_(d, 1, keybox)) {
-            multidictShrinkIfNeeded_(d);
-            return true;
-        }
-        /* Then try ht[0] (older table, entries may not be migrated yet) */
-        if (multidictDeleteFromSlot_(d, 0, keybox)) {
-            multidictShrinkIfNeeded_(d);
-            return true;
-        }
-        return false;
+    const uint32_t hash = multidictHashOfKey_(d, keybox);
+    const size_t keySize = mdBoxSize_(keybox);
+
+    /* The LRU tracks exactly the keys present, so this is a no-op for an
+     * absent key; it runs first, while 'keybox' may still borrow from the
+     * slot the removal rewrites */
+    multidictLRUOnDelete(d, keybox);
+
+    /* While rehashing the key may be in either table: the newer first */
+    const bool removed = (unlikely(d->rehashing) &&
+                          multidictRemoveFromTable_(d, 1, keybox, hash, keySize,
+                                                    removedVal, take)) ||
+                         multidictRemoveFromTable_(d, 0, keybox, hash, keySize,
+                                                   removedVal, take);
+    if (removed) {
+        multidictShrinkIfNeeded_(d);
     }
 
-    /* Not rehashing - simple single table delete */
-    if (multidictDeleteFromSlot_(d, 0, keybox)) {
-        multidictShrinkIfNeeded_(d);
-        return true;
-    }
-    return false;
+    return removed;
 }
 
 /* multidictDelete for a key matched by the type's compare, out of line as
  * multidictAddMatched_ is */
 DK_STATIC __attribute__((noinline)) bool
-multidictDeleteMatched_(multidict *d, const databox *keybox) {
+multidictRemoveMatched_(multidict *d, const databox *keybox,
+                        databox *removedVal, bool take) {
     mdKeyCopy copy;
     const databox *key = mdKeyForUpdate_(d, keybox, &copy);
-    const bool deleted = multidictDeleteExact_(d, key);
+    const bool removed = multidictRemoveExact_(d, key, removedVal, take);
     mdKeyCopyRelease_(&copy);
-    return deleted;
+    return removed;
+}
+
+/* Remove 'keybox' in one search per table, matching it as the dict's type
+ * does; 'removedVal' and 'take' as for multidictRemoveFromTable_ */
+DK_STATIC bool multidictRemove_(multidict *d, const databox *keybox,
+                                databox *removedVal, bool take) {
+    if (unlikely(MD_MATCH_BY_COMPARE(d, keybox))) {
+        return multidictRemoveMatched_(d, keybox, removedVal, take);
+    }
+
+    return multidictRemoveExact_(d, keybox, removedVal, take);
 }
 
 /* Search and remove an element - optimized for common case (key exists) */
 bool multidictDelete(multidict *d, const databox *keybox) {
-    if (unlikely(MD_MATCH_BY_COMPARE(d, keybox))) {
-        return multidictDeleteMatched_(d, keybox);
-    }
-
-    return multidictDeleteExact_(d, keybox);
+    return multidictRemove_(d, keybox, NULL, false);
 }
 
 /* ====================================================================
@@ -1493,27 +1442,15 @@ bool multidictGetAndDelete(multidict *d, const databox *keybox,
         return false;
     }
 
-    /* First, find the value */
-    databox found;
-    databoxWide foundWide;
-    mdBoxAim_(&found, &foundWide);
-    if (!multidictFind(d, keybox, &found)) {
+    /* One removal that takes the value: an owned copy (a 96/128-bit value
+     * in a heap payload, since the box starts zeroed) */
+    databox taken = {{0}};
+    if (!multidictRemove_(d, keybox, &taken, true)) {
         return false; /* Key doesn't exist */
     }
 
-    /* The stored value goes away with the delete: hand back an owned copy */
-    *valbox = databoxCopy(&found);
-
-    /* Now delete it - this should succeed since we just found it */
-    bool deleted = multidictDelete(d, keybox);
-
-    /* During concurrent rehashing, key could theoretically move between
-     * find and delete, but our implementation handles this correctly */
-    if (!deleted) {
-        databoxFreeData(valbox);
-    }
-
-    return deleted;
+    *valbox = taken;
+    return true;
 }
 
 /* Pop a random entry (for sampling/draining) */
@@ -1535,33 +1472,21 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
     }
 
     /* The key borrows its bytes from its slot, and the rehash step the
-     * find below runs can move the entry and free that slot: copy it
-     * first, then find and delete by the copy.  The find and the delete
-     * search both tables while a rehash is in flight, so they find the
-     * entry the key was just read from. */
+     * removal below runs can move the entry and free that slot: copy it
+     * first, then remove by the copy.  The removal searches both tables
+     * while a rehash is in flight, so it finds the entry the key was just
+     * read from, and takes its value in the same search (no LRU use: the
+     * entry is going). */
     databox ownedKey = databoxCopy(&key);
-
-    /* Get the value for this key; the entry is about to go, so the
-     * lookup does not promote it in the LRU */
-    databox val;
-    databoxWide valWide;
-    mdBoxAim_(&val, &valWide);
-    if (!multidictFindNoTouch_(d, &ownedKey, &val)) {
+    databox taken = {{0}};
+    if (!multidictRemove_(d, &ownedKey, &taken, true)) {
         databoxFreeData(&ownedKey);
         return false;
     }
 
-    /* The entry goes away with the delete: hand back owned copies */
     *keybox = ownedKey;
-    *valbox = databoxCopy(&val);
-
-    if (multidictDelete(d, keybox)) {
-        return true;
-    }
-
-    databoxFreeData(keybox);
-    databoxFreeData(valbox);
-    return false;
+    *valbox = taken;
+    return true;
 }
 
 /* Destroy an entire multidictionary */
@@ -2433,9 +2358,10 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
         return;
     }
 
-    /* Look up ptr */
+    /* Remove the key's handle from keyToPtr in one search, reading the
+     * handle (a number, reported by value) as it goes */
     databox ptrBox = {{0}};
-    if (!multidictFind(d->lruKeyToPtr, keybox, &ptrBox)) {
+    if (!multidictRemove_(d->lruKeyToPtr, keybox, &ptrBox, false)) {
         return;
     }
 
@@ -2443,9 +2369,6 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
 
     /* Delete from multilru */
     multilruDelete(d->lru, ptr);
-
-    /* Delete from keyToPtr */
-    multidictDelete(d->lruKeyToPtr, keybox);
 
     /* Mark ptrToKey entry as invalid */
     if (ptr < d->lruPtrToKeySize) {
@@ -3194,17 +3117,17 @@ DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
     return *slot;
 }
 
-DK_STATIC void *mmSlotRemove(multidictClass *qdc, multidictSlot **slot,
-                             const databox *keybox) {
+DK_STATIC bool mmSlotRemove(multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox, databox *removedVal,
+                            bool take) {
     (void)qdc;
     if (*slot == NULL) {
-        return NULL;
+        return false;
     }
 
-    bool deleted = multimapDelete(MM_SLOT_REF(slot), keybox);
-    // cppcheck-suppress intToPointerCast - non-NULL sentinel to indicate
-    // deletion occurred
-    return deleted ? (void *)1 : NULL;
+    return take
+               ? multimapDeleteTaking(MM_SLOT_REF(slot), keybox, removedVal)
+               : multimapDeleteReporting(MM_SLOT_REF(slot), keybox, removedVal);
 }
 
 DK_STATIC bool mmSlotFindValue(multidictClass *qdc, multidictSlot *slot,
@@ -3344,25 +3267,6 @@ DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
     }
 }
 
-DK_STATIC bool mmSlotLastEntry(multidictSlot *slot, databox *keybox,
-                               databox *valbox) {
-    if (slot == NULL) {
-        return false;
-    }
-
-    databox *elements[2] = {keybox, valbox};
-    return multimapLast(MM_SLOT(slot), elements);
-}
-
-DK_STATIC bool mmSlotMigrateLast(multidictSlot **dst, multidictSlot **src,
-                                 const databox *keybox, const databox *valbox) {
-    /* Insert into the destination (copying any bytes the boxes borrow
-     * from the source), then drop the source's last row by position */
-    const databox *insertElements[2] = {keybox, valbox};
-    multimapInsert(MM_SLOT_REF(dst), insertElements);
-    return multimapDeleteByPosition(MM_SLOT_REF(src), -1);
-}
-
 DK_STATIC void mmSlotClassFree(multidictClass *qdc) {
     (void)qdc;
     /* Nothing to free for this simple class */
@@ -3391,8 +3295,6 @@ DK_STATIC multidictClass *multidictMmClassNew(void) {
     qdc->countSlot = mmSlotCount;
     qdc->findKeyByPosition = mmSlotFindKeyByPos;
     qdc->iterateAll = mmSlotIterateAll;
-    qdc->lastEntry = mmSlotLastEntry;
-    qdc->migrateLast = mmSlotMigrateLast;
     qdc->free = mmSlotClassFree;
     qdc->freeClass = mmSlotFreeClass;
     qdc->disableResize = false;

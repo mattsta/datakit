@@ -54,6 +54,10 @@ void multimapSmallReplaceEntry(multimapSmall *m, multimapEntry *me,
                                const databox *box);
 
 bool multimapSmallDelete(multimapSmall *m, const databox *key);
+bool multimapSmallDeleteReporting(multimapSmall *m, const databox *key,
+                                  databox *removedOut);
+bool multimapSmallDeleteTaking(multimapSmall *m, const databox *key,
+                               databox *takenOut);
 bool multimapSmallDeleteFullWidth(multimapSmall *m, const databox *elements[]);
 bool multimapSmallDeleteWithFound(multimapSmall *m, const databox *key,
                                   databox *foundReference);

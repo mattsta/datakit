@@ -142,8 +142,14 @@ typedef struct multidictClass {
     void *(*operationSlotGetOrCreate)(struct multidictClass *qdc,
                                       multidictSlot **slot,
                                       const databox *keybox);
-    void *(*operationRemove)(struct multidictClass *qdc, multidictSlot **slot,
-                             const databox *keybox);
+    /* Remove 'keybox' from the slot in one search; false when it is not
+     * there.  'removedVal', when not NULL, receives the removed value:
+     * without 'take' under multimapDeleteReporting's rules (type and
+     * length valid, payload not to be read), with 'take' as an owned copy
+     * (multimapDeleteTaking). */
+    bool (*operationRemove)(struct multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox, databox *removedVal,
+                            bool take);
     bool (*findValueByKey)(struct multidictClass *qdc, multidictSlot *slot,
                            const databox *keybox, databox *valbox);
     void *(*createSlot)(void);
@@ -168,11 +174,10 @@ typedef struct multidictClass {
     void (*iterateAll)(struct multidictClass *qdc, multidictSlot *slot,
                        multidictIterProcess process, void *privdata);
 
-    /* For rehash: read the slot's last entry (the key to hash, the value
-     * to measure), then move that entry to its new slot */
-    bool (*lastEntry)(multidictSlot *slot, databox *keybox, databox *valbox);
-    bool (*migrateLast)(multidictSlot **dst, multidictSlot **src,
-                        const databox *keybox, const databox *valbox);
+    /* Rehash uses getIter/iterNext, insertByType and freeSlot: every row
+     * of an old slot is read in place and inserted into its new slot, then
+     * the old slot is freed whole, so insertByType must copy what a row
+     * borrows and freeSlot must not release what the copies hold. */
     void (*free)(struct multidictClass *qdc);
     /*** END OF INTERFACE ***/
 

@@ -60,6 +60,10 @@ bool multimapMediumDeleteRandomValue(multimapMedium *m,
                                      databox **deletedBox);
 
 bool multimapMediumDelete(multimapMedium *m, const databox *key);
+bool multimapMediumDeleteReporting(multimapMedium *m, const databox *key,
+                                   databox *removedOut);
+bool multimapMediumDeleteTaking(multimapMedium *m, const databox *key,
+                                databox *takenOut);
 bool multimapMediumDeleteFullWidth(multimapMedium *m,
                                    const databox *elements[]);
 bool multimapMediumDeleteWithReference(

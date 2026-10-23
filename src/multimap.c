@@ -589,6 +589,15 @@ bool multimapDelete(multimap **m, const databox *key) {
     MULTIMAP_RETURN(*m, Delete, key);
 }
 
+bool multimapDeleteReporting(multimap **m, const databox *key,
+                             databox *removedOut) {
+    MULTIMAP_RETURN(*m, DeleteReporting, key, removedOut);
+}
+
+bool multimapDeleteTaking(multimap **m, const databox *key, databox *takenOut) {
+    MULTIMAP_RETURN(*m, DeleteTaking, key, takenOut);
+}
+
 bool multimapDeleteWithReference(multimap **m, const databox *key,
                                  const struct multimapAtom *referenceContainer,
                                  databox *foundReference) {
@@ -3030,9 +3039,9 @@ static bool mxTypeOnly(const databox *got, const mwInt *want) {
            databoxIsWideDeferred(got);
 }
 
-/* The removing reads: InsertReplacing's replacedOut, DeleteWithFound and
- * a DeleteRandomValue drain that empties the map, alternating armed and
- * zeroed boxes. */
+/* The removing reads: InsertReplacing's replacedOut, DeleteWithFound,
+ * DeleteReporting and a DeleteRandomValue drain that empties the map,
+ * alternating armed and zeroed boxes. */
 /* Replace every third row's value (alternating wide and narrow) and
  * delete every fourth row, checking each reported old value and key. */
 static int32_t mxReplaceAndDelete(const char *where, multimap **m, mwRow *rows,
@@ -3066,6 +3075,39 @@ static int32_t mxReplaceAndDelete(const char *where, multimap **m, mwRow *rows,
         }
 
         const databox key = mwBox(&rows[i].key);
+        if (i % 8 == 5) {
+            /* DeleteReporting: the removed value, under replacedOut's
+             * rules */
+            databoxBig removed;
+            databox *r = mwArm(&removed);
+            if (!multimapDeleteReporting(m, &key, r)) {
+                ERR("%s: DeleteReporting row %zu found nothing", where, i);
+            } else if (mwIsWide(&rows[i].val) ? !mxTypeOnly(r, &rows[i].val)
+                                              : !mwHolds(r, &rows[i].val)) {
+                ERR("%s: DeleteReporting row %zu reported a wrong value", where,
+                    i);
+            }
+
+            rows[i].present = false;
+            continue;
+        }
+
+        if (i % 8 == 1) {
+            /* DeleteTaking into an armed box: the value whole, wide in
+             * band */
+            databoxBig taken;
+            databox *t = mwArm(&taken);
+            if (!multimapDeleteTaking(m, &key, t)) {
+                ERR("%s: DeleteTaking row %zu found nothing", where, i);
+            } else if (!mwHolds(t, &rows[i].val)) {
+                ERR("%s: DeleteTaking row %zu took a wrong value", where, i);
+            }
+
+            databoxFreeData(t);
+            rows[i].present = false;
+            continue;
+        }
+
         databoxBig found;
         databox *f = mwArm(&found);
         if (!multimapDeleteWithFound(m, &key, f)) {
@@ -3169,6 +3211,40 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
 
     bool seen[rows];
     memset(seen, 0, sizeof(seen));
+
+    /* DeleteReporting reports a string's type and length (its bytes are
+     * not to be read once the row is gone) */
+    for (size_t i = 0; i < rows; i += 5) {
+        const databox key = databoxNewUnsigned(i);
+        databox removed = {{0}};
+        if (!multimapDeleteReporting(&m, &key, &removed) ||
+            !DATABOX_IS_BYTES(&removed) || removed.len != i % 21) {
+            ERR("%s: DeleteReporting of row %zu reported type %d length %zu",
+                where, i, removed.type, (size_t)removed.len);
+        }
+
+        seen[i] = true;
+    }
+
+    /* DeleteTaking hands each string back whole and owned: short ones
+     * embedded, longer ones as heap copies */
+    for (size_t i = 2; i < rows; i += 5) {
+        const databox key = databoxNewUnsigned(i);
+        databox taken = {{0}};
+        const size_t len = i % 21;
+        const bool shortBytes = len <= sizeof(taken.data.bytes.embed8);
+        if (!multimapDeleteTaking(&m, &key, &taken) || taken.len != len ||
+            memcmp(databoxBytes(&taken), text, len) ||
+            taken.type != (shortBytes ? DATABOX_BYTES_EMBED : DATABOX_BYTES) ||
+            taken.allocated != !shortBytes) {
+            ERR("%s: DeleteTaking of row %zu took a wrong %zu-byte string",
+                where, i, len);
+        }
+
+        databoxFreeData(&taken);
+        seen[i] = true;
+    }
+
     for (size_t k = 0; multimapCount(m); k++) {
         databox kb = {{0}};
         databox vb = {{0}};
