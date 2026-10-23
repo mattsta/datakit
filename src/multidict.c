@@ -5901,6 +5901,175 @@ static int multidictTestAddNXMidRehash_(void) {
     return err;
 }
 
+typedef struct mdRehashScan_ {
+    uint8_t *seen;
+    uint64_t n;
+    uint64_t bad;
+} mdRehashScan_;
+
+static void mdRehashScanCb_(void *privdata, const databox *key,
+                            const databox *val) {
+    mdRehashScan_ *s = privdata;
+    if (key->type != DATABOX_UNSIGNED_64 || key->data.u64 >= s->n ||
+        val->data.u64 != key->data.u64 * 3) {
+        s->bad++;
+        return;
+    }
+    s->seen[key->data.u64] = 1;
+}
+
+/* Every read while a rehash is part way: both tables' stats add up, the
+ * random reads return live keys, a scan sees every key, every key is
+ * found and random pops remove exactly the keys they return */
+static int multidictTestRehashReads_(void) {
+    int err = 0;
+    const uint64_t n = 2000;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 31);
+    for (uint64_t k = 0; k < n; k++) {
+        const databox key = DATABOX_UNSIGNED(k);
+        const databox val = DATABOX_UNSIGNED(k * 3);
+        multidictAdd(d, &key, &val);
+    }
+    while (multidictRehash(d, 100)) {
+    }
+
+    /* A rehash to 8x the slots, moved one bucket per operation */
+    multidictResizeDisable(d);
+    multidictStats before;
+    multidictGetStats(d, &before);
+    if (!multidictExpand(d, before.slots * 8) || !multidictIsRehashing(d)) {
+        printf("ERROR: rehash reads: expand did not start a rehash\n");
+        return err + 1;
+    }
+
+    multidictDetailedStats ds;
+    multidictGetDetailedStats(d, &ds);
+    multidictStats s;
+    multidictGetStats(d, &s);
+    if (!ds.hasRehashTable || !ds.basic.isRehashing ||
+        ds.basic.count + ds.rehashTable.count != n ||
+        ds.rehashTable.slots < before.slots * 8 || s.count != n ||
+        !s.isRehashing) {
+        printf("ERROR: rehash reads: stats %" PRIu64 " + %" PRIu64
+               " of %" PRIu64 " keys\n",
+               ds.basic.count, ds.rehashTable.count, n);
+        err++;
+    }
+
+    databox some[32];
+    const uint32_t got = multidictGetSomeKeys(d, some, 32);
+    databox rk = {{0}};
+    if (!multidictIsRehashing(d) || got == 0 || got > 32 ||
+        !multidictGetRandomKey(d, &rk) || rk.type != DATABOX_UNSIGNED_64 ||
+        rk.data.u64 >= n) {
+        printf("ERROR: rehash reads: random keys (%" PRIu32 ")\n", got);
+        err++;
+    }
+    for (uint32_t i = 0; i < got; i++) {
+        if (some[i].type != DATABOX_UNSIGNED_64 || some[i].data.u64 >= n) {
+            printf("ERROR: rehash reads: GetSomeKeys slot %" PRIu32 "\n", i);
+            err++;
+        }
+    }
+
+    cleanerName(zfree, SeenBytes) uint8_t *seen = zcalloc(n, 1);
+    mdRehashScan_ scan = {.seen = seen, .n = n, .bad = 0};
+    if (!multidictIsRehashing(d)) {
+        printf("ERROR: rehash reads: the rehash ended before the scan\n");
+        err++;
+    }
+    uint64_t cursor = 0;
+    do {
+        cursor = multidictScan(d, cursor, mdRehashScanCb_, &scan);
+    } while (cursor != 0);
+    for (uint64_t k = 0; k < n; k++) {
+        scan.bad += !seen[k];
+    }
+    if (scan.bad) {
+        printf("ERROR: rehash reads: scan missed or garbled %" PRIu64 " keys\n",
+               scan.bad);
+        err++;
+    }
+
+    /* Pops first, while the rehash is still young, then every key */
+    memset(seen, 0, n);
+    for (int i = 0; i < 10; i++) {
+        databox pk = {{0}};
+        databox pv = {{0}};
+        if (!multidictPopRandom(d, &pk, &pv) ||
+            pk.type != DATABOX_UNSIGNED_64 || pk.data.u64 >= n ||
+            seen[pk.data.u64] || pv.data.u64 != pk.data.u64 * 3) {
+            printf("ERROR: rehash reads: pop %d\n", i);
+            err++;
+            break;
+        }
+        seen[pk.data.u64] = 1;
+    }
+    for (uint64_t k = 0; k < n; k++) {
+        const databox key = DATABOX_UNSIGNED(k);
+        databox val = {{0}};
+        const bool found = multidictFind(d, &key, &val);
+        if (found == (bool)seen[k] || (found && val.data.u64 != k * 3)) {
+            printf("ERROR: rehash reads: key %" PRIu64 " found %d\n", k, found);
+            err++;
+            break;
+        }
+    }
+
+    while (multidictRehash(d, 100)) {
+    }
+    multidictGetDetailedStats(d, &ds);
+    if (ds.hasRehashTable || ds.basic.count != n - 10 ||
+        multidictCount(d) != n - 10) {
+        printf("ERROR: rehash reads: %" PRIu64 " keys after the rehash\n",
+               ds.basic.count);
+        err++;
+    }
+    multidictResizeEnable(d);
+    return err;
+}
+
+/* LRU tracking turned on and off: only an empty dict can start it, and
+ * turning it off keeps every entry */
+static int multidictTestLRUToggle_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 7);
+    multidictDisableLRU(d); /* not on: nothing to do */
+    if (multidictHasLRU(d) || !multidictEnableLRU(d, 4) ||
+        !multidictHasLRU(d) ||
+        multidictGetEvictPolicy(d) != MULTIDICT_EVICT_LRU ||
+        !multidictEnableLRU(d, 4)) {
+        printf("ERROR: LRU toggle: enabling an empty dict\n");
+        err++;
+    }
+    for (uint64_t k = 0; k < 50; k++) {
+        const databox key = DATABOX_UNSIGNED(k);
+        const databox val = DATABOX_UNSIGNED(k);
+        multidictAdd(d, &key, &val);
+    }
+    multidictDisableLRU(d);
+    if (multidictHasLRU(d) ||
+        multidictGetEvictPolicy(d) != MULTIDICT_EVICT_NONE ||
+        multidictEnableLRU(d, 4) || multidictCount(d) != 50) {
+        printf("ERROR: LRU toggle: disabling a populated dict\n");
+        err++;
+    }
+    for (uint64_t k = 0; k < 50; k++) {
+        const databox key = DATABOX_UNSIGNED(k);
+        databox val = {{0}};
+        if (!multidictFind(d, &key, &val) || val.data.u64 != k) {
+            printf("ERROR: LRU toggle: key %" PRIu64 " lost\n", k);
+            err++;
+            break;
+        }
+    }
+    return err;
+}
+
 int multidictTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -7718,6 +7887,12 @@ int multidictTest(int argc, char *argv[]) {
 
     printf("Test 9.7: Persist snapshots record how keys match...\n");
     err += multidictTestPersistKeys_();
+
+    printf("Test 9.8: Every read while a rehash is part way...\n");
+    err += multidictTestRehashReads_();
+
+    printf("Test 9.9: LRU tracking turned on and off...\n");
+    err += multidictTestLRUToggle_();
 
     /* ================================================================
      * SECTION 10: Print Stats (Visual Verification)
