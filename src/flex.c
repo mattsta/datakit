@@ -3234,16 +3234,23 @@ flex *flexMerge(flex **first, flex **second) {
         appendToTarget = false;
     }
 
-    /* Calculate final data bytes (remove all headers and one end marker,
-     * add back later) */
-    const size_t fbytes = firstBytes + secondBytes - sourceSize;
+    /* The merged buffer keeps the header at its front and drops the other
+     * one: appending keeps the target's header, prepending the source's.
+     * Headers are varints, so the two can differ in size; the header is
+     * resized for the merged totals below. */
+    const size_t fbytes = appendToTarget
+                              ? targetBytes + sourceBytes - sourceSize
+                              : sourceBytes + targetBytes - targetSize;
 
     /* Same as above for bytes, but now for count too.  */
     const size_t fcount = firstCount + secondCount;
 
-    /* Extend target to new fbytes then append or prepend source. */
+    /* Size target for the merge, then append or prepend source.  A prepend
+     * can merge to fewer bytes than target had (a source header smaller
+     * than target's), so keep target whole until its entries have moved;
+     * flexSetTotalBytesCount trims to the final size. */
     /* @own: caller; free=flexFree */
-    target = zrealloc(target, fbytes);
+    target = zrealloc(target, fbytes > targetBytes ? fbytes : targetBytes);
     if (appendToTarget) {
         /* Copy source after target
          *   [TARGET, SOURCE - HEADER] */
@@ -8135,6 +8142,85 @@ static int32_t flexTestWideReferenceSorted(void) {
     return bad;
 }
 
+/* Build merge-test input `kind` into *f (and, appended, into *both) */
+static void flexTestMergeFill(int kind, flex **f, flex **both) {
+    static char big[70000];
+    memset(big, 'z', sizeof(big));
+    switch (kind) {
+    case 0: /* empty */
+        break;
+    case 1: /* one small integer */
+        flexPushSigned(f, -3, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(both, -3, FLEX_ENDPOINT_TAIL);
+        break;
+    case 2: /* 300 small integers: a 2-byte count */
+        for (int i = 0; i < 300; i++) {
+            flexPushUnsigned(f, (uint64_t)i, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(both, (uint64_t)i, FLEX_ENDPOINT_TAIL);
+        }
+        break;
+    case 3: /* one 200-byte string: more bytes, a 1-byte count */
+        flexPushBytes(f, big, 200, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(both, big, 200, FLEX_ENDPOINT_TAIL);
+        break;
+    case 4: /* one 70000-byte string: a wide byte total */
+        flexPushBytes(f, big, sizeof(big), FLEX_ENDPOINT_TAIL);
+        flexPushBytes(both, big, sizeof(big), FLEX_ENDPOINT_TAIL);
+        break;
+    default: /* 20 mixed entries */
+        for (int i = 0; i < 20; i++) {
+            flexPushBytes(f, "entry", 5, FLEX_ENDPOINT_TAIL);
+            flexPushBytes(both, "entry", 5, FLEX_ENDPOINT_TAIL);
+            flexPushDouble(f, i + 0.5, FLEX_ENDPOINT_TAIL);
+            flexPushDouble(both, i + 0.5, FLEX_ENDPOINT_TAIL);
+        }
+        break;
+    }
+}
+
+/* flexMerge of every ordered pair of inputs whose header sizes differ
+ * every way (empty, 2-byte count, 1-byte count over more bytes, a wide
+ * byte total): the result is byte-identical to one flex holding the
+ * first's entries then the second's, and passes deep validation */
+static int32_t flexTestMergeMatrix(void) {
+    int32_t bad = 0;
+    for (int a = 0; a < 6; a++) {
+        for (int b = 0; b < 6; b++) {
+            /* flexMerge frees one input and keeps the other: both are
+             * freed below, the one it freed as NULL */
+            /* @own: caller; free=flexFree */
+            flex *first = flexNew();
+            /* @own: caller; free=flexFree */
+            flex *second = flexNew();
+            cleaner(flexFree) flex *want = flexNew();
+            flexTestMergeFill(a, &first, &want);
+            flexTestMergeFill(b, &second, &want);
+            flex *merged = flexMerge(&first, &second);
+            flex *kept = first ? first : second;
+            if (!merged || merged != kept || (first && second) ||
+                flexBytes(merged) != flexBytes(want) ||
+                memcmp(merged, want, flexBytes(want)) != 0 ||
+                !flexValidateBufferDeep(merged, flexBytes(merged))) {
+                printf("  FAIL: merge of input %d with %d\n", a, b);
+                bad++;
+            }
+            flexFree(first);
+            flexFree(second);
+        }
+    }
+
+    /* Refusals: NULLs and a flex merged with itself */
+    cleaner(flexFree) flex *self = flexNew();
+    flex *none = NULL;
+    flex *alias = self;
+    if (flexMerge(NULL, &self) || flexMerge(&self, &none) ||
+        flexMerge(&self, &alias)) {
+        printf("  FAIL: merge accepted NULL or itself\n");
+        bad++;
+    }
+    return bad;
+}
+
 static int32_t flexTestWideSorted(void) {
     int32_t bad = 0;
     enum { WIDE_KEYS = 64, NARROW_KEYS = 16, KEYS = WIDE_KEYS + NARROW_KEYS };
@@ -10757,6 +10843,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(FLEX_TRUE == 253);
         assert(FLEX_FALSE == 254);
         assert(FLEX_NULL == 255);
+    }
+
+    printf("Verify merge across every header-size pairing:\n");
+    {
+        const int32_t bad = flexTestMergeMatrix();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " merge checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
     }
 
     printf("Verify sorted insert and find over 96/128-bit keys:\n");
