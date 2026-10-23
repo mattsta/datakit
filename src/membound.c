@@ -917,9 +917,14 @@ size_t memboundCalculateGrowthSize(const membound *m, size_t requestedBytes) {
         growSize = m->growth.maxExtentSize;
     }
 
-    /* Ensure at least requestedBytes fits */
-    if (growSize < requestedBytes) {
-        growSize = memboundNextPow2(requestedBytes);
+    /* The new extent must hold the request: a buddy block of its power of
+     * two, while the extent also keeps one control byte per atom (an atom
+     * is at least 8 bytes) out of its own space.  An extent of exactly the
+     * block's size can never serve it; a quarter more always can. */
+    const size_t block = memboundNextPow2(requestedBytes);
+    const size_t holds = block + block / 4;
+    if (growSize < holds) {
+        growSize = holds;
     }
 
     return growSize;
@@ -5600,6 +5605,37 @@ int memboundTest(int argc, char *argv[]) {
 
         for (int i = 0; i < count; i++) {
             memboundFree(m, ptrs[i]);
+        }
+
+        memboundShutdown(m);
+    }
+
+    TEST("Dynamic: one allocation larger than any extent gets one that fits") {
+        /* Extents are capped at 4x the initial size, but a single request
+         * past the cap grows by an extent sized to hold it (the next power
+         * of two), so the allocation succeeds */
+        membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
+        assert(m != NULL);
+        const size_t big = (size_t)(1 << 14) * 4 + 12345;
+        uint8_t *p = memboundAlloc(m, big);
+        if (!p || !memboundOwns(m, p)) {
+            ERR("a %zu-byte allocation past the extent cap failed", big);
+        } else {
+            memset(p, 0xA5, big);
+            bool fits = false;
+            for (size_t i = 0; i < memboundExtentCount(m); i++) {
+                memboundExtentInfo info;
+                if (memboundGetExtentInfo(m, i, &info) &&
+                    info.capacity >= big) {
+                    fits = true;
+                }
+            }
+
+            if (!fits) {
+                ERR("no extent holds the %zu-byte allocation", big);
+            }
+
+            memboundFree(m, p);
         }
 
         memboundShutdown(m);
