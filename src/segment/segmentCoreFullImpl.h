@@ -72,11 +72,12 @@ SEGMENT_FULL_FN_(FullNewFromArray)(const SEGMENT_VALUE_TYPE *values,
         return seg;
     }
 
-    const uint64_t leaves = SEGMENT_FULL_FN_(LeavesFor_)(0, count - 1);
+    const uint64_t slots = segmentTreeSize(count);
+    const uint64_t leaves = slots / 2;
     seg->count = count;
-    seg->capacity = 2 * leaves;
+    seg->capacity = slots;
     /* @own: container */
-    seg->tree = zmalloc(2 * leaves * sizeof(SEGMENT_VALUE_TYPE));
+    seg->tree = zmalloc(slots * sizeof(SEGMENT_VALUE_TYPE));
     memcpy(&seg->tree[leaves], values, count * sizeof(SEGMENT_VALUE_TYPE));
     const SEGMENT_VALUE_TYPE identity = SEGMENT_FULL_FN_(Identity_)(op);
     for (uint64_t i = count; i < leaves; i++) {

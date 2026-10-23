@@ -70,7 +70,8 @@ static inline uint64_t SEGMENT_ALGO_(LeavesFor_)(uint64_t current,
 static inline void SEGMENT_ALGO_(Rebuild_)(SEGMENT_VALUE_TYPE *tree,
                                            uint64_t leaves, segmentOp op) {
     for (uint64_t i = leaves - 1; i > 0; i--) {
-        tree[i] = SEGMENT_ALGO_(Combine_)(tree[2 * i], tree[2 * i + 1], op);
+        tree[i] = SEGMENT_ALGO_(Combine_)(tree[segmentLeft(i)],
+                                          tree[segmentRight(i)], op);
     }
 }
 
@@ -79,15 +80,16 @@ static inline void SEGMENT_ALGO_(Rebuild_)(SEGMENT_VALUE_TYPE *tree,
 static inline void SEGMENT_ALGO_(Refresh_)(SEGMENT_VALUE_TYPE *tree,
                                            uint64_t leaves, uint64_t first,
                                            uint64_t last, segmentOp op) {
-    uint64_t lo = (first + leaves) >> 1;
-    uint64_t hi = (last + leaves) >> 1;
+    uint64_t lo = segmentParent(first + leaves);
+    uint64_t hi = segmentParent(last + leaves);
     while (lo > 0) {
         for (uint64_t p = lo; p <= hi; p++) {
-            tree[p] = SEGMENT_ALGO_(Combine_)(tree[2 * p], tree[2 * p + 1], op);
+            tree[p] = SEGMENT_ALGO_(Combine_)(tree[segmentLeft(p)],
+                                              tree[segmentRight(p)], op);
         }
 
-        lo >>= 1;
-        hi >>= 1;
+        lo = segmentParent(lo);
+        hi = segmentParent(hi);
     }
 }
 

@@ -74,12 +74,13 @@ SEGMENT_SMALL_FN_(SmallNewFromArray)(const SEGMENT_VALUE_TYPE *values,
         return SEGMENT_SMALL_FN_(SmallNew)(op);
     }
 
-    const uint64_t leaves = SEGMENT_SMALL_FN_(LeavesFor_)(0, count - 1);
+    const uint64_t slots = segmentTreeSize(count);
+    const uint64_t leaves = slots / 2;
     /* @own: caller */
-    SEGMENT_SMALL_T_ *seg = zcalloc(
-        1, sizeof(SEGMENT_SMALL_T_) + 2 * leaves * sizeof(SEGMENT_VALUE_TYPE));
+    SEGMENT_SMALL_T_ *seg = zcalloc(1, sizeof(SEGMENT_SMALL_T_) +
+                                           slots * sizeof(SEGMENT_VALUE_TYPE));
     seg->count = count;
-    seg->capacity = (SEGMENT_INDEX_TYPE_SMALL)(2 * leaves);
+    seg->capacity = (SEGMENT_INDEX_TYPE_SMALL)slots;
     seg->operation = op;
     memcpy(&seg->tree[leaves], values, count * sizeof(SEGMENT_VALUE_TYPE));
     const SEGMENT_VALUE_TYPE identity = SEGMENT_SMALL_FN_(Identity_)(op);
