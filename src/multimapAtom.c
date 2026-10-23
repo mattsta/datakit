@@ -2235,6 +2235,74 @@ int multimapAtomTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("release by key and delete by id with the reverse map in every "
+         "tier") {
+        /* Release and DeleteByRef reuse the entry their first search found;
+         * table sizes from a few atoms to thousands put the reverse map in
+         * each tier while that happens */
+        const int32_t sizes[] = {6, 60, 200, 400, 900, 2500};
+        bool sawTier[MULTIMAP_TYPE_FULL + 1] = {false};
+        char name[32];
+        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
+            const int32_t n = sizes[s];
+            cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+            for (int32_t i = 0; i < n; i++) {
+                snprintf(name, sizeof(name), "tiered-%06" PRId32, i);
+                databox k = databoxNewBytesString(name);
+                multimapAtomInsertIfNewConvert(ma, &k);
+            }
+
+            sawTier[multimapGetType(ma->mapAtomReverse)] = true;
+
+            /* Odd atoms leave by their value, every fourth by its id */
+            for (int32_t i = 0; i < n; i++) {
+                snprintf(name, sizeof(name), "tiered-%06" PRId32, i);
+                const databox k = databoxNewBytesString(name);
+                if (i % 2) {
+                    if (!multimapAtomRelease(ma, &k)) {
+                        ERR("%d atoms: release of %s kept it", n, name);
+                    }
+                } else if (i % 4 == 0) {
+                    databox ref = {{0}};
+                    if (!multimapAtomLookupReference(ma, &k, &ref) ||
+                        !multimapAtomDeleteById(ma, ref.data.u)) {
+                        ERR("%d atoms: delete by id of %s failed", n, name);
+                    }
+                }
+            }
+
+            for (int32_t i = 0; i < n; i++) {
+                snprintf(name, sizeof(name), "tiered-%06" PRId32, i);
+                const databox k = databoxNewBytesString(name);
+                databox ref = {{0}};
+                const bool want = i % 4 == 2;
+                const bool present = multimapAtomLookupReference(ma, &k, &ref);
+                databox back = {{0}};
+                if (present != want ||
+                    (present &&
+                     (!multimapAtomLookup(ma, &ref, &back) ||
+                      databoxLen(&back) != strlen(name) ||
+                      memcmp(databoxCBytes(&back), name, strlen(name)) != 0))) {
+                    ERR("%d atoms: %s present %d (want %d) or unresolvable", n,
+                        name, present, want);
+                }
+            }
+
+            if (multimapAtomCount(ma) != (size_t)(n / 4 + (n % 4 > 2)) ||
+                multimapCount(ma->mapAtomReverse) != multimapAtomCount(ma)) {
+                ERR("%d atoms: %zu left (%zu reverse rows)", n,
+                    multimapAtomCount(ma), multimapCount(ma->mapAtomReverse));
+            }
+        }
+
+        if (!sawTier[MULTIMAP_TYPE_SMALL] || !sawTier[MULTIMAP_TYPE_MEDIUM] ||
+            !sawTier[MULTIMAP_TYPE_FULL]) {
+            ERR("reverse tiers seen: small %d medium %d full %d",
+                sawTier[MULTIMAP_TYPE_SMALL], sawTier[MULTIMAP_TYPE_MEDIUM],
+                sawTier[MULTIMAP_TYPE_FULL]);
+        }
+    }
+
     TEST("last releases by key across sub-maps keep every survivor "
          "resolvable") {
         /* Enough string atoms for both maps to split into sub-maps; the

@@ -24,6 +24,8 @@ flex *multimapDump(const multimap *m);
  * with isSet): rows are deduplicated whole, so one key may hold several
  * rows.  False for a map, where inserting a key replaces its row. */
 bool multimapIsSet(const multimap *m);
+/* The tier currently holding the rows (Small, Medium or Full) */
+multimapType multimapGetType(const multimap *m);
 /* A multimap holding `rows` (full-width rows, as multimapDump writes them);
  * a dump larger than the Medium tier holds is cut straight into Full's
  * inner maps in O(rows), with no per-row insert.  Takes `rows`.  NULL,

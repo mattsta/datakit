@@ -194,6 +194,10 @@ flex *multimapDump(const multimap *m) {
     MULTIMAP_SINGLE_RETURN(m, Dump);
 }
 
+multimapType multimapGetType(const multimap *m) {
+    return multimapType_(m);
+}
+
 bool multimapIsSet(const multimap *m) {
     switch (multimapType_(m)) {
     case MULTIMAP_TYPE_SMALL:
