@@ -68,6 +68,7 @@ class CoverageOptions:
     jobs: int | None = None
     compiler: toolchain.Compiler | None = None
     update_baseline: bool = False
+    learn_volatile: bool = False
 
 
 @dataclass
@@ -411,25 +412,69 @@ def parse_lcov(text: str, source_root: Path) -> dict[str, LcovFile]:
     return files
 
 
+#: A line or branch of library code, by what it is rather than where:
+#: (kind, source, previous code line), kind "line" or "branch B.R".  Two
+#: runs of an edited file still line up, and the previous line keeps a
+#: common line ("}", "return false;") from standing for every copy.
+Point = tuple[str, str, str]
+
+
+def _point_sources(text: str) -> tuple[list[str], list[str]]:
+    """Each line's stripped source, and the previous non-blank one."""
+    source = [s.strip() for s in text.splitlines()]
+    prev: list[str] = []
+    last = ""
+    for s in source:
+        prev.append(last)
+        if s:
+            last = s
+    return source, prev
+
+
+def _point_key(source: list[str], prev: list[str], kind: str, n: int) -> Point:
+    if 0 < n <= len(source):
+        return (kind, source[n - 1], prev[n - 1])
+    return (kind, "", "")
+
+
 def library_coverage(
-    lcov: dict[str, LcovFile], source_root: Path
+    lcov: dict[str, LcovFile],
+    source_root: Path,
+    volatile: dict[str, set[Point]] | None = None,
 ) -> tuple[list[FileCoverage], FileCoverage]:
     """Per-file and total line, function and branch coverage with in-file
     test code left out (regions are not split by line, so they read as
-    absent)."""
+    absent), and the `volatile` points (coverage that depends on thread
+    scheduling) too."""
     files: list[FileCoverage] = []
     tl = [0, 0, 0, 0, 0, 0]  # lines, functions, branches: covered, count
     for path in sorted(lcov):
         rec = lcov[path]
         source = source_root / path
-        skip = (
-            test_lines(source.read_text(errors="replace"))
-            if source.is_file()
-            else set()
-        )
-        lines = [c for n, c in rec.lines.items() if n not in skip]
+        text = source.read_text(errors="replace") if source.is_file() else ""
+        skip = test_lines(text)
+        drop_lines: set[int] = set()
+        drop_branches: set[tuple[int, int, int]] = set()
+        flaky = (volatile or {}).get(path)
+        if flaky:
+            src, prev = _point_sources(text)
+            drop_lines = {
+                n for n in rec.lines if _point_key(src, prev, "line", n) in flaky
+            }
+            drop_branches = {
+                k
+                for k in rec.branches
+                if _point_key(src, prev, f"branch {k[1]}.{k[2]}", k[0]) in flaky
+            }
+        lines = [
+            c for n, c in rec.lines.items() if n not in skip and n not in drop_lines
+        ]
         funcs = [c for line, c in rec.functions.values() if line not in skip]
-        branches = [t for (n, _b, _r), t in rec.branches.items() if n not in skip]
+        branches = [
+            t
+            for k, t in rec.branches.items()
+            if k[0] not in skip and k not in drop_branches
+        ]
         row = FileCoverage(
             path,
             (sum(1 for c in lines if c > 0), len(lines)),
@@ -685,7 +730,15 @@ def run(repo: Path, opts: CoverageOptions) -> int:
 
     export_lcov(work, compiler)
     held = report(
-        work, commit, subject, tests, tests_ok, opts.top, repo, opts.update_baseline
+        work,
+        commit,
+        subject,
+        tests,
+        tests_ok,
+        opts.top,
+        repo,
+        opts.update_baseline,
+        opts.learn_volatile,
     )
     return 0 if tests_ok and held else 1
 
@@ -722,8 +775,13 @@ def export_lcov(work: Path, compiler: toolchain.Compiler) -> None:
 BASELINE = Path("tools") / "coverage-baseline.json"
 
 
-def baseline_doc(commit: str, files: list[FileCoverage]) -> dict:
-    """Uncovered library lines and branches per file, for the ratchet."""
+def baseline_doc(
+    commit: str,
+    files: list[FileCoverage],
+    volatile: dict[str, set[Point]] | None = None,
+) -> dict:
+    """Uncovered library lines and branches per file, for the ratchet, and
+    the volatile points those counts leave out."""
     return {
         "commit": commit,
         "files": {
@@ -733,6 +791,11 @@ def baseline_doc(commit: str, files: list[FileCoverage]) -> dict:
             }
             for f in sorted(files, key=lambda f: f.path)
             if f.lines[1] > 0
+        },
+        "volatile": {
+            path: [list(p) for p in sorted(points)]
+            for path, points in sorted((volatile or {}).items())
+            if points
         },
     }
 
@@ -746,44 +809,77 @@ class Ratchet:
     regressed: list[str] = field(default_factory=list)  # paths
     # path -> (line, what) newly uncovered, when the baseline run is cached
     lost: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
+    volatile: int = 0  # points left out of every count
 
     @property
     def ok(self) -> bool:
         return not self.regressions
 
 
-def uncovered_points(rec: LcovFile, text: str) -> dict[str, list[int]]:
-    """A file's uncovered library lines and untaken branches, keyed by what
-    they are ("line: SOURCE" or "branch B.R: SOURCE") rather than where, so
-    two runs of an edited file still line up; values are the line numbers."""
-    source = text.splitlines()
+def _points(rec: LcovFile, text: str, covered: bool) -> dict[Point, list[int]]:
+    """A file's library-code points whose coverage is `covered`, with
+    their line numbers."""
+    source, prev = _point_sources(text)
     skip = test_lines(text)
-
-    def at(n: int) -> str:
-        return source[n - 1].strip() if 0 < n <= len(source) else ""
-
-    out: dict[str, list[int]] = {}
+    out: dict[Point, list[int]] = {}
     for n, count in sorted(rec.lines.items()):
-        if count == 0 and n not in skip:
-            out.setdefault(f"line: {at(n)}", []).append(n)
+        if n not in skip and (count > 0) == covered:
+            out.setdefault(_point_key(source, prev, "line", n), []).append(n)
     for (n, block, branch), taken in sorted(rec.branches.items()):
-        if not taken and n not in skip:
-            out.setdefault(f"branch {block}.{branch}: {at(n)}", []).append(n)
+        if n not in skip and taken == covered:
+            kind = f"branch {block}.{branch}"
+            out.setdefault(_point_key(source, prev, kind, n), []).append(n)
     return out
 
 
+def uncovered_points(rec: LcovFile, text: str) -> dict[Point, list[int]]:
+    """A file's uncovered library lines and untaken branches."""
+    return _points(rec, text, covered=False)
+
+
+def describe(point: Point) -> str:
+    return f"{point[0]}: {point[1]}"
+
+
 def newly_uncovered(
-    old: LcovFile, old_text: str, new: LcovFile, new_text: str
+    old: LcovFile,
+    old_text: str,
+    new: LcovFile,
+    new_text: str,
+    volatile: set[Point] | None = None,
 ) -> list[tuple[int, str]]:
     """(line, what) the new run left uncovered beyond the old run: for each
-    kind of point, the excess over the old run's count, at its last lines."""
+    point, the excess over the old run's count, at its last lines.
+    Volatile points are left out."""
     was = uncovered_points(old, old_text)
     out: list[tuple[int, str]] = []
     for key, lines in uncovered_points(new, new_text).items():
+        if volatile and key in volatile:
+            continue
         extra = len(lines) - len(was.get(key, []))
         if extra > 0:
-            out += [(n, key) for n in lines[-extra:]]
+            out += [(n, describe(key)) for n in lines[-extra:]]
     return sorted(out)
+
+
+def flipped_points(
+    old: LcovFile, old_text: str, new: LcovFile, new_text: str
+) -> set[Point]:
+    """Points covered in one run and not the other (by count, so one copy
+    of a repeated point flipping counts)."""
+    was = uncovered_points(old, old_text)
+    now = uncovered_points(new, new_text)
+    return {
+        k for k in was.keys() | now.keys() if len(was.get(k, [])) != len(now.get(k, []))
+    }
+
+
+def volatile_from(doc: dict) -> dict[str, set[Point]]:
+    """The baseline's volatile points per file."""
+    return {
+        path: {(p[0], p[1], p[2]) for p in points}
+        for path, points in doc.get("volatile", {}).items()
+    }
 
 
 def ratchet(baseline: dict, files: list[FileCoverage]) -> Ratchet:
@@ -825,7 +921,7 @@ def render_ratchet(r: Ratchet | None) -> str:
     md.append(
         f"against baseline {r.baseline_commit}: "
         f"{'ok' if r.ok else 'REGRESSED'}, {len(r.improved)} improved, "
-        f"{len(r.new)} new"
+        f"{len(r.new)} new, {r.volatile} volatile points left out"
     )
     for title, items in (
         ("Regressions (fail)", r.regressions),
@@ -849,7 +945,11 @@ def render_ratchet(r: Ratchet | None) -> str:
 
 
 def attach_lost(
-    r: Ratchet, base_work: Path, lcov: dict[str, LcovFile], src: Path
+    r: Ratchet,
+    base_work: Path,
+    lcov: dict[str, LcovFile],
+    src: Path,
+    volatile: dict[str, set[Point]] | None = None,
 ) -> None:
     """Fill r.lost for each regressed file from the baseline commit's
     cached run in `base_work` (skipped when that run is not cached)."""
@@ -868,7 +968,63 @@ def attach_lost(
             old_file.read_text(errors="replace"),
             lcov[path],
             new_file.read_text(errors="replace"),
+            (volatile or {}).get(path),
         )
+
+
+#: More points than this flipping between two runs of the same sources is
+#: not scheduling noise (a failed or skipped test, a changed environment):
+#: --learn-volatile refuses to record it.
+VOLATILE_LIMIT = 100
+
+#: The paths whose changes can change coverage.
+MEASURED_PATHS = ("src", "CMakeLists.txt", "CMakePresets.json")
+
+
+def learn_volatile(
+    repo: Path,
+    base_commit: str,
+    commit: str,
+    base_work: Path,
+    lcov: dict[str, LcovFile],
+    src: Path,
+) -> dict[str, set[Point]]:
+    """Points whose coverage differs between this run and the baseline
+    commit's cached run of the same sources: coverage that depends on
+    thread scheduling.  ToolError unless the sources match, the baseline
+    run is cached, and the difference is small enough to be noise."""
+    changed = gitutil.git_text(
+        repo, "diff", "--name-only", base_commit, commit, "--", *MEASURED_PATHS
+    )
+    if changed:
+        raise ToolError(
+            f"--learn-volatile needs the same sources as the baseline commit "
+            f"{base_commit[:10]}; changed: {', '.join(changed.splitlines()[:5])}"
+        )
+    base_lcov = base_work / "logs" / "coverage.lcov"
+    if not base_lcov.exists():
+        raise ToolError(
+            f"--learn-volatile needs the baseline commit's run: {base_lcov} is "
+            f"missing (run coverage at {base_commit[:10]} first)"
+        )
+    base_src = base_work / "src"
+    old = parse_lcov(base_lcov.read_text(), base_src)
+    learned: dict[str, set[Point]] = {}
+    for path in sorted(old.keys() & lcov.keys()):
+        if not (src / path).is_file():
+            continue
+        text = (src / path).read_text(errors="replace")
+        flipped = flipped_points(old[path], text, lcov[path], text)
+        if flipped:
+            learned[path] = flipped
+    total = sum(len(p) for p in learned.values())
+    if total > VOLATILE_LIMIT:
+        raise ToolError(
+            f"--learn-volatile: {total} points differ between two runs of the "
+            f"same sources (limit {VOLATILE_LIMIT}); that is not scheduling "
+            f"noise: compare the two runs' test logs"
+        )
+    return learned
 
 
 def report(
@@ -880,11 +1036,15 @@ def report(
     top: int,
     repo: Path | None = None,
     update_baseline: bool = False,
+    learn: bool = False,
 ) -> bool:
     """Write and print the summary of the run in `work` (its exported
     tree, profile listing and llvm-cov export).  Returns False when the
     coverage ratchet regressed against the measured tree's baseline;
-    with `update_baseline`, writes the run's figures as `repo`'s baseline."""
+    with `update_baseline`, writes the run's figures as `repo`'s baseline;
+    with `learn`, first adds the points that differ from the baseline
+    commit's run of the same sources to the baseline's volatile points
+    (and writes the baseline)."""
     logs = work / "logs"
     src = work / "src"
     export_text = (logs / "export.json").read_text().split("\n", 1)[1]
@@ -892,23 +1052,38 @@ def report(
     counts = parse_profile_counts((logs / "functions.txt").read_text())
     api = public_api(collect_headers(src), counts)
     api.unrun_inline = unrun_inline(collect_headers(src, public_only=False), counts)
+    baseline_file = src / BASELINE
+    doc = json.loads(baseline_file.read_text()) if baseline_file.exists() else None
+    volatile = volatile_from(doc) if doc else {}
+    base = str(doc.get("commit", "")) if doc else ""
     library = None
     lcov_file = logs / "coverage.lcov"
     lcov: dict[str, LcovFile] = {}
     if lcov_file.exists():
         lcov = parse_lcov(lcov_file.read_text(), src)
-        library = library_coverage(lcov, src)
+        if learn:
+            if not tests_ok or repo is None or not base:
+                raise ToolError(
+                    "--learn-volatile needs a passing run and a baseline commit"
+                )
+            learned = learn_volatile(
+                repo, base, commit, work.parent / base[:10], lcov, src
+            )
+            for path, points in learned.items():
+                volatile.setdefault(path, set()).update(points)
+                for p in sorted(points):
+                    print(f"volatile: {path}: {describe(p)}")
+            print(f"learned {sum(len(p) for p in learned.values())} volatile points")
+        library = library_coverage(lcov, src, volatile)
 
     text = render(commit, subject, tests, files, total, api, top, library)
     result: Ratchet | None = None
     if library is not None:
-        baseline_file = src / BASELINE
-        if baseline_file.exists():
-            doc = json.loads(baseline_file.read_text())
+        if doc is not None:
             result = ratchet(doc, library[0])
-            base = str(doc.get("commit", ""))[:10]
+            result.volatile = sum(len(p) for p in volatile.values())
             if base:
-                attach_lost(result, work.parent / base, lcov, src)
+                attach_lost(result, work.parent / base[:10], lcov, src, volatile)
         text += render_ratchet(result)
     (work / "summary.md").write_text(text)
     (work / "summary.json").write_text(
@@ -917,9 +1092,11 @@ def report(
     )
     sys.stdout.write(text)
     print(f"summary: {work / 'summary.md'}")
-    if update_baseline and repo is not None and library is not None:
+    if (update_baseline or learn) and repo is not None and library is not None:
         target = repo / BASELINE
-        target.write_text(json.dumps(baseline_doc(commit, library[0]), indent=1) + "\n")
+        target.write_text(
+            json.dumps(baseline_doc(commit, library[0], volatile), indent=1) + "\n"
+        )
         print(f"baseline: {target}")
     return result is None or result.ok
 
@@ -1091,6 +1268,14 @@ def rereport(repo: Path, opts: CoverageOptions) -> int:
     tests = "all passed (earlier run)" if tests_ok else f"FAILED: {', '.join(failed)}"
     export_lcov(work, opts.compiler or toolchain.resolve_compiler("clang22"))
     held = report(
-        work, commit, subject, tests, tests_ok, opts.top, repo, opts.update_baseline
+        work,
+        commit,
+        subject,
+        tests,
+        tests_ok,
+        opts.top,
+        repo,
+        opts.update_baseline,
+        opts.learn_volatile,
     )
     return 0 if tests_ok and held else 1

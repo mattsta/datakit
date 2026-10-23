@@ -398,6 +398,13 @@ def main(argv: list[str] | None = None) -> int:
         help="write this run's per-file uncovered library lines and branches "
         "to tools/coverage-baseline.json (the ratchet's baseline)",
     )
+    cv.add_argument(
+        "--learn-volatile",
+        action="store_true",
+        help="record the points whose coverage differs from the baseline "
+        "commit's cached run of the same sources (thread-scheduling noise) "
+        "as volatile in the baseline, and write it",
+    )
     toolchain.add_arguments(cv)
 
     vs = sub.add_parser(
@@ -496,6 +503,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             jobs=args.jobs,
             compiler=toolchain.from_args("clang22", args),
             update_baseline=args.update_baseline,
+            learn_volatile=args.learn_volatile,
         )
         if args.detail:
             return coverage.detail(args.repo, cov_opts, args.detail)

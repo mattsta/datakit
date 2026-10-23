@@ -478,5 +478,131 @@ class Detail(unittest.TestCase):
         self.assertIn("every line ran", coverage.render_detail("src/a.c", [], []))
 
 
+# Two identical "return 0;" lines, told apart by the line before each
+SPIN = """\
+int spin(int x) {
+  if (x) {
+    return 0;
+  }
+  if (x > 1) {
+    return 0;
+  }
+  return 1;
+}
+"""
+
+
+def spin_lcov(root: Path, second_taken: bool) -> str:
+    """A run of SPIN where line 6 (and its branch) ran or not."""
+    six = 1 if second_taken else 0
+    return (
+        f"SF:{root.resolve()}/src/spin.c\n"
+        f"DA:1,2\nDA:2,2\nDA:3,0\nDA:5,2\nDA:6,{six}\nDA:8,2\n"
+        f"BRDA:2,0,0,0\nBRDA:2,0,1,2\nBRDA:5,0,0,{six}\nBRDA:5,0,1,2\n"
+        "end_of_record\n"
+    )
+
+
+class Volatile(unittest.TestCase):
+    def test_volatile_points_leave_the_counts_and_nothing_else(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "spin.c").write_text(SPIN)
+            lcov = coverage.parse_lcov(spin_lcov(root, False), root)
+            plain, _ = coverage.library_coverage(lcov, root)
+            flaky = {
+                "src/spin.c": {
+                    ("line", "return 0;", "if (x > 1) {"),
+                    ("branch 0.0", "if (x > 1) {", "}"),
+                }
+            }
+            files, total = coverage.library_coverage(lcov, root, flaky)
+        # Line 3 is the same text as line 6 but follows another line: kept
+        self.assertEqual(plain[0].lines, (4, 6))
+        self.assertEqual(files[0].lines, (4, 5))
+        self.assertEqual(plain[0].branches, (2, 4))
+        self.assertEqual(files[0].branches, (2, 3))
+        self.assertEqual(total.lines, (4, 5))
+        doc = coverage.baseline_doc("c" * 40, files, flaky)
+        self.assertEqual(coverage.volatile_from(doc), flaky)
+        self.assertEqual(doc["files"]["src/spin.c"], {"lines": 1, "branches": 1})
+
+    def test_flipped_points_are_the_runs_differences(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "spin.c").write_text(SPIN)
+            ran = coverage.parse_lcov(spin_lcov(root, True), root)["src/spin.c"]
+            missed = coverage.parse_lcov(spin_lcov(root, False), root)["src/spin.c"]
+        self.assertEqual(
+            coverage.flipped_points(ran, SPIN, missed, SPIN),
+            {
+                ("line", "return 0;", "if (x > 1) {"),
+                ("branch 0.0", "if (x > 1) {", "}"),
+            },
+        )
+        self.assertEqual(coverage.flipped_points(ran, SPIN, ran, SPIN), set())
+        lost = coverage.newly_uncovered(
+            ran, SPIN, missed, SPIN, {("line", "return 0;", "if (x > 1) {")}
+        )
+        self.assertEqual(lost, [(5, "branch 0.0: if (x > 1) {")])
+
+    def test_learning_needs_the_same_sources_and_a_cached_run(self) -> None:
+        from repofixture import IsolatedGitEnv, TempRepo
+
+        from dktools.procs import ToolError
+
+        repo = TempRepo()
+        try:
+            with IsolatedGitEnv():
+                repo.write("src/spin.c", SPIN)
+                base = repo.commit("base", "src/spin.c")
+                repo.write("tools/coverage-baseline.json", "{}\n")
+                same = repo.commit("baseline only", "tools/coverage-baseline.json")
+                scratch = repo.path.parent / "scratch"
+                base_work = scratch / base[:10]
+                (base_work / "logs").mkdir(parents=True)
+                (base_work / "src" / "src").mkdir(parents=True)
+                (base_work / "src" / "src" / "spin.c").write_text(SPIN)
+                (base_work / "logs" / "coverage.lcov").write_text(
+                    spin_lcov(base_work / "src", True)
+                )
+                head_src = scratch / same[:10] / "src"
+                (head_src / "src").mkdir(parents=True)
+                (head_src / "src" / "spin.c").write_text(SPIN)
+                lcov = coverage.parse_lcov(spin_lcov(head_src, False), head_src)
+                learned = coverage.learn_volatile(
+                    repo.path, base, same, base_work, lcov, head_src
+                )
+                self.assertEqual(
+                    learned,
+                    {
+                        "src/spin.c": {
+                            ("line", "return 0;", "if (x > 1) {"),
+                            ("branch 0.0", "if (x > 1) {", "}"),
+                        }
+                    },
+                )
+                # No cached run of the baseline commit
+                with self.assertRaises(ToolError):
+                    coverage.learn_volatile(
+                        repo.path, base, same, scratch / "none", lcov, head_src
+                    )
+                # Changed sources: differences are not noise
+                repo.write("src/spin.c", SPIN + "\n")
+                edited = repo.commit("edit", "src/spin.c")
+                with self.assertRaises(ToolError):
+                    coverage.learn_volatile(
+                        repo.path, base, edited, base_work, lcov, head_src
+                    )
+        finally:
+            repo.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

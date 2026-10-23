@@ -311,6 +311,16 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   The coverage preset updates counters atomically: plain counters lose
   counts in threaded tests, and the branch counts llvm derives from them
   then drift by one or wrap, which read as coverage changes.
+- Volatile points: coverage that depends on thread scheduling (a CAS
+  that fails only under contention, a child process that exits first)
+  differs between runs of the same sources.  The baseline lists such
+  points (kind, source line and the line before it) and every count
+  leaves them out.  `--learn-volatile` finds them: run coverage at a
+  commit whose `src/` and CMake files match the baseline commit's (the
+  commit that records the baseline is one) while the baseline commit's
+  run is still cached; every point that differs between the two runs is
+  added and the baseline rewritten.  It refuses a failed run, changed
+  sources, or more than 100 differing points (not noise).
 - `--detail FILE` (repeatable, repo-relative) reads the earlier run for
   REV and lists FILE's functions by missed lines and its uncovered line
   ranges (each with its first source line): the worklist for one file.
