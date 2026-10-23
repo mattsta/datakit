@@ -424,6 +424,8 @@ typedef __uint128_t StrBloomFilterBig;
 #endif
 
 size_t StrInt64ToBuf(void *dst, size_t dstLen, int64_t svalue);
+/* The digits of 'value' (no terminator); 0 when dstLen < 10, whatever the
+ * value's length */
 size_t StrUInt32ToBuf(void *dst, size_t dstLen, uint32_t value);
 size_t StrUInt64ToBuf(void *dst, size_t dstLen, uint64_t svalue);
 
@@ -467,6 +469,8 @@ void StrUInt9DigitsToBuf(void *p_, uint32_t u);
 void StrUInt8DigitsToBuf(void *p_, uint32_t u);
 void StrUInt4DigitsToBuf(void *p_, uint32_t u);
 
+/* The length of the value's decimal form (StrDigitCountInt64 counts a
+ * negative value's '-') */
 size_t StrDigitCountUInt32(uint32_t v);
 size_t StrDigitCountInt64(int64_t v);
 size_t StrDigitCountUInt64(uint64_t v);

@@ -481,6 +481,78 @@ int utilTest(int argc, char **argv) {
 
     int err = 0;
 
+    TEST("glob matching, human seconds, base names, counter hex") {
+        static const struct {
+            const char *pattern;
+            const char *string;
+            int nocase;
+            bool match;
+        } globs[] = {{"h*o", "hello", 0, true},
+                     {"h?llo", "hello", 0, true},
+                     {"h[ae]llo", "hallo", 0, true},
+                     {"h[^e]llo", "hello", 0, false},
+                     {"HELLO", "hello", 1, true},
+                     {"HELLO", "hello", 0, false},
+                     {"*", "", 0, true},
+                     {"a\\*b", "a*b", 0, true}};
+        for (size_t i = 0; i < sizeof(globs) / sizeof(*globs); i++) {
+            if (stringmatch(globs[i].pattern, globs[i].string,
+                            globs[i].nocase) != globs[i].match) {
+                ERR("stringmatch(\"%s\", \"%s\")", globs[i].pattern,
+                    globs[i].string);
+            }
+        }
+        /* The length form reads only the given bytes */
+        if (!stringmatchlen("ab*", 3, "abcdef", 3, 0) ||
+            stringmatchlen("abc", 3, "abd", 3, 0)) {
+            ERRR("stringmatchlen ignored its lengths");
+        }
+
+        char human[64];
+        static const struct {
+            double sec;
+            const char *unit;
+        } spans[] = {{1e-8, " ns"},    {1e-5, " us"},     {0.5, " ms"},
+                     {5, " seconds"},  {120, " minutes"}, {7200, " hours"},
+                     {200000, " days"}};
+        for (size_t i = 0; i < sizeof(spans) / sizeof(*spans); i++) {
+            secondsToHuman(human, sizeof(human), spans[i].sec);
+            if (!strstr(human, spans[i].unit)) {
+                ERR("secondsToHuman(%g) = \"%s\"", spans[i].sec, human);
+            }
+        }
+
+        char base[] = "file.txt";
+        char unix[] = "dir/file.txt";
+        char dos[] = "dir\\file.txt";
+        if (!pathIsBaseName(base) || pathIsBaseName(unix) ||
+            pathIsBaseName(dos)) {
+            ERRR("pathIsBaseName misjudged a path");
+        }
+
+        /* Counter mode: the seed and counter decide the output */
+        uint8_t seed[SHA1_DIGEST_LENGTH];
+        uint8_t shortSeed[4];
+        if (getRandomHexCharsCounterInit(shortSeed, sizeof(shortSeed)) ||
+            !getRandomHexCharsCounterInit(seed, sizeof(seed))) {
+            ERRR("counter init accepted a short seed or refused a full one");
+        }
+        uint64_t c1 = 7;
+        uint64_t c2 = 7;
+        uint8_t a[50];
+        uint8_t b[50];
+        getRandomHexCharsCounter(seed, &c1, a, sizeof(a));
+        getRandomHexCharsCounter(seed, &c2, b, sizeof(b));
+        bool hex = true;
+        for (size_t i = 0; i < sizeof(a); i++) {
+            hex &= (a[i] >= '0' && a[i] <= '9') || (a[i] >= 'a' && a[i] <= 'f');
+        }
+        if (!hex || memcmp(a, b, sizeof(a)) != 0 || c1 != c2 || c1 == 7 ||
+            getRandomHexCharsCounter(NULL, &c1, a, 1)) {
+            ERRR("counter-mode hex is not deterministic hex");
+        }
+    }
+
     TEST("humanToBytes") {
         bool errr;
         const uint64_t GB12 = humanToBytes("12GB", 4, &errr);

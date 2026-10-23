@@ -2050,6 +2050,162 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("bit positions 16/32/64 against a naive walk, set and unset") {
+        uint64_t words[64];
+        uint64_t rng = 0xb17ab17aULL;
+        for (size_t i = 0; i < 64; i++) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            words[i] = rng & (rng >> 7);
+        }
+        uint64_t setWant[4096];
+        uint64_t unsetWant[4096];
+        size_t nSet = 0;
+        size_t nUnset = 0;
+        for (uint64_t bit = 0; bit < 4096; bit++) {
+            if (words[bit / 64] >> (bit % 64) & 1) {
+                setWant[nSet++] = bit;
+            } else {
+                unsetWant[nUnset++] = bit;
+            }
+        }
+        uint16_t p16[4096];
+        uint32_t p32[4096];
+        uint64_t p64[4096];
+        bool ok =
+            StrBitmapGetSetPositionsExact16(words, sizeof(words), p16) ==
+                nSet &&
+            StrBitmapGetSetPositionsExact32(words, sizeof(words), p32) ==
+                nSet &&
+            StrBitmapGetSetPositionsExact64(words, sizeof(words), p64) == nSet;
+        for (size_t i = 0; ok && i < nSet; i++) {
+            ok = p16[i] == setWant[i] && p32[i] == setWant[i] &&
+                 p64[i] == setWant[i];
+        }
+        ok = ok &&
+             StrBitmapGetUnsetPositionsExact16(words, sizeof(words), p16) ==
+                 nUnset &&
+             StrBitmapGetUnsetPositionsExact32(words, sizeof(words), p32) ==
+                 nUnset &&
+             StrBitmapGetUnsetPositionsExact64(words, sizeof(words), p64) ==
+                 nUnset;
+        for (size_t i = 0; ok && i < nUnset; i++) {
+            ok = p16[i] == unsetWant[i] && p32[i] == unsetWant[i] &&
+                 p64[i] == unsetWant[i];
+        }
+        if (!ok) {
+            ERRR("a wide bitmap reader disagrees with the naive walk");
+        }
+    }
+
+    TEST("number formatting, digit counts and double casts against libc") {
+        static const uint64_t edges[] = {0,
+                                         9,
+                                         10,
+                                         99,
+                                         100,
+                                         65535,
+                                         4294967295ULL,
+                                         4294967296ULL,
+                                         9999999999999999999ULL,
+                                         UINT64_MAX};
+        char buf[32];
+        char want[32];
+        for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
+            const int wantLen =
+                snprintf(want, sizeof(want), "%" PRIu64, edges[i]);
+            const size_t got = StrUInt64ToBufTable(buf, sizeof(buf), edges[i]);
+            if (got != (size_t)wantLen || memcmp(buf, want, got) != 0) {
+                ERR("StrUInt64ToBufTable(%" PRIu64 ")", edges[i]);
+            }
+            if (edges[i] <= UINT32_MAX) {
+                const size_t got32 =
+                    StrUInt32ToBuf(buf, sizeof(buf), (uint32_t)edges[i]);
+                if (got32 != (size_t)wantLen || memcmp(buf, want, got32) != 0) {
+                    ERR("StrUInt32ToBuf(%" PRIu64 ")", edges[i]);
+                }
+            }
+            const int64_t s = (int64_t)(edges[i] >> 1) * (i % 2 ? -1 : 1);
+            /* The formatted length: a minus sign counts */
+            if (StrDigitCountInt64(s) !=
+                (size_t)snprintf(want, sizeof(want), "%" PRId64, s)) {
+                ERR("StrDigitCountInt64(%" PRId64 ")", s);
+            }
+        }
+
+        if (StrDoubleToInt64(3.9) != 3 || StrDoubleToInt64(-3.9) != -3 ||
+            StrDoubleToInt64(1e300) != INT64_MAX ||
+            StrDoubleToInt64(-1e300) != INT64_MIN ||
+            !StrDoubleCanBeCastToInt64(42.0) ||
+            StrDoubleCanBeCastToInt64(42.5) ||
+            StrDoubleCanBeCastToInt64(1e300)) {
+            ERRR("a double cast is wrong");
+        }
+
+        /* ASCII case-insensitive comparison agrees with strcasecmp */
+        static const char *const pairs[][2] = {
+            {"Hello", "hello"}, {"abc", "abd"}, {"ABD", "abc"}, {"", "a"}};
+        for (size_t i = 0; i < 4; i++) {
+            const int a = StrICmp(pairs[i][0], pairs[i][1]);
+            const int b = strcasecmp(pairs[i][0], pairs[i][1]);
+            if ((a > 0) != (b > 0) || (a < 0) != (b < 0)) {
+                ERR("StrICmp(\"%s\", \"%s\")", pairs[i][0], pairs[i][1]);
+            }
+        }
+    }
+
+    TEST("log estimates and the double and 128-bit scanners") {
+        /* sqlite's LogEst: ten times log2, exact for powers of two */
+        if (StrLogEst(1) != 0 || StrLogEst(2) != 10 || StrLogEst(10) != 33 ||
+            StrLogEst(1000) != 99 || StrLogEst(1 << 20) != 200 ||
+            StrLogEstFromDouble(1000.0) != 99 || StrLogEstAdd(99, 99) != 109) {
+            ERRR("a LogEst value is wrong");
+        }
+        for (int k = 0; k < 60; k++) {
+            if (StrLogEstToInt(StrLogEst((uint64_t)1 << k)) != (uint64_t)1
+                                                                   << k) {
+                ERR("LogEst round trip of 2^%d", k);
+            }
+        }
+        const LogEst big = StrLogEstFromDouble(1e30);
+        if (big < 990 || big > 1010) {
+            ERR("LogEstFromDouble(1e30) = %d", (int)big);
+        }
+
+        databox box = {{0}};
+        if (!StrScanToDouble("1.5", &box, false, false) ||
+            box.data.d64 != 1.5 || StrScanToDouble("x", &box, false, false) ||
+            StrScanToDouble("inf", &box, false, false) ||
+            !StrScanToDouble("inf", &box, true, false) ||
+            !isinf(box.data.d64)) {
+            ERRR("StrScanToDouble disagrees with the scanner rules");
+        }
+
+        /* The PreVerified 128-bit scan matches the checking one on
+         * canonical digits */
+        static const char int128Max[] =
+            "170141183460469231731687303715884105727";
+        static const char *const numbers[] = {"0", "18446744073709551616",
+                                              int128Max};
+        for (size_t i = 0; i < 3; i++) {
+            databox smallA;
+            databox smallB;
+            databoxBig bigA;
+            databoxBig bigB;
+            databoxBig *useA = NULL;
+            databoxBig *useB = NULL;
+            const size_t len = strlen(numbers[i]);
+            const bool a = StrScanScanReliableConvert128(numbers[i], len,
+                                                         &smallA, &bigA, &useA);
+            const bool b = StrScanScanReliableConvert128PreVerified(
+                numbers[i], len, &smallB, &bigB, &useB);
+            if (!a || !b || (useA == &bigA) != (useB == &bigB) ||
+                (useA == &bigA && *bigA.data.u128 != *bigB.data.u128) ||
+                (useA != &bigA && smallA.data.u64 != smallB.data.u64)) {
+                ERR("the 128-bit scans disagree on %s", numbers[i]);
+            }
+        }
+    }
+
     TEST("bit set positions 8") {
         const uint64_t pickles = 0xc0c0c0c0c0c0c0c0ULL;
         const uint8_t positionsValidate[64] = {
@@ -2061,7 +2217,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         uint8_t positions[64] = {0};
         StrBitmapGetSetPositionsExact8(&pickles, sizeof(pickles), positions);
         assert(
-            !memcmp(positions, positionsValidate, sizeof(*positionsValidate)));
+            !memcmp(positions, positionsValidate, sizeof(positionsValidate)));
     }
 
     TEST("bit unset positions 8") {
@@ -2078,7 +2234,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         uint8_t positions[64] = {0};
         StrBitmapGetUnsetPositionsExact8(&pickles, sizeof(pickles), positions);
         assert(
-            !memcmp(positions, positionsValidate, sizeof(*positionsValidate)));
+            !memcmp(positions, positionsValidate, sizeof(positionsValidate)));
     }
 
     TEST("small bit offset (single storage)") {

@@ -2461,6 +2461,61 @@ int ulidTest(int argc, char *argv[]) {
     /* ================================================================
      * Generator State Contract Tests
      * ================================================================ */
+    TEST("64/32-bit accessors: fields fit their layouts; zero/copy/clear") {
+        ulid64_t a;
+        ulid64_t b;
+        ulid64Generate(&g, &a, ULID_VARIANT_NSCOUNT);
+        ulid64Generate(&g, &b, ULID_VARIANT_NSCOUNT);
+        /* NSCOUNT: 40-bit ns + 24-bit counter, ids rising */
+        if (ulid64GetCounter(&a) >> 24 || ulid64Compare(&a, &b) >= 0) {
+            ERRR("NSCOUNT counter outside 24 bits or ids not rising");
+        }
+        ulid64Generate(&g, &a, ULID_VARIANT_HYBRID);
+        if (ulid64GetNsDelta(&a) >> 20) {
+            ERRR("HYBRID ns delta outside 20 bits");
+        }
+        ulid64Generate(&g, &a, ULID_VARIANT_MS);
+        if (ulid64GetRandom(&a, ULID_VARIANT_MS) >> 22) {
+            ERRR("MS random outside 22 bits");
+        }
+        ulid64Copy(&b, &a);
+        if (ulid64IsZero(&a) || ulid64Compare(&a, &b) != 0) {
+            ERRR("a generated id is zero or did not copy");
+        }
+        ulid64Clear(&b);
+        if (!ulid64IsZero(&b)) {
+            ERRR("a cleared id is not zero");
+        }
+
+        /* The largest timestamp a variant holds validates; one past not */
+        const uint64_t max = ulid64GetMaxTimestamp(ULID_VARIANT_EPOCH2024);
+        if (!ulid64ValidateTimestamp(ULID_EPOCH_2024_NS,
+                                     ULID_VARIANT_EPOCH2024) ||
+            !ulid64ValidateTimestamp(max, ULID_VARIANT_EPOCH2024) ||
+            ulid64ValidateTimestamp(max + 1, ULID_VARIANT_EPOCH2024) ||
+            max <= ULID_EPOCH_2024_NS) {
+            ERRR("the EPOCH2024 timestamp bounds are wrong");
+        }
+
+        ulid32_t s;
+        ulid32_t t;
+        ulid32Generate(&g, &s, ULID_VARIANT_32S);
+        ulid32Copy(&t, &s);
+        if (ulid32GetRandom(&s, ULID_VARIANT_32S) >> 10 ||
+            ulid32Compare(&s, &t) != 0 ||
+            ulid32GetTimestampNs(&s, ULID_VARIANT_32S) % 1000000000 != 0) {
+            ERRR("a 32S id's random or second-resolution timestamp is wrong");
+        }
+        ulid32Clear(&t);
+        if (!ulid32IsZero(&t) || ulid32IsZero(&s)) {
+            ERRR("ulid32 IsZero / Clear disagree");
+        }
+
+        if ((unsigned)ulidGetEncodeImpl() >= ULID_ENCODE_COUNT) {
+            ERRR("the encoding implementation is not a known one");
+        }
+    }
+
     TEST("generator: stack zero-init self-seeds and generates") {
         ulidGen z = {0};
         ulid_t id;
