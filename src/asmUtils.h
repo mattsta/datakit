@@ -52,33 +52,6 @@ DK_FN_UNUSED DK_FN_PURE DK_INLINE_ALWAYS uint64_t pow2Ceiling64(uint64_t x) {
 #endif
 }
 
-/* We don't care about 32 bit targets currently */
-#if 0
-DK_FN_UNUSED DK_FN_PURE DK_INLINE_ALWAYS uint32_t
-pow2Ceiling32(uint32_t x) {
-#if __i386__
-    if (unlikely(x <= 1)) {
-        return 2;
-    }
-
-    size_t indexOfHighestBitSet;
-
-    asm("bsr %1, %0" : "=r"(indexOfHighestBitSet) : "r"(x - 1));
-
-    return 1U << (indexOfHighestBitSet + 1);
-#else
-    x--;
-    x |= x >> 1;
-    x |= x >> 2;
-    x |= x >> 4;
-    x |= x >> 8;
-    x |= x >> 16;
-    x++;
-    return x;
-#endif
-}
-#endif
-
 /* A compile-time version of lg_floor and lg_ceil. */
 #define LG_FLOOR_1(x) 0
 #define LG_FLOOR_2(x) (x < (1ULL << 1) ? LG_FLOOR_1(x) : 1 + LG_FLOOR_1(x >> 1))

@@ -183,12 +183,6 @@ static const char DK_BITS = sizeof(void *) == 8   ? 64
 /* ====================================================================
  * Float helpers from numpy numpy_math.h
  * ==================================================================== */
-#if 0
-#define DK_EXP754 (((uint64_t)0x7ff) << 52)
-#define DK_MAN754 ((((uint64_t)1) << 52) - 1)
-#define DK_IsNaN(X) (((X) & EXP754) == EXP754 && ((X) & MAN754) != 0)
-#endif
-
 #ifndef DK_HAS_ISNAN
 #define dk_isnan(x) ((x) != (x))
 #else
