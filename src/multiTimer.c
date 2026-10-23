@@ -287,9 +287,9 @@ static bool checkTimerExceptions(multiTimer *t, multiTimerId id) {
      * deleted timer ranges. */
     if (id <= t->stopHighest && id >= t->stopLowest) {
         const databox stop = databoxNewUnsigned(id);
-        if (multimapExists(t->stopEvents, &stop)) {
+        /* One search: the delete reports whether the id was there */
+        if (multimapDelete(&t->stopEvents, &stop)) {
             /* Remove from times to stop since we're not running it. */
-            multimapDelete(&t->stopEvents, &stop);
             t->stopPending--;
 
             stopBoundsAfterRemoval(t);

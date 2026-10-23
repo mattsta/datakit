@@ -172,7 +172,11 @@ persistLogResult multimapDeleteP(multimapP *m, const databox *key) {
     if (!multimapLoggableP(m)) {
         return PERSIST_LOG_REFUSED;
     }
-    if (!multimapExists(m->m, key)) {
+
+    /* The row found here is deleted where it is once logged (logging
+     * leaves the map as it was): one search */
+    multimapEntry me = {0};
+    if (!multimapGetUnderlyingEntry(m->m, key, &me)) {
         return PERSIST_LOG_UNCHANGED;
     }
 
@@ -182,7 +186,7 @@ persistLogResult multimapDeleteP(multimapP *m, const databox *key) {
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
-    multimapDelete(&m->m, key);
+    multimapDeleteEntry(&m->m, &me);
     persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
     return logged;
 }
