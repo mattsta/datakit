@@ -95,6 +95,19 @@ bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
     return replaced;
 }
 
+/* Inserts the row only when no row has its key, in one search: true when
+ * inserted, false when the key was present (the map unchanged). */
+bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[]) {
+    flexEntry *middle = GET_MIDDLE(m);
+    if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
+            &m->map, m->elementsPerEntry, elements, &middle)) {
+        return false;
+    }
+
+    SET_MIDDLE(m, middle);
+    return true;
+}
+
 void multimapSmallInsertFullWidth(multimapSmall *m, const databox *elements[]) {
     flexEntry *middle = GET_MIDDLE(m);
     /* InsertFullWidth: Always compare ALL elements (key+value) to allow

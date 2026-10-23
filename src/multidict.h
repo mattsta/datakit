@@ -132,7 +132,7 @@ typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
 typedef bool(multidictValueUpdate)(void *ctx, const databox *current,
                                    databox *replacement);
 
-/* multidictClass is a (16 * 8) + 1, padded = 136 byte struct: the
+/* multidictClass is a (17 * 8) + 1, padded = 144 byte struct: the
  * per-operation hooks fill the first cache line. */
 typedef struct multidictClass {
     /* Private data this class needs (atom dict, key dict, etc) */
@@ -190,6 +190,13 @@ typedef struct multidictClass {
     int32_t (*updateByType)(struct multidictClass *qdc, multidictSlot **slot,
                             const databox *keybox, multidictValueUpdate *update,
                             void *ctx);
+
+    /* Insert 'keybox' -> 'valbox' only when the key is not in the slot, in
+     * one search: 1 inserted, 0 present (the slot unchanged), -1 no slot.
+     * (AddNX uses it.) */
+    int64_t (*insertIfAbsentByType)(struct multidictClass *qdc,
+                                    multidictSlot **slot, const databox *keybox,
+                                    const databox *valbox);
 
     /* Rehash uses getIter/iterNext, insertByType and freeSlot: every row
      * of an old slot is read in place and inserted into its new slot, then

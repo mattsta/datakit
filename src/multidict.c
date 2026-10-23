@@ -1315,16 +1315,57 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Check if key exists; a present key is named, so this is its one use */
-    if (multidictExists(d, keybox)) {
+    /* A key stored under another spelling is found only by walking its
+     * slot: check, then add */
+    if (unlikely(MD_MATCH_BY_COMPARE(d, keybox))) {
+        if (multidictExists(d, keybox)) {
+            return MULTIDICT_ERR; /* a present key is named: its one use */
+        }
+
+        return multidictAdd(d, keybox, valbox);
+    }
+
+    /* While rehashing the key may still be in ht[0]; the hash found for
+     * that check serves the slot lookup below */
+    uint32_t hash = 0;
+    const uint32_t *knownHash = NULL;
+    if (multidictIsRehashing(d)) {
+        hash = multidictHashOfKey_(d, keybox);
+        knownHash = &hash;
+        multidictSlot *old = *SLOT_BY_HASH_PTR_PTR(d, 0, hash);
+        databox unused = {{0}};
+        if (old && d->shared->findValueByKey(d->shared, old, keybox, &unused)) {
+            multidictLRUOnAccess(d, keybox);
+            return MULTIDICT_ERR;
+        }
+    }
+
+    multidictOp op;
+    multidictFindSlotForKeyNewest(d, &op, keybox, knownHash);
+    const size_t lenBefore = op.created ? 0 : d->shared->sizeBytes(*op.slot);
+
+    /* One search finds the key or inserts it */
+    const int64_t inserted =
+        d->shared->insertIfAbsentByType(d->shared, op.slot, keybox, valbox);
+    if (inserted == 0) {
+        multidictLRUOnAccess(d, keybox);
         return MULTIDICT_ERR; /* Key exists - NX fails */
     }
 
-    /* Key doesn't exist - perform insert */
-    multidictResult result = multidictAdd(d, keybox, valbox);
+    if (inserted < 0) {
+        return MULTIDICT_ERR;
+    }
 
-    /* multidictAdd should return INSERTED since we checked it doesn't exist */
-    return result;
+    op.ht->usedBytes += d->shared->sizeBytes(*op.slot) - lenBefore;
+    op.ht->count++;
+    op.ht->keyBytes += mdBoxSize_(keybox);
+    op.ht->valBytes += mdBoxSize_(valbox);
+    HT_UPDATE_TOTAL(op.ht);
+    multidictLRUOnInsert(d, keybox);
+
+    /* Grown after the insert, not before: a refused offer adds nothing */
+    multidictExpandIfNeeded_(d);
+    return MULTIDICT_OK_INSERTED;
 }
 
 /* AddXX's rewrite: the new value, whatever was stored */
@@ -3208,6 +3249,19 @@ DK_STATIC int64_t mmSlotInsert(multidictClass *qdc, multidictSlot **slot,
     return wasReplaced ? 0 : 1; /* 1 = new insert, 0 = replaced */
 }
 
+DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *qdc,
+                                       multidictSlot **slot,
+                                       const databox *keybox,
+                                       const databox *valbox) {
+    (void)qdc;
+    if (*slot == NULL) {
+        return -1;
+    }
+
+    const databox *elements[2] = {keybox, valbox};
+    return multimapInsertIfAbsent(MM_SLOT_REF(slot), elements) ? 1 : 0;
+}
+
 DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
                                   const databox *keybox) {
     (void)qdc;
@@ -3425,6 +3479,7 @@ DK_STATIC multidictClass *multidictMmClassNew(void) {
     qdc->findKeyByPosition = mmSlotFindKeyByPos;
     qdc->iterateAll = mmSlotIterateAll;
     qdc->updateByType = mmSlotUpdate;
+    qdc->insertIfAbsentByType = mmSlotInsertIfAbsent;
     qdc->free = mmSlotClassFree;
     qdc->freeClass = mmSlotFreeClass;
     qdc->disableResize = false;
@@ -5718,10 +5773,22 @@ static int multidictTestCountersUnderUpdates_(void) {
         snprintf(keyBuf, sizeof(keyBuf), "k%" PRId64, i % 1500);
         const databox key = databoxNewBytesString(keyBuf);
         rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
-        switch ((rng >> 33) % 7) {
+        switch ((rng >> 33) % 8) {
         case 0: {
             const databox val = databoxNewSigned(i);
             multidictAdd(d, &key, &val);
+            break;
+        }
+        case 7: {
+            /* Inserts exactly when the key is absent, from either table */
+            const bool present = multidictExistsNoTouch(d, &key);
+            const databox val = databoxNewSigned(-i);
+            const multidictResult r = multidictAddNX(d, &key, &val);
+            if (r != (present ? MULTIDICT_ERR : MULTIDICT_OK_INSERTED)) {
+                printf("AddNX of %s (present %d, rehashing %d) returned %d\n",
+                       keyBuf, present, multidictIsRehashing(d), r);
+                err++;
+            }
             break;
         }
         case 1: {
@@ -5763,6 +5830,72 @@ static int multidictTestCountersUnderUpdates_(void) {
             err++;
             break;
         }
+    }
+
+    return err;
+}
+
+/* AddNX mid-rehash, while most keys still sit in ht[0]: a present key is
+ * refused wherever it is (its value kept), an absent one is inserted
+ * once, and the counters stay exact. */
+static int multidictTestAddNXMidRehash_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 77);
+    enum { present = 300 };
+    for (int64_t i = 0; i < present; i++) {
+        const databox key = databoxNewSigned(i);
+        const databox val = databoxNewSigned(i * 3);
+        multidictAdd(d, &key, &val);
+    }
+
+    while (multidictRehash(d, 100)) {
+    }
+
+    if (!multidictExpand(d, 8192) || !multidictIsRehashing(d)) {
+        printf("AddNX mid-rehash: expand did not start a rehash\n");
+        return 1;
+    }
+
+    for (int64_t i = 0; i < present * 2; i++) {
+        /* present keys and absent keys interleaved */
+        const int64_t k = (i & 1) ? i / 2 : present + i / 2;
+        const databox key = databoxNewSigned(k);
+        const databox val = databoxNewSigned(-1);
+        const multidictResult want =
+            k < present ? MULTIDICT_ERR : MULTIDICT_OK_INSERTED;
+        const multidictResult got = multidictAddNX(d, &key, &val);
+        if (got != want) {
+            printf("AddNX mid-rehash: key %" PRId64 " returned %d, want %d\n",
+                   k, got, want);
+            err++;
+        }
+
+        if (!mdTestCountersHold_(d)) {
+            printf("AddNX mid-rehash: counters wrong after key %" PRId64 "\n",
+                   k);
+            err++;
+            break;
+        }
+    }
+
+    for (int64_t k = 0; k < present * 2; k++) {
+        const databox key = databoxNewSigned(k);
+        databox val = {{0}};
+        const int64_t want = k < present ? k * 3 : -1;
+        if (!multidictFind(d, &key, &val) || val.data.i != want) {
+            printf("AddNX mid-rehash: key %" PRId64 " holds %" PRId64
+                   ", want %" PRId64 "\n",
+                   k, (int64_t)val.data.i, want);
+            err++;
+        }
+    }
+
+    if (multidictCount(d) != present * 2) {
+        printf("AddNX mid-rehash: count %" PRIu64 ", want %d\n",
+               (uint64_t)multidictCount(d), present * 2);
+        err++;
     }
 
     return err;
@@ -7611,6 +7744,9 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 11.0: counters exact under in-place updates and removals, "
            "mid-rehash too...\n");
     assert(multidictTestCountersUnderUpdates_() == 0);
+
+    printf("Test 11.0b: AddNX mid-rehash refuses keys still in ht[0]...\n");
+    err += multidictTestAddNXMidRehash_();
 
     printf("Test 11.1: Fresh dict has zero bytes...\n");
     {

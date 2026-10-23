@@ -21,6 +21,8 @@ bool multimapSmallInsert(multimapSmall *m, const databox *elements[]);
  * (SIGNED_128 or UNSIGNED_128) with a NULL payload pointer. */
 bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
                                   databox *replacedOut);
+/* As multimapInsertIfAbsent (multimap.h) */
+bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[]);
 void multimapSmallInsertFullWidth(multimapSmall *m, const databox *elements[]);
 void multimapSmallAppend(multimapSmall *m, const databox *elements[]);
 

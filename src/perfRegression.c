@@ -636,6 +636,15 @@ static void benchMultidict(void) {
     }
     emitRow("multidict", "find", 0, n, monoNowSec() - t0);
 
+    /* AddNX of present keys: every offer refused */
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += multidictAddNX(d, &k, &v);
+    }
+    emitRow("multidict", "addNXPresent", 0, n, monoNowSec() - t0);
+
     t0 = monoNowSec();
     for (uint32_t r = 0; r < 3; r++) {
         for (uint32_t i = 0; i < n; i++) {
@@ -689,6 +698,15 @@ static void benchMultidict(void) {
         }
     }
     emitRow("multidict", "getAndDelete", 0, n, monoNowSec() - t0);
+
+    /* AddNX of absent keys into the emptied (still presized) table */
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += multidictAddNX(d, &k, &v);
+    }
+    emitRow("multidict", "addNX", 0, n, monoNowSec() - t0);
 
     perfContainerSink = sink;
 }

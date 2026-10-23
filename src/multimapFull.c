@@ -1707,6 +1707,21 @@ bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
     return multimapFullInsert_(m, elements, mapIdx, replacedOut);
 }
 
+/* As multimapSmallInsertIfAbsent: the map the key belongs to is found
+ * once, and serves both the presence check and the insert */
+bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[]) {
+    const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
+    const flex *map = *getMapPtr(m, mapIdx);
+    if (flexCount(map) &&
+        flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, elements[0],
+                                       GET_MIDDLE(m, mapIdx, map))) {
+        return false;
+    }
+
+    multimapFullInsert_(m, elements, mapIdx, NULL);
+    return true;
+}
+
 bool multimapFullInsertAllowExternalizeKeys(multimapFull *m,
                                             const databox *elements[],
                                             void **keyAllocation) {

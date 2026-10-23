@@ -422,6 +422,18 @@ bool multimapInsertReplacing(multimap **m, const databox *elements[],
     return replaced;
 }
 
+bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
+    bool inserted;
+    MULTIMAP_SETRESULT(inserted, *m, InsertIfAbsent, elements);
+    if (inserted) {
+        const uint32_t depth = COMPRESS_DEPTH(*m);
+        const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+        multimapUpgradeIfNecessary(m, depth, limit);
+    }
+
+    return inserted;
+}
+
 void multimapInsertFullWidth(multimap **m, const databox *elements[]) {
     /* Insert new elements */
     MULTIMAP_NORETURN(*m, InsertFullWidth, elements);
@@ -3692,11 +3704,96 @@ static int32_t multimapTestNextSize_(int32_t i) {
     return i < 256 ? i + 1 : i + i / 16;
 }
 
+/* multimapInsertIfAbsent through Small, Medium and Full against an oracle
+ * of the first value each key was offered: only a key's first offer
+ * inserts, a later offer leaves the stored value, and the count is the
+ * number of distinct keys. */
+static int32_t multimapInsertIfAbsentSweep_(void) {
+    int32_t err = 0;
+    enum { keys = 1500, offers = 3 };
+    static uint64_t firstValue[keys];
+    static bool seen[keys];
+    memset(seen, 0, sizeof(seen));
+
+    cleaner(multimapFree) multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+    bool sawType[MULTIMAP_TYPE_FULL + 1] = {false};
+    uint64_t distinct = 0;
+    uint64_t state = 0x9E3779B97F4A7C15ULL;
+    for (uint64_t i = 0; i < (uint64_t)keys * offers; i++) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        const uint64_t key = (state >> 33) % keys;
+        const uint64_t value = i * 7 + 1;
+        const databox k = databoxNewUnsigned(key);
+        const databox v = databoxNewUnsigned(value);
+        const databox *row[2] = {&k, &v};
+        const bool inserted = multimapInsertIfAbsent(&m, row);
+        if (inserted != !seen[key]) {
+            ERR("if-absent: key %" PRIu64 " offer returned %d, expected %d",
+                key, inserted, !seen[key]);
+        }
+
+        if (!seen[key]) {
+            seen[key] = true;
+            firstValue[key] = value;
+            distinct++;
+        }
+
+        sawType[multimapType_(m)] = true;
+    }
+
+    if (!sawType[MULTIMAP_TYPE_SMALL] || !sawType[MULTIMAP_TYPE_MEDIUM] ||
+        !sawType[MULTIMAP_TYPE_FULL]) {
+        ERR("if-absent: tiers visited small %d medium %d full %d",
+            sawType[MULTIMAP_TYPE_SMALL], sawType[MULTIMAP_TYPE_MEDIUM],
+            sawType[MULTIMAP_TYPE_FULL]);
+    }
+
+    if (multimapCount(m) != distinct) {
+        ERR("if-absent: count %zu, expected %" PRIu64, multimapCount(m),
+            distinct);
+    }
+
+    for (uint64_t key = 0; key < keys; key++) {
+        const databox k = databoxNewUnsigned(key);
+        databox got = {{0}};
+        databox *out[1] = {&got};
+        const bool found = multimapLookup(m, &k, out);
+        if (found != seen[key] || (found && (got.type != DATABOX_UNSIGNED_64 ||
+                                             got.data.u != firstValue[key]))) {
+            ERR("if-absent: key %" PRIu64 " found %d value %" PRIu64
+                ", expected found %d value %" PRIu64,
+                key, found, (uint64_t)got.data.u, seen[key],
+                seen[key] ? firstValue[key] : 0);
+        }
+    }
+
+    multimapVerify(m);
+
+    /* In a set any row with the key counts as present */
+    cleaner(multimapFree) multimap *set = multimapSetNew(2);
+    const databox k = databoxNewUnsigned(5);
+    const databox v1 = databoxNewUnsigned(1);
+    const databox v2 = databoxNewUnsigned(2);
+    const databox *first[2] = {&k, &v1};
+    const databox *second[2] = {&k, &v2};
+    if (!multimapInsertIfAbsent(&set, first) ||
+        multimapInsertIfAbsent(&set, second) || multimapCount(set) != 1) {
+        ERR("if-absent: set holds %zu rows for one key offered twice",
+            multimapCount(set));
+    }
+
+    return err;
+}
+
 int multimapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("insert-if-absent through every tier") {
+        err += multimapInsertIfAbsentSweep_();
+    }
 
     TEST("96/128-bit keys and values through every tier") {
         err += multimapWideSweep();

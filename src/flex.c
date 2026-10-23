@@ -5109,8 +5109,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     const struct multimapAtom *const referenceContainer,
     const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
     const bool useHighestInsertPosition, const bool newKeysBecomeShared,
-    void **keyAsAllocation, const bool fullWidthDedupe,
-    databox *const replacedOut) {
+    void **keyAsAllocation, const bool keepFound, databox *const replacedOut) {
     /* When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
      * that receive the value entries a replace overwrites, in tuple order.
      * A call that does not replace (new key, full-width insert, set dedupe
@@ -5120,7 +5119,6 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
 
     /* If no middle given, discover current middle (or head, if no
      * elements). */
-    const size_t initialCount = flexCount_(*ff) / elementsPerEntry;
     flexEntry *mid = *middleEntry;
     if (!mid) {
         mid = flexMiddle(*ff, elementsPerEntry);
@@ -5131,7 +5129,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     assert(flexCount(*ff) % elementsPerEntry == 0);
 
     /* Slows down testing too much when enabled. */
-    assert(initialCount ? mid == flexMiddle(*ff, elementsPerEntry) : true);
+    assert(flexCount(*ff) ? mid == flexMiddle(*ff, elementsPerEntry) : true);
 #endif
 
     /* We always use box[0] as initial search key */
@@ -5167,21 +5165,21 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         }
     }
 
-    /* TRUE SET SEMANTICS: full-width compare AND no duplicate entry.
-     * The plain full-width mode below keeps its historical
-     * duplicates-allowed behavior (sorted-bag consumers such as
-     * InsertFullWidth rely on it); set-mode multimaps route through
-     * this dedupe instead — a found full-width-equal entry is
-     * reported found WITHOUT touching the flex.  Without this, every
-     * re-insert of an existing set member appended a duplicate row
-     * while returning 'found', so the caller's reply looked correct
-     * as the structure silently diverged. */
-    if (fullWidthDedupe && found) {
+    /* 'keepFound': a found entry is reported found WITHOUT touching the
+     * flex.  With a full-width compare this is TRUE SET SEMANTICS (no
+     * duplicate entry; the plain full-width mode below keeps its
+     * duplicates-allowed behavior, which sorted-bag consumers such as
+     * InsertFullWidth rely on).  With a key-only compare it is
+     * insert-if-absent: the row goes in only when no row has its key. */
+    if (keepFound && found) {
         for (int_fast32_t i = 0; replacedOut && i < elementsPerEntry - 1; i++) {
             replacedOut[i] = (databox){.type = DATABOX_VOID};
         }
         return true;
     }
+
+    /* Entry count before this call (read only by a new-entry insert) */
+    const size_t initialCount = flexCount_(*ff) / elementsPerEntry;
 
     /* Only replace if we *found* the key.
      * If so, replace everything after the key.  */
@@ -5418,6 +5416,17 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
     const databox **const box, flexEntry **const middleEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, false, false, NULL, false, NULL,
+        false, false, NULL, true, NULL);
+}
+
+/* Insert-if-absent: key-only compare, and a found key leaves the flex as
+ * it is.  Returns true when the key was present (nothing inserted), false
+ * when the row was inserted. */
+bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, flexEntry **const middleEntry) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+        ff, elementsPerEntry, box, middleEntry, true, false, NULL, false, NULL,
         false, false, NULL, true, NULL);
 }
 

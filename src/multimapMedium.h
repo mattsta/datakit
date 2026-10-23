@@ -23,6 +23,8 @@ bool multimapMediumInsert(multimapMedium *m, const databox *elements[]);
  * (SIGNED_128 or UNSIGNED_128) with a NULL payload pointer. */
 bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
                                    databox *replacedOut);
+/* As multimapInsertIfAbsent (multimap.h) */
+bool multimapMediumInsertIfAbsent(multimapMedium *m, const databox *elements[]);
 void multimapMediumInsertFullWidth(multimapMedium *m,
                                    const databox *elements[]);
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]);

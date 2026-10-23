@@ -50,6 +50,8 @@ bool multimapFullInsertAllowExternalizeKeys(multimapFull *m,
  * before the insert if it is needed. */
 bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
                                  databox *replacedOut);
+/* As multimapInsertIfAbsent (multimap.h) */
+bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[]);
 bool multimapFullInsertAllowExternalizeKeysReplacing(multimapFull *m,
                                                      const databox *elements[],
                                                      void **keyAllocation,

@@ -43,6 +43,10 @@ bool multimapInsert(multimap **m, const databox *elements[]);
  * or data.u128); read such a value before the insert if it is needed. */
 bool multimapInsertReplacing(multimap **m, const databox *elements[],
                              databox *replacedOut);
+/* Inserts the row only when no row has its key, in one search: true when
+ * inserted, false when the key was present (the map unchanged).  In a set
+ * any row with the key counts as present. */
+bool multimapInsertIfAbsent(multimap **m, const databox *elements[]);
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 
 /* multimapInsert for rows arriving in ascending key order: a row at or past

@@ -318,6 +318,12 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersRep
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
     flexEntry **middleEntry);
+/* Insert-if-absent in one search: key-only compare, and a found key leaves
+ * the flex (and '*middleEntry') unchanged.  Returns true when the key was
+ * present, false when the row was inserted. */
+bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
+    flexEntry **middleEntry);
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
     flexEntry **middleEntry, const struct multimapAtom *referenceContainer);
