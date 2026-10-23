@@ -95,7 +95,19 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
  * Memory Mapping Utilities
  * ==================================================================== */
 
+#ifdef DATAKIT_TEST
+/* Test builds only: when non-negative, the number of mappings left before
+ * one fails (then it disarms), so tests reach every mmap failure path.
+ * Armed only by single-threaded tests. */
+static int64_t memboundTestMapFailIn = -1;
+#endif
+
 static void *memboundMAP(const size_t len) {
+#ifdef DATAKIT_TEST
+    if (memboundTestMapFailIn >= 0 && memboundTestMapFailIn-- == 0) {
+        return NULL;
+    }
+#endif
     void *z = mmap(NULL, len, PROT_READ | PROT_WRITE,
                    MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     if (z == MAP_FAILED) {
@@ -4566,10 +4578,73 @@ static void *statsRaceReader(void *arg) {
     return NULL;
 }
 
+/* One pool of kind `kind` (dynamic, enterprise, fixed, micro, compact)
+ * created, filled past its first extent, grown and resized, then freed,
+ * with the mapping the sweep armed failing somewhere along the way.
+ * Whatever fails must fail cleanly: every allocation that succeeds is
+ * writable and counted, and teardown works.  *fired reports whether the
+ * armed mapping was reached.  Returns the violations. */
+static int memboundTestMapFailRun(int kind, bool *fired) {
+    int bad = 0;
+    membound *m = kind == 0   ? memboundCreateDynamic(1 << 16, 0, 1 << 16)
+                  : kind == 1 ? memboundCreateEnterprise(1 << 16, 0)
+                  : kind == 2 ? memboundCreateFixed(1 << 16)
+                  : kind == 3 ? memboundCreateMicro(1 << 15)
+                              : memboundCreateCompact(1 << 16, true);
+    if (m) {
+        void *ptrs[24] = {0};
+        size_t live = 0;
+        for (int i = 0; i < 24; i++) {
+            ptrs[i] = memboundAlloc(m, 6000);
+            if (ptrs[i]) {
+                memset(ptrs[i], 0xab, 6000);
+                live++;
+            }
+        }
+        (void)memboundGrowBy(m, 1 << 16);
+        (void)memboundIncreaseSize(m, 1 << 18);
+        void *more = memboundAlloc(m, 6000);
+        live += more != NULL;
+        if (more) {
+            memset(more, 0xcd, 6000);
+        }
+        if (memboundCurrentAllocationCount(m) != live) {
+            printf("ERROR: map failure, kind %d: %zu allocations counted, "
+                   "%zu made\n",
+                   kind, memboundCurrentAllocationCount(m), live);
+            bad++;
+        }
+        for (int i = 0; i < 24; i++) {
+            memboundFree(m, ptrs[i]);
+        }
+        memboundFree(m, more);
+        (void)memboundShrink(m);
+        memboundShutdown(m);
+    }
+    *fired = memboundTestMapFailIn < 0;
+    memboundTestMapFailIn = -1;
+    return bad;
+}
+
 int memboundTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("every mmap failure is a clean refusal, in every tier") {
+        /* The k-th mapping of each scenario fails, for each k until a
+         * run never reaches the armed mapping */
+        for (int kind = 0; kind < 5; kind++) {
+            for (int64_t k = 0; k < 200; k++) {
+                bool fired = false;
+                memboundTestMapFailIn = k;
+                err += memboundTestMapFailRun(kind, &fired);
+                if (!fired) {
+                    break;
+                }
+            }
+        }
+    }
 
     /* ================================================================
      * Fixed Mode Tests (Original Behavior)
