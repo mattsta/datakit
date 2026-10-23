@@ -1,4 +1,5 @@
 #include "atomPool.h"
+#include "atomPersist.h"
 #include "cleaner.h"
 
 defcleaner(atomPool *, atomPoolFree);
@@ -15,6 +16,7 @@ defcleaner(void *, zfree);
 defcleanerName(databox *, zfree, Databoxes);
 defcleanerName(char *, zfree, Chars);
 defcleanerName(uint64_t *, zfree, U64);
+defcleanerName(uint8_t *, zfree, U8);
 
 /* ====================================================================
  * VTable - Function Pointer Interface for Backend Polymorphism
@@ -451,6 +453,180 @@ const char *atomPoolTypeName(atomPoolType type) {
         return "UNKNOWN";
     }
 }
+
+/* ====================================================================
+ * Persistence (atomPersist.h)
+ * ==================================================================== */
+/* The descriptor of a pool's backend */
+static const persistOps *atomPoolBackendOps_(atomPoolType type,
+                                             atomPoolIds ids) {
+    if (type == ATOM_POOL_HASH) {
+        return &persistOpsStringPool;
+    }
+
+    return ids == ATOM_POOL_IDS_LOWEST ? &persistOpsMultimapAtomDense
+                                       : &persistOpsMultimapAtom;
+}
+
+static uint8_t *atomPoolPersistSnapshot_(const void *structure, size_t *len) {
+    const atomPool *pool = structure;
+    size_t innerLen = 0;
+    cleanerName(zfree, U8) uint8_t *inner =
+        atomPoolBackendOps_(pool->type, pool->ids)
+            ->snapshot(pool->impl, &innerLen);
+    if (!inner) {
+        return NULL;
+    }
+
+    const databox type = DATABOX_UNSIGNED(pool->type);
+    const databox ids = DATABOX_UNSIGNED(pool->ids);
+    const databox backend = databoxNewBytes(inner, innerLen);
+    const databox *row[3] = {&type, &ids, &backend};
+    /* @own: caller; free=zfree */
+    flex *f = flexNewFromDataboxPtrsExact(row, 3);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len) ||
+        flexCount((const flex *)data) != 3) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    databox type;
+    databox ids;
+    databox backend;
+    flexEntry *fe = flexHead(f);
+    flexGetByType(fe, &type);
+    fe = flexNext(f, fe);
+    flexGetByType(fe, &ids);
+    fe = flexNext(f, fe);
+    flexGetByType(fe, &backend);
+    if (type.type != DATABOX_UNSIGNED_64 || ids.type != DATABOX_UNSIGNED_64 ||
+        type.data.u64 > ATOM_POOL_TREE || ids.data.u64 > ATOM_POOL_IDS_LOWEST ||
+        !DATABOX_IS_BYTES(&backend)) {
+        return NULL;
+    }
+
+    const atomPoolType t = (atomPoolType)type.data.u64;
+    const atomPoolIds i = (atomPoolIds)ids.data.u64;
+    const persistOps *ops = atomPoolBackendOps_(t, i);
+    void *impl = ops->restore(databoxBytes(&backend), backend.len);
+    if (!impl) {
+        return NULL;
+    }
+
+    /* The backend's own id behaviour must be the one the pool names */
+    static const stringPoolIds hashIds[] = {
+        [ATOM_POOL_IDS_REUSE] = STRING_POOL_IDS_REUSE,
+        [ATOM_POOL_IDS_PERMANENT] = STRING_POOL_IDS_PERMANENT,
+        [ATOM_POOL_IDS_LOWEST] = STRING_POOL_IDS_LOWEST,
+    };
+    const bool fits =
+        t == ATOM_POOL_HASH
+            ? stringPoolIdsOf(impl) == hashIds[i]
+            : (i == ATOM_POOL_IDS_LOWEST ||
+               multimapAtomIsPermanent(impl) == (i == ATOM_POOL_IDS_PERMANENT));
+    if (!fits) {
+        ops->free(impl);
+        return NULL;
+    }
+
+    /* @own: caller; free=atomPoolFree */
+    atomPool *pool = zcalloc(1, sizeof(*pool));
+    pool->type = t;
+    pool->ids = i;
+    pool->impl = impl;
+    if (t == ATOM_POOL_HASH) {
+        pool->vtable = &hashVTable;
+    } else {
+        pool->vtable = i == ATOM_POOL_IDS_LOWEST ? &denseVTable : &treeVTable;
+    }
+
+    return pool;
+}
+
+static uint8_t *atomPoolPersistEncodeOp_(persistOp op, const void *args,
+                                         size_t argc, size_t *len) {
+    *len = 0;
+    if ((op != PERSIST_OP_INSERT && op != PERSIST_OP_NUM_INCR) || argc != 2 ||
+        !args) {
+        /* CLEAR carries no operand */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(args, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+/* The pool's ops are its backend's with the pool's 1-based ids: a TREE
+ * backend counts from 0 */
+static bool atomPoolPersistApplyOp_(void *structure, persistOp op,
+                                    const uint8_t *data, size_t len) {
+    atomPool *pool = *(atomPool **)structure;
+    if (op == PERSIST_OP_CLEAR) {
+        atomPoolReset(pool);
+        return true;
+    }
+
+    const persistOps *ops = atomPoolBackendOps_(pool->type, pool->ids);
+    if (pool->type == ATOM_POOL_HASH) {
+        return ops->applyOp(&pool->impl, op, data, len);
+    }
+
+    databoxBig id;
+    databoxBig arg;
+    if ((op != PERSIST_OP_INSERT && op != PERSIST_OP_NUM_INCR) ||
+        !flexGetTwoDataboxesBig(data, len, &id, &arg) ||
+        id.type != DATABOX_UNSIGNED_64 || id.data.u64 == 0) {
+        return false;
+    }
+
+    const databox treeId = DATABOX_UNSIGNED(TREE_ID_FROM_EXTERNAL(id.data.u64));
+    const databox *args[2] = {&treeId, (const databox *)&arg};
+    size_t innerLen = 0;
+    cleanerName(zfree, U8) uint8_t *inner =
+        ops->encodeOp(op, args, 2, &innerLen);
+    return inner && ops->applyOp(&pool->impl, op, inner, innerLen);
+}
+
+static void *atomPoolPersistNewEmpty_(void) {
+    /* @own: caller; free=atomPoolFree */
+    return atomPoolNewDefault();
+}
+
+static size_t atomPoolPersistCount_(const void *structure) {
+    return atomPoolCount(structure);
+}
+
+static size_t atomPoolPersistBytes_(const void *structure) {
+    return atomPoolBytes(structure);
+}
+
+static void atomPoolPersistFree_(void *structure) {
+    atomPoolFree(structure);
+}
+
+const persistOps persistOpsAtomPool = {
+    .type = PERSIST_TYPE_ATOM_POOL,
+    .name = "atomPool",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = atomPoolPersistSnapshot_,
+    .restore = atomPoolPersistRestore_,
+    .newEmpty = atomPoolPersistNewEmpty_,
+    .count = atomPoolPersistCount_,
+    .estimateSize = atomPoolPersistBytes_,
+    .encodeOp = atomPoolPersistEncodeOp_,
+    .applyOp = atomPoolPersistApplyOp_,
+    .free = atomPoolPersistFree_,
+};
 
 /* ====================================================================
  * Testing

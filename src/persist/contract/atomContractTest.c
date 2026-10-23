@@ -6,6 +6,7 @@
 #ifdef DATAKIT_TEST
 
 #include "../../atomPersist.h"
+#include "../../atomPool.h"
 #include "../../multimapAtom.h"
 #include "../../multimapAtomDense.h"
 #include "../../str.h"
@@ -262,6 +263,72 @@ const persistContractType persistContractStringPool = {
     .ops = &persistOpsStringPool,
     .build = pcStringPoolBuild,
     .holdsBytes = pcStringPoolHoldsBytes,
+};
+
+/* As pcStringPoolBuild through the pool interface, over both backends and
+ * all three id behaviours (picked by the seed) */
+static void *pcAtomPoolBuild(const persistContractBuild *b) {
+    const atomPoolType type = (atomPoolType)(b->seed % 2);
+    const atomPoolIds ids = (atomPoolIds)((b->seed / 2) % 3);
+    atomPool *pool = atomPoolNewWithIds(type, ids);
+    persistContractStart(b->log, pool);
+
+    uint64_t rng = b->seed;
+    char buf[64];
+    const databox plusOne = DATABOX_SIGNED(1);
+    const databox minusOne = DATABOX_SIGNED(-1);
+    for (size_t i = 0; i < b->size; i++) {
+        const uint64_t roll = splitmix64(&rng) % 8;
+        const size_t k =
+            (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
+        const databox str = pcStringPoolValue(b->seed, k, buf, sizeof(buf));
+        const uint64_t known = atomPoolGetId(pool, &str);
+        if (roll < 3 || !known) {
+            const uint64_t id = atomPoolIntern(pool, &str);
+            if (!known) {
+                pcAtomRecordId(b->log, PERSIST_OP_INSERT, id, &str);
+            } else if (ids != ATOM_POOL_IDS_PERMANENT) {
+                pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, id, &plusOne);
+            }
+        } else if (roll < 5) {
+            atomPoolRetain(pool, known);
+            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, known, &plusOne);
+        } else {
+            atomPoolRelease(pool, known);
+            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, known, &minusOne);
+        }
+
+        if (b->size >= 100 && i == b->size / 3) {
+            atomPoolReset(pool);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+        }
+    }
+
+    for (size_t i = 0; i < b->stringCount; i++) {
+        const uint64_t known = atomPoolGetId(pool, &b->strings[i]);
+        const uint64_t id = atomPoolIntern(pool, &b->strings[i]);
+        if (!known) {
+            pcAtomRecordId(b->log, PERSIST_OP_INSERT, id, &b->strings[i]);
+        } else if (ids != ATOM_POOL_IDS_PERMANENT) {
+            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, id, &plusOne);
+        }
+    }
+
+    return pool;
+}
+
+static bool pcAtomPoolHoldsBytes(const void *structure, const databox *bytes) {
+    const atomPool *pool = structure;
+    databox got = {{0}};
+    const uint64_t id = atomPoolGetId(pool, bytes);
+    return id && atomPoolLookup(pool, id, &got) &&
+           persistContractSameBytes(&got, bytes);
+}
+
+const persistContractType persistContractAtomPool = {
+    .ops = &persistOpsAtomPool,
+    .build = pcAtomPoolBuild,
+    .holdsBytes = pcAtomPoolHoldsBytes,
 };
 
 #endif /* DATAKIT_TEST */

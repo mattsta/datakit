@@ -219,6 +219,7 @@ typedef enum persistType {
     PERSIST_TYPE_MULTIMAP_ATOM = 140,
     PERSIST_TYPE_MULTIMAP_ATOM_DENSE = 141,
     PERSIST_TYPE_STRING_POOL = 142,
+    PERSIST_TYPE_ATOM_POOL = 143,
 
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255

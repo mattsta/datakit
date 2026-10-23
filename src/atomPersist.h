@@ -34,7 +34,15 @@
  *   WAL: INSERT [id, bytes]   a new string under the id the pool hands out
  *                             next (refused otherwise, or when present)
  *        NUM_INCR [id, +1|-1] Retain / Release (the last one frees)
- *        CLEAR                Reset */
+ *        CLEAR                Reset
+ *
+ * atomPool (PERSIST_TYPE_ATOM_POOL):
+ *   snapshot: flex [backend (HASH 0, TREE 1), id behaviour, the backend's
+ *             snapshot as bytes: stringPool's, or multimapAtom's
+ *             (multimapAtomDense's for lowest-first TREE)].  Restore
+ *             refuses a backend whose own id behaviour differs.
+ *   WAL: INSERT [id, bytes], NUM_INCR [id, +1|-1] with the pool's 1-based
+ *        ids, replayed through the backend's ops; CLEAR (Reset). */
 
 #include "databox.h"
 #include "persist.h"
@@ -42,6 +50,7 @@
 extern const persistOps persistOpsMultimapAtom;
 extern const persistOps persistOpsMultimapAtomDense;
 extern const persistOps persistOpsStringPool;
+extern const persistOps persistOpsAtomPool;
 
 /* Whether a persisted value is one an atom may hold: a number, true,
  * false, null or bytes (shared by the atom descriptors) */

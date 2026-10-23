@@ -71,6 +71,7 @@ extern const persistContractType persistContractSegmentDouble;
 extern const persistContractType persistContractMultimapAtom;
 extern const persistContractType persistContractMultimapAtomDense;
 extern const persistContractType persistContractStringPool;
+extern const persistContractType persistContractAtomPool;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,
@@ -124,6 +125,7 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractMultimapAtom,
     &persistContractMultimapAtomDense,
     &persistContractStringPool,
+    &persistContractAtomPool,
 };
 
 /* ====================================================================

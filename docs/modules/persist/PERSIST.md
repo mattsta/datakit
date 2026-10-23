@@ -223,8 +223,8 @@ Fenwick trees (`fenwick/fenwickPersist.h`) and `persistOpsMultiFenwick`,
 `persistOpsMultiFenwickFlat`, `persistOpsMultiFenwick2d` for the databox
 ones (see FENWICK.md), `persistOpsSegment<T>` for the typed segment trees
 (`segment/segmentPersist.h`; see SEGMENT.md), and `persistOpsMultimapAtom`,
-`persistOpsMultimapAtomDense` and `persistOpsStringPool` for atom tables
-(`atomPersist.h`; see multimap/VARIANTS.md).
+`persistOpsMultimapAtomDense`, `persistOpsStringPool` and `persistOpsAtomPool`
+for atom tables (`atomPersist.h`; see multimap/VARIANTS.md).
 
 ## Writing a persistOps Descriptor
 

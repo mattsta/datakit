@@ -632,6 +632,10 @@ bytes]` (refused unless it is the ID the pool hands out next), `NUM_INCR [id,
 +1 | -1]`, `CLEAR` (Reset).  Perf preset, 100k strings: snapshot 40 ns,
 restore 270 ns per string.
 
+`persistOpsAtomPool` (type id 143) wraps its backend's snapshot (stringPool's,
+multimapAtom's or multimapAtomDense's) with the backend and ID behaviour, and
+replays the same ops with the pool's 1-based IDs.
+
 ### Using an Atom Container With a multimap
 
 The `*WithReference` and `*WithSurrogateKey` multimap entry points take the atom

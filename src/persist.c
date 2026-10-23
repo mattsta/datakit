@@ -1976,6 +1976,8 @@ const char *persistTypeName(persistType type) {
         return "multimapAtomDense";
     case PERSIST_TYPE_STRING_POOL:
         return "stringPool";
+    case PERSIST_TYPE_ATOM_POOL:
+        return "atomPool";
     default:
         return "unknown";
     }
