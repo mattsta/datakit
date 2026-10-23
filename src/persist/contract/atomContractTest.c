@@ -7,6 +7,7 @@
 
 #include "../../atomPersist.h"
 #include "../../multimapAtom.h"
+#include "../../multimapAtomDense.h"
 #include "../../str.h"
 
 /* Value number 'i' of a build, a function of (seed, i), so a later step
@@ -97,6 +98,74 @@ const persistContractType persistContractMultimapAtom = {
     .ops = &persistOpsMultimapAtom,
     .build = pcMultimapAtomBuild,
     .holdsBytes = pcMultimapAtomHoldsBytes,
+};
+
+/* As pcMultimapAtomBuild through the lowest-first table: releases and
+ * deletes leave holes that later interns fill */
+static void *pcMultimapAtomDenseBuild(const persistContractBuild *b) {
+    multimapAtomDense *d = multimapAtomDenseNew();
+    persistContractStart(b->log, d);
+
+    uint64_t rng = b->seed;
+    uint8_t buf[64];
+    const databox plusOne = DATABOX_SIGNED(1);
+    const databox minusOne = DATABOX_SIGNED(-1);
+    for (size_t i = 0; i < b->size; i++) {
+        const uint64_t roll = splitmix64(&rng) % 8;
+        const size_t k =
+            (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
+        databoxBig value;
+        pcAtomValue(b->seed, k, &value, buf, sizeof(buf));
+        databox ref = {{0}};
+        const bool live = multimapAtomLookupReference(
+            multimapAtomDenseBase(d), (const databox *)&value, &ref);
+        if (roll < 3 || !live) {
+            databox key = *(const databox *)&value;
+            const bool andRetain = roll == 1;
+            const bool existed =
+                andRetain
+                    ? multimapAtomDenseInsertIfNewConvertAndRetain(d, &key)
+                    : multimapAtomDenseInsertIfNewConvert(d, &key);
+            if (!existed) {
+                pcAtomRecordId(b->log, PERSIST_OP_INSERT, key.data.u,
+                               (const databox *)&value);
+            } else if (andRetain) {
+                pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, key.data.u,
+                               &plusOne);
+            }
+        } else if (roll < 5) {
+            multimapAtomDenseRetainById(d, ref.data.u);
+            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, ref.data.u, &plusOne);
+        } else if (roll < 7) {
+            multimapAtomDenseRelease(d, (const databox *)&value);
+            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, ref.data.u, &minusOne);
+        } else {
+            multimapAtomDenseDeleteById(d, ref.data.u);
+            pcAtomRecordId(b->log, PERSIST_OP_DELETE, ref.data.u, NULL);
+        }
+    }
+
+    for (size_t i = 0; i < b->stringCount; i++) {
+        databox key = b->strings[i];
+        if (!multimapAtomDenseInsertIfNewConvert(d, &key)) {
+            pcAtomRecordId(b->log, PERSIST_OP_INSERT, key.data.u,
+                           &b->strings[i]);
+        }
+    }
+
+    return d;
+}
+
+static bool pcMultimapAtomDenseHoldsBytes(const void *structure,
+                                          const databox *bytes) {
+    return pcMultimapAtomHoldsBytes(
+        multimapAtomDenseBase((const multimapAtomDense *)structure), bytes);
+}
+
+const persistContractType persistContractMultimapAtomDense = {
+    .ops = &persistOpsMultimapAtomDense,
+    .build = pcMultimapAtomDenseBuild,
+    .holdsBytes = pcMultimapAtomDenseHoldsBytes,
 };
 
 #endif /* DATAKIT_TEST */

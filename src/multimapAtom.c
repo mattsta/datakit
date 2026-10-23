@@ -623,7 +623,7 @@ static bool atomPersistUnsigned_(const flex *f, flexEntry **fe, uint64_t *out) {
 
 /* A value an atom may intern from persisted bytes: a number, true,
  * false, null or bytes */
-static bool atomPersistValueOk_(const databox *value) {
+bool atomPersistValueOk(const databox *value) {
     switch (value->type) {
     case DATABOX_SIGNED_64:
     case DATABOX_UNSIGNED_64:
@@ -693,7 +693,7 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
 
         /* Ids ascend below the next id; a permanent table keeps no counts */
         if ((r && ids[r] <= ids[r - 1]) || ids[r] >= next ||
-            !atomPersistValueOk_((const databox *)&values[r]) ||
+            !atomPersistValueOk((const databox *)&values[r]) ||
             countBox.type != DATABOX_UNSIGNED_64 ||
             !atomPersistCountOf_((const databox *)&countBox, &count) ||
             count > INT64_MAX || (permanent && count)) {
@@ -781,7 +781,7 @@ static bool multimapAtomPersistApplyOp_(void *structure, persistOp op,
         if (!flexGetTwoDataboxesBig(data, len, &a, &b) ||
             a.type != DATABOX_UNSIGNED_64 ||
             a.data.u64 >= MULTIMAP_ATOM_ID_LIMIT - 1 ||
-            !atomPersistValueOk_((const databox *)&b) ||
+            !atomPersistValueOk((const databox *)&b) ||
             atomPersistLiveRef_(ma, &a, &ref)) {
             return false;
         }

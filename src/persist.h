@@ -217,6 +217,7 @@ typedef enum persistType {
 
     /* Atom tables (atomPersist.h) */
     PERSIST_TYPE_MULTIMAP_ATOM = 140,
+    PERSIST_TYPE_MULTIMAP_ATOM_DENSE = 141,
 
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255

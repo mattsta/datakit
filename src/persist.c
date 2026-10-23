@@ -1972,6 +1972,8 @@ const char *persistTypeName(persistType type) {
         return "segmentDouble";
     case PERSIST_TYPE_MULTIMAP_ATOM:
         return "multimapAtom";
+    case PERSIST_TYPE_MULTIMAP_ATOM_DENSE:
+        return "multimapAtomDense";
     default:
         return "unknown";
     }

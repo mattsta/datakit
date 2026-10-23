@@ -15,8 +15,21 @@
  *                           (refused when the id or the value is bound)
  *     NUM_INCR [id, +1|-1]  one reference more / fewer (the last one
  *                           deletes the atom, as Release does)
- *     DELETE   [id]         DeleteById */
+ *     DELETE   [id]         DeleteById
+ *
+ * multimapAtomDense (PERSIST_TYPE_MULTIMAP_ATOM_DENSE):
+ *   snapshot: its base table's (above); the ids in use determine the next
+ *             id (one past the highest) and the free set (every id below
+ *             it not in use).  Restore refuses a permanent base.
+ *   WAL: the same ops; INSERT takes exactly its id out of the free set
+ *        (ids it skips over become free). */
 
+#include "databox.h"
 #include "persist.h"
 
 extern const persistOps persistOpsMultimapAtom;
+extern const persistOps persistOpsMultimapAtomDense;
+
+/* Whether a persisted value is one an atom may hold: a number, true,
+ * false, null or bytes (shared by the atom descriptors) */
+bool atomPersistValueOk(const databox *value);

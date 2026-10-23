@@ -1,4 +1,5 @@
 #include "multimapAtomDense.h"
+#include "atomPersist.h"
 #include "multiroar.h"
 
 /* Invariant: the live ids are exactly [0, next) minus 'holes', and every
@@ -184,6 +185,187 @@ size_t multimapAtomDenseBytes(const multimapAtomDense *d) {
     return sizeof(*d) + multimapAtomBytes(d->atoms) +
            (d->holes ? (size_t)multiroarMemoryUsage(d->holes) : 0);
 }
+
+/* ====================================================================
+ * Persistence (atomPersist.h)
+ * ==================================================================== */
+/* The table's snapshot is its base table's: the ids in use determine the
+ * next id and the holes */
+static uint8_t *densePersistSnapshot_(const void *structure, size_t *len) {
+    const multimapAtomDense *d = structure;
+    return persistOpsMultimapAtom.snapshot(d->atoms, len);
+}
+
+static void *densePersistRestore_(const uint8_t *data, size_t len) {
+    multimapAtom *atoms = persistOpsMultimapAtom.restore(data, len);
+    if (!atoms) {
+        return NULL;
+    }
+
+    /* @own: caller; free=multimapAtomDenseFree */
+    multimapAtomDense *d = zcalloc(1, sizeof(*d));
+    d->atoms = atoms;
+    if (multimapAtomIsPermanent(atoms)) {
+        multimapAtomDenseFree(d);
+        return NULL;
+    }
+
+    /* The base restore validated the rows [flags, next, (id, value,
+     * count)...]: the gaps below the highest id are the holes */
+    const flex *f = (const flex *)data;
+    flexEntry *fe = flexIndex(f, 2);
+    while (fe) {
+        databox id;
+        flexGetByType(fe, &id);
+        if (id.data.u > d->next) {
+            if (!d->holes) {
+                /* @own: container; free=multimapAtomDenseFree */
+                d->holes = multiroarBitNew();
+            }
+
+            multiroarBitSetRange(d->holes, d->next, id.data.u - d->next);
+        }
+
+        d->next = id.data.u + 1;
+        fe = flexNext(f, fe);
+        fe = fe ? flexNext(f, fe) : NULL;
+        fe = fe ? flexNext(f, fe) : NULL;
+    }
+
+    return d;
+}
+
+/* An INSERT under exactly 'id': the id leaves the holes, or the ids it
+ * skips over become holes */
+static bool densePersistInsert_(multimapAtomDense *d, const uint64_t id,
+                                const databox *value) {
+    databox ref = denseRef_(id);
+    databox count = {{0}};
+    databox found = {{0}};
+    multimapAtomLookupRefcount(d->atoms, &ref, &count);
+    if (id + 1 >= MULTIMAP_ATOM_ID_LIMIT || count.type != DATABOX_VOID ||
+        multimapAtomLookupReference(d->atoms, value, &found)) {
+        return false;
+    }
+
+    if (id < d->next) {
+        assert(d->holes && multiroarBitGet(d->holes, id));
+        multiroarRemove(d->holes, id);
+        if (multiroarIsEmpty(d->holes)) {
+            multiroarFree(d->holes);
+            d->holes = NULL;
+        }
+    } else {
+        if (id > d->next) {
+            if (!d->holes) {
+                /* @own: container; free=multimapAtomDenseFree */
+                d->holes = multiroarBitNew();
+            }
+
+            multiroarBitSetRange(d->holes, d->next, id - d->next);
+        }
+
+        d->next = id + 1;
+    }
+
+    multimapAtomInsertWithExactAtomID(d->atoms, id, value);
+    return true;
+}
+
+static bool densePersistApplyOp_(void *structure, persistOp op,
+                                 const uint8_t *data, size_t len) {
+    multimapAtomDense *d = *(multimapAtomDense **)structure;
+    databoxBig a;
+    databoxBig b;
+    const bool pair = op == PERSIST_OP_INSERT || op == PERSIST_OP_NUM_INCR;
+    if (pair ? !flexGetTwoDataboxesBig(data, len, &a, &b)
+             : !flexGetSingleDataboxBig(data, len, &a)) {
+        return false;
+    }
+
+    if (a.type != DATABOX_UNSIGNED_64 || a.data.u64 >= MULTIMAP_ATOM_ID_LIMIT) {
+        return false;
+    }
+
+    const uint64_t id = a.data.u64;
+    databox count = {{0}};
+    const databox ref = denseRef_(id);
+    multimapAtomLookupRefcount(d->atoms, &ref, &count);
+    const bool live = count.type != DATABOX_VOID;
+    switch (op) {
+    case PERSIST_OP_INSERT:
+        return atomPersistValueOk((const databox *)&b) &&
+               densePersistInsert_(d, id, (const databox *)&b);
+    case PERSIST_OP_NUM_INCR:
+        if (!live ||
+            (b.type != DATABOX_SIGNED_64 && b.type != DATABOX_UNSIGNED_64)) {
+            return false;
+        }
+
+        if (b.data.i64 == 1) {
+            multimapAtomDenseRetainById(d, id);
+            return true;
+        }
+
+        if (b.type == DATABOX_SIGNED_64 && b.data.i64 == -1) {
+            multimapAtomDenseReleaseById(d, id);
+            return true;
+        }
+
+        return false;
+    case PERSIST_OP_DELETE:
+        return multimapAtomDenseDeleteById(d, id);
+    default:
+        return false;
+    }
+}
+
+/* The WAL ops and their encoding are the base table's */
+static uint8_t *densePersistEncodeOp_(persistOp op, const void *args,
+                                      size_t argc, size_t *len) {
+    return persistOpsMultimapAtom.encodeOp(op, args, argc, len);
+}
+
+static void *densePersistNewEmpty_(void) {
+    /* @own: caller; free=multimapAtomDenseFree */
+    return multimapAtomDenseNew();
+}
+
+static size_t densePersistCount_(const void *structure) {
+    return multimapAtomDenseCount(structure);
+}
+
+static size_t densePersistBytes_(const void *structure) {
+    return multimapAtomDenseBytes(structure);
+}
+
+/* The free set is exactly the ids below the next id not in use */
+static bool densePersistValidate_(const void *structure) {
+    const multimapAtomDense *d = structure;
+    const uint64_t holes = d->holes ? multiroarBitCount(d->holes) : 0;
+    return persistOpsMultimapAtom.validate(d->atoms) &&
+           multimapAtomCount(d->atoms) + holes == d->next;
+}
+
+static void densePersistFree_(void *structure) {
+    multimapAtomDenseFree(structure);
+}
+
+const persistOps persistOpsMultimapAtomDense = {
+    .type = PERSIST_TYPE_MULTIMAP_ATOM_DENSE,
+    .name = "multimapAtomDense",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = densePersistSnapshot_,
+    .restore = densePersistRestore_,
+    .newEmpty = densePersistNewEmpty_,
+    .count = densePersistCount_,
+    .estimateSize = densePersistBytes_,
+    .encodeOp = densePersistEncodeOp_,
+    .applyOp = densePersistApplyOp_,
+    .validate = densePersistValidate_,
+    .free = densePersistFree_,
+};
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"

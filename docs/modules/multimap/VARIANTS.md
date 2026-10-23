@@ -619,6 +619,11 @@ atom, against 2.2 µs per atom to intern them again).  WAL ops: `INSERT [id,
 value]` (a new atom with one reference), `NUM_INCR [id, +1 | -1]` (retain;
 release, the last one deleting), `DELETE [id]`.
 
+`persistOpsMultimapAtomDense` (type id 141) writes its base table's snapshot
+and the same WAL ops: the IDs in use determine the next ID and the free set,
+so the holes cost no bytes in the snapshot.  Replaying an `INSERT` takes
+exactly its ID out of the free set.
+
 ### Using an Atom Container With a multimap
 
 The `*WithReference` and `*WithSurrogateKey` multimap entry points take the atom

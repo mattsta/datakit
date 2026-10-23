@@ -25,6 +25,7 @@
 #include "multiOrderedSet.h"
 #include "multidict.h"
 #include "multimapAtom.h"
+#include "multimapAtomDense.h"
 #include "rapidhash.h"
 #include "sha256.h"
 
@@ -592,6 +593,7 @@ defcleaner(multiOrderedSet *, multiOrderedSetFree);
 defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
+defcleaner(multimapAtomDense *, multimapAtomDenseFree);
 
 /* PERF_CONTAINER_N keys, each PERF_CONTAINER_KEY bytes plus a NUL */
 static char *perfContainerKeys(void) {
@@ -891,6 +893,30 @@ static void benchMultimapAtom(void) {
         persistOpsMultimapAtom.restore(snap, snapLen);
     emitRow("multimapAtom", "restore", 0, n, monoNowSec() - t0);
     sink += multimapAtomCount(restored);
+
+    /* The same values in a lowest-first table, with every fourth one
+     * released so the restore rebuilds holes */
+    cleaner(multimapAtomDenseFree) multimapAtomDense *dense =
+        multimapAtomDenseNew();
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        multimapAtomDenseInsertConvert(dense, &k);
+    }
+    for (uint32_t i = 0; i < n; i += 4) {
+        multimapAtomDenseDeleteById(dense, i);
+    }
+
+    size_t denseLen = 0;
+    t0 = monoNowSec();
+    cleanerName(zfree, U8Buf) uint8_t *denseSnap =
+        persistOpsMultimapAtomDense.snapshot(dense, &denseLen);
+    emitRow("multimapAtomDense", "snapshot", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    cleaner(multimapAtomDenseFree) multimapAtomDense *denseRestored =
+        persistOpsMultimapAtomDense.restore(denseSnap, denseLen);
+    emitRow("multimapAtomDense", "restore", 0, n, monoNowSec() - t0);
+    sink += multimapAtomDenseCount(denseRestored);
 
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {
