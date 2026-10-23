@@ -1684,7 +1684,9 @@ membound *memboundCreateWithConfig(const memboundConfig *config) {
 
     /* Setup growth configuration */
     if (config->mode == MEMBOUND_MODE_DYNAMIC) {
-        if (config->growthFactor > 0) {
+        if (config->growthAdaptive) {
+            m->growth.type = MEMBOUND_GROWTH_ADAPTIVE;
+        } else if (config->growthFactor > 0) {
             m->growth.type = MEMBOUND_GROWTH_GEOMETRIC;
             m->growth.growthFactor = config->growthFactor;
         } else if (config->growthSize > 0) {
@@ -4511,6 +4513,20 @@ static void *tcExtentChurnWorker(void *arg) {
     return NULL;
 }
 
+/* Pressure callback for the tests: counts calls and keeps the last level */
+typedef struct pressureSeen {
+    int calls;
+    memboundPressure last;
+} pressureSeen;
+
+static void pressureSeenCb(membound *m, memboundPressure level,
+                           void *userData) {
+    (void)m;
+    pressureSeen *s = userData;
+    s->calls++;
+    s->last = level;
+}
+
 /* Allocates and frees until told to stop. */
 typedef struct statsRaceCtx {
     membound *m;
@@ -7259,6 +7275,201 @@ int memboundTest(int argc, char *argv[]) {
         }
         /* every worker drained its cache at exit */
         assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST(
+        "adaptive growth: half the capacity, at least what the request needs") {
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 20,
+                              .growthAdaptive = true};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        const size_t cap0 = memboundCapacity(m);
+        /* Fill the first extent with 64 KB blocks until a second one grows:
+         * half the capacity (512 KB) beats twice the request (128 KB) */
+        void *blocks[64];
+        size_t n = 0;
+        while (memboundExtentCount(m) == 1 && n < 64) {
+            blocks[n] = memboundAlloc(m, 64 << 10);
+            assert(blocks[n]);
+            n++;
+        }
+        bool halfFound = false;
+        for (size_t i = 0; i < memboundExtentCount(m); i++) {
+            memboundExtentInfo info;
+            if (memboundGetExtentInfo(m, i, &info) &&
+                info.capacity <= cap0 / 2 &&
+                info.capacity >= (cap0 / 2) / 100 * 99) {
+                halfFound = true;
+            }
+        }
+        if (memboundExtentCount(m) != 2 || !halfFound) {
+            ERR("adaptive growth: %zu extents, no extent of half %zu",
+                memboundExtentCount(m), cap0);
+        }
+        /* A request past the largest extent still gets one that holds it */
+        void *big = memboundAlloc(m, (size_t)3 << 20);
+        if (!big || memboundUsableSize(m, big) < ((size_t)3 << 20)) {
+            ERRR("adaptive growth refused a request past the extent limit");
+        }
+        memboundFree(m, big);
+        for (size_t i = 0; i < n; i++) {
+            memboundFree(m, blocks[i]);
+        }
+        assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST("many extents: lookup, ownership and releasing middle extents") {
+        /* One 48 KB block per extent: 40 extents take the lookup through
+         * the binary search and the wide scan; releasing every other one
+         * removes extents from the middle of the index */
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 64 << 10,
+                              .growthSize = 64 << 10,
+                              .shrinkThreshold = 0.5f};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        enum { N = 40 };
+        void *p[N];
+        for (size_t i = 0; i < N; i++) {
+            p[i] = memboundAlloc(m, 48 << 10);
+            assert(p[i]);
+            memset(p[i], (int)i, 48 << 10);
+        }
+        if (memboundExtentCount(m) < N) {
+            ERR("expected an extent per block, got %zu",
+                memboundExtentCount(m));
+        }
+        size_t used = 0;
+        for (memboundExtent *e = m->extents; e; e = e->next) {
+            used += memboundExtentBytesUsed(e);
+        }
+        if (used != memboundBytesUsed(m)) {
+            ERR("extents hold %zu bytes, the pool reports %zu", used,
+                memboundBytesUsed(m));
+        }
+        for (size_t i = 0; i < N; i += 2) {
+            memboundFree(m, p[i]); /* an emptied extent is released */
+            p[i] = NULL;
+        }
+        for (size_t i = 0; i < N; i++) {
+            if (!p[i]) {
+                continue;
+            }
+            size_t owners = 0;
+            for (memboundExtent *e = m->extents; e; e = e->next) {
+                owners += memboundExtentOwns(e, p[i]);
+            }
+            const unsigned char *b = p[i];
+            if (!memboundOwns(m, p[i]) || owners != 1 ||
+                b[0] != (unsigned char)i ||
+                b[(48 << 10) - 1] != (unsigned char)i) {
+                ERR("block %zu: owned %d by %zu extents after middle releases",
+                    i, memboundOwns(m, p[i]), owners);
+            }
+        }
+        for (size_t i = 1; i < N; i += 2) {
+            memboundFree(m, p[i]);
+        }
+        if (memboundCurrentAllocationCount(m) != 0) {
+            ERRR("allocations left after freeing every block");
+        }
+        memboundShutdown(m);
+    }
+
+    TEST("pressure notification fires once per level change") {
+        pressureSeen seen = {0};
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 16,
+                              .pressureCallback = pressureSeenCb,
+                              .pressureUserData = &seen};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        memboundNotifyPressure(m, MEMBOUND_PRESSURE_HIGH);
+        memboundNotifyPressure(m, MEMBOUND_PRESSURE_HIGH);
+        const int afterHigh = seen.calls;
+        memboundNotifyPressure(m, MEMBOUND_PRESSURE_MEDIUM);
+        if (afterHigh != 1 || seen.calls != 2 ||
+            seen.last != MEMBOUND_PRESSURE_MEDIUM) {
+            ERR("pressure calls %d then %d, last %d", afterHigh, seen.calls,
+                (int)seen.last);
+        }
+        memboundShutdown(m);
+    }
+
+    TEST("increase size: refused while allocated, then grows an empty pool") {
+        membound *m = memboundCreate(64 << 10);
+        assert(m);
+        void *p = memboundAlloc(m, 1024);
+        assert(p);
+        if (memboundIncreaseSize(m, 1 << 20)) {
+            ERRR("a pool with allocations was resized");
+        }
+        memboundFree(m, p);
+        if (!memboundIncreaseSize(m, 1 << 20) ||
+            memboundCapacity(m) < (size_t)900 << 10) {
+            ERR("an empty pool did not grow (capacity %zu)",
+                memboundCapacity(m));
+        }
+        void *big = memboundAlloc(m, 512 << 10);
+        if (!big) {
+            ERRR("the grown pool refused a block it now holds");
+        }
+        memboundFree(m, big);
+        memboundShutdown(m);
+
+        memboundConfig dyn = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 64 << 10};
+        m = memboundCreateWithConfig(&dyn);
+        const size_t before = memboundExtentCount(m);
+        if (!memboundIncreaseSize(m, 256 << 10) ||
+            memboundExtentCount(m) != before + 1) {
+            ERRR("a dynamic pool's increase did not add an extent");
+        }
+        memboundShutdown(m);
+    }
+
+    TEST("adaptive strategy: best fit once fragmented, first fit before") {
+        /* Fragmentation is free space stranded across partly used
+         * extents (one extent reads 0): blocks over several 64 KB extents,
+         * every other one freed */
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 64 << 10,
+                              .growthSize = 64 << 10,
+                              .strategy = MEMBOUND_STRATEGY_ADAPTIVE,
+                              .fragmentationThreshold = 0.25f};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        if (memboundAdaptiveGetStrategy(m) != MEMBOUND_STRATEGY_FIRST_FIT) {
+            ERRR("an empty pool is not fragmented");
+        }
+        enum { NB = 48 };
+        void *p[NB];
+        for (size_t i = 0; i < NB; i++) {
+            p[i] = memboundAlloc(m, 8 << 10);
+            assert(p[i]);
+        }
+        for (size_t i = 0; i < NB; i += 2) {
+            memboundFree(m, p[i]);
+        }
+        const float frag = memboundGetFragmentation(m);
+        /* The threshold decides: at or below the measure, best fit */
+        m->strategy.fragmentationThreshold = frag;
+        const memboundExtentStrategy atOrBelow = memboundAdaptiveGetStrategy(m);
+        m->strategy.fragmentationThreshold = frag + 0.01f;
+        const memboundExtentStrategy above = memboundAdaptiveGetStrategy(m);
+        if (memboundExtentCount(m) < 2 || frag <= 0.0f ||
+            atOrBelow != MEMBOUND_STRATEGY_BEST_FIT ||
+            above != MEMBOUND_STRATEGY_FIRST_FIT) {
+            ERR("%zu extents, fragmentation %f chose %d / %d",
+                memboundExtentCount(m), (double)frag, (int)atOrBelow,
+                (int)above);
+        }
+        for (size_t i = 1; i < NB; i += 2) {
+            memboundFree(m, p[i]);
+        }
         memboundShutdown(m);
     }
 

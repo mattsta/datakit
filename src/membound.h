@@ -462,6 +462,11 @@ typedef struct memboundConfig {
     /* Optional callbacks (STANDARD and ENTERPRISE tiers only) */
     memboundPressureCallback pressureCallback;
     void *pressureUserData;
+
+    /* Adaptive growth (dynamic mode): each new extent is half the current
+     * capacity, and at least twice the request that needed it, within the
+     * extent size limits.  Overrides growthSize and growthFactor. */
+    bool growthAdaptive;
 } memboundConfig;
 
 /* Extent information (for diagnostics) */
