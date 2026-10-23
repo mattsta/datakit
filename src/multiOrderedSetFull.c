@@ -1884,6 +1884,57 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         atomPoolFree(shared);
     }
 
+    TEST("MOS-Full: one score over many sub-maps stays in member order") {
+        /* 2000 members at one score split into many sub-maps; members
+         * joining at that score afterwards (below, between and above
+         * the rest in member order) iterate in member order and rank
+         * where iteration puts them */
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        const databox seven = databoxNewSigned(7);
+        for (int i = 0; i < 2000; i++) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "same-%05d", i * 2);
+            const databox member = databoxNewBytesString(buf);
+            multiOrderedSetFullAdd(m, &seven, &member);
+        }
+        static const char *later[] = {"a", "same-00001", "same-01999",
+                                      "same-03999", "zzz"};
+        for (size_t i = 0; i < 5; i++) {
+            const databox member = databoxNewBytesString(later[i]);
+            multiOrderedSetFullAdd(m, &seven, &member);
+        }
+        mosIterator it;
+        multiOrderedSetFullIteratorInit(m, &it, true);
+        databox member;
+        databox score;
+        char prev[32] = "";
+        size_t prevLen = 0;
+        int64_t rank = 0;
+        bool ordered = true;
+        bool ranked = true;
+        while (multiOrderedSetFullIteratorNext(&it, &member, &score)) {
+            const databox before = databoxNewBytes(prev, prevLen);
+            if (rank && databoxCompare(&before, &member) >= 0) {
+                ordered = false;
+            }
+            prevLen = databoxLen(&member) < sizeof(prev) ? databoxLen(&member)
+                                                         : sizeof(prev);
+            memcpy(prev, databoxBytes(&member), prevLen);
+            const databox key = databoxNewBytes(prev, prevLen);
+            if (rank % 97 == 0 || prevLen < 6 || prev[0] == 'z' ||
+                prev[prevLen - 1] == '9') {
+                ranked = ranked && multiOrderedSetFullGetRank(m, &key) == rank;
+            }
+            rank++;
+        }
+        if (!ordered || !ranked || rank != 2005 ||
+            mosFullCheckInvariants(m) != 0) {
+            ERR("one score: %" PRId64 " iterated, ordered %d, ranked %d", rank,
+                ordered, ranked);
+        }
+        multiOrderedSetFullFree(m);
+    }
+
     TEST("MOS-Full: copies of plain, owned-pool and shared-pool sets") {
         /* 3000 members over many sub-maps, then a score band, a rank band
          * and both ends removed (emptying middle sub-maps); the copy,
