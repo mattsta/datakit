@@ -9354,8 +9354,22 @@ int32_t flexTest(int32_t argc, char **argv) {
         FLEX_MATH_CHECK_(!flexAddUnsigned(m, &u) && u == 77,
                          "a negative entry refused by an unsigned fold");
         FLEX_MATH_CHECK_(flexAddDouble(m, &d) && d == 11 &&
-                             flexSubtractFloat(m, &fl) && fl == 9.0f,
+                             flexSubtractFloat(m, &fl) && fl == 9.0f &&
+                             flexSubtractDouble(m, &d) && d == 9,
                          "integers fold as reals");
+        flexFree(m);
+
+        /* [6, 7, 5]: the unsigned product, exact to its edge */
+        m = flexNew();
+        flexPushUnsigned(&m, 6, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&m, 7, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&m, 5, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(flexMultiplyUnsigned(m, &u) && u == 210,
+                         "unsigned product of [6, 7, 5]");
+        flexPushUnsigned(&m, UINT64_MAX / 200, FLEX_ENDPOINT_TAIL);
+        u = 77;
+        FLEX_MATH_CHECK_(!flexMultiplyUnsigned(m, &u) && u == 77,
+                         "an unsigned product overflow refused");
         flexFree(m);
 
         /* The range edges: UINT64_MAX is unsigned only; overflow refuses */
