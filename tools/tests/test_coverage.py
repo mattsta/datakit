@@ -601,6 +601,49 @@ class Volatile(unittest.TestCase):
         )
         self.assertEqual(lost, [(5, "branch 0.0: if (x > 1) {")])
 
+    def test_a_rerun_learns_from_the_run_it_replaced(self) -> None:
+        from repofixture import IsolatedGitEnv, TempRepo
+
+        repo = TempRepo()
+        try:
+            with IsolatedGitEnv():
+                repo.write("src/spin.c", SPIN)
+                commit = repo.commit("one", "src/spin.c")
+                work = repo.path.parent / "coverage" / commit[:10]
+                src = work / "src"
+                # An unfinished run is not kept
+                (work / "logs").mkdir(parents=True)
+                coverage.keep_previous_run(work)
+                self.assertTrue(work.exists())
+                # A finished one moves aside, replacing an older one
+                (src / "src").mkdir(parents=True)
+                (src / "src" / "spin.c").write_text(SPIN)
+                (work / "logs" / "coverage.lcov").write_text(spin_lcov(src, True))
+                prev = coverage.previous_run(work)
+                (prev / "stale").mkdir(parents=True)
+                coverage.keep_previous_run(work)
+                self.assertFalse(work.exists())
+                self.assertTrue((prev / "logs" / "coverage.lcov").exists())
+                self.assertFalse((prev / "stale").exists())
+                # The rerun at the same commit, same paths
+                (src / "src").mkdir(parents=True)
+                (src / "src" / "spin.c").write_text(SPIN)
+                lcov = coverage.parse_lcov(spin_lcov(src, False), src)
+                learned = coverage.learn_volatile(
+                    repo.path, commit, commit, prev, lcov, src, base_root=src
+                )
+            self.assertEqual(
+                learned,
+                {
+                    "src/spin.c": {
+                        ("line", "return 0;", "if (x > 1) {"),
+                        ("branch 0.0", "if (x > 1) {", "}"),
+                    }
+                },
+            )
+        finally:
+            repo.cleanup()
+
     def test_learning_needs_the_same_sources_and_a_cached_run(self) -> None:
         from repofixture import IsolatedGitEnv, TempRepo
 

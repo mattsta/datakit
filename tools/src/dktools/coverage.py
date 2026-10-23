@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -642,6 +643,7 @@ def run(repo: Path, opts: CoverageOptions) -> int:
     commit = gitutil.resolve_commit(repo, opts.rev)
     subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
     root = gitutil.scratch_root(opts.root).resolve()
+    keep_previous_run(root / "coverage" / commit[:10])
     work = gitutil.fresh_dir(root / "coverage" / commit[:10])
     src = work / "src"
     gitutil.export_tree(repo, commit, src)
@@ -974,6 +976,22 @@ def attach_lost(
         )
 
 
+def previous_run(work: Path) -> Path:
+    """Where the run before `work`'s, at the same commit, is kept."""
+    return work.with_name(work.name + ".prev")
+
+
+def keep_previous_run(work: Path) -> None:
+    """Move a finished run at `work` aside (replacing an older one), so a
+    second run at the same commit can learn its volatile points from it."""
+    if not (work / "logs" / "coverage.lcov").exists():
+        return
+    prev = previous_run(work)
+    if prev.exists():
+        shutil.rmtree(prev)
+    work.rename(prev)
+
+
 #: More points than this flipping between two runs of the same sources is
 #: not scheduling noise (a failed or skipped test, a changed environment):
 #: --learn-volatile refuses to record it.
@@ -990,10 +1008,12 @@ def learn_volatile(
     base_work: Path,
     lcov: dict[str, LcovFile],
     src: Path,
+    base_root: Path | None = None,
 ) -> dict[str, set[Point]]:
-    """Points whose coverage differs between this run and the baseline
-    commit's cached run of the same sources: coverage that depends on
-    thread scheduling.  ToolError unless the sources match, the baseline
+    """Points whose coverage differs between this run and an earlier run
+    of the same sources in `base_work` (at `base_commit`, whose lcov paths
+    are under `base_root`, default base_work/src): coverage that depends on
+    thread scheduling.  ToolError unless the sources match, the earlier
     run is cached, and the difference is small enough to be noise."""
     changed = gitutil.git_text(
         repo, "diff", "--name-only", base_commit, commit, "--", *MEASURED_PATHS
@@ -1006,11 +1026,11 @@ def learn_volatile(
     base_lcov = base_work / "logs" / "coverage.lcov"
     if not base_lcov.exists():
         raise ToolError(
-            f"--learn-volatile needs the baseline commit's run: {base_lcov} is "
-            f"missing (run coverage at {base_commit[:10]} first)"
+            f"--learn-volatile needs an earlier run of the same sources: "
+            f"{base_lcov} is missing (run coverage again at {commit[:10]}, or "
+            f"at the baseline commit {base_commit[:10]})"
         )
-    base_src = base_work / "src"
-    old = parse_lcov(base_lcov.read_text(), base_src)
+    old = parse_lcov(base_lcov.read_text(), base_root or base_work / "src")
     learned: dict[str, set[Point]] = {}
     for path in sorted(old.keys() & lcov.keys()):
         if not (src / path).is_file():
@@ -1070,9 +1090,17 @@ def report(
                 raise ToolError(
                     "--learn-volatile needs a passing run and a baseline commit"
                 )
-            learned = learn_volatile(
-                repo, base, commit, work.parent / base[:10], lcov, src
-            )
+            # The run before this one at the same commit, else the
+            # baseline commit's (moved runs keep their original lcov paths)
+            prev = previous_run(work)
+            if (prev / "logs" / "coverage.lcov").exists():
+                learned = learn_volatile(
+                    repo, commit, commit, prev, lcov, src, base_root=src
+                )
+            else:
+                learned = learn_volatile(
+                    repo, base, commit, work.parent / base[:10], lcov, src
+                )
             for path, points in learned.items():
                 volatile.setdefault(path, set()).update(points)
                 for p in sorted(points):

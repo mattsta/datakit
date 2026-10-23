@@ -316,12 +316,15 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   that fails only under contention, a child process that exits first)
   differs between runs of the same sources.  The baseline lists such
   points (kind, source line and the line before it) and every count
-  leaves them out.  `--learn-volatile` finds them: run coverage at a
-  commit whose `src/` and CMake files match the baseline commit's (the
-  commit that records the baseline is one) while the baseline commit's
-  run is still cached; every point that differs between the two runs is
-  added and the baseline rewritten.  It refuses a failed run, changed
-  sources, or more than 100 differing points (not noise).
+  leaves them out.  `--learn-volatile` finds them by diffing two runs of
+  the same sources: a second run at the same commit keeps the first as
+  `ROOT/coverage/<hash>.prev` and diffs against it; otherwise it diffs
+  against the baseline commit's cached run, if `src/` and the CMake files
+  match.  Every point that differs is added and the baseline rewritten.
+  It refuses a failed run, changed sources, or more than 100 differing
+  points (not noise).  A point that is lucky in the baseline run but
+  missed in both reruns shows as a regression: review it and record it
+  with `--accept-regressions`; a later rerun that flips it learns it.
 - `--detail FILE` (repeatable, repo-relative) reads the earlier run for
   REV and lists FILE's functions by missed lines and its uncovered line
   ranges (each with its first source line): the worklist for one file.
