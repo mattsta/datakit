@@ -3806,11 +3806,299 @@ void multiroarTestCompare(multiroar *r, uint64_t highest) {
            asPositional, (((double)b / asPositional) - 1) * 100);
 }
 
+/* The chunk-form matrix test: MR_FORM_CHUNKS chunks per roar, each filled
+ * in one storage form, checked against a plain bit array. */
+#define MR_FORM_CHUNKS 7
+#define MR_FORM_BITS ((uint64_t)MR_FORM_CHUNKS * BITMAP_SIZE_IN_BITS)
+#define MR_FORM_WORDS (MR_FORM_BITS / 64)
+
+static bool mrOracleGet(const uint64_t *o, uint64_t p) {
+    return (o[p / 64] >> (p % 64)) & 1;
+}
+
+/* Give chunk 'c' exactly 'count' set bits, in the roar and the oracle.
+ * Above half full the chunk starts all set (BitSetRange) and loses bits
+ * one Remove at a time, so dense forms are reached by removal; below,
+ * bits are set one at a time. */
+static void mrFillChunk(multiroar *r, uint64_t *o, uint64_t c, uint32_t count,
+                        uint64_t *rng) {
+    const uint64_t base = c * BITMAP_SIZE_IN_BITS;
+    if (count > BITMAP_SIZE_IN_BITS / 2) {
+        multiroarBitSetRange(r, base, BITMAP_SIZE_IN_BITS);
+        for (uint64_t w = 0; w < BITMAP_SIZE_IN_BITS / 64; w++) {
+            o[base / 64 + w] = UINT64_MAX;
+        }
+        for (uint32_t clear = BITMAP_SIZE_IN_BITS - count; clear > 0;) {
+            const uint64_t p = base + splitmix64(rng) % BITMAP_SIZE_IN_BITS;
+            if (mrOracleGet(o, p)) {
+                multiroarRemove(r, p);
+                o[p / 64] &= ~(UINT64_C(1) << (p % 64));
+                clear--;
+            }
+        }
+        return;
+    }
+
+    for (uint32_t left = count; left > 0;) {
+        const uint64_t p = base + splitmix64(rng) % BITMAP_SIZE_IN_BITS;
+        if (!mrOracleGet(o, p)) {
+            multiroarBitSet(r, p);
+            o[p / 64] |= UINT64_C(1) << (p % 64);
+            left--;
+        }
+    }
+}
+
+static uint64_t mrOracleCount(const uint64_t *o, uint64_t start, uint64_t end) {
+    uint64_t n = 0;
+    for (uint64_t p = start; p < end; p++) {
+        n += mrOracleGet(o, p);
+    }
+    return n;
+}
+
+/* Every read of 'r' against the oracle 'o'; returns the mismatches */
+static int mrCheckForms(const multiroar *r, const uint64_t *o,
+                        const char *what) {
+    int bad = 0;
+#define MR_BAD(...)                                                            \
+    do {                                                                       \
+        printf("%s: ", what);                                                  \
+        printf(__VA_ARGS__);                                                   \
+        printf("\n");                                                          \
+        bad++;                                                                 \
+    } while (0)
+
+    uint64_t count = 0;
+    uint64_t lo = UINT64_MAX;
+    uint64_t hi = 0;
+    multiroarIterator it;
+    multiroarIteratorInit(r, &it);
+    for (uint64_t p = 0; p < MR_FORM_BITS; p++) {
+        const bool set = mrOracleGet(o, p);
+        if (multiroarBitGet(r, p) != set) {
+            MR_BAD("bit %" PRIu64 " reads %d", p, !set);
+            break;
+        }
+        /* Rank counts the set bits below p; Select is 1-indexed */
+        if ((p % 509 == 0 || p % BITMAP_SIZE_IN_BITS == 0) &&
+            multiroarRank(r, p) != count) {
+            MR_BAD("rank(%" PRIu64 ") = %" PRIu64 ", want %" PRIu64, p,
+                   multiroarRank(r, p), count);
+        }
+        if (!set) {
+            continue;
+        }
+        count++;
+        lo = lo == UINT64_MAX ? p : lo;
+        hi = p;
+        uint64_t pos = 0;
+        if (!multiroarIteratorNext(&it, &pos) || pos != p) {
+            MR_BAD("iterator gave %" PRIu64 ", want %" PRIu64, pos, p);
+            break;
+        }
+        if (count % 97 == 1 && (!multiroarSelect(r, count, &pos) || pos != p)) {
+            MR_BAD("select(%" PRIu64 ") = %" PRIu64 ", want %" PRIu64, count,
+                   pos, p);
+        }
+    }
+    uint64_t pos = 0;
+    if (multiroarIteratorNext(&it, &pos)) {
+        MR_BAD("iterator ran past the last bit to %" PRIu64, pos);
+    }
+    multiroarIteratorReset(&it);
+    if (count && (!multiroarIteratorNext(&it, &pos) || pos != lo)) {
+        MR_BAD("iterator after reset gave %" PRIu64, pos);
+    }
+    if (multiroarBitCount(r) != count || multiroarIsEmpty(r) != (count == 0) ||
+        multiroarRank(r, MR_FORM_BITS) != count ||
+        multiroarSelect(r, count + 1, &pos)) {
+        MR_BAD("count %" PRIu64 ", want %" PRIu64, multiroarBitCount(r), count);
+    }
+    uint64_t got = 0;
+    if (count ? (!multiroarMin(r, &got) || got != lo ||
+                 !multiroarMax(r, &got) || got != hi)
+              : (multiroarMin(r, &got) || multiroarMax(r, &got))) {
+        MR_BAD("min/max");
+    }
+
+    /* Ranges inside a chunk, across chunk edges and over everything */
+    static const uint64_t ranges[][2] = {
+        {0, MR_FORM_BITS}, {100, 200},     {8000, 8400},   {8192, 16384},
+        {12000, 30000},    {24575, 24577}, {40000, 40000}, {50000, 57344},
+    };
+    for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+        const uint64_t want = mrOracleCount(o, ranges[i][0], ranges[i][1]);
+        const uint64_t have =
+            multiroarRangeCount(r, ranges[i][0], ranges[i][1]);
+        if (have != want) {
+            MR_BAD("range [%" PRIu64 ", %" PRIu64 ") has %" PRIu64
+                   ", want %" PRIu64,
+                   ranges[i][0], ranges[i][1], have, want);
+        }
+    }
+
+    /* Copies: array, duplicate, both serialized forms */
+    cleanerName(zfree, UInt64) uint64_t *arr =
+        zmalloc((count + 1) * sizeof(uint64_t));
+    if (multiroarToArray(r, arr, count + 1) != count ||
+        (count && (arr[0] != lo || arr[count - 1] != hi))) {
+        MR_BAD("to array");
+    }
+    cleaner(multiroarFree) multiroar *fromArr = multiroarFromArray(arr, count);
+    cleaner(multiroarFree) multiroar *dup = multiroarDuplicate(r);
+    const uint64_t size = multiroarSerializedSize(r);
+    const uint64_t rawSize = multiroarSerializedSizeRaw(r);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size + rawSize);
+    cleaner(multiroarFree) multiroar *back = NULL;
+    cleaner(multiroarFree) multiroar *backRaw = NULL;
+    if (multiroarSerialize(r, buf, size) == size) {
+        back = multiroarDeserialize(buf, size);
+    }
+    if (multiroarSerializeRaw(r, buf + size, rawSize) == rawSize) {
+        backRaw = multiroarDeserializeRaw(buf + size, rawSize);
+    }
+    if (!multiroarEquals(fromArr, r) || !multiroarEquals(dup, r) || !back ||
+        !multiroarEquals(back, r) || !backRaw || !multiroarEquals(backRaw, r)) {
+        MR_BAD("a copy differs");
+    }
+#undef MR_BAD
+    return bad;
+}
+
 int multiroarTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("every chunk form against a bit-array oracle") {
+        /* Forms per chunk number: a sparse listing, a bitmap, a listing
+         * of the bits not set, all set, empty.  The three roars put a
+         * different form at each chunk number, so the set operations
+         * meet every pairing of forms */
+        enum { SPARSE = 60, BITMAP = 3000, DENSE = 8150, ALL = 8192 };
+        static const uint32_t forms[3][MR_FORM_CHUNKS] = {
+            {SPARSE, BITMAP, DENSE, ALL, 0, 1, 5000},
+            {ALL, DENSE, SPARSE, BITMAP, 10, 0, DENSE},
+            {4000, 200, ALL, DENSE, 0, ALL, 30},
+        };
+        uint64_t rng = 0xf0f0;
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *c3 = multiroarBitNew();
+        multiroar *roars[3] = {a, b, c3};
+        cleanerName(zfree, UInt64) uint64_t *oracle =
+            zcalloc(3 * MR_FORM_WORDS, sizeof(uint64_t));
+        uint64_t *o[3] = {oracle, oracle + MR_FORM_WORDS,
+                          oracle + 2 * MR_FORM_WORDS};
+        for (int i = 0; i < 3; i++) {
+            for (uint64_t c = 0; c < MR_FORM_CHUNKS; c++) {
+                mrFillChunk(roars[i], o[i], c, forms[i][c], &rng);
+            }
+            err += mrCheckForms(roars[i], o[i], "filled");
+        }
+
+        cleanerName(zfree, UInt64) uint64_t *want =
+            zmalloc(MR_FORM_WORDS * sizeof(uint64_t));
+        enum { AND, OR, XOR, ANDNOT };
+        static const char *names[] = {"and", "or", "xor", "andnot"};
+        for (int op = AND; op <= ANDNOT; op++) {
+            for (uint64_t w = 0; w < MR_FORM_WORDS; w++) {
+                const uint64_t x = o[0][w];
+                const uint64_t y = o[1][w];
+                want[w] = op == AND   ? x & y
+                          : op == OR  ? x | y
+                          : op == XOR ? x ^ y
+                                      : x & ~y;
+            }
+            cleaner(multiroarFree) multiroar *fresh =
+                op == AND   ? multiroarNewAnd(a, b)
+                : op == OR  ? multiroarNewOr(a, b)
+                : op == XOR ? multiroarNewXor(a, b)
+                            : multiroarNewAndNot(a, b);
+            cleaner(multiroarFree) multiroar *inPlace = multiroarDuplicate(a);
+            if (op == AND) {
+                multiroarAnd(inPlace, b);
+            } else if (op == OR) {
+                multiroarOr(inPlace, b);
+            } else if (op == XOR) {
+                multiroarXor(inPlace, b);
+            } else {
+                multiroarAndNot(inPlace, b);
+            }
+            err += mrCheckForms(fresh, want, names[op]);
+            err += mrCheckForms(inPlace, want, names[op]);
+        }
+
+        /* Three-way, fresh and in place */
+        for (int op = AND; op <= XOR; op++) {
+            for (uint64_t w = 0; w < MR_FORM_WORDS; w++) {
+                const uint64_t x = o[0][w];
+                const uint64_t y = o[1][w];
+                const uint64_t z = o[2][w];
+                want[w] = op == AND  ? x & y & z
+                          : op == OR ? x | y | z
+                                     : x ^ y ^ z;
+            }
+            multiroar *three[3] = {a, b, c3};
+            cleaner(multiroarFree) multiroar *fresh =
+                op == AND  ? multiroarNewAndN(3, three)
+                : op == OR ? multiroarNewOrN(3, three)
+                           : multiroarNewXorN(3, three);
+            cleaner(multiroarFree) multiroar *first = multiroarDuplicate(a);
+            three[0] = first;
+            if (op == AND) {
+                multiroarAndN(3, three);
+            } else if (op == OR) {
+                multiroarOrN(3, three);
+            } else {
+                multiroarXorN(3, three);
+            }
+            err += mrCheckForms(fresh, want, names[op]);
+            err += mrCheckForms(first, want, names[op]);
+        }
+
+        /* NOT flips the chunks that hold any bit and leaves the rest */
+        for (uint64_t c = 0; c < MR_FORM_CHUNKS; c++) {
+            const uint64_t words = BITMAP_SIZE_IN_BITS / 64;
+            bool any = false;
+            for (uint64_t w = 0; w < words; w++) {
+                any = any || o[0][c * words + w] != 0;
+            }
+            for (uint64_t w = 0; w < words; w++) {
+                want[c * words + w] = any ? ~o[0][c * words + w] : 0;
+            }
+        }
+        cleaner(multiroarFree) multiroar *notA = multiroarNewNot(a);
+        err += mrCheckForms(notA, want, "not");
+
+        /* Relations and similarity, from the oracle's counts */
+        uint64_t na = 0;
+        uint64_t nb = 0;
+        uint64_t nAnd = 0;
+        uint64_t nOr = 0;
+        uint64_t nXor = 0;
+        for (uint64_t w = 0; w < MR_FORM_WORDS; w++) {
+            na += (uint64_t)__builtin_popcountll(o[0][w]);
+            nb += (uint64_t)__builtin_popcountll(o[1][w]);
+            nAnd += (uint64_t)__builtin_popcountll(o[0][w] & o[1][w]);
+            nOr += (uint64_t)__builtin_popcountll(o[0][w] | o[1][w]);
+            nXor += (uint64_t)__builtin_popcountll(o[0][w] ^ o[1][w]);
+        }
+        cleaner(multiroarFree) multiroar *ab = multiroarNewAnd(a, b);
+        if (multiroarIntersects(a, b) != (nAnd > 0) ||
+            !multiroarIsSubset(ab, a) || !multiroarIsSubset(ab, b) ||
+            multiroarIsSubset(a, b) || multiroarEquals(a, b) ||
+            !multiroarEquals(a, a) ||
+            multiroarJaccard(a, b) != (double)nAnd / (double)nOr ||
+            multiroarHammingDistance(a, b) != nXor ||
+            multiroarOverlap(a, b) !=
+                (double)nAnd / (double)(na < nb ? na : nb) ||
+            multiroarDice(a, b) != (2.0 * nAnd) / (double)(na + nb)) {
+            ERRR("relations or similarity disagree with the oracle");
+        }
+    }
 
     TEST("create") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
