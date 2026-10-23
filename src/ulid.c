@@ -1242,18 +1242,29 @@ void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
         uint64_t timestampMs = timestampNs / 1000000;
         uint64_t ts = timestampMs & 0x1FFFFFFFFFFULL; /* 41 bits */
 
-        /* Handle sequence counter */
-        if (timestampMs == g->snowflakeLastMs) {
+        /* Handle sequence counter.  The ms never goes backwards (emission
+         * times strictly increase), and one already past this clock's (see
+         * below) is used as is. */
+        if (timestampMs <= g->snowflakeLastMs) {
+            timestampMs = g->snowflakeLastMs;
             g->snowflakeSeq++;
             if (g->snowflakeSeq >= 8192) {
-                /* Sequence overflow, wait for next millisecond */
+                /* The ms is out of sequence numbers: take the next ms
+                 * now rather than wait for it, and move the emission
+                 * watermark there so later ids sort after this one */
+                timestampMs++;
+                g->snowflakeLastMs = timestampMs;
                 g->snowflakeSeq = 0;
-                /* This is a simplified version; production would wait */
+                const uint64_t msStart = timestampMs * 1000000;
+                if (g->lastEmittedNs < msStart) {
+                    g->lastEmittedNs = msStart;
+                }
             }
         } else {
             g->snowflakeLastMs = timestampMs;
             g->snowflakeSeq = 0;
         }
+        ts = timestampMs & 0x1FFFFFFFFFFULL; /* 41 bits */
 
         uint64_t machineId = config->machineId & 0x3FF; /* 10 bits */
         uint64_t sequence = g->snowflakeSeq & 0x1FFF;   /* 13 bits */
@@ -2465,6 +2476,104 @@ int ulidTest(int argc, char *argv[]) {
     (void)argv;
 
     int32_t err = 0;
+
+    TEST("SNOWFLAKE ids stay unique and ordered past 8192 in one ms") {
+        /* With the watermark a second ahead of the clock every id lands
+         * in the same millisecond, so the 13-bit sequence runs out */
+        ulidGen g;
+        ulidGenInit(&g, ULID_CLOCK_REALTIME);
+        g.lastEmittedNs = timeUtilNs() + 1000000000ULL;
+        const ulidVariantConfig cfg = {.type = ULID_VARIANT_SNOWFLAKE,
+                                       .machineId = 77};
+        ulid64_t prev = {0};
+        for (int i = 0; i < 20000; i++) {
+            ulid64_t id;
+            ulid64GenerateWithConfig(&g, &id, &cfg);
+            if ((i && ulid64Compare(&prev, &id) >= 0) ||
+                ulid64GetSnowflakeMachineId(&id) != 77) {
+                ERR("snowflake id %d not after the one before", i);
+                break;
+            }
+            prev = id;
+        }
+    }
+
+    TEST("32-bit variants, compares and config validation") {
+        static const ulidVariantType v32[] = {ULID_VARIANT_32MS,
+                                              ULID_VARIANT_32S};
+        static const uint64_t prec[] = {1000000, 1000000000};
+        for (size_t v = 0; v < 2; v++) {
+            ulidGen g;
+            ulidGenInit(&g, ULID_CLOCK_REALTIME);
+            const uint64_t before = timeUtilNs();
+            ulid32_t id;
+            ulid32Generate(&g, &id, v32[v]);
+            const uint64_t after = timeUtilNs();
+            /* The timestamp field wraps: compare it modulo its range */
+            const uint64_t span = prec[v] << (v ? 22 : 26);
+            const uint64_t got = ulid32GetTimestampNs(&id, v32[v]);
+            const uint64_t lo = (before / prec[v] * prec[v]) % span;
+            const uint64_t hi = (after / prec[v] * prec[v]) % span;
+            const uint32_t rnd = ulid32GetRandom(&id, v32[v]);
+            char text[16];
+            ulid32_t back;
+            if ((lo <= hi ? (got < lo || got > hi) : (got < lo && got > hi)) ||
+                rnd >> (v ? 10 : 6) ||
+                ulid32Encode(&id, text, sizeof(text)) != 7 ||
+                !ulid32Decode(text, &back) || ulid32Compare(&back, &id) != 0) {
+                ERR("32-bit variant %d round trip", (int)v32[v]);
+            }
+            if (ulid32GetTimestampNs(&id, ULID_VARIANT_NS) != 0 ||
+                ulid32GetRandom(&id, ULID_VARIANT_NS) != 0) {
+                ERR("32-bit variant %d: wrong-variant read", (int)v32[v]);
+            }
+            ulid32_t none;
+            ulid32Generate(&g, &none, ULID_VARIANT_NS);
+            if (none.data != 0) {
+                ERRR("ulid32Generate made a 64-bit variant");
+            }
+        }
+
+        const ulid32_t a32 = {.data = 5};
+        const ulid32_t b32 = {.data = 9};
+        const ulid64_t a64 = {.data = 5};
+        const ulid64_t b64 = {.data = 9};
+        ulid_t a128 = {{0}};
+        ulid_t b128 = {{0}};
+        b128.data[0] = 1;
+        if (ulid32Compare(&a32, &b32) >= 0 || ulid32Compare(&b32, &a32) <= 0 ||
+            ulid32Compare(NULL, &a32) >= 0 || ulid32Compare(&a32, NULL) <= 0 ||
+            ulid32Compare(NULL, NULL) != 0 || ulid64Compare(&a64, &b64) >= 0 ||
+            ulid64Compare(&b64, &a64) <= 0 || ulid64Compare(NULL, &a64) >= 0 ||
+            ulid64Compare(&a64, NULL) <= 0 || ulidCompare(&a128, &b128) >= 0 ||
+            ulidCompare(NULL, &a128) >= 0 || ulidCompare(&a128, NULL) <= 0 ||
+            ulidCompare(NULL, NULL) != 0) {
+            ERRR("compares");
+        }
+
+        ulidVariantConfig cfg = {.type = ULID_VARIANT_SNOWFLAKE,
+                                 .machineId = 1023};
+        const bool snowOk = ulidVariantConfigValidate(&cfg);
+        cfg.machineId = 1024;
+        const bool snowBad = ulidVariantConfigValidate(&cfg);
+        cfg = (ulidVariantConfig){.type = ULID_VARIANT_EPOCHCUSTOM,
+                                  .customEpochNs = ULID_EPOCH_2020_NS};
+        const bool epochOk = ulidVariantConfigValidate(&cfg);
+        cfg.customEpochNs = timeUtilNs() + 1000000000000ULL;
+        const bool epochBad = ulidVariantConfigValidate(&cfg);
+        cfg = (ulidVariantConfig){.type = ULID_VARIANT_COUNT};
+        if (!snowOk || snowBad || !epochOk || epochBad ||
+            ulidVariantConfigValidate(&cfg) ||
+            ulidVariantConfigValidate(NULL)) {
+            ERRR("config validation");
+        }
+        if (ulid64GetMaxTimestamp(ULID_VARIANT_DUALNS) != UINT64_MAX ||
+            ulid64GetMaxTimestamp(ULID_VARIANT_COUNT) != 0 ||
+            ulid64GetMaxTimestamp(ULID_VARIANT_EPOCHCUSTOM) !=
+                0xFFFFFFFFFFFFULL) {
+            ERRR("max timestamps");
+        }
+    }
 
     TEST("every 64-bit variant round-trips a timestamp in its range") {
         /* At the middle of each variant's valid range and near its top,
