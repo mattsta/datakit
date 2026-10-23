@@ -265,6 +265,71 @@ TOTAL                                          6       2  66.67%        11      
 """
 
 
+LIB_SOURCE = """\
+int widgetGet(int x) {          /* 1 */
+    return x;                   /* 2 */
+}                               /* 3 */
+#ifdef DATAKIT_TEST             /* 4 */
+#if WIDE                        /* 5 */
+int wide;                       /* 6 */
+#endif                          /* 7 */
+int widgetTest(void) {          /* 8 */
+    return widgetGet(1) ? 0 : 1;/* 9 */
+}                               /* 10 */
+#else                           /* 11 */
+int notTest;                    /* 12 */
+#endif                          /* 13 */
+#ifndef DATAKIT_TEST            /* 14 */
+int alsoNotTest;                /* 15 */
+#endif                          /* 16 */
+#if defined(DATAKIT_TEST) && 1  /* 17 */
+int testToo;                    /* 18 */
+#endif                          /* 19 */
+"""
+
+LCOV = """\
+$ llvm-cov export -format=lcov ...
+SF:{root}/src/widget.c
+FN:1,widgetGet
+FN:8,widgetTest
+FNDA:4,widgetGet
+FNDA:1,widgetTest
+DA:1,4
+DA:2,4
+DA:3,0
+DA:8,1
+DA:9,0
+BRDA:2,0,0,4
+BRDA:2,0,1,-
+BRDA:9,0,0,0
+end_of_record
+"""
+
+
+class LibraryOnly(unittest.TestCase):
+    def test_test_regions(self) -> None:
+        lines = coverage.test_lines(LIB_SOURCE)
+        self.assertEqual(lines, {4, 5, 6, 7, 8, 9, 10, 17, 18})
+
+    def test_lcov_and_library_totals(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "widget.c").write_text(LIB_SOURCE)
+            lcov = coverage.parse_lcov(LCOV.format(root=root.resolve()), root)
+            rec = lcov["src/widget.c"]
+            self.assertEqual(rec.lines[9], 0)
+            self.assertEqual(rec.functions["widgetTest"], [8, 1])
+            files, total = coverage.library_coverage(lcov, root)
+        # Lines 8 and 9 and widgetTest are test code: left out
+        self.assertEqual(files[0].lines, (2, 3))
+        self.assertEqual(files[0].functions, (1, 1))
+        self.assertEqual(files[0].branches, (1, 2))
+        self.assertEqual(total.lines, (2, 3))
+
+
 class Detail(unittest.TestCase):
     def test_uncovered_ranges_span_lines_without_code(self) -> None:
         ranges = coverage.parse_show_uncovered(SHOW)

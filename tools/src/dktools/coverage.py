@@ -293,6 +293,127 @@ def collect_headers(src: Path, public_only: bool = True) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+#: A conditional that opens in-file test code: ``#ifdef DATAKIT_TEST`` or
+#: an ``#if`` that requires ``defined(DATAKIT_TEST)`` (not negated).
+_TEST_IF_RE = re.compile(
+    r"^\s*#\s*(?:ifdef\s+DATAKIT_TEST\b|if\s+(?!.*!\s*defined\s*\(?\s*DATAKIT_TEST)"
+    r".*\bdefined\s*\(?\s*DATAKIT_TEST\b)"
+)
+_COND_OPEN_RE = re.compile(r"^\s*#\s*if")
+_COND_ELSE_RE = re.compile(r"^\s*#\s*(?:else|elif)\b")
+_COND_END_RE = re.compile(r"^\s*#\s*endif\b")
+
+
+def test_lines(text: str) -> set[int]:
+    """Line numbers (1-based) inside in-file test code: the branch of an
+    ``#ifdef DATAKIT_TEST`` (or ``#if defined(DATAKIT_TEST)``) up to its
+    ``#else``/``#elif``/``#endif``, nested conditionals included."""
+    stack: list[bool] = []
+    out: set[int] = set()
+    for number, line in enumerate(text.splitlines(), 1):
+        if _COND_OPEN_RE.match(line):
+            stack.append(bool(_TEST_IF_RE.match(line)))
+        elif _COND_ELSE_RE.match(line) and stack:
+            stack[-1] = False
+        elif _COND_END_RE.match(line) and stack:
+            stack.pop()
+        if any(stack):
+            out.add(number)
+    return out
+
+
+@dataclass
+class LcovFile:
+    lines: dict[int, int] = field(default_factory=dict)  # line -> count
+    # (line, block, branch) -> taken
+    branches: dict[tuple[int, int, int], bool] = field(default_factory=dict)
+    functions: dict[str, list[int]] = field(
+        default_factory=dict
+    )  # name -> [line, count]
+
+
+def _bare(name: str) -> str:
+    """A function's name without the ``file.c:`` prefix llvm gives static
+    functions (one prefix per including file for a header's)."""
+    return name.rsplit(":", 1)[-1]
+
+
+def parse_lcov(text: str, source_root: Path) -> dict[str, LcovFile]:
+    """Per-file line, branch and function records of ``llvm-cov export
+    -format=lcov``; paths relative to `source_root`."""
+    root = str(source_root.resolve()) + "/"
+    files: dict[str, LcovFile] = {}
+    cur: LcovFile | None = None
+    for raw in text.splitlines():
+        tag, _, rest = raw.partition(":")
+        if tag == "SF":
+            path = rest[len(root) :] if rest.startswith(root) else rest
+            cur = files.setdefault(path, LcovFile())
+        elif cur is None:
+            continue
+        elif tag == "DA":
+            parts = rest.split(",")
+            line, count = int(parts[0]), int(parts[1])
+            cur.lines[line] = cur.lines.get(line, 0) + count
+        elif tag == "BRDA":
+            # A header's inline function has a copy per including file,
+            # each with its own records: a branch is taken if any copy
+            # took it, and a function ran if any copy ran.
+            line, block, branch, taken = rest.split(",")
+            key = (int(line), int(block), int(branch))
+            cur.branches[key] = cur.branches.get(key, False) or taken not in (
+                "-",
+                "0",
+            )
+        elif tag == "FN":
+            line, name = rest.split(",", 1)
+            entry = cur.functions.setdefault(_bare(name), [int(line), 0])
+            entry[0] = min(entry[0], int(line))
+        elif tag == "FNDA":
+            count, name = rest.split(",", 1)
+            if _bare(name) in cur.functions:
+                cur.functions[_bare(name)][1] += int(count)
+        elif tag == "end_of_record":
+            cur = None
+    return files
+
+
+def library_coverage(
+    lcov: dict[str, LcovFile], source_root: Path
+) -> tuple[list[FileCoverage], FileCoverage]:
+    """Per-file and total line, function and branch coverage with in-file
+    test code left out (regions are not split by line, so they read as
+    absent)."""
+    files: list[FileCoverage] = []
+    tl = [0, 0, 0, 0, 0, 0]  # lines, functions, branches: covered, count
+    for path in sorted(lcov):
+        rec = lcov[path]
+        source = source_root / path
+        skip = (
+            test_lines(source.read_text(errors="replace"))
+            if source.is_file()
+            else set()
+        )
+        lines = [c for n, c in rec.lines.items() if n not in skip]
+        funcs = [c for line, c in rec.functions.values() if line not in skip]
+        branches = [t for (n, _b, _r), t in rec.branches.items() if n not in skip]
+        row = FileCoverage(
+            path,
+            (sum(1 for c in lines if c > 0), len(lines)),
+            (sum(1 for c in funcs if c > 0), len(funcs)),
+            (sum(1 for t in branches if t), len(branches)),
+            (0, 0),
+        )
+        files.append(row)
+        for i, pair in enumerate((row.lines, row.functions, row.branches)):
+            tl[2 * i] += pair[0]
+            tl[2 * i + 1] += pair[1]
+    total = FileCoverage(
+        "TOTAL", (tl[0], tl[1]), (tl[2], tl[3]), (tl[4], tl[5]), (0, 0)
+    )
+    return files, total
+
+
 def _pct(pair: tuple[int, int]) -> str:
     covered, count = pair
     if count == 0:
@@ -308,6 +429,7 @@ def render(
     total: FileCoverage,
     api: PublicApi,
     top: int,
+    library: tuple[list[FileCoverage], FileCoverage] | None = None,
 ) -> str:
     md = [f"# coverage {commit[:10]}", "", f"Revision `{commit}`: {subject}", ""]
     md += [f"- tests: {tests}", ""]
@@ -317,6 +439,17 @@ def render(
         f"| {_pct(total.lines)} | {_pct(total.functions)} "
         f"| {_pct(total.branches)} | {_pct(total.regions)} |"
     )
+    if library is not None:
+        # In-file tests (#ifdef DATAKIT_TEST blocks) count above; their
+        # failure branches never run in a passing suite, so the library's
+        # own coverage, and the per-file tables below, leave them out.
+        files, lib_total = library
+        md += ["", "## Library code (in-file test code excluded)", ""]
+        md += ["| lines | functions | branches |", "| --- | --- | --- |"]
+        md.append(
+            f"| {_pct(lib_total.lines)} | {_pct(lib_total.functions)} "
+            f"| {_pct(lib_total.branches)} |"
+        )
     md += ["", f"## Least-covered files (by lines, {top} shown)", ""]
     md += [
         "| file | lines | functions | branches |",
@@ -376,6 +509,7 @@ def to_json(
     files: list[FileCoverage],
     total: FileCoverage,
     api: PublicApi,
+    library: tuple[list[FileCoverage], FileCoverage] | None = None,
 ) -> dict:
     def row(f: FileCoverage) -> dict:
         return {
@@ -391,6 +525,12 @@ def to_json(
         "testsPassed": tests_ok,
         "totals": row(total),
         "files": [row(f) for f in files],
+        "library": None
+        if library is None
+        else {
+            "totals": row(library[1]),
+            "files": [row(f) for f in library[0]],
+        },
         "publicApi": {
             "called": api.called,
             "neverCalled": api.never,
@@ -510,8 +650,36 @@ def run(repo: Path, opts: CoverageOptions) -> int:
     if not (merge.ok and show.ok and export.ok):
         raise ToolError(f"llvm-profdata / llvm-cov failed; see {logs}")
 
+    export_lcov(work, compiler)
     report(work, commit, subject, tests, tests_ok, opts.top)
     return 0 if tests_ok else 1
+
+
+def export_lcov(work: Path, compiler: toolchain.Compiler) -> None:
+    """Write logs/coverage.lcov (per-line, per-branch and per-function
+    counts of the library sources) for the run in `work`, if absent."""
+    out = work / "logs" / "coverage.lcov"
+    if out.exists():
+        return
+    src = work / "src"
+    llvm_cov = str(Path(compiler.cc).parent / "llvm-cov")
+    binary = toolchain.build_config(compiler, "coverage").binary_dir(src) / "src"
+    step = steps.run_logged(
+        "coverage lcov",
+        [
+            llvm_cov,
+            "export",
+            "-format=lcov",
+            str(binary / "datakit-test"),
+            f"-instr-profile={work / 'merged.profdata'}",
+            f"-ignore-filename-regex={IGNORE_FILES}",
+        ],
+        out,
+        timeout=steps.CONFIGURE_TIMEOUT,
+    )
+    if not step.ok:
+        out.unlink(missing_ok=True)
+        raise ToolError(f"llvm-cov export -format=lcov failed; see {work / 'logs'}")
 
 
 def report(
@@ -526,11 +694,16 @@ def report(
     counts = parse_profile_counts((logs / "functions.txt").read_text())
     api = public_api(collect_headers(src), counts)
     api.unrun_inline = unrun_inline(collect_headers(src, public_only=False), counts)
+    library = None
+    lcov = logs / "coverage.lcov"
+    if lcov.exists():
+        library = library_coverage(parse_lcov(lcov.read_text(), src), src)
 
-    text = render(commit, subject, tests, files, total, api, top)
+    text = render(commit, subject, tests, files, total, api, top, library)
     (work / "summary.md").write_text(text)
     (work / "summary.json").write_text(
-        json.dumps(to_json(commit, tests_ok, files, total, api), indent=1) + "\n"
+        json.dumps(to_json(commit, tests_ok, files, total, api, library), indent=1)
+        + "\n"
     )
     sys.stdout.write(text)
     print(f"summary: {work / 'summary.md'}")
@@ -651,6 +824,8 @@ def detail(repo: Path, opts: CoverageOptions, paths: list[str]) -> int:
             )
         return done.stdout.decode("utf-8", "replace")
 
+    export_lcov(work, compiler)
+    lcov = parse_lcov((work / "logs" / "coverage.lcov").read_text(), src)
     out = []
     for rel in paths:
         source = src / rel
@@ -658,13 +833,23 @@ def detail(repo: Path, opts: CoverageOptions, paths: list[str]) -> int:
             raise ToolError(f"{rel}: not a file of the exported tree")
         show = cov(["show", "-use-color=false"], source)
         report_text = cov(["report", "-show-functions", "-use-color=false"], source)
-        out.append(
-            render_detail(
-                rel,
-                parse_function_report(report_text),
-                parse_show_uncovered(show),
-            )
-        )
+        # In-file test code is left out, as in the library totals.
+        skip = test_lines(source.read_text(errors="replace"))
+        rec = lcov.get(rel, LcovFile())
+        test_funcs = {
+            name for name, (line, _count) in rec.functions.items() if line in skip
+        }
+        funcs = [
+            f
+            for f in parse_function_report(report_text)
+            if f.name.rsplit(":", 1)[-1] not in test_funcs
+        ]
+        ranges = [r for r in parse_show_uncovered(show) if r.first not in skip]
+        text = render_detail(rel, funcs, ranges)
+        skipped = sum(1 for n, c in rec.lines.items() if n in skip and c == 0)
+        if skipped:
+            text += f"\n({skipped} uncovered lines of in-file test code not listed)\n"
+        out.append(text)
     sys.stdout.write("\n".join(out))
     return 0
 
@@ -689,5 +874,6 @@ def rereport(repo: Path, opts: CoverageOptions) -> int:
     failed = [name for r in results for name in r.failed]
     tests_ok = not failed
     tests = "all passed (earlier run)" if tests_ok else f"FAILED: {', '.join(failed)}"
+    export_lcov(work, opts.compiler or toolchain.resolve_compiler("clang22"))
     report(work, commit, subject, tests, tests_ok, top=opts.top)
     return 0 if tests_ok else 1

@@ -294,6 +294,11 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   copies, this list holds only the ones that never ran anywhere.
 - `--reuse` renders the summary again from the earlier run for REV (no
   build, no tests), for changes to the report itself.
+- A module's in-file tests (`#ifdef DATAKIT_TEST` blocks) count in the
+  llvm-cov totals, and their failure branches never run in a passing
+  suite.  The "Library code" totals and the per-file tables leave them
+  out (per-line counts from `llvm-cov export -format=lcov`; a header's
+  inline function counts as run if any copy ran).
 - `--detail FILE` (repeatable, repo-relative) reads the earlier run for
   REV and lists FILE's functions by missed lines and its uncovered line
   ranges (each with its first source line): the worklist for one file.
