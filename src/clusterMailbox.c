@@ -211,6 +211,7 @@ _Static_assert(offsetof(struct clusterMailbox, counters) % 64u == 0u,
                "clusterMailbox::counters must start on a 64B cache line");
 
 static void cmBumpCounter(_Atomic uint64_t *c, uint64_t delta) {
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(c, delta, memory_order_relaxed);
 }
 
@@ -260,18 +261,20 @@ static void cmRecordIngestResult(clusterMailbox *mb,
  * Caller MUST guarantee origin_id != 0 — origin 0 is reserved as the
  * unoccupied-slot sentinel and would falsely match every empty slot.
  *
- * Threading: this routine is invoked from the writer path (Ingest) and
- * also from cmLookupOriginConst-callers via the const variant below.
- * `origin_id` is _Atomic and the writer publishes a new slot's
- * origin_id with release; an acquire load here pairs with that store
- * so a reader who matches a non-zero origin_id is guaranteed to also
- * see the writer's last_applied initialisation (cmInsertOrigin) — or
- * any subsequent atomic update of last_applied. */
+ * Threading: only the writer path (Ingest, and Restore serialised
+ * against it) calls this, and the writer is the only thread that stores
+ * origin_id, so the loads read back its own stores and need no order.
+ * Observers use cmLookupOriginConst, whose acquire pairs with the
+ * release that publishes a slot in cmInsertOrigin. */
 static clusterMailboxOrigin *cmLookupOriginMut(clusterMailbox *mb,
                                                uint32_t origin_id) {
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        /* Only the writer (Ingest, or a Restore serialised against it)
+         * reaches this scan, and the writer is the only thread that
+         * stores origin_id: it reads back its own stores. */
+        /* @sync: relaxed owner */
         const uint32_t id = atomic_load_explicit(&mb->origins[i].origin_id,
-                                                 memory_order_acquire);
+                                                 memory_order_relaxed);
         if (id == origin_id) {
             return &mb->origins[i];
         }
@@ -285,6 +288,7 @@ static clusterMailboxOrigin *cmLookupOriginMut(clusterMailbox *mb,
 static const clusterMailboxOrigin *cmLookupOriginConst(const clusterMailbox *mb,
                                                        uint32_t origin_id) {
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        /* @sync: acquire mailbox.slotPublish */
         const uint32_t id = atomic_load_explicit(&mb->origins[i].origin_id,
                                                  memory_order_acquire);
         if (id == origin_id) {
@@ -301,7 +305,7 @@ static const clusterMailboxOrigin *cmLookupOriginConst(const clusterMailbox *mb,
  * Threading: writes `last_applied` (relaxed — it's 0, which the reader
  * already treats as "never seen") BEFORE publishing the slot via a
  * release-store on `origin_id`. This pairs with the acquire-load in
- * cmLookupOrigin{Mut,Const} so a reader who matches the new origin_id
+ * cmLookupOriginConst so a reader who matches the new origin_id
  * is guaranteed to see the 0-initialised last_applied (not stale junk
  * from a previously-occupied slot). */
 static clusterMailboxOrigin *cmInsertOrigin(clusterMailbox *mb,
@@ -310,17 +314,24 @@ static clusterMailboxOrigin *cmInsertOrigin(clusterMailbox *mb,
      * matter; the typical cluster has a handful of peers and the table
      * is mostly empty. */
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        /* The writer is the only thread that stores origin_id. */
+        /* @sync: relaxed owner */
         const uint32_t cur = atomic_load_explicit(&mb->origins[i].origin_id,
-                                                  memory_order_acquire);
+                                                  memory_order_relaxed);
         if (cur == 0u) {
+            /* The slot is unpublished (origin_id == 0), so no observer
+             * reaches it; the origin_id release below orders this. */
+            /* @sync: relaxed init */
             atomic_store_explicit(&mb->origins[i].last_applied, 0u,
                                   memory_order_relaxed);
             mb->origins[i].window_bits = 0u;
             /* Release-publish the slot: any reader who sees this
              * origin_id is guaranteed to also see the last_applied=0
              * initialisation above. */
+            /* @sync: release mailbox.slotPublish */
             atomic_store_explicit(&mb->origins[i].origin_id, origin_id,
                                   memory_order_release);
+            /* @sync: release mailbox.originCount */
             atomic_fetch_add_explicit(&mb->origin_count, 1u,
                                       memory_order_release);
             return &mb->origins[i];
@@ -585,7 +596,7 @@ void clusterMailboxFree(clusterMailbox *mb) {
     /* Wipe the origin table — sequence numbers reveal traffic
      * patterns; not strictly secret but worth zeroing along with
      * everything else. */
-    memset(mb->origins, 0, sizeof(mb->origins));
+    dkSecureZero(mb->origins, sizeof(mb->origins));
     zfree(mb);
 }
 
@@ -626,6 +637,7 @@ size_t clusterMailboxOriginCount(const clusterMailbox *mb) {
      * the observed count is never higher than the number of slots whose
      * origin_id is already visible to a concurrent
      * clusterMailboxLastApplied probe. */
+    /* @sync: acquire mailbox.originCount */
     return atomic_load_explicit(&mb->origin_count, memory_order_acquire);
 }
 
@@ -642,6 +654,7 @@ uint64_t clusterMailboxLastApplied(const clusterMailbox *mb,
      * Concurrent readers see a coherent 64-bit value (no torn read) and
      * a monotonic non-decreasing watermark — the writer is single-thread
      * and never rewinds last_applied except via single-threaded Restore. */
+    /* @sync: acquire mailbox.watermark */
     return atomic_load_explicit(&e->last_applied, memory_order_acquire);
 }
 
@@ -882,6 +895,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
      * obligation INTO this routine — the only outbound ordering is the
      * release-store at the end of the apply path. */
     if (existing != NULL) {
+        /* @sync: relaxed owner */
         const uint64_t cur =
             atomic_load_explicit(&existing->last_applied, memory_order_relaxed);
         if (!use_window) {
@@ -932,12 +946,14 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
             return CLUSTER_MAILBOX_ERR_APPLY_REJECTED;
         }
     }
-    /* Advance watermark + maintain the replay bitmap. The final
-     * watermark publish uses release so a concurrent reader observing
-     * the new last_applied value never sees a previous-frame's stale
-     * window_bits. window_bits is non-atomic by policy (only the I/O
-     * thread reads it) and the release on last_applied transitively
-     * orders its updates relative to any future read of last_applied. */
+    /* Advance watermark + maintain the replay bitmap. The watermark
+     * publish uses release so an observer whose acquire load in
+     * clusterMailboxLastApplied reads `sequence` also sees everything
+     * this thread did before it, the on_apply effects of that frame
+     * included. window_bits is not part of that: it is non-atomic and
+     * only the I/O thread (or a Snapshot/Restore serialised against it)
+     * reads it. */
+    /* @sync: relaxed owner */
     const uint64_t cur =
         atomic_load_explicit(&slot->last_applied, memory_order_relaxed);
     if (use_window) {
@@ -953,6 +969,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
                 slot->window_bits <<= shift;
             }
             slot->window_bits |= (uint64_t)1; /* mark the new watermark */
+            /* @sync: release mailbox.watermark */
             atomic_store_explicit(&slot->last_applied, sequence,
                                   memory_order_release);
         } else {
@@ -962,6 +979,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
             slot->window_bits |= ((uint64_t)1 << age);
         }
     } else {
+        /* @sync: release mailbox.watermark */
         atomic_store_explicit(&slot->last_applied, sequence,
                               memory_order_release);
     }
@@ -1017,34 +1035,49 @@ void clusterMailboxGetStats(const clusterMailbox *mb,
      * portable. Snapshot is per-counter consistent, not cross-counter
      * consistent — an observer might see ingest_total advance before
      * its outcome counter does (or vice versa) by a few ns. */
+    /* @sync: relaxed counter */
     out->ingest_total =
         atomic_load_explicit(&mb->counters.ingest_total, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->apply_ok =
         atomic_load_explicit(&mb->counters.apply_ok, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->apply_rejected = atomic_load_explicit(&mb->counters.apply_rejected,
                                                memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->replay_rejected = atomic_load_explicit(&mb->counters.replay_rejected,
                                                 memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->algo_mismatch =
         atomic_load_explicit(&mb->counters.algo_mismatch, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->verify_failed =
         atomic_load_explicit(&mb->counters.verify_failed, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->key_missing =
         atomic_load_explicit(&mb->counters.key_missing, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->bad_frame =
         atomic_load_explicit(&mb->counters.bad_frame, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->origin_table_full = atomic_load_explicit(
         &mb->counters.origin_table_full, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->protocol_rejected = atomic_load_explicit(
         &mb->counters.protocol_rejected, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->param_error =
         atomic_load_explicit(&mb->counters.param_error, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->seal_total =
         atomic_load_explicit(&mb->counters.seal_total, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->seal_param_error = atomic_load_explicit(&mb->counters.seal_param_error,
                                                  memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->bytes_ingested = atomic_load_explicit(&mb->counters.bytes_ingested,
                                                memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->bytes_sealed =
         atomic_load_explicit(&mb->counters.bytes_sealed, memory_order_relaxed);
 }
@@ -1053,26 +1086,41 @@ void clusterMailboxResetStats(clusterMailbox *mb) {
     if (mb == NULL) {
         return;
     }
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.ingest_total, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.apply_ok, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.apply_rejected, 0,
                           memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.replay_rejected, 0,
                           memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.algo_mismatch, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.verify_failed, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.key_missing, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.bad_frame, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.origin_table_full, 0,
                           memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.protocol_rejected, 0,
                           memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.param_error, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.seal_total, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.seal_param_error, 0,
                           memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.bytes_ingested, 0,
                           memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.bytes_sealed, 0, memory_order_relaxed);
 }
 
@@ -1202,11 +1250,13 @@ static flex *cmBuildSnapshotFlex(const clusterMailbox *mb) {
     flex *f = flexNew();
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
         const clusterMailboxOrigin *o = &mb->origins[i];
+        /* @sync: relaxed owner */
         const uint64_t la =
             atomic_load_explicit(&o->last_applied, memory_order_relaxed);
         if (la == 0u) {
             continue;
         }
+        /* @sync: relaxed owner */
         const uint32_t oid =
             atomic_load_explicit(&o->origin_id, memory_order_relaxed);
         flexRow row = FLEX_ROW_INIT;
@@ -1358,8 +1408,11 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
      * when the snapshot repeats it) needs a free slot */
     size_t free_slots = 0;
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        /* Restore is serialised against the writer, and only writer-side
+         * code stores origin_id. */
+        /* @sync: relaxed owner */
         if (atomic_load_explicit(&mb->origins[i].origin_id,
-                                 memory_order_acquire) == 0u) {
+                                 memory_order_relaxed) == 0u) {
             free_slots++;
         }
     }
@@ -1399,17 +1452,21 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
                 return false; /* unreachable: room was checked above */
             }
         }
-        /* Snapshot/restore is single-threaded per the header contract;
-         * the atomic ops here exist only to satisfy the underlying
-         * `_Atomic`-typed access rules. Release on the final
-         * last_applied store mirrors the Ingest-path policy so any
-         * concurrent (post-restore) reader observes a coherent state. */
+        /* Restore is serialised against the writer per the header
+         * contract, so the load reads back writer-side state. The
+         * last_applied stores below stay release: they replace Ingest's
+         * release stores in last_applied's modification order, and an
+         * observer whose acquire reads a Restore-written value still
+         * synchronises with everything before it (the caller's
+         * serialisation makes prior Ingest applies part of that). */
+        /* @sync: relaxed owner */
         const uint64_t cur_la =
             atomic_load_explicit(&slot->last_applied, memory_order_relaxed);
         if (fresh_slot || cur_la == 0u) {
             /* Brand-new slot (or slot occupied by an APPLY_REJECTED
              * record with last_applied==0): adopt snapshot wholesale. */
             slot->window_bits = window_bits;
+            /* @sync: release mailbox.watermark */
             atomic_store_explicit(&slot->last_applied, seq,
                                   memory_order_release);
         } else if (seq >= cur_la) {
@@ -1420,6 +1477,7 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
             const uint64_t current_bits_in_snap_frame =
                 cmReorientWindowBits(slot->window_bits, cur_la, seq);
             slot->window_bits = current_bits_in_snap_frame | window_bits;
+            /* @sync: release mailbox.watermark */
             atomic_store_explicit(&slot->last_applied, seq,
                                   memory_order_release);
         } else {
@@ -1604,6 +1662,7 @@ static size_t cmPersistCount(const void *structure) {
     const clusterMailbox *mb = (const clusterMailbox *)structure;
     size_t n = 0;
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        /* @sync: relaxed owner */
         n += atomic_load_explicit(&mb->origins[i].last_applied,
                                   memory_order_relaxed) != 0u;
     }
@@ -3931,12 +3990,16 @@ static void *cmStatsRaceWriter(void *vctx) {
             /* Publish the high-water BEFORE Seal so a reader can sample
              * "writer-claims-to-have-tried-up-to N" and compare last_applied
              * against it; last_applied may legitimately equal seq once
-             * Ingest commits, but must never exceed it. */
+             * Ingest commits, but must never exceed it. The store is
+             * sequenced before Ingest's watermark release, which is what
+             * orders it for the reader. */
+            /* @sync: relaxed counter */
             atomic_store_explicit(&c->writer_high_water, seq,
-                                  memory_order_release);
+                                  memory_order_relaxed);
             if (!clusterMailboxSeal(c->mb, c->origin, seq, 0u, payload,
                                     sizeof(payload), c->key_id, buf, cap,
                                     &written)) {
+                /* @sync: relaxed counter */
                 atomic_fetch_add_explicit(&c->writer_seal_failures, 1,
                                           memory_order_relaxed);
                 continue;
@@ -3944,12 +4007,15 @@ static void *cmStatsRaceWriter(void *vctx) {
             const clusterMailboxIngestResult rc =
                 clusterMailboxIngest(c->mb, buf, written, c->key_id);
             if (rc != CLUSTER_MAILBOX_OK) {
+                /* @sync: relaxed counter */
                 atomic_fetch_add_explicit(&c->writer_ingest_failures, 1,
                                           memory_order_relaxed);
             }
         }
     }
-    atomic_store_explicit(&c->writer_done, 1, memory_order_release);
+    /* Nothing reads writer_done; the main thread joins instead. */
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&c->writer_done, 1, memory_order_relaxed);
     return NULL;
 }
 
@@ -3964,13 +4030,17 @@ static void *cmStatsRaceReader(void *vctx) {
          * it is at least as large; last_applied > that high-water is a torn
          * or out-of-thin-air read.  (Sampling the high-water first would
          * let the writer advance and ingest between the two reads, a
-         * legitimate interleaving that reports a false failure.) */
+         * legitimate interleaving that reports a false failure.) The
+         * acquire inside clusterMailboxLastApplied (mailbox.watermark)
+         * makes the high-water store of seq happen before this load. */
         const uint64_t la = clusterMailboxLastApplied(c->mb, c->origin);
+        /* @sync: relaxed counter */
         const uint64_t hw =
-            atomic_load_explicit(&c->writer_high_water, memory_order_acquire);
+            atomic_load_explicit(&c->writer_high_water, memory_order_relaxed);
         const size_t oc = clusterMailboxOriginCount(c->mb);
 
         if (la > hw) {
+            /* @sync: relaxed counter */
             atomic_fetch_add_explicit(&c->reader_invariant_failures, 1,
                                       memory_order_relaxed);
         }
@@ -3978,6 +4048,7 @@ static void *cmStatsRaceReader(void *vctx) {
             /* Monotonic violation -- writer never rewinds in this
              * test, so an earlier value reappearing indicates a torn
              * or out-of-thin-air read. */
+            /* @sync: relaxed counter */
             atomic_fetch_add_explicit(&c->reader_invariant_failures, 1,
                                       memory_order_relaxed);
         } else {
@@ -3985,9 +4056,11 @@ static void *cmStatsRaceReader(void *vctx) {
         }
         if (oc > 1u) {
             /* Only one origin is in play. */
+            /* @sync: relaxed counter */
             atomic_fetch_add_explicit(&c->reader_invariant_failures, 1,
                                       memory_order_relaxed);
         }
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&c->reader_iterations, 1,
                                   memory_order_relaxed);
     }
@@ -4034,14 +4107,18 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
         pthread_join(writer_thr, NULL);
         pthread_join(reader_thr, NULL);
 
+        /* @sync: relaxed init */
         const int seal_fail = atomic_load_explicit(&ctx.writer_seal_failures,
-                                                   memory_order_acquire);
+                                                   memory_order_relaxed);
+        /* @sync: relaxed init */
         const int ingest_fail = atomic_load_explicit(
-            &ctx.writer_ingest_failures, memory_order_acquire);
+            &ctx.writer_ingest_failures, memory_order_relaxed);
+        /* @sync: relaxed init */
         const int reader_fail = atomic_load_explicit(
-            &ctx.reader_invariant_failures, memory_order_acquire);
+            &ctx.reader_invariant_failures, memory_order_relaxed);
+        /* @sync: relaxed init */
         const uint64_t reader_iters =
-            atomic_load_explicit(&ctx.reader_iterations, memory_order_acquire);
+            atomic_load_explicit(&ctx.reader_iterations, memory_order_relaxed);
 
         if (seal_fail != 0) {
             ERR("statsRace: writer Seal failures: %d", seal_fail);
@@ -4300,15 +4377,22 @@ static void *cmRetireRaceWriter(void *vctx) {
     const size_t cap = clusterMailboxSealedSize(c->mb, CM_RACE_PAYLOAD_LEN);
     cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(cap);
     /* Wait for the rotator so every round trip overlaps rotation. The
-     * done check covers a rotator that failed to start. */
-    while (!atomic_load_explicit(&c->rotator_started, memory_order_acquire) &&
-           !atomic_load_explicit(&c->rotator_done, memory_order_acquire)) {
+     * done check covers a rotator that failed to start. The flags only
+     * pace the threads; the writer reads nothing the rotator wrote
+     * before them (keyring state is ordered by the keyring's lock). */
+    /* @sync: relaxed hint */
+    while (
+        !atomic_load_explicit(&c->rotator_started, memory_order_relaxed) &&
+        !atomic_load_explicit(&c->rotator_done,
+                              memory_order_relaxed)) { /* @sync: relaxed hint */
         sched_yield();
     }
-    while (!atomic_load_explicit(&c->rotator_done, memory_order_acquire)) {
+    /* @sync: relaxed hint */
+    while (!atomic_load_explicit(&c->rotator_done, memory_order_relaxed)) {
         cmRetireRaceCheckCopy(c);
         if (cmRetireRaceRoundTrip(c, buf, cap) == CLUSTER_MAILBOX_OK) {
-            atomic_fetch_add_explicit(&c->writer_ok, 1u, memory_order_release);
+            /* @sync: relaxed counter */
+            atomic_fetch_add_explicit(&c->writer_ok, 1u, memory_order_relaxed);
         }
     }
     return NULL;
@@ -4316,11 +4400,14 @@ static void *cmRetireRaceWriter(void *vctx) {
 
 static void *cmRetireRaceRotator(void *vctx) {
     cmRetireRaceCtx *c = (cmRetireRaceCtx *)vctx;
-    atomic_store_explicit(&c->rotator_started, 1, memory_order_release);
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&c->rotator_started, 1, memory_order_relaxed);
     uint64_t i = 0;
     for (; i < CM_RACE_ROTATION_CAP; i++) {
+        /* The count only decides when to stop; nothing is read through it. */
+        /* @sync: relaxed counter */
         if (i >= CM_RACE_TARGET_ROTATIONS &&
-            atomic_load_explicit(&c->writer_ok, memory_order_acquire) >=
+            atomic_load_explicit(&c->writer_ok, memory_order_relaxed) >=
                 CM_RACE_TARGET_OK) {
             break;
         }
@@ -4335,7 +4422,9 @@ static void *cmRetireRaceRotator(void *vctx) {
         sched_yield();
     }
     c->rotations = i;
-    atomic_store_explicit(&c->rotator_done, 1, memory_order_release);
+    /* `rotations` reaches the main thread through pthread_join. */
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&c->rotator_done, 1, memory_order_relaxed);
     return NULL;
 }
 
@@ -4386,8 +4475,9 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
                                    &ctx) != 0) {
                     ERRR("retireRace: spawn rotator failed");
                     /* Release the writer from its start wait. */
+                    /* @sync: relaxed hint */
                     atomic_store_explicit(&ctx.rotator_done, 1,
-                                          memory_order_release);
+                                          memory_order_relaxed);
                 } else {
                     pthread_join(rotator_thr, NULL);
                     ran = true;
@@ -4397,8 +4487,9 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
         }
 
         if (ran) {
+            /* @sync: relaxed init */
             const uint64_t writerOk =
-                atomic_load_explicit(&ctx.writer_ok, memory_order_acquire);
+                atomic_load_explicit(&ctx.writer_ok, memory_order_relaxed);
             if (writerOk < CM_RACE_TARGET_OK) {
                 ERR("retireRace: writer completed only %" PRIu64 " of %" PRIu64
                     " applied round trips before the rotator hit its cap of "

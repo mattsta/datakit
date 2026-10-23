@@ -48,9 +48,10 @@
  * each other AND against the writer's Ingest/Seal -- e.g. quiesce
  * the I/O thread before issuing a Restore, or hold a caller-owned
  * write-lock for the duration. Observer threads may continue to
- * run during Snapshot (it only reads), but Restore atomically
- * mutates the watermark table and observers will see the merged
- * state once Restore returns.
+ * run during Snapshot (it only reads) and during Restore: Restore
+ * merges one slot at a time, so a concurrent observer sees each
+ * slot's watermark move forward on its own (never backwards), and
+ * the whole merged table once Restore returns.
  * - The typical deployment binds one mailbox per follower
  * connection (or per replication shard), processed by a
  * dedicated I/O thread. Observability and replay watermarks are
