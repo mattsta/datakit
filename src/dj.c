@@ -981,9 +981,10 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djTrue(testA);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "true")) {
+            ERR("true wrote %s", out);
+        }
     }
 
     TEST("false") {
@@ -992,9 +993,10 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djFalse(testA);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "false")) {
+            ERR("false wrote %s", out);
+        }
     }
 
     TEST("null") {
@@ -1003,9 +1005,10 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djNULL(testA);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "null")) {
+            ERR("null wrote %s", out);
+        }
     }
 
     TEST("hello - direct") {
@@ -1014,9 +1017,10 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djStringDirect(testA, "hello", 5);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "\"hello\"")) {
+            ERR("direct string wrote %s", out);
+        }
     }
 
     TEST("hello - escaped") {
@@ -1025,9 +1029,10 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djString(testA, "hello", 5, false);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "\"hello\"")) {
+            ERR("escaped string wrote %s", out);
+        }
     }
 
     TEST("hello plus garbage - escaped") {
@@ -1036,9 +1041,10 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djString(testA, "hello\n\n\t\t", 9, false);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "\"hello\\n\\n\\t\\t\"")) {
+            ERR("escaped controls wrote %s", out);
+        }
     }
 
     TEST("hello plus garbage SIMD - escaped") {
@@ -1046,6 +1052,8 @@ int djTest(int argc, char *argv[]) {
         djState *testA = &testA_;
         djInit(testA);
 
+        /* Each string escaped by the scalar reference, joined as an array */
+        cleaner(mdsfree) mds *expected = mdsnew("[");
         djArrayOpen(testA);
         cleaner(mdsfree) mds *str = mdsnew("hello");
         for (size_t i = 0; i < 32; i++) {
@@ -1061,14 +1069,21 @@ int djTest(int argc, char *argv[]) {
             str = mdscatlen(str, what, strlen(what));
 
             djString(testA, str, mdslen(str), false);
+            cleaner(mdsfree) mds *escaped =
+                djBuildExpectedEscape((const uint8_t *)str, mdslen(str));
+            expected = mdscatlen(expected, i ? "," : "", i ? 1 : 0);
+            expected = mdscatlen(expected, escaped, mdslen(escaped));
         }
 
         djArrayCloseFinal(testA);
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        expected = mdscatlen(expected, "]", 1);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, expected)) {
+            ERR("escaped array wrote %s, expected %s", out, expected);
+        }
     }
 
+    /* "pickles" written with length 6 is "pickle" */
     TEST("simple map") {
         djState testA_ = {{0}};
         djState *testA = &testA_;
@@ -1079,9 +1094,10 @@ int djTest(int argc, char *argv[]) {
         djStringDirect(testA, "pickles", 6);
         djMapCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "{\"hello\":\"pickle\"}")) {
+            ERR("simple map wrote %s", out);
+        }
     }
 
     TEST("simple two map") {
@@ -1096,9 +1112,10 @@ int djTest(int argc, char *argv[]) {
         djStringDirect(testA, "map", 3);
         djMapCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "{\"hello\":\"pickle\",\"two\":\"map\"}")) {
+            ERR("two map wrote %s", out);
+        }
     }
 
     TEST("various map") {
@@ -1119,9 +1136,12 @@ int djTest(int argc, char *argv[]) {
         djNULL(testA);
         djMapCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out,
+                      "{\"hello\":\"pickle\",\"two\":\"map\",\"true\":true,"
+                      "\"false\":false,\"null\":null}")) {
+            ERR("various map wrote %s", out);
+        }
     }
 
     TEST("various map nested") {
@@ -1129,25 +1149,67 @@ int djTest(int argc, char *argv[]) {
         djState *testA = &testA_;
         djInit(testA);
 
+        /* The expected text, built alongside by the JSON separator rules
+         * alone: in a map, element 2k+1 follows ':' and element 2k+2
+         * follows ','; in an array every element after the first follows
+         * ',' */
+        cleaner(mdsfree) mds *expected = mdsempty();
+        enum { maxDepth = sizeof(DJ_BITMAP) * 8 * (2 + 3) + 2 };
+        bool isMap[maxDepth];
+        uint32_t elements[maxDepth];
+        int32_t depth = -1;
+#define DJ_EXPECT_ELEMENT_(text)                                               \
+    do {                                                                       \
+        if (depth >= 0 && elements[depth]) {                                   \
+            expected = mdscat(                                                 \
+                expected, (isMap[depth] && elements[depth] % 2) ? ":" : ",");  \
+        }                                                                      \
+        if (depth >= 0) {                                                      \
+            elements[depth]++;                                                 \
+        }                                                                      \
+        expected = mdscat(expected, text);                                     \
+    } while (0)
+#define DJ_EXPECT_OPEN_(map)                                                   \
+    do {                                                                       \
+        DJ_EXPECT_ELEMENT_((map) ? "{" : "[");                                 \
+        depth++;                                                               \
+        isMap[depth] = (map);                                                  \
+        elements[depth] = 0;                                                   \
+    } while (0)
+#define DJ_EXPECT_CLOSE_()                                                     \
+    do {                                                                       \
+        expected = mdscat(expected, isMap[depth] ? "}" : "]");                 \
+        depth--;                                                               \
+    } while (0)
+
         djMapOpen(testA);
+        DJ_EXPECT_OPEN_(true);
         djString(testA, "hello", 5, false);
+        DJ_EXPECT_ELEMENT_("\"hello\"");
         djStringDirect(testA, "pickles", 6);
+        DJ_EXPECT_ELEMENT_("\"pickle\"");
 
         djStringDirect(testA, "DAMAP", 5);
+        DJ_EXPECT_ELEMENT_("\"DAMAP\"");
 
         /* Stress bitmap by growing beyond its static allocation */
         /* (default is 2 static, so add 3 more to grow beyond) */
         static const size_t maxNesting = sizeof(DJ_BITMAP) * 8 * (2 + 3);
 
+        uint64_t rng = 0x2545F4914F6CDD1DULL;
         for (size_t i = 0; i < maxNesting; i++) {
-            if (random() % 2 == 0) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            const bool map = (rng >> 40) % 2 == 0;
+            if (map) {
                 djMapOpen(testA);
             } else {
                 djArrayOpen(testA);
             }
+            DJ_EXPECT_OPEN_(map);
 
             djString(testA, "here's a key ya coward", 22, false);
-            const uint32_t picker = random();
+            DJ_EXPECT_ELEMENT_("\"here's a key ya coward\"");
+            const uint32_t picker = (uint32_t)(rng >> 33);
             for (size_t j = 0; j < 2; j++) {
                 /* If the LAST LAST element, don't place anything because
                  * the j==1 is a key for the next map, but we won't
@@ -1158,22 +1220,30 @@ int djTest(int argc, char *argv[]) {
 
                 if (!j && picker % 2 == 0) {
                     djTrue(testA);
+                    DJ_EXPECT_ELEMENT_("true");
                 } else if (!j && picker % 3 == 0) {
                     djFalse(testA);
+                    DJ_EXPECT_ELEMENT_("false");
                 } else if (!j && picker % 5 == 0) {
                     djNULL(testA);
+                    DJ_EXPECT_ELEMENT_("null");
                 } else if (picker % 7 == 0) {
                     djString(testA, "wallby", 5, false);
+                    DJ_EXPECT_ELEMENT_("\"wallb\"");
                 } else {
                     djStringDirect(testA, "pickledNonense", 14);
+                    DJ_EXPECT_ELEMENT_("\"pickledNonense\"");
                 }
             }
         }
 
         for (size_t i = 0; i < maxNesting; i++) {
             djString(testA, "finalizerA", 10, false);
+            DJ_EXPECT_ELEMENT_("\"finalizerA\"");
             djStringDirect(testA, "there it is", 11);
+            DJ_EXPECT_ELEMENT_("\"there it is\"");
             djCloseElement(testA);
+            DJ_EXPECT_CLOSE_();
         }
 
         djString(testA, "two", 3, false);
@@ -1185,10 +1255,24 @@ int djTest(int argc, char *argv[]) {
         djString(testA, "null", 4, false);
         djNULL(testA);
         djMapCloseFinal(testA);
+        DJ_EXPECT_ELEMENT_("\"two\"");
+        DJ_EXPECT_ELEMENT_("\"map\"");
+        DJ_EXPECT_ELEMENT_("\"true\"");
+        DJ_EXPECT_ELEMENT_("true");
+        DJ_EXPECT_ELEMENT_("\"false\"");
+        DJ_EXPECT_ELEMENT_("false");
+        DJ_EXPECT_ELEMENT_("\"null\"");
+        DJ_EXPECT_ELEMENT_("null");
+        DJ_EXPECT_CLOSE_();
+#undef DJ_EXPECT_ELEMENT_
+#undef DJ_EXPECT_OPEN_
+#undef DJ_EXPECT_CLOSE_
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (depth != -1 || !djTestIs(out, expected)) {
+            ERR("nested output differs from the expected text (depth %d)",
+                depth);
+        }
     }
 
     TEST("simple array") {
@@ -1201,9 +1285,10 @@ int djTest(int argc, char *argv[]) {
         djStringDirect(testA, "pickles", 6);
         djArrayCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "[\"hello\",\"pickle\"]")) {
+            ERR("simple array wrote %s", out);
+        }
     }
 
     TEST("simple two array") {
@@ -1218,9 +1303,10 @@ int djTest(int argc, char *argv[]) {
         djStringDirect(testA, "map", 3);
         djArrayCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "[\"hello\",\"pickle\",\"two\",\"map\"]")) {
+            ERR("two array wrote %s", out);
+        }
     }
 
     TEST("various array") {
@@ -1241,9 +1327,12 @@ int djTest(int argc, char *argv[]) {
         djNULL(testA);
         djArrayCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out,
+                      "[\"hello\",\"pickle\",\"two\",\"map\",\"true\",true,"
+                      "\"false\",false,\"null\",null]")) {
+            ERR("various array wrote %s", out);
+        }
     }
 
     TEST("various nesting mechanics") {
@@ -1251,6 +1340,7 @@ int djTest(int argc, char *argv[]) {
         djState *testA = &testA_;
         djInit(testA);
 
+        /* Each block opens one container and closes it */
         {
             djMapOpen(testA);
             djStringDirect(testA, "b", 1);
@@ -1277,8 +1367,8 @@ int djTest(int argc, char *argv[]) {
                                 }
                                 djMapCloseElement(testA);
                             }
+                            djMapCloseElement(testA);
                         }
-                        djMapCloseElement(testA);
 
                         djStringDirect(testA, "mine", 4);
                         djArrayOpen(testA);
@@ -1293,18 +1383,21 @@ int djTest(int argc, char *argv[]) {
                         djStringDirect(testA, "f", 1);
                         djStringDirect(testA, "g", 1);
                         djSetCloseElement(testA);
+                        djMapCloseElement(testA);
                     }
                     djMapCloseElement(testA);
                 }
                 djMapCloseElement(testA);
             }
-            djMapCloseElement(testA);
+            djMapCloseFinal(testA);
         }
-        djMapCloseFinal(testA);
 
-        mds *out = djFinalize(testA);
-        printf("%s\n", out);
-        mdsfree(out);
+        cleaner(mdsfree) mds *out = djFinalize(testA);
+        if (!djTestIs(out, "{\"b\":{\"c\":{\"d\":{\"e\":{\"f\":{\"g\":{\"a\":"
+                           "\"b\"}}},\"mine\":[\"e\",\"f\",\"g\"],\"q\":{\"e\","
+                           "\"f\",\"g\"}}}}}")) {
+            ERR("nesting mechanics wrote %s", out);
+        }
     }
 
     TEST("SIMD escape detection - comprehensive stress test") {
