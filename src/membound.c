@@ -5501,6 +5501,43 @@ int memboundTest(int argc, char *argv[]) {
         memboundShutdown(m);
     }
 
+    TEST("ENTERPRISE: shrinking the extent the cache points at clears it") {
+        /* The last allocations land in a grown extent, which the
+         * extent-selection cache then points at; once that extent is
+         * empty, Shrink releases it and must drop the cache's pointer, or
+         * the next allocation would use an unmapped extent */
+        membound *m = memboundCreateEnterprise(1 << 16, 0);
+        void *ptrs[12];
+        for (int i = 0; i < 12; i++) {
+            ptrs[i] = memboundAlloc(m, 8192);
+        }
+        memboundStats grown;
+        memboundGetStats(m, &grown);
+        for (int i = 0; i < 12; i++) {
+            memboundFree(m, ptrs[i]);
+        }
+        const size_t released = memboundShrink(m);
+        memboundStats shrunk;
+        memboundGetStats(m, &shrunk);
+        if (grown.capacity <= (1 << 16) || released == 0 ||
+            shrunk.capacity >= grown.capacity) {
+            ERR("enterprise shrink: capacity %zu -> %zu, %zu released",
+                (size_t)grown.capacity, (size_t)shrunk.capacity, released);
+        }
+        for (int i = 0; i < 12; i++) {
+            ptrs[i] = memboundAlloc(m, 8192);
+            if (!ptrs[i]) {
+                ERR("enterprise shrink: allocation %d failed", i);
+                break;
+            }
+            memset(ptrs[i], 0x5a, 8192);
+        }
+        for (int i = 0; i < 12; i++) {
+            memboundFree(m, ptrs[i]);
+        }
+        memboundShutdown(m);
+    }
+
     TEST("ENTERPRISE: Pool operations") {
         membound *m = memboundCreateEnterprise(1 << 20, 0);
         assert(m != NULL);
