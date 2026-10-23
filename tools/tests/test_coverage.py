@@ -330,6 +330,37 @@ class LibraryOnly(unittest.TestCase):
         self.assertEqual(total.lines, (2, 3))
 
 
+TEMPLATE_HEADER = """\
+#if defined(FULL)
+#define WTYPE wid
+#else
+#define WTYPE widc
+#endif
+#define W_NEW DK_NAME(WTYPE, new)
+#define W_LEN DK_NAME(WTYPE, len)
+#define W_TEST DK_NAME(WTYPE, Test)
+WTYPE *W_NEW(const char *init);
+size_t W_LEN(const WTYPE *s);
+int W_TEST(int argc, char *argv[]);
+"""
+
+
+class Templates(unittest.TestCase):
+    def test_template_names_expand_per_type(self) -> None:
+        names = coverage.template_functions(TEMPLATE_HEADER)
+        self.assertEqual(
+            sorted(names),
+            ["widTest", "widcTest", "widclen", "widcnew", "widlen", "widnew"],
+        )
+        self.assertEqual(coverage.declared_functions(TEMPLATE_HEADER), [])
+        api = coverage.public_api(
+            {"src/w.h": TEMPLATE_HEADER}, {"widnew": 3, "widcnew": 0}
+        )
+        self.assertEqual(api.called, {"src/w.h": ["widnew"]})
+        self.assertEqual(api.never, {"src/w.h": ["widcnew"]})
+        self.assertEqual(api.not_built, {"src/w.h": ["widclen", "widlen"]})
+
+
 class Ratchet(unittest.TestCase):
     def row(self, path: str, lines: tuple, branches: tuple) -> coverage.FileCoverage:
         return coverage.FileCoverage(path, lines, (0, 0), branches, (0, 0))

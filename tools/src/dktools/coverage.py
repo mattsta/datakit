@@ -114,15 +114,16 @@ def _strip_comments_and_preprocessor(text: str) -> str:
     return "\n".join(out)
 
 
-def declared_functions(header_text: str) -> list[str]:
+def declared_functions(header_text: str, templates: bool = False) -> list[str]:
     """Names of the functions a header declares with a prototype.
 
     File-scope statements only (anything inside braces is skipped, so
     inline bodies and struct members are not declarations); typedefs,
     static functions and macro invocations without a return type are
     not public functions.  ALL_CAPS names are template macros that
-    expand to the real names (``DKS_NEW``), and ``deprecated``
-    declarations exist only to stop callers using a libc function."""
+    expand to the real names (``DKS_NEW``; `templates` keeps them for
+    template_functions), and ``deprecated`` declarations exist only to
+    stop callers using a libc function."""
     text = _strip_comments_and_preprocessor(header_text)
     statements: list[str] = []
     depth = 0
@@ -161,10 +162,39 @@ def declared_functions(header_text: str) -> list[str]:
         prefix, name = match.group(1).strip(), match.group(2)
         if not prefix or name in NOT_A_NAME or not re.search(r"\w", prefix):
             continue
-        if not re.search(r"[a-z]", name) or "deprecated" in flat:
+        if "deprecated" in flat:
+            continue
+        if not re.search(r"[a-z]", name) and not templates:
             continue
         names.append(name)
     return names
+
+
+_DK_NAME_RE = re.compile(
+    r"^\s*#\s*define\s+([A-Z_][A-Z0-9_]*)\s+DK_NAME\(\s*(\w+)\s*,\s*(\w+)\s*\)",
+    re.M,
+)
+_DEFINE_WORD_RE = re.compile(r"^\s*#\s*define\s+(\w+)\s+([A-Za-z_]\w*)\s*$", re.M)
+
+
+def template_functions(header_text: str) -> list[str]:
+    """The real names of the functions a template header declares through
+    ``#define NAME DK_NAME(TYPE, suffix)``: one per value the header gives
+    TYPE (``#define DKS_TYPE mds`` and ``mdsc``: ``mdsnew``, ``mdscnew``)."""
+    macros = {
+        m.group(1): (m.group(2), m.group(3)) for m in _DK_NAME_RE.finditer(header_text)
+    }
+    if not macros:
+        return []
+    values: dict[str, list[str]] = {}
+    for m in _DEFINE_WORD_RE.finditer(header_text):
+        values.setdefault(m.group(1), []).append(m.group(2))
+    out: list[str] = []
+    for name in declared_functions(header_text, templates=True):
+        if name in macros:
+            type_macro, suffix = macros[name]
+            out += [value + suffix for value in values.get(type_macro, [])]
+    return out
 
 
 #: A function a header defines: ``static inline`` or ``DK_INLINE_ALWAYS``
@@ -264,7 +294,9 @@ def public_api(headers: dict[str, str], counts: dict[str, int]) -> PublicApi:
     """Split every public function into called / never called / not built."""
     api = PublicApi()
     for header in sorted(headers):
-        for name in sorted(set(declared_functions(headers[header]))):
+        text = headers[header]
+        names = set(declared_functions(text)) | set(template_functions(text))
+        for name in sorted(names):
             if name.endswith("Test"):
                 continue  # datakit-test entry points always run
             if name not in counts:

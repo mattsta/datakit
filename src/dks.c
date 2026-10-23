@@ -3585,6 +3585,11 @@ int DKS_TEST(int argc, char *argv[]) {
         testCond("SPLITLEN_MAX() with a multi-byte separator",
                  count == 3 && tok[2][0] == 'z', true, "%d");
         DKS_SPLITLENFREE(tok, count);
+        tok = DKS_SPLITLEN("a,,b,", 5, ",", 1, &count);
+        testCond("SPLITLEN() keeps empty tokens, drops a trailing one",
+                 count == 3 && DKS_LEN(tok[1]) == 0 && tok[2][0] == 'b', true,
+                 "%d");
+        DKS_SPLITLENFREE(tok, count);
 
         /* JOIN, MAPCHARS, PREPENDLEN */
         char *parts[] = {"a", "bc", "", "d"};
