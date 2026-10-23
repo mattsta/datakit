@@ -38,7 +38,6 @@
  * - Lowest first: multimapAtomDense (multimapAtomDense.h) reuses every
  *   freed id, always handing out the lowest id not in use. */
 
-#include "mflex.h"
 #include "multimap.h"
 
 typedef struct multimapAtom multimapAtom;
@@ -56,7 +55,6 @@ multimapAtom *multimapAtomNew(void);
 /* A permanent table (see ID BEHAVIOURS above) */
 multimapAtom *multimapAtomNewPermanent(void);
 bool multimapAtomIsPermanent(const multimapAtom *ma);
-multimapAtom *multimapAtomNewCompress(mflexState *state);
 void multimapAtomFree(multimapAtom *ma);
 
 /* The *Convert calls (InsertConvert, InsertIfNewConvert*, RetainConvert)

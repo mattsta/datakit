@@ -3,9 +3,6 @@
 struct multimapAtom {
     multimap *mapAtomForward; /* ID -> String, sorted by ID */
     multimap *mapAtomReverse; /* IDs sorted by string value */
-#if 0
-    mflexState *state;
-#endif
     /* The next generated id, with the table's id behaviour in the top bit
      * (set: permanent), so the behaviour costs no bytes.  Ids stay below
      * MULTIMAP_ATOM_ID_LIMIT. */
@@ -55,17 +52,6 @@ multimapAtom *multimapAtomNewPermanent(void) {
     ma->highest |= ATOM_PERMANENT_BIT_;
     return ma;
 }
-
-#if 0
-multimapAtom *multimapAtomNewCompress(mflexState *state) {
-    /* @own: caller; free=multimapAtomFree */
-    multimapAtom *ma = zcalloc(1, sizeof(*ma));
-    ma->mapAtomForward = multimapNewCompress(3, 4);
-    ma->mapAtomReverse = multimapNewCompress(1, 4);
-    ma->state = state;
-    return ma;
-}
-#endif
 
 /* ====================================================================
  * Free
