@@ -1966,7 +1966,7 @@ static bool memboundTLSBind(membound *m, memboundTLSCache *c) {
      * reset concurrent with it orders this allocation before the reset. */
     /* @sync: relaxed hint */
     const uint64_t epoch =
-        atomic_load_explicit(&m->enterprise->cacheEpoch, memory_order_acquire);
+        atomic_load_explicit(&m->enterprise->cacheEpoch, memory_order_relaxed);
     if (c->owner == m && c->epoch == epoch) {
         return true;
     }
@@ -2501,7 +2501,7 @@ void memboundReset(membound *m) {
     if (m->enterprise) {
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->enterprise->cacheEpoch, 1,
-                                  memory_order_release);
+                                  memory_order_relaxed);
     }
 
     memboundLeave(m);
@@ -2929,7 +2929,26 @@ float memboundGetFragmentation(const membound *m) {
 
 /* ====================================================================
  * Query Functions
- * ==================================================================== */
+ * ====================================================================
+ * Totals that allocation and free change under the pool lock (counts,
+ * bytes, capacity, extent count) are read under it too: a reader on
+ * another thread would otherwise race those plain fields.  Fields fixed
+ * at creation (mode, tier, limits, a COMPACT pool's size) need no lock.
+ * MICRO pools are single-threaded by contract. */
+
+/* A COMPACT pool's lock, when it has one.  Its stat readers take
+ * `const`; the mutex is the one field they change. */
+static void memboundCompactPoolLock(const memboundCompactPool *m) {
+    if (m->threadSafe && m->mutexInitialized) {
+        pthread_mutex_lock(&((memboundCompactPool *)m)->mutex);
+    }
+}
+
+static void memboundCompactPoolUnlock(const memboundCompactPool *m) {
+    if (m->threadSafe && m->mutexInitialized) {
+        pthread_mutex_unlock(&((memboundCompactPool *)m)->mutex);
+    }
+}
 
 memboundMode memboundGetMode(const membound *m) {
     if (!m) {
@@ -2950,7 +2969,10 @@ size_t memboundExtentCount(const membound *m) {
     if (memboundIsMicro(m) || memboundIsCompact(m)) {
         return 1;
     }
-    return m->extentCount;
+    memboundEnter((membound *)m);
+    const size_t n = m->extentCount;
+    memboundLeave((membound *)m);
+    return n;
 }
 
 size_t memboundCurrentAllocationCount(const membound *m) {
@@ -2964,7 +2986,10 @@ size_t memboundCurrentAllocationCount(const membound *m) {
         return memboundCompactPoolAllocationCount(
             (const memboundCompactPool *)m);
     }
-    return m->currentCount;
+    memboundEnter((membound *)m);
+    const size_t n = m->currentCount;
+    memboundLeave((membound *)m);
+    return n;
 }
 
 size_t memboundBytesUsed(const membound *m) {
@@ -2977,7 +3002,10 @@ size_t memboundBytesUsed(const membound *m) {
     if (memboundIsCompact(m)) {
         return memboundCompactPoolBytesUsed((const memboundCompactPool *)m);
     }
-    return m->currentOut;
+    memboundEnter((membound *)m);
+    const size_t used = m->currentOut;
+    memboundLeave((membound *)m);
+    return used;
 }
 
 size_t memboundBytesAvailable(const membound *m) {
@@ -2991,9 +3019,12 @@ size_t memboundBytesAvailable(const membound *m) {
         return memboundCompactPoolBytesAvailable(
             (const memboundCompactPool *)m);
     }
-    return (m->totalCapacity > m->currentOut)
-               ? (m->totalCapacity - m->currentOut)
-               : 0;
+    memboundEnter((membound *)m);
+    const size_t avail = (m->totalCapacity > m->currentOut)
+                             ? (m->totalCapacity - m->currentOut)
+                             : 0;
+    memboundLeave((membound *)m);
+    return avail;
 }
 
 size_t memboundCapacity(const membound *m) {
@@ -3006,7 +3037,10 @@ size_t memboundCapacity(const membound *m) {
     if (memboundIsCompact(m)) {
         return memboundCompactPoolCapacity((const memboundCompactPool *)m);
     }
-    return m->totalCapacity;
+    memboundEnter((membound *)m);
+    const size_t cap = m->totalCapacity;
+    memboundLeave((membound *)m);
+    return cap;
 }
 
 size_t memboundMaxSize(const membound *m) {
@@ -3034,7 +3068,10 @@ bool memboundCanGrow(const membound *m) {
     if (m->mode != MEMBOUND_MODE_DYNAMIC) {
         return false;
     }
-    return memboundCanGrowBy(m, m->growth.minExtentSize);
+    memboundEnter((membound *)m);
+    const bool can = memboundCanGrowBy(m, m->growth.minExtentSize);
+    memboundLeave((membound *)m);
+    return can;
 }
 
 bool memboundOwns(const membound *m, const void *p) {
@@ -3158,9 +3195,12 @@ void memboundGetStats(const membound *m, memboundStats *stats) {
         stats->tier = MEMBOUND_TIER_COMPACT;
         stats->extentCount = 1;
         stats->capacity = compact->poolSize;
+        memboundCompactPoolLock(compact);
         stats->bytesUsed = compact->currentOut;
-        stats->bytesAvailable = stats->capacity - stats->bytesUsed;
         stats->allocationCount = compact->currentCount;
+        stats->safetyViolations = compact->safetyViolations;
+        memboundCompactPoolUnlock(compact);
+        stats->bytesAvailable = stats->capacity - stats->bytesUsed;
         stats->threadSafe = compact->threadSafe;
         /* COMPACT tier doesn't track lifetime stats, pressure, or lock
          * contention */
@@ -3169,7 +3209,6 @@ void memboundGetStats(const membound *m, memboundStats *stats) {
             stats->usagePercent =
                 (float)stats->bytesUsed / (float)stats->capacity * 100.0f;
         }
-        stats->safetyViolations = compact->safetyViolations;
         return;
     }
 
@@ -3928,14 +3967,14 @@ void memboundCompactPoolFree(memboundCompactPool *m, void *pOld) {
 
     uint8_t *z = (uint8_t *)pOld;
 
-    /* Verify ownership */
-    if (z < m->zPool || z >= m->zPool + m->poolSize) {
-        m->safetyViolations++;
-        return;
-    }
-
     if (m->threadSafe && m->mutexInitialized) {
         pthread_mutex_lock(&m->mutex);
+    }
+
+    /* Verify ownership (the count is shared, so under the lock) */
+    if (z < m->zPool || z >= m->zPool + m->poolSize) {
+        m->safetyViolations++;
+        goto done;
     }
 
     int32_t iBlock = (int32_t)((z - m->zPool) / m->szAtom);
@@ -4006,14 +4045,22 @@ bool memboundCompactPoolOwns(const memboundCompactPool *m, const void *ptr) {
 
 /* Query functions for COMPACT tier */
 size_t memboundCompactPoolBytesUsed(const memboundCompactPool *m) {
-    return m ? m->currentOut : 0;
+    if (!m) {
+        return 0;
+    }
+    memboundCompactPoolLock(m);
+    const size_t used = m->currentOut;
+    memboundCompactPoolUnlock(m);
+    return used;
 }
 
 size_t memboundCompactPoolBytesAvailable(const memboundCompactPool *m) {
     if (!m) {
         return 0;
     }
-    /* Calculate based on freelist bitmap */
+    /* Calculate based on freelist bitmap; the lists change under the
+     * lock, so they are walked under it. */
+    memboundCompactPoolLock(m);
     size_t avail = 0;
     for (int i = 0; i <= MEMBOUND_COMPACT_LOGMAX; i++) {
         if (m->freelistBitmap & (1U << i)) {
@@ -4026,6 +4073,7 @@ size_t memboundCompactPoolBytesAvailable(const memboundCompactPool *m) {
             }
         }
     }
+    memboundCompactPoolUnlock(m);
     return avail;
 }
 
@@ -4034,7 +4082,13 @@ size_t memboundCompactPoolCapacity(const memboundCompactPool *m) {
 }
 
 size_t memboundCompactPoolAllocationCount(const memboundCompactPool *m) {
-    return m ? m->currentCount : 0;
+    if (!m) {
+        return 0;
+    }
+    memboundCompactPoolLock(m);
+    const size_t n = m->currentCount;
+    memboundCompactPoolUnlock(m);
+    return n;
 }
 
 size_t memboundCompactPoolSize(const memboundCompactPool *m, const void *ptr) {
@@ -4224,7 +4278,7 @@ static void *mtAllocFreeWorker(void *arg) {
      * before pthread_create, which already orders it; the flag only
      * times the start. */
     /* @sync: relaxed hint */
-    while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
+    while (!atomic_load_explicit(ctx->startFlag, memory_order_relaxed)) {
         /* spin */
     }
 
@@ -4278,7 +4332,7 @@ static void *mtReallocWorker(void *arg) {
 
     /* Wait for start signal */
     /* @sync: relaxed hint */
-    while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
+    while (!atomic_load_explicit(ctx->startFlag, memory_order_relaxed)) {
         /* spin */
     }
 
@@ -4324,7 +4378,7 @@ static void *mtQueryWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
     /* @sync: relaxed hint */
-    while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
+    while (!atomic_load_explicit(ctx->startFlag, memory_order_relaxed)) {
         /* spin */
     }
 
@@ -4453,6 +4507,45 @@ static void *tcExtentChurnWorker(void *arg) {
             memboundFree(m, p[i]);
         }
         memboundFlushThreadCache(m);
+    }
+    return NULL;
+}
+
+/* Allocates and frees until told to stop. */
+typedef struct statsRaceCtx {
+    membound *m;
+    _Atomic bool stop;
+    uint64_t readerRounds; /* read after join */
+} statsRaceCtx;
+
+static void *statsRaceChurn(void *arg) {
+    statsRaceCtx *c = arg;
+    void *p[16];
+    for (int r = 0; r < 2000; r++) {
+        for (int i = 0; i < 16; i++) {
+            p[i] = memboundAlloc(c->m, (size_t)32 << (i & 3));
+        }
+        for (int i = 0; i < 16; i++) {
+            memboundFree(c->m, p[i]);
+        }
+    }
+    return NULL;
+}
+
+/* Polls every stat accessor while the churn threads run. */
+static void *statsRaceReader(void *arg) {
+    statsRaceCtx *c = arg;
+    /* @sync: relaxed hint */
+    while (!atomic_load_explicit(&c->stop, memory_order_relaxed)) {
+        memboundStats st;
+        memboundGetStats(c->m, &st);
+        (void)memboundCurrentAllocationCount(c->m);
+        (void)memboundBytesUsed(c->m);
+        (void)memboundBytesAvailable(c->m);
+        (void)memboundCapacity(c->m);
+        (void)memboundExtentCount(c->m);
+        (void)memboundCanGrow(c->m);
+        c->readerRounds++;
     }
     return NULL;
 }
@@ -6570,7 +6663,7 @@ int memboundTest(int argc, char *argv[]) {
 
         /* Start all threads at once */
         /* @sync: relaxed hint */
-        atomic_store_explicit(&startFlag, 1, memory_order_release);
+        atomic_store_explicit(&startFlag, 1, memory_order_relaxed);
 
         /* Wait for completion */
         int totalErrors = 0;
@@ -6608,7 +6701,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* @sync: relaxed hint */
-        atomic_store_explicit(&startFlag, 1, memory_order_release);
+        atomic_store_explicit(&startFlag, 1, memory_order_relaxed);
 
         for (int i = 0; i < MT_NUM_THREADS; i++) {
             pthread_join(threads[i], NULL);
@@ -6641,7 +6734,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* @sync: relaxed hint */
-        atomic_store_explicit(&startFlag, 1, memory_order_release);
+        atomic_store_explicit(&startFlag, 1, memory_order_relaxed);
 
         int totalErrors = 0;
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -6714,7 +6807,7 @@ int memboundTest(int argc, char *argv[]) {
 
         /* Start all threads simultaneously */
         /* @sync: relaxed hint */
-        atomic_store_explicit(&startFlag, 1, memory_order_release);
+        atomic_store_explicit(&startFlag, 1, memory_order_relaxed);
 
         /* Wait for completion */
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -6769,7 +6862,7 @@ int memboundTest(int argc, char *argv[]) {
 
         /* Start all threads simultaneously */
         /* @sync: relaxed hint */
-        atomic_store_explicit(&startFlag, 1, memory_order_release);
+        atomic_store_explicit(&startFlag, 1, memory_order_relaxed);
 
         /* Wait for completion */
         int totalErrors = 0;
@@ -7167,6 +7260,47 @@ int memboundTest(int argc, char *argv[]) {
         /* every worker drained its cache at exit */
         assert(memboundCurrentAllocationCount(m) == 0);
         memboundShutdown(m);
+    }
+
+    TEST("stat accessors read under the pool lock while others allocate") {
+        /* A thread-safe COMPACT pool and an ENTERPRISE pool: every stat
+         * accessor runs against concurrent alloc/free (TSan reports an
+         * unlocked read of the totals; a free-list walk racing a free
+         * can follow a stale link). */
+        const memboundConfig cfgs[] = {
+            {.mode = MEMBOUND_MODE_FIXED,
+             .initialSize = 1 << 16,
+             .tier = MEMBOUND_TIER_COMPACT,
+             .threadSafe = true},
+            {.mode = MEMBOUND_MODE_DYNAMIC,
+             .initialSize = 1 << 18,
+             .tier = MEMBOUND_TIER_ENTERPRISE,
+             .threadSafe = true,
+             .growthSize = 1 << 18},
+        };
+        for (size_t k = 0; k < sizeof(cfgs) / sizeof(cfgs[0]); k++) {
+            statsRaceCtx c = {.m = memboundCreateWithConfig(&cfgs[k])};
+            assert(c.m);
+            pthread_t churn[2];
+            pthread_t reader;
+            assert(pthread_create(&reader, NULL, statsRaceReader, &c) == 0);
+            for (int i = 0; i < 2; i++) {
+                assert(pthread_create(&churn[i], NULL, statsRaceChurn, &c) ==
+                       0);
+            }
+            for (int i = 0; i < 2; i++) {
+                pthread_join(churn[i], NULL);
+            }
+            /* @sync: relaxed hint */
+            atomic_store_explicit(&c.stop, true, memory_order_relaxed);
+            pthread_join(reader, NULL);
+            if (c.readerRounds == 0 ||
+                memboundCurrentAllocationCount(c.m) != 0) {
+                ERR("pool %zu: reader rounds %" PRIu64 ", live %zu", k,
+                    c.readerRounds, memboundCurrentAllocationCount(c.m));
+            }
+            memboundShutdown(c.m);
+        }
     }
 
     TEST("ThreadCache: cached allocs while extents come and go") {
