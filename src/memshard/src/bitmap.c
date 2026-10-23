@@ -323,16 +323,19 @@ static bool mi_bitmap_try_find_claim_field_across(
     return true;
 
 rollback:
-    // roll back intermediate fields
-    // (we just failed to claim `field` so decrement first)
-    while (--field > initial_field) {
-        newmap = 0;
-        map = MI_BITMAP_FIELD_FULL;
-        mi_assert_internal(mi_atomic_load_relaxed(field) == map);
-        mi_atomic_store_release(field, newmap);
-    }
-    if (field == initial_field) { // (if we failed on the initial field, `field
-                                  // + 1 == initial_field`)
+    // roll back what was claimed before `field` (the field that failed).
+    // datakit: a failure on the initial field claimed nothing; testing that
+    // first keeps `field` from stepping below `initial_field`, which formed
+    // `&bitmap[-1]` (undefined) when `idx == 0`.
+    if (field != initial_field) {
+        // intermediate fields (decrement first: `field` was not claimed)
+        while (--field > initial_field) {
+            newmap = 0;
+            map = MI_BITMAP_FIELD_FULL;
+            mi_assert_internal(mi_atomic_load_relaxed(field) == map);
+            mi_atomic_store_release(field, newmap);
+        }
+        // and the initial field's bits
         map = mi_atomic_load_relaxed(field);
         do {
             mi_assert_internal((map & initial_mask) == initial_mask);

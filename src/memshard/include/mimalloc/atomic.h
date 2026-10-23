@@ -247,19 +247,18 @@ static inline void mi_sleep0(void) {
 // Backoff for contended spin loops: yield for `ticks_until_sleep`
 // iterations, then yield the whole timeslice once and reset (upstream
 // issue #1317).
+// A fresh counter (0) starts a round with a yield, so the first contended
+// retry does not pay the sleep's syscall.
 static inline void mi_atomic_yield_sleep(size_t *ticks,
                                          const size_t ticks_until_sleep) {
     const size_t n = *ticks;
-    if (n == 0 || n > ticks_until_sleep) {
-        *ticks = ticks_until_sleep; // reset
-    } else {
-        *ticks = n - 1;
-    }
-    if (n > 1) {
-        mi_atomic_yield();
-    } else {
+    if (n == 1) {
+        *ticks = ticks_until_sleep; // the round's last tick: sleep, restart
         mi_sleep0();
+        return;
     }
+    *ticks = (n == 0 || n > ticks_until_sleep) ? ticks_until_sleep : n - 1;
+    mi_atomic_yield();
 }
 
 // ----------------------------------------------------------------------

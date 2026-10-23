@@ -233,6 +233,65 @@ static void test_mt_heap_delete_crossfree(void) {
     }
 }
 
+/* ---- usable size from a non-owner while the owner moves pages ----
+ * The owner pins blocks of one size, then churns that size so their
+ * pages move in and out of the full queue (a write to the page flags);
+ * another thread reads mi_usable_size of the pinned blocks, which reads
+ * the same flags (TSan reports a plain read racing that write). */
+#define US_PINNED 256
+#define US_ROUNDS 200
+static void *us_pinned[US_PINNED];
+static _Atomic int us_state; /* 1: pinned published, 2: owner done */
+
+static void *us_reader(void *arg) {
+    size_t *bad = arg;
+    /* @sync: acquire memshardTest.usState */
+    while (atomic_load_explicit(&us_state, memory_order_acquire) == 0) {
+        /* spin until the pinned blocks are published */
+    }
+    /* @sync: relaxed hint */
+    while (atomic_load_explicit(&us_state, memory_order_relaxed) != 2) {
+        for (int i = 0; i < US_PINNED; i++) {
+            if (mi_usable_size(us_pinned[i]) < 48) {
+                (*bad)++;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void test_mt_usable_size_remote(void) {
+    T("memshard: usable size from another thread while pages move");
+    for (int i = 0; i < US_PINNED; i++) {
+        us_pinned[i] = mi_malloc(48);
+        assert(us_pinned[i]);
+    }
+    /* @sync: relaxed init */
+    atomic_store_explicit(&us_state, 0, memory_order_relaxed);
+    size_t bad = 0;
+    pthread_t th;
+    assert(pthread_create(&th, NULL, us_reader, &bad) == 0);
+    /* @sync: release memshardTest.usState */
+    atomic_store_explicit(&us_state, 1, memory_order_release);
+    void *churn[1024];
+    for (int r = 0; r < US_ROUNDS; r++) {
+        for (int i = 0; i < 1024; i++) {
+            churn[i] = mi_malloc(48);
+            assert(churn[i]);
+        }
+        for (int i = 0; i < 1024; i++) {
+            mi_free(churn[i]);
+        }
+    }
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&us_state, 2, memory_order_relaxed);
+    pthread_join(th, NULL);
+    assert(bad == 0);
+    for (int i = 0; i < US_PINNED; i++) {
+        mi_free(us_pinned[i]);
+    }
+}
+
 int main(void) {
     test_basic();
     test_calloc_zero();
@@ -243,6 +302,7 @@ int main(void) {
     test_mt_local();
     test_mt_crossfree();
     test_mt_heap_delete_crossfree();
+    test_mt_usable_size_remote();
     printf("ALL MEMSHARD TESTS PASSED!\n");
     return 0;
 }

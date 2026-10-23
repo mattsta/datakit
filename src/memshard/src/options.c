@@ -489,11 +489,15 @@ static mi_output_fun *mi_out_get_default(void **parg) {
 }
 
 void mi_register_output(mi_output_fun *out, void *arg) mi_attr_noexcept {
+    // datakit: the argument first, then the function with release: a
+    // reader that acquires the new function then loads the new argument
+    // (upstream stored the function first, so a reader could pair the new
+    // function with the old argument).
+    mi_atomic_store_ptr_release(void, &mi_out_arg, arg);
     mi_atomic_store_ptr_release(
         void, &mi_out_default,
         (void *)(out == NULL ? &mi_out_stderr
                              : out)); // stop using the delayed output buffer
-    mi_atomic_store_ptr_release(void, &mi_out_arg, arg);
     if (out != NULL) {
         mi_out_buf_flush(out, true, arg);
     } // output all the delayed output now
@@ -691,8 +695,11 @@ _mi_assert_fail(const char *assertion, const char *fname, unsigned line,
 // Errors
 // --------------------------------------------------------
 
-static mi_error_fun *volatile mi_error_handler; // = NULL
-static _Atomic(void *) mi_error_arg;            // = NULL
+// datakit: atomic (it was a volatile plain pointer, read on every error
+// from any thread); `mi_error_fun*` stored as `void *` as for the output
+// handler.
+static _Atomic(void *) mi_error_handler; // = NULL
+static _Atomic(void *) mi_error_arg;     // = NULL
 
 static void mi_error_default(int err) {
     MI_UNUSED(err);
@@ -716,8 +723,10 @@ static void mi_error_default(int err) {
 }
 
 void mi_register_error(mi_error_fun *fun, void *arg) {
-    mi_error_handler = fun; // can be NULL
+    // datakit: the argument first, then the function (as for output).
     mi_atomic_store_ptr_release(void, &mi_error_arg, arg);
+    mi_atomic_store_ptr_release(void, &mi_error_handler,
+                                (void *)fun); // can be NULL
 }
 
 void _mi_error_message(int err, const char *fmt, ...) {
@@ -727,8 +736,10 @@ void _mi_error_message(int err, const char *fmt, ...) {
     mi_show_error_message(fmt, args);
     va_end(args);
     // and call the error handler which may abort (or return normally)
-    if (mi_error_handler != NULL) {
-        mi_error_handler(err, mi_atomic_load_ptr_acquire(void, &mi_error_arg));
+    mi_error_fun *const handler =
+        (mi_error_fun *)mi_atomic_load_ptr_acquire(void, &mi_error_handler);
+    if (handler != NULL) {
+        handler(err, mi_atomic_load_ptr_acquire(void, &mi_error_arg));
     } else {
         mi_error_default(err);
     }

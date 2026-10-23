@@ -988,8 +988,11 @@ void _mi_arena_unsafe_destroy_all(void) {
 bool _mi_arena_contains(const void *p) {
     const size_t max_arena = mi_atomic_load_relaxed(&mi_arena_count);
     for (size_t i = 0; i < max_arena; i++) {
+        // datakit: acquire, pairing with the release that publishes the
+        // arena in mi_arena_add, so its plain fields are read after they
+        // were written (an arena can be reserved concurrently).
         mi_arena_t *arena =
-            mi_atomic_load_ptr_relaxed(mi_arena_t, &mi_arenas[i]);
+            mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[i]);
         if (arena != NULL && arena->start <= (const uint8_t *)p &&
             arena->start + mi_arena_block_size(arena->block_count) >
                 (const uint8_t *)p) {
@@ -1228,8 +1231,9 @@ void mi_debug_show_arenas(void) mi_attr_noexcept {
     // size_t abandoned_total = 0;
     // size_t purge_total = 0;
     for (size_t i = 0; i < max_arenas; i++) {
+        // datakit: acquire, as in _mi_arena_contains.
         mi_arena_t *arena =
-            mi_atomic_load_ptr_relaxed(mi_arena_t, &mi_arenas[i]);
+            mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[i]);
         if (arena == NULL) {
             break;
         }

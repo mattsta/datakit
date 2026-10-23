@@ -757,12 +757,31 @@ static inline mi_page_queue_t *mi_page_queue(const mi_heap_t *heap,
 //-----------------------------------------------------------
 // Page flags
 //-----------------------------------------------------------
+// datakit: the flags share one word that the owner writes while other
+// threads read it (mi_free's fast-path test, mi_usable_size from any
+// thread), so every access is a relaxed atomic load or store of the whole
+// word: the same byte instructions as before, without the C11 data race
+// (upstream issue #130 sidesteps it only under MI_TSAN).  Only the owner
+// writes, so load-modify-store needs no RMW.
+static inline mi_page_flags_t mi_page_flags_load(const mi_page_t *page) {
+    mi_page_flags_t f;
+    f.full_aligned =
+        __atomic_load_n(&page->flags.full_aligned, __ATOMIC_RELAXED);
+    return f;
+}
+
+static inline void mi_page_flags_store(mi_page_t *page, mi_page_flags_t f) {
+    __atomic_store_n(&page->flags.full_aligned, f.full_aligned,
+                     __ATOMIC_RELAXED);
+}
+
 static inline bool mi_page_is_in_full(const mi_page_t *page) {
-    return page->flags.x.in_full;
+    return mi_page_flags_load(page).x.in_full;
 }
 
 static inline void mi_page_set_in_full(mi_page_t *page, bool in_full) {
-    if (page->flags.x.in_full != in_full) {
+    mi_page_flags_t f = mi_page_flags_load(page);
+    if (f.x.in_full != in_full) {
         // optimize: maintain pages_full_size to avoid visiting the full queue
         // (issue #1220)
         mi_heap_t *const heap = mi_page_heap(page);
@@ -774,15 +793,18 @@ static inline void mi_page_set_in_full(mi_page_t *page, bool in_full) {
             heap->pages_full_size -= size;
         }
     }
-    page->flags.x.in_full = in_full;
+    f.x.in_full = in_full;
+    mi_page_flags_store(page, f);
 }
 
 static inline bool mi_page_has_aligned(const mi_page_t *page) {
-    return page->flags.x.has_aligned;
+    return mi_page_flags_load(page).x.has_aligned;
 }
 
 static inline void mi_page_set_has_aligned(mi_page_t *page, bool has_aligned) {
-    page->flags.x.has_aligned = has_aligned;
+    mi_page_flags_t f = mi_page_flags_load(page);
+    f.x.has_aligned = has_aligned;
+    mi_page_flags_store(page, f);
 }
 
 /* -------------------------------------------------------------------
