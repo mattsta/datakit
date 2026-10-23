@@ -859,6 +859,16 @@ int bigmathTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Repr: zero and a negative value print without faults") {
+        bigmath b;
+        bigmathInit(&b);
+        bigmathRepr(&b);
+        bigmathFree(&b);
+        bigmathInitSigned(&b, -123456789);
+        bigmathRepr(&b);
+        bigmathFree(&b);
+    }
+
     TEST_FINAL_RESULT;
 }
 

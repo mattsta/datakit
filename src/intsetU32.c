@@ -543,6 +543,18 @@ int intsetU32Test(int argc, char **argv) {
         ok();
     }
 
+    printf("Repr prints an empty and a filled set: ");
+    {
+        intsetU32 *is = intsetU32New();
+        intsetU32Repr(is);
+        for (uint32_t v = 0; v < 20; v += 3) {
+            intsetU32Add(is, v);
+        }
+        intsetU32Repr(is);
+        intsetU32Free(is);
+        ok();
+    }
+
     return 0;
 }
 

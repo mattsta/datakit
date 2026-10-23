@@ -558,5 +558,15 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
         printf("\n");
     }
 
+    TEST("Repr: nil, empty and holding values") {
+        multiFenwickFlatRepr(NULL);
+        multiFenwickFlat *mfw = multiFenwickFlatNew();
+        multiFenwickFlatRepr(mfw);
+        const databox one = DATABOX_SIGNED(1);
+        multiFenwickFlatUpdate(&mfw, 5, &one);
+        multiFenwickFlatRepr(mfw);
+        multiFenwickFlatFree(mfw);
+    }
+
     TEST_FINAL_RESULT;
 }

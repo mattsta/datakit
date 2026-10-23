@@ -4389,6 +4389,23 @@ int multimapFullTest(int argc, char *argv[]) {
     /* RandomValue's selection checks (uniformity, fromTail, the random()
      * stream) run over every tier from multimapTest. */
 
+    TEST("Repr: an empty map and one split into inner maps") {
+        multimapFull *m = multimapFullNew(2);
+        multimapFullRepr(m);
+        for (int64_t i = 0; i < 300; i++) {
+            const databox k = databoxNewSigned(i);
+            const databox v = databoxNewSigned(i * 3);
+            const databox *row[2] = {&k, &v};
+            multimapFullInsert(m, row);
+        }
+
+        if (multimapFullNodeCount(m) < 2) {
+            ERR("300 rows stayed in %zu inner map", multimapFullNodeCount(m));
+        }
+        multimapFullRepr(m);
+        multimapFullFree(m);
+    }
+
     TEST_FINAL_RESULT;
 }
 

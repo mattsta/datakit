@@ -7684,6 +7684,24 @@ int clusterRingTest(int argc, char *argv[]) {
     /* Optimization edge case tests */
     err += testOptimizationEdgeCases();
 
+    TEST("Repr: ring, node and placement print without faults") {
+        clusterRing *ring = clusterRingNewDefault();
+        clusterRingRepr(ring); /* empty */
+        const clusterNodeConfig node = {.id = 1, .name = "a", .weight = 100};
+        clusterRingAddNode(ring, &node);
+        clusterRingRepr(ring);
+        clusterNodeRepr(clusterRingGetNode(ring, 1));
+        clusterPlacement p;
+        clusterPlacementInit(&p);
+        if (clusterRingLocate(ring, "key", 3, &p) != CLUSTER_OK ||
+            clusterPlacementReplicaCount(&p) != 1) {
+            ERRR("a one-node ring did not place the key on its node");
+        }
+        clusterPlacementRepr(&p);
+        clusterPlacementFree(&p);
+        clusterRingFree(ring);
+    }
+
     TEST_FINAL_RESULT;
 }
 

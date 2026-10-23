@@ -1321,6 +1321,17 @@ int atomPoolTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Repr: both backends, empty and holding atoms") {
+        for (int t = 0; t < 2; t++) {
+            atomPool *pool = atomPoolNew((atomPoolType)t);
+            atomPoolRepr(pool);
+            const databox s = databoxNewBytesString("printed");
+            atomPoolIntern(pool, &s);
+            atomPoolRepr(pool);
+            atomPoolFree(pool);
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 

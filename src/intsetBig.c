@@ -2959,6 +2959,18 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigFree(bad2);
     }
 
+    TEST("Repr: empty and holding narrow and wide members") {
+        intsetBig *isb = intsetBigNew();
+        intsetBigRepr(isb);
+        databoxBig v;
+        DATABOX_BIG_SIGNED_128(&v, -((__int128_t)1 << 90));
+        intsetBigAdd(isb, &v);
+        DATABOX_BIG_UNSIGNED_128(&v, 42);
+        intsetBigAdd(isb, &v);
+        intsetBigRepr(isb);
+        intsetBigFree(isb);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif

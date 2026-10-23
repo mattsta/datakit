@@ -262,6 +262,15 @@ int segmentTypesTest(int argc, char *argv[]) {
         err += sgtBulk##T(SEGMENT_OP_SUM, 31);                                 \
         err += sgtBulk##T(SEGMENT_OP_MIN, 32);                                 \
         err += sgtBulk##T(SEGMENT_OP_MAX, 33);                                 \
+    }                                                                          \
+    TEST("Repr: segment" #T " nil, Small and Full") {                          \
+        segment##T##Repr(NULL);                                                \
+        void *seg = segment##T##New(SEGMENT_OP_SUM);                           \
+        segment##T##Update(&seg, 3, 1);                                        \
+        segment##T##Repr(seg);                                                 \
+        segment##T##Update(&seg, 1 << 17, 1);                                  \
+        segment##T##Repr(seg);                                                 \
+        segment##T##Free(seg);                                                 \
     }
 
     SGT_RUN(I16)

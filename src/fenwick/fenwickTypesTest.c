@@ -387,6 +387,15 @@ int fenwickTypesTest(int argc, char *argv[]) {
     }                                                                          \
     TEST("NewFromArray and CopyTo: fenwick" #T) {                              \
         err += fwtBulk##T(11);                                                 \
+    }                                                                          \
+    TEST("Repr: fenwick" #T " nil, Small and Full") {                          \
+        fenwick##T##Repr(NULL);                                                \
+        void *fw = NULL;                                                       \
+        fenwick##T##Update(&fw, 3, 1);                                         \
+        fenwick##T##Repr(fw);                                                  \
+        fenwick##T##Update(&fw, 1 << 17, 1);                                   \
+        fenwick##T##Repr(fw);                                                  \
+        fenwick##T##Free(fw);                                                  \
     }
 
     FWT_RUN(I16)

@@ -1474,6 +1474,14 @@ int stringPoolTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Repr: empty and holding strings") {
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
+        stringPoolRepr(pool);
+        const databox s = databoxNewBytesString("printed");
+        stringPoolIntern(pool, &s);
+        stringPoolRepr(pool);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif

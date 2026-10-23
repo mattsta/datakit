@@ -3761,6 +3761,30 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Repr: once in each tier, members listed") {
+        /* A 128-byte limit reaches Medium and Full within a few dozen
+         * members (each tier's printer lists every member) */
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNewLimit(FLEX_CAP_LEVEL_128);
+        bool printed[MOS_TYPE_FULL + 1] = {false};
+        for (int64_t i = 0; i < 200 && !printed[MOS_TYPE_FULL]; i++) {
+            char name[16];
+            snprintf(name, sizeof(name), "m%03" PRId64, i);
+            const databox s = databoxNewSigned(i);
+            const databox m = databoxNewBytesString(name);
+            multiOrderedSetAdd(&mos, &s, &m);
+            if (!printed[mosType_(mos)]) {
+                multiOrderedSetRepr(mos);
+                printed[mosType_(mos)] = true;
+            }
+        }
+
+        if (!printed[MOS_TYPE_SMALL] || !printed[MOS_TYPE_MEDIUM] ||
+            !printed[MOS_TYPE_FULL]) {
+            ERRR("did not reach every tier to print it");
+        }
+    }
+
     /* Run per-tier test suites */
     err += multiOrderedSetSmallTest(argc, argv);
     err += multiOrderedSetMediumTest(argc, argv);

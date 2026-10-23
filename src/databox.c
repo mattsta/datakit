@@ -4160,6 +4160,29 @@ int databoxTest(int argc, char *argv[]) {
 
     printf("\n=== All databox fuzz tests completed! ===\n\n");
 
+    TEST("Repr: every kind of box prints without faults") {
+        databoxBig wide;
+        DATABOX_BIG_UNSIGNED_128(&wide, ((__uint128_t)1 << 100) + 7);
+        const databox boxes[] = {
+            databoxNewSigned(-5),
+            databoxNewUnsigned(7),
+            DATABOX_DOUBLE(1.5),
+            {.type = DATABOX_FLOAT_32, .data.f32 = 0.5f},
+            databoxNewBytesString("text"),
+            databoxNewBytesAllowEmbed("hi", 2),
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_FALSE,
+            DATABOX_BOX_NULL,
+            DATABOX_BOX_VOID,
+            {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = 9},
+            *(const databox *)&wide,
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(boxes); i++) {
+            databoxRepr(&boxes[i]);
+            databoxReprSay("box:", &boxes[i]);
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

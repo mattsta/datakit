@@ -7748,6 +7748,22 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 11.0b: AddNX mid-rehash refuses keys still in ht[0]...\n");
     err += multidictTestAddNXMidRehash_();
 
+    printf("Test 11.0c: Repr of a dict and of a slot operation...\n");
+    {
+        cleaner(multidictMmClassFree) multidictClass *qdcRepr =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dRepr =
+            multidictNew(&multidictTypeExactKey, qdcRepr, 5);
+        multidictRepr(dRepr);
+        const databox key = databoxNewBytesString("printed");
+        const databox val = databoxNewSigned(1);
+        multidictAdd(dRepr, &key, &val);
+        multidictRepr(dRepr);
+        multidictOp op;
+        multidictFindSlotForKeyNewest(dRepr, &op, &key, NULL);
+        multidictOpRepr(&op);
+    }
+
     printf("Test 11.1: Fresh dict has zero bytes...\n");
     {
         cleaner(multidictMmClassFree) multidictClass *qdcBytes =

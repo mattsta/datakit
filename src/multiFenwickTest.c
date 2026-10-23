@@ -2234,5 +2234,15 @@ int multiFenwickTest(int argc, char *argv[]) {
         printf("    Checksum: %" PRIu64 "\n", (uint64_t)checksum);
     }
 
+    TEST("Repr: nil, empty and holding values") {
+        multiFenwickRepr(NULL);
+        multiFenwick *mfw = multiFenwickNew();
+        multiFenwickRepr(mfw);
+        const databox one = DATABOX_SIGNED(1);
+        multiFenwickUpdate(&mfw, 5, &one);
+        multiFenwickRepr(mfw);
+        multiFenwickFree(mfw);
+    }
+
     TEST_FINAL_RESULT;
 }
