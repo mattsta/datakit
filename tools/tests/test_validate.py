@@ -104,6 +104,10 @@ class ValidateRun(unittest.TestCase):
         self.repo.cleanup()
         self._env.__exit__()
 
+    def default_dir(self) -> str:
+        """The default matrix's work directory for HEAD"""
+        return f"{self.head[:10]}-clang22-dev+clang22-debug+gcc15-release"
+
     def run_validate(self, runner: MatrixRunner, **kw) -> tuple[int, str]:
         opts = validate.ValidateOptions(
             compilers=kw.pop("compilers", self.compilers),
@@ -154,7 +158,7 @@ class ValidateRun(unittest.TestCase):
         self.assertIn("- tier: quick (iterative", out)
         self.assertIn("clang22-debug: slow, skipped in the quick tier: ", out)
 
-        summary = self.root / "validate" / self.head[:10] / "summary.md"
+        summary = self.root / "validate" / self.default_dir() / "summary.md"
         self.assertEqual(summary.read_text(), out.rsplit("summary: ", 1)[0])
         # The export is the commit, not the working tree.
         self.repo.write("src/stray.c", "int stray;\n")
@@ -249,8 +253,23 @@ class ValidateRun(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("fastmutex: WARNING: ThreadSanitizer: data race", out)
 
+    def test_two_matrices_on_one_revision_keep_separate_logs(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(runner)
+        self.assertEqual(code, 0, out)
+        tsan = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(
+            tsan, compilers=self.compilers[:1], presets=["tsan"]
+        )
+        self.assertEqual(code, 0, out)
+        base = self.root / "validate"
+        self.assertTrue((base / self.default_dir() / "summary.md").exists())
+        self.assertTrue(
+            (base / f"{self.head[:10]}-clang22-tsan" / "summary.md").exists()
+        )
+
     def test_warnings_are_split_by_area(self) -> None:
-        tree = (self.root / "validate" / self.head[:10] / "src").resolve()
+        tree = (self.root / "validate" / self.default_dir() / "src").resolve()
         build = (
             f"{tree}/src/a.c:1:5: warning: unused [-Wunused]\n"
             f"{tree}/deps/varint/src/v.c:2:1: warning: shadow [-Wshadow]\n"

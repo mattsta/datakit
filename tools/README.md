@@ -225,7 +225,9 @@ uv run --project tools dktools validate [--rev REV] \
   output, `allocaudit check --constructors` on the exported tree, and
   the leakage gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
-- Writes `ROOT/validate/<hash>/summary.md` (warnings split into
+- Writes `ROOT/validate/<hash>-<configs>/summary.md` (`<configs>` joins
+  the matrix's labels, e.g. `clang22-dev+clang22-debug+gcc15-release`, so a
+  TSan matrix on the same revision keeps the default one's logs; warnings split into
   datakit `src/`, `deps/` and other) and prints it. Exits 0 only when
   everything passed with no warning, sanitizer report or hard leak
   hit; 1 on any failure; 2 on an input error.

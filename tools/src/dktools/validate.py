@@ -7,7 +7,9 @@ Usage::
         [--debug-skip REGEX] [--leak-base BASE] [--root DIR] [-j N]
 
 REV (default HEAD) is exported with ``git archive`` into
-``ROOT/validate/<short hash>/src``; uncommitted work never takes part.
+``ROOT/validate/<short hash>-<configs>/src`` (``<configs>`` joins the
+matrix's labels, so matrices on one revision keep separate logs);
+uncommitted work never takes part.
 For each (compiler, preset) of the matrix (see
 ``toolchain.matrix``: gcc15 builds ``release``) it runs a clean
 configure, an all-targets build, then ctest twice: every test outside
@@ -26,7 +28,8 @@ exported tree, and runs the leakage gate over the added lines of
 ``merge-base(BASE, REV)..REV`` (BASE default ``origin/main``; an empty
 ``--leak-base`` skips it).
 
-Writes a markdown summary to ``ROOT/validate/<short hash>/summary.md``
+Writes a markdown summary to
+``ROOT/validate/<short hash>-<configs>/summary.md``
 and prints it, with compiler warnings grouped by file and split into
 datakit ``src/``, ``deps/`` and other.  The macOS "no debug symbols in
 executable" linker notes are counted apart and are not warnings.
@@ -362,6 +365,13 @@ def render(
     return "\n".join(md) + "\n"
 
 
+def work_dir_name(commit: str, configs) -> str:
+    """The work directory of one matrix on one revision: the short hash
+    and the configurations, so a second matrix on the same revision (a
+    TSan run after the default one) keeps the first one's logs."""
+    return f"{commit[:10]}-{'+'.join(c.label for c in configs)}"
+
+
 def run(repo: Path, opts: ValidateOptions) -> int:
     """Run the matrix; return the exit code (ToolError: input error)."""
     if opts.jobs is not None and opts.jobs < 1:
@@ -381,7 +391,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         leak_range = f"{merge_base}..{commit}"
 
     root = gitutil.scratch_root(opts.root).resolve()
-    work = gitutil.fresh_dir(root / "validate" / commit[:10])
+    work = gitutil.fresh_dir(root / "validate" / work_dir_name(commit, configs))
     src = work / "src"
     gitutil.export_tree(repo, commit, src)
     for config in configs:
