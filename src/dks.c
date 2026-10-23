@@ -375,11 +375,19 @@ DKS_TYPE *DKS_NEWFROMFILE(const char *filename) {
         return NULL;
     }
 
-    fseek(fp, 0, SEEK_END);
-    long length = ftell(fp);
+    /* ftell fails (-1) on what is not a seekable file (a directory, a
+     * pipe); that must not become a SIZE_MAX-sized request. */
+    long length = -1;
+    if (fseek(fp, 0, SEEK_END) == 0) {
+        length = ftell(fp);
+    }
+    if (length < 0) {
+        fclose(fp);
+        return NULL;
+    }
     rewind(fp);
 
-    DKS_TYPE *t = DKS_NEWLEN(NULL, length);
+    DKS_TYPE *t = DKS_NEWLEN(NULL, (size_t)length);
     if (!t) {
         fclose(fp);
         return NULL;
@@ -397,25 +405,27 @@ DKS_TYPE *DKS_NEWFROMFILE(const char *filename) {
     return t;
 }
 
+/* The hashes cover the contents (info.buf), not the allocation, whose
+ * start is the header. */
 uint64_t DKS_XXH64(const DKS_TYPE *s, const uint64_t seed) {
     dksInfo info;
     DKS_BASE(s, &info);
 
-    return XXH64(info.start, info.len, seed);
+    return XXH64(info.buf, info.len, seed);
 }
 
 uint64_t DKS_XXH3_64(const DKS_TYPE *s, const uint64_t seed) {
     dksInfo info;
     DKS_BASE(s, &info);
 
-    return XXH3_64bits_withSeed(info.start, info.len, seed);
+    return XXH3_64bits_withSeed(info.buf, info.len, seed);
 }
 
 __uint128_t DKS_XXH3_128(const DKS_TYPE *s, const uint64_t seed) {
     dksInfo info;
     DKS_BASE(s, &info);
 
-    XXH128_hash_t result = XXH3_128bits_withSeed(info.start, info.len, seed);
+    XXH128_hash_t result = XXH3_128bits_withSeed(info.buf, info.len, seed);
     return ((__uint128_t)result.high64 << 64) | result.low64;
 }
 
@@ -1525,7 +1535,9 @@ DKS_TYPE *DKS_CATREPR(DKS_TYPE *s, const char *p, size_t len) {
             s = DKS_CATLEN(s, "\\b", 2);
             break;
         default:
-            if (isprint(*p)) {
+            /* isprint takes an unsigned char value (or EOF): a byte past
+             * 0x7f in a signed char would be negative, undefined. */
+            if (isprint((unsigned char)*p)) {
                 s = DKS_CATPRINTF(s, "%c", *p);
             } else {
                 s = DKS_CATPRINTF(s, "\\x%02x", (unsigned char)*p);
@@ -3515,6 +3527,209 @@ int DKS_TEST(int argc, char *argv[]) {
         }
         testCond("DKS_TOUPPER() long string SIMD", allUpper, true, "%d");
         DKS_FREE(x);
+    }
+
+    {
+        /* SPLITARGS: words, quotes, escapes, and the inputs it refuses */
+        int nargs = 0;
+        DKS_TYPE **args = DKS_SPLITARGS(
+            "  set \"a b\\n\\x41\\\"\" 'it\\'s' plain\t\"\"  ", &nargs);
+        bool ok = args && nargs == 5 && DKS_LEN(args[0]) == 3 &&
+                  memcmp(args[0], "set", 3) == 0 && DKS_LEN(args[1]) == 6 &&
+                  memcmp(args[1], "a b\nA\"", 6) == 0 &&
+                  DKS_LEN(args[2]) == 4 && memcmp(args[2], "it's", 4) == 0 &&
+                  DKS_LEN(args[3]) == 5 && DKS_LEN(args[4]) == 0;
+        testCond("SPLITARGS() words, quotes and escapes", ok, true, "%d");
+        DKS_SPLITLENFREE(args, (size_t)nargs);
+        static const char *const refused[] = {"\"unterminated", "'open",
+                                              "\"a\"b", "'a'b"};
+        for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+            args = DKS_SPLITARGS(refused[i], &nargs);
+            testCond("SPLITARGS() refuses unbalanced or glued quotes",
+                     args == NULL && nargs == 0, true, "%d");
+        }
+        args = DKS_SPLITARGS("   ", &nargs);
+        testCond("SPLITARGS() of blanks is an empty vector",
+                 args != NULL && nargs == 0, true, "%d");
+        DKS_SPLITLENFREE(args, 0);
+
+        /* CATREPR then SPLITARGS gives back every byte, NUL and high
+         * bytes included: the round trip the two are documented for */
+        uint8_t bytes[256];
+        for (size_t i = 0; i < sizeof(bytes); i++) {
+            bytes[i] = (uint8_t)(255 - i);
+        }
+        DKS_TYPE *repr =
+            DKS_CATREPR(DKS_EMPTY(), (const char *)bytes, sizeof(bytes));
+        args = DKS_SPLITARGS(repr, &nargs);
+        testCond("CATREPR() round-trips through SPLITARGS()",
+                 args && nargs == 1 && DKS_LEN(args[0]) == sizeof(bytes) &&
+                     memcmp(args[0], bytes, sizeof(bytes)) == 0,
+                 true, "%d");
+        DKS_SPLITLENFREE(args, (size_t)nargs);
+        DKS_FREE(repr);
+
+        /* SPLITLEN_MAX keeps the first maxCount tokens */
+        size_t count = 0;
+        DKS_TYPE **tok = DKS_SPLITLEN_MAX("a,b,c,d", 7, ",", 1, &count, 2);
+        testCond("SPLITLEN_MAX() stops at maxCount",
+                 count == 2 && DKS_LEN(tok[0]) == 1 && tok[0][0] == 'a' &&
+                     DKS_LEN(tok[1]) == 1 && tok[1][0] == 'b',
+                 true, "%d");
+        DKS_SPLITLENFREE(tok, count);
+        tok = DKS_SPLITLEN_MAX("abc", 3, ",", 1, &count, 3);
+        testCond("SPLITLEN_MAX() without a separator is the whole string",
+                 count == 1 && DKS_LEN(tok[0]) == 3, true, "%d");
+        DKS_SPLITLENFREE(tok, count);
+        tok = DKS_SPLITLEN_MAX("x--y--z", 7, "--", 2, &count, 10);
+        testCond("SPLITLEN_MAX() with a multi-byte separator",
+                 count == 3 && tok[2][0] == 'z', true, "%d");
+        DKS_SPLITLENFREE(tok, count);
+
+        /* JOIN, MAPCHARS, PREPENDLEN */
+        char *parts[] = {"a", "bc", "", "d"};
+        DKS_TYPE *joined = DKS_JOIN(parts, 4, "::");
+        testCond("JOIN()",
+                 DKS_LEN(joined) == 10 && memcmp(joined, "a::bc::::d", 10) == 0,
+                 true, "%d");
+        DKS_MAPCHARS(joined, ":d", "-D", 2);
+        testCond("MAPCHARS()", memcmp(joined, "a--bc----D", 10) == 0, true,
+                 "%d");
+        joined = DKS_PREPENDLEN(joined, "<<", 2);
+        testCond("PREPENDLEN()",
+                 DKS_LEN(joined) == 12 &&
+                     memcmp(joined, "<<a--bc----D", 12) == 0 &&
+                     joined[12] == '\0',
+                 true, "%d");
+        DKS_FREE(joined);
+
+        /* The raw quote appenders, with and without a trailing byte */
+        DKS_TYPE *raw = DKS_NEW("[");
+        raw = DKS_CATLEN_QUOTE_RAW(raw, "k", 1, ',');
+        raw = DKS_CATLEN_QUOTE_RAW(raw, "v", 1, 0);
+        raw = DKS_CATLEN_NOQUOTE_RAW(raw, "12", 2, ']');
+        raw = DKS_CATLEN_NOQUOTE_RAW(raw, "!", 1, 0);
+        testCond("CATLEN_QUOTE_RAW() / CATLEN_NOQUOTE_RAW()",
+                 DKS_LEN(raw) == 12 && memcmp(raw, "[\"k\",\"v\"12]!", 12) == 0,
+                 true, "%d");
+        DKS_FREE(raw);
+
+        /* FORMATIP brackets IPv6; a negative port leaves it off */
+        DKS_TYPE *ip4 = DKS_FORMATIP("10.0.0.1", 80);
+        DKS_TYPE *ip6 = DKS_FORMATIP("::1", 443);
+        DKS_TYPE *bare = DKS_FORMATIP("fe80::2", -1);
+        testCond("FORMATIP()",
+                 DKS_LEN(ip4) == 11 && memcmp(ip4, "10.0.0.1:80", 11) == 0 &&
+                     DKS_LEN(ip6) == 9 && memcmp(ip6, "[::1]:443", 9) == 0 &&
+                     DKS_LEN(bare) == 9 && memcmp(bare, "[fe80::2]", 9) == 0,
+                 true, "%d");
+        DKS_FREE(ip4);
+        DKS_FREE(ip6);
+        DKS_FREE(bare);
+
+        /* CATFMT: every verb, and %<other> as the literal character */
+        const databox dbBytes = databoxNewBytesString("db");
+        const databox dbNum = DATABOX_SIGNED(-9);
+        DKS_TYPE *named = DKS_NEW("nm");
+        DKS_TYPE *fmt = DKS_CATFMT(DKS_EMPTY(), "%s|%S|%i|%I|%u|%U|%%|%q|%b|%B",
+                                   "cs", named, (int32_t)-1, (int64_t)INT64_MIN,
+                                   (uint32_t)UINT32_MAX, (uint64_t)UINT64_MAX,
+                                   &dbBytes, &dbNum);
+        const char *wantFmt = "cs|nm|-1|-9223372036854775808|4294967295|"
+                              "18446744073709551615|%|q|db|-9";
+        testCond("CATFMT() verbs",
+                 DKS_LEN(fmt) == strlen(wantFmt) &&
+                     memcmp(fmt, wantFmt, strlen(wantFmt)) == 0,
+                 true, "%d");
+        DKS_FREE(fmt);
+        DKS_FREE(named);
+
+        /* RANGE with negative and out-of-range bounds */
+        DKS_TYPE *r = DKS_NEW("Hello World");
+        DKS_RANGE(r, -5, -1);
+        testCond("RANGE() negative bounds",
+                 DKS_LEN(r) == 5 && memcmp(r, "World", 5) == 0, true, "%d");
+        DKS_RANGE(r, 2, 100);
+        testCond("RANGE() end past the length",
+                 DKS_LEN(r) == 3 && memcmp(r, "rld", 3) == 0, true, "%d");
+        DKS_RANGE(r, 5, 9);
+        testCond("RANGE() start past the length empties", DKS_LEN(r), (size_t)0,
+                 "%zu");
+        DKS_FREE(r);
+
+        /* The hashes are xxhash over the contents; BUFALLOCSIZE and
+         * UPDATELEN account for every byte */
+        DKS_TYPE *h = DKS_NEW("hash me");
+        const uint64_t seed = 7;
+        const XXH128_hash_t h128 = XXH3_128bits_withSeed("hash me", 7, seed);
+        testCond("XXH64 / XXH3_64 / XXH3_128 of the contents",
+                 DKS_XXH64(h, seed) == XXH64("hash me", 7, seed) &&
+                     DKS_XXH3_64(h, seed) ==
+                         XXH3_64bits_withSeed("hash me", 7, seed) &&
+                     DKS_XXH3_128(h, seed) ==
+                         (((__uint128_t)h128.high64 << 64) | h128.low64),
+                 true, "%d");
+        h = DKS_EXPANDBY(h, 100);
+        const size_t room = DKS_BUFALLOCSIZE(h);
+        h[4] = '\0';
+        DKS_UPDATELEN(h);
+#if defined(DATAKIT_DKS_COMPACT)
+        /* Compact strings record no free space: the room is the length */
+        const bool roomOk = room == 7 && DKS_AVAIL(h) == 0;
+#else
+        const bool roomOk = room >= 107 && DKS_LEN(h) + DKS_AVAIL(h) == room;
+#endif
+        if (!roomOk || DKS_LEN(h) != 4) {
+            printf("BUFALLOCSIZE %zu after EXPANDBY(100) of 7; after "
+                   "UPDATELEN len %zu avail %zu\n",
+                   room, DKS_LEN(h), DKS_AVAIL(h));
+        }
+        testCond("BUFALLOCSIZE() / UPDATELEN()", roomOk && DKS_LEN(h) == 4,
+                 true, "%d");
+        DKS_FREE(h);
+
+        /* GETABSOLUTEPATH joins the cwd and folds leading "../" */
+        char cwd[1024];
+        if (getcwd(cwd, sizeof(cwd))) {
+            DKS_TYPE *rel = DKS_GETABSOLUTEPATH(" sub/file \n");
+            DKS_TYPE *abs = DKS_GETABSOLUTEPATH("/already/abs");
+            DKS_TYPE *up = DKS_GETABSOLUTEPATH("../up");
+            const size_t cwdLen = strlen(cwd);
+            const char *slash = strrchr(cwd, '/');
+            const size_t parentLen = slash ? (size_t)(slash - cwd) + 1 : 1;
+            testCond("GETABSOLUTEPATH()",
+                     DKS_LEN(rel) == cwdLen + 9 &&
+                         memcmp(rel, cwd, cwdLen) == 0 &&
+                         memcmp(rel + cwdLen, "/sub/file", 9) == 0 &&
+                         DKS_LEN(abs) == 12 &&
+                         memcmp(abs, "/already/abs", 12) == 0 &&
+                         DKS_LEN(up) == parentLen + 2 &&
+                         memcmp(up, cwd, parentLen) == 0 &&
+                         memcmp(up + parentLen, "up", 2) == 0,
+                     true, "%d");
+            DKS_FREE(rel);
+            DKS_FREE(abs);
+            DKS_FREE(up);
+        }
+
+        /* NEWFROMFILE reads a file's bytes exactly; a missing file is NULL */
+        char path[] = "dksNewFromFileXXXXXX";
+        const int fd = mkstemp(path);
+        if (fd >= 0) {
+            static const uint8_t content[] = {'a', 0, 'b', 0xff, '\n'};
+            const bool wrote =
+                write(fd, content, sizeof(content)) == (ssize_t)sizeof(content);
+            close(fd);
+            DKS_TYPE *got = DKS_NEWFROMFILE(path);
+            testCond("NEWFROMFILE() reads every byte",
+                     wrote && got && DKS_LEN(got) == sizeof(content) &&
+                         memcmp(got, content, sizeof(content)) == 0,
+                     true, "%d");
+            DKS_FREE(got);
+            unlink(path);
+        }
+        testCond("NEWFROMFILE() of a missing file",
+                 DKS_NEWFROMFILE("dks-no-such-file") == NULL, true, "%d");
     }
 
     testReport();
