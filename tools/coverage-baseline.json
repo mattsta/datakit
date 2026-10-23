@@ -1,5 +1,5 @@
 {
- "commit": "17f0f5883384c61b659e9b7e0249db7904ac9ed6",
+ "commit": "f4381feedb0b691a1c18aa1821c4f85652f5b0c5",
  "files": {
   "src/OSRegulate.c": {
    "lines": 245,
@@ -7,7 +7,7 @@
   },
   "src/aeadNonceLog.c": {
    "lines": 54,
-   "branches": 46
+   "branches": 47
   },
   "src/aeadNonceLog.h": {
    "lines": 0,
@@ -38,16 +38,16 @@
    "branches": 6
   },
   "src/blake3.c": {
-   "lines": 135,
-   "branches": 59
+   "lines": 136,
+   "branches": 63
   },
   "src/blake3.h": {
    "lines": 0,
    "branches": 0
   },
   "src/chacha20poly1305.c": {
-   "lines": 46,
-   "branches": 48
+   "lines": 48,
+   "branches": 52
   },
   "src/chacha20poly1305.h": {
    "lines": 0,
@@ -74,8 +74,8 @@
    "branches": 0
   },
   "src/clusterRing.c": {
-   "lines": 353,
-   "branches": 327
+   "lines": 286,
+   "branches": 320
   },
   "src/clusterRing.h": {
    "lines": 0,
@@ -107,7 +107,7 @@
   },
   "src/databox.h": {
    "lines": 2,
-   "branches": 16
+   "branches": 15
   },
   "src/databoxLinear.c": {
    "lines": 6,
@@ -162,11 +162,11 @@
    "branches": 27
   },
   "src/dks.c": {
-   "lines": 412,
-   "branches": 272
+   "lines": 70,
+   "branches": 77
   },
   "src/dks.h": {
-   "lines": 4,
+   "lines": 0,
    "branches": 0
   },
   "src/dksCompact.h": {
@@ -190,8 +190,8 @@
    "branches": 0
   },
   "src/fastmutex.c": {
-   "lines": 23,
-   "branches": 27
+   "lines": 21,
+   "branches": 25
   },
   "src/fastmutex.h": {
    "lines": 2,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 487,
-   "branches": 530
+   "lines": 301,
+   "branches": 463
   },
   "src/flex.h": {
    "lines": 0,
@@ -414,8 +414,8 @@
    "branches": 1
   },
   "src/flexEnvelope.c": {
-   "lines": 299,
-   "branches": 267
+   "lines": 246,
+   "branches": 226
   },
   "src/flexEnvelope.h": {
    "lines": 0,
@@ -495,7 +495,7 @@
   },
   "src/hmacKeyring.c": {
    "lines": 91,
-   "branches": 78
+   "branches": 83
   },
   "src/hmacKeyring.h": {
    "lines": 0,
@@ -586,8 +586,8 @@
    "branches": 0
   },
   "src/membound.c": {
-   "lines": 441,
-   "branches": 373
+   "lines": 383,
+   "branches": 354
   },
   "src/memboundInternal.h": {
    "lines": 39,
@@ -622,8 +622,8 @@
    "branches": 3
   },
   "src/multiFenwickCommon.h": {
-   "lines": 232,
-   "branches": 89
+   "lines": 18,
+   "branches": 33
   },
   "src/multiFenwickFlat.c": {
    "lines": 13,
@@ -790,8 +790,8 @@
    "branches": 10
   },
   "src/ownedState.c": {
-   "lines": 85,
-   "branches": 91
+   "lines": 88,
+   "branches": 107
   },
   "src/ownedState.h": {
    "lines": 4,
@@ -1026,8 +1026,8 @@
    "branches": 0
   },
   "src/sha256.c": {
-   "lines": 5,
-   "branches": 2
+   "lines": 8,
+   "branches": 4
   },
   "src/sha256.h": {
    "lines": 0,
@@ -1158,8 +1158,8 @@
    "branches": 53
   },
   "src/ulid.c": {
-   "lines": 250,
-   "branches": 166
+   "lines": 202,
+   "branches": 143
   },
   "src/ulid.h": {
    "lines": 0,
