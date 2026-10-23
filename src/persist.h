@@ -452,7 +452,9 @@ struct persistOps {
     /* Get current element count (for header) */
     size_t (*count)(const void *structure);
 
-    /* Get approximate serialized size (for pre-allocation) */
+    /* Approximate serialized size, a pre-allocation hint: most types
+     * return their in-memory size, which can be below the snapshot's.
+     * Never size a buffer a snapshot must fit with it. */
     size_t (*estimateSize)(const void *structure);
 
     /* ---- WAL Operations ---- */

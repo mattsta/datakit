@@ -267,14 +267,22 @@ clusterMailbox *clusterReplicatorMailbox(clusterReplicator *rep) {
 size_t clusterReplicatorSnapshotSize(clusterReplicator *rep,
                                      const persistOps *ops,
                                      const void *structure) {
-    if (rep == NULL || ops == NULL || ops->estimateSize == NULL ||
+    if (rep == NULL || ops == NULL || ops->snapshot == NULL ||
         structure == NULL) {
+        return 0;
+    }
+    /* The snapshot's own length: ops->estimateSize is an approximation
+     * for pre-allocation and falls short for many types, and Seal needs
+     * a buffer the snapshot fits. */
+    size_t snapshot_len = 0;
+    cleanerName(zfree, Wire) uint8_t *snapshot =
+        ops->snapshot(structure, &snapshot_len);
+    if (snapshot == NULL) {
         return 0;
     }
     const dkFormatSpec spec = persistOpsFormat(ops);
     const dkFormatStamp stamp = dkFormatStampFor(&spec, 0);
-    const size_t inner_payload =
-        dkFormatPrefixSize(&stamp) + ops->estimateSize(structure);
+    const size_t inner_payload = dkFormatPrefixSize(&stamp) + snapshot_len;
     return clusterMailboxSealedSize(rep->mb, inner_payload);
 }
 
@@ -326,11 +334,13 @@ clusterMailboxIngestResult clusterReplicatorIngest(clusterReplicator *rep,
 
 #include "ctest.h"
 #include "flex.h"
+#include "multimap.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 
 defcleaner(flex *, flexFree);
+defcleaner(multimap *, multimapFree);
 
 typedef struct {
     flex *restored[4];
@@ -457,6 +467,45 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         }
         flexFree(app_ctx.restored[0]);
 
+        clusterReplicatorFree(rep);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("snapshot size fits the snapshot, not the type's estimate") {
+        /* A multimap's estimateSize (its in-memory bytes) is below its
+         * snapshot (2 vs 6 bytes empty), so a size computed from it left
+         * Seal a buffer too small. */
+        const uint8_t key[32] = {0xCD};
+        hmacKeyring *ring = hmacKeyringCreate();
+        const hmacKeyId KID = 1u;
+        hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        replicatorTestCtx app_ctx = {0};
+        clusterReplicator *rep = clusterReplicatorCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
+            type_table, 256u, testApply, &app_ctx);
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        for (int n = 0; n < 3; n++) {
+            size_t snapLen = 0;
+            cleanerName(zfree, Wire) uint8_t *snap =
+                persistOpsMultimap.snapshot(m, &snapLen);
+            const size_t cap =
+                clusterReplicatorSnapshotSize(rep, &persistOpsMultimap, m);
+            cleanerName(zfree, Wire) uint8_t *wire = zmalloc(cap);
+            size_t written = 0;
+            if (!clusterReplicatorSeal(rep, &persistOpsMultimap, m, 3u,
+                                       (uint64_t)n + 1, KID, wire, cap,
+                                       &written) ||
+                written > cap) {
+                ERR("round %d: seal into %zu B failed (snapshot %zu B, "
+                    "estimate %zu B)",
+                    n, cap, snapLen, persistOpsMultimap.estimateSize(m));
+            }
+            const databox k = DATABOX_SIGNED(n);
+            const databox v = DATABOX_SIGNED(n * 10);
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&m, row);
+        }
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);
     }
