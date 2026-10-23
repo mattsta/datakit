@@ -2220,11 +2220,139 @@ static size_t mlruWidthWorkload_(multilru *mlru, uint64_t *trace) {
     return n;
 }
 
+/* Each width's setters write exactly their entry, and the migration reader
+ * gets back every field at its extremes; returns the mismatches */
+#define MLRU_LAYOUT_CHECK(W, BITS)                                             \
+    do {                                                                       \
+        const uint64_t top = (UINT64_C(1) << (BITS)) - 1;                      \
+        const uint64_t idxs[] = {0, 1, top / 3, top};                          \
+        for (size_t pi = 0; pi < 4; pi++) {                                    \
+            for (size_t ni = 0; ni < 4; ni++) {                                \
+                for (uint8_t lv = 0; lv < 64; lv += 21) {                      \
+                    for (int fl = 0; fl < 4; fl++) {                           \
+                        uint8_t buf[3 * (W)];                                  \
+                        memset(buf, 0xa5, sizeof(buf));                        \
+                        void *e = buf + (W);                                   \
+                        entry##W##SetPrev(e, idxs[pi]);                        \
+                        entry##W##SetNext(e, idxs[ni]);                        \
+                        entry##W##SetLevel(e, lv);                             \
+                        entry##W##SetPopulated(e, fl & 1);                     \
+                        entry##W##SetHead(e, fl & 2);                          \
+                        uint64_t p = 0, nx = 0;                                \
+                        uint8_t l = 0;                                         \
+                        bool pop = false, head = false;                        \
+                        entryReadByWidth(buf, (W), 1, &p, &nx, &l, &pop,       \
+                                         &head);                               \
+                        bool outside = false;                                  \
+                        for (size_t k = 0; k < (W); k++) {                     \
+                            outside |=                                         \
+                                buf[k] != 0xa5 || buf[2 * (W) + k] != 0xa5;    \
+                        }                                                      \
+                        if (p != idxs[pi] || nx != idxs[ni] || l != lv ||      \
+                            pop != (bool)(fl & 1) || head != (bool)(fl & 2) || \
+                            outside) {                                         \
+                            bad++;                                             \
+                        }                                                      \
+                    }                                                          \
+                }                                                              \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
+static int multilruTestEntryLayouts(void) {
+    int bad = 0;
+    MLRU_LAYOUT_CHECK(5, 16);
+    MLRU_LAYOUT_CHECK(6, 20);
+    MLRU_LAYOUT_CHECK(7, 24);
+    MLRU_LAYOUT_CHECK(8, 28);
+    MLRU_LAYOUT_CHECK(9, 32);
+    MLRU_LAYOUT_CHECK(10, 36);
+    MLRU_LAYOUT_CHECK(11, 40);
+    MLRU_LAYOUT_CHECK(12, 44);
+    MLRU_LAYOUT_CHECK(16, 60);
+    return bad;
+}
+
 int multilruTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("every entry width round-trips its fields through migration") {
+        const int bad = multilruTestEntryLayouts();
+        if (bad) {
+            ERR("%d entry layout mismatches", bad);
+        }
+    }
+
+    TEST("growing past 64K entries widens entries and keeps levels") {
+        /* 70000 entries cross the 5-byte limit; levels set before the
+         * upgrade survive it, and removal by minimum drains every entry
+         * once in non-decreasing level order */
+        multilru *mlru = multilruNewWithLevels(7);
+        enum { N = 70000 };
+        cleanerName(zfree, Ptrs) multilruPtr *ptrs =
+            zcalloc(N, sizeof(multilruPtr));
+        cleanerName(zfree, Bytes) uint8_t *want = zcalloc(N, 1);
+        for (size_t i = 0; i < N; i++) {
+            ptrs[i] = multilruInsert(mlru);
+            if (i < 60000 && i % 7 == 0) {
+                const uint8_t ups = (uint8_t)(i % 9);
+                for (uint8_t u = 0; u < ups; u++) {
+                    multilruIncrease(mlru, ptrs[i]);
+                }
+                want[i] = ups > 6 ? 6 : ups;
+            }
+        }
+        size_t wrong = 0;
+        for (size_t i = 0; i < N; i++) {
+            wrong += multilruGetLevel(mlru, ptrs[i]) != want[i];
+        }
+        if (mlru->entryWidth != 6 || multilruCount(mlru) != N || wrong) {
+            ERR("upgrade: width %u, count %zu, %zu levels wrong",
+                mlru->entryWidth, multilruCount(mlru), wrong);
+        }
+        /* Each handle's insert slot, to look up the level it should have */
+        multilruPtr maxHandle = 0;
+        for (size_t i = 0; i < N; i++) {
+            maxHandle = ptrs[i] > maxHandle ? ptrs[i] : maxHandle;
+        }
+        cleanerName(zfree, U64s) uint64_t *slotOf =
+            zcalloc(maxHandle + 1, sizeof(uint64_t));
+        for (size_t i = 0; i < N; i++) {
+            slotOf[ptrs[i]] = i + 1;
+        }
+        /* RemoveMinimum demotes an entry above level 0 (S4LRU) and evicts
+         * one at level 0, so each handle comes back its level + 1 times,
+         * the last time unpopulated */
+        cleanerName(zfree, Bytes) uint8_t *returns = zcalloc(N, 1);
+        size_t evicted = 0;
+        size_t strays = 0;
+        multilruPtr out;
+        while (multilruRemoveMinimum(mlru, &out)) {
+            const uint64_t slot = out <= maxHandle ? slotOf[out] : 0;
+            if (!slot) {
+                strays++;
+                continue;
+            }
+            returns[slot - 1]++;
+            if (!multilruIsPopulated(mlru, out)) {
+                evicted++;
+                slotOf[out] = 0; /* evicted: must not come back */
+            }
+        }
+        size_t miscounted = 0;
+        for (size_t i = 0; i < N; i++) {
+            miscounted += returns[i] != want[i] + 1;
+        }
+        if (evicted != N || strays || miscounted) {
+            ERR("upgrade: %zu evicted of %d, %zu strays, %zu entries returned "
+                "the wrong number of times",
+                evicted, (int)N, strays, miscounted);
+        }
+        multilruFree(mlru);
+    }
 
     /* ================================================================
      * BASIC TESTS
