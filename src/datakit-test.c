@@ -1792,33 +1792,93 @@ static void *dkSeqWriterMain_(void *arg) {
 typedef struct dkSeqReaderCtx {
     ownedSeq *seq;
     _Atomic bool *stop;
+    /* Fault injection: when set, the reader does not start reading until
+     * it reads true (a reader the scheduler starves for the whole run) */
+    _Atomic bool *go;
     uint64_t validReads;
     uint64_t mixedReads;
+    uint64_t finalNumber;           /* the number the last read asked for */
+    ownedSeqReadResult finalResult; /* and its verdict */
 } dkSeqReaderCtx;
-/* The iteration that observes `stop` still reads once.  The test sets
- * `stop` only after every writer is joined, so that last read sees a
- * settled publication and must read VALID.  This makes "the reader
- * validated at least one copy" depend on the seqlock, not on whether
- * the scheduler ran this thread while the writers were publishing. */
+/* While writers run, read the newest assigned number (it may be in
+ * progress or abandoned: TORN or OVERWRITTEN, fine).  The iteration that
+ * observes `stop` reads the CURSOR instead: the test sets `stop` only
+ * after every writer is joined, and then the cursor's publication is
+ * provably readable -- nothing is in progress, and no number above the
+ * cursor completed, so nothing replaced it.  The highest ASSIGNED number
+ * is not: its writer may have found the version held by a lower number
+ * and abandoned (it then reads TORN forever).  So "the reader validated
+ * at least one copy" holds under every schedule, a starved reader
+ * included. */
 static void *dkSeqReaderMain_(void *arg) {
     dkSeqReaderCtx *r = arg;
     uint8_t out[DK_SEQ_BYTES];
+    while (r->go && !atomic_load_explicit(r->go, memory_order_acquire)) {
+        sched_yield();
+    }
     bool stopped = false;
     do {
         stopped = atomic_load_explicit(r->stop, memory_order_acquire);
-        const uint64_t want = ownedSeqAssigned(r->seq);
+        const uint64_t want =
+            stopped ? ownedSeqCursor(r->seq) : ownedSeqAssigned(r->seq);
         if (want == 0) {
             continue;
         }
         size_t outLen = 0;
-        if (ownedSeqReadAt(r->seq, want, out, sizeof(out), &outLen) ==
-            OWNED_SEQ_VALID) {
+        const ownedSeqReadResult got =
+            ownedSeqReadAt(r->seq, want, out, sizeof(out), &outLen);
+        if (stopped) {
+            r->finalNumber = want;
+            r->finalResult = got;
+        }
+        if (got == OWNED_SEQ_VALID) {
             r->validReads++;
             if (!dkSeqPayloadWhole_(out, outLen)) {
                 r->mixedReads++;
             }
         }
     } while (!stopped);
+    return NULL;
+}
+
+/* Deterministic schedule: writer A enters the one version (N == 1) and,
+ * inside its fill, waits until writer B has taken a HIGHER number and
+ * given up on the held version.  The highest assigned number is then
+ * abandoned for good. */
+typedef struct dkSeqHoldFill {
+    _Atomic bool *aInside;
+    _Atomic bool *bDone;
+} dkSeqHoldFill;
+static void dkSeqHoldFillFn_(ownedSeqVersionRef *v, void *ctx) {
+    dkSeqHoldFill *f = ctx;
+    uint8_t payload[DK_SEQ_BYTES];
+    dkSeqPayload_(payload, 0xA0);
+    ownedSeqPutBytes(v, 0, payload, sizeof(payload));
+    atomic_store_explicit(f->aInside, true, memory_order_release);
+    while (!atomic_load_explicit(f->bDone, memory_order_acquire)) {
+        sched_yield();
+    }
+}
+typedef struct dkSeqHoldCtx {
+    ownedSeq *seq;
+    _Atomic bool aInside;
+    _Atomic bool bDone;
+} dkSeqHoldCtx;
+static void *dkSeqHoldWriterA_(void *arg) {
+    dkSeqHoldCtx *h = arg;
+    dkSeqHoldFill f = {.aInside = &h->aInside, .bDone = &h->bDone};
+    (void)ownedSeqPublishWith(h->seq, DK_SEQ_BYTES, dkSeqHoldFillFn_, &f);
+    return NULL;
+}
+static void *dkSeqHoldWriterB_(void *arg) {
+    dkSeqHoldCtx *h = arg;
+    while (!atomic_load_explicit(&h->aInside, memory_order_acquire)) {
+        sched_yield();
+    }
+    uint8_t payload[DK_SEQ_BYTES];
+    dkSeqPayload_(payload, 0xB0);
+    (void)ownedSeqPublish(h->seq, payload, sizeof(payload));
+    atomic_store_explicit(&h->bDone, true, memory_order_release);
     return NULL;
 }
 
@@ -1942,14 +2002,48 @@ typedef struct dkOwnedSoakObj {
 
 static _Atomic uint64_t g_dkOwnedSoakBadReleases = 0;
 
+/* Which soak object ids have been released (ids below the bound), so a
+ * schedule can check that one particular object was or was not freed */
+#define DK_OWNED_SOAK_ID_BOUND (DK_OWNED_SOAK_PUBLISHES + 4096u)
+static _Atomic bool g_dkOwnedSoakReleasedId[DK_OWNED_SOAK_ID_BOUND];
+
 static void dkOwnedSoakRelease_(void *cargo) {
     dkOwnedSoakObj *o = cargo;
     if (o->magic != DK_OWNED_SOAK_MAGIC) {
         atomic_fetch_add_explicit(&g_dkOwnedSoakBadReleases, 1,
                                   memory_order_relaxed);
     }
+    if (o->id < DK_OWNED_SOAK_ID_BOUND) {
+        atomic_store_explicit(&g_dkOwnedSoakReleasedId[o->id], true,
+                              memory_order_relaxed);
+    }
     o->magic = 0;
     zfree(o);
+}
+
+/* Fault injection: a reader that enters, reads the current object and
+ * then stalls inside its scope until told to go on -- a reader the
+ * scheduler preempted mid-read, for as long as the test likes */
+typedef struct dkOwnedStallReader {
+    ownedArena *arena;
+    ownedCell *cell;
+    _Atomic uint64_t heldId; /* the object read; UINT64_MAX until read */
+    _Atomic bool resume;
+    bool intactAfterStall;
+} dkOwnedStallReader;
+
+static void *dkOwnedStallReaderMain_(void *arg) {
+    dkOwnedStallReader *s = arg;
+    ownedArenaEnter(s->arena);
+    const dkOwnedSoakObj *o = ownedCellRead(s->cell);
+    atomic_store_explicit(&s->heldId, o->id, memory_order_release);
+    while (!atomic_load_explicit(&s->resume, memory_order_acquire)) {
+        sched_yield();
+    }
+    /* Under ASan a premature release is a use-after-free right here */
+    s->intactAfterStall = o->magic == DK_OWNED_SOAK_MAGIC;
+    ownedArenaExit(s->arena);
+    return NULL;
 }
 
 static uint64_t dkOwnedSoakNowUs_(void) {
@@ -2048,6 +2142,11 @@ static int dkTestOwnedArenaSoak(void) {
     } while (0)
     atomic_store_explicit(&g_dkOwnedSoakBadReleases, 0, memory_order_relaxed);
     for (int rule = 0; rule < 2; rule++) {
+        /* Both rules reuse the ids: clear what the previous rule freed */
+        for (uint32_t id = 0; id < DK_OWNED_SOAK_ID_BOUND; id++) {
+            atomic_store_explicit(&g_dkOwnedSoakReleasedId[id], false,
+                                  memory_order_relaxed);
+        }
         ownedArena arena;
         ownedArenaInit(&arena, &dkOwnedSoakArenaDecls_[rule]);
         ownedCell cell;
@@ -2096,8 +2195,69 @@ static int dkTestOwnedArenaSoak(void) {
             reads += readers[i].reads;
             bad += readers[i].bad;
         }
+        /* Observability: the run's whole state, one line per rule */
+        printf("owned soak rule %d: readers %d reading %" PRIu32
+               " reads %" PRIu64 " bad %" PRIu64 " bad releases %" PRIu64
+               " live rows %" PRIu64 "\n",
+               rule, started,
+               atomic_load_explicit(&readersReading, memory_order_relaxed),
+               reads, bad,
+               atomic_load_explicit(&g_dkOwnedSoakBadReleases,
+                                    memory_order_relaxed),
+               ownedArenaLiveRows());
         SOAKEXPECT(bad == 0, "no reader saw a released object");
         SOAKEXPECT(reads > 0, "the readers read published objects");
+
+        /* Injected schedule: a reader stalls inside its scope holding the
+         * current object while the writer publishes successors and
+         * drains, past the grace on the real clock.  The held object must
+         * survive every drain, and go once the reader leaves. */
+        {
+            dkOwnedStallReader stall = {.arena = &arena, .cell = &cell};
+            atomic_store_explicit(&stall.heldId, UINT64_MAX,
+                                  memory_order_relaxed);
+            pthread_t st;
+            const bool stallStarted =
+                pthread_create(&st, NULL, dkOwnedStallReaderMain_, &stall) == 0;
+            SOAKEXPECT(stallStarted, "stalled reader started");
+            while (stallStarted &&
+                   atomic_load_explicit(&stall.heldId, memory_order_acquire) ==
+                       UINT64_MAX) {
+                sched_yield();
+            }
+            const uint64_t held =
+                atomic_load_explicit(&stall.heldId, memory_order_acquire);
+            for (uint32_t i = 0; stallStarted && i < 256; i++) {
+                ownedCellPublish(
+                    &cell, dkOwnedSoakObjNew_(DK_OWNED_SOAK_PUBLISHES + 1 + i));
+                if (i % 32 == 31) {
+                    usleep(1000); /* well past the 200 us grace */
+                    ownedArenaDrain(&arena);
+                }
+            }
+            const bool heldSurvived =
+                held < DK_OWNED_SOAK_ID_BOUND &&
+                !atomic_load_explicit(&g_dkOwnedSoakReleasedId[held],
+                                      memory_order_relaxed);
+            atomic_store_explicit(&stall.resume, true, memory_order_release);
+            if (stallStarted) {
+                pthread_join(st, NULL);
+            }
+            usleep(1000);
+            ownedArenaDrain(&arena);
+            const bool heldReleased =
+                held < DK_OWNED_SOAK_ID_BOUND &&
+                atomic_load_explicit(&g_dkOwnedSoakReleasedId[held],
+                                     memory_order_relaxed);
+            printf("owned stall rule %d: held #%" PRIu64
+                   " survived drains %d, intact %d, released after exit %d\n",
+                   rule, held, heldSurvived, stall.intactAfterStall,
+                   heldReleased);
+            SOAKEXPECT(heldSurvived && stall.intactAfterStall,
+                       "a stalled reader's object survives every drain");
+            SOAKEXPECT(heldReleased,
+                       "and is released once the reader has left");
+        }
         ownedCellDestruct(&cell);
         ownedArenaDestruct(&arena);
     }
@@ -2609,7 +2769,6 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
         const uint64_t pubBase = ownedSeqPublishedTotal();
         const uint64_t tornBase = ownedSeqTornReadsTotal();
         const uint64_t overBase = ownedSeqOverwrittenReadsTotal();
-        const uint64_t abandonBase = ownedSeqPublishAbandonedTotal();
         const uint64_t oversizeBase = ownedSeqPublishRefusedOversizeTotal();
 
         /* A published version reads VALID, byte for byte. */
@@ -2990,18 +3149,75 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
             ownedSeqDestruct(&sw);
         }
 
+        /* The highest assigned number abandoned (deterministic): A holds
+         * the one version while B takes number 2 and gives up.  Number 2
+         * reads TORN forever; the cursor (1) reads A's payload. */
+        {
+            ownedSeq sh;
+            cleanerName(zfree, Bytes) uint8_t *storageH =
+                (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclOne_));
+            ownedSeqInit(&sh, &dkSeqDeclOne_, NULL, storageH);
+            const uint64_t abandonBefore = ownedSeqPublishAbandonedTotal();
+            dkSeqHoldCtx hold = {.seq = &sh};
+            pthread_t ta;
+            pthread_t tb;
+            const bool startedA =
+                pthread_create(&ta, NULL, dkSeqHoldWriterA_, &hold) == 0;
+            /* B waits for A to be inside: start it only when A runs */
+            const bool startedB =
+                startedA &&
+                pthread_create(&tb, NULL, dkSeqHoldWriterB_, &hold) == 0;
+            if (startedA && !startedB) {
+                atomic_store_explicit(&hold.bDone, true, memory_order_release);
+            }
+            OEXPECT(startedA && startedB, "seq hold: writers started");
+            if (startedB) {
+                pthread_join(tb, NULL);
+            }
+            if (startedA) {
+                pthread_join(ta, NULL);
+            }
+            uint8_t want[DK_SEQ_BYTES];
+            dkSeqPayload_(want, 0xA0);
+            OEXPECT(ownedSeqAssigned(&sh) == 2 && ownedSeqCursor(&sh) == 1 &&
+                        ownedSeqPublishAbandonedTotal() == abandonBefore + 1,
+                    "seq hold: the higher number was abandoned, the lower "
+                    "published");
+            OEXPECT(ownedSeqReadAt(&sh, 2, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_TORN,
+                    "seq hold: the abandoned highest number never validates");
+            OEXPECT(ownedSeqReadAt(&sh, ownedSeqCursor(&sh), out, sizeof(out),
+                                   &outLen) == OWNED_SEQ_VALID &&
+                        memcmp(out, want, DK_SEQ_BYTES) == 0,
+                    "seq hold: the cursor's publication validates");
+            ownedSeqDestruct(&sh);
+        }
+
         /* Overlapping writers, N == 1 and N == 4, with a concurrent
-         * reader, followed by a liveness check. */
+         * reader, followed by a liveness check.  Each runs under three
+         * schedules, the last two injected: as the scheduler places the
+         * threads; a reader starved until every writer is joined; and the
+         * writers run one after another (no overlap at all).  Every check
+         * below holds under all three, so none depends on load. */
         {
             const ownedSeqDecl *decls[2] = {&dkSeqDeclOne_, &dkSeqDeclA_};
-            for (int d = 0; d < 2; d++) {
+            static const char *const scheduleName[3] = {"free", "starved",
+                                                        "serial"};
+            for (int run = 0; run < 6; run++) {
+                const int d = run / 3;
+                const int schedule = run % 3;
                 enum { kWriters = 8, kPerWriter = 2000 };
                 ownedSeq sv;
                 cleanerName(zfree, Bytes) uint8_t *storageV =
                     (uint8_t *)zmalloc(ownedSeqStorageBytes(decls[d]));
                 ownedSeqInit(&sv, decls[d], NULL, storageV);
+                const uint64_t pubBefore = ownedSeqPublishedTotal();
+                const uint64_t abandonBefore = ownedSeqPublishAbandonedTotal();
                 _Atomic bool stop = false;
-                dkSeqReaderCtx reader = {.seq = &sv, .stop = &stop};
+                _Atomic bool go = false;
+                dkSeqReaderCtx reader = {.seq = &sv,
+                                         .stop = &stop,
+                                         .go = schedule == 1 ? &go : NULL};
                 pthread_t rt;
                 OEXPECT(pthread_create(&rt, NULL, dkSeqReaderMain_, &reader) ==
                             0,
@@ -3015,17 +3231,49 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                     OEXPECT(pthread_create(&th[i], NULL, dkSeqWriterMain_,
                                            &ctx[i]) == 0,
                             "seq overlap: writer started");
+                    if (schedule == 2) {
+                        pthread_join(th[i], NULL);
+                    }
                 }
-                for (int i = 0; i < kWriters; i++) {
+                for (int i = 0; schedule != 2 && i < kWriters; i++) {
                     pthread_join(th[i], NULL);
                 }
                 atomic_store_explicit(&stop, true, memory_order_release);
+                atomic_store_explicit(&go, true, memory_order_release);
                 pthread_join(rt, NULL);
+                const uint64_t published = ownedSeqPublishedTotal() - pubBefore;
+                const uint64_t abandoned =
+                    ownedSeqPublishAbandonedTotal() - abandonBefore;
+                /* Observability: one line per run, so a failure's log
+                 * shows the whole state */
+                printf("seq overlap N=%u %s: assigned %" PRIu64
+                       " cursor %" PRIu64 " published %" PRIu64
+                       " abandoned %" PRIu64 " valid reads %" PRIu64
+                       " mixed %" PRIu64 " final read #%" PRIu64 " -> %d\n",
+                       decls[d]->versions, scheduleName[schedule],
+                       ownedSeqAssigned(&sv), ownedSeqCursor(&sv), published,
+                       abandoned, reader.validReads, reader.mixedReads,
+                       reader.finalNumber, reader.finalResult);
                 OEXPECT(reader.mixedReads == 0,
                         "seq overlap: no VALID read carried a mixed payload");
-                /* Without a VALID read the check above is vacuous. */
-                OEXPECT(reader.validReads > 0,
-                        "seq overlap: the reader validated at least one copy");
+                /* The final read asks for the cursor once every writer is
+                 * joined, so it validates under every schedule; without a
+                 * VALID read the check above would be vacuous. */
+                OEXPECT(reader.finalResult == OWNED_SEQ_VALID &&
+                            reader.validReads > 0,
+                        "seq overlap: the cursor validates once the writers "
+                        "are joined");
+                /* Conservation, under any schedule: every number handed
+                 * out was published or abandoned, and the cursor is a
+                 * published number */
+                OEXPECT(ownedSeqAssigned(&sv) == kWriters * kPerWriter &&
+                            published + abandoned == kWriters * kPerWriter &&
+                            published > 0 &&
+                            ownedSeqCursor(&sv) <= ownedSeqAssigned(&sv),
+                        "seq overlap: every number published or abandoned");
+                /* With no overlap nothing is ever abandoned */
+                OEXPECT(schedule != 2 || abandoned == 0,
+                        "seq overlap: serialized writers abandon nothing");
                 /* Liveness: after the writers are joined, one publication
                  * into every version must read VALID. */
                 bool healed = true;
@@ -3044,10 +3292,6 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                         "version returns to service");
                 ownedSeqDestruct(&sv);
             }
-            /* Eight writers on N == 1 overlap, so some publications must
-             * have been abandoned. */
-            OEXPECT(ownedSeqPublishAbandonedTotal() > abandonBase + 1,
-                    "seq overlap: publish_abandoned_total moved");
         }
 
         ownedSeqDestruct(&sc);
