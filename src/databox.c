@@ -246,6 +246,57 @@ static void databoxOwnWidePayload_(databox *dst, const databox *src) {
     dst->big = true;
 }
 
+/* Give 'box' (holding its source's fields) its own copy of the bytes it
+ * carries, by type: plain bytes (BYTES, NEVER_FREE) become owned BYTES,
+ * embedded when they fit 8 bytes; an embedded flex aggregate is copied to
+ * the heap under its own type; an mdsc string becomes a new mdsc.  VOID (a
+ * reservation, no contents) and OFFSET (a position in another stream)
+ * carry no bytes of their own, nor do the non-byte types: left as they are.
+ * True when 'box' now owns a copy. */
+static bool databoxOwnBytes_(databox *box) {
+    const uint8_t *const bytes = box->data.bytes.start;
+    const size_t len = box->len;
+    switch (box->type) {
+    case DATABOX_BYTES:
+    case DATABOX_BYTES_NEVER_FREE:
+        if (len <= sizeof(box->data.bytes.embed8)) {
+            /* 'bytes' is saved: the embed overlays the pointer */
+            box->type = DATABOX_BYTES_EMBED;
+            box->allocated = false;
+            memcpy(box->data.bytes.embed8, bytes, len);
+        } else {
+            box->type = DATABOX_BYTES;
+            box->allocated = true;
+            /* @own: container; free=databoxFreeData */
+            box->data.bytes.start = zmalloc(len);
+            memcpy(box->data.bytes.start, bytes, len);
+        }
+        return true;
+    case DATABOX_CONTAINER_FLEX_MAP:
+    case DATABOX_CONTAINER_FLEX_LIST:
+    case DATABOX_CONTAINER_FLEX_SET:
+    case DATABOX_CONTAINER_FLEX_TUPLE:
+    case DATABOX_CONTAINER_CFLEX_MAP:
+    case DATABOX_CONTAINER_CFLEX_LIST:
+    case DATABOX_CONTAINER_CFLEX_SET:
+    case DATABOX_CONTAINER_CFLEX_TUPLE:
+        box->allocated = true;
+        /* @own: container; free=databoxFreeData */
+        box->data.bytes.start = zmalloc(len);
+        memcpy(box->data.bytes.start, bytes, len);
+        return true;
+#if DATABOX_ENABLE_PTR_MDSC
+    case DATABOX_PTR_MDSC:
+        box->allocated = true;
+        /* @own: container; free=databoxFreeData */
+        box->data.ptr = mdscnewlen(bytes, len);
+        return true;
+#endif
+    default:
+        return false;
+    }
+}
+
 void databoxCopyBytesFromBox(databox *dst, const databox *src) {
     *dst = *src;
     if (databoxIsWide_(src)) {
@@ -254,32 +305,18 @@ void databoxCopyBytesFromBox(databox *dst, const databox *src) {
     }
 
     dst->big = false;
-    if (DATABOX_IS_BYTES_EMBED(src)) {
-        /* Nothing remaining to copy since bytes are embeded */
-        return;
-    }
-
-    /* NOTE: this breaks with offset boxes */
-    if (src->type >= DATABOX_BYTES) {
-        if (src->len <= sizeof(dst->data.bytes.embed8)) {
-            /* If source bytes small enough to become embed, do
-             * embed instead of allocating actual memory */
-            memcpy(dst->data.bytes.embed8, databoxBytes(src), databoxLen(src));
-            dst->type = DATABOX_BYTES_EMBED;
-        } else {
-            const void *srcBytes = src->data.bytes.start;
-            dst->allocated = true;
-            /* @own: container; free=databoxFreeData */
-            dst->data.bytes.start = zcalloc(1, src->len);
-            memcpy(dst->data.bytes.start, srcBytes, src->len);
-        }
-    }
+    dst->allocated = false;
+    databoxOwnBytes_(dst);
 }
 
 bool databoxAllocateIfNeeded(databox *restrict box) {
+    /* An owned payload is already independent of its source */
+    if (box->allocated) {
+        return false;
+    }
+
     if (databoxIsWide_(box)) {
-        /* An owned payload is already independent of its source. */
-        if (box->allocated || !box->data.ptr) {
+        if (!box->data.ptr) {
             return false;
         }
 
@@ -287,47 +324,13 @@ bool databoxAllocateIfNeeded(databox *restrict box) {
         return true;
     }
 
-    if (DATABOX_IS_BYTES_EMBED(box)) {
-        /* Nothing remaining to copy since bytes are embeded */
-        return false;
-    }
-
-    if (box->type >= DATABOX_BYTES && box->type < DATABOX_MAX_EMBED) {
-        const void *restrict srcBytes = box->data.bytes.start;
-        box->allocated = true;
-        /* @own: container; free=databoxFreeData */
-        box->data.bytes.start = zmalloc(box->len);
-        memcpy(box->data.bytes.start, srcBytes, box->len);
-        return true;
-    }
-
-    return false;
+    return databoxOwnBytes_(box);
 }
 
 databox databoxCopy(const databox *restrict src) {
-    databox dst_ = *src;
-    databox *restrict dst = &dst_;
-    if (databoxIsWide_(src)) {
-        databoxOwnWidePayload_(dst, src);
-        return dst_;
-    }
-
-    dst->big = false;
-    if (DATABOX_IS_BYTES_EMBED(src)) {
-        /* Nothing remaining to copy since bytes are embeded */
-        return dst_;
-    }
-
-    /* NOTE: this breaks with offset boxes */
-    if (src->type >= DATABOX_BYTES) {
-        const void *restrict srcBytes = src->data.bytes.start;
-        dst->allocated = true;
-        /* @own: container; free=databoxFreeData */
-        dst->data.bytes.start = zcalloc(1, src->len);
-        memcpy(dst->data.bytes.start, srcBytes, src->len);
-    }
-
-    return dst_;
+    databox dst;
+    databoxCopyBytesFromBox(&dst, src);
+    return dst;
 }
 
 void databoxBigCopyFrom(databoxBig *dst, const databox *src) {
@@ -357,9 +360,10 @@ void databoxBigCopyFrom(databoxBig *dst, const databox *src) {
 void databoxFreeData(databox *box) {
     if (box) {
         if (box->allocated) {
-            if (box->type == DATABOX_BYTES) {
-                /*  box->type != DATABOX_BYTES_NEVER_FREE && box->allocated) {
-                 */
+            /* Owned bytes: plain, or an embedded flex aggregate's copy */
+            if (box->type == DATABOX_BYTES ||
+                (box->type >= DATABOX_CONTAINER_FLEX_MAP &&
+                 box->type <= DATABOX_CONTAINER_CFLEX_TUPLE)) {
                 zfree(box->data.ptr);
                 box->data.ptr = NULL;
                 box->allocated = false;
@@ -1099,6 +1103,7 @@ bool databoxCanonicalNumeral(const databox *in, databoxBig *out) {
 defcleanerName(uint8_t *, zfree, U8);
 defcleanerName(databoxBig *, zfree, Big);
 defcleaner(flex *, flexFree);
+defcleaner(mdsc *, mdscfree);
 
 const char *databoxReprStr(const databox *const box) {
     _Thread_local static char buf[256];
@@ -3089,6 +3094,62 @@ int databoxTest(int argc, char *argv[]) {
         }
         if (databoxCompare(&pLo, &sNeg) <= 0) {
             ERRR("PTR (as unsigned) must order above negative signed");
+        }
+    }
+
+    TEST("databox: owning copies of every byte-carrying type") {
+        /* Each source, copied with databoxCopy and made owned in place
+         * with databoxAllocateIfNeeded: the copy keeps its type (bytes
+         * the source never frees become owned BYTES), holds the same
+         * bytes in its own storage, and databoxFreeData releases it */
+        uint8_t text20[] = "twenty bytes of text";
+        cleaner(mdscfree) mdsc *mds20 = mdscnew("an mdsc of 23 bytes!!!");
+        cleaner(mdscfree) mdsc *mds3 = mdscnew("xyz");
+        cleaner(flexFree) flex *fl = flexNew();
+        flexPushSigned(&fl, 42, FLEX_ENDPOINT_TAIL);
+        struct {
+            databox box;
+            databoxType want;
+        } cases[] = {
+            {{.type = DATABOX_BYTES, .data.bytes.start = text20, .len = 20},
+             DATABOX_BYTES},
+            {{.type = DATABOX_BYTES_NEVER_FREE,
+              .data.bytes.start = text20,
+              .len = 20},
+             DATABOX_BYTES},
+            {{.type = DATABOX_PTR_MDSC,
+              .data.ptr = mds20,
+              .len = mdsclen(mds20)},
+             DATABOX_PTR_MDSC},
+            {{.type = DATABOX_PTR_MDSC, .data.ptr = mds3, .len = 3},
+             DATABOX_PTR_MDSC},
+            {{.type = DATABOX_CONTAINER_FLEX_LIST,
+              .data.bytes.start = fl,
+              .len = flexBytes(fl)},
+             DATABOX_CONTAINER_FLEX_LIST},
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            for (int inPlace = 0; inPlace <= 1; inPlace++) {
+                const databox *src = &cases[c].box;
+                databox copy = *src;
+                if (inPlace) {
+                    databoxAllocateIfNeeded(&copy);
+                } else {
+                    copy = databoxCopy(src);
+                }
+                const bool own = databoxBytes(&copy) != databoxBytes(src);
+                const bool same = databoxLen(&copy) == databoxLen(src) &&
+                                  memcmp(databoxBytes(&copy), databoxBytes(src),
+                                         databoxLen(src)) == 0;
+                const bool typed = copy.type == cases[c].want;
+                databoxFreeData(&copy);
+                if (!own || !same || !typed || copy.allocated) {
+                    ERR("case %zu (%s): own %d same %d type %d (want %d) "
+                        "freed %d",
+                        c, inPlace ? "in place" : "copy", own, same,
+                        (int)copy.type, (int)cases[c].want, !copy.allocated);
+                }
+            }
         }
     }
 

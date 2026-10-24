@@ -678,12 +678,16 @@ void databoxRetainBytesSelfExact(databox *dst, void *bytes);
 ssize_t databoxRetainBytesSelf(databox *dst, databoxRetainCache *cache);
 /* Owning copies.  databoxCopy returns, and databoxCopyBytesFromBox writes
  * to 'dst', a copy that is independent of the source's storage;
- * databoxAllocateIfNeeded makes 'box' independent in place.  BYTES are
- * copied to the heap (or embedded when they fit 8 bytes), and a 96/128-bit
- * payload is copied to a 16-byte heap block with allocated = 1 and
- * big = 1.  Release either with databoxFreeData.  Every other result has
- * big = 0, and a type-only wide box (data.ptr == NULL) stays type-only.
- * databoxAllocateIfNeeded leaves an already-owned wide payload alone. */
+ * databoxAllocateIfNeeded makes 'box' independent in place.  Plain bytes
+ * (BYTES, BYTES_NEVER_FREE) are copied to the heap as owned BYTES, or
+ * embedded when they fit 8 bytes; an embedded flex aggregate is copied to
+ * the heap under its own type; an mdsc string (PTR_MDSC) becomes a new
+ * mdsc; a 96/128-bit payload is copied to a 16-byte heap block with
+ * allocated = 1 and big = 1.  Release any of them with databoxFreeData.
+ * BYTES_VOID and BYTES_OFFSET carry no bytes of their own and stay as they
+ * are.  Every other result has big = 0, and a type-only wide box
+ * (data.ptr == NULL) stays type-only.  databoxAllocateIfNeeded leaves an
+ * already-owned box alone. */
 void databoxCopyBytesFromBox(databox *dst, const databox *src);
 bool databoxAllocateIfNeeded(databox *box);
 databox databoxCopy(const databox *src);
