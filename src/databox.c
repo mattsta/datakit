@@ -1,10 +1,9 @@
 #include "databox.h"
+#include "dkDiag.h"
 #include "floatExtended.h"
 #include "str.h"
 
-#include <math.h>   /* isnan */
-#include <stdio.h>  /* fprintf */
-#include <stdlib.h> /* abort */
+#include <math.h> /* isnan */
 
 #if DATABOX_ENABLE_PTR_MDSC
 #include "mdsc.h"
@@ -661,12 +660,11 @@ DK_INLINE_ALWAYS int databoxCompareInteger(const databox *a, const databox *b) {
 }
 
 void databoxWidePayloadMissing(const databox *box, const char *where) {
-    fprintf(stderr,
-            "%s: %s box has no payload (a deferred wide value); read it "
-            "into wide storage before using it\n",
-            where,
-            box->type == DATABOX_SIGNED_128 ? "SIGNED_128" : "UNSIGNED_128");
-    abort();
+    DK_DIAG_FATAL(
+        DK_DIAG_DATABOX_WIDE_DEFERRED,
+        "%s: %s box has no payload (a deferred wide value); read "
+        "it into wide storage before using it",
+        where, box->type == DATABOX_SIGNED_128 ? "SIGNED_128" : "UNSIGNED_128");
 }
 
 /* The 96/128-bit comparison arms read the payload of whichever operand is
@@ -871,14 +869,12 @@ DK_INLINE_ALWAYS int databoxCompareNumeric_(const databox *restrict a,
     case c3b(DATABOX_DOUBLE_64, DATABOX_SIGNED_128):
         return -databoxCompareInt128Float(b, a);
     default:
-#ifndef NDEBUG
-        printf("Attempted to compare: %" PRIu32 " and %" PRIu32 "?",
-               (uint32_t)a->type, (uint32_t)b->type);
-#endif
-        assert(NULL && "Either you tried to compare against DATABOX_VOID "
-                       "or we created new numeric types and didn't add "
-                       "corresponding comparison table entries.");
-        __builtin_unreachable();
+        /* A VOID box, or a numeric type this table has no entry for: no
+         * order exists, so stop in every build (never undefined behaviour
+         * where assertions are compiled out) */
+        DK_DIAG_FATAL(DK_DIAG_DATABOX_UNCOMPARABLE,
+                      "no numeric order between types %" PRIu32 " and %" PRIu32,
+                      (uint32_t)a->type, (uint32_t)b->type);
     }
 }
 

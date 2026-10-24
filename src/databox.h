@@ -267,8 +267,9 @@ static inline bool databoxIsWideDeferred(const databox *box) {
  * encoders read a 96/128-bit value through data.i128 / data.u128, and a
  * deferred box has nothing there, so reaching one of those paths with it
  * is a caller bug.  databoxWidePayloadRequire, used only inside their
- * 96/128-bit arms, prints the caller's name and aborts instead of
- * dereferencing NULL.  Narrow values never reach it. */
+ * 96/128-bit arms, reports it (a FATAL DK_DIAG_DATABOX_WIDE_DEFERRED
+ * diagnostic naming the caller) and aborts instead of dereferencing
+ * NULL.  Narrow values never reach it. */
 __attribute__((noreturn, cold)) void
 databoxWidePayloadMissing(const databox *box, const char *where);
 #define databoxWidePayloadRequire(box)                                         \

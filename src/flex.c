@@ -83,6 +83,7 @@
 #include "../deps/varint/src/varintSplitFullNoZero.h" /* byte lengths */
 #include "../deps/varint/src/varintTagged.h"          /* count */
 #include "datakit.h"
+#include "dkDiag.h"
 #include "flex.h"
 
 #include "cleaner.h"
@@ -2443,13 +2444,14 @@ void flexInsertBytes(flex **const ff, flexEntry *const fe, const void *data,
 
 /* A box of a type flex has no encoding for (an offset box, a compressed
  * aggregate, ...) reached a store: a caller contract violation, reported
- * and stopped in every build (never left to undefined behaviour where
- * assertions are compiled out) */
+ * (a FATAL DK_DIAG_FLEX_BOX_UNENCODABLE diagnostic) and stopped in every
+ * build, never left to undefined behaviour where assertions are compiled
+ * out */
 __attribute__((noreturn, cold)) static void
 flexBoxTypeUnsupported_(const databox *box, const char *where) {
-    fprintf(stderr, "%s: a box of type %d has no flex encoding\n", where,
-            (int)box->type);
-    abort();
+    DK_DIAG_FATAL(DK_DIAG_FLEX_BOX_UNENCODABLE,
+                  "%s: a box of type %d has no flex encoding", where,
+                  (int)box->type);
 }
 
 DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,

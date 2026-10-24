@@ -60,6 +60,8 @@ typedef enum dkDiagCode {
     DK_DIAG_MULTIROAR_WRONG_MODE = 8,
     /* a container operation on a native multiarray */
     DK_DIAG_MULTIARRAY_NATIVE = 9,
+    /* two numeric boxes with no order between them (a VOID box) (FATAL) */
+    DK_DIAG_DATABOX_UNCOMPARABLE = 10,
     DK_DIAG_CODE_COUNT_ /* one past the last code; not a code */
 } dkDiagCode;
 

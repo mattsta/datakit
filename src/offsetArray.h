@@ -182,10 +182,9 @@
  * makes offsetArrayGet this form.  It is always defined so the offsetArray
  * tests exercise it in every build.
  * --------------------------------------------------------------------------*/
+#include "dkDiag.h"
 #include <inttypes.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 #define offsetArrayGetChecked_(arr, idx)                                       \
     (*({                                                                       \
@@ -203,21 +202,21 @@
 #define offsetArrayGet(arr, idx) offsetArrayGetChecked_(arr, idx)
 #endif
 
+/* A failed check is a FATAL DK_DIAG_OFFSETARRAY_BOUNDS diagnostic, located
+ * at the offsetArrayGet that failed, then abort() */
 static inline void offsetArrayBoundsCheck_(bool hasObj, bool aboveLow,
                                            bool belowHigh, const char *name,
                                            int64_t idx, const char *file,
                                            int line) {
     if (!hasObj) {
-        fprintf(stderr,
-                "%s:%d: offsetArrayGet(%s, %" PRId64 "): array is empty\n",
-                file, line, name, idx);
-        abort();
+        dkDiagFatal_(DK_DIAG_OFFSETARRAY_BOUNDS, "offsetArrayGet", file, line,
+                     "offsetArrayGet(%s, %" PRId64 "): array is empty", name,
+                     idx);
     }
     if (!aboveLow || !belowHigh) {
-        fprintf(stderr,
-                "%s:%d: offsetArrayGet(%s, %" PRId64 "): index out of bounds\n",
-                file, line, name, idx);
-        abort();
+        dkDiagFatal_(DK_DIAG_OFFSETARRAY_BOUNDS, "offsetArrayGet", file, line,
+                     "offsetArrayGet(%s, %" PRId64 "): index out of bounds",
+                     name, idx);
     }
 }
 
