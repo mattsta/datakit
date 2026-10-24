@@ -66,39 +66,24 @@ struct stringPool {
 stringPool *stringPoolNew(void) {
     /* A zeroed pool is safe to hand to stringPoolFree at ANY point
      * during construction (every teardown arm is NULL-safe), so the
-     * cleaner covers all partial-construction exits below. */
+     * cleaner covers any exit below.  Allocation fails fast. */
     cleaner(stringPoolFree) stringPool *pool = zcalloc(1, sizeof(*pool));
-    if (!pool) {
-        return NULL;
-    }
 
     /* Create hash table for string→ID lookup */
     /* @own: container; free=multidictDefaultClassFree */
     pool->mdClass = multidictDefaultClassNew();
-    if (!pool->mdClass) {
-        return NULL;
-    }
 
     /* @own: container; free=multidictFree */
     pool->strToId = multidictNew(&multidictTypeExactKey, pool->mdClass, 0);
-    if (!pool->strToId) {
-        return NULL;
-    }
 
     /* Allocate initial entry array */
     /* @own: container; free=zfree */
     pool->entries = zcalloc(INITIAL_CAPACITY, sizeof(poolEntry));
-    if (!pool->entries) {
-        return NULL;
-    }
     pool->capacity = INITIAL_CAPACITY;
 
     /* Allocate initial free list */
     /* @own: container; free=zfree */
     pool->freeList = zmalloc(INITIAL_FREE_CAPACITY * sizeof(uint64_t));
-    if (!pool->freeList) {
-        return NULL;
-    }
     pool->freeCapacity = INITIAL_FREE_CAPACITY;
 
     /* IDs start at 1 (0 = invalid) */
@@ -337,10 +322,6 @@ uint64_t stringPoolIntern(stringPool *pool, const databox *str) {
 
     /* @own: container; free=stringPoolFree */
     uint8_t *data = zmalloc(len);
-    if (!data) {
-        pushFreeId(pool, id);
-        return 0;
-    }
     memcpy(data, srcBytes, len);
 
     /* Store entry */
