@@ -970,8 +970,7 @@ DK_STATIC void multilistFullMergeNodes_(multilistFull *ml, mflexState *state[2],
  * Either side may be empty (OFFSET at the node's head or tail).
  *
  * Returns index of newly allocated nodeId */
-/* Worker function for _multilistFullSplitNode().
- * Note: accepts *open* node/flex as input, then *closes* before returning. */
+/* Note: accepts *open* node/flex as input, then *closes* before returning. */
 DK_STATIC mlNodeId multilistFullSplitNodeFromOpen_(
     multilistFull *ml, mflexState *state, mflex **node, flex **ff,
     const mlNodeId nodeIdx, const int offset, const bool after) {
@@ -993,31 +992,6 @@ DK_STATIC mlNodeId multilistFullSplitNodeFromOpen_(
     const mlNodeId newIdx = multilistFullInsertNodeEmpty__(ml, nodeIdx, after);
     mflex **newNode = getNodePtr(newIdx);
     *newNode = mflexConvertFromFlexNoCompress(deletedContents);
-
-    return newIdx;
-}
-
-__attribute__((unused)) DK_STATIC mlNodeId _multilistFullSplitNode(
-    multilistFull *ml, mflexState *state, const mlNodeId nodeIdx,
-    const int offset, const bool after) {
-    mflex **node = getNodePtr(nodeIdx);
-    flex *f = mflexOpen(*node, state);
-
-#if VERIFY_SPLIT_RESULT
-    const int prevalues = mflexCount(*node);
-#endif
-
-    const mlNodeId newIdx = multilistFullSplitNodeFromOpen_(
-        ml, state, node, &f, nodeIdx, offset, after);
-
-#if VERIFY_SPLIT_RESULT
-    assert(prevalues ==
-           getNode(after ? nodeIdx : nodeIdx - 1)->values + newNode->values);
-#endif
-
-    D("After split lengths: orig (%zu), new (%zu)",
-      mflexCount(getNode(after ? nodeIdx : nodeIdx - 1)),
-      mflexCount(getNode(newIdx)));
 
     return newIdx;
 }
