@@ -194,6 +194,11 @@ struct persist {
     /* Bad WAL entries (see persist.h, "Bad WAL entries") */
     persistBadEntryKind walBadKind; /* why the last read stopped (BAD) */
     bool keyProven; /* the current key verified a snapshot or WAL entry */
+    /* A held entry (KEY, or CORRUPT with no quarantine) refuses appends
+     * without re-walking the WAL until something could change the verdict:
+     * a key change, a quarantine, a WAL store, a compaction.  READ is not
+     * cached: the store may come back. */
+    bool walHeld;
     uint64_t walEntriesRead;        /* complete entries the last walk read */
     persistStore *quarantine;       /* owned; NULL: none */
     char *quarantinePath;           /* owned; opened when a heal needs it */
@@ -445,6 +450,7 @@ bool persistAttachWAL(persist *p, persistStore *store) {
     p->walInitialized = false;
     p->walCursorMoved = false;
     p->walAppendOffset = 0;
+    p->walHeld = false;
     return true;
 }
 
@@ -475,6 +481,7 @@ bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
     p->attachedGeneration = 0u;
     p->integrityPreparedKey = NULL;
     p->keyProven = false;
+    p->walHeld = false;
     if (key == NULL || key_len == 0) {
         p->integrityKey = NULL;
         p->integrityKeyLen = 0;
@@ -491,6 +498,7 @@ bool persistSetIntegrityPreparedKey(persist *p, const struct hmacKey *prep) {
     }
     p->integrityPreparedKey = prep;
     p->keyProven = false;
+    p->walHeld = false;
     return true;
 }
 
@@ -588,6 +596,7 @@ static bool persistBindKeyringInternal(persist *p, hmacKeyring *ring,
     p->lastError = PERSIST_ERR_NONE;
     p->lastExpectedKeyId = 0u;
     p->keyProven = false;
+    p->walHeld = false;
     return true;
 }
 
@@ -999,6 +1008,7 @@ void *persistRestore(persist *p) {
             return NULL;
         }
         p->keyProven = true; /* the key reads what it wrote */
+        p->walHeld = false;
 
         /* The envelope's payload sits at an arbitrary offset inside the
          * malloc'd envelope buffer (after the varint framing). ops->restore
@@ -1156,6 +1166,9 @@ bool persistWALReady(persist *p) {
         return false;
     }
     if (!p->walInitialized) {
+        if (p->walHeld) {
+            return false; /* held, and nothing has changed since */
+        }
         if (!persistWALInit(p)) {
             return false;
         }
@@ -1534,6 +1547,7 @@ static bool persistWALHeal_(persist *p, int64_t goodEnd) {
     if (p->walBadKind != PERSIST_BAD_ENTRY_CORRUPT || !wal->truncate ||
         (!p->quarantine && !p->quarantinePath)) {
         persistBadEntryReport_(p, goodEnd, bytes, PERSIST_BAD_ENTRY_HELD);
+        p->walHeld = p->walBadKind != PERSIST_BAD_ENTRY_READ;
         return false;
     }
 
@@ -1583,6 +1597,7 @@ bool persistAttachQuarantine(persist *p, persistStore *store) {
         zfree(p->quarantine);
     }
     p->quarantine = store;
+    p->walHeld = false;
     return true;
 }
 
@@ -1592,6 +1607,7 @@ bool persistAttachQuarantineFile(persist *p, const char *path) {
     }
     zfree(p->quarantinePath);
     p->quarantinePath = NULL;
+    p->walHeld = false;
     if (path) {
         const size_t n = strlen(path) + 1;
         /* @own: container; free=persistClose */
@@ -1848,6 +1864,7 @@ bool persistCompact(persist *p, void *structure) {
             return false;
         }
         p->walInitialized = true;
+        p->walHeld = false;
     }
 
     p->stats.compactionCount++;
@@ -10574,7 +10591,8 @@ int persistTest(int argc, char *argv[]) {
         kcfg.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
         cleaner(persistClose) persist *k =
             persistCreate(&persistOpsIntset, &kcfg);
-        persistStore *kwal = persistStoreMemory(0);
+        /* (an unarmed fault store: it counts the reads) */
+        persistStore *kwal = persistStoreFaulty(persistStoreMemory(0), false);
         persistAttachWAL(k, kwal);
         persistSetIntegrityKey(k, keyA, sizeof(keyA));
         persistLogOp(k, PERSIST_OP_INSERT, &later, 1);
@@ -10584,10 +10602,20 @@ int persistTest(int argc, char *argv[]) {
         cleaner(intsetFree) intset *kis = intsetNew();
         persistReplayWAL(k, &kis);
         persistLastBadEntry(k, &r);
-        const bool heldForKey = r.kind == PERSIST_BAD_ENTRY_KEY &&
-                                r.action == PERSIST_BAD_ENTRY_HELD &&
-                                persistLogOp(k, PERSIST_OP_INSERT, &later, 1) ==
-                                    PERSIST_LOG_REFUSED;
+        bool heldForKey = r.kind == PERSIST_BAD_ENTRY_KEY &&
+                          r.action == PERSIST_BAD_ENTRY_HELD;
+        /* A held verdict is kept: refused appends do not re-read the WAL */
+        const uint64_t readsBefore =
+            persistStoreFaultyCalls(kwal, PERSIST_FAULT_READ);
+        for (int i = 0; i < 100; i++) {
+            heldForKey &= persistLogOp(k, PERSIST_OP_INSERT, &later, 1) ==
+                          PERSIST_LOG_REFUSED;
+        }
+        if (persistStoreFaultyCalls(kwal, PERSIST_FAULT_READ) != readsBefore) {
+            ERR("100 refused appends read the WAL %" PRIu64 " times",
+                persistStoreFaultyCalls(kwal, PERSIST_FAULT_READ) -
+                    readsBefore);
+        }
         persistSetIntegrityKey(k, keyA, sizeof(keyA));
         const int64_t eight = 8;
         if (!heldForKey || persistLogOp(k, PERSIST_OP_INSERT, &eight, 1) ==
