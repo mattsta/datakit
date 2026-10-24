@@ -2831,16 +2831,9 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
          * reports a container's len with its reverse trailer included. */
         c->len = flexBytes(c->data);
         break;
-    case DATABOX_CONTAINER_CFLEX_MAP:
-    case DATABOX_CONTAINER_CFLEX_LIST:
-    case DATABOX_CONTAINER_CFLEX_SET:
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
-        /* TODO: we aren't storing nested compressed maps.
-         *       if map is compressed, must uncompress for storage. */
-        c->encoding = FLEX_CONTAINER_MAP + DATABOX_CONTAINER_OFFSET(box->type);
-        c->data = box->data.bytes.start;
-        c->len = cflexBytes(c->data);
-        break;
+    /* A compressed nested container has no flex encoding (its tags are
+     * reserved and refused on read): refused with the other unencodable
+     * boxes (the default below), as flexInsertByType refuses it */
     case DATABOX_TRUE:
         c->encoding = FLEX_TRUE;
         break;
@@ -9340,18 +9333,29 @@ static int32_t flexTestReplaceSign(void) {
 }
 
 #include "jebuf.h"
-/* Feed a deferred wide box (wide type, data.ptr == NULL) to one insert or
- * encode path in a child and report whether the child aborted.  The
- * child turns SIGABRT into a distinct exit status, which keeps the
- * platform crash reporter out of it, and silences its stderr. */
+/* Feed a box flex cannot encode to one insert or encode path in a child
+ * and report whether the child stopped through a FATAL diagnostic: the
+ * dkDiag hook (which runs before the abort) exits with a distinct status.
+ * An abort with no FATAL report first (an assertion, gone from builds
+ * without them) exits differently and fails.  The child's stderr is
+ * silenced, and turning SIGABRT into an exit keeps the platform crash
+ * reporter out of it. */
 #define FLEX_TEST_DEFERRED_PATHS 4
 #define FLEX_TEST_ABORT_STATUS 86
+#define FLEX_TEST_BARE_ABORT_STATUS 87
 static void flexTestAbortHandler_(int sig) {
     (void)sig;
-    _exit(FLEX_TEST_ABORT_STATUS);
+    _exit(FLEX_TEST_BARE_ABORT_STATUS);
 }
 
-static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
+static void flexTestFatalHook_(const dkDiagnostic *d, void *ctx) {
+    (void)ctx;
+    if (d->severity == DK_DIAG_FATAL) {
+        _exit(FLEX_TEST_ABORT_STATUS);
+    }
+}
+
+static bool flexTestBoxAborts_(int32_t path, const databoxBig *given) {
     fflush(stdout);
     fflush(stderr);
     const pid_t kid = fork();
@@ -9360,6 +9364,8 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
     }
 
     if (kid == 0) {
+        static const dkDiagHook fatalHook = {.fn = flexTestFatalHook_};
+        dkDiagSetHook(&fatalHook);
         (void)signal(SIGABRT, flexTestAbortHandler_);
         if (!freopen("/dev/null", "w", stderr)) {
             _exit(2);
@@ -9367,9 +9373,7 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
 
         cleaner(flexFree) flex *f = flexNew();
         flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
-        databoxBig deferred;
-        memset(&deferred, 0, sizeof(deferred));
-        deferred.type = type;
+        databoxBig deferred = *given;
         databox *const box = (databox *)&deferred;
         const databox *row[1] = {box};
         switch (path) {
@@ -9396,6 +9400,14 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
     }
 
     return WIFEXITED(status) && WEXITSTATUS(status) == FLEX_TEST_ABORT_STATUS;
+}
+
+/* flexTestBoxAborts_ for a box of 'type' and nothing else (no payload) */
+static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
+    databoxBig box;
+    memset(&box, 0, sizeof(box));
+    box.type = type;
+    return flexTestBoxAborts_(path, &box);
 }
 
 /* The decimal spelling of a numeric box read back from a flex: integers in
@@ -9909,6 +9921,35 @@ int32_t flexTest(int32_t argc, char **argv) {
         for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
             if (!flexTestDeferredAborts_(path, DATABOX_BYTES_OFFSET)) {
                 ERR("path %" PRId32 " did not abort", path);
+            }
+        }
+
+        /* A real compressed flex as a nested container: no flex encoding
+         * exists for one yet (the tags are reserved and refused on read),
+         * so every path refuses it the same way instead of writing an entry
+         * nothing can read back */
+        cleaner(flexFree) flex *inner = flexNew();
+        for (int i = 0; i < 64; i++) {
+            flexPushBytes(&inner, "repeat repeat repeat repeat", 27,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        const size_t cSize = flexBytes(inner) + 64;
+        cleaner(zfree) void *cBuf = zcalloc(1, cSize);
+        if (!flexConvertToCFlex(inner, cBuf, cSize)) {
+            ERRR("a repetitive flex did not compress");
+        }
+        for (int32_t kind = 0; kind < 4; kind++) {
+            databoxBig box;
+            memset(&box, 0, sizeof(box));
+            box.type = DATABOX_CONTAINER_CFLEX_MAP + kind;
+            box.data.bytes.start = cBuf;
+            box.len = cflexBytes(cBuf);
+            for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
+                if (!flexTestBoxAborts_(path, &box)) {
+                    ERR("compressed container kind %" PRId32
+                        " through path %" PRId32 " did not abort",
+                        kind, path);
+                }
             }
         }
     }
