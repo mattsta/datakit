@@ -9280,6 +9280,35 @@ int persistTest(int argc, char *argv[]) {
                 (int)persistLastError(p));
         }
         persistClose(p);
+
+        /* A plain snapshot (not a compaction) after rotating: it holds
+         * every op under the new key, so recovery under that key gives
+         * them all even though the WAL still names the old one */
+        persist *q = persistCreate(&persistOpsIntset, &config);
+        persistAttachSnapshot(q, persistStoreMemory(0));
+        persistAttachWAL(q, persistStoreMemory(0));
+        persistAttachKeyring(q, ring, 1u);
+        cleaner(intsetFree) intset *liveQ = intsetNew();
+        persistSnapshot(q, liveQ);
+        for (int64_t v = 1; v <= 3; v++) {
+            bool added = false;
+            intsetAdd(&liveQ, v, &added);
+            persistLogOp(q, PERSIST_OP_INSERT, &v, 1);
+        }
+        persistSync(q);
+        persistRebindKeyring(q, ring, 2u);
+        const bool snapped = persistSnapshot(q, liveQ);
+        intset *gotQ = persistRecover(q);
+        const size_t membersQ = gotQ ? (size_t)intsetCount(gotQ) : 0;
+        if (gotQ) {
+            intsetFree(gotQ);
+        }
+        if (!snapped || membersQ != 3) {
+            ERR("snapshot after a rebind: snapped %d, recovered %zu of 3 "
+                "(error %d)",
+                snapped, membersQ, (int)persistLastError(q));
+        }
+        persistClose(q);
         hmacKeyringFree(ring);
     }
 
