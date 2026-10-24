@@ -655,7 +655,7 @@ multilistFull *multilistFullAppendValuesFromFlex(multilistFull *ml,
     /* A 96/128-bit value lands in 'wide', reused for each element */
     databox holder = {{0}};
     databoxWide wide;
-    flexEntry *fe = flexHead(fl);
+    flexEntry *fe = flexHeadIfAny(fl);
 
     while (fe) {
         flexGetByTypeInto(fe, &holder, &wide);
@@ -4286,6 +4286,23 @@ int multilistFullTest(int argc, char *argv[]) {
                 }
             }
         }
+    }
+
+    TEST("an empty flex appends no values and builds an empty list") {
+        cleaner(flexFree) flex *none = flexNew();
+        multilistFull *ml = multilistFullNewFromFlex(2, 0, s0, none);
+        const size_t built = multilistFullCount(ml);
+        const databox one = databoxNewSigned(1);
+        multilistFullPushByTypeTail(ml, s0, &one);
+        multilistFullAppendValuesFromFlex(ml, s0, none);
+        multilistFullAppendValuesFlex(ml, s0, none);
+        databox got = {{0}};
+        if (built != 0 || multilistFullCount(ml) != 1 ||
+            !multilistFullPop(ml, s0, &got, false) || got.data.i != 1) {
+            ERR("built %zu values, then hold %zu, want 0 then 1", built,
+                multilistFullCount(ml));
+        }
+        multilistFullFree(ml);
     }
 
     TEST("wide: NewFromFlex, AppendValuesFromFlex, Rotate and Pop keep "

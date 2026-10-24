@@ -1035,6 +1035,11 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
         multilist##PFX##AdapterAppendFlex(ml_, f34_);                          \
         multilist##PFX##AdapterAppendValuesFromFlex(ml_, f56_);                \
                                                                                \
+        /* Empty flexes append nothing, through either entry point */          \
+        cleaner(flexFree) flex *none_ = flexNew();                             \
+        multilist##PFX##AdapterAppendValuesFromFlex(ml_, none_);               \
+        multilist##PFX##AdapterAppendFlex(ml_, none_);                         \
+                                                                               \
         /* Insert 100 before id 3 and 101 after it, through Index */           \
         multilistEntry e_;                                                     \
         if (!multilist##PFX##AdapterIndex(ml_, s0, 3, &e_, true)) {            \
