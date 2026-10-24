@@ -470,7 +470,12 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
                                  memtestContext *ctx, memtestResult *result) {
     uint64_t backup[MEMTEST_BACKUP_WORDS];
     uint64_t *p = mem;
-    uint64_t *end = (uint64_t *)((char *)mem + bytes - MEMTEST_DECACHE_SIZE);
+    /* The last decache window, only formed when the buffer holds one (a
+     * pointer before the buffer's start would be undefined) */
+    uint64_t *end =
+        bytes >= MEMTEST_DECACHE_SIZE
+            ? (uint64_t *)((char *)mem + bytes - MEMTEST_DECACHE_SIZE)
+            : mem;
     size_t left = bytes;
     size_t errors = 0;
     uint64_t start = memtest_time_ns();
@@ -483,6 +488,12 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
             result->duration_s = 0;
         }
         return 0;
+    }
+
+    /* One phase for the whole run, its progress in hundredths of the
+     * bytes done (the per-chunk tests run without a context) */
+    if (ctx) {
+        ctx_start_phase(ctx, "Preserving test", 100);
     }
 
     while (left) {
@@ -537,10 +548,14 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
         left -= len;
         p += len / sizeof(uint64_t);
 
-        if (ctx) {
+        /* The end of the phase reports completion, once */
+        if (ctx && left > 0) {
             double progress = (double)(bytes - left) / (double)bytes;
             ctx_update(ctx, (size_t)(progress * 100), '.');
         }
+    }
+    if (ctx) {
+        ctx_end_phase(ctx);
     }
 
     if (result) {
@@ -792,6 +807,34 @@ static void memtest_print_usage(void) {
     printf("\nFor thorough testing, run several minutes per GB.\n");
 }
 
+/* Records progress calls: a phase opens at 0.0, rises without going back
+ * and stays within [0, 1], and closes at 1.0 */
+typedef struct mtProgressLog {
+    const char *phase; /* the open phase; NULL between phases */
+    double last;
+    size_t phases;
+    bool open;
+    bool bad;
+} mtProgressLog;
+
+static void mtProgressNote_(const char *phase, double progress, void *ud) {
+    mtProgressLog *log = ud;
+    if (!log->open) {
+        log->bad = log->bad || !phase || progress != 0.0;
+        log->phase = phase;
+        log->last = 0.0;
+        log->open = true;
+        log->phases++;
+        return;
+    }
+    log->bad = log->bad || phase != log->phase || progress < log->last ||
+               progress > 1.0;
+    log->last = progress;
+    if (progress == 1.0) {
+        log->open = false;
+    }
+}
+
 static int memtest_run_unit_tests(void) {
     int err = 0;
 
@@ -867,6 +910,38 @@ static int memtest_run_unit_tests(void) {
     }
 
     /* Test preserving mode */
+    TEST("progress reports every phase from 0 to 1, in order") {
+        /* Both modes, two passes over 64 KiB: every phase reports 0.0
+         * first, then non-decreasing progress within [0, 1], then 1.0;
+         * no errors, both passes done; memtest() agrees; preserving mode
+         * leaves the contents as they were */
+        size_t bytes = 64 * 1024;
+        uint64_t *mem = aligned_alloc(4096, bytes);
+        for (int preserving = 0; preserving <= 1; preserving++) {
+            for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+                mem[i] = i * 0x9e3779b97f4a7c15ULL;
+            }
+            mtProgressLog log = {0};
+            memtestResult result = {0};
+            memtestWithProgress(mem, bytes, 2, preserving, mtProgressNote_,
+                                &log, &result);
+            bool kept = true;
+            for (size_t i = 0; preserving && i < bytes / sizeof(uint64_t);
+                 i++) {
+                kept = kept && mem[i] == i * 0x9e3779b97f4a7c15ULL;
+            }
+            if (log.bad || log.phases == 0 || log.open ||
+                result.errors_found != 0 || result.passes_complete != 2 ||
+                !kept || memtest(mem, bytes, 1, preserving) != 0) {
+                ERR("preserving %d: %zu phases, bad %d, open %d, errors "
+                    "%zu, passes %zu, kept %d",
+                    preserving, log.phases, log.bad, log.open,
+                    result.errors_found, result.passes_complete, kept);
+            }
+        }
+        free(mem);
+    }
+
     TEST("preserving test - 64KB") {
         size_t bytes = 64 * 1024;
         uint64_t *mem = aligned_alloc(4096, bytes);
