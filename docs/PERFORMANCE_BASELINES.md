@@ -28,6 +28,38 @@ the headline numbers and decisions; the TSV keeps every row.
 
 ---
 
+## 2026-10-24 — multiOrderedSet data-flow edges; multiarray bounds
+
+Apple M1 Max, macOS 14.8, clang 22, `perf` preset, single thread.  Each pair
+is a `dktools perfcompare` median (5-9 alternating runs) of the commit
+against its parent, ns per operation over 100k operations unless named.  The
+machine was shared with other work, so the before/after ratios are the
+result; the absolute numbers are not a quiet capture.
+
+| row | before -> after | commit, change |
+| --- | ---: | --- |
+| multiOrderedSet addEqualScore10k | 17161 -> 1359 | aa44902: an equal-score run may span sub-maps (routing by whole row) |
+| multiOrderedSet unionSum (n/4 shared) | 8535 -> 1048 | aa44902: its shared members all summed to one score |
+| multiOrderedSet countByScoreTop (100-score window) | 1740 us -> 18.3 us | 0ae4e5c: score ranges seek to their start |
+| multiOrderedSet add / update | 1570 / 3001 -> 904 / 1662 | 06bde2c: no 1024-sub-map split cap; 1024-row slot arrays |
+| multiOrderedSet getRank / remove | 4509 / 1157 -> 1742 / 817 | 06bde2c: rank skips sub-maps by count from the nearer end |
+| multiOrderedSetLarge add / getRank (600k members) | 4296 / 9069 -> 2726 / 7252 | 06bde2c |
+| multiOrderedSetLarge getByRank (600k members) | 3826 -> 5035 | 06bde2c: more, smaller sub-maps to count past; O(sub-maps) rank positioning deferred (per-node totals if needed) |
+| multiOrderedSet removeRangeByScore / removeRangeByRank / popMin (per row) | 413 / 433 / 450 -> 207 / 201 / 239 | 22d77c7: each sub-map's span deleted at once |
+| multiarray Get small / medium / large | 1.3 / 8.0 / 279 -> 1.3 / 8.3 / 270 | d5dc49a: indexes checked on every tier (within run-to-run spread) |
+
+### Reproduce
+
+```
+uv run --project tools dktools perfcompare NAME --base REV \
+    --modules multiOrderedSet,multiOrderedSetLarge,multiarray
+```
+
+`multiOrderedSetLarge` and `multidictP` run only when named (perfNamed), so
+plain `datakit-test test perfRegression` skips them.
+
+---
+
 ## 2026-10-23 — containers reusing inner-layer work; atom-table persistence
 
 Apple M1 Max, macOS 14.8, clang 22, `perf` preset, single thread, revision
