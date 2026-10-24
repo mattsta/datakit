@@ -1,9 +1,9 @@
 {
- "commit": "73f83058a285ce9bf25c86e31d600450a46bfb79",
+ "commit": "df086a9986b15b6971db0c55716890747c84c29b",
  "files": {
   "src/OSRegulate.c": {
-   "lines": 240,
-   "branches": 187
+   "lines": 243,
+   "branches": 190
   },
   "src/aeadNonceLog.c": {
    "lines": 54,
@@ -27,7 +27,7 @@
   },
   "src/atomPool.c": {
    "lines": 40,
-   "branches": 49
+   "branches": 46
   },
   "src/bbits.c": {
    "lines": 15,
@@ -82,10 +82,6 @@
    "branches": 0
   },
   "src/clusterRingInternal.h": {
-   "lines": 0,
-   "branches": 0
-  },
-  "src/config.h": {
    "lines": 0,
    "branches": 0
   },
@@ -148,6 +144,10 @@
   "src/dkFormatManifest.c": {
    "lines": 0,
    "branches": 2
+  },
+  "src/dkPlatform.h": {
+   "lines": 0,
+   "branches": 1
   },
   "src/dkRandom.c": {
    "lines": 3,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 246,
-   "branches": 442
+   "lines": 225,
+   "branches": 434
   },
   "src/flex.h": {
    "lines": 0,
@@ -494,8 +494,8 @@
    "branches": 31
   },
   "src/hmacKeyring.c": {
-   "lines": 90,
-   "branches": 82
+   "lines": 88,
+   "branches": 78
   },
   "src/hmacKeyring.h": {
    "lines": 0,
@@ -522,8 +522,8 @@
    "branches": 0
   },
   "src/intset.c": {
-   "lines": 40,
-   "branches": 41
+   "lines": 38,
+   "branches": 40
   },
   "src/intsetBig.c": {
    "lines": 36,
@@ -586,8 +586,8 @@
    "branches": 0
   },
   "src/membound.c": {
-   "lines": 352,
-   "branches": 342
+   "lines": 297,
+   "branches": 307
   },
   "src/memboundInternal.h": {
    "lines": 39,
@@ -607,7 +607,7 @@
   },
   "src/multiFenwick.c": {
    "lines": 35,
-   "branches": 47
+   "branches": 44
   },
   "src/multiFenwick.h": {
    "lines": 0,
@@ -627,7 +627,7 @@
   },
   "src/multiFenwickFlat.c": {
    "lines": 13,
-   "branches": 33
+   "branches": 30
   },
   "src/multiFenwickFlat.h": {
    "lines": 0,
@@ -746,8 +746,8 @@
    "branches": 4
   },
   "src/multimapAtom.c": {
-   "lines": 25,
-   "branches": 61
+   "lines": 23,
+   "branches": 56
   },
   "src/multimapAtom.h": {
    "lines": 0,
@@ -802,8 +802,8 @@
    "branches": 33
   },
   "src/persist.c": {
-   "lines": 371,
-   "branches": 324
+   "lines": 266,
+   "branches": 266
   },
   "src/persist.h": {
    "lines": 0,
@@ -1147,7 +1147,7 @@
   },
   "src/stringPool.c": {
    "lines": 65,
-   "branches": 84
+   "branches": 81
   },
   "src/timeUtil.c": {
    "lines": 0,
@@ -1171,10 +1171,10 @@
   },
   "src/versionOSRuntime.c": {
    "lines": 0,
-   "branches": 0
+   "branches": 1
   },
   "src/versionOSRuntime.h": {
-   "lines": 0,
+   "lines": 1,
    "branches": 1
   },
   "src/x25519.c": {
