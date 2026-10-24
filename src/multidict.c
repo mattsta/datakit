@@ -566,53 +566,32 @@ uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
             multidictRehash(d, 1);                                             \
     } while (0)
 
-/* Hot path: called on every lookup/insert/delete. Optimize for common case.
- * 'knownHash', when not NULL, is the key's hash already computed by the
- * caller (it does not depend on the table). */
+/* The key's slot in the table new rows go to: ht[1] while rehashing, else
+ * ht[0].  A key still in ht[0] during a rehash is not looked for here;
+ * inserts remove it from ht[0] first (multidictAddExact_).  'knownHash',
+ * when not NULL, is the key's hash already computed by the caller (it
+ * does not depend on the table). */
 DK_INLINE_ALWAYS multidictSlot **
-multidictSlotForKey(multidict *d, bool onlyLatest, const databox *keybox,
-                    const uint32_t *knownHash, int *htidx) {
-    bool rehashing = d->rehashing; /* Direct access for performance */
-
-    /* If our SIZE is 1, then we only have one hash slot and
-     * and can return it directly when either a.) we want ONLY LATEST
-     * (latest is defined as '1' when rehashing, '0' otherwise) or
-     * b.) we are not rehashing and can use HT '0' directly. */
-    if (likely((onlyLatest || !rehashing) && HTSIZE(d, rehashing) == 1)) {
-        if (htidx) {
-            *htidx = rehashing;
-        }
-
-        return &SLOT(d, rehashing, 0);
+multidictNewestSlotForKey(multidict *d, const databox *keybox,
+                          const uint32_t *knownHash, int *htidx) {
+    const int newest = d->rehashing;
+    if (htidx) {
+        *htidx = newest;
     }
 
-    /* else, we look up the slot by hash value first by checking the
-     * 'rehashing' table then by checking the other table (if requested) */
+    /* A one-slot table needs no hash */
+    if (likely(HTSIZE(d, newest) == 1)) {
+        return &SLOT(d, newest, 0);
+    }
+
     const uint32_t hash =
         knownHash ? *knownHash : multidictHashOfKey_(d, keybox);
-
-    /* Initial search is always the new table if we are rehashing. */
-    int useSlot = rehashing;
-    multidictSlot **foundSlot = SLOT_BY_HASH_PTR_PTR(d, useSlot, hash);
-
-    /* If we didn't find a slot and we are rehashing,
-     * then check the other table (if it's requested that we check
-     * other than the latest table) */
-    if (unlikely(!onlyLatest && (!*foundSlot && rehashing))) {
-        useSlot = !rehashing; /* try the opposite of rehashing now (HT 0) */
-        foundSlot = SLOT_BY_HASH_PTR_PTR(d, useSlot, hash);
-    }
-
-    if (htidx) {
-        *htidx = useSlot;
-    }
-
-    return foundSlot;
+    return SLOT_BY_HASH_PTR_PTR(d, newest, hash);
 }
 
 DK_STATIC void *
 multidictOperate(multidict *d, multidictOp *op, const databox *keybox,
-                 const uint32_t *knownHash, bool onlyLatest,
+                 const uint32_t *knownHash,
                  void *(*operate)(multidictClass *qdc, multidictSlot **slot,
                                   const databox *keybox)) {
     multidictRehashStep(d);
@@ -623,15 +602,9 @@ multidictOperate(multidict *d, multidictOp *op, const databox *keybox,
         multidictExpand(d, MULTIDICT_HT_INITIAL_SIZE);
     }
 
-    /* If we find an existing slot, then it hasn't been re-hash'd away yet.
-     * So, if we find a slot, then it is safe to use. */
-
-    /* If we are NOT rehashing and we do NOT find a slot, we may need to
-     * create one.  If we ARE rehashing and we DO NOT find a slot in
-     * table 0, then we search (and optionally create) in table 1. */
     int htidx;
     multidictSlot **foundSlot =
-        multidictSlotForKey(d, onlyLatest, keybox, knownHash, &htidx);
+        multidictNewestSlotForKey(d, keybox, knownHash, &htidx);
     const bool wasEmpty = !*foundSlot;
     void *result = operate(d->shared, foundSlot, keybox);
 
@@ -650,14 +623,7 @@ DK_STATIC multidictSlot *
 multidictFindSlotForKeyNewest(multidict *d, multidictOp *op,
                               const databox *keybox,
                               const uint32_t *knownHash) {
-    return multidictOperate(d, op, keybox, knownHash, true,
-                            d->shared->operationSlotGetOrCreate);
-}
-
-__attribute__((unused)) DK_STATIC multidictSlot *
-multidictFindSlotForKeyAny(multidict *d, multidictOp *op,
-                           const databox *keybox) {
-    return multidictOperate(d, op, keybox, NULL, false,
+    return multidictOperate(d, op, keybox, knownHash,
                             d->shared->operationSlotGetOrCreate);
 }
 
@@ -1203,17 +1169,14 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
     multidictExpandIfNeeded_(d);
 
     /* During rehashing, check if key exists in ht[0] and remove it first.
-     * This prevents duplicate keys across tables and keeps counts accurate.
-     *
-     * IMPORTANT: We must EXPLICITLY check ht[0], not rely on
-     * multidictSlotForKey, because multidictSlotForKey will return ht[1] if
-     * that slot exists, even if the key hasn't been removed from ht[0] yet. */
+     * This prevents duplicate keys across tables and keeps counts accurate:
+     * multidictNewestSlotForKey looks only in ht[1]. */
     bool removedFromOldTable = false;
     uint32_t hash = 0;
     const uint32_t *knownHash = NULL;
     if (multidictIsRehashing(d)) {
-        /* Remove the key from ht[0] in one search (bypassing
-         * multidictSlotForKey); the hash serves the slot lookup below */
+        /* Remove the key from ht[0] in one search; the hash serves the
+         * slot lookup below */
         hash = multidictHashOfKey_(d, keybox);
         knownHash = &hash;
         removedFromOldTable = multidictRemoveFromTable_(
