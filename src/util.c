@@ -258,155 +258,132 @@ bool pathIsBaseName(char *path) {
 /* ====================================================================
  * Weird pattern-vs-string match with limited features
  * ==================================================================== */
-/* Glob-style pattern matching. */
-bool stringmatchlen(const char *pattern, int patternLen, const char *string,
-                    int stringLen, int nocase) {
-    while (patternLen) {
-        switch (pattern[0]) {
-        case '*':
-            while (pattern[1] == '*') {
+static bool globByteEq(uint8_t a, uint8_t b, int nocase) {
+    return nocase ? StrTolower(a) == StrTolower(b) : a == b;
+}
+
+/* The nesting of stars past which a pattern is refused (each costs a stack
+ * frame) */
+#define GLOB_MAX_NESTING 1000
+
+/* One step of the match.  Every element but '*' consumes exactly one byte
+ * of the string, so it needs one; every read is inside its length.  A star
+ * tries each split of the rest of the string, but once a nested star has
+ * run out of string ('*skipLonger'), a later start for this star cannot
+ * match either (the elements between stars are fixed-width), so the search
+ * stops: polynomial instead of exponential in the number of stars. */
+static bool globMatch(const uint8_t *pattern, int patternLen,
+                      const uint8_t *string, int stringLen, int nocase,
+                      bool *skipLonger, int nesting) {
+    if (nesting > GLOB_MAX_NESTING) {
+        return false;
+    }
+
+    while (patternLen > 0) {
+        if (pattern[0] == '*') {
+            while (patternLen > 1 && pattern[1] == '*') {
                 pattern++;
                 patternLen--;
             }
-
             if (patternLen == 1) {
-                return true; /* match */
+                return true; /* a trailing star matches the rest */
             }
-
-            while (stringLen) {
-                if (stringmatchlen(pattern + 1, patternLen - 1, string,
-                                   stringLen, nocase)) {
-                    return true; /* match */
+            for (; stringLen > 0; string++, stringLen--) {
+                if (globMatch(pattern + 1, patternLen - 1, string, stringLen,
+                              nocase, skipLonger, nesting + 1)) {
+                    return true;
                 }
-
-                string++;
-                stringLen--;
+                if (*skipLonger) {
+                    return false;
+                }
             }
+            *skipLonger = true;
+            return false;
+        }
 
-            return false; /* no match */
-            break;
-        case '?':
-            if (stringLen == 0) {
-                return false; /* no match */
-            }
+        if (stringLen <= 0) {
+            return false;
+        }
+        const uint8_t c = string[0];
 
-            string++;
-            stringLen--;
-            break;
-        case '[': {
-            int not, match;
-
+        if (pattern[0] == '?') {
             pattern++;
             patternLen--;
-            not = pattern[0] == '^';
+        } else if (pattern[0] == '[') {
+            pattern++;
+            patternLen--;
+            const bool not = patternLen > 0 && pattern[0] == '^';
             if (not) {
                 pattern++;
                 patternLen--;
             }
-
-            match = 0;
-            while (true) {
-                if (pattern[0] == '\\') {
-                    pattern++;
-                    patternLen--;
-                    if (pattern[0] == string[0]) {
-                        match = 1;
-                    }
-                } else if (pattern[0] == ']') {
-                    break;
-                } else if (patternLen == 0) {
-                    pattern--;
-                    patternLen++;
-                    break;
-                } else if (pattern[1] == '-' && patternLen >= 3) {
+            /* To the closing ']', or the pattern's end for an unterminated
+             * class.  A backslash escapes the next byte; a trailing one is
+             * itself. */
+            bool match = false;
+            while (patternLen > 0 && pattern[0] != ']') {
+                if (pattern[0] == '\\' && patternLen >= 2) {
+                    match |= globByteEq(pattern[1], c, nocase);
+                    pattern += 2;
+                    patternLen -= 2;
+                } else if (patternLen >= 3 && pattern[1] == '-') {
                     int start = pattern[0];
                     int end = pattern[2];
-                    int c = string[0];
+                    int x = c;
                     if (start > end) {
-                        int t = start;
+                        const int t = start;
                         start = end;
                         end = t;
                     }
-
                     if (nocase) {
                         start = StrTolower(start);
                         end = StrTolower(end);
-                        c = StrTolower(c);
+                        x = StrTolower(x);
                     }
-
-                    pattern += 2;
-                    patternLen -= 2;
-                    if (c >= start && c <= end) {
-                        match = 1;
-                    }
+                    match |= x >= start && x <= end;
+                    pattern += 3;
+                    patternLen -= 3;
                 } else {
-                    if (!nocase) {
-                        if (pattern[0] == string[0]) {
-                            match = 1;
-                        }
-                    } else {
-                        if (StrTolower((int)pattern[0]) ==
-                            StrTolower((int)string[0])) {
-                            match = 1;
-                        }
-                    }
+                    match |= globByteEq(pattern[0], c, nocase);
+                    pattern++;
+                    patternLen--;
                 }
-
+            }
+            if (patternLen > 0) {
+                pattern++; /* the ']' */
+                patternLen--;
+            }
+            if (match == not) {
+                return false;
+            }
+        } else {
+            if (pattern[0] == '\\' && patternLen >= 2) {
                 pattern++;
                 patternLen--;
             }
-
-            if (not) {
-                match = !match;
+            if (!globByteEq(pattern[0], c, nocase)) {
+                return false;
             }
-
-            if (!match) {
-                return false; /* no match */
-            }
-
-            string++;
-            stringLen--;
-            break;
+            pattern++;
+            patternLen--;
         }
-        case '\\':
-            if (patternLen >= 2) {
-                pattern++;
-                patternLen--;
-            }
-        /* fall through */
-        default:
-            if (!nocase) {
-                if (pattern[0] != string[0]) {
-                    return false; /* no match */
-                }
-            } else {
-                if (StrTolower((int)pattern[0]) != StrTolower((int)string[0])) {
-                    return false; /* no match */
-                }
-            }
-
-            string++;
-            stringLen--;
-            break;
-        }
-
-        pattern++;
-        patternLen--;
-        if (stringLen == 0) {
-            while (*pattern == '*') {
-                pattern++;
-                patternLen--;
-            }
-
-            break;
-        }
+        string++;
+        stringLen--;
     }
 
-    if (patternLen == 0 && stringLen == 0) {
-        return true;
-    }
+    return stringLen <= 0;
+}
 
-    return false;
+/* Glob-style pattern matching over 'patternLen' and 'stringLen' bytes (no
+ * NUL needed): '*' any run, '?' one byte, '[...]' a class ('^' negates,
+ * 'a-z' ranges, '\' escapes), '\' escapes outside one too.  A pattern
+ * nesting more than GLOB_MAX_NESTING stars matches nothing. */
+bool stringmatchlen(const char *pattern, int patternLen, const char *string,
+                    int stringLen, int nocase) {
+    bool skipLonger = false;
+    return globMatch((const uint8_t *)pattern, patternLen,
+                     (const uint8_t *)string, stringLen, nocase, &skipLonger,
+                     0);
 }
 
 bool stringmatch(const char *pattern, const char *string, int nocase) {
@@ -455,8 +432,107 @@ void dumpX86Calls(void *addr, size_t len) {
 
 #ifdef DATAKIT_TEST
 #include "asmUtils.h"
+#include "cleaner.h"
 #include "ctest.h"
 #include <assert.h>
+
+defcleanerName(uint8_t *, zfree, Bytes);
+
+/* An independent glob oracle: the pattern parsed into elements (a star, or
+ * the set of bytes one position accepts), then matched by dynamic
+ * programming over (element, position), with no recursion and no early
+ * stop.  Small inputs only. */
+#define GLOB_ORACLE_MAX 16
+typedef struct globOracleElem {
+    bool star;
+    uint8_t accept[32]; /* bit per byte */
+} globOracleElem;
+
+static void globOracleAdd(globOracleElem *e, int b, int nocase) {
+    e->accept[(uint8_t)b >> 3] |= (uint8_t)(1u << ((uint8_t)b & 7));
+    if (nocase) {
+        const int lo = StrTolower(b);
+        const int up = (lo >= 'a' && lo <= 'z') ? lo - 'a' + 'A' : lo;
+        e->accept[(uint8_t)lo >> 3] |= (uint8_t)(1u << ((uint8_t)lo & 7));
+        e->accept[(uint8_t)up >> 3] |= (uint8_t)(1u << ((uint8_t)up & 7));
+    }
+}
+
+static bool globOracle(const char *p, int pl, const char *s, int sl,
+                       int nocase) {
+    globOracleElem el[GLOB_ORACLE_MAX];
+    int n = 0;
+    for (int i = 0; i < pl;) {
+        globOracleElem *e = &el[n++];
+        memset(e, 0, sizeof(*e));
+        if (p[i] == '*') {
+            e->star = true;
+            i++;
+        } else if (p[i] == '?') {
+            memset(e->accept, 0xff, sizeof(e->accept));
+            i++;
+        } else if (p[i] == '[') {
+            i++;
+            const bool not = i < pl && p[i] == '^';
+            i += not;
+            while (i < pl && p[i] != ']') {
+                if (p[i] == '\\' && i + 1 < pl) {
+                    globOracleAdd(e, p[i + 1], nocase);
+                    i += 2;
+                } else if (i + 2 < pl && p[i + 1] == '-') {
+                    int a = (uint8_t)p[i];
+                    int b = (uint8_t)p[i + 2];
+                    if (a > b) {
+                        const int t = a;
+                        a = b;
+                        b = t;
+                    }
+                    for (int c = 0; c < 256; c++) {
+                        const int x = nocase ? StrTolower(c) : c;
+                        const int lo = nocase ? StrTolower(a) : a;
+                        const int hi = nocase ? StrTolower(b) : b;
+                        if (x >= lo && x <= hi) {
+                            e->accept[c >> 3] |= (uint8_t)(1u << (c & 7));
+                        }
+                    }
+                    i += 3;
+                } else {
+                    globOracleAdd(e, p[i], nocase);
+                    i++;
+                }
+            }
+            i += i < pl; /* the ']' */
+            if (not) {
+                for (size_t k = 0; k < sizeof(e->accept); k++) {
+                    e->accept[k] = (uint8_t)~e->accept[k];
+                }
+            }
+        } else {
+            if (p[i] == '\\' && i + 1 < pl) {
+                i++;
+            }
+            globOracleAdd(e, p[i], nocase);
+            i++;
+        }
+    }
+
+    /* ok[i][j]: elements i.. match string bytes j.. */
+    bool ok[GLOB_ORACLE_MAX + 1][GLOB_ORACLE_MAX + 1];
+    for (int i = n; i >= 0; i--) {
+        for (int j = sl; j >= 0; j--) {
+            if (i == n) {
+                ok[i][j] = j == sl;
+            } else if (el[i].star) {
+                ok[i][j] = ok[i + 1][j] || (j < sl && ok[i][j + 1]);
+            } else {
+                const uint8_t c = (uint8_t)s[j < sl ? j : 0];
+                ok[i][j] = j < sl && (el[i].accept[c >> 3] & (1u << (c & 7))) &&
+                           ok[i + 1][j + 1];
+            }
+        }
+    }
+    return ok[0][0];
+}
 
 /* Reference implementation of pow2Ceiling64 for testing */
 static uint64_t pow2Ceiling64_reference(uint64_t x) {
@@ -506,6 +582,82 @@ int utilTest(int argc, char **argv) {
         if (!stringmatchlen("ab*", 3, "abcdef", 3, 0) ||
             stringmatchlen("abc", 3, "abd", 3, 0)) {
             ERRR("stringmatchlen ignored its lengths");
+        }
+
+        /* Pattern and string each copied into an allocation of exactly
+         * their length: the address sanitizer reports any read past
+         * either (an empty string, a pattern ending inside a class, an
+         * escape or a range) */
+        static const struct {
+            const char *pattern;
+            const char *string;
+            int nocase;
+            bool match;
+        } edges[] = {
+            {"a", "", 0, false},      {"[a]", "", 0, false},
+            {"\\a", "", 0, false},    {"?", "", 0, false},
+            {"*", "", 0, true},       {"", "", 0, true},
+            {"", "a", 0, false},      {"a**", "a", 0, true},
+            {"a*b", "a", 0, false},   {"ab", "a", 0, false},
+            {"[a", "a", 0, true},     {"[a\\", "\\", 0, true},
+            {"[a-", "-", 0, true},    {"[a-", "b", 0, false},
+            {"[^", "x", 0, true},     {"\\", "\\", 0, true},
+            {"[c-a]", "b", 0, true},  {"[a-c]", "B", 1, true},
+            {"[\\A]", "a", 1, true},  {"[]", "a", 0, false},
+            {"[^]", "a", 0, true},    {"*.c", "x.c", 0, true},
+            {"*.c", "x.h", 0, false}, {"a?c", "abc", 0, true},
+        };
+        for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
+            const size_t pl = strlen(edges[i].pattern);
+            const size_t sl = strlen(edges[i].string);
+            cleanerName(zfree, Bytes) uint8_t *p = zmalloc(pl ? pl : 1);
+            cleanerName(zfree, Bytes) uint8_t *s = zmalloc(sl ? sl : 1);
+            memcpy(p, edges[i].pattern, pl);
+            memcpy(s, edges[i].string, sl);
+            if (stringmatchlen((const char *)p, (int)pl, (const char *)s,
+                               (int)sl, edges[i].nocase) != edges[i].match) {
+                ERR("stringmatchlen(\"%s\", \"%s\") wrong", edges[i].pattern,
+                    edges[i].string);
+            }
+        }
+
+        /* Random small patterns and strings against the oracle */
+        {
+            static const char palpha[] = "ab*?[]^-\\A";
+            static const char salpha[] = "abAB-]^\\";
+            uint64_t rng = 0x61b;
+            for (int iter = 0; iter < 20000; iter++) {
+                char p[GLOB_ORACLE_MAX];
+                char s[GLOB_ORACLE_MAX];
+                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                const int pl = (int)((rng >> 33) % 9);
+                const int sl = (int)((rng >> 45) % 9);
+                const int nocase = (int)((rng >> 60) & 1);
+                for (int i = 0; i < pl; i++) {
+                    rng = rng * 6364136223846793005ULL + 1;
+                    p[i] = palpha[(rng >> 40) % (sizeof(palpha) - 1)];
+                }
+                for (int i = 0; i < sl; i++) {
+                    rng = rng * 6364136223846793005ULL + 1;
+                    s[i] = salpha[(rng >> 40) % (sizeof(salpha) - 1)];
+                }
+                if (stringmatchlen(p, pl, s, sl, nocase) !=
+                    globOracle(p, pl, s, sl, nocase)) {
+                    ERR("pattern \"%.*s\" string \"%.*s\" nocase %d: "
+                        "disagrees with the oracle",
+                        pl, p, sl, s, nocase);
+                    break;
+                }
+            }
+        }
+
+        /* Stars that cannot all match fail in polynomial time, not by
+         * trying every way to split the string among them */
+        static const char hard[] = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+        char run[200];
+        memset(run, 'a', sizeof(run));
+        if (stringmatchlen(hard, (int)strlen(hard), run, (int)sizeof(run), 0)) {
+            ERRR("an unmatchable star pattern matched");
         }
 
         char human[64];
