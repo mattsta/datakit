@@ -4053,22 +4053,26 @@ int multimapTest(int argc, char *argv[]) {
     TEST("one-row maps take smaller keys in a new map before them") {
         /* 3000-byte values, past the Full tier's 2048-byte sub-map size.
          * Ascending keys 1000..20000 reach the Full tier, each new largest
-         * row in a map of its own at the end; then keys just below those
-         * rows (and below every key) arrive at one-row maps, and land in
-         * new maps beside them.  The result is in key order, every row
+         * row in a map of its own at the end; keys just below those rows
+         * go to the maps before them.  Then 20 keys descending below every
+         * key reach map 0: once it is down to one row, each lands in a new
+         * map placed before it.  The result is in key order, every row
          * found with its value, and the map verifies. */
         static char big[3000];
         cleaner(multimapFree) multimap *m =
             multimapNewLimit(2, FLEX_CAP_LEVEL_512);
-        int64_t keys[40];
+        int64_t keys[64];
         size_t NK = 0;
         for (int64_t k = 1000; k <= 20000; k += 1000) {
             keys[NK++] = k;
         }
-        static const int64_t later[] = {19500, 18500, 17999, 16001, 500,
-                                        15500, 250,   19999, 1,     14500};
+        static const int64_t later[] = {19500, 18500, 17999, 16001,
+                                        15500, 19999, 14500};
         for (size_t i = 0; i < sizeof(later) / sizeof(*later); i++) {
             keys[NK++] = later[i];
+        }
+        for (int64_t k = 990; k >= 800; k -= 10) {
+            keys[NK++] = k;
         }
         for (size_t i = 0; i < NK; i++) {
             memset(big, (int)('a' + i % 26), sizeof(big));
