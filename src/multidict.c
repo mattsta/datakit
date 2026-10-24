@@ -483,11 +483,12 @@ uint32_t multidictGetHashFunctionSeed(multidict *d) {
 }
 
 uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len) {
-    if (DK_BITS == 64) {
-        return XXH64(key, len, d->seed);
-    } else {
-        return XXH32(key, len, d->seed);
-    }
+    /* The hash native to the word size, chosen at compile time */
+#if DK_BITS == 64
+    return XXH64(key, len, d->seed);
+#else
+    return XXH32(key, len, d->seed);
+#endif
 }
 
 /* Copy 'len' bytes of 'src' to 'dst' with exactly 'A'-'Z' folded to
@@ -519,27 +520,27 @@ uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
         return multidictGenHashFunction(d, folded, (int32_t)total);
     }
 
-    if (DK_BITS == 64) {
-        XXH64_state_t state;
-        XXH64_reset(&state, d->seed);
-        for (size_t at = 0; at < total; at += sizeof(folded)) {
-            const size_t left = total - at;
-            const size_t n = left < sizeof(folded) ? left : sizeof(folded);
-            mdFoldAscii_(folded, buf + at, n);
-            XXH64_update(&state, folded, n);
-        }
-        return (uint32_t)XXH64_digest(&state);
-    } else {
-        XXH32_state_t state;
-        XXH32_reset(&state, d->seed);
-        for (size_t at = 0; at < total; at += sizeof(folded)) {
-            const size_t left = total - at;
-            const size_t n = left < sizeof(folded) ? left : sizeof(folded);
-            mdFoldAscii_(folded, buf + at, n);
-            XXH32_update(&state, folded, n);
-        }
-        return XXH32_digest(&state);
+#if DK_BITS == 64
+    XXH64_state_t state;
+    XXH64_reset(&state, d->seed);
+    for (size_t at = 0; at < total; at += sizeof(folded)) {
+        const size_t left = total - at;
+        const size_t n = left < sizeof(folded) ? left : sizeof(folded);
+        mdFoldAscii_(folded, buf + at, n);
+        XXH64_update(&state, folded, n);
     }
+    return (uint32_t)XXH64_digest(&state);
+#else
+    XXH32_state_t state;
+    XXH32_reset(&state, d->seed);
+    for (size_t at = 0; at < total; at += sizeof(folded)) {
+        const size_t left = total - at;
+        const size_t n = left < sizeof(folded) ? left : sizeof(folded);
+        mdFoldAscii_(folded, buf + at, n);
+        XXH32_update(&state, folded, n);
+    }
+    return XXH32_digest(&state);
+#endif
 }
 
 /* ====================================================================
