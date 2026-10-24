@@ -4097,6 +4097,8 @@ const persistOps persistOpsClusterRing = {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
+defcleaner(flex *, flexFree);
+
 void clusterRingRepr(const clusterRing *ring) {
     if (!ring) {
         printf("clusterRing: (null)\n");
@@ -5651,6 +5653,72 @@ static int testFuzzSerializationRoundtrip(void) {
                 ERR("shape %zu (%u vnodes): %zu of 2000 walks differ", s,
                     data->vnodeCount, wrong);
             }
+        }
+    }
+
+    TEST("deserialize refuses every header field out of its range") {
+        /* A ring's snapshot rebuilt entry by entry deserializes; rebuilt
+         * with one header field replaced it is refused: every field by
+         * 2^40 (past each one's range, and no string), the spread flag
+         * by 2, the strategy by 0 (a ring never stores DEFAULT), the
+         * bounded-load percent by 99, the node count by one more than
+         * there are; and a header cut short */
+        clusterRingConfig config = {.name = "deser-header",
+                                    .strategyType = CLUSTER_STRATEGY_KETAMA};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
+        for (uint32_t n = 1; n <= 3; n++) {
+            clusterNodeConfig nc = {
+                .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
+            clusterRingAddNode(ring, &nc);
+        }
+        cleaner(flexFree) flex *good = clusterRingBuildSnapshotFlex(ring);
+        const size_t total = flexCount(good);
+        /* field index, replacement; index SIZE_MAX: the unchanged rebuild;
+         * replacement 0 with index > total: truncate to that many */
+        struct {
+            size_t field;
+            uint64_t value;
+        } cases[CLUSTER_RING_HEADER_ENTRY_COUNT + 6];
+        size_t nCases = 0;
+        cases[nCases++] = (typeof(cases[0])){SIZE_MAX, 0};
+        for (size_t i = 0; i < CLUSTER_RING_HEADER_ENTRY_COUNT; i++) {
+            cases[nCases++] = (typeof(cases[0])){i, (uint64_t)1 << 40};
+        }
+        cases[nCases++] = (typeof(cases[0])){10, 2};
+        cases[nCases++] = (typeof(cases[0])){11, 0};
+        cases[nCases++] = (typeof(cases[0])){13, 99};
+        cases[nCases++] = (typeof(cases[0])){15, 4};
+        for (size_t c = 0; c < nCases; c++) {
+            cleaner(flexFree) flex *mutated = flexNew();
+            flexEntry *fe = flexHead(good);
+            for (size_t i = 0; i < total; i++, fe = flexNext(good, fe)) {
+                databox box = {{0}};
+                flexGetByType(fe, &box);
+                if (i == cases[c].field) {
+                    box = databoxNewUnsigned(cases[c].value);
+                }
+                flexPushByType(&mutated, &box, FLEX_ENDPOINT_TAIL);
+            }
+            cleaner(clusterRingFree) clusterRing *back =
+                clusterRingDeserialize(mutated, flexBytes(mutated));
+            const bool want = cases[c].field == SIZE_MAX;
+            if ((back != NULL) != want) {
+                ERR("header field %zu = %" PRIu64 ": deserialized %d, want %d",
+                    cases[c].field, cases[c].value, back != NULL, want);
+            }
+        }
+        cleaner(flexFree) flex *cut = flexNew();
+        flexEntry *fe = flexHead(good);
+        for (size_t i = 0; i + 1 < CLUSTER_RING_HEADER_ENTRY_COUNT;
+             i++, fe = flexNext(good, fe)) {
+            databox box = {{0}};
+            flexGetByType(fe, &box);
+            flexPushByType(&cut, &box, FLEX_ENDPOINT_TAIL);
+        }
+        cleaner(clusterRingFree) clusterRing *fromCut =
+            clusterRingDeserialize(cut, flexBytes(cut));
+        if (fromCut) {
+            ERRR("a header cut short deserialized");
         }
     }
 
