@@ -170,12 +170,21 @@ static void ctx_set_callback(memtestContext *ctx, memtestProgressFn fn,
     ctx->userdata = userdata;
 }
 
+/* The display draws below a 3-row header, so it needs 4+ rows and some
+ * columns: fewer (a failed query, or a terminal reporting 0x0 or a sliver)
+ * would make the progress width (cols * (rows - 3)) negative, wrapping to
+ * an enormous count of characters to print.  Those get 80x20. */
+static void memtestFitWindow_(struct winsize *ws, bool queried) {
+    if (!queried || ws->ws_row < 4 || ws->ws_col == 0) {
+        ws->ws_col = 80;
+        ws->ws_row = 20;
+    }
+}
+
 static void ctx_set_interactive(memtestContext *ctx) {
     ctx->interactive = true;
-    if (ioctl(1, TIOCGWINSZ, &ctx->ws) == -1) {
-        ctx->ws.ws_col = 80;
-        ctx->ws.ws_row = 20;
-    }
+    const bool queried = ioctl(1, TIOCGWINSZ, &ctx->ws) != -1;
+    memtestFitWindow_(&ctx->ws, queried);
 }
 
 static void ctx_start_phase(memtestContext *ctx, const char *phase,
@@ -910,6 +919,32 @@ static int memtest_run_unit_tests(void) {
     }
 
     /* Test preserving mode */
+    TEST("interactive display sizes stay positive") {
+        /* A failed query or a terminal under 4 rows or with no columns
+         * gets 80x20; a usable one is kept; either way the progress width
+         * cols * (rows - 3) is positive */
+        static const struct {
+            unsigned short rows, cols;
+            bool queried;
+            unsigned short wantRows, wantCols;
+        } cases[] = {
+            {0, 0, true, 20, 80},     {1, 120, true, 20, 80},
+            {3, 120, true, 20, 80},   {4, 0, true, 20, 80},
+            {4, 50, true, 4, 50},     {50, 200, true, 50, 200},
+            {50, 200, false, 20, 80},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            struct winsize ws = {.ws_row = cases[i].rows,
+                                 .ws_col = cases[i].cols};
+            memtestFitWindow_(&ws, cases[i].queried);
+            if (ws.ws_row != cases[i].wantRows ||
+                ws.ws_col != cases[i].wantCols ||
+                ws.ws_col * (ws.ws_row - 3) <= 0) {
+                ERR("window %zu fit to %ux%u", i, ws.ws_col, ws.ws_row);
+            }
+        }
+    }
+
     TEST("progress reports every phase from 0 to 1, in order") {
         /* Both modes, two passes over 64 KiB: every phase reports 0.0
          * first, then non-decreasing progress within [0, 1], then 1.0;
