@@ -1,6 +1,17 @@
 #include "multiarraySmall.h"
 #include "multiarraySmallInternal.h"
 
+#include "dkDiag.h"
+
+void *multiarrayIndexRefused_(const char *function, const char *file, int line,
+                              int64_t idx, uint64_t count) {
+    dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIARRAY_INDEX, function, file,
+                  line,
+                  "index %" PRId64 " (range %" PRIu64 ") is outside the array",
+                  idx, count ? count : 1);
+    return NULL;
+}
+
 multiarraySmall *multiarraySmallNew(uint16_t len, uint16_t rowMax) {
     /* @own: caller; free=multiarraySmallFree */
     multiarraySmall *mar = zcalloc(1, sizeof(*mar));
@@ -21,10 +32,12 @@ void multiarraySmallFree(multiarraySmall *mar) {
 /* multiarray offset helper macro (size_t math: uint16*uint16 products
  * would promote to int and can overflow at extreme len*count) */
 #define _mo(offset) ((size_t)mar->len * (offset))
-void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s) {
-    /* Same contract the Medium/Large tiers assert: idx may be at most
-     * one past the end (append position) */
-    assert(idx <= mar->count);
+void multiarraySmallInsert(multiarraySmall *mar, uint32_t idx, void *s) {
+    /* idx may be at most one past the end (the append position) */
+    if (unlikely(idx > mar->count)) {
+        MA_INDEX_REFUSED_(idx);
+        return;
+    }
 
     /* @own: container; free=multiarraySmallFree */
     mar->data = zrealloc(mar->data, _mo(mar->count + 1));
@@ -47,27 +60,26 @@ size_t multiarraySmallBytes(const multiarraySmall *mar) {
     return (size_t)mar->len * mar->count;
 }
 
-void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx) {
+void multiarraySmallDelete(multiarraySmall *mar, uint32_t idx) {
     multiarraySmallDeleteTaking(mar, idx, NULL);
 }
 
 /* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL */
-void multiarraySmallDeleteTaking(multiarraySmall *mar, uint16_t idx,
+void multiarraySmallDeleteTaking(multiarraySmall *mar, uint32_t idx,
                                  void *out) {
-    /* Deleting from an empty array or past the end is a caller bug
-     * (silently dropping the tail element or requesting a ~SIZE_MAX
-     * realloc otherwise) */
-    assert(mar->count > 0);
-    assert(idx < mar->count);
+    /* Past the end (any index of an empty array): refused, 'out'
+     * untouched */
+    if (unlikely(idx >= mar->count)) {
+        MA_INDEX_REFUSED_(idx);
+        return;
+    }
 
     if (out) {
         memcpy(out, mar->data + _mo(idx), mar->len);
     }
 
-    if (idx < mar->count) {
-        const uint32_t remaining = mar->count - idx - 1;
-        memmove(mar->data + _mo(idx), mar->data + _mo(idx + 1), _mo(remaining));
-    }
+    const uint32_t remaining = mar->count - idx - 1;
+    memmove(mar->data + _mo(idx), mar->data + _mo(idx + 1), _mo(remaining));
 
     /* @own: container; free=multiarraySmallFree */
     mar->data = zrealloc(mar->data, _mo(mar->count - 1));
@@ -76,10 +88,14 @@ void multiarraySmallDeleteTaking(multiarraySmall *mar, uint16_t idx,
 
 /* Delete the 'count' entries from 'idx' (all within the array) with one
  * move and one resize */
-void multiarraySmallDeleteRange(multiarraySmall *mar, uint16_t idx,
-                                uint16_t count) {
-    assert((uint32_t)idx + count <= mar->count);
+void multiarraySmallDeleteRange(multiarraySmall *mar, uint32_t idx,
+                                uint32_t count) {
+    /* An empty range changes nothing, wherever it is (as in every tier) */
     if (count == 0) {
+        return;
+    }
+    if (unlikely((uint64_t)idx + count > mar->count)) {
+        MA_RANGE_REFUSED_(idx, count);
         return;
     }
 

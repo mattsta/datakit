@@ -269,16 +269,18 @@ void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
     multiarrayLargeNode *found = worker.current;
 
     const int32_t offset = worker.offset;
+    /* The walk stops in the tail node for any index past it, so an index
+     * past the end (or one too large for int32_t, seen as negative) is an
+     * offset outside [0, count] there */
+    if (unlikely((uint32_t)offset > found->count)) {
+        MA_INDEX_REFUSED_(idx);
+        return;
+    }
+
     const size_t offsetLen = offset * len;
 
     const int32_t remaining = found->count - offset;
     const size_t remainingLen = remaining * len;
-
-#if 0
-    printf("Worker Returned: [%p, %p (%d), %p], %d, %d\n", worker.prev, worker.current, found->count, worker.next, offset, remaining);
-#endif
-
-    assert(remaining >= 0 && "You tried to insert beyond your entires.");
 
     /* If there's room in the found node for more entries, add directly .*/
     if (found->count < rowMax) {
@@ -319,59 +321,76 @@ void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
     }
 }
 
+/* A negative idx counts from the end (-1 is the last element).  Both
+ * directions stop in the end node for an index past the array, which then
+ * answers NULL. */
 void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx) {
-    if (idx < 0) {
-        /* Reverse: accumulate node counts from the tail, then convert
-         * to a forward offset inside the landing node (mirror of
-         * multiarrayMediumGet's reverse arithmetic) */
-        const int32_t index = (-idx) - 1;
-        multiarrayLargeNode *prev = NULL;
-        multiarrayLargeNode *current = mar->tail;
-        multiarrayLargeNode *next = NULL;
-        int32_t accum = 0;
-
-        while ((next = getNext(prev, current)) &&
-               (accum + current->count) <= index) {
-            accum += current->count;
-            prev = current;
-            current = next;
-        }
-
-        const int32_t offset = (int32_t)current->count + idx + accum;
-        return current->data + (mar->len * offset);
+    if (idx >= 0) {
+        return multiarrayLargeGetForward(mar, (uint32_t)idx);
     }
 
-    multiarrayLargeResult worker =
-        multiarrayLargeGetForwardWorker(mar->head, idx, mar->len);
-    return worker.entry;
+    /* Elements back from the end: -1 is 0 back (no overflow at INT32_MIN);
+     * the XOR links walk from the tail exactly as from the head */
+    const uint32_t back = (uint32_t)(-(idx + 1));
+    multiarrayLargeNode *prev = NULL;
+    multiarrayLargeNode *current = mar->tail;
+    multiarrayLargeNode *next = NULL;
+    uint64_t accum = 0;
+    while ((next = getNext(prev, current)) && accum + current->count <= back) {
+        accum += current->count;
+        prev = current;
+        current = next;
+    }
+
+    const uint64_t inNode = back - accum;
+    if (unlikely(inNode >= current->count)) {
+        return MA_INDEX_REFUSED_(idx);
+    }
+
+    return current->data + (size_t)mar->len * (current->count - 1 - inNode);
 }
 
 void *multiarrayLargeGetForward(const multiarrayLarge *mar,
                                 const uint32_t index) {
-    multiarrayLargeNode *startNode = mar->head;
-
-    /* If we only have one node, no lookup, just
-     * return the index directly. */
-    const multiarrayLarge *prev = NULL;
-    if (getNext(prev, startNode) == NULL) {
-        return startNode->data + (mar->len * index);
+    const multiarrayLargeNode *prev = NULL;
+    const multiarrayLargeNode *current = mar->head;
+    const multiarrayLargeNode *next;
+    uint32_t accum = 0;
+    /* The next link is loaded with the count it sits beside, so each step
+     * is one load; the walk stops in the tail for an index past it */
+    while ((next = getNext(prev, current)) && accum + current->count <= index) {
+        accum += current->count;
+        prev = current;
+        current = next;
     }
 
-    multiarrayLargeResult worker =
-        multiarrayLargeGetForwardWorker(startNode, index, mar->len);
-    return worker.entry;
+    const uint32_t offset = index - accum;
+    if (unlikely(offset >= current->count)) {
+        return MA_INDEX_REFUSED_(index);
+    }
+
+    return current->data + (size_t)mar->len * offset;
 }
 
+/* First / last element; NULL when the array is empty */
 void *multiarrayLargeGetHead(const multiarrayLarge *mar) {
-    return mar->head->data;
+    /* The head is empty only when it is the array's only node */
+    return mar->head->count ? mar->head->data : NULL;
 }
 
 void *multiarrayLargeGetTail(const multiarrayLarge *mar) {
-    if (mar->tail->count > 0) {
-        return mar->tail->data + (mar->len * (mar->tail->count - 1));
-    } else {
-        return multiarrayLargeGet(mar, -1);
+    /* Only a trailing node can be empty (one carried over from a Medium
+     * made from a full native array): the node before it holds the last
+     * element */
+    const multiarrayLargeNode *tail = mar->tail;
+    if (tail->count == 0) {
+        tail = getNext((const multiarrayLargeNode *)NULL, tail);
+        if (!tail || tail->count == 0) {
+            return NULL;
+        }
     }
+
+    return tail->data + (size_t)mar->len * (tail->count - 1);
 }
 
 void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx) {
@@ -392,7 +411,6 @@ void multiarrayLargeLocate(const multiarrayLarge *mar, const uint32_t idx,
  * once: whole nodes are unlinked, a partial node moves its tail once */
 void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
                                 uint32_t count) {
-    assert(idx + (size_t)count <= multiarrayLargeCount(mar));
     if (count == 0) {
         return;
     }
@@ -401,6 +419,25 @@ void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
     multiarrayLargeResult worker =
         multiarrayLargeGetForwardWorker(mar->head, (int32_t)idx, mar->len);
     uint32_t offset = (uint32_t)worker.offset;
+
+    /* The range must lie inside the array: summed over the nodes the
+     * delete visits anyway, so the check costs what the delete does */
+    uint64_t held = 0;
+    if (offset < worker.current->count) {
+        held = worker.current->count - offset;
+        const multiarrayLargeNode *p = worker.current;
+        const multiarrayLargeNode *n = worker.next;
+        while (held < count && n) {
+            held += n->count;
+            const multiarrayLargeNode *after = getNext(p, n);
+            p = n;
+            n = after;
+        }
+    }
+    if (unlikely(held < count)) {
+        MA_RANGE_REFUSED_(idx, count);
+        return;
+    }
     while (count) {
         multiarrayLargeNode *node = worker.current;
         const uint32_t inNode = node->count - offset;
@@ -451,6 +488,13 @@ void multiarrayLargeDeleteTaking(multiarrayLarge *mar, const int32_t idx,
         multiarrayLargeGetForwardWorker(mar->head, idx, len);
 
     multiarrayLargeNode *found = worker.current;
+    /* Past the end (or any index of an empty array): refused, 'out'
+     * untouched */
+    if (unlikely((uint32_t)worker.offset >= found->count)) {
+        MA_INDEX_REFUSED_(idx);
+        return;
+    }
+
     if (out) {
         memcpy(out, worker.entry, len);
     }
@@ -460,12 +504,6 @@ void multiarrayLargeDeleteTaking(multiarrayLarge *mar, const int32_t idx,
 
     const int32_t remaining = found->count - offset - 1;
     const size_t remainingLen = remaining * len;
-
-    assert(remaining >= 0 && "You tried to delete beyond your entires.");
-
-#if 0
-    printf("Worker Returned: [%p, %p (%d), %p], %d, %d\n", worker.prev, worker.current, found->count, worker.next, offset, remaining);
-#endif
 
     if (found->count == 1) {
         /* Delete entire node */

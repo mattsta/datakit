@@ -161,15 +161,16 @@ void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
     const int32_t offset = worker.offset;
     const size_t offsetLen = offset * len;
 
+    /* The walk stops in the last node for any index past it, so an index
+     * past the end (or one too large for int32_t, seen as negative) is an
+     * offset outside [0, count] there */
+    if (unlikely((uint32_t)offset > found->count)) {
+        MA_INDEX_REFUSED_(idx);
+        return;
+    }
+
     const int32_t remaining = found->count - offset;
     const size_t remainingLen = remaining * len;
-
-#if 0
-    printf("Worker Returned: [%p (%d)], %d, %d\n", worker.current, found->count,
-           offset, remaining);
-#endif
-
-    assert(remaining >= 0 && "You tried to insert beyond your entires.");
 
     /* If there's room in the found node for more entries, add directly .*/
     if (found->count < mar->rowMax) {
@@ -223,66 +224,68 @@ size_t multiarrayMediumBytes(const multiarrayMedium *mar) {
     return (size_t)mar->len * multiarrayMediumCount(mar);
 }
 
+/* A negative idx counts from the end (-1 is the last element).  Both
+ * directions stop in the end node for an index past the array, which then
+ * answers NULL. */
 void *multiarrayMediumGet(const multiarrayMedium *mar, const int32_t idx) {
-    int32_t index = idx;
-    int32_t nodeIdx = 0;
-    bool reverse = idx < 0 ? true : false; /* negative index == reverse */
-    if (reverse) {
-        /* Convert reverse index into zero-based forward conterpart. */
-        index = (-idx) - 1;
-        nodeIdx = mar->count - 1;
+    if (idx >= 0) {
+        return multiarrayMediumGetForward(mar, (uint32_t)idx);
     }
 
-    int32_t accum = 0;
-    multiarrayMediumNode *node = getNode(nodeIdx);
-    while ((accum + node->count) <= index) {
+    /* Elements back from the end: -1 is 0 back (no overflow at INT32_MIN) */
+    const uint32_t back = (uint32_t)(-(idx + 1));
+    uint32_t nodeIdx = mar->count - 1;
+    uint64_t accum = 0;
+    const multiarrayMediumNode *node = getNode(nodeIdx);
+    while (accum + node->count <= back && nodeIdx > 0) {
         accum += node->count;
-        if (reverse) {
-            node = getNode(--nodeIdx);
-        } else {
-            node = getNode(++nodeIdx);
-        }
+        node = getNode(--nodeIdx);
     }
 
-    assert(node->count > 0);
-
-    int32_t offset = index - accum;
-    if (reverse) {
-        /* Convert reverse index to forward index */
-        offset = (node->count) + ((-index) - 1 + accum);
+    const uint64_t inNode = back - accum;
+    if (unlikely(inNode >= node->count)) {
+        return MA_INDEX_REFUSED_(idx);
     }
 
-    return node->data + (offset * mar->len);
+    return node->data + (size_t)mar->len * (node->count - 1 - inNode);
 }
 
 void *multiarrayMediumGetForward(const multiarrayMedium *mar,
                                  const uint32_t index) {
-    int32_t nodeIdx = 0;
-
-    uint32_t accum = 0;
-    multiarrayMediumNode *node = getNode(nodeIdx);
-    while ((accum + node->count) <= index) {
+    uint32_t nodeIdx = 0;
+    uint64_t accum = 0;
+    const multiarrayMediumNode *node = getNode(nodeIdx);
+    while (accum + node->count <= index && nodeIdx + 1 < mar->count) {
         accum += node->count;
         node = getNode(++nodeIdx);
     }
 
-    assert(node->count > 0);
+    const uint64_t offset = index - accum;
+    if (unlikely(offset >= node->count)) {
+        return MA_INDEX_REFUSED_(index);
+    }
 
-    int32_t offset = index - accum;
-    return node->data + (offset * mar->len);
+    return node->data + (size_t)mar->len * offset;
 }
 
+/* First / last element; NULL when the array is empty */
 void *multiarrayMediumGetHead(const multiarrayMedium *mar) {
-    return getNode(0)->data;
+    /* Node 0 is empty only when it is the array's only node */
+    const multiarrayMediumNode *node = getNode(0);
+    return node->count ? node->data : NULL;
 }
 
 void *multiarrayMediumGetTail(const multiarrayMedium *mar) {
-    const multiarrayMediumNode *node = getNode(mar->count - 1);
-    if (node->count > 0) {
-        return node->data + (mar->len * (node->count - 1));
+    /* Only a trailing node can be empty (one made from a full native
+     * array keeps an empty node after it) */
+    for (uint32_t n = mar->count; n-- > 0;) {
+        const multiarrayMediumNode *node = getNode(n);
+        if (node->count > 0) {
+            return node->data + (size_t)mar->len * (node->count - 1);
+        }
     }
 
-    return multiarrayMediumGet(mar, -1);
+    return NULL;
 }
 
 void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx) {
@@ -302,7 +305,6 @@ void multiarrayMediumLocate(const multiarrayMedium *mar, const uint32_t idx,
  * once: whole nodes are dropped, a partial node moves its tail once */
 void multiarrayMediumDeleteRange(multiarrayMedium *mar, const uint32_t idx,
                                  uint32_t count) {
-    assert(idx + (size_t)count <= multiarrayMediumCount(mar));
     if (count == 0) {
         return;
     }
@@ -311,6 +313,21 @@ void multiarrayMediumDeleteRange(multiarrayMedium *mar, const uint32_t idx,
         multiarrayMediumGetForwardWorker(mar, (int32_t)idx);
     uint32_t nodeIdx = worker.nodeIdx;
     uint32_t offset = (uint32_t)worker.offset;
+
+    /* The range must lie inside the array: summed over the nodes the
+     * delete visits anyway, so the check costs what the delete does */
+    uint64_t held = 0;
+    if (offset < getNode(nodeIdx)->count) {
+        held = getNode(nodeIdx)->count - offset;
+        for (uint32_t n = nodeIdx + 1; held < count && n < mar->count; n++) {
+            held += getNode(n)->count;
+        }
+    }
+    if (unlikely(held < count)) {
+        MA_RANGE_REFUSED_(idx, count);
+        return;
+    }
+
     const size_t len = mar->len;
     while (count) {
         multiarrayMediumNode *node = getNode(nodeIdx);
@@ -352,6 +369,13 @@ void multiarrayMediumDeleteTaking(multiarrayMedium *mar, const int32_t idx,
     multiarrayMediumResult worker = multiarrayMediumGetForwardWorker(mar, idx);
 
     multiarrayMediumNode *found = worker.current;
+    /* Past the end (or any index of an empty array): refused, 'out'
+     * untouched */
+    if (unlikely((uint32_t)worker.offset >= found->count)) {
+        MA_INDEX_REFUSED_(idx);
+        return;
+    }
+
     if (out) {
         memcpy(out, worker.entry, mar->len);
     }
@@ -362,8 +386,6 @@ void multiarrayMediumDeleteTaking(multiarrayMedium *mar, const int32_t idx,
 
     const int32_t remaining = found->count - offset - 1;
     const size_t remainingLen = remaining * len;
-
-    assert(remaining >= 0 && "You tried to delete beyond your entires.");
 
     if (found->count == 1) {
         /* Delete entire node */

@@ -79,6 +79,9 @@ typedef enum dkDiagCode {
     DK_DIAG_MEMBOUND_INVALID_FREE = 16,
     /* a timer callback called its timer's ProcessTimerEvents (ignored) */
     DK_DIAG_TIMER_REENTERED = 17,
+    /* a multiarray index (or range) outside its elements: a Get answers
+     * NULL, a change is refused */
+    DK_DIAG_MULTIARRAY_INDEX = 18,
     DK_DIAG_CODE_COUNT_ /* one past the last code; not a code */
 } dkDiagCode;
 

@@ -12,6 +12,12 @@ multiarrayMedium *multiarrayMediumNewWithData(int16_t len, int16_t rowMax,
 void multiarrayMediumFreeInside(multiarrayMedium *e);
 void multiarrayMediumFree(multiarrayMedium *e);
 
+/* Indexes (as for multiarrayLarge): Insert takes idx up to the count (the
+ * append position); Get and the deletes take elements that exist, Get's
+ * negative idx counting from the end (-1 is the last).  Out of range, Get
+ * answers NULL and a change is refused, the array unchanged; both report
+ * DK_DIAG_MULTIARRAY_INDEX.  GetHead / GetTail answer NULL when empty. */
+
 void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
                             const void *s);
 void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx);

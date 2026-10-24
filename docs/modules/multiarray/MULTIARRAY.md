@@ -76,6 +76,19 @@ an iterator that yields nothing) and report a `DK_DIAG_MULTIARRAY_NATIVE`
 misuse diagnostic ([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)).  NULL is
 refused the same way without a report.
 
+Indexes are checked on every tier, in every build.  Insert takes an index up
+to the count (the append); Get, Replace, Delete, Pop and IteratorInitAt take
+an element that exists; DeleteRange takes a range inside the array (an empty
+range changes nothing).  Outside that, Get answers NULL, the iterator yields
+nothing, and a change is refused with the array (and Pop's `out`) unchanged;
+each reports `DK_DIAG_MULTIARRAY_INDEX`.  GetHead and GetTail answer NULL for
+an empty array.  The container's `multiarrayIdx` counts from the front on
+every tier (an index of 2^31 or more is just out of range, never "from the
+end").  The checks sit where each tier already finds the index (the node walk
+stops in the end node, and the landing offset tells), so an in-range call
+costs what it did: the perfRegression `multiarray` rows show Small and Large
+Get unchanged and Medium Get within its run-to-run spread.
+
 There is no automatic _demotion_. `multiarrayDelete()` shrinks nodes but never
 converts Large back to Medium or Medium back to Small (there is an explicit
 `TODO` about this in `multiarray.c`).
@@ -273,6 +286,10 @@ Contract details that are easy to get wrong:
 - The Get macros are statements, not expressions: they write into `result`.
 - `localCount` / `count` are **your** counters. Insert increments them; delete
   decrements them. The macros never read a count out of the container.
+- Indexes are yours to keep in range.  The bare Native stage is a C array and
+  checks nothing; once promoted, Medium and Large refuse and report an index
+  outside the array (Get answers NULL), but the macro still moves your
+  counter, so a refused call leaves it one off.
 - `multiarrayNativeFree()` dispatches on the tag and handles Native, Medium, and
   Large. It asserts on a Small tag — Native-rooted arrays never become Small.
 - Native growth is a `zrealloc()` to exactly `count + 1` elements on every
@@ -322,14 +339,17 @@ void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s);
 void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx);
 
 #define multiarraySmallGet(mar, idx) ((mar)->data + _marsOff((mar)->len, idx))
-#define multiarraySmallGetHead(mar) multiarraySmallGet(mar, 0)
-#define multiarraySmallGetTail(mar) multiarraySmallGet(mar, (mar)->count - 1)
+#define multiarraySmallGetHead(mar)                                            \
+    ((mar)->count ? multiarraySmallGet(mar, 0) : NULL)
+#define multiarraySmallGetTail(mar)                                            \
+    ((mar)->count ? multiarraySmallGet(mar, (mar)->count - 1) : NULL)
 ```
 
-`multiarraySmallGet()` returns `uint8_t *`; cast it to your element type.
-Both `multiarraySmallInsert()` and `multiarraySmallDelete()` assert their index:
-insert accepts `idx <= mar->count` (append position included), delete requires a
-non-empty array and `idx < mar->count`.
+`multiarraySmallGet()` returns `uint8_t *`; cast it to your element type.  It
+is an unchecked address, as for a C array (the container's `multiarrayGet()`
+checks the index).  `multiarraySmallInsert()` accepts `idx <= mar->count`
+(append position included); the deletes require `idx < mar->count` (a range:
+inside the array).  Anything else is refused and reported, as above.
 
 ```c
 multiarraySmall *small = multiarraySmallNew(sizeof(int64_t), 512);
@@ -429,7 +449,7 @@ void multiarrayMediumFree(multiarrayMedium *e);
 
 `multiarrayMediumGet()` accepts a **negative** index meaning "from the tail":
 `-1` is the last element. `multiarrayMediumGetForward()` takes a `uint32_t` and
-has no reverse mode.
+has no reverse mode.  Either answers NULL for an index outside the array.
 
 `multiarrayMediumFromSmall()` consumes the Small: it `zrealloc()`s the
 `multiarraySmall` allocation into the `multiarrayMedium` and reuses its data
@@ -459,7 +479,7 @@ void multiarrayLargeFree(multiarrayLarge *e);
 ```
 
 `multiarrayLargeGet()` also accepts negative indexes and walks backwards from
-`tail`. `multiarrayLargeFromMedium()` consumes the Medium the same way
+`tail`; out of range, both Gets answer NULL. `multiarrayLargeFromMedium()` consumes the Medium the same way
 `multiarrayMediumFromSmall()` consumes the Small.
 
 ## Promotion Thresholds
@@ -544,13 +564,12 @@ tiers always keep at least one node alive (its contents are zeroed instead).
 | `Insert`     | O(N) realloc+move | O(K + rowMax)                  | O(K + rowMax)                  |
 | `Delete`     | O(N) realloc+move | O(K + rowMax)                  | O(K + rowMax)                  |
 | `GetHead`    | O(1)              | O(1)                           | O(1)                           |
-| `GetTail`    | O(1)              | O(1) (O(K) if tail node empty) | O(1) (O(K) if tail node empty) |
+| `GetTail`    | O(1)              | O(1)                           | O(1)                           |
 
 `GetForward` is **not** a stateful iterator. It does not memoize the previous
 traversal position; it is the forward-only entry point (no negative-index
-handling) and, for Large, it short-circuits the single-node case. Use it when
-you know the index is non-negative; do not expect it to make an
-index-by-index loop cheaper than O(N\*K).
+handling), and the container's `multiarrayGet()` uses it on Medium and Large.
+Do not expect it to make an index-by-index loop cheaper than O(N\*K).
 
 To iterate cheaply, use `multiarrayIteratorInit()` / `multiarrayIteratorNext()`
 on a container array (or walk a Native Large's node list directly) instead of

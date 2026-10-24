@@ -23,6 +23,7 @@
 #include "hmacKeyring.h"
 #include "membound.h"
 #include "multiOrderedSet.h"
+#include "multiarray.h"
 #include "multidict.h"
 #include "multimapAtom.h"
 #include "multimapAtomDense.h"
@@ -592,6 +593,7 @@ static void benchMembound(const char *name, membound *pool, size_t bytes) {
 defcleanerName(char *, zfree, PerfKeys);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
 defcleaner(multidict *, multidictFree);
+defcleaner(multiarray *, multiarrayFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(multimapAtomDense *, multimapAtomDenseFree);
@@ -830,6 +832,42 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
     }
     snprintf(name, sizeof(name), "%sAddNXPresent", tier);
     emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+
+    perfContainerSink = sink;
+}
+
+/* A multiarray of 'n' 8-byte elements, 64 per node, held in the tier
+ * 'tier' names (64 or fewer: Small; up to 64 nodes: Medium; past that:
+ * Large): PERF_CONTAINER_N reads at scattered indexes, then as many
+ * Insert + Pop pairs at scattered indexes (the size stays 'n') */
+static void benchMultiarrayTier(const char *tier, uint32_t n) {
+    const uint32_t ops = PERF_CONTAINER_N;
+    cleaner(multiarrayFree) multiarray *m = multiarrayNew(sizeof(uint64_t), 64);
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t v = i;
+        multiarrayInsert(&m, i, &v);
+    }
+
+    char name[48];
+    uint64_t sink = 0;
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < ops; i++) {
+        const uint64_t *at = multiarrayGet(m, (i * 7919u) % n);
+        sink += *at;
+    }
+    snprintf(name, sizeof(name), "%sGet", tier);
+    emitRow("multiarray", name, 0, ops, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < ops; i++) {
+        const uint32_t idx = (i * 7919u) % n;
+        uint64_t v = i;
+        multiarrayInsert(&m, idx, &v);
+        multiarrayPop(&m, idx, &v);
+        sink += v;
+    }
+    snprintf(name, sizeof(name), "%sInsertPop", tier);
+    emitRow("multiarray", name, 0, ops, monoNowSec() - t0);
 
     perfContainerSink = sink;
 }
@@ -1110,6 +1148,12 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfWanted("multimapAtom")) {
             benchMultimapAtom();
+        }
+
+        if (perfWanted("multiarray")) {
+            benchMultiarrayTier("small", 48);
+            benchMultiarrayTier("medium", 2048);
+            benchMultiarrayTier("large", 16384);
         }
 
         /* membound allocator: per-op alloc/free cost for the three

@@ -16,16 +16,24 @@ typedef struct multiarraySmall multiarraySmall;
 
 multiarraySmall *multiarraySmallNew(uint16_t len, uint16_t rowMax);
 void multiarraySmallFree(multiarraySmall *mar);
-void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s);
-void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx);
-void multiarraySmallDeleteTaking(multiarraySmall *mar, uint16_t idx, void *out);
-void multiarraySmallDeleteRange(multiarraySmall *mar, uint16_t idx,
-                                uint16_t count);
+/* Insert takes idx up to the count (append); the deletes take elements
+ * that exist.  Anything else is refused and reported
+ * (DK_DIAG_MULTIARRAY_INDEX); the array is unchanged. */
+void multiarraySmallInsert(multiarraySmall *mar, uint32_t idx, void *s);
+void multiarraySmallDelete(multiarraySmall *mar, uint32_t idx);
+void multiarraySmallDeleteTaking(multiarraySmall *mar, uint32_t idx, void *out);
+void multiarraySmallDeleteRange(multiarraySmall *mar, uint32_t idx,
+                                uint32_t count);
 size_t multiarraySmallCount(const multiarraySmall *mar);
 size_t multiarraySmallBytes(const multiarraySmall *mar);
+/* Unchecked element address, as for a C array: idx must be below the
+ * count (the container API's multiarrayGet checks it) */
 #define multiarraySmallGet(mar, idx) ((mar)->data + _marsOff((mar)->len, idx))
-#define multiarraySmallGetHead(mar) multiarraySmallGet(mar, 0)
-#define multiarraySmallGetTail(mar) multiarraySmallGet(mar, (mar)->count - 1)
+/* First / last element; NULL when empty (as on every tier) */
+#define multiarraySmallGetHead(mar)                                            \
+    ((mar)->count ? multiarraySmallGet(mar, 0) : NULL)
+#define multiarraySmallGetTail(mar)                                            \
+    ((mar)->count ? multiarraySmallGet(mar, (mar)->count - 1) : NULL)
 
 /* ====================================================================
  * Macro API

@@ -155,7 +155,16 @@ typedef uint32_t multiarrayIdx;
  * multiarrayNewFromArray.  Given a native multiarray (multiarrayNativeNew:
  * a bare array whose element size only the macro API above knows) or NULL,
  * every call is refused safely: readers return 0 / NULL, writers and Free
- * change nothing, and iterators yield nothing. */
+ * change nothing, and iterators yield nothing.
+ *
+ * Indexes count from the front.  Insert takes one up to the count (the
+ * append); Get, Replace, Delete, Pop and IteratorInitAt take an element
+ * that exists; DeleteRange takes a range inside the array (an empty range
+ * changes nothing).  Outside that, Get answers NULL, an iterator yields
+ * nothing and a change is refused with the array (and Pop's 'out')
+ * unchanged; each reports DK_DIAG_MULTIARRAY_INDEX (dkDiag.h).  GetHead
+ * and GetTail answer NULL for an empty array.  The checks sit where each
+ * tier already finds the index, so in-range calls cost what they did. */
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax);
 void multiarrayFree(multiarray *m);
 

@@ -12,6 +12,11 @@ void multiarrayLargeFree(multiarrayLarge *e);
 
 struct multiarrayLargeNode;
 
+/* Indexes as for multiarrayMedium: Insert up to the count, Get and the
+ * deletes on elements that exist (Get's negative idx from the end); out of
+ * range, Get answers NULL and a change is refused, reporting
+ * DK_DIAG_MULTIARRAY_INDEX.  GetHead / GetTail answer NULL when empty. */
+
 void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
                            const void *s);
 void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx);

@@ -36,6 +36,7 @@ Codes (one enum, append-only: a value is never reused, so you may log and match 
 | `DK_DIAG_HMAC_KEYRING_ZERO_SALT` | MISUSE | `hmacKeyringInstall` given a NULL or all-zero salt (`hmacKeyringInstallUnsalted` is the unsalted entry point) |
 | `DK_DIAG_RANDOM_ZERO_BOUND` | MISUSE | `dkRandomBounded(0)`, a value from an empty interval (also counted by `dkRandomZeroBoundTotal`) |
 | `DK_DIAG_MEMBOUND_INVALID_FREE` | MISUSE | a membound free of a pointer the pool does not hold out: outside it, off the block grid, freed already, or inside a block (also counted in `memboundStats.safetyViolations`, except on MICRO) |
+| `DK_DIAG_MULTIARRAY_INDEX` | MISUSE | a multiarray index or range outside the array (Get answers NULL, a change is refused) on any tier |
 | `DK_DIAG_TIMER_REENTERED` | MISUSE | `timerWheelProcessTimerEvents` or `multiTimerProcessTimerEvents` called from one of its own callbacks (ignored; the running call processes the rest) |
 
 Not reported: NULL passed where NULL means "nothing" (`*Free(NULL)`, a NULL operand), data a structure

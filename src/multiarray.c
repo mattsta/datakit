@@ -26,17 +26,18 @@ defcleaner(void *, zfree);
  * refused with a defined answer, and reported as misuse
  * (DK_DIAG_MULTIARRAY_NATIVE).  NULL is refused the same way without a
  * report: NULL is every container call's "nothing" */
-__attribute__((cold, noinline)) static void
+__attribute__((cold, noinline)) static void *
 maNativeRefused_(const char *function, int line) {
     dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIARRAY_NATIVE, function, __FILE__,
                   line,
                   "a container call was given a native multiarray (use the "
                   "multiarrayNative* macros)");
+    return NULL;
 }
 #define MA_NATIVE_REFUSED_(m)                                                  \
     do {                                                                       \
         if ((m) != NULL) {                                                     \
-            maNativeRefused_(__func__, __LINE__);                              \
+            (void)maNativeRefused_(__func__, __LINE__);                        \
         }                                                                      \
     } while (0)
 
@@ -63,8 +64,6 @@ maNativeRefused_(const char *function, int line) {
     } while (0)
 
 #define MULTIARRAY_NORETURN(m, func, ...) _MULTIARRAY(, m, func, __VA_ARGS__)
-#define MULTIARRAY_RETURN(m, func, ...)                                        \
-    _MULTIARRAY(return, m, func, __VA_ARGS__)
 
 #define _MULTIARRAY_SINGLE(ret, m, func)                                       \
     do {                                                                       \
@@ -107,11 +106,25 @@ multiarray *multiarrayNew(uint16_t len, uint16_t rowMax) {
     return _MULTIARRAY_TAG(mar, MULTIARRAY_TYPE_SMALL);
 }
 
+/* Element 'idx' counted from the front on every tier (the tiers' own
+ * negative-from-the-end form is theirs alone); NULL past the end */
 void *multiarrayGet(multiarray *m, multiarrayIdx idx) {
-    MULTIARRAY_RETURN(m, Get, idx);
-    return NULL;
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL: {
+        multiarraySmall *s = mars(m);
+        return likely(idx < s->count) ? multiarraySmallGet(s, idx)
+                                      : MA_INDEX_REFUSED_(idx);
+    }
+    case MULTIARRAY_TYPE_MEDIUM:
+        return multiarrayMediumGetForward(marm(m), idx);
+    case MULTIARRAY_TYPE_LARGE:
+        return multiarrayLargeGetForward(marl(m), idx);
+    default: /* native or NULL: refused (a tail call, as above) */
+        return m ? maNativeRefused_(__func__, __LINE__) : NULL;
+    }
 }
 
+/* First / last element; NULL when empty (each tier's own rule) */
 void *multiarrayGetHead(multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, GetHead);
     return NULL;
@@ -162,7 +175,7 @@ void multiarrayDelete(multiarray **m, const uint32_t index) {
 void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
     switch (_multiarrayType(*m)) {
     case MULTIARRAY_TYPE_SMALL:
-        multiarraySmallDeleteTaking(mars(*m), (uint16_t)idx, out);
+        multiarraySmallDeleteTaking(mars(*m), idx, out);
         break;
     case MULTIARRAY_TYPE_MEDIUM:
         multiarrayMediumDeleteTaking(marm(*m), (int32_t)idx, out);
@@ -180,7 +193,7 @@ void multiarrayDeleteRange(multiarray **m, multiarrayIdx start,
                            uint32_t count) {
     switch (_multiarrayType(*m)) {
     case MULTIARRAY_TYPE_SMALL:
-        multiarraySmallDeleteRange(mars(*m), (uint16_t)start, (uint16_t)count);
+        multiarraySmallDeleteRange(mars(*m), start, count);
         break;
     case MULTIARRAY_TYPE_MEDIUM:
         multiarrayMediumDeleteRange(marm(*m), start, count);
@@ -260,15 +273,19 @@ void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
         MA_NATIVE_REFUSED_(m);
         return; /* native or NULL: an iterator that yields nothing */
     }
-    assert(idx < multiarrayCount(m));
+    /* Each locate stops in the end node for an index past the array, so
+     * the landing offset tells an index outside it */
+    uint32_t inNode = 0;
     switch (_multiarrayType(m)) {
     case MULTIARRAY_TYPE_SMALL:
         iter->offset = (int32_t)idx;
+        inNode = mars(m)->count;
         break;
     case MULTIARRAY_TYPE_MEDIUM: {
         uint32_t offset;
         multiarrayMediumLocate(marm(m), idx, &iter->nodeIdx, &offset);
         iter->offset = (int32_t)offset;
+        inNode = marm(m)->node[iter->nodeIdx].count;
         break;
     }
     case MULTIARRAY_TYPE_LARGE: {
@@ -280,10 +297,18 @@ void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
         /* Walking backwards, the node 'behind' is the one after */
         iter->prev = forward ? prev : multiarrayLargeStep_(prev, node);
         iter->offset = (int32_t)offset;
+        inNode = node->count;
         break;
     }
     default: /* native: handled above */
         break;
+    }
+
+    /* Outside the array (or past int32_t): an iterator that yields
+     * nothing */
+    if (unlikely(iter->offset < 0 || (uint32_t)iter->offset >= inNode)) {
+        MA_INDEX_REFUSED_(idx);
+        *iter = (multiarrayIter){.type = MULTIARRAY_TYPE_NATIVE};
     }
 }
 
@@ -484,6 +509,21 @@ typedef struct s16 {
 defcleanerName(s16 *, zfree, S16);
 defcleaner(multiarray *, multiarrayFree);
 
+/* 'call' records exactly 'want' diagnostics, the last of them 'wantCode';
+ * 'subject' names what it ran on when it does not */
+#define MA_EXPECT_REPORTS_(subject, want, wantCode, call)                      \
+    do {                                                                       \
+        const uint64_t c0_ = dkDiagCount();                                    \
+        call;                                                                  \
+        const uint64_t got_ = dkDiagCount() - c0_;                             \
+        dkDiagnostic d_;                                                       \
+        if (got_ != (want) ||                                                  \
+            ((want) && (!dkDiagLast(&d_) || d_.code != (wantCode)))) {         \
+            ERR("%s on %s reported %" PRIu64 " times, want %" PRIu64, #call,   \
+                (subject), got_, (uint64_t)(want));                            \
+        }                                                                      \
+    } while (0)
+
 /* Every element read back through iterators (both directions, from both
  * ends and from 'at') and CopyTo matches 'oracle' */
 static int multiarrayOracleCheck_(const multiarray *m, const s16 *oracle,
@@ -635,11 +675,138 @@ static int multiarrayOracleSoak_(uint32_t lo, uint32_t hi, uint16_t rowMax,
     return err;
 }
 
+/* An array of 'n' elements (rowMax 8, so 'tier' is reached by size) given
+ * indexes and ranges outside it: each Get answers NULL, each change is
+ * refused with the array and 'out' unchanged, each reports
+ * DK_DIAG_MULTIARRAY_INDEX exactly once; the edge calls just inside report
+ * nothing */
+static int multiarrayBoundsCheck_(uint32_t n, multiarrayType tier) {
+    int err = 0;
+    cleaner(multiarrayFree) multiarray *m = multiarrayNew(sizeof(s16), 8);
+    cleanerName(zfree, S16) s16 *oracle = zcalloc(n + 1, sizeof(*oracle));
+    for (uint32_t i = 0; i < n; i++) {
+        oracle[i] = (s16){.a = i, .b = -(int64_t)i};
+        multiarrayInsert(&m, i, &oracle[i]);
+    }
+    /* Empty arrays stay Small */
+    if (_multiarrayType(m) != (n ? tier : MULTIARRAY_TYPE_SMALL)) {
+        ERR("%" PRIu32 " elements built tier %d, want %d", n,
+            _multiarrayType(m), tier);
+        return err;
+    }
+
+    const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+    dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+    char subject[32];
+    snprintf(subject, sizeof(subject), "%" PRIu32 " elements", n);
+    uint64_t want = 1;
+#define MA_BOUNDS_(call)                                                       \
+    MA_EXPECT_REPORTS_(subject, want, DK_DIAG_MULTIARRAY_INDEX, call)
+    s16 probe = {.a = 99};
+    s16 out = {.a = 77};
+    const void *got[3] = {NULL, NULL, NULL};
+    multiarrayIter it;
+    MA_BOUNDS_(got[0] = multiarrayGet(m, n));
+    MA_BOUNDS_(got[1] = multiarrayGet(m, UINT32_MAX)); /* not "from the end" */
+    MA_BOUNDS_(got[2] = multiarrayGet(m, 65536 + 1));
+    MA_BOUNDS_(multiarrayInsert(&m, n + 1, &probe));
+    MA_BOUNDS_(multiarrayInsert(&m, 65536 + 1, &probe)); /* not truncated */
+    MA_BOUNDS_(multiarrayInsert(&m, UINT32_MAX, &probe));
+    MA_BOUNDS_(multiarrayDelete(&m, n));
+    MA_BOUNDS_(multiarrayDelete(&m, UINT32_MAX));
+    MA_BOUNDS_(multiarrayPop(&m, n, &out));
+    MA_BOUNDS_(multiarrayDeleteRange(&m, n, 1));
+    MA_BOUNDS_(multiarrayDeleteRange(&m, 0, n + 1));
+    MA_BOUNDS_(multiarrayDeleteRange(&m, n ? n - 1 : 0, 2));
+    MA_BOUNDS_(multiarrayDeleteRange(&m, 1, UINT32_MAX));
+    MA_BOUNDS_(multiarrayReplace(m, n, &probe));
+    MA_BOUNDS_(multiarrayIteratorInitAt(m, &it, n, true));
+    if (got[0] || got[1] || got[2] || out.a != 77 ||
+        multiarrayIteratorNext(&it)) {
+        ERR("%" PRIu32 " elements: an out-of-range call answered", n);
+    }
+
+    /* Just inside: nothing reported */
+    want = 0;
+    const void *head = NULL;
+    const void *tail = NULL;
+    const void *last = NULL;
+    MA_BOUNDS_(head = multiarrayGetHead(m));
+    MA_BOUNDS_(tail = multiarrayGetTail(m));
+    MA_BOUNDS_(multiarrayDeleteRange(&m, n, 0)); /* empty: no change */
+    if (n) {
+        MA_BOUNDS_(last = multiarrayGet(m, n - 1));
+        /* Read before the append: an insert may move the elements */
+        if (!head || !tail || tail != last || ((const s16 *)head)->a != 0 ||
+            ((const s16 *)tail)->a != (int64_t)n - 1) {
+            ERR("%" PRIu32 " elements: the edge elements are wrong", n);
+        }
+        MA_BOUNDS_(multiarrayInsert(&m, n, &probe)); /* the append */
+        MA_BOUNDS_(multiarrayPop(&m, n, &out));
+        if (out.a != 99) {
+            ERR("%" PRIu32 " elements: the appended element did not pop", n);
+        }
+    } else if (head || tail) {
+        ERRR("an empty array has a head or tail");
+    }
+#undef MA_BOUNDS_
+    dkDiagSetPrintMode(priorPrint);
+
+    err += multiarrayOracleCheck_(m, oracle, n, n / 2, "bounds refusals");
+    return err;
+}
+
 int multiarrayTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("indexes and ranges outside the array are refused and reported, "
+         "per tier") {
+        err += multiarrayBoundsCheck_(0, MULTIARRAY_TYPE_SMALL);
+        err += multiarrayBoundsCheck_(5, MULTIARRAY_TYPE_SMALL);
+        err += multiarrayBoundsCheck_(40, MULTIARRAY_TYPE_MEDIUM);
+        err += multiarrayBoundsCheck_(300, MULTIARRAY_TYPE_LARGE);
+    }
+
+    TEST("a Medium made from a full native array (an empty node after it) "
+         "answers its ends and bounds") {
+        /* The native macro API promotes a full bare array to Medium with
+         * an empty node after the data */
+        const uint16_t rowMax = 4;
+        /* @own: container; free=multiarrayMediumFree */
+        s16 *data = zcalloc(rowMax, sizeof(*data));
+        for (uint16_t i = 0; i < rowMax; i++) {
+            data[i] = (s16){.a = i};
+        }
+        /* @own: caller; free=multiarrayMediumFree */
+        multiarrayMedium *med =
+            multiarrayMediumNewWithData(sizeof(s16), rowMax, rowMax, data);
+        const s16 *tail = multiarrayMediumGetTail(med);
+        const s16 *back = multiarrayMediumGet(med, -1);
+        const s16 *first = multiarrayMediumGet(med, -(int32_t)rowMax);
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+        const uint64_t c0 = dkDiagCount();
+        const void *past = multiarrayMediumGetForward(med, rowMax);
+        const void *before = multiarrayMediumGet(med, -(int32_t)rowMax - 1);
+        dkDiagSetPrintMode(priorPrint);
+        if (!tail || tail->a != rowMax - 1 || back != tail || !first ||
+            first->a != 0 || past || before || dkDiagCount() != c0 + 2) {
+            ERRR("a promoted Medium's ends or bounds are wrong");
+        }
+
+        /* And as a Large, which keeps the empty trailing node */
+        /* @own: caller; free=multiarrayLargeFree */
+        multiarrayLarge *large = multiarrayLargeFromMedium(med);
+        const s16 *ltail = multiarrayLargeGetTail(large);
+        if (!ltail || ltail->a != rowMax - 1 ||
+            multiarrayLargeGet(large, -1) != ltail) {
+            ERRR("a Large carrying an empty trailing node lost its tail");
+        }
+        multiarrayLargeFree(large);
+    }
 
     TEST("Insert / Pop / DeleteRange / Replace / Rotate / iterators vs an "
          "oracle, per tier") {
@@ -669,18 +836,9 @@ int multiarrayTest(int argc, char *argv[]) {
             /* A call on the native array reports the misuse once; one on
              * NULL ("nothing") reports nothing */
             const uint64_t want = i == 0 ? 1 : 0;
+            const char *subject = i ? "NULL" : "a native multiarray";
 #define MA_REPORTS_(call)                                                      \
-    do {                                                                       \
-        const uint64_t c0_ = dkDiagCount();                                    \
-        call;                                                                  \
-        dkDiagnostic d_;                                                       \
-        if (dkDiagCount() - c0_ != want ||                                     \
-            (want &&                                                           \
-             (!dkDiagLast(&d_) || d_.code != DK_DIAG_MULTIARRAY_NATIVE))) {    \
-            ERR("%s on %s reported %" PRIu64 " times", #call,                  \
-                i ? "NULL" : "a native multiarray", dkDiagCount() - c0_);      \
-        }                                                                      \
-    } while (0)
+    MA_EXPECT_REPORTS_(subject, want, DK_DIAG_MULTIARRAY_NATIVE, call)
             multiarrayIter it;
             const void *first = NULL;
             const void *firstAt = NULL;
