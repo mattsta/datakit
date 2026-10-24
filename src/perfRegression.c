@@ -72,11 +72,12 @@ static DK_FN_UNUSED void perfRegPtrArray_cleanup(perfRegPtrArray *pa) {
     }
 }
 
-/* True when DK_PERF_MODULES is unset or names 'module' */
-static bool perfWanted(const char *module) {
+/* True when DK_PERF_MODULES names 'module'; with DK_PERF_MODULES unset,
+ * 'unsetMeans' */
+static bool perfListed_(const char *module, bool unsetMeans) {
     const char *list = getenv("DK_PERF_MODULES");
     if (!list || !*list) {
-        return true;
+        return unsetMeans;
     }
 
     const size_t len = strlen(module);
@@ -91,6 +92,18 @@ static bool perfWanted(const char *module) {
     }
 
     return false;
+}
+
+/* True when DK_PERF_MODULES is unset or names 'module' */
+static bool perfWanted(const char *module) {
+    return perfListed_(module, true);
+}
+
+/* True only when DK_PERF_MODULES names 'module': rows too slow for every
+ * test run (large-scale behaviour), run by name, e.g. through
+ * dktools perfcompare --modules */
+static bool perfNamed(const char *module) {
+    return perfListed_(module, false);
 }
 
 static double monoNowSec(void) {
@@ -843,6 +856,54 @@ static void benchMultiOrderedSet(void) {
     perfContainerSink = sink;
 }
 
+/* A 600000-member set, past the size where the Full tier's sub-map count
+ * once stopped growing: adds of the last 100000, then ranks and score
+ * lookups spread over the set (only when asked for by name) */
+static void benchMultiOrderedSetLarge(void) {
+    const uint32_t n = 600000;
+    const uint32_t timed = 100000;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    uint64_t sink = 0;
+    char key[24];
+    for (uint32_t i = 0; i < n - timed; i++) {
+        const int klen = snprintf(key, sizeof(key), "large-%07u", i);
+        const databox m = databoxNewBytes(key, klen);
+        const databox s = databoxNewSigned((int64_t)((i * 7919ull) % n));
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+
+    double t0 = monoNowSec();
+    for (uint32_t i = n - timed; i < n; i++) {
+        const int klen = snprintf(key, sizeof(key), "large-%07u", i);
+        const databox m = databoxNewBytes(key, klen);
+        const databox s = databoxNewSigned((int64_t)((i * 7919ull) % n));
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+    emitRow("multiOrderedSetLarge", "add600k", 0, timed, monoNowSec() - t0);
+
+    const uint32_t ranks = 2000;
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < ranks; i++) {
+        const int klen =
+            snprintf(key, sizeof(key), "large-%07u", (i * 7919u) % n);
+        const databox m = databoxNewBytes(key, klen);
+        sink += (uint64_t)multiOrderedSetGetRank(mos, &m);
+    }
+    emitRow("multiOrderedSetLarge", "getRank600k", 0, ranks, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < ranks; i++) {
+        databox member;
+        databox score;
+        sink += multiOrderedSetGetByRank(mos, (int64_t)((i * 7919u) % n),
+                                         &member, &score);
+    }
+    emitRow("multiOrderedSetLarge", "getByRank600k", 0, ranks,
+            monoNowSec() - t0);
+
+    perfContainerSink = sink;
+}
+
 /* A set of 'members' members (scores spaced 16 apart), small enough to
  * stay in the tier 'tier' names, driven PERF_CONTAINER_N operations at a
  * time: increments that keep each member's place, scattered updates that
@@ -1193,6 +1254,10 @@ int perfRegressionTest(int argc, char *argv[]) {
         /* Containers whose layered operations are tuned */
         if (perfWanted("multidict")) {
             benchMultidict();
+        }
+
+        if (perfNamed("multiOrderedSetLarge")) {
+            benchMultiOrderedSetLarge();
         }
 
         if (perfWanted("multiOrderedSet")) {
