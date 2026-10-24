@@ -769,15 +769,6 @@ DK_INLINE_ALWAYS size_t flexRawEntryLength(flexEntry *const fe) {
     return len + FLEX_ENCODING_SIZE_TOTAL_FORWARD(fe, encodingSize);
 }
 
-/* Return total number of bytes used by entry at 'fe'. */
-DK_FN_UNUSED DK_INLINE_ALWAYS size_t
-flexRawEntryLengthReverse(flexEntry *const fe) {
-    size_t len;
-    varintWidth encodingSize;
-    FLEX_DECODE_LENGTH_REVERSE(fe, encodingSize, len);
-    return len + FLEX_ENCODING_SIZE_TOTAL_REVERSE(fe, encodingSize);
-}
-
 /* ====================================================================
  * flex internal accounting
  * ==================================================================== */
@@ -1818,32 +1809,19 @@ void flexBulkPushBytesMembers(flex **const ff,
     cleanerName(zfree, FlexPtrs) flex **mergeHeap = NULL;
     if (mergeCap > (sizeof(chunkStack) / sizeof(chunkStack[0]))) {
         mergeHeap = zcalloc(mergeCap, sizeof(*merge));
-        if (!mergeHeap) {
-            for (size_t i = 0; i < count; i++) {
-                flexPushBytes(ff, members[i].data, members[i].len,
-                              FLEX_ENDPOINT_TAIL);
-            }
-            return;
-        }
-
         merge = mergeHeap;
     }
 
+    /* Allocation fails fast, so every chunk is built and the merge always
+     * produces the result */
     size_t mergeCount = 0;
     merge[mergeCount++] = *ff;
-
-    bool chunkFail = false;
     for (size_t i = 0; i < count; i += FLEX_BULK_PUSH_MEMBERS_PER_CHUNK) {
         const size_t thisChunk = (count - i) < FLEX_BULK_PUSH_MEMBERS_PER_CHUNK
                                      ? (count - i)
                                      : FLEX_BULK_PUSH_MEMBERS_PER_CHUNK;
         /* @own: container; free=flexFree */
         flex *chunk = flexNew();
-        if (!chunk) {
-            chunkFail = true;
-            break;
-        }
-
         for (size_t j = 0; j < thisChunk; j++) {
             flexPushBytes(&chunk, members[i + j].data, members[i + j].len,
                           FLEX_ENDPOINT_TAIL);
@@ -1853,24 +1831,11 @@ void flexBulkPushBytesMembers(flex **const ff,
     }
 
     flex *merged =
-        chunkFail
-            ? NULL
-            : flexBulkMergeFlex((const flex *const *const)merge, mergeCount);
+        flexBulkMergeFlex((const flex *const *const)merge, mergeCount);
 
-    /* Free the chunks only — slot 0 is the caller's flex, which stays
-     * theirs until the merge has actually succeeded. */
+    /* Free the chunks only — slot 0 is the caller's flex, replaced below */
     for (size_t i = 1; i < mergeCount; i++) {
         flexFree(merge[i]);
-    }
-
-    if (!merged) {
-        /* Assembly failed with `*ff` untouched, so the slow path still
-         * produces the correct result rather than a partial one. */
-        for (size_t i = 0; i < count; i++) {
-            flexPushBytes(ff, members[i].data, members[i].len,
-                          FLEX_ENDPOINT_TAIL);
-        }
-        return;
     }
 
     flexFree(*ff);
