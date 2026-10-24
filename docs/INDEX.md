@@ -61,6 +61,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 #### Other Multi-Containers
 
 - [multidict](modules/multi/MULTIDICT.md) - General-purpose dictionary
+- [multiOrderedSet](modules/multi/MULTIORDEREDSET.md) - Sorted set by score with member lookup and ranks
 - [multilru](modules/multi/MULTILRU.md) - Least Recently Used cache
 - [multiroar](modules/multi/MULTIROAR.md) - Roaring bitmap implementation
 

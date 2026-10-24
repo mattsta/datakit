@@ -11,7 +11,10 @@
  *   - Members are unique (databox keys)
  *   - Scores are databox values (int64, uint64, double, etc.)
  *   - Pairs are sorted by score (ascending)
- *   - When scores are equal, pairs are sorted by member lexicographically
+ *   - When scores are equal, pairs are sorted by member (databoxCompare:
+ *     bytes in natural order, so "m2" sorts before "m10")
+ *
+ * Guide: docs/modules/multi/MULTIORDEREDSET.md
  *
  * ====================================================================
  * WHEN TO USE multiOrderedSet vs multimap
@@ -61,20 +64,13 @@
  * Tier promotion is automatic and transparent. No manual management.
  *
  * ====================================================================
- * PERFORMANCE CHARACTERISTICS (10,000 entries benchmark)
+ * PERFORMANCE
  * ====================================================================
  *
- * Operation               multiOrderedSet     multimap        Notes
- * -----------------------------------------------------------------------
- * Insert                  ~13,000/s           ~300,000/s      24x slower
- * Exists (by member)      ~2,200,000/s        N/A             O(1) hash
- * GetScore (by member)    ~2,600,000/s        N/A             O(1) hash
- * Lookup (by score/key)   N/A                 ~500,000/s      O(log n)
- * Random member lookup    ~2,000,000/s        ~450,000/s      4.5x faster
- * Iteration               ~7,400,000/s        ~7,100,000/s    Similar
- *
- * The key advantage: multimap cannot efficiently answer "what is member
- * X's score?" without O(n) scan. multiOrderedSet answers in O(1).
+ * Measured per-operation numbers (perfRegression's multiOrderedSet rows)
+ * live in docs/PERFORMANCE_BASELINES.md.  The key advantage over multimap:
+ * multimap cannot answer "what is member X's score?" without an O(n)
+ * scan; multiOrderedSet answers in O(1).
  *
  * ====================================================================
  * MEMORY USAGE (10,000 entries, ~6-byte keys)
@@ -100,15 +96,17 @@
  * Operation                    Small       Medium      Full
  * -----------------------------------------------------------------------
  * Add/Update                   O(n)        O(n/k)      O(1) + O(log n)
- * Remove                       O(n)        O(n/k)      O(1) + O(n)
+ * Remove                       O(n)        O(n/k)      O(1) + O(log n)
  * Exists (by member)           O(n)        O(n/k)      O(1)
  * GetScore (by member)         O(n)        O(n/k)      O(1)
- * GetRank (by member)          O(n)        O(n)        O(1) + O(n)
- * GetByRank                    O(n)        O(n)        O(n)
+ * GetRank (by member)          O(n)        O(n)        O(1) + O(s)
+ * GetByRank                    O(n)        O(n)        O(s)
  * CountByScore                 O(log n)    O(log n)    O(log n) + O(m)
  * Iteration                    O(1)/next   O(1)/next   O(1)/next
  *
- * Where n = total entries, k = split factor, m = entries in range
+ * Where n = total entries, k = split factor, m = entries in range,
+ * s = Full-tier sub-maps (about one per 4 KB of rows), counted from the
+ * nearer end.  Sub-map inserts and deletes move at most one sub-map.
  *
  * ====================================================================
  * DATA STRUCTURE CHOICES & RATIONALE
