@@ -6957,6 +6957,59 @@ int clusterRingTest(int argc, char *argv[]) {
      * WAL-replay paths that have no leading snapshot.  The framework
      * documents NULL as "skip with diagnostic"; this descriptor must
      * supply a usable constructor. */
+    TEST("persistOps validate refuses each corruption of a valid ring") {
+        /* Restore checks the same rules first, so validate is reached
+         * here by corrupting a live ring in memory: each change is
+         * refused, and undoing it validates again */
+        clusterRingConfig config = {.name = "validate",
+                                    .strategyType = CLUSTER_STRATEGY_KETAMA};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
+        for (uint32_t i = 1u; i <= 4u; i++) {
+            clusterNodeConfig nc = {.id = (uint64_t)i * 10u,
+                                    .weight = 100u,
+                                    .initialState = CLUSTER_NODE_UP};
+            clusterRingAddNode(ring, &nc);
+        }
+        clusterKeySpaceConfig ksc = {
+            .name = "ks",
+            .quorum = {.replicaCount = 3, .writeQuorum = 2, .readQuorum = 2},
+            .strategy = CLUSTER_STRATEGY_DEFAULT};
+        clusterKeySpace *ks = NULL;
+        if (clusterRingAddKeySpace(ring, &ksc, &ks) != CLUSTER_OK || !ks ||
+            !persistOpsClusterRing.validate(ring) ||
+            persistOpsClusterRing.validate(NULL)) {
+            ERRR("setup: a valid ring did not validate");
+        }
+
+#define CR_CORRUPT(field, bad, what)                                           \
+    do {                                                                       \
+        const __typeof__(field) saved_ = (field);                              \
+        (field) = (bad);                                                       \
+        if (persistOpsClusterRing.validate(ring)) {                            \
+            ERR("validate accepted %s", what);                                 \
+        }                                                                      \
+        (field) = saved_;                                                      \
+        if (!persistOpsClusterRing.validate(ring)) {                           \
+            ERR("validate refused the ring after undoing %s", what);           \
+        }                                                                      \
+    } while (0)
+
+        CR_CORRUPT(ring->strategyType, (clusterStrategyType)99,
+                   "an unknown strategy");
+        CR_CORRUPT(ring->strategyType, CLUSTER_STRATEGY_DEFAULT,
+                   "DEFAULT as the ring's strategy");
+        CR_CORRUPT(ring->defaultQuorum.consistency, (clusterConsistencyLevel)99,
+                   "an unknown consistency level");
+        CR_CORRUPT(ring->nodeArray[1]->state, (clusterNodeState)99,
+                   "an unknown node state");
+        CR_CORRUPT(ring->nodeArray[3]->id, ring->nodeArray[0]->id,
+                   "a duplicate node id");
+        CR_CORRUPT(ks->strategy, (clusterStrategyType)99,
+                   "an unknown keyspace strategy");
+        CR_CORRUPT(ks->quorum.readQuorum, 4, "a read quorum past replicas");
+#undef CR_CORRUPT
+    }
+
     TEST("persistOps newEmpty returns a fresh-empty ring") {
         if (persistOpsClusterRing.newEmpty == NULL) {
             ERRR("persistOpsClusterRing.newEmpty must not be NULL");
