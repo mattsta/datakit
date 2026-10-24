@@ -7454,6 +7454,60 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Requested 200, got %u\n", got);
     }
 
+    printf("Test 6.2b: Get some keys while growing and shrinking...\n");
+    {
+        /* Mid-rehash both tables are sampled, skipping the old table's
+         * migrated slots (and, when the new table is the smaller one,
+         * jumping to the rehash index past its end).  Every key returned
+         * must be live, at most the count asked for, at least one. */
+        for (int shrink = 0; shrink < 2; shrink++) {
+            cleaner(multidictMmClassFree) multidictClass *sc =
+                multidictMmClassNew();
+            cleaner(multidictFree) multidict *sd =
+                multidictNew(&multidictTypeExactKey, sc, 23);
+            /* The old table: big enough that a few rehash steps leave
+             * most of it unmigrated */
+            multidictExpand(sd, shrink ? 8192 : 256);
+            while (multidictIsRehashing(sd)) {
+                multidictRehash(sd, 1000);
+            }
+            multidictResizeDisable(sd);
+            for (int i = 0; i < 1500; i++) {
+                const databox k = databoxNewSigned(i * 31);
+                const databox v = databoxNewSigned(i);
+                multidictAdd(sd, &k, &v);
+            }
+            multidictResizeEnable(sd);
+            multidictExpand(sd, shrink ? 64 : 16384);
+            multidictRehash(sd, 3);
+            if (!multidictIsRehashing(sd)) {
+                printf("  ERROR: no rehash in flight to sample\n");
+                err++;
+            }
+            for (int r = 0; r < 30 && multidictIsRehashing(sd); r++) {
+                databox got[40];
+                const uint32_t n = multidictGetSomeKeys(sd, got, 40);
+                if (n == 0 || n > 40) {
+                    printf("  ERROR: sampled %u keys of 40\n", n);
+                    err++;
+                }
+                for (uint32_t i = 0; i < n; i++) {
+                    /* Non-negative integers come back by value, either
+                     * signedness */
+                    databox found;
+                    const bool integer = got[i].type == DATABOX_SIGNED_64 ||
+                                         got[i].type == DATABOX_UNSIGNED_64;
+                    if (!integer || got[i].data.u64 % 31 != 0 ||
+                        !multidictFind(sd, &got[i], &found)) {
+                        printf("  ERROR: sampled key %u is not live\n", i);
+                        err++;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     printf("Test 6.3: Random key during rehash...\n");
     {
         multidictExpand(d, 512);

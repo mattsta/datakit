@@ -405,6 +405,12 @@ void multidictIteratorRelease(multidictIterator *iter);
 /* Fills 'keybox' with a random key; returns false only when the dict is
  * empty, including while a rehash is in flight. */
 bool multidictGetRandomKey(multidict *d, databox *keybox);
+
+/* Samples up to 'count' keys into 'keys' and returns how many: a walk
+ * from a random slot (both tables while rehashing, after a few rehash
+ * steps) bounded at 10 slots per key asked for, so it may return fewer
+ * than 'count' and may return a key more than once.  For eviction-style
+ * sampling, not enumeration (use multidictScan or an iterator). */
 uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count);
 void multidictEmpty(multidict *d);
 void multidictPrintStats(multidict *d);
