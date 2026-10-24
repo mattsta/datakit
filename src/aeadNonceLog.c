@@ -723,7 +723,8 @@ static flex *anlTestReplaceEntry(const flex *src, size_t idx,
     /* @own: caller; free=flexFree */
     flex *out = flexNew();
     size_t i = 0;
-    for (flexEntry *fe = flexHead(src); fe != NULL; fe = flexNext(src, fe)) {
+    for (flexEntry *fe = flexHeadIfAny(src); fe != NULL;
+         fe = flexNext(src, fe)) {
         databoxBig box;
         flexGetByTypeBig(fe, &box);
         const databox *push =

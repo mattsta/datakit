@@ -5320,7 +5320,7 @@ static bool persistTestRecoversTo(persist *p, const int64_t *want, size_t n) {
         return false;
     }
     size_t i = 0;
-    for (flexEntry *fe = flexHead(f); fe; fe = flexNext(f, fe), i++) {
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe), i++) {
         databox box;
         flexGetByType(fe, &box);
         if (!DATABOX_IS_INTEGER(&box) || box.data.i64 != want[i]) {
