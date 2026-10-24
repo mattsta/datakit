@@ -4299,6 +4299,85 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("envelope: Open refuses what it cannot open, wiping a short buffer") {
+        /* A ChaCha20-Poly1305 and an AES-128-GCM envelope of 21 bytes:
+         * each opens with its key; refused are an XXH64 (not AEAD)
+         * envelope, NULL params, a key of the other cipher's length, and
+         * a 20-byte plaintext buffer (which comes back zeroed, not
+         * partly written); trailing bytes open only when allowed */
+        uint8_t key32[32];
+        uint8_t key16[16];
+        for (size_t i = 0; i < sizeof(key32); i++) {
+            key32[i] = (uint8_t)(i * 7 + 3);
+        }
+        memcpy(key16, key32, sizeof(key16));
+        uint8_t nonce[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+        const uint8_t plain[21] = "twenty-one plaintext";
+        uint8_t env[2][128];
+        size_t envLen[2] = {0, 0};
+        const flexEnvelopeSealParams sp[2] = {
+            {.key = key32,
+             .key_len = sizeof(key32),
+             .nonce = nonce,
+             .nonce_len = sizeof(nonce),
+             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305},
+            {.key = key16,
+             .key_len = sizeof(key16),
+             .nonce = nonce,
+             .nonce_len = sizeof(nonce),
+             .algo = FLEX_ENV_ALGO_AEAD_AES128_GCM},
+        };
+        uint8_t xxh[128];
+        size_t xxhLen = 0;
+        const flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
+        if (!flexEnvelopeSeal(env[0], sizeof(env[0]), plain, sizeof(plain),
+                              &sp[0], &envLen[0]) ||
+            !flexEnvelopeSeal(env[1], sizeof(env[1]), plain, sizeof(plain),
+                              &sp[1], &envLen[1]) ||
+            !flexEnvelopeWrap(xxh, sizeof(xxh), plain, sizeof(plain), &wp,
+                              &xxhLen)) {
+            ERRR("envelope setup failed");
+        }
+        for (int e = 0; e < 2; e++) {
+            const flexEnvelopeVerifyParams right = {.key = sp[e].key,
+                                                    .key_len = sp[e].key_len};
+            const flexEnvelopeVerifyParams wrongLen = {
+                .key = key32, .key_len = e == 0 ? 16 : 32};
+            const flexEnvelopeVerifyParams trailing = {
+                .key = sp[e].key,
+                .key_len = sp[e].key_len,
+                .opts = FLEX_ENV_VERIFY_ALLOW_TRAILING};
+            uint8_t out[64];
+            size_t got = 0;
+            const bool opens = flexEnvelopeOpen(env[e], envLen[e], &right, out,
+                                                sizeof(out), &got) &&
+                               got == sizeof(plain) &&
+                               memcmp(out, plain, sizeof(plain)) == 0;
+            memset(out, 0xaa, sizeof(out));
+            const bool shortOpens =
+                flexEnvelopeOpen(env[e], envLen[e], &right, out, 20, &got);
+            bool wiped = true;
+            for (size_t i = 0; i < 20; i++) {
+                wiped = wiped && out[i] == 0;
+            }
+            env[e][envLen[e]] = 0x00; /* one trailing byte */
+            if (!opens || shortOpens || !wiped ||
+                flexEnvelopeOpen(env[e], envLen[e], NULL, out, sizeof(out),
+                                 &got) ||
+                flexEnvelopeOpen(env[e], envLen[e], &wrongLen, out, sizeof(out),
+                                 &got) ||
+                flexEnvelopeOpen(env[e], envLen[e] + 1, &right, out,
+                                 sizeof(out), &got) ||
+                !flexEnvelopeOpen(env[e], envLen[e] + 1, &trailing, out,
+                                  sizeof(out), &got) ||
+                flexEnvelopeOpen(xxh, xxhLen, &right, out, sizeof(out), &got)) {
+                ERR("cipher %d: opens %d, short opens %d, wiped %d, or a "
+                    "refusal accepted",
+                    e, opens, shortOpens, wiped);
+            }
+        }
+    }
+
     TEST("envelope: wrap stream Final refuses misuse and poisons the stream") {
         /* An HMAC-SHA256 stream declared for 8 payload bytes: Final after
          * 7, into a 31-byte digest buffer, or into a NULL one is refused,
