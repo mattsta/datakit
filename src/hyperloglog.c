@@ -2045,6 +2045,46 @@ cleanup:
         }
     }
 
+    printf("Testing a dense merge into a sparse sketch...\n");
+    {
+        /* A sparse sketch of 10 elements takes a dense one of 5000: it
+         * turns dense and holds the register-wise maximum, so its count
+         * is exactly that of the dense sketch with the 10 elements
+         * added */
+        hyperloglog *few = hyperloglogNewSparse();
+        hyperloglog *many = hyperloglogNewDense();
+        char elem[24];
+        for (int i = 0; i < 10; i++) {
+            const int n = snprintf(elem, sizeof(elem), "few-%d", i);
+            hyperloglogAdd(&few, elem, (size_t)n);
+        }
+        for (int i = 0; i < 5000; i++) {
+            const int n = snprintf(elem, sizeof(elem), "many-%d", i);
+            hyperloglogAdd(&many, elem, (size_t)n);
+        }
+        hyperloglog *oracle = hyperloglogCopy(many);
+        for (int i = 0; i < 10; i++) {
+            const int n = snprintf(elem, sizeof(elem), "few-%d", i);
+            hyperloglogAdd(&oracle, elem, (size_t)n);
+        }
+        const bool wasSparse = isSparse(few);
+        const bool merged = hyperloglogMergeInto(&few, many);
+        bool invalid = false;
+        const uint64_t got = hyperloglogCount(few, &invalid);
+        const uint64_t want = hyperloglogCount(oracle, &invalid);
+        if (!wasSparse || !merged || !isDense(few) || invalid || got != want) {
+            printf("  [FAIL] dense into sparse: merged %d, dense %d, count "
+                   "%" PRIu64 " want %" PRIu64 "\n",
+                   merged, isDense(few), got, want);
+            errors++;
+        } else {
+            printf("  [OK] dense into sparse merges to the register max\n");
+        }
+        hyperloglogFree(few);
+        hyperloglogFree(many);
+        hyperloglogFree(oracle);
+    }
+
     printf("Testing pfadd batches...\n");
     {
         hyperloglog *ph = NULL;
