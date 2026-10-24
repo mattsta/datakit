@@ -6064,6 +6064,148 @@ static int multidictTestLRUToggle_(void) {
     return err;
 }
 
+typedef struct mdShrinkScan_ {
+    uint8_t *seen;
+    size_t n;
+    int32_t bad;
+} mdShrinkScan_;
+
+/* Keys and values are non-negative, so they read back as UNSIGNED_64 (the
+ * integer family's minimal form) */
+static void mdShrinkScanCb_(void *privdata, const databox *key,
+                            const databox *val) {
+    mdShrinkScan_ *s = privdata;
+    if (key->type != DATABOX_UNSIGNED_64 || key->data.u >= s->n ||
+        val->type != DATABOX_UNSIGNED_64 || val->data.u != key->data.u * 3) {
+        s->bad++;
+        return;
+    }
+    s->seen[key->data.u] = 1;
+}
+
+/* 2000 keys, all but every 20th deleted, then a resize: the table shrinks
+ * through a rehash into a smaller one (table 0 the larger).  A full scan
+ * during it, with 'stepsBetween' rehash steps between cursor calls, must
+ * emit every kept key; the detailed stats see both tables; the scan and
+ * stats agree with the count. */
+static int mdTestShrinkingRehashScan_(multidictClass *qdc,
+                                      int32_t stepsBetween) {
+    int err = 0;
+    enum { N = 2000 };
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 7);
+    for (int64_t i = 0; i < N; i++) {
+        const databox k = databoxNewSigned(i);
+        const databox v = databoxNewSigned(i * 3);
+        multidictAdd(d, &k, &v);
+    }
+    for (int64_t i = 0; i < N; i++) {
+        if (i % 20) {
+            const databox k = databoxNewSigned(i);
+            multidictDelete(d, &k);
+        }
+    }
+    while (multidictIsRehashing(d)) {
+        multidictRehash(d, 100);
+    }
+    multidictDetailedStats before = {0};
+    multidictGetDetailedStats(d, &before);
+    if (!multidictResize(d) || !multidictIsRehashing(d) || multidictResize(d)) {
+        printf("ERROR: resize after deletes did not start one rehash\n");
+        return 1;
+    }
+    multidictDetailedStats during = {0};
+    multidictGetDetailedStats(d, &during);
+    if (!during.hasRehashTable ||
+        during.rehashTable.slots >= during.basic.slots ||
+        during.basic.slots != before.basic.slots ||
+        during.basic.count + during.rehashTable.count != N / 20) {
+        printf("ERROR: the shrink's tables are not larger-to-smaller "
+               "(%" PRIu64 " -> %" PRIu64 " slots)\n",
+               during.basic.slots, during.rehashTable.slots);
+        err++;
+    }
+
+    uint8_t seen[N] = {0};
+    mdShrinkScan_ state = {.seen = seen, .n = N, .bad = 0};
+    uint64_t cursor = 0;
+    size_t calls = 0;
+    do {
+        cursor = multidictScan(d, cursor, mdShrinkScanCb_, &state);
+        if (stepsBetween) {
+            multidictRehash(d, stepsBetween);
+        }
+        calls++;
+    } while (cursor != 0 && calls < 100000);
+    for (size_t i = 0; i < N; i++) {
+        if ((i % 20 == 0) != (seen[i] == 1)) {
+            state.bad++;
+        }
+    }
+    if (state.bad || cursor != 0) {
+        printf("ERROR: scan during a shrink (%d steps between calls) missed "
+               "or invented %d keys\n",
+               stepsBetween, state.bad);
+        err++;
+    }
+    return err;
+}
+
+/* Resize sizing and stats on an empty dict */
+static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
+    int err = 0;
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 9);
+    multidictStats stats = {0};
+    multidictGetStats(d, &stats);
+    multidictDetailedStats detail = {0};
+    multidictGetDetailedStats(d, &detail);
+    databox k = {{0}};
+    databox v = {{0}};
+    if (stats.count != 0 || stats.loadFactor != 0 ||
+        detail.basic.loadFactor != 0 || detail.avgChainLen != 0.0f ||
+        detail.hasRehashTable || multidictPopRandom(d, &k, &v)) {
+        printf("ERROR: an empty dict reported entries\n");
+        err++;
+    }
+
+    /* Byte-based: a resize keeps the slots its bytes need at the target
+     * average, not one per entry */
+    for (int64_t i = 0; i < 64; i++) {
+        char buf[200];
+        memset(buf, 'a' + (int)(i % 26), sizeof(buf));
+        const databox key = databoxNewSigned(i);
+        const databox val = databoxNewBytes(buf, sizeof(buf));
+        multidictAdd(d, &key, &val);
+    }
+    while (multidictIsRehashing(d)) {
+        multidictRehash(d, 100);
+    }
+    multidictEnableByteBasedExpansion(d, 512, 4096);
+    multidictGetStats(d, &stats);
+    const uint64_t forBytes = stats.usedBytes / 512 + 1;
+    multidictResize(d);
+    while (multidictIsRehashing(d)) {
+        multidictRehash(d, 100);
+    }
+    multidictGetStats(d, &stats);
+    if (stats.count != 64 || stats.slots < forBytes) {
+        printf("ERROR: a byte-based resize kept %" PRIu64
+               " slots, below the %" PRIu64 " its bytes need\n",
+               stats.slots, forBytes);
+        err++;
+    }
+
+    /* A resize is refused with resizing off (a class-wide switch) */
+    multidictResizeDisable(d);
+    if (multidictResize(d)) {
+        printf("ERROR: a resize ran with resizing disabled\n");
+        err++;
+    }
+    multidictResizeEnable(d);
+    return err;
+}
+
 int multidictTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -6074,6 +6216,12 @@ int multidictTest(int argc, char *argv[]) {
 
     printf("Creating multimap-based multidictClass...\n");
     cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+
+    printf("Test: scans during a shrinking rehash, resize sizing, empty "
+           "stats...\n");
+    err += mdTestShrinkingRehashScan_(qdc, 0);
+    err += mdTestShrinkingRehashScan_(qdc, 1);
+    err += mdTestResizeAndEmptyStats_(qdc);
 
     printf("Creating multidict with multimap slots...\n");
 
