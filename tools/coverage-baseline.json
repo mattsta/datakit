@@ -1,5 +1,5 @@
 {
- "commit": "30d6558148fa0db9d565c2d00b6b414bda040294",
+ "commit": "61b062da78c196d7ad585dee7137fce194432f19",
  "files": {
   "src/OSRegulate.c": {
    "lines": 243,
@@ -14,8 +14,8 @@
    "branches": 0
   },
   "src/aesGcm.c": {
-   "lines": 74,
-   "branches": 53
+   "lines": 31,
+   "branches": 28
   },
   "src/aesGcm.h": {
    "lines": 0,
@@ -26,7 +26,7 @@
    "branches": 0
   },
   "src/atomPool.c": {
-   "lines": 40,
+   "lines": 28,
    "branches": 46
   },
   "src/bbits.c": {
@@ -162,8 +162,8 @@
    "branches": 27
   },
   "src/dks.c": {
-   "lines": 70,
-   "branches": 77
+   "lines": 53,
+   "branches": 68
   },
   "src/dks.h": {
    "lines": 0,
@@ -494,8 +494,8 @@
    "branches": 31
   },
   "src/hmacKeyring.c": {
-   "lines": 88,
-   "branches": 78
+   "lines": 82,
+   "branches": 74
   },
   "src/hmacKeyring.h": {
    "lines": 0,
@@ -691,7 +691,7 @@
   },
   "src/multidict.c": {
    "lines": 139,
-   "branches": 168
+   "branches": 169
   },
   "src/multidict.h": {
    "lines": 0,
@@ -738,8 +738,8 @@
    "branches": 73
   },
   "src/multimap.c": {
-   "lines": 64,
-   "branches": 117
+   "lines": 41,
+   "branches": 105
   },
   "src/multimap.h": {
    "lines": 0,
@@ -755,7 +755,7 @@
   },
   "src/multimapAtomDense.c": {
    "lines": 23,
-   "branches": 26
+   "branches": 25
   },
   "src/multimapFull.c": {
    "lines": 63,
@@ -790,8 +790,8 @@
    "branches": 10
   },
   "src/ownedState.c": {
-   "lines": 88,
-   "branches": 107
+   "lines": 78,
+   "branches": 104
   },
   "src/ownedState.h": {
    "lines": 4,
@@ -810,8 +810,8 @@
    "branches": 0
   },
   "src/persist/flexP.c": {
-   "lines": 33,
-   "branches": 34
+   "lines": 31,
+   "branches": 33
   },
   "src/persist/intsetP.c": {
    "lines": 33,
@@ -846,8 +846,8 @@
    "branches": 72
   },
   "src/persist/persistCtx.c": {
-   "lines": 55,
-   "branches": 45
+   "lines": 53,
+   "branches": 44
   },
   "src/portableRandom.c": {
    "lines": 19,
@@ -1050,8 +1050,8 @@
    "branches": 0
   },
   "src/str/strCountDigits.c": {
-   "lines": 25,
-   "branches": 16
+   "lines": 0,
+   "branches": 1
   },
   "src/str/strDigitsVerify.c": {
    "lines": 0,
@@ -1130,32 +1130,32 @@
    "branches": 2
   },
   "src/str/strUTF8Valid.c": {
-   "lines": 38,
-   "branches": 35
+   "lines": 32,
+   "branches": 31
   },
   "src/str/strUTF8Width.c": {
-   "lines": 38,
-   "branches": 13
+   "lines": 2,
+   "branches": 1
   },
   "src/str/strUnicodeData.c": {
-   "lines": 79,
-   "branches": 121
+   "lines": 34,
+   "branches": 83
   },
   "src/strDoubleFormat.c": {
    "lines": 19,
    "branches": 32
   },
   "src/stringPool.c": {
-   "lines": 65,
-   "branches": 81
+   "lines": 50,
+   "branches": 71
   },
   "src/timeUtil.c": {
    "lines": 0,
    "branches": 0
   },
   "src/timerWheel.c": {
-   "lines": 72,
-   "branches": 53
+   "lines": 53,
+   "branches": 45
   },
   "src/ulid.c": {
    "lines": 160,
@@ -1166,8 +1166,8 @@
    "branches": 0
   },
   "src/util.c": {
-   "lines": 74,
-   "branches": 75
+   "lines": 28,
+   "branches": 34
   },
   "src/versionOSRuntime.c": {
    "lines": 0,
