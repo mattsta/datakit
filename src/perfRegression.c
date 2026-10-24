@@ -813,6 +813,24 @@ static void benchMultiOrderedSet(void) {
     }
     emitRow("multiOrderedSet", "remove", 0, n, monoNowSec() - t0);
 
+    /* Every member with one score: an equal-score run never straddles two
+     * of the Full tier's sub-maps, so it stays one flex and each add moves
+     * a share of it (cost per add grows with the run; 10000 members keeps
+     * the row short) */
+    {
+        const uint32_t sameN = 10000;
+        cleaner(multiOrderedSetFree) multiOrderedSet *same =
+            multiOrderedSetNew();
+        const databox s = databoxNewSigned(7);
+        t0 = monoNowSec();
+        for (uint32_t i = 0; i < sameN; i++) {
+            const databox m = perfContainerKey(keys, i);
+            sink += multiOrderedSetAdd(&same, &s, &m);
+        }
+        emitRow("multiOrderedSet", "addEqualScore10k", 0, sameN,
+                monoNowSec() - t0);
+    }
+
     perfContainerSink = sink;
 }
 
