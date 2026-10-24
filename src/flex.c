@@ -8202,6 +8202,55 @@ static int32_t flexTestDeleteUpTo(void) {
     return bad;
 }
 
+/* flex math over 96/128-bit entries and at the edges of the result range:
+ * a 128-bit entry counts by its value, one past the result's range
+ * refuses, a 64x64-bit product past 2^127 refuses, and the double fold
+ * takes any unsigned 128-bit value */
+static int32_t flexTestMathWide(void) {
+    int32_t bad = 0;
+    databoxBig b;
+    cleaner(flexFree) flex *small128 = flexNew();
+    DATABOX_BIG_UNSIGNED_128(&b, (__uint128_t)5);
+    flexPushDataboxBigExact(&small128, &b, FLEX_ENDPOINT_TAIL);
+    DATABOX_BIG_SIGNED_128(&b, (__int128_t)-7);
+    flexPushDataboxBigExact(&small128, &b, FLEX_ENDPOINT_TAIL);
+    int64_t s = 0;
+    uint64_t u = 0;
+    double d = 0;
+    if (!flexAddSigned(small128, &s) || s != -2 ||
+        !flexMultiplySigned(small128, &s) || s != -35) {
+        printf("  FAIL: 128-bit-encoded 5 and -7 folded to %" PRId64 "\n", s);
+        bad++;
+    }
+
+    cleaner(flexFree) flex *top = flexNew();
+    DATABOX_BIG_UNSIGNED_128(&b, ((__uint128_t)1 << 127) + 1);
+    flexPushDataboxBigExact(&top, &b, FLEX_ENDPOINT_TAIL);
+    if (flexAddSigned(top, &s) || flexAddUnsigned(top, &u) ||
+        !flexAddDouble(top, &d) || d != 0x1p127) {
+        printf("  FAIL: 2^127 + 1 folded as an integer, or as double %g\n", d);
+        bad++;
+    }
+
+    cleaner(flexFree) flex *huge = flexNew();
+    flexPushUnsigned(&huge, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&huge, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+    if (flexMultiplyUnsigned(huge, &u) || flexAddUnsigned(huge, &u)) {
+        printf("  FAIL: UINT64_MAX^2 or 2*UINT64_MAX fit a uint64\n");
+        bad++;
+    }
+
+    cleaner(flexFree) flex *edge = flexNew();
+    flexPushSigned(&edge, INT64_MIN, FLEX_ENDPOINT_TAIL);
+    flexPushSigned(&edge, 1, FLEX_ENDPOINT_TAIL);
+    if (flexSubtractSigned(edge, &s) || !flexAddSigned(edge, &s) ||
+        s != INT64_MIN + 1) {
+        printf("  FAIL: INT64_MIN - 1 fit, or INT64_MIN + 1 did not\n");
+        bad++;
+    }
+    return bad;
+}
+
 static int32_t flexTestReferenceSet(void) {
     int32_t bad = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
@@ -11070,6 +11119,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify math over 128-bit entries and the result range edges:\n");
+    {
+        const int32_t bad = flexTestMathWide();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " wide math checks\n", bad);
             return bad;
         }
         printf("  ok\n");
