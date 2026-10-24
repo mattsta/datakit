@@ -168,43 +168,61 @@ static void updateMiddle(multiOrderedSetFull *m, uint32_t idx) {
     }
 }
 
-/* Find which sub-map a score belongs to: the LAST sub-map whose min score
- * (rangeBox[i] = head/min of sub-map i) is <= score — i.e. the sub-map that
- * should contain `score`. If score is below every sub-map's min, returns 0 (it
- * belongs at the front and becomes the new min there).
- *
- * Must be "last min <= score", NOT "first min >= score": the latter overshoots
- * interior scores to the next sub-map, mis-routing inserts (breaking global
- * order) and member lookups (findEntryForScore searches only the returned
- * sub-map). Masked while mapCount==1; sub-map splitting makes it mandatory.
- * Relies on rangeBox being monotonic, which empty-sub-map reclaim guarantees
- * (no interior INT64_MAX sentinels). */
-static int32_t findSubMapForScore(const multiOrderedSetFull *m,
-                                  const databox *score) {
+/* Sub-maps hold rows in (score, member or pool id) order, and so do the
+ * sub-maps among themselves: an equal-score run may span several.  A
+ * sub-map's first row compares with (score, memberOrId) by its rangeBox
+ * score, and on a tie by its first member, read from the flex then (so a
+ * lookup decodes at most one member per tied step).  With a NULL
+ * 'memberOrId' only the score counts.  An empty sub-map (only ever the
+ * lone one) sorts after everything. */
+static int mosFullHeadCompare_(const multiOrderedSetFull *m, uint32_t i,
+                               const databox *score,
+                               const databox *memberOrId) {
+    const int byScore = databoxCompare(getRangeBox(m, i), score);
+    if (byScore != 0 || !memberOrId) {
+        return byScore;
+    }
+
+    const flex *map = getSubMap(m, i);
+    if (!map || flexCount(map) == 0) {
+        return 1;
+    }
+
+    databox head;
+    databoxWide headWide;
+    flexGetByTypeInto(flexNext(map, flexHead(map)), &head, &headWide);
+    return databoxCompare(&head, memberOrId);
+}
+
+/* The LAST sub-map whose first row is at or below the row (score,
+ * memberOrId): the sub-map that holds that row, or should.  Below every
+ * first row it is sub-map 0, where the row becomes the new first.  With a
+ * NULL 'memberOrId' it is the last sub-map whose first score is strictly
+ * below 'score' (or 0): where a scan for the first row at 'score' or above
+ * starts, since an equal-score run may begin in that sub-map's tail.
+ * Binary search over the first rows, which stay strictly ascending because
+ * empty sub-maps are reclaimed (no interior INT64_MAX sentinels). */
+static uint32_t findSubMap_(const multiOrderedSetFull *m, const databox *score,
+                            const databox *memberOrId) {
     int32_t left = 0;
     int32_t right = (int32_t)m->mapCount - 1;
-
     while (left < right) {
         const int32_t mid = (left + right + 1) / 2; /* upper mid: bias right */
-        const databox *rangeScore = getRangeBox(m, (uint32_t)mid);
-
-        if (rangeScore && databoxCompare(rangeScore, score) <= 0) {
-            left =
-                mid; /* sub-map mid's min <= score: candidate, search right */
+        const int cmp =
+            mosFullHeadCompare_(m, (uint32_t)mid, score, memberOrId);
+        if (memberOrId ? cmp <= 0 : cmp < 0) {
+            left = mid; /* sub-map mid starts at or below: search right */
         } else {
             right = mid - 1;
         }
     }
 
-    return left;
+    return (uint32_t)left;
 }
 
-/* Split an oversized sub-map at a score boundary so member lookups (which route
- * by a single sub-map via findSubMapForScore) never have an equal-score run
- * straddling two sub-maps. Lower [0,k) stays; upper [k,end) becomes a new
- * sub-map at mapIdx+1, where k is a pair index with score[k] != score[k-1]. If
- * the whole sub-map is one score value (no interior boundary), it is left
- * oversized — it cannot be split safely. */
+/* Split an oversized sub-map at its middle row.  Routing compares whole
+ * rows (findSubMap_), so a cut may fall inside an equal-score run.  Lower
+ * [0,k) stays; upper [k,pairs) becomes a new sub-map at mapIdx+1. */
 static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
     flex *map = getSubMap(m, mapIdx);
     if (!map) {
@@ -216,46 +234,9 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
         return;
     }
 
-    /* Pairs are in score order, so equal first and last scores mean one
-     * equal-score run with no boundary to cut at.  Checked in O(1): an
-     * oversized run is offered a split on every insert into it. */
-    databox s[2];
-    databoxWide sw[2];
-    flexGetByTypeInto(flexHead(map), &s[0], &sw[0]);
-    flexGetByTypeInto(flexIndex(map, -(int32_t)MOS_ELEMENTS_PER_ENTRY), &s[1],
-                      &sw[1]);
-    if (databoxCompare(&s[0], &s[1]) == 0) {
-        return; /* one giant equal-score run: cannot split safely */
-    }
-
-    /* Snap the cut to the score boundary nearest the geometric middle: k is
-     * a PAIR index in [1, pairs-1] with score[k] != score[k-1].  One walk
-     * (each box keeps its own wide storage, so the previous score stays
-     * valid while the next is read). */
-    const size_t mid = pairs / 2;
-    size_t k = 0;
-    size_t bestDistance = SIZE_MAX;
-    flexEntry *fe = flexHead(map);
-    int cur = 0;
-    flexGetByTypeInto(fe, &s[cur], &sw[cur]);
-    for (size_t i = 1; i < pairs; i++) {
-        fe = flexNext(map, flexNext(map, fe)); /* past the member */
-        cur ^= 1;
-        flexGetByTypeInto(fe, &s[cur], &sw[cur]);
-        if (databoxCompare(&s[cur], &s[cur ^ 1]) != 0) {
-            const size_t distance = i > mid ? i - mid : mid - i;
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                k = i;
-            }
-            if (i >= mid) {
-                break; /* later boundaries are only further away */
-            }
-        }
-    }
-
     /* Lower [0,k) stays in 'map' (reallocated); upper [k,pairs) returns new.
      * flexSplitRange is ELEMENT-indexed. */
+    const size_t k = pairs / 2;
     const uint32_t splitElem = (uint32_t)(k * MOS_ELEMENTS_PER_ENTRY);
     const uint32_t moveElems = (uint32_t)((pairs - k) * MOS_ELEMENTS_PER_ENTRY);
     flex *upper = flexSplitRange(&map, (int32_t)splitElem, moveElems);
@@ -291,16 +272,18 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
     updateMiddle(m, mapIdx);
 }
 
-/* Insert into specific sub-map */
-static void insertIntoSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
-                             const databox *score, const databox *member) {
+/* Insert the row (score, member) into the sub-map that holds its place.
+ * In pool mode the row holds the member's pool id, which is also what
+ * routes it. */
+static void insertRow(multiOrderedSetFull *m, const databox *score,
+                      const databox *member) {
+    databox memberOrId = memberToPoolId(m, member);
+    const uint32_t mapIdx = findSubMap_(m, score, &memberOrId);
     flex *map = getSubMap(m, mapIdx);
     if (!map) {
         return;
     }
 
-    /* In pool mode, convert member to pool ID for storage in scoreMap */
-    databox memberOrId = memberToPoolId(m, member);
     const databox *elements[2] = {score, &memberOrId};
     uint32_t mid = getMiddle(m, mapIdx);
     flexEntry *middle = (flexEntry *)(map + mid);
@@ -321,10 +304,7 @@ static void insertIntoSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
         }
     }
 
-    /* Split oversized sub-maps so the structure scales. Requires >=2 pairs;
-     * splitSubMap is a no-op when no interior score boundary exists (a single
-     * giant equal-score run stays oversized so member routing stays correct).
-     */
+    /* Split oversized sub-maps so the structure scales (>= 2 rows) */
     if (flexBytes(map) > m->maxMapSize && m->mapCount < 1024 &&
         subMapCount(map) >= 2) {
         splitSubMap(m, mapIdx);
@@ -365,10 +345,10 @@ static void removeFromSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
     }
 }
 
-/* Reclaim an emptied sub-map slot so rangeBox stays monotonic for
- * findSubMapForScore's binary search. Score updates can empty a *middle*
- * sub-map; an empty middle keeps the INT64_MAX rangeBox sentinel, breaking the
- * non-decreasing order the search relies on -> mis-routing -> duplicates.
+/* Reclaim an emptied sub-map slot so the first rows stay ascending for
+ * findSubMap_'s binary search. Score updates can empty a *middle* sub-map;
+ * an empty middle keeps the INT64_MAX rangeBox sentinel, breaking the
+ * ascending order the search relies on -> mis-routing -> duplicates.
  * Never reclaims the last sub-map (mapCount must stay >= 1; a lone empty map
  * with rangeBox==INT64_MAX is harmless, search returns 0 trivially).
  * WARNING: shifts all sub-map indices > mapIdx down by one and frees the
@@ -416,19 +396,14 @@ static bool findScore(const multiOrderedSetFull *m, const databox *member,
 }
 
 /* The score-map row of 'member' whose score is 'score' (the member
- * index's value for it): the sub-map that holds the score, then a binary
- * search for the (score, member or pool id) row, as the sub-maps are kept
- * sorted by that pair.  NULL when there is no such row. */
+ * index's value for it): the sub-map that holds the (score, member or pool
+ * id) row, then a binary search for it there, as rows are kept sorted by
+ * that pair.  NULL when there is no such row. */
 static flexEntry *findEntryForScore(const multiOrderedSetFull *m,
                                     const databox *member, const databox *score,
                                     uint32_t *mapIdx) {
-    *mapIdx = findSubMapForScore(m, score);
-    flex *map = getSubMap(m, *mapIdx);
-    if (!map || flexCount(map) == 0) {
-        return NULL;
-    }
-
     /* In pool mode the row holds the member's pool ID */
+    *mapIdx = 0;
     databox memberToMatch;
     if (m->pool) {
         const uint64_t id = atomPoolGetId(m->pool, member);
@@ -438,6 +413,12 @@ static flexEntry *findEntryForScore(const multiOrderedSetFull *m,
         memberToMatch = databoxNewUnsigned(id);
     } else {
         memberToMatch = *member;
+    }
+
+    *mapIdx = findSubMap_(m, score, &memberToMatch);
+    flex *map = getSubMap(m, *mapIdx);
+    if (!map || flexCount(map) == 0) {
+        return NULL;
     }
 
     const databox *row[MOS_ELEMENTS_PER_ENTRY] = {score, &memberToMatch};
@@ -866,7 +847,7 @@ static bool setMemberScore(multiOrderedSetFull *m, const databox *member,
         return false;
     }
 
-    insertIntoSubMap(m, findSubMapForScore(m, score), score, member);
+    insertRow(m, score, member);
     return true;
 }
 
@@ -893,9 +874,7 @@ bool multiOrderedSetFullAddNX(multiOrderedSetFull *m, const databox *score,
         return false;
     }
 
-    uint32_t mapIdx = findSubMapForScore(m, score);
-    insertIntoSubMap(m, mapIdx, score, member);
-
+    insertRow(m, score, member);
     return true;
 }
 
@@ -1386,7 +1365,9 @@ bool multiOrderedSetFullIteratorInitAtScore(const multiOrderedSetFull *m,
     iter->type = MOS_TYPE_FULL;
     iter->forward = forward;
 
-    uint32_t mapIdx = findSubMapForScore(m, score);
+    /* An equal-score run may begin in the tail of the sub-map before the
+     * first one starting at 'score': start there */
+    uint32_t mapIdx = findSubMap_(m, score, NULL);
 
     for (; mapIdx < m->mapCount; mapIdx++) {
         flex *map = getSubMap(m, mapIdx);
@@ -1653,13 +1634,16 @@ void multiOrderedSetFullRepr(const multiOrderedSetFull *m) {
  * the number of violations (0 = healthy). Sub-map splitting and every
  * mutation must preserve all of these; this is the fuzz oracle for the split
  * path. Checks: (1) rangeBox[i] == head/min score of sub-map i;
- * (2) global non-decreasing score order across sub-maps; (3) totalEntries ==
- * sum of per-sub-map pair counts. Empty sub-maps (rangeBox == INT64_MAX
- * sentinel) are skipped for (1)/(2). */
+ * (2) rows strictly ascend across sub-maps: each sub-map's last
+ * (score, member or id) row is below the next one's first, equal-score
+ * runs included; (3) totalEntries == sum of per-sub-map pair counts.
+ * Empty sub-maps (rangeBox == INT64_MAX sentinel) are skipped for
+ * (1)/(2). */
 static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
     int bad = 0;
     uint64_t sum = 0;
     databoxBig prevLast = {{0}};
+    databoxBig prevLastMember = {{0}};
     bool havePrev = false;
     for (uint32_t i = 0; i < m->mapCount; i++) {
         flex *map = getSubMap(m, i);
@@ -1683,14 +1667,25 @@ static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
             printf("  INVARIANT FAIL: submap %u rangeBox flags wrong\n", i);
             bad++;
         }
-        if (havePrev && databoxCompare((const databox *)&prevLast,
-                                       (const databox *)&headScore) > 0) {
-            printf("  INVARIANT FAIL: submap %u breaks global score order\n",
-                   i);
-            bad++;
+        databoxBig headMember;
+        flexGetByTypeBig(flexNext(map, flexHead(map)), &headMember);
+        if (havePrev) {
+            int order = databoxCompare((const databox *)&prevLast,
+                                       (const databox *)&headScore);
+            if (order == 0) {
+                order = databoxCompare((const databox *)&prevLastMember,
+                                       (const databox *)&headMember);
+            }
+            if (order >= 0) {
+                printf("  INVARIANT FAIL: submap %u breaks global row order\n",
+                       i);
+                bad++;
+            }
         }
-        flexGetByTypeBig(flexIndex(map, (cnt - 1) * MOS_ELEMENTS_PER_ENTRY),
-                         &prevLast);
+        flexEntry *last =
+            flexIndex(map, (int32_t)((cnt - 1) * MOS_ELEMENTS_PER_ENTRY));
+        flexGetByTypeBig(last, &prevLast);
+        flexGetByTypeBig(flexNext(map, last), &prevLastMember);
         havePrev = true;
     }
     if (sum != m->totalEntries) {
@@ -2025,11 +2020,11 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
     }
 
     TEST("MOS-Full: one score over many sub-maps stays in member order") {
-        /* 2000 members at one score: one sub-map past its size limit that
-         * has no score boundary to split at (and must not cost a scan per
-         * insert to find that out); members joining at that score
-         * afterwards (below, between and above the rest in member order)
-         * iterate in member order and rank where iteration puts them */
+        /* 2000 members at one score: the run splits over many sub-maps
+         * (routing compares whole rows, so a cut may fall inside it);
+         * members joining at that score afterwards (below, between and
+         * above the rest in member order) iterate in member order and rank
+         * where iteration puts them */
         multiOrderedSetFull *m = multiOrderedSetFullNew();
         const databox seven = databoxNewSigned(7);
         for (int i = 0; i < 2000; i++) {
@@ -2068,12 +2063,92 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             }
             rank++;
         }
-        if (!ordered || !ranked || rank != 2005 ||
+        if (!ordered || !ranked || rank != 2005 || m->mapCount < 2 ||
             mosFullCheckInvariants(m) != 0) {
-            ERR("one score: %" PRId64 " iterated, ordered %d, ranked %d", rank,
-                ordered, ranked);
+            ERR("one score: %" PRId64 " iterated, ordered %d, ranked %d, %u "
+                "sub-maps",
+                rank, ordered, ranked, m->mapCount);
         }
         multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: equal-score runs across sub-maps, plain and pool mode") {
+        /* Ten scores with 400 members each, added in a scattered order, so
+         * every run spans sub-maps and cuts land inside runs.  Plain mode
+         * orders a run by member, pool mode by pool id; both must keep
+         * rows strictly ascending, iterate in score order, start a score
+         * scan at the run's first row, find and rank every member, and
+         * remove every member (scattered) back to empty */
+        for (int pooled = 0; pooled < 2; pooled++) {
+            multiOrderedSetFull *m = pooled
+                                         ? multiOrderedSetFullNewWithOwnedPool()
+                                         : multiOrderedSetFullNew();
+            const uint32_t n = 4000;
+            for (uint32_t i = 0; i < n; i++) {
+                /* scattered: 2654435761 is coprime with n */
+                const uint32_t j = (uint32_t)(((uint64_t)i * 2654435761u) % n);
+                char buf[24];
+                snprintf(buf, sizeof(buf), "run-%05u", j);
+                const databox member = databoxNewBytesString(buf);
+                const databox score = databoxNewSigned(j % 10);
+                multiOrderedSetFullAdd(m, &score, &member);
+            }
+            if (multiOrderedSetFullCount(m) != n || m->mapCount < 10 ||
+                mosFullCheckInvariants(m) != 0) {
+                ERR("pooled %d: %zu members over %u sub-maps after adds",
+                    pooled, multiOrderedSetFullCount(m), m->mapCount);
+            }
+
+            /* A scan at each score starts at its run's first row: the
+             * smallest member (plain) or a member of that score (pool) */
+            for (int64_t s = 0; s < 10; s++) {
+                const databox at = databoxNewSigned(s);
+                mosIterator it;
+                databox member;
+                databox score;
+                if (!multiOrderedSetFullIteratorInitAtScore(m, &it, &at,
+                                                            true) ||
+                    !multiOrderedSetFullIteratorNext(&it, &member, &score) ||
+                    score.data.i64 != s) {
+                    ERR("pooled %d: score scan at %" PRId64 " missed", pooled,
+                        s);
+                    continue;
+                }
+                const int64_t rank = multiOrderedSetFullGetRank(m, &member);
+                if (rank != s * 400) {
+                    ERR("pooled %d: the run at %" PRId64 " starts at rank "
+                        "%" PRId64 ", want %" PRId64,
+                        pooled, s, rank, s * 400);
+                }
+            }
+
+            for (uint32_t i = 0; i < n; i++) {
+                const uint32_t j = (i * 40503u + 7) % n; /* scattered again */
+                char buf[24];
+                snprintf(buf, sizeof(buf), "run-%05u", j);
+                const databox member = databoxNewBytesString(buf);
+                databox score;
+                if (!multiOrderedSetFullGetScore(m, &member, &score) ||
+                    score.data.i64 != (int64_t)(j % 10) ||
+                    multiOrderedSetFullGetRank(m, &member) < 0 ||
+                    !multiOrderedSetFullRemove(m, &member)) {
+                    ERR("pooled %d: member %u not found or not removed", pooled,
+                        j);
+                    break;
+                }
+                if (i % 500 == 0 && mosFullCheckInvariants(m) != 0) {
+                    ERR("pooled %d: invariants broken after %u removals",
+                        pooled, i);
+                    break;
+                }
+            }
+            if (multiOrderedSetFullCount(m) != 0 ||
+                mosFullCheckInvariants(m) != 0) {
+                ERR("pooled %d: %zu members left", pooled,
+                    multiOrderedSetFullCount(m));
+            }
+            multiOrderedSetFullFree(m);
+        }
     }
 
     TEST("MOS-Full: copies of plain, owned-pool and shared-pool sets") {
