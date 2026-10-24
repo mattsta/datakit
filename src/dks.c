@@ -2296,6 +2296,27 @@ int DKS_TEST(int argc, char *argv[]) {
         x = DKS_CATFMT(x, "Hello % World %,%--%", "Hi!", INT64_MIN, INT64_MAX);
         DKS_FREE(x);
 
+        {
+            /* %B formats any box it supports: heap and embedded bytes,
+             * signed, unsigned, float, double */
+            const databox bytes = databoxNewBytesString("abcdefghijk");
+            const databox embed = databoxNewBytesAllowEmbed("xy", 2);
+            const databox neg = DATABOX_SIGNED(-42);
+            const databox top = DATABOX_UNSIGNED(UINT64_MAX);
+            const databox f32 = {.type = DATABOX_FLOAT_32, .data.f32 = 1.5f};
+            const databox d64 = DATABOX_DOUBLE(0.25);
+            DKS_TYPE *boxFmt =
+                DKS_CATFMT(DKS_EMPTY(), "[%B|%B|%B|%B|%B|%B]", &bytes, &embed,
+                           &neg, &top, &f32, &d64);
+            const char *boxWant =
+                "[abcdefghijk|xy|-42|18446744073709551615|1.5|0.25]";
+            testCond("DKS_CATFMT() %B formats every box kind",
+                     (int)(DKS_LEN(boxFmt) == strlen(boxWant) &&
+                           memcmp(boxFmt, boxWant, strlen(boxWant)) == 0),
+                     1, "%d");
+            DKS_FREE(boxFmt);
+        }
+
         x = DKS_NEW("--");
         x = DKS_CATFMT(x, "Hello %s World %I,%I--", "Hi!", INT64_MIN,
                        INT64_MAX);
