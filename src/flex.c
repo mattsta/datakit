@@ -2441,6 +2441,17 @@ void flexInsertBytes(flex **const ff, flexEntry *const fe, const void *data,
     }
 }
 
+/* A box of a type flex has no encoding for (an offset box, a compressed
+ * aggregate, ...) reached a store: a caller contract violation, reported
+ * and stopped in every build (never left to undefined behaviour where
+ * assertions are compiled out) */
+__attribute__((noreturn, cold)) static void
+flexBoxTypeUnsupported_(const databox *box, const char *where) {
+    fprintf(stderr, "%s: a box of type %d has no flex encoding\n", where,
+            (int)box->type);
+    abort();
+}
+
 DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
                                  const databox *box) {
     /* Special case: if databox is NULL, insert NULL encoding. */
@@ -2554,8 +2565,7 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
         break;
     }
     default:
-        assert(NULL);
-        __builtin_unreachable();
+        flexBoxTypeUnsupported_(box, "flexInsertByType");
     }
 }
 
@@ -2839,8 +2849,7 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
         c->encoding = FLEX_NULL;
         break;
     default:
-        assert(NULL);
-        __builtin_unreachable();
+        flexBoxTypeUnsupported_(box, "flex insert/replace");
     }
 
     return false;
@@ -3368,8 +3377,7 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
         flexPush_(flexInsertNull, NULL);
         break;
     default:
-        assert(NULL && "box type has no flexPushByType encoding");
-        __builtin_unreachable();
+        flexBoxTypeUnsupported_(box, "flexPushByType");
     }
 }
 
@@ -10158,6 +10166,24 @@ int32_t flexTest(int32_t argc, char **argv) {
             return bad;
         }
         printf("  ok\n");
+    }
+
+    printf("Verify a box type flex cannot encode fails fast, in any build:\n");
+    {
+        /* An offset box (a position in another stream, no bytes of its
+         * own) through push, replace, multi-element append and big-box
+         * push: each stops the process (abort), in release builds too,
+         * rather than running into undefined behaviour */
+        int32_t bad = 0;
+        for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
+            if (!flexTestDeferredAborts_(path, DATABOX_BYTES_OFFSET)) {
+                printf("  FAIL: path %" PRId32 " did not abort\n", path);
+                bad++;
+            }
+        }
+        if (bad) {
+            return bad;
+        }
     }
 
     printf("Verify inserting or encoding a deferred wide box fails fast:\n");
