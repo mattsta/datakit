@@ -5654,6 +5654,64 @@ static int testFuzzSerializationRoundtrip(void) {
         }
     }
 
+    TEST("read and write plans clamp to the nodes there are") {
+        /* Two nodes against a quorum asking 3 replicas, 3 sync writes and
+         * 3 read responses: the write plan has 2 targets, both sync,
+         * none async; the read plan needs 2 responses; both report the
+         * quorum unreachable.  A 2-of-2 quorum plans the same and
+         * succeeds.  A NULL key plans nothing. */
+        clusterRingConfig config = {.name = "plan-clamp",
+                                    .strategyType = CLUSTER_STRATEGY_KETAMA};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
+        for (uint32_t n = 1; n <= 2; n++) {
+            clusterNodeConfig nc = {
+                .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
+            clusterRingAddNode(ring, &nc);
+        }
+        const clusterQuorum tooMany = {.replicaCount = 3,
+                                       .writeQuorum = 3,
+                                       .writeSync = 3,
+                                       .readQuorum = 3,
+                                       .readRepairEnabled = true};
+        const clusterQuorum enough = {.replicaCount = 2,
+                                      .writeQuorum = 2,
+                                      .writeSync = 2,
+                                      .readQuorum = 2};
+        for (int q = 0; q < 2; q++) {
+            const clusterQuorum *quorum = q == 0 ? &tooMany : &enough;
+            const clusterResult want =
+                q == 0 ? CLUSTER_ERR_QUORUM_FAILED : CLUSTER_OK;
+            clusterWriteSet ws;
+            clusterReadSet rs;
+            const clusterResult w =
+                clusterRingPlanWrite(ring, "k", 1, quorum, &ws);
+            const clusterResult r =
+                clusterRingPlanRead(ring, "k", 1, quorum, &rs);
+            if (w != want || r != want ||
+                clusterWriteSetTargetCount(&ws) != 2 || ws.syncRequired != 2 ||
+                ws.asyncAllowed != 0 ||
+                clusterReadSetCandidateCount(&rs) != 2 ||
+                rs.requiredResponses != 2 ||
+                rs.readRepair != quorum->readRepairEnabled) {
+                ERR("quorum %d: write %d read %d, targets %zu sync %u async "
+                    "%u, candidates %zu need %u",
+                    q, (int)w, (int)r, clusterWriteSetTargetCount(&ws),
+                    ws.syncRequired, ws.asyncAllowed,
+                    clusterReadSetCandidateCount(&rs), rs.requiredResponses);
+            }
+            clusterWriteSetFree(&ws);
+            clusterReadSetFree(&rs);
+        }
+        clusterWriteSet ws;
+        clusterReadSet rs;
+        if (clusterRingPlanWrite(ring, NULL, 1, NULL, &ws) != CLUSTER_ERR ||
+            clusterRingPlanRead(ring, NULL, 1, NULL, &rs) != CLUSTER_ERR) {
+            ERRR("a NULL key was planned");
+        }
+        clusterWriteSetFree(&ws);
+        clusterReadSetFree(&rs);
+    }
+
     TEST("FUZZ: Serialization with random data") {
         for (int trial = 0; trial < 10; trial++) {
             clusterRingConfig config = {
