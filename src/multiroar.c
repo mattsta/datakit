@@ -3247,7 +3247,13 @@ void multiroarOr(multiroar *r, multiroar *b) {
 
 /* AND: r = r AND b */
 void multiroarAnd(multiroar *r, multiroar *b) {
-    if (!r || !b) {
+    if (!r) {
+        return;
+    }
+    if (!b) {
+        /* A NULL operand is the empty set, as in the comparisons:
+         * r AND {} is empty */
+        multiroarClear(r);
         return;
     }
 
@@ -3994,6 +4000,72 @@ int multiroarTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
+
+    TEST("a NULL operand is the empty set; empty-set metrics") {
+        /* a = {1, 5, 9000}; e = {} */
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *e = multiroarBitNew();
+        multiroarBitSet(a, 1);
+        multiroarBitSet(a, 5);
+        multiroarBitSet(a, 9000);
+
+        if (!multiroarIsEmpty(NULL) || multiroarIntersects(a, NULL) ||
+            !multiroarIsSubset(NULL, a) || multiroarIsSubset(a, NULL) ||
+            !multiroarIsSubset(e, NULL) || !multiroarEquals(NULL, NULL) ||
+            multiroarEquals(a, NULL)) {
+            ERRR("a comparison did not treat NULL as the empty set");
+        }
+
+        /* a AND {} = {}; a OR / XOR / AND NOT {} = a */
+        cleaner(multiroarFree) multiroar *andNull = multiroarNewAnd(a, NULL);
+        cleaner(multiroarFree) multiroar *orNull = multiroarNewOr(a, NULL);
+        cleaner(multiroarFree) multiroar *xorNull = multiroarNewXor(a, NULL);
+        cleaner(multiroarFree) multiroar *notNull = multiroarNewAndNot(a, NULL);
+        if (!andNull || !multiroarIsEmpty(andNull) ||
+            !multiroarEquals(orNull, a) || !multiroarEquals(xorNull, a) ||
+            !multiroarEquals(notNull, a)) {
+            ERRR("a set operation with NULL did not use the empty set");
+        }
+        cleaner(multiroarFree) multiroar *inPlace = multiroarDuplicate(a);
+        multiroarAnd(inPlace, NULL);
+        if (!multiroarIsEmpty(inPlace)) {
+            ERRR("in-place AND with NULL kept bits");
+        }
+
+        /* A NULL first set has nothing to copy: no result */
+        cleaner(multiroarFree) multiroar *n1 = multiroarNewAnd(NULL, a);
+        cleaner(multiroarFree) multiroar *n2 = multiroarNewOr(NULL, a);
+        cleaner(multiroarFree) multiroar *n3 = multiroarNewXor(NULL, a);
+        cleaner(multiroarFree) multiroar *n4 = multiroarNewAndNot(NULL, a);
+        if (n1 || n2 || n3 || n4) {
+            ERRR("a NULL first set gave a result");
+        }
+
+        /* Two empty sets are identical (Jaccard, Dice 1); the overlap
+         * coefficient has no smaller set to divide by (0); a NULL gives 0 */
+        if (multiroarJaccard(e, e) != 1.0 || multiroarDice(e, e) != 1.0 ||
+            multiroarOverlap(e, e) != 0.0 || multiroarOverlap(e, a) != 0.0 ||
+            multiroarHammingDistance(e, a) != 3 ||
+            multiroarJaccard(e, a) != 0.0 || multiroarJaccard(a, NULL) != 0.0 ||
+            multiroarDice(NULL, a) != 0.0 || multiroarOverlap(a, NULL) != 0.0 ||
+            multiroarHammingDistance(NULL, a) != 0) {
+            ERRR("an empty-set or NULL metric is off");
+        }
+
+        /* The raw value setter stores true and false as 1 and 0 */
+        cleaner(multiroarFree) multiroar *v = multiroarValueNew(4, 0, 0);
+        databox yes = DATABOX_BOX_TRUE;
+        databox no = DATABOX_BOX_FALSE;
+        multiroarValueSet(v, 3, &yes);
+        multiroarValueSet(v, 4, &no);
+        databox got3 = {{0}};
+        databox got4 = {{0}};
+        if (!multiroarValueGet(v, 3, &got3) || got3.data.u != 1 ||
+            !multiroarValueGet(v, 4, &got4) || got4.data.u != 0 ||
+            got4.type != DATABOX_UNSIGNED_64) {
+            ERRR("true/false did not store as 1/0");
+        }
+    }
 
     TEST("bitmap first/last set bit against a per-bit scan, any length") {
         /* Lengths with and without a partial last word: no bit, every

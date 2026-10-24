@@ -57,7 +57,10 @@ bool multiroarMin(const multiroar *r, uint64_t *position);
 bool multiroarMax(const multiroar *r, uint64_t *position);
 bool multiroarIsEmpty(const multiroar *r); /* True if no bits set */
 
-/* Comparison operations */
+/* Comparison operations.  Here and in the set operations, a NULL operand
+ * is the empty set (an empty set is a subset of anything; NULL equals only
+ * NULL); a NULL first set of a New* operation gives NULL, and a NULL target
+ * of an in-place operation is left alone. */
 bool multiroarIntersects(const multiroar *a, const multiroar *b);
 bool multiroarIsSubset(const multiroar *a, const multiroar *b);
 bool multiroarEquals(const multiroar *a, const multiroar *b);
@@ -133,7 +136,9 @@ uint64_t multiroarToArray(const multiroar *r, uint64_t *positions,
  * NULL positions with a nonzero count. */
 multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count);
 
-/* Similarity and distance metrics */
+/* Similarity and distance metrics.  Two empty sets have Jaccard and Dice
+ * 1 (identical); the overlap coefficient is 0 when either set is empty
+ * (there is no smaller set to divide by).  A NULL roar gives 0. */
 double multiroarJaccard(const multiroar *a, const multiroar *b);
 uint64_t multiroarHammingDistance(const multiroar *a, const multiroar *b);
 double multiroarOverlap(const multiroar *a, const multiroar *b);
