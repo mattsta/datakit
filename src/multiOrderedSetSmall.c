@@ -233,7 +233,7 @@ bool multiOrderedSetSmallRemoveGetScore(multiOrderedSetSmall *m,
 size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
                                               const mosRangeSpec *range) {
     size_t removed = 0;
-    flexEntry *entry = flexHead(m->map);
+    flexEntry *entry = flexHeadIfAny(m->map);
 
     while (entry) {
         databox score;
@@ -419,7 +419,7 @@ bool multiOrderedSetSmallGetByRank(const multiOrderedSetSmall *m, int64_t rank,
 size_t multiOrderedSetSmallCountByScore(const multiOrderedSetSmall *m,
                                         const mosRangeSpec *range) {
     size_t count = 0;
-    flexEntry *entry = flexHead(m->map);
+    flexEntry *entry = flexHeadIfAny(m->map);
 
     while (entry) {
         databox score;
@@ -459,7 +459,7 @@ void multiOrderedSetSmallIteratorInit(const multiOrderedSetSmall *m,
     iter->mapIndex = 0;
 
     if (forward) {
-        iter->current = flexHead(m->map);
+        iter->current = flexHeadIfAny(m->map);
     } else {
         /* Start at last entry (last score position) */
         size_t count = flexCount(m->map);
@@ -483,7 +483,7 @@ bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
     iter->mapIndex = 0;
 
     /* Find first entry with score >= given score */
-    flexEntry *entry = flexHead(m->map);
+    flexEntry *entry = flexHeadIfAny(m->map);
     while (entry) {
         databox currentScore;
         databoxWide currentScoreWide;
@@ -566,7 +566,7 @@ bool multiOrderedSetSmallIteratorNext(mosIterator *iter, databox *member,
 
 bool multiOrderedSetSmallFirst(const multiOrderedSetSmall *m, databox *member,
                                databox *score) {
-    flexEntry *entry = flexHead(m->map);
+    flexEntry *entry = flexHeadIfAny(m->map);
     if (!entry) {
         return false;
     }
@@ -633,7 +633,10 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
  * ==================================================================== */
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
+
+defcleaner(multiOrderedSetSmall *, multiOrderedSetSmallFree);
 
 void multiOrderedSetSmallRepr(const multiOrderedSetSmall *m) {
     printf("multiOrderedSetSmall {\n");
@@ -641,7 +644,7 @@ void multiOrderedSetSmallRepr(const multiOrderedSetSmall *m) {
     printf("  bytes: %zu\n", multiOrderedSetSmallBytes(m));
     printf("  entries:\n");
 
-    flexEntry *entry = flexHead(m->map);
+    flexEntry *entry = flexHeadIfAny(m->map);
     int idx = 0;
     while (entry) {
         flexEntry *memberEntry = flexNext(m->map, entry);
@@ -933,6 +936,108 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         }
 
         multiOrderedSetSmallFree(mos);
+    }
+
+    TEST("multiOrderedSetSmall — misses, empty sets and edge positions") {
+        /* Scores 10, 20, 30, 40 for a, b, c, d.  A new member through
+         * AddGetPrevious lands in score order; misses report nothing; a
+         * score-range removal skips scores below its minimum; iterators
+         * start where asked (or report nothing past the end); an empty set
+         * has no first, last, random member or iterator position */
+        cleaner(multiOrderedSetSmallFree) multiOrderedSetSmall *mos =
+            multiOrderedSetSmallNew();
+        static const char names[] = "abcd";
+        for (int i = 0; i < 4; i++) {
+            const databox score = databoxNewSigned((i + 1) * 10);
+            const databox member = databoxNewBytesAllowEmbed(&names[i], 1);
+            multiOrderedSetSmallAdd(mos, &score, &member);
+        }
+        const databox e = databoxNewBytesAllowEmbed("e", 1);
+        const databox score25 = databoxNewSigned(25);
+        const databox score50 = databoxNewSigned(50);
+        databox prev = databoxNewSigned(-1);
+        if (multiOrderedSetSmallAddGetPrevious(mos, &score25, &e, &prev) ||
+            prev.data.i != -1 || multiOrderedSetSmallGetRank(mos, &e) != 2 ||
+            !multiOrderedSetSmallAddGetPrevious(mos, &score50, &e, &prev) ||
+            prev.data.i != 25 || multiOrderedSetSmallGetRank(mos, &e) != 4) {
+            ERRR("AddGetPrevious misplaced a new or moved member");
+        }
+
+        const databox zz = databoxNewBytesAllowEmbed("zz", 2);
+        databox gone = databoxNewSigned(-7);
+        if (multiOrderedSetSmallRemoveGetScore(mos, &zz, &gone) ||
+            gone.data.i != -7 || multiOrderedSetSmallGetRank(mos, &zz) != -1 ||
+            multiOrderedSetSmallGetReverseRank(mos, &zz) != -1 ||
+            multiOrderedSetSmallCount(mos) != 5) {
+            ERRR("a missing member was found or removed");
+        }
+
+        /* [15, 30] removes b and c, keeping a (below the minimum) */
+        const mosRangeSpec middle = {.min = databoxNewSigned(15),
+                                     .max = databoxNewSigned(30)};
+        const mosRangeSpec all = {.min = databoxNewSigned(0),
+                                  .max = databoxNewSigned(100)};
+        if (multiOrderedSetSmallRemoveRangeByScore(mos, &middle) != 2 ||
+            multiOrderedSetSmallCountByScore(mos, &all) != 3) {
+            ERRR("the score-range removal took the wrong rows");
+        }
+
+        /* Left: a=10, d=40, e=50 */
+        mosIterator iter;
+        databox m;
+        databox s;
+        const databox score60 = databoxNewSigned(60);
+        const databox score40 = databoxNewSigned(40);
+        if (multiOrderedSetSmallIteratorInitAtScore(mos, &iter, &score60,
+                                                    true) ||
+            iter.valid || multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {
+            ERRR("an iterator started past the highest score");
+        }
+        int64_t seen[4] = {0};
+        size_t n = 0;
+        multiOrderedSetSmallIteratorInitAtScore(mos, &iter, &score40, true);
+        while (n < 4 && multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {
+            seen[n++] = s.data.i;
+        }
+        if (n != 2 || seen[0] != 40 || seen[1] != 50) {
+            ERRR("an iterator at score 40 did not give 40, 50");
+        }
+        n = 0;
+        multiOrderedSetSmallIteratorInit(mos, &iter, false);
+        while (n < 4 && multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {
+            seen[n++] = s.data.i;
+        }
+        if (n != 3 || seen[0] != 50 || seen[1] != 40 || seen[2] != 10) {
+            ERRR("reverse iteration did not give 50, 40, 10");
+        }
+        if (multiOrderedSetSmallIteratorInitAtRank(mos, &iter, 3, true) ||
+            iter.valid ||
+            !multiOrderedSetSmallIteratorInitAtRank(mos, &iter, -1, true) ||
+            !multiOrderedSetSmallIteratorNext(&iter, &m, &s) ||
+            s.data.i != 50) {
+            ERRR("an iterator by rank started in the wrong place");
+        }
+
+        cleaner(multiOrderedSetSmallFree) multiOrderedSetSmall *empty =
+            multiOrderedSetSmallNew();
+        databox members[2];
+        databox scores[2];
+        multiOrderedSetSmallIteratorInit(empty, &iter, true);
+        const bool forwardValid = iter.valid;
+        multiOrderedSetSmallIteratorInit(empty, &iter, false);
+        const bool reverseValid = iter.valid;
+        if (multiOrderedSetSmallFirst(empty, &m, &s) ||
+            multiOrderedSetSmallLast(empty, &m, &s) || forwardValid ||
+            reverseValid ||
+            multiOrderedSetSmallCountByScore(empty, &all) != 0 ||
+            multiOrderedSetSmallRemoveRangeByScore(empty, &all) != 0 ||
+            multiOrderedSetSmallIteratorNext(&iter, &m, &s) ||
+            multiOrderedSetSmallIteratorInitAtRank(empty, &iter, 0, true) ||
+            multiOrderedSetSmallIteratorInitAtScore(empty, &iter, &score40,
+                                                    true) ||
+            multiOrderedSetSmallRandomMembers(empty, 2, members, scores) != 0) {
+            ERRR("an empty set reported a member or a position");
+        }
     }
 
     TEST("multiOrderedSetSmall — copy") {
