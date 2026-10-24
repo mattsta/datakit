@@ -4006,7 +4006,7 @@ int multimapTest(int argc, char *argv[]) {
             cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
             multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
             for (size_t i = 0; i < sizes[t]; i++) {
-                char buf[24];
+                char buf[40];
                 snprintf(buf, sizeof(buf), "lookup-key-%05zu",
                          (i * 7) % sizes[t]);
                 const databox key = databoxNewBytesString(buf);
@@ -4019,7 +4019,7 @@ int multimapTest(int argc, char *argv[]) {
             tiers |= 1u << multimapType_(m);
             size_t missed = 0;
             for (size_t i = 0; i < sizes[t]; i++) {
-                char buf[24];
+                char buf[40];
                 snprintf(buf, sizeof(buf), "lookup-key-%05zu", i);
                 const databox key = databoxNewBytesString(buf);
                 databox got = {{0}};
