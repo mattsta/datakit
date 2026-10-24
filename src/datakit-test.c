@@ -154,6 +154,8 @@ defcleaner(flex *, flexFree);
 defcleaner(clusterRing *, clusterRingFree);
 defcleaner(multilist *, multilistFree);
 defcleaner(aeadNonceLog *, aeadNonceLogFree);
+defcleaner(mds *, mdsfree);
+defcleaner(hyperloglog *, hyperloglogFree);
 
 /* Scope-exit cleaner for a fixed 3-slot owned-buffer array (used by
  * dkTestRevokedKeyFloorTest's per-key wrapped envelopes): frees whichever
@@ -7617,6 +7619,58 @@ cleanup_c5:
 /* ====================================================================
  * persist snapshot/WAL headers carry key_id + typed error.
  * ==================================================================== */
+/* Empty input given as (NULL, 0): hashes, strings and sketches treat it as
+ * the empty input, with no sanitizer report (memcpy and friends must not
+ * be handed NULL even for 0 bytes) */
+static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    TEST("(NULL, 0) is the empty input everywhere bytes are taken") {
+        static const uint8_t none[1] = {0};
+        if (rapidhash(NULL, 0) != rapidhash(none, 0)) {
+            ERRR("rapidhash of (NULL, 0) differs from the empty input");
+        }
+
+        uint8_t viaNull[SHA256_DIGEST_LEN];
+        uint8_t viaEmpty[SHA256_DIGEST_LEN];
+        sha256Ctx sctx;
+        sha256Init(&sctx);
+        sha256Update(&sctx, NULL, 0);
+        sha256Final(&sctx, viaNull);
+        sha256Hash(none, 0, viaEmpty);
+        if (memcmp(viaNull, viaEmpty, sizeof(viaNull)) != 0) {
+            ERRR("sha256 of (NULL, 0) differs from the empty input");
+        }
+
+        uint8_t b3Null[32];
+        uint8_t b3Empty[32];
+        blake3Hasher bh;
+        blake3HasherInit(&bh);
+        blake3HasherUpdate(&bh, NULL, 0);
+        blake3HasherFinalize(&bh, b3Null, sizeof(b3Null));
+        blake3HasherInit(&bh);
+        blake3HasherFinalize(&bh, b3Empty, sizeof(b3Empty));
+        if (memcmp(b3Null, b3Empty, sizeof(b3Null)) != 0) {
+            ERRR("blake3 of (NULL, 0) differs from the empty input");
+        }
+
+        cleaner(mdsfree) mds *s = mdsnewlen(NULL, 0);
+        s = mdscatlen(s, NULL, 0);
+        if (mdslen(s) != 0) {
+            ERRR("an mds built from (NULL, 0) is not empty");
+        }
+
+        cleaner(hyperloglogFree) hyperloglog *h = hyperloglogNew();
+        if (hyperloglogAdd(&h, NULL, 0) < 0) {
+            ERRR("hyperloglogAdd refused (NULL, 0)");
+        }
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 static int dkTestPersistKeyIdHeaderTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -12680,6 +12734,7 @@ static const TestEntry testRegistry[] = {
     T_A(dkTestEnvelopeOpenKeyringResolve, "envelopeOpenKeyring"),
     T_A(dkTestWireKeyIdAmbiguityReject, "envelopeWireKeyIdFlag"),
     T_A(dkTestPersistKeyIdHeader, "persistKeyIdHeader"),
+    T_A(dkTestEmptyNullInput, "emptyNullInput"),
     T_A(dkTestNonceLogPersistRoundTrip, "nonceLogPersist"),
     T_A(dkTestEnvelopeNonceLogIntegration, "envelopeNonceLog"),
     T_A(dkTestNonceLogEvictionPerf, "nonceLogEvictPerf"),
