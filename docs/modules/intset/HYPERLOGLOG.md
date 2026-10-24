@@ -341,6 +341,19 @@ if (hyperloglogDetect(hll)) {
 hyperloglogFree(hll);
 ```
 
+### Batch adds
+
+```c
+/* Add n elements in one call: how many changed a register, or -1 at the
+ * first corrupt-sketch report (the adds stop there) */
+int64_t hyperloglogAddMany(hyperloglog **inHll, const void *const *data,
+                           const size_t *lens, size_t n);
+
+const void *const users[3] = {"alice", "bob", "carol"};
+static const size_t userLens[3] = {5, 3, 5};
+hyperloglogAddMany(&visitors, users, userLens, 3);
+```
+
 ### The cached count
 
 `hyperloglogCount` writes a freshly computed estimate into the header's

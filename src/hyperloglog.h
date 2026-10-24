@@ -22,6 +22,12 @@ uint64_t hyperloglogCount(hyperloglog *hdr, bool *invalid);
  * '*inHll' may move (sparse growth, promotion to dense). */
 int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size);
 
+/* Add 'n' elements (data[i], lens[i]) in one call: how many changed a
+ * register, or -1 at the first corrupt-sketch report (the adds stop there).
+ * '*inHll' may move as for hyperloglogAdd. */
+int64_t hyperloglogAddMany(hyperloglog **inHll, const void *const *data,
+                           const size_t *lens, size_t n);
+
 /* The cardinality of the union of 'n' sketches, without building it; 0 with
  * *invalid set (when given) if any is corrupt, 0 for n == 0. */
 uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,

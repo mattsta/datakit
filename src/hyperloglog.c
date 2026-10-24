@@ -1261,6 +1261,19 @@ int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size) {
     return hyperloglogSparseAdd(inHll, data, size);
 }
 
+int64_t hyperloglogAddMany(hyperloglog **inHll, const void *const *data,
+                           const size_t *lens, size_t n) {
+    int64_t updated = 0;
+    for (size_t i = 0; i < n; i++) {
+        const int added = hyperloglogAdd(inHll, data[i], lens[i]);
+        if (added < 0) {
+            return -1;
+        }
+        updated += added;
+    }
+    return updated;
+}
+
 /* Merge by computing MAX(registers[i],hyperloglog[i]) the HyperLogLog
  * 'hyperloglog' with an array of uint8_t HLL_REGISTERS registers
  * pointed by 'max'.
@@ -2025,6 +2038,31 @@ cleanup:
         hyperloglogFree(few);
         hyperloglogFree(many);
         hyperloglogFree(oracle);
+    }
+
+    printf("Testing batch adds, both encodings...\n");
+    {
+        /* One call adds every element and reports how many changed a
+         * register: 3 new, then a repeat and a fresh one (1), then none */
+        for (int dense = 0; dense <= 1; dense++) {
+            cleaner(hyperloglogFree) hyperloglog *sk =
+                dense ? hyperloglogNewDense() : hyperloglogNewSparse();
+            const void *const first[3] = {"alpha", "beta", "gamma"};
+            static const size_t firstLens[3] = {5, 4, 5};
+            const void *const second[2] = {"alpha", "delta"};
+            static const size_t secondLens[2] = {5, 5};
+            const int64_t a = hyperloglogAddMany(&sk, first, firstLens, 3);
+            const int64_t b = hyperloglogAddMany(&sk, second, secondLens, 2);
+            const int64_t c = hyperloglogAddMany(&sk, second, secondLens, 0);
+            bool invalid = false;
+            const uint64_t count = hyperloglogCount(sk, &invalid);
+            if (a != 3 || b != 1 || c != 0 || count != 4 || invalid) {
+                printf("  [FAIL] %s batch: %" PRId64 ", %" PRId64 ", %" PRId64
+                       ", count %" PRIu64 "\n",
+                       dense ? "dense" : "sparse", a, b, c, count);
+                errors++;
+            }
+        }
     }
 
     printf("Testing the cached count across adds, both encodings...\n");
