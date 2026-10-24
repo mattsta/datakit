@@ -21,7 +21,6 @@ defcleanerName(multiOrderedSetP *, zfree, MultiOrderedSetP);
 
 multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
     if (!ctx) {
-        printf("DEBUG: multiOrderedSetNewP: ctx is NULL\n");
         return NULL;
     }
 
@@ -33,16 +32,11 @@ multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
     /* @own: container; free=multiOrderedSetFree */
     mos->mos = multiOrderedSetNew();
 
-    /* Initialize persistence context for multiOrderedSet type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet)) {
-        return NULL;
-    }
-
-    /* Save initial snapshot (empty set) */
-    if (!persistCtxSaveSnapshot(ctx, mos->mos, &persistOpsMultiOrderedSet)) {
-        if (mos->mos) {
-            multiOrderedSetFree(mos->mos);
-        }
+    /* Initialize persistence context for multiOrderedSet type, and save
+     * the initial snapshot (empty set) */
+    if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet) ||
+        !persistCtxSaveSnapshot(ctx, mos->mos, &persistOpsMultiOrderedSet)) {
+        multiOrderedSetFree(mos->mos);
         return NULL;
     }
 
@@ -62,13 +56,13 @@ multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
     }
 
     /* Recover from snapshot + WAL */
+    /* An empty set restores as an empty set: NULL means no snapshot, or one
+     * that cannot be read, which must not open as an empty set (its next
+     * compaction would replace the files) */
     multiOrderedSet *recovered =
         persistCtxRecover(ctx, &persistOpsMultiOrderedSet);
-    /* Note: recovered can be NULL for empty set, but we need non-NULL for
-     * proper operation */
     if (!recovered) {
-        /* @own: container; free=multiOrderedSetFree */
-        recovered = multiOrderedSetNew();
+        return NULL;
     }
 
     /* @own: caller; free=multiOrderedSetCloseP */
@@ -734,9 +728,163 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+/* The whole file at 'path' into 'buf' (up to 'cap'); its length, or 0 */
+static size_t test_mosPReadFile(const char *path, uint8_t *buf, size_t cap) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return 0;
+    }
+    const size_t n = fread(buf, 1, cap, f);
+    fclose(f);
+    return n;
+}
+
+static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_open", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+    char snapPath[PATH_MAX + sizeof(".snap")];
+    snprintf(snapPath, sizeof(snapPath), "%s.snap", basePath);
+
+    TEST("multiOrderedSetP opens only what it saved, and refuses changes "
+         "after a damaged WAL entry until compacted")
+
+    /* An empty set reopens as an empty set */
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
+    multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+    ctx = persistCtxNew(basePath, NULL);
+    mos = multiOrderedSetOpenP(ctx);
+    if (!mos || multiOrderedSetCountP(mos) != 0) {
+        ERRR("an empty set did not reopen empty");
+    }
+    multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+
+    /* A damaged snapshot does not open, and stays as it was */
+    ctx = persistCtxNew(basePath, NULL);
+    mos = multiOrderedSetNewP(ctx);
+    for (int64_t i = 0; i < 20; i++) {
+        const databox score = databoxNewSigned(i);
+        const databox member = databoxNewSigned(i * 7);
+        multiOrderedSetAddP(mos, &score, &member, NULL);
+    }
+    multiOrderedSetCompactP(mos);
+    multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+    static uint8_t before[1 << 16];
+    static uint8_t after[1 << 16];
+    const size_t len = test_mosPReadFile(snapPath, before, sizeof(before));
+    FILE *f = fopen(snapPath, "r+b");
+    if (!f || len < 16 || fseek(f, (long)(len / 2), SEEK_SET) != 0 ||
+        fputc(before[len / 2] ^ 0x5a, f) == EOF) {
+        ERRR("could not damage the snapshot");
+    }
+    if (f) {
+        fclose(f);
+    }
+    before[len / 2] ^= 0x5a;
+    ctx = persistCtxNew(basePath, NULL);
+    mos = multiOrderedSetOpenP(ctx);
+    if (mos) {
+        ERRR("a damaged snapshot opened");
+        multiOrderedSetCloseP(mos);
+    }
+    persistCtxFree(ctx);
+    if (test_mosPReadFile(snapPath, after, sizeof(after)) != len ||
+        memcmp(before, after, len) != 0) {
+        ERRR("a refused open changed the snapshot");
+    }
+
+    /* No snapshot at all does not open (it used to open as empty) */
+    ptestCleanupFiles(basePath);
+    ctx = persistCtxNew(basePath, NULL);
+    mos = multiOrderedSetOpenP(ctx);
+    if (mos) {
+        ERRR("a set opened with no snapshot");
+        multiOrderedSetCloseP(mos);
+    }
+    persistCtxFree(ctx);
+
+    /* Members 10, 20, 30 added with the last entry damaged: lenient
+     * recovery keeps {10, 20}; an add and a remove are then refused and
+     * change nothing; after a compaction an add of 40 is logged, and a
+     * reopen holds {10, 20, 40} */
+    ptestCleanupFiles(basePath);
+    ctx = persistCtxNew(basePath, NULL);
+    mos = multiOrderedSetNewP(ctx);
+    for (int64_t m = 10; m <= 30; m += 10) {
+        const databox score = databoxNewSigned(m / 10);
+        const databox member = databoxNewSigned(m);
+        multiOrderedSetAddP(mos, &score, &member, NULL);
+    }
+    multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+    if (!ptestDamageLastWalEntry(basePath)) {
+        ERRR("could not damage the WAL");
+    }
+    const databox m10 = databoxNewSigned(10);
+    const databox m30 = databoxNewSigned(30);
+    const databox m40 = databoxNewSigned(40);
+    const databox s4 = databoxNewSigned(4);
+    ctx = persistCtxOpen(basePath, NULL);
+    mos = multiOrderedSetOpenP(ctx);
+    if (!mos || multiOrderedSetCountP(mos) != 2 ||
+        multiOrderedSetExistsP(mos, &m30)) {
+        ERR("lenient recovery kept %zu members, want 10, 20",
+            mos ? multiOrderedSetCountP(mos) : (size_t)0);
+    }
+    if (mos &&
+        (multiOrderedSetAddP(mos, &s4, &m40, NULL) != PERSIST_LOG_REFUSED ||
+         multiOrderedSetRemoveP(mos, &m10) != PERSIST_LOG_REFUSED ||
+         multiOrderedSetCountP(mos) != 2 ||
+         !multiOrderedSetExistsP(mos, &m10) ||
+         multiOrderedSetExistsP(mos, &m40))) {
+        ERRR("a change after the damaged entry was applied or logged");
+    }
+    if (mos &&
+        (!multiOrderedSetCompactP(mos) ||
+         multiOrderedSetAddP(mos, &s4, &m40, NULL) == PERSIST_LOG_REFUSED)) {
+        ERRR("compaction did not resume logging");
+    }
+    multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+    ctx = persistCtxOpen(basePath, NULL);
+    mos = multiOrderedSetOpenP(ctx);
+    if (!mos || multiOrderedSetCountP(mos) != 3 ||
+        !multiOrderedSetExistsP(mos, &m10) ||
+        !multiOrderedSetExistsP(mos, &m40)) {
+        ERRR("reopen does not hold 10, 20, 40");
+    }
+    multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    /* A context bound to another type takes no set */
+    ctx = persistCtxNew(basePath, NULL);
+    if (!persistCtxInitForType(ctx, &persistOpsIntset) ||
+        multiOrderedSetNewP(ctx) || multiOrderedSetOpenP(ctx)) {
+        ERRR("a set started on a context bound to an intset");
+    }
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multiOrderedSetPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiOrderedSetP_openRefusals(argc, argv);
     err += test_multiOrderedSetP_readers(argc, argv);
     err += test_multiOrderedSetP_basic(argc, argv);
     err += test_multiOrderedSetP_iteration(argc, argv);

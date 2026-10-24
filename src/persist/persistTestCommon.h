@@ -126,6 +126,29 @@ static DK_FN_UNUSED void ptestCleanupFiles(const char *basePath) {
     }
 }
 
+/* Damage the digest of basePath's last WAL entry (every entry ends with
+ * its digest): flip one byte 3 from the end.  Lenient recovery then
+ * keeps every entry before it, and the WAL takes no appends until a
+ * compaction.  False if the WAL could not be read and rewritten. */
+static DK_FN_UNUSED bool ptestDamageLastWalEntry(const char *basePath) {
+    char walPath[PATH_MAX];
+    const int walLen = snprintf(walPath, sizeof(walPath), "%s.wal", basePath);
+    if (walLen < 0 || (size_t)walLen >= sizeof(walPath)) {
+        return false;
+    }
+    FILE *wal = fopen(walPath, "r+b");
+    if (!wal) {
+        return false;
+    }
+    bool damaged = false;
+    if (fseek(wal, -3, SEEK_END) == 0) {
+        const int c = fgetc(wal);
+        damaged = c != EOF && fseek(wal, -3, SEEK_END) == 0 &&
+                  fputc(c ^ 0x5a, wal) != EOF;
+    }
+    return fclose(wal) == 0 && damaged;
+}
+
 /* ============================================================================
  * Verification Utilities
  * ============================================================================
