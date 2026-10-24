@@ -1222,8 +1222,12 @@ void multimapDifferenceKeys(multimap **restrict dst,
             multimapInsert(dst, (const databox **)ea);
             foundA = nextA_();
         } else if (compared > 0) {
-            /* ea > eb: element in B is smaller than current A element.
-             * Just advance B to catch up - ea might still be in B. */
+            /* ea > eb: element in B is smaller than current A element, so
+             * eb is NOT in A: part of a symmetric difference.  Advance B
+             * to catch up - ea might still be in B. */
+            if (symmetricDifference) {
+                multimapInsert(dst, (const databox **)eb);
+            }
             foundB = nextB_();
         } else {
             /* ea == eb: element exists in both A and B.
@@ -7525,6 +7529,67 @@ int multimapTest(int argc, char *argv[]) {
                         ERR("width %u, %d rows, <= %" PRId64
                             ": %zu rows left, want %zu",
                             width, n, bound, multimapCount(m), want);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST("key set operations agree with a bitset oracle in every tier") {
+        /* Two random sets of 0..n-1 per round, sizes reaching each tier:
+         * intersection, difference, symmetric difference and union
+         * (copy keys) hold exactly the oracle's members */
+        static const int32_t ns[] = {12, 300, 3000};
+        static bool inA[3000];
+        static bool inB[3000];
+        uint64_t rng = 0x5e7;
+        for (size_t t = 0; t < sizeof(ns) / sizeof(*ns); t++) {
+            for (int round = 0; round < 4; round++) {
+                const int32_t n = ns[t];
+                cleaner(multimapFree) multimap *a = multimapSetNew(1);
+                cleaner(multimapFree) multimap *b = multimapSetNew(1);
+                for (int32_t i = 0; i < n; i++) {
+                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    inA[i] = (rng >> 40) % 3 == 0;
+                    inB[i] = (rng >> 50) % 3 == 0;
+                    const databox key = databoxNewSigned(i);
+                    const databox *row[1] = {&key};
+                    if (inA[i]) {
+                        multimapInsert(&a, row);
+                    }
+                    if (inB[i]) {
+                        multimapInsert(&b, row);
+                    }
+                }
+                for (int op = 0; op < 4; op++) {
+                    cleaner(multimapFree) multimap *out = multimapSetNew(1);
+                    multimapIterator ia;
+                    multimapIterator ib;
+                    multimapIteratorInit(a, &ia, true);
+                    multimapIteratorInit(b, &ib, true);
+                    if (op == 0) {
+                        multimapIntersectKeys(&out, &ia, &ib);
+                    } else if (op == 1 || op == 2) {
+                        multimapDifferenceKeys(&out, &ia, &ib, op == 2);
+                    } else {
+                        multimapCopyKeys(&out, a);
+                        multimapCopyKeys(&out, b);
+                    }
+                    size_t want = 0;
+                    bool same = true;
+                    for (int32_t i = 0; i < n; i++) {
+                        const bool member = op == 0   ? inA[i] && inB[i]
+                                            : op == 1 ? inA[i] && !inB[i]
+                                            : op == 2 ? inA[i] != inB[i]
+                                                      : inA[i] || inB[i];
+                        const databox key = databoxNewSigned(i);
+                        want += member;
+                        same = same && multimapExists(out, &key) == member;
+                    }
+                    if (!same || multimapCount(out) != want) {
+                        ERR("%d keys, op %d: %zu members, want %zu%s", n, op,
+                            multimapCount(out), want,
+                            same ? "" : " (membership differs)");
                     }
                 }
             }
