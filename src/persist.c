@@ -7072,8 +7072,9 @@ int persistTest(int argc, char *argv[]) {
     TEST("count and size hooks track the structure (ordered set, LRU)") {
         /* estimateSize is a pre-allocation hint that follows the
          * in-memory size: growing the structure must grow it */
-        multiOrderedSet *mos = multiOrderedSetNew();
-        multilru *lru = multilruNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
+        cleaner(multilruFree) multilru *lru = multilruNew();
         const size_t mosEmpty = persistOpsMultiOrderedSet.estimateSize(mos);
         const size_t lruEmpty = persistOpsMultiLRU.estimateSize(lru);
         char name[32];
@@ -7099,8 +7100,6 @@ int persistTest(int argc, char *argv[]) {
             persistOpsMultiLRU.estimateSize(NULL) != 0) {
             ERRR("a size hook sized a NULL structure");
         }
-        multiOrderedSetFree(mos);
-        multilruFree(lru);
     }
 
     TEST("an op the descriptor cannot replay is refused, never logged") {
