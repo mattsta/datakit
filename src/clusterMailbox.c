@@ -1771,8 +1771,9 @@ static bool cmTestWrapStamped(uint8_t *out, size_t cap, const uint8_t *raw,
 /* Copy of 'src' with entry 'idx' replaced by 'wide' (a SIZE_MAX index
  * copies every entry unchanged).  The crafted entry is checked to be
  * stored wide, so a refusal is about the width and not a narrowed value. */
-static flex *cmTestReplaceEntry(const flex *src, size_t idx,
-                                const databoxBig *wide) {
+/* A copy of 'src' with entry 'idx' replaced by 'value' (SIZE_MAX: none) */
+static flex *cmTestReplaceAny(const flex *src, size_t idx,
+                              const databoxBig *value) {
     /* @own: caller; free=flexFree */
     flex *out = flexNew();
     size_t i = 0;
@@ -1780,10 +1781,18 @@ static flex *cmTestReplaceEntry(const flex *src, size_t idx,
         databoxBig box;
         flexGetByTypeBig(fe, &box);
         const databox *push =
-            (i == idx) ? (const databox *)wide : (const databox *)&box;
+            (i == idx) ? (const databox *)value : (const databox *)&box;
         flexPushByType(&out, push, FLEX_ENDPOINT_TAIL);
         i++;
     }
+    return out;
+}
+
+/* cmTestReplaceAny with a 96/128-bit replacement, checked stored wide */
+static flex *cmTestReplaceEntry(const flex *src, size_t idx,
+                                const databoxBig *wide) {
+    /* @own: caller; free=flexFree */
+    flex *out = cmTestReplaceAny(src, idx, wide);
     if (idx != SIZE_MAX) {
         databoxBig check;
         flexGetByTypeBig(flexIndex(out, (int32_t)idx), &check);
@@ -2023,6 +2032,102 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
+    }
+
+    TEST("inner header and rotation announce: ranges and counts are exact") {
+        /* Field values just past their range, a non-integer, and the
+         * wrong entry count are refused; the largest values in range
+         * are accepted and read back */
+        uint8_t hdr[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
+        const size_t hlen =
+            cmEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
+        if (hlen == 0) {
+            ERRR("encode failed");
+        }
+        const flex *src = (const flex *)hdr;
+        const databox text = databoxNewBytesString("x");
+        databoxBig asText = {0};
+        memcpy(&asText, &text, sizeof(text));
+        const databoxBig u33 = DATABOX_BIG_UNSIGNED((uint64_t)1 << 33);
+        const databoxBig u32 = DATABOX_BIG_UNSIGNED((uint64_t)1 << 32);
+        const databoxBig u256 = DATABOX_BIG_UNSIGNED(256);
+        const databoxBig neg = DATABOX_BIG_SIGNED(-1);
+        const struct {
+            size_t idx;
+            const databoxBig *value;
+        } refused[] = {
+            {0, &u33},    /* protocol version past uint32 */
+            {2, &u32},    /* origin past uint32 */
+            {2, &neg},    /* origin negative */
+            {3, &asText}, /* sequence not an integer */
+            {4, &u256},   /* message type past uint8 */
+        };
+        uint32_t origin = 0;
+        uint64_t seq = 0;
+        uint8_t mtype = 0;
+        size_t consumed = 0;
+        dkFormatStamp protocol;
+        for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+            cleaner(flexFree) flex *bad =
+                cmTestReplaceAny(src, refused[i].idx, refused[i].value);
+            if (cmDecodeInnerHeader(bad, flexBytes(bad), &protocol, &origin,
+                                    &seq, &mtype, &consumed)) {
+                ERR("inner header case %zu accepted", i);
+            }
+        }
+        const databoxBig maxOrigin = DATABOX_BIG_UNSIGNED(UINT32_MAX);
+        const databoxBig maxType = DATABOX_BIG_UNSIGNED(UINT8_MAX);
+        cleaner(flexFree) flex *edgeOrigin =
+            cmTestReplaceAny(src, 2, &maxOrigin);
+        cleaner(flexFree) flex *edge =
+            cmTestReplaceAny(edgeOrigin, 4, &maxType);
+        if (!cmDecodeInnerHeader(edge, flexBytes(edge), &protocol, &origin,
+                                 &seq, &mtype, &consumed) ||
+            origin != UINT32_MAX || mtype != UINT8_MAX || seq != 12345u ||
+            consumed != flexBytes(edge)) {
+            ERRR("inner header refused the largest in-range values");
+        }
+        /* Four or six entries */
+        cleaner(flexFree) flex *shortHdr = flexDuplicate(src);
+        flexDeleteRange(&shortHdr, -1, 1);
+        cleaner(flexFree) flex *longHdr = flexDuplicate(src);
+        flexPushUnsigned(&longHdr, 1, FLEX_ENDPOINT_TAIL);
+        if (cmDecodeInnerHeader(shortHdr, flexBytes(shortHdr), &protocol,
+                                &origin, &seq, &mtype, &consumed) ||
+            cmDecodeInnerHeader(longHdr, flexBytes(longHdr), &protocol, &origin,
+                                &seq, &mtype, &consumed)) {
+            ERRR("an inner header of 4 or 6 entries was accepted");
+        }
+
+        /* Rotation announce: one key id, 1..UINT32_MAX */
+        uint8_t ann[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
+        if (clusterMailboxBuildRotateAnnounce(ann, 0x1234u) == 0) {
+            ERRR("build failed");
+        }
+        const flex *annSrc = (const flex *)ann;
+        const databoxBig zero = DATABOX_BIG_UNSIGNED(0);
+        const databoxBig *badIds[] = {&zero, &u32, &neg, &asText};
+        hmacKeyId got = 0;
+        for (size_t i = 0; i < sizeof(badIds) / sizeof(*badIds); i++) {
+            cleaner(flexFree) flex *bad =
+                cmTestReplaceAny(annSrc, 0, badIds[i]);
+            if (clusterMailboxParseRotateAnnounce(bad, flexBytes(bad), &got)) {
+                ERR("announce case %zu accepted", i);
+            }
+        }
+        cleaner(flexFree) flex *top = cmTestReplaceAny(annSrc, 0, &maxOrigin);
+        cleaner(flexFree) flex *twoIds = flexDuplicate(annSrc);
+        flexPushUnsigned(&twoIds, 9, FLEX_ENDPOINT_TAIL);
+        cleaner(flexFree) flex *noIds = flexNew();
+        if (!clusterMailboxParseRotateAnnounce(top, flexBytes(top), &got) ||
+            got != UINT32_MAX ||
+            clusterMailboxParseRotateAnnounce(twoIds, flexBytes(twoIds),
+                                              &got) ||
+            clusterMailboxParseRotateAnnounce(noIds, flexBytes(noIds), &got) ||
+            clusterMailboxParseRotateAnnounce(NULL, 3, &got) ||
+            clusterMailboxParseRotateAnnounce(ann, sizeof(ann), NULL)) {
+            ERRR("announce bounds or counts not exact");
+        }
     }
 
     TEST("rotation announce: a 96/128-bit key id is refused") {
