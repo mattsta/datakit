@@ -5,6 +5,7 @@
 #include "../deps/varint/src/varintTagged.h"
 
 #include "cleaner.h"
+#include "dkDiag.h"
 #include "str.h" /* optimized popcnt helpers */
 #include <inttypes.h>
 #include <stdlib.h> /* qsort */
@@ -48,11 +49,27 @@ struct multiroar {
      *       just a bitmap, we only care about 'col' and not 'row' */
 };
 
-/* A value-mode roar: its rows map positions to values, not chunk ids to
- * chunk encodings, so every bit operation refuses one (reading its rows
- * as chunks would be a wild read).  NULL is not value mode: each function
- * keeps its own NULL meaning. */
+/* A roar given to an operation of the other mode: refused, and reported as
+ * misuse (DK_DIAG_MULTIROAR_WRONG_MODE) with the API function and line */
+__attribute__((cold, noinline)) static bool
+mrWrongMode_(const char *function, int line, const char *what) {
+    dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIROAR_WRONG_MODE, function,
+                  __FILE__, line, "%s", what);
+    return true;
+}
+
+/* A value-mode roar (no report: for code that handles both modes) */
 #define MR_VALUE_MODE_(r) ((r) && (r)->meta[0] != 0)
+
+/* A bit operation given a value-mode roar: its rows map positions to
+ * values, not chunk ids to chunk encodings, so the operation refuses it
+ * (reading its rows as chunks would be a wild read) and reports the
+ * misuse.  NULL is not value mode: each function keeps its own NULL
+ * meaning. */
+#define MR_BIT_OP_REFUSED_(r)                                                  \
+    (MR_VALUE_MODE_(r) &&                                                      \
+     mrWrongMode_(__func__, __LINE__,                                          \
+                  "a bit operation was given a value-mode roar"))
 
 /* Overall file todo:
  *   - Finish flexing out grow/shrink operations.
@@ -507,7 +524,7 @@ DK_STATIC uint16_t deletePackedArrayMember(multiroar *r, const databox *value,
 }
 
 bool multiroarBitSet(multiroar *r, uint64_t position) {
-    if (!r || MR_VALUE_MODE_(r)) {
+    if (!r || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
 
@@ -686,7 +703,7 @@ static bool chunkTestsBit(const databox *value, uint64_t position) {
 }
 
 bool multiroarBitGet(const multiroar *r, uint64_t position) {
-    if (!r || MR_VALUE_MODE_(r)) {
+    if (!r || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
 
@@ -707,7 +724,7 @@ bool multiroarBitGet(const multiroar *r, uint64_t position) {
  * Remove (Clear Bit)
  * ==================================================================== */
 bool multiroarRemove(multiroar *r, uint64_t position) {
-    if (!r || MR_VALUE_MODE_(r)) {
+    if (!r || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
 
@@ -847,11 +864,15 @@ multiroar *multiroarDuplicate(const multiroar *r) {
  * be mixed on one multiroar — the meta mode byte enforces it here.
  * Values round-trip as unsigned databoxes (booleans store as 0/1). */
 /* A value op may run: a value-mode roar, and 'position' inside its declared
- * rows * cols (0 in either means unbounded) */
-DK_INLINE_ALWAYS bool mrValueReady_(const multiroar *r,
-                                    const uint64_t position) {
-    return r && r->meta[0] != 0 && multiroarValueInBounds(r, position);
-}
+ * rows * cols (0 in either means unbounded).  A bit-mode roar is refused
+ * and reported as misuse; a position outside the dimensions is refused
+ * quietly (it is data, not a mode mix-up). */
+#define mrValueReady_(r, position)                                             \
+    ((r) &&                                                                    \
+     ((r)->meta[0] != 0 ||                                                     \
+      !mrWrongMode_(__func__, __LINE__,                                        \
+                    "a value operation was given a bit-mode roar")) &&         \
+     multiroarValueInBounds((r), (position)))
 
 /* The unsigned value a box stores as, or false for one value mode cannot
  * store: not an integer or boolean, negative, or wider than the roar */
@@ -1020,7 +1041,7 @@ void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent) {
  * Bitcount - Count Total Set Bits
  * ==================================================================== */
 uint64_t multiroarBitCount(const multiroar *r) {
-    if (!r || !r->map || MR_VALUE_MODE_(r)) {
+    if (!r || !r->map || MR_BIT_OP_REFUSED_(r)) {
         return 0;
     }
 
@@ -1136,7 +1157,7 @@ DK_STATIC uint64_t findLastSetBitInBitmap(const uint8_t *bitmap,
 
 /* Find first set bit position */
 bool multiroarMin(const multiroar *r, uint64_t *position) {
-    if (!r || !r->map || !position || MR_VALUE_MODE_(r)) {
+    if (!r || !r->map || !position || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
 
@@ -1211,7 +1232,7 @@ bool multiroarMin(const multiroar *r, uint64_t *position) {
 
 /* Find last set bit position */
 bool multiroarMax(const multiroar *r, uint64_t *position) {
-    if (!r || !r->map || !position || MR_VALUE_MODE_(r)) {
+    if (!r || !r->map || !position || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
 
@@ -1300,8 +1321,8 @@ bool multiroarIsEmpty(const multiroar *r) {
 
 /* Check if two bitmaps have any overlapping bits */
 bool multiroarIntersects(const multiroar *a, const multiroar *b) {
-    if (!a || !b || !a->map || !b->map || MR_VALUE_MODE_(a) ||
-        MR_VALUE_MODE_(b)) {
+    if (!a || !b || !a->map || !b->map || MR_BIT_OP_REFUSED_(a) ||
+        MR_BIT_OP_REFUSED_(b)) {
         return false;
     }
 
@@ -1342,7 +1363,7 @@ bool multiroarIntersects(const multiroar *a, const multiroar *b) {
 
 /* Check if a is subset of b (a ⊆ b) */
 bool multiroarIsSubset(const multiroar *a, const multiroar *b) {
-    if (MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return false; /* subset of bits is not a value-mode question */
     }
     if (!a || !a->map) {
@@ -1508,7 +1529,7 @@ DK_STATIC uint64_t countBitsInBitmapRange(const uint8_t *bitmap,
 
 /* Rank: Count set bits in range [0, position) */
 uint64_t multiroarRank(const multiroar *r, uint64_t position) {
-    if (!r || !r->map || MR_VALUE_MODE_(r)) {
+    if (!r || !r->map || MR_BIT_OP_REFUSED_(r)) {
         return 0;
     }
 
@@ -1590,7 +1611,7 @@ uint64_t multiroarRank(const multiroar *r, uint64_t position) {
 
 /* Select: Find position of the k-th set bit (1-indexed) */
 bool multiroarSelect(const multiroar *r, uint64_t k, uint64_t *position) {
-    if (!r || !r->map || k == 0 || !position || MR_VALUE_MODE_(r)) {
+    if (!r || !r->map || k == 0 || !position || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
 
@@ -1695,7 +1716,7 @@ bool multiroarSelect(const multiroar *r, uint64_t k, uint64_t *position) {
 
 /* Count bits in range [start, end) using rank */
 uint64_t multiroarRangeCount(const multiroar *r, uint64_t start, uint64_t end) {
-    if (!r || start >= end) {
+    if (!r || start >= end || MR_BIT_OP_REFUSED_(r)) {
         return 0;
     }
     return multiroarRank(r, end) - multiroarRank(r, start);
@@ -1743,7 +1764,7 @@ DK_STATIC void bitmapRangeApply_(uint8_t *bitmap, uint32_t lo, uint32_t hi,
  * exist, so clearing a huge sparse range costs nothing for empty space. */
 DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
                                     uint64_t extent, multiroarRangeOp_ op) {
-    if (!r || extent == 0 || MR_VALUE_MODE_(r)) {
+    if (!r || extent == 0 || MR_BIT_OP_REFUSED_(r)) {
         return;
     }
 
@@ -1818,7 +1839,7 @@ void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent) {
 
 /* Set difference: A AND NOT B (bits in A but not in B) - returns new */
 multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
-    if (!a || MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (!a || MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return NULL;
     }
 
@@ -1880,8 +1901,8 @@ multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
 
 /* Set difference: r = r AND NOT b (in-place) */
 void multiroarAndNot(multiroar *r, multiroar *b) {
-    if (!r || !r->map || !b || !b->map || MR_VALUE_MODE_(r) ||
-        MR_VALUE_MODE_(b)) {
+    if (!r || !r->map || !b || !b->map || MR_BIT_OP_REFUSED_(r) ||
+        MR_BIT_OP_REFUSED_(b)) {
         return;
     }
 
@@ -1912,7 +1933,7 @@ void multiroarIteratorInit(const multiroar *r, multiroarIterator *iter) {
     iter->roar = r;
     iter->valid = false;
 
-    if (!r || !r->map || MR_VALUE_MODE_(r)) {
+    if (!r || !r->map || MR_BIT_OP_REFUSED_(r)) {
         return; /* nothing to iterate; a value roar has no bit positions */
     }
 
@@ -2090,7 +2111,7 @@ void multiroarIteratorReset(multiroarIterator *iter) {
 /* Set multiple positions efficiently */
 void multiroarBitSetMany(multiroar *r, const uint64_t *positions,
                          uint64_t count) {
-    if (!r || !positions || count == 0 || MR_VALUE_MODE_(r)) {
+    if (!r || !positions || count == 0 || MR_BIT_OP_REFUSED_(r)) {
         return;
     }
 
@@ -2150,7 +2171,7 @@ void multiroarBitGetMany(const multiroar *r, const uint64_t *positions,
     if (!r || !positions || !results || count == 0) {
         return;
     }
-    if (MR_VALUE_MODE_(r)) {
+    if (MR_BIT_OP_REFUSED_(r)) {
         /* No position is a set bit of a value roar */
         memset(results, 0, count * sizeof(*results));
         return;
@@ -2182,7 +2203,7 @@ void multiroarBitGetMany(const multiroar *r, const uint64_t *positions,
 /* Convert to sorted position array - returns actual count */
 uint64_t multiroarToArray(const multiroar *r, uint64_t *positions,
                           uint64_t maxCount) {
-    if (!r || !positions || maxCount == 0 || MR_VALUE_MODE_(r)) {
+    if (!r || !positions || maxCount == 0 || MR_BIT_OP_REFUSED_(r)) {
         return 0;
     }
 
@@ -2266,7 +2287,7 @@ static uint64_t multiroarIntersectionCount_(const multiroar *a,
 
 /* Jaccard similarity: |A ∩ B| / |A ∪ B| ∈ [0, 1] */
 double multiroarJaccard(const multiroar *a, const multiroar *b) {
-    if (!a || !b || MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (!a || !b || MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return 0.0;
     }
 
@@ -2282,7 +2303,7 @@ double multiroarJaccard(const multiroar *a, const multiroar *b) {
 
 /* Hamming distance: number of differing bits */
 uint64_t multiroarHammingDistance(const multiroar *a, const multiroar *b) {
-    if (!a || !b || MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (!a || !b || MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return 0;
     }
 
@@ -2292,7 +2313,7 @@ uint64_t multiroarHammingDistance(const multiroar *a, const multiroar *b) {
 
 /* Overlap coefficient: |A ∩ B| / min(|A|, |B|) ∈ [0, 1] */
 double multiroarOverlap(const multiroar *a, const multiroar *b) {
-    if (!a || !b || MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (!a || !b || MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return 0.0;
     }
 
@@ -2309,7 +2330,7 @@ double multiroarOverlap(const multiroar *a, const multiroar *b) {
 
 /* Dice coefficient: 2|A ∩ B| / (|A| + |B|) ∈ [0, 1] */
 double multiroarDice(const multiroar *a, const multiroar *b) {
-    if (!a || !b || MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (!a || !b || MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return 0.0;
     }
 
@@ -3241,7 +3262,7 @@ DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
 
 /* OR: r = r OR b */
 void multiroarOr(multiroar *r, multiroar *b) {
-    if (!r || !b || MR_VALUE_MODE_(r) || MR_VALUE_MODE_(b)) {
+    if (!r || !b || MR_BIT_OP_REFUSED_(r) || MR_BIT_OP_REFUSED_(b)) {
         return;
     }
 
@@ -3300,7 +3321,7 @@ void multiroarOr(multiroar *r, multiroar *b) {
 
 /* AND: r = r AND b */
 void multiroarAnd(multiroar *r, multiroar *b) {
-    if (!r || MR_VALUE_MODE_(r) || MR_VALUE_MODE_(b)) {
+    if (!r || MR_BIT_OP_REFUSED_(r) || MR_BIT_OP_REFUSED_(b)) {
         return;
     }
     if (!b) {
@@ -3375,7 +3396,7 @@ typedef struct multiroarChunkBitmap {
 defcleanerName(ChunkBitmap *, zfree, ChunkBitmap);
 
 void multiroarXor(multiroar *r, multiroar *b) {
-    if (!r || !b || MR_VALUE_MODE_(r) || MR_VALUE_MODE_(b)) {
+    if (!r || !b || MR_BIT_OP_REFUSED_(r) || MR_BIT_OP_REFUSED_(b)) {
         return;
     }
 
@@ -3428,7 +3449,7 @@ void multiroarXor(multiroar *r, multiroar *b) {
 
 /* NOT: r = NOT r (within existing chunks only) */
 void multiroarNot(multiroar *r) {
-    if (!r || MR_VALUE_MODE_(r)) {
+    if (!r || MR_BIT_OP_REFUSED_(r)) {
         return;
     }
 
@@ -3479,7 +3500,7 @@ void multiroarNot(multiroar *r) {
 /* The New* forms copy 'a' and apply the in-place form; a value-mode operand
  * gives no result (a copy of a value roar is not a set result) */
 multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
-    if (MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return NULL;
     }
     /* @own: caller; free=multiroarFree */
@@ -3489,7 +3510,7 @@ multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
 }
 
 multiroar *multiroarNewOr(const multiroar *a, const multiroar *b) {
-    if (MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return NULL;
     }
     /* @own: caller; free=multiroarFree */
@@ -3499,7 +3520,7 @@ multiroar *multiroarNewOr(const multiroar *a, const multiroar *b) {
 }
 
 multiroar *multiroarNewXor(const multiroar *a, const multiroar *b) {
-    if (MR_VALUE_MODE_(a) || MR_VALUE_MODE_(b)) {
+    if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return NULL;
     }
     /* @own: caller; free=multiroarFree */
@@ -3509,7 +3530,7 @@ multiroar *multiroarNewXor(const multiroar *a, const multiroar *b) {
 }
 
 multiroar *multiroarNewNot(const multiroar *r) {
-    if (MR_VALUE_MODE_(r)) {
+    if (MR_BIT_OP_REFUSED_(r)) {
         return NULL;
     }
     /* @own: caller; free=multiroarFree */
@@ -3522,7 +3543,7 @@ multiroar *multiroarNewNot(const multiroar *r) {
  * over one is refused) */
 DK_STATIC bool mrAnyValueMode_(uint64_t n, multiroar *const *roars) {
     for (uint64_t i = 0; i < n; i++) {
-        if (MR_VALUE_MODE_(roars[i])) {
+        if (MR_BIT_OP_REFUSED_(roars[i])) {
             return true;
         }
     }
@@ -4082,6 +4103,20 @@ static int mrCheckForms(const multiroar *r, const uint64_t *o,
     return bad;
 }
 
+/* Exactly one wrong-mode misuse report since count 'c0', and no result */
+static int mrTestReportedOnce_(uint64_t c0, const char *what,
+                               const multiroar *result) {
+    int err = 0;
+    dkDiagnostic d;
+    if (dkDiagCount() - c0 != 1 || !dkDiagLast(&d) ||
+        d.code != DK_DIAG_MULTIROAR_WRONG_MODE ||
+        d.severity != DK_DIAG_MISUSE || result) {
+        ERR("%s reported %" PRIu64 " times (result %p)", what,
+            dkDiagCount() - c0, (const void *)result);
+    }
+    return err;
+}
+
 int multiroarTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -4102,6 +4137,10 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(B, 5);
         cleaner(multiroarFree) multiroar *Vcopy = multiroarDuplicate(V);
         cleaner(multiroarFree) multiroar *Bcopy = multiroarDuplicate(B);
+
+        /* Every refusal below is reported as misuse; kept off stderr */
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
 
         uint64_t pos = 99;
         multiroarIterator it;
@@ -4155,6 +4194,85 @@ int multiroarTest(int argc, char *argv[]) {
             ERRR("a set operation over a value roar gave a result");
         }
 
+        /* Each refused bit call reports the misuse exactly once (run again:
+         * a refused call changes nothing) */
+#define MR_REPORTS_ONCE_(call)                                               \
+    do {                                                                       \
+        const uint64_t c0_ = dkDiagCount();                                    \
+        (void)(call);                                                          \
+        dkDiagnostic d_;                                                       \
+        if (dkDiagCount() - c0_ != 1 || !dkDiagLast(&d_) ||                    \
+            d_.code != DK_DIAG_MULTIROAR_WRONG_MODE ||                         \
+            d_.severity != DK_DIAG_MISUSE) {                                   \
+            ERR("%s reported %" PRIu64 " times", #call, dkDiagCount() - c0_);  \
+        }                                                                      \
+    } while (0)
+        MR_REPORTS_ONCE_(multiroarBitSet(V, 3));
+        MR_REPORTS_ONCE_(multiroarBitGet(V, 3));
+        MR_REPORTS_ONCE_(multiroarRemove(V, 3));
+        MR_REPORTS_ONCE_(multiroarBitCount(V));
+        MR_REPORTS_ONCE_(multiroarMin(V, &pos));
+        MR_REPORTS_ONCE_(multiroarMax(V, &pos));
+        MR_REPORTS_ONCE_(multiroarRank(V, 50));
+        MR_REPORTS_ONCE_(multiroarSelect(V, 1, &pos));
+        MR_REPORTS_ONCE_(multiroarRangeCount(V, 0, 50));
+        MR_REPORTS_ONCE_(multiroarIntersects(V, B));
+        MR_REPORTS_ONCE_(multiroarIntersects(B, V));
+        MR_REPORTS_ONCE_(multiroarIsSubset(V, B));
+        MR_REPORTS_ONCE_(multiroarIsSubset(B, V));
+        MR_REPORTS_ONCE_(multiroarToArray(V, arr, 4));
+        MR_REPORTS_ONCE_(multiroarJaccard(V, V));
+        MR_REPORTS_ONCE_(multiroarDice(V, B));
+        MR_REPORTS_ONCE_(multiroarOverlap(B, V));
+        MR_REPORTS_ONCE_(multiroarHammingDistance(V, B));
+        MR_REPORTS_ONCE_((multiroarBitGetMany(V, probe, 3, got), 0));
+        MR_REPORTS_ONCE_((multiroarBitSetRange(V, 0, 50), 0));
+        MR_REPORTS_ONCE_((multiroarBitClearRange(V, 0, 50), 0));
+        MR_REPORTS_ONCE_((multiroarBitFlipRange(V, 0, 50), 0));
+        MR_REPORTS_ONCE_((multiroarBitSetMany(V, probe, 3), 0));
+        MR_REPORTS_ONCE_((multiroarOr(V, B), 0));
+        MR_REPORTS_ONCE_((multiroarAnd(V, B), 0));
+        MR_REPORTS_ONCE_((multiroarXor(V, B), 0));
+        MR_REPORTS_ONCE_((multiroarNot(V), 0));
+        MR_REPORTS_ONCE_((multiroarAndNot(V, B), 0));
+        MR_REPORTS_ONCE_((multiroarOr(B, V), 0));
+        MR_REPORTS_ONCE_((multiroarAnd(B, V), 0));
+        MR_REPORTS_ONCE_((multiroarXor(B, V), 0));
+        MR_REPORTS_ONCE_((multiroarAndNot(B, V), 0));
+        MR_REPORTS_ONCE_((multiroarAndN(2, both), 0));
+        MR_REPORTS_ONCE_((multiroarOrN(2, both), 0));
+        MR_REPORTS_ONCE_((multiroarXorN(2, both), 0));
+#undef MR_REPORTS_ONCE_
+        /* The constructors, each result owned (NULL when refused) */
+        {
+            uint64_t c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x1 = multiroarNewAnd(B, V);
+            err += mrTestReportedOnce_(c0, "multiroarNewAnd", x1);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x2 = multiroarNewOr(V, B);
+            err += mrTestReportedOnce_(c0, "multiroarNewOr", x2);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x3 = multiroarNewXor(B, V);
+            err += mrTestReportedOnce_(c0, "multiroarNewXor", x3);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x4 = multiroarNewNot(V);
+            err += mrTestReportedOnce_(c0, "multiroarNewNot", x4);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x5 = multiroarNewAndNot(V, B);
+            err += mrTestReportedOnce_(c0, "multiroarNewAndNot", x5);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x6 = multiroarNewAndN(2, both);
+            err += mrTestReportedOnce_(c0, "multiroarNewAndN", x6);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x7 = multiroarNewOrN(2, both);
+            err += mrTestReportedOnce_(c0, "multiroarNewOrN", x7);
+            c0 = dkDiagCount();
+            cleaner(multiroarFree) multiroar *x8 = multiroarNewXorN(2, both);
+            err += mrTestReportedOnce_(c0, "multiroarNewXorN", x8);
+        }
+        dkDiagnostic d;
+        const uint64_t afterBit = dkDiagCount();
+
         /* Value calls on a bit roar, and values a value roar cannot
          * store, are refused */
         databox out = {{0}};
@@ -4177,6 +4295,16 @@ int multiroarTest(int argc, char *argv[]) {
             ERRR("a value call on a bit roar or an unstorable value was "
                  "taken");
         }
+
+        /* Only the three calls on the bit roar are misuse; a value the
+         * roar cannot store, or a position past its dimensions, is data */
+        if (dkDiagCount() - afterBit != 3 || !dkDiagLast(&d) ||
+            strcmp(d.function, "multiroarValueRemoveGetRemoved") != 0) {
+            ERR("%" PRIu64 " reports from the value calls (want 3), last in "
+                "%s",
+                dkDiagCount() - afterBit, d.function);
+        }
+        dkDiagSetPrintMode(priorPrint);
 
         /* Both roars are as they were; value roars compare by content */
         cleaner(multiroarFree) multiroar *other = multiroarValueNew(8, 10, 10);
