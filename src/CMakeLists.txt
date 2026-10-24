@@ -533,6 +533,7 @@ add_library(${PROJECT_NAME} OBJECT
     util.c
     portableRandom.c
     dkRandom.c
+    dkDiag.c
     # quickcount.c
 
     # quickdictClassAtom.c

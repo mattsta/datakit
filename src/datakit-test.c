@@ -26,6 +26,7 @@
 #include "databoxLinear.h"
 #include "dataspeed.h"
 #include "dj.h"
+#include "dkDiag.h"
 #include "dkFormat.h"
 #include "dkRandom.h"
 #include "dkTestTmp.h"
@@ -12710,6 +12711,9 @@ static const TestEntry testRegistry[] = {
 
     /* Random generators */
     T_A(dkRandom, "rng"), T(portableRandom),
+
+    /* Diagnostics: misuse and conditions, recorded per thread */
+    T_A(dkDiag, "diag"),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),
