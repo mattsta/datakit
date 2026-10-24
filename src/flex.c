@@ -1747,7 +1747,7 @@ flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count) {
 
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (!f || payloadBytes == 0) {
+    if (payloadBytes == 0) {
         return f;
     }
 
@@ -3391,9 +3391,6 @@ void flexPushBytesExact(flex **const ff, const void *data, size_t len,
 flex *flexNewFromDatabox(const databox *box) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
     flexPushByType(&f, box, FLEX_ENDPOINT_TAIL);
     return f;
 }
@@ -3405,9 +3402,6 @@ static flex *flexNewFromBoxes_(const databox *boxes, const databox *const *ptrs,
                                const size_t n, const bool exact) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
 
     enum { FACTORY_CHUNK_ = 64 };
     const databox *chunk[FACTORY_CHUNK_];
@@ -3441,9 +3435,6 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n) {
 flex *flexNewFromDataboxExact(const databox *box) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
     flexPushByTypeExact(&f, box, FLEX_ENDPOINT_TAIL);
     return f;
 }
@@ -3471,9 +3462,6 @@ bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
         return false;
     }
     flexEntry *fe = flexHead(f);
-    if (!fe) {
-        return false;
-    }
     /* A plain databox cannot hold a 96/128-bit value; that needs
      * flexGetSingleDataboxBig. */
     if (flexEntryIsIntegerWide_(fe)) {
@@ -3516,9 +3504,6 @@ void flexPushDataboxBig(flex **const ff, const databoxBig *b,
 flex *flexNewFromDataboxBig(const databoxBig *b) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
     flexPushDataboxBig(&f, b, FLEX_ENDPOINT_TAIL);
     return f;
 }
@@ -3553,9 +3538,6 @@ void flexPushDataboxBigExact(flex **const ff, const databoxBig *b,
 flex *flexNewFromDataboxBigExact(const databoxBig *b) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
     flexPushDataboxBigExact(&f, b, FLEX_ENDPOINT_TAIL);
     return f;
 }
@@ -3572,11 +3554,7 @@ bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
     if (flexCount(f) != 1) {
         return false;
     }
-    flexEntry *fe = flexHead(f);
-    if (!fe) {
-        return false;
-    }
-    flexGetByTypeBig(fe, out);
+    flexGetByTypeBig(flexHead(f), out);
     return true;
 }
 
@@ -3592,14 +3570,9 @@ bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
     if (flexCount(f) != 2) {
         return false;
     }
+    /* A validated flex of 2 entries has a head and a next */
     flexEntry *fe = flexHead(f);
-    if (!fe) {
-        return false;
-    }
     flexEntry *const second = flexNext(f, fe);
-    if (!second) {
-        return false;
-    }
     /* Plain databoxes cannot hold a 96/128-bit value.  Both entries are
      * checked before either box is written, so a refusal leaves both
      * untouched. */
@@ -3623,14 +3596,9 @@ bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,
     if (flexCount(f) != 2) {
         return false;
     }
+    /* A validated flex of 2 entries has a head and a next */
     flexEntry *fe = flexHead(f);
-    if (!fe) {
-        return false;
-    }
     flexEntry *const second = flexNext(f, fe);
-    if (!second) {
-        return false;
-    }
     flexGetByTypeBig(fe, a);
     flexGetByTypeBig(second, b);
     return true;
@@ -8124,6 +8092,75 @@ static int32_t flexTestVoidEntries(void) {
     return bad;
 }
 
+/* The single- and two-value readers of untrusted bytes: each refuses NULL
+ * arguments, bytes that are not a valid flex, the wrong element count and
+ * (the plain-databox readers) a 96/128-bit value, leaving the outputs
+ * exactly as they were; a good buffer reads back its values. */
+static int32_t flexTestUntrustedGetters(void) {
+    int32_t bad = 0;
+    cleaner(flexFree) flex *one = flexNew();
+    flexPushSigned(&one, -77, FLEX_ENDPOINT_TAIL);
+    cleaner(flexFree) flex *two = flexNew();
+    flexPushSigned(&two, 5, FLEX_ENDPOINT_TAIL);
+    flexPushBytes(&two, "pq", 2, FLEX_ENDPOINT_TAIL);
+    cleaner(flexFree) flex *wide = flexNew();
+    databoxBig w;
+    DATABOX_BIG_SIGNED_128(&w, -((__int128_t)1 << 90));
+    flexPushDataboxBig(&wide, &w, FLEX_ENDPOINT_TAIL);
+    cleaner(flexFree) flex *wideTwo = flexDuplicate(wide);
+    flexPushSigned(&wideTwo, 1, FLEX_ENDPOINT_TAIL);
+    const uint8_t junk[3] = {0xFF, 0xFF, 0xFF};
+
+    const databox mark = DATABOX_SIGNED(0x5A5A);
+    databox a = mark;
+    databox b = mark;
+    databoxBig ba = {0};
+    databoxBig bb = {0};
+#define UG_REFUSE(call)                                                        \
+    do {                                                                       \
+        a = mark;                                                              \
+        b = mark;                                                              \
+        if ((call) || a.data.i64 != mark.data.i64 ||                           \
+            b.data.i64 != mark.data.i64) {                                     \
+            printf("  FAIL: %s accepted or wrote\n", #call);                   \
+            bad++;                                                             \
+        }                                                                      \
+    } while (0)
+    const uint8_t *o = (const uint8_t *)one;
+    const uint8_t *t = (const uint8_t *)two;
+    const uint8_t *wd = (const uint8_t *)wide;
+    const uint8_t *w2 = (const uint8_t *)wideTwo;
+    UG_REFUSE(flexGetSingleDatabox(NULL, 3, &a));
+    UG_REFUSE(flexGetSingleDatabox(o, flexBytes(one), NULL));
+    UG_REFUSE(flexGetSingleDatabox(junk, sizeof(junk), &a));
+    UG_REFUSE(flexGetSingleDatabox(t, flexBytes(two), &a));
+    UG_REFUSE(flexGetSingleDatabox(wd, flexBytes(wide), &a));
+    UG_REFUSE(flexGetTwoDataboxes(NULL, 3, &a, &b));
+    UG_REFUSE(flexGetTwoDataboxes(t, flexBytes(two), &a, NULL));
+    UG_REFUSE(flexGetTwoDataboxes(junk, sizeof(junk), &a, &b));
+    UG_REFUSE(flexGetTwoDataboxes(o, flexBytes(one), &a, &b));
+    UG_REFUSE(flexGetTwoDataboxes(w2, flexBytes(wideTwo), &a, &b));
+    UG_REFUSE(flexGetSingleDataboxBig(NULL, 3, &ba));
+    UG_REFUSE(flexGetSingleDataboxBig(junk, sizeof(junk), &ba));
+    UG_REFUSE(flexGetSingleDataboxBig(t, flexBytes(two), &ba));
+    UG_REFUSE(flexGetTwoDataboxesBig(NULL, 3, &ba, &bb));
+    UG_REFUSE(flexGetTwoDataboxesBig(junk, sizeof(junk), &ba, &bb));
+    UG_REFUSE(flexGetTwoDataboxesBig(o, flexBytes(one), &ba, &bb));
+#undef UG_REFUSE
+
+    if (!flexGetSingleDatabox(o, flexBytes(one), &a) || a.data.i64 != -77 ||
+        !flexGetTwoDataboxes(t, flexBytes(two), &a, &b) || a.data.i64 != 5 ||
+        b.len != 2 || memcmp(b.data.bytes.start, "pq", 2) != 0 ||
+        !flexGetSingleDataboxBig(wd, flexBytes(wide), &ba) ||
+        ba.type != DATABOX_SIGNED_128 ||
+        !flexGetTwoDataboxesBig(w2, flexBytes(wideTwo), &ba, &bb) ||
+        ba.type != DATABOX_SIGNED_128 || bb.data.i64 != 1) {
+        printf("  FAIL: a valid buffer did not read back\n");
+        bad++;
+    }
+    return bad;
+}
+
 static int32_t flexTestReferenceSet(void) {
     int32_t bad = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
@@ -10992,6 +11029,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify the untrusted-bytes getters refuse and leave outputs:\n");
+    {
+        const int32_t bad = flexTestUntrustedGetters();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " getter checks\n", bad);
             return bad;
         }
         printf("  ok\n");
