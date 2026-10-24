@@ -9197,6 +9197,98 @@ int persistTest(int argc, char *argv[]) {
         zfree(s);
     }
 
+    TEST("strict recovery past a bad WAL entry fails and appends nothing") {
+        /* Inserts of 1, 2, 3 with the last entry's digest damaged on disk.
+         * Strict recovery fails and refuses appends, leaving the WAL byte
+         * for byte as it was; lenient recovery keeps {1, 2} and refuses
+         * appends too, until a compaction */
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        char snapPath[PATH_MAX];
+        char walPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "strict.snap", snapPath,
+                              sizeof(snapPath)) ||
+            !dkTestTmpDirPath(&tmp, "strict.wal", walPath, sizeof(walPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+            return err;
+        }
+        persistConfig strict = persistDefaultConfig();
+        strict.strictRecovery = true;
+        {
+            persist *p = persistCreate(&persistOpsIntset, &strict);
+            persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+            persistAttachWAL(p, persistStoreFile(walPath, true));
+            cleaner(intsetFree) intset *empty = intsetNew();
+            persistSnapshot(p, empty);
+            for (int64_t v = 1; v <= 3; v++) {
+                persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            }
+            persistSync(p);
+            persistClose(p);
+        }
+        static uint8_t before[4096];
+        static uint8_t after[4096];
+        size_t walLen = 0;
+        FILE *wal = fopen(walPath, "r+b");
+        if (wal) {
+            walLen = fread(before, 1, sizeof(before), wal);
+            if (walLen > 3 && walLen < sizeof(before)) {
+                before[walLen - 3] ^= 0x5a;
+                fseek(wal, (long)(walLen - 3), SEEK_SET);
+                fputc(before[walLen - 3], wal);
+            }
+            fclose(wal);
+        }
+        if (walLen <= 3 || walLen >= sizeof(before)) {
+            ERRR("could not damage the WAL");
+        }
+
+        {
+            persist *p = persistCreate(&persistOpsIntset, &strict);
+            persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+            persistAttachWAL(p, persistStoreFile(walPath, true));
+            intset *got = persistRecover(p);
+            const int64_t four = 4;
+            if (got || persistLogOp(p, PERSIST_OP_INSERT, &four, 1) !=
+                           PERSIST_LOG_REFUSED) {
+                ERRR("strict recovery passed a bad entry or then appended");
+            }
+            if (got) {
+                intsetFree(got);
+            }
+            persistClose(p);
+        }
+        wal = fopen(walPath, "rb");
+        const size_t afterLen = wal ? fread(after, 1, sizeof(after), wal) : 0;
+        if (wal) {
+            fclose(wal);
+        }
+        if (afterLen != walLen || memcmp(before, after, walLen) != 0) {
+            ERRR("a failed strict recovery changed the WAL");
+        }
+
+        {
+            persist *p = persistCreate(&persistOpsIntset, NULL);
+            persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+            persistAttachWAL(p, persistStoreFile(walPath, true));
+            intset *got = persistRecover(p);
+            const int64_t four = 4;
+            if (!got || intsetCount(got) != 2 ||
+                persistLogOp(p, PERSIST_OP_INSERT, &four, 1) !=
+                    PERSIST_LOG_REFUSED) {
+                ERRR("lenient recovery did not keep {1, 2} and refuse appends");
+            }
+            if (got && (!persistCompact(p, got) ||
+                        persistLogOp(p, PERSIST_OP_INSERT, &four, 1) ==
+                            PERSIST_LOG_REFUSED)) {
+                ERRR("compaction did not resume appends");
+            }
+            if (got) {
+                intsetFree(got);
+            }
+            persistClose(p);
+        }
+    }
+
     TEST("durability: atomic snapshot publish leaves no torn temp file") {
         cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
         char snapPath[PATH_MAX];
