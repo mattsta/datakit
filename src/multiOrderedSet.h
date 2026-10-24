@@ -32,7 +32,7 @@
  *   - Leaderboards: lookup player score by player ID (member)
  *   - Rate limiters: check if IP exists, get its request count
  *   - Priority queues with named items: lookup priority by item name
- *   - Sorted-set operations: ZSCORE, ZRANK, ZINCRBY
+ *   - Ordered sets: a member's score, its rank, and score increments
  *
  * ====================================================================
  * ARCHITECTURE: Three-Tier Design
