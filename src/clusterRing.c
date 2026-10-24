@@ -2223,15 +2223,27 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
 static bool clusterKeyBytes(const databox *key, uint8_t scratch[16],
                             const void **data, uint32_t *len) {
     switch (key->type) {
+    /* Bytes place by the bytes, however they are held */
     case DATABOX_BYTES:
     case DATABOX_BYTES_EMBED:
+    case DATABOX_BYTES_NEVER_FREE:
         *data = databoxBytes(key);
         *len = (uint32_t)key->len;
         return true;
+#if DATABOX_ENABLE_PTR_MDSC
+    case DATABOX_PTR_MDSC:
+        *data = key->data.ptr;
+        *len = (uint32_t)key->len;
+        return true;
+#endif
     case DATABOX_CONTAINER_FLEX_MAP:
     case DATABOX_CONTAINER_FLEX_LIST:
     case DATABOX_CONTAINER_FLEX_SET:
     case DATABOX_CONTAINER_FLEX_TUPLE:
+    case DATABOX_CONTAINER_CFLEX_MAP:
+    case DATABOX_CONTAINER_CFLEX_LIST:
+    case DATABOX_CONTAINER_CFLEX_SET:
+    case DATABOX_CONTAINER_CFLEX_TUPLE:
         *data = key->data.bytes.start;
         *len = (uint32_t)key->len;
         return true;
@@ -4098,6 +4110,7 @@ const persistOps persistOpsClusterRing = {
 #include "ctest.h"
 
 defcleaner(flex *, flexFree);
+defcleaner(mdsc *, mdscfree);
 
 void clusterRingRepr(const clusterRing *ring) {
     if (!ring) {
@@ -5653,6 +5666,69 @@ static int testFuzzSerializationRoundtrip(void) {
                 ERR("shape %zu (%u vnodes): %zu of 2000 walks differ", s,
                     data->vnodeCount, wrong);
             }
+        }
+    }
+
+    TEST("box keys place by their bytes whatever holds them") {
+        /* On a 4-node ring, each of 64 keys given as NEVER_FREE bytes and
+         * as an mdsc string places exactly as the same bytes given as
+         * BYTES (so they spread over several nodes, not one); in a bulk
+         * call an offset box, which has no bytes, is refused with its
+         * placement left empty while the keys around it are placed */
+        clusterRingConfig config = {.name = "box-keys",
+                                    .strategyType = CLUSTER_STRATEGY_KETAMA};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
+        for (uint32_t n = 1; n <= 4; n++) {
+            clusterNodeConfig nc = {
+                .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
+            clusterRingAddNode(ring, &nc);
+        }
+        size_t differ = 0;
+        uint32_t nodesSeen = 0;
+        for (int i = 0; i < 64; i++) {
+            char text[32];
+            const int len = snprintf(text, sizeof(text), "box-key-%d", i);
+            cleaner(mdscfree) mdsc *str = mdscnewlen(text, (size_t)len);
+            const databox asBytes = databoxNewBytes(text, (size_t)len);
+            const databox asNever = {.type = DATABOX_BYTES_NEVER_FREE,
+                                     .data.bytes.start = (uint8_t *)text,
+                                     .len = (size_t)len};
+            const databox asMdsc = {
+                .type = DATABOX_PTR_MDSC, .data.ptr = str, .len = (size_t)len};
+            clusterPlacement pb;
+            clusterPlacement pn;
+            clusterPlacement pm;
+            clusterRingLocateBox(ring, &asBytes, &pb);
+            clusterRingLocateBox(ring, &asNever, &pn);
+            clusterRingLocateBox(ring, &asMdsc, &pm);
+            const clusterNode *b = clusterPlacementGetReplica(&pb, 0);
+            differ += b != clusterPlacementGetReplica(&pn, 0) ||
+                      b != clusterPlacementGetReplica(&pm, 0);
+            if (b) {
+                nodesSeen |= 1u << (clusterNodeGetId(b) & 31);
+            }
+            clusterPlacementFree(&pb);
+            clusterPlacementFree(&pn);
+            clusterPlacementFree(&pm);
+        }
+        if (differ || __builtin_popcount(nodesSeen) < 2) {
+            ERR("%zu of 64 keys placed differently by holder; %d nodes used",
+                differ, __builtin_popcount(nodesSeen));
+        }
+        const databox bulk[3] = {
+            databoxNewBytes("left", 4),
+            {.type = DATABOX_BYTES_OFFSET, .len = 4},
+            databoxNewBytes("right", 5),
+        };
+        clusterPlacement placed[3];
+        const clusterResult r = clusterRingLocateBulk(ring, bulk, 3, placed);
+        if (r == CLUSTER_OK || clusterPlacementReplicaCount(&placed[1]) != 0 ||
+            clusterPlacementReplicaCount(&placed[0]) == 0 ||
+            clusterPlacementReplicaCount(&placed[2]) == 0) {
+            ERRR("bulk placement around a key with no bytes went wrong");
+        }
+        for (int i = 0; i < 3; i++) {
+            clusterPlacementFree(&placed[i]);
         }
     }
 
