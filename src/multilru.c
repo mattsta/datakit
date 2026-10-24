@@ -5289,6 +5289,55 @@ int multilruTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("out-of-range handles and levels are refused without effect") {
+        /* Unweighted: the weight calls are inert */
+        cleaner(multilruFree) multilru *plain = multilruNew();
+        const multilruPtr p = multilruInsert(plain);
+        multilruUpdateWeight(plain, p, 99);
+        if (multilruEvictToSize(plain, 0, NULL, 4) != 0 ||
+            multilruGetWeight(plain, p) != 0 ||
+            multilruTotalWeight(plain) != 0) {
+            ERRR("an unweighted LRU took a weight");
+        }
+
+        /* Weighted, levels asked past 64 clamp to 64 */
+        multilruConfig config = {.maxLevels = 200, .enableWeights = true};
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
+        const multilruPtr a = multilruInsertWeighted(mlru, 7);
+        const multilruPtr b = multilruInsertWeighted(mlru, 11);
+        const uint64_t total = multilruTotalWeight(mlru);
+        const multilruPtr bogus[] = {0, (multilruPtr)1 << 40, a + b + 1000};
+        for (size_t i = 0; i < sizeof(bogus) / sizeof(*bogus); i++) {
+            multilruUpdateWeight(mlru, bogus[i], 1000);
+            multilruIncrease(mlru, bogus[i]);
+            multilruDecrease(mlru, bogus[i]);
+            if (multilruGetWeight(mlru, bogus[i]) != 0 ||
+                multilruGetLevel(mlru, bogus[i]) != 0) {
+                ERR("bogus handle %zu reads a weight or level", i);
+            }
+        }
+        /* A level head is not an entry either: handle 1 is a head */
+        multilruUpdateWeight(mlru, 1, 1000);
+        if (multilruTotalWeight(mlru) != total || multilruCount(mlru) != 2 ||
+            multilruGetWeight(mlru, a) != 7 ||
+            multilruGetWeight(mlru, b) != 11) {
+            ERRR("a refused update changed the weights");
+        }
+        if (multilruLevelCount(mlru, 63) != 0 ||
+            multilruLevelCount(mlru, 64) != 0 ||
+            multilruLevelWeight(mlru, 64) != 0 ||
+            multilruLevelCount(mlru, 0) != 2 ||
+            multilruLevelWeight(mlru, 0) != 18) {
+            ERRR("level queries past the 64 levels answered");
+        }
+        /* Valid update moves the totals */
+        multilruUpdateWeight(mlru, a, 70);
+        if (multilruTotalWeight(mlru) != 81 ||
+            multilruLevelWeight(mlru, 0) != 81) {
+            ERR("update to 70: total %" PRIu64, multilruTotalWeight(mlru));
+        }
+    }
+
     TEST("every entry width runs the same workload identically") {
         /* Widths above 5 normally need 64K to 16T entries.  Upgrading a
          * small cache in place (as growth does) puts every width,
