@@ -1273,6 +1273,15 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
     const void *data = contents->data;
     const size_t len = contents->len;
 
+    if (unlikely(contents->isVoidEntry)) {
+        /* An abstract space reservation: no contents to copy (the box
+         * holds none; its data is only the 8-byte embed), so the caller
+         * fills the entry later.  Zeroed, so the flex never carries
+         * whatever bytes its memory held before. */
+        memset(fe, 0, len);
+        return len;
+    }
+
     if (FLEX_IS_STR(encoding)) {
         /* If 'fe' == 'data', then there's nothing new to write!
          * else, copy 'len' 'data' to 'fe' */
@@ -1282,14 +1291,6 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
             memmove(fe, data, len);
         }
 
-        return len;
-    }
-
-    if (unlikely(contents->isVoidEntry)) {
-        /* If user requested just an abstract space allocation without
-         * needing any contents written, then just report we made 'len'
-         * bytes available for the user (they'll get the entry and write
-         * contents later). */
         return len;
     }
 
@@ -8052,6 +8053,77 @@ static uint64_t flexTestWideRand(uint64_t *state) {
  * references resolve to, and flexGetByTypeSortedWithMiddleWithReference
  * returns each key's position: its row when present, else the row it
  * would precede (the end past the last) */
+/* A void entry reserves bytes without copying any: the entry reads back as
+ * that many zero bytes, the caller fills them in place, and the entries
+ * around it are untouched.  The box is all the writer sees, so a
+ * reservation longer than the box's 8-byte embed must not be read from it.
+ * Void boxes reach the writer through a replace and through the sorted
+ * row inserts (a row value); checked both ways. */
+static int32_t flexTestVoidEntries(void) {
+    int32_t bad = 0;
+    static const size_t sizes[] = {1, 7, 8, 9, 100, 300, 70000};
+    for (size_t s = 0; s < 2 * (sizeof(sizes) / sizeof(*sizes)); s++) {
+        const bool sorted = s % 2 == 1;
+        const size_t n = sizes[s / 2];
+        const databox reserve = {.type = DATABOX_BYTES_VOID, .len = n};
+        cleaner(flexFree) flex *f = flexNew();
+        if (sorted) {
+            /* Rows [-5, void] and [7, "after"], sorted by key: index 1 is
+             * the void, index 3 "after" */
+            const databox k1 = DATABOX_SIGNED(-5);
+            const databox k2 = DATABOX_SIGNED(7);
+            const databox after = DATABOX_WITH_BYTES((uint8_t *)"after", 5);
+            const databox *row1[2] = {&k1, &reserve};
+            const databox *row2[2] = {&k2, &after};
+            flexEntry *mid = NULL;
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&f, 2, row1,
+                                                               &mid, true);
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&f, 2, row2,
+                                                               &mid, true);
+        } else {
+            flexPushSigned(&f, -5, FLEX_ENDPOINT_TAIL);
+            flexPushBytes(&f, "x", 1, FLEX_ENDPOINT_TAIL);
+            flexPushBytes(&f, "after", 5, FLEX_ENDPOINT_TAIL);
+            flexReplaceByType(&f, flexIndex(f, 1), &reserve);
+        }
+
+        databox got = {{0}};
+        flexGetByType(flexIndex(f, 1), &got);
+        if (got.type != DATABOX_BYTES || got.len != n) {
+            printf("  FAIL: %zu-byte void entry read back as type %d, %zu "
+                   "bytes\n",
+                   n, got.type, (size_t)got.len);
+            bad++;
+            continue;
+        }
+        uint8_t *space = (uint8_t *)got.data.bytes.start;
+        for (size_t i = 0; i < n; i++) {
+            if (space[i] != 0) {
+                printf("  FAIL: %zu-byte void entry byte %zu is %u\n", n, i,
+                       space[i]);
+                bad++;
+                break;
+            }
+        }
+        memset(space, 0xAB, n); /* the caller fills it in place */
+
+        databox first = {{0}};
+        databox last = {{0}};
+        flexGetByType(flexIndex(f, 0), &first);
+        flexGetByType(flexIndex(f, sorted ? 3 : 2), &last);
+        flexGetByType(flexIndex(f, 1), &got);
+        if (first.type != DATABOX_SIGNED_64 || first.data.i64 != -5 ||
+            last.len != 5 || memcmp(last.data.bytes.start, "after", 5) != 0 ||
+            got.len != n ||
+            ((const uint8_t *)got.data.bytes.start)[n - 1] != 0xAB ||
+            !flexValidateBufferDeep(f, flexBytes(f))) {
+            printf("  FAIL: %zu-byte void entry disturbed its neighbours\n", n);
+            bad++;
+        }
+    }
+    return bad;
+}
+
 static int32_t flexTestReferenceSet(void) {
     int32_t bad = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
@@ -10920,6 +10992,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify a void entry reserves zeroed bytes the caller fills:\n");
+    {
+        const int32_t bad = flexTestVoidEntries();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " void entry checks\n", bad);
             return bad;
         }
         printf("  ok\n");
