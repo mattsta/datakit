@@ -1,4 +1,5 @@
 #include "ulid.h"
+#include "portableRandom.h"
 #include "str.h"
 #include "timeUtil.h"
 #include "util.h"
@@ -74,9 +75,24 @@ static void detectBestImplementation(void) {
  * Generator State
  * ==================================================================== */
 
+static uint8_t ulidHexNibble(uint8_t c) {
+    return c <= '9' ? (uint8_t)(c - '0') : (uint8_t)(c - 'a' + 10);
+}
+
 static void ulidGenSeedRng(ulidGen *g) {
+    /* 16 whole bytes from the OS CSPRNG.  If it fails (it never blocks,
+     * so before the kernel pool is ready), 32 hex characters from the
+     * fallback, two per byte, so the state still spans all 128 bits (a
+     * hex character carries 4). */
     uint8_t seed[16];
-    getRandomHexChars(seed, sizeof(seed));
+    if (!portableRandomDirectFull(seed, sizeof(seed))) {
+        uint8_t hex[2 * sizeof(seed)];
+        getRandomHexChars(hex, sizeof(hex));
+        for (size_t i = 0; i < sizeof(seed); i++) {
+            seed[i] = (uint8_t)(ulidHexNibble(hex[2 * i]) << 4 |
+                                ulidHexNibble(hex[2 * i + 1]));
+        }
+    }
 
     uint64_t tempState[2] = {0, 0};
     for (int32_t i = 0; i < 8; i++) {
@@ -2476,6 +2492,28 @@ int ulidTest(int argc, char *argv[]) {
     (void)argv;
 
     int32_t err = 0;
+
+    TEST("generator seeds carry whole bytes from the OS random source") {
+        /* Hex characters carry 4 bits a byte: a seed of 16 of them would
+         * leave all 16 state bytes inside "0-9a-f" (certain), while 16
+         * whole random bytes all land there with probability 2^-64 */
+        for (int g = 0; g < 4; g++) {
+            ulidGen gen;
+            ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+            ulidGenSeedRng(&gen);
+            uint8_t state[sizeof(gen.rng)];
+            memcpy(state, gen.rng, sizeof(state));
+            bool allHex = true;
+            for (size_t i = 0; i < sizeof(state); i++) {
+                const uint8_t c = state[i];
+                allHex = allHex &&
+                         ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+            }
+            if (allHex) {
+                ERR("generator %d seeded from hex characters only", g);
+            }
+        }
+    }
 
     TEST("SNOWFLAKE ids stay unique and ordered past 8192 in one ms") {
         /* With the watermark a second ahead of the clock every id lands

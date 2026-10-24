@@ -1,4 +1,5 @@
 #include "util.h"
+#include "portableRandom.h"
 #include "str.h"
 
 #include <stdio.h>
@@ -144,12 +145,12 @@ bool bytesToHuman(void *const buf, const size_t len, const uint64_t n) {
 }
 
 void getRandomHexChars(uint8_t *p, uint32_t len) {
-    FILE *fp = fopen("/dev/urandom", "r");
     static const char *charset = "0123456789abcdef";
 
-    if (fp == NULL || fread(p, len, 1, fp) == 0) {
-        /* If we can't read from /dev/urandom because of permission problems,
-         * attempt to generate entropy given our userspace access. */
+    if (!portableRandomDirectFull(p, len)) {
+        /* The OS source failed (its read never blocks, so this happens
+         * before the kernel pool is ready): fall back to entropy from our
+         * userspace access, which is predictable. */
         uint8_t *x = p;
         uint32_t l = len;
         const pid_t pid = getpid();
@@ -184,10 +185,6 @@ void getRandomHexChars(uint8_t *p, uint32_t len) {
     /* Turn it into hex digits taking just 4 bits out of 8 for every byte. */
     for (uint32_t j = 0; j < len; j++) {
         p[j] = charset[p[j] & 0x0F];
-    }
-
-    if (fp) {
-        fclose(fp);
     }
 }
 
