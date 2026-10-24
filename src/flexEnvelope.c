@@ -2701,6 +2701,105 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("envelope: one-shot and stream verify agree on every policy") {
+        /* Each case: an envelope, verify params, the expected verdict;
+         * flexEnvelopeVerify and the verify stream must both give it */
+        uint8_t key[32];
+        uint8_t otherKey[32];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(i * 13 + 5);
+            otherKey[i] = (uint8_t)(i * 13 + 6);
+        }
+        uint8_t payload[100];
+        for (size_t i = 0; i < sizeof(payload); i++) {
+            payload[i] = (uint8_t)(i ^ 0x5c);
+        }
+        enum { ENV_XXH, ENV_HMAC, ENV_BLAKE3K, ENV_COUNT };
+        static const flexEnvelopeAlgo envAlgo[ENV_COUNT] = {
+            FLEX_ENV_ALGO_XXH64, FLEX_ENV_ALGO_HMAC_SHA256,
+            FLEX_ENV_ALGO_BLAKE3_KEYED};
+        static uint8_t env[ENV_COUNT][256];
+        size_t envLen[ENV_COUNT];
+        for (int e = 0; e < ENV_COUNT; e++) {
+            const bool keyed = FLEX_ENV_ALGO_IS_KEYED(envAlgo[e]);
+            const flexEnvelopeWrapParams wp = {.key = keyed ? key : NULL,
+                                               .key_len =
+                                                   keyed ? sizeof(key) : 0,
+                                               .algo = envAlgo[e]};
+            if (!flexEnvelopeWrap(env[e], sizeof(env[e]), payload,
+                                  sizeof(payload), &wp, &envLen[e])) {
+                ERR("envelope %d: wrap failed", e);
+            }
+        }
+        const size_t prepSize = hmacPreparedSize(&hmacAlgoSHA256);
+        cleanerName(zfree, Bytes) uint8_t *prepStorage = zmalloc(prepSize);
+        hmacKey prep;
+        hmacPrepareKey(&prep, &hmacAlgoSHA256, prepStorage, prepSize, key,
+                       sizeof(key));
+
+        const struct {
+            int env;
+            flexEnvelopeVerifyParams vp;
+            size_t len; /* 0: the whole envelope */
+            bool accept;
+        } cases[] = {
+            {ENV_XXH, {0}, 0, true},
+            {ENV_XXH, {.opts = FLEX_ENV_VERIFY_REQUIRE_HMAC}, 0, false},
+            {ENV_HMAC, {0}, 0, false}, /* keyed, no key */
+            {ENV_HMAC, {.key = key, .key_len = sizeof(key)}, 0, true},
+            {ENV_HMAC, {.key = otherKey, .key_len = sizeof(key)}, 0, false},
+            {ENV_HMAC, {.prepared_key = &prep}, 0, true},
+            {ENV_HMAC,
+             {.key = key,
+              .key_len = sizeof(key),
+              .opts = FLEX_ENV_VERIFY_REQUIRE_HMAC},
+             0,
+             true},
+            {ENV_BLAKE3K, {.key = key, .key_len = sizeof(key)}, 0, true},
+            /* a prepared HMAC key cannot key BLAKE3 */
+            {ENV_BLAKE3K, {.prepared_key = &prep}, 0, false},
+            {ENV_XXH,
+             {.opts = FLEX_ENV_VERIFY_BOUND_PAYLOAD, .max_payload_len = 99},
+             0,
+             false},
+            {ENV_XXH,
+             {.opts = FLEX_ENV_VERIFY_BOUND_PAYLOAD, .max_payload_len = 100},
+             0,
+             true},
+            {ENV_XXH, {0}, 2, false}, /* header cut short */
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            const uint8_t *buf = env[cases[c].env];
+            const size_t len =
+                cases[c].len ? cases[c].len : envLen[cases[c].env];
+            const uint8_t *out = NULL;
+            uint64_t outLen = 0;
+            const bool once =
+                flexEnvelopeVerify(buf, len, &cases[c].vp, &out, &outLen);
+
+            flexEnvelopeVerifyStream vs;
+            size_t used = 0;
+            uint64_t plen = 0;
+            flexEnvelopeAlgo seen = FLEX_ENV_ALGO_NONE;
+            bool streamed = flexEnvelopeVerifyStreamInit(
+                &vs, &cases[c].vp, buf, len, &used, &plen, &seen);
+            if (streamed && used < len) {
+                streamed =
+                    flexEnvelopeVerifyStreamUpdate(&vs, buf + used, len - used);
+            }
+            streamed = streamed && flexEnvelopeVerifyStreamFinal(&vs);
+
+            if (once != cases[c].accept || streamed != cases[c].accept) {
+                ERR("case %zu: one-shot %d, stream %d, want %d", c, once,
+                    streamed, cases[c].accept);
+            }
+            if (once && (outLen != sizeof(payload) ||
+                         memcmp(out, payload, sizeof(payload)) != 0)) {
+                ERR("case %zu: accepted payload differs", c);
+            }
+        }
+    }
+
     TEST("envelope: every wrap entry point agrees on the params it refuses") {
         /* One-shot Wrap, Reserve/Finalize and the stream each validate
          * the params themselves; each invalid change must be refused by
