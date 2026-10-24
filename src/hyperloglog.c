@@ -1181,16 +1181,17 @@ static DK_FN_PURE double hllTau(double x) {
 }
 
 /* Return the approximated cardinality of the set based on the harmonic
- * mean of the registers values. 'hdr' points to the start of the string
- * representing the String object holding the HLL representation.
+ * mean of the registers values. 'hdr' points to the sketch (its header
+ * followed by its registers).
  *
- * If the sparse representation of the HLL object is not valid, the integer
- * pointed by 'invalid' is set to non-zero, otherwise it is left untouched.
+ * If the sketch is not valid (a corrupt sparse representation, or an
+ * encoding none of these), '*invalid' (when given) is set and the count is
+ * 0; otherwise it is left untouched.
  *
- * hyperloglogCount() supports a special internal-only encoding of HLL_RAW, that
- * is, hdr->registers will point to an uint8_t array of HLL_REGISTERS element.
- * This is useful in order to speedup PFCOUNT when called against multiple
- * keys (no need to work with 6-bit integers encoding). */
+ * Besides the dense and sparse encodings this reads the internal HLL_RAW
+ * one, whose registers are a uint8_t array of HLL_REGISTERS entries: a
+ * union of several sketches is counted from it without packing 6-bit
+ * registers. */
 DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
     double m = HLL_REGISTERS;
     double E;
@@ -1206,8 +1207,12 @@ DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
     } else if (hdr->encoding == HLL_RAW) {
         hyperloglogRawRegisterHistogram(hdr->registers, reghisto);
     } else {
-        /* Error condition! */
-        return -1; /* this is BAD because return becomes UINT64_MAX */
+        /* No representation this code reads: the sketch is invalid, and
+         * has no cardinality to report */
+        if (invalid) {
+            *invalid = true;
+        }
+        return 0;
     }
 
     /* Estimate cardinality form register histogram. See:
@@ -2043,6 +2048,26 @@ cleanup:
         } else {
             printf("  [OK] tau matches its series\n");
         }
+    }
+
+    printf("Testing a count of a sketch with no known encoding...\n");
+    {
+        /* An encoding byte that names no representation: the count is 0
+         * and the sketch reported invalid, not a count of UINT64_MAX */
+        hyperloglog *unk = hyperloglogNewDense();
+        const uint8_t saved = unk->encoding;
+        unk->encoding = 3; /* the 2-bit field's one unused value */
+        bool invalid = false;
+        const uint64_t count = hyperloglogCount(unk, &invalid);
+        unk->encoding = saved;
+        if (count != 0 || !invalid) {
+            printf("  [FAIL] unknown encoding: count %" PRIu64 ", invalid %d\n",
+                   count, invalid);
+            errors++;
+        } else {
+            printf("  [OK] unknown encoding counts 0, reported invalid\n");
+        }
+        hyperloglogFree(unk);
     }
 
     printf("Testing a dense merge into a sparse sketch...\n");
