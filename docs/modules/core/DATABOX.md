@@ -429,6 +429,11 @@ printf("Length: %zu\n", databoxLen(&str));
 const uint8_t *data = databoxCBytes(&str);
 ```
 
+`databoxGetBytes` / `databoxGetSize` serve every box that carries bytes
+(`BYTES`, embedded, `BYTES_NEVER_FREE`, `PTR_MDSC`, flex aggregates) and the
+value bytes of 64-bit integers and reals; they return `false` for types with
+no byte form (booleans, null, 96/128-bit, void, offset).
+
 ### Accessing Numeric Values
 
 ```c
@@ -483,13 +488,21 @@ databoxFreeData(&copy);
 /* original is still valid; it never owned the bytes */
 ```
 
-`databoxCopy` and `databoxCopyBytesFromBox` both short-circuit on
-`DATABOX_BYTES_EMBED` (nothing to copy, the bytes ride inside the box).
-`databoxCopyBytesFromBox` additionally re-embeds when the source is 8 bytes
-or fewer, so a copy can come out cheaper than its source.
-`databoxAllocateIfNeeded` returns `true` only when it actually allocated.
-None of the three handle `DATABOX_BYTES_OFFSET`: resolve an offset box with
-`databoxOffsetBoxToRealBox()` first.
+All three give a copy independent of the source's storage, by type:
+
+| Source                                  | Copy                                                    |
+| --------------------------------------- | ------------------------------------------------------- |
+| `BYTES`, `BYTES_NEVER_FREE`             | owned `BYTES` on the heap, or `BYTES_EMBED` if ≤ 8 bytes |
+| `BYTES_EMBED`                           | itself (the bytes ride inside the box)                  |
+| flex aggregate (`CONTAINER_FLEX_*`/`CFLEX_*`) | a heap copy under the same type                   |
+| `PTR_MDSC`                              | a new mdsc string                                       |
+| `BYTES_VOID`, `BYTES_OFFSET`            | not copied (no bytes of their own)                      |
+
+Release any copy with `databoxFreeData`. A copy can come out cheaper than
+its source (a short string embeds). `databoxAllocateIfNeeded` returns
+`true` only when the box now owns a new copy, and leaves a box that already
+owns its bytes alone. Resolve an offset box with
+`databoxOffsetBoxToRealBox()` before copying it.
 
 A 96/128-bit value is owned the same way as BYTES. All three copy its
 16-byte payload to a heap block and set `allocated = 1` and `big = 1`, so
@@ -593,16 +606,18 @@ for (size_t i = 0; i < COUNT_ARRAY(cache.bytes); i++) {
 
 Return value of `databoxRetainBytesSelf`:
 
-| Result | Meaning                                                                        |
-| ------ | ------------------------------------------------------------------------------ |
-| `>= 0` | copied into `cache.bytes[slot]`; the box now points at **cache** memory        |
-| `-1`   | either re-embedded (`len <= 8`) or `zmalloc`'d because no slot was populated   |
-| `-2`   | nothing done: not a bytes-class type, or `len` exceeds the largest slot (4 MB) |
+| Result | Meaning                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------- |
+| `>= 0` | copied into `cache.bytes[slot]`; the box now points at **cache** memory                  |
+| `-1`   | retained privately: re-embedded (`len <= 8`), or `zmalloc`'d (no populated slot fits, larger than the largest slot included); an mdsc string or flex aggregate copied under its own type |
+| `-2`   | nothing done: the box references no external bytes (non-byte types, embedded bytes, VOID, OFFSET) or already owns its mdsc string / aggregate |
 
-A non-negative result means the box borrows the cache buffer while still
-having `allocated` set, so do **not** call `databoxFreeData()` on it — that
-would free the cache slot out from under the cache. Reset the box (or
-detach the pointer) before the next reuse of that slot.
+Plain bytes (`BYTES`, `BYTES_NEVER_FREE`) come back as `BYTES`.
+
+A non-negative result means the box borrows the cache buffer: `allocated`
+stays false, so `databoxFreeData()` on it is a no-op and the cache keeps
+ownership. The box's bytes change when that slot is reused, so copy or
+reset the box before then.
 
 `databoxRetainBytesSelfExact` presupposes `DATABOX_BYTES` and that the
 caller has already sized `bytes` to `box->len`; it still prefers embedding
