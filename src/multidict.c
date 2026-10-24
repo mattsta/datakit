@@ -265,27 +265,18 @@ DK_INLINE_ALWAYS bool mdKeyHashBytes_(const databox *key, uint64_t *scratch,
     *buf = (uint8_t *)scratch;
     *len = 0;
 
-    if (!mdBoxIsWide_(key)) {
-        return databoxGetBytes((databox *)key, buf, len);
-    }
-
-    if (!key->data.ptr) {
+    if (mdBoxIsWide_(key) && !key->data.ptr) {
         return false; /* type-only: no value to hash */
     }
 
-    const bool fits64 =
-        key->type == DATABOX_SIGNED_128
-            ? *key->data.i128 >= INT64_MIN && *key->data.i128 <= UINT64_MAX
-            : *key->data.u128 <= UINT64_MAX;
-    if (fits64) {
-        *scratch = (uint64_t)*key->data.u128;
+    /* A number hashes by its value, as the slots match it: 5, 5.0f, 5.0
+     * and a 128-bit 5 are one key (databoxNumericHashKey) */
+    if (databoxNumericHashKey(key, scratch)) {
         *len = sizeof(*scratch);
-    } else {
-        *buf = (uint8_t *)key->data.u128;
-        *len = sizeof(__uint128_t);
+        return true;
     }
 
-    return true;
+    return databoxGetBytes((databox *)key, buf, len);
 }
 
 /* Slot hash of 'keybox' */
@@ -6151,6 +6142,64 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
     return err;
 }
 
+/* Numeric keys are one key by value, whatever box holds them: signed and
+ * unsigned 5, 5.0f, 5.0 and a 128-bit 5; -0.0 and 0; 2^70 as a 128-bit
+ * integer and as a double.  5.5 stays its own key. */
+static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
+    int err = 0;
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 3);
+
+    /* Each group: the first box adds, every other one names the same key */
+    databoxBig wide5;
+    DATABOX_BIG_UNSIGNED_128(&wide5, 5);
+    databoxBig wide70;
+    DATABOX_BIG_UNSIGNED_128(&wide70, (__uint128_t)1 << 70);
+    databox float5 = {{0}};
+    DATABOX_SET_FLOAT(&float5, 5.0f);
+    const databox five[5] = {databoxNewSigned(5), databoxNewUnsigned(5), float5,
+                             DATABOX_DOUBLE(5.0), *(const databox *)&wide5};
+    const databox zero[2] = {databoxNewSigned(0), DATABOX_DOUBLE(-0.0)};
+    const databox big[2] = {*(const databox *)&wide70, DATABOX_DOUBLE(0x1p70)};
+    const struct {
+        const databox *boxes;
+        size_t n;
+        int64_t value;
+    } groups[3] = {{five, 5, 50}, {zero, 2, 0}, {big, 2, 70}};
+
+    for (size_t g = 0; g < 3; g++) {
+        const databox v = databoxNewSigned(groups[g].value);
+        if (multidictAdd(d, &groups[g].boxes[0], &v) != MULTIDICT_OK_INSERTED) {
+            printf("ERROR: numeric group %zu: the first key did not add\n", g);
+            err++;
+        }
+        for (size_t i = 1; i < groups[g].n; i++) {
+            /* Found under its value, and adding it replaces (same value,
+             * so the next box finds it unchanged) */
+            databox got = {{0}};
+            if (!multidictFind(d, &groups[g].boxes[i], &got) ||
+                got.data.i != groups[g].value ||
+                multidictAdd(d, &groups[g].boxes[i], &v) !=
+                    MULTIDICT_OK_REPLACED) {
+                printf("ERROR: numeric group %zu: box %zu is not the same "
+                       "key\n",
+                       g, i);
+                err++;
+            }
+        }
+    }
+
+    const databox fraction = DATABOX_DOUBLE(5.5);
+    const databox fv = databoxNewSigned(55);
+    if (multidictAdd(d, &fraction, &fv) != MULTIDICT_OK_INSERTED ||
+        multidictCount(d) != 4) {
+        printf("ERROR: 5.5 was not its own key (count %" PRIu64 ")\n",
+               (uint64_t)multidictCount(d));
+        err++;
+    }
+    return err;
+}
+
 /* Resize sizing and stats on an empty dict */
 static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     int err = 0;
@@ -6222,6 +6271,7 @@ int multidictTest(int argc, char *argv[]) {
     err += mdTestShrinkingRehashScan_(qdc, 0);
     err += mdTestShrinkingRehashScan_(qdc, 1);
     err += mdTestResizeAndEmptyStats_(qdc);
+    err += mdTestNumericKeyIdentity_(qdc);
 
     printf("Creating multidict with multimap slots...\n");
 
