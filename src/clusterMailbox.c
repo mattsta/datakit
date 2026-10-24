@@ -1707,6 +1707,9 @@ const persistOps persistOpsClusterMailbox = {
 #include <pthread.h>
 #include <sched.h> /* sched_yield — retire/reinstall race test */
 
+defcleaner(clusterMailbox *, clusterMailboxFree);
+defcleaner(hmacKeyring *, hmacKeyringFree);
+
 /* Apply callback that records the most recent frame's contents into
  * caller-owned storage and counts the calls. */
 typedef struct {
@@ -4091,6 +4094,52 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
 
         clusterMailboxFree(mb_tgt);
         hmacKeyringFree(ring);
+    }
+
+    TEST("snapshot a whole window or more away — the far bits drop") {
+        /* Watermarks 90 apart, either way round: re-orienting a window
+         * by 64 or more bits drops it (a shift that wide would be
+         * undefined), the watermark is the higher of the two, and only
+         * what that frame saw stays rejected */
+        cleaner(hmacKeyringFree) hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        for (int snapshotAhead = 0; snapshotAhead <= 1; snapshotAhead++) {
+            /* low: 1..10; high: 40..100 (39 is in its window, unseen) */
+            cmTestCtx ctx_src = {0};
+            cmTestCtx ctx_tgt = {0};
+            cleaner(clusterMailboxFree) clusterMailbox *mb_src =
+                clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256,
+                                       cmRecordApply, &ctx_src,
+                                       CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
+            cleaner(clusterMailboxFree) clusterMailbox *mb_tgt =
+                clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256,
+                                       cmRecordApply, &ctx_tgt,
+                                       CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
+            clusterMailbox *low = snapshotAhead ? mb_tgt : mb_src;
+            clusterMailbox *high = snapshotAhead ? mb_src : mb_tgt;
+            for (uint64_t s = 1u; s <= 10u; s++) {
+                D5_INGEST(low, s);
+            }
+            for (uint64_t s = 40u; s <= 100u; s++) {
+                D5_INGEST(high, s);
+            }
+            const size_t snap_size = clusterMailboxSnapshotSize(mb_src);
+            cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(snap_size);
+            size_t snap_written = 0;
+            if (!clusterMailboxSnapshot(mb_src, snap, snap_size,
+                                        &snap_written) ||
+                !clusterMailboxRestore(mb_tgt, snap, snap_written) ||
+                clusterMailboxLastApplied(mb_tgt, ORIGIN) != 100u) {
+                ERR("snapshot %s by 90: restore or watermark wrong",
+                    snapshotAhead ? "ahead" : "behind");
+            }
+            D5_TRY_INGEST(mb_tgt, 100u, CLUSTER_MAILBOX_ERR_REPLAY);
+            D5_TRY_INGEST(mb_tgt, 70u, CLUSTER_MAILBOX_ERR_REPLAY);
+            D5_TRY_INGEST(mb_tgt, 5u, CLUSTER_MAILBOX_ERR_REPLAY);
+            D5_TRY_INGEST(mb_tgt, 39u, CLUSTER_MAILBOX_OK);
+            D5_TRY_INGEST(mb_tgt, 101u, CLUSTER_MAILBOX_OK);
+        }
     }
 
 #undef D5_INGEST
