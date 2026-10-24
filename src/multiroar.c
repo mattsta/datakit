@@ -2166,32 +2166,62 @@ multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count) {
  * Similarity and Distance Metrics
  * ==================================================================== */
 
+/* |A ∩ B| without building it: each chunk both hold, expanded to a
+ * bitmap, ANDed and counted.  Every metric below derives from this and
+ * the two bit counts (|A ∪ B| = |A| + |B| - |A ∩ B|, and the symmetric
+ * difference is |A| + |B| - 2|A ∩ B|). */
+static uint64_t multiroarIntersectionCount_(const multiroar *a,
+                                            const multiroar *b) {
+    if (!a->map || !b->map) {
+        return 0;
+    }
+
+    /* Walk the roar with fewer chunks, look each up in the other */
+    if (multimapCount(a->map) > multimapCount(b->map)) {
+        const multiroar *t = a;
+        a = b;
+        b = t;
+    }
+
+    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    uint64_t count = 0;
+    multimapIterator iter;
+    multimapIteratorInit(a->map, &iter, true);
+    databox keyValue[2];
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
+        databox valueB;
+        if (!multimapLookupInto(b->map, &keyValue[0], &valueB, 1)) {
+            continue;
+        }
+
+        expandChunkToBitmap(&keyValue[1], bitmapA);
+        expandChunkToBitmap(&valueB, bitmapB);
+        uint64_t *a64 = (uint64_t *)bitmapA;
+        const uint64_t *b64 = (const uint64_t *)bitmapB;
+        for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES / 8; i++) {
+            a64[i] &= b64[i];
+        }
+        count += StrPopCntExact(bitmapA, BITMAP_SIZE_IN_BYTES);
+    }
+
+    return count;
+}
+
 /* Jaccard similarity: |A ∩ B| / |A ∪ B| ∈ [0, 1] */
 double multiroarJaccard(const multiroar *a, const multiroar *b) {
     if (!a || !b) {
         return 0.0;
     }
 
-    /* Handle empty cases */
-    uint64_t countA = multiroarBitCount(a);
-    uint64_t countB = multiroarBitCount(b);
-
+    const uint64_t countA = multiroarBitCount(a);
+    const uint64_t countB = multiroarBitCount(b);
     if (countA == 0 && countB == 0) {
         return 1.0; /* Both empty - perfect similarity */
     }
 
-    /* Calculate intersection and union */
-    cleaner(multiroarFree) multiroar *intersection = multiroarNewAnd(a, b);
-    cleaner(multiroarFree) multiroar *unionSet = multiroarNewOr(a, b);
-
-    uint64_t intersectionCount = multiroarBitCount(intersection);
-    uint64_t unionCount = multiroarBitCount(unionSet);
-
-    if (unionCount == 0) {
-        return 1.0;
-    }
-
-    return (double)intersectionCount / (double)unionCount;
+    const uint64_t intersection = multiroarIntersectionCount_(a, b);
+    return (double)intersection / (double)(countA + countB - intersection);
 }
 
 /* Hamming distance: number of differing bits */
@@ -2200,9 +2230,8 @@ uint64_t multiroarHammingDistance(const multiroar *a, const multiroar *b) {
         return 0;
     }
 
-    /* Hamming distance is count of XOR */
-    cleaner(multiroarFree) multiroar *xorResult = multiroarNewXor(a, b);
-    return multiroarBitCount(xorResult);
+    return multiroarBitCount(a) + multiroarBitCount(b) -
+           2 * multiroarIntersectionCount_(a, b);
 }
 
 /* Overlap coefficient: |A ∩ B| / min(|A|, |B|) ∈ [0, 1] */
@@ -2218,11 +2247,8 @@ double multiroarOverlap(const multiroar *a, const multiroar *b) {
         return 0.0;
     }
 
-    cleaner(multiroarFree) multiroar *intersection = multiroarNewAnd(a, b);
-    uint64_t intersectionCount = multiroarBitCount(intersection);
-
-    uint64_t minCount = countA < countB ? countA : countB;
-    return (double)intersectionCount / (double)minCount;
+    const uint64_t minCount = countA < countB ? countA : countB;
+    return (double)multiroarIntersectionCount_(a, b) / (double)minCount;
 }
 
 /* Dice coefficient: 2|A ∩ B| / (|A| + |B|) ∈ [0, 1] */
@@ -2238,14 +2264,8 @@ double multiroarDice(const multiroar *a, const multiroar *b) {
         return 1.0; /* Both empty - perfect similarity */
     }
 
-    if (countA + countB == 0) {
-        return 0.0;
-    }
-
-    cleaner(multiroarFree) multiroar *intersection = multiroarNewAnd(a, b);
-    uint64_t intersectionCount = multiroarBitCount(intersection);
-
-    return (2.0 * intersectionCount) / (double)(countA + countB);
+    return (2.0 * (double)multiroarIntersectionCount_(a, b)) /
+           (double)(countA + countB);
 }
 
 /* ====================================================================
@@ -7146,6 +7166,40 @@ int multiroarTest(int argc, char *argv[]) {
         denseNs /= iterations;
 
         printf("  Sparse: %.1f ns/op, Dense: %.1f ns/op\n", sparseNs, denseNs);
+    }
+
+    TEST("PERF: similarity metrics") {
+        /* Two overlapping roars over 24 chunks of mixed density; ns per
+         * call for each metric */
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
+        uint64_t rng = 0x51b;
+        for (uint64_t c = 0; c < 24; c++) {
+            const uint64_t fill = c % 3 == 0 ? 7000 : c % 3 == 1 ? 3000 : 200;
+            for (uint64_t k = 0; k < fill; k++) {
+                multiroarBitSet(a, c * 8192 + splitmix64(&rng) % 8192);
+                multiroarBitSet(b, c * 8192 + splitmix64(&rng) % 8192);
+            }
+        }
+        const int rounds = 200;
+        double sink = 0;
+        int64_t t0 = timeUtilMonotonicNs();
+        for (int i = 0; i < rounds; i++) {
+            sink += multiroarJaccard(a, b);
+        }
+        int64_t t1 = timeUtilMonotonicNs();
+        for (int i = 0; i < rounds; i++) {
+            sink += (double)multiroarHammingDistance(a, b);
+        }
+        int64_t t2 = timeUtilMonotonicNs();
+        for (int i = 0; i < rounds; i++) {
+            sink += multiroarDice(a, b) + multiroarOverlap(a, b);
+        }
+        int64_t t3 = timeUtilMonotonicNs();
+        printf("similarity: jaccard %" PRId64 " ns, hamming %" PRId64
+               " ns, dice+overlap %" PRId64 " ns per call (sink %g)\n",
+               (t1 - t0) / rounds, (t2 - t1) / rounds, (t3 - t2) / rounds,
+               sink);
     }
 
     TEST("PERF: N-way operations vs chained binary (N=10)") {
