@@ -1211,6 +1211,82 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
         multiOrderedSetMediumFree(mos);
     }
 
+    TEST("multiOrderedSetMedium — resized in-place scores, misses, edges") {
+        /* Scores i * 2^40 for m0..m9.  m3's 6-byte integer becomes the
+         * double 3.5e12: still between its neighbours, so it is rewritten
+         * in place, but 8 bytes wide.  Ranks, scores and order hold. */
+        multiOrderedSetMedium *mos = multiOrderedSetMediumNew();
+        for (int64_t i = 0; i < 10; i++) {
+            const databox score = databoxNewSigned(i << 40);
+            char buf[8];
+            snprintf(buf, sizeof(buf), "m%" PRId64, i);
+            const databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
+            multiOrderedSetMediumAdd(mos, &score, &member);
+        }
+        const databox m3 = databoxNewBytesAllowEmbed("m3", 2);
+        const databox wider = DATABOX_DOUBLE(3.5e12);
+        databox prev = {{0}};
+        if (!multiOrderedSetMediumAddGetPrevious(mos, &wider, &m3, &prev) ||
+            prev.data.i != (INT64_C(3) << 40)) {
+            ERRR("the rewrite did not report m3's old score");
+        }
+        databox got = {{0}};
+        if (!multiOrderedSetMediumGetScore(mos, &m3, &got) ||
+            got.type != DATABOX_DOUBLE_64 || got.data.d64 != 3.5e12 ||
+            multiOrderedSetMediumGetRank(mos, &m3) != 3) {
+            ERRR("m3 lost its new score or its rank");
+        }
+
+        /* A new member through AddGetPrevious; misses rank -1 */
+        const databox mNew = databoxNewBytesAllowEmbed("mN", 2);
+        const databox mid = databoxNewSigned((INT64_C(5) << 40) + 1);
+        const databox ghost = databoxNewBytesAllowEmbed("ghost", 5);
+        if (multiOrderedSetMediumAddGetPrevious(mos, &mid, &mNew, &prev) ||
+            multiOrderedSetMediumGetRank(mos, &mNew) != 6 ||
+            multiOrderedSetMediumGetRank(mos, &ghost) != -1 ||
+            multiOrderedSetMediumGetReverseRank(mos, &ghost) != -1) {
+            ERRR("a new member was misplaced or a miss was ranked");
+        }
+
+        /* Every row in ascending order */
+        mosIterator iter;
+        databox m;
+        databox s;
+        multiOrderedSetMediumIteratorInit(mos, &iter, true);
+        databox last = databoxNewSigned(INT64_MIN);
+        size_t n = 0;
+        bool ordered = true;
+        while (multiOrderedSetMediumIteratorNext(&iter, &m, &s)) {
+            ordered = ordered && databoxCompare(&last, &s) < 0;
+            last = s;
+            n++;
+        }
+        if (!ordered || n != 11) {
+            ERR("iterated %zu rows, ordered %d", n, ordered);
+        }
+
+        /* Iterators past the end, or at a rank out of range, start
+         * nowhere and step nothing */
+        const databox above = databoxNewSigned(INT64_C(20) << 40);
+        if (multiOrderedSetMediumIteratorInitAtScore(mos, &iter, &above,
+                                                     true) ||
+            multiOrderedSetMediumIteratorNext(&iter, &m, &s) ||
+            multiOrderedSetMediumIteratorInitAtRank(mos, &iter, 11, true) ||
+            multiOrderedSetMediumIteratorNext(&iter, &m, &s)) {
+            ERRR("an iterator started past the end");
+        }
+        multiOrderedSetMediumFree(mos);
+
+        multiOrderedSetMedium *empty = multiOrderedSetMediumNew();
+        databox members[2];
+        databox scores[2];
+        if (multiOrderedSetMediumRandomMembers(empty, 2, members, scores) !=
+            0) {
+            ERRR("an empty set gave random members");
+        }
+        multiOrderedSetMediumFree(empty);
+    }
+
     TEST("multiOrderedSetMedium — add and lookup") {
         multiOrderedSetMedium *mos = multiOrderedSetMediumNew();
 
