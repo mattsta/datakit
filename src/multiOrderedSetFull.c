@@ -1971,11 +1971,20 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             databox m;
             databox s;
             const bool stepped = multiOrderedSetFullIteratorNext(&iter, &m, &s);
+            const databox m007 = databoxNewBytesString("m007");
+            databox members[2];
+            databox scores[2];
             if (multiOrderedSetFullCount(mos) != 0 ||
                 multiOrderedSetFullCountByScore(mos, &all) != 0 ||
                 multiOrderedSetFullIteratorInitAtScore(mos, &iter, &zero,
                                                        true) ||
-                iter.valid || forwardValid || reverseValid || stepped) {
+                iter.valid || forwardValid || reverseValid || stepped ||
+                multiOrderedSetFullFirst(mos, &m, &s) ||
+                multiOrderedSetFullLast(mos, &m, &s) ||
+                multiOrderedSetFullGetRank(mos, &m007) != -1 ||
+                multiOrderedSetFullGetReverseRank(mos, &m007) != -1 ||
+                multiOrderedSetFullRandomMembers(mos, 2, members, scores) !=
+                    0) {
                 ERR("%s set: found a row", emptied ? "an emptied" : "a new");
             }
             multiOrderedSetFullFree(mos);
