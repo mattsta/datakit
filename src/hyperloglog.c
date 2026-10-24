@@ -2021,6 +2021,30 @@ cleanup:
 
     /* pfadd contract: every vararg element is added, duplicates are
      * no-ops rather than failures, and a NULL *hh is populated. */
+    printf("Testing the estimator's tau against its series...\n");
+    {
+        /* tau(x) = (1 - x - sum_k (1 - x^(2^-k))^2 2^-k) / 3, summed here
+         * with pow over 60 terms (past double precision): the estimator's
+         * iterative form agrees to 1e-12, and is 0 at both ends */
+        static const double xs[] = {1e-6, 0.001, 0.25, 0.5, 0.75, 0.999};
+        bool agree = hllTau(0.0) == 0.0 && hllTau(1.0) == 0.0;
+        for (size_t i = 0; i < sizeof(xs) / sizeof(*xs); i++) {
+            double sum = 0.0;
+            for (int k = 1; k <= 60; k++) {
+                const double root = pow(xs[i], ldexp(1.0, -k));
+                sum += (1.0 - root) * (1.0 - root) * ldexp(1.0, -k);
+            }
+            const double want = (1.0 - xs[i] - sum) / 3.0;
+            agree = agree && fabs(hllTau(xs[i]) - want) < 1e-12;
+        }
+        if (!agree) {
+            printf("  [FAIL] tau differs from its series\n");
+            errors++;
+        } else {
+            printf("  [OK] tau matches its series\n");
+        }
+    }
+
     printf("Testing pfadd batches...\n");
     {
         hyperloglog *ph = NULL;
