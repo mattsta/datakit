@@ -144,8 +144,6 @@ struct multidict {
 /* ====================================================================
  * Repetitive Helpers
  * ==================================================================== */
-#define MULTIDICT_MEDIAN_TARGET_CONTAINER_BYTES 8192
-
 #define HT(d, htidx) (&(d)->ht[(htidx)])
 #define HTSIZE(d, htidx) (HT((d), (htidx))->size) /* number of slots */
 /* MASK is SIZE-1, and SIZE is power of 2, so MASK is all 1s */
@@ -966,21 +964,24 @@ bool multidictResize(multidict *d) {
         return false;
     }
 
-    int32_t minimal = 0;
-    if (HTSIZE(d, 0) > 0) {
-        float avgZiplistSz = HTBYTES(d, 0) / HTSIZE(d, 0);
-        /* We want: new size so after we rehash, ideally each slot is
-         * at 50% of MULTIDICT_MEDIAN_TARGET_CONTAINER_BYTES */
-        /* For that, we also have to track how many "megaentries" we have
-         * and their average size, so we can subtract that from the
-         * overall expectation calculation of how big we can expect
-         * our resulting ziplists to become. */
-        /* Given SIZE ziplists use avgZiplistSz bytes each, we want
-         * to make size so avg = MULTIDICT_MEDIAN_TARGET_CONTAINER_BYTES/2 */
-        minimal = avgZiplistSz / (MULTIDICT_MEDIAN_TARGET_CONTAINER_BYTES / 2);
+    /* Fit the table to its contents the way the automatic shrink does:
+     * one slot per entry (rounded up to a power of two by the expand),
+     * never below the shrink minimum; in byte-based mode also no fewer
+     * slots than the bytes need at the target average.  (This sized from
+     * the average slot instead of the total bytes, so it nearly always
+     * asked for 0 slots and collapsed the table to its minimum.) */
+    uint64_t want = HTCOUNT(d, 0) > 0 ? HTCOUNT(d, 0) : 1;
+    if (d->useByteBasedExpand && d->targetSlotBytes > 0) {
+        const uint64_t forBytes = HTBYTES(d, 0) / d->targetSlotBytes + 1;
+        if (forBytes > want) {
+            want = forBytes;
+        }
+    }
+    if (want < MULTIDICT_MIN_SLOTS_FOR_SHRINK) {
+        want = MULTIDICT_MIN_SLOTS_FOR_SHRINK;
     }
 
-    return multidictExpand(d, minimal);
+    return multidictExpand(d, want);
 }
 
 /* Expand or create the hash table */
@@ -6651,20 +6652,36 @@ int multidictTest(int argc, char *argv[]) {
 
     printf("Test 4.6: multidictResize (shrink)...\n");
     {
-        /* Delete many entries to create sparse table */
+        /* Delete many entries to create a sparse table, with automatic
+         * resizing off so the explicit resize is what shrinks it */
+        while (multidictIsRehashing(d)) {
+            multidictRehash(d, 100);
+        }
+        multidictResizeDisable(d);
         for (int i = 0; i < 900; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "rh%d", i);
             databox key = databoxNewBytesString(keyBuf);
             multidictDelete(d, &key);
         }
+        const uint64_t sparseSlots = multidictSlots(d);
+        multidictResizeEnable(d);
 
         bool resized = multidictResize(d);
-        printf("  Resize returned: %s\n", resized ? "true" : "false");
+        printf("  Resize returned: %s (%" PRIu64 " slots before)\n",
+               resized ? "true" : "false", sparseSlots);
 
         /* Complete any triggered rehash */
         while (multidictIsRehashing(d)) {
             multidictRehash(d, 100);
+        }
+        /* 100 entries fit in 128 slots: not the sparse table, and not
+         * collapsed to the minimum */
+        if (multidictSlots(d) != 128 || (sparseSlots > 128 && !resized)) {
+            printf("  ERROR: resize left %" PRIu64 " slots for %" PRIu64
+                   " entries, want 128\n",
+                   multidictSlots(d), multidictCount(d));
+            err++;
         }
 
         /* Verify remaining entries */
