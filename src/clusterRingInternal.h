@@ -261,7 +261,6 @@ void clusterRingSortVnodes(clusterRing *ring);
 
 /* Hash functions */
 uint64_t clusterHash64(const void *key, uint32_t len, uint32_t seed);
-uint32_t clusterHash32(const void *key, uint32_t len, uint32_t seed);
 
 /* Affinity checking */
 bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,

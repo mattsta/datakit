@@ -321,10 +321,6 @@ uint64_t clusterHash64(const void *key, uint32_t len, uint32_t seed) {
     return XXH64(key, len, seed);
 }
 
-uint32_t clusterHash32(const void *key, uint32_t len, uint32_t seed) {
-    return XXH32(key, len, seed);
-}
-
 /* Hash with node ID for virtual node point generation */
 static uint64_t clusterHashVnodePoint(uint64_t nodeId, uint32_t vnodeIdx,
                                       uint32_t seed) {
@@ -6323,6 +6319,24 @@ static int testFuzzLargeScale(void) {
                     "replicas of 5 nodes",
                     (int)strategies[s], shortSets);
             }
+        }
+    }
+
+    TEST("bulk placement with no ring refuses and leaves each placement "
+         "empty") {
+        const databox keys[3] = {databoxNewSigned(1), databoxNewSigned(2),
+                                 databoxNewSigned(3)};
+        clusterPlacement placements[3];
+        memset(placements, 0xA5, sizeof(placements));
+        if (clusterRingLocateBulk(NULL, keys, 3, placements) != CLUSTER_ERR) {
+            ERRR("bulk placement without a ring was not refused");
+        }
+        for (size_t i = 0; i < 3; i++) {
+            if (placements[i].primary ||
+                clusterPlacementReplicaCount(&placements[i]) != 0) {
+                ERR("placement %zu was left holding something", i);
+            }
+            clusterPlacementFree(&placements[i]);
         }
     }
 
