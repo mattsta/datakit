@@ -2492,6 +2492,30 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
     OEXPECT(g_dkOwnedArena.initialized, "a declared arena comes up");
     OEXPECT(ownedArenaDepth(&g_dkOwnedArena) == 0, "a fresh arena is idle");
 
+    /* No arena to park in (NULL, or never initialized): FREE releases
+     * the cargo at once and LEAK leaves it to the caller; nothing is
+     * counted as retired or deferred */
+    {
+        ownedArena never = {0};
+        dkOwnedCargo freed = {.id = 91, .released = false};
+        dkOwnedCargo freedNull = {.id = 92, .released = false};
+        dkOwnedCargo kept = {.id = 93, .released = false};
+        const uint64_t releasesBefore = g_dkOwnedReleases;
+        ownedArenaRetire(&never, &freed, dkOwnedRelease_, dkOwnedDescribe_,
+                         OWNED_OOM_FREE);
+        ownedArenaRetire(NULL, &freedNull, dkOwnedRelease_, dkOwnedDescribe_,
+                         OWNED_OOM_FREE);
+        ownedArenaRetire(&never, &kept, dkOwnedRelease_, dkOwnedDescribe_,
+                         OWNED_OOM_LEAK);
+        ownedArenaRetire(&never, NULL, dkOwnedRelease_, dkOwnedDescribe_,
+                         OWNED_OOM_FREE);
+        OEXPECT(freed.released && freedNull.released && !kept.released &&
+                    g_dkOwnedReleases == releasesBefore + 2 &&
+                    ownedArenaRetiredTotal() == baseRetired &&
+                    ownedArenaDeferredTotal() == baseDeferred,
+                "no arena: FREE releases at once, LEAK keeps the cargo");
+    }
+
     /* --- 1a: the grace has not elapsed. --- */
     dkOwnedCargo rowA = {.id = 11, .released = false};
     ownedArenaRetire(&g_dkOwnedArena, &rowA, dkOwnedRelease_, dkOwnedDescribe_,
