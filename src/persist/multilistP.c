@@ -1544,6 +1544,67 @@ int multilistPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("multilistP after a damaged WAL entry: refused until compacted") {
+        /* Tail pushes of 1, 2, 3 with the last entry damaged: lenient
+         * recovery keeps [1, 2]; a push, both pops, a replace, a range
+         * delete and a reset are then refused and change nothing; after a
+         * compaction a push of 4 is logged, and a reopen holds [1, 2, 4] */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
+        for (int64_t v = 1; v <= 3; v++) {
+            const databox box = databoxNewSigned(v);
+            multilistPushTailP(ml, &box);
+        }
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+        if (!ptestDamageLastWalEntry(basePath)) {
+            ERRR("could not damage the WAL");
+        }
+
+        const databox four = databoxNewSigned(4);
+        ctx = persistCtxOpen(basePath, NULL);
+        ml = multilistOpenP(ctx);
+        if (!ml || multilistCountP(ml) != 2) {
+            ERR("lenient recovery kept %zu values, want 1, 2",
+                ml ? multilistCountP(ml) : (size_t)0);
+        }
+        databox got = {{0}};
+        if (ml &&
+            (multilistPushTailP(ml, &four) != PERSIST_LOG_REFUSED ||
+             multilistPopHeadP(ml, &got) != PERSIST_LOG_REFUSED ||
+             multilistPopTailP(ml, &got) != PERSIST_LOG_REFUSED ||
+             multilistReplaceAtIndexP(ml, 0, &four) != PERSIST_LOG_REFUSED ||
+             multilistDelRangeP(ml, 0, 1) != PERSIST_LOG_REFUSED ||
+             multilistResetP(ml) != PERSIST_LOG_REFUSED ||
+             multilistCountP(ml) != 2)) {
+            ERRR("a change after the damaged entry was applied or logged");
+        }
+        if (ml && (!multilistCompactP(ml) ||
+                   multilistPushTailP(ml, &four) == PERSIST_LOG_REFUSED)) {
+            ERRR("compaction did not resume logging");
+        }
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        ml = multilistOpenP(ctx);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        const int64_t want[3] = {1, 2, 4};
+        bool same = ml && multilistCountP(ml) == 3;
+        for (int i = 0; same && i < 3; i++) {
+            multilistEntry at = {0};
+            same = multilistIndexGetP(ml, state, i, &at) &&
+                   at.box.data.i == want[i];
+        }
+        if (!same) {
+            ERRR("reopen does not hold 1, 2, 4");
+        }
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

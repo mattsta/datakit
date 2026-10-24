@@ -1149,6 +1149,70 @@ int multimapPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("multimapP after a damaged WAL entry: refused until compacted") {
+        /* Rows 1, 2, 3 inserted with the last entry damaged: lenient
+         * recovery keeps {1, 2}; an insert, both deletes, a field
+         * increment and a reset are then refused and change nothing; after
+         * a compaction an insert of 4 is logged, and a reopen holds
+         * {1, 2, 4} */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multimapP *m = multimapNewP(ctx, 2);
+        for (int64_t k = 1; k <= 3; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(k * 100);
+            const databox *row[2] = {&key, &val};
+            multimapInsertP(m, row, NULL);
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+        if (!ptestDamageLastWalEntry(basePath)) {
+            ERRR("could not damage the WAL");
+        }
+
+        const databox k1 = databoxNewSigned(1);
+        const databox k3 = databoxNewSigned(3);
+        const databox k4 = databoxNewSigned(4);
+        const databox v1 = databoxNewSigned(100);
+        const databox v9 = databoxNewSigned(900);
+        const databox *row4[2] = {&k4, &v9};
+        const databox *row1[2] = {&k1, &v1};
+        databox got = {{0}};
+        databox *out[1] = {&got};
+        ctx = persistCtxOpen(basePath, NULL);
+        m = multimapOpenP(ctx);
+        if (!m || multimapCountP(m) != 2 || multimapExistsP(m, &k3)) {
+            ERR("lenient recovery kept %zu rows, want 1, 2",
+                m ? multimapCountP(m) : (size_t)0);
+        }
+        if (m &&
+            (multimapInsertP(m, row4, NULL) != PERSIST_LOG_REFUSED ||
+             multimapDeleteP(m, &k1) != PERSIST_LOG_REFUSED ||
+             multimapDeleteFullWidthP(m, row1) != PERSIST_LOG_REFUSED ||
+             multimapFieldIncrP(m, &k1, 1, 5, NULL) != PERSIST_LOG_REFUSED ||
+             multimapResetP(m) != PERSIST_LOG_REFUSED ||
+             multimapCountP(m) != 2 || multimapExistsP(m, &k4) ||
+             !multimapLookupP(m, &k1, out) || got.data.i != 100)) {
+            ERRR("a change after the damaged entry was applied or logged");
+        }
+        if (m && (!multimapCompactP(m) ||
+                  multimapInsertP(m, row4, NULL) == PERSIST_LOG_REFUSED)) {
+            ERRR("compaction did not resume logging");
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        m = multimapOpenP(ctx);
+        if (!m || multimapCountP(m) != 3 || !multimapExistsP(m, &k1) ||
+            !multimapLookupP(m, &k4, out) || got.data.i != 900) {
+            ERRR("reopen does not hold 1, 2, 4");
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

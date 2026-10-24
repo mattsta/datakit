@@ -963,6 +963,55 @@ int intsetPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("intsetP after a damaged WAL entry: refused until compacted") {
+        /* Adds of 10, 20, 30 with the last entry damaged: lenient recovery
+         * keeps {10, 20}; an add and a remove are then refused and change
+         * nothing; after a compaction an add of 40 is logged, and a
+         * reopen holds {10, 20, 40} */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        intsetP *is = intsetNewP(ctx);
+        for (int64_t v = 10; v <= 30; v += 10) {
+            intsetAddP(is, v, NULL);
+        }
+        intsetCloseP(is);
+        persistCtxFree(ctx);
+        if (!ptestDamageLastWalEntry(basePath)) {
+            ERRR("could not damage the WAL");
+        }
+
+        ctx = persistCtxOpen(basePath, NULL);
+        is = intsetOpenP(ctx);
+        if (!is || intsetCountP(is) != 2 || intsetFindP(is, 30)) {
+            ERR("lenient recovery kept %" PRIu64 " values, want 10, 20",
+                is ? intsetCountP(is) : 0);
+        }
+        bool changed = true;
+        if (is &&
+            (intsetAddP(is, 40, &changed) != PERSIST_LOG_REFUSED || changed ||
+             intsetRemoveP(is, 10, &changed) != PERSIST_LOG_REFUSED ||
+             changed || intsetCountP(is) != 2 || !intsetFindP(is, 10) ||
+             intsetFindP(is, 40))) {
+            ERRR("a change after the damaged entry was applied or logged");
+        }
+        if (is && (!intsetCompactP(is) ||
+                   intsetAddP(is, 40, NULL) == PERSIST_LOG_REFUSED)) {
+            ERRR("compaction did not resume logging");
+        }
+        intsetCloseP(is);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        is = intsetOpenP(ctx);
+        if (!is || intsetCountP(is) != 3 || !intsetFindP(is, 10) ||
+            !intsetFindP(is, 20) || !intsetFindP(is, 40)) {
+            ERRR("reopen does not hold 10, 20, 40");
+        }
+        intsetCloseP(is);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

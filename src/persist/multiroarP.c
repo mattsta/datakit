@@ -926,9 +926,77 @@ static int test_multiroarP_lifecycleRefusals(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multiroarP_damagedWal(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_damagedWal", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiroarP after a damaged WAL entry: refused until compacted")
+
+    /* Bits 3, 5, 7 set with the last entry damaged: lenient recovery
+     * keeps {3, 5}; a set, a clear and both range forms are then refused
+     * and change nothing; after a compaction a set of 9 is logged, and a
+     * reopen holds {3, 5, 9} */
+    ptestCleanupFiles(basePath);
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multiroarP *r = multiroarNewP(ctx);
+    for (uint64_t bit = 3; bit <= 7; bit += 2) {
+        multiroarBitSetP(r, bit, NULL);
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    if (!ptestDamageLastWalEntry(basePath)) {
+        ERRR("could not damage the WAL");
+    }
+
+    ctx = persistCtxOpen(basePath, NULL);
+    r = multiroarOpenP(ctx);
+    if (!r || multiroarBitCountP(r) != 2 || multiroarBitGetP(r, 7)) {
+        ERR("lenient recovery kept %zu bits, want 3, 5",
+            r ? multiroarBitCountP(r) : (size_t)0);
+    }
+    bool changed = true;
+    if (r &&
+        (multiroarBitSetP(r, 9, &changed) != PERSIST_LOG_REFUSED || changed ||
+         multiroarRemoveP(r, 3, &changed) != PERSIST_LOG_REFUSED || changed ||
+         multiroarBitSetRangeP(r, 20, 4) != PERSIST_LOG_REFUSED ||
+         multiroarBitClearRangeP(r, 0, 8) != PERSIST_LOG_REFUSED ||
+         multiroarBitCountP(r) != 2 || !multiroarBitGetP(r, 3) ||
+         !multiroarBitGetP(r, 5))) {
+        ERRR("a change after the damaged entry was applied or logged");
+    }
+    if (r && (!multiroarCompactP(r) ||
+              multiroarBitSetP(r, 9, NULL) == PERSIST_LOG_REFUSED)) {
+        ERRR("compaction did not resume logging");
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+
+    ctx = persistCtxOpen(basePath, NULL);
+    r = multiroarOpenP(ctx);
+    if (!r || multiroarBitCountP(r) != 3 || !multiroarBitGetP(r, 3) ||
+        !multiroarBitGetP(r, 5) || !multiroarBitGetP(r, 9)) {
+        ERRR("reopen does not hold 3, 5, 9");
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multiroarPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiroarP_damagedWal(argc, argv);
     err += test_multiroarP_lifecycleRefusals(argc, argv);
     err += test_multiroarP_values(argc, argv);
     err += test_multiroarP_ranges(argc, argv);

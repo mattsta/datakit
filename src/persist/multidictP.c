@@ -1193,6 +1193,62 @@ int multidictPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("multidictP after a damaged WAL entry: refused until compacted") {
+        /* Keys 1, 2, 3 added with the last entry damaged: lenient
+         * recovery keeps {1, 2}; an add, a replace, a delete and an empty
+         * are then refused and change nothing; after a compaction an add
+         * of 4 is logged, and a reopen holds {1, 2, 4} */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multidictP *d = multidictNewP(ctx);
+        for (int64_t k = 1; k <= 3; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(k * 100);
+            multidictAddP(d, &key, &val, NULL);
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+        if (!ptestDamageLastWalEntry(basePath)) {
+            ERRR("could not damage the WAL");
+        }
+
+        const databox k1 = databoxNewSigned(1);
+        const databox k3 = databoxNewSigned(3);
+        const databox k4 = databoxNewSigned(4);
+        const databox v9 = databoxNewSigned(900);
+        ctx = persistCtxOpen(basePath, NULL);
+        d = multidictOpenP(ctx);
+        if (!d || multidictCountP(d) != 2 || multidictExistsP(d, &k3)) {
+            ERR("lenient recovery kept %" PRIu64 " keys, want 1, 2",
+                d ? multidictCountP(d) : 0);
+        }
+        databox got = {{0}};
+        if (d && (multidictAddP(d, &k4, &v9, NULL) != PERSIST_LOG_REFUSED ||
+                  multidictReplaceP(d, &k1, &v9) != PERSIST_LOG_REFUSED ||
+                  multidictDeleteP(d, &k1) != PERSIST_LOG_REFUSED ||
+                  multidictEmptyP(d) != PERSIST_LOG_REFUSED ||
+                  multidictCountP(d) != 2 || multidictExistsP(d, &k4) ||
+                  !multidictFindP(d, &k1, &got) || got.data.i != 100)) {
+            ERRR("a change after the damaged entry was applied or logged");
+        }
+        if (d && (!multidictCompactP(d) ||
+                  multidictAddP(d, &k4, &v9, NULL) == PERSIST_LOG_REFUSED)) {
+            ERRR("compaction did not resume logging");
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        d = multidictOpenP(ctx);
+        if (!d || multidictCountP(d) != 3 || !multidictExistsP(d, &k1) ||
+            !multidictFindP(d, &k4, &got) || got.data.i != 900) {
+            ERRR("reopen does not hold 1, 2, 4");
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */
