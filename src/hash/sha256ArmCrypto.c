@@ -1015,6 +1015,49 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
         }
     }
 
+#if SHA256_ARM_CRYPTO_BUILD
+    TEST("unwired multi-buffer schedule variant matches the wired one") {
+        /* compressBlocksMulti4V2 is kept as a measured alternative to the
+         * wired compressBlocksMulti4: from random states over random
+         * blocks (1..6 per lane), both leave the states the portable
+         * compressor leaves per lane, word for word */
+        uint64_t rng = 0x5ca1ab1e;
+        uint8_t blocks[4][6 * SHA256_BLOCK_LEN];
+        uint32_t wrong = 0;
+        for (uint32_t t = 0; t < 300; t++) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            const size_t nb = 1 + (size_t)((rng >> 33) % 6);
+            uint32_t v1[4][8];
+            uint32_t v2[4][8];
+            uint32_t ref[4][8];
+            for (uint32_t lane = 0; lane < 4; lane++) {
+                for (size_t i = 0; i < nb * SHA256_BLOCK_LEN; i++) {
+                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    blocks[lane][i] = (uint8_t)(rng >> 56);
+                }
+                for (uint32_t w = 0; w < 8; w++) {
+                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    v1[lane][w] = (uint32_t)(rng >> 32);
+                }
+            }
+            memcpy(v2, v1, sizeof(v1));
+            memcpy(ref, v1, sizeof(v1));
+            const uint8_t *const bptrs[4] = {blocks[0], blocks[1], blocks[2],
+                                             blocks[3]};
+            compressBlocksMulti4(v1, bptrs, nb);
+            compressBlocksMulti4V2(v2, bptrs, nb);
+            for (uint32_t lane = 0; lane < 4; lane++) {
+                sha256PortableCompressBlocks(ref[lane], blocks[lane], nb);
+            }
+            wrong += memcmp(v1, ref, sizeof(ref)) != 0;
+            wrong += memcmp(v2, ref, sizeof(ref)) != 0;
+        }
+        if (wrong) {
+            ERR("%u multi-buffer results differ from portable", wrong);
+        }
+    }
+#endif
+
     TEST("sha256 arm crypto multi-buffer performance bench") {
         const size_t bufSize = 64u * 1024u; /* 64 KiB per lane */
         const uint32_t iters = 4096;
