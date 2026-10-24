@@ -405,6 +405,8 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
     return p;
 }
 
+static bool persistWALFlush(persist *p);
+
 bool persistAttachSnapshot(persist *p, persistStore *store) {
     if (!p || !store) {
         return false;
@@ -415,6 +417,12 @@ bool persistAttachSnapshot(persist *p, persistStore *store) {
 
 bool persistAttachWAL(persist *p, persistStore *store) {
     if (!p || !store) {
+        return false;
+    }
+    /* Entries still buffered were logged to the current store: write them
+     * there first (refused, keeping the current store, if that fails) */
+    if (p->walStore && store != p->walStore && p->walBufferUsed > 0 &&
+        !persistWALFlush(p)) {
         return false;
     }
     /* A new store is readied (walked, or given a header) on first use:
@@ -623,8 +631,6 @@ static bool persistCheckFileFormat(persist *p, const dkFormatSpec *container,
 
     return true;
 }
-
-static bool persistWALFlush(persist *p);
 
 bool persistSetConfig(persist *p, const persistConfig *config) {
     if (!p || !config) {
@@ -9208,9 +9214,11 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("a newly attached WAL store starts with its own header") {
-        /* Logging to one WAL store, then attaching an empty one: the
-         * next entries go to the new store from its start, under a header
-         * of its own, and a persist reading only that store replays them */
+        /* Three entries logged (and still buffered) to one WAL store, then
+         * an empty one attached: the three stay with the store they were
+         * logged to, and the next entry goes to the new store from its
+         * start, under a header of its own; each store verifies and holds
+         * exactly its own entries */
         persist *p = persistCreate(&persistOpsIntset, NULL);
         persistAttachSnapshot(p, persistStoreMemory(0));
         persistAttachWAL(p, persistStoreMemory(0));
@@ -9226,11 +9234,22 @@ int persistTest(int argc, char *argv[]) {
         const bool logged =
             persistLogOp(p, PERSIST_OP_INSERT, &v, 1) != PERSIST_LOG_REFUSED;
         persistSync(p);
-        if (!logged || !persistVerifyWAL(p)) {
-            ERRR("an entry on a newly attached WAL store does not verify");
+        persistTestWalCount onSecond = {.stopAfter = SIZE_MAX, .ordered = true};
+        const bool secondOk =
+            persistVerifyWAL(p) &&
+            persistIterateWAL(p, persistTestCountEntries, &onSecond);
+        persistAttachWAL(p, first);
+        persistTestWalCount onFirst = {.stopAfter = SIZE_MAX, .ordered = true};
+        const bool firstOk =
+            persistVerifyWAL(p) &&
+            persistIterateWAL(p, persistTestCountEntries, &onFirst);
+        if (!logged || !secondOk || !firstOk || onSecond.seen != 1 ||
+            onFirst.seen != 3) {
+            ERR("new store holds %zu entries (want 1), old %zu (want 3)",
+                onSecond.seen, onFirst.seen);
         }
-        first->close(first->ctx);
-        zfree(first);
+        second->close(second->ctx);
+        zfree(second);
         persistClose(p);
     }
 
