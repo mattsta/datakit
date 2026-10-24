@@ -12,21 +12,36 @@ void multiroarFree(multiroar *r);
 
 multiroar *multiroarDuplicate(const multiroar *r);
 
-/* Modify 'r' in place */
+/* Modes.  A roar is bit-mode (multiroarBitNew: a set of positions) or
+ * value-mode (multiroarValueNew: position -> unsigned value of a fixed
+ * width).  Every operation belongs to one mode and refuses a roar of the
+ * other, safely and with one test: bit calls on a value roar answer
+ * false / 0 / NULL or change nothing, value calls on a bit roar answer
+ * MULTIROAR_VALUE_REFUSED / false.  Mode-free calls (New/Free, Duplicate,
+ * Clear, IsEmpty, Equals, MemoryUsage, Serialize*) take either. */
+
+/* Bit mode; 'r' modified in place */
 bool multiroarBitSet(multiroar *r, uint64_t position);
 bool multiroarBitGet(const multiroar *r, uint64_t position);
 void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent);
 bool multiroarRemove(multiroar *r, uint64_t position);
 
-/* Value operations — ONLY for value-mode multiroars (multiroarValueNew).
- * Bit ops and value ops share one keyspace and must never be mixed on
- * the same multiroar (asserted).  Values are unsigned integers that
- * must fit the declared bitWidth (signed inputs must be >= 0; booleans
- * store as 0/1) and round-trip as unsigned databoxes.  Set returns
- * whether the position was previously occupied. */
-bool multiroarValueSet(multiroar *r, uint64_t position, databox *value);
-bool multiroarValueSetGetPrevious(multiroar *r, uint64_t position,
-                                  databox *value, databox *overwritten);
+/* Value mode.  Values are unsigned integers that fit the declared bitWidth
+ * (a signed value must be >= 0; booleans store as 0/1) and round-trip as
+ * unsigned databoxes.  A set is refused, changing nothing, on a bit roar,
+ * outside the declared rows * cols, or for a value that cannot be stored;
+ * Get and Remove answer false in the same cases. */
+typedef enum multiroarValueSetResult {
+    MULTIROAR_VALUE_REFUSED = 0, /* nothing stored */
+    MULTIROAR_VALUE_ADDED,       /* the position held no value */
+    MULTIROAR_VALUE_REPLACED,    /* the position's value was replaced */
+} multiroarValueSetResult;
+multiroarValueSetResult multiroarValueSet(multiroar *r, uint64_t position,
+                                          databox *value);
+multiroarValueSetResult multiroarValueSetGetPrevious(multiroar *r,
+                                                     uint64_t position,
+                                                     databox *value,
+                                                     databox *overwritten);
 bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value);
 bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
                                     databox *removed);

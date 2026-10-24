@@ -334,12 +334,19 @@ dimensions.
 a sparse map of `position -> unsigned value`, where every value must fit the
 declared `bitWidth` (1-64; out-of-range widths return NULL). `rows`/`cols`
 declare the addressable space — when both are nonzero, positions must be
-`< rows * cols` (asserted); either being 0 means unbounded.
+`< rows * cols`; either being 0 means unbounded.
 
 ```c
-bool multiroarValueSet(multiroar *r, uint64_t position, databox *value);
-bool multiroarValueSetGetPrevious(multiroar *r, uint64_t position,
-                                  databox *value, databox *overwritten);
+typedef enum multiroarValueSetResult {
+    MULTIROAR_VALUE_REFUSED = 0, /* nothing stored */
+    MULTIROAR_VALUE_ADDED,       /* the position held no value */
+    MULTIROAR_VALUE_REPLACED,    /* the position's value was replaced */
+} multiroarValueSetResult;
+
+multiroarValueSetResult multiroarValueSet(multiroar *r, uint64_t position,
+                                          databox *value);
+multiroarValueSetResult multiroarValueSetGetPrevious(
+    multiroar *r, uint64_t position, databox *value, databox *overwritten);
 bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value);
 bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
                                     databox *removed);
@@ -349,11 +356,27 @@ Contracts:
 
 - Values are unsigned integers (signed inputs must be `>= 0`; booleans store
   as 0/1) and round-trip as unsigned databoxes.
-- `Set`/`SetGetPrevious` return whether the position was previously occupied;
-  `Get`/`RemoveGetRemoved` return whether the position held a value.
-- Bit ops and value ops share one keyspace and must **never** be mixed on the
-  same multiroar (asserted via the mode byte). A bit-mode multiroar comes from
-  `multiroarBitNew()`; a value-mode one from `multiroarValueNew()`.
+- `Set`/`SetGetPrevious` report ADDED or REPLACED, or REFUSED (nothing
+  changes) on a bit-mode roar, outside the declared `rows * cols`, or for a
+  value that cannot be stored (not an integer or boolean, negative, wider than
+  `bitWidth`, NULL).  `Get`/`RemoveGetRemoved` return whether the position
+  held a value, and false in those cases.
+
+## Modes
+
+A bit-mode multiroar comes from `multiroarBitNew()`; a value-mode one from
+`multiroarValueNew()`.  Their rows share one keyspace, so every operation
+belongs to one mode and refuses a roar of the other with a single check:
+
+- Bit calls on a value roar answer `false`, 0 or NULL, or change nothing:
+  set/get/remove, ranges, counts, min/max, rank/select, iteration, batch
+  set/get, `ToArray`, comparisons, every set operation (in place, `New*`,
+  N-way) and the similarity metrics.
+- Value calls on a bit roar are refused (`MULTIROAR_VALUE_REFUSED` / false).
+- Mode-free calls take either: `Free`, `Duplicate`, `Clear`, `IsEmpty`,
+  `MemoryUsage`, `Serialize*` / `Deserialize*`, and `Equals` (two value
+  roars are equal when width, dimensions and every row match; a bit roar
+  never equals a value roar).
 - `multiroarDuplicate` preserves value-mode metadata (bit width and bounds).
 - `multiroarValueWidth` (0 for a bit-mode roar), `multiroarValueDimensions`,
   `multiroarValueCount` and `multiroarValueInBounds` describe a value roar;
