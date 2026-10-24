@@ -216,47 +216,42 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
         return;
     }
 
-    /* Snap the cut to a score boundary at/around the geometric middle. k is a
-     * PAIR index in [1, pairs-1] with score[k] != score[k-1]. */
+    /* Pairs are in score order, so equal first and last scores mean one
+     * equal-score run with no boundary to cut at.  Checked in O(1): an
+     * oversized run is offered a split on every insert into it. */
+    databox s[2];
+    databoxWide sw[2];
+    flexGetByTypeInto(flexHead(map), &s[0], &sw[0]);
+    flexGetByTypeInto(flexIndex(map, -(int32_t)MOS_ELEMENTS_PER_ENTRY), &s[1],
+                      &sw[1]);
+    if (databoxCompare(&s[0], &s[1]) == 0) {
+        return; /* one giant equal-score run: cannot split safely */
+    }
+
+    /* Snap the cut to the score boundary nearest the geometric middle: k is
+     * a PAIR index in [1, pairs-1] with score[k] != score[k-1].  One walk
+     * (each box keeps its own wide storage, so the previous score stays
+     * valid while the next is read). */
     const size_t mid = pairs / 2;
     size_t k = 0;
-    databox prevScore;
-    databox curScore;
-    databoxWide prevScoreWide;
-    databoxWide curScoreWide;
-
-    for (size_t i = (mid < 1 ? 1 : mid); i < pairs; i++) {
-        flexGetByTypeInto(
-            flexIndex(map, (int32_t)((i - 1) * MOS_ELEMENTS_PER_ENTRY)),
-            &prevScore, &prevScoreWide);
-        flexGetByTypeInto(flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
-                          &curScore, &curScoreWide);
-        if (databoxCompare(&curScore, &prevScore) != 0) {
-            k = i;
-            break;
-        }
-    }
-
-    if (k == 0) {
-        for (size_t i = (mid < 1 ? 1 : mid); i >= 1; i--) {
-            flexGetByTypeInto(
-                flexIndex(map, (int32_t)((i - 1) * MOS_ELEMENTS_PER_ENTRY)),
-                &prevScore, &prevScoreWide);
-            flexGetByTypeInto(
-                flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
-                &curScore, &curScoreWide);
-            if (databoxCompare(&curScore, &prevScore) != 0) {
+    size_t bestDistance = SIZE_MAX;
+    flexEntry *fe = flexHead(map);
+    int cur = 0;
+    flexGetByTypeInto(fe, &s[cur], &sw[cur]);
+    for (size_t i = 1; i < pairs; i++) {
+        fe = flexNext(map, flexNext(map, fe)); /* past the member */
+        cur ^= 1;
+        flexGetByTypeInto(fe, &s[cur], &sw[cur]);
+        if (databoxCompare(&s[cur], &s[cur ^ 1]) != 0) {
+            const size_t distance = i > mid ? i - mid : mid - i;
+            if (distance < bestDistance) {
+                bestDistance = distance;
                 k = i;
-                break;
             }
-            if (i == 1) {
-                break; /* avoid size_t underflow */
+            if (i >= mid) {
+                break; /* later boundaries are only further away */
             }
         }
-    }
-
-    if (k == 0) {
-        return; /* one giant equal-score run: cannot split safely */
     }
 
     /* Lower [0,k) stays in 'map' (reallocated); upper [k,pairs) returns new.
@@ -1831,6 +1826,99 @@ static int mosCopyCheck_(const multiOrderedSetFull *m, const bool *present,
     return bad;
 }
 
+/* A Full set spanning several sub-maps against a presence oracle over
+ * scores 0..MOSF_N-1 (member "f<score>") */
+#define MOSF_N 2400
+static void mosfName_(char *buf, size_t len, int64_t s) {
+    snprintf(buf, len, "f%05" PRId64, s);
+}
+
+static bool mosfIs_(const databox *member, const databox *score, int64_t s) {
+    char want[24]; /* "f" and any int64 */
+    mosfName_(want, sizeof(want), s);
+    const bool scoreOk = score->type == DATABOX_SIGNED_64 ? score->data.i64 == s
+                         : score->type == DATABOX_UNSIGNED_64
+                             ? s >= 0 && score->data.u64 == (uint64_t)s
+                             : false;
+    return scoreOk && databoxLen(member) == strlen(want) &&
+           memcmp(databoxBytes(member), want, strlen(want)) == 0;
+}
+
+/* The present scores in rank order into 'list'; returns how many */
+static int64_t mosfList_(const bool *present, int64_t *list) {
+    int64_t n = 0;
+    for (int64_t s = 0; s < MOSF_N; s++) {
+        if (present[s]) {
+            list[n++] = s;
+        }
+    }
+    return n;
+}
+
+static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
+                      int step, uint64_t *rng) {
+    static int64_t list[MOSF_N];
+    const int64_t n = mosfList_(present, list);
+    if (multiOrderedSetFullCount(m) != (size_t)n) {
+        printf("ERROR: step %d: count %zu, oracle %" PRId64 "\n", step,
+               multiOrderedSetFullCount(m), n);
+        return 1;
+    }
+    int bad = mosFullCheckInvariants(m) != 0;
+
+    /* Ranks past either end refuse */
+    databox member;
+    databox score;
+    mosIterator it;
+    if (multiOrderedSetFullGetByRank(m, n, &member, &score) ||
+        multiOrderedSetFullGetByRank(m, -n - 1, &member, &score) ||
+        multiOrderedSetFullIteratorInitAtRank(m, &it, n, true)) {
+        printf("ERROR: step %d: a rank past the end answered\n", step);
+        bad++;
+    }
+
+    /* Sampled ranks, from the front and the back, and a short walk */
+    for (int k = 0; k < 6 && n > 0; k++) {
+        const int64_t r = (int64_t)(splitmix64(rng) % (uint64_t)n);
+        const int64_t s = list[r];
+        if (!multiOrderedSetFullGetByRank(m, r, &member, &score) ||
+            !mosfIs_(&member, &score, s) ||
+            !multiOrderedSetFullGetByRank(m, r - n, &member, &score) ||
+            !mosfIs_(&member, &score, s)) {
+            printf("ERROR: step %d: rank %" PRId64 " is not %" PRId64 "\n",
+                   step, r, s);
+            bad++;
+            continue;
+        }
+        const bool forward = k % 2 == 0;
+        if (!multiOrderedSetFullIteratorInitAtRank(m, &it, r, forward)) {
+            printf("ERROR: step %d: iterator at rank %" PRId64 "\n", step, r);
+            bad++;
+            continue;
+        }
+        for (int64_t w = 0; w < 4; w++) {
+            const int64_t at = forward ? r + w : r - w;
+            const bool more =
+                multiOrderedSetFullIteratorNext(&it, &member, &score);
+            if (at < 0 || at >= n) {
+                if (more) {
+                    printf("ERROR: step %d: walk ran past the end\n", step);
+                    bad++;
+                }
+                break;
+            }
+            if (!more || !mosfIs_(&member, &score, list[at])) {
+                printf("ERROR: step %d: walk from %" PRId64 " step %" PRId64
+                       "\n",
+                       step, r, w);
+                bad++;
+                break;
+            }
+        }
+    }
+    return bad;
+}
+
 int multiOrderedSetFullTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1882,10 +1970,11 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
     }
 
     TEST("MOS-Full: one score over many sub-maps stays in member order") {
-        /* 2000 members at one score split into many sub-maps; members
-         * joining at that score afterwards (below, between and above
-         * the rest in member order) iterate in member order and rank
-         * where iteration puts them */
+        /* 2000 members at one score: one sub-map past its size limit that
+         * has no score boundary to split at (and must not cost a scan per
+         * insert to find that out); members joining at that score
+         * afterwards (below, between and above the rest in member order)
+         * iterate in member order and rank where iteration puts them */
         multiOrderedSetFull *m = multiOrderedSetFullNew();
         const databox seven = databoxNewSigned(7);
         for (int i = 0; i < 2000; i++) {
@@ -2409,6 +2498,96 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
      * Sub-map invariant oracle — validates mosFullCheckInvariants itself on
      * healthy sets, both single sub-map and split (mapCount > 1).
      * ================================================================ */
+    TEST("MOS-Full: random ops across sub-maps against a sorted oracle") {
+        /* Pops and range removals large enough to empty whole sub-maps
+         * and cross into the next, mixed with adds; after every step the
+         * count, invariants, sampled ranks from both ends, short walks
+         * both ways and out-of-range refusals agree with the oracle */
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        static bool present[MOSF_N];
+        memset(present, 0, sizeof(present));
+        uint64_t rng = 0xf011u;
+        char name[24]; /* "f" and any int64 */
+        for (int64_t s = 0; s < MOSF_N;
+             s += 1 + (int64_t)(splitmix64(&rng) % 2)) {
+            mosfName_(name, sizeof(name), s);
+            const databox member = databoxNewBytesString(name);
+            const databox score = databoxNewSigned(s);
+            multiOrderedSetFullAdd(m, &score, &member);
+            present[s] = true;
+        }
+        static databox pm[700];
+        static databox ps[700];
+        static int64_t list[MOSF_N];
+        for (int step = 0; step < 160 && !err; step++) {
+            const uint64_t op = splitmix64(&rng) % 6;
+            const int64_t n = mosfList_(present, list);
+            if (op <= 1 || n < 200) {
+                for (int i = 0; i < 120; i++) {
+                    const int64_t s = (int64_t)(splitmix64(&rng) % MOSF_N);
+                    mosfName_(name, sizeof(name), s);
+                    const databox member = databoxNewBytesString(name);
+                    const databox score = databoxNewSigned(s);
+                    multiOrderedSetFullAdd(m, &score, &member);
+                    present[s] = true;
+                }
+            } else if (op == 2 || op == 3) {
+                const size_t want = 1 + splitmix64(&rng) % 700;
+                const size_t got =
+                    op == 2 ? multiOrderedSetFullPopMin(m, want, pm, ps)
+                            : multiOrderedSetFullPopMax(m, want, pm, ps);
+                if (got != (want < (size_t)n ? want : (size_t)n)) {
+                    ERR("step %d: popped %zu of %zu", step, got, want);
+                }
+                for (size_t i = 0; i < got && (int64_t)i < n; i++) {
+                    const int64_t s =
+                        op == 2 ? list[i] : list[n - 1 - (int64_t)i];
+                    if (!mosfIs_(&pm[i], &ps[i], s)) {
+                        ERR("step %d: pop %zu wrong", step, i);
+                    }
+                    present[s] = false;
+                    databoxFreeData(&pm[i]);
+                    databoxFreeData(&ps[i]);
+                }
+            } else if (op == 4) {
+                const int64_t a = (int64_t)(splitmix64(&rng) % (uint64_t)n);
+                const int64_t b = a + (int64_t)(splitmix64(&rng) % 600);
+                const int64_t last = b < n ? b : n - 1;
+                size_t want = 0;
+                for (int64_t r = a; r <= last; r++) {
+                    present[list[r]] = false;
+                    want++;
+                }
+                if (multiOrderedSetFullRemoveRangeByRank(m, a, b) != want) {
+                    ERR("step %d: rank range [%" PRId64 ", %" PRId64 "]", step,
+                        a, b);
+                }
+            } else {
+                const int64_t lo = (int64_t)(splitmix64(&rng) % MOSF_N);
+                const int64_t hi = lo + (int64_t)(splitmix64(&rng) % 600);
+                const mosRangeSpec range = {.min = databoxNewSigned(lo),
+                                            .max = databoxNewSigned(hi)};
+                size_t want = 0;
+                for (int64_t s = lo; s <= hi && s < MOSF_N; s++) {
+                    want += present[s];
+                }
+                if (multiOrderedSetFullCountByScore(m, &range) != want) {
+                    ERR("step %d: count by score [%" PRId64 ", %" PRId64 "]",
+                        step, lo, hi);
+                }
+                for (int64_t s = lo; s <= hi && s < MOSF_N; s++) {
+                    present[s] = false;
+                }
+                if (multiOrderedSetFullRemoveRangeByScore(m, &range) != want) {
+                    ERR("step %d: score range [%" PRId64 ", %" PRId64 "]", step,
+                        lo, hi);
+                }
+            }
+            err += mosfCheck_(m, present, step, &rng);
+        }
+        multiOrderedSetFullFree(m);
+    }
+
     TEST("MOS-Full: invariant oracle holds (ascending insert)") {
         multiOrderedSetFull *m = multiOrderedSetFullNew();
         for (int i = 0; i < 1000; i++) {
