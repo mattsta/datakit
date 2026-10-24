@@ -134,7 +134,7 @@ class ValidateRun(unittest.TestCase):
         for label in ("clang22-dev", "clang22-debug", "gcc15-release"):
             for step in ("configure", "build", "ctest", "ctest-serial"):
                 self.assertIn(f"{label} {step}", names)
-        self.assertEqual(names[-2:], ["allocaudit", "atomicaudit"])
+        self.assertEqual(names[-3:], ["allocaudit", "atomicaudit", "outputaudit"])
 
         # All targets: no --target.
         self.assertNotIn("--target", runner.command("clang22-dev build"))
@@ -336,6 +336,11 @@ class ValidateRun(unittest.TestCase):
                 {"atomicaudit": "VIOLATION y\n"},
                 "VIOLATION y",
             ),
+            "output": (
+                {"outputaudit": 1},
+                {"outputaudit": "UNREQUESTED src/z.c:1: puts\n"},
+                "UNREQUESTED src/z.c:1: puts",
+            ),
         }
         for label, (codes, outputs, needle) in cases.items():
             with self.subTest(label=label):
@@ -362,6 +367,7 @@ class ValidateRun(unittest.TestCase):
             "clang22-dev ctest",
             "allocaudit",
             "atomicaudit",
+            "outputaudit",
         ):
             with self.subTest(step=step):
                 runner = MatrixRunner(timed_out=[step])

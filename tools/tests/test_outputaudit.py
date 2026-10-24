@@ -129,6 +129,13 @@ class Sorting(unittest.TestCase):
             ["dead", "debug", "unrequested", "debug", "debug", "unrequested"],
         )
 
+    def test_operator_tools(self) -> None:
+        src = "void report(void) { printf(\"MB/s\"); }\n"
+        for path in ("src/dataspeed.c", "src/memtest.c"):
+            with self.subTest(path=path):
+                self.assertEqual(scan(src, path), [("printf", "report", "tool")])
+        self.assertEqual(scan(src, "src/dataspeedy.c"), [("printf", "report", "unrequested")])
+
     def test_test_only_files(self) -> None:
         src = "void bench(void) { printf(\"t\"); }\n"
         for path in ("src/intsetTest.c", "src/memboundBench.c", "src/datakit-test.c"):

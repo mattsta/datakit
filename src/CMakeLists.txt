@@ -805,6 +805,20 @@ if(BuildTestBinary)
             TIMEOUT_SIGNAL_GRACE_PERIOD 5
             SKIP_RETURN_CODE 77
             LABELS "gate")
+        # Library-output gate: no library code writes to stdout or stderr
+        # unasked (diagnostics go through dkDiag; only repr/print
+        # functions, operator tools and test code print).
+        add_test(NAME libraryOutput
+            COMMAND sh ${DK_TOOLS_DIR}/uvGate.sh ${UV_EXECUTABLE} ${DK_TOOLS_DIR}
+                dktools --repo ${PROJECT_SOURCE_DIR}
+                outputaudit check
+            WORKING_DIRECTORY ${DK_TOOLS_DIR})
+        set_tests_properties(libraryOutput PROPERTIES
+            TIMEOUT 120
+            TIMEOUT_SIGNAL_NAME SIGTERM
+            TIMEOUT_SIGNAL_GRACE_PERIOD 5
+            SKIP_RETURN_CODE 77
+            LABELS "gate")
         # The tools' own unit tests (tools/tests: every dktools
         # subcommand), through the same environment and skip rule.
         add_test(NAME dktoolsSelfTest
@@ -817,9 +831,9 @@ if(BuildTestBinary)
             TIMEOUT_SIGNAL_GRACE_PERIOD 5
             SKIP_RETURN_CODE 77
             LABELS "gate")
-        message(STATUS "Registered allocOwnership and atomicOrdering gates (dktools)")
+        message(STATUS "Registered allocOwnership, atomicOrdering and libraryOutput gates (dktools)")
     else()
-        message(STATUS "allocOwnership/atomicOrdering gates skipped (uv or tools/ missing)")
+        message(STATUS "allocOwnership/atomicOrdering/libraryOutput gates skipped (uv or tools/ missing)")
     endif()
 
     # check target - runs all tests with verbose output

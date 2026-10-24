@@ -90,13 +90,20 @@ or stderr (`printf`, `fprintf(stderr, ...)`, `write(2, ...)`, ...),
 outside in-file test code, and sorts each: `unrequested` (printed without
 the caller asking), `debug` (only under a DEBUG/VERBOSE/NOISY/TRACE/DBG/
 DUMP switch or `#ifndef NDEBUG`), `dead` (`#if 0`), `requested` (inside a
-Repr/Print/Dump/Say/Show function) and `test` (test-only files).  Writes
-to a stream the caller passed in are the caller's output and not listed.
+Repr/Print/Dump/Say/Show function), `tool` (the operator tools dataspeed
+and memtest, whose output is their job) and `test` (test-only files).
+Writes to a stream the caller passed in are the caller's output and not
+listed.  Library code reports misuse and conditions through dkDiag
+(`src/dkDiag.h`) instead of printing.
 
 ```sh
 uv run dktools outputaudit report    # markdown, by category, file and function
 uv run dktools outputaudit check     # exit 1 while unrequested output remains
 ```
+
+It is enforced as the ctest test `libraryOutput` (beside
+`atomicOrdering`), and `verify` and `validate` run it on the tree they
+build (the `output` line).
 
 The allocation audit is enforced as the ctest test `allocOwnership`
 (registered in `src/CMakeLists.txt` whenever `uv` is on PATH), so it

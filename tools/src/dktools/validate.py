@@ -23,8 +23,9 @@ wall-clock limit TSan breaks).  The summary names every skipped test,
 why, and how to run it.
 
 After the matrix it scans the test logs for UBSan ("runtime error:"),
-ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors`` and
-``atomicaudit check`` on the exported tree, and runs the leakage gate over the added lines of
+ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors``,
+``atomicaudit check`` and ``outputaudit check`` on the exported tree, and runs the leakage gate
+over the added lines of
 ``merge-base(BASE, REV)..REV`` (BASE default ``origin/main``; an empty
 ``--leak-base`` skips it).
 
@@ -246,6 +247,7 @@ def render(
     opts: ValidateOptions,
     alloc: Step,
     atomic: Step,
+    output: Step,
     leak: tuple[str, list[leakcheck.Hit]] | None,
     passed: bool,
 ) -> str:
@@ -343,6 +345,9 @@ def render(
     md += ["", "## Atomic ordering", ""]
     md.append(f"{_step_cell(atomic)}: {steps.last_line(atomic.log)}")
 
+    md += ["", "## Library output", ""]
+    md.append(f"{_step_cell(output)}: {steps.last_line(output.log)}")
+
     md += ["", "## Leakage gate", ""]
     if leak is None:
         md.append("skipped (empty --leak-base)")
@@ -367,6 +372,7 @@ def render(
             md.append(f"- {out}")
     md.append(f"- {alloc.log}")
     md.append(f"- {atomic.log}")
+    md.append(f"- {output.log}")
     return "\n".join(md) + "\n"
 
 
@@ -419,20 +425,20 @@ def run(repo: Path, opts: ValidateOptions) -> int:
             timeout=steps.ALLOCAUDIT_TIMEOUT,
         )
 
-    atomic = Step("atomicaudit", work / "atomic.log")
-    try:
-        uv = gitutil.require_program("uv")
-    except ToolError as exc:
-        atomic.log.write_text(f"{exc}\n")
-        atomic.code = 127
-    else:
-        atomic = steps.run_logged(
-            "atomicaudit",
-            steps.atomicaudit_command(uv, src),
-            atomic.log,
-            cwd=src / "tools",
-            timeout=steps.ATOMICAUDIT_TIMEOUT,
-        )
+    atomic = steps.run_tree_gate(
+        "atomicaudit",
+        steps.atomicaudit_command,
+        work / "atomic.log",
+        src,
+        steps.ATOMICAUDIT_TIMEOUT,
+    )
+    output = steps.run_tree_gate(
+        "outputaudit",
+        steps.outputaudit_command,
+        work / "output.log",
+        src,
+        steps.OUTPUTAUDIT_TIMEOUT,
+    )
 
     leak = None
     leak_ok = True
@@ -442,8 +448,14 @@ def run(repo: Path, opts: ValidateOptions) -> int:
             leak_ok = leakcheck.report(hits, scanned, out=log) == 0
         leak = (leak_range, hits)
 
-    passed = all(r.ok for r in results) and alloc.ok and atomic.ok and leak_ok
-    text = render(commit, subject, results, opts, alloc, atomic, leak, passed)
+    passed = (
+        all(r.ok for r in results)
+        and alloc.ok
+        and atomic.ok
+        and output.ok
+        and leak_ok
+    )
+    text = render(commit, subject, results, opts, alloc, atomic, output, leak, passed)
     summary = work / "summary.md"
     summary.write_text(text)
     sys.stdout.write(text)

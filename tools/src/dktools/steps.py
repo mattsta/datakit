@@ -18,11 +18,11 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import procs
+from . import gitutil, procs
 
 #: Step wall-clock limits, in seconds.
 CONFIGURE_TIMEOUT = 30 * 60
@@ -33,6 +33,8 @@ CTEST_TIMEOUT = 3 * 3600
 ALLOCAUDIT_TIMEOUT = 30 * 60
 #: The atomic audit is lexical and takes about a second.
 ATOMICAUDIT_TIMEOUT = 10 * 60
+#: The output audit is lexical too, and as quick.
+OUTPUTAUDIT_TIMEOUT = 10 * 60
 #: ``ctest --timeout``: the limit for each test that sets no TIMEOUT
 #: property of its own (ctest's conventional default), so one hung
 #: test fails alone instead of running into CTEST_TIMEOUT.
@@ -531,6 +533,42 @@ def atomicaudit_command(uv: str, tree: Path) -> list[str]:
         "--repo",
         str(tree),
         "atomicaudit",
+        "check",
+    ]
+
+
+def run_tree_gate(
+    name: str,
+    command: Callable[[str, Path], list[str]],
+    log: Path,
+    tree: Path,
+    timeout: float,
+) -> Step:
+    """A dktools gate run on 'tree' with the tree's own dktools (uv
+    project tree/tools); a missing uv fails the step (code 127) with the
+    reason in its log."""
+    try:
+        uv = gitutil.require_program("uv")
+    except procs.ToolError as exc:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"{exc}\n")
+        return Step(name, log, 127)
+    return run_logged(name, command(uv, tree), log, cwd=tree / "tools", timeout=timeout)
+
+
+def outputaudit_command(uv: str, tree: Path) -> list[str]:
+    """The libraryOutput gate (no library code writes to stdout/stderr
+    unasked), run with the tree's own dktools."""
+    return [
+        uv,
+        "run",
+        "--frozen",
+        "--project",
+        str(tree / "tools"),
+        "dktools",
+        "--repo",
+        str(tree),
+        "outputaudit",
         "check",
     ]
 

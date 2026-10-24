@@ -16,6 +16,9 @@ stdout and stderr.  This audit finds every call that writes to them in
                ``#ifdef`` of a name holding DEBUG, VERBOSE, NOISY, TRACE or
                DBG) or only with assertions on (``#ifndef NDEBUG``)
   dead         inside ``#if 0``
+  tool         in an operator tool whose output is its job (dataspeed's
+               benchmark reports, memtest's interactive run): the caller
+               runs it to read what it prints
   test         in a test-only file (``*Test.c``, ``*Bench.c``,
                datakit-test.c, perfRegression.c, ctest.h), outside
                DATAKIT_TEST guards but never part of an application's use
@@ -72,11 +75,15 @@ TEST_FILE_RE = re.compile(
     r"(?:Test|Bench)\.c$|(?:^|/)(?:datakit-test|perfRegression)\.c$|(?:^|/)ctest\.h$"
 )
 
+#: Operator tools: library modules whose output is what the caller runs them
+#: for.
+TOOL_FILE_RE = re.compile(r"(?:^|/)(?:dataspeed|memtest)\.c$")
+
 #: A conditional's switch that turns on debugging output.
 DEBUG_SWITCH_RE = re.compile(r"DEBUG|VERBOSE|NOISY|TRACE|DBG|DUMP")
 
 #: The categories, in report order.
-CATEGORIES = ("unrequested", "debug", "dead", "requested", "test")
+CATEGORIES = ("unrequested", "debug", "dead", "requested", "tool", "test")
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +204,7 @@ def scan_text(path: str, src: str) -> list[Site]:
     defines = _define_lines(src)
     dead, debug = _conditionals(src)
     test_file = bool(TEST_FILE_RE.search(path))
+    tool_file = bool(TOOL_FILE_RE.search(path))
     sites: list[Site] = []
 
     depth = 0
@@ -242,6 +250,8 @@ def scan_text(path: str, src: str) -> list[Site]:
         context = f"#define {defines[tok.line]}" if tok.line in defines else function
         if test_file:
             category = "test"
+        elif tool_file:
+            category = "tool"
         elif tok.line in dead:
             category = "dead"
         elif tok.line in debug:
@@ -269,7 +279,8 @@ def summary_line(result: AuditResult) -> str:
     return (
         f"outputaudit: {counts['unrequested']} unrequested output calls in {files} files; "
         f"{counts['debug']} debug-only, {counts['dead']} in #if 0, "
-        f"{counts['requested']} requested (repr/print), {counts['test']} in test-only files"
+        f"{counts['requested']} requested (repr/print), {counts['tool']} in operator "
+        f"tools, {counts['test']} in test-only files"
     )
 
 
@@ -279,7 +290,8 @@ def render_report(result: AuditResult) -> str:
         "Every call in library code that writes to stdout or stderr, outside",
         "in-file test code.  `unrequested` calls print without the caller asking;",
         "`debug` ones only under a debug switch or with assertions on; `dead` ones",
-        "are in `#if 0`; `requested` ones are inside Repr/Print/Dump functions.",
+        "are in `#if 0`; `requested` ones are inside Repr/Print/Dump functions;",
+        "`tool` ones are in operator tools (dataspeed, memtest).",
         "",
     ]
     for category in CATEGORIES:
