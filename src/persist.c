@@ -2424,7 +2424,19 @@ static int64_t persistFileSize(void *ctx) {
 /* fsync the directory holding `path` so a rename into it is itself
  * durable (the rename's metadata otherwise lives only in the dir
  * inode's dirty page). */
+#ifdef DATAKIT_TEST
+/* Test builds only: makes the next directory fsync fail, so tests reach
+ * a commit whose rename landed but whose durability is unknown */
+static bool persistTestFailDirFsync = false;
+#endif
+
 static bool persistFsyncDir(const char *path) {
+#ifdef DATAKIT_TEST
+    if (persistTestFailDirFsync) {
+        persistTestFailDirFsync = false;
+        return false;
+    }
+#endif
     const char *slash = strrchr(path, '/');
     char dirbuf[2] = ".";
     const char *dir;
@@ -2489,17 +2501,19 @@ static bool persistFileRewriteCommit(void *ctx) {
     if (rename(f->tmpPath, f->path) != 0) {
         return false;
     }
-    if (!persistFsyncDir(f->path)) {
-        return false;
-    }
 
-    /* The temp fd now refers to the live path; retire the old fd. */
+    /* The temp fd now refers to the live path; retire the old fd before
+     * anything else can fail, or later writes would go to the replaced
+     * (unlinked) file. */
     close(f->fd);
     f->fd = f->tmpFd;
     f->tmpFd = -1;
     zfree(f->tmpPath);
     f->tmpPath = NULL;
-    return true;
+
+    /* The rename itself is durable only once the directory is synced:
+     * report failure when it is not (the new content is in place) */
+    return persistFsyncDir(f->path);
 }
 
 static void persistFileRewriteAbort(void *ctx) {
@@ -8759,6 +8773,75 @@ int persistTest(int argc, char *argv[]) {
 
         multilistFree(recovered2);
         persistClose(p);
+    }
+
+    TEST("file store: rewrite abort, and a commit whose directory sync "
+         "fails") {
+        /* Abort keeps the live bytes and drops the temp; a commit whose
+         * rename lands but whose directory fsync fails reports failure
+         * and still leaves the store writing the live file; a clean
+         * commit replaces the content */
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        char path[PATH_MAX];
+        char tmpPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "rw.snap", path, sizeof(path)) ||
+            !dkTestTmpDirPath(&tmp, "rw.snap.tmp", tmpPath, sizeof(tmpPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+            return err;
+        }
+        persistStore *s = persistStoreFile(path, true);
+        char got[64];
+#define PERSIST_TEST_FILE_IS(want)                                             \
+    do {                                                                       \
+        FILE *fp = fopen(path, "rb");                                          \
+        const size_t n = fp ? fread(got, 1, sizeof(got) - 1, fp) : 0;          \
+        if (fp) {                                                              \
+            fclose(fp);                                                        \
+        }                                                                      \
+        got[n] = '\0';                                                         \
+        if (strcmp(got, (want)) != 0) {                                        \
+            ERR("file holds \"%s\", want \"%s\"", got, (want));                \
+        }                                                                      \
+    } while (0)
+
+        s->write(s->ctx, "old", 3);
+        s->sync(s->ctx);
+
+        if (!s->rewriteBegin(s->ctx) || s->rewriteBegin(s->ctx)) {
+            ERRR("rewrite begin: not exactly one rewrite at a time");
+        }
+        s->write(s->ctx, "garbage", 7);
+        s->rewriteAbort(s->ctx);
+        s->rewriteAbort(s->ctx); /* no rewrite: nothing to do */
+        if (access(tmpPath, F_OK) == 0) {
+            ERRR("abort left the temp file");
+        }
+        PERSIST_TEST_FILE_IS("old");
+
+        s->rewriteBegin(s->ctx);
+        s->write(s->ctx, "new1", 4);
+        persistTestFailDirFsync = true;
+        if (s->rewriteCommit(s->ctx)) {
+            ERRR("a commit whose directory sync failed reported success");
+        }
+        s->rewriteAbort(s->ctx); /* as the engine does after a failure */
+        s->seek(s->ctx, 0, SEEK_END);
+        s->write(s->ctx, "+more", 5);
+        s->sync(s->ctx);
+        PERSIST_TEST_FILE_IS("new1+more");
+
+        if (s->rewriteCommit(s->ctx)) {
+            ERRR("commit without a rewrite reported success");
+        }
+        s->rewriteBegin(s->ctx);
+        s->write(s->ctx, "new2", 4);
+        if (!s->rewriteCommit(s->ctx) || access(tmpPath, F_OK) == 0) {
+            ERRR("a clean commit failed or left its temp");
+        }
+        PERSIST_TEST_FILE_IS("new2");
+#undef PERSIST_TEST_FILE_IS
+        s->close(s->ctx);
+        zfree(s);
     }
 
     TEST("durability: atomic snapshot publish leaves no torn temp file") {
