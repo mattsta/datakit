@@ -6,6 +6,7 @@
 #include "persistCtx.h"
 #include "../cleaner.h"
 #include "../datakit.h"
+#include "../dkDiag.h"
 
 #include <errno.h>
 #include <string.h>
@@ -368,30 +369,35 @@ void *persistCtxRecover(persistCtx *ctx, const persistOps *ops) {
     return persistRecover(ctx->p);
 }
 
-bool persistCtxExists(const char *basePath) {
+persistCtxState persistCtxProbe(const char *basePath) {
     if (!basePath) {
-        return false;
+        return PERSIST_CTX_ABSENT;
     }
 
     char *snapPath = makeSnapshotPath(basePath);
-    bool exists = (access(snapPath, F_OK) == 0);
+    const bool snapshot = access(snapPath, F_OK) == 0;
     zfree(snapPath);
-
-    if (!exists) {
-        /* An orphaned WAL (log present, snapshot missing) means data
-         * exists but the Open paths will treat it as absent - surface
-         * the condition instead of silently losing the log */
-        char *walPath = makeWalPath(basePath);
-        if (access(walPath, F_OK) == 0) {
-            fprintf(stderr,
-                    "persistCtx: WAL exists without snapshot at %s.wal - "
-                    "recovery will ignore it\n",
-                    basePath);
-        }
-        zfree(walPath);
+    if (snapshot) {
+        return PERSIST_CTX_PRESENT;
     }
 
-    return exists;
+    char *walPath = makeWalPath(basePath);
+    const bool wal = access(walPath, F_OK) == 0;
+    zfree(walPath);
+    return wal ? PERSIST_CTX_ORPHAN_WAL : PERSIST_CTX_ABSENT;
+}
+
+bool persistCtxExists(const char *basePath) {
+    const persistCtxState state = persistCtxProbe(basePath);
+    if (state == PERSIST_CTX_ORPHAN_WAL) {
+        /* There is data, but the Open paths treat the path as absent:
+         * surface it rather than pass over the log in silence */
+        DK_DIAG_CONDITION(DK_DIAG_PERSIST_ORPHAN_WAL,
+                          "%s.wal exists without its snapshot; an Open "
+                          "will not replay it",
+                          basePath);
+    }
+    return state == PERSIST_CTX_PRESENT;
 }
 
 /* ============================================================================
@@ -520,6 +526,56 @@ int persistCtxTest(int argc, char *argv[]) {
             /* Now should exist */
             if (!persistCtxExists(path)) {
                 ERRR("Context should exist now");
+            }
+        }
+    }
+
+    TEST("a WAL without its snapshot probes as orphaned and is reported") {
+        char path[PATH_MAX];
+        char walPath[PATH_MAX];
+        char snapPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxOrphan", path, sizeof(path)) ||
+            !dkTestTmpDirPath(&tmp, "persistCtxOrphan.wal", walPath,
+                              sizeof(walPath)) ||
+            !dkTestTmpDirPath(&tmp, "persistCtxOrphan.snap", snapPath,
+                              sizeof(snapPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            const persistCtxState absent = persistCtxProbe(path);
+            FILE *w = fopen(walPath, "w");
+            if (w) {
+                fclose(w);
+            }
+
+            /* Probing asks, so it reports nothing; Exists answers false
+             * and records the condition */
+            const dkDiagPrintMode prior = dkDiagGetPrintMode();
+            dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+            const uint64_t before = dkDiagCount();
+            const persistCtxState orphan = persistCtxProbe(path);
+            const bool probeQuiet = dkDiagCount() == before;
+            const bool exists = persistCtxExists(path);
+            dkDiagnostic d;
+            const bool reported =
+                dkDiagCount() == before + 1 && dkDiagLast(&d) &&
+                d.code == DK_DIAG_PERSIST_ORPHAN_WAL &&
+                d.severity == DK_DIAG_CONDITION && strstr(d.message, path);
+            dkDiagSetPrintMode(prior);
+
+            FILE *s = fopen(snapPath, "w");
+            if (s) {
+                fclose(s);
+            }
+            const uint64_t afterSnap = dkDiagCount();
+            const persistCtxState present = persistCtxProbe(path);
+            const bool presentExists = persistCtxExists(path);
+            if (absent != PERSIST_CTX_ABSENT ||
+                orphan != PERSIST_CTX_ORPHAN_WAL || !probeQuiet || exists ||
+                !reported || present != PERSIST_CTX_PRESENT || !presentExists ||
+                dkDiagCount() != afterSnap ||
+                persistCtxProbe(NULL) != PERSIST_CTX_ABSENT) {
+                ERR("probe %d/%d/%d, exists %d/%d, reported %d", absent, orphan,
+                    present, exists, presentExists, reported);
             }
         }
     }

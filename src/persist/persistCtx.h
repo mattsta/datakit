@@ -170,7 +170,20 @@ bool persistCtxCompact(persistCtx *ctx, void *structure, const persistOps *ops);
  * Returns NULL on failure (check errno) */
 void *persistCtxRecover(persistCtx *ctx, const persistOps *ops);
 
-/* Check if persistent context exists at path */
+/* What is on disk at 'basePath' */
+typedef enum persistCtxState {
+    PERSIST_CTX_ABSENT = 0,  /* no snapshot and no WAL */
+    PERSIST_CTX_PRESENT = 1, /* a snapshot (an Open can recover it) */
+    /* a WAL without its snapshot: there is data, but every Open treats
+     * the path as absent and would not replay it */
+    PERSIST_CTX_ORPHAN_WAL = 2,
+} persistCtxState;
+persistCtxState persistCtxProbe(const char *basePath);
+
+/* Whether a context exists at 'basePath' (persistCtxProbe says PRESENT).
+ * An orphaned WAL answers false and is also reported as a CONDITION
+ * diagnostic, DK_DIAG_PERSIST_ORPHAN_WAL (dkDiag.h), so the log is never
+ * passed over unnoticed. */
 bool persistCtxExists(const char *basePath);
 
 /* ============================================================================
