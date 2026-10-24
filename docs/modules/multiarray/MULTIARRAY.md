@@ -70,7 +70,11 @@ There are **two entry points with different promotion ladders**:
 
 The Native macro ladder skips Small entirely: a full Native array is handed
 directly to `multiarrayMediumNewWithData()` as node 0. The container ladder
-never uses Native — `multiarrayGet()` and friends assert on a Native tag.
+never uses Native: given a native multiarray, `multiarrayGet()` and the
+other container calls refuse with a defined answer (0 / NULL, no change,
+an iterator that yields nothing) and report a `DK_DIAG_MULTIARRAY_NATIVE`
+misuse diagnostic ([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)).  NULL is
+refused the same way without a report.
 
 There is no automatic _demotion_. `multiarrayDelete()` shrinks nodes but never
 converts Large back to Medium or Medium back to Small (there is an explicit

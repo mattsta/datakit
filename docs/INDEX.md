@@ -14,6 +14,7 @@
 ### Core Infrastructure
 
 - [databox](modules/core/DATABOX.md) - Universal 16-byte container for any data type
+- [Diagnostics (dkDiag)](modules/core/DIAGNOSTICS.md) - How datakit reports misuse and conditions without printing
 
 Core platform plumbing has no standalone guide; read the headers
 directly: `src/datakit.h` (platform abstraction and shared macros),

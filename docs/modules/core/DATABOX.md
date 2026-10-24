@@ -1101,9 +1101,11 @@ tests the type and the pointer.
 
 A deferred box is not a value. Comparing, inserting or encoding one is a
 caller bug, and those paths fail fast: their 96/128-bit arms call
-`databoxWidePayloadRequire(box)`, which prints the caller's name and aborts
-through `databoxWidePayloadMissing` instead of dereferencing NULL. Narrow
-values never reach the check.
+`databoxWidePayloadRequire(box)`, which reports a FATAL
+`DK_DIAG_DATABOX_WIDE_DEFERRED` diagnostic naming the caller and aborts
+through `databoxWidePayloadMissing` instead of dereferencing NULL (see
+[DIAGNOSTICS.md](DIAGNOSTICS.md): your diagnostic hook runs before the
+abort). Narrow values never reach the check.
 
 ## Best Practices
 

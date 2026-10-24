@@ -53,6 +53,27 @@ multimapP *back = multimapOpenP(again); /* NULL when there is nothing to open */
 Reads go to the structure directly (`multimapLookupP`, `multimapGetP(m)`
 for the underlying multimap, iterators); they never touch the files.
 
+### How a context binds
+
+A `persistCtx` holds one structure's files (`<base>.snap`, `<base>.wal`,
+and `<base>.quarantine` once a damaged WAL entry is set aside):
+
+- **To one type.**  The first `*NewP` / `*OpenP` binds the context to its
+  structure type; any other type's New, Open, Recover, snapshot or compaction
+  on it is refused.
+- **To one live wrapper.**  From a successful `*NewP` / `*OpenP` until its
+  `*CloseP`, the wrapper holds the context; a second `*NewP` / `*OpenP` on it
+  returns NULL.  Close the first, then open again.
+
+Both refusals report a misuse diagnostic (`DK_DIAG_PERSIST_CTX_WRONG_TYPE`,
+`DK_DIAG_PERSIST_CTX_CLAIMED`; see [DIAGNOSTICS.md](../core/DIAGNOSTICS.md)).
+
+`persistCtxProbe(basePath)` says what is on disk: `PERSIST_CTX_ABSENT`,
+`PERSIST_CTX_PRESENT` (a snapshot an Open recovers) or
+`PERSIST_CTX_ORPHAN_WAL` (a WAL without its snapshot, which every Open
+treats as absent).  `persistCtxExists` answers whether it is PRESENT and
+reports an orphaned WAL as a `DK_DIAG_PERSIST_ORPHAN_WAL` condition.
+
 ## Mutation Results
 
 Every P mutator returns a `persistLogResult`:
@@ -225,6 +246,10 @@ A false return from the core API may leave a typed code in
 
 Other failures (I/O, a malformed file) return false and may leave
 `PERSIST_ERR_NONE`: not every failure path sets a code.
+
+Misuse of a context (a second wrapper, the wrong type) and an orphaned WAL
+are also recorded as diagnostics on the calling thread
+([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)); persist never prints.
 
 ## Using the Core Directly
 

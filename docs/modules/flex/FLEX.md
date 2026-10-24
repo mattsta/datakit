@@ -391,9 +391,16 @@ bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen,
  * having set ->big */
 void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
 
-/* Round-trip + defensive-unwrap self test; returns the failure count */
+/* Round-trip + defensive-unwrap self test; returns the failure count.
+ * Each failed check is also a DK_DIAG_SELF_TEST_FAILED diagnostic; a
+ * passing run prints nothing */
 int flexFactorySelfTest(void);
 ```
+
+A box type flex has no encoding for (an offset box, a compressed aggregate)
+reaching any store is a caller bug: it stops the process in every build,
+after a FATAL `DK_DIAG_FLEX_BOX_UNENCODABLE` diagnostic
+([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)).
 
 The returned flex **is** the byte buffer (length via `flexBytes`); free it
 with `flexFree`. The unwrap calls return false and leave their outputs

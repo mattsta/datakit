@@ -373,6 +373,10 @@ belongs to one mode and refuses a roar of the other with a single check:
   set/get, `ToArray`, comparisons, every set operation (in place, `New*`,
   N-way) and the similarity metrics.
 - Value calls on a bit roar are refused (`MULTIROAR_VALUE_REFUSED` / false).
+- Each such refusal also reports a `DK_DIAG_MULTIROAR_WRONG_MODE` misuse
+  diagnostic naming the function ([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)).
+  A value a roar cannot store, or a position past its dimensions, is
+  refused quietly: that is data, not a mode mix-up.
 - Mode-free calls take either: `Free`, `Duplicate`, `Clear`, `IsEmpty`,
   `MemoryUsage`, `Serialize*` / `Deserialize*`, and `Equals` (two value
   roars are equal when width, dimensions and every row match; a bit roar

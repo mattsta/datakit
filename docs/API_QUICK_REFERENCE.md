@@ -24,6 +24,7 @@ A task-oriented quick reference for common operations across all datakit modules
 12. [Compression](#compression)
 13. [Set Operations](#set-operations)
 14. [Prefix Sums & Range Queries](#prefix-sums--range-queries)
+15. [Errors & Diagnostics](#errors--diagnostics)
 
 ---
 
@@ -1308,9 +1309,52 @@ Which tree for which job, and measured speed and memory:
 
 ---
 
+## Errors & Diagnostics
+
+datakit never prints.  A refused misuse, a runtime condition or a fatal misuse is recorded per thread
+(details: [DIAGNOSTICS.md](modules/core/DIAGNOSTICS.md)).
+
+### "A call returned false / NULL and I want to know why"
+
+```c
+const uint64_t before = dkDiagCount();
+multiroar *u = multiroarNewOr(a, b);
+dkDiagnostic d;
+if (!u && dkDiagCount() != before && dkDiagLast(&d)) {
+    fprintf(stderr, "%s: %s\n", dkDiagCodeName(d.code), d.message);
+}
+```
+
+### "I want datakit's diagnostics in my logs"
+
+```c
+static void onDiag(const dkDiagnostic *d, void *ctx) { /* log d */ }
+static const dkDiagHook hook = {.fn = onDiag, .ctx = NULL};
+dkDiagSetHook(&hook);
+```
+
+### "I want them on stderr while debugging (or never)"
+
+```c
+dkDiagSetPrintMode(DK_DIAG_PRINT_ALWAYS); /* or DK_DIAG_PRINT_NEVER */
+```
+
+### "Is there data at this persist path?"
+
+```c
+switch (persistCtxProbe(basePath)) {
+case PERSIST_CTX_PRESENT:    /* an Open recovers it */ break;
+case PERSIST_CTX_ORPHAN_WAL: /* a WAL without its snapshot */ break;
+case PERSIST_CTX_ABSENT:     break;
+}
+```
+
+---
+
 ## Module Reference
 
 - [databox](modules/core/DATABOX.md) - Universal 16-byte container
+- [diagnostics](modules/core/DIAGNOSTICS.md) - Misuse and condition reporting (dkDiag)
 - [multimap](modules/multimap/MULTIMAP.md) - Sorted key-value store
 - [multilist](modules/multilist/MULTILIST.md) - Linked list with packed nodes
 - [multiarray](modules/multiarray/MULTIARRAY.md) - Dynamic array
