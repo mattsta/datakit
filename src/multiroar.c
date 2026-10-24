@@ -4182,6 +4182,26 @@ int multiroarTest(int argc, char *argv[]) {
             ERRR("similarity with uneven or empty roars");
         }
 
+        /* Set-many into every chunk form: sorted runs of 6 positions per
+         * chunk (enough for the run path, including a run into an all-set
+         * chunk, which changes nothing), merged with the oracle */
+        {
+            cleaner(multiroarFree) multiroar *many = multiroarDuplicate(a);
+            uint64_t positions[MR_FORM_CHUNKS * 6];
+            uint64_t n = 0;
+            for (uint64_t c = 0; c < MR_FORM_CHUNKS; c++) {
+                for (uint64_t k = 0; k < 6; k++) {
+                    positions[n++] = c * BITMAP_SIZE_IN_BITS + 37 + k * 1301;
+                }
+            }
+            multiroarBitSetMany(many, positions, n);
+            memcpy(want, o[0], MR_FORM_WORDS * sizeof(uint64_t));
+            for (uint64_t i = 0; i < n; i++) {
+                want[positions[i] / 64] |= UINT64_C(1) << (positions[i] % 64);
+            }
+            err += mrCheckForms(many, want, "set many");
+        }
+
         /* Operations that cancel every chunk form (a ^ a, a & ~a, and
          * a & not(a), whose chunks are disjoint bitmaps) leave nothing:
          * every read sees empty, and no emptied chunk lingers (equal to,
