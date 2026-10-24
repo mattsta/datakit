@@ -3541,6 +3541,64 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * rejects above because payload doesn't fit. */
     }
 
+    TEST("envelope: framing refuses out-of-range flags, key ids and lengths") {
+        /* Hand-built XXH64 headers (8 digest bytes, no nonce) followed by
+         * room for the digest: flags past 32 bits (which would truncate to
+         * valid ones), a key id that is missing, 0, or past 32 bits, and a
+         * payload length whose payload + digest wraps the address space.
+         * A key id of 7 with an empty payload is the accepted control. */
+        static const struct {
+            uint64_t flags;
+            bool putKeyId;
+            uint64_t keyId;
+            uint64_t payloadLen;
+            bool accept;
+        } cases[] = {
+            {FLEX_ENV_FLAG_KEYID_PRESENT, true, 7, 0, true},
+            {(uint64_t)1 << 32, false, 0, 0, false},
+            {((uint64_t)1 << 32) | FLEX_ENV_FLAG_KEYID_PRESENT, true, 7, 0,
+             false},
+            {FLEX_ENV_FLAG_KEYID_PRESENT, false, 0, 0, false},
+            {FLEX_ENV_FLAG_KEYID_PRESENT, true, 0, 0, false},
+            {FLEX_ENV_FLAG_KEYID_PRESENT, true, (uint64_t)1 << 32, 0, false},
+            {0, false, 0, UINT64_MAX - 8, false},
+            {0, false, 0, UINT64_MAX - 20, false},
+            {0, false, 0, UINT64_MAX, false},
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            uint8_t buf[64] = {0};
+            size_t pos = 0;
+            size_t w = 0;
+            buf[pos++] = FLEX_ENVELOPE_MAGIC_0;
+            buf[pos++] = FLEX_ENVELOPE_MAGIC_1;
+            varintSplitFullPut_(buf + pos, w, (uint64_t)1);
+            pos += w;
+            varintSplitFullPut_(buf + pos, w, (uint64_t)FLEX_ENV_ALGO_XXH64);
+            pos += w;
+            varintSplitFullPut_(buf + pos, w, cases[c].flags);
+            pos += w;
+            size_t len = pos; /* a missing key id ends the frame here */
+            if (cases[c].putKeyId) {
+                varintSplitFullPut_(buf + pos, w, cases[c].keyId);
+                pos += w;
+            }
+            if (cases[c].putKeyId ||
+                !(cases[c].flags & FLEX_ENV_FLAG_KEYID_PRESENT)) {
+                varintSplitFullPut_(buf + pos, w, cases[c].payloadLen);
+                pos += w;
+                len = pos + 8;
+            }
+            flexEnvelopeHeader h = {0};
+            const bool ok = flexEnvelopePeek(buf, len, &h);
+            if (ok != cases[c].accept ||
+                (ok && (h.key_id != 7 || h.payload_len != 0 ||
+                        h.header_size != pos))) {
+                ERR("framing case %zu: accepted %d, want %d", c, ok,
+                    cases[c].accept);
+            }
+        }
+    }
+
     /* ============================================================
      * Policy flags
      * ============================================================ */
