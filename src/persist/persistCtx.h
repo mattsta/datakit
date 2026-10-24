@@ -88,7 +88,21 @@ typedef struct persistCtx {
     /* Bad-entry notification, kept until the structure's persist exists */
     persistBadEntryNotify *badEntryNotify;
     void *badEntryNotifyCtx;
+
+    /* A live wrapper (made by a *NewP or *OpenP, not yet closed) holds the
+     * context: one structure's snapshot and WAL belong to one live wrapper */
+    bool claimed;
 } persistCtx;
+
+/* How a context binds: the first *NewP / *OpenP fixes the structure type
+ * (persistCtxInitForType; any other type is refused from then on), and the
+ * wrapper it returns holds the context until its *CloseP.  While a wrapper
+ * holds it, another *NewP / *OpenP on it is refused (two live structures
+ * would interleave their changes in one WAL, and the second's snapshot
+ * would replace the first's).  After the close, a new wrapper of the same
+ * type may take it.  Wrappers call these; an application need not. */
+bool persistCtxClaim(persistCtx *ctx);
+void persistCtxRelease(persistCtx *ctx);
 
 /* Bad WAL entries (persist.h, "Bad WAL entries"): a context heals damaged
  * WAL bytes into <basePath>.quarantine (created only when needed) and holds

@@ -55,6 +55,7 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
     dict = NULL;
     qdc = NULL;
 
+    persistCtxClaim(ctx);
     multidictP *out = d;
     d = NULL;
     return out;
@@ -87,6 +88,7 @@ multidictP *multidictOpenP(persistCtx *ctx) {
     d->ctx = ctx;
     d->d = recovered;
 
+    persistCtxClaim(ctx);
     return d;
 }
 
@@ -95,9 +97,10 @@ void multidictCloseP(multidictP *d) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (d->ctx) {
         persistCtxSync(d->ctx);
+        persistCtxRelease(d->ctx);
     }
 
     /* Free underlying multidict; it privately owns a default class

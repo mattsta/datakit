@@ -40,6 +40,7 @@ multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     multiOrderedSetP *out = mos;
     mos = NULL;
     return out;
@@ -70,6 +71,7 @@ multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
     mos->ctx = ctx;
     mos->mos = recovered;
 
+    persistCtxClaim(ctx);
     return mos;
 }
 
@@ -78,9 +80,10 @@ void multiOrderedSetCloseP(multiOrderedSetP *mos) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (mos->ctx) {
         persistCtxSync(mos->ctx);
+        persistCtxRelease(mos->ctx);
     }
 
     /* Free underlying multiOrderedSet */

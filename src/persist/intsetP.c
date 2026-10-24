@@ -45,6 +45,7 @@ intsetP *intsetNewP(persistCtx *ctx) {
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     intsetP *out = is;
     is = NULL;
     return out;
@@ -71,6 +72,7 @@ intsetP *intsetOpenP(persistCtx *ctx) {
     is->ctx = ctx;
     is->is = recovered;
 
+    persistCtxClaim(ctx);
     return is;
 }
 
@@ -79,9 +81,10 @@ void intsetCloseP(intsetP *is) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (is->ctx) {
         persistCtxSync(is->ctx);
+        persistCtxRelease(is->ctx);
     }
 
     /* Free underlying intset */

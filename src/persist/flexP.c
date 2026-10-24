@@ -45,6 +45,7 @@ flexP *flexNewP(persistCtx *ctx) {
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     flexP *out = f;
     f = NULL;
     return out;
@@ -71,6 +72,7 @@ flexP *flexOpenP(persistCtx *ctx) {
     f->ctx = ctx;
     f->f = recovered;
 
+    persistCtxClaim(ctx);
     return f;
 }
 
@@ -79,9 +81,10 @@ void flexCloseP(flexP *f) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (f->ctx) {
         persistCtxSync(f->ctx);
+        persistCtxRelease(f->ctx);
     }
 
     /* Free underlying flex */

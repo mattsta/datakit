@@ -137,6 +137,7 @@ static multilruP *multilruPNew_(persistCtx *ctx, const multilruConfig *config) {
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     multilruP *out = mlru;
     mlru = NULL;
     return out;
@@ -190,6 +191,7 @@ multilruP *multilruOpenP(persistCtx *ctx) {
     multilruP *mlru = zcalloc(1, sizeof(*mlru));
     mlru->ctx = ctx;
     mlru->mlru = recovered;
+    persistCtxClaim(ctx);
     return mlru;
 }
 
@@ -198,9 +200,10 @@ void multilruCloseP(multilruP *mlru) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (mlru->ctx) {
         persistCtxSync(mlru->ctx);
+        persistCtxRelease(mlru->ctx);
     }
 
     /* Free underlying multilru */

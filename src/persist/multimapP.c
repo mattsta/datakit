@@ -57,6 +57,7 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     multimapP *out = mp;
     mp = NULL;
     return out;
@@ -67,8 +68,10 @@ multimapP *multimapOpenP(persistCtx *ctx) {
         return NULL;
     }
 
-    /* Check if files exist */
-    if (!persistCtxExists(ctx->basePath)) {
+    /* Check if files exist; bind the context (refused for another type, or
+     * while a wrapper holds it) */
+    if (!persistCtxExists(ctx->basePath) ||
+        !persistCtxInitForType(ctx, &persistOpsMultimap)) {
         return NULL;
     }
 
@@ -86,6 +89,7 @@ multimapP *multimapOpenP(persistCtx *ctx) {
     multimapIteratorInit(mp->m, &iter, true);
     mp->elementsPerEntry = iter.elementsPerEntry;
 
+    persistCtxClaim(ctx);
     multimapP *out = mp;
     mp = NULL;
     return out;
@@ -96,10 +100,11 @@ void multimapCloseP(multimapP *m) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (m->ctx && m->ctx->p) {
         persistSync(m->ctx->p);
     }
+    persistCtxRelease(m->ctx);
 
     /* Free underlying multimap */
     if (m->m) {

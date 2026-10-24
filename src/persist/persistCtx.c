@@ -136,6 +136,11 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
         return false;
     }
 
+    /* A live wrapper holds the context: no second structure on it */
+    if (ctx->claimed) {
+        return false;
+    }
+
     /* Already initialized: only for the same type.  A context holds one
      * structure's snapshot and WAL, which another type's codecs would
      * misread (or write over) */
@@ -197,6 +202,20 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
                              ctx->badEntryNotifyCtx);
 
     return true;
+}
+
+bool persistCtxClaim(persistCtx *ctx) {
+    if (!ctx || ctx->claimed) {
+        return false;
+    }
+    ctx->claimed = true;
+    return true;
+}
+
+void persistCtxRelease(persistCtx *ctx) {
+    if (ctx) {
+        ctx->claimed = false;
+    }
 }
 
 bool persistCtxLastBadEntry(const persistCtx *ctx, persistBadEntryReport *out) {
@@ -548,6 +567,36 @@ int persistCtxTest(int argc, char *argv[]) {
                 ERR("%s: %zu calls of other types accepted", types[bound]->name,
                     accepted);
             }
+            persistCtxFree(ctx);
+        }
+    }
+
+    TEST("a live wrapper holds its context until it closes") {
+        /* While a flexP is live, a second New or Open on its context is
+         * refused and the first one's data stays its own; after the close
+         * an Open takes the context and sees the first one's values */
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxClaim", path, sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            persistCtx *ctx = persistCtxNew(path, NULL);
+            flexP *first = flexNewP(ctx);
+            const databox one = DATABOX_SIGNED(1);
+            flexPushTailP(first, &one);
+            flexP *second = flexNewP(ctx);
+            flexP *opened = flexOpenP(ctx);
+            const bool refused = first && !second && !opened;
+            flexCloseP(second);
+            flexCloseP(opened);
+            flexCloseP(first);
+
+            flexP *again = flexOpenP(ctx);
+            if (!refused || !again || flexCountP(again) != 1) {
+                ERR("live wrapper refused %d, reopen %s with %zu values",
+                    refused, again ? "made" : "refused",
+                    again ? flexCountP(again) : (size_t)0);
+            }
+            flexCloseP(again);
             persistCtxFree(ctx);
         }
     }

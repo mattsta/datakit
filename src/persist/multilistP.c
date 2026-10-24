@@ -67,6 +67,7 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     multilistP *out = ml;
     ml = NULL;
     return out;
@@ -100,6 +101,7 @@ multilistP *multilistOpenP(persistCtx *ctx) {
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     multilistP *out = ml;
     ml = NULL;
     return out;
@@ -110,9 +112,10 @@ void multilistCloseP(multilistP *ml) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (ml->ctx) {
         persistCtxSync(ml->ctx);
+        persistCtxRelease(ml->ctx);
     }
 
     /* Free underlying multilist */

@@ -42,6 +42,7 @@ static multiroarP *multiroarStartP(persistCtx *ctx, multiroar *roar) {
         return NULL;
     }
 
+    persistCtxClaim(ctx);
     multiroarP *out = r;
     r = NULL;
     return out;
@@ -80,6 +81,7 @@ multiroarP *multiroarOpenP(persistCtx *ctx) {
     r->ctx = ctx;
     r->r = recovered;
 
+    persistCtxClaim(ctx);
     return r;
 }
 
@@ -88,9 +90,10 @@ void multiroarCloseP(multiroarP *r) {
         return;
     }
 
-    /* Sync before closing */
+    /* Sync before closing; the context is free for another wrapper */
     if (r->ctx) {
         persistCtxSync(r->ctx);
+        persistCtxRelease(r->ctx);
     }
 
     /* Free underlying multiroar */
