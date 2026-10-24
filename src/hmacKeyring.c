@@ -1236,6 +1236,8 @@ const persistOps persistOpsHmacKeyring = {
 
 #include "ctest.h"
 
+defcleaner(hmacKeyring *, hmacKeyringFree);
+
 /* Worker context for the multi-threaded contention test. Each worker
  * runs `iters` lookups against a shared keyring; one designated writer
  * thread interleaves install/retire to keep the slot churning. */
@@ -1594,6 +1596,56 @@ int hmacKeyringTest(int argc, char *argv[]) {
             ERRR("Empty keyring should report size 0");
         }
         hmacKeyringFree(ring);
+    }
+
+    TEST("every id-taking call refuses an invalid or absent id") {
+        /* Beside an installed key 3 (32 bytes, salted): ids 0 (invalid)
+         * and 4 (never installed) are refused by every lookup, copy,
+         * nonce and salt call, and key 3 is left exactly as it was */
+        cleaner(hmacKeyringFree) hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x31, 0x41, 0x59};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {1, 2, 3, 4};
+        uint64_t gen = 0;
+        uint64_t counter = 0;
+        if (!hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt) ||
+            !hmacKeyringGetGeneration(ring, 3u, &gen) ||
+            !hmacKeyringPeekAeadCounter(ring, 3u, &counter)) {
+            ERRR("key 3 setup failed");
+        }
+        static const hmacKeyId ids[] = {HMAC_KEY_ID_INVALID, 4u};
+        for (size_t i = 0; i < sizeof(ids) / sizeof(*ids); i++) {
+            const hmacKeyId id = ids[i];
+            const uint8_t *bytes = NULL;
+            size_t len = 0;
+            uint8_t buf[64];
+            uint64_t v = 0;
+            uint8_t nonce[12];
+            aesGcmKey schedule;
+            const int accepted =
+                hmacKeyringRetire(ring, id) +
+                (hmacKeyringLookup(ring, id) != NULL) +
+                hmacKeyringGetRaw(ring, id, &bytes, &len, NULL) +
+                hmacKeyringGetRawCopy(ring, id, buf, sizeof(buf), &len, NULL) +
+                hmacKeyringGetGeneration(ring, id, &v) +
+                (hmacKeyringGetAesGcmKey(ring, id) != NULL) +
+                hmacKeyringGetAesGcmKeyCopy(ring, id, &schedule) +
+                hmacKeyringNextAeadNonce(ring, id, nonce) +
+                hmacKeyringSetAeadSalt(ring, id, salt) +
+                hmacKeyringPeekAeadCounter(ring, id, &v) +
+                hmacKeyringRestoreAeadCounter(ring, id, 99);
+            if (accepted) {
+                ERR("id %u: %d calls accepted", (unsigned)id, accepted);
+            }
+        }
+        uint64_t genAfter = 0;
+        uint64_t counterAfter = 0;
+        if (hmacKeyringSize(ring) != 1 ||
+            !hmacKeyringGetGeneration(ring, 3u, &genAfter) || genAfter != gen ||
+            !hmacKeyringPeekAeadCounter(ring, 3u, &counterAfter) ||
+            counterAfter != counter) {
+            ERRR("refused calls changed key 3");
+        }
     }
 
     TEST("install + lookup + retire one key") {
