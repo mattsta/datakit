@@ -1256,11 +1256,13 @@ int atomPoolTest(int argc, char *argv[]) {
          * the two id sequences are identical */
         enum { LOW_IDS_ = 512 };
         uint64_t sequence[2][2000] = {{0}};
+        static char names[LOW_IDS_ + 1][32];
         for (int t = 0; t < 2; t++) {
             atomPool *pool =
                 atomPoolNewWithIds((atomPoolType)t, ATOM_POOL_IDS_LOWEST);
             bool live[LOW_IDS_ + 1] = {false};
             size_t liveCount = 0;
+            uint64_t lastReleased = 0;
             uint64_t rng = 0x5EED;
             for (size_t op = 0; op < 2000; op++) {
                 rng =
@@ -1290,6 +1292,7 @@ int atomPoolTest(int argc, char *argv[]) {
 
                     live[want] = true;
                     liveCount++;
+                    memcpy(names[want], buf, sizeof(buf));
                 } else {
                     uint64_t id = 1 + (r % LOW_IDS_);
                     while (!live[id]) {
@@ -1305,6 +1308,34 @@ int atomPoolTest(int argc, char *argv[]) {
 
                     live[id] = false;
                     liveCount--;
+                    lastReleased = id;
+                }
+
+                /* The queries agree: a live atom by id and by string, the
+                 * last released one gone, and the counts */
+                uint64_t probe = 1 + (r % LOW_IDS_);
+                for (size_t k = 0; k < LOW_IDS_ && !live[probe]; k++) {
+                    probe = probe % LOW_IDS_ + 1;
+                }
+                databox back;
+                const databox name = databoxNewBytesString(names[probe]);
+                const bool liveOk =
+                    !live[probe] ||
+                    (atomPoolLookup(pool, probe, &back) &&
+                     back.len == strlen(names[probe]) &&
+                     memcmp(databoxBytes(&back), names[probe], back.len) == 0 &&
+                     atomPoolExists(pool, &name) &&
+                     atomPoolGetId(pool, &name) == probe &&
+                     atomPoolRefcount(pool, probe) == 1);
+                const bool goneOk =
+                    lastReleased == 0 || live[lastReleased] ||
+                    (!atomPoolLookup(pool, lastReleased, &back) &&
+                     atomPoolRefcount(pool, lastReleased) == 0);
+                if (!liveOk || !goneOk || atomPoolCount(pool) != liveCount ||
+                    (liveCount && atomPoolBytes(pool) == 0)) {
+                    ERR("%s op %zu: queries disagree (live %d, gone %d)",
+                        atomPoolTypeName((atomPoolType)t), op, liveOk, goneOk);
+                    break;
                 }
             }
 
