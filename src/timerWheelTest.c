@@ -1207,6 +1207,55 @@ int timerWheelTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("timerWheel: reconcile keeps live cancellations in every store") {
+        /* Timers in all three stores (pending: below the resolution;
+         * wheel: one second; overflow: a day), one of each cancelled,
+         * plus a fired id unregistered: reconcile drops only the fired
+         * id's tombstone and keeps the three whose timers are stored */
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+        const timerWheelId fired =
+            timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
+        timerWheelAdvanceTime(tw, 3000);
+
+        const timerWheelDurationUs day = 24ULL * 3600 * 1000000;
+        static const timerWheelDurationUs delays[3] = {0, 1000000, 0};
+        timerWheelId ids[3][3];
+        for (int store = 0; store < 3; store++) {
+            for (int i = 0; i < 3; i++) {
+                ids[store][i] =
+                    timerWheelRegister(tw, store == 2 ? day : delays[store], 0,
+                                       testCountingCallback, &state);
+            }
+        }
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (stats.pendingCount != 3 || stats.overflowCount != 3) {
+            ERR("setup: %zu pending, %zu in overflow, want 3 and 3",
+                stats.pendingCount, stats.overflowCount);
+        }
+        for (int store = 0; store < 3; store++) {
+            timerWheelUnregister(tw, ids[store][1]);
+        }
+        timerWheelUnregister(tw, fired);
+
+        if (!timerWheelReconcileCancellations(tw)) {
+            ERRR("reconcile failed outside a callback");
+        }
+        timerWheelGetStats(tw, &stats);
+        if (timerWheelCount(tw) != 6 || stats.cancelledPending != 3) {
+            ERR("after reconcile: count %zu (want 6), %zu live tombstones "
+                "(want 3)",
+                timerWheelCount(tw), stats.cancelledPending);
+        }
+
+        /* Everything left fires once; the cancelled ones never */
+        timerWheelAdvanceTime(tw, day + 2000000);
+        if (state.callCount != 1 + 6) {
+            ERR("%d callbacks, want 7", state.callCount);
+        }
+    }
+
     TEST("timerWheel: single large advance with live distant timer") {
         /* Exercises empty-span hopping: the catch-up loop must cross
          * many wheel0 revolutions (with cascades) in one call and
