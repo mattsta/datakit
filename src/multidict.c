@@ -3512,6 +3512,7 @@ void multidictDefaultClassFree(multidictClass *qdc) {
  * Comprehensive Test Function
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+#include "ctest.h"
 #include "persist.h" /* snapshot round trips of wide pairs */
 #include <locale.h>  /* the case compare ignores the C locale */
 
@@ -4049,22 +4050,18 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         mdTestPoisonStack_();
         if (!multidictFind(d, (databox *)&key, (databox *)&val) ||
             !mdWideMatches_((databox *)&val, &p[i].val)) {
-            printf("ERROR: wide Find mismatch for pair %zu\n", i);
-            err++;
+            ERR("wide Find mismatch for pair %zu", i);
         }
     }
 
     if (multidictCount(d) != live) {
-        printf("ERROR: wide count %" PRIu64 ", expected %zu\n",
-               multidictCount(d), live);
-        err++;
+        ERR("wide count %" PRIu64 ", expected %zu", multidictCount(d), live);
     }
 
     if (multidictKeyBytes(d) != keyBytes || multidictValBytes(d) != valBytes) {
-        printf("ERROR: wide byte stats key %" PRIu64 "/%" PRIu64 " val %" PRIu64
-               "/%" PRIu64 "\n",
-               multidictKeyBytes(d), keyBytes, multidictValBytes(d), valBytes);
-        err++;
+        ERR("wide byte stats key %" PRIu64 "/%" PRIu64 " val %" PRIu64
+            "/%" PRIu64,
+            multidictKeyBytes(d), keyBytes, multidictValBytes(d), valBytes);
     }
 
     /* Iterate (unsafe, then safe) into an entry poisoned before every
@@ -4105,18 +4102,16 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
             }
 
             if (!ok) {
-                printf("ERROR: wide %s iteration entry %zu wrong\n",
-                       safe ? "safe" : "unsafe", visited);
-                err++;
+                ERR("wide %s iteration entry %zu wrong",
+                    safe ? "safe" : "unsafe", visited);
                 break;
             }
             seen[at] = 1;
         }
         multidictIteratorRelease(&iter);
         if (visited != live) {
-            printf("ERROR: wide %s iteration visited %zu of %zu\n",
-                   safe ? "safe" : "unsafe", visited, live);
-            err++;
+            ERR("wide %s iteration visited %zu of %zu",
+                safe ? "safe" : "unsafe", visited, live);
         }
     }
 
@@ -4128,8 +4123,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         mdTestPoisonStack_();
         const uint32_t got = multidictGetSomeKeys(d, some, 16);
         if (got == 0) {
-            printf("ERROR: GetSomeKeys returned nothing\n");
-            err++;
+            ERRR("GetSomeKeys returned nothing");
         }
         for (uint32_t i = 0; i < got; i++) {
             const bool wide = some[i].type == DATABOX_SIGNED_128 ||
@@ -4137,8 +4131,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
             if (wide ? !databoxIsWideDeferred(&some[i])
                      : (some[i].big || some[i].allocated ||
                         mdWideFind_(p, n, &some[i]) == SIZE_MAX)) {
-                printf("ERROR: GetSomeKeys slot %u wrong\n", i);
-                err++;
+                ERR("GetSomeKeys slot %u wrong", i);
             }
         }
     }
@@ -4157,8 +4150,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         }
     }
     if (state.bad) {
-        printf("ERROR: wide scan saw %d wrong or missing pairs\n", state.bad);
-        err++;
+        ERR("wide scan saw %d wrong or missing pairs", state.bad);
     }
 
     return err;
@@ -4182,8 +4174,7 @@ static int multidictTestWide_(mdWideMode mode) {
         mdTestPoisonStack_();
         if (multidictAdd(d, (databox *)&key, (databox *)&val) !=
             MULTIDICT_OK_INSERTED) {
-            printf("ERROR: wide Add of pair %zu did not insert\n", i);
-            err++;
+            ERR("wide Add of pair %zu did not insert", i);
         }
 
         /* Interleave lookups with the incremental rehash */
@@ -4207,8 +4198,7 @@ static int multidictTestWide_(mdWideMode mode) {
         DATABOX_BIG_INIT(&val);
         if (!multidictFind(d, (databox *)&key, (databox *)&val) ||
             !mdWideMatches_((databox *)&val, &p[i].val)) {
-            printf("ERROR: 128-bit box of a 64-bit key %zu not found\n", i);
-            err++;
+            ERR("128-bit box of a 64-bit key %zu not found", i);
         }
     }
 
@@ -4219,8 +4209,7 @@ static int multidictTestWide_(mdWideMode mode) {
         databox val = {{0}};
         if (!multidictFind(d, (databox *)&key, &val) ||
             val.type != DATABOX_UNSIGNED_128 || val.data.ptr) {
-            printf("ERROR: zeroed box did not get a type-only wide value\n");
-            err++;
+            ERRR("zeroed box did not get a type-only wide value");
         }
     }
 
@@ -4231,8 +4220,7 @@ static int multidictTestWide_(mdWideMode mode) {
         mdTestPoisonStack_();
         if (!multidictGetRandomKey(d, (databox *)&key) ||
             mdWideFind_(p, n, (databox *)&key) == SIZE_MAX) {
-            printf("ERROR: GetRandomKey returned an unknown key\n");
-            err++;
+            ERRR("GetRandomKey returned an unknown key");
         }
     }
 
@@ -4247,8 +4235,7 @@ static int multidictTestWide_(mdWideMode mode) {
         multidict *restored =
             snap ? persistOpsMultidict.restore(snap, snapLen) : NULL;
         if (!restored) {
-            printf("ERROR: persist snapshot round trip failed\n");
-            err++;
+            ERRR("persist snapshot round trip failed");
         } else {
             err += mdWideVerify_(restored, p, n);
             persistOpsMultidict.free(restored);
@@ -4257,8 +4244,7 @@ static int multidictTestWide_(mdWideMode mode) {
         cleaner(multidictFree) multidict *merged =
             multidictNew(&multidictTypeExactKey, qdc, 0);
         if (multidictMerge(merged, d, MULTIDICT_MERGE_REPLACE) != n) {
-            printf("ERROR: wide Merge count wrong\n");
-            err++;
+            ERRR("wide Merge count wrong");
         }
         err += mdWideVerify_(merged, p, n);
     }
@@ -4270,13 +4256,11 @@ static int multidictTestWide_(mdWideMode mode) {
         mdWideBox_(&key, &p[i].key);
         mdTestPoisonStack_();
         if (!multidictDelete(d, (databox *)&key)) {
-            printf("ERROR: wide Delete of pair %zu failed\n", i);
-            err++;
+            ERR("wide Delete of pair %zu failed", i);
         }
         p[i].live = false;
         if (multidictExists(d, (databox *)&key)) {
-            printf("ERROR: pair %zu exists after Delete\n", i);
-            err++;
+            ERR("pair %zu exists after Delete", i);
         }
     }
     err += mdWideVerify_(d, p, n);
@@ -4288,12 +4272,10 @@ static int multidictTestWide_(mdWideMode mode) {
         memset(&val, 0xFF, sizeof(val));
         mdTestPoisonStack_();
         if (!multidictGetAndDelete(d, (databox *)&key, &val)) {
-            printf("ERROR: GetAndDelete of pair %zu failed\n", i);
-            err++;
+            ERR("GetAndDelete of pair %zu failed", i);
         } else {
             if (!mdWideMatches_(&val, &p[i].val) || !mdWideOwned_(&val)) {
-                printf("ERROR: GetAndDelete value of pair %zu wrong\n", i);
-                err++;
+                ERR("GetAndDelete value of pair %zu wrong", i);
             }
             databoxFreeData(&val);
         }
@@ -4308,16 +4290,14 @@ static int multidictTestWide_(mdWideMode mode) {
         memset(&val, 0xFF, sizeof(val));
         mdTestPoisonStack_();
         if (!multidictPopRandom(d, &key, &val)) {
-            printf("ERROR: PopRandom failed\n");
-            err++;
+            ERRR("PopRandom failed");
             break;
         }
 
         const size_t at = mdWideFind_(p, n, &key);
         if (at == SIZE_MAX || !mdWideMatches_(&val, &p[at].val) ||
             !mdWideOwned_(&key) || !mdWideOwned_(&val)) {
-            printf("ERROR: PopRandom returned a wrong pair\n");
-            err++;
+            ERRR("PopRandom returned a wrong pair");
         } else {
             p[at].live = false;
         }
@@ -4349,9 +4329,7 @@ static int multidictTestWide_(mdWideMode mode) {
          * free their slots, and the evictions themselves shrink the table */
         multidictExpand(e, (uint64_t)n * 4);
         if (!multidictIsRehashing(e)) {
-            printf("ERROR: policy %d eviction did not start rehashing\n",
-                   policy);
-            err++;
+            ERR("policy %d eviction did not start rehashing", policy);
         }
 
         mdWideEvictPairs_ = p;
@@ -4365,9 +4343,8 @@ static int multidictTestWide_(mdWideMode mode) {
         const uint32_t evicted = multidictEvictToLimit(e);
         if (evicted == 0 || mdWideEvictBad_ != 0 ||
             mdWideEvictSeen_ < (int)evicted) {
-            printf("ERROR: policy %d evicted %u, callback saw %d (%d bad)\n",
-                   policy, evicted, mdWideEvictSeen_, mdWideEvictBad_);
-            err++;
+            ERR("policy %d evicted %u, callback saw %d (%d bad)", policy,
+                evicted, mdWideEvictSeen_, mdWideEvictBad_);
         }
 
         /* The survivors still read back */
@@ -4413,8 +4390,7 @@ static int multidictTestSlotIteratorWide_(void) {
     memset(&iter, 0xFF, sizeof(iter));
     memset(&first, 0xFF, sizeof(first));
     if (!qdc->getIter(&iter, slot) || !qdc->iterNext(&iter, &first)) {
-        printf("ERROR: slot iterator produced nothing\n");
-        err++;
+        ERRR("slot iterator produced nothing");
     } else {
         multidictSlotIterator copy = iter;
         multidictEntry second;
@@ -4425,14 +4401,12 @@ static int multidictTestSlotIteratorWide_(void) {
             first.val.data.i128 != (__int128_t *)iter.wide[1].b ||
             !first.key.big || first.key.allocated ||
             *first.key.data.u128 != k1 || *first.val.data.i128 != v1) {
-            printf("ERROR: slot iterator entry does not use its slots\n");
-            err++;
+            ERRR("slot iterator entry does not use its slots");
         }
 
         if (!more || second.key.data.u128 != (__uint128_t *)copy.wide[0].b ||
             *second.key.data.u128 != k2 || *second.val.data.i128 != v2) {
-            printf("ERROR: copied slot iterator did not use its own slots\n");
-            err++;
+            ERRR("copied slot iterator did not use its own slots");
         }
     }
 
@@ -4486,8 +4460,7 @@ static int multidictTestKeyCompare_(void) {
         const bool f = fold(NULL, cases[i].a, cases[i].alen, cases[i].b,
                             cases[i].blen) != 0;
         if (e != cases[i].exactEq || f != cases[i].foldEq) {
-            printf("ERROR: key compare case %zu: exact %d fold %d\n", i, e, f);
-            err++;
+            ERR("key compare case %zu: exact %d fold %d", i, e, f);
         }
     }
 
@@ -4503,15 +4476,12 @@ static int multidictTestKeyCompare_(void) {
             const bool want = testFoldAscii_(ab) == testFoldAscii_(bb);
             const bool got = fold(NULL, &ab, 1, &bb, 1) != 0;
             if (got != want) {
-                printf("ERROR: case compare of 0x%02x and 0x%02x is %d\n", a, b,
-                       got);
-                err++;
+                ERR("case compare of 0x%02x and 0x%02x is %d", a, b, got);
             }
 
             if (want && multidictGenCaseHashFunction(d, &ab, 1) !=
                             multidictGenCaseHashFunction(d, &bb, 1)) {
-                printf("ERROR: case hash of 0x%02x and 0x%02x differs\n", a, b);
-                err++;
+                ERR("case hash of 0x%02x and 0x%02x differs", a, b);
             }
         }
     }
@@ -4537,8 +4507,7 @@ static int multidictTestKeyCompare_(void) {
         if (!fold(NULL, a, len, b, len) ||
             multidictGenCaseHashFunction(d, a, (int32_t)len) !=
                 multidictGenCaseHashFunction(d, b, (int32_t)len)) {
-            printf("ERROR: case flip round %d does not match\n", round);
-            err++;
+            ERR("case flip round %d does not match", round);
         }
     }
 
@@ -4563,10 +4532,9 @@ static int multidictTestKeyCompare_(void) {
         if (h != multidictGenHashFunction(d, folded, (int32_t)len) ||
             h != multidictGenCaseHashFunction(d, flipped, (int32_t)len) ||
             !fold(NULL, raw, len, flipped, len)) {
-            printf("ERROR: case hash of a %" PRIu32 "-byte key is not the "
-                   "seeded hash of its folded bytes\n",
-                   len);
-            err++;
+            ERR("case hash of a %" PRIu32 "-byte key is not the seeded hash "
+                "of its folded bytes",
+                len);
         }
     }
 
@@ -4595,8 +4563,7 @@ static int multidictTestKeyCompare_(void) {
                 if (k == 0) {
                     first = h;
                 } else if (h != first) {
-                    printf("ERROR: djb collision set does not collide\n");
-                    err++;
+                    ERRR("djb collision set does not collide");
                     break;
                 }
             }
@@ -4620,10 +4587,9 @@ static int multidictTestKeyCompare_(void) {
         }
 
         if (collisions != 0 || sameAcrossSeeds != 0) {
-            printf("ERROR: case hash: %" PRIu32 " collisions in the djb set, "
-                   "%" PRIu32 " keys hash alike under two seeds\n",
-                   collisions, sameAcrossSeeds);
-            err++;
+            ERR("case hash: %" PRIu32 " collisions in the djb set, %" PRIu32
+                " keys hash alike under two seeds",
+                collisions, sameAcrossSeeds);
         }
 
         /* In a dict they spread over the slots instead of piling up */
@@ -4643,10 +4609,8 @@ static int multidictTestKeyCompare_(void) {
         multidictDetailedStats stats;
         multidictGetDetailedStats(d2, &stats);
         if (multidictCount(d2) != keys || stats.maxChainLen > 8) {
-            printf("ERROR: djb collision set piles %" PRIu64
-                   " keys into one slot\n",
-                   stats.maxChainLen);
-            err++;
+            ERR("djb collision set piles %" PRIu64 " keys into one slot",
+                stats.maxChainLen);
         }
     }
 
@@ -4663,8 +4627,7 @@ static int multidictTestKeyCompare_(void) {
         if (setlocale(LC_CTYPE, latin1[i])) {
             if (fold(NULL, "\xc4", 1, "\xe4", 1) ||
                 !fold(NULL, "A\xc4", 2, "a\xc4", 2)) {
-                printf("ERROR: case compare follows locale %s\n", latin1[i]);
-                err++;
+                ERR("case compare follows locale %s", latin1[i]);
             }
             break;
         }
@@ -4760,8 +4723,7 @@ static int multidictTestCaseOps_(void) {
         multidictAddXX(d, &other, &one) != MULTIDICT_ERR ||
         multidictReplace(d, &other, &one) != MULTIDICT_ERR ||
         !testOnlyEntryIs_(d, "Key", 3, &three)) {
-        printf("ERROR: case conditional adds\n");
-        err++;
+        ERRR("case conditional adds");
     }
 
     /* Exists, by box and by string, and FindByString */
@@ -4772,8 +4734,7 @@ static int multidictTestCaseOps_(void) {
         multidictExistsByString(d, "KEYS") ||
         !multidictFindByString(d, "kEy", &found) || !found ||
         memcmp(found, "payload", 7) != 0) {
-        printf("ERROR: case exists / find by string\n");
-        err++;
+        ERRR("case exists / find by string");
     }
 
     /* Increments create under the first spelling, then match any */
@@ -4788,8 +4749,7 @@ static int multidictTestCaseOps_(void) {
         multidictIncrByFloat(d, &counterLow, 0.5, &dval) !=
             MULTIDICT_OK_REPLACED ||
         dval != 7.5 || multidictCount(d) != 2) {
-        printf("ERROR: case increments\n");
-        err++;
+        ERRR("case increments");
     }
 
     /* Get-and-delete by another spelling */
@@ -4797,8 +4757,7 @@ static int multidictTestCaseOps_(void) {
     if (!multidictGetAndDelete(d, &KEY, &got) ||
         !testBoxIsBytes_(&got, "payload", 7) || multidictExists(d, &key) ||
         multidictCount(d) != 1) {
-        printf("ERROR: case get-and-delete\n");
-        err++;
+        ERRR("case get-and-delete");
     }
     databoxFreeData(&got);
     multidictDelete(d, &COUNTER);
@@ -4819,8 +4778,7 @@ static int multidictTestCaseOps_(void) {
         multidictAddMultiple(d, firsts, vals, 3) != 3 ||
         multidictAddMultiple(d, seconds, vals, 3) != 0 ||
         multidictCount(d) != 3) {
-        printf("ERROR: case bulk add\n");
-        err++;
+        ERRR("case bulk add");
     }
 
     /* Iteration, scan, random keys and pops report the stored spelling */
@@ -4829,8 +4787,7 @@ static int multidictTestCaseOps_(void) {
     multidictEntry e;
     while (multidictIteratorNext(&iter, &e)) {
         if (!testKeyIsOneOf_(&e.key, stored, 3)) {
-            printf("ERROR: case iteration reported another spelling\n");
-            err++;
+            ERRR("case iteration reported another spelling");
         }
     }
     multidictIteratorRelease(&iter);
@@ -4861,8 +4818,8 @@ static int multidictTestCaseOps_(void) {
     }
 
     if (bad) {
-        printf("ERROR: case scan or random key reported another spelling\n");
-        err++;
+        ERR("case scan or random key reported another spelling (%" PRId32 ")",
+            bad);
     }
 
     /* Copy keeps the type; merge matches dst keys across spellings */
@@ -4871,8 +4828,7 @@ static int multidictTestCaseOps_(void) {
         databox fv = {{0}};
         if (multidictCount(copy) != 3 ||
             !multidictFind(copy, &seconds[0], &fv) || !testBoxIsInt_(&fv, 10)) {
-            printf("ERROR: case copy\n");
-            err++;
+            ERRR("case copy");
         }
 
         cleaner(multidictFree) multidict *src =
@@ -4884,15 +4840,13 @@ static int multidictTestCaseOps_(void) {
         if (multidictMerge(copy, src, MULTIDICT_MERGE_KEEP) != 1 ||
             multidictCount(copy) != 4 ||
             !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 10)) {
-            printf("ERROR: case merge (keep)\n");
-            err++;
+            ERRR("case merge (keep)");
         }
 
         if (multidictMerge(copy, src, MULTIDICT_MERGE_REPLACE) != 2 ||
             multidictCount(copy) != 4 ||
             !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 90)) {
-            printf("ERROR: case merge (replace)\n");
-            err++;
+            ERRR("case merge (replace)");
         }
 
         bool alphaKept = false;
@@ -4902,8 +4856,7 @@ static int multidictTestCaseOps_(void) {
         }
         multidictIteratorRelease(&iter);
         if (!alphaKept) {
-            printf("ERROR: case merge replaced the stored spelling\n");
-            err++;
+            ERRR("case merge replaced the stored spelling");
         }
     }
 
@@ -4912,8 +4865,7 @@ static int multidictTestCaseOps_(void) {
     multidictSetEvictionCallback(d, testRecordEvictionCb_, &bad);
     multidictSetMaxMemory(d, 1);
     if (multidictEvictToLimit(d) != 3 || multidictCount(d) != 0 || bad) {
-        printf("ERROR: case eviction\n");
-        err++;
+        ERRR("case eviction");
     }
     multidictSetMaxMemory(d, 0);
     multidictSetEvictionCallback(d, NULL, NULL);
@@ -4924,8 +4876,7 @@ static int multidictTestCaseOps_(void) {
     databox pv = {{0}};
     if (!multidictPopRandom(d, &pk, &pv) || !testBoxIsBytes_(&pk, "BETA", 4) ||
         !testBoxIsInt_(&pv, 1) || multidictCount(d) != 0) {
-        printf("ERROR: case pop random\n");
-        err++;
+        ERRR("case pop random");
     }
     databoxFreeData(&pk);
     databoxFreeData(&pv);
@@ -4933,8 +4884,7 @@ static int multidictTestCaseOps_(void) {
     /* Bulk delete under other spellings */
     multidictAddMultiple(d, firsts, vals, 3);
     if (multidictDeleteMultiple(d, seconds, 3) != 3 || multidictCount(d) != 0) {
-        printf("ERROR: case bulk delete\n");
-        err++;
+        ERRR("case bulk delete");
     }
 
     /* Integer keys match exactly: 0x41 and 0x61 differ only in the case
@@ -4950,8 +4900,7 @@ static int multidictTestCaseOps_(void) {
         !testBoxIsInt_(&iv, 1) || !multidictFind(d, &inta, &iv) ||
         !testBoxIsInt_(&iv, 2) || !multidictDelete(d, &inta) ||
         !multidictFind(d, &intA, &iv) || multidictCount(d) != 2) {
-        printf("ERROR: case dict integer keys are not exact\n");
-        err++;
+        ERRR("case dict integer keys are not exact");
     }
     multidictEmpty(d);
 
@@ -4969,8 +4918,7 @@ static int multidictTestCaseOps_(void) {
         !testOnlyEntryIs_(d, lower, sizeof(lower), &two) ||
         !multidictDelete(d, &longUp) || multidictCount(d) != 0 ||
         multidictKeyBytes(d) != 0) {
-        printf("ERROR: case dict long keys\n");
-        err++;
+        ERRR("case dict long keys");
     }
 
     return err;
@@ -4995,23 +4943,19 @@ static int multidictTestBinaryKeys_(multidictType *type) {
         const databox k = databoxNewBytes(keys[i].bytes, keys[i].len);
         const databox v = DATABOX_SIGNED((int64_t)i);
         if (multidictAdd(d, &k, &v) != MULTIDICT_OK_INSERTED) {
-            printf("ERROR: binary key %zu did not insert\n", i);
-            err++;
+            ERR("binary key %zu did not insert", i);
         }
     }
 
     if (multidictCount(d) != n) {
-        printf("ERROR: binary keys collapsed: %" PRIu64 " of %zu\n",
-               multidictCount(d), n);
-        err++;
+        ERR("binary keys collapsed: %" PRIu64 " of %zu", multidictCount(d), n);
     }
 
     for (size_t i = 0; i < n; i++) {
         const databox k = databoxNewBytes(keys[i].bytes, keys[i].len);
         databox v = {{0}};
         if (!multidictFind(d, &k, &v) || !testBoxIsInt_(&v, (int64_t)i)) {
-            printf("ERROR: binary key %zu found the wrong entry\n", i);
-            err++;
+            ERR("binary key %zu found the wrong entry", i);
         }
     }
 
@@ -5022,16 +4966,14 @@ static int multidictTestBinaryKeys_(multidictType *type) {
     if (!multidictDelete(d, &gone) || multidictExists(d, &gone) ||
         !multidictFind(d, &kept, &v) || !testBoxIsInt_(&v, 1) ||
         multidictCount(d) != n - 1) {
-        printf("ERROR: binary key delete\n");
-        err++;
+        ERRR("binary key delete");
     }
 
     /* In a case dict the letter after the NUL still folds */
     if (type == &multidictTypeCaseKey) {
         const databox upper = databoxNewBytes("A\0C", 3);
         if (!multidictFind(d, &upper, &v) || !testBoxIsInt_(&v, 1)) {
-            printf("ERROR: case fold past an embedded NUL\n");
-            err++;
+            ERRR("case fold past an embedded NUL");
         }
     }
 
@@ -5050,8 +4992,7 @@ static int multidictTestExactDistinct_(void) {
         const databox k = databoxNewBytesString(spellings[i]);
         const databox v = DATABOX_SIGNED(i);
         if (multidictAdd(d, &k, &v) != MULTIDICT_OK_INSERTED) {
-            printf("ERROR: exact spelling '%s' did not insert\n", spellings[i]);
-            err++;
+            ERR("exact spelling '%s' did not insert", spellings[i]);
         }
     }
 
@@ -5062,8 +5003,7 @@ static int multidictTestExactDistinct_(void) {
         multidictAddXX(d, &absent, &KEY) != MULTIDICT_ERR ||
         !multidictDelete(d, &KEY) || multidictExists(d, &KEY) ||
         multidictCount(d) != 3) {
-        printf("ERROR: exact dict matched across case\n");
-        err++;
+        ERRR("exact dict matched across case");
     }
 
     for (int32_t i = 0; i < 4; i++) {
@@ -5071,8 +5011,7 @@ static int multidictTestExactDistinct_(void) {
         const bool want = i != 1;
         if (multidictFind(d, &k, &v) != want ||
             (want && !testBoxIsInt_(&v, i))) {
-            printf("ERROR: exact spelling '%s' lost its value\n", spellings[i]);
-            err++;
+            ERR("exact spelling '%s' lost its value", spellings[i]);
         }
     }
 
@@ -5126,8 +5065,7 @@ static int multidictTestCustomCompare_(void) {
             multidictCount(d) != 2 || !multidictFind(d, &plain, &v) ||
             !testBoxIsInt_(&v, 2) || !multidictDelete(d, &plain) ||
             multidictExists(d, &padded) || multidictCount(d) != 1) {
-            printf("ERROR: custom keyCompare not honoured\n");
-            err++;
+            ERRR("custom keyCompare not honoured");
         }
     }
 
@@ -5140,8 +5078,7 @@ static int multidictTestCustomCompare_(void) {
         if (multidictAdd(d, &a, &one) != MULTIDICT_OK_INSERTED ||
             multidictAdd(d, &b, &one) != MULTIDICT_OK_INSERTED ||
             multidictCount(d) != 2) {
-            printf("ERROR: NULL keyCompare does not match exact bytes\n");
-            err++;
+            ERRR("NULL keyCompare does not match exact bytes");
         }
     }
 
@@ -5213,8 +5150,8 @@ static int multidictTestPersistKeys_(void) {
     if (!exactSnap || flexCount((const flex *)exactSnap) != 6 || !ciSnap ||
         flexCount((const flex *)ciSnap) != 6 || !ciEmptySnap ||
         flexCount((const flex *)ciEmptySnap) != 2 || !customSnap) {
-        printf("ERROR: multidict snapshot layout\n");
-        return err + 1;
+        ERRR("multidict snapshot layout");
+        return err;
     }
 
     /* Built-in types restore by themselves, or as the same type */
@@ -5226,8 +5163,7 @@ static int multidictTestPersistKeys_(void) {
                         &multidictTypeExactKey, 2) ||
         !testRestoreIs_(ciSnap, ciLen, &multidictTypeCaseKey,
                         &multidictTypeCaseKey, 2)) {
-        printf("ERROR: built-in key types did not round trip\n");
-        err++;
+        ERRR("built-in key types did not round trip");
     }
 
     /* A custom type needs the caller's type; the trim type matches "Foo"
@@ -5239,8 +5175,7 @@ static int multidictTestPersistKeys_(void) {
     if (persistOpsMultidict.restore(customSnap, customLen) != NULL || !r ||
         multidictGetType(r) != &testTrimType_ || multidictCount(r) != 2 ||
         !multidictFind(r, &padded, &v)) {
-        printf("ERROR: custom key type restore\n");
-        err++;
+        ERRR("custom key type restore");
     }
     if (r) {
         persistOpsMultidict.free(r);
@@ -5256,8 +5191,7 @@ static int multidictTestPersistKeys_(void) {
         multidictPersistRestoreAs(customSnap, customLen,
                                   &multidictTypeExactKey) ||
         multidictPersistRestoreAs(ciSnap, ciLen, NULL)) {
-        printf("ERROR: a key type mismatch was not refused\n");
-        err++;
+        ERRR("a key type mismatch was not refused");
     }
 
     /* Pairs without the key record are refused */
@@ -5270,8 +5204,7 @@ static int multidictTestPersistKeys_(void) {
         if (persistOpsMultidict.restore(pairsOnly, flexBytes(pairsOnly)) ||
             multidictPersistRestoreAs(pairsOnly, flexBytes(pairsOnly),
                                       &multidictTypeExactKey)) {
-            printf("ERROR: a snapshot without its key record restored\n");
-            err++;
+            ERRR("a snapshot without its key record restored");
         }
     }
 
@@ -5286,8 +5219,7 @@ static int multidictTestPersistKeys_(void) {
             flexPushByType(&bad, &foo, FLEX_ENDPOINT_TAIL);
             flexPushByType(&bad, &one, FLEX_ENDPOINT_TAIL);
             if (persistOpsMultidict.restore(bad, flexBytes(bad)) != NULL) {
-                printf("ERROR: key record %zu was not refused\n", h);
-                err++;
+                ERR("key record %zu was not refused", h);
             }
         }
     }
@@ -5391,7 +5323,7 @@ static void testCiRemove_(testCiOracle *o, int32_t at) {
  * oracle's spelling with its value, each once, and key bytes adding up */
 static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
                          uint32_t step) {
-    int err = 0;
+    int bad = 0; /* entries the oracle does not hold as iterated */
     bool seen[TEST_CI_BASES * 8] = {0};
     uint64_t keyBytes = 0;
     for (uint32_t i = 0; i < o->count; i++) {
@@ -5406,24 +5338,24 @@ static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
         n++;
         const int32_t at = testCiFindExact_(o, &e.key);
         if (at < 0 || seen[at] || !testBoxIsInt_(&e.val, o->e[at].val)) {
-            err++;
+            bad++;
             continue;
         }
         seen[at] = true;
     }
     multidictIteratorRelease(&iter);
 
-    if (err || n != o->count || multidictCount(d) != o->count ||
+    int err = 0;
+    if (bad || n != o->count || multidictCount(d) != o->count ||
         multidictKeyBytes(d) != keyBytes ||
         (lru && !testLruTrackingExact_(d))) {
-        printf("ERROR: differential step %" PRIu32 ": %" PRIu32
-               " entries, %d bad, count %" PRIu64 " (oracle %" PRIu32
-               "), key bytes %" PRIu64 " (oracle %" PRIu64 ")\n",
-               step, n, err, multidictCount(d), o->count, multidictKeyBytes(d),
-               keyBytes);
-        return 1;
+        ERR("differential step %" PRIu32 ": %" PRIu32
+            " entries, %d bad, count %" PRIu64 " (oracle %" PRIu32
+            "), key bytes %" PRIu64 " (oracle %" PRIu64 ")",
+            step, n, bad, multidictCount(d), o->count, multidictKeyBytes(d),
+            keyBytes);
     }
-    return 0;
+    return err;
 }
 
 static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
@@ -5539,10 +5471,8 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
         }
 
         if (!ok) {
-            printf("ERROR: differential step %" PRIu32 ": op %" PRIu32
-                   " on base %.5s\n",
-                   step, op, (const char *)key);
-            err++;
+            ERR("differential step %" PRIu32 ": op %" PRIu32 " on base %.5s",
+                step, op, (const char *)key);
         }
 
         if (step % 500 == 499) {
@@ -5552,8 +5482,7 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
 
     err += testCiVerify_(d, o, lru, steps);
     if (inFlight == 0) {
-        printf("ERROR: differential never ran with a rehash in flight\n");
-        err++;
+        ERRR("differential never ran with a rehash in flight");
     }
 
     return err;
@@ -5598,9 +5527,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
         const databox probe = TEST_RANK_KEY();                                 \
         const int level = multidictGetLRULevel(d, &probe);                     \
         if (level != expect) {                                                 \
-            printf("ERROR: LRU level %d after %s, expected %d\n", level,       \
-                   (what), expect);                                            \
-            err++;                                                             \
+            ERR("LRU level %d after %s, expected %d", level, (what), expect);  \
             expect = level;                                                    \
         }                                                                      \
     } while (0)
@@ -5611,25 +5538,25 @@ static int multidictTestLruPromotion_(multidictType *type) {
      * outcome */
     databox k = TEST_RANK_KEY();
     if (!multidictExists(d, &k)) {
-        err++;
+        ERRR("exists missed the ranked key");
     }
     TEST_RANK_STEP("exists", 1);
 
     if (!multidictExistsByString(d, fold ? "RANK" : "rank")) {
-        err++;
+        ERRR("exists by string missed the ranked key");
     }
     TEST_RANK_STEP("exists by string", 1);
 
     k = TEST_RANK_KEY();
     if (multidictAddNX(d, &k, &ten) != MULTIDICT_ERR) {
-        err++;
+        ERRR("add-NX of a present key was not refused");
     }
     TEST_RANK_STEP("add-NX of a present key", 1);
 
     int64_t ires = 0;
     k = TEST_RANK_KEY();
     if (multidictIncrBy(d, &k, 1, &ires) != MULTIDICT_ERR) {
-        err++; /* the value is text */
+        ERRR("an increment of text was not refused");
     }
     TEST_RANK_STEP("refused increment", 1);
 
@@ -5637,7 +5564,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     const databox absent = databoxNewBytesString("absent-key");
     if (multidictExists(d, &absent) ||
         multidictIncrByFloat(d, &absent, NAN, NULL) != MULTIDICT_ERR) {
-        err++;
+        ERRR("an absent key was found or incremented by NaN");
     }
     TEST_RANK_STEP("a miss", 0);
 
@@ -5661,13 +5588,13 @@ static int multidictTestLruPromotion_(multidictType *type) {
     databox v = {{0}};
     k = TEST_RANK_KEY();
     if (!multidictFind(d, &k, &v)) {
-        err++;
+        ERRR("find missed the ranked key");
     }
     TEST_RANK_STEP("find", 1);
 
     uint8_t *bytes = NULL;
     if (!multidictFindByString(d, fold ? "rANK" : "rank", &bytes)) {
-        err++;
+        ERRR("find by string missed the ranked key");
     }
     TEST_RANK_STEP("find by string", 1);
 
@@ -5677,26 +5604,26 @@ static int multidictTestLruPromotion_(multidictType *type) {
 
     k = TEST_RANK_KEY();
     if (multidictAdd(d, &k, &text) != MULTIDICT_OK_REPLACED) {
-        err++;
+        ERRR("add of a present key did not replace");
     }
     TEST_RANK_STEP("add of a present key", 1);
 
     k = TEST_RANK_KEY();
     if (multidictAddXX(d, &k, &text) != MULTIDICT_OK_REPLACED) {
-        err++;
+        ERRR("add-XX did not replace");
     }
     TEST_RANK_STEP("add-XX", 1);
 
     k = TEST_RANK_KEY();
     if (multidictReplace(d, &k, &ten) != MULTIDICT_OK_REPLACED) {
-        err++;
+        ERRR("replace did not replace");
     }
     TEST_RANK_STEP("replace", 1);
 
     k = TEST_RANK_KEY();
     if (multidictIncrBy(d, &k, 5, &ires) != MULTIDICT_OK_REPLACED ||
         ires != 15) {
-        err++;
+        ERR("increment gave %" PRId64 ", expected 15", ires);
     }
     TEST_RANK_STEP("increment", 1);
 
@@ -5704,7 +5631,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     k = TEST_RANK_KEY();
     if (multidictIncrByFloat(d, &k, 0.5, &dres) != MULTIDICT_OK_REPLACED ||
         dres != 15.5) {
-        err++;
+        ERR("float increment gave %g, expected 15.5", dres);
     }
     TEST_RANK_STEP("float increment", 1);
 
@@ -5714,8 +5641,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     if (multidictGetLRULevel(d, &other) != 0 ||
         multidictAddNX(d, &fresh, &ten) != MULTIDICT_OK_INSERTED ||
         multidictGetLRULevel(d, &fresh) != 0 || !testLruTrackingExact_(d)) {
-        printf("ERROR: LRU bystander or fresh key level\n");
-        err++;
+        ERRR("LRU bystander or fresh key level");
     }
 
 #undef TEST_RANK_STEP
@@ -5794,9 +5720,8 @@ static int multidictTestCountersUnderUpdates_(void) {
             const databox val = databoxNewSigned(-i);
             const multidictResult r = multidictAddNX(d, &key, &val);
             if (r != (present ? MULTIDICT_ERR : MULTIDICT_OK_INSERTED)) {
-                printf("AddNX of %s (present %d, rehashing %d) returned %d\n",
-                       keyBuf, present, multidictIsRehashing(d), r);
-                err++;
+                ERR("AddNX of %s (present %d, rehashing %d) returned %d",
+                    keyBuf, present, multidictIsRehashing(d), r);
             }
             break;
         }
@@ -5835,8 +5760,7 @@ static int multidictTestCountersUnderUpdates_(void) {
         }
 
         if (!mdTestCountersHold_(d)) {
-            printf("counters wrong after operation %" PRId64 "\n", i);
-            err++;
+            ERR("counters wrong after operation %" PRId64, i);
             break;
         }
     }
@@ -5863,8 +5787,8 @@ static int multidictTestAddNXMidRehash_(void) {
     }
 
     if (!multidictExpand(d, 8192) || !multidictIsRehashing(d)) {
-        printf("AddNX mid-rehash: expand did not start a rehash\n");
-        return 1;
+        ERRR("AddNX mid-rehash: expand did not start a rehash");
+        return err;
     }
 
     for (int64_t i = 0; i < present * 2; i++) {
@@ -5876,15 +5800,12 @@ static int multidictTestAddNXMidRehash_(void) {
             k < present ? MULTIDICT_ERR : MULTIDICT_OK_INSERTED;
         const multidictResult got = multidictAddNX(d, &key, &val);
         if (got != want) {
-            printf("AddNX mid-rehash: key %" PRId64 " returned %d, want %d\n",
-                   k, got, want);
-            err++;
+            ERR("AddNX mid-rehash: key %" PRId64 " returned %d, want %d", k,
+                got, want);
         }
 
         if (!mdTestCountersHold_(d)) {
-            printf("AddNX mid-rehash: counters wrong after key %" PRId64 "\n",
-                   k);
-            err++;
+            ERR("AddNX mid-rehash: counters wrong after key %" PRId64, k);
             break;
         }
     }
@@ -5894,17 +5815,15 @@ static int multidictTestAddNXMidRehash_(void) {
         databox val = {{0}};
         const int64_t want = k < present ? k * 3 : -1;
         if (!multidictFind(d, &key, &val) || val.data.i != want) {
-            printf("AddNX mid-rehash: key %" PRId64 " holds %" PRId64
-                   ", want %" PRId64 "\n",
-                   k, (int64_t)val.data.i, want);
-            err++;
+            ERR("AddNX mid-rehash: key %" PRId64 " holds %" PRId64
+                ", want %" PRId64,
+                k, (int64_t)val.data.i, want);
         }
     }
 
     if (multidictCount(d) != present * 2) {
-        printf("AddNX mid-rehash: count %" PRIu64 ", want %d\n",
-               (uint64_t)multidictCount(d), present * 2);
-        err++;
+        ERR("AddNX mid-rehash: count %" PRIu64 ", want %d",
+            (uint64_t)multidictCount(d), present * 2);
     }
 
     return err;
@@ -5949,8 +5868,8 @@ static int multidictTestRehashReads_(void) {
     multidictStats before;
     multidictGetStats(d, &before);
     if (!multidictExpand(d, before.slots * 8) || !multidictIsRehashing(d)) {
-        printf("ERROR: rehash reads: expand did not start a rehash\n");
-        return err + 1;
+        ERRR("rehash reads: expand did not start a rehash");
+        return err;
     }
 
     multidictDetailedStats ds;
@@ -5961,10 +5880,8 @@ static int multidictTestRehashReads_(void) {
         ds.basic.count + ds.rehashTable.count != n ||
         ds.rehashTable.slots < before.slots * 8 || s.count != n ||
         !s.isRehashing) {
-        printf("ERROR: rehash reads: stats %" PRIu64 " + %" PRIu64
-               " of %" PRIu64 " keys\n",
-               ds.basic.count, ds.rehashTable.count, n);
-        err++;
+        ERR("rehash reads: stats %" PRIu64 " + %" PRIu64 " of %" PRIu64 " keys",
+            ds.basic.count, ds.rehashTable.count, n);
     }
 
     databox some[32];
@@ -5973,21 +5890,18 @@ static int multidictTestRehashReads_(void) {
     if (!multidictIsRehashing(d) || got == 0 || got > 32 ||
         !multidictGetRandomKey(d, &rk) || rk.type != DATABOX_UNSIGNED_64 ||
         rk.data.u64 >= n) {
-        printf("ERROR: rehash reads: random keys (%" PRIu32 ")\n", got);
-        err++;
+        ERR("rehash reads: random keys (%" PRIu32 ")", got);
     }
     for (uint32_t i = 0; i < got; i++) {
         if (some[i].type != DATABOX_UNSIGNED_64 || some[i].data.u64 >= n) {
-            printf("ERROR: rehash reads: GetSomeKeys slot %" PRIu32 "\n", i);
-            err++;
+            ERR("rehash reads: GetSomeKeys slot %" PRIu32, i);
         }
     }
 
     cleanerName(zfree, SeenBytes) uint8_t *seen = zcalloc(n, 1);
     mdRehashScan_ scan = {.seen = seen, .n = n, .bad = 0};
     if (!multidictIsRehashing(d)) {
-        printf("ERROR: rehash reads: the rehash ended before the scan\n");
-        err++;
+        ERRR("rehash reads: the rehash ended before the scan");
     }
     uint64_t cursor = 0;
     do {
@@ -5997,9 +5911,7 @@ static int multidictTestRehashReads_(void) {
         scan.bad += !seen[k];
     }
     if (scan.bad) {
-        printf("ERROR: rehash reads: scan missed or garbled %" PRIu64 " keys\n",
-               scan.bad);
-        err++;
+        ERR("rehash reads: scan missed or garbled %" PRIu64 " keys", scan.bad);
     }
 
     /* Pops first, while the rehash is still young, then every key */
@@ -6010,8 +5922,7 @@ static int multidictTestRehashReads_(void) {
         if (!multidictPopRandom(d, &pk, &pv) ||
             pk.type != DATABOX_UNSIGNED_64 || pk.data.u64 >= n ||
             seen[pk.data.u64] || pv.data.u64 != pk.data.u64 * 3) {
-            printf("ERROR: rehash reads: pop %d\n", i);
-            err++;
+            ERR("rehash reads: pop %d", i);
             break;
         }
         seen[pk.data.u64] = 1;
@@ -6021,8 +5932,7 @@ static int multidictTestRehashReads_(void) {
         databox val = {{0}};
         const bool found = multidictFind(d, &key, &val);
         if (found == (bool)seen[k] || (found && val.data.u64 != k * 3)) {
-            printf("ERROR: rehash reads: key %" PRIu64 " found %d\n", k, found);
-            err++;
+            ERR("rehash reads: key %" PRIu64 " found %d", k, found);
             break;
         }
     }
@@ -6032,9 +5942,7 @@ static int multidictTestRehashReads_(void) {
     multidictGetDetailedStats(d, &ds);
     if (ds.hasRehashTable || ds.basic.count != n - 10 ||
         multidictCount(d) != n - 10) {
-        printf("ERROR: rehash reads: %" PRIu64 " keys after the rehash\n",
-               ds.basic.count);
-        err++;
+        ERR("rehash reads: %" PRIu64 " keys after the rehash", ds.basic.count);
     }
     multidictResizeEnable(d);
     return err;
@@ -6052,8 +5960,7 @@ static int multidictTestLRUToggle_(void) {
         !multidictHasLRU(d) ||
         multidictGetEvictPolicy(d) != MULTIDICT_EVICT_LRU ||
         !multidictEnableLRU(d, 4)) {
-        printf("ERROR: LRU toggle: enabling an empty dict\n");
-        err++;
+        ERRR("LRU toggle: enabling an empty dict");
     }
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
@@ -6064,15 +5971,13 @@ static int multidictTestLRUToggle_(void) {
     if (multidictHasLRU(d) ||
         multidictGetEvictPolicy(d) != MULTIDICT_EVICT_NONE ||
         multidictEnableLRU(d, 4) || multidictCount(d) != 50) {
-        printf("ERROR: LRU toggle: disabling a populated dict\n");
-        err++;
+        ERRR("LRU toggle: disabling a populated dict");
     }
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
         databox val = {{0}};
         if (!multidictFind(d, &key, &val) || val.data.u64 != k) {
-            printf("ERROR: LRU toggle: key %" PRIu64 " lost\n", k);
-            err++;
+            ERR("LRU toggle: key %" PRIu64 " lost", k);
             break;
         }
     }
@@ -6126,8 +6031,8 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
     multidictDetailedStats before = {0};
     multidictGetDetailedStats(d, &before);
     if (!multidictResize(d) || !multidictIsRehashing(d) || multidictResize(d)) {
-        printf("ERROR: resize after deletes did not start one rehash\n");
-        return 1;
+        ERRR("resize after deletes did not start one rehash");
+        return err;
     }
     multidictDetailedStats during = {0};
     multidictGetDetailedStats(d, &during);
@@ -6135,10 +6040,9 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
         during.rehashTable.slots >= during.basic.slots ||
         during.basic.slots != before.basic.slots ||
         during.basic.count + during.rehashTable.count != N / 20) {
-        printf("ERROR: the shrink's tables are not larger-to-smaller "
-               "(%" PRIu64 " -> %" PRIu64 " slots)\n",
-               during.basic.slots, during.rehashTable.slots);
-        err++;
+        ERR("the shrink's tables are not larger-to-smaller (%" PRIu64
+            " -> %" PRIu64 " slots)",
+            during.basic.slots, during.rehashTable.slots);
     }
 
     uint8_t seen[N] = {0};
@@ -6158,10 +6062,9 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
         }
     }
     if (state.bad || cursor != 0) {
-        printf("ERROR: scan during a shrink (%d steps between calls) missed "
-               "or invented %d keys\n",
-               stepsBetween, state.bad);
-        err++;
+        ERR("scan during a shrink (%d steps between calls) missed or "
+            "invented %d keys",
+            stepsBetween, state.bad);
     }
     return err;
 }
@@ -6194,8 +6097,7 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
     for (size_t g = 0; g < 3; g++) {
         const databox v = databoxNewSigned(groups[g].value);
         if (multidictAdd(d, &groups[g].boxes[0], &v) != MULTIDICT_OK_INSERTED) {
-            printf("ERROR: numeric group %zu: the first key did not add\n", g);
-            err++;
+            ERR("numeric group %zu: the first key did not add", g);
         }
         for (size_t i = 1; i < groups[g].n; i++) {
             /* Found under its value, and adding it replaces (same value,
@@ -6205,10 +6107,7 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
                 got.data.i != groups[g].value ||
                 multidictAdd(d, &groups[g].boxes[i], &v) !=
                     MULTIDICT_OK_REPLACED) {
-                printf("ERROR: numeric group %zu: box %zu is not the same "
-                       "key\n",
-                       g, i);
-                err++;
+                ERR("numeric group %zu: box %zu is not the same key", g, i);
             }
         }
     }
@@ -6217,9 +6116,8 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
     const databox fv = databoxNewSigned(55);
     if (multidictAdd(d, &fraction, &fv) != MULTIDICT_OK_INSERTED ||
         multidictCount(d) != 4) {
-        printf("ERROR: 5.5 was not its own key (count %" PRIu64 ")\n",
-               (uint64_t)multidictCount(d));
-        err++;
+        ERR("5.5 was not its own key (count %" PRIu64 ")",
+            (uint64_t)multidictCount(d));
     }
     return err;
 }
@@ -6230,8 +6128,7 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
     int err = 0;
     const int32_t seed = multidictRandomSeed();
     if (multidictRandomSeed() != seed) {
-        printf("ERROR: the process seed changed between calls\n");
-        err++;
+        ERRR("the process seed changed between calls");
     }
 
     static const int32_t seeds[2] = {(int32_t)0x9E3779B9u, 0};
@@ -6257,9 +6154,8 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
             same = multidictFind(r, &key, &got) && got.data.i == k * 7;
         }
         if (!same) {
-            printf("ERROR: a restore lost the seed %" PRIu32 " or a pair\n",
-                   multidictGetHashFunctionSeed(d));
-            err++;
+            ERR("a restore lost the seed %" PRIu32 " or a pair",
+                multidictGetHashFunctionSeed(d));
         }
         if (r) {
             persistOpsMultidict.free(r);
@@ -6282,8 +6178,7 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     if (stats.count != 0 || stats.loadFactor != 0 ||
         detail.basic.loadFactor != 0 || detail.avgChainLen != 0.0f ||
         detail.hasRehashTable || multidictPopRandom(d, &k, &v)) {
-        printf("ERROR: an empty dict reported entries\n");
-        err++;
+        ERRR("an empty dict reported entries");
     }
 
     /* Byte-based: a resize keeps the slots its bytes need at the target
@@ -6307,17 +6202,15 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     }
     multidictGetStats(d, &stats);
     if (stats.count != 64 || stats.slots < forBytes) {
-        printf("ERROR: a byte-based resize kept %" PRIu64
-               " slots, below the %" PRIu64 " its bytes need\n",
-               stats.slots, forBytes);
-        err++;
+        ERR("a byte-based resize kept %" PRIu64 " slots, below the %" PRIu64
+            " its bytes need",
+            stats.slots, forBytes);
     }
 
     /* A resize is refused with resizing off (a class-wide switch) */
     multidictResizeDisable(d);
     if (multidictResize(d)) {
-        printf("ERROR: a resize ran with resizing disabled\n");
-        err++;
+        ERRR("a resize ran with resizing disabled");
     }
     multidictResizeEnable(d);
     return err;
@@ -6329,43 +6222,40 @@ int multidictTest(int argc, char *argv[]) {
 
     int err = 0;
 
-    printf("=== MULTIDICT COMPREHENSIVE TEST SUITE ===\n\n");
-
-    printf("Creating multimap-based multidictClass...\n");
+    /* The dict most sections below share, on multimap slots */
     cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 12345);
 
-    printf("Test: scans during a shrinking rehash, resize sizing, empty "
-           "stats...\n");
-    err += mdTestShrinkingRehashScan_(qdc, 0);
-    err += mdTestShrinkingRehashScan_(qdc, 1);
-    err += mdTestResizeAndEmptyStats_(qdc);
-    err += mdTestNumericKeyIdentity_(qdc);
-    err += mdTestSeedRoundTrip_(qdc);
-
-    printf("Creating multidict with multimap slots...\n");
+    TEST("scans during a shrinking rehash, resize sizing, empty stats, "
+         "numeric keys, seeds") {
+        err += mdTestShrinkingRehashScan_(qdc, 0);
+        err += mdTestShrinkingRehashScan_(qdc, 1);
+        err += mdTestResizeAndEmptyStats_(qdc);
+        err += mdTestNumericKeyIdentity_(qdc);
+        err += mdTestSeedRoundTrip_(qdc);
+    }
 
     /* ================================================================
      * SECTION 1: Basic API Tests
      * ================================================================ */
-    printf("--- Section 1: Basic API Tests ---\n");
+    TEST("1.1 create with the exact key type") {
+        assert(d != NULL);
+        assert(multidictSize(d) == 0);
+    }
 
-    printf("Test 1.1: Create with exact key type...\n");
-    cleaner(multidictFree) multidict *d =
-        multidictNew(&multidictTypeExactKey, qdc, 12345);
-    assert(d != NULL);
-    assert(multidictSize(d) == 0);
+    TEST("1.2 multidictGetClass") {
+        assert(multidictGetClass(d) == qdc);
+    }
 
-    printf("Test 1.2: multidictGetClass...\n");
-    assert(multidictGetClass(d) == qdc);
+    TEST("1.3 get/set the hash seed") {
+        assert(multidictGetHashFunctionSeed(d) == 12345);
+        multidictSetHashFunctionSeed(d, 99999);
+        assert(multidictGetHashFunctionSeed(d) == 99999);
+        multidictSetHashFunctionSeed(d, 12345); /* restore */
+    }
 
-    printf("Test 1.3: Get/Set hash seed...\n");
-    assert(multidictGetHashFunctionSeed(d) == 12345);
-    multidictSetHashFunctionSeed(d, 99999);
-    assert(multidictGetHashFunctionSeed(d) == 99999);
-    multidictSetHashFunctionSeed(d, 12345); /* restore */
-
-    printf("Test 1.4: Empty dict operations...\n");
-    {
+    TEST("1.4 empty dict operations") {
         databox key = databoxNewBytesString("nokey");
         databox val;
         assert(multidictFind(d, &key, &val) == false);
@@ -6382,8 +6272,7 @@ int multidictTest(int argc, char *argv[]) {
         (void)keys;
     }
 
-    printf("Test 1.5: Basic insert and find...\n");
-    {
+    TEST("1.5 basic insert and find") {
         databox key = databoxNewBytesString("hello");
         databox val = databoxNewBytesString("world");
         multidictResult result = multidictAdd(d, &key, &val);
@@ -6397,8 +6286,7 @@ int multidictTest(int argc, char *argv[]) {
         (void)found;
     }
 
-    printf("Test 1.6: Update existing key...\n");
-    {
+    TEST("1.6 update an existing key") {
         databox key = databoxNewBytesString("hello");
         databox newVal = databoxNewBytesString("universe");
         multidictResult result = multidictAdd(d, &key, &newVal);
@@ -6411,8 +6299,7 @@ int multidictTest(int argc, char *argv[]) {
         (void)found;
     }
 
-    printf("Test 1.7: Delete key...\n");
-    {
+    TEST("1.7 delete a key") {
         databox key = databoxNewBytesString("hello");
         assert(multidictDelete(d, &key) == true);
         assert(multidictSize(d) == 0);
@@ -6424,8 +6311,7 @@ int multidictTest(int argc, char *argv[]) {
         (void)key;
     }
 
-    printf("Test 1.8: multidictFindByString...\n");
-    {
+    TEST("1.8 multidictFindByString") {
         databox key = databoxNewBytesString("strkey");
         databox val = databoxNewBytesString("strval");
         multidictAdd(d, &key, &val);
@@ -6460,10 +6346,7 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 2: Edge Cases
      * ================================================================ */
-    printf("\n--- Section 2: Edge Cases ---\n");
-
-    printf("Test 2.1: Single character keys...\n");
-    {
+    TEST("2.1 single character keys") {
         for (int i = 0; i < 26; i++) {
             char keyBuf[2] = {(char)('a' + i), '\0'};
             char valBuf[2] = {(char)('A' + i), '\0'};
@@ -6485,8 +6368,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 2.2: Long keys (256 bytes)...\n");
-    {
+    TEST("2.2 long keys (256 bytes)") {
         char longKey[257];
         char longVal[257];
         memset(longKey, 'K', 256);
@@ -6505,8 +6387,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 2.3: Keys with special characters...\n");
-    {
+    TEST("2.3 keys with special characters") {
         const char *specialKeys[] = {
             "",
             "  ",
@@ -6536,8 +6417,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 2.4: Numeric string keys with collisions...\n");
-    {
+    TEST("2.4 numeric string keys with collisions") {
         /* Insert keys that might hash similarly */
         for (int i = 0; i < 1000; i++) {
             char keyBuf[32];
@@ -6562,10 +6442,7 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 3: Iterator Tests
      * ================================================================ */
-    printf("\n--- Section 3: Iterator Tests ---\n");
-
-    printf("Test 3.1: Iterator on empty dict...\n");
-    {
+    TEST("3.1 an iterator on an empty dict") {
         multidictIterator iter;
         multidictIteratorInit(d, &iter);
         multidictEntry entry;
@@ -6573,8 +6450,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictIteratorRelease(&iter);
     }
 
-    printf("Test 3.2: Iterate and count...\n");
-    {
+    TEST("3.2 iterate and count") {
         for (int i = 0; i < 500; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "iter%d", i);
@@ -6594,8 +6470,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(count == 500);
     }
 
-    printf("Test 3.3: Safe iterator allows modifications...\n");
-    {
+    TEST("3.3 a safe iterator allows modifications") {
         multidictIterator iter;
         multidictIteratorGetSafe(d, &iter);
         multidictEntry entry;
@@ -6617,8 +6492,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictDelete(d, &key);
     }
 
-    printf("Test 3.4: Multiple iterators...\n");
-    {
+    TEST("3.4 multiple iterators") {
         multidictIterator iter1, iter2;
         multidictIteratorInit(d, &iter1);
         multidictIteratorInit(d, &iter2);
@@ -6644,8 +6518,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 3.5: Safe iterator prevents auto-rehash step...\n");
-    {
+    TEST("3.5 a safe iterator prevents the auto-rehash step") {
         /* Add enough entries to allow expansion to start */
         for (int i = 0; i < 100; i++) {
             char keyBuf[32];
@@ -6697,8 +6570,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 3.6: Iterator release without advancing...\n");
-    {
+    TEST("3.6 iterator release without advancing") {
         /* Add some entries */
         for (int i = 0; i < 50; i++) {
             char keyBuf[32];
@@ -6724,8 +6596,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 3.7: Multiple safe iterators counted correctly...\n");
-    {
+    TEST("3.7 multiple safe iterators are counted") {
         for (int i = 0; i < 100; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "multi_safe_%d", i);
@@ -6758,8 +6629,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 3.8: Iterator during active rehash sees all entries...\n");
-    {
+    TEST("3.8 an iterator during an active rehash sees every entry") {
         /* Add entries */
         for (int i = 0; i < 200; i++) {
             char keyBuf[32];
@@ -6796,8 +6666,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 3.9: Re-init iterator mid-iteration...\n");
-    {
+    TEST("3.9 re-init an iterator mid-iteration") {
         /* Add entries */
         for (int i = 0; i < 100; i++) {
             char keyBuf[32];
@@ -6836,10 +6705,7 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 4: Rehash Tests
      * ================================================================ */
-    printf("\n--- Section 4: Rehash Tests ---\n");
-
-    printf("Test 4.1: Basic expand and rehash...\n");
-    {
+    TEST("4.1 basic expand and rehash") {
         for (int i = 0; i < 1000; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "rh%d", i);
@@ -6867,8 +6733,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 4.2: Operations during rehash...\n");
-    {
+    TEST("4.2 operations during a rehash") {
         multidictExpand(d, 8192);
         assert(multidictIsRehashing(d) == true);
 
@@ -6891,8 +6756,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 4.3: Rehash with single steps...\n");
-    {
+    TEST("4.3 rehash with single steps") {
         multidictExpand(d, 16384);
         int steps = 0;
         while (multidictIsRehashing(d)) {
@@ -6902,8 +6766,7 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Completed in %d single steps\n", steps);
     }
 
-    printf("Test 4.4: multidictRehashMilliseconds...\n");
-    {
+    TEST("4.4 multidictRehashMilliseconds") {
         multidictExpand(d, 32768);
         int64_t rehashed = multidictRehashMilliseconds(d, 5);
         printf("  Rehashed %" PRId64 " entries in ~5ms\n", rehashed);
@@ -6914,16 +6777,14 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 4.5: Expand to same size (should fail)...\n");
-    {
+    TEST("4.5 an expand to the same size is refused") {
         uint64_t currentSlots = multidictSlots(d);
         bool expanded = multidictExpand(d, currentSlots / 2);
         /* Should fail - can't expand to same or smaller */
         assert(expanded == false || !multidictIsRehashing(d));
     }
 
-    printf("Test 4.6: multidictResize (shrink)...\n");
-    {
+    TEST("4.6 multidictResize (shrink)") {
         /* Delete many entries to create a sparse table, with automatic
          * resizing off so the explicit resize is what shrinks it */
         while (multidictIsRehashing(d)) {
@@ -6950,10 +6811,9 @@ int multidictTest(int argc, char *argv[]) {
         /* 100 entries fit in 128 slots: not the sparse table, and not
          * collapsed to the minimum */
         if (multidictSlots(d) != 128 || (sparseSlots > 128 && !resized)) {
-            printf("  ERROR: resize left %" PRIu64 " slots for %" PRIu64
-                   " entries, want 128\n",
-                   multidictSlots(d), multidictCount(d));
-            err++;
+            ERR("resize left %" PRIu64 " slots for %" PRIu64
+                " entries, want 128",
+                multidictSlots(d), multidictCount(d));
         }
 
         /* Verify remaining entries */
@@ -6967,8 +6827,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 4.7: Find entries in ht[0] when ht[1] slot is non-empty...\n");
-    {
+    TEST("4.7 find entries in ht[0] when the ht[1] slot is non-empty") {
         /* This test covers a critical bug where during incremental rehashing,
          * multidictFind would only search ht[0] if the ht[1] slot was NULL.
          * If ht[1] had a non-empty slot (due to hash collision with different
@@ -7050,8 +6909,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 4.8: Delete entries from ht[0] during partial rehash...\n");
-    {
+    TEST("4.8 delete entries from ht[0] during a partial rehash") {
         /* Similar to 4.7, but tests that delete works correctly when
          * entries are split across ht[0] and ht[1]. */
 
@@ -7100,9 +6958,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 4.9: Comprehensive rehash operation fuzzing - Add/Find/Delete "
-           "mix...\n");
-    {
+    TEST("4.9 rehash operation fuzzing - add/find/delete mix") {
         const int FUZZ_ENTRIES = 1500;
         const int FUZZ_OPS = 2000;
 
@@ -7187,8 +7043,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 4.10: IncrBy operations during rehashing...\n");
-    {
+    TEST("4.10 IncrBy operations during rehashing") {
         multidictEmpty(d); /* Start fresh */
         const int INCR_ENTRIES = 1000;
 
@@ -7245,9 +7100,9 @@ int multidictTest(int argc, char *argv[]) {
                "(expected=%d)\n",
                incrSuccess, incrErrCount, incrWrongValue, INCR_ENTRIES);
         if (incrSuccess != INCR_ENTRIES) {
-            printf("  ERROR: Not all IncrBy operations succeeded!\n");
+            ERR("%d of %d IncrBy operations succeeded", incrSuccess,
+                INCR_ENTRIES);
         }
-        assert(incrSuccess == INCR_ENTRIES);
 
         /* Complete rehash */
         while (multidictIsRehashing(d)) {
@@ -7267,8 +7122,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 4.11: GetAndDelete during rehashing...\n");
-    {
+    TEST("4.11 GetAndDelete during rehashing") {
         multidictEmpty(d); /* Start fresh */
         const int GAD_ENTRIES = 500;
 
@@ -7316,9 +7170,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 4.12: Stress test - rapid rehashing with constant "
-           "operations...\n");
-    {
+    TEST("4.12 stress - rapid rehashing with constant operations") {
         multidictEmpty(d); /* Start fresh */
         const int STRESS_ENTRIES = 1000;
         const int STRESS_CYCLES = 3;
@@ -7401,18 +7253,14 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 5: Scan Tests
      * ================================================================ */
-    printf("\n--- Section 5: Scan Tests ---\n");
-
-    printf("Test 5.1: Scan empty dict...\n");
-    {
+    TEST("5.1 scan an empty dict") {
         int scanCount = 0;
         uint64_t cursor = multidictScan(d, 0, scanCountCallback, &scanCount);
         assert(cursor == 0);
         assert(scanCount == 0);
     }
 
-    printf("Test 5.2: Full scan with callback...\n");
-    {
+    TEST("5.2 a full scan with a callback") {
         for (int i = 0; i < 1000; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "scan%d", i);
@@ -7431,8 +7279,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(scanCount == 1000);
     }
 
-    printf("Test 5.3: Scan during rehash...\n");
-    {
+    TEST("5.3 scan during a rehash") {
         multidictExpand(d, 4096);
         assert(multidictIsRehashing(d) == true);
 
@@ -7460,8 +7307,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 5.4: Comprehensive scan fuzz - small dict sizes...\n");
-    {
+    TEST("5.4 scan fuzz - small dict sizes") {
         /* Test scanning with various small dict sizes */
         const int testSizes[] = {1, 2, 3, 5, 10, 50, 100, 500};
         for (size_t sizeIdx = 0;
@@ -7493,9 +7339,7 @@ int multidictTest(int argc, char *argv[]) {
                sizeof(testSizes) / sizeof(testSizes[0]));
     }
 
-    printf("Test 5.5: Scan fuzz - large dicts with rehashing at various "
-           "stages...\n");
-    {
+    TEST("5.5 scan fuzz - large dicts with rehashing at various stages") {
         for (int testRun = 0; testRun < 5; testRun++) {
             cleaner(multidictFree) multidict *dScan =
                 multidictNew(&multidictTypeExactKey, qdc, 0);
@@ -7542,9 +7386,7 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Completed 5 large dict scans with varying rehash states\n");
     }
 
-    printf(
-        "Test 5.6: Scan with concurrent modifications during rehashing...\n");
-    {
+    TEST("5.6 scan with concurrent modifications during rehashing") {
         cleaner(multidictFree) multidict *dScan =
             multidictNew(&multidictTypeExactKey, qdc, 0);
 
@@ -7595,8 +7437,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(scanCount >= 2000); /* At minimum, original entries */
     }
 
-    printf("Test 5.7: Scan correctness - verify exact key coverage...\n");
-    {
+    TEST("5.7 scan correctness - exact key coverage") {
         cleaner(multidictFree) multidict *dScan =
             multidictNew(&multidictTypeExactKey, qdc, 0);
         const int exactCount = 1000;
@@ -7649,8 +7490,7 @@ int multidictTest(int argc, char *argv[]) {
                exactCount); /* No duplicates after rehash complete */
     }
 
-    printf("Test 5.8: Extreme fuzz - rapid dict size changes during scan...\n");
-    {
+    TEST("5.8 fuzz - rapid dict size changes during a scan") {
         cleaner(multidictFree) multidict *dScan =
             multidictNew(&multidictTypeExactKey, qdc, 0);
 
@@ -7694,10 +7534,7 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 6: Random Access Tests
      * ================================================================ */
-    printf("\n--- Section 6: Random Access Tests ---\n");
-
-    printf("Test 6.1: Random key from populated dict...\n");
-    {
+    TEST("6.1 a random key from a populated dict") {
         for (int i = 0; i < 100; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "rand%d", i);
@@ -7713,8 +7550,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 6.2: Get some keys...\n");
-    {
+    TEST("6.2 get some keys") {
         databox keys[20];
         uint32_t got = multidictGetSomeKeys(d, keys, 20);
         printf("  Requested 20, got %u\n", got);
@@ -7726,8 +7562,7 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Requested 200, got %u\n", got);
     }
 
-    printf("Test 6.2b: Get some keys while growing and shrinking...\n");
-    {
+    TEST("6.2b get some keys while growing and shrinking") {
         /* Mid-rehash both tables are sampled, skipping the old table's
          * migrated slots (and, when the new table is the smaller one,
          * jumping to the rehash index past its end).  Every key returned
@@ -7753,15 +7588,13 @@ int multidictTest(int argc, char *argv[]) {
             multidictExpand(sd, shrink ? 64 : 16384);
             multidictRehash(sd, 3);
             if (!multidictIsRehashing(sd)) {
-                printf("  ERROR: no rehash in flight to sample\n");
-                err++;
+                ERRR("no rehash in flight to sample");
             }
             for (int r = 0; r < 30 && multidictIsRehashing(sd); r++) {
                 databox got[40];
                 const uint32_t n = multidictGetSomeKeys(sd, got, 40);
                 if (n == 0 || n > 40) {
-                    printf("  ERROR: sampled %u keys of 40\n", n);
-                    err++;
+                    ERR("sampled %u keys of 40", n);
                 }
                 for (uint32_t i = 0; i < n; i++) {
                     /* Non-negative integers come back by value, either
@@ -7771,8 +7604,7 @@ int multidictTest(int argc, char *argv[]) {
                                          got[i].type == DATABOX_UNSIGNED_64;
                     if (!integer || got[i].data.u64 % 31 != 0 ||
                         !multidictFind(sd, &got[i], &found)) {
-                        printf("  ERROR: sampled key %u is not live\n", i);
-                        err++;
+                        ERR("sampled key %u is not live", i);
                         break;
                     }
                 }
@@ -7780,8 +7612,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 6.3: Random key during rehash...\n");
-    {
+    TEST("6.3 a random key during a rehash") {
         multidictExpand(d, 512);
         assert(multidictIsRehashing(d) == true);
 
@@ -7798,8 +7629,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 6.4: Random key never fails on a non-empty dict...\n");
-    {
+    TEST("6.4 a random key never fails on a non-empty dict") {
         /* Deletes leave emptied slots allocated, and a rehash is kept in
          * flight (resize on, so shrinks start their own), so the random
          * picks keep landing on NULL and emptied slots.  Every pick must
@@ -7848,10 +7678,8 @@ int multidictTest(int argc, char *argv[]) {
                 const bool got = multidictGetRandomKey(rd, &rk);
                 const int32_t idx = got ? testKeyIndex_(&rk, "grk") : -1;
                 if (!got || idx < 0 || !alive[idx]) {
-                    printf("ERROR: GetRandomKey at count %" PRIu64
-                           ": got=%d idx=%d\n",
-                           multidictCount(rd), got, idx);
-                    assert(NULL);
+                    ERR("GetRandomKey at count %" PRIu64 ": got=%d idx=%d",
+                        multidictCount(rd), got, idx);
                 }
                 picks++;
             }
@@ -7875,9 +7703,8 @@ int multidictTest(int argc, char *argv[]) {
             databox pk;
             databox pv;
             if (!multidictPopRandom(rd, &pk, &pv)) {
-                printf("ERROR: PopRandom failed at count %" PRIu64 "\n",
-                       remaining);
-                assert(NULL);
+                ERR("PopRandom failed at count %" PRIu64, remaining);
+                break;
             }
             const int32_t idx = testKeyIndex_(&pk, "grk");
             assert(idx >= 0 && alive[idx]);
@@ -7902,10 +7729,7 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 7: Stress Tests / Fuzzing
      * ================================================================ */
-    printf("\n--- Section 7: Stress Tests / Fuzzing ---\n");
-
-    printf("Test 7.1: Large insert/delete/find mix (10K ops)...\n");
-    {
+    TEST("7.1 a large insert/delete/find mix (10K ops)") {
         testRandSeed(42);
         int inserted = 0, deleted = 0, found = 0, notFound = 0;
 
@@ -7946,8 +7770,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 7.2: Rapid expand/rehash cycles...\n");
-    {
+    TEST("7.2 rapid expand/rehash cycles") {
         for (int cycle = 0; cycle < 5; cycle++) {
             /* Insert entries */
             for (int i = 0; i < 500; i++) {
@@ -7968,8 +7791,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 7.3: Interleaved operations during rehash (5K ops)...\n");
-    {
+    TEST("7.3 interleaved operations during a rehash (5K ops)") {
         testRandSeed(123);
 
         /* Pre-populate */
@@ -8024,8 +7846,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 7.4: Verify consistency after random ops...\n");
-    {
+    TEST("7.4 consistency after random ops") {
         testRandSeed(999);
 
         /* Track what should exist */
@@ -8079,10 +7900,7 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 8: State Transition Tests
      * ================================================================ */
-    printf("\n--- Section 8: State Transition Tests ---\n");
-
-    printf("Test 8.1: Empty -> Populated -> Empty -> Populated...\n");
-    {
+    TEST("8.1 empty -> populated -> empty -> populated") {
         for (int cycle = 0; cycle < 3; cycle++) {
             assert(multidictSize(d) == 0);
 
@@ -8100,8 +7918,7 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Completed 3 cycles of empty->populated->empty\n");
     }
 
-    printf("Test 8.2: Resize enable/disable behavior...\n");
-    {
+    TEST("8.2 resize enable/disable behavior") {
         for (int i = 0; i < 100; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "resize%d", i);
@@ -8123,8 +7940,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
-    printf("Test 8.3: Iterator fingerprint check (implicit)...\n");
-    {
+    TEST("8.3 the iterator fingerprint check (implicit)") {
         for (int i = 0; i < 50; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "fp%d", i);
@@ -8151,13 +7967,11 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 9: Case-Insensitive Key Type
      * ================================================================ */
-    printf("\n--- Section 9: Case-Insensitive Key Type ---\n");
+    TEST("9.0 key compares are binary-safe and locale-free") {
+        err += multidictTestKeyCompare_();
+    }
 
-    printf("Test 9.0: Key compares are binary-safe and locale-free...\n");
-    err += multidictTestKeyCompare_();
-
-    printf("Test 9.1: Case-insensitive find, replace and delete...\n");
-    {
+    TEST("9.1 case-insensitive find, replace and delete") {
         cleaner(multidictMmClassFree) multidictClass *qdcCase =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dCase =
@@ -8175,8 +7989,7 @@ int multidictTest(int argc, char *argv[]) {
             databox found = {{0}};
             if (!multidictFind(dCase, &key, &found) ||
                 !testBoxIsBytes_(&found, "world", 5)) {
-                printf("ERROR: case find of '%s' failed\n", spellings[i]);
-                err++;
+                ERR("case find of '%s' failed", spellings[i]);
             }
         }
 
@@ -8186,52 +7999,58 @@ int multidictTest(int argc, char *argv[]) {
         if (multidictAdd(dCase, &key2, &val2) != MULTIDICT_OK_REPLACED ||
             multidictCount(dCase) != 1 ||
             !testOnlyEntryIs_(dCase, "hello", 5, &val2)) {
-            printf("ERROR: case replace did not keep 'hello'\n");
-            err++;
+            ERRR("case replace did not keep 'hello'");
         }
 
         databox key3 = databoxNewBytesString("hElLo");
         if (!multidictDelete(dCase, &key3) || multidictCount(dCase) != 0 ||
             multidictExists(dCase, &key1) || multidictDelete(dCase, &key1)) {
-            printf("ERROR: case delete failed\n");
-            err++;
+            ERRR("case delete failed");
         }
     }
 
-    printf("Test 9.2: Every key-matching operation in a case dict...\n");
-    err += multidictTestCaseOps_();
+    TEST("9.2 every key-matching operation in a case dict") {
+        err += multidictTestCaseOps_();
+    }
 
-    printf("Test 9.3: Binary keys with embedded NUL, both types...\n");
-    err += multidictTestBinaryKeys_(&multidictTypeExactKey);
-    err += multidictTestBinaryKeys_(&multidictTypeCaseKey);
+    TEST("9.3 binary keys with embedded NUL, both types") {
+        err += multidictTestBinaryKeys_(&multidictTypeExactKey);
+        err += multidictTestBinaryKeys_(&multidictTypeCaseKey);
+    }
 
-    printf("Test 9.4: Exact dict keeps case-differing keys distinct...\n");
-    err += multidictTestExactDistinct_();
+    TEST("9.4 an exact dict keeps case-differing keys distinct") {
+        err += multidictTestExactDistinct_();
+    }
 
-    printf("Test 9.5: A custom keyCompare is honoured...\n");
-    err += multidictTestCustomCompare_();
+    TEST("9.5 a custom keyCompare is honoured") {
+        err += multidictTestCustomCompare_();
+    }
 
-    printf("Test 9.6: Case dict against a folding oracle...\n");
-    err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0x5eed, false);
-    err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0xca5e, true);
-    err += multidictTestCaseDifferential_(&multidictTypeExactKey, 0xe7ac, true);
+    TEST("9.6 dicts against a folding oracle") {
+        err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0x5eed,
+                                              false);
+        err +=
+            multidictTestCaseDifferential_(&multidictTypeCaseKey, 0xca5e, true);
+        err += multidictTestCaseDifferential_(&multidictTypeExactKey, 0xe7ac,
+                                              true);
+    }
 
-    printf("Test 9.7: Persist snapshots record how keys match...\n");
-    err += multidictTestPersistKeys_();
+    TEST("9.7 persist snapshots record how keys match") {
+        err += multidictTestPersistKeys_();
+    }
 
-    printf("Test 9.8: Every read while a rehash is part way...\n");
-    err += multidictTestRehashReads_();
+    TEST("9.8 every read while a rehash is part way") {
+        err += multidictTestRehashReads_();
+    }
 
-    printf("Test 9.9: LRU tracking turned on and off...\n");
-    err += multidictTestLRUToggle_();
+    TEST("9.9 LRU tracking turned on and off") {
+        err += multidictTestLRUToggle_();
+    }
 
     /* ================================================================
      * SECTION 10: Print Stats (Visual Verification)
      * ================================================================ */
-    printf("\n--- Section 10: Stats Verification ---\n");
-
-    printf("Test 10.1: Stats on populated dict...\n");
-    {
+    TEST("10.1 stats on a populated dict") {
         for (int i = 0; i < 1000; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "stats%d", i);
@@ -8245,17 +8064,16 @@ int multidictTest(int argc, char *argv[]) {
     /* ================================================================
      * SECTION 11: Bytes Tracking Verification
      * ================================================================ */
-    printf("\n--- Section 11: Bytes Tracking Verification ---\n");
+    TEST("11.0 counters exact under in-place updates and removals, "
+         "mid-rehash too") {
+        err += multidictTestCountersUnderUpdates_();
+    }
 
-    printf("Test 11.0: counters exact under in-place updates and removals, "
-           "mid-rehash too...\n");
-    assert(multidictTestCountersUnderUpdates_() == 0);
+    TEST("11.0b AddNX mid-rehash refuses keys still in ht[0]") {
+        err += multidictTestAddNXMidRehash_();
+    }
 
-    printf("Test 11.0b: AddNX mid-rehash refuses keys still in ht[0]...\n");
-    err += multidictTestAddNXMidRehash_();
-
-    printf("Test 11.0c: Repr of a dict and of a slot operation...\n");
-    {
+    TEST("11.0c repr of a dict and of a slot operation") {
         cleaner(multidictMmClassFree) multidictClass *qdcRepr =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dRepr =
@@ -8270,8 +8088,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictOpRepr(&op);
     }
 
-    printf("Test 11.1: Fresh dict has zero bytes...\n");
-    {
+    TEST("11.1 a fresh dict has zero bytes") {
         cleaner(multidictMmClassFree) multidictClass *qdcBytes =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dBytes =
@@ -8283,8 +8100,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(dBytes->ht[0].totalBytes == 0);
     }
 
-    printf("Test 11.2: Bytes increase on insert...\n");
-    {
+    TEST("11.2 bytes increase on insert") {
         cleaner(multidictMmClassFree) multidictClass *qdcBytes =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dBytes =
@@ -8315,8 +8131,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(dBytes->ht[0].count == 100);
     }
 
-    printf("Test 11.3: Bytes decrease on delete...\n");
-    {
+    TEST("11.3 bytes decrease on delete") {
         cleaner(multidictMmClassFree) multidictClass *qdcBytes =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dBytes =
@@ -8356,8 +8171,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(bytesAfterDelete > 0);
     }
 
-    printf("Test 11.4: Value replacement updates valBytes...\n");
-    {
+    TEST("11.4 a value replacement updates valBytes") {
         cleaner(multidictMmClassFree) multidictClass *qdcBytes =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dBytes =
@@ -8385,8 +8199,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(dBytes->ht[0].count == 1); /* Still just one entry */
     }
 
-    printf("Test 11.5: Bytes preserved through rehash...\n");
-    {
+    TEST("11.5 bytes preserved through a rehash") {
         cleaner(multidictMmClassFree) multidictClass *qdcBytes =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dBytes =
@@ -8425,12 +8238,9 @@ int multidictTest(int argc, char *argv[]) {
         assert(dBytes->ht[1].count == 0);
     }
 
-    printf("=== Bytes tracking tests passed! ===\n");
-
     /* ================================================================
-     * SECTION 12: New API Tests (Sprint 3)
+     * SECTION 12: Existence and stats API
      * ================================================================ */
-    printf("\n--- Section 12: New API Tests (Sprint 3) ---\n");
 
     /* Free the original d and qdc from sections 1-10, create fresh for API
      * tests */
@@ -8439,8 +8249,7 @@ int multidictTest(int argc, char *argv[]) {
     qdc = multidictMmClassNew();
     d = multidictNew(&multidictTypeExactKey, qdc, 12345);
 
-    printf("Test 12.1: multidictExists...\n");
-    {
+    TEST("12.1 multidictExists") {
         databox key = databoxNewBytesString("testkey");
         databox val = databoxNewBytesString("testval");
 
@@ -8459,8 +8268,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictExists(d, &nokey) == false);
     }
 
-    printf("Test 12.2: multidictExistsByString...\n");
-    {
+    TEST("12.2 multidictExistsByString") {
         assert(multidictExistsByString(d, "testkey") == true);
         assert(multidictExistsByString(d, "nokey") == false);
 
@@ -8471,8 +8279,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictExistsByString(d, "key2") == true);
     }
 
-    printf("Test 12.3: multidictGetStats...\n");
-    {
+    TEST("12.3 multidictGetStats") {
         multidictStats stats;
         multidictGetStats(d, &stats);
 
@@ -8491,8 +8298,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(stats.isRehashing == false);
     }
 
-    printf("Test 12.4: multidictLoadFactor...\n");
-    {
+    TEST("12.4 multidictLoadFactor") {
         /* Add more entries to increase load factor */
         for (int j = 0; j < 100; j++) {
             char keyBuf[32];
@@ -8507,8 +8313,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(lf > 0); /* Should have non-zero load factor */
     }
 
-    printf("Test 12.5: multidictBytes, KeyBytes, ValBytes...\n");
-    {
+    TEST("12.5 multidictBytes, KeyBytes, ValBytes") {
         uint64_t totalBytes = multidictBytes(d);
         uint64_t keyBytes = multidictKeyBytes(d);
         uint64_t valBytes = multidictValBytes(d);
@@ -8524,8 +8329,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(totalBytes >= keyBytes + valBytes);
     }
 
-    printf("Test 12.6: Stats consistency through operations...\n");
-    {
+    TEST("12.6 stats consistency through operations") {
         multidictStats before, after;
         multidictGetStats(d, &before);
 
@@ -8548,18 +8352,14 @@ int multidictTest(int argc, char *argv[]) {
         assert(after.keyBytes < before.keyBytes);
     }
 
-    printf("=== New API tests passed! ===\n");
-
     /* ================================================================
-     * SECTION 13: Bulk Operations Tests (Sprint 6)
+     * SECTION 13: Bulk Operations Tests
      * ================================================================ */
-    printf("\n--- Section 13: Bulk Operations Tests (Sprint 6) ---\n");
 
     /* Clear dict for fresh bulk tests */
     multidictEmpty(d);
 
-    printf("Test 13.1: multidictAddMultiple basic...\n");
-    {
+    TEST("13.1 multidictAddMultiple") {
         databox keys[5], vals[5];
         char keyBufs[5][32], valBufs[5][32]; /* Persist outside loop */
         for (int j = 0; j < 5; j++) {
@@ -8580,8 +8380,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 13.2: multidictAddMultiple with duplicates...\n");
-    {
+    TEST("13.2 multidictAddMultiple with duplicates") {
         /* Try to add same keys again - should count as 0 new inserts */
         databox keys[3], vals[3];
         char keyBufs[3][32], valBufs[3][32]; /* Persist outside loop */
@@ -8598,8 +8397,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictSize(d) == 5); /* Size unchanged */
     }
 
-    printf("Test 13.3: multidictDeleteMultiple basic...\n");
-    {
+    TEST("13.3 multidictDeleteMultiple") {
         databox keys[3];
         char keyBufs[3][32]; /* Persist outside loop */
         for (int j = 0; j < 3; j++) {
@@ -8618,8 +8416,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 13.4: multidictDeleteMultiple with non-existent keys...\n");
-    {
+    TEST("13.4 multidictDeleteMultiple with non-existent keys") {
         databox keys[4];
         /* Mix of existing and non-existing keys */
         keys[0] = databoxNewBytesString("bulkkey3"); /* exists */
@@ -8633,8 +8430,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictSize(d) == 0);
     }
 
-    printf("Test 13.5: Bulk operations edge cases...\n");
-    {
+    TEST("13.5 bulk operation edge cases") {
         /* NULL/empty checks */
         assert(multidictAddMultiple(d, NULL, NULL, 5) == 0);
         assert(multidictDeleteMultiple(d, NULL, 5) == 0);
@@ -8647,8 +8443,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictDeleteMultiple(d, keys, 0) == 0);
     }
 
-    printf("Test 13.6: Large bulk insert...\n");
-    {
+    TEST("13.6 a large bulk insert") {
         multidictEmpty(d);
         const int BULK_COUNT = 500;
         cleanerName(zfree, Databoxes) databox *keys =
@@ -8680,12 +8475,9 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictSize(d) == (uint64_t)(BULK_COUNT / 2));
     }
 
-    printf("=== Bulk operations tests passed! ===\n");
-
     /* ================================================================
-     * Section 14: Self-Management Tests (Sprint 7)
+     * Section 14: Self-Management Tests
      * ================================================================ */
-    printf("\n--- Section 14: Self-Management Tests (Sprint 7) ---\n");
 
     /* Clean up and create fresh dict for these tests */
     multidictFree(d);
@@ -8693,8 +8485,7 @@ int multidictTest(int argc, char *argv[]) {
     qdc = multidictMmClassNew();
     d = multidictNew(&multidictTypeExactKey, qdc, 12345);
 
-    printf("Test 14.1: Memory limit get/set...\n");
-    {
+    TEST("14.1 memory limit get/set") {
         assert(multidictGetMaxMemory(d) == 0); /* Default is unlimited */
         multidictSetMaxMemory(d, 10000);
         assert(multidictGetMaxMemory(d) == 10000);
@@ -8702,8 +8493,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictGetMaxMemory(d) == 0);
     }
 
-    printf("Test 14.2: multidictIsOverLimit...\n");
-    {
+    TEST("14.2 multidictIsOverLimit") {
         /* With no limit, should never be over */
         multidictSetMaxMemory(d, 0);
         assert(multidictIsOverLimit(d) == false);
@@ -8729,8 +8519,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictIsOverLimit(d) == false);
     }
 
-    printf("Test 14.3: multidictEvictToLimit basic...\n");
-    {
+    TEST("14.3 multidictEvictToLimit") {
         /* Set a reasonable limit (95% of current) to ensure eviction happens */
         uint64_t userBytes = multidictKeyBytes(d) + multidictValBytes(d);
         uint64_t targetBytes = (userBytes * 95) / 100;
@@ -8754,8 +8543,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(userBytesAfter < userBytes || userBytesAfter <= targetBytes);
     }
 
-    printf("Test 14.4: Eviction callback...\n");
-    {
+    TEST("14.4 the eviction callback") {
         testEvictionCallbackCount_ = 0;
 
         multidictSetEvictionCallback(d, testEvictionCb_,
@@ -8785,8 +8573,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictSetEvictionCallback(d, NULL, NULL);
     }
 
-    printf("Test 14.5: Eviction callback veto...\n");
-    {
+    TEST("14.5 an eviction callback veto") {
         testVetoCount_ = 0;
 
         /* Ensure we have enough entries to veto 5 times */
@@ -8813,15 +8600,13 @@ int multidictTest(int argc, char *argv[]) {
         multidictSetEvictionCallback(d, NULL, NULL);
     }
 
-    printf("Test 14.6: No eviction when unlimited...\n");
-    {
+    TEST("14.6 no eviction when unlimited") {
         multidictSetMaxMemory(d, 0); /* Unlimited */
         uint32_t evicted = multidictEvictToLimit(d);
         assert(evicted == 0);
     }
 
-    printf("Test 14.7: Eviction with a rehash in flight...\n");
-    {
+    TEST("14.7 eviction with a rehash in flight") {
         /* Random then LRU victims, chosen while the table is rehashing
          * and resizing is on: each victim's find and delete runs rehash
          * steps that move entries and free their old slots, and the
@@ -8883,12 +8668,9 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("=== Self-management tests passed! ===\n");
-
     /* ================================================================
-     * Section 15: Extended Fuzzing / Property Tests (Sprint 8)
+     * Section 15: Extended Fuzzing / Property Tests
      * ================================================================ */
-    printf("\n--- Section 15: Extended Fuzzing (Sprint 8) ---\n");
 
     /* Fresh dict for fuzzing */
     multidictFree(d);
@@ -8896,8 +8678,7 @@ int multidictTest(int argc, char *argv[]) {
     qdc = multidictMmClassNew();
     d = multidictNew(&multidictTypeExactKey, qdc, 54321);
 
-    printf("Test 15.1: Mixed operations stress test...\n");
-    {
+    TEST("15.1 mixed operations stress") {
         char keyBufs[1000][32], valBufs[1000][32];
         databox keys[1000], vals[1000];
 
@@ -8944,8 +8725,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictCount(d) <= 1000);
     }
 
-    printf("Test 15.2: Bulk operations under stress...\n");
-    {
+    TEST("15.2 bulk operations under stress") {
         multidictEmpty(d);
 
         char keyBufs[100][32], valBufs[100][32];
@@ -8981,8 +8761,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictCount(d) == totalInserted - totalDeleted);
     }
 
-    printf("Test 15.3: Iterator consistency under modification...\n");
-    {
+    TEST("15.3 iterator consistency under modification") {
         multidictEmpty(d);
 
         char keyBufs[200][32], valBufs[200][32];
@@ -9018,8 +8797,7 @@ int multidictTest(int argc, char *argv[]) {
                multidictCount(d));
     }
 
-    printf("Test 15.4: Memory limit with continuous operations...\n");
-    {
+    TEST("15.4 a memory limit with continuous operations") {
         multidictEmpty(d);
 
         /* Set a memory limit */
@@ -9051,8 +8829,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictSetMaxMemory(d, 0); /* Clear limit */
     }
 
-    printf("Test 15.5: Stats consistency verification...\n");
-    {
+    TEST("15.5 stats consistency") {
         /* Verify stats match actual state */
         multidictStats stats;
         multidictGetStats(d, &stats);
@@ -9068,52 +8845,42 @@ int multidictTest(int argc, char *argv[]) {
                stats.count, stats.slots, stats.totalBytes);
     }
 
-    printf("=== Extended fuzzing tests passed! ===\n");
-
     /* ================================================================
-     * Section 16: Conditional Insert Tests (Sprint 9.1)
+     * Section 16: Conditional Insert Tests
      * ================================================================ */
-    printf("\n--- Section 16: Conditional Insert Tests (Sprint 9.1) ---\n");
-
     multidictFree(d);
     multidictMmClassFree(qdc);
     qdc = multidictMmClassNew();
     d = multidictNew(&multidictTypeExactKey, qdc, 42);
 
-    /* Test AddNX - should succeed for new key */
-    {
+    TEST("16.1 AddNX inserts a new key and refuses a present one") {
         databox key = databoxNewBytesString("nx-key");
         databox val = databoxNewBytesString("nx-value");
         multidictResult r = multidictAddNX(d, &key, &val);
         if (r != MULTIDICT_OK_INSERTED) {
-            printf("ERROR: AddNX should succeed for new key\n");
-            err++;
+            ERRR("AddNX should succeed for a new key");
         }
 
         /* AddNX again should fail */
         databox val2 = databoxNewBytesString("nx-value-2");
         r = multidictAddNX(d, &key, &val2);
         if (r != MULTIDICT_ERR) {
-            printf("ERROR: AddNX should fail for existing key\n");
-            err++;
+            ERRR("AddNX should fail for an existing key");
         }
 
         /* Verify original value is preserved */
         databox found = {{0}};
         if (!multidictFind(d, &key, &found)) {
-            printf("ERROR: Key should exist after AddNX\n");
-            err++;
+            ERRR("the key should exist after AddNX");
         }
     }
 
-    /* Test AddXX - should fail for non-existent key */
-    {
+    TEST("16.2 AddXX refuses an absent key and replaces a present one") {
         databox key = databoxNewBytesString("xx-key");
         databox val = databoxNewBytesString("xx-value");
         multidictResult r = multidictAddXX(d, &key, &val);
         if (r != MULTIDICT_ERR) {
-            printf("ERROR: AddXX should fail for non-existent key\n");
-            err++;
+            ERRR("AddXX should fail for a non-existent key");
         }
 
         /* Add the key first */
@@ -9123,73 +8890,59 @@ int multidictTest(int argc, char *argv[]) {
         databox val2 = databoxNewBytesString("xx-value-updated");
         r = multidictAddXX(d, &key, &val2);
         if (r != MULTIDICT_OK_REPLACED) {
-            printf("ERROR: AddXX should succeed for existing key\n");
-            err++;
+            ERRR("AddXX should succeed for an existing key");
         }
     }
 
-    /* Test Replace - same semantics as AddXX */
-    {
+    TEST("16.3 Replace has the semantics of AddXX") {
         databox key = databoxNewBytesString("replace-key");
         databox val = databoxNewBytesString("replace-value");
 
         /* Should fail for non-existent */
         if (multidictReplace(d, &key, &val) != MULTIDICT_ERR) {
-            printf("ERROR: Replace should fail for non-existent key\n");
-            err++;
+            ERRR("Replace should fail for a non-existent key");
         }
 
         /* Add key, then replace */
         multidictAdd(d, &key, &val);
         databox val2 = databoxNewBytesString("replaced!");
         if (multidictReplace(d, &key, &val2) != MULTIDICT_OK_REPLACED) {
-            printf("ERROR: Replace should succeed for existing key\n");
-            err++;
+            ERRR("Replace should succeed for an existing key");
         }
     }
 
-    printf("=== Conditional insert tests passed! ===\n");
-
     /* ================================================================
-     * Section 17: Atomic Get-and-Delete Tests (Sprint 9.2)
+     * Section 17: Atomic Get-and-Delete Tests
      * ================================================================ */
-    printf("\n--- Section 17: Atomic Operations Tests (Sprint 9.2) ---\n");
-
-    /* Test GetAndDelete */
-    {
+    TEST("17.1 GetAndDelete") {
         databox key = databoxNewBytesString("gad-key");
         databox val = databoxNewBytesString("gad-value");
         multidictAdd(d, &key, &val);
 
         databox foundVal = {{0}};
         if (!multidictGetAndDelete(d, &key, &foundVal)) {
-            printf("ERROR: GetAndDelete should succeed\n");
-            err++;
+            ERRR("GetAndDelete should succeed");
         }
 
         /* Key should no longer exist */
         if (multidictExists(d, &key)) {
-            printf("ERROR: Key should be deleted after GetAndDelete\n");
-            err++;
+            ERRR("the key should be deleted after GetAndDelete");
         }
 
         /* GetAndDelete on non-existent should return false */
         databox dummy = {{0}};
         if (multidictGetAndDelete(d, &key, &dummy)) {
-            printf("ERROR: GetAndDelete should fail for non-existent key\n");
-            err++;
+            ERRR("GetAndDelete should fail for a non-existent key");
         }
     }
 
-    /* Test PopRandom */
-    {
+    TEST("17.2 PopRandom") {
         multidictEmpty(d);
 
         /* PopRandom on empty should fail */
         databox k = {{0}}, v = {{0}};
         if (multidictPopRandom(d, &k, &v)) {
-            printf("ERROR: PopRandom should fail on empty dict\n");
-            err++;
+            ERRR("PopRandom should fail on an empty dict");
         }
 
         /* Add some entries */
@@ -9210,84 +8963,65 @@ int multidictTest(int argc, char *argv[]) {
         }
 
         if (multidictCount(d) != 0) {
-            printf("ERROR: Dict should be empty after popping all\n");
-            err++;
+            ERRR("the dict should be empty after popping every entry");
         }
 
         if (initialCount != 10) {
-            printf("ERROR: Should have had 10 entries initially\n");
-            err++;
+            ERR("%" PRIu64 " entries before the pops, expected 10",
+                initialCount);
         }
     }
 
-    printf("=== Atomic operations tests passed! ===\n");
-
     /* ================================================================
-     * Section 18: Numeric Operations Tests (Sprint 9.3)
+     * Section 18: Numeric Operations Tests
      * ================================================================ */
-    printf("\n--- Section 18: Numeric Operations Tests (Sprint 9.3) ---\n");
-
     multidictEmpty(d);
 
-    /* Test IncrBy on new key */
-    {
+    TEST("18.1 IncrBy inserts, then increments and decrements") {
         databox key = databoxNewBytesString("counter");
         int64_t result = 0;
         multidictResult r = multidictIncrBy(d, &key, 5, &result);
         if (r != MULTIDICT_OK_INSERTED) {
-            printf("ERROR: IncrBy should insert on new key\n");
-            err++;
+            ERRR("IncrBy should insert on a new key");
         }
         if (result != 5) {
-            printf("ERROR: IncrBy result should be 5, got %" PRId64 "\n",
-                   result);
-            err++;
+            ERR("IncrBy result should be 5, got %" PRId64, result);
         }
 
         /* Increment again */
         r = multidictIncrBy(d, &key, 10, &result);
         if (r != MULTIDICT_OK_REPLACED) {
-            printf("ERROR: IncrBy should replace on existing key\n");
-            err++;
+            ERRR("IncrBy should replace on an existing key");
         }
         if (result != 15) {
-            printf("ERROR: IncrBy result should be 15, got %" PRId64 "\n",
-                   result);
-            err++;
+            ERR("IncrBy result should be 15, got %" PRId64, result);
         }
 
         /* Decrement */
         r = multidictIncrBy(d, &key, -3, &result);
         if (result != 12) {
-            printf("ERROR: IncrBy(-3) should give 12, got %" PRId64 "\n",
-                   result);
-            err++;
+            ERR("IncrBy(-3) should give 12, got %" PRId64, result);
         }
     }
 
-    /* Test IncrByFloat */
-    {
+    TEST("18.2 IncrByFloat") {
         databox key = databoxNewBytesString("float-counter");
         double result = 0.0;
         multidictResult r = multidictIncrByFloat(d, &key, 1.5, &result);
         if (r != MULTIDICT_OK_INSERTED) {
-            printf("ERROR: IncrByFloat should insert on new key\n");
-            err++;
+            ERRR("IncrByFloat should insert on a new key");
         }
         if (result != 1.5) {
-            printf("ERROR: IncrByFloat result should be 1.5, got %f\n", result);
-            err++;
+            ERR("IncrByFloat result should be 1.5, got %f", result);
         }
 
         r = multidictIncrByFloat(d, &key, 2.5, &result);
         if (result != 4.0) {
-            printf("ERROR: IncrByFloat result should be 4.0, got %f\n", result);
-            err++;
+            ERR("IncrByFloat result should be 4.0, got %f", result);
         }
     }
 
-    /* Test IncrBy on non-numeric value should fail */
-    {
+    TEST("18.3 IncrBy on a non-numeric value is refused") {
         databox key = databoxNewBytesString("string-key");
         databox val = databoxNewBytesString("not-a-number");
         multidictAdd(d, &key, &val);
@@ -9295,14 +9029,13 @@ int multidictTest(int argc, char *argv[]) {
         int64_t result = 0;
         multidictResult r = multidictIncrBy(d, &key, 1, &result);
         if (r != MULTIDICT_ERR) {
-            printf("ERROR: IncrBy on non-numeric should fail\n");
-            err++;
+            ERRR("IncrBy on a non-numeric value should fail");
         }
     }
 
     /* Increment policy: exact, refuse overflow, value unchanged on refusal;
      * IncrBy needs an int64 value; IncrByFloat refuses inf and NaN. */
-    {
+    TEST("18.4 the increment policy") {
         const databox kMax = databoxNewBytesString("incr-max");
         const databox kMin = databoxNewBytesString("incr-min");
         const databox kBig = databoxNewBytesString("incr-big-unsigned");
@@ -9324,47 +9057,35 @@ int multidictTest(int argc, char *argv[]) {
         databox now = {{0}};
         if (multidictIncrBy(d, &kMax, 1, &ir) != MULTIDICT_ERR || ir != 42 ||
             !multidictFind(d, &kMax, &now) || now.data.i64 != INT64_MAX) {
-            printf("ERROR: INT64_MAX + 1 was not refused unchanged\n");
-            err++;
+            ERRR("INT64_MAX + 1 was not refused unchanged");
         }
         if (multidictIncrBy(d, &kMin, -1, &ir) != MULTIDICT_ERR) {
-            printf("ERROR: INT64_MIN - 1 was not refused\n");
-            err++;
+            ERRR("INT64_MIN - 1 was not refused");
         }
         if (multidictIncrBy(d, &kBig, 1, &ir) != MULTIDICT_ERR) {
-            printf("ERROR: IncrBy on UINT64_MAX was not refused\n");
-            err++;
+            ERRR("IncrBy on UINT64_MAX was not refused");
         }
         if (multidictIncrBy(d, &kFloat, 1, &ir) != MULTIDICT_ERR) {
-            printf("ERROR: IncrBy on a float value was not refused\n");
-            err++;
+            ERRR("IncrBy on a float value was not refused");
         }
         if (multidictIncrByFloat(d, &kFloat, 0.25, &dr) !=
                 MULTIDICT_OK_REPLACED ||
             dr != 2.75) {
-            printf("ERROR: IncrByFloat on a float value read it wrongly\n");
-            err++;
+            ERRR("IncrByFloat on a float value read it wrongly");
         }
         if (multidictIncrByFloat(d, &kHuge, DBL_MAX, &dr) != MULTIDICT_ERR ||
             !multidictFind(d, &kHuge, &now) || now.data.d64 != DBL_MAX) {
-            printf("ERROR: an infinite IncrByFloat result was not refused\n");
-            err++;
+            ERRR("an infinite IncrByFloat result was not refused");
         }
         if (multidictIncrByFloat(d, &kHuge, NAN, &dr) != MULTIDICT_ERR) {
-            printf("ERROR: a NaN IncrByFloat result was not refused\n");
-            err++;
+            ERRR("a NaN IncrByFloat result was not refused");
         }
     }
 
-    printf("=== Numeric operations tests passed! ===\n");
-
     /* ================================================================
-     * Section 19: Dict Operations Tests (Sprint 9.4)
+     * Section 19: Dict Operations Tests
      * ================================================================ */
-    printf("\n--- Section 19: Dict Operations Tests (Sprint 9.4) ---\n");
-
-    /* Test Copy */
-    {
+    TEST("19.1 Copy") {
         multidictEmpty(d);
 
         /* Add some entries */
@@ -9379,14 +9100,11 @@ int multidictTest(int argc, char *argv[]) {
 
         cleaner(multidictFree) multidict *copy = multidictCopy(d);
         if (!copy) {
-            printf("ERROR: Copy should return non-NULL\n");
-            err++;
+            ERRR("Copy should return non-NULL");
         } else {
             if (multidictCount(copy) != multidictCount(d)) {
-                printf("ERROR: Copy count mismatch: %" PRIu64 " vs %" PRIu64
-                       "\n",
-                       multidictCount(copy), multidictCount(d));
-                err++;
+                ERR("Copy count mismatch: %" PRIu64 " vs %" PRIu64,
+                    multidictCount(copy), multidictCount(d));
             }
 
             /* Verify all keys exist in copy */
@@ -9395,15 +9113,13 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "copy-key-%d", i);
                 databox key = databoxNewBytesString(keyBuf);
                 if (!multidictExists(copy, &key)) {
-                    printf("ERROR: Key %s missing from copy\n", keyBuf);
-                    err++;
+                    ERR("key %s missing from the copy", keyBuf);
                 }
             }
         }
     }
 
-    /* Test Merge with REPLACE mode */
-    {
+    TEST("19.2 Merge in REPLACE mode") {
         multidictEmpty(d);
 
         /* Create source dict */
@@ -9434,21 +9150,17 @@ int multidictTest(int argc, char *argv[]) {
 
         uint64_t merged = multidictMerge(d, src, MULTIDICT_MERGE_REPLACE);
         if (merged != 50) {
-            printf("ERROR: Merge REPLACE should merge 50, got %" PRIu64 "\n",
-                   merged);
-            err++;
+            ERR("Merge REPLACE should merge 50, got %" PRIu64, merged);
         }
 
         /* Total should now be 75 (0-74) */
         if (multidictCount(d) != 75) {
-            printf("ERROR: After merge count should be 75, got %" PRIu64 "\n",
-                   multidictCount(d));
-            err++;
+            ERR("after the merge the count should be 75, got %" PRIu64,
+                multidictCount(d));
         }
     }
 
-    /* Test Merge with KEEP mode */
-    {
+    TEST("19.3 Merge in KEEP mode") {
         multidictEmpty(d);
 
         cleaner(multidictMmClassFree) multidictClass *srcQdc =
@@ -9479,32 +9191,25 @@ int multidictTest(int argc, char *argv[]) {
         /* KEEP mode - only non-existent keys should be added */
         uint64_t merged = multidictMerge(d, src, MULTIDICT_MERGE_KEEP);
         if (merged != 5) {
-            printf("ERROR: Merge KEEP should only add 5 new, got %" PRIu64 "\n",
-                   merged);
-            err++;
+            ERR("Merge KEEP should only add 5 new, got %" PRIu64, merged);
         }
 
         if (multidictCount(d) != 15) {
-            printf("ERROR: After merge count should be 15, got %" PRIu64 "\n",
-                   multidictCount(d));
-            err++;
+            ERR("after the merge the count should be 15, got %" PRIu64,
+                multidictCount(d));
         }
     }
 
-    printf("=== Dict operations tests passed! ===\n");
-
     /* ================================================================
-     * Section 20: LRU Eviction Tests (Sprint 10)
+     * Section 20: LRU Eviction Tests
      * ================================================================ */
-    printf("\n--- Section 20: LRU Eviction Tests (Sprint 10) ---\n");
 
     multidictFree(d);
     multidictMmClassFree(qdc);
     qdc = multidictMmClassNew();
     d = multidictNew(&multidictTypeExactKey, qdc, 42);
 
-    printf("Test 20.1: EnableLRU/HasLRU/DisableLRU basics...\n");
-    {
+    TEST("20.1 EnableLRU/HasLRU/DisableLRU basics") {
         assert(!multidictHasLRU(d)); /* Initially disabled */
         bool enabled1 = multidictEnableLRU(d, 7);
         assert(enabled1);
@@ -9517,8 +9222,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictHasLRU(d));
     }
 
-    printf("Test 20.2: Large-scale LRU eviction (10K entries, 5K limit)...\n");
-    {
+    TEST("20.2 large-scale LRU eviction (10K entries, 5K limit)") {
         multidictEmpty(d);
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
 
@@ -9570,8 +9274,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(foundNew);  /* New should remain */
     }
 
-    printf("Test 20.3: Hot key protection under pressure...\n");
-    {
+    TEST("20.3 hot key protection under pressure") {
         multidictEmpty(d);
         multidictSetMaxMemory(d, 3000); /* ~100 entries */
 
@@ -9613,8 +9316,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(hotSurvived);
     }
 
-    printf("Test 20.4: LRU stress fuzz with mixed ops (5K iterations)...\n");
-    {
+    TEST("20.4 LRU stress fuzz with mixed ops (5K iterations)") {
         multidictEmpty(d);
         multidictSetMaxMemory(d, 5000); /* ~166 entries */
 
@@ -9672,8 +9374,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(iterCount == multidictCount(d));
     }
 
-    printf("Test 20.5: LRU during rehashing...\n");
-    {
+    TEST("20.5 LRU during rehashing") {
         multidictEmpty(d);
         multidictSetMaxMemory(d, 0); /* No limit initially */
 
@@ -9715,8 +9416,7 @@ int multidictTest(int argc, char *argv[]) {
                stats.count, stats.totalBytes);
     }
 
-    printf("Test 20.6: Policy switching...\n");
-    {
+    TEST("20.6 policy switching") {
         assert(multidictGetEvictPolicy(d) == MULTIDICT_EVICT_LRU);
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_RANDOM);
         assert(multidictGetEvictPolicy(d) == MULTIDICT_EVICT_RANDOM);
@@ -9725,8 +9425,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
     }
 
-    printf("Test 20.7: GetLRULevel API...\n");
-    {
+    TEST("20.7 the GetLRULevel API") {
         multidictEmpty(d);
         multidictSetMaxMemory(d, 0);
 
@@ -9746,8 +9445,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(level1 >= level0); /* Should promote */
     }
 
-    printf("Test 20.8: Zero-overhead verification (no LRU)...\n");
-    {
+    TEST("20.8 zero overhead without LRU") {
         /* Create new dict without LRU */
         cleaner(multidictMmClassFree) multidictClass *qdcNoLru =
             multidictMmClassNew();
@@ -9769,8 +9467,7 @@ int multidictTest(int argc, char *argv[]) {
             "    No-LRU operations: no crash, operations silently ignored\n");
     }
 
-    printf("Test 20.9: Vetoed LRU victims stay tracked at their rank...\n");
-    {
+    TEST("20.9 vetoed LRU victims stay tracked at their rank") {
         cleaner(multidictMmClassFree) multidictClass *vqdc =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *vd =
@@ -9829,9 +9526,8 @@ int multidictTest(int argc, char *argv[]) {
                 expect++;
             }
             if (testLruEvictOrder_[n] != expect) {
-                printf("ERROR: round 1 victim %d is key %d, expected %d\n", n,
-                       testLruEvictOrder_[n], expect);
-                assert(NULL);
+                ERR("round 1 victim %d is key %d, expected %d", n,
+                    testLruEvictOrder_[n], expect);
             }
             present[expect] = false;
             expect++;
@@ -9873,9 +9569,8 @@ int multidictTest(int argc, char *argv[]) {
             }
             assert(next < cold);
             if (testLruEvictOrder_[n] != next) {
-                printf("ERROR: round 2 victim %d is key %d, expected %d\n", n,
-                       testLruEvictOrder_[n], next);
-                assert(NULL);
+                ERR("round 2 victim %d is key %d, expected %d", n,
+                    testLruEvictOrder_[n], next);
             }
             present[next] = false;
         }
@@ -9889,8 +9584,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(testLruVetoBad_ == 0);
     }
 
-    printf("Test 20.10: Case-insensitive dict evicts in LRU order...\n");
-    {
+    TEST("20.10 a case-insensitive dict evicts in LRU order") {
         cleaner(multidictMmClassFree) multidictClass *cqdc =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *cd =
@@ -9960,9 +9654,8 @@ int multidictTest(int argc, char *argv[]) {
                 expect++;
             }
             if (log.order[n] != expect * 2 + expect % 2) {
-                printf("ERROR: case victim %d is code %d, expected index %d\n",
-                       n, log.order[n], expect);
-                assert(NULL);
+                ERR("case victim %d is code %d, expected index %d", n,
+                    log.order[n], expect);
             }
             expect++;
         }
@@ -9986,8 +9679,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictIteratorRelease(&iter);
     }
 
-    printf("Test 20.11: Same-hash keys in one slot evict in LRU order...\n");
-    {
+    TEST("20.11 same-hash keys in one slot evict in LRU order") {
         cleaner(multidictMmClassFree) multidictClass *hqdc =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *hd =
@@ -10029,9 +9721,8 @@ int multidictTest(int argc, char *argv[]) {
         for (int32_t n = 0; n < evict; n++) {
             const int32_t expect = (n + 1) * 2; /* keys 1..10 */
             if (log.order[n] != expect) {
-                printf("ERROR: same-hash victim %d is code %d, expected %d\n",
-                       n, log.order[n], expect);
-                assert(NULL);
+                ERR("same-hash victim %d is code %d, expected %d", n,
+                    log.order[n], expect);
             }
         }
 
@@ -10040,12 +9731,12 @@ int multidictTest(int argc, char *argv[]) {
         assert(testLruTrackingExact_(hd));
     }
 
-    printf("Test 20.12: Reads do not promote, accesses promote once...\n");
-    err += multidictTestLruPromotion_(&multidictTypeExactKey);
-    err += multidictTestLruPromotion_(&multidictTypeCaseKey);
+    TEST("20.12 reads do not promote, accesses promote once") {
+        err += multidictTestLruPromotion_(&multidictTypeExactKey);
+        err += multidictTestLruPromotion_(&multidictTypeCaseKey);
+    }
 
-    printf("Test 20.13: Fewer tracked keys than the candidate window...\n");
-    {
+    TEST("20.13 fewer tracked keys than the candidate window") {
         cleaner(multidictMmClassFree) multidictClass *wqdc =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *wd =
@@ -10126,15 +9817,10 @@ int multidictTest(int argc, char *argv[]) {
         testLruVetoActive_ = false;
     }
 
-    printf("=== LRU eviction tests passed! ===\n");
-
     /* ================================================================
-     * Section 21: Byte-Based Expansion Tests (Sprint 11)
+     * Section 21: Byte-Based Expansion Tests
      * ================================================================ */
-    printf("\n--- Section 21: Byte-Based Expansion Tests ---\n");
-
-    printf("Test 21.1: Enable/disable byte-based expansion API...\n");
-    {
+    TEST("21.1 enable/disable the byte-based expansion API") {
         multidictEmpty(d);
         assert(!multidictIsByteBasedExpansion(d)); /* Disabled by default */
 
@@ -10145,8 +9831,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(!multidictIsByteBasedExpansion(d));
     }
 
-    printf("Test 21.2: multidictGetLoadMetrics basic...\n");
-    {
+    TEST("21.2 multidictGetLoadMetrics") {
         multidictEmpty(d);
         multidictLoadMetrics metrics;
 
@@ -10180,8 +9865,7 @@ int multidictTest(int argc, char *argv[]) {
                metrics.maxSlotBytes);
     }
 
-    printf("Test 21.3: Byte-based expansion trigger - small values...\n");
-    {
+    TEST("21.3 the byte-based expansion trigger - small values") {
         /* Create fresh dict with byte-based expansion */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
@@ -10207,8 +9891,7 @@ int multidictTest(int argc, char *argv[]) {
                multidictSlotCount(dByte), metrics.avgSlotBytes);
     }
 
-    printf("Test 21.4: Byte-based expansion trigger - large values...\n");
-    {
+    TEST("21.4 the byte-based expansion trigger - large values") {
         /* Create fresh dict with byte-based expansion */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
@@ -10241,8 +9924,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(finalSlots > initialSlots); /* Should expand due to byte load */
     }
 
-    printf("Test 21.5: Safeguard - maximum slot size trigger...\n");
-    {
+    TEST("21.5 safeguard - the maximum slot size trigger") {
         /* Create dict with very low max slot size */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
@@ -10274,8 +9956,7 @@ int multidictTest(int argc, char *argv[]) {
                initialSlots, finalSlots, metrics.maxSlotBytes);
     }
 
-    printf("Test 21.6: Safeguard - count-based backstop...\n");
-    {
+    TEST("21.6 safeguard - the count-based backstop") {
         /* Create dict with very high byte targets but low count threshold */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
@@ -10311,11 +9992,9 @@ int multidictTest(int argc, char *argv[]) {
             }
         }
         if (overCount) {
-            printf("ERROR: byte mode held %" PRIu64 " entries in %" PRIu64
-                   " slots, past the %d%% backstop\n",
-                   overCount, overSlots,
-                   2 * MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR);
-            err++;
+            ERR("byte mode held %" PRIu64 " entries in %" PRIu64
+                " slots, past the %d%% backstop",
+                overCount, overSlots, 2 * MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR);
         }
 
         uint32_t finalSlots = multidictSlotCount(dByte);
@@ -10330,8 +10009,7 @@ int multidictTest(int argc, char *argv[]) {
                initialSlots); /* Should expand via count backstop */
     }
 
-    printf("Test 21.7: Safeguard - expansion effectiveness check...\n");
-    {
+    TEST("21.7 safeguard - the expansion effectiveness check") {
         /* Every entry is larger than the target slot size, so once each
          * sits alone in a slot no expansion can bring a slot under it.
          * Expansion must stop there (the count-based backstop still
@@ -10362,15 +10040,13 @@ int multidictTest(int argc, char *argv[]) {
                metrics.avgSlotBytes, multidictSlotCount(dByte));
         if (multidictCount(dByte) != BIG_ENTRIES ||
             multidictSlotCount(dByte) > 4 * BIG_ENTRIES) {
-            printf("    ERROR: %" PRIu64 " slots for %d entries larger "
-                   "than the target: expansion did not stop\n",
-                   multidictSlotCount(dByte), BIG_ENTRIES);
-            err++;
+            ERR("%" PRIu64 " slots for %d entries larger than the target: "
+                "expansion did not stop",
+                multidictSlotCount(dByte), BIG_ENTRIES);
         }
     }
 
-    printf("PERF: byte-based expansion insert cost against count-based...\n");
-    {
+    TEST("perf: byte-based expansion insert cost against count-based") {
         /* The byte-based check measures the table; doing that by
          * walking every slot on every insert makes inserting n entries
          * quadratic.  Checked by the slots the measuring walks, which
@@ -10400,18 +10076,15 @@ int multidictTest(int argc, char *argv[]) {
                 perOp[size][mode] =
                     (double)(timeUtilMonotonicNs() - t0) / perfN[size];
                 if (multidictCount(perfD) != (uint64_t)perfN[size]) {
-                    printf("    ERROR: %" PRIu64 " entries, want %d\n",
-                           multidictCount(perfD), perfN[size]);
-                    err++;
+                    ERR("%" PRIu64 " entries, want %d", multidictCount(perfD),
+                        perfN[size]);
                 }
                 /* @sync: relaxed counter */
                 const uint64_t walked = atomic_load_explicit(
                     &mdTestMetricSlotsWalked, memory_order_relaxed);
                 if (mode == 1 && walked > 64 * (uint64_t)perfN[size]) {
-                    printf("    ERROR: %d byte-based inserts walked %" PRIu64
-                           " slots\n",
-                           perfN[size], walked);
-                    err++;
+                    ERR("%d byte-based inserts walked %" PRIu64 " slots",
+                        perfN[size], walked);
                 }
             }
             printf("    %d inserts: count-based %.1f ns/op, byte-based %.1f "
@@ -10420,8 +10093,7 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("Test 21.8: Byte-based vs count-based expansion comparison...\n");
-    {
+    TEST("21.8 byte-based against count-based expansion") {
         /* Create two dicts: one byte-based, one count-based */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
@@ -10459,8 +10131,7 @@ int multidictTest(int argc, char *argv[]) {
         /* Byte-based may expand more aggressively for large values */
     }
 
-    printf("Test 21.9: Byte-based expansion during rehashing operations...\n");
-    {
+    TEST("21.9 byte-based expansion during rehashing operations") {
         /* Verify byte-based expansion works correctly with rehashing */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
@@ -10502,9 +10173,7 @@ int multidictTest(int argc, char *argv[]) {
         assert(foundCount == 200);
     }
 
-    printf("Test 21.10: Fuzz test - byte-based expansion with mixed "
-           "operations...\n");
-    {
+    TEST("21.10 fuzz - byte-based expansion with mixed operations") {
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dByte =
@@ -10553,8 +10222,6 @@ int multidictTest(int argc, char *argv[]) {
                adds, dels, finds, multidictCount(dByte), metrics.avgSlotBytes);
     }
 
-    printf("=== Byte-based expansion tests passed! ===\n");
-
     /* ================================================================
      * Regression: single-step incremental rehash through a sparse table
      * ================================================================
@@ -10564,8 +10231,7 @@ int multidictTest(int argc, char *argv[]) {
      * UINT32_MAX, disabling the cap entirely. This drives many single steps
      * over a populated-then-sparsified table (lots of NULL slot runs in HT0
      * mid-rehash) and verifies the rehash terminates and preserves data. */
-    printf("--- Section: single-step rehash sparse-table regression ---\n");
-    {
+    TEST("single-step rehash through a sparse table") {
         enum { N = 4000 };
         cleaner(multidictFree) multidict *r =
             multidictNew(&multidictTypeExactKey, qdc, 0xABCDEF);
@@ -10613,14 +10279,12 @@ int multidictTest(int argc, char *argv[]) {
             }
         }
         assert(multidictSize(r) == N / 2);
-        printf("=== single-step rehash regression passed! ===\n");
     }
 
     /* ================================================================
      * Empty then reuse (reset-family regression matrix)
      * ================================================================ */
-    printf("\n--- Empty-then-reuse cycles ---\n");
-    {
+    TEST("empty-then-reuse cycles") {
         /* Start from a clean slate: earlier suite sections leave
          * entries in the long-lived dict */
         multidictEmpty(d);
@@ -10632,17 +10296,14 @@ int multidictTest(int argc, char *argv[]) {
                 multidictAdd(d, &keybox, &valbox);
             }
             if (multidictCount(d) != 500) {
-                printf("ERROR: cycle %d expected 500, got %" PRIu64 "\n", cycle,
-                       multidictCount(d));
-                err++;
+                ERR("cycle %d expected 500, got %" PRIu64, cycle,
+                    multidictCount(d));
             }
 
             multidictEmpty(d);
             if (multidictCount(d) != 0) {
-                printf("ERROR: cycle %d expected 0 after Empty, got %" PRIu64
-                       "\n",
-                       cycle, multidictCount(d));
-                err++;
+                ERR("cycle %d expected 0 after Empty, got %" PRIu64, cycle,
+                    multidictCount(d));
             }
         }
 
@@ -10660,24 +10321,18 @@ int multidictTest(int argc, char *argv[]) {
             }
         }
         if (missing > 0) {
-            printf("ERROR: %" PRIu64 " of 500 keys missing after Empty-reuse\n",
-                   missing);
-            err++;
+            ERR("%" PRIu64 " of 500 keys missing after Empty-reuse", missing);
         }
     }
 
-    printf("\n--- 96/128-bit keys and values: normal / extended / mixed ---\n");
-    err += multidictTestWide_(MD_WIDE_NORMAL);
-    err += multidictTestWide_(MD_WIDE_EXTENDED);
-    err += multidictTestWide_(MD_WIDE_MIXED);
-    err += multidictTestSlotIteratorWide_();
+    TEST("96/128-bit keys and values: normal / extended / mixed") {
+        err += multidictTestWide_(MD_WIDE_NORMAL);
+        err += multidictTestWide_(MD_WIDE_EXTENDED);
+        err += multidictTestWide_(MD_WIDE_MIXED);
+        err += multidictTestSlotIteratorWide_();
+    }
 
-    /* ================================================================
-     * Smoke benchmark: per-entry cost of the core operations (meaningful
-     * under the perf preset; checks the results too)
-     * ================================================================ */
-    printf("\n--- Integer hash functions ---\n");
-    {
+    TEST("integer hash functions") {
         /* The 32-bit mixer is a bijection: distinct keys never collide.
          * The 64-bit one folds to 32 bits: collisions stay rare. */
         enum { MD_HASH_KEYS = 65536 };
@@ -10691,8 +10346,7 @@ int multidictTest(int argc, char *argv[]) {
         }
         if (multidictIntHashFunction(12345) !=
             multidictIntHashFunction(12345)) {
-            printf("an integer hash is not deterministic\n");
-            err++;
+            ERRR("an integer hash is not deterministic");
         }
         qsort(h32, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
         qsort(h64, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
@@ -10703,14 +10357,11 @@ int multidictTest(int argc, char *argv[]) {
             same64 += h64[i] == h64[i - 1];
         }
         if (same32 != 0 || same64 > 4) {
-            printf("hash collisions: %zu (32-bit), %zu (64-bit)\n", same32,
-                   same64);
-            err++;
+            ERR("hash collisions: %zu (32-bit), %zu (64-bit)", same32, same64);
         }
     }
 
-    printf("Test: a key given as never-free bytes finds its entry...\n");
-    {
+    TEST("a key given as never-free bytes finds its entry") {
         /* Added under BYTES keys; found, and deleted, through boxes that
          * carry the same bytes as NEVER_FREE (hashing reads both alike) */
         cleaner(multidictMmClassFree) multidictClass *nc =
@@ -10738,14 +10389,14 @@ int multidictTest(int argc, char *argv[]) {
                         .len = strlen((char *)names[0])};
         if (found != 3 || !multidictDelete(nd, &gone) ||
             multidictCount(nd) != 2) {
-            printf("ERROR: never-free keys found %d of 3, count %" PRIu64 "\n",
-                   found, multidictCount(nd));
-            err++;
+            ERR("never-free keys found %d of 3, count %" PRIu64, found,
+                multidictCount(nd));
         }
     }
 
-    printf("\n--- Smoke benchmark (ns per entry) ---\n");
-    {
+    /* Per-entry cost of the core operations (meaningful under the perf
+     * preset; checks the results too) */
+    TEST("smoke benchmark (ns per entry)") {
         enum { MD_BENCH_KEYS = 100000 };
         cleaner(multidictMmClassFree) multidictClass *bc =
             multidictMmClassNew();
@@ -10823,20 +10474,13 @@ int multidictTest(int argc, char *argv[]) {
                (double)deleteNs / MD_BENCH_KEYS);
         if (found != MD_BENCH_KEYS || iterated != MD_BENCH_KEYS ||
             deleted != MD_BENCH_KEYS || multidictSize(bd) != 0) {
-            printf("benchmark results wrong: found %" PRIu64
-                   " iterated %" PRIu64 " deleted %" PRIu64 "\n",
-                   found, iterated, deleted);
-            err++;
+            ERR("benchmark results wrong: found %" PRIu64 " iterated %" PRIu64
+                " deleted %" PRIu64,
+                found, iterated, deleted);
         }
     }
 
-    /* ================================================================
-     * Cleanup
-     * ================================================================ */
-    printf("\n--- Cleanup ---\n");
-
-    printf("\n=== ALL MULTIDICT TESTS PASSED! ===\n");
-    return err;
+    TEST_FINAL_RESULT;
 }
 
 #endif /* DATAKIT_TEST */
