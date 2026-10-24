@@ -26,7 +26,9 @@ hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense);
 bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src);
 void hyperloglogInvalidateCache(hyperloglog *h);
 
-/* User-friendly API */
+/* User-friendly API.  pfadd returns how many adds changed a register (-1
+ * for a corrupt sketch); pfcount (the union of several) and pfcountSingle
+ * return UINT64_MAX for a corrupt sketch. */
 int pfadd(hyperloglog **hh, ...);
 uint64_t pfcount(hyperloglog *h, ...);
 uint64_t pfcountSingle(hyperloglog *h);

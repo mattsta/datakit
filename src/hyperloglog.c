@@ -2051,7 +2051,20 @@ cleanup:
         unk->encoding = 3; /* the 2-bit field's one unused value */
         bool invalid = false;
         const uint64_t count = hyperloglogCount(unk, &invalid);
+        /* The convenience counts report a corrupt sketch as UINT64_MAX */
+        hyperloglog *fine = hyperloglogNewDense();
+        unk->encoding = 3;
+        HLL_INVALIDATE_CACHE(unk);
+        const uint64_t single = pfcountSingle(unk);
+        const uint64_t unionOf = pfcount(fine, unk, (hyperloglog *)NULL);
         unk->encoding = saved;
+        hyperloglogFree(fine);
+        if (single != UINT64_MAX || unionOf != UINT64_MAX) {
+            printf("  [FAIL] corrupt sketch: single %" PRIu64 ", union %" PRIu64
+                   "\n",
+                   single, unionOf);
+            errors++;
+        }
         if (count != 0 || !invalid) {
             printf("  [FAIL] unknown encoding: count %" PRIu64 ", invalid %d\n",
                    count, invalid);

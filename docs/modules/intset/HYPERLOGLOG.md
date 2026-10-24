@@ -338,11 +338,12 @@ Convenience functions with variadic arguments:
  */
 int pfadd(hyperloglog **hh, ...);
 
-/* Count a single HLL, using and refreshing its cached cardinality */
+/* Count a single HLL, using and refreshing its cached cardinality.
+ * UINT64_MAX if the sketch is corrupt. */
 uint64_t pfcountSingle(hyperloglog *h);
 
 /* Count the UNION cardinality of several HLLs (NULL-terminated).
- * Does not modify the inputs. */
+ * Does not modify the inputs.  UINT64_MAX if any of them is corrupt. */
 uint64_t pfcount(hyperloglog *h, ...);
 
 /* Merge several HLLs (NULL-terminated).
@@ -352,12 +353,11 @@ uint64_t pfcount(hyperloglog *h, ...);
 hyperloglog *pfmerge(hyperloglog *h, ...);
 ```
 
-**Caution on `pfadd`'s return value.** It counts adds that changed a
-register and stops early — returning `0` — as soon as one add reports "no
-change". A zero return therefore does not mean "nothing was stored", and a
-non-zero return is not a count of elements accepted. Treat it as a
-best-effort signal only; use `hyperloglogAdd` in a loop when you need a
-per-element result.
+**`pfadd`'s return value** counts the adds that changed a register; an
+element already represented changes nothing and is not an error, so a
+return of `0` means no register moved, not that nothing was accepted. It
+is `-1` if the sketch is corrupt (the adds stop there). Use
+`hyperloglogAdd` in a loop when you need a per-element result.
 
 `pfcountSingle` writes the freshly computed estimate back into the header's
 cached-cardinality field, so a "read" can dirty the object — relevant when
