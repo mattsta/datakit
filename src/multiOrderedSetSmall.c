@@ -287,10 +287,7 @@ size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
 size_t multiOrderedSetSmallRemoveRangeByRank(multiOrderedSetSmall *m,
                                              int64_t start, int64_t stop) {
     size_t count = multiOrderedSetSmallCount(m);
-    start = mosNormalizeRank(start, count);
-    stop = mosNormalizeRank(stop, count);
-
-    if (start < 0 || stop < 0 || start > stop) {
+    if (!mosClampRankRange(&start, &stop, count)) {
         return 0;
     }
 

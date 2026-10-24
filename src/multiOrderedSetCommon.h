@@ -349,6 +349,30 @@ DK_INLINE_ALWAYS int64_t mosNormalizeRank(int64_t rank, size_t count) {
     return rank;
 }
 
+/* Resolve the inclusive rank range [*start, *stop] against 'count' rows:
+ * negative ranks count from the end, a start
+ * below the first row starts at it and a stop past the last row stops at
+ * it.  False (nothing in range) when the range is empty or entirely
+ * outside the rows. */
+DK_INLINE_ALWAYS bool mosClampRankRange(int64_t *start, int64_t *stop,
+                                        size_t count) {
+    const int64_t n = (int64_t)count;
+    int64_t s = *start < 0 ? *start + n : *start;
+    int64_t e = *stop < 0 ? *stop + n : *stop;
+    if (s < 0) {
+        s = 0;
+    }
+    if (e >= n) {
+        e = n - 1;
+    }
+    if (n == 0 || s > e || s >= n || e < 0) {
+        return false;
+    }
+    *start = s;
+    *stop = e;
+    return true;
+}
+
 /* ====================================================================
  * Random members
  * ==================================================================== */

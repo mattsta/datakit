@@ -448,10 +448,7 @@ size_t multiOrderedSetMediumRemoveRangeByScore(multiOrderedSetMedium *m,
 size_t multiOrderedSetMediumRemoveRangeByRank(multiOrderedSetMedium *m,
                                               int64_t start, int64_t stop) {
     size_t count = multiOrderedSetMediumCount(m);
-    start = mosNormalizeRank(start, count);
-    stop = mosNormalizeRank(stop, count);
-
-    if (start < 0 || stop < 0 || start > stop) {
+    if (!mosClampRankRange(&start, &stop, count)) {
         return 0;
     }
 
@@ -1144,8 +1141,8 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
                     const int64_t b = a + (int64_t)(splitmix64(&rng) % 5);
                     int64_t rank = 0;
                     size_t want = 0;
-                    /* A stop past the end removes nothing (not clamped) */
-                    for (int64_t s = 0; b < n && s < MOSM_N; s++) {
+                    /* A stop past the end stops at the last rank */
+                    for (int64_t s = 0; s < MOSM_N; s++) {
                         if (present[s]) {
                             if (rank >= a && rank <= b) {
                                 present[s] = false;

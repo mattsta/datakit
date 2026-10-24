@@ -1857,6 +1857,79 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         err += mosUpdateOracle_(1200, MOS_TYPE_FULL);
     }
 
+    TEST("multiOrderedSet: RemoveRangeByRank clamps its range in every tier") {
+        /* Each range on a fresh set of n members (score i, member "r%05d")
+         * removes exactly the oracle's ranks: negative ranks from the end,
+         * start and stop clamped to the set, empty when outside it */
+        static const int64_t ns[] = {5, 10, 14, 20, 40, 3000};
+        unsigned tiersSeen = 0;
+        static const struct {
+            int64_t start;
+            int64_t stop;
+        } ranges[] = {
+            {0, -1},         {0, INT64_MAX}, {-1000, 1},       {5, 2},
+            {-2, 100},       {3, 3},         {-1, -1},         {1, -2},
+            {INT64_MIN, -1}, {10000, 20000}, {-20000, -10000},
+        };
+        for (size_t t = 0; t < sizeof(ns) / sizeof(*ns); t++) {
+            const int64_t n = ns[t];
+            for (size_t r = 0; r < sizeof(ranges) / sizeof(*ranges); r++) {
+                multiOrderedSet *mos =
+                    multiOrderedSetNewLimit(FLEX_CAP_LEVEL_128);
+                for (int64_t i = 0; i < n; i++) {
+                    char buf[24];
+                    snprintf(buf, sizeof(buf), "r%05" PRId64, i);
+                    const databox member = databoxNewBytesString(buf);
+                    const databox score = databoxNewSigned(i);
+                    multiOrderedSetAdd(&mos, &score, &member);
+                }
+                const int tier = (int)mosType_(mos);
+                tiersSeen |= 1u << tier;
+                /* Oracle */
+                int64_t s = ranges[r].start;
+                int64_t e = ranges[r].stop;
+                if (s < 0) {
+                    s = s < -n ? 0 : s + n;
+                }
+                if (e < 0) {
+                    e = e < -n ? -1 : e + n;
+                }
+                if (e >= n) {
+                    e = n - 1;
+                }
+                const size_t want = s <= e && s < n ? (size_t)(e - s + 1) : 0;
+                const size_t got = multiOrderedSetRemoveRangeByRank(
+                    &mos, ranges[r].start, ranges[r].stop);
+                /* The survivors are the ranks outside [s, e] */
+                bool rest = multiOrderedSetCount(mos) == (size_t)n - got;
+                mosIterator it;
+                multiOrderedSetIteratorInit(mos, &it, true);
+                databox member;
+                databox score;
+                int64_t expect = 0;
+                while (rest &&
+                       multiOrderedSetIteratorNext(&it, &member, &score)) {
+                    if (want && expect == s) {
+                        expect = e + 1;
+                    }
+                    rest = score.data.i64 == expect;
+                    expect++;
+                }
+                if (got != want || !rest) {
+                    ERR("tier %d, n %" PRId64 ", range (%" PRId64 ", %" PRId64
+                        "): removed %zu, want %zu",
+                        tier, n, ranges[r].start, ranges[r].stop, got, want);
+                }
+                multiOrderedSetFree(mos);
+            }
+        }
+        const unsigned all = (1u << MOS_TYPE_SMALL) | (1u << MOS_TYPE_MEDIUM) |
+                             (1u << MOS_TYPE_FULL);
+        if ((tiersSeen & all) != all) {
+            ERR("rank clamp: tiers seen 0x%x, want 0x%x", tiersSeen, all);
+        }
+    }
+
     TEST("multiOrderedSet: equal scores stay in member order across a "
          "Small->Medium split") {
         /* Promotion splits Small's rows in half whatever their scores, so

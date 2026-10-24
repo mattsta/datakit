@@ -1052,10 +1052,7 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
 size_t multiOrderedSetFullRemoveRangeByRank(multiOrderedSetFull *m,
                                             int64_t start, int64_t stop) {
     size_t count = m->totalEntries;
-    start = mosNormalizeRank(start, count);
-    stop = mosNormalizeRank(stop, count);
-
-    if (start < 0 || stop < 0 || start > stop) {
+    if (!mosClampRankRange(&start, &stop, count)) {
         return 0;
     }
 
