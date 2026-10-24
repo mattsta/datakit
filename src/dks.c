@@ -1020,9 +1020,16 @@ DKS_TYPE *DKS_CATFMT(DKS_TYPE *s, char const *fmt, ...) {
                 switch (box->type) {
                 case DATABOX_BYTES:
                 case DATABOX_BYTES_EMBED:
+                case DATABOX_BYTES_NEVER_FREE:
                     l = databoxLen(box);
                     useBuf = (uint8_t *)databoxBytes(box);
                     break;
+#if DATABOX_ENABLE_PTR_MDSC
+                case DATABOX_PTR_MDSC:
+                    l = databoxLen(box);
+                    useBuf = (uint8_t *)box->data.ptr;
+                    break;
+#endif
                 case DATABOX_SIGNED_64:
                     l = StrInt64ToBuf(writerBuf, sizeof(writerBuf),
                                       box->data.i);
@@ -2305,11 +2312,29 @@ int DKS_TEST(int argc, char *argv[]) {
             const databox top = DATABOX_UNSIGNED(UINT64_MAX);
             const databox f32 = {.type = DATABOX_FLOAT_32, .data.f32 = 1.5f};
             const databox d64 = DATABOX_DOUBLE(0.25);
+            static uint8_t neverText[] = "static";
+            const databox never = {.type = DATABOX_BYTES_NEVER_FREE,
+                                   .data.bytes.start = neverText,
+                                   .len = 6};
             DKS_TYPE *boxFmt =
-                DKS_CATFMT(DKS_EMPTY(), "[%B|%B|%B|%B|%B|%B]", &bytes, &embed,
-                           &neg, &top, &f32, &d64);
+                DKS_CATFMT(DKS_EMPTY(), "[%B|%B|%B|%B|%B|%B|%B]", &bytes,
+                           &embed, &neg, &top, &f32, &d64, &never);
             const char *boxWant =
-                "[abcdefghijk|xy|-42|18446744073709551615|1.5|0.25]";
+                "[abcdefghijk|xy|-42|18446744073709551615|1.5|"
+                "0.25|static]";
+#ifdef DATAKIT_DKS_COMPACT
+            /* An mdsc string box (only the compact build makes mdsc) */
+            DKS_TYPE *str = DKS_NEW("from an mdsc");
+            const databox viaMdsc = {
+                .type = DATABOX_PTR_MDSC, .data.ptr = str, .len = DKS_LEN(str)};
+            DKS_TYPE *mdscFmt = DKS_CATFMT(DKS_EMPTY(), "<%B>", &viaMdsc);
+            testCond("DKS_CATFMT() %B formats an mdsc string box",
+                     (int)(DKS_LEN(mdscFmt) == 14 &&
+                           memcmp(mdscFmt, "<from an mdsc>", 14) == 0),
+                     1, "%d");
+            DKS_FREE(mdscFmt);
+            DKS_FREE(str);
+#endif
             testCond("DKS_CATFMT() %B formats every box kind",
                      (int)(DKS_LEN(boxFmt) == strlen(boxWant) &&
                            memcmp(boxFmt, boxWant, strlen(boxWant)) == 0),
