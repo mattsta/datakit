@@ -1311,7 +1311,7 @@ size_t multiOrderedSetFullCountByScore(const multiOrderedSetFull *m,
             continue;
         }
 
-        flexEntry *entry = flexHead(map);
+        flexEntry *entry = flexHeadIfAny(map);
         while (entry) {
             databox score;
             databoxWide scoreWide;
@@ -1347,6 +1347,7 @@ void multiOrderedSetFullIteratorInit(const multiOrderedSetFull *m,
     iter->mos = (void *)m;
     iter->type = MOS_TYPE_FULL;
     iter->forward = forward;
+    iter->current = NULL; /* stays NULL when every sub-map is empty */
 
     if (forward) {
         iter->mapIndex = 0;
@@ -1390,7 +1391,7 @@ bool multiOrderedSetFullIteratorInitAtScore(const multiOrderedSetFull *m,
             continue;
         }
 
-        flexEntry *entry = flexHead(map);
+        flexEntry *entry = flexHeadIfAny(map);
         while (entry) {
             databox currentScore;
             databoxWide currentScoreWide;
@@ -1933,6 +1934,52 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             ERRR("New set should be empty");
         }
         multiOrderedSetFullFree(mos);
+    }
+
+    TEST("multiOrderedSetFull — empty and emptied sets have nothing to read") {
+        /* A new set and one emptied after holding rows: counting a score
+         * range and starting an iterator at a score find nothing, and
+         * neither reads past a sub-map */
+        const mosRangeSpec all = {.min = databoxNewSigned(INT64_MIN),
+                                  .max = databoxNewSigned(INT64_MAX)};
+        const databox zero = databoxNewSigned(0);
+        for (int emptied = 0; emptied <= 1; emptied++) {
+            multiOrderedSetFull *mos = multiOrderedSetFullNew();
+            if (emptied) {
+                for (int i = 0; i < 300; i++) {
+                    char buf[16];
+                    snprintf(buf, sizeof(buf), "m%03d", i);
+                    const databox member = databoxNewBytesString(buf);
+                    const databox score = databoxNewSigned(i);
+                    multiOrderedSetFullAdd(mos, &score, &member);
+                }
+                for (int i = 0; i < 300; i++) {
+                    char buf[16];
+                    snprintf(buf, sizeof(buf), "m%03d", i);
+                    const databox member = databoxNewBytesString(buf);
+                    multiOrderedSetFullRemove(mos, &member);
+                }
+            }
+            /* The iterator starts as junk, as an uninitialized one would */
+            mosIterator iter;
+            memset(&iter, 0xA5, sizeof(iter));
+            multiOrderedSetFullIteratorInit(mos, &iter, true);
+            const bool forwardValid = iter.valid;
+            memset(&iter, 0xA5, sizeof(iter));
+            multiOrderedSetFullIteratorInit(mos, &iter, false);
+            const bool reverseValid = iter.valid;
+            databox m;
+            databox s;
+            const bool stepped = multiOrderedSetFullIteratorNext(&iter, &m, &s);
+            if (multiOrderedSetFullCount(mos) != 0 ||
+                multiOrderedSetFullCountByScore(mos, &all) != 0 ||
+                multiOrderedSetFullIteratorInitAtScore(mos, &iter, &zero,
+                                                       true) ||
+                iter.valid || forwardValid || reverseValid || stepped) {
+                ERR("%s set: found a row", emptied ? "an emptied" : "a new");
+            }
+            multiOrderedSetFullFree(mos);
+        }
     }
 
     TEST(
