@@ -2451,6 +2451,7 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
 
     switch (box->type) {
     case DATABOX_BYTES:
+    case DATABOX_BYTES_NEVER_FREE:
         flexInsert_(ff, fe, FLEX_STRING_ENCODING(box->len),
                     box->data.bytes.start, databoxLen(box));
         break;
@@ -2644,6 +2645,7 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
         c->encoding = FLEX_STRING_ENCODING(box->len);
         break;
     case DATABOX_BYTES:
+    case DATABOX_BYTES_NEVER_FREE:
 #if FLEX_ENABLE_PTR_MDSC
         if (override && box->len > override) {
             assert(!box->allocated);
@@ -3317,6 +3319,7 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
 
     switch (box->type) {
     case DATABOX_BYTES:
+    case DATABOX_BYTES_NEVER_FREE:
         flexPush_(flexInsertBytes, box->data.bytes.start, databoxLen(box));
         break;
     case DATABOX_BYTES_EMBED:
@@ -5774,6 +5777,7 @@ DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
     switch (box->type) {
     case DATABOX_BYTES:
     case DATABOX_BYTES_EMBED:
+    case DATABOX_BYTES_NEVER_FREE:
         flexFind__(forward, databoxBytes(box), databoxLen(box),
                    flexEntryCompareString__);
         return NULL; /* flexFind__ macro returns, but this satisfies static
@@ -11700,6 +11704,56 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         printf("SUCCESS\n\n");
         flexFree(f);
+    }
+
+    printf("Test never-free bytes are bytes to every box entry point:\n");
+    {
+        /* The same strings as BYTES boxes and as NEVER_FREE boxes, through
+         * push at both ends, insert at a position, replace and sorted
+         * insert, build byte-identical flexes, and find finds them */
+        static uint8_t words[3][24] = {"alpha, a longer string", "beta",
+                                       "gamma, also longer text"};
+        cleaner(flexFree) flex *asBytes = flexNew();
+        cleaner(flexFree) flex *asNever = flexNew();
+        cleaner(flexFree) flex *sortedBytes = flexNew();
+        cleaner(flexFree) flex *sortedNever = flexNew();
+        for (int kind = 0; kind < 2; kind++) {
+            flex **into = kind ? &asNever : &asBytes;
+            flex **sorted = kind ? &sortedNever : &sortedBytes;
+            databox b[3];
+            for (int i = 0; i < 3; i++) {
+                b[i] = (databox){.type = kind ? DATABOX_BYTES_NEVER_FREE
+                                              : DATABOX_BYTES,
+                                 .data.bytes.start = words[i],
+                                 .len = strlen((char *)words[i])};
+            }
+            flexPushByType(into, &b[0], FLEX_ENDPOINT_TAIL);
+            flexPushByType(into, &b[1], FLEX_ENDPOINT_HEAD);
+            flexInsertByType(into, flexIndex(*into, 1), &b[2]);
+            flexReplaceByType(into, flexIndex(*into, 0), &b[2]);
+            for (int i = 2; i >= 0; i--) {
+                flexInsertByTypeSorted(sorted, &b[i]);
+            }
+        }
+        int32_t bad = 0;
+        if (flexBytes(asBytes) != flexBytes(asNever) ||
+            memcmp(asBytes, asNever, flexBytes(asBytes)) != 0 ||
+            flexBytes(sortedBytes) != flexBytes(sortedNever) ||
+            memcmp(sortedBytes, sortedNever, flexBytes(sortedBytes)) != 0) {
+            printf("  FAIL: never-free bytes built a different flex\n");
+            bad++;
+        }
+        /* [gamma, gamma, alpha]: the replace overwrote beta */
+        const databox findMe = {.type = DATABOX_BYTES_NEVER_FREE,
+                                .data.bytes.start = words[0],
+                                .len = strlen((char *)words[0])};
+        if (!flexFindByType(asNever, flexHead(asNever), &findMe, 0)) {
+            printf("  FAIL: find by never-free bytes found nothing\n");
+            bad++;
+        }
+        if (bad) {
+            return bad;
+        }
     }
 
     printf("Test pointer entries keep their mdsc strings:\n");
