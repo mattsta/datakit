@@ -137,9 +137,7 @@ bool bytesToHuman(void *const buf, const size_t len, const uint64_t n) {
     return true;
 }
 
-void getRandomHexChars(uint8_t *p, uint32_t len) {
-    static const char *charset = "0123456789abcdef";
-
+void getRandomBytes(uint8_t *p, uint32_t len) {
     if (!portableRandomDirectFull(p, len)) {
         /* The OS source failed (its read never blocks, so this happens
          * before the kernel pool is ready): fall back to entropy from our
@@ -174,6 +172,12 @@ void getRandomHexChars(uint8_t *p, uint32_t len) {
             p[j] ^= rand();
         }
     }
+}
+
+void getRandomHexChars(uint8_t *p, uint32_t len) {
+    static const char *charset = "0123456789abcdef";
+
+    getRandomBytes(p, len);
 
     /* Turn it into hex digits taking just 4 bits out of 8 for every byte. */
     for (uint32_t j = 0; j < len; j++) {
@@ -692,6 +696,46 @@ int utilTest(int argc, char **argv) {
         if (!hex || memcmp(a, b, sizeof(a)) != 0 || c1 != c2 || c1 == 7 ||
             getRandomHexCharsCounter(NULL, &c1, a, 1)) {
             ERRR("counter-mode hex is not deterministic hex");
+        }
+
+        /* OS-random bytes: two 32-byte draws differ, and across 64 draws
+         * every bit position takes both values; hex draws are lowercase
+         * hex using every digit across 64 x 32 characters */
+        uint8_t r1[32];
+        uint8_t r2[32];
+        uint8_t seenOne[32] = {0};
+        uint8_t seenZero[32] = {0};
+        bool drawsDiffer = true;
+        for (int draw = 0; draw < 64; draw++) {
+            getRandomBytes(r1, sizeof(r1));
+            getRandomBytes(r2, sizeof(r2));
+            drawsDiffer &= memcmp(r1, r2, sizeof(r1)) != 0;
+            for (size_t i = 0; i < sizeof(r1); i++) {
+                seenOne[i] |= r1[i];
+                seenZero[i] |= (uint8_t)~r1[i];
+            }
+        }
+        bool everyBit = true;
+        for (size_t i = 0; i < sizeof(r1); i++) {
+            everyBit &= seenOne[i] == 0xff && seenZero[i] == 0xff;
+        }
+        uint32_t digitsSeen = 0;
+        bool lowerHex = true;
+        for (int draw = 0; draw < 64; draw++) {
+            getRandomHexChars(r1, sizeof(r1));
+            for (size_t i = 0; i < sizeof(r1); i++) {
+                const bool digit = r1[i] >= '0' && r1[i] <= '9';
+                const bool letter = r1[i] >= 'a' && r1[i] <= 'f';
+                lowerHex &= digit || letter;
+                if (digit || letter) {
+                    digitsSeen |= 1u
+                                  << (digit ? r1[i] - '0' : r1[i] - 'a' + 10);
+                }
+            }
+        }
+        if (!drawsDiffer || !everyBit || !lowerHex || digitsSeen != 0xffff) {
+            ERR("random fills: differ %d, every bit %d, hex %d, digits 0x%x",
+                drawsDiffer, everyBit, lowerHex, digitsSeen);
         }
     }
 

@@ -20,10 +20,13 @@ bool bytesToHuman(void *buf, size_t len, uint64_t n);
 void secondsToHuman(void *buf, size_t len, double sec);
 bool pathIsBaseName(char *path);
 
-/* 'len' lowercase hex characters (4 bits each) from the OS CSPRNG; when the
- * OS source fails (it never blocks, so before the kernel pool is ready)
- * from a time / pid / rand() mix, which is predictable.  For identifiers,
- * not key material: use portableRandomDirectFull for raw bytes. */
+/* 'len' bytes from the OS CSPRNG; when the OS source fails (it never
+ * blocks, so before the kernel pool is ready) from a time / pid / rand()
+ * mix, which is predictable.  For identifiers and seeds, not key
+ * material: key material uses portableRandomDirectFull and refuses on
+ * failure. */
+void getRandomBytes(uint8_t *p, uint32_t len);
+/* getRandomBytes as 'len' lowercase hex characters (4 bits each) */
 void getRandomHexChars(uint8_t *p, uint32_t len);
 bool getRandomHexCharsCounterInit(uint8_t seed[], uint8_t seedLen);
 bool getRandomHexCharsCounter(uint8_t seed[SHA1_DIGEST_LENGTH],

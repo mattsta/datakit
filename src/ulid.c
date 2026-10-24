@@ -1,5 +1,4 @@
 #include "ulid.h"
-#include "portableRandom.h"
 #include "str.h"
 #include "timeUtil.h"
 #include "util.h"
@@ -75,24 +74,11 @@ static void detectBestImplementation(void) {
  * Generator State
  * ==================================================================== */
 
-static uint8_t ulidHexNibble(uint8_t c) {
-    return c <= '9' ? (uint8_t)(c - '0') : (uint8_t)(c - 'a' + 10);
-}
-
 static void ulidGenSeedRng(ulidGen *g) {
-    /* 16 whole bytes from the OS CSPRNG.  If it fails (it never blocks,
-     * so before the kernel pool is ready), 32 hex characters from the
-     * fallback, two per byte, so the state still spans all 128 bits (a
-     * hex character carries 4). */
+    /* 16 whole bytes: all 128 bits of state from the OS CSPRNG (or its
+     * predictable fallback before the kernel pool is ready) */
     uint8_t seed[16];
-    if (!portableRandomDirectFull(seed, sizeof(seed))) {
-        uint8_t hex[2 * sizeof(seed)];
-        getRandomHexChars(hex, sizeof(hex));
-        for (size_t i = 0; i < sizeof(seed); i++) {
-            seed[i] = (uint8_t)(ulidHexNibble(hex[2 * i]) << 4 |
-                                ulidHexNibble(hex[2 * i + 1]));
-        }
-    }
+    getRandomBytes(seed, sizeof(seed));
 
     uint64_t tempState[2] = {0, 0};
     for (int32_t i = 0; i < 8; i++) {
