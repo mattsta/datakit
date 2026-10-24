@@ -115,32 +115,25 @@ void secondsToHuman(void *const buf, const size_t len, const double sec) {
 }
 
 bool bytesToHuman(void *const buf, const size_t len, const uint64_t n) {
-    double d;
-
     if (n < 1024) {
         snprintf(buf, len, "%" PRIu64 " B", n);
-    } else if (n < (1024ULL * 1024)) {
-        d = (double)n / (1024);
-        snprintf(buf, len, "%.5f KiB", d);
-    } else if (n < (1024ULL * 1024 * 1024)) {
-        d = (double)n / (1024 * 1024);
-        snprintf(buf, len, "%.5f MiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024LL * 1024 * 1024);
-        snprintf(buf, len, "%.5f GiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024LL * 1024 * 1024 * 1024);
-        snprintf(buf, len, "%.5f TiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024LL * 1024 * 1024 * 1024 * 1024);
-        snprintf(buf, len, "%.5f PiB", d);
-    } else {
-        /* UINT64_MAX is just under 16 EiB, so EiB is the largest unit any
-         * uint64_t needs. */
-        d = (double)n / (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024);
-        snprintf(buf, len, "%.5f EiB", d);
+        return true;
     }
 
+    /* UINT64_MAX is just under 16 EiB, so EiB is the largest unit any
+     * uint64_t needs.  The unit is the largest whose value is at least 1,
+     * judged after rounding to the 5 decimals printed: just under a
+     * boundary (1024^4 - 1 bytes is 1023.999999999 GiB) reads as 1.00000
+     * of the next unit, not 1024.00000 of this one. */
+    static const char *const units[] = {"KiB", "MiB", "GiB",
+                                        "TiB", "PiB", "EiB"};
+    size_t unit = 0;
+    double d = (double)n / 1024;
+    while (unit + 1 < sizeof(units) / sizeof(*units) && d >= 1024 - 0.000005) {
+        d /= 1024;
+        unit++;
+    }
+    snprintf(buf, len, "%.5f %s", d, units[unit]);
     return true;
 }
 
@@ -823,6 +816,13 @@ int utilTest(int argc, char **argv) {
             {EiB, "1.00000 EiB"},
             {3 * EiB, "3.00000 EiB"},
             {UINT64_MAX, "16.00000 EiB"},
+            /* Just under each boundary rounds to 1 of the next unit */
+            {(1ULL << 20) - 1, "1023.99902 KiB"},
+            {(1ULL << 30) - 1, "1.00000 GiB"},
+            {(1ULL << 40) - 1, "1.00000 TiB"},
+            {(1ULL << 50) - 1, "1.00000 PiB"},
+            {(1ULL << 60) - 1, "1.00000 EiB"},
+            {(1ULL << 30) + (1ULL << 29), "1.50000 GiB"},
         };
 
         for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
