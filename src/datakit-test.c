@@ -2653,10 +2653,15 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
             "and it retired through the cell's arena");
 
     g_dkOwnedWriterOk = false;
+    const uint64_t writerDiag = dkDiagCount();
     ownedCellPublish(&cell, &v3);
     OEXPECT(ownedCellWriterViolationTotal() == baseViolations + 1,
             "an undeclared writer is counted");
     OEXPECT(g_dkOwnedViolationNotes == 1, "and named");
+    dkDiagnostic writerReport;
+    OEXPECT(dkDiagCount() == writerDiag + 1 && dkDiagLast(&writerReport) &&
+                writerReport.code == DK_DIAG_OWNED_WRITER_VIOLATION,
+            "and reported once");
     OEXPECT(ownedCellRead(&cell) == &v3,
             "and the publication is never stopped halfway");
     g_dkOwnedWriterOk = true;
@@ -2665,8 +2670,10 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
     ownedCellInit(&declining, &dkOwnedDeclineDecl_, NULL, &g_dkOwnedArena);
     dkOwnedCargo v4 = {.id = 44, .released = false};
     g_dkOwnedWriterOk = false; /* would fail, if anything asked */
+    const uint64_t decliningDiag = dkDiagCount();
     ownedCellPublish(&declining, &v4);
-    OEXPECT(ownedCellWriterViolationTotal() == baseViolations + 1,
+    OEXPECT(ownedCellWriterViolationTotal() == baseViolations + 1 &&
+                dkDiagCount() == decliningDiag,
             "a NULL predicate disables the check");
     OEXPECT(g_dkOwnedViolationNotes == 1, "and says nothing");
     OEXPECT(ownedCellRead(&declining) == &v4, "and publishes normally");
@@ -2897,10 +2904,15 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
          * leaves the state and the cargo alone. */
         ownedSlot sm = OWNED_SLOT_INIT(NULL);
         g_dkSlotReleases = 0;
+        const uint64_t unclaimedDiag = dkDiagCount();
         OEXPECT(!ownedSlotPublish(&sm, true, dkSlotRelease_, &cargo) &&
                     ownedSlotLoad(&sm) == OWNED_SLOT_EMPTY &&
                     g_dkSlotReleases == 0,
                 "slot: publish on an EMPTY slot changes nothing");
+        dkDiagnostic unclaimed;
+        OEXPECT(dkDiagCount() == unclaimedDiag + 1 && dkDiagLast(&unclaimed) &&
+                    unclaimed.code == DK_DIAG_OWNED_SLOT_UNCLAIMED,
+                "slot: an unclaimed publish is reported once");
         OEXPECT(ownedSlotClaim(&sm, &prior) &&
                     ownedSlotPublish(&sm, true, dkSlotRelease_, &cargo) &&
                     !ownedSlotPublish(&sm, false, dkSlotRelease_, &cargo) &&
@@ -3207,8 +3219,10 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
         /* A foreign writer is counted and reported, and still lands. */
         g_dkSeqWriterOk = false;
         dkSeqPayload_(payload, 0x77);
+        const uint64_t seqWriterDiag = dkDiagCount();
         /* @sync: relaxed owner */
         OEXPECT(ownedSeqPublish(&sc, payload, sizeof(payload)) &&
+                    dkDiagCount() == seqWriterDiag + 1 &&
                     ownedCellWriterViolationTotal() == violBase + 1 &&
                     atomic_load_explicit(&g_dkSeqViolationNotes,
                                          memory_order_relaxed) == 1 &&

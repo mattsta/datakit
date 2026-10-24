@@ -10,6 +10,7 @@
 #include "cleaner.h"
 #include "ctmem.h"   /* dkSecureZero */
 #include "datakit.h" /* zmalloc / zfree */
+#include "dkDiag.h"
 #include "flex.h"
 #include "persist.h"
 
@@ -365,6 +366,10 @@ bool hmacKeyringInstall(hmacKeyring *ring, hmacKeyId id,
      * making `aead_salt` mandatory in the first place; callers wanting
      * that behavior must reach for the explicit Unsalted entry point. */
     if (aead_salt == NULL || hmacKeyringSaltIsZero(aead_salt)) {
+        DK_DIAG(DK_DIAG_HMAC_KEYRING_ZERO_SALT,
+                "key %" PRIu32 ": %s salt (hmacKeyringInstallUnsalted is the "
+                "unsalted entry point)",
+                id, aead_salt == NULL ? "a NULL" : "an all-zero");
         return false;
     }
     return hmacKeyringInstallInternal(ring, id, algo, key_bytes, key_len,
@@ -1701,6 +1706,32 @@ int hmacKeyringTest(int argc, char *argv[]) {
         if (hmacKeyringInstall(ring, 1u, &hmacAlgoSHA256, key, sizeof(key),
                                salt)) {
             ERRR("Duplicate install of id=1 must be refused");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("salted install refuses a NULL or all-zero salt, and reports it") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[16] = {0xAA};
+        const uint8_t zero[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
+        const uint64_t diagBefore = dkDiagCount();
+        if (hmacKeyringInstall(ring, 2u, &hmacAlgoSHA256, key, sizeof(key),
+                               NULL) ||
+            hmacKeyringInstall(ring, 2u, &hmacAlgoSHA256, key, sizeof(key),
+                               zero)) {
+            ERRR("a NULL or all-zero salt must be refused");
+        }
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 2 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_HMAC_KEYRING_ZERO_SALT) {
+            ERRR("each refused salt must be reported once");
+        }
+        /* The unsalted entry point is the sanctioned way: no report */
+        const uint64_t diagUnsalted = dkDiagCount();
+        if (!hmacKeyringInstallUnsalted(ring, 2u, &hmacAlgoSHA256, key,
+                                        sizeof(key)) ||
+            dkDiagCount() != diagUnsalted) {
+            ERRR("an unsalted install must succeed without a report");
         }
         hmacKeyringFree(ring);
     }

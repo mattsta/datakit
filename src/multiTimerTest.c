@@ -10,6 +10,7 @@
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "ctest.h"
+#include "dkDiag.h"
 
 #define DOUBLE_NEWLINE 1
 #include "perf.h"
@@ -904,11 +905,19 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerRegister(t, 2000, 0, testCountingCallback, &later);
 
         sleepUs(5000);
+        const uint64_t diagBefore = dkDiagCount();
         multiTimerProcessTimerEvents(t);
 
         if (reentrant.callCount != 1) {
             ERR("Reentrant callback fired %d times, expected 1",
                 reentrant.callCount);
+        }
+        /* The ignored inner call is reported, once */
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_TIMER_REENTERED) {
+            ERRR("a re-entered ProcessTimerEvents must report "
+                 "TIMER_REENTERED once");
         }
         if (later.callCount != 1) {
             ERR("Second timer fired %d times, expected 1", later.callCount);

@@ -47,8 +47,9 @@ uint64_t dkRandom64(void);
 
 /* A uniform value in [0, bound), exactly uniform at every bound.
  * bound == 1 returns 0.  bound == 0 is an empty interval and a caller
- * error: it returns 0 without dividing and increments
- * dkRandomZeroBoundTotal(). */
+ * error: it returns 0 without dividing, increments
+ * dkRandomZeroBoundTotal() and reports DK_DIAG_RANDOM_ZERO_BOUND
+ * (dkDiag.h). */
 uint64_t dkRandomBounded(uint64_t bound);
 
 /* Process-wide count of dkRandomBounded(0) calls: a misuse diagnostic.

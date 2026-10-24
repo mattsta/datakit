@@ -237,6 +237,8 @@ void hmacKeyringFree(hmacKeyring *ring);
  * - `aead_salt` is all-zero (callers wanting all-zero must use the
  * explicit `hmacKeyringInstallUnsalted` variant)
  * - allocation fails
+ * A NULL or all-zero salt is also reported as
+ * DK_DIAG_HMAC_KEYRING_ZERO_SALT (dkDiag.h).
  *
  * On success the caller's `key_bytes` buffer can be wiped immediately —
  * the keyring has copied everything it needs. */

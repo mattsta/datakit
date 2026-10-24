@@ -35,7 +35,9 @@ Dynamic Storage Allocation", JACM 21(8), July 1974
 - Exact free validation on every tier: a free is honoured only for the start
   of a block currently handed out (a double free, an interior, misaligned,
   unowned or pre-reset pointer is refused), counted in
-  `memboundStats.safetyViolations` on STANDARD, ENTERPRISE and COMPACT
+  `memboundStats.safetyViolations` on STANDARD, ENTERPRISE and COMPACT, and
+  reported on every tier as `DK_DIAG_MEMBOUND_INVALID_FREE`
+  ([diagnostics](../core/DIAGNOSTICS.md))
 
 ## Tiers at a glance
 
@@ -325,10 +327,13 @@ callback and call `memboundCompact`.
 - **Invalid frees are swallowed, not fatal.** A double-free, a pointer into a
   block's interior, an out-of-bounds or misaligned pointer, a pointer from
   another pool, or one handed out before `memboundReset` is validated before
-  any state changes, silently ignored, and counted (MICRO refuses without
-  counting). Check `memboundStats.safetyViolations` — a non-zero value is a bug
-  in your code, and nothing else will tell you about it. Assert it is zero at
-  checkpoints in debug builds; log it in production.
+  any state changes, refused, and counted (MICRO refuses without counting).
+  Each refusal is also reported as a `DK_DIAG_MEMBOUND_INVALID_FREE`
+  diagnostic naming the pointer and the reason
+  ([diagnostics](../core/DIAGNOSTICS.md)): read it with `dkDiagLast`, or
+  install a hook to log it.  `memboundStats.safetyViolations` stays the
+  cheap checkpoint count — a non-zero value is a bug in your code; assert it
+  is zero at checkpoints in debug builds.
 - **Lifetime/peak/pressure/lock stats are STANDARD and ENTERPRISE only.** On
   MICRO and COMPACT `totalAllocations`, `peakBytesUsed`, `usagePercent`, and the
   lock-contention fields read as 0 (and `currentPressure` as `LOW`) — that is

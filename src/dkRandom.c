@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "datakit.h"
+#include "dkDiag.h"
 #include "portableRandom.h"
 
 /* Words generated per refill.  Each drawing thread carries this block
@@ -96,6 +97,8 @@ uint64_t dkRandomBounded(const uint64_t bound) {
         /* @sync: relaxed counter */
         (void)atomic_fetch_add_explicit(&zeroBoundTotal, 1,
                                         memory_order_relaxed);
+        DK_DIAG(DK_DIAG_RANDOM_ZERO_BOUND,
+                "a value from the empty interval [0, 0); returning 0");
         return 0;
     }
 
@@ -373,11 +376,19 @@ int dkRandomTest(int argc, char *argv[]) {
             ERRR("dkRandomBounded(1) must return 0");
         }
 
-        /* bound 0 returns 0 without dividing and increments the tally. */
+        /* bound 0 returns 0 without dividing, increments the tally and
+         * reports one misuse on this thread. */
         const uint64_t zeroBefore = dkRandomZeroBoundTotal();
+        const uint64_t diagBefore = dkDiagCount();
 
         if (dkRandomBounded(0) != 0) {
             ERRR("dkRandomBounded(0) must return 0");
+        }
+
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_RANDOM_ZERO_BOUND) {
+            ERRR("dkRandomBounded(0) must report RANDOM_ZERO_BOUND once");
         }
 
         const uint64_t zeroAfter = dkRandomZeroBoundTotal();

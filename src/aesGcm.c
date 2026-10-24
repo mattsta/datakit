@@ -14,6 +14,7 @@
 #include "aesGcm.h"
 
 #include "ctmem.h" /* dkCtMemEq16, dkSecureZero */
+#include "dkDiag.h"
 #include "hash/aesGcmArmCrypto.h"
 #include "hash/aesGcmNi.h"
 
@@ -456,9 +457,23 @@ bool aesGcmInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
     return aesGcmPortableInit(out, key, key_len);
 }
 
+/* Arguments no backend can use (a NULL key, nonce or tag, or a NULL buffer
+ * for a nonzero length): refused before the dispatch, so every backend
+ * refuses them alike, and reported once as misuse */
+#define AES_GCM_ARGS_MISUSED_(k, nonce, tag, aad, aadLen, in, out, len)        \
+    ((!(k) || !(nonce) || !(tag) || ((len) > 0 && (!(in) || !(out))) ||        \
+      ((aadLen) > 0 && !(aad))) &&                                             \
+     (DK_DIAG(DK_DIAG_AEAD_MISUSE, "a NULL key, nonce or tag, or a NULL "      \
+                                   "buffer for a nonzero length"),             \
+      true))
+
 bool aesGcmSeal(const aesGcmKey *k, const uint8_t nonce[12], const uint8_t *aad,
                 size_t aad_len, const uint8_t *plaintext, size_t plaintext_len,
                 uint8_t *ciphertext, uint8_t tag[16]) {
+    if (AES_GCM_ARGS_MISUSED_(k, nonce, tag, aad, aad_len, plaintext,
+                              ciphertext, plaintext_len)) {
+        return false;
+    }
     aesGcmBackend b = aesGcmResolveBackend();
     if (b == AES_GCM_BACKEND_AESNI) {
         return aesGcmNiSeal(k, nonce, aad, aad_len, plaintext, plaintext_len,
@@ -476,6 +491,10 @@ bool aesGcmOpen(const aesGcmKey *k, const uint8_t nonce[12], const uint8_t *aad,
                 size_t aad_len, const uint8_t *ciphertext,
                 size_t ciphertext_len, const uint8_t tag[16],
                 uint8_t *plaintext) {
+    if (AES_GCM_ARGS_MISUSED_(k, nonce, tag, aad, aad_len, ciphertext,
+                              plaintext, ciphertext_len)) {
+        return false;
+    }
     aesGcmBackend b = aesGcmResolveBackend();
     if (b == AES_GCM_BACKEND_AESNI) {
         return aesGcmNiOpen(k, nonce, aad, aad_len, ciphertext, ciphertext_len,
@@ -793,6 +812,40 @@ int aesGcmTest(int argc, char *argv[]) {
         if (aesGcmInit(&k, key, 0)) {
             ERRR("0-byte key must refuse");
         }
+    }
+
+    TEST("aesGcm: NULL buffers for a nonzero length are refused and "
+         "reported") {
+        aesGcmKey k;
+        const uint8_t key[16] = {7};
+        if (!aesGcmInit(&k, key, sizeof(key))) {
+            ERRR("a 16-byte key must initialise");
+        }
+        const uint8_t nonce[12] = {0};
+        uint8_t tag[16] = {0};
+        uint8_t buf[16] = {0};
+        const uint64_t diagBefore = dkDiagCount();
+        if (aesGcmSeal(&k, nonce, NULL, 0, NULL, 16, buf, tag) ||
+            aesGcmSeal(&k, nonce, NULL, 4, buf, 16, buf, tag) ||
+            aesGcmOpen(&k, nonce, NULL, 0, buf, 16, tag, NULL) ||
+            aesGcmOpen(NULL, nonce, NULL, 0, buf, 16, tag, buf)) {
+            ERRR("a NULL buffer for a nonzero length must refuse");
+        }
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 4 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_AEAD_MISUSE) {
+            ERR("four refused calls reported %" PRIu64 " times, want 4",
+                dkDiagCount() - diagBefore);
+        }
+        /* A tag that does not verify is data, not misuse */
+        const uint64_t diagData = dkDiagCount();
+        if (aesGcmOpen(&k, nonce, NULL, 0, buf, 16, tag, buf)) {
+            ERRR("an all-zero tag must not verify");
+        }
+        if (dkDiagCount() != diagData) {
+            ERRR("a failed tag check must not report");
+        }
+        dkSecureZero(&k, sizeof(k));
     }
 
     TEST("aesGcmKey: dkSecureZero scrubs round_keys + h "

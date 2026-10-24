@@ -12,6 +12,7 @@
 #include "chacha20poly1305.h"
 
 #include "ctmem.h"
+#include "dkDiag.h"
 #include "hash/chacha20AVX2.h"
 #include "hash/chacha20Neon.h"
 #include "hash/poly1305AVX2.h"
@@ -673,12 +674,35 @@ static void computeAeadTag(const uint8_t otk[32], const uint8_t *aad,
     poly1305Final(&st, tag);
 }
 
+/* An AEAD call made wrongly (NULL buffers for a nonzero length, a stream
+ * call out of order or on a finished context): refused by the caller of
+ * this, and reported as misuse */
+__attribute__((cold, noinline)) static void
+aeadMisuse_(const char *function, int line, const char *what) {
+    dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_AEAD_MISUSE, function, __FILE__, line,
+                  "%s", what);
+}
+#define AEAD_MISUSE_(what) aeadMisuse_(__func__, __LINE__, (what))
+
+/* Arguments a one-shot Seal or Open cannot use: a NULL key, nonce or tag,
+ * or a NULL buffer for a nonzero length */
+#define AEAD_ARGS_MISUSED_(key, nonce, tag, aad, aadLen, in, out, len)         \
+    ((!(key) || !(nonce) || !(tag) || ((len) > 0 && (!(in) || !(out))) ||      \
+      ((aadLen) > 0 && !(aad))) &&                                             \
+     (AEAD_MISUSE_("a NULL key, nonce or tag, or a NULL buffer for a "         \
+                   "nonzero length"),                                          \
+      true))
+
 bool chacha20poly1305Seal(const uint8_t key[CHACHA20_POLY1305_KEY_LEN],
                           const uint8_t nonce[CHACHA20_POLY1305_NONCE_LEN],
                           const uint8_t *aad, size_t aad_len,
                           const uint8_t *plaintext, size_t plaintext_len,
                           uint8_t *ciphertext,
                           uint8_t tag[CHACHA20_POLY1305_TAG_LEN]) {
+    if (AEAD_ARGS_MISUSED_(key, nonce, tag, aad, aad_len, plaintext, ciphertext,
+                           plaintext_len)) {
+        return false;
+    }
     if ((uint64_t)plaintext_len > CHACHA20_POLY1305_MAX_PAYLOAD) {
         return false;
     }
@@ -721,10 +745,11 @@ bool chacha20poly1305Open(const uint8_t key[CHACHA20_POLY1305_KEY_LEN],
          * were written. */
         return false;
     }
-    /* NULL guard parity with aesGcmPortableOpen: a non-zero length
-     * paired with a NULL buffer is a caller bug; refuse cleanly
-     * instead of segfaulting through the MAC / XOR loops. */
-    if (ciphertext_len > 0 && (ciphertext == NULL || plaintext == NULL)) {
+    /* NULL guard parity with aesGcmOpen: a non-zero length paired with a
+     * NULL buffer is a caller bug; refuse cleanly (and report it) instead
+     * of segfaulting through the MAC / XOR loops. */
+    if (AEAD_ARGS_MISUSED_(key, nonce, tag, aad, aad_len, ciphertext, plaintext,
+                           ciphertext_len)) {
         return false;
     }
 
@@ -801,6 +826,8 @@ void chacha20poly1305SealStreamInit(chacha20poly1305StreamCtx *ctx,
                                     const uint8_t key[32],
                                     const uint8_t nonce[12]) {
     if (ctx == NULL || key == NULL || nonce == NULL) {
+        /* No return value says so: the diagnostic is the only signal */
+        AEAD_MISUSE_("stream init with no context, key or nonce");
         if (ctx != NULL) {
             /* Wipe the ctx (any prior key/nonce from a previous Init)
              * before leaving in the rejection state; mirrors
@@ -817,6 +844,8 @@ void chacha20poly1305OpenStreamInit(chacha20poly1305StreamCtx *ctx,
                                     const uint8_t key[32],
                                     const uint8_t nonce[12]) {
     if (ctx == NULL || key == NULL || nonce == NULL) {
+        /* No return value says so: the diagnostic is the only signal */
+        AEAD_MISUSE_("stream init with no context, key or nonce");
         if (ctx != NULL) {
             /* Wipe the ctx (any prior key/nonce from a previous Init)
              * before leaving in the rejection state; mirrors
@@ -836,6 +865,8 @@ void chacha20poly1305OpenStreamInit(chacha20poly1305StreamCtx *ctx,
 static bool streamAadCommon(chacha20poly1305StreamCtx *ctx, const uint8_t *aad,
                             size_t len) {
     if (ctx == NULL || ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD) {
+        AEAD_MISUSE_("stream AAD with no context, after the body began, or "
+                     "on a finished context");
         if (ctx != NULL) {
             dkSecureZero(ctx, sizeof(*ctx));
         }
@@ -845,6 +876,7 @@ static bool streamAadCommon(chacha20poly1305StreamCtx *ctx, const uint8_t *aad,
         return true;
     }
     if (aad == NULL) {
+        AEAD_MISUSE_("stream AAD: a NULL buffer for a nonzero length");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
     }
@@ -910,6 +942,8 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
                                       uint8_t *ciphertext_out) {
     if (ctx == NULL || (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD &&
                         ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY)) {
+        AEAD_MISUSE_("stream update with no context or on a finished "
+                     "context");
         if (ctx != NULL) {
             dkSecureZero(ctx, sizeof(*ctx));
         }
@@ -920,6 +954,7 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
         return true;
     }
     if (plaintext == NULL || ciphertext_out == NULL) {
+        AEAD_MISUSE_("stream update: a NULL buffer for a nonzero length");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
     }
@@ -991,6 +1026,8 @@ bool chacha20poly1305OpenStreamUpdate(chacha20poly1305StreamCtx *ctx,
                                       uint8_t *plaintext_out) {
     if (ctx == NULL || (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD &&
                         ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY)) {
+        AEAD_MISUSE_("stream update with no context or on a finished "
+                     "context");
         if (ctx != NULL) {
             /* Wipe the ctx (key, nonce, keystream_buf, etc.) before
              * marking poisoned: streamFinalise's failure path does the
@@ -1005,6 +1042,7 @@ bool chacha20poly1305OpenStreamUpdate(chacha20poly1305StreamCtx *ctx,
         return true;
     }
     if (ciphertext == NULL || plaintext_out == NULL) {
+        AEAD_MISUSE_("stream update: a NULL buffer for a nonzero length");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
     }
@@ -1088,6 +1126,7 @@ static bool streamFinalise(chacha20poly1305StreamCtx *ctx, uint8_t tag[16]) {
     if (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY) {
         /* Out-of-order use: caller must not see partial state.  Wipe
          * everything (including key/nonce) before returning. */
+        AEAD_MISUSE_("stream final on a finished context");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
     }
@@ -1111,6 +1150,7 @@ static bool streamFinalise(chacha20poly1305StreamCtx *ctx, uint8_t tag[16]) {
 bool chacha20poly1305SealStreamFinal(chacha20poly1305StreamCtx *ctx,
                                      uint8_t tag[16]) {
     if (ctx == NULL || tag == NULL) {
+        AEAD_MISUSE_("stream final with no context or no tag buffer");
         if (ctx != NULL) {
             /* Wipe everything; per the streamFinalise contract the
              * post-failure ctx must be bytewise zero so key/nonce
@@ -1125,6 +1165,7 @@ bool chacha20poly1305SealStreamFinal(chacha20poly1305StreamCtx *ctx,
 bool chacha20poly1305OpenStreamFinal(chacha20poly1305StreamCtx *ctx,
                                      const uint8_t expected_tag[16]) {
     if (ctx == NULL || expected_tag == NULL) {
+        AEAD_MISUSE_("stream final with no context or no tag");
         if (ctx != NULL) {
             /* Wipe everything; per the streamFinalise contract the
              * post-failure ctx must be bytewise zero so key/nonce
@@ -1846,6 +1887,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             ERRR("first update must succeed");
         }
         /* AAD now is out of order. */
+        const uint64_t diagBefore = dkDiagCount();
         if (chacha20poly1305SealStreamAad(&ctx, pt, 4)) {
             ERRR("AAD after update must be refused");
         }
@@ -1856,6 +1898,12 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t tag[16];
         if (chacha20poly1305SealStreamFinal(&ctx, tag)) {
             ERRR("final on poisoned ctx must fail");
+        }
+        /* Each out-of-order call is reported once */
+        if (dkDiagCount() != diagBefore + 3) {
+            ERR("three out-of-order stream calls reported %" PRIu64
+                " times, want 3",
+                dkDiagCount() - diagBefore);
         }
     }
 
@@ -2016,6 +2064,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t ct_buf[16];
         memset(ct_buf, 0xDD, sizeof(ct_buf));
 
+        const uint64_t diagBefore = dkDiagCount();
         if (chacha20poly1305Open(key, nonce, NULL, 0u, NULL, 16u, tag,
                                  pt_buf)) {
             ERRR("Open with NULL ciphertext (len>0) must return false");
@@ -2024,12 +2073,29 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                                  NULL)) {
             ERRR("Open with NULL plaintext (len>0) must return false");
         }
+        if (chacha20poly1305Seal(key, nonce, NULL, 0u, NULL, 16u, ct_buf,
+                                 tag)) {
+            ERRR("Seal with NULL plaintext (len>0) must return false");
+        }
+        /* Each misuse is reported once */
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 3 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_AEAD_MISUSE) {
+            ERR("three NULL-buffer calls reported %" PRIu64 " times, want 3",
+                dkDiagCount() - diagBefore);
+        }
         /* len == 0 with NULL pointers must remain valid (no read, no
          * write).  It's effectively an authenticate-AAD-only call. */
+        const uint64_t diagValid = dkDiagCount();
         if (chacha20poly1305Open(key, nonce, NULL, 0u, NULL, 0u, tag, NULL)) {
             /* Tag is all-zero and won't match the real MAC of empty
              * input under this key/nonce, so a false is expected — but
              * the caller-supplied NULLs must not crash before that. */
+        }
+        /* A tag that does not verify is data, not misuse: nothing is
+         * reported */
+        if (dkDiagCount() != diagValid) {
+            ERRR("a failed tag check must not report");
         }
     }
 

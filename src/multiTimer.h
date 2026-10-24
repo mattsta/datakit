@@ -21,7 +21,8 @@
  * ignored. Inside a callback it is safe to register timers (deferred
  * until processing completes), unregister any timer including self,
  * and call multiTimerStopAll (later registrations survive). Calling
- * multiTimerProcessTimerEvents from inside a callback is a safe no-op.
+ * multiTimerProcessTimerEvents from inside a callback is a safe no-op,
+ * reported as DK_DIAG_TIMER_REENTERED (dkDiag.h).
  *
  * Cancellation is a tombstone: the id is recorded in O(log n) and the
  * timer's storage is reclaimed when processing next encounters it (or

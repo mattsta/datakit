@@ -16,6 +16,7 @@
 #include "memboundInternal.h"
 
 #include "datakit.h"
+#include "dkDiag.h"
 
 #include "timeUtil.h"
 #include <assert.h>
@@ -52,6 +53,18 @@
 #define MEMBOUND_TLS_BATCH_MAX 256
 #define MEMBOUND_TLS_BATCH_DEFAULT 64
 
+/* A free refused for misuse, reported (the tier's counter, where it has
+ * one, is the caller's).  Callers may hold the pool lock, so a dkDiag hook
+ * runs under it. */
+__attribute__((cold, noinline)) static void
+memboundRefusedFree_(const char *function, int line, const void *ptr,
+                     const char *why) {
+    dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MEMBOUND_INVALID_FREE, function,
+                  __FILE__, line, "free of %p refused: %s", ptr, why);
+}
+#define MEMBOUND_REFUSED_FREE_(ptr, why)                                       \
+    memboundRefusedFree_(__func__, __LINE__, (ptr), (why))
+
 /* Validate a free operation and track violations.
  * Returns true if valid, false if invalid (and increments violation counter).
  */
@@ -69,6 +82,7 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
+        MEMBOUND_REFUSED_FREE_(pOld, "outside the pool");
         return false;
     }
 
@@ -77,6 +91,7 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
+        MEMBOUND_REFUSED_FREE_(pOld, "not on a block boundary");
         return false;
     }
 
@@ -86,6 +101,7 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
+        MEMBOUND_REFUSED_FREE_(pOld, "freed already, or inside a block");
         return false;
     }
 
@@ -2409,6 +2425,7 @@ static bool memboundFreeLockedStandard(membound *m, void *pPrior) {
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
+        MEMBOUND_REFUSED_FREE_(pPrior, "not from this pool");
         return false;
     }
     if (!memboundValidateFree(m, owner, pPrior)) {
@@ -3584,21 +3601,27 @@ void memboundMicroFree(memboundMicro *m, void *pOld) {
      * free leaves the pool exactly as it was. */
     const int32_t atom = memboundMicroAtomOf(m, pOld);
     if (unlikely(atom < 0)) {
-        return; /* Not a block start this pool owns */
+        /* Not a block start this pool owns */
+        MEMBOUND_REFUSED_FREE_(pOld, "not a block start in this pool");
+        return;
     }
     int16_t iBlock = (int16_t)atom;
     if (unlikely(!(m->aCtrl[iBlock] & MEMBOUND_CTRL_ALLOC))) {
-        return; /* Double free, or a pointer into a block's interior */
+        /* Double free, or a pointer into a block's interior */
+        MEMBOUND_REFUSED_FREE_(pOld, "freed already, or inside a block");
+        return;
     }
 
     int iLogsize = m->aCtrl[iBlock] & MEMBOUND_CTRL_LOGSIZE;
     int16_t size = (1 << iLogsize);
 
     if (unlikely(iBlock + size - 1 >= m->nBlock)) {
+        MEMBOUND_REFUSED_FREE_(pOld, "its block runs past the pool");
         return;
     }
     if (unlikely(m->currentCount == 0 ||
                  m->currentOut < (uint32_t)size * m->szAtom)) {
+        MEMBOUND_REFUSED_FREE_(pOld, "more freed than the pool holds out");
         return;
     }
 
@@ -3982,6 +4005,7 @@ void memboundCompactPoolFree(memboundCompactPool *m, void *pOld) {
     /* Verify ownership (the count is shared, so under the lock) */
     if (z < m->zPool || z >= m->zPool + m->poolSize) {
         m->safetyViolations++;
+        MEMBOUND_REFUSED_FREE_(pOld, "not from this pool");
         goto done;
     }
 
@@ -3990,12 +4014,14 @@ void memboundCompactPoolFree(memboundCompactPool *m, void *pOld) {
     /* Alignment check */
     if (((z - m->zPool) % m->szAtom) != 0) {
         m->safetyViolations++;
+        MEMBOUND_REFUSED_FREE_(pOld, "not on a block boundary");
         goto done;
     }
 
     /* Double-free check - COMPACT uses high bit as allocated marker */
     if ((m->aCtrl[iBlock] & 0x80) == 0) {
         m->safetyViolations++;
+        MEMBOUND_REFUSED_FREE_(pOld, "freed already, or inside a block");
         goto done;
     }
 
@@ -4372,6 +4398,10 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
     size_t nFreed = 0;
     const size_t atom = memboundTestAtom(m);
     uint64_t r = seed;
+    /* Every refused free reports once and every valid one never: counted
+     * here, so thousands of them need not print */
+    const dkDiagPrintMode printMode = dkDiagGetPrintMode();
+    dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
 
     for (int op = 0; op < ops; op++) {
         r ^= r << 13;
@@ -4395,7 +4425,13 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
         }
         if (kind < 7) {
             void *p = live.blocks[which].ptr;
+            const uint64_t diagValid = dkDiagCount();
             memboundFree(m, p);
+            if (dkDiagCount() != diagValid) {
+                ERR("tier %d op %d: a valid free reported", memboundGetTier(m),
+                    op);
+                break;
+            }
             live.blocks[which] = live.blocks[--live.n];
             freed[nFreed++ % 32] = p;
             continue;
@@ -4425,7 +4461,14 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
         if (!target) {
             continue;
         }
+        const uint64_t diagRefused = dkDiagCount();
         memboundFree(m, target);
+        if (dkDiagCount() != diagRefused + 1) {
+            ERR("tier %d op %d: a refused free (kind %u) reported %" PRIu64
+                " times, want once",
+                memboundGetTier(m), op, kind, dkDiagCount() - diagRefused);
+            break;
+        }
         if (memboundCurrentAllocationCount(m) != live.n) {
             ERR("tier %d op %d: refused free (kind %u) changed the count to "
                 "%zu, want %zu",
@@ -4438,6 +4481,7 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
         }
     }
 
+    dkDiagSetPrintMode(printMode);
     err += memboundTestLiveCheck(m, &live, "bad-free run end");
     for (size_t i = 0; i < live.n; i++) {
         memboundFree(m, live.blocks[i].ptr);
@@ -5583,11 +5627,17 @@ int memboundTest(int argc, char *argv[]) {
                 ERR("foreign pointer %zu reports %zu usable bytes", i,
                     memboundUsableSize(m, foreign[i]));
             }
+            const uint64_t diagBefore = dkDiagCount();
             memboundFree(m, foreign[i]);
             if (memboundCurrentAllocationCount(m) != 2) {
                 ERR("freeing foreign pointer %zu changed the count to %zu", i,
                     memboundCurrentAllocationCount(m));
                 break;
+            }
+            dkDiagnostic d;
+            if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+                d.code != DK_DIAG_MEMBOUND_INVALID_FREE) {
+                ERR("freeing foreign pointer %zu was not reported once", i);
             }
         }
 
@@ -5604,15 +5654,24 @@ int memboundTest(int argc, char *argv[]) {
             }
         }
 
-        /* Double free releases once */
+        /* Double free releases once, and the second is reported */
         memboundFree(m, c);
+        const uint64_t diagBefore = dkDiagCount();
         memboundFree(m, c);
         if (memboundCurrentAllocationCount(m) != 2) {
             ERR("double free left %zu allocations, want 2",
                 memboundCurrentAllocationCount(m));
         }
+        if (dkDiagCount() != diagBefore + 1) {
+            ERRR("a MICRO double free must report once");
+        }
 
+        /* NULL is not misuse: nothing is reported */
+        const uint64_t diagNull = dkDiagCount();
         memboundFree(m, NULL);
+        if (dkDiagCount() != diagNull) {
+            ERRR("freeing NULL must not report");
+        }
         memboundFree(m, a);
         memboundFree(m, b);
         if (memboundCurrentAllocationCount(m) != 0) {
@@ -7649,6 +7708,7 @@ int memboundTest(int argc, char *argv[]) {
                 memboundStats before;
                 memboundStats after;
                 memboundGetStats(m, &before);
+                const uint64_t diagBefore = dkDiagCount();
                 memboundFree(m, bad[i]);
                 memboundGetStats(m, &after);
                 if (after.safetyViolations != before.safetyViolations + 1 ||
@@ -7657,6 +7717,12 @@ int memboundTest(int argc, char *argv[]) {
                         " violations, %zu allocations",
                         t, i, before.safetyViolations, after.safetyViolations,
                         memboundCurrentAllocationCount(m));
+                }
+                dkDiagnostic d;
+                if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+                    d.code != DK_DIAG_MEMBOUND_INVALID_FREE) {
+                    ERR("pool %zu bad free %zu: not reported exactly once", t,
+                        i);
                 }
             }
             for (size_t i = 0; i < 1000; i++) {
@@ -7685,7 +7751,8 @@ int memboundTest(int argc, char *argv[]) {
         assert(p != NULL);
         memboundFree(m, p);
 
-        /* Double free should increment violation */
+        /* Double free should increment violation, and is reported */
+        const uint64_t diagBefore = dkDiagCount();
         memboundFree(m, p);
 
         memboundGetStats(m, &stats);
@@ -7697,6 +7764,12 @@ int memboundTest(int argc, char *argv[]) {
 
         memboundGetStats(m, &stats);
         assert(stats.safetyViolations == 2);
+
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 2 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_MEMBOUND_INVALID_FREE) {
+            ERRR("COMPACT: two refused frees must report twice");
+        }
 
         memboundShutdown(m);
     }

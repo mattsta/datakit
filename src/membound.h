@@ -273,13 +273,15 @@
  *   - STANDARD, ENTERPRISE and COMPACT count each refusal; MICRO refuses
  *     without counting (its struct has no counter, to stay small)
  *   - Violations increment an atomic counter (thread-safe)
- *   - Invalid frees are silently ignored (no crash, no corruption)
+ *   - Invalid frees are refused (no crash, no corruption) and reported on
+ *     every tier as DK_DIAG_MEMBOUND_INVALID_FREE (dkDiag.h), naming the
+ *     pointer and the reason
  *   - Counter accessible via memboundStats.safetyViolations
  *
- * Why silent handling:
+ * Why refuse rather than abort:
  *   - Crashing on invalid free could mask the real bug
- *   - Ignoring allows program to continue (for debugging)
- *   - Counter provides clear signal something is wrong
+ *   - Refusing allows program to continue (for debugging)
+ *   - The counter and the diagnostic say something is wrong, and where
  *   - Non-zero safetyViolations should trigger investigation
  *
  * Recommended usage:

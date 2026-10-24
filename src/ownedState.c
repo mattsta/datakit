@@ -3,6 +3,7 @@
  * below. */
 
 #include "ownedState.h"
+#include "dkDiag.h"
 
 #include <string.h>
 
@@ -365,6 +366,9 @@ static void ownedCellWriterCheck_(const ownedCell *c) {
         return;
     }
     ownedTotalAdd_(OWNED_T_WRITER_VIOLATION);
+    DK_DIAG(DK_DIAG_OWNED_WRITER_VIOLATION,
+            "cell %s published by a writer its declaration does not allow",
+            d->name ? d->name : "(unnamed)");
     if (d->note_violation) {
         d->note_violation(d, c->owner);
     }
@@ -649,6 +653,9 @@ bool ownedSlotPublish(ownedSlot *s, bool still_armed, ownedReleaseFn release,
         /* No live claim: EMPTY or ARMED (nobody claimed), or RETIRED (a
          * claim refused after a retire, or a claimant whose release has
          * already run). A misuse: leave the slot and the cargo alone. */
+        DK_DIAG(DK_DIAG_OWNED_SLOT_UNCLAIMED,
+                "ownedSlotPublish with no live claim (slot state %u)",
+                (unsigned)expect);
         return false;
     }
     /* A Retire happened while claimed. The CAS to RETIRED decides which
@@ -915,6 +922,10 @@ static void ownedSeqWriterCheck_(const ownedSeq *s) {
         return;
     }
     ownedTotalAdd_(OWNED_T_WRITER_VIOLATION);
+    DK_DIAG(DK_DIAG_OWNED_WRITER_VIOLATION,
+            "sequence %s published by a writer its declaration does not "
+            "allow",
+            d->name ? d->name : "(unnamed)");
     if (d->note_violation) {
         d->note_violation(d, s->owner);
     }

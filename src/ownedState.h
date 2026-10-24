@@ -19,7 +19,8 @@
  *   - Publication is a release operation and reading is an acquire. A
  *     published value is never modified; a successor replaces it.
  *   - A declaration may supply a writer_ok predicate. A publication that
- *     fails it is counted and passed to note_violation, but is still
+ *     fails it is counted, passed to note_violation and reported as
+ *     DK_DIAG_OWNED_WRITER_VIOLATION (dkDiag.h), but is still
  *     performed: abandoning it partway would leave a half-written
  *     object. A NULL predicate disables the check.
  *   - Nothing here blocks waiting for readers. Drain samples the reader
@@ -418,8 +419,8 @@ bool ownedSlotClaim(ownedSlot *s, ownedSlotState *out_prior);
  * returns false; the slot stays RETIRED. Calling it without a live claim
  * is a misuse: on EMPTY or ARMED (never claimed), or on RETIRED (a claim
  * refused after a retire, or a claimant publishing again after its
- * release ran) it returns false, releases nothing and changes
- * nothing. */
+ * release ran) it returns false, releases nothing, changes nothing and
+ * reports DK_DIAG_OWNED_SLOT_UNCLAIMED (dkDiag.h). */
 bool ownedSlotPublish(ownedSlot *s, bool still_armed, ownedReleaseFn release,
                       void *cargo);
 

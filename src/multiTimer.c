@@ -2,6 +2,7 @@
 #include "multiTimerInternal.h"
 
 #include "cleaner.h"
+#include "dkDiag.h"
 #include "timeUtil.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
@@ -486,6 +487,9 @@ void multiTimerProcessTimerEvents(multiTimer *t) {
      * iterated would be walked (and reset) twice. Deferred work is
      * picked up by the in-progress outer call. */
     if (t->context == MULTI_TIMER_CONTEXT_TIMER) {
+        DK_DIAG(DK_DIAG_TIMER_REENTERED,
+                "called from a timer callback; the running call processes "
+                "the rest");
         return;
     }
 

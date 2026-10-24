@@ -30,10 +30,17 @@ Codes (one enum, append-only: a value is never reused, so you may log and match 
 | `DK_DIAG_MULTIROAR_WRONG_MODE` | MISUSE | a bit operation on a value-mode roar, or a value operation on a bit roar |
 | `DK_DIAG_MULTIARRAY_NATIVE` | MISUSE | a container call on a native multiarray |
 | `DK_DIAG_DATABOX_UNCOMPARABLE` | FATAL | two numeric boxes with no order between them |
+| `DK_DIAG_OWNED_WRITER_VIOLATION` | MISUSE | an owned cell or sequence published by a writer its declaration does not allow (counted and published, never refused) |
+| `DK_DIAG_OWNED_SLOT_UNCLAIMED` | MISUSE | `ownedSlotPublish` with no live claim behind it |
+| `DK_DIAG_AEAD_MISUSE` | MISUSE | ChaCha20-Poly1305 or AES-GCM given a NULL key, nonce, tag or buffer for a nonzero length, or a ChaCha20-Poly1305 stream call out of order or on a finished context (stream Init returns nothing, so this is its only signal) |
+| `DK_DIAG_HMAC_KEYRING_ZERO_SALT` | MISUSE | `hmacKeyringInstall` given a NULL or all-zero salt (`hmacKeyringInstallUnsalted` is the unsalted entry point) |
+| `DK_DIAG_RANDOM_ZERO_BOUND` | MISUSE | `dkRandomBounded(0)`, a value from an empty interval (also counted by `dkRandomZeroBoundTotal`) |
+| `DK_DIAG_MEMBOUND_INVALID_FREE` | MISUSE | a membound free of a pointer the pool does not hold out: outside it, off the block grid, freed already, or inside a block (also counted in `memboundStats.safetyViolations`, except on MICRO) |
+| `DK_DIAG_TIMER_REENTERED` | MISUSE | `timerWheelProcessTimerEvents` or `multiTimerProcessTimerEvents` called from one of its own callbacks (ignored; the running call processes the rest) |
 
 Not reported: NULL passed where NULL means "nothing" (`*Free(NULL)`, a NULL operand), data a structure
-refuses because of its content (a value too wide for a roar, a position past its dimensions), and every
-success path.
+refuses because of its content (a value too wide for a roar, a position past its dimensions, a tag that
+does not verify, a malformed envelope), and every success path.
 
 ## Reading diagnostics
 
@@ -79,7 +86,8 @@ dkDiagSetHook(&hook);   /* NULL removes it */
 The hook runs on the reporting thread, with a copy of the diagnostic, and for FATAL before the abort, so a
 fatal misuse reaches your logs.  The hook struct is yours and must outlive every report that might use it
 (static storage is simplest).  A hook may call `dkDiagLast`; a report made inside the hook is recorded and
-hooked as usual.
+hooked as usual.  A report can come from inside a structure's lock (a membound pool's free path, for one),
+so the hook must not call back into the structure whose call is reporting: log, count, or hand off.
 
 ## Printing
 

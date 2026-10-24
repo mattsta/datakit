@@ -81,7 +81,10 @@ bool chacha20poly1305Open(const uint8_t key[CHACHA20_POLY1305_KEY_LEN],
  * NULL inputs where required, or when total ciphertext would exceed
  * CHACHA20_POLY1305_MAX_PAYLOAD.  Failure POISONS the ctx — every
  * subsequent call also returns false (fail-closed; resuming a
- * corrupted state would mask the violation).
+ * corrupted state would mask the violation).  Out-of-order calls and
+ * NULL inputs (Init's included: it returns nothing) are reported as
+ * DK_DIAG_AEAD_MISUSE (dkDiag.h), as are the one-shot Seal/Open's NULL
+ * buffers for a nonzero length; a tag that does not verify is not.
  *
  * CAUTION — Streaming Open plaintext-before-tag exposure:
  *   The Poly1305 tag is only verified inside OpenStreamFinal.  Until

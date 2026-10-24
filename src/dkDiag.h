@@ -62,6 +62,23 @@ typedef enum dkDiagCode {
     DK_DIAG_MULTIARRAY_NATIVE = 9,
     /* two numeric boxes with no order between them (a VOID box) (FATAL) */
     DK_DIAG_DATABOX_UNCOMPARABLE = 10,
+    /* an owned cell or sequence published by a writer its declaration
+     * does not allow (counted, never refused) */
+    DK_DIAG_OWNED_WRITER_VIOLATION = 11,
+    /* an ownedSlot published with no live claim behind it */
+    DK_DIAG_OWNED_SLOT_UNCLAIMED = 12,
+    /* an AEAD call given NULL buffers for a nonzero length, or a stream
+     * call out of order (or on a context already finished) */
+    DK_DIAG_AEAD_MISUSE = 13,
+    /* an hmacKeyring salted install given a NULL or all-zero salt */
+    DK_DIAG_HMAC_KEYRING_ZERO_SALT = 14,
+    /* dkRandomBounded(0): a value from an empty interval */
+    DK_DIAG_RANDOM_ZERO_BOUND = 15,
+    /* a membound free of a pointer the pool does not hold out (outside
+     * it, misaligned, freed already, or into a block's interior) */
+    DK_DIAG_MEMBOUND_INVALID_FREE = 16,
+    /* a timer callback called its timer's ProcessTimerEvents (ignored) */
+    DK_DIAG_TIMER_REENTERED = 17,
     DK_DIAG_CODE_COUNT_ /* one past the last code; not a code */
 } dkDiagCode;
 
@@ -97,7 +114,9 @@ const char *dkDiagSeverityName(dkDiagSeverity severity);
  * the diagnostic (before abort() for FATAL).  The struct is the caller's
  * and must outlive every report that might use it; NULL removes the hook.
  * The hook may call dkDiagLast; a report made inside it is recorded and
- * hooked as usual. */
+ * hooked as usual.  A report can come from inside a structure's lock (a
+ * membound pool's free path, for one), so the hook must not call back into
+ * the structure whose call is reporting: log, count, or hand off. */
 typedef struct dkDiagHook {
     void (*fn)(const dkDiagnostic *d, void *ctx);
     void *ctx;
