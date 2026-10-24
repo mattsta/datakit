@@ -754,8 +754,8 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     char snapPath[PATH_MAX + sizeof(".snap")];
     snprintf(snapPath, sizeof(snapPath), "%s.snap", basePath);
 
-    TEST("multiOrderedSetP opens only what it saved, and refuses changes "
-         "after a damaged WAL entry until compacted")
+    TEST("multiOrderedSetP opens only what it saved, and heals a damaged "
+         "WAL entry")
 
     /* An empty set reopens as an empty set */
     persistCtx *ctx = persistCtxNew(basePath, NULL);
@@ -816,9 +816,9 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     persistCtxFree(ctx);
 
     /* Members 10, 20, 30 added with the last entry damaged: lenient
-     * recovery keeps {10, 20}; an add and a remove are then refused and
-     * change nothing; after a compaction an add of 40 is logged, and a
-     * reopen holds {10, 20, 40} */
+     * recovery keeps {10, 20} and heals the WAL (the damaged entry moves
+     * to the quarantine); an add of 40 is then logged with no compaction,
+     * and a reopen holds {10, 20, 40} */
     ptestCleanupFiles(basePath);
     ctx = persistCtxNew(basePath, NULL);
     mos = multiOrderedSetNewP(ctx);
@@ -843,18 +843,12 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
         ERR("lenient recovery kept %zu members, want 10, 20",
             mos ? multiOrderedSetCountP(mos) : (size_t)0);
     }
-    if (mos &&
-        (multiOrderedSetAddP(mos, &s4, &m40, NULL) != PERSIST_LOG_REFUSED ||
-         multiOrderedSetRemoveP(mos, &m10) != PERSIST_LOG_REFUSED ||
-         multiOrderedSetCountP(mos) != 2 ||
-         !multiOrderedSetExistsP(mos, &m10) ||
-         multiOrderedSetExistsP(mos, &m40))) {
-        ERRR("a change after the damaged entry was applied or logged");
+    if (!ptestExpectHealed(ctx, basePath)) {
+        ERRR("the damaged entry was not healed into the quarantine");
     }
     if (mos &&
-        (!multiOrderedSetCompactP(mos) ||
-         multiOrderedSetAddP(mos, &s4, &m40, NULL) == PERSIST_LOG_REFUSED)) {
-        ERRR("compaction did not resume logging");
+        multiOrderedSetAddP(mos, &s4, &m40, NULL) == PERSIST_LOG_REFUSED) {
+        ERRR("a change after the healed entry was refused");
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);

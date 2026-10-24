@@ -84,7 +84,19 @@ typedef struct persistCtx {
     uint64_t totalSyncs;
     uint64_t notDurableOps;
     uint64_t totalCompactions;
+
+    /* Bad-entry notification, kept until the structure's persist exists */
+    persistBadEntryNotify *badEntryNotify;
+    void *badEntryNotifyCtx;
 } persistCtx;
+
+/* Bad WAL entries (persist.h, "Bad WAL entries"): a context heals damaged
+ * WAL bytes into <basePath>.quarantine (created only when needed) and holds
+ * entries it cannot heal.  The last one met, and a callback for each new
+ * one (set it before *OpenP to hear about recovery). */
+bool persistCtxLastBadEntry(const persistCtx *ctx, persistBadEntryReport *out);
+void persistCtxSetBadEntryNotify(persistCtx *ctx, persistBadEntryNotify *fn,
+                                 void *notifyCtx);
 
 /* ============================================================================
  * Lifecycle

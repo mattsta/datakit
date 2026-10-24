@@ -371,11 +371,11 @@ int flexPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
-    TEST("flexP after a damaged WAL entry: refused until compacted") {
+    TEST("flexP after a damaged WAL entry: healed, logging goes on") {
         /* Three pushes; the last WAL entry's digest damaged on disk.
-         * Lenient recovery keeps two; the WAL then takes no appends (a
-         * push is refused and changes nothing), compaction resumes
-         * logging, and a reopen holds the two kept values and the new
+         * Lenient recovery keeps two and heals the WAL (the damaged entry
+         * moves to the quarantine); a push is then logged with no
+         * compaction, and a reopen holds the two kept values and the new
          * one. */
         ptestCleanupFiles(basePath);
         {
@@ -388,19 +388,8 @@ int flexPTest(int argc, char *argv[]) {
             flexCloseP(f);
             persistCtxFree(ctx);
         }
-
-        char walPath[PATH_MAX + 8];
-        snprintf(walPath, sizeof(walPath), "%s.wal", basePath);
-        FILE *wal = fopen(walPath, "r+b");
-        if (!wal || fseek(wal, -3, SEEK_END) != 0) {
-            ERRR("could not open the WAL to damage it");
-        } else {
-            const int c = fgetc(wal);
-            fseek(wal, -3, SEEK_END);
-            fputc(c ^ 0x5a, wal);
-        }
-        if (wal) {
-            fclose(wal);
+        if (!ptestDamageLastWalEntry(basePath)) {
+            ERRR("could not damage the WAL");
         }
 
         {
@@ -410,17 +399,13 @@ int flexPTest(int argc, char *argv[]) {
                 ERR("lenient recovery kept %zu values, want 2",
                     f ? flexCountP(f) : (size_t)0);
             }
+            if (!ptestExpectHealed(ctx, basePath)) {
+                ERRR("the damaged entry was not healed into the quarantine");
+            }
             const databox later = DATABOX_SIGNED(99);
-            if (f && flexPushTailP(f, &later) != PERSIST_LOG_REFUSED) {
-                ERRR("a push after the damaged entry was logged");
-            }
-            if (f && flexCountP(f) != 2) {
-                ERRR("a refused push changed the flex");
-            }
-            if (f && (!flexCompactP(f) ||
-                      flexPushTailP(f, &later) == PERSIST_LOG_REFUSED ||
+            if (f && (flexPushTailP(f, &later) == PERSIST_LOG_REFUSED ||
                       flexCountP(f) != 3)) {
-                ERRR("compaction did not resume logging");
+                ERRR("a push after the healed entry was refused");
             }
             if (f) {
                 flexCloseP(f);

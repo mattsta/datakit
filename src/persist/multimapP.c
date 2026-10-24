@@ -1149,12 +1149,11 @@ int multimapPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
-    TEST("multimapP after a damaged WAL entry: refused until compacted") {
+    TEST("multimapP after a damaged WAL entry: healed, logging goes on") {
         /* Rows 1, 2, 3 inserted with the last entry damaged: lenient
-         * recovery keeps {1, 2}; an insert, both deletes, a field
-         * increment and a reset are then refused and change nothing; after
-         * a compaction an insert of 4 is logged, and a reopen holds
-         * {1, 2, 4} */
+         * recovery keeps {1, 2} and heals the WAL (the damaged entry moves
+         * to the quarantine); an insert of 4 is then logged with no
+         * compaction, and a reopen holds {1, 2, 4} */
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         multimapP *m = multimapNewP(ctx, 2);
@@ -1173,10 +1172,8 @@ int multimapPTest(int argc, char *argv[]) {
         const databox k1 = databoxNewSigned(1);
         const databox k3 = databoxNewSigned(3);
         const databox k4 = databoxNewSigned(4);
-        const databox v1 = databoxNewSigned(100);
         const databox v9 = databoxNewSigned(900);
         const databox *row4[2] = {&k4, &v9};
-        const databox *row1[2] = {&k1, &v1};
         databox got = {{0}};
         databox *out[1] = {&got};
         ctx = persistCtxOpen(basePath, NULL);
@@ -1185,19 +1182,12 @@ int multimapPTest(int argc, char *argv[]) {
             ERR("lenient recovery kept %zu rows, want 1, 2",
                 m ? multimapCountP(m) : (size_t)0);
         }
-        if (m &&
-            (multimapInsertP(m, row4, NULL) != PERSIST_LOG_REFUSED ||
-             multimapDeleteP(m, &k1) != PERSIST_LOG_REFUSED ||
-             multimapDeleteFullWidthP(m, row1) != PERSIST_LOG_REFUSED ||
-             multimapFieldIncrP(m, &k1, 1, 5, NULL) != PERSIST_LOG_REFUSED ||
-             multimapResetP(m) != PERSIST_LOG_REFUSED ||
-             multimapCountP(m) != 2 || multimapExistsP(m, &k4) ||
-             !multimapLookupP(m, &k1, out) || got.data.i != 100)) {
-            ERRR("a change after the damaged entry was applied or logged");
+        if (!ptestExpectHealed(ctx, basePath)) {
+            ERRR("the damaged entry was not healed into the quarantine");
         }
-        if (m && (!multimapCompactP(m) ||
-                  multimapInsertP(m, row4, NULL) == PERSIST_LOG_REFUSED)) {
-            ERRR("compaction did not resume logging");
+        if (m && (multimapInsertP(m, row4, NULL) == PERSIST_LOG_REFUSED ||
+                  !multimapLookupP(m, &k1, out) || got.data.i != 100)) {
+            ERRR("a change after the healed entry was refused");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);

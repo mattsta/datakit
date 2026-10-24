@@ -1193,11 +1193,11 @@ int multidictPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
-    TEST("multidictP after a damaged WAL entry: refused until compacted") {
+    TEST("multidictP after a damaged WAL entry: healed, logging goes on") {
         /* Keys 1, 2, 3 added with the last entry damaged: lenient
-         * recovery keeps {1, 2}; an add, a replace, a delete and an empty
-         * are then refused and change nothing; after a compaction an add
-         * of 4 is logged, and a reopen holds {1, 2, 4} */
+         * recovery keeps {1, 2} and heals the WAL (the damaged entry moves
+         * to the quarantine); an add of 4 is then logged with no
+         * compaction, and a reopen holds {1, 2, 4} */
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         multidictP *d = multidictNewP(ctx);
@@ -1223,17 +1223,12 @@ int multidictPTest(int argc, char *argv[]) {
                 d ? multidictCountP(d) : 0);
         }
         databox got = {{0}};
-        if (d && (multidictAddP(d, &k4, &v9, NULL) != PERSIST_LOG_REFUSED ||
-                  multidictReplaceP(d, &k1, &v9) != PERSIST_LOG_REFUSED ||
-                  multidictDeleteP(d, &k1) != PERSIST_LOG_REFUSED ||
-                  multidictEmptyP(d) != PERSIST_LOG_REFUSED ||
-                  multidictCountP(d) != 2 || multidictExistsP(d, &k4) ||
-                  !multidictFindP(d, &k1, &got) || got.data.i != 100)) {
-            ERRR("a change after the damaged entry was applied or logged");
+        if (!ptestExpectHealed(ctx, basePath)) {
+            ERRR("the damaged entry was not healed into the quarantine");
         }
-        if (d && (!multidictCompactP(d) ||
-                  multidictAddP(d, &k4, &v9, NULL) == PERSIST_LOG_REFUSED)) {
-            ERRR("compaction did not resume logging");
+        if (d && (multidictAddP(d, &k4, &v9, NULL) == PERSIST_LOG_REFUSED ||
+                  !multidictFindP(d, &k1, &got) || got.data.i != 100)) {
+            ERRR("a change after the healed entry was refused");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);

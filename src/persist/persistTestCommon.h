@@ -15,6 +15,8 @@
 #include "../ctest.h"
 #include "../databox.h"
 #include "../dkTestTmp.h"
+#include "persistCtx.h"
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -124,12 +126,52 @@ static DK_FN_UNUSED void ptestCleanupFiles(const char *basePath) {
     if (walLen >= 0 && (size_t)walLen < sizeof(walPath)) {
         unlink(walPath);
     }
+
+    char qPath[PATH_MAX];
+    const int qLen = snprintf(qPath, sizeof(qPath), "%s.quarantine", basePath);
+    if (qLen >= 0 && (size_t)qLen < sizeof(qPath)) {
+        unlink(qPath);
+    }
+}
+
+/* After recovery met a damaged entry: the context reports it CORRUPT and
+ * HEALED, and basePath.quarantine holds one record ("DKPQ", version 1)
+ * whose byte count is the report's and whose bytes follow its header */
+static DK_FN_UNUSED bool ptestExpectHealed(const persistCtx *ctx,
+                                           const char *basePath) {
+    persistBadEntryReport report;
+    if (!persistCtxLastBadEntry(ctx, &report) ||
+        report.kind != PERSIST_BAD_ENTRY_CORRUPT ||
+        report.action != PERSIST_BAD_ENTRY_HEALED || report.bytes == 0) {
+        return false;
+    }
+    char qPath[PATH_MAX];
+    const int qLen = snprintf(qPath, sizeof(qPath), "%s.quarantine", basePath);
+    if (qLen < 0 || (size_t)qLen >= sizeof(qPath)) {
+        return false;
+    }
+    FILE *q = fopen(qPath, "rb");
+    if (!q) {
+        return false;
+    }
+    uint8_t head[32];
+    const bool read = fread(head, 1, sizeof(head), q) == sizeof(head);
+    uint64_t n = 0;
+    for (size_t i = 0; read && i < 8; i++) {
+        n |= (uint64_t)head[24 + i] << (8 * i);
+    }
+    const bool atEnd = read && fseek(q, 0, SEEK_END) == 0 &&
+                       (uint64_t)ftell(q) == sizeof(head) + n;
+    fclose(q);
+    return read && memcmp(head, "DKPQ\x01\x00", 6) == 0 && n == report.bytes &&
+           atEnd;
 }
 
 /* Damage the digest of basePath's last WAL entry (every entry ends with
- * its digest): flip one byte 3 from the end.  Lenient recovery then
- * keeps every entry before it, and the WAL takes no appends until a
- * compaction.  False if the WAL could not be read and rewritten. */
+ * its digest): flip one byte 3 from the end.  Lenient recovery then keeps
+ * every entry before it, and a context heals the WAL (the damaged entry
+ * moves to basePath.quarantine; see ptestExpectHealed).  False if the WAL
+ * could not be read and rewritten. */
 static DK_FN_UNUSED bool ptestDamageLastWalEntry(const char *basePath) {
     char walPath[PATH_MAX];
     const int walLen = snprintf(walPath, sizeof(walPath), "%s.wal", basePath);

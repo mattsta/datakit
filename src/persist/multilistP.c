@@ -1544,11 +1544,11 @@ int multilistPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
-    TEST("multilistP after a damaged WAL entry: refused until compacted") {
+    TEST("multilistP after a damaged WAL entry: healed, logging goes on") {
         /* Tail pushes of 1, 2, 3 with the last entry damaged: lenient
-         * recovery keeps [1, 2]; a push, both pops, a replace, a range
-         * delete and a reset are then refused and change nothing; after a
-         * compaction a push of 4 is logged, and a reopen holds [1, 2, 4] */
+         * recovery keeps [1, 2] and heals the WAL (the damaged entry moves
+         * to the quarantine); a push of 4 is then logged with no
+         * compaction, and a reopen holds [1, 2, 4] */
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
@@ -1569,20 +1569,11 @@ int multilistPTest(int argc, char *argv[]) {
             ERR("lenient recovery kept %zu values, want 1, 2",
                 ml ? multilistCountP(ml) : (size_t)0);
         }
-        databox got = {{0}};
-        if (ml &&
-            (multilistPushTailP(ml, &four) != PERSIST_LOG_REFUSED ||
-             multilistPopHeadP(ml, &got) != PERSIST_LOG_REFUSED ||
-             multilistPopTailP(ml, &got) != PERSIST_LOG_REFUSED ||
-             multilistReplaceAtIndexP(ml, 0, &four) != PERSIST_LOG_REFUSED ||
-             multilistDelRangeP(ml, 0, 1) != PERSIST_LOG_REFUSED ||
-             multilistResetP(ml) != PERSIST_LOG_REFUSED ||
-             multilistCountP(ml) != 2)) {
-            ERRR("a change after the damaged entry was applied or logged");
+        if (!ptestExpectHealed(ctx, basePath)) {
+            ERRR("the damaged entry was not healed into the quarantine");
         }
-        if (ml && (!multilistCompactP(ml) ||
-                   multilistPushTailP(ml, &four) == PERSIST_LOG_REFUSED)) {
-            ERRR("compaction did not resume logging");
+        if (ml && multilistPushTailP(ml, &four) == PERSIST_LOG_REFUSED) {
+            ERRR("a change after the healed entry was refused");
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);

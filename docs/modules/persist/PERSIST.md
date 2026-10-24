@@ -126,15 +126,34 @@ includes, so nothing is applied twice.
 `persistCtxOpen` + `*OpenP` restore the snapshot and replay the WAL.
 
 - **Lenient** (default): an entry that verifies but does not apply is
-  skipped and counted (`persistStats.entriesSkipped`).  Replay stops at the
-  first entry that fails verification and keeps what came before.  That
-  entry stays in place (it may only need the right key), and since no
-  reader can pass it, the WAL takes no appends while it is there: every
-  `persistLogOp` (and P-wrapper op) returns `PERSIST_LOG_REFUSED` until the
-  WAL reads again (the right key bound) or `persistCompact` writes a
-  snapshot of the recovered structure and starts a fresh WAL.  A torn tail
-  (the last entry cut short by a crash) is truncated at the last complete
-  entry, so the WAL keeps growing from a clean end.
+  skipped and counted (`persistStats.entriesSkipped`).  A torn tail (the
+  last entry cut short by a crash) is truncated at the last complete
+  entry.  Replay stops at the first entry that does not read and keeps
+  what came before; nothing after it is applied, since later ops without
+  it could build a state that never existed.  The system does not stop
+  there:
+  - **Corruption** (a length out of range, or a checksum / MAC failing
+    under a key already proven good, or an unkeyed checksum): the WAL
+    **heals**.  The bad entry and everything after it are copied, synced,
+    into the quarantine as one record, the WAL is cut at the last good
+    entry, and appends continue at once.  A `persistCtx` quarantines into
+    `<basePath>.quarantine` (created only when needed); a bare `persist`
+    uses `persistAttachQuarantine` / `persistAttachQuarantineFile`.
+  - **A key problem** (no key resolves, or a keyed WAL whose first entry
+    fails under a key not yet proven: it may only need the right key), **a
+    store read error**, or corruption with no quarantine attached: the
+    entry is **held**.  The WAL is left as found and appends return
+    `PERSIST_LOG_REFUSED` until it reads (the right key bound, the store
+    back) or `persistCompact` writes a fresh WAL.
+  - Every new bad entry is reported once: `persistLastBadEntry` /
+    `persistCtxLastBadEntry` give its kind (CORRUPT, KEY, READ), action
+    (HEALED, HELD), offset, byte count and the entries before it, and
+    `persistSetBadEntryNotify` / `persistCtxSetBadEntryNotify` call back
+    (set it before `*OpenP` to hear about recovery).
+  - A quarantine record is `"DKPQ"`, a version (uint16 LE, 1), 2 reserved
+    bytes, the bad entry's WAL offset (int64 LE), the WAL's next sequence
+    (uint64 LE), the byte count n (uint64 LE), then the n WAL bytes,
+    exactly as they were.
 - **Strict** (`strictRecovery = true`): an entry that fails to verify or
   apply fails the recovery, and the open returns NULL.
 

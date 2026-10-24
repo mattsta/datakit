@@ -190,6 +190,16 @@ struct persist {
     bool walCursorMoved;
     bool walInitialized; /* WAL header verified or written; appendOffset set */
     uint32_t walKeyId;   /* key id the open WAL's header names (0: none) */
+
+    /* Bad WAL entries (see persist.h, "Bad WAL entries") */
+    persistBadEntryKind walBadKind; /* why the last read stopped (BAD) */
+    bool keyProven; /* the current key verified a snapshot or WAL entry */
+    uint64_t walEntriesRead;        /* complete entries the last walk read */
+    persistStore *quarantine;       /* owned; NULL: none */
+    char *quarantinePath;           /* owned; opened when a heal needs it */
+    persistBadEntryReport badEntry; /* the last one met */
+    persistBadEntryNotify *badEntryNotify;
+    void *badEntryNotifyCtx;
 };
 
 /* ============================================================================
@@ -464,6 +474,7 @@ bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
     p->attachedKeyId = 0u;
     p->attachedGeneration = 0u;
     p->integrityPreparedKey = NULL;
+    p->keyProven = false;
     if (key == NULL || key_len == 0) {
         p->integrityKey = NULL;
         p->integrityKeyLen = 0;
@@ -479,6 +490,7 @@ bool persistSetIntegrityPreparedKey(persist *p, const struct hmacKey *prep) {
         return false;
     }
     p->integrityPreparedKey = prep;
+    p->keyProven = false;
     return true;
 }
 
@@ -575,6 +587,7 @@ static bool persistBindKeyringInternal(persist *p, hmacKeyring *ring,
     p->integrityPreparedKey = hmacKeyringLookup(ring, key_id);
     p->lastError = PERSIST_ERR_NONE;
     p->lastExpectedKeyId = 0u;
+    p->keyProven = false;
     return true;
 }
 
@@ -703,6 +716,8 @@ void persistClose(persist *p) {
         p->walStore->close(p->walStore->ctx);
         zfree(p->walStore);
     }
+    persistAttachQuarantine(p, NULL);
+    persistAttachQuarantineFile(p, NULL);
 
     zfree(p->walBuffer);
     zfree(p);
@@ -983,6 +998,7 @@ void *persistRestore(persist *p) {
                                 &payload, &payloadLen)) {
             return NULL;
         }
+        p->keyProven = true; /* the key reads what it wrote */
 
         /* The envelope's payload sits at an arbitrary offset inside the
          * malloc'd envelope buffer (after the varint framing). ops->restore
@@ -1409,15 +1425,18 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     persistStore *store = p->walStore;
     uint32_t envelopeLen32 = 0;
 
+    /* Every BAD names its kind in p->walBadKind (see persist.h) */
     const ssize_t headerRead =
         store->read(store->ctx, &envelopeLen32, sizeof(envelopeLen32));
     if (headerRead == 0) {
         return PERSIST_WAL_END;
     }
     if (headerRead != (ssize_t)sizeof(envelopeLen32)) {
+        p->walBadKind = PERSIST_BAD_ENTRY_READ;
         return headerRead < 0 ? PERSIST_WAL_BAD : PERSIST_WAL_TORN;
     }
     if (envelopeLen32 == 0 || envelopeLen32 > PERSIST_WAL_ENTRY_MAX_BYTES) {
+        p->walBadKind = PERSIST_BAD_ENTRY_CORRUPT;
         return PERSIST_WAL_BAD;
     }
 
@@ -1425,21 +1444,31 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     cleanerName(zfree, Bytes) uint8_t *envelope = zmalloc(envelopeLen);
     const ssize_t bodyRead = store->read(store->ctx, envelope, envelopeLen);
     if (bodyRead != (ssize_t)envelopeLen) {
+        p->walBadKind = PERSIST_BAD_ENTRY_READ;
         return bodyRead < 0 ? PERSIST_WAL_BAD : PERSIST_WAL_TORN;
     }
 
     flexEnvelopeVerifyParams verify;
     if (!persistBuildVerifyParams(p, &verify)) {
+        p->walBadKind = PERSIST_BAD_ENTRY_KEY;
         return PERSIST_WAL_BAD;
     }
 
+    /* A failed check under a keyed algorithm whose key has verified
+     * nothing yet may be the wrong key, not damage */
+    const bool keyed = flexEnvelopeAlgoIsKeyed(
+        persistChecksumToEnvelopeAlgo(p->config.checksumType));
     const uint8_t *payload = NULL;
     uint64_t payloadLen = 0;
     if (!flexEnvelopeVerify(envelope, envelopeLen, &verify, &payload,
                             &payloadLen)) {
+        p->walBadKind = keyed && !p->keyProven ? PERSIST_BAD_ENTRY_KEY
+                                               : PERSIST_BAD_ENTRY_CORRUPT;
         return PERSIST_WAL_BAD;
     }
+    p->keyProven = true;
     if (payloadLen < (uint64_t)PERSIST_WAL_ENTRY_PREAMBLE_LEN) {
+        p->walBadKind = PERSIST_BAD_ENTRY_CORRUPT;
         return PERSIST_WAL_BAD;
     }
 
@@ -1455,17 +1484,155 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     return PERSIST_WAL_ENTRY;
 }
 
+/* Report the bad entry the last read met at `offset` (once per new one:
+ * a held entry is met again by every refused append) */
+static void persistBadEntryReport_(persist *p, int64_t offset, uint64_t bytes,
+                                   persistBadEntryAction action) {
+    persistBadEntryReport *r = &p->badEntry;
+    const bool same = r->events && r->kind == p->walBadKind &&
+                      r->offset == offset && r->action == action;
+    r->kind = p->walBadKind;
+    r->action = action;
+    r->offset = offset;
+    r->bytes = bytes;
+    r->entriesBefore = p->walEntriesRead;
+    if (same) {
+        return;
+    }
+    r->events++;
+    if (p->badEntryNotify) {
+        p->badEntryNotify(p, r, p->badEntryNotifyCtx);
+    }
+}
+
+/* Copy WAL bytes [from, from + n) to the end of `q` */
+static bool persistQuarantineCopy_(persistStore *wal, persistStore *q,
+                                   int64_t from, uint64_t n) {
+    if (wal->seek(wal->ctx, from, SEEK_SET) != from) {
+        return false;
+    }
+    uint8_t chunk[16384];
+    while (n > 0) {
+        const size_t want = n < sizeof(chunk) ? (size_t)n : sizeof(chunk);
+        if (wal->read(wal->ctx, chunk, want) != (ssize_t)want ||
+            q->write(q->ctx, chunk, want) != (ssize_t)want) {
+            return false;
+        }
+        n -= want;
+    }
+    return true;
+}
+
+/* A reader stopped at a bad entry at `goodEnd`: heal a CORRUPT one when a
+ * quarantine can take its bytes (see persist.h, "Bad WAL entries"), else
+ * hold it.  True when healed: the WAL then ends at `goodEnd`. */
+static bool persistWALHeal_(persist *p, int64_t goodEnd) {
+    persistStore *wal = p->walStore;
+    const int64_t size = wal->size(wal->ctx);
+    const uint64_t bytes = size > goodEnd ? (uint64_t)(size - goodEnd) : 0;
+    p->walCursorMoved = true;
+    if (p->walBadKind != PERSIST_BAD_ENTRY_CORRUPT || !wal->truncate ||
+        (!p->quarantine && !p->quarantinePath)) {
+        persistBadEntryReport_(p, goodEnd, bytes, PERSIST_BAD_ENTRY_HELD);
+        return false;
+    }
+
+    /* A path opens only now, closing again after */
+    persistStore *q = p->quarantine;
+    persistStore *opened = NULL;
+    if (!q) {
+        /* @own: local; free=close below */
+        opened = persistStoreFile(p->quarantinePath, true);
+        q = opened;
+    }
+
+    /* The record header, little-endian; a fixed layout, not a flex: it is
+     * read by an operator's tool before anything is known to be intact */
+    uint8_t head[32] = {'D', 'K', 'P', 'Q', 1, 0, 0, 0};
+    for (size_t i = 0; i < 8; i++) {
+        head[8 + i] = (uint8_t)((uint64_t)goodEnd >> (8 * i));
+        head[16 + i] = (uint8_t)(p->walSequence >> (8 * i));
+        head[24 + i] = (uint8_t)(bytes >> (8 * i));
+    }
+    bool kept = q && q->seek(q->ctx, 0, SEEK_END) >= 0 &&
+                q->write(q->ctx, head, sizeof(head)) == (ssize_t)sizeof(head) &&
+                persistQuarantineCopy_(wal, q, goodEnd, bytes) &&
+                (!q->sync || q->sync(q->ctx));
+    if (opened) {
+        opened->close(opened->ctx);
+        zfree(opened);
+    }
+
+    /* Only once the bytes are safe is the WAL cut */
+    kept = kept && wal->seek(wal->ctx, goodEnd, SEEK_SET) == goodEnd &&
+           wal->truncate(wal->ctx) && (!wal->sync || wal->sync(wal->ctx));
+    persistBadEntryReport_(p, goodEnd, bytes,
+                           kept ? PERSIST_BAD_ENTRY_HEALED
+                                : PERSIST_BAD_ENTRY_HELD);
+    return kept;
+}
+
+bool persistAttachQuarantine(persist *p, persistStore *store) {
+    if (!p) {
+        return false;
+    }
+    if (p->quarantine && p->quarantine != store) {
+        if (p->quarantine->close) {
+            p->quarantine->close(p->quarantine->ctx);
+        }
+        zfree(p->quarantine);
+    }
+    p->quarantine = store;
+    return true;
+}
+
+bool persistAttachQuarantineFile(persist *p, const char *path) {
+    if (!p) {
+        return false;
+    }
+    zfree(p->quarantinePath);
+    p->quarantinePath = NULL;
+    if (path) {
+        const size_t n = strlen(path) + 1;
+        /* @own: container; free=persistClose */
+        p->quarantinePath = zmalloc(n);
+        memcpy(p->quarantinePath, path, n);
+    }
+    return true;
+}
+
+void persistSetBadEntryNotify(persist *p, persistBadEntryNotify *fn,
+                              void *ctx) {
+    if (p) {
+        p->badEntryNotify = fn;
+        p->badEntryNotifyCtx = ctx;
+    }
+}
+
+bool persistLastBadEntry(const persist *p, persistBadEntryReport *out) {
+    if (out) {
+        *out = (persistBadEntryReport){0};
+    }
+    if (!p || !p->badEntry.events) {
+        return false;
+    }
+    if (out) {
+        *out = p->badEntry;
+    }
+    return true;
+}
+
 /* Make the WAL appendable after a reader stopped at `goodEnd`, the end of
  * the last entry that read completely, having met `stop` there.  A torn
  * tail (a crash mid-append) is cut off, so what is logged next follows
- * complete entries and a later recovery reaches it.  A bad entry is left
- * in place (it may only need the right key), and the WAL stays
- * unappendable: readers stop at it, so nothing appended after it would
- * ever replay.  Logging resumes once it reads (the right key bound) or
- * after persistCompact starts a fresh WAL. */
+ * complete entries and a later recovery reaches it.  A bad entry is healed
+ * or held (persistWALHeal_): a held one stays in place and the WAL takes
+ * no appends, since readers stop at it and nothing after it would ever
+ * replay; logging resumes once it reads (the right key bound, the store
+ * back) or after persistCompact starts a fresh WAL. */
 static bool persistWALResume(persist *p, int64_t goodEnd, int stop) {
     persistStore *store = p->walStore;
-    if (stop == PERSIST_WAL_BAD) {
+    if (stop == PERSIST_WAL_BAD && !persistWALHeal_(p, goodEnd)) {
         p->walInitialized = false;
         return false;
     }
@@ -1492,6 +1659,7 @@ static int persistWALWalk(persist *p, persistWALEntryFn cb, void *ctx,
                           int64_t *goodEnd) {
     persistStore *store = p->walStore;
     *goodEnd = store->tell(store->ctx);
+    p->walEntriesRead = 0;
     for (;;) {
         uint8_t *envelope = NULL;
         size_t envelopeLen = 0;
@@ -1506,6 +1674,7 @@ static int persistWALWalk(persist *p, persistWALEntryFn cb, void *ctx,
         }
 
         *goodEnd = store->tell(store->ctx);
+        p->walEntriesRead++;
         const bool more = cb ? cb(p, seq, op, opData, opDataLen, ctx) : true;
         if (seq >= p->walSequence) {
             p->walSequence = seq + 1;
@@ -5314,6 +5483,21 @@ static bool persistTestPushRange(persist *p, int64_t first, size_t count) {
 }
 
 /* True iff recovering `p` gives exactly the integers `want[0..n)` */
+/* Counts bad-entry notifications and keeps the last report */
+typedef struct persistTestBadNotify {
+    int calls;
+    persistBadEntryReport last;
+} persistTestBadNotify;
+
+static void persistTestBadNotifyFn(persist *p,
+                                   const persistBadEntryReport *report,
+                                   void *ctx) {
+    (void)p;
+    persistTestBadNotify *n = ctx;
+    n->calls++;
+    n->last = *report;
+}
+
 static bool persistTestRecoversTo(persist *p, const int64_t *want, size_t n) {
     cleaner(flexFree) flex *f = persistRecover(p);
     if (!f || flexCount(f) != n) {
@@ -10272,10 +10456,182 @@ int persistTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("a WAL with a bad entry takes no appends until compacted") {
+    TEST("bad WAL entries: corruption heals into the quarantine, once") {
+        /* Inserts 1, 2, 3 with the second entry damaged, and a memory
+         * quarantine: recovery keeps {1}, reports CORRUPT / HEALED with one
+         * entry before at the second entry's offset, the quarantine holds
+         * one record whose bytes are exactly the WAL's tail from there, the
+         * WAL ends at that offset, an insert logs at once, a second
+         * recovery holds {1, 99} and reports nothing new, and the notify
+         * callback ran once */
+        persistConfig cfg = persistDefaultConfig();
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsIntset, &cfg);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistStore *wal = persistStoreMemory(0);
+        persistAttachWAL(p, wal);
+        persistStore *q = persistStoreMemory(0);
+        persistAttachQuarantine(p, q);
+        persistTestBadNotify heard = {0};
+        persistSetBadEntryNotify(p, persistTestBadNotifyFn, &heard);
+        cleaner(intsetFree) intset *empty = intsetNew();
+        persistSnapshot(p, empty);
+        for (int64_t v = 1; v <= 3; v++) {
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+        }
+        persistSync(p);
+
+        size_t walLen = 0;
+        uint8_t *bytes = (uint8_t *)persistStoreMemoryBuffer(wal, &walLen);
+        size_t at = sizeof(persistWALHeader);
+        uint32_t entryLen = 0;
+        memcpy(&entryLen, bytes + at, sizeof(entryLen));
+        at += sizeof(entryLen) + entryLen; /* the second entry starts here */
+        memcpy(&entryLen, bytes + at, sizeof(entryLen));
+        bytes[at + sizeof(entryLen) + entryLen / 2] ^= 0x10u;
+        const size_t tail = walLen - at;
+        cleanerName(zfree, Bytes) uint8_t *expected = zmalloc(tail);
+        memcpy(expected, bytes + at, tail);
+
+        cleaner(intsetFree) intset *partial = persistRecover(p);
+        persistBadEntryReport r;
+        const bool met = persistLastBadEntry(p, &r);
+        size_t qLen = 0;
+        const uint8_t *rec = persistStoreMemoryBuffer(q, &qLen);
+        uint64_t n = 0;
+        for (size_t i = 0; qLen >= 32 && i < 8; i++) {
+            n |= (uint64_t)rec[24 + i] << (8 * i);
+        }
+        if (!partial || intsetCount(partial) != 1 || !met ||
+            r.kind != PERSIST_BAD_ENTRY_CORRUPT ||
+            r.action != PERSIST_BAD_ENTRY_HEALED || r.offset != (int64_t)at ||
+            r.bytes != tail || r.entriesBefore != 1 || qLen != 32 + tail ||
+            memcmp(rec, "DKPQ\x01\x00", 6) != 0 || n != tail ||
+            memcmp(rec + 32, expected, tail) != 0) {
+            ERRR("a corrupt entry was not healed into one exact record");
+        }
+        persistStoreMemoryBuffer(wal, &walLen);
+        const int64_t later = 99;
+        if (walLen != at || persistLogOp(p, PERSIST_OP_INSERT, &later, 1) ==
+                                PERSIST_LOG_REFUSED) {
+            ERR("the WAL is %zu bytes (want %zu) or refused an insert", walLen,
+                at);
+        }
+        persistSync(p);
+        cleaner(intsetFree) intset *again = persistRecover(p);
+        persistLastBadEntry(p, &r);
+        if (!again || intsetCount(again) != 2 || !intsetFind(again, 99) ||
+            r.events != 1 || heard.calls != 1 ||
+            heard.last.action != PERSIST_BAD_ENTRY_HEALED) {
+            ERRR("after healing: wrong members, or reported again");
+        }
+    }
+
+    TEST("bad WAL entries: no quarantine, a key problem or a read error "
+         "hold") {
+        /* Corruption with no quarantine is held (healing would destroy
+         * the bytes) and reported once however many appends it refuses;
+         * a keyed WAL whose first entry fails under an unproven key is a
+         * KEY problem, held until the right key reads it; a failing store
+         * read is a READ problem, and never heals */
+        persistConfig cfg = persistDefaultConfig();
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsIntset, &cfg);
+        persistStore *wal = persistStoreMemory(0);
+        persistAttachWAL(p, wal);
+        persistTestBadNotify heard = {0};
+        persistSetBadEntryNotify(p, persistTestBadNotifyFn, &heard);
+        for (int64_t v = 1; v <= 2; v++) {
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+        }
+        persistSync(p);
+        size_t walLen = 0;
+        uint8_t *bytes = (uint8_t *)persistStoreMemoryBuffer(wal, &walLen);
+        bytes[walLen - 3] ^= 0x5au;
+        cleaner(intsetFree) intset *is = intsetNew();
+        persistReplayWAL(p, &is);
+        const int64_t later = 7;
+        for (int i = 0; i < 5; i++) {
+            if (persistLogOp(p, PERSIST_OP_INSERT, &later, 1) !=
+                PERSIST_LOG_REFUSED) {
+                ERRR("a held WAL took an append");
+            }
+        }
+        persistBadEntryReport r;
+        persistLastBadEntry(p, &r);
+        if (r.kind != PERSIST_BAD_ENTRY_CORRUPT ||
+            r.action != PERSIST_BAD_ENTRY_HELD || r.events != 1 ||
+            heard.calls != 1 || intsetCount(is) != 1) {
+            ERR("no-quarantine corruption: kind %d action %d, %" PRIu64
+                " events, %d notifications",
+                (int)r.kind, (int)r.action, r.events, heard.calls);
+        }
+
+        /* KEY: HMAC entries written under one key, read under another */
+        static const uint8_t keyA[32] = {1};
+        static const uint8_t keyB[32] = {2};
+        persistConfig kcfg = persistDefaultConfig();
+        kcfg.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+        cleaner(persistClose) persist *k =
+            persistCreate(&persistOpsIntset, &kcfg);
+        persistStore *kwal = persistStoreMemory(0);
+        persistAttachWAL(k, kwal);
+        persistSetIntegrityKey(k, keyA, sizeof(keyA));
+        persistLogOp(k, PERSIST_OP_INSERT, &later, 1);
+        persistSync(k);
+        persistSetIntegrityKey(k, keyB, sizeof(keyB));
+        persistAttachWAL(k, kwal);
+        cleaner(intsetFree) intset *kis = intsetNew();
+        persistReplayWAL(k, &kis);
+        persistLastBadEntry(k, &r);
+        const bool heldForKey = r.kind == PERSIST_BAD_ENTRY_KEY &&
+                                r.action == PERSIST_BAD_ENTRY_HELD &&
+                                persistLogOp(k, PERSIST_OP_INSERT, &later, 1) ==
+                                    PERSIST_LOG_REFUSED;
+        persistSetIntegrityKey(k, keyA, sizeof(keyA));
+        const int64_t eight = 8;
+        if (!heldForKey || persistLogOp(k, PERSIST_OP_INSERT, &eight, 1) ==
+                               PERSIST_LOG_REFUSED) {
+            ERRR("a wrong key was not held as a KEY problem, or the right "
+                 "key did not release it");
+        }
+
+        /* READ: every arming point of a failing read; none heals */
+        bool sawRead = false;
+        bool healed = false;
+        for (uint64_t nth = 1; nth <= 8; nth++) {
+            cleaner(persistClose) persist *f =
+                persistCreate(&persistOpsIntset, &cfg);
+            persistStore *fwal =
+                persistStoreFaulty(persistStoreMemory(0), false);
+            persistAttachWAL(f, fwal);
+            persistAttachQuarantine(f, persistStoreMemory(0));
+            for (int64_t v = 1; v <= 3; v++) {
+                persistLogOp(f, PERSIST_OP_INSERT, &v, 1);
+            }
+            persistSync(f);
+            persistAttachWAL(f, fwal);
+            persistStoreFaultyArm(fwal, PERSIST_FAULT_READ, nth);
+            cleaner(intsetFree) intset *fis = intsetNew();
+            persistReplayWAL(f, &fis);
+            persistStoreFaultyDisarm(fwal);
+            if (persistLastBadEntry(f, &r)) {
+                sawRead |= r.kind == PERSIST_BAD_ENTRY_READ &&
+                           r.action == PERSIST_BAD_ENTRY_HELD;
+                healed |= r.action == PERSIST_BAD_ENTRY_HEALED;
+            }
+        }
+        if (!sawRead || healed) {
+            ERRR("a failing read was not held as a READ problem");
+        }
+    }
+
+    TEST("a WAL with a bad entry and no quarantine takes no appends until "
+         "compacted") {
         /* Readers stop at a bad entry, so an op appended after one would
-         * be reported logged and never replayed.  Appends are refused
-         * instead; compaction (snapshot + fresh WAL) resumes logging. */
+         * be reported logged and never replayed.  With nowhere to keep the
+         * damaged bytes, appends are refused instead; compaction (snapshot
+         * + fresh WAL) resumes logging. */
         persistConfig cfg = persistDefaultConfig();
         cfg.strictRecovery = false;
         cleaner(persistClose) persist *p =

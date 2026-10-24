@@ -4,11 +4,14 @@
  */
 
 #include "persistCtx.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 
 #include <errno.h>
 #include <string.h>
 #include <sys/time.h>
+
+defcleanerName(char *, zfree, Chars);
 
 /* ============================================================================
  * Time Utilities
@@ -185,7 +188,28 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
     persistAttachSnapshot(ctx->p, snapStore);
     persistAttachWAL(ctx->p, walStore);
 
+    /* Damaged WAL bytes heal into <base>.quarantine, created only then */
+    const size_t qlen = strlen(ctx->basePath) + sizeof(".quarantine");
+    cleanerName(zfree, Chars) char *qpath = zmalloc(qlen);
+    snprintf(qpath, qlen, "%s.quarantine", ctx->basePath);
+    persistAttachQuarantineFile(ctx->p, qpath);
+    persistSetBadEntryNotify(ctx->p, ctx->badEntryNotify,
+                             ctx->badEntryNotifyCtx);
+
     return true;
+}
+
+bool persistCtxLastBadEntry(const persistCtx *ctx, persistBadEntryReport *out) {
+    return persistLastBadEntry(ctx ? ctx->p : NULL, out);
+}
+
+void persistCtxSetBadEntryNotify(persistCtx *ctx, persistBadEntryNotify *fn,
+                                 void *notifyCtx) {
+    if (ctx) {
+        ctx->badEntryNotify = fn;
+        ctx->badEntryNotifyCtx = notifyCtx;
+        persistSetBadEntryNotify(ctx->p, fn, notifyCtx);
+    }
 }
 
 /* ============================================================================

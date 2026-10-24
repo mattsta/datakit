@@ -1620,18 +1620,17 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
         return err;
     }
 
-    TEST("multilruP after a damaged WAL entry: refused until compacted")
+    TEST("multilruP after a damaged WAL entry: healed, logging goes on")
 
     /* Three inserts with the last entry damaged: lenient recovery keeps
-     * the first two (under their handles); an insert, a promote, a
-     * weight update, a delete, a remove-minimum and both limit changes
-     * are then refused and change nothing; after a compaction an insert
-     * is logged, and a reopen holds three entries */
+     * the first two (under their handles) and heals the WAL (the damaged
+     * entry moves to the quarantine); an insert and a promote are then
+     * logged with no compaction, and a reopen holds three entries */
     ptestCleanupFiles(basePath);
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 100);
     const multilruPtr h1 = mlruTestInsert(mlru, 0);
-    const multilruPtr h2 = mlruTestInsert(mlru, 0);
+    mlruTestInsert(mlru, 0);
     mlruTestInsert(mlru, 0);
     multilruCloseP(mlru);
     persistCtxFree(ctx);
@@ -1645,24 +1644,14 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
         ERR("lenient recovery kept %zu entries, want 2",
             mlru ? multilruCountP(mlru) : (size_t)0);
     }
-    multilruPtr handle = 1;
-    multilruPtr removed = 1;
-    if (mlru &&
-        (multilruInsertP(mlru, &handle) != PERSIST_LOG_REFUSED || handle ||
-         multilruIncreaseP(mlru, h1) != PERSIST_LOG_REFUSED ||
-         multilruUpdateWeightP(mlru, h2, 9) != PERSIST_LOG_REFUSED ||
-         multilruDeleteP(mlru, h1) != PERSIST_LOG_REFUSED ||
-         multilruRemoveMinimumP(mlru, &removed) != PERSIST_LOG_REFUSED ||
-         multilruSetMaxCountP(mlru, 1) != PERSIST_LOG_REFUSED ||
-         multilruSetMaxWeightP(mlru, 1) != PERSIST_LOG_REFUSED ||
-         multilruCountP(mlru) != 2 || multilruGetMaxCountP(mlru) == 1 ||
-         multilruGetMaxWeightP(mlru) == 1)) {
-        ERRR("a change after the damaged entry was applied or logged");
+    if (!ptestExpectHealed(ctx, basePath)) {
+        ERRR("the damaged entry was not healed into the quarantine");
     }
+    multilruPtr handle = 0;
     if (mlru &&
-        (!multilruCompactP(mlru) ||
-         multilruInsertP(mlru, &handle) == PERSIST_LOG_REFUSED || !handle)) {
-        ERRR("compaction did not resume logging");
+        (multilruInsertP(mlru, &handle) == PERSIST_LOG_REFUSED || !handle ||
+         multilruIncreaseP(mlru, h1) == PERSIST_LOG_REFUSED)) {
+        ERRR("a change after the healed entry was refused");
     }
     multilruCloseP(mlru);
     persistCtxFree(ctx);

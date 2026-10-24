@@ -876,8 +876,8 @@ void *persistRestore(persist *p);
  * lastSyncError), and the next sync tries again. */
 typedef enum persistLogResult {
     PERSIST_LOG_REFUSED = 0,     /* not logged (encode or write failed, WAL
-                                    refused, or the WAL holds an entry no
-                                    reader can pass, until persistCompact):
+                                    refused, or the WAL holds a bad entry
+                                    that is held: see "Bad WAL entries"):
                                     apply nothing */
     PERSIST_LOG_BUFFERED = 1,    /* logged; the sync policy writes it out
                                     later (SYNC_NONE, or EVERYSEC between
@@ -892,11 +892,78 @@ typedef enum persistLogResult {
 } persistLogResult;
 
 /* Ready the WAL for an append, as persistLogOp does first: false when the
- * next op would be refused for the WAL itself (none attached, or a WAL
- * past a bad entry, which takes no appends until persistCompact).  For a
- * change persisted some other way (a snapshot), so it is refused exactly
- * when a logged change would be. */
+ * next op would be refused for the WAL itself (none attached, or a bad
+ * entry that is held: see "Bad WAL entries" below).  For a change
+ * persisted some other way (a snapshot), so it is refused exactly when a
+ * logged change would be. */
 bool persistWALReady(persist *p);
+
+/* ---- Bad WAL entries: heal, hold, report ----
+ *
+ * Readers stop at an entry that does not read: nothing after it is ever
+ * applied, since applying later ops without it could leave a state that
+ * never existed.  What happens next depends on why it failed:
+ *
+ *   CORRUPT: the bytes are damaged (a length out of range, or a checksum /
+ *     MAC that fails under a key already proven good this session, or an
+ *     unkeyed checksum).  With a quarantine attached, the WAL HEALS: the
+ *     bad entry and everything after it are copied to the quarantine (and
+ *     synced) as one record, the WAL is cut at the last good entry, and
+ *     appends continue.  The recovered state is the snapshot plus every
+ *     entry before the bad one; the quarantined bytes stay for manual
+ *     recovery.  Without a quarantine the entry is HELD (healing would
+ *     destroy the bytes).
+ *   KEY: no key resolves, or a keyed WAL's first entry fails under a key
+ *     not yet proven (it may only need the right key).  HELD.
+ *   READ: the store failed the read.  HELD.
+ *
+ * HELD leaves the WAL as found and refuses appends until it reads (key
+ * fixed, store back), or persistCompact writes a fresh WAL.  Strict
+ * recovery still fails the recovery instead.  Each new bad entry is
+ * reported once: persistLastBadEntry, and the notify callback if set.
+ *
+ * A quarantine record is: "DKPQ", version (uint16 LE, 1), reserved
+ * (uint16), the bad entry's WAL offset (int64 LE), the WAL's next sequence
+ * (uint64 LE), the byte count n (uint64 LE), then the n WAL bytes. */
+typedef enum persistBadEntryKind {
+    PERSIST_BAD_ENTRY_NONE = 0,
+    PERSIST_BAD_ENTRY_CORRUPT = 1,
+    PERSIST_BAD_ENTRY_KEY = 2,
+    PERSIST_BAD_ENTRY_READ = 3,
+} persistBadEntryKind;
+
+typedef enum persistBadEntryAction {
+    PERSIST_BAD_ENTRY_NO_ACTION = 0, /* reported by a reader that only
+                                        reads (iterate, verify) */
+    PERSIST_BAD_ENTRY_HEALED = 1,    /* quarantined, WAL cut, appends go on */
+    PERSIST_BAD_ENTRY_HELD = 2,      /* left in place, appends refused */
+} persistBadEntryAction;
+
+typedef struct persistBadEntryReport {
+    persistBadEntryKind kind;
+    persistBadEntryAction action;
+    int64_t offset;         /* where the bad entry starts in the WAL */
+    uint64_t bytes;         /* from there to the WAL's end (the record's n) */
+    uint64_t entriesBefore; /* complete entries the reader passed first */
+    uint64_t events;        /* bad entries reported since creation */
+} persistBadEntryReport;
+
+typedef void persistBadEntryNotify(persist *p,
+                                   const persistBadEntryReport *report,
+                                   void *ctx);
+
+/* Where healing copies damaged WAL bytes: a store (owned by `p` from now,
+ * closed with it), or a file path opened (created) only when a heal needs
+ * it.  Either replaces an earlier one; NULL detaches (bad entries are then
+ * held). */
+bool persistAttachQuarantine(persist *p, persistStore *store);
+bool persistAttachQuarantineFile(persist *p, const char *path);
+
+/* Called once per newly met bad entry, after it is healed or held */
+void persistSetBadEntryNotify(persist *p, persistBadEntryNotify *fn, void *ctx);
+
+/* The last bad entry met; false (and *out zeroed) when none has been */
+bool persistLastBadEntry(const persist *p, persistBadEntryReport *out);
 
 /* Log an operation (appends to WAL), syncing as the config's syncMode
  * asks */
