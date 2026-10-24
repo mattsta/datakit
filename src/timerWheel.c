@@ -10,6 +10,7 @@
 
 #include "cleaner.h"
 #include "databox.h"
+#include "dkDiag.h"
 #include "flex.h"
 #include "intset.h"
 #include "multimap.h"
@@ -322,7 +323,10 @@ static void insertTimerIntoOverflow(timerWheel *tw, const timerWheelEntry *e) {
     const databox *entry[ELEMENTS_PER_TIMER] = {&expireBox, &cbBox, &dataBox,
                                                 &idBox, &repeatBox};
 
-    multimapInsert(&tw->overflow, entry);
+    /* Full width: timers can share an expiry (two long timers registered
+     * in one microsecond, or saturated delays), and a keyed insert would
+     * replace the earlier one */
+    multimapInsertFullWidth(&tw->overflow, entry);
 }
 
 static inline void wheel0OccupancySet(timerWheel *tw, uint32_t idx) {
@@ -1070,6 +1074,9 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
      * iterated would be processed (and freed) twice. Deferred work is
      * picked up by the in-progress outer call. */
     if (tw->context == TIMER_WHEEL_CONTEXT_TIMER) {
+        DK_DIAG(DK_DIAG_TIMER_REENTERED,
+                "called from a timer callback; the running call processes "
+                "the rest");
         return;
     }
 

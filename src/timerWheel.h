@@ -132,7 +132,8 @@
  * from inside a callback is a safe no-op for processing: the
  * in-progress outer call picks up any deferred work (AdvanceTime still
  * shifts the simulated clock; the shift takes effect on the next
- * processing pass).
+ * processing pass).  The ignored call is reported as
+ * DK_DIAG_TIMER_REENTERED (dkDiag.h).
  *
  * ============================================================================
  * CANCELING/UPDATING TIMERS

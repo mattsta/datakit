@@ -16,6 +16,7 @@
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "ctest.h"
+#include "dkDiag.h"
 
 #define DOUBLE_NEWLINE 1
 #include "perf.h"
@@ -103,6 +104,16 @@ static bool testCountingCallback(timerWheel *tw, timerWheelId id,
     state->callCount++;
     state->lastId = id;
     return state->shouldReschedule;
+}
+
+/* Callback that tries to re-enter timer processing */
+static bool testReentrantProcessCallback(timerWheel *tw, timerWheelId id,
+                                         void *clientData) {
+    (void)id;
+    testCallbackState *state = clientData;
+    state->callCount++;
+    timerWheelProcessTimerEvents(tw); /* ignored, and reported */
+    return false;
 }
 
 static bool testNestedTimerCallback(timerWheel *tw, timerWheelId id,
@@ -406,6 +417,31 @@ int timerWheelTest(int argc, char *argv[]) {
 
         if (timerWheelCount(tw) != 0) {
             ERR("Timer should be removed, count=%zu", timerWheelCount(tw));
+        }
+    }
+
+    TEST("timerWheel: process from within a callback is ignored and "
+         "reported") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState reentrant = {0};
+        testCallbackState later = {0};
+
+        timerWheelRegister(tw, 1000, 0, testReentrantProcessCallback,
+                           &reentrant);
+        timerWheelRegister(tw, 2000, 0, testCountingCallback, &later);
+
+        const uint64_t diagBefore = dkDiagCount();
+        timerWheelAdvanceTime(tw, 10000);
+
+        if (reentrant.callCount != 1 || later.callCount != 1) {
+            ERR("the timers fired %d and %d times, expected once each",
+                reentrant.callCount, later.callCount);
+        }
+        dkDiagnostic d;
+        if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_TIMER_REENTERED) {
+            ERRR("a re-entered ProcessTimerEvents must report "
+                 "TIMER_REENTERED once");
         }
     }
 
@@ -1266,6 +1302,36 @@ int timerWheelTest(int argc, char *argv[]) {
         }
         if (timerWheelCount(tw) != 0) {
             ERR("Expected empty wheel, got %zu", timerWheelCount(tw));
+        }
+    }
+
+    TEST("timerWheel: overflow timers sharing an expiry are all kept") {
+        /* A saturated delay gives every such timer the same expiry, as
+         * two long timers registered in one microsecond do: the overflow
+         * store must hold each of them, not keep only the last */
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+        timerWheelId ids[3];
+        for (int i = 0; i < 3; i++) {
+            ids[i] = timerWheelRegister(tw, UINT64_MAX, 0, testCountingCallback,
+                                        &state);
+        }
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (timerWheelCount(tw) != 3 || stats.overflowCount != 3) {
+            ERR("count %zu, %zu in overflow, want 3 and 3", timerWheelCount(tw),
+                stats.overflowCount);
+        }
+        /* Each one is still there to cancel */
+        timerWheelUnregister(tw, ids[1]);
+        if (!timerWheelReconcileCancellations(tw)) {
+            ERRR("reconcile failed outside a callback");
+        }
+        timerWheelGetStats(tw, &stats);
+        if (timerWheelCount(tw) != 2 || stats.cancelledPending != 1) {
+            ERR("after one cancel: count %zu (want 2), %zu live tombstones "
+                "(want 1)",
+                timerWheelCount(tw), stats.cancelledPending);
         }
     }
 
