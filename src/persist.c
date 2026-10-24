@@ -5465,6 +5465,18 @@ static bool persistTestCountEntries(const persistWALEntry *entry, void *ctx) {
 static size_t persistTestWriteBudget = SIZE_MAX;
 static ssize_t (*persistTestMemWrite)(void *, const void *, size_t);
 
+/* An encoder claiming a body one byte past the WAL entry limit; the size
+ * check refuses it before anything reads the claimed bytes */
+static uint8_t *persistTestHugeEncode(persistOp op, const void *args,
+                                      size_t argc, size_t *len) {
+    (void)op;
+    (void)args;
+    (void)argc;
+    *len = PERSIST_WAL_ENTRY_MAX_BYTES;
+    /* @own: caller; free=zfree */
+    return zmalloc(1);
+}
+
 static ssize_t persistTestBudgetWrite(void *ctx, const void *data, size_t len) {
     if (persistTestWriteBudget == SIZE_MAX) {
         return persistTestMemWrite(ctx, data, len);
@@ -9578,6 +9590,72 @@ int persistTest(int argc, char *argv[]) {
         if (!persistSnapshot(p, second) ||
             !persistTestRecoversTo(p, wantSecond, 1)) {
             ERRR("a working snapshot after the failures did not land");
+        }
+    }
+
+    TEST("EVERYSEC: a second passed syncs; a failed sync waits a second") {
+        persistConfig cfg = persistDefaultConfig();
+        cfg.syncMode = PERSIST_SYNC_EVERYSEC;
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsIntset, &cfg);
+        persistStore *wal = persistStoreFaulty(persistStoreMemory(0), false);
+        persistAttachWAL(p, wal);
+        const int64_t v = 42;
+        const struct {
+            bool secondPassed;
+            bool syncFails;
+            persistLogResult want;
+        } steps[] = {
+            {false, false, PERSIST_LOG_BUFFERED},
+            {true, false, PERSIST_LOG_DURABLE},
+            {false, false, PERSIST_LOG_BUFFERED},
+            {true, true, PERSIST_LOG_NOT_DURABLE},
+            {false, false, PERSIST_LOG_BUFFERED}, /* not retried per op */
+            {true, false, PERSIST_LOG_DURABLE},
+        };
+        for (size_t i = 0; i < sizeof(steps) / sizeof(*steps); i++) {
+            if (steps[i].syncFails) {
+                persistStoreFaultyArm(wal, PERSIST_FAULT_SYNC, 0);
+            } else {
+                persistStoreFaultyDisarm(wal);
+            }
+            if (steps[i].secondPassed) {
+                p->lastSyncTime = persistGetMicroseconds() - 2000000;
+            }
+            const persistLogResult got =
+                persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            if (got != steps[i].want) {
+                ERR("step %zu: result %d, want %d", i, (int)got,
+                    (int)steps[i].want);
+            }
+        }
+        persistStats stats;
+        persistGetStats(p, &stats);
+        if (stats.walEntries != 6 || stats.syncFailures != 1 ||
+            stats.syncCount != 2) {
+            ERR("%" PRIu64 " entries, %" PRIu64 " sync failures, %" PRIu64
+                " syncs",
+                stats.walEntries, stats.syncFailures, stats.syncCount);
+        }
+    }
+
+    TEST("an entry over the WAL entry limit is refused, nothing written") {
+        persistOps huge = persistOpsIntset;
+        huge.encodeOp = persistTestHugeEncode;
+        cleaner(persistClose) persist *p = persistCreate(&huge, NULL);
+        persistStore *wal = persistStoreMemory(0);
+        persistAttachWAL(p, wal);
+        const int64_t v = 1;
+        if (persistLogOp(p, PERSIST_OP_INSERT, &v, 1) != PERSIST_LOG_REFUSED) {
+            ERRR("an entry over the limit was logged");
+        }
+        persistStats stats;
+        persistGetStats(p, &stats);
+        persistSync(p);
+        size_t walLen = 0;
+        (void)persistStoreMemoryBuffer(wal, &walLen);
+        if (stats.walEntries != 0 || walLen > sizeof(persistWALHeader)) {
+            ERR("%" PRIu64 " entries, %zu WAL bytes", stats.walEntries, walLen);
         }
     }
 
