@@ -1,5 +1,5 @@
 {
- "commit": "48e943227ccf8518401ae294b7579a40eeb08214",
+ "commit": "ddb7876a98d0cac17a17328fec209271cdb5fad6",
  "files": {
   "src/OSRegulate.c": {
    "lines": 243,
@@ -58,8 +58,8 @@
    "branches": 0
   },
   "src/clusterMailbox.c": {
-   "lines": 108,
-   "branches": 85
+   "lines": 90,
+   "branches": 75
   },
   "src/clusterMailbox.h": {
    "lines": 0,
@@ -74,8 +74,8 @@
    "branches": 0
   },
   "src/clusterRing.c": {
-   "lines": 229,
-   "branches": 290
+   "lines": 215,
+   "branches": 285
   },
   "src/clusterRing.h": {
    "lines": 0,
@@ -503,7 +503,7 @@
   },
   "src/hyperloglog.c": {
    "lines": 36,
-   "branches": 74
+   "branches": 73
   },
   "src/inflightGate.c": {
    "lines": 2,
@@ -642,8 +642,8 @@
    "branches": 17
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 106,
-   "branches": 158
+   "lines": 91,
+   "branches": 146
   },
   "src/multiOrderedSetFullInternal.h": {
    "lines": 0,
@@ -654,8 +654,8 @@
    "branches": 55
   },
   "src/multiOrderedSetSmall.c": {
-   "lines": 50,
-   "branches": 42
+   "lines": 29,
+   "branches": 30
   },
   "src/multiTimer.c": {
    "lines": 27,
@@ -690,8 +690,8 @@
    "branches": 16
   },
   "src/multidict.c": {
-   "lines": 139,
-   "branches": 168
+   "lines": 128,
+   "branches": 160
   },
   "src/multidict.h": {
    "lines": 0,
@@ -774,8 +774,8 @@
    "branches": 38
   },
   "src/multiroar.c": {
-   "lines": 217,
-   "branches": 254
+   "lines": 184,
+   "branches": 229
   },
   "src/multiroar.h": {
    "lines": 0,
@@ -842,8 +842,8 @@
    "branches": 50
   },
   "src/persist/multiroarP.c": {
-   "lines": 51,
-   "branches": 62
+   "lines": 9,
+   "branches": 35
   },
   "src/persist/persistCtx.c": {
    "lines": 41,
@@ -1158,8 +1158,8 @@
    "branches": 45
   },
   "src/ulid.c": {
-   "lines": 160,
-   "branches": 105
+   "lines": 108,
+   "branches": 68
   },
   "src/ulid.h": {
    "lines": 0,
