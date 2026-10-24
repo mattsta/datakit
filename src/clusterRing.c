@@ -661,7 +661,8 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     /* @own: container; free=multidictDefaultClassFree */
     multidictClass *nodeClass = multidictDefaultClassNew();
     /* @own: container; free=multidictFree */
-    ring->nodeById = multidictNew(&multidictTypeExactKey, nodeClass, 0);
+    ring->nodeById =
+        multidictNew(&multidictTypeExactKey, nodeClass, multidictRandomSeed());
     if (!ring->nodeById) {
         return NULL;
     }
@@ -709,8 +710,8 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     /* @own: container; free=multidictDefaultClassFree */
     multidictClass *keySpaceClass = multidictDefaultClassNew();
     /* @own: container; free=multidictFree */
-    ring->keySpaceByName =
-        multidictNew(&multidictTypeExactKey, keySpaceClass, 0);
+    ring->keySpaceByName = multidictNew(&multidictTypeExactKey, keySpaceClass,
+                                        multidictRandomSeed());
 
     /* The ring is its own strategy's first user */
     if (clusterRingUseStrategy(ring, ring->strategyType) != CLUSTER_OK) {

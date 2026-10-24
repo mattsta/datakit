@@ -37,7 +37,8 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
     cleanerName(zfree, MultidictP) multidictP *d = zcalloc(1, sizeof(*d));
     cleaner(multidictDefaultClassFree) multidictClass *qdc =
         multidictDefaultClassNew();
-    cleaner(multidictFree) multidict *dict = multidictNew(type, qdc, 0);
+    cleaner(multidictFree) multidict *dict =
+        multidictNew(type, qdc, multidictRandomSeed());
     if (!d || !qdc || !dict) {
         return NULL;
     }

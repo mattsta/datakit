@@ -470,7 +470,8 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
     /* @own: container; free=multiOrderedSetFullFree */
     m->mdClass = multidictDefaultClassNew();
     /* @own: container; free=multiOrderedSetFullFree */
-    m->memberIndex = multidictNew(&multidictTypeExactKey, m->mdClass, 0);
+    m->memberIndex =
+        multidictNew(&multidictTypeExactKey, m->mdClass, multidictRandomSeed());
 
     /* Create initial sub-map */
     m->scoreMap = multiarrayNativeNew(flex *);
@@ -569,7 +570,8 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
     /* @own: container; free=multiOrderedSetFullFree */
     copy->mdClass = multidictDefaultClassNew();
     /* @own: container; free=multiOrderedSetFullFree */
-    copy->memberIndex = multidictNew(&multidictTypeExactKey, copy->mdClass, 0);
+    copy->memberIndex = multidictNew(&multidictTypeExactKey, copy->mdClass,
+                                     multidictRandomSeed());
 
     /* Copy all entries from original memberIndex */
     multidictIterator iter;

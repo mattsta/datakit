@@ -321,7 +321,13 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
  *     non-numeric and fail with MULTIDICT_ERR. */
 
 /* API */
+/* 'seed' keys the hash: a fixed one gives the same slot layout every run;
+ * multidictRandomSeed() is the process's random seed (drawn once from the
+ * OS), so colliding keys cannot be worked out ahead of time.  datakit's own
+ * dicts use the random seed; a persisted multidict records its seed, so a
+ * restore lays its keys out as they were. */
 multidict *multidictNew(multidictType *type, multidictClass *qdc, int32_t seed);
+int32_t multidictRandomSeed(void);
 multidictClass *multidictGetClass(multidict *d);
 /* The type 'd' was created with (how its keys hash and match) */
 multidictType *multidictGetType(const multidict *d);

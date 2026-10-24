@@ -13,6 +13,7 @@
 #include "multimap.h"
 #include "str.h"
 #include "timeUtil.h"
+#include "util.h" /* getRandomBytes */
 
 #include <assert.h>
 #include <float.h> /* DBL_MAX (tests) */
@@ -878,6 +879,29 @@ DK_INLINE_ALWAYS uint64_t _multidictNextPower(const uint64_t size) {
 /* ====================================================================
  * User API
  * ==================================================================== */
+/* The process's random dict seed, drawn once: bit 32 marks it drawn, so a
+ * drawn seed of 0 is still told from "not drawn yet".  Racing first calls
+ * draw their own and one wins the CAS; every caller returns the winner. */
+static _Atomic uint64_t mdRandomSeed_;
+
+int32_t multidictRandomSeed(void) {
+    /* @sync: relaxed init */
+    uint64_t seed = atomic_load_explicit(&mdRandomSeed_, memory_order_relaxed);
+    if (!seed) {
+        uint32_t drawn;
+        getRandomBytes((uint8_t *)&drawn, sizeof(drawn));
+        uint64_t expected = 0;
+        const uint64_t mine = (UINT64_C(1) << 32) | drawn;
+        /* @sync: relaxed init */
+        seed = atomic_compare_exchange_strong_explicit(
+                   &mdRandomSeed_, &expected, mine, memory_order_relaxed,
+                   memory_order_relaxed)
+                   ? mine
+                   : expected;
+    }
+    return (int32_t)(uint32_t)seed;
+}
+
 multidict *multidictNew(multidictType *type, multidictClass *qdc,
                         int32_t seed) {
     if (!type || !qdc) {
@@ -5185,10 +5209,10 @@ static int multidictTestPersistKeys_(void) {
     cleanerName(zfree, SeenBytes) uint8_t *customSnap =
         testSnapshot_(custom, &customLen);
 
-    /* The key record, then the pairs */
-    if (!exactSnap || flexCount((const flex *)exactSnap) != 5 || !ciSnap ||
-        flexCount((const flex *)ciSnap) != 5 || !ciEmptySnap ||
-        flexCount((const flex *)ciEmptySnap) != 1 || !customSnap) {
+    /* The key record and the hash seed, then the pairs */
+    if (!exactSnap || flexCount((const flex *)exactSnap) != 6 || !ciSnap ||
+        flexCount((const flex *)ciSnap) != 6 || !ciEmptySnap ||
+        flexCount((const flex *)ciEmptySnap) != 2 || !customSnap) {
         printf("ERROR: multidict snapshot layout\n");
         return err + 1;
     }
@@ -6200,6 +6224,50 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
     return err;
 }
 
+/* The process seed is drawn once (every call agrees); a snapshot carries a
+ * dict's seed, and its restore uses it with every pair */
+static int mdTestSeedRoundTrip_(multidictClass *qdc) {
+    int err = 0;
+    const int32_t seed = multidictRandomSeed();
+    if (multidictRandomSeed() != seed) {
+        printf("ERROR: the process seed changed between calls\n");
+        err++;
+    }
+
+    static const int32_t seeds[2] = {(int32_t)0x9E3779B9u, 0};
+    for (size_t s = 0; s < 2; s++) {
+        cleaner(multidictFree) multidict *d = multidictNew(
+            &multidictTypeExactKey, qdc, s ? multidictRandomSeed() : seeds[0]);
+        for (int64_t k = 0; k < 50; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(k * 7);
+            multidictAdd(d, &key, &val);
+        }
+        size_t len = 0;
+        cleanerName(zfree, SeenBytes) uint8_t *snap =
+            persistOpsMultidict.snapshot(d, &len);
+        multidict *r = snap ? persistOpsMultidict.restore(snap, len) : NULL;
+        bool same = r &&
+                    multidictGetHashFunctionSeed(r) ==
+                        multidictGetHashFunctionSeed(d) &&
+                    multidictCount(r) == 50;
+        for (int64_t k = 0; same && k < 50; k++) {
+            const databox key = databoxNewSigned(k);
+            databox got = {{0}};
+            same = multidictFind(r, &key, &got) && got.data.i == k * 7;
+        }
+        if (!same) {
+            printf("ERROR: a restore lost the seed %" PRIu32 " or a pair\n",
+                   multidictGetHashFunctionSeed(d));
+            err++;
+        }
+        if (r) {
+            persistOpsMultidict.free(r);
+        }
+    }
+    return err;
+}
+
 /* Resize sizing and stats on an empty dict */
 static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     int err = 0;
@@ -6272,6 +6340,7 @@ int multidictTest(int argc, char *argv[]) {
     err += mdTestShrinkingRehashScan_(qdc, 1);
     err += mdTestResizeAndEmptyStats_(qdc);
     err += mdTestNumericKeyIdentity_(qdc);
+    err += mdTestSeedRoundTrip_(qdc);
 
     printf("Creating multidict with multimap slots...\n");
 

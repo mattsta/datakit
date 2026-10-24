@@ -4407,6 +4407,10 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
 
     const databox keys = DATABOX_UNSIGNED(mdPersistKeysOf(multidictGetType(d)));
     flexPushByTypeExact(&f, &keys, FLEX_ENDPOINT_TAIL);
+    /* The hash seed: a restore keys its slots as the dict did */
+    const databox seed =
+        DATABOX_UNSIGNED(multidictGetHashFunctionSeed((multidict *)d));
+    flexPushByTypeExact(&f, &seed, FLEX_ENDPOINT_TAIL);
 
     /* [key, val, key, val, ...] in key order: the hash table's order
      * depends on its size and growth history, so pairs are sorted to make
@@ -4464,8 +4468,8 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
 
-    /* The key-matching element, then whole pairs */
-    if (count % 2 != 1) {
+    /* The key-matching element and the hash seed, then whole pairs */
+    if (count < 2 || count % 2 != 0) {
         return NULL;
     }
     databox tag = {{0}};
@@ -4476,7 +4480,14 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     }
     const mdPersistKeys keys = (mdPersistKeys)tag.data.u;
     fe = flexNext(f, fe);
-    count--;
+    databox seedBox = {{0}};
+    flexGetByType(fe, &seedBox);
+    if (seedBox.type != DATABOX_UNSIGNED_64 || seedBox.data.u > UINT32_MAX) {
+        return NULL;
+    }
+    const int32_t seed = (int32_t)(uint32_t)seedBox.data.u;
+    fe = flexNext(f, fe);
+    count -= 2;
 
     multidictType *type;
     if (want) {
@@ -4498,7 +4509,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     /* @own: container; free=multidictDefaultClassFree */
     multidictClass *qdc = multidictDefaultClassNew();
     /* @own: caller; free=multidictFree */
-    multidict *d = multidictNew(type, qdc, 0);
+    multidict *d = multidictNew(type, qdc, seed);
 
     /* Size the table for every pair once, instead of rehashing as it
      * grows through the adds */
@@ -4627,14 +4638,15 @@ static void *multidictPersistNewEmpty(void) {
     /* @own: container; free=multidictDefaultClassFree */
     multidictClass *cls = multidictDefaultClassNew();
     /* @own: caller; free=multidictFree */
-    return multidictNew(&multidictTypeExactKey, cls, 0);
+    return multidictNew(&multidictTypeExactKey, cls, multidictRandomSeed());
 }
 
 const persistOps persistOpsMultidict = {
     .type = PERSIST_TYPE_MULTIDICT,
     .name = "multidict",
-    .formatVersion = 1,
-    .minReadVersion = 1,
+    /* 2: the snapshot carries the dict's hash seed */
+    .formatVersion = 2,
+    .minReadVersion = 2,
     .snapshot = multidictPersistSnapshot,
     .restore = multidictPersistRestore,
     .newEmpty = multidictPersistNewEmpty,

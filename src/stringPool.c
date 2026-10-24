@@ -73,8 +73,11 @@ stringPool *stringPoolNew(void) {
     /* @own: container; free=multidictDefaultClassFree */
     pool->mdClass = multidictDefaultClassNew();
 
+    /* A random seed: interned strings are often the caller's input, so
+     * colliding keys must not be computable offline */
     /* @own: container; free=multidictFree */
-    pool->strToId = multidictNew(&multidictTypeExactKey, pool->mdClass, 0);
+    pool->strToId = multidictNew(&multidictTypeExactKey, pool->mdClass,
+                                 multidictRandomSeed());
 
     /* Allocate initial entry array */
     /* @own: container; free=zfree */
