@@ -87,6 +87,15 @@ static bool twDueWithin_(const int64_t next, const int64_t before,
            next <= after + (int64_t)delayUs + slotUs;
 }
 
+/* Counts, cancels itself, and asks to repeat anyway */
+static bool testCancelSelfRepeating(timerWheel *tw, timerWheelId id,
+                                    void *clientData) {
+    testCallbackState *state = clientData;
+    state->callCount++;
+    timerWheelUnregister(tw, id);
+    return true;
+}
+
 static bool testCountingCallback(timerWheel *tw, timerWheelId id,
                                  void *clientData) {
     (void)tw;
@@ -256,6 +265,59 @@ int timerWheelTest(int argc, char *argv[]) {
 
     TEST("timerWheel: free NULL safety") {
         timerWheelFree(NULL);
+    }
+
+    TEST("timerWheel: unregister after StopAll, StopAll after stale "
+         "tombstones, a pending timer cancelling itself") {
+        /* Ids StopAll covered unregister as done: true, and nothing more
+         * is billed */
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+        const timerWheelId a =
+            timerWheelRegister(tw, 1000000, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 2000000, 0, testCountingCallback, &state);
+        timerWheelStopAll(tw);
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        const size_t cancelledByStop = stats.totalCancellations;
+        if (!timerWheelUnregister(tw, a) || timerWheelCount(tw) != 0 ||
+            cancelledByStop != 2) {
+            ERRR("StopAll or a later unregister of its id miscounted");
+        }
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalCancellations != cancelledByStop) {
+            ERRR("unregistering a StopAll-covered id billed a cancellation");
+        }
+
+        /* An unregister of a fired id leaves a stale tombstone; StopAll
+         * reconciles it first, so it bills exactly the one live timer */
+        cleaner(timerWheelFree) timerWheel *tw2 = timerWheelNew();
+        const timerWheelId fired =
+            timerWheelRegister(tw2, 1000, 0, testCountingCallback, &state);
+        timerWheelAdvanceTime(tw2, 5000);
+        timerWheelUnregister(tw2, fired);
+        timerWheelRegister(tw2, 1000000, 0, testCountingCallback, &state);
+        timerWheelGetStats(tw2, &stats);
+        const size_t beforeStop = stats.totalCancellations;
+        timerWheelStopAll(tw2);
+        timerWheelGetStats(tw2, &stats);
+        if (stats.totalCancellations - beforeStop != 1 ||
+            timerWheelCount(tw2) != 0) {
+            ERR("StopAll billed %zu cancellations, want 1",
+                stats.totalCancellations - beforeStop);
+        }
+
+        /* An immediate repeating timer that cancels itself in its own
+         * callback fires once and is gone, though it asked to repeat */
+        cleaner(timerWheelFree) timerWheel *tw3 = timerWheelNew();
+        testCallbackState self = {0};
+        timerWheelRegister(tw3, 0, 1000, testCancelSelfRepeating, &self);
+        timerWheelAdvanceTime(tw3, 10);
+        timerWheelAdvanceTime(tw3, 10000);
+        if (self.callCount != 1 || timerWheelCount(tw3) != 0) {
+            ERR("a self-cancelling timer fired %d times, %zu left",
+                self.callCount, timerWheelCount(tw3));
+        }
     }
 
     TEST("timerWheel: ResetStats zeroes the counters, not the state") {
