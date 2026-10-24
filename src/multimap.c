@@ -4110,6 +4110,54 @@ int multimapTest(int argc, char *argv[]) {
                 (int)multimapType_(m), multimapCount(m),
                 (unsigned)mmf(m)->count, seen);
         }
+
+        /* Descending keys never leave map 0 at one row (each arrival
+         * splits a two-row map 0 and lands in its lower half), so empty
+         * it down to one: deleting every key in (800, 4000] leaves map 0
+         * holding only 800 (it holds the smallest keys).  Then 700, 600
+         * and 500 each find map 0 a single oversized row above them and
+         * get a new map placed before it: three more maps, in order. */
+        size_t kept = 0;
+        for (size_t i = 0; i < NK; i++) {
+            if (keys[i] > 800 && keys[i] <= 4000) {
+                const databox k = databoxNewSigned(keys[i]);
+                multimapDelete(&m, &k);
+            } else {
+                kept++;
+            }
+        }
+        const uint32_t mapsBefore = (uint32_t)mmf(m)->count;
+        static const int64_t below[] = {700, 600, 500};
+        for (size_t i = 0; i < 3; i++) {
+            memset(big, 'z' - (int)i, sizeof(big));
+            const databox k = databoxNewSigned(below[i]);
+            const databox v = databoxNewBytes(big, sizeof(big));
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&m, row);
+        }
+        multimapVerify(m);
+        multimapIteratorInit(m, &it, true);
+        prev = INT64_MIN;
+        seen = 0;
+        ok = true;
+        while (ok && multimapIteratorNext(&it, rowOut)) {
+            ok = kb.data.i > prev;
+            prev = kb.data.i;
+            seen++;
+        }
+        for (size_t i = 0; ok && i < 3; i++) {
+            const databox k = databoxNewSigned(below[i]);
+            databox got = {{0}};
+            databox *out[1] = {&got};
+            ok = multimapLookup(m, &k, out) &&
+                 ((const char *)databoxBytes(&got))[0] == (char)('z' - i);
+        }
+        if (!ok || seen != kept + 3 ||
+            (uint32_t)mmf(m)->count != mapsBefore + 3) {
+            ERR("maps placed before map 0: %zu rows (want %zu), %u maps "
+                "(want %u)",
+                seen, kept + 3, (unsigned)mmf(m)->count, mapsBefore + 3);
+        }
     }
 
     TEST("ReplaceEntryWithReference grows values in a reference-keyed map") {
