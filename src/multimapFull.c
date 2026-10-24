@@ -952,7 +952,6 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
                    flex **map, const databox *elements[],
                    const bool useSurrogateKey, const databox *const insertKey,
                    const multimapAtom *const referenceContainer,
-                   const bool useHighestInsertPosition,
                    const bool keysCanBecomePointers, void **keyAsPointer,
                    const bool forceFullWidthComparison,
                    databox *const replacedOut) {
@@ -970,23 +969,14 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
         assert(!keysCanBecomePointers);
         /* No replacing entry point reaches the surrogate-key insert. */
         assert(!replacedOut);
-        if (useHighestInsertPosition) {
-            assert(NULL && "Not implemented!");
-            __builtin_unreachable();
-        } else {
-            found =
-                flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
-                    map, m->elementsPerEntry, elements, insertKey, &middle,
-                    compareUsingKeyElementOnly, referenceContainer);
-        }
+        found =
+            flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+                map, m->elementsPerEntry, elements, insertKey, &middle,
+                compareUsingKeyElementOnly, referenceContainer);
 
         updateRangeBoxForIdxWithReference(m, mapIdx, *map, referenceContainer);
     } else {
-        if (useHighestInsertPosition) {
-            assert(NULL && "Not implemented!");
-            __builtin_unreachable();
-        } else if (keysCanBecomePointers && m->mapIsSet &&
-                   !forceFullWidthComparison) {
+        if (keysCanBecomePointers && m->mapIsSet && !forceFullWidthComparison) {
             /* Set semantics with externalized keys: the pointer insert has
              * no dedupe mode, so look for the whole row first and insert
              * (as a full-width row, which may externalize the key) only
@@ -1041,7 +1031,7 @@ DK_STATIC bool multimapFullFlexInsert(multimapFull *m,
                                       const databox *elements[],
                                       databox *replacedOut) {
     return abstractFlexInsert(m, mapIdx, map, elements, false, NULL, NULL,
-                              false, false, NULL, false, replacedOut);
+                              false, NULL, false, replacedOut);
 }
 
 DK_STATIC bool multimapFullFlexInsertFullWidth(multimapFull *m,
@@ -1050,14 +1040,14 @@ DK_STATIC bool multimapFullFlexInsertFullWidth(multimapFull *m,
                                                const databox *elements[]) {
     /* Force full-width comparison (compare all elements, not just key) */
     return abstractFlexInsert(m, mapIdx, map, elements, false, NULL, NULL,
-                              false, false, NULL, true, NULL);
+                              false, NULL, true, NULL);
 }
 
 DK_STATIC bool multimapFullFlexInsertExternalizeLargeKeys(
     multimapFull *m, const multimapFullIdx mapIdx, flex **map,
     const databox *elements[], void **keyCreated, databox *replacedOut) {
-    return abstractFlexInsert(m, mapIdx, map, elements, false, NULL, NULL,
-                              false, true, keyCreated, false, replacedOut);
+    return abstractFlexInsert(m, mapIdx, map, elements, false, NULL, NULL, true,
+                              keyCreated, false, replacedOut);
 }
 
 DK_STATIC bool multimapFullFlexInsertWithSurrogateKey(
@@ -1065,8 +1055,7 @@ DK_STATIC bool multimapFullFlexInsertWithSurrogateKey(
     const databox *elements[], const databox *insertKey,
     const multimapAtom *referenceContainer) {
     return abstractFlexInsert(m, mapIdx, map, elements, true, insertKey,
-                              referenceContainer, false, false, NULL, false,
-                              NULL);
+                              referenceContainer, false, NULL, false, NULL);
 }
 
 /* ====================================================================
@@ -1343,7 +1332,6 @@ DK_INLINE_ALWAYS bool
 abstractInsert(multimapFull *m, const databox *elements[],
                multimapFullIdx mapIdx, const bool useSurrogateKey,
                const databox *insertKey, const multimapAtom *referenceContainer,
-               const bool useHighestInsertPosition,
                const bool keysCanBecomePointers, void **keyAsPointer,
                const bool forceFullWidthComparison, databox *replacedOut) {
     assert(!useSurrogateKey || (useSurrogateKey && referenceContainer));
@@ -1412,18 +1400,10 @@ abstractInsert(multimapFull *m, const databox *elements[],
 
         /* Step 3a: If map has room, insert directly. */
         if (useSurrogateKey) {
-            if (useHighestInsertPosition) {
-                assert(NULL && "Not implemented!");
-                __builtin_unreachable();
-            } else {
-                found = multimapFullFlexInsertWithSurrogateKey(
-                    m, mapIdx, map, elements, insertKey, referenceContainer);
-            }
+            found = multimapFullFlexInsertWithSurrogateKey(
+                m, mapIdx, map, elements, insertKey, referenceContainer);
         } else {
-            if (useHighestInsertPosition) {
-                assert(NULL && "Not implemented!");
-                __builtin_unreachable();
-            } else if (keysCanBecomePointers) {
+            if (keysCanBecomePointers) {
                 found = multimapFullFlexInsertExternalizeLargeKeys(
                     m, mapIdx, map, elements, keyAsPointer, replacedOut);
             } else if (forceFullWidthComparison) {
@@ -1589,19 +1569,10 @@ abstractInsert(multimapFull *m, const databox *elements[],
             map = getMapPtr(m, mapIdx);
 
             if (useSurrogateKey) {
-                if (useHighestInsertPosition) {
-                    assert(NULL && "Not implemented!");
-                    __builtin_unreachable();
-                } else {
-                    found = multimapFullFlexInsertWithSurrogateKey(
-                        m, mapIdx, map, elements, insertKey,
-                        referenceContainer);
-                }
+                found = multimapFullFlexInsertWithSurrogateKey(
+                    m, mapIdx, map, elements, insertKey, referenceContainer);
             } else {
-                if (useHighestInsertPosition) {
-                    assert(NULL && "Not implemented!");
-                    __builtin_unreachable();
-                } else if (keysCanBecomePointers) {
+                if (keysCanBecomePointers) {
                     found = multimapFullFlexInsertExternalizeLargeKeys(
                         m, mapIdx, map, elements, keyAsPointer, replacedOut);
                 } else if (forceFullWidthComparison) {
@@ -1620,19 +1591,11 @@ abstractInsert(multimapFull *m, const databox *elements[],
             const multimapFullIdx nextIdx = mapIdx + 1;
             flex **nextMap = getMapPtr(m, nextIdx);
             if (useSurrogateKey) {
-                if (useHighestInsertPosition) {
-                    assert(NULL && "Not implemented!");
-                    __builtin_unreachable();
-                } else {
-                    found = multimapFullFlexInsertWithSurrogateKey(
-                        m, nextIdx, nextMap, elements, insertKey,
-                        referenceContainer);
-                }
+                found = multimapFullFlexInsertWithSurrogateKey(
+                    m, nextIdx, nextMap, elements, insertKey,
+                    referenceContainer);
             } else {
-                if (useHighestInsertPosition) {
-                    assert(NULL && "Not implemented!");
-                    __builtin_unreachable();
-                } else if (keysCanBecomePointers) {
+                if (keysCanBecomePointers) {
                     found = multimapFullFlexInsertExternalizeLargeKeys(
                         m, nextIdx, nextMap, elements, keyAsPointer,
                         replacedOut);
@@ -1669,23 +1632,23 @@ abstractInsert(multimapFull *m, const databox *elements[],
 DK_STATIC bool multimapFullInsert_(multimapFull *m, const databox *elements[],
                                    const multimapFullIdx mapIdx,
                                    databox *replacedOut) {
-    return abstractInsert(m, elements, mapIdx, false, NULL, NULL, false, false,
-                          NULL, false, replacedOut);
+    return abstractInsert(m, elements, mapIdx, false, NULL, NULL, false, NULL,
+                          false, replacedOut);
 }
 
 DK_STATIC bool multimapFullInsert_FullWidth_(multimapFull *m,
                                              const databox *elements[],
                                              const multimapFullIdx mapIdx) {
     /* Force full-width comparison (compare all elements, not just key) */
-    return abstractInsert(m, elements, mapIdx, false, NULL, NULL, false, false,
-                          NULL, true, NULL);
+    return abstractInsert(m, elements, mapIdx, false, NULL, NULL, false, NULL,
+                          true, NULL);
 }
 
 DK_STATIC bool multimapFullInsertWithSurrogateKey_(
     multimapFull *m, const databox *elements[], const databox *insertKey,
     const multimapFullIdx mapIdx, const multimapAtom *referenceContainer) {
     return abstractInsert(m, elements, mapIdx, true, insertKey,
-                          referenceContainer, false, false, NULL, false, NULL);
+                          referenceContainer, false, NULL, false, NULL);
 }
 
 bool multimapFullInsertWithSurrogateKey(
@@ -1782,7 +1745,7 @@ bool multimapFullInsertAllowExternalizeKeysReplacing(multimapFull *m,
                                                      databox *replacedOut) {
     /* Step 1: find matching map for range. */
     const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
-    return abstractInsert(m, elements, mapIdx, false, NULL, NULL, false, true,
+    return abstractInsert(m, elements, mapIdx, false, NULL, NULL, true,
                           keyAllocation, false, replacedOut);
 }
 

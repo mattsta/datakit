@@ -4730,7 +4730,7 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
     const databox **compareAgainst, bool *const found,
     const flexEntry *startMiddle, const uint_fast32_t compareElementDepth,
     const bool useReference, const multimapAtom *const referenceContainer,
-    const bool useHighestInsertPosition, const bool useLowestMatch) {
+    const bool useLowestMatch) {
     /* useLowestMatch: on a match keep searching lower, so among rows that
      * match 'compareElementDepth' elements the first one is returned */
     flexEntry *lowest = NULL;
@@ -4793,85 +4793,9 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
         databox box;
         databoxWide wide;
 
-/* TODO: test speed difference of:
- *         - single key lookup
- *         - all element lookup.
- *       If noticeable, split out multiple element
- *       lookup into a new function. */
-#if 0
-        flexGetByType(fe, &box);
-
-        /* FIXME: Compare currently only compares *matching* type
-         * classes (i.e. we don't compare strings and integers).
-         * At this point, we trust the user to only store same-type values
-         * for proper comparison. */
-        /* TODO: Allow user-defined comparison functions and/or well-define
-         * ordering between all data types. */
-        int compared = databoxCompare(&box, compareAgainst[0]);
-        /* TODO: investigate tri-branching cmov with return capability */
-        if (compared < 0) {
-            /* current key < search box */
-            min = mid + 1;
-        } else if (compared > 0) {
-            /* current key > search box */
-            max = mid;
-        } else {
-            /* else, current key == search box, BUT
-             *  - if this is a map alllowing duplicate keys,
-             *    we *also* need to compare against the values so we
-             *    sort in total order so we can find/remove across
-             *    duplicate keys.
-             *    Basically, if 'compareElementDepth' > 1, then
-             *    treat 'compareElementDepth' elements after the key
-             *    as also sortable, so they are also (logically) part
-             *    of the sort key too.
-             *    This also means if elements have an identical first key,
-             *    they will still sort in order by their additional sub-values.
-             *  - if the map doesn't allow duplicate keys, then
-             *    jump to the else and return successfully found. */
-            if (compareElementDepth > 1) {
-                /* Found a key match, but need to compare against
-                 * sub-elements too */
-
-                const databox **walkingCompareAgainst = compareAgainst;
-                flexEntry *walkingFE = fe;
-
-                /* Binary search the field elements of this current key against
-                 * the input elements for comparison */
-                /* Note: 'compareElementDepth' is the number of *sub elements*
-                 *       to compare *excluding* the original key position */
-                for (uint32_t i = 1; i < compareElementDepth; i++) {
-                    /* advance 'walkingFE' by one entry */
-                    walkingFE += flexRawEntryLength(walkingFE);
-                    flexGetByType(walkingFE, &box);
-
-                    /* Compare sub-elements after key */
-                    compared = databoxCompare(&box, walkingCompareAgainst[i]);
-                    if (compared < 0) {
-                        min = mid + 1;
-                        break;
-                    } else if (compared > 0) {
-                        max = mid;
-                        break;
-                    } else {
-                        /* else:
-                         *   - return success if we are at max element.
-                         *    - OR -
-                         *   - loop again to process next element. */
-                        if (i == compareElementDepth-1) {
-                            *found = true;
-                            return fe;
-                        }
-                    }
-                }
-            } else {
-                *found = true;
-                return fe;
-            }
-        }
-#else
+        /* Compare key, then (for multi-element sort keys) each following
+         * element, until one differs or all 'compareElementDepth' match */
         flexEntry *walkingFE = fe;
-        /* TODO: make this a do-while? */
         for (uint_fast32_t i = 0; i < compareElementDepth; i++) {
             const flexEncoding probed =
                 flexDecode_(walkingFE, &box, &wide, FLEX_WIDE_STORE_SLOT_);
@@ -4894,12 +4818,6 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
 
             /* down here, 'compared' == 0, so we found a match! */
 
-            if (useHighestInsertPosition) {
-                *found = true;
-                min = mid + 1;
-                break;
-            }
-
             if (i == (compareElementDepth - 1)) {
                 /* We found a complete element-by-element match at the
                  * full width of 'compareElementDepth', so we found
@@ -4917,11 +4835,6 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
              * equal and have more elements to check against. */
             walkingFE += flexRawEntryLength(walkingFE);
         }
-#endif
-    }
-
-    if (useHighestInsertPosition && *found) {
-        return fe;
     }
 
     if (useLowestMatch && *found) {
@@ -4953,16 +4866,7 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedDirect_(
     const flexEntry *startMiddle, const uint_fast32_t compareElementDepth) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, false, NULL, false, false);
-}
-
-DK_STATIC flexEntry *flexFindPositionByTypeSortedDirectHighest_(
-    const flex *const f, const uint_fast32_t elementsPerEntry,
-    const databox **compareAgainst, bool *const found,
-    const flexEntry *startMiddle, const uint_fast32_t compareElementDepth) {
-    return abstractFindPositionByTypeSortedDirect(
-        f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, false, NULL, true, false);
+        compareElementDepth, false, NULL, false);
 }
 
 DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReference_(
@@ -4972,17 +4876,7 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReference_(
     const multimapAtom *referenceContainer) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, true, referenceContainer, false, false);
-}
-
-DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReferenceHighest_(
-    const flex *const f, const uint_fast32_t elementsPerEntry,
-    const databox **compareAgainst, bool *const found,
-    const flexEntry *startMiddle, const uint_fast32_t compareElementDepth,
-    const multimapAtom *referenceContainer) {
-    return abstractFindPositionByTypeSortedDirect(
-        f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, true, referenceContainer, true, false);
+        compareElementDepth, true, referenceContainer, false);
 }
 
 flexEntry *flexFindByTypeSortedWithMiddleLowest(
@@ -4991,7 +4885,7 @@ flexEntry *flexFindByTypeSortedWithMiddleLowest(
     bool found = false;
     flexEntry *fe = abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, false, NULL,
-        false, true);
+        true);
     return found ? fe : NULL;
 }
 
@@ -5002,7 +4896,7 @@ flexEntry *flexFindByTypeSortedWithMiddleLowestWithReference(
     bool found = false;
     flexEntry *fe = abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, true,
-        referenceContainer, false, true);
+        referenceContainer, true);
     return found ? fe : NULL;
 }
 
@@ -5071,8 +4965,8 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     const bool useReference,
     const struct multimapAtom *const referenceContainer,
     const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
-    const bool useHighestInsertPosition, const bool newKeysBecomeShared,
-    void **keyAsAllocation, const bool keepFound, databox *const replacedOut,
+    const bool newKeysBecomeShared, void **keyAsAllocation,
+    const bool keepFound, databox *const replacedOut,
     flexEntry **const foundOut, flexWhenAbsent *const whenAbsent,
     void *const whenAbsentCtx) {
     /* When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
@@ -5109,25 +5003,12 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
 
     flexEntry *fe = NULL;
     if (useReference) {
-        if (useHighestInsertPosition) {
-            fe = flexFindPositionByTypeSortedWithReferenceHighest_(
-                *ff, elementsPerEntry, box, &found, mid,
-                maxSubElementsToCompare, referenceContainer);
-        } else {
-            fe = flexFindPositionByTypeSortedWithReference_(
-                *ff, elementsPerEntry, box, &found, mid,
-                maxSubElementsToCompare, referenceContainer);
-        }
+        fe = flexFindPositionByTypeSortedWithReference_(
+            *ff, elementsPerEntry, box, &found, mid, maxSubElementsToCompare,
+            referenceContainer);
     } else {
-        if (useHighestInsertPosition) {
-            fe = flexFindPositionByTypeSortedDirectHighest_(
-                *ff, elementsPerEntry, box, &found, mid,
-                maxSubElementsToCompare);
-        } else {
-            fe = flexFindPositionByTypeSortedDirect_(*ff, elementsPerEntry, box,
-                                                     &found, mid,
-                                                     maxSubElementsToCompare);
-        }
+        fe = flexFindPositionByTypeSortedDirect_(
+            *ff, elementsPerEntry, box, &found, mid, maxSubElementsToCompare);
     }
 
     /* 'keepFound': a found entry is reported found WITHOUT touching the
@@ -5368,13 +5249,13 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     const bool useReference,
     const struct multimapAtom *const referenceContainer,
     const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
-    const bool useHighestInsertPosition, const bool newKeysBecomeShared,
-    void **keyAsAllocation, const bool keepFound, databox *const replacedOut) {
+    const bool newKeysBecomeShared, void **keyAsAllocation,
+    const bool keepFound, databox *const replacedOut) {
     return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
         useReference, referenceContainer, useSurrogateKeyForInsert,
-        surrogateKey, useHighestInsertPosition, newKeysBecomeShared,
-        keyAsAllocation, keepFound, replacedOut, NULL, NULL, NULL);
+        surrogateKey, newKeysBecomeShared, keyAsAllocation, keepFound,
+        replacedOut, NULL, NULL, NULL);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
@@ -5383,7 +5264,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     const bool compareUsingKeyElementOnly) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, false, NULL, false, NULL);
+        false, NULL, false, NULL, false, NULL, false, NULL);
 }
 
 /* As above, also reporting replaced values (see flex.h). */
@@ -5393,7 +5274,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
     const bool compareUsingKeyElementOnly, databox *const replacedOut) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, false, NULL, false, replacedOut);
+        false, NULL, false, NULL, false, NULL, false, replacedOut);
 }
 
 /* TRUE SET insert: full-width compare AND dedupe — a found
@@ -5406,7 +5287,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
     const databox **const box, flexEntry **const middleEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, false, false, NULL, false, NULL,
-        false, false, NULL, true, NULL);
+        false, NULL, true, NULL);
 }
 
 /* Insert-if-absent: key-only compare, and a found key leaves the flex as
@@ -5417,7 +5298,7 @@ bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
     const databox **const box, flexEntry **const middleEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, true, false, NULL, false, NULL,
-        false, false, NULL, true, NULL);
+        false, NULL, true, NULL);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -5426,7 +5307,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
     const bool compareUsingKeyElementOnly, void **recoveredPointer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, true, recoveredPointer, false, NULL);
+        false, NULL, false, NULL, true, recoveredPointer, false, NULL);
 }
 
 /* As above, also reporting replaced values (see flex.h). */
@@ -5437,8 +5318,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersRep
     databox *const replacedOut) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, true, recoveredPointer, false,
-        replacedOut);
+        false, NULL, false, NULL, true, recoveredPointer, false, replacedOut);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
@@ -5448,7 +5328,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, false, NULL, false, false, NULL, false, NULL);
+        true, referenceContainer, false, NULL, false, NULL, false, NULL);
 }
 
 /* TRUE SET insert with atom references — the reference-container
@@ -5459,7 +5339,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, false, true, referenceContainer,
-        false, NULL, false, false, NULL, true, NULL);
+        false, NULL, false, NULL, true, NULL);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
@@ -5469,8 +5349,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, true, boxInsertKey, false, false, NULL, false,
-        NULL);
+        true, referenceContainer, true, boxInsertKey, false, NULL, false, NULL);
 }
 
 /* Insert-if-absent for a map of atom references inserting under a
@@ -5487,8 +5366,8 @@ bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
     void *const whenAbsentCtx) {
     return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         ff, elementsPerEntry, box, middleEntry, true, true, referenceContainer,
-        true, boxInsertKey, false, false, NULL, true, NULL, foundEntry,
-        whenAbsent, whenAbsentCtx);
+        true, boxInsertKey, false, NULL, true, NULL, foundEntry, whenAbsent,
+        whenAbsentCtx);
 }
 
 void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
