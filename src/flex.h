@@ -567,8 +567,10 @@ bool flexGetNextByType(flex *f, flexEntry **fe, databox *box);
 void flexGetByTypeBig(const flexEntry *fe, databoxBig *box);
 bool flexGetNextByTypeBig(flex *f, flexEntry **fe, databoxBig *box);
 
-/* Retrieve specific data.  Each returns false when the value does not fit
- * the result type, including any 96/128-bit value. */
+/* Retrieve specific data.  Each returns false, leaving '*value' alone, when
+ * the entry does not fit the result type: a 64-bit integer out of its
+ * range, any 96/128-bit value, and every entry that is no integer (bytes,
+ * reals, booleans, null, ...). */
 bool flexGetSigned(flexEntry *fe, int64_t *value);
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value);
 

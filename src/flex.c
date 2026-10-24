@@ -4129,8 +4129,9 @@ bool flexGetSigned(flexEntry *fe, int64_t *value) {
     databox box;
     flexGetByTypeInto(fe, &box, NULL);
 
-    if (box.type == DATABOX_SIGNED_128 || box.type == DATABOX_UNSIGNED_128) {
-        /* Stored wide means the value does not fit 64 bits. */
+    /* Only a 64-bit integer can fit: a wide one does not fit 64 bits, and
+     * bytes, reals, booleans and the rest are no integer at all */
+    if (box.type != DATABOX_SIGNED_64 && box.type != DATABOX_UNSIGNED_64) {
         return false;
     }
 
@@ -4148,8 +4149,8 @@ bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
     databox box;
     flexGetByTypeInto(fe, &box, NULL);
 
-    if (box.type == DATABOX_SIGNED_128 || box.type == DATABOX_UNSIGNED_128) {
-        /* Stored wide means the value does not fit 64 bits. */
+    /* Only a 64-bit integer can fit (as in flexGetSigned) */
+    if (box.type != DATABOX_SIGNED_64 && box.type != DATABOX_UNSIGNED_64) {
         return false;
     }
 
@@ -7514,6 +7515,36 @@ static int32_t flexTestWideDecoders(void) {
                         uv == 7;
         if (!ok) {
             printf("  FAIL: flexGetSigned / flexGetUnsigned on a wide value\n");
+            bad++;
+        }
+
+        /* Out of the result's range, or not an integer at all (bytes, a
+         * real, a boolean): refused, and the result left as it was */
+        cleaner(flexFree) flex *h = flexNew();
+        flexPushUnsigned(&h, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&h, INT64_MIN, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&h, "not a number", 12, FLEX_ENDPOINT_TAIL);
+        flexPushDouble(&h, 2.5, FLEX_ENDPOINT_TAIL);
+        const databox yes = {.type = DATABOX_TRUE};
+        flexPushByType(&h, &yes, FLEX_ENDPOINT_TAIL);
+        sv = 11;
+        uv = 11;
+        const bool refused =
+            !flexGetSigned(flexIndex(h, 0), &sv) &&
+            flexGetUnsigned(flexIndex(h, 0), &uv) && uv == UINT64_MAX &&
+            flexGetSigned(flexIndex(h, 1), &sv) && sv == INT64_MIN &&
+            !flexGetUnsigned(flexIndex(h, 1), &uv);
+        bool nonIntegers = true;
+        for (int32_t at = 2; at <= 4; at++) {
+            sv = 11;
+            uv = 11;
+            nonIntegers =
+                nonIntegers && !flexGetSigned(flexIndex(h, at), &sv) &&
+                !flexGetUnsigned(flexIndex(h, at), &uv) && sv == 11 && uv == 11;
+        }
+        if (!refused || !nonIntegers) {
+            printf("  FAIL: getters out of range %d, non-integers %d\n",
+                   refused, nonIntegers);
             bad++;
         }
     }
