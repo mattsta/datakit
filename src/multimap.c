@@ -4050,8 +4050,97 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("ReplaceEntryWithReference grows values in a reference-keyed map") {
+        /* Every third row's value replaced by a 600-byte one through the
+         * reference-aware replace (Full sub-maps grow past their limit and
+         * rebalance through the references); every key still looks up its
+         * current value and the map verifies */
+        static const size_t sizes[] = {6, 150, 1500};
+        static char bigValue[600];
+        memset(bigValue, 'v', sizeof(bigValue));
+        for (size_t t = 0; t < sizeof(sizes) / sizeof(*sizes); t++) {
+            cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+            for (size_t i = 0; i < sizes[t]; i++) {
+                char buf[40];
+                snprintf(buf, sizeof(buf), "replace-key-%05zu", i);
+                const databox key = databoxNewBytesString(buf);
+                databox ref = key;
+                multimapAtomInsertConvert(atoms, &ref);
+                const databox val = databoxNewUnsigned(i);
+                const databox *row[2] = {&key, &val};
+                multimapInsertWithSurrogateKey(&m, row, &ref, atoms);
+            }
+            for (size_t i = 0; i < sizes[t]; i += 3) {
+                char buf[40];
+                snprintf(buf, sizeof(buf), "replace-key-%05zu", i);
+                const databox key = databoxNewBytesString(buf);
+                multimapEntry me;
+                if (!multimapGetUnderlyingEntryWithReference(m, &key, &me,
+                                                             atoms)) {
+                    ERR("size %zu: key %zu not found to replace", sizes[t], i);
+                    continue;
+                }
+                me.fe = flexNext(*me.map, me.fe); /* to the value */
+                bigValue[0] = (char)('a' + i % 26);
+                const databox big = databoxNewBytes(bigValue, sizeof(bigValue));
+                multimapReplaceEntryWithReference(&m, &me, &big, atoms);
+            }
+            size_t wrong = 0;
+            for (size_t i = 0; i < sizes[t]; i++) {
+                char buf[40];
+                snprintf(buf, sizeof(buf), "replace-key-%05zu", i);
+                const databox key = databoxNewBytesString(buf);
+                databox got = {{0}};
+                databox *out[1] = {&got};
+                const bool found =
+                    multimapLookupWithReference(m, &key, out, atoms);
+                const bool ok =
+                    i % 3 == 0
+                        ? found && databoxLen(&got) == sizeof(bigValue) &&
+                              ((const char *)databoxBytes(&got))[0] ==
+                                  (char)('a' + i % 26)
+                        : found && got.data.u64 == i;
+                wrong += !ok;
+            }
+            if (wrong || multimapCount(m) != sizes[t]) {
+                ERR("size %zu: %zu rows read wrong after replaces, count %zu",
+                    sizes[t], wrong, multimapCount(m));
+            }
+            multimapVerify(m);
+            multimapFree(m);
+        }
+    }
+
     TEST("delete by entry through every tier") {
         err += multimapDeleteEntrySweep_();
+    }
+
+    TEST("multimapProcessPredicate: every condition below, at and above") {
+        static const multimapCondition conds[] = {
+            MULTIMAP_CONDITION_ALL,
+            MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+            MULTIMAP_CONDITION_LESS_THAN,
+            MULTIMAP_CONDITION_EQUAL,
+            MULTIMAP_CONDITION_GREATER_THAN,
+            MULTIMAP_CONDITION_GREATER_THAN_EQUAL,
+        };
+        /* rows: condition; columns: value 4, 5, 6 against 5 */
+        static const bool want[6][3] = {
+            {true, true, true},   {true, true, false},  {true, false, false},
+            {false, true, false}, {false, false, true}, {false, true, true},
+        };
+        for (size_t c = 0; c < 6; c++) {
+            const multimapPredicate p = {.condition = conds[c],
+                                         .compareAgainst = databoxNewSigned(5)};
+            for (int64_t v = 4; v <= 6; v++) {
+                const databox value = databoxNewSigned(v);
+                if (multimapProcessPredicate(&p, &value) != want[c][v - 4]) {
+                    ERR("condition %d against %" PRId64 " wrong", (int)conds[c],
+                        v);
+                }
+            }
+        }
     }
 
     TEST("insert-if-absent through every tier") {
