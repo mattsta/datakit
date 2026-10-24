@@ -9635,6 +9635,118 @@ int persistTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("every reader fails cleanly on each failed read or seek") {
+        /* Each reader runs with its k-th read (or seek) failing, for each
+         * k until a run no longer reaches the armed call: it must fail,
+         * not crash or half-succeed, and must leave the WAL bytes alone
+         * (a failed read is not a torn tail to cut).  Disarmed, it
+         * succeeds again. */
+        persistConfig cfg = persistDefaultConfig();
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsIntset, &cfg);
+        persistStore *snapMem = persistStoreMemory(0);
+        persistStore *walMem = persistStoreMemory(0);
+        persistStore *snap = persistStoreFaulty(snapMem, false);
+        persistStore *wal = persistStoreFaulty(walMem, false);
+        persistAttachSnapshot(p, snap);
+        persistAttachWAL(p, wal);
+        cleaner(intsetFree) intset *is = intsetNew();
+        for (int64_t v = 1; v <= 3; v++) {
+            bool added = false;
+            intsetAdd(&is, v, &added);
+        }
+        persistSnapshot(p, is);
+        for (int64_t v = 4; v <= 6; v++) {
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+        }
+        persistSync(p);
+        size_t walBytes = 0;
+        (void)persistStoreMemoryBuffer(walMem, &walBytes);
+
+        enum {
+            R_RESTORE,
+            R_VERIFY_SNAP,
+            R_VERIFY_WAL,
+            R_ITERATE,
+            R_INSPECT,
+            R_RECOVER,
+            R_COUNT
+        };
+        const persistFaultOp kinds[2] = {PERSIST_FAULT_READ,
+                                         PERSIST_FAULT_SEEK};
+        for (int r = 0; r < R_COUNT; r++) {
+            /* Restore, verify-snapshot and inspect read the snapshot;
+             * the rest read the WAL (recover reads both: sweep each) */
+            for (int target = 0; target < 2; target++) {
+                persistStore *armed = target == 0 ? snap : wal;
+                for (int k = 0; k < 2; k++) {
+                    for (uint64_t nth = 0; nth < 64; nth++) {
+                        persistStoreFaultyArm(armed, kinds[k], nth);
+                        bool ok = false;
+                        persistTestWalCount count = {.stopAfter = SIZE_MAX,
+                                                     .ordered = true};
+                        if (r == R_RESTORE) {
+                            intset *got = persistRestore(p);
+                            ok = got && intsetCount(got) == 3;
+                            intsetFree(got);
+                        } else if (r == R_VERIFY_SNAP) {
+                            ok = persistVerifySnapshot(p);
+                        } else if (r == R_VERIFY_WAL) {
+                            ok = persistVerifyWAL(p);
+                        } else if (r == R_ITERATE) {
+                            ok = persistIterateWAL(p, persistTestCountEntries,
+                                                   &count) &&
+                                 count.seen == 3;
+                        } else if (r == R_INSPECT) {
+                            persistFileInfo info;
+                            ok = persistInspect(armed, &info);
+                        } else {
+                            intset *got = persistRecover(p);
+                            ok = got && intsetCount(got) == 6;
+                            intsetFree(got);
+                        }
+                        const bool fired =
+                            persistStoreFaultyCalls(armed, kinds[k]) > nth;
+                        persistStoreFaultyDisarm(armed);
+                        size_t nowBytes = 0;
+                        (void)persistStoreMemoryBuffer(walMem, &nowBytes);
+                        if (nowBytes != walBytes) {
+                            ERR("reader %d, fault %d at call %" PRIu64
+                                ": WAL changed from %zu to %zu bytes",
+                                r, k, nth, walBytes, nowBytes);
+                        }
+                        /* Recovery may fail its probe past the last
+                         * entry and still be complete */
+                        if (fired && ok && r != R_RECOVER) {
+                            ERR("reader %d succeeded with call %" PRIu64
+                                " of fault %d failing",
+                                r, nth, k);
+                        }
+                        if (!fired) {
+                            if (!ok) {
+                                ERR("reader %d failed with no fault fired", r);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        /* After all those reads the WAL still appends where it ends */
+        const int64_t seven = 7;
+        if (persistLogOp(p, PERSIST_OP_INSERT, &seven, 1) ==
+            PERSIST_LOG_REFUSED) {
+            ERRR("the WAL refused an append after the reads");
+        }
+        persistSync(p);
+        cleaner(intsetFree) intset *all = persistRecover(p);
+        if (!all || intsetCount(all) != 7) {
+            ERR("recovered %zu members after the sweep, want 7",
+                all ? (size_t)intsetCount(all) : (size_t)0);
+        }
+    }
+
     TEST("a WAL with a bad entry takes no appends until compacted") {
         /* Readers stop at a bad entry, so an op appended after one would
          * be reported logged and never replayed.  Appends are refused
