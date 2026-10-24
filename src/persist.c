@@ -5461,6 +5461,95 @@ static bool persistTestCountEntries(const persistWALEntry *entry, void *ctx) {
 static size_t persistTestWriteBudget = SIZE_MAX;
 static ssize_t (*persistTestMemWrite)(void *, const void *, size_t);
 
+/* A structure of `n` elements built through the descriptor's own encodeOp
+ * and applyOp (multilru, which has no empty constructor, directly) */
+static void *persistTestPopulate(const persistOps *ops, int n) {
+    if (ops == &persistOpsMultiLRU) {
+        /* @own: caller; free=multilruFree */
+        multilru *lru = multilruNew();
+        for (int i = 0; i < n; i++) {
+            (void)multilruInsert(lru);
+        }
+        return lru;
+    }
+
+    void *s = ops->newEmpty(); /* the caller frees it with ops->free */
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    persistSetReplayState(state); /* multilist's apply needs one */
+    char text[32];
+    for (int i = 0; i < n; i++) {
+        const int tl = snprintf(text, sizeof(text), "v%d-%d", i, i * 31);
+        const databox num = DATABOX_SIGNED((int64_t)i * 7 - 50);
+        const databox str = DATABOX_WITH_BYTES((uint8_t *)text, (size_t)tl);
+        const databox *pair[2] = {&num, &str};
+        const databoxBig big = DATABOX_BIG_SIGNED((int64_t)i * 1000003);
+        const int64_t i64 = (int64_t)i * 977 - 9000;
+        const uint64_t pos = (uint64_t)i * 37;
+
+        persistOp op = PERSIST_OP_INSERT;
+        const void *args = pair;
+        size_t argc = 2;
+        if (ops == &persistOpsFlex || ops == &persistOpsMultilist) {
+            op = PERSIST_OP_PUSH_TAIL;
+            args = i % 2 ? &num : &str;
+            argc = 1;
+        } else if (ops == &persistOpsIntset) {
+            args = &i64;
+            argc = 1;
+        } else if (ops == &persistOpsIntsetBig) {
+            args = &big;
+            argc = 1;
+        } else if (ops == &persistOpsMultiroar) {
+            args = &pos;
+            argc = 1;
+        } else if (ops == &persistOpsHyperloglog) {
+            args = text;
+            argc = (size_t)tl;
+        } else if (ops == &persistOpsMultimap) {
+            argc = 1; /* newEmpty is a 1-element set: one-element rows */
+        }
+
+        size_t blen = 0;
+        cleanerName(zfree, Bytes) uint8_t *body =
+            ops->encodeOp(op, args, argc, &blen);
+        if (!body || !ops->applyOp(&s, op, body, blen)) {
+            persistSetReplayState(NULL);
+            ops->free(s);
+            return NULL;
+        }
+    }
+    persistSetReplayState(NULL);
+    return s;
+}
+
+/* A restore of possibly damaged bytes: refusing is fine; what it returns
+ * must be a well-formed structure, whose own snapshot restores again with
+ * the same element count.  Returns 1 when it is not. */
+static int persistTestRestoreConsistent(const persistOps *ops,
+                                        const uint8_t *buf, size_t len,
+                                        const char *how, size_t at) {
+    void *r = ops->restore(buf, len);
+    if (!r) {
+        return 0;
+    }
+    const size_t n = ops->count(r);
+    size_t againLen = 0;
+    cleanerName(zfree, Bytes) uint8_t *again = ops->snapshot(r, &againLen);
+    void *r2 = again ? ops->restore(again, againLen) : NULL;
+    int bad = 0;
+    if (!r2 || ops->count(r2) != n) {
+        printf("ERROR: %s: %s at %zu restored %zu elements that do not "
+               "restore again (%s)\n",
+               ops->name, how, at, n, r2 ? "count changed" : "refused");
+        bad = 1;
+    }
+    if (r2) {
+        ops->free(r2);
+    }
+    ops->free(r);
+    return bad;
+}
+
 /* An encoder claiming a body one byte past the WAL entry limit; the size
  * check refuses it before anything reads the claimed bytes */
 static uint8_t *persistTestHugeEncode(persistOp op, const void *args,
@@ -9257,6 +9346,57 @@ int persistTest(int argc, char *argv[]) {
         /* @own: container; free=multilruFree */
         multilru *lru = multilruNew();
         err += persistTestDecoderMatrix(&persistOpsMultiLRU, lru);
+    }
+
+    TEST("restore: every truncation and byte flip is refused or "
+         "self-consistent") {
+        const persistOps *const all[] = {
+            &persistOpsFlex,
+            &persistOpsIntset,
+            &persistOpsIntsetBig,
+            &persistOpsMultiroar,
+            &persistOpsHyperloglog,
+            &persistOpsMultimap,
+            &persistOpsMultilist,
+            &persistOpsMultidict,
+            &persistOpsMultiOrderedSet,
+            &persistOpsMultiLRU,
+        };
+        for (size_t t = 0; t < sizeof(all) / sizeof(*all); t++) {
+            const persistOps *ops = all[t];
+            void *s = persistTestPopulate(ops, 40);
+            if (!s) {
+                ERR("%s: could not build a structure", ops->name);
+                continue;
+            }
+            size_t len = 0;
+            cleanerName(zfree, Bytes) uint8_t *snap = ops->snapshot(s, &len);
+            ops->free(s);
+            if (!snap || len == 0) {
+                ERR("%s: snapshot failed", ops->name);
+                continue;
+            }
+            int bad = 0;
+            /* Every prefix, in an allocation of exactly its size */
+            for (size_t cut = 0; cut < len && bad < 3; cut++) {
+                cleanerName(zfree, Bytes) uint8_t *prefix =
+                    zmalloc(cut ? cut : 1);
+                memcpy(prefix, snap, cut);
+                bad +=
+                    persistTestRestoreConsistent(ops, prefix, cut, "cut", cut);
+            }
+            /* Every byte with its low and high bit flipped */
+            cleanerName(zfree, Bytes) uint8_t *copy = zmalloc(len);
+            for (size_t pos = 0; pos < len && bad < 3; pos++) {
+                for (int m = 0; m < 2; m++) {
+                    memcpy(copy, snap, len);
+                    copy[pos] ^= m ? 0x80u : 0x01u;
+                    bad += persistTestRestoreConsistent(ops, copy, len, "flip",
+                                                        pos);
+                }
+            }
+            err += bad;
+        }
     }
 
     TEST("restore: truncated flex header is rejected") {
