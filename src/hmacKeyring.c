@@ -2168,6 +2168,57 @@ int hmacKeyringTest(int argc, char *argv[]) {
         persistClose(p);
     }
 
+    TEST("AEAD reservation through persist: no nonce until the limit is "
+         "synced") {
+        /* Both sync policies: the reservation logged durable at once, or
+         * buffered and synced by the reservation.  When the WAL's sync
+         * fails the reservation fails and no nonce is issued past the
+         * window already reserved; once it syncs, issuance resumes. */
+        if (hmacKeyringReserveThroughPersist(NULL, 37u, 8)) {
+            ERRR("a NULL persist reserved");
+        }
+        static const persistSyncMode modes[2] = {PERSIST_SYNC_ALWAYS,
+                                                 PERSIST_SYNC_NONE};
+        for (int m = 0; m < 2; m++) {
+            persistConfig cfg = persistDefaultConfig();
+            cfg.syncMode = modes[m];
+            persist *p = persistCreate(&persistOpsHmacKeyring, &cfg);
+            persistStore *wal =
+                persistStoreFaulty(persistStoreMemory(0), false);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            persistAttachWAL(p, wal);
+            hmacKeyring *ring = hmacKeyringCreate();
+            const uint8_t key[32] = {0x37};
+            const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {9, 8, 7, 6};
+            hmacKeyringInstall(ring, 37u, &hmacAlgoSHA256, key, sizeof(key),
+                               salt);
+            if (!persistSnapshot(p, ring) ||
+                !hmacKeyringSetAeadReservation(
+                    ring, 8, hmacKeyringReserveThroughPersist, p)) {
+                ERRR("persist setup");
+            }
+            uint8_t n[12];
+            bool ok = true;
+            for (int i = 0; i < 8; i++) {
+                ok = ok && hmacKeyringNextAeadNonce(ring, 37u, n);
+            }
+            persistStoreFaultyArm(wal, PERSIST_FAULT_SYNC, 0);
+            const bool pastWindow = hmacKeyringNextAeadNonce(ring, 37u, n);
+            uint64_t counter = 0;
+            hmacKeyringPeekAeadCounter(ring, 37u, &counter);
+            persistStoreFaultyDisarm(wal);
+            const bool resumed = hmacKeyringNextAeadNonce(ring, 37u, n);
+            if (!ok || pastWindow || counter != 8 || !resumed ||
+                hkrTestNonceCounter(n) != 8) {
+                ERR("sync mode %d: window issued %d, past an unsynced "
+                    "reservation %d (counter %" PRIu64 "), resumed %d",
+                    m, ok, pastWindow, counter, resumed);
+            }
+            hmacKeyringFree(ring);
+            persistClose(p);
+        }
+    }
+
     TEST("snapshot/restore: round-trip with counter + salt + multi-algo") {
         hmacKeyring *src = hmacKeyringCreate();
         const uint8_t key_a[32] = {0x10, 0x20, 0x30};
