@@ -10442,6 +10442,41 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
+    printf("Test: a key given as never-free bytes finds its entry...\n");
+    {
+        /* Added under BYTES keys; found, and deleted, through boxes that
+         * carry the same bytes as NEVER_FREE (hashing reads both alike) */
+        cleaner(multidictMmClassFree) multidictClass *nc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *nd =
+            multidictNew(&multidictTypeExactKey, nc, 7);
+        static uint8_t names[3][32] = {"first key, twenty+ bytes",
+                                       "second key, also longer", "short"};
+        for (int i = 0; i < 3; i++) {
+            const databox k =
+                databoxNewBytes(names[i], strlen((char *)names[i]));
+            const databox v = databoxNewUnsigned((uint64_t)i);
+            multidictAdd(nd, &k, &v);
+        }
+        int found = 0;
+        for (int i = 0; i < 3; i++) {
+            databox k = {.type = DATABOX_BYTES_NEVER_FREE,
+                         .data.bytes.start = names[i],
+                         .len = strlen((char *)names[i])};
+            databox v = {{0}};
+            found += multidictFind(nd, &k, &v) && v.data.u == (uint64_t)i;
+        }
+        databox gone = {.type = DATABOX_BYTES_NEVER_FREE,
+                        .data.bytes.start = names[0],
+                        .len = strlen((char *)names[0])};
+        if (found != 3 || !multidictDelete(nd, &gone) ||
+            multidictCount(nd) != 2) {
+            printf("ERROR: never-free keys found %d of 3, count %" PRIu64 "\n",
+                   found, multidictCount(nd));
+            err++;
+        }
+    }
+
     printf("\n--- Smoke benchmark (ns per entry) ---\n");
     {
         enum { MD_BENCH_KEYS = 100000 };

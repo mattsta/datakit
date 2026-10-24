@@ -28,6 +28,7 @@ bool databoxGetBytes(databox *box, uint8_t **buf, size_t *len) {
         *len = box->len;
         break;
     case DATABOX_BYTES:
+    case DATABOX_BYTES_NEVER_FREE:
     case DATABOX_CONTAINER_FLEX_MAP:
     case DATABOX_CONTAINER_FLEX_LIST:
     case DATABOX_CONTAINER_FLEX_SET:
@@ -51,12 +52,14 @@ bool databoxGetBytes(databox *box, uint8_t **buf, size_t *len) {
         *buf = (uint8_t *)&box->data.f32;
         *len = 4;
         break;
-    case DATABOX_TRUE:
-    case DATABOX_FALSE:
-    case DATABOX_NULL:
-        return NULL; /* not implemented yet! */
+#if DATABOX_ENABLE_PTR_MDSC
+    case DATABOX_PTR_MDSC:
+        *buf = box->data.ptr;
+        *len = box->len;
+        break;
+#endif
     default:
-        assert(NULL && "Unsupported bytes type?");
+        /* No byte form (booleans, null, 96/128-bit, void, offset) */
         return false;
     }
 
@@ -3136,6 +3139,43 @@ int databoxTest(int argc, char *argv[]) {
         }
         if (databoxCompare(&pLo, &sNeg) <= 0) {
             ERRR("PTR (as unsigned) must order above negative signed");
+        }
+    }
+
+    TEST("databoxGetBytes: every bytes-carrying type, false for the rest") {
+        /* BYTES, NEVER_FREE, embedded bytes and an mdsc string give their
+         * bytes; booleans, null and a 128-bit integer have no byte form
+         * and give false (not a debug assertion) */
+        uint8_t text[] = "some bytes to read";
+        cleaner(mdscfree) mdsc *str = mdscnew("mdsc bytes");
+        databox carriers[] = {
+            {.type = DATABOX_BYTES, .data.bytes.start = text, .len = 18},
+            {.type = DATABOX_BYTES_NEVER_FREE,
+             .data.bytes.start = text,
+             .len = 18},
+            databoxNewBytesAllowEmbed("tiny", 4),
+            {.type = DATABOX_PTR_MDSC, .data.ptr = str, .len = mdsclen(str)},
+        };
+        static const char *const want[] = {
+            "some bytes to read", "some bytes to read", "tiny", "mdsc bytes"};
+        for (size_t i = 0; i < sizeof(carriers) / sizeof(*carriers); i++) {
+            uint8_t *buf = NULL;
+            size_t len = 0;
+            if (!databoxGetBytes(&carriers[i], &buf, &len) ||
+                len != strlen(want[i]) || memcmp(buf, want[i], len) != 0) {
+                ERR("carrier %zu: no bytes, or the wrong ones", i);
+            }
+        }
+        databox none[] = {{.type = DATABOX_TRUE},
+                          {.type = DATABOX_FALSE},
+                          {.type = DATABOX_NULL},
+                          {.type = DATABOX_SIGNED_128}};
+        for (size_t i = 0; i < sizeof(none) / sizeof(*none); i++) {
+            uint8_t *buf = NULL;
+            size_t len = 0;
+            if (databoxGetBytes(&none[i], &buf, &len)) {
+                ERR("type %d gave bytes", (int)none[i].type);
+            }
         }
     }
 
