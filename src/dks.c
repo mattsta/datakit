@@ -2067,38 +2067,23 @@ size_t DKS_UTF8GRAPHEMETRUNCATE(const DKS_TYPE *s, size_t n) {
  * Testing
  * ==================================================================== */
 #if defined(DATAKIT_TEST)
-#define testCond(descr, _c, _target, _fmt)                                     \
-    _testCond(descr, _c, _target, _fmt, ==)
-#define testCondGte(descr, _c, _target, _fmt)                                  \
-    _testCond(descr, _c, _target, _fmt, >=)
-#define _testCond(descr, _c, _target, _fmt, _compare)                          \
+#include "ctest.h"
+
+/* One named check through the shared test macros: 'got' compared to 'want'
+ * (both printed with 'fmt' on a failure); with 'hardStop' the first failure
+ * stops the run where it happened */
+#define testCond(descr, got, want, fmt)                                        \
+    dksTestCompare_(descr, got, want, fmt, ==)
+#define testCondGte(descr, got, want, fmt)                                     \
+    dksTestCompare_(descr, got, want, fmt, >=)
+#define dksTestCompare_(descr, got, want, fmt, compare)                        \
     do {                                                                       \
-        __testNum++;                                                           \
-        printf("%d - %s: ", __testNum, descr);                                 \
-        if ((_c)_compare(_target)) {                                           \
-            printf("PASSED\n");                                                \
-        } else {                                                               \
-            printf("FAILED! " _fmt " != " _fmt "\n", _c, _target);             \
+        TEST(descr)                                                            \
+        if (!((got)compare(want))) {                                           \
+            ERR("%s: got " fmt ", want " #compare " " fmt, descr, got, want);  \
             if (hardStop) {                                                    \
                 assert(NULL);                                                  \
             }                                                                  \
-            __failed_tests++;                                                  \
-        }                                                                      \
-    } while (0)
-
-#define testReport()                                                           \
-    do {                                                                       \
-        printf("%d tests, %d passed, %d failed\n", __testNum,                  \
-               __testNum - __failed_tests, __failed_tests);                    \
-        if (__failed_tests) {                                                  \
-            printf("=== WARNING === We have failed tests here...\n");          \
-            if (hardStop) {                                                    \
-                printf("Note: this was an 'mdsc' test and some tests around "  \
-                       "size classes don't pass under 'mdsc' testing.\n");     \
-                printf("If 'mds' tests clean and 'mdsc' has size errors, "     \
-                       "it's okay.\n");                                        \
-            }                                                                  \
-            exit(1);                                                           \
         }                                                                      \
     } while (0)
 
@@ -2196,10 +2181,9 @@ int DKS_TEST(int argc, char *argv[]) {
     bool hardStop = true;
 
     for (int i = 2; i < argc; i++) {
-        /* We need nostop because DKS_COMPACT fails
-         * the availability tests (because it never has any available space)
-         * and it fails the min size tests since it has a different size
-         * range than mds (and we don't have per-impl test ranges yet) */
+        /* "nostop" (and the mdsc run) reports every failed check and keeps
+         * going, instead of stopping at the first; "nobig" skips the checks
+         * that allocate several GB */
         if (!strcmp(argv[i], "nostop") || !strcmp(argv[i], "mdsc")) {
             hardStop = false;
         } else if (!strcmp(argv[i], "nobig")) {
@@ -2207,8 +2191,7 @@ int DKS_TEST(int argc, char *argv[]) {
         }
     }
 
-    int __failed_tests = 0;
-    int __testNum = 0;
+    int err = 0;
 
     {
         /* The comma-aware append replaces a trailing comma, appends
@@ -3140,8 +3123,7 @@ int DKS_TEST(int argc, char *argv[]) {
 
     if (!bigTests) {
         printf("Stopping early because requested skip big allocation tests\n");
-        testReport();
-        return __failed_tests;
+        TEST_FINAL_RESULT;
     }
 
     {
@@ -3832,8 +3814,7 @@ int DKS_TEST(int argc, char *argv[]) {
                  DKS_NEWFROMFILE("dks-no-such-file") == NULL, true, "%d");
     }
 
-    testReport();
-    return __failed_tests;
+    TEST_FINAL_RESULT;
 }
 
 int DKS_BENCHMAIN(void) {
