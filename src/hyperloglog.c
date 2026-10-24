@@ -683,9 +683,8 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
  * Actually nothing is added, but the max 0 pattern counter of the subset
  * the element belongs to is incremented if needed.
  *
- * The object 'o' is the String object holding the HLL. The function requires
- * a reference to the object in order to be able to enlarge the string if
- * needed.
+ * '*inHll' is the sketch; it is taken by reference because the update may
+ * enlarge (reallocate) it.
  *
  * On success, the function returns 1 if the cardinality changed, or 0
  * if the register for this element was not updated.
@@ -797,7 +796,7 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
      *
      * A) If it is a VAL opcode already set to a value >= our 'count'
      *    no update is needed, regardless of the VAL run-length field.
-     *    In this case PFADD returns 0 since no changes are performed.
+     *    In this case the add returns 0 since no changes are performed.
      *
      * B) If it is a VAL opcode with len = 1 (representing only our
      *    register) and the value is less than 'count', we just update it
@@ -961,11 +960,8 @@ promote: /* Promote to dense representation. */
 
     /* We need to call hyperloglogDenseAdd() to perform the operation after the
      * conversion. However the result must be 1, since if we need to
-     * convert from sparse to dense a register requires to be updated.
-     *
-     * Note that this in turn means that PFADD will make sure the command
-     * is propagated to slaves / AOF, so if there is a sparse -> dense
-     * conversion, it will be performed in all the slaves as well. */
+     * convert from sparse to dense a register requires to be updated: the
+     * add always reports a change when it converted the sketch. */
     const int32_t denseRetval =
         hyperloglogDenseSet(hdr->registers, index, count);
     assert(denseRetval == 1);
@@ -1028,7 +1024,7 @@ DK_STATIC void hyperloglogSparseRegisterHistogram(uint8_t *sparse,
  * computation, representation-specific, while all the rest is common. */
 
 /* Implements the register histogram calculation for uint8_t data type
- * which is only used internally as speedup for PFCOUNT with multiple keys. */
+ * which is only used internally to count a union of several sketches. */
 static void hyperloglogRawRegisterHistogram(uint8_t *registers,
                                             int32_t *reghisto) {
 #if HLL_USE_SSE
@@ -1532,13 +1528,10 @@ int pfadd(hyperloglog **hh, ...) {
     return corrupt ? -1 : (int)updated;
 }
 
-/* PFCOUNT var -> approximated cardinality of set. */
+/* The approximated cardinality of one sketch (its cached value when valid,
+ * else counted and cached). */
 uint64_t pfcountSingle(hyperloglog *h) {
     uint64_t card;
-    /* Cardinality of the single HLL.
-     *
-     * The user specified a single key. Either return the cached value
-     * or compute one and update the cache. */
 
 #if 0
     if (hyperloglogDetect(h) == false) {
@@ -1576,10 +1569,8 @@ uint64_t pfcountSingle(hyperloglog *h) {
 }
 
 DK_INLINE_ALWAYS uint64_t pfvcount(hyperloglog *first, va_list ap) {
-    /* multi-key keys, cardinality of the union.
-     *
-     * When multiple keys are specified, PFCOUNT actually computes
-     * the cardinality of the merge of the N HLLs specified. */
+    /* Several sketches: the cardinality of their union, counted from the
+     * merge of all of them. */
     hllStatic max = {0};
 
     /* Compute an HLL with M[i] = MAX(M[i]_j). */
@@ -1672,7 +1663,8 @@ uint64_t pfcount(hyperloglog *h, ...) {
     return count;
 }
 
-/* PFMERGE src1 src2 src3 ... srcN NULL => merged HLL */
+/* Merge the NULL-terminated list of sketches after 'first' into a new
+ * sketch holding their union */
 DK_INLINE_ALWAYS hyperloglog *pfvmerge(hyperloglog *first, va_list ap) {
     hllStatic max = {0};
     hyperloglog *restrict total = toHLL(max);
@@ -2191,121 +2183,6 @@ cleanup:
     }
 
     return errors;
-}
-#endif
-
-#if 0
-/* PFDEBUG <subcommand> <key> ... args ...
- * Different debugging related operations about the HLL implementation. */
-void pfdebugCommand(char *cmd, hyperloglogHeader *hdr) {
-    robj *o;
-    int32_t j;
-
-    o = lookupKeyWrite(c->db, c->argv[2]);
-    if (o == NULL) {
-        addReplyError(c, "The specified key does not exist");
-        return;
-    }
-    if (!hyperloglogDetect(c, o)) {
-        return;
-    }
-    o = dbUnshareStringValue(c->db, c->argv[2], o);
-    hdr = o->ptr;
-
-    /* PFDEBUG GETREG <key> */
-    if (!strcasecmp(cmd, "getreg")) {
-        if (c->argc != 3) {
-            goto arityerr;
-        }
-
-        if (isSparse(hdr)) {
-            if (hyperloglogSparseToDense(o) == false) {
-                /* @own: container; free=mdscfree */
-                addReplymdsc(c, mdscnew(invalidHllErr));
-                return;
-            }
-            server.dirty++; /* Force propagation on encoding change. */
-        }
-
-        hdr = o->ptr;
-        addReplyMultiBulkLen(c, HLL_REGISTERS);
-        for (j = 0; j < HLL_REGISTERS; j++) {
-            uint8_t val;
-
-            HLL_DENSE_GET_REGISTER(val, hdr->registers, j);
-            addReplyLongLong(c, val);
-        }
-    }
-    /* PFDEBUG DECODE <key> */
-    else if (!strcasecmp(cmd, "decode")) {
-        if (c->argc != 3) {
-            goto arityerr;
-        }
-
-        uint8_t *p = o->ptr, *end = p + mdsclen(o->ptr);
-        cleaner(mdscfree) mdsc *decoded = mdscempty();
-
-        if (hdr->encoding != HLL_SPARSE) {
-            addReplyError(c, "HLL encoding is not sparse");
-            return;
-        }
-
-        p += HLL_HDR_SIZE;
-        while (p < end) {
-            int32_t runlen, regval;
-
-            if (HLL_SPARSE_IS_ZERO(p)) {
-                runlen = HLL_SPARSE_ZERO_LEN(p);
-                p++;
-                decoded = mdsccatprintf(decoded, "z:%d ", runlen);
-            } else if (HLL_SPARSE_IS_XZERO(p)) {
-                runlen = HLL_SPARSE_XZERO_LEN(p);
-                p += 2;
-                decoded = mdsccatprintf(decoded, "Z:%d ", runlen);
-            } else {
-                runlen = HLL_SPARSE_VAL_LEN(p);
-                regval = HLL_SPARSE_VAL_VALUE(p);
-                p++;
-                decoded = mdsccatprintf(decoded, "v:%d,%d ", regval, runlen);
-            }
-        }
-        decoded = mdsctrim(decoded, " ");
-        addReplyBulkCBuffer(c, decoded, mdsclen(decoded));
-    }
-    /* PFDEBUG ENCODING <key> */
-    else if (!strcasecmp(cmd, "encoding")) {
-        char *encodingstr[2] = {"dense", "sparse"};
-        if (c->argc != 3) {
-            goto arityerr;
-        }
-
-        addReplyStatus(c, encodingstr[hdr->encoding]);
-    }
-    /* PFDEBUG TODENSE <key> */
-    else if (!strcasecmp(cmd, "todense")) {
-        int32_t conv = 0;
-        if (c->argc != 3) {
-            goto arityerr;
-        }
-
-        if (isSparse(hdr)) {
-            if (hyperloglogSparseToDense(o) == false) {
-                /* @own: container; free=mdscfree */
-                addReplymdsc(c, mdscnew(invalidHllErr));
-                return;
-            }
-            conv = 1;
-            server.dirty++; /* Force propagation on encoding change. */
-        }
-        addReply(c, conv ? shared.cone : shared.czero);
-    } else {
-        addReplyErrorFormat(c, "Unknown PFDEBUG subcommand '%s'", cmd);
-    }
-    return;
-
-arityerr:
-    addReplyErrorFormat(c, "Wrong number of arguments for the '%s' subcommand",
-            cmd);
 }
 #endif
 
