@@ -1,5 +1,5 @@
 {
- "commit": "61b062da78c196d7ad585dee7137fce194432f19",
+ "commit": "fae898715165bd5871c91d2de53b65669c6f2103",
  "files": {
   "src/OSRegulate.c": {
    "lines": 243,
@@ -38,8 +38,8 @@
    "branches": 6
   },
   "src/blake3.c": {
-   "lines": 131,
-   "branches": 62
+   "lines": 128,
+   "branches": 63
   },
   "src/blake3.h": {
    "lines": 0,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 179,
-   "branches": 409
+   "lines": 176,
+   "branches": 410
   },
   "src/flex.h": {
    "lines": 0,
@@ -414,8 +414,8 @@
    "branches": 1
   },
   "src/flexEnvelope.c": {
-   "lines": 218,
-   "branches": 208
+   "lines": 175,
+   "branches": 183
   },
   "src/flexEnvelope.h": {
    "lines": 0,
@@ -478,8 +478,8 @@
    "branches": 0
   },
   "src/hash/sha256ArmCrypto.c": {
-   "lines": 172,
-   "branches": 29
+   "lines": 4,
+   "branches": 47
   },
   "src/hash/sha256ShaNi.c": {
    "lines": 5,
@@ -494,16 +494,16 @@
    "branches": 31
   },
   "src/hmacKeyring.c": {
-   "lines": 82,
-   "branches": 74
+   "lines": 59,
+   "branches": 63
   },
   "src/hmacKeyring.h": {
    "lines": 0,
    "branches": 0
   },
   "src/hyperloglog.c": {
-   "lines": 56,
-   "branches": 85
+   "lines": 53,
+   "branches": 84
   },
   "src/inflightGate.c": {
    "lines": 2,
@@ -586,8 +586,8 @@
    "branches": 0
   },
   "src/membound.c": {
-   "lines": 297,
-   "branches": 307
+   "lines": 287,
+   "branches": 304
   },
   "src/memboundInternal.h": {
    "lines": 39,
@@ -691,7 +691,7 @@
   },
   "src/multidict.c": {
    "lines": 139,
-   "branches": 169
+   "branches": 168
   },
   "src/multidict.h": {
    "lines": 0,
@@ -767,15 +767,15 @@
   },
   "src/multimapMedium.c": {
    "lines": 25,
-   "branches": 60
+   "branches": 59
   },
   "src/multimapSmall.c": {
    "lines": 21,
    "branches": 38
   },
   "src/multiroar.c": {
-   "lines": 237,
-   "branches": 267
+   "lines": 217,
+   "branches": 254
   },
   "src/multiroar.h": {
    "lines": 0,
@@ -790,8 +790,8 @@
    "branches": 10
   },
   "src/ownedState.c": {
-   "lines": 78,
-   "branches": 104
+   "lines": 71,
+   "branches": 98
   },
   "src/ownedState.h": {
    "lines": 4,
@@ -802,7 +802,7 @@
    "branches": 33
   },
   "src/persist.c": {
-   "lines": 266,
+   "lines": 260,
    "branches": 266
   },
   "src/persist.h": {
@@ -814,40 +814,40 @@
    "branches": 33
   },
   "src/persist/intsetP.c": {
-   "lines": 33,
-   "branches": 32
+   "lines": 31,
+   "branches": 31
   },
   "src/persist/multiOrderedSetP.c": {
-   "lines": 53,
-   "branches": 66
+   "lines": 36,
+   "branches": 59
   },
   "src/persist/multidictP.c": {
-   "lines": 41,
-   "branches": 54
+   "lines": 33,
+   "branches": 48
   },
   "src/persist/multilistP.c": {
-   "lines": 59,
-   "branches": 47
+   "lines": 49,
+   "branches": 42
   },
   "src/persist/multilistP.h": {
    "lines": 0,
-   "branches": 1
+   "branches": 2
   },
   "src/persist/multilruP.c": {
-   "lines": 53,
-   "branches": 82
+   "lines": 41,
+   "branches": 75
   },
   "src/persist/multimapP.c": {
-   "lines": 47,
-   "branches": 57
+   "lines": 37,
+   "branches": 50
   },
   "src/persist/multiroarP.c": {
-   "lines": 68,
-   "branches": 72
+   "lines": 51,
+   "branches": 62
   },
   "src/persist/persistCtx.c": {
-   "lines": 53,
-   "branches": 44
+   "lines": 41,
+   "branches": 41
   },
   "src/portableRandom.c": {
    "lines": 19,
