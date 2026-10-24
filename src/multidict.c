@@ -18,6 +18,7 @@
 #include <float.h> /* DBL_MAX (tests) */
 #include <limits.h>
 #include <math.h> /* isfinite */
+#include <stdatomic.h>
 #include <stdio.h>
 #include <sys/time.h>
 
@@ -1989,12 +1990,23 @@ void multidictGetDetailedStats(multidict *d, multidictDetailedStats *stats) {
 }
 
 /* Calculate comprehensive load metrics including byte-based and count-based */
+#ifdef DATAKIT_TEST
+/* Test builds only: slots walked by the metrics below, so a test can bound
+ * the work of byte-based expansion without timing it */
+static _Atomic uint64_t mdTestMetricSlotsWalked = 0;
+#endif
+
 void multidictGetLoadMetrics(multidict *d, multidictLoadMetrics *metrics) {
     if (!d || !metrics) {
         return;
     }
 
     memset(metrics, 0, sizeof(*metrics));
+#ifdef DATAKIT_TEST
+    /* @sync: relaxed counter */
+    atomic_fetch_add_explicit(&mdTestMetricSlotsWalked, HTSIZE(d, 0),
+                              memory_order_relaxed);
+#endif
 
     /* Count-based load factor (legacy) */
     if (HTSIZE(d, 0) > 0) {
@@ -10072,37 +10084,50 @@ int multidictTest(int argc, char *argv[]) {
     {
         /* The byte-based check measures the table; doing that by
          * walking every slot on every insert makes inserting n entries
-         * quadratic.  Smoke-sized: the ratio, not the time, is checked. */
-        enum { PERF_N = 20000 };
-        uint64_t ns[2] = {0, 0};
-        for (int mode = 0; mode < 2; mode++) {
-            cleaner(multidictMmClassFree) multidictClass *perfCls =
-                multidictMmClassNew();
-            cleaner(multidictFree) multidict *perfD =
-                multidictNew(&multidictTypeExactKey, perfCls, 91);
-            if (mode == 1) {
-                multidictEnableByteBasedExpansion(perfD, 512, 4096);
+         * quadratic.  Checked by the slots the measuring walks, which
+         * neither load nor build flavour changes: linear in the entries
+         * (the amortized design walks about 16 per insert; quadratic is
+         * n^2 / 2).  Times are printed for reference. */
+        static const int perfN[2] = {4000, 16000};
+        double perOp[2][2] = {{0}};
+        for (int size = 0; size < 2; size++) {
+            for (int mode = 0; mode < 2; mode++) {
+                cleaner(multidictMmClassFree) multidictClass *perfCls =
+                    multidictMmClassNew();
+                cleaner(multidictFree) multidict *perfD =
+                    multidictNew(&multidictTypeExactKey, perfCls, 91);
+                if (mode == 1) {
+                    multidictEnableByteBasedExpansion(perfD, 512, 4096);
+                }
+                /* @sync: relaxed counter */
+                atomic_store_explicit(&mdTestMetricSlotsWalked, 0,
+                                      memory_order_relaxed);
+                const uint64_t t0 = timeUtilMonotonicNs();
+                for (int i = 0; i < perfN[size]; i++) {
+                    const databox key = databoxNewSigned(i * 7919);
+                    const databox val = databoxNewSigned(i);
+                    multidictAdd(perfD, &key, &val);
+                }
+                perOp[size][mode] =
+                    (double)(timeUtilMonotonicNs() - t0) / perfN[size];
+                if (multidictCount(perfD) != (uint64_t)perfN[size]) {
+                    printf("    ERROR: %" PRIu64 " entries, want %d\n",
+                           multidictCount(perfD), perfN[size]);
+                    err++;
+                }
+                /* @sync: relaxed counter */
+                const uint64_t walked = atomic_load_explicit(
+                    &mdTestMetricSlotsWalked, memory_order_relaxed);
+                if (mode == 1 && walked > 64 * (uint64_t)perfN[size]) {
+                    printf("    ERROR: %d byte-based inserts walked %" PRIu64
+                           " slots\n",
+                           perfN[size], walked);
+                    err++;
+                }
             }
-            const uint64_t t0 = timeUtilMonotonicNs();
-            for (int i = 0; i < PERF_N; i++) {
-                const databox key = databoxNewSigned(i * 7919);
-                const databox val = databoxNewSigned(i);
-                multidictAdd(perfD, &key, &val);
-            }
-            ns[mode] = timeUtilMonotonicNs() - t0;
-            if (multidictCount(perfD) != PERF_N) {
-                printf("    ERROR: %" PRIu64 " entries, want %d\n",
-                       multidictCount(perfD), PERF_N);
-                err++;
-            }
-        }
-        printf("    %d inserts: count-based %.1f ns/op, byte-based %.1f "
-               "ns/op\n",
-               PERF_N, (double)ns[0] / PERF_N, (double)ns[1] / PERF_N);
-        if (ns[1] > 6 * ns[0] + 2000000) {
-            printf("    ERROR: byte-based inserts cost %.1fx count-based\n",
-                   (double)ns[1] / (double)ns[0]);
-            err++;
+            printf("    %d inserts: count-based %.1f ns/op, byte-based %.1f "
+                   "ns/op\n",
+                   perfN[size], perOp[size][0], perOp[size][1]);
         }
     }
 
