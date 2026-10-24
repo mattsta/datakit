@@ -83,8 +83,6 @@ typedef enum databoxType {
     DATABOX_CONTAINER_CFLEX_SET,
     DATABOX_CONTAINER_CFLEX_TUPLE,
 
-    DATABOX_MAX_EMBED, /* placeholder type for math */
-
 #if DATABOX_ENABLE_PTR_MDSC
     DATABOX_PTR_MDSC,
 #endif

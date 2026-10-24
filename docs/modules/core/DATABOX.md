@@ -150,8 +150,7 @@ typedef enum databoxType {
     DATABOX_CONTAINER_CFLEX_SET = 29,
     DATABOX_CONTAINER_CFLEX_TUPLE = 30,
 
-    DATABOX_MAX_EMBED = 31,   /* placeholder for math, not a real type */
-    DATABOX_PTR_MDSC = 32,    /* only when DATABOX_ENABLE_PTR_MDSC */
+    DATABOX_PTR_MDSC = 31,    /* only when DATABOX_ENABLE_PTR_MDSC */
 
     DATABOX_MAX = 255         /* the type field is ONE byte */
 } databoxType;
@@ -165,8 +164,9 @@ Ordering is load-bearing in three places, so do not renumber:
 - `type >= DATABOX_BYTES` is the "has a `len`" test, so every
   variable-length and container type sits at or above 18.
 - `DATABOX_CONTAINER_OFFSET(encoding)` is
-  `encoding - DATABOX_CONTAINER_FLEX_MAP`, so the four FLEX and four CFLEX
-  container types must stay in matching order.
+  `encoding - DATABOX_CONTAINER_FLEX_MAP`, so the four FLEX container types
+  stay in the order of flex's `FLEX_CONTAINER_MAP`..`_TUPLE`.  (The four
+  CFLEX types have no flex encoding yet; flex refuses them.)
 
 ## Creation Functions
 

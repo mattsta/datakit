@@ -129,21 +129,19 @@ typedef enum flexType {
     /* ... _16, _24, _32, _40, _48, _56 ... */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_64,  /* 236 */
 
-    /* 8 container types (237-244) — order must match databox's
-     * DATABOX_CONTAINER_FLEX_* / _CFLEX_* order */
+    /* 4 container types (237-240) — order must match databox's
+     * DATABOX_CONTAINER_FLEX_* order */
     FLEX_CONTAINER_MAP,    /* 237 */
     FLEX_CONTAINER_LIST,   /* 238 */
     FLEX_CONTAINER_SET,    /* 239 */
     FLEX_CONTAINER_TUPLE,  /* 240 */
-    FLEX_CONTAINER_CMAP,   /* 241 - compressed variants */
-    FLEX_CONTAINER_CLIST,  /* 242 */
-    FLEX_CONTAINER_CSET,   /* 243 */
-    FLEX_CONTAINER_CTUPLE, /* 244 */
+    FLEX_CONTAINER_COMPRESSED, /* 241 - reserved: a compressed nested
+                                * container, kind in the payload; no
+                                * writer, refused on read */
 
-    /* 245-250 unassigned */
+    /* 242-251 unassigned (refused on read) */
 
-    /* Immediate (single-byte) types: FLEX_IS_IMMEDIATE(enc) is enc >= 251 */
-    FLEX_SAME = 251,         /* "same as previous entry" marker; UNUSED */
+    /* Immediate (single-byte) types: FLEX_IS_IMMEDIATE(enc) is enc >= 252 */
     FLEX_BYTES_EMPTY = 252,  /* zero-length byte array */
     FLEX_TRUE = 253,         /* Boolean true */
     FLEX_FALSE = 254,        /* Boolean false */
@@ -2064,20 +2062,19 @@ Flex serves as the underlying storage for these higher-level structures:
 
 ### As Nested Container
 
-The encoding reserves eight container types (`FLEX_CONTAINER_MAP` through
-`FLEX_CONTAINER_CTUPLE`) whose payload is a nested flex or cflex, and the
-readers understand them: `flexGetByType` decodes such an entry into the
-matching `DATABOX_CONTAINER_FLEX_*` / `_CFLEX_*` box, and
-`flexGetByTypeCopy` copies the nested buffer out.
+Four container types (`FLEX_CONTAINER_MAP`, `_LIST`, `_SET`, `_TUPLE`)
+hold a nested flex.  The insert paths (`flexPushByType`, insert, replace,
+the multi-element appends) store a `DATABOX_CONTAINER_FLEX_*` box whose
+`data.bytes.start` is a flex, whole, sized from that flex's own header;
+`flexGetByType` reads the entry back as the matching box pointing into the
+outer flex, and `flexGetByTypeCopy` copies the nested buffer out.
 
-The **writers do not accept them**: neither `flexPushByType` nor
-`flexInsertByType` has a case for a `DATABOX_CONTAINER_*` box, so passing
-one is undefined behavior, not an error return. Nested containers are
-produced by the higher-level containers that own the encoding, not by
-pushing a hand-built container databox.
+Compressed nested containers (`DATABOX_CONTAINER_CFLEX_*` boxes) have one
+reserved tag (`FLEX_CONTAINER_COMPRESSED`, 241) and no writer yet: every
+insert path refuses one with the fatal `DK_DIAG_FLEX_BOX_UNENCODABLE`
+([diagnostics](../core/DIAGNOSTICS.md)), and the validators refuse the tag.
 
-To carry one flex inside another today, store it as bytes and re-wrap on
-read:
+A flex can also travel inside another as plain bytes, re-wrapped on read:
 
 ```c
 flex *inner = flexNew();

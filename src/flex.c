@@ -234,9 +234,8 @@ typedef enum flexType {
     FLEX_CONTAINER_REFERENCE_EXTERNAL_64, /* to 18EB + ... */
 
     /************ BEGIN BOX MARKER TYPES ************/
-    /* Note: the order of the next 8 types matter.
-     *       The order here must match the order in the databox type enum.
-     */
+    /* Note: the order of the next 4 types matters: it matches
+     * DATABOX_CONTAINER_FLEX_MAP..TUPLE in the databox type enum. */
     /* 4 container holder types.
      *   value is a flex with conforming layout for type specified. */
     FLEX_CONTAINER_MAP, /* map is our embedded K/V pair type */
@@ -244,26 +243,17 @@ typedef enum flexType {
     FLEX_CONTAINER_SET,
     FLEX_CONTAINER_TUPLE,
 
-    /* Compress variants; do we need this many? Can we combine
-     * these? Should we make this a 2-level type with:
-     * [FLEX_CONTAINER][CONTAINER_TYPE][data][EPYT][RENIATNOC] */
-    FLEX_CONTAINER_CMAP, /* map is our embedded K/V pair type */
-    FLEX_CONTAINER_CLIST,
-    FLEX_CONTAINER_CSET,
-    FLEX_CONTAINER_CTUPLE,
+    /* Reserved: one compressed nested container, its kind (map, list,
+     * set, tuple) carried in the payload.  Nothing writes it yet; read
+     * and validation refuse it. */
+    FLEX_CONTAINER_COMPRESSED, /* 241 */
 
-    /* NOTE: If you add any types between here and FLEX_SAME, you
-     *       need to update the first test case accounting for
-     *       type differences. */
+    /* 242-251 are unassigned.  An addition here updates the "embedded
+     * types" test's accounting. */
 
     /************ BEGIN IMMEDIATE TYPES ************/
-    /* 1 marker to mean "current value is same as previous value."
-     *   Allows us to avoid storing duplicate entries.
-     *   If the previous entry matches the current entry, we
-     *   just store a one byte FLEX_SAME marker instead. */
-    FLEX_SAME = 251, /* UNUSED */
-
-    /* 4 immediate value types; our highest type values */
+    /* 4 immediate value types (one byte, no payload); our highest type
+     * values */
     FLEX_BYTES_EMPTY = 252, /* empty, since we can't store 0 len directly. */
     FLEX_TRUE = 253,
     FLEX_FALSE = 254,
@@ -330,10 +320,9 @@ typedef enum flexType {
 /* Immediate encodings are single-byte encodings (we don't duplicate
  * the encoding for reverse traversal because there's no inner "contents"
  * to skip over).
- * Immediate encodings are for any of:
- *   - one byte markers (SAME)
- *   - one byte values (T/F/N) */
-#define FLEX_IS_IMMEDIATE(encoding) ((encoding) >= FLEX_SAME)
+ * Immediate encodings are the one byte values: empty bytes, true, false,
+ * null. */
+#define FLEX_IS_IMMEDIATE(encoding) ((encoding) >= FLEX_BYTES_EMPTY)
 
 /* Integers are between types negative 8 bits and unsigned 64 bits. */
 #define FLEX_IS_INTEGER(enc) ((enc) >= FLEX_NEG_8B && (enc) <= FLEX_UINT_64B)
@@ -346,9 +335,9 @@ typedef enum flexType {
     ((enc) >= FLEX_CONTAINER_REFERENCE_EXTERNAL_8 &&                           \
      (enc) <= FLEX_CONTAINER_REFERENCE_EXTERNAL_64)
 
-/* Identify a type indicating a nested type we need to further consult */
+/* Identify a nested container (a flex inside the entry) */
 #define FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(enc)                              \
-    ((enc) >= FLEX_CONTAINER_MAP && (enc) < FLEX_SAME)
+    ((enc) >= FLEX_CONTAINER_MAP && (enc) <= FLEX_CONTAINER_TUPLE)
 
 /* Empty container header: 2 bytes (split varint) + 0 count (tagged varint) */
 #define FLEX_EMPTY_HEADER_SIZE (sizeof(uint8_t) + sizeof(uint8_t))
@@ -776,9 +765,9 @@ DK_INLINE_ALWAYS size_t flexRawEntryLength(flexEntry *const fe) {
 /* Payload size for every encoding whose size depends on the encoding
  * byte alone: fixed-width numbers and references plus the immediates.
  * Every other value is absent: the container tags (sized by their inner
- * varint), FLEX_SAME, the reserved compressed container tags,
- * FLEX_REAL_32D/64D, and the MDSC references when FLEX_ENABLE_PTR_MDSC
- * is off.
+ * varint), the reserved compressed container tag, the unassigned bytes
+ * 242-251, FLEX_REAL_32D/64D, and the MDSC references when
+ * FLEX_ENABLE_PTR_MDSC is off.
  *
  * This one case list expands into two switches: the decode-size switch
  * (flexDataSizeForFixedWidthEncodingWithInnerEntry, which adds the
@@ -5949,9 +5938,9 @@ bool flexPeekTotalBytes(const uint8_t *buf, size_t buflen, size_t *out_total) {
 }
 
 /* Class of an entry's encoding byte, for the validate walk.  Every byte
- * value maps to one class; UNKNOWN covers FLEX_SAME, the reserved
- * container tags and the gap before FLEX_SAME, FLEX_REAL_32D/64D, and
- * the MDSC references when mdsc support is compiled out. */
+ * value maps to one class; UNKNOWN covers the reserved compressed
+ * container tag, the unassigned bytes 242-251, FLEX_REAL_32D/64D, and the
+ * MDSC references when mdsc support is compiled out. */
 typedef enum flexEntryClass {
     FLEX_ENTRY_CLASS_UNKNOWN = 0,
     FLEX_ENTRY_CLASS_IMMEDIATE,
@@ -5966,8 +5955,7 @@ typedef enum flexEntryClass {
 DK_INLINE_ALWAYS flexEntryClass flexEntryClassify(const flexEncoding encoding,
                                                   size_t *const outFixedSize) {
     if (FLEX_IS_IMMEDIATE(encoding)) {
-        return encoding == FLEX_SAME ? FLEX_ENTRY_CLASS_UNKNOWN
-                                     : FLEX_ENTRY_CLASS_IMMEDIATE;
+        return FLEX_ENTRY_CLASS_IMMEDIATE;
     }
 
     if (FLEX_IS_STR(encoding)) {
@@ -10798,7 +10786,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const uint32_t lowestTopDownType = FLEX_BYTES_EMPTY;
         const uint32_t typeCount =
             highestNonStaticNumericType - FLEX_UINT_8B + numberOfImmediateTypes;
-        const uint32_t typeCountMax = FLEX_SAME - FLEX_FIXED_START;
+        const uint32_t typeCountMax = FLEX_BYTES_EMPTY - FLEX_FIXED_START;
         printf("Type range: [%" PRIu32 ", %" PRIu32 "] (+ %" PRIu32
                " top-down types) (%" PRIu32 " total used; %" PRIu32 " "
                "max limit; %" PRIu32 " "
@@ -10819,6 +10807,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * the *maximum* type byte positions to ensure integrity of
          * insert and traversal operations
          * (because we check with (encoding >= FLEX_NULL)) */
+        assert(FLEX_CONTAINER_COMPRESSED == 241);
         assert(FLEX_BYTES_EMPTY == 252);
         assert(FLEX_TRUE == 253);
         assert(FLEX_FALSE == 254);
@@ -14517,14 +14506,11 @@ int32_t flexTest(int32_t argc, char **argv) {
     /* ================================================================
      * FLEX VALIDATOR REJECTS ENCODINGS THE SIZE HELPER CANNOT HANDLE
      *
-     * FLEX_IS_FORWARD_DECLARE_SUBCONTAINER spans [FLEX_CONTAINER_MAP,
-     * FLEX_SAME), which includes the four implemented container tags
-     * plus reserved-but-unimplemented values (compressed-container
-     * variants 241..244 and the unused gap 245..250).  Only the four
-     * implemented tags are sizable by
-     * flexDataSizeForFixedWidthEncodingWithInnerEntry; the other
-     * values land on its assert(NULL) default.  The validator must
-     * reject them so a fuzzed tag byte cannot tunnel through to a
+     * Above the four implemented container tags sit the reserved
+     * compressed container (241) and the unassigned bytes 242..251.
+     * None is sizable by flexDataSizeForFixedWidthEncodingWithInnerEntry
+     * (they land on its assert(NULL) default), so the validator must
+     * reject them: a fuzzed tag byte cannot tunnel through to a
      * fail-loud abort.
      *
      * Similarly the fixed-width range carries two declared-but-unused
@@ -14533,29 +14519,17 @@ int32_t flexTest(int32_t argc, char **argv) {
      * ================================================================ */
     TEST("flexValidateBufferDeep rejects unimplemented container "
          "encodings") {
-        /* The four compressed-container reservations (CMAP, CLIST,
-         * CSET, CTUPLE) plus the unused gap before FLEX_SAME (245..250)
-         * are all in the FORWARD_DECLARE range but unsizable by the
-         * helper.  Build a buffer with a single entry whose tag byte
-         * is each candidate and confirm the deep validator rejects. */
-        const uint8_t bad_tags[] = {
-            (uint8_t)FLEX_CONTAINER_CMAP,
-            (uint8_t)FLEX_CONTAINER_CLIST,
-            (uint8_t)FLEX_CONTAINER_CSET,
-            (uint8_t)FLEX_CONTAINER_CTUPLE,
-            245u,
-            246u,
-            247u,
-            248u,
-            249u,
-            250u,
-        };
-        for (size_t i = 0; i < sizeof(bad_tags) / sizeof(bad_tags[0]); i++) {
+        /* The reserved compressed container and every unassigned byte
+         * after it, up to the immediates: build a buffer with a single
+         * entry whose tag byte is each and confirm the deep validator
+         * rejects it */
+        for (uint32_t tag = FLEX_CONTAINER_COMPRESSED; tag < FLEX_BYTES_EMPTY;
+             tag++) {
             uint8_t buf[4];
-            buf[0] = 0x03u;       /* split-varint: total_bytes = 4 */
-            buf[1] = 0x01u;       /* tagged-varint: count = 1 */
-            buf[2] = bad_tags[i]; /* unsizable container-range tag */
-            buf[3] = 0x01u;       /* inner varint header (1-byte form) */
+            buf[0] = 0x03u;        /* split-varint: total_bytes = 4 */
+            buf[1] = 0x01u;        /* tagged-varint: count = 1 */
+            buf[2] = (uint8_t)tag; /* unsizable tag */
+            buf[3] = 0x01u;        /* inner varint header (1-byte form) */
             /* Outer envelope passes (header is well-formed). */
             assert(flexValidateBuffer(buf, sizeof(buf)) == true);
             /* Deep walker rejects via the new helper-allowlist guard. */
