@@ -189,6 +189,7 @@ struct persist {
     int64_t walAppendOffset;
     bool walCursorMoved;
     bool walInitialized; /* WAL header verified or written; appendOffset set */
+    uint32_t walKeyId;   /* key id the open WAL's header names (0: none) */
 };
 
 /* ============================================================================
@@ -1056,6 +1057,7 @@ static bool persistWALWriteHeader(persist *p) {
         (ssize_t)sizeof(header)) {
         return false;
     }
+    p->walKeyId = header.keyId;
     /* A fresh WAL is the header alone: nothing that followed in the store
      * may be read back as entries */
     if (store->truncate && !store->truncate(store->ctx)) {
@@ -1118,7 +1120,9 @@ static bool persistWALInit(persist *p) {
     }
 
     persistStore *store = p->walStore;
-    if (persistWALReadVerifyHeader(p, NULL)) {
+    persistWALHeader header;
+    if (persistWALReadVerifyHeader(p, &header)) {
+        p->walKeyId = header.keyId;
         int64_t goodEnd = 0;
         const int rc = persistWALWalk(p, NULL, NULL, &goodEnd);
         return persistWALResume(p, goodEnd, rc);
@@ -1141,7 +1145,11 @@ bool persistWALReady(persist *p) {
         }
         p->walInitialized = true;
     }
-    return true;
+    /* The open WAL's header names the key its entries were written under:
+     * an entry under another key (a rotation since) could be read by no
+     * binding, so appends wait for a compaction to rewrite the snapshot
+     * and the WAL under the current key */
+    return persistCheckHeaderKeyId(p, p->walKeyId);
 }
 
 /* Write `len` bytes at the WAL's append offset */
@@ -9220,6 +9228,59 @@ int persistTest(int argc, char *argv[]) {
 #undef PERSIST_TEST_FILE_IS
         s->close(s->ctx);
         zfree(s);
+    }
+
+    TEST("rebinding to a new key mid-WAL keeps everything recoverable") {
+        /* Bound to key 1: a snapshot, then 3 entries; rebound to key 2 (a
+         * rotation).  The open WAL's header names key 1, so appends are
+         * refused (key id mismatch) rather than written where no binding
+         * can read them; a compaction rewrites everything under key 2,
+         * after which 2 more entries log and recovery gives all five */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t k1[32] = {1, 1, 1};
+        const uint8_t k2[32] = {2, 2, 2};
+        hmacKeyringInstallUnsalted(ring, 1u, &hmacAlgoSHA256, k1, sizeof(k1));
+        hmacKeyringInstallUnsalted(ring, 2u, &hmacAlgoSHA256, k2, sizeof(k2));
+        persistConfig config = persistDefaultConfig();
+        config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+        persist *p = persistCreate(&persistOpsIntset, &config);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        persistAttachKeyring(p, ring, 1u);
+        cleaner(intsetFree) intset *live = intsetNew();
+        persistSnapshot(p, live);
+        for (int64_t v = 1; v <= 3; v++) {
+            bool added = false;
+            intsetAdd(&live, v, &added);
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+        }
+        const bool rebound = persistRebindKeyring(p, ring, 2u);
+        const int64_t four = 4;
+        const bool refused = persistLogOp(p, PERSIST_OP_INSERT, &four, 1) ==
+                                 PERSIST_LOG_REFUSED &&
+                             persistLastError(p) == PERSIST_ERR_KEY_ID_MISMATCH;
+        const bool compacted = persistCompact(p, live);
+        size_t logged = 0;
+        for (int64_t v = 4; v <= 5; v++) {
+            bool added = false;
+            intsetAdd(&live, v, &added);
+            logged += persistLogOp(p, PERSIST_OP_INSERT, &v, 1) !=
+                      PERSIST_LOG_REFUSED;
+        }
+        persistSync(p);
+        intset *got = persistRecover(p);
+        const size_t members = got ? (size_t)intsetCount(got) : 0;
+        if (got) {
+            intsetFree(got);
+        }
+        if (!rebound || !refused || !compacted || logged != 2 || members != 5) {
+            ERR("rebind %d, refused %d, compacted %d, %zu of 2 logged, %zu "
+                "of 5 recovered (error %d)",
+                rebound, refused, compacted, logged, members,
+                (int)persistLastError(p));
+        }
+        persistClose(p);
+        hmacKeyringFree(ring);
     }
 
     TEST("a WAL-only rebuild applies every entry once no snapshot holds them") {

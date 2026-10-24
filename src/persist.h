@@ -757,7 +757,13 @@ bool persistAttachKeyring(persist *p, struct hmacKeyring *ring,
  * caller has handled rotation). Internally identical to Attach but
  * named separately so audit/log review can distinguish first-attach
  * from post-rotation rebind. Returns false if `key_id` is not
- * currently installed in `ring`. */
+ * currently installed in `ring`.
+ *
+ * Rotating to a different key_id: the snapshot and the open WAL name the
+ * old id in their headers, so appends are refused (lastError
+ * PERSIST_ERR_KEY_ID_MISMATCH) until persistCompact rewrites both under
+ * the new key; an entry written in between could be read by no binding.
+ * Rotate as: rebind, compact, then carry on. */
 bool persistRebindKeyring(persist *p, struct hmacKeyring *ring,
                           uint32_t key_id);
 
