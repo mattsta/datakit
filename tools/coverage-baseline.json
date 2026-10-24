@@ -1,5 +1,5 @@
 {
- "commit": "c80afcf54dcdde7bc02fe4591bcfb3d6b3c3561d",
+ "commit": "73f83058a285ce9bf25c86e31d600450a46bfb79",
  "files": {
   "src/OSRegulate.c": {
    "lines": 240,
@@ -58,8 +58,8 @@
    "branches": 0
   },
   "src/clusterMailbox.c": {
-   "lines": 118,
-   "branches": 95
+   "lines": 114,
+   "branches": 91
   },
   "src/clusterMailbox.h": {
    "lines": 0,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 258,
-   "branches": 443
+   "lines": 246,
+   "branches": 442
   },
   "src/flex.h": {
    "lines": 0,
@@ -414,8 +414,8 @@
    "branches": 1
   },
   "src/flexEnvelope.c": {
-   "lines": 246,
-   "branches": 226
+   "lines": 231,
+   "branches": 219
   },
   "src/flexEnvelope.h": {
    "lines": 0,
@@ -495,15 +495,15 @@
   },
   "src/hmacKeyring.c": {
    "lines": 90,
-   "branches": 83
+   "branches": 82
   },
   "src/hmacKeyring.h": {
    "lines": 0,
    "branches": 0
   },
   "src/hyperloglog.c": {
-   "lines": 57,
-   "branches": 86
+   "lines": 56,
+   "branches": 85
   },
   "src/inflightGate.c": {
    "lines": 2,
@@ -642,8 +642,8 @@
    "branches": 21
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 120,
-   "branches": 173
+   "lines": 116,
+   "branches": 166
   },
   "src/multiOrderedSetFullInternal.h": {
    "lines": 0,
@@ -651,11 +651,11 @@
   },
   "src/multiOrderedSetMedium.c": {
    "lines": 58,
-   "branches": 59
+   "branches": 57
   },
   "src/multiOrderedSetSmall.c": {
-   "lines": 65,
-   "branches": 47
+   "lines": 63,
+   "branches": 44
   },
   "src/multiTimer.c": {
    "lines": 27,
@@ -690,8 +690,8 @@
    "branches": 16
   },
   "src/multidict.c": {
-   "lines": 189,
-   "branches": 183
+   "lines": 179,
+   "branches": 181
   },
   "src/multidict.h": {
    "lines": 0,
@@ -739,7 +739,7 @@
   },
   "src/multimap.c": {
    "lines": 64,
-   "branches": 115
+   "branches": 117
   },
   "src/multimap.h": {
    "lines": 0,
@@ -758,24 +758,24 @@
    "branches": 26
   },
   "src/multimapFull.c": {
-   "lines": 79,
-   "branches": 222
+   "lines": 63,
+   "branches": 220
   },
   "src/multimapInternal.h": {
    "lines": 0,
    "branches": 1
   },
   "src/multimapMedium.c": {
-   "lines": 31,
+   "lines": 28,
    "branches": 62
   },
   "src/multimapSmall.c": {
-   "lines": 30,
+   "lines": 21,
    "branches": 39
   },
   "src/multiroar.c": {
-   "lines": 243,
-   "branches": 272
+   "lines": 237,
+   "branches": 269
   },
   "src/multiroar.h": {
    "lines": 0,
@@ -802,8 +802,8 @@
    "branches": 33
   },
   "src/persist.c": {
-   "lines": 388,
-   "branches": 329
+   "lines": 371,
+   "branches": 324
   },
   "src/persist.h": {
    "lines": 0,
