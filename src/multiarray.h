@@ -150,7 +150,12 @@ typedef uint32_t multiarrayIdx;
 
 /* ====================================================================
  * Starting with containers...
- * ==================================================================== */
+ * ====================================================================
+ * The container API works on multiarrays from multiarrayNew /
+ * multiarrayNewFromArray.  Given a native multiarray (multiarrayNativeNew:
+ * a bare array whose element size only the macro API above knows) or NULL,
+ * every call is refused safely: readers return 0 / NULL, writers and Free
+ * change nothing, and iterators yield nothing. */
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax);
 void multiarrayFree(multiarray *m);
 

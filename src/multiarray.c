@@ -37,9 +37,8 @@ defcleaner(void *, zfree);
         case MULTIARRAY_TYPE_LARGE:                                            \
             ret multiarrayLarge##func(marl(m), __VA_ARGS__);                   \
             break;                                                             \
-        default:                                                               \
-            assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+        default: /* native (or NULL): refused by the caller's fallback */      \
+            break;                                                             \
         }                                                                      \
     } while (0)
 
@@ -59,23 +58,27 @@ defcleaner(void *, zfree);
         case MULTIARRAY_TYPE_LARGE:                                            \
             ret multiarrayLarge##func(marl(m));                                \
             break;                                                             \
-        default:                                                               \
-            assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+        default: /* native (or NULL): refused by the caller's fallback */      \
+            break;                                                             \
         }                                                                      \
     } while (0)
 
 #define MULTIARRAY_SINGLE_NORETURN(m, func) _MULTIARRAY_SINGLE(, m, func)
 #define MULTIARRAY_SINGLE_RETURN(m, func) _MULTIARRAY_SINGLE(return, m, func)
 
-/* Count/Bytes only apply to the tagged container API (multiarrayNew);
- * the Native macro API tracks its count externally by design. */
+/* The container API (multiarrayNew) works on its own tagged tiers.  A
+ * native multiarray (multiarrayNativeNew: a bare array whose element size
+ * only its macro API knows) or NULL is refused with a defined answer:
+ * readers give 0 / NULL, writers change nothing, Free does nothing.
+ * Count/Bytes: the Native macro API tracks its count externally. */
 size_t multiarrayCount(const multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, Count);
+    return 0;
 }
 
 size_t multiarrayBytes(const multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, Bytes);
+    return 0;
 }
 
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax) {
@@ -85,14 +88,17 @@ multiarray *multiarrayNew(uint16_t len, uint16_t rowMax) {
 
 void *multiarrayGet(multiarray *m, multiarrayIdx idx) {
     MULTIARRAY_RETURN(m, Get, idx);
+    return NULL;
 }
 
 void *multiarrayGetHead(multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, GetHead);
+    return NULL;
 }
 
 void *multiarrayGetTail(multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, GetTail);
+    return NULL;
 }
 
 DK_STATIC inline void _multiarrayUpgrade(multiarray **m) {
@@ -143,9 +149,8 @@ void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
     case MULTIARRAY_TYPE_LARGE:
         multiarrayLargeDeleteTaking(marl(*m), (int32_t)idx, out);
         break;
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL: refused, 'out' untouched */
+        break;
     }
 }
 
@@ -161,14 +166,16 @@ void multiarrayDeleteRange(multiarray **m, multiarrayIdx start,
     case MULTIARRAY_TYPE_LARGE:
         multiarrayLargeDeleteRange(marl(*m), start, count);
         break;
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL: refused */
+        break;
     }
 }
 
 void multiarrayReplace(multiarray *m, multiarrayIdx idx, const void *what) {
-    memcpy(multiarrayGet(m, idx), what, multiarrayElementLen(m));
+    void *at = multiarrayGet(m, idx);
+    if (at) {
+        memcpy(at, what, multiarrayElementLen(m));
+    }
 }
 
 void multiarrayRotate(multiarray **m) {
@@ -215,18 +222,20 @@ void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
                 : (int32_t)((const multiarrayLargeNode *)iter->node)->count - 1;
         break;
     }
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL: an iterator that yields nothing */
+        break;
     }
 }
 
 void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
                               multiarrayIdx idx, bool forward) {
-    assert(idx < multiarrayCount(m));
     *iter = (multiarrayIter){.tier = _MULTIARRAY_USE(m),
                              .type = (uint8_t)_multiarrayType(m),
                              .forward = forward};
+    if (_multiarrayType(m) == MULTIARRAY_TYPE_NATIVE) {
+        return; /* native or NULL: an iterator that yields nothing */
+    }
+    assert(idx < multiarrayCount(m));
     switch (_multiarrayType(m)) {
     case MULTIARRAY_TYPE_SMALL:
         iter->offset = (int32_t)idx;
@@ -248,9 +257,8 @@ void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
         iter->offset = (int32_t)offset;
         break;
     }
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native: handled above */
+        break;
     }
 }
 
@@ -316,9 +324,8 @@ void *multiarrayIteratorNext(multiarrayIter *iter) {
 
         return NULL;
     }
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL */
+        return NULL;
     }
 }
 
@@ -334,9 +341,8 @@ uint16_t multiarrayElementLen(const multiarray *m) {
         return marm(m)->len;
     case MULTIARRAY_TYPE_LARGE:
         return marl(m)->len;
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL */
+        return 0;
     }
 }
 
@@ -348,9 +354,8 @@ uint16_t multiarrayRowMax(const multiarray *m) {
         return marm(m)->rowMax;
     case MULTIARRAY_TYPE_LARGE:
         return marl(m)->rowMax;
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL */
+        return 0;
     }
 }
 
@@ -392,9 +397,8 @@ void multiarrayCopyTo(const multiarray *m, void *out) {
         }
         break;
     }
-    default:
-        assert(NULL && "container API on a native multiarray");
-        __builtin_unreachable();
+    default: /* native or NULL: nothing copied */
+        break;
     }
 }
 
@@ -615,6 +619,51 @@ int multiarrayTest(int argc, char *argv[]) {
         err += multiarrayOracleSoak_(2, 7, 8, MULTIARRAY_TYPE_SMALL, 1);
         err += multiarrayOracleSoak_(12, 50, 8, MULTIARRAY_TYPE_MEDIUM, 2);
         err += multiarrayOracleSoak_(120, 400, 8, MULTIARRAY_TYPE_LARGE, 3);
+    }
+
+    TEST("the container API refuses a native multiarray and NULL") {
+        /* A native array (its element size known only to its macro API)
+         * holding one element, and NULL: readers answer 0 / NULL, writers
+         * and Free change nothing, iterators yield nothing, and the native
+         * element is untouched */
+        multiarray *nat = multiarrayNativeNew(s16);
+        int count = 0;
+        s16 one = {.a = 11};
+        multiarrayNativeInsert(nat, s16, 64, count, 0, &one);
+        multiarray *const subjects[2] = {nat, NULL};
+        for (size_t i = 0; i < 2; i++) {
+            multiarray *m = subjects[i];
+            s16 probe = {.a = 99};
+            s16 out = {.a = 77};
+            uint8_t copied[sizeof(s16)] = {0xEE};
+            multiarrayIter it;
+            multiarrayIteratorInit(m, &it, true);
+            const void *first = multiarrayIteratorNext(&it);
+            multiarrayIteratorInitAt(m, &it, 0, false);
+            const void *firstAt = multiarrayIteratorNext(&it);
+            multiarrayInsert(&m, 0, &probe);
+            multiarrayDelete(&m, 0);
+            multiarrayPop(&m, 0, &out);
+            multiarrayDeleteRange(&m, 0, 1);
+            multiarrayReplace(m, 0, &probe);
+            multiarrayRotate(&m);
+            multiarrayCopyTo(m, copied);
+            if (multiarrayCount(m) || multiarrayBytes(m) ||
+                multiarrayGet(m, 0) || multiarrayGetHead(m) ||
+                multiarrayGetTail(m) || multiarrayElementLen(m) ||
+                multiarrayRowMax(m) || first || firstAt || out.a != 77 ||
+                copied[0] != 0xEE || m != subjects[i]) {
+                ERR("the container API acted on %s",
+                    i ? "NULL" : "a native multiarray");
+            }
+            multiarrayFree(NULL);
+        }
+        s16 *held = NULL;
+        multiarrayNativeGet(nat, s16, held, 0);
+        if (!held || held->a != 11) {
+            ERRR("the native element changed");
+        }
+        multiarrayNativeFree(nat);
     }
 
     printf("Testing direct...\n");
