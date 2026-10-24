@@ -1809,8 +1809,15 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
     out[found++] = primary;
     seenTrackerSet(&seen, primary->arrayIndex);
 
-    /* For replicas, use different hash seeds */
-    for (uint32_t r = 1; r < maxNodes && found < maxNodes; r++) {
+    /* Replicas come from the key hashed with seeds 1, 2, ...  A seed that
+     * lands on a node already chosen is retried with the next one (one
+     * try per seed lost a replica on every collision), up to a bound;
+     * then the nodes still missing are taken in bucket order after the
+     * primary, so every placement gets min(maxNodes, buckets) nodes */
+    const uint32_t want =
+        maxNodes < data->bucketCount ? maxNodes : data->bucketCount;
+    const uint32_t probeLimit = 2 * want + 8;
+    for (uint32_t r = 1; found < want && r <= probeLimit; r++) {
         uint64_t replicaHash = clusterHash64(key, keyLen, ring->hashSeed + r);
         int32_t replicaBucket =
             jumpConsistentHash(replicaHash, (int32_t)data->bucketCount);
@@ -1821,6 +1828,14 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
                 seenTrackerSet(&seen, replica->arrayIndex);
                 out[found++] = replica;
             }
+        }
+    }
+    for (uint32_t i = 1; found < want && i < data->bucketCount; i++) {
+        const clusterNode *replica =
+            data->nodes[((uint32_t)bucket + i) % data->bucketCount];
+        if (!seenTrackerTest(&seen, replica->arrayIndex)) {
+            seenTrackerSet(&seen, replica->arrayIndex);
+            out[found++] = replica;
         }
     }
 
@@ -6128,6 +6143,111 @@ static int testFuzzLargeScale(void) {
             }
 
             clusterPlacementFree(&p);
+        }
+    }
+
+    TEST("replica counts past 64 get every node they ask for, once") {
+        /* Past 64 the strategies fill a heap buffer, not the stack one:
+         * 100 nodes asked for 200 replicas give all 100, 300 nodes asked
+         * for 255 (the most a quorum holds) give 255, distinct, with the
+         * primary first, under every built-in strategy */
+        static const clusterStrategyType strategies[] = {
+            CLUSTER_STRATEGY_KETAMA, CLUSTER_STRATEGY_JUMP,
+            CLUSTER_STRATEGY_RENDEZVOUS, CLUSTER_STRATEGY_MAGLEV,
+            CLUSTER_STRATEGY_BOUNDED};
+        static const struct {
+            uint32_t nodes;
+            uint8_t replicas;
+        } sizes[] = {{100, 200}, {300, 255}};
+        for (size_t s = 0; s < sizeof(strategies) / sizeof(*strategies); s++) {
+            for (size_t z = 0; z < sizeof(sizes) / sizeof(*sizes); z++) {
+                clusterRingConfig config = {
+                    .name = "wide-replicas",
+                    .strategyType = strategies[s],
+                    .defaultQuorum = {.replicaCount = sizes[z].replicas},
+                };
+                cleaner(clusterRingFree) clusterRing *ring =
+                    clusterRingNew(&config);
+                for (uint64_t i = 1; i <= sizes[z].nodes; i++) {
+                    clusterNodeConfig nodeConfig = {
+                        .id = i,
+                        .weight = 100,
+                        .initialState = CLUSTER_NODE_UP,
+                    };
+                    clusterRingAddNode(ring, &nodeConfig);
+                }
+                const size_t want = sizes[z].nodes < sizes[z].replicas
+                                        ? sizes[z].nodes
+                                        : sizes[z].replicas;
+                clusterPlacement p;
+                if (clusterRingLocate(ring, "wide-key", 8, &p) != CLUSTER_OK) {
+                    ERR("strategy %d, %u nodes: placement failed",
+                        (int)strategies[s], sizes[z].nodes);
+                    continue;
+                }
+                cleanerName(zfree, Bools) bool *seen =
+                    zcalloc(sizes[z].nodes + 1, sizeof(bool));
+                bool unique = clusterPlacementReplicaCount(&p) == want &&
+                              p.primary == clusterPlacementGetReplica(&p, 0);
+                for (size_t i = 0; unique && i < want; i++) {
+                    const clusterNode *node = clusterPlacementGetReplica(&p, i);
+                    unique = node && node->id >= 1 &&
+                             node->id <= sizes[z].nodes && !seen[node->id];
+                    if (unique) {
+                        seen[node->id] = true;
+                    }
+                }
+                if (!unique) {
+                    ERR("strategy %d, %u nodes, %u replicas: got %zu, want "
+                        "%zu distinct",
+                        (int)strategies[s], sizes[z].nodes,
+                        (unsigned)sizes[z].replicas,
+                        clusterPlacementReplicaCount(&p), want);
+                }
+                clusterPlacementFree(&p);
+            }
+        }
+
+        /* Small rings: 5 nodes, 3 replicas, 2000 keys; every placement
+         * gets 3 distinct nodes (Jump used to lose one whenever a seed
+         * landed on a node already chosen) */
+        for (size_t s = 0; s < sizeof(strategies) / sizeof(*strategies); s++) {
+            clusterRingConfig config = {
+                .name = "small-replicas",
+                .strategyType = strategies[s],
+                .defaultQuorum = {.replicaCount = 3},
+            };
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
+            for (uint64_t i = 1; i <= 5; i++) {
+                clusterNodeConfig nodeConfig = {
+                    .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
+                clusterRingAddNode(ring, &nodeConfig);
+            }
+            uint32_t shortSets = 0;
+            for (uint32_t k = 0; k < 2000; k++) {
+                char key[16];
+                const int n = snprintf(key, sizeof(key), "k%u", k);
+                clusterPlacement p;
+                if (clusterRingLocate(ring, key, (uint32_t)n, &p) !=
+                    CLUSTER_OK) {
+                    shortSets++;
+                    continue;
+                }
+                const clusterNode *a = clusterPlacementGetReplica(&p, 0);
+                const clusterNode *b = clusterPlacementGetReplica(&p, 1);
+                const clusterNode *c = clusterPlacementGetReplica(&p, 2);
+                if (clusterPlacementReplicaCount(&p) != 3 || !a || !b || !c ||
+                    a == b || b == c || a == c) {
+                    shortSets++;
+                }
+                clusterPlacementFree(&p);
+            }
+            if (shortSets) {
+                ERR("strategy %d: %u of 2000 keys did not get 3 distinct "
+                    "replicas of 5 nodes",
+                    (int)strategies[s], shortSets);
+            }
         }
     }
 
