@@ -391,7 +391,6 @@ static inline __m128i base36CharsToValues_SSE2(__m128i chars) {
 
     /* Check if digit (>= '0' && <= '9') */
     __m128i zero_char = _mm_set1_epi8('0');
-    __m128i nine_char = _mm_set1_epi8('9');
     __m128i A_char = _mm_set1_epi8('A');
     __m128i a_char = _mm_set1_epi8('a');
 
@@ -420,10 +419,15 @@ static inline __m128i base36CharsToValues_SSE2(__m128i chars) {
         _mm_and_si128(_mm_cmpgt_epi8(chars, _mm_set1_epi8('a' - 1)),
                       _mm_cmplt_epi8(chars, _mm_set1_epi8('z' + 1)));
 
-    /* Select the appropriate value based on character type */
+    /* Select the appropriate value based on character type; any other
+     * byte becomes 0xFF, which the decoder refuses (with no lane selected
+     * it would read as '0') */
     __m128i result = _mm_and_si128(is_digit, as_digit);
     result = _mm_or_si128(result, _mm_and_si128(is_upper, as_upper_val));
     result = _mm_or_si128(result, _mm_and_si128(is_lower, as_lower_val));
+    const __m128i valid =
+        _mm_or_si128(_mm_or_si128(is_digit, is_upper), is_lower);
+    result = _mm_or_si128(result, _mm_andnot_si128(valid, _mm_set1_epi8(-1)));
 
     return result;
 }
@@ -431,7 +435,6 @@ static inline __m128i base36CharsToValues_SSE2(__m128i chars) {
 /* SSE2 helper: parallel value to character conversion */
 static inline __m128i base36ValuesToChars_SSE2(__m128i values) {
     /* Values 0-9 -> '0'-'9', values 10-35 -> 'A'-'Z' */
-    __m128i ten = _mm_set1_epi8(10);
     __m128i is_letter = _mm_cmpgt_epi8(values, _mm_set1_epi8(9));
 
     /* For digits: add '0' */
@@ -568,9 +571,15 @@ static inline __m256i base36CharsToValues_AVX2(__m256i chars) {
         _mm256_and_si256(_mm256_cmpgt_epi8(chars, _mm256_set1_epi8('a' - 1)),
                          _mm256_cmpgt_epi8(_mm256_set1_epi8('z' + 1), chars));
 
+    /* Any byte in none of the three ranges becomes 0xFF, which the
+     * decoder refuses (with no lane selected it would read as '0') */
     __m256i result = _mm256_and_si256(is_digit, as_digit);
     result = _mm256_or_si256(result, _mm256_and_si256(is_upper, as_upper_val));
     result = _mm256_or_si256(result, _mm256_and_si256(is_lower, as_lower_val));
+    const __m256i valid =
+        _mm256_or_si256(_mm256_or_si256(is_digit, is_upper), is_lower);
+    result = _mm256_or_si256(result,
+                             _mm256_andnot_si256(valid, _mm256_set1_epi8(-1)));
 
     return result;
 }
@@ -691,10 +700,13 @@ static inline uint8x16_t base36CharsToValues_NEON(uint8x16_t chars) {
     uint8x16_t as_upper = vaddq_u8(vsubq_u8(chars, A_char), ten);
     uint8x16_t as_lower = vaddq_u8(vsubq_u8(chars, a_char), ten);
 
-    /* Select based on masks */
+    /* Select based on masks; any other byte becomes 0xFF, which the
+     * decoder refuses (with no lane selected it would read as '0') */
     uint8x16_t result = vandq_u8(is_digit, as_digit);
     result = vorrq_u8(result, vandq_u8(is_upper, as_upper));
     result = vorrq_u8(result, vandq_u8(is_lower, as_lower));
+    const uint8x16_t valid = vorrq_u8(vorrq_u8(is_digit, is_upper), is_lower);
+    result = vorrq_u8(result, vmvnq_u8(valid));
 
     return result;
 }
@@ -2478,6 +2490,103 @@ int ulidTest(int argc, char *argv[]) {
     (void)argv;
 
     int32_t err = 0;
+
+    TEST("every codec refuses bad characters, NULL and short buffers") {
+        /* Each decoder this build has: a bad byte at either end of either
+         * SIMD half (positions 0, 15, 16, 24) is refused; the untouched
+         * text decodes, and every encoder writes it back the same.  NULLs
+         * and a buffer one byte short are refused by every codec. */
+        typedef struct {
+            size_t (*enc)(const ulid_t *, char *, size_t);
+            bool (*dec)(const char *, ulid_t *);
+            const char *name;
+        } codec;
+        static const codec codecs[] = {
+            {ulidEncodeScalar, ulidDecodeScalar, "scalar"},
+            {ulidEncodeSWAR, ulidDecodeSWAR, "swar"},
+#if ULID_HAS_SSE2
+            {ulidEncodeSSE2, ulidDecodeSSE2, "sse2"},
+#endif
+#if ULID_HAS_AVX2
+            {ulidEncodeAVX2, ulidDecodeAVX2, "avx2"},
+#endif
+#if ULID_HAS_NEON
+            {ulidEncodeNEON, ulidDecodeNEON, "neon"},
+#endif
+        };
+        static const char good[ULID_ENCODED_LENGTH + 1] =
+            "0123456789ABCDEFGHIJKLMNO";
+        static const uint8_t bad[] = {'!', '/', ':',  '@',  '[', '`',
+                                      '{', ' ', 0x7f, 0x80, 0xff};
+        static const size_t at[] = {0, 15, 16, 24};
+        ulid_t want = {{0}};
+        if (!ulidDecodeScalar(good, &want)) {
+            ERRR("the scalar decoder refused a valid string");
+        }
+        for (size_t c = 0; c < sizeof(codecs) / sizeof(*codecs); c++) {
+            const codec *k = &codecs[c];
+            ulid_t got = {{0}};
+            char text[ULID_ENCODED_LENGTH + 1];
+            if (!k->dec(good, &got) || memcmp(&got, &want, sizeof(got)) ||
+                k->enc(&want, text, sizeof(text)) != ULID_ENCODED_LENGTH ||
+                strcmp(text, good) != 0) {
+                ERR("%s: the valid string did not round-trip", k->name);
+            }
+            for (size_t p = 0; p < sizeof(at) / sizeof(*at); p++) {
+                for (size_t b = 0; b < sizeof(bad); b++) {
+                    char probe[ULID_ENCODED_LENGTH + 1];
+                    memcpy(probe, good, sizeof(probe));
+                    probe[at[p]] = (char)bad[b];
+                    if (k->dec(probe, &got)) {
+                        ERR("%s: accepted byte 0x%02x at %zu", k->name, bad[b],
+                            at[p]);
+                    }
+                }
+            }
+            if (k->dec(NULL, &got) || k->dec(good, NULL) ||
+                k->enc(NULL, text, sizeof(text)) ||
+                k->enc(&want, NULL, sizeof(text)) ||
+                k->enc(&want, text, ULID_ENCODED_LENGTH)) {
+                ERR("%s: took a NULL or a short buffer", k->name);
+            }
+        }
+
+        /* The 64- and 32-bit codecs, and the accessors, refuse the same */
+        ulid64_t id64 = {0};
+        ulid32_t id32 = {0};
+        char t64[ULID64_ENCODED_LENGTH + 1];
+        char t32[ULID32_ENCODED_LENGTH + 1];
+        if (ulid64Decode("0000000000!00", &id64) ||
+            ulid32Decode("000!000", &id32) || ulid64Decode(NULL, &id64) ||
+            ulid32Decode(NULL, &id32) ||
+            ulid64Encode(&id64, t64, ULID64_ENCODED_LENGTH) ||
+            ulid32Encode(&id32, t32, ULID32_ENCODED_LENGTH) ||
+            ulid64Encode(NULL, t64, sizeof(t64)) ||
+            ulid32Encode(NULL, t32, sizeof(t32)) || ulidGetTimestampNs(NULL) ||
+            ulidGetRandom(NULL) || ulid64GetCounter(NULL) ||
+            ulid64GetSnowflakeMachineId(NULL) ||
+            ulid64GetSnowflakeSequence(NULL) || ulid64GetNsDelta(NULL) ||
+            ulidGetFirstTimestampNs(NULL) || ulidGetSecondTimestampNs(NULL) ||
+            ulidGetFirstTimestampNsInterleaved(NULL) ||
+            ulidGetSecondTimestampNsInterleaved(NULL)) {
+            ERRR("a 64/32-bit codec or an accessor took bad input");
+        }
+
+        /* An encoder this build lacks cannot be chosen; the choice stays */
+        const ulidEncodeImpl before = ulidGetEncodeImpl();
+#if !ULID_HAS_AVX2
+        if (ulidSetEncodeImpl(ULID_ENCODE_AVX2) ||
+            ulidGetEncodeImpl() != before) {
+            ERRR("an unavailable encoder was chosen");
+        }
+#endif
+        if (strcmp(ulidGetImplName(ULID_ENCODE_AUTO), "auto") != 0 ||
+            strcmp(ulidGetImplName((ulidEncodeImpl)99), "unknown") != 0 ||
+            ulidIsImplAvailable((ulidEncodeImpl)99)) {
+            ERRR("encoder names or availability are wrong");
+        }
+        (void)before;
+    }
 
     TEST("generator seeds carry whole bytes from the OS random source") {
         /* Hex characters carry 4 bits a byte: a seed of 16 of them would
