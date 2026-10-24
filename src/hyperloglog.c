@@ -1624,6 +1624,7 @@ hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n) {
 
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
+#include "ctest.h"
 #include "datakit.h"
 #include "timeUtil.h"
 
@@ -1648,134 +1649,116 @@ int hyperloglogTest(int argc, char *argv[]) {
     cleaner(mdscfree) mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
     hyperloglogHeader *hdr = (hyperloglogHeader *)bitcounters, *hdr2;
     uint8_t bytecounters[HLL_REGISTERS] = {0};
-    int32_t errors = 0;
+    int err = 0;
     cleaner(hyperloglogFree) hyperloglog *h = NULL;
 
-    /* Test 1: access registers.
-     * The test is conceived to test that the different counters of our data
-     * structure are accessible and that setting their values both result in
-     * the correct value to be retained and not affect adjacent values. */
-    for (uint32_t j = 0; j < HLL_TEST_CYCLES; j++) {
-        if (j % 5000 == 0) {
-            printf("[register access]: Testing cycle %" PRIu32
-                   " (%0.2f%% done)\n",
-                   j, (float)j / HLL_TEST_CYCLES * 100);
-        }
-        /* Set the HLL counters and an array of unsigned byes of the
-         * same size to the same set of random values. */
-        for (uint32_t i = 0; i < HLL_REGISTERS; i++) {
-            uint32_t r = rand() & HLL_REGISTER_MAX;
+    /* Every register is accessible, and setting one keeps its value without
+     * touching its neighbours */
+    TEST("register access: each register holds its value") {
+        for (uint32_t j = 0; j < HLL_TEST_CYCLES; j++) {
+            if (j % 5000 == 0) {
+                printf("[register access]: Testing cycle %" PRIu32
+                       " (%0.2f%% done)\n",
+                       j, (float)j / HLL_TEST_CYCLES * 100);
+            }
+            /* Set the HLL counters and an array of unsigned byes of the
+             * same size to the same set of random values. */
+            for (uint32_t i = 0; i < HLL_REGISTERS; i++) {
+                uint32_t r = rand() & HLL_REGISTER_MAX;
 
-            bytecounters[i] = r;
-            HLL_DENSE_SET_REGISTER(hdr->registers, i, r);
-        }
+                bytecounters[i] = r;
+                HLL_DENSE_SET_REGISTER(hdr->registers, i, r);
+            }
 
-        /* Check that we are able to retrieve the same values. */
-        for (uint32_t i = 0; i < HLL_REGISTERS; i++) {
-            uint32_t val;
+            /* Check that we are able to retrieve the same values. */
+            for (uint32_t i = 0; i < HLL_REGISTERS; i++) {
+                uint32_t val;
 
-            HLL_DENSE_GET_REGISTER(val, hdr->registers, i);
-            if (val != bytecounters[i]) {
-                printf("TESTFAILED Register %" PRIu32 " should be %" PRIu8
-                       " but is %" PRIu32 "\n",
-                       (uint32_t)i, (uint8_t)bytecounters[i], (uint32_t)val);
-                errors++;
-                goto cleanup;
+                HLL_DENSE_GET_REGISTER(val, hdr->registers, i);
+                if (val != bytecounters[i]) {
+                    ERR("register %" PRIu32 " should be %" PRIu8
+                        " but is %" PRIu32,
+                        (uint32_t)i, (uint8_t)bytecounters[i], (uint32_t)val);
+                    goto approximationDone;
+                }
             }
         }
     }
 
-    /* Test 2: approximation error.
-     * The test adds unique elements and check that the estimated value
-     * is always reasonable bounds.
-     *
-     * We check that the error is smaller than a few times than the expected
-     * standard error, to make it very unlikely for the test to fail because
-     * of a "bad" run.
-     *
-     * The test is performed with both dense and sparse HLLs at the same
-     * time also verifying that the computed cardinality is the same. */
-    memset(hdr->registers, 0, HLL_DENSE_SIZE - HLL_HDR_SIZE);
-    h = hyperloglogNew();
-    double relerr = 1.04 / sqrt(HLL_REGISTERS);
-    uint64_t checkpoint = 1;
-    uint64_t seed = (uint64_t)rand() | (uint64_t)rand() << 32;
-    uint64_t ele;
-    /* Checkpoints 1, 10, ... 10^6: past the sparse-to-dense switch and the
-     * linear-counting range (about 2.5 x HLL_REGISTERS), well into the
-     * raw-estimate range */
-    uint64_t testCount = HLL_TEST_CYCLES * 1000;
-    for (uint64_t j = 1; j <= testCount; j++) {
-        if (j % 500000 == 0) {
-            printf("[approximation error]: Testing cycle %" PRIu64
-                   " (%0.2f%% done)\n",
-                   j, (float)j / testCount * 100);
-        }
-        ele = j ^ seed;
-        /* Through hyperloglogAdd, as a caller would: it invalidates the
-         * cached count when a register changes (a dense add never moves
-         * the buffer) */
-        hyperloglogAdd(&hdr, &ele, sizeof(ele));
-        hyperloglogAdd(&h, &ele, sizeof(ele));
-
-        /* Make sure for small cardinalities we use sparse encoding. */
-        if (j == checkpoint && j < serverSparseMaxBytes / 2) {
-            hdr2 = h;
-            if (hdr2->encoding != HLL_SPARSE) {
-                printf("TESTFAILED sparse encoding not used\n");
-                errors++;
-                goto cleanup;
+    /* Unique elements keep the estimate within a few standard errors (so a
+     * "bad" run is very unlikely to fail it), with a dense and a sparse
+     * sketch fed together agreeing on every checkpoint's count */
+    TEST("approximation error: dense and sparse agree within bounds") {
+        memset(hdr->registers, 0, HLL_DENSE_SIZE - HLL_HDR_SIZE);
+        h = hyperloglogNew();
+        double relerr = 1.04 / sqrt(HLL_REGISTERS);
+        uint64_t checkpoint = 1;
+        uint64_t seed = (uint64_t)rand() | (uint64_t)rand() << 32;
+        uint64_t ele;
+        /* Checkpoints 1, 10, ... 10^6: past the sparse-to-dense switch and the
+         * linear-counting range (about 2.5 x HLL_REGISTERS), well into the
+         * raw-estimate range */
+        uint64_t testCount = HLL_TEST_CYCLES * 1000;
+        for (uint64_t j = 1; j <= testCount; j++) {
+            if (j % 500000 == 0) {
+                printf("[approximation error]: Testing cycle %" PRIu64
+                       " (%0.2f%% done)\n",
+                       j, (float)j / testCount * 100);
             }
-        }
+            ele = j ^ seed;
+            /* Through hyperloglogAdd, as a caller would: it invalidates the
+             * cached count when a register changes (a dense add never moves
+             * the buffer) */
+            hyperloglogAdd(&hdr, &ele, sizeof(ele));
+            hyperloglogAdd(&h, &ele, sizeof(ele));
 
-        /* Check that dense and sparse representations agree. */
-        if (j == checkpoint &&
-            hyperloglogCount(hdr, NULL) != hyperloglogCount(h, NULL)) {
-            printf("TESTFAILED dense/sparse disagree\n");
-            errors++;
-            goto cleanup;
-        }
-
-        /* Check error. */
-        if (j == checkpoint) {
-            int64_t abserr = checkpoint - (int64_t)hyperloglogCount(hdr, NULL);
-            uint64_t maxerr = ceil(relerr * 6 * checkpoint);
-
-            /* Adjust the max error we expect for cardinality 10
-             * since from time to time it is statistically likely to get
-             * much higher error due to collision, resulting into a false
-             * positive. */
-            if (j == 10) {
-                maxerr = 1;
+            /* Make sure for small cardinalities we use sparse encoding. */
+            if (j == checkpoint && j < serverSparseMaxBytes / 2) {
+                hdr2 = h;
+                if (hdr2->encoding != HLL_SPARSE) {
+                    ERR("sparse encoding not used at %" PRIu64, j);
+                    goto approximationDone;
+                }
             }
 
-            if (abserr < 0) {
-                abserr = -abserr;
+            /* Check that dense and sparse representations agree. */
+            if (j == checkpoint &&
+                hyperloglogCount(hdr, NULL) != hyperloglogCount(h, NULL)) {
+                ERR("dense/sparse disagree at %" PRIu64, j);
+                goto approximationDone;
             }
 
-            if (abserr > (int64_t)maxerr) {
-                printf("TESTFAILED Too big error. card:%" PRIu64
-                       " abserr:%" PRIu64 "\n",
-                       checkpoint, abserr);
-                errors++;
-                goto cleanup;
+            /* Check error. */
+            if (j == checkpoint) {
+                int64_t abserr =
+                    checkpoint - (int64_t)hyperloglogCount(hdr, NULL);
+                uint64_t maxerr = ceil(relerr * 6 * checkpoint);
+
+                /* Adjust the max error we expect for cardinality 10
+                 * since from time to time it is statistically likely to get
+                 * much higher error due to collision, resulting into a false
+                 * positive. */
+                if (j == 10) {
+                    maxerr = 1;
+                }
+
+                if (abserr < 0) {
+                    abserr = -abserr;
+                }
+
+                if (abserr > (int64_t)maxerr) {
+                    ERR("error too big: card %" PRIu64 ", abserr %" PRId64,
+                        checkpoint, abserr);
+                    goto approximationDone;
+                }
+                checkpoint *= 10;
             }
-            checkpoint *= 10;
         }
     }
 
-    /* Success! */
-    printf("ALL TESTS PASSED!\n");
-
-cleanup:
-    if (errors) {
-        printf("TESTS FAILED!  Error count: %d\n", errors);
-    }
-
-    /* Test 3: SIMD merge correctness.
-     * Verify that merging dense HLLs produces correct results. */
-    printf("[merge correctness]: Testing SIMD merge...\n");
-    {
+approximationDone:
+    /* Merging dense sketches of disjoint elements counts about their sum */
+    TEST("merge correctness: a dense union counts both inputs") {
         hyperloglog *h1 = hyperloglogNewDense();
         hyperloglog *h2 = hyperloglogNewDense();
 
@@ -1801,14 +1784,9 @@ cleanup:
         uint64_t expectedMax = (count1 + count2) * 110 / 100;
 
         if (countMerged < expectedMin || countMerged > expectedMax) {
-            printf("TESTFAILED merge count %" PRIu64 " not in range [%" PRIu64
-                   ", %" PRIu64 "] (h1=%" PRIu64 ", h2=%" PRIu64 ")\n",
-                   countMerged, expectedMin, expectedMax, count1, count2);
-            errors++;
-        } else {
-            printf("[merge correctness]: PASSED (merged=%" PRIu64
-                   ", expected ~%" PRIu64 ")\n",
-                   countMerged, count1 + count2);
+            ERR("merge count %" PRIu64 " not in [%" PRIu64 ", %" PRIu64
+                "] (h1=%" PRIu64 ", h2=%" PRIu64 ")",
+                countMerged, expectedMin, expectedMax, count1, count2);
         }
 
         hyperloglogFree(h1);
@@ -1816,10 +1794,8 @@ cleanup:
         hyperloglogFree(merged);
     }
 
-    /* Test 4: SIMD merge performance benchmark.
-     * Measures merge throughput with SIMD optimizations. */
-    printf("[merge benchmark]: Benchmarking SIMD merge performance...\n");
-    {
+    /* Merge throughput (informational) */
+    TEST("merge benchmark: chained dense unions") {
         /* Smoke size: the timing printed is informational (measure merges
          * under the perf preset, not in this correctness suite) */
         const int numHlls = 100;
@@ -1866,10 +1842,9 @@ cleanup:
         }
     }
 
-    /* Test 5: Raw Register Histogram SIMD Performance Benchmark.
-     * Compares SIMD-optimized histogram against scalar baseline. */
-    printf("[histogram benchmark]: Benchmarking register histogram...\n");
-    {
+    /* The SIMD register histogram matches the scalar one; timings are
+     * informational */
+    TEST("register histogram: SIMD matches scalar") {
         /* Smoke size, as for the merge benchmark above */
         const int histoIterations = 100;
 
@@ -1913,18 +1888,14 @@ cleanup:
         for (int i = 0; i < HLL_Q + 2; i++) {
             if (reghistoSIMD[i] != reghistoScalar[i]) {
                 if (histoMismatch < 5) {
-                    printf("  Histogram mismatch at [%d]: SIMD=%d Scalar=%d\n",
+                    printf("  histogram mismatch at [%d]: SIMD=%d Scalar=%d\n",
                            i, reghistoSIMD[i], reghistoScalar[i]);
                 }
                 histoMismatch++;
             }
         }
-
-        if (histoMismatch == 0) {
-            printf("  [OK] Histogram: SIMD matches Scalar\n");
-        } else {
-            printf("  [WARN] Histogram: %d mismatches\n", histoMismatch);
-            errors++;
+        if (histoMismatch) {
+            ERR("histogram: %d SIMD/scalar mismatches", histoMismatch);
         }
 
         double nsPerHistoSIMD = (double)(endSIMD - startSIMD) / histoIterations;
@@ -1937,8 +1908,7 @@ cleanup:
         printf("  Speedup: %.2fx\n", speedup);
     }
 
-    printf("Testing the estimator's tau against its series...\n");
-    {
+    TEST("the estimator's tau matches its series") {
         /* tau(x) = (1 - x - sum_k (1 - x^(2^-k))^2 2^-k) / 3, summed here
          * with pow over 60 terms (past double precision): the estimator's
          * iterative form agrees to 1e-12, and is 0 at both ends */
@@ -1954,15 +1924,11 @@ cleanup:
             agree = agree && fabs(hllTau(xs[i]) - want) < 1e-12;
         }
         if (!agree) {
-            printf("  [FAIL] tau differs from its series\n");
-            errors++;
-        } else {
-            printf("  [OK] tau matches its series\n");
+            ERRR("tau differs from its series");
         }
     }
 
-    printf("Testing a count of a sketch with no known encoding...\n");
-    {
+    TEST("a sketch with no known encoding counts 0, reported invalid") {
         /* An encoding byte that names no representation: the count is 0
          * and the sketch reported invalid, not a count of UINT64_MAX */
         hyperloglog *unk = hyperloglogNewDense();
@@ -1982,24 +1948,19 @@ cleanup:
         unk->encoding = saved;
         hyperloglogFree(fine);
         if (unionOf != 0 || !unionBad || unionSketch || !again) {
-            printf("  [FAIL] corrupt sketch: union %" PRIu64
-                   " (invalid %d), sketch %p, recount invalid %d\n",
-                   unionOf, unionBad, (void *)unionSketch, again);
-            errors++;
+            ERR("corrupt sketch: union %" PRIu64
+                " (invalid %d), sketch %p, recount invalid %d",
+                unionOf, unionBad, (void *)unionSketch, again);
             hyperloglogFree(unionSketch);
         }
         if (count != 0 || !invalid) {
-            printf("  [FAIL] unknown encoding: count %" PRIu64 ", invalid %d\n",
-                   count, invalid);
-            errors++;
-        } else {
-            printf("  [OK] unknown encoding counts 0, reported invalid\n");
+            ERR("unknown encoding: count %" PRIu64 ", invalid %d", count,
+                invalid);
         }
         hyperloglogFree(unk);
     }
 
-    printf("Testing a dense merge into a sparse sketch...\n");
-    {
+    TEST("a dense merge into a sparse sketch holds the register max") {
         /* A sparse sketch of 10 elements takes a dense one of 5000: it
          * turns dense and holds the register-wise maximum, so its count
          * is exactly that of the dense sketch with the 10 elements
@@ -2028,20 +1989,16 @@ cleanup:
         const uint64_t got = hyperloglogCount(few, &invalid);
         const uint64_t want = hyperloglogCount(oracle, &invalid);
         if (!wasSparse || !merged || !isDense(few) || invalid || got != want) {
-            printf("  [FAIL] dense into sparse: merged %d, dense %d, count "
-                   "%" PRIu64 " want %" PRIu64 "\n",
-                   merged, isDense(few), got, want);
-            errors++;
-        } else {
-            printf("  [OK] dense into sparse merges to the register max\n");
+            ERR("dense into sparse: merged %d, dense %d, count %" PRIu64
+                " want %" PRIu64,
+                merged, isDense(few), got, want);
         }
         hyperloglogFree(few);
         hyperloglogFree(many);
         hyperloglogFree(oracle);
     }
 
-    printf("Testing batch adds, both encodings...\n");
-    {
+    TEST("batch adds report the changed registers, both encodings") {
         /* One call adds every element and reports how many changed a
          * register: 3 new, then a repeat and a fresh one (1), then none */
         for (int dense = 0; dense <= 1; dense++) {
@@ -2057,16 +2014,14 @@ cleanup:
             bool invalid = false;
             const uint64_t count = hyperloglogCount(sk, &invalid);
             if (a != 3 || b != 1 || c != 0 || count != 4 || invalid) {
-                printf("  [FAIL] %s batch: %" PRId64 ", %" PRId64 ", %" PRId64
-                       ", count %" PRIu64 "\n",
-                       dense ? "dense" : "sparse", a, b, c, count);
-                errors++;
+                ERR("%s batch: %" PRId64 ", %" PRId64 ", %" PRId64
+                    ", count %" PRIu64,
+                    dense ? "dense" : "sparse", a, b, c, count);
             }
         }
     }
 
-    printf("Testing the cached count across adds, both encodings...\n");
-    {
+    TEST("the cached count follows adds, both encodings") {
         /* Counting caches the estimate; an add that changes a register
          * invalidates it (the dense path used not to, so a dense sketch
          * kept serving its old count), a repeat add changes nothing */
@@ -2085,16 +2040,15 @@ cleanup:
             const uint64_t four = hyperloglogCount(sk, &invalid);
             if (three != 3 || repeat != 0 || stillThree != 3 || fresh != 1 ||
                 four != 4 || invalid) {
-                printf("  [FAIL] %s cache: %" PRIu64 ", repeat %d, %" PRIu64
-                       ", fresh %d, %" PRIu64 "\n",
-                       dense ? "dense" : "sparse", three, repeat, stillThree,
-                       fresh, four);
-                errors++;
+                ERR("%s cache: %" PRIu64 ", repeat %d, %" PRIu64
+                    ", fresh %d, %" PRIu64,
+                    dense ? "dense" : "sparse", three, repeat, stillThree,
+                    fresh, four);
             }
         }
     }
 
-    {
+    TEST("a copy is independent; union counts agree with the merge") {
         /* A copy is independent of its source; the union count of several
          * sketches equals the count of their merge and of the new union
          * sketch; no sketches count 0 and union to an empty sketch */
@@ -2102,8 +2056,7 @@ cleanup:
         cleaner(hyperloglogFree) hyperloglog *b = hyperloglogNew();
         bool invalid = false;
         if (hyperloglogCount(a, &invalid) != 0 || invalid) {
-            printf("  [FAIL] a new sparse HLL is not empty\n");
-            errors++;
+            ERRR("a new sparse HLL is not empty");
         }
         /* Fixed-size keys: members 0..1499, a holds 0..999, b 500..1499 */
         for (uint64_t i = 0; i < 1500; i++) {
@@ -2137,19 +2090,13 @@ cleanup:
             hyperloglogCount(u, &invalid) != unionCount || !none ||
             hyperloglogCount(none, &invalid) != 0 ||
             hyperloglogCountUnion(ab, 0, &invalid) != 0 || invalid) {
-            printf("  [FAIL] copy/union: a %" PRIu64 " (was %" PRIu64
-                   "), union %" PRIu64 ", merged %" PRIu64 "\n",
-                   hyperloglogCount(a, &invalid), countA, unionCount,
-                   mergedCount);
-            errors++;
-        } else {
-            printf("  [OK] copy independent; union count %" PRIu64
-                   " == merged == union sketch\n",
-                   unionCount);
+            ERR("copy/union: a %" PRIu64 " (was %" PRIu64 "), union %" PRIu64
+                ", merged %" PRIu64,
+                hyperloglogCount(a, &invalid), countA, unionCount, mergedCount);
         }
     }
 
-    return errors;
+    TEST_FINAL_RESULT;
 }
 #endif
 
