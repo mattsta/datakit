@@ -1767,6 +1767,44 @@ int blake3Test(int argc, char *argv[]) {
         blake3SetForceImpl(BLAKE3_IMPL_AUTO);
     }
 
+    TEST("blake3: force setting reads back; seeked output is the long one") {
+        const blake3ForceImpl was = blake3GetForceImpl();
+        blake3SetForceImpl(BLAKE3_IMPL_SCALAR);
+        if (blake3GetForceImpl() != BLAKE3_IMPL_SCALAR ||
+            blake3DispatcherActiveBackend() != BLAKE3_BACKEND_SCALAR) {
+            ERRR("forced scalar did not read back as scalar");
+        }
+        blake3SetForceImpl(BLAKE3_IMPL_SIMD);
+        if (blake3GetForceImpl() != BLAKE3_IMPL_SIMD) {
+            ERRR("forced SIMD did not read back");
+        }
+        blake3SetForceImpl(was);
+
+        /* Extended output from offset k is bytes k.. of one long output,
+         * across the 64-byte output block boundaries */
+        static uint8_t seekInput[5000];
+        for (size_t i = 0; i < sizeof(seekInput); i++) {
+            seekInput[i] = (uint8_t)(i * 7 + 3);
+        }
+        static const size_t lens[] = {0, 3, 1024, 5000};
+        static const uint64_t seeks[] = {0, 1, 63, 64, 65, 127, 200};
+        for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
+            blake3Hasher h;
+            blake3HasherInit(&h);
+            blake3HasherUpdate(&h, seekInput, lens[l]);
+            uint8_t full[300];
+            blake3HasherFinalize(&h, full, sizeof(full));
+            for (size_t s = 0; s < sizeof(seeks) / sizeof(*seeks); s++) {
+                uint8_t part[90];
+                blake3HasherFinalizeSeek(&h, seeks[s], part, sizeof(part));
+                if (memcmp(part, full + seeks[s], sizeof(part)) != 0) {
+                    ERR("input %zu: output at %" PRIu64 " differs", lens[l],
+                        seeks[s]);
+                }
+            }
+        }
+    }
+
     TEST("blake3 small-input latency (finalize-dominated)") {
         /* Small-input hash is dominated by the finalize path:
          * one chunk_output -> output_root_bytes -> compress_xof
