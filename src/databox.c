@@ -74,6 +74,10 @@ bool databoxGetSize(const databox *box, size_t *len) {
     switch (box->type) {
     case DATABOX_BYTES:
     case DATABOX_BYTES_EMBED:
+    case DATABOX_BYTES_NEVER_FREE:
+#if DATABOX_ENABLE_PTR_MDSC
+    case DATABOX_PTR_MDSC:
+#endif
     case DATABOX_CONTAINER_FLEX_MAP:
     case DATABOX_CONTAINER_FLEX_LIST:
     case DATABOX_CONTAINER_FLEX_SET:
@@ -3161,9 +3165,12 @@ int databoxTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(carriers) / sizeof(*carriers); i++) {
             uint8_t *buf = NULL;
             size_t len = 0;
+            size_t size = 0;
             if (!databoxGetBytes(&carriers[i], &buf, &len) ||
-                len != strlen(want[i]) || memcmp(buf, want[i], len) != 0) {
-                ERR("carrier %zu: no bytes, or the wrong ones", i);
+                len != strlen(want[i]) || memcmp(buf, want[i], len) != 0 ||
+                !databoxGetSize(&carriers[i], &size) || size != len) {
+                ERR("carrier %zu: no bytes, the wrong ones, or another size",
+                    i);
             }
         }
         databox none[] = {{.type = DATABOX_TRUE},
