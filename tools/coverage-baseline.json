@@ -1,5 +1,5 @@
 {
- "commit": "df086a9986b15b6971db0c55716890747c84c29b",
+ "commit": "30d6558148fa0db9d565c2d00b6b414bda040294",
  "files": {
   "src/OSRegulate.c": {
    "lines": 243,
@@ -38,8 +38,8 @@
    "branches": 6
   },
   "src/blake3.c": {
-   "lines": 136,
-   "branches": 63
+   "lines": 131,
+   "branches": 62
   },
   "src/blake3.h": {
    "lines": 0,
@@ -58,8 +58,8 @@
    "branches": 0
   },
   "src/clusterMailbox.c": {
-   "lines": 114,
-   "branches": 91
+   "lines": 108,
+   "branches": 85
   },
   "src/clusterMailbox.h": {
    "lines": 0,
@@ -74,8 +74,8 @@
    "branches": 0
   },
   "src/clusterRing.c": {
-   "lines": 286,
-   "branches": 320
+   "lines": 274,
+   "branches": 311
   },
   "src/clusterRing.h": {
    "lines": 0,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 225,
-   "branches": 434
+   "lines": 179,
+   "branches": 409
   },
   "src/flex.h": {
    "lines": 0,
@@ -414,8 +414,8 @@
    "branches": 1
   },
   "src/flexEnvelope.c": {
-   "lines": 231,
-   "branches": 219
+   "lines": 218,
+   "branches": 208
   },
   "src/flexEnvelope.h": {
    "lines": 0,
@@ -635,23 +635,23 @@
   },
   "src/multiOrderedSet.c": {
    "lines": 13,
-   "branches": 73
+   "branches": 72
   },
   "src/multiOrderedSetCommon.h": {
-   "lines": 25,
-   "branches": 21
+   "lines": 22,
+   "branches": 17
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 116,
-   "branches": 166
+   "lines": 106,
+   "branches": 158
   },
   "src/multiOrderedSetFullInternal.h": {
    "lines": 0,
    "branches": 0
   },
   "src/multiOrderedSetMedium.c": {
-   "lines": 58,
-   "branches": 57
+   "lines": 52,
+   "branches": 55
   },
   "src/multiOrderedSetSmall.c": {
    "lines": 63,
@@ -690,8 +690,8 @@
    "branches": 16
   },
   "src/multidict.c": {
-   "lines": 179,
-   "branches": 181
+   "lines": 139,
+   "branches": 168
   },
   "src/multidict.h": {
    "lines": 0,
@@ -734,8 +734,8 @@
    "branches": 6
   },
   "src/multilru.c": {
-   "lines": 67,
-   "branches": 89
+   "lines": 49,
+   "branches": 73
   },
   "src/multimap.c": {
    "lines": 64,
@@ -759,23 +759,23 @@
   },
   "src/multimapFull.c": {
    "lines": 63,
-   "branches": 220
+   "branches": 219
   },
   "src/multimapInternal.h": {
    "lines": 0,
    "branches": 1
   },
   "src/multimapMedium.c": {
-   "lines": 28,
-   "branches": 62
+   "lines": 25,
+   "branches": 60
   },
   "src/multimapSmall.c": {
    "lines": 21,
-   "branches": 39
+   "branches": 38
   },
   "src/multiroar.c": {
    "lines": 237,
-   "branches": 269
+   "branches": 267
   },
   "src/multiroar.h": {
    "lines": 0,
