@@ -1066,6 +1066,44 @@ bool databoxNumericHashKey(const databox *box, uint64_t *key) {
 #define DATABOX_CANONICAL_WIDE_MIN_LEN 20
 #define DATABOX_CANONICAL_WIDE_MAX_LEN 40
 
+bool databoxIntegralRealAsInteger(const databox *in, databox *out) {
+    double d;
+    if (in->type == DATABOX_DOUBLE_64) {
+        d = in->data.d64;
+    } else if (in->type == DATABOX_FLOAT_32) {
+        d = (double)in->data.f32;
+    } else {
+        return false;
+    }
+
+    /* NaN fails every comparison; -0.0 keeps its sign as a real */
+    if (d == 0) {
+        if (signbit(d)) {
+            return false;
+        }
+        *out = databoxNewUnsigned(0);
+        return true;
+    }
+
+    if (d >= -0x1p63 && d < 0) {
+        const int64_t i = (int64_t)d;
+        if ((double)i == d) {
+            *out = databoxNewSigned(i);
+            return true;
+        }
+        return false;
+    }
+
+    if (d > 0 && d < 0x1p64) {
+        const uint64_t u = (uint64_t)d;
+        if ((double)u == d) {
+            *out = databoxNewUnsigned(u);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool databoxCanonicalNumeral(const databox *in, databoxBig *out) {
     if (!DATABOX_IS_BYTES(in) || in->len == 0) {
         return false;
@@ -1746,6 +1784,72 @@ int databoxTest(int argc, char *argv[]) {
     int err = 0;
 
     assert(sizeof(databox) == 16);
+
+    TEST("an integral real is the integer it equals, at every boundary") {
+        /* Whole numbers in [-2^63, 2^64) become SIGNED (negative) or
+         * UNSIGNED; -0.0, fractions, infinities, NaN and values outside
+         * stay reals; floats widen first */
+        databox f7 = {{0}};
+        DATABOX_SET_FLOAT(&f7, 7.0f);
+        databox fHalf = {{0}};
+        DATABOX_SET_FLOAT(&fHalf, 7.5f);
+        static const struct {
+            double d;
+            int kind; /* 0 stays real, 1 unsigned, 2 signed */
+            uint64_t bits;
+        } cases[] = {
+            {5.0, 1, 5},
+            {0.0, 1, 0},
+            {-0.0, 0, 0},
+            {-3.0, 2, (uint64_t)-3},
+            {0.5, 0, 0},
+            {-1e-300, 0, 0},
+            {0x1p63, 1, UINT64_C(1) << 63},
+            {0x1p64 - 2048, 1, UINT64_MAX - 2047},
+            {0x1p64, 0, 0},
+            {-0x1p63, 2, UINT64_C(1) << 63},
+            {-0x1p63 - 2048, 0, 0},
+            {INFINITY, 0, 0},
+            {-INFINITY, 0, 0},
+            {NAN, 0, 0},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            const databox in = DATABOX_DOUBLE(cases[i].d);
+            databox out = databoxNewSigned(-77);
+            const bool whole = databoxIntegralRealAsInteger(&in, &out);
+            const bool ok = cases[i].kind == 0
+                                ? !whole && out.data.i == -77
+                                : whole &&
+                                      out.type == (cases[i].kind == 1
+                                                       ? DATABOX_UNSIGNED_64
+                                                       : DATABOX_SIGNED_64) &&
+                                      out.data.u == cases[i].bits;
+            if (!ok) {
+                ERR("case %zu (%g): whole %d, type %d", i, cases[i].d, whole,
+                    (int)out.type);
+            }
+        }
+        databox out = {{0}};
+        const databox text = databoxNewBytesString("5");
+        if (!databoxIntegralRealAsInteger(&f7, &out) || out.data.u != 7 ||
+            databoxIntegralRealAsInteger(&fHalf, &out) ||
+            databoxIntegralRealAsInteger(&text, &out)) {
+            ERRR("floats or a non-real box were handled wrongly");
+        }
+
+        /* The minimal-storage canonical form applies it to real boxes;
+         * the numeral "22.0" stays the real 22.0, keeping its spelling */
+        databoxBig scratch;
+        const databox five = DATABOX_DOUBLE(5.0);
+        const databox s22 = databoxNewBytesString("22.0");
+        const databox *c5 = databoxCanonical(&five, &scratch);
+        const bool c5ok = c5->type == DATABOX_UNSIGNED_64 && c5->data.u == 5;
+        const databox *c22 = databoxCanonical(&s22, &scratch);
+        if (!c5ok || !DATABOX_IS_FLOAT(c22)) {
+            ERRR("the canonical form did not make a whole real an integer, "
+                 "or changed a numeral's spelling");
+        }
+    }
 
     TEST("retain cache: borrow vs own vs embed ownership") {
         static const char payload[] =
@@ -4132,13 +4236,28 @@ int databoxTest(int argc, char *argv[]) {
             }
         }
 
-        /* Only BYTES and BYTES_EMBED are canonicalized; every other type,
-         * numbers included, passes through. */
+        /* Only BYTES and BYTES_EMBED are parsed as numerals, and only
+         * they and whole reals change under databoxCanonical; every other
+         * type, a fractional real included, passes through.  A whole real
+         * is not a numeral: databoxCanonicalNumeral leaves it, and
+         * databoxCanonical makes it its integer. */
+        const databox real22 = DATABOX_DOUBLE(22.0);
+        databoxBig wholeOut;
+        databoxBig untouched;
+        memset(&untouched, 0xA5, sizeof(untouched));
+        const databoxBig poisoned = untouched;
+        const databox *real22Use = databoxCanonical(&real22, &wholeOut);
+        if (databoxCanonicalNumeral(&real22, &untouched) ||
+            memcmp(&untouched, &poisoned, sizeof(untouched)) != 0 ||
+            real22Use->type != DATABOX_UNSIGNED_64 || real22Use->data.u != 22) {
+            ERRR("a whole real was parsed as a numeral or not made an "
+                 "integer");
+        }
         static const char twentyTwo[] = "22";
         const databox others[] = {
             databoxNewSigned(22),
             databoxNewUnsigned(22),
-            DATABOX_DOUBLE(22.0),
+            DATABOX_DOUBLE(22.5),
             DATABOX_BOX_TRUE,
             DATABOX_BOX_NULL,
             databoxNewPtr((void *)twentyTwo),

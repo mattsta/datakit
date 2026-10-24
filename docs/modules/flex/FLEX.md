@@ -219,7 +219,13 @@ flex has two ways to write a value, and the caller chooses:
 
 Both paths store numbers in their smallest encoding of the **same** type
 (integer width, a double that fits exactly in a float). Only the auto-convert
-path also turns bytes into numbers.
+(minimal-storage) path also turns bytes into numbers, and stores a real box
+holding a whole number in [-2^63, 2^64) as that integer: `DATABOX_DOUBLE(5.0)`
+reads back as the unsigned 5 (-0.0, fractions, infinities and NaN stay reals).
+A numeral string keeps its spelling: `"22.0"` stays the real 22.0.  The exact
+path stores 5.0 as a real, and the typed pushes (`flexPushDouble`,
+`flexPushFloat`) store what they name.  Either way 5 and 5.0 are one value to
+every comparison and key match (numeric identity is by value).
 
 ```c
 flexPushBytes(&f, "42", 2, FLEX_ENDPOINT_TAIL);      /* stored as 42 */

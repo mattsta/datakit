@@ -3362,11 +3362,18 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
                          box);
         break;
     case DATABOX_FLOAT_32:
-        flexPush_(flexInsertFloat, box->data.f32);
+    case DATABOX_DOUBLE_64: {
+        /* The minimal form of a whole number is the integer it equals */
+        databox whole;
+        if (databoxIntegralRealAsInteger(box, &whole)) {
+            flexPushByType(ff, &whole, where);
+        } else if (box->type == DATABOX_FLOAT_32) {
+            flexPush_(flexInsertFloat, box->data.f32);
+        } else {
+            flexPush_(flexInsertDouble, box->data.d64);
+        }
         break;
-    case DATABOX_DOUBLE_64:
-        flexPush_(flexInsertDouble, box->data.d64);
-        break;
+    }
     case DATABOX_TRUE:
         flexPush_(flexInsertTrue, NULL);
         break;
@@ -11609,6 +11616,52 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         printf("SUCCESS\n\n");
         flexFree(f);
+    }
+
+    printf("Test the minimal path stores whole reals as integers, exact keeps "
+           "them:\n");
+    {
+        /* Auto: a DOUBLE 5.0 push and an appended FLOAT 3.0 read back as
+         * integers; the numeral "22.0" stays a real (it keeps its
+         * spelling), as do 2.5 and -0.0; exact keeps DOUBLE 5.0 a real;
+         * flexPushDouble asks for a double and gets one */
+        cleaner(flexFree) flex *a = flexNew();
+        const databox d5 = DATABOX_DOUBLE(5.0);
+        const databox d25 = DATABOX_DOUBLE(2.5);
+        const databox dNegZero = DATABOX_DOUBLE(-0.0);
+        databox f3 = {{0}};
+        DATABOX_SET_FLOAT(&f3, 3.0f);
+        flexPushByType(&a, &d5, FLEX_ENDPOINT_TAIL);
+        const databox *row[1] = {&f3};
+        flexAppendMultiple(&a, 1, row);
+        flexPushBytes(&a, "22.0", 4, FLEX_ENDPOINT_TAIL);
+        flexPushByType(&a, &d25, FLEX_ENDPOINT_TAIL);
+        flexPushByType(&a, &dNegZero, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&a, &d5, FLEX_ENDPOINT_TAIL);
+        flexPushDouble(&a, 6.0, FLEX_ENDPOINT_TAIL);
+        static const struct {
+            bool integer;
+            double value;
+        } want[7] = {{true, 5},     {true, 3},  {false, 22}, {false, 2.5},
+                     {false, -0.0}, {false, 5}, {false, 6}};
+        int bad = flexCount(a) != 7;
+        for (int32_t i = 0; !bad && i < 7; i++) {
+            databox got = {{0}};
+            flexGetByType(flexIndex(a, i), &got);
+            const bool isInt = DATABOX_IS_INTEGER(&got);
+            const double v = isInt ? (double)got.data.u
+                             : got.type == DATABOX_FLOAT_32
+                                 ? (double)got.data.f32
+                                 : got.data.d64;
+            if (isInt != want[i].integer || v != want[i].value ||
+                (i == 4 && !signbit(v))) {
+                printf("  FAIL: element %d integer %d value %g\n", i, isInt, v);
+                bad++;
+            }
+        }
+        if (bad) {
+            return bad;
+        }
     }
 
     printf("Test empty bytes given as (NULL, 0) store as the empty string:\n");

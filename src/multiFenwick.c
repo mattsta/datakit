@@ -609,7 +609,9 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
             ptrs[i] = &boxes[i];
         }
 
-        flexAppendMultiple(&cells, (uint_fast32_t)batch, ptrs);
+        /* Exact: a restored cell keeps its type (a whole double stays a
+         * double) */
+        flexAppendMultipleExact(&cells, (uint_fast32_t)batch, ptrs);
     }
 
     multilistFree(mfw->tree);

@@ -614,15 +614,31 @@ bool databoxNumericHashKey(const databox *box, uint64_t *key);
  * borrow from its bytes. */
 bool databoxCanonicalNumeral(const databox *in, databoxBig *out);
 
-/* The box to store or compare with: 'in' itself, or 'scratch' holding the
- * canonical numeral of 'in'.  The inline fast reject returns 'in' with no
- * call for boxes that are not BYTES or BYTES_EMBED, for empty strings, and
- * for strings whose first byte is neither '-' nor a digit, because no
- * numeral starts any other way.  Only a numeral-looking string pays for
- * databoxCanonicalNumeral.  'scratch' is written only when the result is
- * 'scratch'. */
+/* An integral real as the integer it equals: true, with *out the SIGNED_64
+ * (negative) or UNSIGNED_64 box, for a FLOAT_32 or DOUBLE_64 holding a whole
+ * number in [-2^63, 2^64).  False (and *out untouched) for any other box,
+ * fractions, infinities, NaN, values beyond that range, and -0.0 (its sign
+ * is kept).  'in' and 'out' may be the same box. */
+bool databoxIntegralRealAsInteger(const databox *in, databox *out);
+
+/* The box to store or compare with on the minimal-storage (auto-convert)
+ * path: 'in' itself, or 'scratch' holding its canonical form.  A numeral
+ * string becomes its number (databoxCanonicalNumeral; "5.0" stays the real
+ * 5.0, so it prints back as given), and a real box holding a whole number
+ * becomes that integer (databoxIntegralRealAsInteger): 5.0 stores as 5.  The
+ * inline
+ * fast reject returns 'in' with no call for boxes that are neither reals
+ * nor BYTES / BYTES_EMBED, for empty strings, and for strings whose first
+ * byte is neither '-' nor a digit, because no numeral starts any other way.
+ * 'scratch' is written only when the result is 'scratch'. */
 static inline const databox *databoxCanonical(const databox *in,
                                               databoxBig *scratch) {
+    if (in->type == DATABOX_FLOAT_32 || in->type == DATABOX_DOUBLE_64) {
+        return databoxIntegralRealAsInteger(in, (databox *)scratch)
+                   ? (const databox *)scratch
+                   : in;
+    }
+
     if (!DATABOX_IS_BYTES(in) || in->len == 0) {
         return in;
     }
@@ -634,6 +650,9 @@ static inline const databox *databoxCanonical(const databox *in,
         return in;
     }
 
+    /* A numeral keeps its spelling: "22.0" parses to the real 22.0, which
+     * prints back as "22.0"; only a real given as a number becomes an
+     * integer */
     return databoxCanonicalNumeral(in, scratch) ? (const databox *)scratch : in;
 }
 
