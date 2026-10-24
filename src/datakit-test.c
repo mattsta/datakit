@@ -106,6 +106,7 @@
 #include "persist/persistCtx.h"
 #include "portableRandom.h"
 #include "ptrPrevNext.h"
+#include "versionOSRuntime.h"
 
 /* ptrlib is a guard-less config-macro header; its test entry point is
  * declared here rather than in the header */
@@ -12563,11 +12564,11 @@ static const TestEntry testRegistry[] = {
     /* Utilities */
     T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray), T(multiheap),
     T_ADJ(membound), T_ADJ(memtest), T_ADJ(bbits), T_ADJ(ulid), T(persist),
-    T(OSRegulate), T(dataspeedParse), T_A(persistCtx, "pctx"),
-    T_A(persistContract, "pcontract"), T_A(multimapP, "mmP"),
-    T_A(multilistP, "mlP"), T_A(multidictP, "mdP"), T_A(flexP, "fP"),
-    T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
-    T_A(multilruP, "mlruP"),
+    T(OSRegulate), T(versionOSRuntime), T(dataspeedParse),
+    T_A(persistCtx, "pctx"), T_A(persistContract, "pcontract"),
+    T_A(multimapP, "mmP"), T_A(multilistP, "mlP"), T_A(multidictP, "mdP"),
+    T_A(flexP, "fP"), T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"),
+    T_A(multiroarP, "mrP"), T_A(multilruP, "mlruP"),
 
     /* Distributed / Cluster */
     T_A_ADJ(clusterRing, "ring,cluster,chr"),

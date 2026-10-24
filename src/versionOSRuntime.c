@@ -1,28 +1,94 @@
 #include "versionOSRuntime.h"
-#include <stdio.h>
 #include <sys/utsname.h>
 
-size_t versionOSRuntimeKernelVersion = 0;
+uint64_t versionOSRuntimeKernelVersion = 0;
 
-/* Use constructor to always init this on startup.
- * Avoids race conditions and runtime latency. */
-static void __attribute__((constructor)) init() {
-    /* Zero-init: a release string with fewer than three numeric
-     * components (e.g. "6.1", or vendor suffixes) leaves the remaining
-     * fields untouched by sscanf. */
-    struct {
-        int major;
-        int minor;
-        int patch;
-    } kernelVer = {0};
+uint64_t versionOSRuntimeParse(const char *release) {
+    uint64_t parts[3] = {0, 0, 0};
+    size_t part = 0;
+    const char *p = release;
+    while (p && part < 3 && *p >= '0' && *p <= '9') {
+        uint64_t v = 0;
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10 + (uint64_t)(*p - '0');
+            if (v > 0xFFFF) {
+                v = 0xFFFF; /* keep counting digits, stay clamped */
+            }
+            p++;
+        }
+        parts[part++] = v;
+        if (*p != '.') {
+            break;
+        }
+        p++;
+    }
 
-    struct utsname unameFields;
-    uname(&unameFields);
-
-    /* Extract version number for comparison... */
-    sscanf(unameFields.release, "%d.%d.%d", &kernelVer.major, &kernelVer.minor,
-           &kernelVer.patch);
-
-    versionOSRuntimeKernelVersion =
-        _DK_MK_VERSION(kernelVer.major, kernelVer.minor, kernelVer.patch);
+    return versionOSRuntimeCode(parts[0], parts[1], parts[2]);
 }
+
+/* Read once at startup: avoids a race on first use and keeps the read
+ * off every later path */
+static void __attribute__((constructor)) versionOSRuntimeInit(void) {
+    struct utsname unameFields;
+    if (uname(&unameFields) == 0) {
+        versionOSRuntimeKernelVersion =
+            versionOSRuntimeParse(unameFields.release);
+    }
+}
+
+#ifdef DATAKIT_TEST
+#include "ctest.h"
+
+int versionOSRuntimeTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    TEST("release strings parse to ordered version codes") {
+        static const struct {
+            const char *release;
+            uint64_t major, minor, patch;
+        } cases[] = {
+            {"6.1.0-13-amd64", 6, 1, 0},
+            {"23.6.0", 23, 6, 0},
+            {"4.19.300", 4, 19, 300},
+            {"5.15", 5, 15, 0},
+            {"6", 6, 0, 0},
+            {"3.10.0-1160.el7.x86_64", 3, 10, 0},
+            {"999999.2.3", 0xFFFF, 2, 3},
+            {"", 0, 0, 0},
+            {"abc", 0, 0, 0},
+            {"1.2.3.4", 1, 2, 3},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            const uint64_t got = versionOSRuntimeParse(cases[i].release);
+            const uint64_t want = versionOSRuntimeCode(
+                cases[i].major, cases[i].minor, cases[i].patch);
+            if (got != want) {
+                ERR("\"%s\" parsed to %#" PRIx64 ", want %#" PRIx64,
+                    cases[i].release, got, want);
+            }
+        }
+        if (versionOSRuntimeParse(NULL) != 0) {
+            ERRR("NULL release parsed");
+        }
+
+        /* A patch past 255 stays below the next minor version */
+        if (!(versionOSRuntimeParse("4.19.300") <
+              versionOSRuntimeParse("4.20.0")) ||
+            !(versionOSRuntimeParse("4.19.300") >
+              versionOSRuntimeParse("4.19.299")) ||
+            !(versionOSRuntimeParse("3.9.0") <
+              versionOSRuntimeParse("3.10.0"))) {
+            ERRR("version codes out of order");
+        }
+
+        /* The running kernel was read at startup */
+        if (versionOSRuntimeKernelVersion == 0 || !osVersionGTE(1, 0, 0)) {
+            ERRR("the running kernel version was not read");
+        }
+    }
+
+    TEST_FINAL_RESULT;
+}
+#endif

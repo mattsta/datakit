@@ -20,17 +20,11 @@
 Version _detection_ is portable; the pre-defined `linuxKernelHas*` macros only
 carry meaning on Linux (see [Platform Support](#platform-support)).
 
-The `_DK_MK_VERSION` encoding macro comes from `config.h` (reached through
-`datakit.h`), which `versionOSRuntime.h` includes.
-
 ## Global State
 
 ```c
-/* Kernel version encoded as single integer
- * Format: (major << 16) | (minor << 8) | patch
- * Automatically initialized at program startup
- */
-extern size_t versionOSRuntimeKernelVersion;
+/* The running kernel's version (uname release), read at startup */
+extern uint64_t versionOSRuntimeKernelVersion;
 ```
 
 **Important**: This variable is read-only after initialization. Do not modify it.
@@ -47,7 +41,7 @@ extern size_t versionOSRuntimeKernelVersion;
  * Returns: true if running kernel >= specified version
  */
 #define osVersionGTE(major, minor, patch) \
-    (versionOSRuntimeKernelVersion >= _DK_MK_VERSION(major, minor, patch))
+    (versionOSRuntimeKernelVersion >= versionOSRuntimeCode(major, minor, patch))
 ```
 
 This is a **runtime** comparison, not a preprocessor conditional: the right-hand
@@ -76,52 +70,31 @@ see the warning under [Platform Support](#platform-support).
 
 ## Version Encoding
 
-Versions are encoded using the `_DK_MK_VERSION` macro:
+Versions are encoded with `versionOSRuntimeCode`, 16 bits per part, so
+the codes order as the versions do (a long-lived kernel's patch level passes
+255, which an 8-bit field would spill into the minor version):
 
 ```c
-/* Encode version as single integer
- * major: major version (0-255)
- * minor: minor version (0-255)
- * patch: patch version (0-255)
- * Returns: encoded version as size_t
- */
-#define _DK_MK_VERSION(major, minor, patch) \
-    (((major) << 16) + ((minor) << 8) + (patch))
+#define versionOSRuntimeCode(major, minor, patch) \
+    (((uint64_t)(major) << 32) | ((uint64_t)(minor) << 16) | (uint64_t)(patch))
 ```
 
 **Examples:**
 
-- Linux 3.9.0 → `(3 << 16) | (9 << 8) | 0` = `0x030900` = 199936
-- Linux 4.15.3 → `(4 << 16) | (15 << 8) | 3` = `0x040F03` = 265987
-- Linux 5.10.0 → `(5 << 16) | (10 << 8) | 0` = `0x050A00` = 330240
+- Linux 3.9.0 → `0x0000000300090000`
+- Linux 4.19.300 → `0x000000040013012C` (patch 300 = `0x012C`), below 4.20.0
+- Linux 5.10.0 → `0x00000005000A0000`
 
 ## How It Works
 
 ### Automatic Initialization
 
-The kernel version is captured automatically at program startup using a constructor attribute:
-
-```c
-static void __attribute__((constructor)) init() {
-    struct {
-        int major;
-        int minor;
-        int patch;
-    } kernelVer;
-
-    struct utsname unameFields;
-    uname(&unameFields);
-
-    /* Extract version number from uname.release */
-    sscanf(unameFields.release, "%d.%d.%d",
-           &kernelVer.major, &kernelVer.minor, &kernelVer.patch);
-
-    versionOSRuntimeKernelVersion =
-        _DK_MK_VERSION(kernelVer.major, kernelVer.minor, kernelVer.patch);
-}
-```
-
-This is the actual implementation, not a sketch.
+A constructor reads `uname()` before `main()` and parses its release string
+with `versionOSRuntimeParse`: the first three numeric parts, a missing part 0,
+each clamped to 0..65535, stopping at the first character that is not a digit
+or a dot (so `6.1.0-13-amd64` is 6.1.0 and `5.15` is 5.15.0).  If `uname()`
+fails the version stays 0.  `versionOSRuntimeParse` is public, so a release
+string from elsewhere encodes the same way.
 
 **Key Points:**
 
@@ -382,7 +355,7 @@ This guarantees `versionOSRuntimeKernelVersion` is valid when accessed.
 
 ### Version Parsing
 
-The implementation uses `sscanf()` to parse the kernel version from `uname().release`:
+`versionOSRuntimeParse` reads the kernel version from `uname().release`:
 
 **Example release strings:**
 
@@ -390,13 +363,10 @@ The implementation uses `sscanf()` to parse the kernel version from `uname().rel
 - `"4.15.0-112-generic"` → `4.15.0` (Linux)
 - `"3.10.0-1160.el7.x86_64"` → `3.10.0` (Linux)
 - `"23.6.0"` → `23.6.0` (macOS - this is the **Darwin** version, not macOS 14)
+- `"5.15"` → `5.15.0`; `"6"` → `6.0.0`; `""` or `"abc"` → `0.0.0`
 
-Only the first three numeric components are extracted; suffixes are ignored.
-
-Because the parse is a plain `sscanf("%d.%d.%d")` into an uninitialized local, a
-release string carrying fewer than three numeric components leaves the missing
-components unset. Every platform datakit supports reports all three, but do not
-rely on this parser for exotic `uname` formats.
+Only the first three numeric components are read; suffixes are ignored, a
+missing component is 0, and a component above 65535 reads as 65535.
 
 ### Thread Safety
 
@@ -406,9 +376,9 @@ rely on this parser for exotic `uname` formats.
 
 ### Performance
 
-- **Initialization**: One-time cost at startup (one `uname()` + one `sscanf()`)
+- **Initialization**: One-time cost at startup (one `uname()` and a short parse)
 - **Version Checks**: A single integer comparison against a global
-- **Memory Overhead**: One `size_t` variable (8 bytes on 64-bit systems)
+- **Memory Overhead**: One `uint64_t` variable
 
 ## Platform Support
 
@@ -497,7 +467,7 @@ void logSystemInfo(void) {
 
 ```c
 /* BAD - Never do this! */
-versionOSRuntimeKernelVersion = _DK_MK_VERSION(5, 0, 0);  /* Wrong! */
+versionOSRuntimeKernelVersion = versionOSRuntimeCode(5, 0, 0);  /* Wrong! */
 
 /* GOOD - Read-only access */
 if (osVersionGTE(4, 15, 0)) {

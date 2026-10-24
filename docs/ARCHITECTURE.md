@@ -731,7 +731,8 @@ pthread_mutex_unlock(&lock);
 
 datakit supports multiple platforms through:
 
-1. **config.h**: Compile-time feature detection
+1. **dkPlatform.h**: the compiler check (clang or gcc), one `DK_OS_*` flag
+   per target operating system (each always 0 or 1), and `DK_BITS`
 2. **datakit.h**: Platform-specific includes and macros
 3. **CMake**: Build system configuration
 
@@ -739,7 +740,8 @@ datakit supports multiple platforms through:
 
 - Linux (primary target)
 - macOS / Darwin (primary target)
-- FreeBSD, OpenBSD, NetBSD, DragonFly
+- FreeBSD, OpenBSD, NetBSD (each has its `DK_OS_*` flag; DragonFly builds
+  through the generic POSIX paths)
 - AIX has `DK_OS_AIX` detection but is neither built nor tested here —
   treat it as best effort
 

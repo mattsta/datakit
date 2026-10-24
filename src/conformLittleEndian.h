@@ -1,11 +1,6 @@
 #pragma once
 
-#include "config.h"
 #include "endianIsLittle.h"
-
-#if DK_GNUC_LT(4, 3, 0) && !DK_CLANG_VERSION_CODE
-#warning "Your old compiler (probably) doesn't have __builtin_bswap()."
-#endif
 
 /* Note: If your platform *is* little endian, your compiler will detect
  *       it at compile time and remove all these macro bodies since nothing

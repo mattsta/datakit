@@ -807,7 +807,8 @@ osrProcStatRssPages_(const char *stat, uint64_t maxPages, uint64_t *pages) {
 int OSRegulateTFOMode(void) {
     int tfo = 0;
 
-    if (linuxKernelHasTFOServerIPv4) {
+    /* The kernel version is a Linux one only on Linux */
+    if (DK_OS_LINUX && linuxKernelHasTFOServerIPv4) {
         FILE *fp = fopen("/proc/sys/net/ipv4/tcp_fastopen", "r");
 
         if (fp) {
@@ -841,7 +842,7 @@ DK_FN_UNUSED static bool osrBacklogFits_(const char *contents, int requested) {
 }
 
 bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
-#if HAVE_PROC_SOMAXCONN
+#if DK_OS_LINUX /* /proc/sys/net/core/somaxconn */
     FILE *fp = fopen("/proc/sys/net/core/somaxconn", "r");
     if (!fp) {
         return osrBacklogFits_(NULL, tcpBacklogListenLength);
@@ -1076,7 +1077,7 @@ bool OSRegulateLinuxMemorySettingsAreOkay(void) {
  * Example: zmalloc_get_smap_bytes_by_field("Rss:",-1);
  */
 size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
-#if HAVE_PROC_SMAPS
+#if DK_OS_LINUX /* /proc/<pid>/smaps */
     char line[1024] = {0};
     size_t bytes = 0;
     int flen = strlen(field);
@@ -1132,7 +1133,7 @@ size_t OSRegualteLinuxSmapPrivateDirtyGet(int64_t pid) {
 }
 #endif
 
-#if defined(HAVE_PROC_STAT)
+#if DK_OS_LINUX /* /proc/<pid>/stat */
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -1170,7 +1171,7 @@ size_t OSRegulateRSSGet(void) {
 
     return (size_t)pages * (size_t)page;
 }
-#elif defined(HAVE_TASKINFO)
+#elif DK_OS_APPLE /* task_info() */
 #include <mach/mach_init.h>
 #include <mach/task.h>
 #include <stdio.h>

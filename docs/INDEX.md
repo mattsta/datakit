@@ -17,7 +17,7 @@
 
 Core platform plumbing has no standalone guide; read the headers
 directly: `src/datakit.h` (platform abstraction and shared macros),
-`src/config.h` (compile-time feature detection), `src/util.h` (general
+`src/dkPlatform.h` (compiler check, `DK_OS_*` flags, `DK_BITS`), `src/util.h` (general
 utility functions).
 
 ### String and Buffer Management

@@ -4,12 +4,12 @@
 #define __STDC_WANT_LIB_EXT1__ 1
 #endif
 
-#if defined(linux) || defined(__linux) || defined(__linux__)
+#if defined(__linux__)
 #include <features.h>
 #endif
 
 /* establish some global preconditions */
-#include "config.h"
+#include "dkPlatform.h"
 
 /* ====================================================================
  * Macros to expose features
@@ -101,37 +101,16 @@
 /* ====================================================================
  * Compiler helpers
  * ==================================================================== */
-/* only clang gives us __has_builtin */
-#ifndef __has_builtin
-#define __has_builtin(x) 0
-#endif
-
-/* only clang gives us __has_feature */
+/* __has_feature tests clang's sanitizer and language features; gcc
+ * provides it from gcc 14 (older gcc: every feature reads absent) */
 #ifndef __has_feature
 #define __has_feature(x) 0
 #endif
 
-/* GCC added __builtin_unreachable in 4.5, clang has feature detection. */
-#if DK_GNUC_LT(4, 5, 0) && !__has_builtin(__builtin_unreachable)
-#define __builtin_unreachable() (void)0
-#endif
-
-#if __STDC_VERSION__ >= 201112L
+/* datakit is C11 (gnu11): _Static_assert is always available */
 #define DK_C11 1
-#endif
-
-#if DK_C11
 #define DK_SIZECHECK(thing, size)                                              \
     _Static_assert(sizeof(thing) == (size), #thing " changed from " #size "?")
-#else
-#define DK_SIZECHECK(thing, size) (void)0
-#endif
-
-#ifndef __clang__
-#define dk_fallthrough __attribute__((fallthrough))
-#else
-#define dk_fallthrough (void)0
-#endif
 
 #define DK_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 #define DK_BYTESUSED(value)                                                    \
@@ -140,25 +119,9 @@
 /* ====================================================================
  * Feature exposers
  * ==================================================================== */
-#if DK_GNUC_GTE(3, 0, 0) || __has_builtin(__builtin_ctz)
+/* clang and gcc both provide __builtin_ctz / __builtin_clz */
 #define DK_HAS_CTZ 1
-#endif
-
-#if DK_GNUC_GTE(3, 0, 0) || __has_builtin(__builtin_clz)
 #define DK_HAS_CLZ 1
-#endif
-
-#if (__i386 || __amd64 || __powerpc__ || __arm64__) && DK_GNUC_VERSION_CODE
-#if DK_CLANG_VERSION_CODE
-#define DK_HAS_ATOMICS
-#endif
-#elif defined(__GLIBC__) && defined(__GLIBC_PREREQ)
-#if DK_GNUC_GTE(4, 1, 0) && __GLIBC_PREREQ(2, 6)
-#define DK_HAS_ATOMICS
-#endif
-#else
-#warning "No atomic intrinsics detected."
-#endif
 
 /* ====================================================================
  * Testing helpers
@@ -215,51 +178,25 @@
 /* ====================================================================
  * Known behavior helpers (expect)
  * ==================================================================== */
-#if DK_GNUC_GTE(3, 0, 2) || DK_CLANG_VERSION_CODE || __INTEL_COMPILER >= 800
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
-#else
-#define likely(x) (x)
-#define unlikely(x) (x)
-#endif
 
 /* ====================================================================
- * Known behavior helpers (always inline from lz4)
+ * Function attributes
  * ==================================================================== */
-#if DK_GNUC_VERSION_CODE || DK_CLANG_VERSION_CODE /* normal c99+ code */
 #define DK_INLINE_ALWAYS static inline __attribute__((always_inline))
-#else /* fallback */
-#define DK_INLINE_ALWAYS static inline
-#endif
 
 /* 'pure' means a function doesn't modify any memory and only interacts
  * with the world through its return value. */
-#if DK_GNUC_GTE(2, 96, 0) || DK_CLANG_VERSION_CODE
 #define DK_FN_PURE __attribute__((pure))
-#else
-#define DK_FN_PURE
-#endif
 
 /* 'const' means a function accepts scalar arguments and only interacts
  * with the world through its return value based on its scalar arguments.
  * No memory accesses are allowed (also means no pointer parameters). */
-#if DK_GNUC_GTE(2, 5, 0) || DK_CLANG_VERSION_CODE
 #define DK_FN_CONST __attribute__((const))
-#else
-#define DK_FN_CONST
-#endif
 
-#if DK_GNUC_GTE(4, 8, 2) || DK_CLANG_VERSION_CODE
 #define DK_FN_NONNULL __attribute__((returns_nonnull))
-#else
-#define DK_FN_NONNULL
-#endif
-
-#if DK_GNUC_GTE(3, 2, 0) || DK_CLANG_VERSION_CODE
 #define DK_FN_UNUSED __attribute__((unused))
-#else
-#define DK_FN_UNUSED
-#endif
 
 /* Keep a function unoptimized: timing loops the optimizer would fold away,
  * or stores it could drop.  clang spells this optnone; GCC has no optnone

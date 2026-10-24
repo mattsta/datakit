@@ -411,7 +411,8 @@ brew install cmake          # macOS
 
 ```bash
 # Some features require specific platform support
-# Check src/config.h for detected features
+# src/dkPlatform.h sets the DK_OS_* flag for the target; OS-specific code
+# is guarded by those flags (e.g. /proc readers by DK_OS_LINUX)
 ```
 
 ### Runtime Issues

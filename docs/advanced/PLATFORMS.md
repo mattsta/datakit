@@ -20,10 +20,10 @@ when it is vendored in.
 | ------------- | ----------- | ------------------------------------------------- |
 | **Linux**     | Primary     | Fully supported, extensively tested               |
 | **macOS**     | Primary     | Darwin; also the main Apple Silicon test host     |
-| **FreeBSD**   | Supported   | `config.h` detects it; BSD random/proctitle paths |
-| **OpenBSD**   | Supported   | `getentropy()` path                               |
-| **NetBSD**    | Supported   | `config.h` detects it                             |
-| **DragonFly** | Supported   | `config.h` detects it                             |
+| **FreeBSD**   | Supported   | `DK_OS_FREEBSD`; BSD random/proctitle paths       |
+| **OpenBSD**   | Supported   | `DK_OS_OPENBSD`; `getentropy()` path              |
+| **NetBSD**    | Supported   | `DK_OS_NETBSD`                                    |
+| **DragonFly** | Best effort | no `DK_OS_*` flag; generic POSIX paths only       |
 | **AIX**       | Best effort | `DK_OS_AIX` exists; not built or tested by CI     |
 | **Solaris**   | Unsupported | Removed entirely; do not add `__sun` branches     |
 | **Windows**   | Unsupported | Removed entirely; do not add MSVC/Win32 branches  |
@@ -43,32 +43,22 @@ when it is vendored in.
 
 ### Compile-Time Detection
 
-datakit uses `config.h` for compile-time feature detection:
+Three mechanisms, each in one place:
 
-```c
-/* Random number generation */
-#if defined(__linux__)
-    #define HAVE_GETRANDOM 1
-#elif defined(__APPLE__) || defined(__OpenBSD__)
-    #define HAVE_GETENTROPY 1
-#else
-    #define HAVE_DEV_URANDOM 1
-#endif
-
-/* Memory advice */
-#if defined(__linux__) || defined(__APPLE__)
-    #define HAVE_MADVISE 1
-#endif
-
-/* CPU instructions */
-#if defined(__F16C__)
-    #define HAVE_F16C 1  /* float16 hardware support */
-#endif
-
-#if defined(__AVX__)
-    #define HAVE_AVX 1   /* AVX vectorization */
-#endif
-```
+- **Target operating system** — `src/dkPlatform.h` sets exactly one of
+  `DK_OS_LINUX`, `DK_OS_APPLE`, `DK_OS_FREEBSD`, `DK_OS_NETBSD`,
+  `DK_OS_OPENBSD`, `DK_OS_AIX` to 1 and the rest to 0, from the compiler's
+  predefined macros (`__linux__`, `__APPLE__`, ...).  OS-specific code
+  tests them with `#if` (the `/proc` readers in `OSRegulate.c` with
+  `DK_OS_LINUX`, `task_info()` with `DK_OS_APPLE`).  It also refuses a
+  compiler other than clang or gcc and defines `DK_BITS`, the pointer width.
+- **System calls that vary by libc** — `src/CMakeLists.txt` compiles and
+  runs small probes and passes the results as compile definitions:
+  `DK_HAVE_GETRANDOM`, `DK_HAVE_LINUX_SYS_GETRANDOM`, `DK_HAVE_GETENTROPY`,
+  `DK_HAVE_GETENTROPY_SYS_RANDOM` (see Random Number Generation below).
+- **CPU instructions** — code tests the compiler's own target macros
+  directly (`__F16C__`, `__AVX2__`, `__ARM_NEON`, `__ARM_FEATURE_CRYPTO`),
+  so the instruction set chosen with `-m` flags decides the path.
 
 ### Runtime Detection
 
@@ -133,28 +123,16 @@ speed-up.
 
 ### Random Number Generation
 
-Different platforms provide different random sources:
+`portableRandomDirect` (`src/portableRandom.c`) takes the first source the
+build's probes found, in this order:
 
-```c
-/* Linux 3.17+ */
-#ifdef __linux__
-    #include <sys/random.h>
-    ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
-#endif
-
-/* macOS, OpenBSD */
-#if defined(__APPLE__) || defined(__OpenBSD__)
-    #include <sys/random.h>
-    int getentropy(void *buf, size_t buflen);
-#endif
-
-/* Fallback - portable but requires /dev/urandom */
-#ifndef HAVE_GETRANDOM
-    int fd = open("/dev/urandom", O_RDONLY);
-    read(fd, buf, len);
-    close(fd);
-#endif
-```
+1. `getrandom()` (`DK_HAVE_GETRANDOM`, glibc 2.25+ and the BSDs that have it)
+2. the raw `SYS_getrandom` syscall (`DK_HAVE_LINUX_SYS_GETRANDOM`, Linux 3.17+
+   on an older glibc)
+3. `getentropy()` (`DK_HAVE_GETENTROPY` / `DK_HAVE_GETENTROPY_SYS_RANDOM`,
+   macOS and OpenBSD)
+4. otherwise `/dev/urandom` — the probes run test programs, so a cross
+   build detects none and reads the device
 
 **Performance comparison:** there is no in-tree benchmark for these sources,
 so no figures are given. `getrandom()` and `getentropy()` are single system
@@ -432,51 +410,19 @@ gcc -fprofile-use -O3 program.c -o program
 
 ### CMake Configuration
 
-```cmake
-cmake_minimum_required(VERSION 3.10)
-project(datakit C)
+`src/CMakeLists.txt` builds one source list for every platform: OS-specific
+code lives inside the shared files behind `DK_OS_*` (from
+`src/dkPlatform.h`), so no per-platform source files are added.  The build:
 
-# Platform detection
-if(UNIX AND NOT APPLE)
-    set(LINUX TRUE)
-endif()
+- sets the warning flags (`-Wall -Wextra -Winline`, and
+  `-Wmissing-prototypes` on datakit's own objects) and the C standard;
+- adds instruction-set flags only where the target needs them (`-mssse3` on
+  x86_64; aarch64 has NEON without flags);
+- probes `getrandom`, `SYS_getrandom` and `getentropy` with
+  `check_c_source_runs` and passes `DK_HAVE_*` compile definitions.
 
-# Compiler flags
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-Wall -Wextra -O3)
-
-    # Enable F16C on x86_64
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-        add_compile_options(-mf16c)
-    endif()
-
-    # Enable NEON on ARM
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
-        add_compile_options(-mfpu=neon)
-    endif()
-endif()
-
-# Platform-specific sources
-if(LINUX)
-    list(APPEND SOURCES src/linux_specific.c)
-elseif(APPLE)
-    list(APPEND SOURCES src/macos_specific.c)
-elseif(BSD)
-    list(APPEND SOURCES src/bsd_specific.c)
-endif()
-
-# Feature detection
-include(CheckIncludeFile)
-include(CheckFunctionExists)
-
-check_include_file(sys/random.h HAVE_SYS_RANDOM_H)
-check_function_exists(getrandom HAVE_GETRANDOM)
-check_function_exists(getentropy HAVE_GETENTROPY)
-check_function_exists(madvise HAVE_MADVISE)
-
-# Generate config.h
-configure_file(config.h.in config.h)
-```
+Presets (`CMakePresets.json`, see [Build Presets](../BUILD_PRESETS.md))
+select the build type, sanitizers and coverage.
 
 ### Makefile Portability
 
