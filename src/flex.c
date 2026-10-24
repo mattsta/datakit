@@ -6812,7 +6812,7 @@ static int32_t randstring(uint8_t *target, uint32_t min, uint32_t max) {
  * (or at the end), and every remaining entry must hold its value. */
 static int32_t flexTestDeleteCursor(const size_t payloadLen,
                                     const size_t entries) {
-    int32_t bad = 0;
+    int err = 0;
     char buf[64];
     assert(payloadLen >= 5 && payloadLen <= sizeof(buf));
 
@@ -6830,7 +6830,7 @@ static int32_t flexTestDeleteCursor(const size_t payloadLen,
     size_t at = 0;
     size_t shrinks = 0;
     flexEntry *fe = flexHead(f);
-    for (size_t step = 0; count > 0 && bad < 8; step++) {
+    for (size_t step = 0; count > 0 && err < 8; step++) {
         if (step % 3 == 0) {
             /* keep this one */
             fe = flexNext(f, fe);
@@ -6862,10 +6862,9 @@ static int32_t flexTestDeleteCursor(const size_t payloadLen,
                 at < count ? flexIndex(f, (int32_t)at) : FLEX_ENTRY_END(f);
             if (fe != want || flexCount(f) != count ||
                 !flexValidateBufferDeep(f, flexBytes(f))) {
-                printf("  FAIL: cursor off after a delete at %zu of %zu "
-                       "(%zu-byte entries)\n",
-                       at, count, payloadLen);
-                bad++;
+                ERR("cursor off after a delete at %zu of %zu "
+                    "(%zu-byte entries)",
+                    at, count, payloadLen);
                 break;
             }
 
@@ -6879,8 +6878,7 @@ static int32_t flexTestDeleteCursor(const size_t payloadLen,
                 }
 
                 if (i >= count || id != oracle[i]) {
-                    printf("  FAIL: entry %zu wrong after a delete\n", i);
-                    bad++;
+                    ERR("entry %zu wrong after a delete", i);
                     break;
                 }
             }
@@ -6895,12 +6893,10 @@ static int32_t flexTestDeleteCursor(const size_t payloadLen,
     /* The header must actually have shrunk during the walk: once below
      * 64 bytes, and again below 16 KiB for the 62-byte entries. */
     if (shrinks < (payloadLen > 5 ? 2u : 1u)) {
-        printf("  FAIL: %zu header shrinks with %zu-byte entries\n", shrinks,
-               payloadLen);
-        bad++;
+        ERR("%zu header shrinks with %zu-byte entries", shrinks, payloadLen);
     }
 
-    return bad;
+    return err;
 }
 
 static void verify(flex *f, flexEntryData *e) {
@@ -7030,7 +7026,7 @@ static size_t flexTestWideSweep(flexTestWide *out) {
 }
 
 static int32_t flexTestWideDecoders(void) {
-    int32_t bad = 0;
+    int err = 0;
     flexTestWide vals[FLEX_TEST_WIDE_SWEEP_MAX];
     const size_t n = flexTestWideSweep(vals);
 
@@ -7048,8 +7044,7 @@ static int32_t flexTestWideDecoders(void) {
 
     for (uint32_t e = FLEX_NEG_8B; e <= FLEX_UINT_128B; e++) {
         if (!seen[e]) {
-            printf("  FAIL: no entry with integer encoding %" PRIu32 "\n", e);
-            bad++;
+            ERR("no entry with integer encoding %" PRIu32, e);
         }
     }
 
@@ -7064,14 +7059,12 @@ static int32_t flexTestWideDecoders(void) {
         if (!flexTestWideMatches((const databox *)&b, vals[i]) || b.allocated ||
             b.created || b.big != wide ||
             (wide && b.data.u128 != (__uint128_t *)b.extra)) {
-            printf("  FAIL: flexGetByTypeBig entry %zu\n", i);
-            bad++;
+            ERR("flexGetByTypeBig entry %zu", i);
         }
     }
 
     if (i != n) {
-        printf("  FAIL: decoded %zu of %zu entries\n", i, n);
-        bad++;
+        ERR("decoded %zu of %zu entries", i, n);
     }
 
     /* flexGetByTypeInto: a wide value lands in the slot and the box borrows
@@ -7108,8 +7101,7 @@ static int32_t flexTestWideDecoders(void) {
         }
 
         if (!ok) {
-            printf("  FAIL: flexGetByTypeInto entry %zu\n", i);
-            bad++;
+            ERR("flexGetByTypeInto entry %zu", i);
         }
     }
 
@@ -7142,15 +7134,12 @@ static int32_t flexTestWideDecoders(void) {
             flexGetByTypeInto(fe, &viaInto, &slot);
             if (memcmp(&viaGet, &viaInto, sizeof(viaGet)) != 0 ||
                 databoxCompare(&viaInto, &narrow[k]) != 0) {
-                printf("  FAIL: narrow Into decode %zu differs\n", k);
-                bad++;
+                ERR("narrow Into decode %zu differs", k);
             }
         }
 
         if (k != COUNT_ARRAY(narrow)) {
-            printf("  FAIL: mixed flex decoded %zu of %zu\n", k,
-                   COUNT_ARRAY(narrow));
-            bad++;
+            ERR("mixed flex decoded %zu of %zu", k, COUNT_ARRAY(narrow));
         }
     }
 
@@ -7204,10 +7193,9 @@ static int32_t flexTestWideDecoders(void) {
                             miss.data.u == unknownRef.data.u;
 
         if (!wideOk || !deferredOk || !bytesOk || !missOk) {
-            printf("  FAIL: flexGetByTypeIntoWithReference (wide %d, "
-                   "deferred %d, bytes %d, miss %d)\n",
-                   wideOk, deferredOk, bytesOk, missOk);
-            bad++;
+            ERR("flexGetByTypeIntoWithReference (wide %d, deferred %d, "
+                "bytes %d, miss %d)",
+                wideOk, deferredOk, bytesOk, missOk);
         }
     }
 
@@ -7229,9 +7217,7 @@ static int32_t flexTestWideDecoders(void) {
         }
 
         if (!ok || walked != n || fe) {
-            printf("  FAIL: flexGetNextByTypeBig walked %zu of %zu\n", walked,
-                   n);
-            bad++;
+            ERR("flexGetNextByTypeBig walked %zu of %zu", walked, n);
         }
     }
 
@@ -7249,16 +7235,13 @@ static int32_t flexTestWideDecoders(void) {
         if (!flexTestWideMatches(&plain, vals[i]) || plain.allocated != wide ||
             plain.big != wide ||
             (wide && (inFlex || ((uintptr_t)p % 16) != 0))) {
-            printf("  FAIL: flexGetByTypeCopy into a plain box, entry %zu\n",
-                   i);
-            bad++;
+            ERR("flexGetByTypeCopy into a plain box, entry %zu", i);
         }
 
         databoxFreeData(&plain);
         if (wide &&
             (plain.type != DATABOX_VOID || plain.data.ptr || plain.big)) {
-            printf("  FAIL: copied wide entry %zu not released\n", i);
-            bad++;
+            ERR("copied wide entry %zu not released", i);
         }
 
         databoxBig big;
@@ -7269,15 +7252,13 @@ static int32_t flexTestWideDecoders(void) {
             big.big != wide ||
             (wide && big.data.u128 != (__uint128_t *)big.extra) ||
             (!wide && big.allocated)) {
-            printf("  FAIL: flexGetByTypeCopy into a big box, entry %zu\n", i);
-            bad++;
+            ERR("flexGetByTypeCopy into a big box, entry %zu", i);
         }
 
         /* The payload is inline, so this releases nothing. */
         databoxFreeData((databox *)&big);
         if (wide && !flexTestWideMatches((const databox *)&big, vals[i])) {
-            printf("  FAIL: FreeData touched inline entry %zu\n", i);
-            bad++;
+            ERR("FreeData touched inline entry %zu", i);
         }
     }
 
@@ -7305,8 +7286,7 @@ static int32_t flexTestWideDecoders(void) {
         if (!narrowOk || reuse.type != DATABOX_UNSIGNED_128 || !reuse.big ||
             !reuse.allocated || reuse.data.u128 == (__uint128_t *)reuse.extra ||
             *reuse.data.u128 != wu) {
-            printf("  FAIL: reused copy box\n");
-            bad++;
+            ERRR("reused copy box");
         }
 
         databoxFreeData((databox *)&reuse);
@@ -7351,8 +7331,7 @@ static int32_t flexTestWideDecoders(void) {
              a.type == DATABOX_SIGNED_128 && *a.data.i128 == ws &&
              b.type == DATABOX_UNSIGNED_128 && *b.data.u128 == wu;
         if (!ok) {
-            printf("  FAIL: flexGetTwoDataboxesBig pair decode\n");
-            bad++;
+            ERRR("flexGetTwoDataboxesBig pair decode");
         }
 
         /* Refusals leave both boxes untouched. */
@@ -7375,8 +7354,7 @@ static int32_t flexTestWideDecoders(void) {
             if (flexGetTwoDataboxesBig(refuse[r].f, refuse[r].len, &a, &b) ||
                 memcmp(&a, &poison, sizeof(a)) != 0 ||
                 memcmp(&b, &poison, sizeof(b)) != 0) {
-                printf("  FAIL: flexGetTwoDataboxesBig refusal %zu\n", r);
-                bad++;
+                ERR("flexGetTwoDataboxesBig refusal %zu", r);
             }
         }
     }
@@ -7390,8 +7368,7 @@ static int32_t flexTestWideDecoders(void) {
         if (!flexGetSingleDataboxBig(s1, flexBytes(s1), &o) ||
             o.type != DATABOX_SIGNED_64 || o.data.i64 != -77 || o.big ||
             o.allocated) {
-            printf("  FAIL: flexGetSingleDataboxBig narrow decode\n");
-            bad++;
+            ERRR("flexGetSingleDataboxBig narrow decode");
         }
     }
 
@@ -7412,8 +7389,7 @@ static int32_t flexTestWideDecoders(void) {
                         sv == -7 && flexGetUnsigned(flexIndex(g, 3), &uv) &&
                         uv == 7;
         if (!ok) {
-            printf("  FAIL: flexGetSigned / flexGetUnsigned on a wide value\n");
-            bad++;
+            ERRR("flexGetSigned / flexGetUnsigned on a wide value");
         }
 
         /* Out of the result's range, or not an integer at all (bytes, a
@@ -7441,13 +7417,12 @@ static int32_t flexTestWideDecoders(void) {
                 !flexGetUnsigned(flexIndex(h, at), &uv) && sv == 11 && uv == 11;
         }
         if (!refused || !nonIntegers) {
-            printf("  FAIL: getters out of range %d, non-integers %d\n",
-                   refused, nonIntegers);
-            bad++;
+            ERR("getters out of range %d, non-integers %d", refused,
+                nonIntegers);
         }
     }
 
-    return bad;
+    return err;
 }
 
 /* ====================================================================
@@ -7533,12 +7508,12 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
     size_t visited = 0;
     bool trailersIntact = true;
     *reversed = false;
+    int err = 0;
 
 #define FLEX_SWEEP_DECODE_FAIL_(what)                                          \
     do {                                                                       \
-        printf("  ERROR! %s: offset %zu value %" PRIu32 ": %s\n", name, pos,   \
-               v, (what));                                                     \
-        return 1;                                                              \
+        ERR("%s: offset %zu value %" PRIu32 ": %s", name, pos, v, (what));     \
+        return err;                                                            \
     } while (0)
 
     flexEntry *fe = flexHeadIfAny(f);
@@ -7618,7 +7593,7 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
 #undef FLEX_SWEEP_DECODE_FAIL_
 
     *reversed = true;
-    return 0;
+    return err;
 }
 
 /* Sweep one valid flex.  Offsets in [skipFrom, skipTo) are not mutated
@@ -7628,7 +7603,7 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
                                             const flex *const f,
                                             const size_t skipFrom,
                                             const size_t skipTo) {
-    int32_t failures = 0;
+    int err = 0;
     const size_t bytes = flexBytes(f);
     const size_t mutated = bytes - (skipTo - skipFrom);
 
@@ -7646,16 +7621,16 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
 
     bool reversed = false;
     if (!flexValidateBuffer(scratch, bytes)) {
-        printf("  ERROR! %s: unmutated buffer failed the shallow gate\n", name);
-        return failures + 1;
+        ERR("%s: unmutated buffer failed the shallow gate", name);
+        return err;
     }
 
     if (!flexValidateBufferDeep(scratch, bytes)) {
-        printf("  ERROR! %s: unmutated buffer failed the deep gate\n", name);
-        return failures + 1;
+        ERR("%s: unmutated buffer failed the deep gate", name);
+        return err;
     }
 
-    failures += flexValidateSweepDecode(
+    err += flexValidateSweepDecode(
         name, scratch, bytes, 0, FLEX_SWEEP_BYTE_VALUES, true, seen, &reversed);
 
     size_t accepted = 0;
@@ -7683,10 +7658,9 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
             const bool peeked = flexPeekTotalBytes(scratch, bytes, &total);
             if (shallow != (peeked && total == bytes) ||
                 (peeked && total > bytes)) {
-                printf("  ERROR! %s: offset %zu value %" PRIu32
-                       " shallow %d disagrees with peek %d (total %zu)\n",
-                       name, pos, v, shallow, peeked, total);
-                failures++;
+                ERR("%s: offset %zu value %" PRIu32
+                    " shallow %d disagrees with peek %d (total %zu)",
+                    name, pos, v, shallow, peeked, total);
             }
 
             /* A longer outer buffer leaves a successful peek unchanged. */
@@ -7694,23 +7668,21 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
             const bool outerPeeked = flexPeekTotalBytes(
                 scratch, bytes + FLEX_SWEEP_PEEK_SLACK, &outerTotal);
             if (peeked && (!outerPeeked || outerTotal != total)) {
-                printf("  ERROR! %s: offset %zu value %" PRIu32
-                       " peek changed with a longer outer buffer\n",
-                       name, pos, v);
-                failures++;
+                ERR("%s: offset %zu value %" PRIu32
+                    " peek changed with a longer outer buffer",
+                    name, pos, v);
             }
 
             if (deep) {
                 if (!shallow) {
-                    printf("  ERROR! %s: offset %zu value %" PRIu32
-                           " passed deep and failed shallow\n",
-                           name, pos, v);
-                    failures++;
+                    ERR("%s: offset %zu value %" PRIu32
+                        " passed deep and failed shallow",
+                        name, pos, v);
                 }
 
                 accepted++;
-                failures += flexValidateSweepDecode(name, scratch, bytes, pos,
-                                                    v, false, seen, &reversed);
+                err += flexValidateSweepDecode(name, scratch, bytes, pos, v,
+                                               false, seen, &reversed);
                 reverseWalked += reversed;
             }
         }
@@ -7722,7 +7694,7 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
            "%zu\n",
            accepted, reverseWalked);
 
-    return failures;
+    return err;
 }
 
 /* Read the entry at 'index' of 'outer' (walking from the head for a
@@ -7732,6 +7704,7 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
 static int32_t flexValidateSweepCheckNested(const flex *const outer,
                                             const int32_t index,
                                             const flex *const inner) {
+    int err = 0;
     databox got = {{0}};
     const flexEntry *const fe = flexIndexDirect(outer, index);
     if (fe) {
@@ -7741,22 +7714,20 @@ static int32_t flexValidateSweepCheckNested(const flex *const outer,
     if (got.type != DATABOX_CONTAINER_FLEX_MAP ||
         flexBytes(got.data.bytes.start) != flexBytes(inner) ||
         memcmp(got.data.bytes.start, inner, flexBytes(inner)) != 0) {
-        printf("  ERROR! nested: entry at index %" PRId32
-               " is not the nested map (type %d)\n",
-               index, (int)got.type);
-        return 1;
+        ERR("nested: entry at index %" PRId32
+            " is not the nested map (type %d)",
+            index, (int)got.type);
     }
 
-    return 0;
+    return err;
 }
 
 int32_t flexValidateTotalitySweep(void) {
-    int32_t failures = 0;
+    int err = 0;
 
-    printf("Test flex validators are total over every single-byte "
-           "mutation:\n");
-
-    {
+    /* The flex validators are total over every single-byte mutation of
+     * each buffer below */
+    TEST("validator totality: strings") {
         /* Strings of several lengths: the split-varint length path at
          * its 1-byte and 2-byte forms. */
         cleaner(flexFree) flex *strs = flexNew();
@@ -7768,10 +7739,10 @@ int32_t flexValidateTotalitySweep(void) {
             flexPushBytes(&strs, words[i], strlen(words[i]),
                           FLEX_ENDPOINT_TAIL);
         }
-        failures += flexValidateTotalitySweepOne("strings", strs, 0, 0);
+        err += flexValidateTotalitySweepOne("strings", strs, 0, 0);
     }
 
-    {
+    TEST("validator totality: a 3-byte string length") {
         /* One string long enough for a 3-byte length varint, between
          * shorter ones.  Only its edges are mutated: the interior is
          * payload no validator reads. */
@@ -7789,12 +7760,12 @@ int32_t flexValidateTotalitySweep(void) {
         const flexEntry *const longEntry = flexIndexDirect(wideStrs, 1);
         assert(varintSplitFullNoZeroGetLenQuick_(longEntry) == 3);
         const size_t payloadStart = (size_t)(longEntry - wideStrs) + 3;
-        failures += flexValidateTotalitySweepOne(
+        err += flexValidateTotalitySweepOne(
             "3-byte-string", wideStrs, payloadStart + SWEEP_LONG_EDGE_,
             payloadStart + SWEEP_LONG_STRING_ - SWEEP_LONG_EDGE_);
     }
 
-    {
+    TEST("validator totality: integers and immediates") {
         /* Integers across the signed/unsigned width ladder plus the
          * immediates: the fixed-width payload table. */
         cleaner(flexFree) flex *nums = flexNew();
@@ -7809,10 +7780,10 @@ int32_t flexValidateTotalitySweep(void) {
         flexPushByType(&nums, &t, FLEX_ENDPOINT_TAIL);
         flexPushByType(&nums, &fa, FLEX_ENDPOINT_TAIL);
         flexPushByType(&nums, &nil, FLEX_ENDPOINT_TAIL);
-        failures += flexValidateTotalitySweepOne("numbers", nums, 0, 0);
+        err += flexValidateTotalitySweepOne("numbers", nums, 0, 0);
     }
 
-    {
+    TEST("validator totality: wide integers, reals and references") {
         /* The rest of the fixed-width table: 96- and 128-bit integers of
          * both signs, every real width, references of several widths, and
          * empty bytes. */
@@ -7842,10 +7813,10 @@ int32_t flexValidateTotalitySweep(void) {
         }
 
         flexPushBytes(&fixed, "", 0, FLEX_ENDPOINT_TAIL);
-        failures += flexValidateTotalitySweepOne("fixed-width", fixed, 0, 0);
+        err += flexValidateTotalitySweepOne("fixed-width", fixed, 0, 0);
     }
 
-    {
+    TEST("validator totality: nested containers") {
         /* Nested container entries: the inner-varint path, which is a
          * second split varint inside one entry's payload.  'inner' needs
          * a one-byte inner varint, 'wide' a two-byte one. */
@@ -7876,20 +7847,18 @@ int32_t flexValidateTotalitySweep(void) {
         /* Each container must read back whole, from the head (forward
          * sizing) and from the tail (reverse trailer). */
         if (flexCount(outer) != 4) {
-            printf("  ERROR! nested: expected 4 entries, found %zu\n",
-                   flexCount(outer));
-            failures++;
+            ERR("nested: expected 4 entries, found %zu", flexCount(outer));
         } else {
-            failures += flexValidateSweepCheckNested(outer, 1, inner);
-            failures += flexValidateSweepCheckNested(outer, -3, inner);
-            failures += flexValidateSweepCheckNested(outer, 2, wide);
-            failures += flexValidateSweepCheckNested(outer, -2, wide);
+            err += flexValidateSweepCheckNested(outer, 1, inner);
+            err += flexValidateSweepCheckNested(outer, -3, inner);
+            err += flexValidateSweepCheckNested(outer, 2, wide);
+            err += flexValidateSweepCheckNested(outer, -2, wide);
         }
 
-        failures += flexValidateTotalitySweepOne("nested", outer, 0, 0);
+        err += flexValidateTotalitySweepOne("nested", outer, 0, 0);
     }
 
-    {
+    TEST("validator totality: a multi-byte total-bytes header") {
         /* Large enough that the header's total-bytes varint is
          * multi-byte. */
         cleaner(flexFree) flex *big = flexNew();
@@ -7897,18 +7866,10 @@ int32_t flexValidateTotalitySweep(void) {
             flexPushSigned(&big, i * 1000, FLEX_ENDPOINT_TAIL);
         }
         assert(FLEX_TOTAL_BYTES_WIDTH(big) > 1);
-        failures += flexValidateTotalitySweepOne("wide-header", big, 0, 0);
+        err += flexValidateTotalitySweepOne("wide-header", big, 0, 0);
     }
 
-    if (failures == 0) {
-        printf("=== flex validator totality sweep passed! ===\n\n");
-    } else {
-        printf("=== flex validator totality sweep FAILED (%" PRId32
-               " failure(s)) ===\n\n",
-               failures);
-    }
-
-    return failures;
+    return err;
 }
 
 #undef FLEX_SWEEP_BYTE_VALUES
@@ -7958,7 +7919,7 @@ static uint64_t flexTestWideRand(uint64_t *state) {
  * Void boxes reach the writer through a replace and through the sorted
  * row inserts (a row value); checked both ways. */
 static int32_t flexTestVoidEntries(void) {
-    int32_t bad = 0;
+    int err = 0;
     static const size_t sizes[] = {1, 7, 8, 9, 100, 300, 70000};
     for (size_t s = 0; s < 2 * (sizeof(sizes) / sizeof(*sizes)); s++) {
         const bool sorted = s % 2 == 1;
@@ -7988,18 +7949,14 @@ static int32_t flexTestVoidEntries(void) {
         databox got = {{0}};
         flexGetByType(flexIndex(f, 1), &got);
         if (got.type != DATABOX_BYTES || got.len != n) {
-            printf("  FAIL: %zu-byte void entry read back as type %d, %zu "
-                   "bytes\n",
-                   n, got.type, (size_t)got.len);
-            bad++;
+            ERR("%zu-byte void entry read back as type %d, %zu bytes", n,
+                got.type, (size_t)got.len);
             continue;
         }
         uint8_t *space = (uint8_t *)got.data.bytes.start;
         for (size_t i = 0; i < n; i++) {
             if (space[i] != 0) {
-                printf("  FAIL: %zu-byte void entry byte %zu is %u\n", n, i,
-                       space[i]);
-                bad++;
+                ERR("%zu-byte void entry byte %zu is %u", n, i, space[i]);
                 break;
             }
         }
@@ -8015,11 +7972,10 @@ static int32_t flexTestVoidEntries(void) {
             got.len != n ||
             ((const uint8_t *)got.data.bytes.start)[n - 1] != 0xAB ||
             !flexValidateBufferDeep(f, flexBytes(f))) {
-            printf("  FAIL: %zu-byte void entry disturbed its neighbours\n", n);
-            bad++;
+            ERR("%zu-byte void entry disturbed its neighbours", n);
         }
     }
-    return bad;
+    return err;
 }
 
 /* The single- and two-value readers of untrusted bytes: each refuses NULL
@@ -8027,7 +7983,7 @@ static int32_t flexTestVoidEntries(void) {
  * (the plain-databox readers) a 96/128-bit value, leaving the outputs
  * exactly as they were; a good buffer reads back its values. */
 static int32_t flexTestUntrustedGetters(void) {
-    int32_t bad = 0;
+    int err = 0;
     cleaner(flexFree) flex *one = flexNew();
     flexPushSigned(&one, -77, FLEX_ENDPOINT_TAIL);
     cleaner(flexFree) flex *two = flexNew();
@@ -8052,8 +8008,7 @@ static int32_t flexTestUntrustedGetters(void) {
         b = mark;                                                              \
         if ((call) || a.data.i64 != mark.data.i64 ||                           \
             b.data.i64 != mark.data.i64) {                                     \
-            printf("  FAIL: %s accepted or wrote\n", #call);                   \
-            bad++;                                                             \
+            ERR("%s accepted or wrote", #call);                                \
         }                                                                      \
     } while (0)
     const uint8_t *o = (const uint8_t *)one;
@@ -8085,10 +8040,9 @@ static int32_t flexTestUntrustedGetters(void) {
         ba.type != DATABOX_SIGNED_128 ||
         !flexGetTwoDataboxesBig(w2, flexBytes(wideTwo), &ba, &bb) ||
         ba.type != DATABOX_SIGNED_128 || bb.data.i64 != 1) {
-        printf("  FAIL: a valid buffer did not read back\n");
-        bad++;
+        ERRR("a valid buffer did not read back");
     }
-    return bad;
+    return err;
 }
 
 /* flexDeleteUpToInclusive(fe) removes the head through fe; ...PlusN(fe, n)
@@ -8096,7 +8050,7 @@ static int32_t flexTestUntrustedGetters(void) {
  * start (and NULL, which deletes nothing) with n from 0 past the end, and
  * the remaining values checked against the model. */
 static int32_t flexTestDeleteUpTo(void) {
-    int32_t bad = 0;
+    int err = 0;
     enum { N = 6 };
     for (int32_t start = -1; start < N; start++) {
         for (int32_t more = 0; more <= N + 1; more++) {
@@ -8126,14 +8080,13 @@ static int32_t flexTestDeleteUpTo(void) {
                 at = flexNext(f, at);
             }
             if (!ok) {
-                printf("  FAIL: delete up to %" PRId32 " plus %" PRId32
-                       " left %zu entries, want values %" PRId32 "..%d\n",
-                       start, more, flexCount(f), firstKept, N - 1);
-                bad++;
+                ERR("delete up to %" PRId32 " plus %" PRId32
+                    " left %zu entries, want values %" PRId32 "..%d",
+                    start, more, flexCount(f), firstKept, N - 1);
             }
         }
     }
-    return bad;
+    return err;
 }
 
 /* flex math over 96/128-bit entries and at the edges of the result range:
@@ -8141,7 +8094,7 @@ static int32_t flexTestDeleteUpTo(void) {
  * refuses, a 64x64-bit product past 2^127 refuses, and the double fold
  * takes any unsigned 128-bit value */
 static int32_t flexTestMathWide(void) {
-    int32_t bad = 0;
+    int err = 0;
     databoxBig b;
     cleaner(flexFree) flex *small128 = flexNew();
     DATABOX_BIG_UNSIGNED_128(&b, (__uint128_t)5);
@@ -8153,8 +8106,7 @@ static int32_t flexTestMathWide(void) {
     double d = 0;
     if (!flexAddSigned(small128, &s) || s != -2 ||
         !flexMultiplySigned(small128, &s) || s != -35) {
-        printf("  FAIL: 128-bit-encoded 5 and -7 folded to %" PRId64 "\n", s);
-        bad++;
+        ERR("128-bit-encoded 5 and -7 folded to %" PRId64, s);
     }
 
     cleaner(flexFree) flex *top = flexNew();
@@ -8162,16 +8114,14 @@ static int32_t flexTestMathWide(void) {
     flexPushDataboxBigExact(&top, &b, FLEX_ENDPOINT_TAIL);
     if (flexAddSigned(top, &s) || flexAddUnsigned(top, &u) ||
         !flexAddDouble(top, &d) || d != 0x1p127) {
-        printf("  FAIL: 2^127 + 1 folded as an integer, or as double %g\n", d);
-        bad++;
+        ERR("2^127 + 1 folded as an integer, or as double %g", d);
     }
 
     cleaner(flexFree) flex *huge = flexNew();
     flexPushUnsigned(&huge, UINT64_MAX, FLEX_ENDPOINT_TAIL);
     flexPushUnsigned(&huge, UINT64_MAX, FLEX_ENDPOINT_TAIL);
     if (flexMultiplyUnsigned(huge, &u) || flexAddUnsigned(huge, &u)) {
-        printf("  FAIL: UINT64_MAX^2 or 2*UINT64_MAX fit a uint64\n");
-        bad++;
+        ERRR("UINT64_MAX^2 or 2*UINT64_MAX fit a uint64");
     }
 
     cleaner(flexFree) flex *edge = flexNew();
@@ -8179,14 +8129,13 @@ static int32_t flexTestMathWide(void) {
     flexPushSigned(&edge, 1, FLEX_ENDPOINT_TAIL);
     if (flexSubtractSigned(edge, &s) || !flexAddSigned(edge, &s) ||
         s != INT64_MIN + 1) {
-        printf("  FAIL: INT64_MIN - 1 fit, or INT64_MIN + 1 did not\n");
-        bad++;
+        ERRR("INT64_MIN - 1 fit, or INT64_MIN + 1 did not");
     }
-    return bad;
+    return err;
 }
 
 static int32_t flexTestReferenceSet(void) {
-    int32_t bad = 0;
+    int err = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
                                   "banana", "cherry", "date", "grape"};
     enum { W = sizeof(words) / sizeof(words[0]) };
@@ -8212,19 +8161,16 @@ static int32_t flexTestReferenceSet(void) {
             memcmp(databoxBytes(&got), sorted[at], strlen(sorted[at])) != 0) {
             databox raw;
             flexGetByType(fe, &raw);
-            printf("  FAIL: reference set position %zu out of order: "
-                   "resolves to type %d \"%.*s\", stored type %d %" PRIu64 "\n",
-                   at, (int)got.type,
-                   DATABOX_IS_BYTES(&got) ? (int)databoxLen(&got) : 0,
-                   DATABOX_IS_BYTES(&got) ? (const char *)databoxBytes(&got)
-                                          : "",
-                   (int)raw.type, raw.data.u64);
-            bad++;
+            ERR("reference set position %zu out of order: resolves to type "
+                "%d \"%.*s\", stored type %d %" PRIu64,
+                at, (int)got.type,
+                DATABOX_IS_BYTES(&got) ? (int)databoxLen(&got) : 0,
+                DATABOX_IS_BYTES(&got) ? (const char *)databoxBytes(&got) : "",
+                (int)raw.type, raw.data.u64);
         }
     }
     if (at != W) {
-        printf("  FAIL: reference set holds %zu of %d\n", at, (int)W);
-        bad++;
+        ERR("reference set holds %zu of %d", at, (int)W);
     }
 
     /* Present keys, keys between, before all and past all */
@@ -8255,16 +8201,14 @@ static int32_t flexTestReferenceSet(void) {
             }
         }
         if (!ok) {
-            printf("  FAIL: reference set probe \"%s\" landed wrong\n",
-                   probes[i].probe);
-            bad++;
+            ERR("reference set probe \"%s\" landed wrong", probes[i].probe);
         }
     }
-    return bad;
+    return err;
 }
 
 static int32_t flexTestWideReferenceSorted(void) {
-    int32_t bad = 0;
+    int err = 0;
     enum { NARROW_REF_KEYS = 4, REF_KEYS_MAX = 16 };
     flexTestWide keys[REF_KEYS_MAX];
     size_t n = flexTestWideFixedSet(keys);
@@ -8292,9 +8236,9 @@ static int32_t flexTestWideReferenceSorted(void) {
     }
 
     if (flexCount(f) != 2 * n) {
-        printf("  FAIL: reference-sorted flex holds %zu of %zu elements\n",
-               flexCount(f), 2 * n);
-        return bad + 1;
+        ERR("reference-sorted flex holds %zu of %zu elements", flexCount(f),
+            2 * n);
+        return err;
     }
 
     /* Keys resolve in ascending order. */
@@ -8308,10 +8252,7 @@ static int32_t flexTestWideReferenceSorted(void) {
         databoxWide slot;
         flexGetByTypeIntoWithReference(fe, &got, &slot, atoms);
         if (!flexTestWideMatches(&got, sorted[i])) {
-            printf("  FAIL: reference-sorted position %zu holds the wrong "
-                   "key\n",
-                   i);
-            bad++;
+            ERR("reference-sorted position %zu holds the wrong key", i);
         }
     }
 
@@ -8327,12 +8268,11 @@ static int32_t flexTestWideReferenceSorted(void) {
         }
 
         if (!found || val.type != DATABOX_UNSIGNED_64 || val.data.u64 != i) {
-            printf("  FAIL: reference-sorted find of key %zu\n", i);
-            bad++;
+            ERR("reference-sorted find of key %zu", i);
         }
     }
 
-    return bad;
+    return err;
 }
 
 /* Build merge-test input `kind` into *f (and, appended, into *both) */
@@ -8376,7 +8316,7 @@ static void flexTestMergeFill(int kind, flex **f, flex **both) {
  * byte total): the result is byte-identical to one flex holding the
  * first's entries then the second's, and passes deep validation */
 static int32_t flexTestMergeMatrix(void) {
-    int32_t bad = 0;
+    int err = 0;
     for (int a = 0; a < 6; a++) {
         for (int b = 0; b < 6; b++) {
             /* flexMerge frees one input and keeps the other: both are
@@ -8394,8 +8334,7 @@ static int32_t flexTestMergeMatrix(void) {
                 flexBytes(merged) != flexBytes(want) ||
                 memcmp(merged, want, flexBytes(want)) != 0 ||
                 !flexValidateBufferDeep(merged, flexBytes(merged))) {
-                printf("  FAIL: merge of input %d with %d\n", a, b);
-                bad++;
+                ERR("merge of input %d with %d", a, b);
             }
             flexFree(first);
             flexFree(second);
@@ -8408,14 +8347,13 @@ static int32_t flexTestMergeMatrix(void) {
     flex *alias = self;
     if (flexMerge(NULL, &self) || flexMerge(&self, &none) ||
         flexMerge(&self, &alias)) {
-        printf("  FAIL: merge accepted NULL or itself\n");
-        bad++;
+        ERRR("merge accepted NULL or itself");
     }
-    return bad;
+    return err;
 }
 
 static int32_t flexTestWideSorted(void) {
-    int32_t bad = 0;
+    int err = 0;
     enum { WIDE_KEYS = 64, NARROW_KEYS = 16, KEYS = WIDE_KEYS + NARROW_KEYS };
     flexTestWide keys[KEYS];
     size_t n = flexTestWideFixedSet(keys);
@@ -8470,9 +8408,8 @@ static int32_t flexTestWideSorted(void) {
 
     qsort(keys, KEYS, sizeof(keys[0]), flexTestWideCmp);
     if (flexCount(f) != KEYS) {
-        printf("  FAIL: sorted flex holds %zu of %d keys\n", flexCount(f),
-               KEYS);
-        return bad + 1;
+        ERR("sorted flex holds %zu of %d keys", flexCount(f), KEYS);
+        return err;
     }
 
     size_t i = 0;
@@ -8480,8 +8417,7 @@ static int32_t flexTestWideSorted(void) {
         databoxBig b;
         flexGetByTypeBig(fe, &b);
         if (!flexTestWideMatches((const databox *)&b, keys[i])) {
-            printf("  FAIL: sorted position %zu holds the wrong key\n", i);
-            bad++;
+            ERR("sorted position %zu holds the wrong key", i);
         }
     }
 
@@ -8500,8 +8436,7 @@ static int32_t flexTestWideSorted(void) {
             flexCompareEntries(f, &kp, 1, (int_fast32_t)i) != 0 ||
             (i + 1 < KEYS &&
              flexCompareEntries(f, &kp, 1, (int_fast32_t)i + 1) <= 0)) {
-            printf("  FAIL: sorted find of key %zu\n", i);
-            bad++;
+            ERR("sorted find of key %zu", i);
         }
 
         /* The next value up, when it is not a key, is not found. */
@@ -8516,8 +8451,7 @@ static int32_t flexTestWideSorted(void) {
         if (probe) {
             flexTestWideBox(absent, false, &k);
             if (flexFindByTypeSorted(f, 1, (const databox *)&k)) {
-                printf("  FAIL: found absent neighbour of key %zu\n", i);
-                bad++;
+                ERR("found absent neighbour of key %zu", i);
             }
         }
     }
@@ -8533,8 +8467,8 @@ static int32_t flexTestWideSorted(void) {
     }
 
     if (wideCount != WIDE_KEYS) {
-        printf("  FAIL: %zu wide keys generated\n", wideCount);
-        return bad + 1;
+        ERR("%zu wide keys generated", wideCount);
+        return err;
     }
 
     enum { ROWS = 32 };
@@ -8577,8 +8511,8 @@ static int32_t flexTestWideSorted(void) {
     }
 
     if (flexCount(m) != ROWS * 2) {
-        printf("  FAIL: row map holds %zu elements\n", flexCount(m));
-        return bad + 1;
+        ERR("row map holds %zu elements", flexCount(m));
+        return err;
     }
 
     flexEntry *fe = flexHead(m);
@@ -8593,8 +8527,7 @@ static int32_t flexTestWideSorted(void) {
                 (rows[r].key < 0 ? DATABOX_SIGNED_64 : DATABOX_UNSIGNED_64) ||
             k.data.i64 != rows[r].key ||
             !flexTestWideMatches((const databox *)&v, rows[r].val)) {
-            printf("  FAIL: row %zu out of order\n", r);
-            bad++;
+            ERR("row %zu out of order", r);
         }
 
         const databox key = databoxNewSigned(rows[r].key);
@@ -8610,12 +8543,11 @@ static int32_t flexTestWideSorted(void) {
 
         if (!found ||
             !flexTestWideMatches((const databox *)&got, rows[r].val)) {
-            printf("  FAIL: full-width find of row %zu\n", r);
-            bad++;
+            ERR("full-width find of row %zu", r);
         }
     }
 
-    return bad;
+    return err;
 }
 
 /* Push a FLEX_NEG_64B entry that stores 'magnitude' as given.  The
@@ -8637,7 +8569,7 @@ static flexTestWide flexTestNeg64Value(const uint64_t magnitude) {
 /* FLEX_NEG_64B entries whose magnitude has bit 63 set hold values in
  * [-2^64, -2^63 - 1].  Every reader decodes them as that value. */
 static int32_t flexTestNeg64Wide(void) {
-    int32_t bad = 0;
+    int err = 0;
     const uint64_t top = UINT64_C(1) << 63;
     const uint64_t mags[] = {top, top + 1, top + 12345, UINT64_MAX - 1,
                              UINT64_MAX};
@@ -8651,8 +8583,7 @@ static int32_t flexTestNeg64Wide(void) {
         cleaner(flexFree) flex *f = flexNew();
         flexEntry *fe = flexTestPushNeg64(&f, mags[i]);
         if (!flexValidateBufferDeep(f, flexBytes(f))) {
-            printf("  FAIL: magnitude %zu rejected by deep validation\n", i);
-            bad++;
+            ERR("magnitude %zu rejected by deep validation", i);
             continue;
         }
 
@@ -8661,29 +8592,25 @@ static int32_t flexTestNeg64Wide(void) {
         flexGetByTypeBig(fe, &b);
         if (!flexTestWideMatches((const databox *)&b, want) || !b.big ||
             b.data.ptr != (void *)b.extra || b.allocated) {
-            printf("  FAIL: magnitude %zu flexGetByTypeBig\n", i);
-            bad++;
+            ERR("magnitude %zu flexGetByTypeBig", i);
         }
 
         databox plain = {{0}};
         flexGetByType(fe, &plain);
         if (plain.type != DATABOX_SIGNED_128 || plain.data.ptr) {
-            printf("  FAIL: magnitude %zu plain decode is not type-only\n", i);
-            bad++;
+            ERR("magnitude %zu plain decode is not type-only", i);
         }
 
         int64_t s = 0;
         uint64_t u = 0;
         if (flexGetSigned(fe, &s) || flexGetUnsigned(fe, &u)) {
-            printf("  FAIL: magnitude %zu read as a 64-bit value\n", i);
-            bad++;
+            ERR("magnitude %zu read as a 64-bit value", i);
         }
 
         databox copy = {{0}};
         flexGetByTypeCopy(fe, &copy);
         if (!flexTestWideMatches(&copy, want) || !copy.allocated || !copy.big) {
-            printf("  FAIL: magnitude %zu flexGetByTypeCopy\n", i);
-            bad++;
+            ERR("magnitude %zu flexGetByTypeCopy", i);
         }
 
         databoxFreeData(&copy);
@@ -8692,14 +8619,12 @@ static int32_t flexTestNeg64Wide(void) {
             flexCompareUnsigned(fe, (uint64_t)wrapped) ||
             flexFindSigned(f, flexHead(f), wrapped, 0) ||
             flexFindUnsigned(f, flexHead(f), (uint64_t)wrapped, 0)) {
-            printf("  FAIL: magnitude %zu matched a 64-bit value\n", i);
-            bad++;
+            ERR("magnitude %zu matched a 64-bit value", i);
         }
 
         if (flexIncrbySigned(&f, fe, 1, NULL) ||
             flexIncrbyUnsigned(&f, fe, 1, NULL)) {
-            printf("  FAIL: magnitude %zu took a 64-bit increment\n", i);
-            bad++;
+            ERR("magnitude %zu took a 64-bit increment", i);
         }
 
         databox one = {{0}};
@@ -8708,8 +8633,7 @@ static int32_t flexTestNeg64Wide(void) {
         if (flexGetSingleDatabox(f, flexBytes(f), &one) ||
             !flexGetSingleDataboxBig(f, flexBytes(f), &oneBig) ||
             !flexTestWideMatches((const databox *)&oneBig, want)) {
-            printf("  FAIL: magnitude %zu single-databox decode\n", i);
-            bad++;
+            ERR("magnitude %zu single-databox decode", i);
         }
 
         /* The canonical encoding of the same value compares equal. */
@@ -8721,9 +8645,7 @@ static int32_t flexTestNeg64Wide(void) {
         flexGetByTypeBig(flexHead(canon), &cb);
         if (flexHead(canon)[0] != FLEX_NEG_96B ||
             databoxCompare((const databox *)&b, (const databox *)&cb) != 0) {
-            printf("  FAIL: magnitude %zu differs from its canonical form\n",
-                   i);
-            bad++;
+            ERR("magnitude %zu differs from its canonical form", i);
         }
 
         flexPushSigned(&f, -1, FLEX_ENDPOINT_TAIL);
@@ -8735,8 +8657,7 @@ static int32_t flexTestNeg64Wide(void) {
             !flexGetTwoDataboxesBig(f, flexBytes(f), &ba, &bb) ||
             !flexTestWideMatches((const databox *)&ba, want) ||
             bb.type != DATABOX_SIGNED_64 || bb.data.i64 != -1) {
-            printf("  FAIL: magnitude %zu two-databox decode\n", i);
-            bad++;
+            ERR("magnitude %zu two-databox decode", i);
         }
 
         /* The 64-bit replace refuses it, as for any wide entry, and the
@@ -8746,8 +8667,7 @@ static int32_t flexTestNeg64Wide(void) {
         if (flexReplaceSigned(&f, fe, -5) || flexReplaceUnsigned(&f, fe, 5) ||
             (flexGetByTypeBig(flexHead(f), &r),
              !flexTestWideMatches((const databox *)&r, want))) {
-            printf("  FAIL: magnitude %zu took a 64-bit replace\n", i);
-            bad++;
+            ERR("magnitude %zu took a 64-bit replace", i);
         }
     }
 
@@ -8788,8 +8708,7 @@ static int32_t flexTestNeg64Wide(void) {
             flexCompareEntries(f, &kp, 1, (int_fast32_t)i) != 0 ||
             (i > 0 &&
              flexCompareEntries(f, &kp, 1, (int_fast32_t)i - 1) >= 0)) {
-            printf("  FAIL: sorted find of row %zu\n", i);
-            bad++;
+            ERR("sorted find of row %zu", i);
         }
     }
 
@@ -8803,8 +8722,7 @@ static int32_t flexTestNeg64Wide(void) {
         databoxBig k;
         flexTestWideBox(absent[i], false, &k);
         if (flexFindByTypeSorted(f, 1, (const databox *)&k)) {
-            printf("  FAIL: sorted find of absent value %zu\n", i);
-            bad++;
+            ERR("sorted find of absent value %zu", i);
         }
     }
 
@@ -8835,15 +8753,12 @@ static int32_t flexTestNeg64Wide(void) {
         flexGetByTypeBig(fe, &b);
         if (at >= oracleCount ||
             !flexTestWideMatches((const databox *)&b, oracle[at])) {
-            printf("  FAIL: sorted insert position %zu\n", at);
-            bad++;
+            ERR("sorted insert position %zu", at);
         }
     }
 
     if (at != oracleCount) {
-        printf("  FAIL: sorted insert left %zu of %zu entries\n", at,
-               oracleCount);
-        bad++;
+        ERR("sorted insert left %zu of %zu entries", at, oracleCount);
     }
 
     /* A key-match replace reports a crafted value as type-only. */
@@ -8860,11 +8775,10 @@ static int32_t flexTestNeg64Wide(void) {
     if (!flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
             &m, 2, row, &mid, true, &replaced) ||
         replaced.type != DATABOX_SIGNED_128 || replaced.data.ptr) {
-        printf("  FAIL: replaced crafted value not reported type-only\n");
-        bad++;
+        ERRR("replaced crafted value not reported type-only");
     }
 
-    return bad;
+    return err;
 }
 
 /* Push 'v' between an integer and a string, so the entry under test is
@@ -8929,7 +8843,7 @@ static int32_t flexTestIndexOf(const flex *f, const flexEntry *fe) {
 /* Every typed find against an oracle of entry positions, in a flex holding
  * one entry of each kind. */
 static int32_t flexTestTypedFind(void) {
-    int32_t bad = 0;
+    int err = 0;
     cleaner(flexFree) flex *f = flexNew();
     const databox entries[] = {
         databoxNewBytes("", 0),         /* 0 */
@@ -8989,17 +8903,16 @@ static int32_t flexTestTypedFind(void) {
     for (size_t i = 0; i < COUNT_ARRAY(checks); i++) {
         const int32_t at = flexTestIndexOf(f, checks[i].got);
         if (at != checks[i].want) {
-            printf("  FAIL: %s found at %" PRId32 ", expected %" PRId32 "\n",
-                   checks[i].what, at, checks[i].want);
-            bad++;
+            ERR("%s found at %" PRId32 ", expected %" PRId32, checks[i].what,
+                at, checks[i].want);
         }
     }
 
-    return bad;
+    return err;
 }
 
 static int32_t flexTestExactPath(void) {
-    int32_t bad = 0;
+    int err = 0;
     static const char *const strs[] = {
         "22",
         "-5",
@@ -9031,8 +8944,7 @@ static int32_t flexTestExactPath(void) {
             for (flexEntry *fe = flexHead(all[f]); fe;
                  fe = flexNext(all[f], fe)) {
                 if (!flexTestEntryIsBytes(fe, s, len)) {
-                    printf("  exact path changed \"%s\" (flex %zu)\n", s, f);
-                    bad++;
+                    ERR("exact path changed \"%s\" (flex %zu)", s, f);
                 }
             }
         }
@@ -9044,8 +8956,7 @@ static int32_t flexTestExactPath(void) {
         cleaner(flexFree) flex *f = flexNew();
         flexPushBytesExact(&f, bin, sizeof(bin), FLEX_ENDPOINT_TAIL);
         if (!flexTestEntryIsBytes(flexHead(f), bin, sizeof(bin))) {
-            printf("  exact path changed a binary blob\n");
-            bad++;
+            ERRR("exact path changed a binary blob");
         }
     }
 
@@ -9061,15 +8972,13 @@ static int32_t flexTestExactPath(void) {
         flexGetByType(flexHead(f), &a);
         flexGetByType(flexNext(f, flexHead(f)), &b);
         if (a.type != DATABOX_SIGNED_64 || a.data.i != -5) {
-            printf("  exact path changed -5\n");
-            bad++;
+            ERRR("exact path changed -5");
         }
         const double back =
             b.type == DATABOX_FLOAT_32 ? b.data.f32 : b.data.d64;
         if ((b.type != DATABOX_FLOAT_32 && b.type != DATABOX_DOUBLE_64) ||
             back != 1.5) {
-            printf("  exact path changed 1.5\n");
-            bad++;
+            ERRR("exact path changed 1.5");
         }
     }
 
@@ -9080,12 +8989,11 @@ static int32_t flexTestExactPath(void) {
         databox a = {{0}};
         flexGetByType(flexHead(f), &a);
         if (a.type != DATABOX_UNSIGNED_64 || a.data.u != 22) {
-            printf("  auto path no longer converts \"22\"\n");
-            bad++;
+            ERRR("auto path no longer converts \"22\"");
         }
     }
 
-    return bad;
+    return err;
 }
 
 /* Negative 96/128-bit magnitudes at the edge of the range.  A
@@ -9093,7 +9001,7 @@ static int32_t flexTestExactPath(void) {
  * INT128_MIN; deep validation rejects it.  FLEX_NEG_96B has no
  * out-of-range magnitude. */
 static int32_t flexTestNegWideRange(void) {
-    int32_t bad = 0;
+    int err = 0;
     const __uint128_t top = (__uint128_t)1 << 127;
 
     /* INT128_MIN, |v| = 2^127, is the largest magnitude: stored as
@@ -9105,13 +9013,11 @@ static int32_t flexTestNegWideRange(void) {
         if (fe[0] != FLEX_NEG_128B ||
             varintBigExternalGet(fe + 1, VARINT_WIDTH_128B) !=
                 (__uint128_t)INT128_MAX) {
-            printf("  FAIL: INT128_MIN not stored as magnitude INT128_MAX\n");
-            bad++;
+            ERRR("INT128_MIN not stored as magnitude INT128_MAX");
         }
 
         if (!flexTestWideMiddleReads(f, want)) {
-            printf("  FAIL: INT128_MIN rejected or misread\n");
-            bad++;
+            ERRR("INT128_MIN rejected or misread");
         }
 
         databoxBig one;
@@ -9121,8 +9027,7 @@ static int32_t flexTestNegWideRange(void) {
         flexPushDataboxBig(&single, &box, FLEX_ENDPOINT_TAIL);
         if (!flexGetSingleDataboxBig(single, flexBytes(single), &one) ||
             !flexTestWideMatches((const databox *)&one, want)) {
-            printf("  FAIL: INT128_MIN single-databox decode\n");
-            bad++;
+            ERRR("INT128_MIN single-databox decode");
         }
 
         /* Stored 2^127, 2^127 + 1, ..., 2^128 - 1: |v| = 2^127 + 1 and
@@ -9133,19 +9038,15 @@ static int32_t flexTestNegWideRange(void) {
         for (size_t i = 0; i < sizeof(over) / sizeof(over[0]); i++) {
             varintExternalPutFixedWidthBig(fe + 1, over[i], VARINT_WIDTH_128B);
             if (flexValidateBufferDeep(f, flexBytes(f))) {
-                printf("  FAIL: NEG_128B magnitude over INT128_MAX (%zu) "
-                       "accepted\n",
-                       i);
-                bad++;
+                ERR("NEG_128B magnitude over INT128_MAX (%zu) accepted", i);
             }
 
             flexEntry *const sfe = flexHead(single);
             varintExternalPutFixedWidthBig(sfe + 1, over[i], VARINT_WIDTH_128B);
             if (flexGetSingleDataboxBig(single, flexBytes(single), &one)) {
-                printf("  FAIL: NEG_128B magnitude over INT128_MAX (%zu) "
-                       "decoded as a single databox\n",
-                       i);
-                bad++;
+                ERR("NEG_128B magnitude over INT128_MAX (%zu) decoded as a "
+                    "single databox",
+                    i);
             }
         }
 
@@ -9153,16 +9054,13 @@ static int32_t flexTestNegWideRange(void) {
         varintExternalPutFixedWidthBig(fe + 1, (__uint128_t)INT128_MAX - 1,
                                        VARINT_WIDTH_128B);
         if (!flexTestWideMiddleReads(f, flexTestWideS(INT128_MIN + 1))) {
-            printf("  FAIL: NEG_128B magnitude INT128_MAX - 1 not "
-                   "INT128_MIN + 1\n");
-            bad++;
+            ERRR("NEG_128B magnitude INT128_MAX - 1 not INT128_MIN + 1");
         }
 
         varintExternalPutFixedWidthBig(fe + 1, (__uint128_t)INT128_MAX,
                                        VARINT_WIDTH_128B);
         if (!flexTestWideMiddleReads(f, want)) {
-            printf("  FAIL: restored INT128_MIN rejected or misread\n");
-            bad++;
+            ERRR("restored INT128_MIN rejected or misread");
         }
     }
 
@@ -9176,25 +9074,22 @@ static int32_t flexTestNegWideRange(void) {
         if (fe[0] != FLEX_NEG_96B ||
             varintBigExternalGet(fe + 1, VARINT_WIDTH_96B) !=
                 ((__uint128_t)1 << 96) - 1) {
-            printf("  FAIL: -2^96 not stored as NEG_96B magnitude 2^96 - 1\n");
-            bad++;
+            ERRR("-2^96 not stored as NEG_96B magnitude 2^96 - 1");
         }
 
         if (!flexTestWideMiddleReads(f, want)) {
-            printf("  FAIL: -2^96 rejected or misread\n");
-            bad++;
+            ERRR("-2^96 rejected or misread");
         }
 
         const flexTestWide below = flexTestWideS(min96 - 1);
         cleaner(flexFree) flex *g = flexNew();
         const flexEntry *const ge = flexTestPushWideMiddle(&g, below);
         if (ge[0] != FLEX_NEG_128B || !flexTestWideMiddleReads(g, below)) {
-            printf("  FAIL: -2^96 - 1 not stored as NEG_128B\n");
-            bad++;
+            ERRR("-2^96 - 1 not stored as NEG_128B");
         }
     }
 
-    return bad;
+    return err;
 }
 
 /* Read the middle of a [bytes, integer, bytes] flex forward and in
@@ -9215,7 +9110,7 @@ static bool flexTestReplaceReadsBack(flex *f, const flexTestWide want) {
 /* flexReplaceSigned/Unsigned and flexIncrby* across sign changes, in
  * place (the new value fits the old width) and re-encoded. */
 static int32_t flexTestReplaceSign(void) {
-    int32_t bad = 0;
+    int err = 0;
     const int64_t starts[] = {-3, 3, -300, 300, INT64_MIN, INT64_MAX, -1, 0};
     const int64_t signedNew[] = {-5,  7,    -1,        0,        -200,
                                  200, -128, INT64_MIN, INT64_MAX};
@@ -9230,9 +9125,8 @@ static int32_t flexTestReplaceSign(void) {
             if (!flexReplaceSigned(&f, flexNext(f, flexHead(f)),
                                    signedNew[n]) ||
                 !flexTestReplaceReadsBack(f, flexTestWideS(signedNew[n]))) {
-                printf("  FAIL: replace %" PRId64 " with signed %" PRId64 "\n",
-                       starts[s], signedNew[n]);
-                bad++;
+                ERR("replace %" PRId64 " with signed %" PRId64, starts[s],
+                    signedNew[n]);
             }
         }
 
@@ -9245,10 +9139,8 @@ static int32_t flexTestReplaceSign(void) {
             if (!flexReplaceUnsigned(&f, flexNext(f, flexHead(f)),
                                      unsignedNew[n]) ||
                 !flexTestReplaceReadsBack(f, flexTestWideU(unsignedNew[n]))) {
-                printf("  FAIL: replace %" PRId64 " with unsigned %" PRIu64
-                       "\n",
-                       starts[s], unsignedNew[n]);
-                bad++;
+                ERR("replace %" PRId64 " with unsigned %" PRIu64, starts[s],
+                    unsignedNew[n]);
             }
         }
     }
@@ -9267,9 +9159,8 @@ static int32_t flexTestReplaceSign(void) {
         if (!flexIncrbySigned(&f, flexNext(f, flexHead(f)), incrs[i].by,
                               &got) ||
             got != want || !flexTestReplaceReadsBack(f, flexTestWideS(want))) {
-            printf("  FAIL: %" PRId64 " incremented by %" PRId64 "\n",
-                   incrs[i].start, incrs[i].by);
-            bad++;
+            ERR("%" PRId64 " incremented by %" PRId64, incrs[i].start,
+                incrs[i].by);
         }
     }
 
@@ -9294,9 +9185,8 @@ static int32_t flexTestReplaceSign(void) {
                                   &got) ||
                 got != want ||
                 !flexTestReplaceReadsBack(f, flexTestWideS(want))) {
-                printf("  FAIL: boolean %d incremented by %" PRId64 "\n",
-                       bools[i].start, bools[i].by);
-                bad++;
+                ERR("boolean %d incremented by %" PRId64, bools[i].start,
+                    bools[i].by);
             }
         }
         cleaner(flexFree) flex *f = flexNew();
@@ -9307,8 +9197,7 @@ static int32_t flexTestReplaceSign(void) {
         const bool incremented = flexIncrbySigned(&f, flexHead(f), 0, &got);
         flexGetByType(flexHead(f), &after);
         if (!incremented || got != 1 || after.type != DATABOX_TRUE) {
-            printf("  FAIL: boolean incremented by zero\n");
-            bad++;
+            ERRR("boolean incremented by zero");
         }
     }
 
@@ -9323,8 +9212,7 @@ static int32_t flexTestReplaceSign(void) {
         int64_t got = 1;
         if (!flexIncrbySigned(&f, flexNext(f, flexHead(f)), 0, &got) ||
             got != -7 || !flexTestReplaceReadsBack(f, flexTestWideS(-7))) {
-            printf("  FAIL: signed increment by zero\n");
-            bad++;
+            ERRR("signed increment by zero");
         }
     }
     {
@@ -9340,9 +9228,8 @@ static int32_t flexTestReplaceSign(void) {
             if (flexIncrbySigned(&f, flexNext(f, flexHead(f)), over[i].by,
                                  NULL) ||
                 !flexTestReplaceReadsBack(f, flexTestWideS(over[i].start))) {
-                printf("  FAIL: %" PRId64 " + %" PRId64 " was not refused\n",
-                       over[i].start, over[i].by);
-                bad++;
+                ERR("%" PRId64 " + %" PRId64 " was not refused", over[i].start,
+                    over[i].by);
             }
         }
     }
@@ -9356,8 +9243,7 @@ static int32_t flexTestReplaceSign(void) {
             got != 5 ||
             flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), -6, NULL) ||
             !flexTestReplaceReadsBack(f, flexTestWideU(5))) {
-            printf("  FAIL: unsigned increment by zero or below zero\n");
-            bad++;
+            ERRR("unsigned increment by zero or below zero");
         }
     }
 
@@ -9424,15 +9310,12 @@ static int32_t flexTestReplaceSign(void) {
                         !flexTestReplaceReadsBack(
                             f, now < 0 ? flexTestWideS(now)
                                        : flexTestWideU((__uint128_t)now))) {
-                        printf(
-                            "  FAIL: %s increment of %s%" PRIu64 " by %" PRId64
-                            ": %s\n",
+                        ERR("%s increment of %s%" PRIu64 " by %" PRId64 ": %s",
                             sgn ? "signed" : "unsigned",
                             stored[s] < 0 ? "-" : "",
                             (uint64_t)(stored[s] < 0 ? -stored[s] : stored[s]),
                             deltas[d],
                             ok == fits ? "wrong value" : "wrong verdict");
-                        bad++;
                     }
                 }
             }
@@ -9448,12 +9331,11 @@ static int32_t flexTestReplaceSign(void) {
         if (flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 1, NULL) ||
             !flexIncrbySigned(&f, flexNext(f, flexHead(f)), -3, &v) ||
             v != -2 || !flexTestReplaceReadsBack(f, flexTestWideS(-2))) {
-            printf("  FAIL: boolean increment\n");
-            bad++;
+            ERRR("boolean increment");
         }
     }
 
-    return bad;
+    return err;
 }
 
 #include "jebuf.h"
@@ -9593,11 +9475,9 @@ int32_t flexTest(int32_t argc, char **argv) {
     flexEntry *fe = NULL;
     (void)f;
     (void)fe;
+    int err = 0;
 
-    printf("Verify decoding never writes through or yields an untrusted "
-           "pointer:\n");
-    {
-        int32_t bad = 0;
+    TEST("decoding never writes through or yields an untrusted pointer") {
         const __uint128_t wideU = (__uint128_t)1 << 80;
         const __int128_t wideS = -((__int128_t)1 << 100);
 
@@ -9608,8 +9488,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         DATABOX_BIG_SIGNED_128(&w, wideS);
         flexPushDataboxBig(&wide, &w, FLEX_ENDPOINT_TAIL);
         if (!flexValidateBufferDeep(wide, flexBytes(wide))) {
-            printf("  FAIL: 96/128-bit entries failed the deep gate\n");
-            bad++;
+            ERRR("96/128-bit entries failed the deep gate");
         }
 
         /* A plain box reports the type only and leaves the memory its
@@ -9621,10 +9500,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             const databoxType want =
                 i == 0 ? DATABOX_UNSIGNED_128 : DATABOX_SIGNED_128;
             if (plain.type != want || plain.data.ptr || sentinel != 12345) {
-                printf("  FAIL: plain box decode of 128-bit entry %" PRId32
-                       "\n",
-                       i);
-                bad++;
+                ERR("plain box decode of 128-bit entry %" PRId32, i);
             }
 
             databoxBig big;
@@ -9632,9 +9508,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexGetByType(flexIndex(wide, i), (databox *)&big);
             if (big.type != want ||
                 (i == 0 ? *big.data.u128 != wideU : *big.data.i128 != wideS)) {
-                printf("  FAIL: big box decode of 128-bit entry %" PRId32 "\n",
-                       i);
-                bad++;
+                ERR("big box decode of 128-bit entry %" PRId32, i);
             }
         }
 
@@ -9647,8 +9521,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             out.type != DATABOX_SIGNED_64 || out.data.i != 77 ||
             !flexGetSingleDataboxBig(one, flexBytes(one), &outBig) ||
             outBig.type != DATABOX_SIGNED_128 || *outBig.data.i128 != wideS) {
-            printf("  FAIL: single unwrap of a 128-bit entry\n");
-            bad++;
+            ERRR("single unwrap of a 128-bit entry");
         }
 
         cleaner(flexFree) flex *pair = flexNew();
@@ -9658,8 +9531,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox b = databoxNewSigned(2);
         if (flexGetTwoDataboxes(pair, flexBytes(pair), &a, &b) ||
             a.data.i != 1 || b.data.i != 2) {
-            printf("  FAIL: pair unwrap of a 128-bit entry\n");
-            bad++;
+            ERRR("pair unwrap of a 128-bit entry");
         }
 
 #if FLEX_ENABLE_PTR_MDSC
@@ -9676,8 +9548,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexValidateBufferDeep(ptrs, flexBytes(ptrs)) ||
             flexGetSingleDatabox(ptrs, flexBytes(ptrs), &out) ||
             flexGetSingleDataboxBig(ptrs, flexBytes(ptrs), &outBig)) {
-            printf("  FAIL: an MDSC entry passed an untrusted gate\n");
-            bad++;
+            ERRR("an MDSC entry passed an untrusted gate");
         }
 
         /* Integers whose tag byte is flipped to an MDSC tag: the payload
@@ -9696,37 +9567,26 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexPushUnsigned(&retag, retags[i].value, FLEX_ENDPOINT_TAIL);
             flexEntry *const rf = flexHead(retag);
             if (rf[0] != retags[i].integer) {
-                printf("  FAIL: retag %zu built encoding %d\n", i, rf[0]);
-                bad++;
+                ERR("retag %zu built encoding %d", i, rf[0]);
                 continue;
             }
             /* The entry is the last one, so its trailer is the last byte. */
             rf[0] = retags[i].pointer;
             retag[flexBytes(retag) - 1] = retags[i].pointer;
             if (flexValidateBufferDeep(retag, flexBytes(retag))) {
-                printf("  FAIL: retag %zu passed the deep gate\n", i);
-                bad++;
+                ERR("retag %zu passed the deep gate", i);
             } else if (flexGetSingleDatabox(retag, flexBytes(retag), &out)) {
-                printf("  FAIL: retag %zu passed the single unwrap\n", i);
-                bad++;
+                ERR("retag %zu passed the single unwrap", i);
             }
         }
 #endif
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify container math is exact or refused:\n");
-    {
-        int32_t bad = 0;
+    TEST("container math is exact or refused") {
 #define FLEX_MATH_CHECK_(cond, what)                                           \
     do {                                                                       \
         if (!(cond)) {                                                         \
-            printf("  FAIL: %s\n", what);                                      \
-            bad++;                                                             \
+            ERR("%s", what);                                                   \
         }                                                                      \
     } while (0)
 
@@ -9839,22 +9699,14 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushByTypeExact(&m, &seven, FLEX_ENDPOINT_TAIL);
         FLEX_MATH_CHECK_(!flexAddDouble(m, &d), "a string refused");
 #undef FLEX_MATH_CHECK_
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify factories, bulk pushes, drains, reverse and sorted finds "
-           "against their direct forms:\n");
-    {
-        int32_t bad = 0;
+    TEST("factories, bulk pushes, drains, reverse and sorted finds match "
+         "their direct forms") {
 #define FLEX_API_CHECK_(cond, what)                                            \
     do {                                                                       \
         if (!(cond)) {                                                         \
-            printf("  FAIL: %s\n", what);                                      \
-            bad++;                                                             \
+            ERR("%s", what);                                                   \
         }                                                                      \
     } while (0)
 
@@ -9922,10 +9774,9 @@ int32_t flexTest(int32_t argc, char **argv) {
                               FLEX_ENDPOINT_TAIL);
             }
             if (!flexEqual(bulkN, loopN) || flexCount(bulkN) != n + 1) {
-                printf("  FAIL: bulk byte push of %zu members differs from "
-                       "the loop (%zu vs %zu entries)\n",
-                       n, flexCount(bulkN), flexCount(loopN));
-                bad++;
+                ERR("bulk byte push of %zu members differs from the loop "
+                    "(%zu vs %zu entries)",
+                    n, flexCount(bulkN), flexCount(loopN));
             }
         }
 
@@ -10047,55 +9898,35 @@ int32_t flexTest(int32_t argc, char **argv) {
             FLEX_API_CHECK_(false, "a repetitive flex did not compress");
         }
 #undef FLEX_API_CHECK_
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify a box type flex cannot encode fails fast, in any build:\n");
-    {
+    TEST("a box type flex cannot encode fails fast, in any build") {
         /* An offset box (a position in another stream, no bytes of its
          * own) through push, replace, multi-element append and big-box
          * push: each stops the process (abort), in release builds too,
          * rather than running into undefined behaviour */
-        int32_t bad = 0;
         for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
             if (!flexTestDeferredAborts_(path, DATABOX_BYTES_OFFSET)) {
-                printf("  FAIL: path %" PRId32 " did not abort\n", path);
-                bad++;
+                ERR("path %" PRId32 " did not abort", path);
             }
-        }
-        if (bad) {
-            return bad;
         }
     }
 
-    printf("Verify inserting or encoding a deferred wide box fails fast:\n");
-    {
-        int32_t bad = 0;
+    TEST("inserting or encoding a deferred wide box fails fast") {
         for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
             for (int32_t sign = 0; sign < 2; sign++) {
                 const databoxType type =
                     sign ? DATABOX_SIGNED_128 : DATABOX_UNSIGNED_128;
                 if (!flexTestDeferredAborts_(path, type)) {
-                    printf("  FAIL: path %" PRId32 " type %d did not abort\n",
-                           path, (int)type);
-                    bad++;
+                    ERR("path %" PRId32 " type %d did not abort", path,
+                        (int)type);
                 }
             }
         }
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify a SIGNED databox round-trips through flexInsertByType at "
-           "every width boundary:\n");
-    {
+    TEST("a SIGNED databox round-trips through flexInsertByType at every "
+         "width boundary") {
         /* Insert each value as a SIGNED_64 box and as its decimal spelling
          * (scanned by StrScanScanReliable); each must read back unchanged.
          * Non-negative values may read back as UNSIGNED_64. */
@@ -10105,7 +9936,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             -4294967296, -4294967297, INT64_MIN + 1, INT64_MIN, 0,
             1,           255,         256,           65536,     INT64_MAX,
         };
-        int32_t bad = 0;
         for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
             cleaner(flexFree) flex *rt = flexNew();
             const databox in = databoxNewSigned(vals[i]);
@@ -10124,11 +9954,10 @@ int32_t flexTest(int32_t argc, char **argv) {
                     same = vals[i] >= 0 && out.data.u == (uint64_t)vals[i];
                 }
                 if (!same) {
-                    printf("  FAIL: %" PRId64 " (%s) read back as type %d "
-                           "i=%" PRIdMAX " u=%" PRIuMAX "\n",
-                           vals[i], j == 0 ? "box" : "bytes", (int)out.type,
-                           out.data.i, out.data.u);
-                    bad++;
+                    ERR("%" PRId64 " (%s) read back as type %d i=%" PRIdMAX
+                        " u=%" PRIuMAX,
+                        vals[i], j == 0 ? "box" : "bytes", (int)out.type,
+                        out.data.i, out.data.u);
                 }
             }
         }
@@ -10152,9 +9981,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexGetByTypeBig(flexHead(rt), &out);
             if (out.type != DATABOX_SIGNED_128 ||
                 *out.data.i128 != bigVals[i]) {
-                printf("  FAIL: 128-bit value %zu read back as type %d\n", i,
-                       (int)out.type);
-                bad++;
+                ERR("128-bit value %zu read back as type %d", i, (int)out.type);
             }
 
             /* The multi-element writer chooses its width separately. */
@@ -10166,24 +9993,16 @@ int32_t flexTest(int32_t argc, char **argv) {
                                          &single) ||
                 single.type != DATABOX_SIGNED_128 ||
                 *single.data.i128 != bigVals[i]) {
-                printf("  FAIL: appended 128-bit value %zu read back as type "
-                       "%d\n",
-                       i, (int)single.type);
-                bad++;
+                ERR("appended 128-bit value %zu read back as type %d", i,
+                    (int)single.type);
             }
         }
-        if (bad) {
-            printf("  %" PRId32 " signed round-trips FAILED\n", bad);
-            return bad;
-        }
-        printf("  ok (%zu values, box and bytes; %zu 128-bit values)\n",
+        printf("  (%zu values, box and bytes; %zu 128-bit values)\n",
                sizeof(vals) / sizeof(vals[0]),
                sizeof(bigVals) / sizeof(bigVals[0]));
     }
 
-    printf("Verify pushed and inserted numerals store as their canonical "
-           "numbers:\n");
-    {
+    TEST("pushed and inserted numerals store as their canonical numbers") {
         /* Each string goes in through flexPushBytes, flexPushByType with a
          * BYTES box (and a BYTES_EMBED box when it fits) and
          * flexInsertBytes.  A numeral must read back equal to
@@ -10229,7 +10048,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             "-0.0",
             "hello",
         };
-        int32_t bad = 0;
         uint32_t numerals = 0;
         uint32_t wide = 0;
         for (size_t i = 0; i < COUNT_ARRAY(spellings); i++) {
@@ -10256,9 +10074,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             ways++;
 
             if (flexCount(pf) != ways) {
-                printf("  FAIL: '%s' made %zu entries, expected %zu\n", s,
-                       flexCount(pf), ways);
-                bad++;
+                ERR("'%s' made %zu entries, expected %zu", s, flexCount(pf),
+                    ways);
                 continue;
             }
 
@@ -10279,12 +10096,12 @@ int32_t flexTest(int32_t argc, char **argv) {
                 }
 
                 if (!same) {
-                    printf("  FAIL: '%s' (entry %zu) read back as %s,", s, j,
-                           databoxReprStr(&got));
-                    printf(" expected %s\n", expect == &bytes
-                                                 ? "the same bytes"
-                                                 : databoxReprStr(expect));
-                    bad++;
+                    /* databoxReprStr shares one buffer: one per message */
+                    ERR("'%s' (entry %zu) read back as %s", s, j,
+                        databoxReprStr(&got));
+                    printf("\texpected %s\n", expect == &bytes
+                                                  ? "the same bytes"
+                                                  : databoxReprStr(expect));
                 }
             }
 
@@ -10296,22 +10113,15 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         if (wide != 10 || numerals != 25) {
-            printf("  FAIL: %" PRIu32 " numerals (%" PRIu32
-                   " wide); expected 25 (10 wide)\n",
-                   numerals, wide);
-            bad++;
+            ERR("%" PRIu32 " numerals (%" PRIu32 " wide); expected 25 (10 "
+                "wide)",
+                numerals, wide);
         }
-
-        if (bad) {
-            printf("  %" PRId32 " canonical round-trips FAILED\n", bad);
-            return bad;
-        }
-        printf("  ok (%zu spellings, %" PRIu32 " numerals)\n",
+        printf("  (%zu spellings, %" PRIu32 " numerals)\n",
                COUNT_ARRAY(spellings), numerals);
     }
 
-    printf("Verify flexFind matches strings by bytes and numbers by value:\n");
-    {
+    TEST("flexFind matches strings by bytes and numbers by value") {
         cleaner(flexFree) flex *ff = flexNew();
         flexPushBytes(&ff, "hello", 5, FLEX_ENDPOINT_TAIL); /* 0 */
         flexPushBytes(&ff, "22", 2, FLEX_ENDPOINT_TAIL);    /* 1: 22 */
@@ -10349,35 +10159,25 @@ int32_t flexTest(int32_t argc, char **argv) {
             {"18446744073709551616", 1, -1},
             {"-0", 1, -1},
         };
-        int32_t bad = 0;
         for (size_t i = 0; i < COUNT_ARRAY(finds); i++) {
             const flexEntry *const found = flexFind(
                 ff, finds[i].s, (uint32_t)strlen(finds[i].s), finds[i].skip);
             const flexEntry *const want =
                 finds[i].want < 0 ? NULL : flexIndex(ff, finds[i].want);
             if (found != want) {
-                printf("  FAIL: flexFind('%s', skip %" PRIu32
-                       ") found the wrong entry\n",
-                       finds[i].s, finds[i].skip);
-                bad++;
+                ERR("flexFind('%s', skip %" PRIu32 ") found the wrong entry",
+                    finds[i].s, finds[i].skip);
             }
         }
 
         cleaner(flexFree) flex *empty = flexNew();
         if (flexFind(empty, "x", 1, 0) != NULL) {
-            printf("  FAIL: flexFind on an empty flex found an entry\n");
-            bad++;
+            ERRR("flexFind on an empty flex found an entry");
         }
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok (%zu finds)\n", COUNT_ARRAY(finds));
     }
 
-    printf("Verify a nested container read back with flexGetByType writes "
-           "back whole:\n");
-    {
+    TEST("a nested container read back with flexGetByType writes back "
+         "whole") {
         /* Nested sizes on both sides of the 1/2-byte (64/65) and 2/3-byte
          * (16447/16448) boundaries of the size varint the trailer holds.
          * No flex is exactly 65 or 16448 bytes: the byte that would make
@@ -10388,7 +10188,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleanerName(zfree, Bytes) uint8_t *fill = zmalloc(ROUND_TRIP_FILL_);
         memset(fill, 'n', ROUND_TRIP_FILL_);
 
-        int32_t bad = 0;
         for (size_t s = 0; s < COUNT_ARRAY(innerSizes); s++) {
             /* One string sized near the target, padded with one-byte TRUE
              * entries to land on it exactly. */
@@ -10409,8 +10208,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
 
             if (!inner) {
-                printf("  FAIL: no nested flex of %zu bytes\n", target);
-                bad++;
+                ERR("no nested flex of %zu bytes", target);
                 continue;
             }
 
@@ -10425,9 +10223,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             databox got = {{0}};
             flexGetByType(flexHead(outer), &got);
             if (got.len <= flexBytes(inner)) {
-                printf("  FAIL: %zu: read-back len %zu\n", target,
-                       (size_t)got.len);
-                bad++;
+                ERR("%zu: read-back len %zu", target, (size_t)got.len);
             }
 
             /* Push at both ends, insert in the middle, and replace: the
@@ -10452,31 +10248,23 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexCount(copy) != 4 ||
                 !flexValidateBufferDeep(sorted, flexBytes(sorted)) ||
                 flexCount(sorted) != 2) {
-                printf("  FAIL: %zu: written flexes are malformed\n", target);
-                bad++;
+                ERR("%zu: written flexes are malformed", target);
                 continue;
             }
 
             /* Every copy reads back whole from the head (forward sizing)
              * and from the tail (the trailer). */
             for (int32_t i = 0; i < 4; i++) {
-                bad += flexValidateSweepCheckNested(copy, i, inner);
-                bad += flexValidateSweepCheckNested(copy, i - 4, inner);
+                err += flexValidateSweepCheckNested(copy, i, inner);
+                err += flexValidateSweepCheckNested(copy, i - 4, inner);
             }
 
-            bad += flexValidateSweepCheckNested(sorted, 1, inner);
-            bad += flexValidateSweepCheckNested(sorted, -1, inner);
+            err += flexValidateSweepCheckNested(sorted, 1, inner);
+            err += flexValidateSweepCheckNested(sorted, -1, inner);
         }
-
-        if (bad) {
-            printf("  %" PRId32 " container round trips FAILED\n", bad);
-            return bad;
-        }
-        printf("  ok (%zu nested sizes)\n", COUNT_ARRAY(innerSizes));
     }
 
-    printf("Verify external-reference encoding round-trips every tier:\n");
-    {
+    TEST("external-reference encoding round-trips every tier") {
         /* Boundary values across all eight width tiers; the 56/64 pair
          * pins the tier-max subtraction at the encode/decode boundary. */
         const uint64_t refVals[] = {
@@ -10503,24 +10291,18 @@ int32_t flexTest(int32_t argc, char **argv) {
             const uint64_t decoded =
                 flexEncodingReferenceUnsignedDecode(enc, encoded);
             if (decoded != v) {
-                printf("  ref round-trip FAILED for %" PRIu64
-                       " (encoding %d, encoded %" PRIu64 ", decoded %" PRIu64
-                       ")\n",
-                       v, (int)enc, encoded, decoded);
-                assert(NULL && "external reference encode/decode mismatch");
+                ERR("ref round-trip of %" PRIu64
+                    " (encoding %d, encoded %" PRIu64 ", decoded %" PRIu64 ")",
+                    v, (int)enc, encoded, decoded);
             }
         }
-        printf("  SUCCESS\n\n");
     }
 
-    printf("Verify push and insert accept every type flexGetByType "
-           "reports:\n");
-    {
+    TEST("push and insert accept every type flexGetByType reports") {
         /* The types with no flexPush_ helper: references, a plain pointer
          * (stored as an integer), and an MDSC pointer.  Each push must
          * match the bytes flexAppendMultiple writes for the same box, and
          * read back unchanged. */
-        int32_t bad = 0;
 #if FLEX_ENABLE_PTR_MDSC
         cleaner(mdscfree) mdsc *s = mdscnewlen("pushed pointer", 14);
 #endif
@@ -10535,7 +10317,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 in.data.u64 = refs[i];
             } else if (i == COUNT_ARRAY(refs)) {
                 in.type = DATABOX_PTR;
-                in.data.ptr = &bad;
+                in.data.ptr = &err;
                 wantType = DATABOX_UNSIGNED_64;
             } else {
 #if FLEX_ENABLE_PTR_MDSC
@@ -10573,27 +10355,19 @@ int32_t flexTest(int32_t argc, char **argv) {
             const bool sameValue =
                 got.type == wantType && got.data.u64 == in.data.u64;
             if (!sameValue || !sameBytes) {
-                printf("  FAIL: case %zu (type %d) read back as type %d\n", i,
-                       (int)in.type, (int)got.type);
-                bad++;
+                ERR("case %zu (type %d) read back as type %d", i, (int)in.type,
+                    (int)got.type);
             }
         }
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify both row appends write the bytes of their pushes:\n");
-    {
+    TEST("both row appends write the bytes of their pushes") {
         /* flexAppendMultipleExact is the batched form of flexPushByTypeExact
          * and flexAppendMultiple of flexPushByType: a row of every type
          * (numeral strings included, up to 128 bits), element by element,
          * whole, and three times over (past the auto form's 32-value
          * chunks), must give byte-identical flexes.  Containers that build
          * rows from components rely on this to batch their pushes. */
-        int32_t bad = 0;
         static const char longText[] =
             "a string long enough to need a two-byte length prefix, "
             "past sixty-four bytes";
@@ -10604,7 +10378,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox float32 = {.type = DATABOX_FLOAT_32};
         float32.data.f32 = 0.578125f;
         databox ptr = {.type = DATABOX_PTR};
-        ptr.data.ptr = &bad;
+        ptr.data.ptr = &err;
         databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
         ref.data.u64 = 70000;
         const databox boxes[] = {
@@ -10660,10 +10434,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                 append(&appended, 1, &row[i]);
                 if (flexBytes(pushed) != flexBytes(appended) ||
                     memcmp(pushed, appended, flexBytes(pushed)) != 0) {
-                    printf("  FAIL: %s element %zu (type %d) appends "
-                           "differently\n",
-                           mode, i, row[i] ? (int)row[i]->type : -1);
-                    bad++;
+                    ERR("%s element %zu (type %d) appends differently", mode, i,
+                        row[i] ? (int)row[i]->type : -1);
                 }
 
                 /* The auto form really converts some of the strings */
@@ -10686,26 +10458,21 @@ int32_t flexTest(int32_t argc, char **argv) {
                 if (flexBytes(pushedRow) != flexBytes(appendedRow) ||
                     memcmp(pushedRow, appendedRow, flexBytes(pushedRow)) != 0 ||
                     flexCount(appendedRow) != len) {
-                    printf("  FAIL: a %s row of %zu appends differently\n",
-                           mode, len);
-                    bad++;
+                    ERR("a %s row of %zu appends differently", mode, len);
                 }
             }
         }
 
         /* "22", "-5", "1.5" and both 128-bit numerals; "007" stays bytes */
-        if (bad || converted != 5) {
-            printf("  %zu numeral strings converted, want 5\n", converted);
-            assert(NULL && "a row append differs from its pushes");
+        if (converted != 5) {
+            ERR("%zu numeral strings converted, want 5", converted);
         }
 
-        printf("  ok (%zu types, rows of %zu and %zu)\n", types, types,
+        printf("  (%zu types, rows of %zu and %zu)\n", types, types,
                types * ROW_REPEAT_);
     }
 
-    printf("Verify a flexRow appends like its pushes and empties itself:\n");
-    {
-        int32_t bad = 0;
+    TEST("a flexRow appends like its pushes and empties itself") {
         for (int exact = 0; exact < 2; exact++) {
             cleaner(flexFree) flex *pushed = flexNew();
             const databox v22 = databoxNewBytesString("22");
@@ -10735,20 +10502,12 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             if (row.n != 0 || flexBytes(rowed) != flexBytes(pushed) ||
                 memcmp(rowed, pushed, flexBytes(pushed)) != 0) {
-                printf("  FAIL: %s row\n", exact ? "exact" : "auto");
-                bad++;
+                ERR("%s row differs from its pushes", exact ? "exact" : "auto");
             }
         }
-
-        if (bad) {
-            assert(NULL && "a flexRow differs from its pushes");
-        }
-
-        printf("  ok\n");
     }
 
-    printf("Verify replacing sorted inserts report the overwritten value:\n");
-    {
+    TEST("replacing sorted inserts report the overwritten value") {
         cleaner(flexFree) flex *m = flexNew();
         flexEntry *mid = NULL;
         const databox key = databoxNewSigned(1);
@@ -10775,7 +10534,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             {&newKey, &small, DATABOX_VOID},
         };
 
-        int32_t bad = 0;
         for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
             const databox *row[2] = {steps[i].key, steps[i].val};
             flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
@@ -10790,27 +10548,16 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
 
             if (!ok) {
-                printf("  FAIL: step %zu reported type %d\n", i,
-                       (int)replaced[0].type);
-                bad++;
+                ERR("step %zu reported type %d", i, (int)replaced[0].type);
             }
         }
 
         if (flexCount(m) != 4) {
-            printf("  FAIL: expected 2 entries of 2 elements, found %zu\n",
-                   flexCount(m));
-            bad++;
+            ERR("expected 2 entries of 2 elements, found %zu", flexCount(m));
         }
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify replacing inserts accept replacedOut aliasing the new "
-           "values:\n");
-    {
+    TEST("replacing inserts accept replacedOut aliasing the new values") {
         /* The exchange idiom: new values in, old values out, same boxes. */
         cleaner(flexFree) flex *m = flexNew();
         flexEntry *mid = NULL;
@@ -10818,14 +10565,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox vals[2] = {databoxNewUnsigned(100), databoxNewUnsigned(101)};
         const databox *row[3] = {&key, &vals[0], &vals[1]};
 
-        int32_t bad = 0;
         const bool firstFound =
             flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
                 &m, 3, row, &mid, true, vals);
         if (firstFound || vals[0].type != DATABOX_VOID ||
             vals[1].type != DATABOX_VOID) {
-            printf("  FAIL: new-key insert reported a replacement\n");
-            bad++;
+            ERRR("new-key insert reported a replacement");
         }
 
         vals[0] = databoxNewUnsigned(200);
@@ -10836,9 +10581,8 @@ int32_t flexTest(int32_t argc, char **argv) {
         if (!secondFound || vals[0].type != DATABOX_UNSIGNED_64 ||
             vals[0].data.u != 100 || vals[1].type != DATABOX_UNSIGNED_64 ||
             vals[1].data.u != 101) {
-            printf("  FAIL: exchange reported types %d/%d\n", (int)vals[0].type,
-                   (int)vals[1].type);
-            bad++;
+            ERR("exchange reported types %d/%d", (int)vals[0].type,
+                (int)vals[1].type);
         }
 
         /* The flex holds the new values. */
@@ -10851,20 +10595,12 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         if (flexCount(m) != 3 || stored[0] != 1 || stored[1] != 200 ||
             stored[2] != 201) {
-            printf("  FAIL: flex holds %" PRIu64 "/%" PRIu64 "/%" PRIu64
-                   " in %zu entries\n",
-                   stored[0], stored[1], stored[2], flexCount(m));
-            bad++;
+            ERR("flex holds %" PRIu64 "/%" PRIu64 "/%" PRIu64 " in %zu entries",
+                stored[0], stored[1], stored[2], flexCount(m));
         }
-
-        if (bad) {
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify flexIndexWithMiddle matches flexIndex at every index:\n");
-    {
+    TEST("flexIndexWithMiddle matches flexIndex at every index") {
         /* Sorted 2-element rows with a live maintained middle; sweep
          * every element index in both sign conventions and demand
          * pointer equality with the 2-way flexIndex oracle.  Sizes
@@ -10888,20 +10624,15 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexEntry *want = flexIndex(sf, i);
                 flexEntry *got = flexIndexWithMiddle(sf, 2, i, mid);
                 if (want != got) {
-                    printf("  MISMATCH rows=%d index=%" PRId32
-                           " (want %p, got %p)\n",
-                           rowCounts[rc], i, (void *)want, (void *)got);
-                    assert(NULL && "flexIndexWithMiddle diverged!");
+                    ERR("flexIndexWithMiddle diverged: rows=%d index=%" PRId32
+                        " (want %p, got %p)",
+                        rowCounts[rc], i, (void *)want, (void *)got);
                 }
             }
         }
-        printf("  SUCCESS\n\n");
     }
 
-    printf(
-        "Verify flexPushFloatB16 matches flexInsertFloatB16 at both ends:\n");
-    {
-        int32_t bad = 0;
+    TEST("flexPushFloatB16 matches flexInsertFloatB16 at both ends") {
         /* 1.5 and -2.0 are exact in bfloat16; 3.14159 rounds. */
         static const float values[] = {1.5f, -2.0f, 3.14159f, 0.0f};
         cleaner(flexFree) flex *pushed = flexNew();
@@ -10915,58 +10646,44 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexInsertFloatB16(&inserted, FLEX_ENTRY_HEAD(inserted), 7.0f);
 
         if (!flexEqual(pushed, inserted)) {
-            printf("  push and insert encodings differ\n");
-            bad++;
+            ERRR("push and insert encodings differ");
         }
 
         databox got = {{0}};
         flexGetByType(flexHead(pushed), &got);
         if (got.type != DATABOX_FLOAT_32 || got.data.f32 != 7.0f) {
-            printf("  head reads back type %d value %f\n", got.type,
-                   (double)got.data.f32);
-            bad++;
+            ERR("head reads back type %d value %f", got.type,
+                (double)got.data.f32);
         }
 
         flexGetByType(flexIndex(pushed, 1), &got);
         if (got.type != DATABOX_FLOAT_32 || got.data.f32 != 1.5f) {
-            printf("  first tail value reads back %f\n", (double)got.data.f32);
-            bad++;
+            ERR("first tail value reads back %f", (double)got.data.f32);
         }
-
-        if (bad) {
-            assert(NULL && "flexPushFloatB16 mismatch");
-        }
-        printf("  SUCCESS\n\n");
     }
 
-    printf("Verify flexEqual compares metadata and entries exactly:\n");
-    {
-        int32_t bad = 0;
+    TEST("flexEqual compares metadata and entries exactly") {
         cleaner(flexFree) flex *a = flexNew();
         cleaner(flexFree) flex *b = flexNew();
         if (!flexEqual(a, b) || !flexEqual(a, a)) {
-            printf("  empty flexes should be equal\n");
-            bad++;
+            ERRR("empty flexes should be equal");
         }
 
         if (flexEqual(a, NULL) || flexEqual(NULL, a) ||
             !flexEqual(NULL, NULL)) {
-            printf("  NULL handling wrong\n");
-            bad++;
+            ERRR("NULL handling wrong");
         }
 
         flexPushBytes(&a, "abc", 3, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&a, -77, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&b, "abc", 3, FLEX_ENDPOINT_TAIL);
         if (flexEqual(a, b)) {
-            printf("  differing counts compared equal\n");
-            bad++;
+            ERRR("differing counts compared equal");
         }
 
         flexPushSigned(&b, -77, FLEX_ENDPOINT_TAIL);
         if (!flexEqual(a, b)) {
-            printf("  identical contents compared unequal\n");
-            bad++;
+            ERRR("identical contents compared unequal");
         }
 
         /* Same length, one byte different. */
@@ -10974,21 +10691,13 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushBytes(&c, "abd", 3, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&c, -77, FLEX_ENDPOINT_TAIL);
         if (flexBytes(c) != flexBytes(a) || flexEqual(a, c)) {
-            printf("  same-size differing contents compared equal\n");
-            bad++;
+            ERRR("same-size differing contents compared equal");
         }
-
-        if (bad) {
-            assert(NULL && "flexEqual mismatch");
-        }
-        printf("  SUCCESS\n\n");
     }
 
-    printf("Verify a value read from a flex pushes onto its own tail:\n");
-    {
+    TEST("a value read from a flex pushes onto its own tail") {
         /* The pushed box points into the flex it is pushed onto, and the
          * insert position is the flex's end. */
-        int32_t bad = 0;
         cleaner(flexFree) flex *self = flexNew();
         flexPushBytes(&self, "hello world", strlen("hello world"),
                       FLEX_ENDPOINT_TAIL);
@@ -10998,13 +10707,14 @@ int32_t flexTest(int32_t argc, char **argv) {
         for (int32_t i = 0; i < 2 && flexCount(self) == 2; i++) {
             if (!flexCompareString(flexIndex(self, i), "hello world",
                                    strlen("hello world"))) {
-                bad++;
+                ERR("self-pushed string %" PRId32 " differs", i);
             }
         }
 
         if (flexCount(self) != 2 ||
             !flexValidateBufferDeep(self, flexBytes(self))) {
-            bad++;
+            ERR("self-pushed string: %zu entries or malformed",
+                flexCount(self));
         }
 
         /* A nested container pushed onto the flex holding it. */
@@ -11020,46 +10730,27 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushByType(&selfNested, &got, FLEX_ENDPOINT_TAIL);
         if (flexCount(selfNested) != 2 ||
             !flexValidateBufferDeep(selfNested, flexBytes(selfNested))) {
-            bad++;
+            ERR("self-pushed container: %zu entries or malformed",
+                flexCount(selfNested));
         } else {
             for (int32_t i = 0; i < 2; i++) {
-                bad += flexValidateSweepCheckNested(selfNested, i, inner);
-                bad += flexValidateSweepCheckNested(selfNested, i - 2, inner);
+                err += flexValidateSweepCheckNested(selfNested, i, inner);
+                err += flexValidateSweepCheckNested(selfNested, i - 2, inner);
             }
         }
-
-        if (bad) {
-            printf("  FAIL: %" PRId32 " self-push checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
     }
 
-    printf("Verify delete cursors across header shrinks:\n");
-    {
+    TEST("delete cursors across header shrinks") {
         /* 7-byte entries cross the 64-byte boundary; 62-byte entries
          * start past 16 KiB and cross both. */
-        const int32_t bad =
-            flexTestDeleteCursor(5, 20) + flexTestDeleteCursor(60, 280);
-        if (bad) {
-            printf("  FAIL: %" PRId32 " delete cursor checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+        err += flexTestDeleteCursor(5, 20) + flexTestDeleteCursor(60, 280);
     }
 
-    printf("Verify capability-owning decoders at every integer width:\n");
-    {
-        const int32_t bad = flexTestWideDecoders();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " wide decoder checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("capability-owning decoders at every integer width") {
+        err += flexTestWideDecoders();
     }
 
-    printf("Verify embedded types:\n");
-    {
+    TEST("embedded types") {
         const uint32_t numberOfImmediateTypes = 4;
         const uint32_t highestNonStaticNumericType = FLEX_CONTAINER_TUPLE;
         const uint32_t lowestTopDownType = FLEX_BYTES_EMPTY;
@@ -11075,12 +10766,9 @@ int32_t flexTest(int32_t argc, char **argv) {
                typeCountMax - typeCount);
 
         if (highestNonStaticNumericType >= lowestTopDownType) {
-            printf("Too many types!  Highest grow-up type is bigger than "
-                   "lowest top-down type!\n");
-            printf("Highest grow up is %" PRIu32
-                   ", but lowest top-down is %" PRIu32 "\n",
-                   highestNonStaticNumericType, lowestTopDownType);
-            assert(highestNonStaticNumericType < lowestTopDownType);
+            ERR("too many types: the highest grow-up type %" PRIu32
+                " reaches the lowest top-down type %" PRIu32,
+                highestNonStaticNumericType, lowestTopDownType);
         }
 
         assert(typeCount <= (FLEX_NULL - FLEX_FIXED_START));
@@ -11095,134 +10783,56 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(FLEX_NULL == 255);
     }
 
-    printf("Verify merge across every header-size pairing:\n");
-    {
-        const int32_t bad = flexTestMergeMatrix();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " merge checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("merge across every header-size pairing") {
+        err += flexTestMergeMatrix();
     }
 
-    printf("Verify sorted insert and find over 96/128-bit keys:\n");
-    {
-        const int32_t bad = flexTestWideSorted();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("sorted insert and find over 96/128-bit keys") {
+        err += flexTestWideSorted();
     }
 
-    printf("Verify math over 128-bit entries and the result range edges:\n");
-    {
-        const int32_t bad = flexTestMathWide();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " wide math checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("math over 128-bit entries and the result range edges") {
+        err += flexTestMathWide();
     }
 
-    printf("Verify delete-up-to removes the head through the entry:\n");
-    {
-        const int32_t bad = flexTestDeleteUpTo();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " delete-up-to checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("delete-up-to removes the head through the entry") {
+        err += flexTestDeleteUpTo();
     }
 
-    printf("Verify the untrusted-bytes getters refuse and leave outputs:\n");
-    {
-        const int32_t bad = flexTestUntrustedGetters();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " getter checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("the untrusted-bytes getters refuse and leave outputs") {
+        err += flexTestUntrustedGetters();
     }
 
-    printf("Verify a void entry reserves zeroed bytes the caller fills:\n");
-    {
-        const int32_t bad = flexTestVoidEntries();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " void entry checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("a void entry reserves zeroed bytes the caller fills") {
+        err += flexTestVoidEntries();
     }
 
-    printf("Verify a reference-sorted set inserts and positions by value:\n");
-    {
-        const int32_t bad = flexTestReferenceSet();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " reference set checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("a reference-sorted set inserts and positions by value") {
+        err += flexTestReferenceSet();
     }
 
-    printf("Verify reference-sorted probes resolve 96/128-bit atoms:\n");
-    {
-        const int32_t bad = flexTestWideReferenceSorted();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " wide reference checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("reference-sorted probes resolve 96/128-bit atoms") {
+        err += flexTestWideReferenceSorted();
     }
 
-    printf("Verify NEG_64B magnitudes above INT64_MAX decode as 128-bit:\n");
-    {
-        const int32_t bad = flexTestNeg64Wide();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " NEG_64B wide checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("NEG_64B magnitudes above INT64_MAX decode as 128-bit") {
+        err += flexTestNeg64Wide();
     }
 
-    printf("Verify deep validation bounds NEG_96B/NEG_128B magnitudes:\n");
-    {
-        const int32_t bad = flexTestNegWideRange();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " negative wide range checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("deep validation bounds NEG_96B/NEG_128B magnitudes") {
+        err += flexTestNegWideRange();
     }
 
-    printf("Verify typed finds match by kind and value:\n");
-    {
-        const int32_t bad = flexTestTypedFind();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " typed find checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("typed finds match by kind and value") {
+        err += flexTestTypedFind();
     }
 
-    printf("Verify the exact push path stores values as given:\n");
-    {
-        const int32_t bad = flexTestExactPath();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " exact path checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("the exact push path stores values as given") {
+        err += flexTestExactPath();
     }
 
-    printf("Verify integer replace and increment across sign changes:\n");
-    {
-        const int32_t bad = flexTestReplaceSign();
-        if (bad) {
-            printf("  FAIL: %" PRId32 " replace checks\n", bad);
-            return bad;
-        }
-        printf("  ok\n");
+    TEST("integer replace and increment across sign changes") {
+        err += flexTestReplaceSign();
     }
 
 #if 1
@@ -11254,16 +10864,12 @@ int32_t flexTest(int32_t argc, char **argv) {
     flexRepr(f);
     flexFree(f);
 
-    printf("Get element at index 3:\n");
-    {
+    TEST("get the element at index 3") {
         f = createList();
         fe = flexIndexDirect(f, 3);
         if (!flexGet(fe, &entry, &elen, &value)) {
-            printf("ERROR: Could not access index 3\n");
-            assert(NULL);
-        }
-
-        if (entry) {
+            ERRR("could not access index 3");
+        } else if (entry) {
             if (elen) {
                 printf("%.*s", elen, entry);
             }
@@ -11277,33 +10883,26 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Get element at index 4 (out of range):\n");
-    {
+    TEST("get the element at index 4 (out of range)") {
         f = createList();
         fe = flexIndexDirect(f, 4);
         if (fe == NULL) {
             printf("No entry\n");
         } else {
-            printf("ERROR: Out of range index should return NULL, returned "
-                   "offset: %" PRIdPTR "\n",
-                   (ptrdiff_t)(fe - f));
-            assert(NULL);
+            ERR("out of range index returned offset %" PRIdPTR,
+                (ptrdiff_t)(fe - f));
         }
 
         printf("\n");
         flexFree(f);
     }
 
-    printf("Get element at index -1 (last element):\n");
-    {
+    TEST("get the element at index -1 (the last)") {
         f = createList();
         fe = flexIndexDirect(f, -1);
         if (!flexGet(fe, &entry, &elen, &value)) {
-            printf("ERROR: Could not access index -1\n");
-            assert(NULL);
-        }
-
-        if (entry) {
+            ERRR("could not access index -1");
+        } else if (entry) {
             if (elen) {
                 printf("%.*s", elen, entry);
             }
@@ -11317,16 +10916,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Get element at index -4 (first element):\n");
-    {
+    TEST("get the element at index -4 (the first)") {
         f = createList();
         fe = flexIndexDirect(f, -4);
         if (!flexGet(fe, &entry, &elen, &value)) {
-            printf("ERROR: Could not access index -4\n");
-            assert(NULL);
-        }
-
-        if (entry) {
+            ERRR("could not access index -4");
+        } else if (entry) {
             if (elen) {
                 printf("%.*s", elen, entry);
             }
@@ -11340,25 +10935,21 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Get element at index -5 (reverse out of range):\n");
-    {
+    TEST("get the element at index -5 (reverse out of range)") {
         f = createList();
         fe = flexIndexDirect(f, -5);
         if (fe == NULL) {
             printf("No entry\n");
         } else {
-            printf("ERROR: Out of range index should return NULL, returned "
-                   "offset: %" PRIdPTR "\n",
-                   (ptrdiff_t)(fe - f));
-            assert(NULL);
+            ERR("reverse out of range index returned offset %" PRIdPTR,
+                (ptrdiff_t)(fe - f));
         }
 
         printf("\n");
         flexFree(f);
     }
 
-    printf("Iterate list from 0 to end:\n");
-    {
+    TEST("iterate the list from 0 to the end") {
         f = createList();
         fe = flexIndex(f, 0);
         while (flexGet(fe, &entry, &elen, &value)) {
@@ -11379,8 +10970,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Iterate list from 1 to end:\n");
-    {
+    TEST("iterate the list from 1 to the end") {
         f = createList();
         fe = flexIndex(f, 1);
         while (flexGet(fe, &entry, &elen, &value)) {
@@ -11401,8 +10991,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Iterate list from 2 to end:\n");
-    {
+    TEST("iterate the list from 2 to the end") {
         f = createList();
         fe = flexIndex(f, 2);
         while (flexGet(fe, &entry, &elen, &value)) {
@@ -11423,23 +11012,20 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Iterate starting out of range:\n");
-    {
+    TEST("iterate starting out of range") {
         f = createList();
         fe = flexIndex(f, 4);
         if (!flexGet(fe, &entry, &elen, &value)) {
             printf("No entry\n");
         } else {
-            printf("ERROR\n");
-            assert(NULL);
+            ERRR("an out of range start found an entry");
         }
 
         printf("\n");
         flexFree(f);
     }
 
-    printf("Iterate from back to front:\n");
-    {
+    TEST("iterate from back to front") {
         f = createList();
         fe = flexIndex(f, -1);
         assert(fe == flexTail(f));
@@ -11461,8 +11047,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Iterate from back to front, deleting all items:\n");
-    {
+    TEST("iterate from back to front, deleting every item") {
         f = createList();
         fe = flexIndex(f, -1);
         assert(fe == flexTail(f));
@@ -11485,48 +11070,42 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Delete inclusive range 0,0:\n");
-    {
+    TEST("delete the inclusive range 0,0") {
         f = createList();
         flexDeleteRange(&f, 0, 1);
         flexRepr(f);
         flexFree(f);
     }
 
-    printf("Delete inclusive range 0,1:\n");
-    {
+    TEST("delete the inclusive range 0,1") {
         f = createList();
         flexDeleteRange(&f, 0, 2);
         flexRepr(f);
         flexFree(f);
     }
 
-    printf("Delete inclusive range 1,2:\n");
-    {
+    TEST("delete the inclusive range 1,2") {
         f = createList();
         flexDeleteRange(&f, 1, 2);
         flexRepr(f);
         flexFree(f);
     }
 
-    printf("Delete with start index out of range:\n");
-    {
+    TEST("delete with the start index out of range") {
         f = createList();
         flexDeleteRange(&f, 5, 1);
         flexRepr(f);
         flexFree(f);
     }
 
-    printf("Delete with num overflow:\n");
-    {
+    TEST("delete with a count past the end") {
         f = createList();
         flexDeleteRange(&f, 1, 5);
         flexRepr(f);
         flexFree(f);
     }
 
-    printf("Delete foo while iterating:\n");
-    {
+    TEST("delete foo while iterating") {
         f = createList();
         fe = flexIndex(f, 0);
         while (flexGet(fe, &entry, &elen, &value)) {
@@ -11552,8 +11131,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Regression test for >255 byte strings:\n");
-    {
+    TEST("strings longer than 255 bytes") {
         char v1[257] = {0};
         char v2[257] = {0};
         entry = NULL;
@@ -11578,12 +11156,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         if (entry) {
             assert(strncmp(v2, (char *)entry, elen) == 0);
         }
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Regression test deleting next to last entries:\n");
-    {
+    TEST("deleting next to the last entries") {
         char v[3][257] = {{0}};
         flexEntryData e[3] = {{0}};
 
@@ -11614,13 +11190,11 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(e[0].encodingSize == 2);
         assert(e[1].encodingSize == 2);
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test the minimal path stores whole reals as integers, exact keeps "
-           "them:\n");
-    {
+    TEST("the minimal path stores whole reals as integers, exact keeps "
+         "them") {
         /* Auto: a DOUBLE 5.0 push and an appended FLOAT 3.0 read back as
          * integers; the numeral "22.0" stays a real (it keeps its
          * spelling), as do 2.5 and -0.0; exact keeps DOUBLE 5.0 a real;
@@ -11644,8 +11218,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             double value;
         } want[7] = {{true, 5},     {true, 3},  {false, 22}, {false, 2.5},
                      {false, -0.0}, {false, 5}, {false, 6}};
-        int bad = flexCount(a) != 7;
-        for (int32_t i = 0; !bad && i < 7; i++) {
+        if (flexCount(a) != 7) {
+            ERR("%zu elements, expected 7", flexCount(a));
+        }
+        for (int32_t i = 0; flexCount(a) == 7 && i < 7; i++) {
             databox got = {{0}};
             flexGetByType(flexIndex(a, i), &got);
             const bool isInt = DATABOX_IS_INTEGER(&got);
@@ -11655,17 +11231,12 @@ int32_t flexTest(int32_t argc, char **argv) {
                                  : got.data.d64;
             if (isInt != want[i].integer || v != want[i].value ||
                 (i == 4 && !signbit(v))) {
-                printf("  FAIL: element %d integer %d value %g\n", i, isInt, v);
-                bad++;
+                ERR("element %d integer %d value %g", i, isInt, v);
             }
-        }
-        if (bad) {
-            return bad;
         }
     }
 
-    printf("Test empty bytes given as (NULL, 0) store as the empty string:\n");
-    {
+    TEST("empty bytes given as (NULL, 0) store as the empty string") {
         /* No bytes may come with no pointer: each push stores an empty
          * string (without passing NULL to memcpy, which UBSan reports) */
         cleaner(flexFree) flex *e = flexNew();
@@ -11675,27 +11246,21 @@ int32_t flexTest(int32_t argc, char **argv) {
             .type = DATABOX_BYTES, .data.bytes.start = NULL, .len = 0};
         flexPushByType(&e, &nothing, FLEX_ENDPOINT_TAIL);
         flexInsertByType(&e, flexIndex(e, 1), &nothing);
-        int32_t bad = 0;
         if (flexCount(e) != 4) {
-            bad++;
+            ERR("(NULL, 0) pushes made %zu entries, expected 4", flexCount(e));
         }
-        for (int32_t i = 0; i < 4 && !bad; i++) {
+        for (int32_t i = 0; i < 4 && flexCount(e) == 4; i++) {
             databox got = {{0}};
             flexGetByType(flexIndex(e, i), &got);
             if ((got.type != DATABOX_BYTES &&
                  got.type != DATABOX_BYTES_EMBED) ||
                 got.len != 0) {
-                bad++;
+                ERR("(NULL, 0) entry %" PRId32 " is not an empty string", i);
             }
-        }
-        if (bad) {
-            printf("  FAIL: (NULL, 0) did not store empty strings\n");
-            return bad;
         }
     }
 
-    printf("Test never-free bytes are bytes to every box entry point:\n");
-    {
+    TEST("never-free bytes are bytes to every box entry point") {
         /* The same strings as BYTES boxes and as NEVER_FREE boxes, through
          * push at both ends, insert at a position, replace and sorted
          * insert, build byte-identical flexes, and find finds them */
@@ -11723,29 +11288,22 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexInsertByTypeSorted(sorted, &b[i]);
             }
         }
-        int32_t bad = 0;
         if (flexBytes(asBytes) != flexBytes(asNever) ||
             memcmp(asBytes, asNever, flexBytes(asBytes)) != 0 ||
             flexBytes(sortedBytes) != flexBytes(sortedNever) ||
             memcmp(sortedBytes, sortedNever, flexBytes(sortedBytes)) != 0) {
-            printf("  FAIL: never-free bytes built a different flex\n");
-            bad++;
+            ERRR("never-free bytes built a different flex");
         }
         /* [gamma, gamma, alpha]: the replace overwrote beta */
         const databox findMe = {.type = DATABOX_BYTES_NEVER_FREE,
                                 .data.bytes.start = words[0],
                                 .len = strlen((char *)words[0])};
         if (!flexFindByType(asNever, flexHead(asNever), &findMe, 0)) {
-            printf("  FAIL: find by never-free bytes found nothing\n");
-            bad++;
-        }
-        if (bad) {
-            return bad;
+            ERRR("find by never-free bytes found nothing");
         }
     }
 
-    printf("Test pointer entries keep their mdsc strings:\n");
-    {
+    TEST("pointer entries keep their mdsc strings") {
         /* Entries referencing mdsc strings (stored as the pointer's bits;
          * a userspace pointer fits the 6-byte form) read back as the same
          * pointer, with the string's length */
@@ -11758,29 +11316,23 @@ int32_t flexTest(int32_t argc, char **argv) {
             const databox box = {.type = DATABOX_PTR_MDSC, .data.ptr = strs[i]};
             flexPushByType(&pf, &box, FLEX_ENDPOINT_TAIL);
         }
-        int32_t bad = 0;
         flexEntry *pfe = flexHead(pf);
         for (size_t i = 0; i < N_TEXTS; i++) {
             databox got = {{0}};
             flexGetByType(pfe, &got);
             if (got.type != DATABOX_PTR_MDSC || got.data.ptr != strs[i] ||
                 got.len != strlen(texts[i])) {
-                printf("  FAIL: pointer entry %zu read back as %p (%zu)\n", i,
-                       got.data.ptr, (size_t)got.len);
-                bad++;
+                ERR("pointer entry %zu read back as %p (%zu)", i, got.data.ptr,
+                    (size_t)got.len);
             }
             pfe = flexNext(pf, pfe);
         }
         for (size_t i = 0; i < N_TEXTS; i++) {
             mdscfree(strs[i]);
         }
-        if (bad) {
-            return bad;
-        }
     }
 
-    printf("Test integer range encodings:\n");
-    {
+    TEST("integer range encodings") {
         f = flexNew();
         flexPushSigned(&f, INT8_MIN, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&f, INT8_MAX, FLEX_ENDPOINT_TAIL);
@@ -11807,8 +11359,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Test 2-level same keys sort sub elements properly:\n");
-    {
+    TEST("2-level same keys sort their sub elements") {
         f = flexNew();
         const databox samekeybox = databoxBool(false);
         const databox valboxA = databoxNewBytesString("AAAAAAA");
@@ -11835,12 +11386,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("Created A, B, C...\n");
         flexRepr(f);
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test 2-level remove of same keys sort sub elements properly:\n");
-    {
+    TEST("2-level removes of same keys keep their sub elements sorted") {
         f = flexNew();
         const databox samekeybox = databoxBool(false);
         const databox valboxA = databoxNewBytesString("AAAAAAA");
@@ -11927,12 +11476,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexCount(f) == 0);
         assert(flexBytes(f) == FLEX_EMPTY_HEADER_SIZE);
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test sorted insert and delete with multiple entries (numeric):\n");
-    {
+    TEST("sorted insert and delete with multiple entries (numeric)") {
         f = flexNew();
         flexEntry *mid = NULL;
 
@@ -12120,12 +11667,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test sorted insert and delete with multiple entries (strings):\n");
-    {
+    TEST("sorted insert and delete with multiple entries (strings)") {
         /* Run these test with:
          *   - FORWARD delete (-200 to 700)
          *   - REVERSE delete (700 to -200) */
@@ -12211,12 +11756,9 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             flexFree(f);
         }
-
-        printf("SUCCESS\n\n");
     }
 
-    printf("Test flexInsertReplaceByTypeSortedWithMiddleMultiWithReference:\n");
-    {
+    TEST("flexInsertReplaceByTypeSortedWithMiddleMultiWithReference") {
         multimapAtom *a = multimapAtomNew();
 
         f = flexNew();
@@ -12388,8 +11930,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                         }
                         tend = timeUtilUs();
                         uint64_t searched = tend - tstart;
-                        printf("SUCCESS INSERT (%f sec total; %f us per avg "
-                               "insert; %zu bytes%s)\n",
+                        printf("  insert: %f sec total; %f us per avg "
+                               "insert; %zu bytes%s\n",
                                ((double)(searched) / 1e6),
                                ((double)(searched)) / totalVals,
                                flexBytes(fs[0]),
@@ -12414,8 +11956,8 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                     tend = timeUtilUs();
                     uint64_t searched = tend - tstart;
-                    printf("SUCCESS INSERT (%f sec total; %f us per avg "
-                           "insert; %zu bytes)\n",
+                    printf("  insert: %f sec total; %f us per avg "
+                           "insert; %zu bytes\n",
                            ((double)(searched) / 1e6),
                            ((double)(searched)) / totalVals, flexBytes(f));
                 }
@@ -12459,8 +12001,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                         }
 
                         uint64_t searched = tend - tstart;
-                        printf("SUCCESS FIND (%f sec total; %f us per avg "
-                               "lookup%s)\n",
+                        printf("  find: %f sec total; %f us per avg "
+                               "lookup%s\n",
                                ((double)(searched) / 1e6),
                                ((double)(searched)) / looper,
                                withMiddle ? " (WITH MIDDLE)" : "");
@@ -12518,8 +12060,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("\n");
     }
 
-    printf("Test replacing elements on insert:\n");
-    {
+    TEST("replacing elements on insert") {
         f = createList();
         flex *f2 = createList();
 
@@ -12555,13 +12096,11 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("Replaced previous to tail...\n");
         flexRepr(f);
 
-        printf("SUCCESS\n\n");
         flexFree(f);
         flexFree(f2);
     }
 
-    printf("Compare multi-insert ending in NULL:\n");
-    {
+    TEST("a multi-insert ending in an empty string") {
         f = flexNew();
 #define mku(u_) databoxNewUnsigned(u_)
         databox clusterId = mku(100);
@@ -12587,8 +12126,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Create list of data and true/false/null:\n");
-    {
+    TEST("a list of data and true/false/null") {
         f = createList();
         const databox t = databoxBool(true);
         const databox F = databoxBool(false);
@@ -12641,38 +12179,31 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Compare strings with flex entries:\n");
-    {
+    TEST("compare strings with flex entries") {
         f = createList();
         fe = flexIndex(f, 0);
         assert(fe == flexHead(f));
         if (!flexCompareBytes(fe, "hello", 5)) {
-            printf("ERROR: not \"hello\"\n");
-            assert(NULL);
+            ERRR("not \"hello\"");
         }
 
         if (flexCompareBytes(fe, "hella", 5)) {
-            printf("ERROR: \"hella\"\n");
-            assert(NULL);
+            ERRR("matched \"hella\"");
         }
 
         fe = flexIndex(f, 3);
         if (!flexCompareBytes(fe, "1024", 4)) {
-            printf("ERROR: not \"1024\"\n");
-            assert(NULL);
+            ERRR("not \"1024\"");
         }
 
         if (flexCompareBytes(fe, "1025", 4)) {
-            printf("ERROR: \"1025\"\n");
-            assert(NULL);
+            ERRR("matched \"1025\"");
         }
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Merge test:\n");
-    {
+    TEST("merge") {
         /* create list gives us: [hello, foo, quux, 1024] */
         f = createList();
         flex *f2 = createList();
@@ -12684,16 +12215,14 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(flexFree) flex *f4 = flexNew();
 
         if (flexMerge(&f4, &f4)) {
-            printf("ERROR: Allowed merging of one flex into itself.\n");
-            assert(NULL);
+            ERRR("allowed merging a flex into itself");
         }
 
         /* Merge two empty flexes, get empty result back. */
         f4 = flexMerge(&f3, &f4);
         flexRepr(f4);
         if (flexCount(f4)) {
-            printf("ERROR: Merging two empty flexes created entries.\n");
-            assert(NULL);
+            ERRR("merging two empty flexes created entries");
         }
 
         f2 = flexMerge(&f, &f2);
@@ -12701,64 +12230,37 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexRepr(f2);
 
         if (flexCount(f2) != 8) {
-            printf("ERROR: Merged length not 8, but: %zu\n", flexCount(f2));
-            assert(NULL);
+            ERR("merged length not 8, but %zu", flexCount(f2));
         }
 
-        fe = flexIndex(f2, 0);
-        if (!flexCompareBytes(fe, "hello", 5)) {
-            printf("ERROR: not \"hello\"\n");
-            assert(NULL);
-        }
+        /* Both halves: "hello" at 0 and 4, "1024" at 3 and 7 */
+        for (int32_t half = 0; half < 2; half++) {
+            fe = flexIndex(f2, half * 4);
+            if (!flexCompareBytes(fe, "hello", 5)) {
+                ERR("entry %" PRId32 " is not \"hello\"", half * 4);
+            }
 
-        if (flexCompareBytes(fe, "hella", 5)) {
-            printf("ERROR: \"hella\"\n");
-            assert(NULL);
-        }
+            if (flexCompareBytes(fe, "hella", 5)) {
+                ERR("entry %" PRId32 " matched \"hella\"", half * 4);
+            }
 
-        fe = flexIndex(f2, 3);
-        if (!flexCompareBytes(fe, "1024", 4)) {
-            printf("ERROR: not \"1024\"\n");
-            assert(NULL);
-        }
+            fe = flexIndex(f2, half * 4 + 3);
+            if (!flexCompareBytes(fe, "1024", 4)) {
+                ERR("entry %" PRId32 " is not \"1024\"", half * 4 + 3);
+            }
 
-        if (flexCompareBytes(fe, "1025", 4)) {
-            printf("ERROR: \"1025\"\n");
-            assert(NULL);
-        }
-
-        fe = flexIndex(f2, 4);
-        if (!flexCompareBytes(fe, "hello", 5)) {
-            printf("ERROR: not \"hello\"\n");
-            assert(NULL);
-        }
-
-        if (flexCompareBytes(fe, "hella", 5)) {
-            printf("ERROR: \"hella\"\n");
-            assert(NULL);
-        }
-
-        fe = flexIndex(f2, 7);
-        if (!flexCompareBytes(fe, "1024", 4)) {
-            printf("ERROR: not \"1024\"\n");
-            assert(NULL);
-        }
-
-        if (flexCompareBytes(fe, "1025", 4)) {
-            printf("ERROR: \"1025\"\n");
-            assert(NULL);
+            if (flexCompareBytes(fe, "1025", 4)) {
+                ERR("entry %" PRId32 " matched \"1025\"", half * 4 + 3);
+            }
         }
 
         /* Merge a merged flex into itself... */
         cleaner(flexFree) flex *f22 = flexDuplicate(f2);
         f22 = flexMerge(&f22, &f2);
         flexRepr(f22);
-
-        printf("SUCCESS\n\n");
     }
 
-    printf("Test merge and place large entries:\n");
-    {
+    TEST("merge and place large entries") {
         f = createList();
         flex *f2 = createList();
 
@@ -12819,11 +12321,9 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexFree(f);
         f = NULL;
-        printf("SUCCESS\n\n");
     }
 
-    printf("Test rotating 4 element list 300 times:\n");
-    {
+    TEST("rotating a 4 element list 300 times") {
         f = createList();
         for (int i = 0; i < 300; i++) {
             databox box = {{0}};
@@ -12833,12 +12333,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexDelete(&f, &fe);
         }
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test replacing element with bigger version of itself:\n");
-    {
+    TEST("replacing an element with a bigger version of itself") {
         f = flexNew();
         uint8_t thing[2048] = {0};
         memset(thing, 3, sizeof(thing));
@@ -12847,18 +12345,14 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushByType(&f, &box, FLEX_ENDPOINT_HEAD);
         size_t expectedSize = 1 + 1 + 1 + 24 + 1;
         if (flexBytes(f) != expectedSize) {
-            printf("Expected size %zu, but got %zu instead!\n", expectedSize,
-                   flexBytes(f));
-            assert(NULL);
+            ERR("expected size %zu, but got %zu", expectedSize, flexBytes(f));
         }
 
         fe = flexHead(f);
         flexResizeEntry(&f, fe, 2048);
         expectedSize = 2 + 1 + 2 + 2048 + 2;
         if (flexBytes(f) != expectedSize) {
-            printf("Expected size %zu, but got %zu instead!\n", expectedSize,
-                   flexBytes(f));
-            assert(NULL);
+            ERR("expected size %zu, but got %zu", expectedSize, flexBytes(f));
         }
 
         fe = flexHead(f);
@@ -12870,12 +12364,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexGetByType(fe, &box);
         assert(!memcmp(box.data.bytes.start, thing, 2048));
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test replacing element with smaller version of itself:\n");
-    {
+    TEST("replacing an element with a smaller version of itself") {
         f = flexNew();
         uint8_t thing[2048] = {0};
         memset(thing, 3, sizeof(thing));
@@ -12884,30 +12376,24 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushByType(&f, &box, FLEX_ENDPOINT_HEAD);
         size_t expectedSize = 2 + 1 + 2 + 2048 + 2;
         if (flexBytes(f) != expectedSize) {
-            printf("Expected size %zu, but got %zu instead!\n", expectedSize,
-                   flexBytes(f));
-            assert(NULL);
+            ERR("expected size %zu, but got %zu", expectedSize, flexBytes(f));
         }
 
         fe = flexHead(f);
         flexResizeEntry(&f, fe, 24);
         expectedSize = 1 + 1 + 1 + 24 + 1;
         if (flexBytes(f) != expectedSize) {
-            printf("Expected size %zu, but got %zu instead!\n", expectedSize,
-                   flexBytes(f));
-            assert(NULL);
+            ERR("expected size %zu, but got %zu", expectedSize, flexBytes(f));
         }
 
         fe = flexHead(f);
         flexGetByType(fe, &box);
         assert(!memcmp(box.data.bytes.start, thing, 24));
 
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test create long list and check indices:\n");
-    {
+    TEST("a long list keeps its indices") {
         f = flexNew();
         char buf[32];
         int64_t len;
@@ -12972,12 +12458,11 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         uint64_t tend = timeUtilUs();
 
-        printf("SUCCESS (%f sec total)\n\n", ((double)(tend - tstart) / 1e6));
+        printf("  (%f sec total)\n", ((double)(tend - tstart) / 1e6));
         flexFree(f);
     }
 
-    printf("Test cflex -> flex -> cflex conversions:\n");
-    {
+    TEST("cflex -> flex -> cflex conversions") {
         uint8_t randBytesBuf[8192] = {0};
         size_t compressRestoreSize = 1024 * 1024;
         cleaner(zfree) void *compressRestoreBuffer =
@@ -13006,7 +12491,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             if (fullBytes < CFLEX_MINIMUM_COMPRESS_BYTES) {
                 if (flexConvertToCFlex(f, compressRestoreBuffer,
                                        compressRestoreSize)) {
-                    assert(NULL && "converted a too-small cflex!");
+                    ERR("converted a too-small cflex (%zu bytes)", fullBytes);
                 }
                 /* We didn't compress, so free and try next loop. */
 
@@ -13017,7 +12502,9 @@ int32_t flexTest(int32_t argc, char **argv) {
             if (fullBytes >= CFLEX_MINIMUM_COMPRESS_BYTES &&
                 !flexConvertToCFlex(f, compressRestoreBuffer,
                                     compressRestoreSize)) {
-                assert(NULL && "failed to convert to a cflex!");
+                ERR("failed to convert %zu bytes to a cflex", fullBytes);
+                flexFree(f);
+                continue;
             }
 
             const size_t fullBytesC = flexBytes((flex *)c);
@@ -13037,18 +12524,17 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             /* compressed! now restore! */
             if (!cflexConvertToFlex(c, &restored, &compressRestoreSize)) {
-                assert(NULL && "Failed to restore cflex!");
+                ERR("failed to restore a cflex of %zu bytes", fullBytes);
+            } else if (memcmp(f, restored, flexBytes(f)) != 0) {
+                /* the original flex must match the restored flex exactly */
+                ERR("restored cflex of %zu bytes differs", fullBytes);
             }
-
-            /* now the original flex should match exactly the restored flex. */
-            assert(memcmp(f, restored, flexBytes(f)) == 0);
 
             flexFree(f);
         }
     }
 
-    printf("Test cflexConvertToFlex buffer-length contract:\n");
-    {
+    TEST("the cflexConvertToFlex buffer-length contract") {
         /* Decompression trusts the caller's buffer length to skip its
          * own realloc, so pin both sides of that contract: a too-small
          * declared buffer must grow (with the length updated to the
@@ -13070,31 +12556,30 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(zfree) void *cBuf = zcalloc(1, cSize);
         cflex *c = (cflex *)cBuf;
         if (!flexConvertToCFlex(f, cBuf, cSize)) {
-            assert(NULL && "failed to compress contract-test flex!");
-        }
+            ERRR("failed to compress the contract-test flex");
+        } else {
+            /* (a) undersized declared buffer: must realloc and report the
+             * new real allocation back through the length */
+            size_t smallLen = 16;
+            cleanerName(zfree, Bytes) flex *small = zcalloc(1, smallLen);
+            if (!cflexConvertToFlex(c, &small, &smallLen) ||
+                smallLen < totalSize || memcmp(f, small, totalSize) != 0) {
+                ERR("undersized restore: length %zu of %zu", smallLen,
+                    totalSize);
+            }
 
-        /* (a) undersized declared buffer: must realloc and report the
-         * new real allocation back through the length */
-        size_t smallLen = 16;
-        cleanerName(zfree, Bytes) flex *small = zcalloc(1, smallLen);
-        if (!cflexConvertToFlex(c, &small, &smallLen)) {
-            assert(NULL && "undersized restore failed!");
+            /* (b) exactly-sized buffer: no growth needed; any write past
+             * the end is caught by the sanitizer allocator */
+            size_t exactLen = totalSize;
+            cleanerName(zfree, Bytes) flex *exact = zcalloc(1, exactLen);
+            if (!cflexConvertToFlex(c, &exact, &exactLen) ||
+                exactLen != totalSize || memcmp(f, exact, totalSize) != 0) {
+                ERR("exact-size restore: length %zu of %zu", exactLen,
+                    totalSize);
+            }
         }
-        assert(smallLen >= totalSize);
-        assert(memcmp(f, small, totalSize) == 0);
-
-        /* (b) exactly-sized buffer: no growth needed; any write past
-         * the end is caught by the sanitizer allocator */
-        size_t exactLen = totalSize;
-        cleanerName(zfree, Bytes) flex *exact = zcalloc(1, exactLen);
-        if (!cflexConvertToFlex(c, &exact, &exactLen)) {
-            assert(NULL && "exact-size restore failed!");
-        }
-        assert(exactLen == totalSize);
-        assert(memcmp(f, exact, totalSize) == 0);
 
         flexFree(f);
-        printf("SUCCESS\n\n");
     }
 
     /* Each entry is three bytes.  Both sizes take the count past 67823 to
@@ -13102,13 +12587,8 @@ int32_t flexTest(int32_t argc, char **argv) {
      * count to its 4-byte width.  The sanitized size is smaller because
      * every exact-size append reallocates there.  The byte count's 5-byte
      * width has its own boundary test below. */
-#if !FLEX_TEST_SANITIZED
-    printf("Test create flex in single byte increments up to 2 M entries:\n");
-#else
-    printf("Test create flex in single byte increments up to 72 k "
-           "entries:\n");
-#endif
-    {
+    TEST_DESC("create a flex in single byte increments up to %s entries",
+              FLEX_TEST_SANITIZED ? "72 k" : "2 M") {
         f = flexNew();
 
 #if !FLEX_TEST_SANITIZED
@@ -13139,7 +12619,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         int32_t deleter = 0;
         while (flexCount(f) > 0) {
             if (deleter > contentsSize) {
-                assert(NULL);
+                ERR("%zu entries left after %" PRId32 " deletes", flexCount(f),
+                    deleter);
+                break;
             }
 
             /* Randomly delete from head or tail with a bias towards tail */
@@ -13165,12 +12647,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexBytes(f) == FLEX_EMPTY_HEADER_SIZE);
 
         flexFree(f);
-        printf("SUCCESS\n\n");
     }
 
-    printf("Test header byte count crossing its 5-byte width one entry at a "
-           "time:\n");
-    {
+    TEST("the header byte count crosses its 5-byte width one entry at a "
+         "time") {
         /* The header's byte count is 5 bytes wide from MAX_22 + 2^24 up.
          * One padding entry brings the flex just under that; single-byte
          * pushes cross it, tail deletes cross back, and every step checks
@@ -13242,12 +12722,11 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexFree(f);
         f = NULL;
-        printf("SUCCESS (%d pushes, %d deletes)\n\n", pushed, deleted);
+        printf("  (%d pushes, %d deletes)\n", pushed, deleted);
     }
 #endif
 
-    printf("Test half float auto encoding:\n");
-    {
+    TEST("half float auto encoding") {
         f = flexNew();
         float halfValue = 0.578125;
         char *halfFloatStr = "0.578125";
@@ -13259,21 +12738,15 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexGetByType(fe, &box);
 
         if (box.type != DATABOX_FLOAT_32) {
-            databoxReprSay("Expected FLOAT32, but got", &box);
-            assert(NULL && "Didn't decode float!");
+            ERR("decoded type %d, expected FLOAT32", (int)box.type);
+        } else if (box.data.f32 != halfValue) {
+            ERR("expected %f but got %f", halfValue, box.data.f32);
         }
 
-        if (box.data.f32 != halfValue) {
-            printf("Expected %f but got %f!\n", halfValue, box.data.f32);
-            assert(NULL);
-        }
-
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test IEEE float16 exact encoding:\n");
-    {
+    TEST("IEEE float16 exact encoding") {
         f = flexNew();
         float halfValue = 0.578125;
 
@@ -13284,20 +12757,15 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexGetByType(fe, &box);
 
         if (box.type != DATABOX_FLOAT_32) {
-            assert(NULL && "Didn't decode float!");
+            ERR("decoded type %d, expected FLOAT32", (int)box.type);
+        } else if (box.data.f32 != halfValue) {
+            ERR("expected %f but got %f", halfValue, box.data.f32);
         }
 
-        if (box.data.f32 != halfValue) {
-            printf("Expected %f but got %f!\n", halfValue, box.data.f32);
-            assert(NULL);
-        }
-
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test IEEE float16 rounded encoding:\n");
-    {
+    TEST("IEEE float16 rounded encoding") {
         f = flexNew();
         float halfValue = -3.658203125;       /* store this */
         float halfValueStored = -3.658203125; /* read this back */
@@ -13309,20 +12777,15 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexGetByType(fe, &box);
 
         if (box.type != DATABOX_FLOAT_32) {
-            assert(NULL && "Didn't decode float!");
+            ERR("decoded type %d, expected FLOAT32", (int)box.type);
+        } else if (box.data.f32 != halfValueStored) {
+            ERR("expected %f but got %f", halfValueStored, box.data.f32);
         }
 
-        if (box.data.f32 != halfValueStored) {
-            printf("Expected %f but got %f!\n", halfValueStored, box.data.f32);
-            assert(NULL);
-        }
-
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
-    printf("Test truncated bfloat16 encoding:\n");
-    {
+    TEST("truncated bfloat16 encoding") {
         f = flexNew();
         float halfValue = -9992361673228288;       /* store this */
         float halfValueStored = -9992361673228288; /* read this back */
@@ -13334,15 +12797,11 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexGetByType(fe, &box);
 
         if (box.type != DATABOX_FLOAT_32) {
-            assert(NULL && "Didn't decode float!");
+            ERR("decoded type %d, expected FLOAT32", (int)box.type);
+        } else if (box.data.f32 != halfValueStored) {
+            ERR("expected %f but got %f", halfValueStored, box.data.f32);
         }
 
-        if (box.data.f32 != halfValueStored) {
-            printf("Expected %f but got %f!\n", halfValueStored, box.data.f32);
-            assert(NULL);
-        }
-
-        printf("SUCCESS\n\n");
         flexFree(f);
     }
 
@@ -13351,9 +12810,8 @@ int32_t flexTest(int32_t argc, char **argv) {
      * flexInsertBytes() attempts to convert the string to integer/float
      * as appropriate. */
     for (int preallocate = 1; preallocate >= 0; preallocate--) {
-        printf("Stress with random payloads of different encodings (%s):\n",
-               preallocate ? "PREALLOCATED" : "REGULAR");
-        {
+        TEST_DESC("stress with random payloads of different encodings (%s)",
+                  preallocate ? "PREALLOCATED" : "REGULAR") {
             size_t totalAllAllocated = 0;
             size_t bufbuflen = 1 << 15;
             cleanerName(zfree, Chars) char *buf = zcalloc(1, bufbuflen);
@@ -13490,12 +12948,13 @@ int32_t flexTest(int32_t argc, char **argv) {
                 if (!(flexCount(f) < maxTestElementCount &&
                       (size_t)elements == flexCount(f) &&
                       listLength(ref) == flexCount(f))) {
-                    printf("Loopers: i = %d\n", i);
-                    printf("Expected length: %d\n", elements);
-                    printf("Flex count: %zu\n", flexCount(f));
-                    printf("List length: %zu\n", listLength(ref));
+                    ERR("loop %d: expected length %d, flex count %zu, list "
+                        "length %zu",
+                        i, elements, flexCount(f), listLength(ref));
                     flexRepr(f);
-                    assert(NULL);
+                    flexFree(f);
+                    f = NULL;
+                    continue;
                 }
 
                 for (int j = 0; j < elements; j++) {
@@ -13523,7 +12982,9 @@ int32_t flexTest(int32_t argc, char **argv) {
                          * back as 128-bit integers. */
                         buflen = flexTestSpellNumber_(&got, buf);
                     } else {
-                        assert(NULL && "Unexpected type!");
+                        ERR("loop %d element %d: unexpected type %d", i, j,
+                            (int)got.type);
+                        continue;
                     }
 
                     char *refnodeval = listNodeValue(refnode);
@@ -13531,28 +12992,19 @@ int32_t flexTest(int32_t argc, char **argv) {
                     if (memcmp(buf, refnodeval, buflen) != 0) {
                         for (ssize_t joo = 0; joo < buflen; joo++) {
                             if (buf[joo] != refnodeval[joo]) {
-                                printf("ERROR! flex[%" PRIdPTR "] = %d vs. "
-                                       "reference[%" PRIdPTR "] "
-                                       "= %d\n",
+                                printf("\tflex[%" PRIdPTR "] = %d vs. "
+                                       "reference[%" PRIdPTR "] = %d\n",
                                        (ptrdiff_t)joo, buf[joo], (ptrdiff_t)joo,
                                        refnodeval[joo]);
                             }
                         }
-                        ssize_t refnodelen = strlen(refnodeval);
-                        printf("ERROR! flex result != reference node; %.*s "
-                               "(%f, %f; %" PRIu32 ") "
-                               "!= %s\n",
-                               (int)buflen, (char *)buf, got.data.f32,
-                               got.data.d64, (uint32_t)got.type, refnodeval);
-
-                        if (buflen != refnodelen) {
-                            printf("ERROR! flex element size != reference "
-                                   "node "
-                                   "size; %" PRIdPTR " != %" PRIdPTR "\n",
-                                   (ptrdiff_t)buflen, (ptrdiff_t)refnodelen);
-                        }
-
-                        assert(NULL);
+                        const ssize_t refnodelen = strlen(refnodeval);
+                        ERR("flex result != reference node; %.*s (%f, %f; "
+                            "%" PRIu32 ", %" PRIdPTR " bytes) != %s (%" PRIdPTR
+                            " bytes)",
+                            (int)buflen, (char *)buf, got.data.f32,
+                            got.data.d64, (uint32_t)got.type, (ptrdiff_t)buflen,
+                            refnodeval, (ptrdiff_t)refnodelen);
                     }
                 }
 
@@ -13577,44 +13029,38 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             uint64_t tend = timeUtilUs();
 
-            printf("SUCCESS (%f sec total; %f sec deletion; %'zu total "
-                   "bytes)\n\n",
+            printf("  (%f sec total; %f sec deletion; %'zu total bytes)\n",
                    ((double)tend - tstart) / 1e6, (double)deletion / 1e6,
                    totalAllAllocated);
         }
     }
 
-    printf("Stress with variable flex sizes (insert + delete):\n");
-    {
+    TEST("stress with variable flex sizes (insert + delete)") {
         /* 500 push+pop pairs every 512 entries up to 16 k, which takes
          * both header fields through their 1-, 2- and 3-byte widths: a
          * smoke-size run of what was a throughput benchmark */
         float headTotal = stress(FLEX_ENDPOINT_HEAD, 500, 16384, 512);
         float tailTotal = stress(FLEX_ENDPOINT_TAIL, 500, 16384, 512);
 
-        printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
-               headTotal / 1e6, tailTotal / 1e6);
+        printf("  (%f sec head, %f sec tail)\n", headTotal / 1e6,
+               tailTotal / 1e6);
     }
 
-    printf("Stress with variable flex sizes (insert replace):\n");
-    {
+    TEST("stress with variable flex sizes (insert replace)") {
         float headTotal =
             stressReplaceInline(FLEX_ENDPOINT_HEAD, 500, 16384, 512);
         float tailTotal =
             stressReplaceInline(FLEX_ENDPOINT_TAIL, 500, 16384, 512);
 
-        printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
-               headTotal / 1e6, tailTotal / 1e6);
+        printf("  (%f sec head, %f sec tail)\n", headTotal / 1e6,
+               tailTotal / 1e6);
     }
 
     /* ================================================================
      * COMPREHENSIVE FUZZ TESTS
      * ================================================================ */
 
-    printf("\n=== FLEX FUZZ TESTING ===\n\n");
-
-    printf("FUZZ: integer encoding round-trip - signed boundaries: ");
-    {
+    TEST("fuzz: integer encoding round-trip - signed boundaries") {
         f = flexNew();
 
         /* Test all boundary values for each integer width */
@@ -13653,25 +13099,21 @@ int32_t flexTest(int32_t argc, char **argv) {
             } else if (box.type == DATABOX_UNSIGNED_64) {
                 retrieved = (int64_t)box.data.u;
             } else {
-                printf("\nFAIL: unexpected type %d for index %zu\n",
-                       (int)box.type, i);
-                assert(NULL);
+                ERR("unexpected type %d for index %zu", (int)box.type, i);
+                fe = flexNext(f, fe);
+                continue;
             }
             if (retrieved != testVals[i]) {
-                printf("\nFAIL: expected %" PRId64 ", got %" PRId64
-                       " at index %zu\n",
-                       testVals[i], retrieved, i);
-                assert(NULL);
+                ERR("expected %" PRId64 ", got %" PRId64 " at index %zu",
+                    testVals[i], retrieved, i);
             }
             fe = flexNext(f, fe);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: integer encoding round-trip - unsigned boundaries: ");
-    {
+    TEST("fuzz: integer encoding round-trip - unsigned boundaries") {
         f = flexNew();
 
         const uint64_t testVals[] = {0,
@@ -13698,20 +13140,16 @@ int32_t flexTest(int32_t argc, char **argv) {
                                      ? box.data.u
                                      : (uint64_t)box.data.i;
             if (retrieved != testVals[i]) {
-                printf("\nFAIL: expected %" PRIu64 ", got %" PRIu64
-                       " at index %zu\n",
-                       testVals[i], retrieved, i);
-                assert(NULL);
+                ERR("expected %" PRIu64 ", got %" PRIu64 " at index %zu",
+                    testVals[i], retrieved, i);
             }
             fe = flexNext(f, fe);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: bytes encoding round-trip - various lengths: ");
-    {
+    TEST("fuzz: bytes encoding round-trip - various lengths") {
         f = flexNew();
 
         /* Test string lengths from 0 to 8192 */
@@ -13735,26 +13173,21 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexGetByType(fe, &box);
             size_t len = databoxLen(&box);
             if (len != testLens[i]) {
-                printf("\nFAIL: expected len %zu, got %zu at index %zu\n",
-                       testLens[i], len, i);
-                assert(NULL);
-            }
-            if (testLens[i] > 0) {
+                ERR("expected len %zu, got %zu at index %zu", testLens[i], len,
+                    i);
+            } else if (testLens[i] > 0) {
                 const uint8_t *data = (const uint8_t *)box.data.bytes.start;
                 if (memcmp(data, buf, testLens[i]) != 0) {
-                    printf("\nFAIL: data mismatch at index %zu\n", i);
-                    assert(NULL);
+                    ERR("data mismatch at index %zu", i);
                 }
             }
             fe = flexNext(f, fe);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: float encoding round-trip: ");
-    {
+    TEST("fuzz: float encoding round-trip") {
         f = flexNew();
 
         static const float floatVals[] = {0.0f,
@@ -13812,10 +13245,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                 diff = -diff;
             }
             if (floatVals[i] != 0.0f && diff / (double)floatVals[i] > 1e-5) {
-                printf("\nFAIL: float mismatch at index %zu: got %g, expected "
-                       "%g\n",
-                       i, retrieved, (double)floatVals[i]);
-                assert(NULL);
+                ERR("float mismatch at index %zu: got %g, expected %g", i,
+                    retrieved, (double)floatVals[i]);
             }
             fe = flexNext(f, fe);
         }
@@ -13839,20 +13270,16 @@ int32_t flexTest(int32_t argc, char **argv) {
                 diff = -diff;
             }
             if (doubleVals[i] != 0.0 && diff / doubleVals[i] > 1e-14) {
-                printf("\nFAIL: double mismatch at index %zu: got %g, expected "
-                       "%g\n",
-                       i, retrieved, doubleVals[i]);
-                assert(NULL);
+                ERR("double mismatch at index %zu: got %g, expected %g", i,
+                    retrieved, doubleVals[i]);
             }
             fe = flexNext(f, fe);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: sorted insert and binary search - integers: ");
-    {
+    TEST("fuzz: sorted insert and binary search - integers") {
         f = flexNew();
         flexEntry *middle = NULL;
         const size_t count = 1000;
@@ -13873,9 +13300,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         /* Verify count */
         if (flexCount(f) != count) {
-            printf("\nFAIL: count mismatch: flex=%zu expected=%zu\n",
-                   flexCount(f), count);
-            assert(NULL);
+            ERR("count mismatch: flex=%zu expected=%zu", flexCount(f), count);
         }
 
         /* Verify all values can be found */
@@ -13884,35 +13309,29 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexEntry *found =
                 flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
             if (!found) {
-                printf("\nFAIL: value %" PRId64 " not found!\n", oracle[i]);
-                assert(NULL);
+                ERR("value %" PRId64 " not found", oracle[i]);
             }
         }
 
         /* Verify sorted order by iterating */
         int64_t prev = INT64_MIN;
         fe = flexHead(f);
-        for (size_t i = 0; i < count; i++) {
+        for (size_t i = 0; fe && i < count; i++) {
             databox box;
             flexGetByType(fe, &box);
             int64_t val = (box.type == DATABOX_SIGNED_64) ? box.data.i
                                                           : (int64_t)box.data.u;
             if (val <= prev) {
-                printf("\nFAIL: not sorted at %zu: %" PRId64 " <= %" PRId64
-                       "\n",
-                       i, val, prev);
-                assert(NULL);
+                ERR("not sorted at %zu: %" PRId64 " <= %" PRId64, i, val, prev);
             }
             prev = val;
             fe = flexNext(f, fe);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: sorted insert and binary search - strings: ");
-    {
+    TEST("fuzz: sorted insert and binary search - strings") {
         f = flexNew();
         flexEntry *middle = NULL;
         const size_t count = 500;
@@ -13928,9 +13347,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         /* Verify count */
         if (flexCount(f) != count) {
-            printf("\nFAIL: count mismatch: flex=%zu expected=%zu\n",
-                   flexCount(f), count);
-            assert(NULL);
+            ERR("count mismatch: flex=%zu expected=%zu", flexCount(f), count);
         }
 
         /* Verify all strings can be found */
@@ -13941,21 +13358,19 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexEntry *found =
                 flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
             if (!found) {
-                printf("\nFAIL: '%s' not found!\n", buf);
-                assert(NULL);
+                ERR("'%s' not found", buf);
             }
         }
 
         /* Verify sorted order */
         char prevBuf[32] = "";
         fe = flexHead(f);
-        for (size_t i = 0; i < count; i++) {
+        for (size_t i = 0; fe && i < count; i++) {
             databox box;
             flexGetByType(fe, &box);
             const char *str = (const char *)box.data.bytes.start;
             if (strcmp(str, prevBuf) <= 0 && i > 0) {
-                printf("\nFAIL: not sorted at %zu\n", i);
-                assert(NULL);
+                ERR("not sorted at %zu", i);
             }
             snprintf(prevBuf, sizeof(prevBuf), "%.*s", (int)databoxLen(&box),
                      str);
@@ -13963,11 +13378,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: random push/pop with oracle verification: ");
-    {
+    TEST("fuzz: random push/pop with oracle verification") {
         f = flexNew();
         const size_t maxSize = 1000;
         cleanerName(zfree, I64) int64_t *oracle =
@@ -14011,10 +13424,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                                       ? box.data.i
                                       : (int64_t)box.data.u;
                     if (got != oracle[0]) {
-                        printf("\nFAIL: head mismatch: got %" PRId64
-                               " expected %" PRId64 "\n",
-                               got, oracle[0]);
-                        assert(NULL);
+                        ERR("head mismatch: got %" PRId64 " expected %" PRId64,
+                            got, oracle[0]);
                     }
                     flexDeleteHead(&f);
                     memmove(&oracle[0], &oracle[1],
@@ -14028,10 +13439,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                                       ? box.data.i
                                       : (int64_t)box.data.u;
                     if (got != oracle[oracleCount - 1]) {
-                        printf("\nFAIL: tail mismatch: got %" PRId64
-                               " expected %" PRId64 "\n",
-                               got, oracle[oracleCount - 1]);
-                        assert(NULL);
+                        ERR("tail mismatch: got %" PRId64 " expected %" PRId64,
+                            got, oracle[oracleCount - 1]);
                     }
                     flexDeleteTail(&f);
                 }
@@ -14042,38 +13451,34 @@ int32_t flexTest(int32_t argc, char **argv) {
             /* Periodic full verification */
             if (round % 1000 == 0) {
                 if (flexCount(f) != oracleCount) {
-                    printf("\nFAIL: count mismatch at round %zu\n", round);
-                    assert(NULL);
+                    ERR("count mismatch at round %zu", round);
                 }
             }
         }
 
         /* Final verification */
         if (flexCount(f) != oracleCount) {
-            printf("\nFAIL: final count mismatch\n");
-            assert(NULL);
+            ERR("final count %zu, oracle %zu", flexCount(f), oracleCount);
         }
 
         fe = flexHead(f);
-        for (size_t i = 0; i < oracleCount; i++) {
+        for (size_t i = 0; fe && i < oracleCount; i++) {
             databox box;
             flexGetByType(fe, &box);
             int64_t got = (box.type == DATABOX_SIGNED_64) ? box.data.i
                                                           : (int64_t)box.data.u;
             if (got != oracle[i]) {
-                printf("\nFAIL: final verification mismatch at %zu\n", i);
-                assert(NULL);
+                ERR("final verification mismatch at %zu", i);
             }
             fe = flexNext(f, fe);
         }
 
         flexFree(f);
-        printf("push=%zu pop=%zu final=%zu... OK\n", pushOps, popOps,
+        printf("  (push=%zu pop=%zu final=%zu)\n", pushOps, popOps,
                oracleCount);
     }
 
-    printf("FUZZ: mixed type insertions: ");
-    {
+    TEST("fuzz: mixed type insertions") {
         f = flexNew();
 
         srand(44444);
@@ -14110,8 +13515,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         if (flexCount(f) != 1000) {
-            printf("\nFAIL: expected 1000 elements, got %zu\n", flexCount(f));
-            assert(NULL);
+            ERR("expected 1000 elements, got %zu", flexCount(f));
         }
 
         /* Iterate through and verify all entries are readable */
@@ -14126,16 +13530,13 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         if (count != 1000) {
-            printf("\nFAIL: iteration count %zu != 1000\n", count);
-            assert(NULL);
+            ERR("iteration count %zu != 1000", count);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: iterator forward and backward consistency: ");
-    {
+    TEST("fuzz: iterator forward and backward consistency") {
         f = flexNew();
         const size_t count = 500;
 
@@ -14149,8 +13550,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             databox box;
             flexGetByType(fe, &box);
             if ((size_t)box.data.i != i) {
-                printf("\nFAIL: forward iteration at %zu\n", i);
-                assert(NULL);
+                ERR("forward iteration at %zu", i);
             }
             fe = flexNext(f, fe);
         }
@@ -14161,18 +13561,15 @@ int32_t flexTest(int32_t argc, char **argv) {
             databox box;
             flexGetByType(fe, &box);
             if ((size_t)box.data.i != (count - 1 - i)) {
-                printf("\nFAIL: backward iteration at %zu\n", i);
-                assert(NULL);
+                ERR("backward iteration at %zu", i);
             }
             fe = flexPrev(f, fe);
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: delete operations with verification: ");
-    {
+    TEST("fuzz: delete operations with verification") {
         f = flexNew();
         const size_t count = 100;
 
@@ -14184,8 +13581,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         fe = flexIndex(f, 50);
         flexDelete(&f, &fe);
         if (flexCount(f) != count - 1) {
-            printf("\nFAIL: delete from middle failed\n");
-            assert(NULL);
+            ERRR("delete from middle failed");
         }
 
         /* Verify element 49 is followed by 51 */
@@ -14193,22 +13589,18 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox box;
         flexGetByType(fe, &box);
         if (box.data.i != 49) {
-            printf("\nFAIL: element before deleted is wrong\n");
-            assert(NULL);
+            ERRR("element before deleted is wrong");
         }
         fe = flexNext(f, fe);
         flexGetByType(fe, &box);
         if (box.data.i != 51) {
-            printf("\nFAIL: element after deleted is wrong\n");
-            assert(NULL);
+            ERRR("element after deleted is wrong");
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: range delete: ");
-    {
+    TEST("fuzz: range delete") {
         f = flexNew();
 
         for (int i = 0; i < 100; i++) {
@@ -14219,8 +13611,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexDeleteRange(&f, 20, 10);
 
         if (flexCount(f) != 90) {
-            printf("\nFAIL: count after range delete: %zu\n", flexCount(f));
-            assert(NULL);
+            ERR("count after range delete: %zu", flexCount(f));
         }
 
         /* Verify 19 is followed by 30 */
@@ -14228,22 +13619,18 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox box;
         flexGetByType(fe, &box);
         if (box.data.i != 19) {
-            printf("\nFAIL: element before range is wrong\n");
-            assert(NULL);
+            ERRR("element before range is wrong");
         }
         fe = flexNext(f, fe);
         flexGetByType(fe, &box);
         if (box.data.i != 30) {
-            printf("\nFAIL: element after range is wrong\n");
-            assert(NULL);
+            ERRR("element after range is wrong");
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: search for nonexistent keys in sorted flex: ");
-    {
+    TEST("fuzz: search for nonexistent keys in a sorted flex") {
         f = flexNew();
         flexEntry *middle = NULL;
 
@@ -14259,29 +13646,24 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexEntry *found =
                 flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
             if (found) {
-                printf("\nFAIL: found nonexistent %d\n", i);
-                assert(NULL);
+                ERR("found nonexistent %d", i);
             }
         }
 
         /* Search for out-of-range values */
         databox box = databoxNewSigned(-100);
         if (flexFindByTypeSortedWithMiddle(f, 1, &box, middle)) {
-            printf("\nFAIL: found -100\n");
-            assert(NULL);
+            ERRR("found -100");
         }
         box = databoxNewSigned(1000);
         if (flexFindByTypeSortedWithMiddle(f, 1, &box, middle)) {
-            printf("\nFAIL: found 1000\n");
-            assert(NULL);
+            ERRR("found 1000");
         }
 
         flexFree(f);
-        printf("OK\n");
     }
 
-    printf("FUZZ: stress sorted operations - 5K inserts/finds/deletes: ");
-    {
+    TEST("fuzz: stress sorted operations - 5K inserts/finds/deletes") {
         f = flexNew();
         flexEntry *middle = NULL;
 
@@ -14323,12 +13705,10 @@ int32_t flexTest(int32_t argc, char **argv) {
                     flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
                 bool shouldExist = FUZZ_BIT_GET(exists, key);
                 if (found && !shouldExist) {
-                    printf("\nFAIL: found nonexistent %d\n", key);
-                    assert(NULL);
+                    ERR("found nonexistent %d", key);
                 }
                 if (!found && shouldExist) {
-                    printf("\nFAIL: existing %d not found\n", key);
-                    assert(NULL);
+                    ERR("existing %d not found", key);
                 }
                 findOps++;
             } else {
@@ -14341,10 +13721,9 @@ int32_t flexTest(int32_t argc, char **argv) {
                         FUZZ_BIT_CLR(exists, key);
                         existCount--;
                     } else {
-                        printf("\nFAIL: key %d marked as existing but not "
-                               "found for delete\n",
-                               key);
-                        assert(NULL);
+                        ERR("key %d marked as existing but not found for "
+                            "delete",
+                            key);
                     }
                 }
                 deleteOps++;
@@ -14353,10 +13732,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             /* Periodic verification */
             if (round % 500 == 0) {
                 if (flexCount(f) != existCount) {
-                    printf("\nFAIL: count mismatch at round %zu: flex=%zu "
-                           "oracle=%zu\n",
-                           round, flexCount(f), existCount);
-                    assert(NULL);
+                    ERR("count mismatch at round %zu: flex=%zu oracle=%zu",
+                        round, flexCount(f), existCount);
                 }
             }
         }
@@ -14366,11 +13743,9 @@ int32_t flexTest(int32_t argc, char **argv) {
 #undef FUZZ_BIT_GET
 
         flexFree(f);
-        printf("I=%zu D=%zu F=%zu final=%zu... OK\n", insertOps, deleteOps,
+        printf("  (I=%zu D=%zu F=%zu final=%zu)\n", insertOps, deleteOps,
                findOps, existCount);
     }
-
-    printf("\n=== All flex fuzz tests passed! ===\n\n");
 
     /* ================================================================
      * VARINT ENCODING BOUNDARY TESTS
@@ -14383,8 +13758,7 @@ int32_t flexTest(int32_t argc, char **argv) {
      * These tests verify correct behavior at encoding boundaries.
      * ================================================================ */
 
-    printf("Test varint encoding boundary: 1-byte to 2-byte (64 bytes):\n");
-    {
+    TEST("varint encoding boundary: 1-byte to 2-byte (64 bytes)") {
         /* Test strings at exactly the encoding boundary lengths.
          * The encoding stores the *data* length, so we test data lengths
          * of 63, 64, 65 bytes. */
@@ -14457,11 +13831,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(box65.len == 65);
 
         flexFree(f);
-        printf("  OK\n");
     }
 
-    printf("Test varint encoding boundary: 2-byte to 3-byte (16447 bytes):\n");
-    {
+    TEST("varint encoding boundary: 2-byte to 3-byte (16447 bytes)") {
         /* The 2-byte→3-byte boundary is at 16447 bytes.
          * Testing exact boundary: 16446, 16447, 16448 bytes. */
         f = flexNew();
@@ -14570,11 +13942,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(b2.len == 16448);
 
         flexFree(f);
-        printf("  OK\n");
     }
 
-    printf("Test encoding boundary transitions with in-place replacement:\n");
-    {
+    TEST("encoding boundary transitions with in-place replacement") {
         /* Test replacing entries near encoding boundaries to verify
          * the flex correctly handles encoding size changes. */
         f = flexNew();
@@ -14630,11 +14000,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(marker.data.i == 12345);
 
         flexFree(f);
-        printf("  OK\n");
     }
 
-    printf("Test sorted operations at encoding boundaries:\n");
-    {
+    TEST("sorted operations at encoding boundaries") {
         /* Test sorted insert/find/delete with entries near encoding
          * boundaries to ensure the comparison and middle-tracking
          * logic handles variable-width encodings correctly. */
@@ -14708,10 +14076,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexFree(f);
         f = NULL;
-        printf("  OK\n");
     }
-
-    printf("\n=== All varint encoding boundary tests passed! ===\n\n");
 
     /* ================================================================
      * FLEX VALIDATE BUFFER TESTS
@@ -14729,26 +14094,21 @@ int32_t flexTest(int32_t argc, char **argv) {
      *     varint boundary
      * ================================================================ */
 
-    printf("Test flexValidateBuffer rejects NULL / undersize input:\n");
-    {
+    TEST("flexValidateBuffer rejects NULL / undersize input") {
         assert(flexValidateBuffer(NULL, 0) == false);
         assert(flexValidateBuffer(NULL, 1024) == false);
         const uint8_t empty[1] = {0};
         assert(flexValidateBuffer(empty, 0) == false);
         assert(flexValidateBuffer(empty, 1) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBuffer accepts a fresh empty flex:\n");
-    {
+    TEST("flexValidateBuffer accepts a fresh empty flex") {
         cleaner(flexFree) flex *fresh = flexNew();
         const size_t bytes = flexBytes(fresh);
         assert(flexValidateBuffer((const uint8_t *)fresh, bytes) == true);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBuffer accepts a populated small flex:\n");
-    {
+    TEST("flexValidateBuffer accepts a populated small flex") {
         cleaner(flexFree) flex *small = flexNew();
         for (int i = 0; i < 32; i++) {
             const databox b = databoxNewSigned(i);
@@ -14756,11 +14116,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
         const size_t bytes = flexBytes(small);
         assert(flexValidateBuffer((const uint8_t *)small, bytes) == true);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBuffer rejects mismatched total_bytes:\n");
-    {
+    TEST("flexValidateBuffer rejects mismatched total_bytes") {
         /* Buffer claims one length in its header but caller passes a
          * different buflen.  Both directions (too short and too long)
          * must fail. */
@@ -14772,23 +14130,19 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t bytes = flexBytes(built);
         assert(flexValidateBuffer((const uint8_t *)built, bytes - 1) == false);
         assert(flexValidateBuffer((const uint8_t *)built, bytes + 1) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBuffer rejects truncated header (1B claim,"
-           " missing count byte):\n");
-    {
+    TEST("flexValidateBuffer rejects a truncated header (1B claim, missing "
+         "count byte)") {
         /* A 1-byte total_bytes varint that claims length 1 leaves no
          * room for the count varint that must follow.  Catches the
          * "header-says-OK but body missing" failure shape. */
         const uint8_t truncated[1] = {0x01};
         assert(flexValidateBuffer(truncated, 1) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBuffer accepts flex spanning header"
-           " varint width boundary:\n");
-    {
+    TEST("flexValidateBuffer accepts a flex spanning the header varint "
+         "width boundary") {
         /* Push enough payload that the total_bytes varint promotes
          * past its 1-byte form, ensuring the multi-byte header path
          * is exercised. */
@@ -14800,10 +14154,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t bytes = flexBytes(grow);
         assert(bytes > 64); /* past 1-byte varint range */
         assert(flexValidateBuffer((const uint8_t *)grow, bytes) == true);
-        printf("  OK\n");
     }
-
-    printf("\n=== All flexValidateBuffer tests passed! ===\n\n");
 
     /* ================================================================
      * FLEX VALIDATE BUFFER DEEP TESTS
@@ -14825,9 +14176,8 @@ int32_t flexTest(int32_t argc, char **argv) {
      *   - reject a buffer truncated by one byte at the tail
      * ================================================================ */
 
-    printf("Test flexValidateBufferDeep rejects buffers flexValidateBuffer "
-           "already rejects:\n");
-    {
+    TEST("flexValidateBufferDeep rejects buffers flexValidateBuffer already "
+         "rejects") {
         /* The deep validator must inherit every rejection the cheap
          * validator already enforces. */
         assert(flexValidateBufferDeep(NULL, 0) == false);
@@ -14844,12 +14194,9 @@ int32_t flexTest(int32_t argc, char **argv) {
                false);
         assert(flexValidateBufferDeep((const uint8_t *)built, bytes + 1) ==
                false);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBufferDeep accepts a well-formed flex of N "
-           "entries:\n");
-    {
+    TEST("flexValidateBufferDeep accepts a well-formed flex of N entries") {
         /* Build a real flex with a mix of unsigned ints and byte
          * strings — both exercise the string-varint and fixed-width
          * paths in the safe-walker. */
@@ -14863,12 +14210,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t bytes = flexBytes(good);
         assert(flexCount(good) == 5u);
         assert(flexValidateBufferDeep((const uint8_t *)good, bytes) == true);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBufferDeep rejects entry-length varint claiming "
-           "oversize:\n");
-    {
+    TEST("flexValidateBufferDeep rejects an entry-length varint claiming "
+         "oversize") {
         /* Build a valid flex whose first entry is a short byte string,
          * then corrupt that entry's leading length-varint byte to claim
          * a string length far larger than the buffer can hold.  The O(1)
@@ -14898,12 +14243,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexValidateBuffer(tampered, bytes) == true);
         /* Deep validator catches it. */
         assert(flexValidateBufferDeep(tampered, bytes) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBufferDeep rejects header count claim that "
-           "disagrees with body:\n");
-    {
+    TEST("flexValidateBufferDeep rejects a header count claim that disagrees "
+         "with the body") {
         /* Build a valid 4-entry flex, then increment the tagged count
          * varint so it claims 5 entries; the body still has only 4.
          * The deep walk's per-entry budget check will run out of bytes
@@ -14928,12 +14271,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexValidateBuffer(tampered, bytes) == true);
         /* Deep walk runs out of bytes when looking for entry 5. */
         assert(flexValidateBufferDeep(tampered, bytes) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBufferDeep rejects buffer truncated by one "
-           "byte:\n");
-    {
+    TEST("flexValidateBufferDeep rejects a buffer truncated by one byte") {
         /* A buffer the right size with a header that doesn't claim
          * truncation, but missing its last byte, must be rejected.  We
          * build a valid flex, then deliberately tell the deep validator
@@ -14950,10 +14290,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * bytes in the header but garbage extending past the end.  Pass
          * the deep validator a buflen that mismatches the claim. */
         assert(flexValidateBufferDeep((const uint8_t *)fd, bytes + 1) == false);
-        printf("  OK\n");
     }
-
-    printf("\n=== All flexValidateBufferDeep tests passed! ===\n\n");
 
     /* ================================================================
      * FLEX_RAW_ENTRY_LENGTH_SAFE CORNER CASES (via deep validator)
@@ -14986,9 +14323,8 @@ int32_t flexTest(int32_t argc, char **argv) {
      *      left.
      * ================================================================ */
 
-    printf("Test flexRawEntryLengthSafe corner: remaining==0 at entry "
-           "start (count claims one more than fits):\n");
-    {
+    TEST("flexRawEntryLengthSafe corner: remaining==0 at entry start (count "
+         "claims one more than fits)") {
         /* Build the smallest possible "valid envelope" buffer:
          * total_bytes_varint=1B encoding value 2, count_varint=1B
          * encoding value 1, leaving ZERO bytes for the claimed single
@@ -15008,12 +14344,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         /* Deep check rejects via the remaining==0 corner. */
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexRawEntryLengthSafe corner: FORWARD_DECLARE_SUBCONTAINER "
-           "with remaining==1 (tag byte but no room for inner varint):\n");
-    {
+    TEST("flexRawEntryLengthSafe corner: FORWARD_DECLARE_SUBCONTAINER with "
+         "remaining==1 (tag byte but no room for inner varint)") {
         /* Build a buffer with one container-tag entry byte and nothing
          * after it.  Layout: total_bytes=3 (1B tot-varint + 1B count
          * + 1B tag), count=1, single entry = container tag.
@@ -15029,12 +14363,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         /* Deep walker rejects via the container remaining<2 corner. */
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexRawEntryLengthSafe corner: STR varint width "
-           "exceeds remaining:\n");
-    {
+    TEST("flexRawEntryLengthSafe corner: STR varint width exceeds "
+         "remaining") {
         /* Build a buffer whose single entry's encoding byte claims a
          * 9-byte split-varint (top bits 11 + 8-byte external width) =
          * 0xC8.  That requires 9 bytes for the varint alone; we give
@@ -15047,12 +14379,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         buf[2] = 0xC8u; /* 11001000 — split-varint claiming 9-byte width */
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexRawEntryLengthSafe corner: STR meta+payload "
-           "overshoots remaining:\n");
-    {
+    TEST("flexRawEntryLengthSafe corner: STR meta+payload overshoots "
+         "remaining") {
         /* Build a buffer whose single STR entry has a 1-byte varint
          * header claiming a payload length that, combined with the
          * mirrored meta bytes (varint_width * 2 = 2 bytes), exceeds
@@ -15073,12 +14403,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         buf[4] = 0xBBu;
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-        printf("  OK\n");
     }
 
-    printf("Test flexRawEntryLengthSafe corner: container inner-varint "
-           "width exceeds (remaining - 1):\n");
-    {
+    TEST("flexRawEntryLengthSafe corner: container inner-varint width "
+         "exceeds (remaining - 1)") {
         /* Build a buffer with a container tag followed by an inner
          * varint header byte that claims a 9-byte varint width — but
          * only 1 byte (the header byte itself) is available after the
@@ -15095,10 +14423,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         buf[3] = 0xC8u; /* inner split-varint header claiming 9 bytes */
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-        printf("  OK\n");
     }
-
-    printf("\n=== All flexRawEntryLengthSafe corner tests passed! ===\n\n");
 
     /* ================================================================
      * VARINT EXTERNAL GET OUT-OF-RANGE WIDTH REJECTION
@@ -15119,8 +14444,7 @@ int32_t flexTest(int32_t argc, char **argv) {
      * The varint library's own tests cover varintExternalGet's
      * assertion-free fallback.
      * ================================================================ */
-    printf("Test varintExternalGet rejects out-of-range widths:\n");
-    {
+    TEST("varintExternalGet rejects out-of-range widths") {
         /* Provide a buffer big enough that, absent the guard, a width=16
          * load would silently read 16 bytes and write all 16 into the
          * 8-byte result; ASAN/UBSAN would catch the stack write. */
@@ -15146,7 +14470,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         uint64_t one = 0;
         assert(varintExternalTryGet(buf, VARINT_WIDTH_8B, &one) && one == 1);
         (void)one;
-        printf("  OK\n");
     }
 
     /* ================================================================
@@ -15166,9 +14489,8 @@ int32_t flexTest(int32_t argc, char **argv) {
      * encodings (FLEX_REAL_32D, FLEX_REAL_64D); the validator must
      * also reject those before they reach the helper.
      * ================================================================ */
-    printf("Test flexValidateBufferDeep rejects unimplemented "
-           "container encodings:\n");
-    {
+    TEST("flexValidateBufferDeep rejects unimplemented container "
+         "encodings") {
         /* The four compressed-container reservations (CMAP, CLIST,
          * CSET, CTUPLE) plus the unused gap before FLEX_SAME (245..250)
          * are all in the FORWARD_DECLARE range but unsizable by the
@@ -15197,12 +14519,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             /* Deep walker rejects via the new helper-allowlist guard. */
             assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
         }
-        printf("  OK\n");
     }
 
-    printf("Test flexValidateBufferDeep rejects unimplemented "
-           "fixed-width encodings (REAL_32D / REAL_64D):\n");
-    {
+    TEST("flexValidateBufferDeep rejects unimplemented fixed-width "
+         "encodings (REAL_32D / REAL_64D)") {
         /* FLEX_REAL_32D / FLEX_REAL_64D are declared but unimplemented;
          * the helper's switch has no case for them and falls through
          * to assert(NULL).  Without the validator guard these would
@@ -15217,13 +14537,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(flexValidateBuffer(buf, sizeof(buf)) == true);
             assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
         }
-        printf("  OK\n");
     }
 
-    printf("\n=== All width-range and encoding-allowlist tests passed! "
-           "===\n\n");
-
-    return flexValidateTotalitySweep();
+    err += flexValidateTotalitySweep();
+    TEST_FINAL_RESULT;
 }
 #endif
 /* Original ziplist implementation:
