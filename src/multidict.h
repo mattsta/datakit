@@ -50,9 +50,11 @@ typedef struct multidictDetailedStats {
     multidictStats rehashTable; /* Stats for ht[1] during rehashing */
 } multidictDetailedStats;
 
-/* Load factor metrics - includes both count-based and byte-based metrics */
+/* Load factor metrics, count-based and byte-based, of the main table: during
+ * a rehash they cover only the entries not yet moved to the new table (the
+ * expansion check that reads them never runs mid-rehash; see
+ * multidictDetailedStats for both tables) */
 typedef struct multidictLoadMetrics {
-    /* Legacy count-based metric */
     uint32_t countLoadFactor; /* (count * 100) / slots */
 
     /* Byte-based metrics */

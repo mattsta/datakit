@@ -10019,14 +10019,36 @@ int multidictTest(int argc, char *argv[]) {
 
         uint32_t initialSlots = multidictSlotCount(dByte);
 
-        /* Fill dict with tiny entries - count-based backstop should trigger */
-        for (int i = 0; i < 500; i++) {
+        /* Fill dict with tiny entries - count-based backstop should trigger.
+         * Bytes never ask to expand, so outside a rehash the count load
+         * factor never passes the 2x backstop (an add checks before it
+         * inserts, so it can reach it exactly), also in tables of 32+
+         * slots, where byte metrics are measured only every size/16
+         * inserts: reaching the backstop must not wait for that */
+        uint64_t overCount = 0; /* settled adds past the backstop */
+        uint64_t overSlots = 0;
+        for (int i = 0; i < 20000; i++) {
             char keybuf[16], valbuf[4];
             snprintf(keybuf, sizeof(keybuf), "c%d", i);
             snprintf(valbuf, sizeof(valbuf), "v%d", i % 10);
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
             multidictAdd(dByte, &key, &val);
+            /* exact: 100 * count against the backstop's share of slots */
+            if (!multidictIsRehashing(dByte) &&
+                multidictCount(dByte) * 100 >
+                    multidictSlotCount(dByte) * 2u *
+                        MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR) {
+                overCount = multidictCount(dByte);
+                overSlots = multidictSlotCount(dByte);
+            }
+        }
+        if (overCount) {
+            printf("ERROR: byte mode held %" PRIu64 " entries in %" PRIu64
+                   " slots, past the %d%% backstop\n",
+                   overCount, overSlots,
+                   2 * MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR);
+            err++;
         }
 
         uint32_t finalSlots = multidictSlotCount(dByte);
