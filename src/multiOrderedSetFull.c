@@ -439,6 +439,34 @@ static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
     return findEntryForScore(m, member, &score, mapIdx);
 }
 
+/* The first row whose score is at or above 'score', in sub-map '*mapIdx';
+ * NULL (with '*mapIdx' == mapCount) when every score is below.  Starts in
+ * the last sub-map whose first score is strictly below 'score', since an
+ * equal-score run may begin in its tail; a sub-map holds at most
+ * maxMapSize bytes, so the walk there is short. */
+static flexEntry *mosFullSeekScore_(const multiOrderedSetFull *m,
+                                    const databox *score, uint32_t *mapIdx) {
+    for (uint32_t i = findSubMap_(m, score, NULL); i < m->mapCount; i++) {
+        flex *map = getSubMap(m, i);
+        flexEntry *entry = map ? flexHeadIfAny(map) : NULL;
+        while (entry) {
+            databox current;
+            databoxWide currentWide;
+            flexGetByTypeInto(entry, &current, &currentWide);
+            if (databoxCompare(&current, score) >= 0) {
+                *mapIdx = i;
+                return entry;
+            }
+
+            flexEntry *memberEntry = flexNext(map, entry);
+            entry = memberEntry ? flexNext(map, memberEntry) : NULL;
+        }
+    }
+
+    *mapIdx = m->mapCount;
+    return NULL;
+}
+
 /* ====================================================================
  * Creation / Destruction
  * ==================================================================== */
@@ -968,13 +996,19 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
                                              const mosRangeSpec *range) {
     size_t removed = 0;
 
-    for (uint32_t mapIdx = 0; mapIdx < m->mapCount; mapIdx++) {
+    /* From the first row at or above the minimum to past the maximum */
+    uint32_t mapIdx;
+    flexEntry *entry = mosFullSeekScore_(m, &range->min, &mapIdx);
+    bool pastMax = false;
+    for (; mapIdx < m->mapCount && !pastMax; mapIdx++, entry = NULL) {
         flex *map = getSubMap(m, mapIdx);
         if (!map) {
             continue;
         }
 
-        flexEntry *entry = flexHead(map);
+        if (!entry) {
+            entry = flexHeadIfAny(map);
+        }
         while (entry) {
             flexEntry *memberEntry = flexNext(map, entry);
             if (!memberEntry) {
@@ -1013,6 +1047,7 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
             } else {
                 int cmp = databoxCompare(&score, &range->max);
                 if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
+                    pastMax = true;
                     break;
                 }
                 entry = flexNext(map, memberEntry);
@@ -1287,13 +1322,18 @@ size_t multiOrderedSetFullCountByScore(const multiOrderedSetFull *m,
                                        const mosRangeSpec *range) {
     size_t count = 0;
 
-    for (uint32_t mapIdx = 0; mapIdx < m->mapCount; mapIdx++) {
+    /* From the first row at or above the minimum to past the maximum */
+    uint32_t mapIdx;
+    flexEntry *entry = mosFullSeekScore_(m, &range->min, &mapIdx);
+    for (; mapIdx < m->mapCount; mapIdx++, entry = NULL) {
         flex *map = getSubMap(m, mapIdx);
         if (!map) {
             continue;
         }
 
-        flexEntry *entry = flexHeadIfAny(map);
+        if (!entry) {
+            entry = flexHeadIfAny(map);
+        }
         while (entry) {
             databox score;
             databoxWide scoreWide;
@@ -1301,7 +1341,7 @@ size_t multiOrderedSetFullCountByScore(const multiOrderedSetFull *m,
 
             int cmp = databoxCompare(&score, &range->max);
             if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
-                break;
+                return count;
             }
 
             if (mosScoreInRange(&score, &range->min, range->minExclusive,
@@ -1365,40 +1405,11 @@ bool multiOrderedSetFullIteratorInitAtScore(const multiOrderedSetFull *m,
     iter->type = MOS_TYPE_FULL;
     iter->forward = forward;
 
-    /* An equal-score run may begin in the tail of the sub-map before the
-     * first one starting at 'score': start there */
-    uint32_t mapIdx = findSubMap_(m, score, NULL);
-
-    for (; mapIdx < m->mapCount; mapIdx++) {
-        flex *map = getSubMap(m, mapIdx);
-        if (!map) {
-            continue;
-        }
-
-        flexEntry *entry = flexHeadIfAny(map);
-        while (entry) {
-            databox currentScore;
-            databoxWide currentScoreWide;
-            flexGetByTypeInto(entry, &currentScore, &currentScoreWide);
-
-            if (databoxCompare(&currentScore, score) >= 0) {
-                iter->mapIndex = mapIdx;
-                iter->current = entry;
-                iter->valid = true;
-                return true;
-            }
-
-            flexEntry *memberEntry = flexNext(map, entry);
-            if (!memberEntry) {
-                break;
-            }
-            entry = flexNext(map, memberEntry);
-        }
-    }
-
-    iter->current = NULL;
-    iter->valid = false;
-    return false;
+    uint32_t mapIdx;
+    iter->current = mosFullSeekScore_(m, score, &mapIdx);
+    iter->mapIndex = mapIdx;
+    iter->valid = iter->current != NULL;
+    return iter->valid;
 }
 
 bool multiOrderedSetFullIteratorInitAtRank(const multiOrderedSetFull *m,
@@ -2145,6 +2156,48 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             if (multiOrderedSetFullCount(m) != 0 ||
                 mosFullCheckInvariants(m) != 0) {
                 ERR("pooled %d: %zu members left", pooled,
+                    multiOrderedSetFullCount(m));
+            }
+
+            /* Refilled: counts and a range removal over runs that span
+             * sub-maps, with both bounds inclusive and exclusive */
+            for (uint32_t j = 0; j < n; j++) {
+                char buf[24];
+                snprintf(buf, sizeof(buf), "run-%05u", j);
+                const databox member = databoxNewBytesString(buf);
+                const databox score = databoxNewSigned(j % 10);
+                multiOrderedSetFullAdd(m, &score, &member);
+            }
+            for (int64_t s = 0; s < 10; s++) {
+                const mosRangeSpec one = {.min = databoxNewSigned(s),
+                                          .max = databoxNewSigned(s)};
+                const mosRangeSpec openLow = {.min = databoxNewSigned(s),
+                                              .max = databoxNewSigned(s + 1),
+                                              .minExclusive = true};
+                const mosRangeSpec openHigh = {.min = databoxNewSigned(s),
+                                               .max = databoxNewSigned(s + 1),
+                                               .maxExclusive = true};
+                const size_t wantLow = s < 9 ? 400 : 0;
+                if (multiOrderedSetFullCountByScore(m, &one) != 400 ||
+                    multiOrderedSetFullCountByScore(m, &openLow) != wantLow ||
+                    multiOrderedSetFullCountByScore(m, &openHigh) != 400) {
+                    ERR("pooled %d: counts at score %" PRId64 " are %zu, %zu, "
+                        "%zu",
+                        pooled, s, multiOrderedSetFullCountByScore(m, &one),
+                        multiOrderedSetFullCountByScore(m, &openLow),
+                        multiOrderedSetFullCountByScore(m, &openHigh));
+                }
+            }
+            const mosRangeSpec middle = {.min = databoxNewSigned(3),
+                                         .max = databoxNewSigned(5)};
+            const mosRangeSpec all = {.min = databoxNewSigned(0),
+                                      .max = databoxNewSigned(9)};
+            if (multiOrderedSetFullRemoveRangeByScore(m, &middle) != 1200 ||
+                multiOrderedSetFullCountByScore(m, &middle) != 0 ||
+                multiOrderedSetFullCountByScore(m, &all) != n - 1200 ||
+                multiOrderedSetFullCount(m) != n - 1200 ||
+                mosFullCheckInvariants(m) != 0) {
+                ERR("pooled %d: removing scores 3..5 left %zu members", pooled,
                     multiOrderedSetFullCount(m));
             }
             multiOrderedSetFullFree(m);

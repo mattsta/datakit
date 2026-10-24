@@ -778,6 +778,15 @@ static void benchMultiOrderedSet(void) {
     }
     emitRow("multiOrderedSet", "getRank", 0, ranks, monoNowSec() - t0);
 
+    /* A 100-score window near the top of the set, counted */
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < ranks; i++) {
+        const mosRangeSpec top = {.min = databoxNewSigned((int64_t)n - 100),
+                                  .max = databoxNewSigned((int64_t)n)};
+        sink += multiOrderedSetCountByScore(mos, &top);
+    }
+    emitRow("multiOrderedSet", "countByScoreTop", 0, ranks, monoNowSec() - t0);
+
     /* Union of two halves overlapping by half of each (n/2 members each,
      * n/4 shared), per input member: SUM and MAX combine the shared ones */
     {
