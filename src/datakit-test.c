@@ -1801,6 +1801,16 @@ static void dkSeqNoteViolation_(const ownedSeqDecl *decl, const void *owner) {
 }
 
 #define DK_SEQ_BYTES 64u
+/* N = 2, 20 payload bytes (not a whole number of words), no row */
+static const ownedSeqDecl dkSeqDeclOdd_ = {
+    .name = "dk.seq.odd",
+    .versions = 2,
+    .version_bytes = 20,
+    .discipline = OWNED_WRITER_CLAIM,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .row = NULL,
+};
 /* N = 4, CLAIM, NULL predicate. */
 static const ownedSeqDecl dkSeqDeclA_ = {
     .name = "dk.seq.a",
@@ -2917,6 +2927,44 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
         uint8_t out[DK_SEQ_BYTES];
         size_t outLen = 0;
         uint8_t payload[DK_SEQ_BYTES];
+
+        /* Payloads of every length up to a capacity that is not a whole
+         * number of words: each reads back exactly (the partial last
+         * word included); a buffer one byte short reads CAPACITY with
+         * the length; number 0 reads OVERWRITTEN */
+        {
+            ownedSeq so;
+            static _Atomic uint64_t storageOdd[OWNED_SEQ_STORAGE_WORDS(2, 20)];
+            ownedSeqInit(&so, &dkSeqDeclOdd_, NULL, storageOdd);
+            uint8_t src[20];
+            uint8_t dst[20];
+            for (size_t len = 0; len <= 20; len++) {
+                for (size_t i = 0; i < len; i++) {
+                    src[i] = (uint8_t)(len * 16 + i);
+                }
+                size_t got = 99;
+                const bool published = ownedSeqPublish(&so, src, len);
+                const uint64_t n = ownedSeqCursor(&so);
+                OEXPECT(published &&
+                            ownedSeqReadAt(&so, n, dst, sizeof(dst), &got) ==
+                                OWNED_SEQ_VALID &&
+                            got == len && memcmp(dst, src, len) == 0,
+                        "seq: a payload of any length reads back exactly");
+                if (len > 0) {
+                    OEXPECT(ownedSeqReadAt(&so, n, dst, len - 1, &got) ==
+                                    OWNED_SEQ_CAPACITY &&
+                                got == len,
+                            "seq: a short buffer reads CAPACITY with the "
+                            "length");
+                }
+            }
+            size_t none = 1;
+            OEXPECT(ownedSeqReadAt(&so, 0, dst, sizeof(dst), &none) ==
+                            OWNED_SEQ_OVERWRITTEN &&
+                        none == 0,
+                    "seq: number 0 was never published");
+            ownedSeqDestruct(&so);
+        }
 
         /* A runtime-sized instance through ownedSeqInit; storage from the
          * owner, zeroed by Init. */
