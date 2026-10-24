@@ -2148,15 +2148,14 @@ uint64_t multiroarToArray(const multiroar *r, uint64_t *positions,
 
 /* Create from position array */
 multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count) {
-    if (!positions || count == 0) {
+    /* No positions is an empty roar (what multiroarToArray gives for
+     * one); only a count without positions is refused */
+    if (!positions && count > 0) {
         return NULL;
     }
 
     /* @own: caller; free=multiroarFree */
     multiroar *r = multiroarBitNew();
-    if (!r) {
-        return NULL;
-    }
 
     /* Set all positions */
     for (uint64_t i = 0; i < count; i++) {
@@ -4141,6 +4140,38 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarOverlap(a, none) != 0.0 || multiroarDice(a, none) != 0.0 ||
             multiroarDice(none, none) != 1.0) {
             ERRR("similarity with uneven or empty roars");
+        }
+
+        /* Operations that cancel every chunk form (a ^ a, a & ~a, and
+         * a & not(a), whose chunks are disjoint bitmaps) leave nothing:
+         * every read sees empty, and no emptied chunk lingers (equal to,
+         * and serialized like, a new roar) */
+        cleanerName(zfree, UInt64) uint64_t *zeros =
+            zcalloc(MR_FORM_WORDS, sizeof(uint64_t));
+        cleaner(multiroarFree) multiroar *xorSelf = multiroarNewXor(a, a);
+        cleaner(multiroarFree) multiroar *andNotSelf = multiroarNewAndNot(a, a);
+        cleaner(multiroarFree) multiroar *andNotA = multiroarNewAnd(a, notA);
+        cleaner(multiroarFree) multiroar *xorInPlace = multiroarDuplicate(a);
+        cleaner(multiroarFree) multiroar *andNotInPlace = multiroarDuplicate(a);
+        multiroarXor(xorInPlace, a);
+        multiroarAndNot(andNotInPlace, a);
+        multiroar *const cancelled[5] = {xorSelf, andNotSelf, andNotA,
+                                         xorInPlace, andNotInPlace};
+        for (int i = 0; i < 5; i++) {
+            err += mrCheckForms(cancelled[i], zeros, "cancelled");
+            if (!multiroarEquals(cancelled[i], none) ||
+                multiroarSerializedSize(cancelled[i]) !=
+                    multiroarSerializedSize(none)) {
+                ERR("cancelled roar %d keeps emptied chunks", i);
+            }
+        }
+        cleaner(multiroarFree) multiroar *fromNothing =
+            multiroarFromArray(NULL, 0);
+        cleaner(multiroarFree) multiroar *countOnly =
+            multiroarFromArray(NULL, 3);
+        if (!fromNothing || !multiroarIsEmpty(fromNothing) || countOnly) {
+            ERRR("an empty position list is not an empty roar, or a count "
+                 "without positions was accepted");
         }
     }
 

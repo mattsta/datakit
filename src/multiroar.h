@@ -128,6 +128,9 @@ void multiroarBitGetMany(const multiroar *r, const uint64_t *positions,
                          uint64_t count, bool *results);
 uint64_t multiroarToArray(const multiroar *r, uint64_t *positions,
                           uint64_t maxCount);
+/* A new bit-mode roar of 'count' positions (any order, repeats allowed);
+ * count 0 gives an empty roar, positions may then be NULL.  NULL only for
+ * NULL positions with a nonzero count. */
 multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count);
 
 /* Similarity and distance metrics */
