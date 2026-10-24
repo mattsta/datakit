@@ -1,5 +1,5 @@
 {
- "commit": "63f5e504d0f37e28b65b36ad6268beb3713523b6",
+ "commit": "48e943227ccf8518401ae294b7579a40eeb08214",
  "files": {
   "src/OSRegulate.c": {
    "lines": 243,
@@ -75,7 +75,7 @@
   },
   "src/clusterRing.c": {
    "lines": 229,
-   "branches": 288
+   "branches": 290
   },
   "src/clusterRing.h": {
    "lines": 0,
@@ -162,7 +162,7 @@
    "branches": 27
   },
   "src/dks.c": {
-   "lines": 53,
+   "lines": 55,
    "branches": 68
   },
   "src/dks.h": {
@@ -190,8 +190,8 @@
    "branches": 0
   },
   "src/fastmutex.c": {
-   "lines": 23,
-   "branches": 26
+   "lines": 21,
+   "branches": 25
   },
   "src/fastmutex.h": {
    "lines": 2,
@@ -402,16 +402,16 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 176,
-   "branches": 410
+   "lines": 171,
+   "branches": 396
   },
   "src/flex.h": {
    "lines": 0,
    "branches": 1
   },
   "src/flexCapacityManagement.h": {
-   "lines": 2,
-   "branches": 1
+   "lines": 0,
+   "branches": 0
   },
   "src/flexEnvelope.c": {
    "lines": 175,
@@ -502,8 +502,8 @@
    "branches": 0
   },
   "src/hyperloglog.c": {
-   "lines": 42,
-   "branches": 77
+   "lines": 36,
+   "branches": 74
   },
   "src/inflightGate.c": {
    "lines": 2,
@@ -718,8 +718,8 @@
    "branches": 1
   },
   "src/multilistFull.c": {
-   "lines": 58,
-   "branches": 92
+   "lines": 48,
+   "branches": 89
   },
   "src/multilistFull.h": {
    "lines": 0,
@@ -790,8 +790,8 @@
    "branches": 10
   },
   "src/ownedState.c": {
-   "lines": 71,
-   "branches": 98
+   "lines": 72,
+   "branches": 99
   },
   "src/ownedState.h": {
    "lines": 4,
@@ -803,7 +803,7 @@
   },
   "src/persist.c": {
    "lines": 260,
-   "branches": 266
+   "branches": 267
   },
   "src/persist.h": {
    "lines": 0,
