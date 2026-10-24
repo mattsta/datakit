@@ -4051,17 +4051,25 @@ int multimapTest(int argc, char *argv[]) {
     }
 
     TEST("one-row maps take smaller keys in a new map before them") {
-        /* 1000-byte values under a 512-byte map limit: every row sits
-         * alone in its map.  Keys inserted descending each sort before
-         * every map (a new map before map 0), then odd keys land between
-         * maps; the result is the Full tier, in key order, every row
-         * found with its value, and the map verifies */
-        static char big[1000];
+        /* 3000-byte values, past the Full tier's 2048-byte sub-map size.
+         * Ascending keys 1000..20000 reach the Full tier, each new largest
+         * row in a map of its own at the end; then keys just below those
+         * rows (and below every key) arrive at one-row maps, and land in
+         * new maps beside them.  The result is in key order, every row
+         * found with its value, and the map verifies. */
+        static char big[3000];
         cleaner(multimapFree) multimap *m =
             multimapNewLimit(2, FLEX_CAP_LEVEL_512);
-        const int64_t keys[] = {100, 90, 80, 70, 60, 50, 40, 30,
-                                20,  10, 55, 15, 95, 5,  65};
-        enum { NK = sizeof(keys) / sizeof(*keys) };
+        int64_t keys[40];
+        size_t NK = 0;
+        for (int64_t k = 1000; k <= 20000; k += 1000) {
+            keys[NK++] = k;
+        }
+        static const int64_t later[] = {19500, 18500, 17999, 16001, 500,
+                                        15500, 250,   19999, 1,     14500};
+        for (size_t i = 0; i < sizeof(later) / sizeof(*later); i++) {
+            keys[NK++] = later[i];
+        }
         for (size_t i = 0; i < NK; i++) {
             memset(big, (int)('a' + i % 26), sizeof(big));
             const databox k = databoxNewSigned(keys[i]);
@@ -4076,7 +4084,8 @@ int multimapTest(int argc, char *argv[]) {
             const databox k = databoxNewSigned(keys[i]);
             databox got = {{0}};
             databox *out[1] = {&got};
-            ok = multimapLookup(m, &k, out) && databoxLen(&got) == 1000 &&
+            ok = multimapLookup(m, &k, out) &&
+                 databoxLen(&got) == sizeof(big) &&
                  ((const char *)databoxBytes(&got))[0] == (char)('a' + i % 26);
         }
         multimapIterator it;
@@ -4092,8 +4101,10 @@ int multimapTest(int argc, char *argv[]) {
             seen++;
         }
         if (!ok || seen != NK) {
-            ERR("one-row maps: type %d, count %zu, %zu rows in order",
-                (int)multimapType_(m), multimapCount(m), seen);
+            ERR("one-row maps: type %d, count %zu, %u maps, %zu rows in "
+                "order",
+                (int)multimapType_(m), multimapCount(m),
+                (unsigned)mmf(m)->count, seen);
         }
     }
 
