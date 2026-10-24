@@ -131,6 +131,8 @@ void databoxCopyBytes(databox *box, const void *ptr, size_t len) {
     memcpy(box->data.bytes.start, ptr, len);
 }
 
+static bool databoxOwnBytes_(databox *box);
+
 /* A more pre-prepared version of databoxRetainBytesSelf() where the
  * memory size determination has been done out of band of databox.
  * This version also pre-supposes you're only passing in type DATABOX_BYTES.
@@ -165,55 +167,61 @@ void databoxRetainBytesSelfExact(databox *restrict dst, void *restrict bytes) {
  *         the caller must keep the cache alive while the box is live.
  *   -1:   bytes retained privately (embedded, or freshly allocated with
  *         the box owning the allocation via 'allocated' = true).
- *   -2:   the box type does not reference external bytes; untouched. */
+ *   -2:   the box references no external bytes (a non-byte type, bytes
+ *         embedded in it, VOID, OFFSET) or an mdsc string / flex
+ *         aggregate it already owns; untouched.
+ * An mdsc string or embedded flex aggregate it does not own is retained
+ * privately under its own type (-1); plain bytes become BYTES. */
 ssize_t databoxRetainBytesSelf(databox *restrict dst,
                                databoxRetainCache *restrict cache) {
-    /* NOTE: this breaks with offset boxes */
-    if (dst->type >= DATABOX_BYTES) {
-        if (dst->len <= sizeof(dst->data.bytes.embed8)) {
-            /* If source bytes small enough to become embed, do
-             * embed instead of allocating actual memory */
-            memcpy(dst->data.bytes.embed8, dst->data.bytes.start,
-                   databoxLen(dst));
-            dst->type = DATABOX_BYTES_EMBED;
+    /* An mdsc string or an embedded flex aggregate is retained privately
+     * under its own type (the cache holds plain bytes only) */
+    if (dst->type != DATABOX_BYTES && dst->type != DATABOX_BYTES_NEVER_FREE) {
+        return !dst->allocated && databoxOwnBytes_(dst) ? -1 : -2;
+    }
 
-            /* Success, but didn't use any 'cache' bytes */
-            return -1;
-        }
+    /* Plain bytes: once retained they are BYTES */
+    dst->type = DATABOX_BYTES;
+    if (dst->len <= sizeof(dst->data.bytes.embed8)) {
+        /* If source bytes small enough to become embed, do
+         * embed instead of allocating actual memory */
+        memcpy(dst->data.bytes.embed8, dst->data.bytes.start, databoxLen(dst));
+        dst->type = DATABOX_BYTES_EMBED;
 
-        const uint8_t *restrict src = dst->data.bytes.start;
-        size_t start = 128;
-        /* Find the smallest populated size class that fits; each slot
-         * doubles the previous slot's capacity. */
-        for (ssize_t slot = 0; slot < (ssize_t)COUNT_ARRAY(cache->bytes);
-             slot++, start *= 2) {
-            if (dst->len <= start) {
-                if (cache->bytes[slot]) {
-                    /* Borrow the cache's buffer: the cache retains
-                     * ownership, so the box must NOT claim it (a
-                     * claimed borrow would let databoxFreeData free
-                     * the cache slot out from under the cache). */
-                    dst->data.bytes.start = cache->bytes[slot];
-                    memcpy(dst->data.bytes.start, src, dst->len);
-                    return slot;
-                }
-
-                /* fitting slot is unpopulated: retain privately below */
-                break;
-            }
-        }
-
-        /* No usable cache slot (unpopulated, or larger than the largest
-         * size class): retain through a private allocation the box
-         * owns; the bytes are ALWAYS retained on this path. */
-        /* @own: container; free=databoxFreeData */
-        dst->data.bytes.start = zmalloc(dst->len);
-        dst->allocated = true;
-        memcpy(dst->data.bytes.start, src, dst->len);
+        /* Success, but didn't use any 'cache' bytes */
         return -1;
     }
 
-    return -2;
+    const uint8_t *restrict src = dst->data.bytes.start;
+    size_t start = 128;
+    /* Find the smallest populated size class that fits; each slot
+     * doubles the previous slot's capacity. */
+    for (ssize_t slot = 0; slot < (ssize_t)COUNT_ARRAY(cache->bytes);
+         slot++, start *= 2) {
+        if (dst->len <= start) {
+            if (cache->bytes[slot]) {
+                /* Borrow the cache's buffer: the cache retains
+                 * ownership, so the box must NOT claim it (a
+                 * claimed borrow would let databoxFreeData free
+                 * the cache slot out from under the cache). */
+                dst->data.bytes.start = cache->bytes[slot];
+                memcpy(dst->data.bytes.start, src, dst->len);
+                return slot;
+            }
+
+            /* fitting slot is unpopulated: retain privately below */
+            break;
+        }
+    }
+
+    /* No usable cache slot (unpopulated, or larger than the largest
+     * size class): retain through a private allocation the box
+     * owns; the bytes are ALWAYS retained on this path. */
+    /* @own: container; free=databoxFreeData */
+    dst->data.bytes.start = zmalloc(dst->len);
+    dst->allocated = true;
+    memcpy(dst->data.bytes.start, src, dst->len);
+    return -1;
 }
 
 /* 96/128-bit values live behind data.i128 / data.u128, so copies own them
@@ -1782,6 +1790,40 @@ int databoxTest(int argc, char *argv[]) {
         databox num = databoxNewSigned(42);
         assert(databoxRetainBytesSelf(&num, &cache) == -2);
         assert(num.data.i == 42);
+
+        /* Embedded bytes reference nothing outside the box: untouched */
+        databox embedded = databoxNewBytesAllowEmbed("inline", 6);
+        const databox embeddedBefore = embedded;
+        if (embedded.type != DATABOX_BYTES_EMBED ||
+            databoxRetainBytesSelf(&embedded, &cache) != -2 ||
+            memcmp(&embedded, &embeddedBefore, sizeof(embedded)) != 0) {
+            ERRR("an embedded box was not left as it was");
+        }
+
+        /* Bytes the source never frees are retained as owned BYTES; an
+         * mdsc string is retained as a new mdsc; both free cleanly */
+        databox never = {.type = DATABOX_BYTES_NEVER_FREE,
+                         .data.bytes.start = (uint8_t *)payload,
+                         .len = payloadLen};
+        cleaner(mdscfree) mdsc *str = mdscnew(payload);
+        databox viaMdsc = {
+            .type = DATABOX_PTR_MDSC, .data.ptr = str, .len = mdsclen(str)};
+        databoxRetainCache none = {{0}};
+        const ssize_t neverAt = databoxRetainBytesSelf(&never, &none);
+        const ssize_t mdscAt = databoxRetainBytesSelf(&viaMdsc, &none);
+        const bool neverOk =
+            neverAt == -1 && never.type == DATABOX_BYTES && never.allocated &&
+            memcmp(databoxBytes(&never), payload, payloadLen) == 0;
+        const bool mdscOk =
+            mdscAt == -1 && viaMdsc.type == DATABOX_PTR_MDSC &&
+            viaMdsc.data.ptr != str &&
+            memcmp(databoxBytes(&viaMdsc), payload, payloadLen) == 0;
+        databoxFreeData(&never);
+        databoxFreeData(&viaMdsc);
+        if (!neverOk || !mdscOk || never.allocated || viaMdsc.allocated) {
+            ERR("retain: never-free %d (at %zd), mdsc %d (at %zd)", neverOk,
+                neverAt, mdscOk, mdscAt);
+        }
 
         zfree(slot0);
     }
