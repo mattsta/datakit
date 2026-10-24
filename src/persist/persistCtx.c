@@ -133,9 +133,11 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
         return false;
     }
 
-    /* Already initialized? */
+    /* Already initialized: only for the same type.  A context holds one
+     * structure's snapshot and WAL, which another type's codecs would
+     * misread (or write over) */
     if (ctx->p) {
-        return true;
+        return persistGetOps(ctx->p) == ops;
     }
 
     /* Create persist config from ctx config */
@@ -287,11 +289,9 @@ bool persistCtxSync(persistCtx *ctx) {
 
 bool persistCtxCompact(persistCtx *ctx, void *structure,
                        const persistOps *ops) {
-    if (!ctx || !ctx->p || !structure) {
+    if (!ctx || !ctx->p || !structure || persistGetOps(ctx->p) != ops) {
         return false;
     }
-
-    (void)ops; /* Used by persistCompact internally via ctx->p */
 
     if (persistCompact(ctx->p, structure)) {
         ctx->opsSinceCompact = 0;

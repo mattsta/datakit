@@ -364,6 +364,7 @@ void multiroarGetStatsP(const multiroarP *r, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+#include "intsetP.h"
 #include "persistTestCommon.h"
 
 static int test_multiroarP_basic(int argc, char *argv[]) {
@@ -841,9 +842,94 @@ static int test_multiroarP_values(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multiroarP_lifecycleRefusals(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_refusals", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiroarP refuses to start or open what it cannot persist")
+
+    ptestCleanupFiles(basePath);
+
+    /* No context */
+    if (multiroarNewP(NULL) || multiroarValueNewP(NULL, 8, 4, 4) ||
+        multiroarOpenP(NULL)) {
+        ERRR("a NULL context was accepted");
+    }
+
+    /* Value widths the roar cannot store: nothing starts, and the context
+     * stays free for a roar that can */
+    persistCtx *widthCtx = persistCtxNew(basePath, NULL);
+    if (multiroarValueNewP(widthCtx, 0, 4, 4) ||
+        multiroarValueNewP(widthCtx, 65, 4, 4)) {
+        ERRR("a value width of 0 or 65 was accepted");
+    }
+    multiroarP *fits = multiroarValueNewP(widthCtx, 64, 4, 4);
+    if (!fits) {
+        ERRR("a 64-bit value roar was refused after the bad widths");
+    } else {
+        multiroarCloseP(fits);
+    }
+    persistCtxFree(widthCtx);
+    ptestCleanupFiles(basePath);
+
+    /* Files in a directory that does not exist: the stores cannot open,
+     * so neither start nor open succeeds (the roar is freed) */
+    char missingDir[PATH_MAX + sizeof("-missing/sub/roar")];
+    snprintf(missingDir, sizeof(missingDir), "%s-missing/sub/roar", basePath);
+    persistCtx *ctx = persistCtxNew(missingDir, NULL);
+    if (ctx) {
+        if (multiroarNewP(ctx) || multiroarOpenP(ctx)) {
+            ERRR("a roar started where its files cannot be written");
+        }
+        persistCtxFree(ctx);
+    }
+
+    /* Nothing saved yet: open finds no snapshot to recover */
+    ctx = persistCtxNew(basePath, NULL);
+    if (multiroarOpenP(ctx)) {
+        ERRR("a roar opened with no snapshot");
+    }
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    /* Another structure's files are not a roar */
+    ctx = persistCtxNew(basePath, NULL);
+    intsetP *is = intsetNewP(ctx);
+    if (!is || !intsetAddP(is, 42, NULL)) {
+        ERRR("intsetP setup failed");
+    }
+    /* A context bound to the intset cannot take a roar: its snapshot and
+     * WAL codecs are the intset's */
+    if (multiroarNewP(ctx) || multiroarOpenP(ctx)) {
+        ERRR("a roar started on a context bound to an intset");
+    }
+    intsetCloseP(is);
+    persistCtxFree(ctx);
+    ctx = persistCtxNew(basePath, NULL);
+    multiroarP *foreign = multiroarOpenP(ctx);
+    if (foreign) {
+        ERRR("an intset's files opened as a roar");
+        multiroarCloseP(foreign);
+    }
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multiroarPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiroarP_lifecycleRefusals(argc, argv);
     err += test_multiroarP_values(argc, argv);
     err += test_multiroarP_ranges(argc, argv);
     err += test_multiroarP_basic(argc, argv);

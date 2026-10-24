@@ -425,6 +425,10 @@ persistStore *persistSnapshotStore(const persist *p) {
     return p ? p->snapshotStore : NULL;
 }
 
+const persistOps *persistGetOps(const persist *p) {
+    return p ? p->ops : NULL;
+}
+
 persistStore *persistWALStore(const persist *p) {
     return p ? p->walStore : NULL;
 }

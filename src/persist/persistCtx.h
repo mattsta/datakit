@@ -148,7 +148,10 @@ bool persistCtxExists(const char *basePath);
  */
 
 /* Initialize persist context for a specific structure type
- * Must be called before logging operations */
+ * Must be called before logging operations.  A context holds one
+ * structure's files: once bound to a type, it refuses (false) any other
+ * type, and so does every call taking 'ops' (start, open, recover,
+ * snapshot, compaction) */
 bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops);
 
 /* Save initial snapshot when creating a new persistent structure */

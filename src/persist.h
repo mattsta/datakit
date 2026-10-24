@@ -680,6 +680,8 @@ bool persistAttachWAL(persist *p, persistStore *store);
 /* The attached stores (NULL when none) */
 persistStore *persistSnapshotStore(const persist *p);
 persistStore *persistWALStore(const persist *p);
+/* The structure type 'p' was created for (NULL for NULL) */
+const persistOps *persistGetOps(const persist *p);
 
 /* Configuration.  A change of walBufferSize first writes out the buffered
  * WAL bytes; when that write fails persistSetConfig returns false and
