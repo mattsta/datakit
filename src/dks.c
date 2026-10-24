@@ -2228,6 +2228,55 @@ int DKS_TEST(int argc, char *argv[]) {
     }
 
     {
+        /* printf output past the 2048-byte stack buffer retries on the
+         * heap and keeps every byte */
+        static char fill[5000];
+        memset(fill, 'q', sizeof(fill) - 1);
+        DKS_TYPE *p = DKS_CATPRINTF(DKS_EMPTY(), "%s|%d", fill, 7);
+        testCond("printf past the stack buffer",
+                 DKS_LEN(p) == sizeof(fill) + 1 && p[0] == 'q' &&
+                     memcmp(p + sizeof(fill) - 1, "|7", 3) == 0,
+                 true, "%d");
+        DKS_FREE(p);
+
+        /* Range indices below -len clamp to 0; an empty string stays
+         * empty */
+        DKS_TYPE *r = DKS_NEW("hello");
+        DKS_RANGE(r, -100, -100);
+        testCond("range below -len clamps to the first byte",
+                 DKS_LEN(r) == 1 && r[0] == 'h', true, "%d");
+        DKS_FREE(r);
+        DKS_TYPE *e = DKS_EMPTY();
+        DKS_RANGE(e, 0, 5);
+        testCond("range of an empty string", DKS_LEN(e), (size_t)0, "%zu");
+        DKS_FREE(e);
+
+        /* Splitting into more pieces than the first 4 slots */
+        size_t count = 0;
+        DKS_TYPE **parts = DKS_SPLITLEN("a,b,c,d,e,f,g", 13, ",", 1, &count);
+        bool split = parts && count == 7;
+        for (size_t i = 0; split && i < 7; i++) {
+            split = DKS_LEN(parts[i]) == 1 && parts[i][0] == (char)('a' + i);
+        }
+        testCond("split into 7 pieces", split, true, "%d");
+        DKS_SPLITLENFREE(parts, count);
+
+        /* Quoted hex escapes take either case; an unterminated quote
+         * after a whole argument frees what was parsed */
+        int argc2 = 0;
+        DKS_TYPE **args = DKS_SPLITARGS("\"\\x4A\\x4b\" tail", &argc2);
+        testCond("hex escapes in either case",
+                 args && argc2 == 2 && DKS_LEN(args[0]) == 2 &&
+                     memcmp(args[0], "JK", 2) == 0,
+                 true, "%d");
+        DKS_SPLITLENFREE(args, (size_t)argc2);
+        int argc3 = 9;
+        DKS_TYPE **bad = DKS_SPLITARGS("ok \"unterminated", &argc3);
+        testCond("unterminated quote after an argument", !bad && argc3 == 0,
+                 true, "%d");
+    }
+
+    {
         DKS_TYPE *x = DKS_NEWLEN("foobar", 6);
         testCond("New length string", DKS_LEN(x), (size_t)6, "%zu");
         testCond("New length string, avail", DKS_AVAIL(x), (size_t)0, "%zu");
