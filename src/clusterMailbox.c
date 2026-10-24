@@ -2279,6 +2279,50 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyringFree(ring);
     }
 
+    TEST("unknown flags, AEAD on attach, bad sizes and NULL payloads are "
+         "refused") {
+        cleaner(hmacKeyringFree) hmacKeyring *ring = hmacKeyringCreate();
+        static const uint8_t k[32] = {7};
+        hmacKeyringInstallUnsalted(ring, 3u, &hmacAlgoSHA256, k, sizeof(k));
+        cleaner(clusterMailboxFree) clusterMailbox *unknownFlag =
+            clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL,
+                                   1u << 5);
+        cleaner(clusterMailboxFree) clusterMailbox *noOpts =
+            clusterMailboxCreateOpts(NULL);
+        cleaner(clusterMailboxFree) clusterMailbox *mb =
+            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        if (unknownFlag || noOpts || !mb) {
+            ERRR("unknown flag bits or no options were accepted");
+        }
+
+        /* Attach keeps the keyed-class pin; a refusal leaves the bound
+         * algorithm, so sealing still works */
+        uint8_t frame[256];
+        size_t written = 0;
+        static const uint8_t one[1] = {1};
+        if (clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_AEAD_AES256_GCM,
+                                        NULL, NULL) ||
+            clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_XXH3_64, NULL,
+                                        NULL) ||
+            clusterMailboxAttachKeyring(NULL, ring, FLEX_ENV_ALGO_HMAC_SHA256,
+                                        NULL, NULL) ||
+            !clusterMailboxSeal(mb, 1u, 1u, 0u, one, sizeof(one), 3u, frame,
+                                sizeof(frame), &written)) {
+            ERRR("attach took a non-keyed or AEAD algorithm");
+        }
+
+        /* A payload length that cannot be framed has no sealed size; a
+         * NULL payload with bytes, or no output, is refused */
+        if (clusterMailboxSealedSize(mb, SIZE_MAX) != 0 ||
+            clusterMailboxSealedSize(NULL, 1) != 0 ||
+            clusterMailboxSeal(mb, 1u, 2u, 0u, NULL, 4, 3u, frame,
+                               sizeof(frame), &written) ||
+            clusterMailboxSeal(mb, 1u, 2u, 0u, one, sizeof(one), 3u, NULL,
+                               sizeof(frame), &written)) {
+            ERRR("an unframeable size, a NULL payload or no output was taken");
+        }
+    }
+
     TEST("happy-path round-trip across many algorithms") {
         const flexEnvelopeAlgo algos[] = {FLEX_ENV_ALGO_HMAC_SHA256,
                                           FLEX_ENV_ALGO_HMAC_BLAKE3,
