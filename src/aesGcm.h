@@ -38,13 +38,20 @@ extern "C" {
 #define AES_GCM_MAX_PAYLOAD (((uint64_t)1 << 36) - 32u)
 
 typedef struct aesGcmKey {
-    /* Up to AES-256 = 14 rounds + 1, each round 4 x 32-bit words. */
-    uint32_t round_keys[60];
+    /* Up to AES-256 = 14 rounds + 1, each round 4 x 32-bit words.  The
+     * hardware backends read and write it as 16-byte vectors (AES-NI's
+     * aligned stores fault on x86 otherwise), so the type is 16-byte
+     * aligned: every aesGcmKey the compiler places (an array element, a
+     * struct member) is, and heap memory from any allocator honouring
+     * max_align_t is. */
+    _Alignas(16) uint32_t round_keys[60];
     uint8_t h[16];      /* GHASH subkey = AES_K(0^128) */
     uint8_t key_size;   /* 16 (AES-128) or 32 (AES-256) */
     uint8_t num_rounds; /* 10 or 14 */
     uint8_t _pad[6];
 } aesGcmKey;
+_Static_assert(_Alignof(aesGcmKey) >= 16 && sizeof(aesGcmKey) % 16 == 0,
+               "aesGcmKey must stay 16-byte aligned, element by element");
 
 /* Initialise from raw key bytes.  Valid key lengths: 16 (AES-128) or
  * 32 (AES-256).  Returns false on any other length. */

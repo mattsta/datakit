@@ -688,6 +688,102 @@ int aesGcmTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("AES-GCM: portable and hardware backends agree; forgeries refused") {
+        /* Each key initialised under its own backend.  Every seal gives
+         * the same ciphertext and tag under both; each backend opens the
+         * other's output; under the portable backend (otherwise never
+         * opened on hardware hosts) a flipped ciphertext, tag or AAD bit
+         * is refused and the output scrubbed */
+        const aesGcmForceBackend was = aesGcmGetForceBackend();
+        static const aesGcmForceBackend backends[2] = {AES_GCM_FORCE_SCALAR,
+                                                       AES_GCM_FORCE_AUTO};
+        static const size_t lens[] = {0, 1, 15, 16, 17, 63, 64, 65, 200};
+        static const size_t aadLens[] = {0, 7, 16, 33};
+        uint64_t rng = 0xae5;
+        for (size_t kl = 16; kl <= 32; kl += 16) {
+            for (size_t li = 0; li < sizeof(lens) / sizeof(*lens); li++) {
+                for (size_t ai = 0; ai < sizeof(aadLens) / sizeof(*aadLens);
+                     ai++) {
+                    const size_t n = lens[li];
+                    const size_t an = aadLens[ai];
+                    uint8_t key[32], nonce[12], pt[200], aad[33];
+                    uint8_t *fill[] = {key, nonce, pt, aad};
+                    const size_t fillLen[] = {sizeof(key), sizeof(nonce),
+                                              sizeof(pt), sizeof(aad)};
+                    for (size_t f = 0; f < 4; f++) {
+                        for (size_t i = 0; i < fillLen[f]; i++) {
+                            rng = rng * 6364136223846793005ULL + 1;
+                            fill[f][i] = (uint8_t)(rng >> 56);
+                        }
+                    }
+                    aesGcmKey k[2];
+                    uint8_t ct[2][200], tag[2][16];
+                    for (int b = 0; b < 2; b++) {
+                        aesGcmSetForceBackend(backends[b]);
+                        if (!aesGcmInit(&k[b], key, kl) ||
+                            !aesGcmSeal(&k[b], nonce, an ? aad : NULL, an,
+                                        n ? pt : NULL, n, ct[b], tag[b])) {
+                            ERR("key %zu len %zu aad %zu: seal failed", kl, n,
+                                an);
+                        }
+                    }
+                    if (memcmp(ct[0], ct[1], n) != 0 ||
+                        memcmp(tag[0], tag[1], 16) != 0) {
+                        ERR("key %zu len %zu aad %zu: backends differ", kl, n,
+                            an);
+                    }
+                    for (int b = 0; b < 2; b++) {
+                        aesGcmSetForceBackend(backends[b]);
+                        uint8_t out[200];
+                        if (!aesGcmOpen(&k[b], nonce, an ? aad : NULL, an,
+                                        n ? ct[!b] : NULL, n, tag[!b],
+                                        n ? out : NULL) ||
+                            memcmp(out, pt, n) != 0) {
+                            ERR("key %zu len %zu aad %zu: backend %d cannot "
+                                "open the other's output",
+                                kl, n, an, b);
+                        }
+                    }
+
+                    aesGcmSetForceBackend(AES_GCM_FORCE_SCALAR);
+                    for (int what = 0; what < 3; what++) {
+                        if ((what == 0 && n == 0) || (what == 2 && an == 0)) {
+                            continue;
+                        }
+                        uint8_t c2[200], t2[16], a2[33], out[200];
+                        memcpy(c2, ct[0], n);
+                        memcpy(t2, tag[0], 16);
+                        memcpy(a2, aad, an);
+                        if (what == 0) {
+                            c2[n / 2] ^= 0x04;
+                        } else if (what == 1) {
+                            t2[5] ^= 0x80;
+                        } else {
+                            a2[an - 1] ^= 0x01;
+                        }
+                        memset(out, 0xAB, sizeof(out));
+                        if (aesGcmOpen(&k[0], nonce, an ? a2 : NULL, an,
+                                       n ? c2 : NULL, n, t2, n ? out : NULL)) {
+                            ERR("key %zu len %zu aad %zu: forgery %d "
+                                "accepted",
+                                kl, n, an, what);
+                        }
+                        for (size_t i = 0; i < n; i++) {
+                            if (out[i] != 0) {
+                                ERR("key %zu len %zu: refused open left "
+                                    "plaintext",
+                                    kl, n);
+                                break;
+                            }
+                        }
+                    }
+                    dkSecureZero(k, sizeof(k));
+                }
+            }
+        }
+        aesGcmSetForceBackend(was);
+    }
+
     TEST("aesGcmInit: bad key length refused") {
         aesGcmKey k;
         const uint8_t key[24] = {0};
