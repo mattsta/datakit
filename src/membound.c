@@ -179,9 +179,12 @@ void memboundZeroFast(void *dst, size_t bytes) {
     }
 #endif
 
-    /* Handle remainder with 64-bit stores, then byte stores */
+    /* Handle remainder with 64-bit stores, then byte stores.  'dst' has
+     * no alignment guarantee: a memcpy store (one instruction) rather
+     * than a uint64_t store, which would be undefined when misaligned. */
+    static const uint64_t zeroWord = 0;
     while (bytes >= 8) {
-        *(uint64_t *)p = 0;
+        memcpy(p, &zeroWord, sizeof(zeroWord));
         p += 8;
         bytes -= 8;
     }
@@ -5038,6 +5041,39 @@ int memboundTest(int argc, char *argv[]) {
         assert(grew);
 
         memboundShutdown(m);
+    }
+
+    TEST("Fixed: increaseSize to no more than the capacity is refused") {
+        membound *m = memboundCreate(1 << 16);
+        const size_t capacity = memboundCapacity(m);
+        if (memboundIncreaseSize(m, capacity) ||
+            memboundIncreaseSize(m, capacity / 2) ||
+            memboundCapacity(m) != capacity) {
+            ERRR("an increase to no more than the capacity was accepted");
+        }
+        memboundShutdown(m);
+    }
+
+    TEST("memboundZeroFast zeroes exactly its range at any length and "
+         "alignment") {
+        /* Lengths 0..80 at offsets 0..15: the range reads zero and the
+         * guard bytes on both sides keep their pattern */
+        _Alignas(64) uint8_t buf[128];
+        bool exact = true;
+        for (size_t off = 0; off < 16; off++) {
+            for (size_t len = 0; len <= 80; len++) {
+                memset(buf, 0xa5, sizeof(buf));
+                memboundZeroFast(buf + off, len);
+                for (size_t i = 0; i < sizeof(buf); i++) {
+                    const bool inside = i >= off && i < off + len;
+                    exact = exact && buf[i] == (inside ? 0 : 0xa5);
+                }
+            }
+        }
+        if (!exact) {
+            ERRR("memboundZeroFast wrote outside, or missed part of, its "
+                 "range");
+        }
     }
 
     TEST("Fixed: shutdownSafe with allocations") {
