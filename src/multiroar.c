@@ -10494,6 +10494,128 @@ int multiroarTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("random bit, range and set operations agree with a bit oracle") {
+        /* Four chunks of bits under sets, removes, range sets and
+         * clears, and in-place AND / OR / XOR / AND-NOT with a second
+         * random roar: chunks empty and refill in every form.  After each
+         * step the count, min, max, emptiness, ranks, selects and range
+         * counts agree with the oracle (min and max scan past chunks
+         * other operations left empty). */
+        enum { MR_BITS = 4 * BITMAP_SIZE_IN_BITS };
+        static uint8_t oracle[MR_BITS];
+        static uint8_t other[MR_BITS];
+        memset(oracle, 0, sizeof(oracle));
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        uint64_t rng = 0x5eedu;
+        for (int step = 0; step < 300 && !err; step++) {
+            const uint64_t op = splitmix64(&rng) % 10;
+            const uint64_t at = splitmix64(&rng) % MR_BITS;
+            const uint64_t span =
+                1 + splitmix64(&rng) % (2 * BITMAP_SIZE_IN_BITS);
+            const uint64_t end = at + span < MR_BITS ? at + span : MR_BITS;
+            if (op < 2) {
+                for (int i = 0; i < 40; i++) {
+                    const uint64_t p = splitmix64(&rng) % MR_BITS;
+                    multiroarBitSet(r, p);
+                    oracle[p] = 1;
+                }
+            } else if (op == 2) {
+                for (uint64_t p = at; p < end; p++) {
+                    if (oracle[p] && splitmix64(&rng) % 3 == 0) {
+                        multiroarRemove(r, p);
+                        oracle[p] = 0;
+                    }
+                }
+            } else if (op == 3) {
+                multiroarBitSetRange(r, at, end - at);
+                memset(oracle + at, 1, end - at);
+            } else if (op == 4 || op == 5) {
+                /* clear a span, or exactly one whole chunk */
+                const uint64_t lo =
+                    op == 4 ? at
+                            : (at / BITMAP_SIZE_IN_BITS) * BITMAP_SIZE_IN_BITS;
+                const uint64_t hi = op == 4 ? end : lo + BITMAP_SIZE_IN_BITS;
+                multiroarBitClearRange(r, lo, hi - lo);
+                memset(oracle + lo, 0, hi - lo);
+            } else {
+                /* a second roar: dense in one chunk, sparse elsewhere */
+                cleaner(multiroarFree) multiroar *b = multiroarBitNew();
+                memset(other, 0, sizeof(other));
+                const uint64_t dense = splitmix64(&rng) % 4;
+                for (uint64_t p = 0; p < MR_BITS; p++) {
+                    const uint64_t odds =
+                        p / BITMAP_SIZE_IN_BITS == dense ? 2 : 97;
+                    if (splitmix64(&rng) % odds == 0) {
+                        multiroarBitSet(b, p);
+                        other[p] = 1;
+                    }
+                }
+                for (uint64_t p = 0; p < MR_BITS; p++) {
+                    oracle[p] = op == 6   ? oracle[p] & other[p]
+                                : op == 7 ? oracle[p] | other[p]
+                                : op == 8 ? oracle[p] ^ other[p]
+                                          : oracle[p] & !other[p];
+                }
+                if (op == 6) {
+                    multiroarAnd(r, b);
+                } else if (op == 7) {
+                    multiroarOr(r, b);
+                } else if (op == 8) {
+                    multiroarXor(r, b);
+                } else {
+                    multiroarAndNot(r, b);
+                }
+            }
+
+            uint64_t count = 0;
+            uint64_t lo = UINT64_MAX;
+            uint64_t hi = 0;
+            for (uint64_t p = 0; p < MR_BITS; p++) {
+                if (oracle[p]) {
+                    count++;
+                    lo = lo == UINT64_MAX ? p : lo;
+                    hi = p;
+                }
+            }
+            uint64_t min = 0;
+            uint64_t max = 0;
+            const bool hasMin = multiroarMin(r, &min);
+            const bool hasMax = multiroarMax(r, &max);
+            if (multiroarBitCount(r) != count ||
+                multiroarIsEmpty(r) != (count == 0) || hasMin != (count > 0) ||
+                hasMax != (count > 0) || (count && (min != lo || max != hi))) {
+                ERR("step %d (op %" PRIu64 "): count %" PRIu64 "/%" PRIu64
+                    ", min %d %" PRIu64 "/%" PRIu64 ", max %d %" PRIu64
+                    "/%" PRIu64,
+                    step, op, multiroarBitCount(r), count, hasMin, min, lo,
+                    hasMax, max, hi);
+                break;
+            }
+            for (int k = 0; k < 4; k++) {
+                const uint64_t p = splitmix64(&rng) % (MR_BITS + 1);
+                const uint64_t q = p + splitmix64(&rng) % 9000;
+                uint64_t below = 0;
+                uint64_t within = 0;
+                uint64_t first = UINT64_MAX; /* first set bit at or after p */
+                for (uint64_t i = 0; i < MR_BITS; i++) {
+                    below += i < p && oracle[i];
+                    within += i >= p && i < q && oracle[i];
+                    if (i >= p && oracle[i] && first == UINT64_MAX) {
+                        first = i;
+                    }
+                }
+                uint64_t sel = 0;
+                const bool selected = multiroarSelect(r, below + 1, &sel);
+                if (multiroarRank(r, p) != below ||
+                    multiroarRangeCount(r, p, q) != within ||
+                    selected != (below < count) || (selected && sel != first)) {
+                    ERR("step %d: rank / range / select at %" PRIu64, step, p);
+                    break;
+                }
+            }
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 
