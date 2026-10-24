@@ -128,8 +128,10 @@ struct multidict {
     void *evictionPrivdata;                /* passed to eviction callback */
     /* Byte-based expansion configuration */
     uint64_t targetSlotBytes; /* Target average slot size (default: 2MB) */
-    uint64_t maxSlotBytes; /* Maximum slot size before forced expand (default:
-                              8MB) */
+    uint64_t maxSlotBytes;   /* Maximum slot size before forced expand (default:
+                                8MB) */
+    uint64_t byteCheckCount; /* ht[0] count when the byte metrics were last
+                                measured (they walk every slot) */
     /* LRU tracking fields (zero overhead when disabled) */
     multilru *lru;          /* LRU structure (NULL if disabled) */
     void *lruPtrToKey;      /* Array of lruKeyRef: ptr -> hash */
@@ -723,6 +725,20 @@ DK_STATIC bool multidictExpandIfNeeded_(multidict *d) {
 
     /* Use byte-based expansion if enabled */
     if (d->useByteBasedExpand) {
+        /* The metrics walk every slot, so they are measured again only
+         * once the entry count has moved by a 16th of the table since the
+         * last measure (O(1) amortized per insert instead of O(slots));
+         * meanwhile only the count-based backstop below can expand. */
+        const uint64_t count = HTCOUNT(d, 0);
+        const uint64_t moved = count > d->byteCheckCount
+                                   ? count - d->byteCheckCount
+                                   : d->byteCheckCount - count;
+        const uint64_t every = HTSIZE(d, 0) >> 4 ? HTSIZE(d, 0) >> 4 : 1;
+        if (moved < every && countLoadFactor < d->expandLoadFactor * 2u) {
+            return false;
+        }
+        d->byteCheckCount = count;
+
         /* Calculate byte-based load metrics */
         multidictLoadMetrics metrics;
         multidictGetLoadMetrics(d, &metrics);
@@ -764,20 +780,27 @@ DK_STATIC bool multidictExpandIfNeeded_(multidict *d) {
                     fibbufNextSizeBuffer(HTCOUNT(d, 0)); /* Handle overflow */
             }
 
-            /* Safeguard: Expansion effectiveness check
-             * Only expand if it will reduce avg slot size by at least 10%.
-             * This prevents infinite expansion when entries are inherently
-             * large or when hash distribution is poor (e.g., single entry per
-             * slot that's already above target). */
+            /* Safeguard: expand only if it is expected to cut the average
+             * used slot by at least 10%.  That average is totalUsedBytes
+             * over usedSlots, so with the same bytes it scales with the
+             * entries per used slot: now count / usedSlots (measured, so a
+             * skewed table counts as it is), and after the expansion, for
+             * seeded hashing at load a = count / newSize, a / (1 - e^-a).
+             * Entries larger than the target sit mostly alone already, so
+             * the table stops growing near its count instead of expanding
+             * on every insert up to the slot cap.  (Comparing against
+             * totalUsedBytes / newSize, the average over ALL slots, always
+             * passed.) */
             if (metrics.usedSlots > 0) {
-                uint64_t expectedAvgAfter = metrics.totalUsedBytes / newSize;
-                uint64_t minImprovement = (metrics.avgSlotBytes * 9) / 10;
-
-                if (expectedAvgAfter >= minImprovement) {
+                const double entries = (double)HTCOUNT(d, 0);
+                const double perUsedNow = entries / (double)metrics.usedSlots;
+                const double load = entries / (double)newSize;
+                const double perUsedAfter = load / (1.0 - exp(-load));
+                if (perUsedAfter > 0.9 * perUsedNow) {
                     DBG_PRINT("multidictExpandIfNeeded_ EXIT: expansion "
-                              "ineffective (expected avg %" PRIu64
-                              " >= min improvement %" PRIu64 "), skip\n",
-                              expectedAvgAfter, minImprovement);
+                              "ineffective (%.3f entries per used slot "
+                              "now, %.3f expected), skip\n",
+                              perUsedNow, perUsedAfter);
                     return false;
                 }
             }
@@ -2132,6 +2155,8 @@ void multidictEnableByteBasedExpansion(multidict *d, uint64_t targetSlotBytes,
                              : MULTIDICT_DEFAULT_TARGET_SLOT_BYTES;
     d->maxSlotBytes =
         maxSlotBytes > 0 ? maxSlotBytes : MULTIDICT_DEFAULT_MAX_SLOT_BYTES;
+    /* Far from any count: the next expansion check measures */
+    d->byteCheckCount = UINT64_MAX;
 }
 
 /* Disable byte-based expansion (revert to count-based) */
@@ -9942,21 +9967,24 @@ int multidictTest(int argc, char *argv[]) {
 
     printf("Test 21.7: Safeguard - expansion effectiveness check...\n");
     {
-        /* This test verifies that expansion won't happen if it won't help
-         * (skewed distribution where all keys hash to few slots) */
+        /* Every entry is larger than the target slot size, so once each
+         * sits alone in a slot no expansion can bring a slot under it.
+         * Expansion must stop there (the count-based backstop still
+         * grows the table with the entry count), not repeat on every
+         * insert up to the slot cap. */
         cleaner(multidictMmClassFree) multidictClass *qdcByte =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dByte =
             multidictNew(&multidictTypeExactKey, qdcByte, 88);
-        multidictEnableByteBasedExpansion(dByte, 256, 1024);
+        multidictEnableByteBasedExpansion(dByte, 256, 1 << 20);
 
-        /* Insert entries - the effectiveness check will prevent
-         * useless expansions for pathological cases */
-        for (int i = 0; i < 100; i++) {
-            char keybuf[32], valbuf[128];
+        enum { BIG_ENTRIES = 300 };
+        char valbuf[1000];
+        memset(valbuf, 'Z', sizeof(valbuf) - 1);
+        valbuf[sizeof(valbuf) - 1] = '\0';
+        for (int i = 0; i < BIG_ENTRIES; i++) {
+            char keybuf[32];
             snprintf(keybuf, sizeof(keybuf), "eff%d", i);
-            memset(valbuf, 'Z', sizeof(valbuf) - 1);
-            valbuf[sizeof(valbuf) - 1] = '\0';
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
             multidictAdd(dByte, &key, &val);
@@ -9964,9 +9992,54 @@ int multidictTest(int argc, char *argv[]) {
 
         multidictLoadMetrics metrics;
         multidictGetLoadMetrics(dByte, &metrics);
-        printf("    Expansion with effectiveness check: avgSlotBytes=%" PRIu64
+        printf("    Entries above target: avgSlotBytes=%" PRIu64
                ", slots=%" PRIu64 "\n",
                metrics.avgSlotBytes, multidictSlotCount(dByte));
+        if (multidictCount(dByte) != BIG_ENTRIES ||
+            multidictSlotCount(dByte) > 4 * BIG_ENTRIES) {
+            printf("    ERROR: %" PRIu64 " slots for %d entries larger "
+                   "than the target: expansion did not stop\n",
+                   multidictSlotCount(dByte), BIG_ENTRIES);
+            err++;
+        }
+    }
+
+    printf("PERF: byte-based expansion insert cost against count-based...\n");
+    {
+        /* The byte-based check measures the table; doing that by
+         * walking every slot on every insert makes inserting n entries
+         * quadratic.  Smoke-sized: the ratio, not the time, is checked. */
+        enum { PERF_N = 20000 };
+        uint64_t ns[2] = {0, 0};
+        for (int mode = 0; mode < 2; mode++) {
+            cleaner(multidictMmClassFree) multidictClass *perfCls =
+                multidictMmClassNew();
+            cleaner(multidictFree) multidict *perfD =
+                multidictNew(&multidictTypeExactKey, perfCls, 91);
+            if (mode == 1) {
+                multidictEnableByteBasedExpansion(perfD, 512, 4096);
+            }
+            const uint64_t t0 = timeUtilMonotonicNs();
+            for (int i = 0; i < PERF_N; i++) {
+                const databox key = databoxNewSigned(i * 7919);
+                const databox val = databoxNewSigned(i);
+                multidictAdd(perfD, &key, &val);
+            }
+            ns[mode] = timeUtilMonotonicNs() - t0;
+            if (multidictCount(perfD) != PERF_N) {
+                printf("    ERROR: %" PRIu64 " entries, want %d\n",
+                       multidictCount(perfD), PERF_N);
+                err++;
+            }
+        }
+        printf("    %d inserts: count-based %.1f ns/op, byte-based %.1f "
+               "ns/op\n",
+               PERF_N, (double)ns[0] / PERF_N, (double)ns[1] / PERF_N);
+        if (ns[1] > 6 * ns[0] + 2000000) {
+            printf("    ERROR: byte-based inserts cost %.1fx count-based\n",
+                   (double)ns[1] / (double)ns[0]);
+            err++;
+        }
     }
 
     printf("Test 21.8: Byte-based vs count-based expansion comparison...\n");
