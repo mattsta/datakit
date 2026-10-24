@@ -1415,6 +1415,79 @@ int hmacKeyringTest(int argc, char *argv[]) {
     (void)argv;
     int err = 0;
 
+    TEST("Restore of every truncation and byte flip: all or nothing") {
+        /* A ring of four keys (two algorithms, a salted one, an advanced
+         * AEAD counter) is snapshotted; each damaged copy is restored into
+         * a ring holding another key: a refusal leaves that ring's
+         * snapshot byte-identical, and an accepted copy gives a ring whose
+         * snapshot restores again to the same bytes */
+        hmacKeyring *src = hmacKeyringCreate();
+        uint8_t key[32];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(i * 9 + 4);
+        }
+        hmacKeyringInstallUnsalted(src, 11, &hmacAlgoSHA256, key, 32);
+        hmacKeyringInstallUnsalted(src, 12, &hmacAlgoBLAKE3, key, 32);
+        hmacKeyringInstallUnsalted(src, 13, &hmacAlgoSHA256, key, 16);
+        hmacKeyringInstallUnsalted(src, 14, &hmacAlgoSHA256, key + 8, 24);
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {1, 2, 3, 4};
+        hmacKeyringSetAeadSalt(src, 14, salt);
+        (void)hmacKeyringRestoreAeadCounter(src, 11, 1000);
+        const size_t cap = hmacKeyringSnapshotSize(src);
+        cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(cap);
+        cleanerName(zfree, Bytes) uint8_t *before = zmalloc(cap + 256);
+        cleanerName(zfree, Bytes) uint8_t *after = zmalloc(cap * 2 + 256);
+        size_t len = 0;
+        if (!hmacKeyringSnapshot(src, snap, cap, &len)) {
+            ERRR("damage sweep: snapshot failed");
+        }
+
+        size_t changedOnRefusal = 0;
+        size_t unstable = 0;
+        for (size_t step = 0; step < 2 * len; step++) {
+            const bool flip = step >= len;
+            const size_t at = flip ? step - len : step;
+            hmacKeyring *dst = hmacKeyringCreate();
+            hmacKeyringInstallUnsalted(dst, 900, &hmacAlgoSHA256, key, 32);
+            size_t beforeLen = 0;
+            hmacKeyringSnapshot(dst, before, cap + 256, &beforeLen);
+            if (flip) {
+                snap[at] ^= 0x01;
+            }
+            const bool ok = hmacKeyringRestore(dst, snap, flip ? len : at);
+            if (flip) {
+                snap[at] ^= 0x01;
+            }
+            size_t afterLen = 0;
+            const bool snapOk =
+                hmacKeyringSnapshot(dst, after, cap * 2 + 256, &afterLen);
+            if (!ok && (!snapOk || afterLen != beforeLen ||
+                        memcmp(before, after, beforeLen) != 0)) {
+                changedOnRefusal++;
+            }
+            if (ok) {
+                hmacKeyring *again = hmacKeyringCreate();
+                size_t againLen = 0;
+                const bool reOk =
+                    snapOk && hmacKeyringRestore(again, after, afterLen) &&
+                    hmacKeyringSnapshot(again, after + afterLen,
+                                        cap * 2 + 256 - afterLen, &againLen);
+                if (!reOk || againLen != afterLen ||
+                    memcmp(after, after + afterLen, afterLen) != 0) {
+                    unstable++;
+                }
+                hmacKeyringFree(again);
+            }
+            hmacKeyringFree(dst);
+        }
+        if (changedOnRefusal || unstable) {
+            ERR("damage sweep: %zu refusals changed the ring, %zu accepted "
+                "restores were unstable",
+                changedOnRefusal, unstable);
+        }
+        hmacKeyringFree(src);
+    }
+
     TEST("snapshot/restore: salts and keys that spell numbers stay bytes") {
         /* A 4-byte random salt is all ASCII digits about once in 400 K
          * installs, and a caller's key may be digits; the snapshot must
