@@ -411,7 +411,10 @@ bool persistAttachSnapshot(persist *p, persistStore *store) {
     if (!p || !store) {
         return false;
     }
+    /* No snapshot of the new store has been restored: none of the WAL is
+     * known to be folded into one */
     p->snapshotStore = store;
+    p->snapshotWalSequence = 0;
     return true;
 }
 
@@ -931,6 +934,12 @@ void *persistRestore(persist *p) {
         return NULL;
     }
 
+    /* The watermark describes the snapshot in hand: until this restore
+     * succeeds there is none, and a WAL-only rebuild must apply every
+     * entry (an earlier restore's watermark would skip ops only that
+     * snapshot held) */
+    p->snapshotWalSequence = 0;
+
     persistStore *store = p->snapshotStore;
     if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
         return NULL;
@@ -990,8 +999,8 @@ void *persistRestore(persist *p) {
 
     /* Only a snapshot that restored includes anything: from now on WAL
      * replay skips the ops folded into it (crash-consistent compaction).
-     * A failed restore leaves the watermark alone, so rebuilding from the
-     * WAL alone applies every entry. */
+     * A failed restore leaves the watermark at 0 (set above), so
+     * rebuilding from the WAL alone applies every entry. */
     if (structure) {
         p->snapshotWalSequence = header.walSequence;
     }
@@ -9211,6 +9220,58 @@ int persistTest(int argc, char *argv[]) {
 #undef PERSIST_TEST_FILE_IS
         s->close(s->ctx);
         zfree(s);
+    }
+
+    TEST("a WAL-only rebuild applies every entry once no snapshot holds them") {
+        /* Entries 1..3, a snapshot of them, entries 4..5 (the WAL keeps all
+         * five: no compaction).  A restore marks 1..3 as already in the
+         * snapshot.  Rebuilding from the WAL alone then, after attaching a
+         * different (empty) snapshot store, or after a restore that fails,
+         * must apply all five: no snapshot in hand holds the first three */
+        for (int how = 0; how < 2; how++) {
+            persist *p = persistCreate(&persistOpsIntset, NULL);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            persistAttachWAL(p, persistStoreMemory(0));
+            cleaner(intsetFree) intset *live = intsetNew();
+            persistSnapshot(p, live);
+            for (int64_t v = 1; v <= 5; v++) {
+                bool added = false;
+                intsetAdd(&live, v, &added);
+                persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+                if (v == 3) {
+                    persistSnapshot(p, live);
+                }
+            }
+            persistSync(p);
+            intset *restored = persistRestore(p);
+            const bool restoredThree = restored && intsetCount(restored) == 3;
+            if (restored) {
+                intsetFree(restored);
+            }
+            persistStore *old = persistSnapshotStore(p);
+            persistStore *fresh = persistStoreMemory(0);
+            if (how == 1) {
+                /* a store holding no snapshot: the restore fails */
+                persistAttachSnapshot(p, fresh);
+                intset *none = persistRestore(p);
+                if (none) {
+                    intsetFree(none);
+                    ERRR("an empty snapshot store restored something");
+                }
+            } else {
+                persistAttachSnapshot(p, fresh);
+            }
+            cleaner(intsetFree) intset *rebuilt = intsetNew();
+            const bool replayed = persistReplayWAL(p, &rebuilt);
+            if (!restoredThree || !replayed || intsetCount(rebuilt) != 5) {
+                ERR("%s: WAL-only rebuild holds %zu members, want 5",
+                    how ? "after a failed restore" : "after re-attaching",
+                    (size_t)intsetCount(rebuilt));
+            }
+            old->close(old->ctx);
+            zfree(old);
+            persistClose(p);
+        }
     }
 
     TEST("a newly attached WAL store starts with its own header") {
