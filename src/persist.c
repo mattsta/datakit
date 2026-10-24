@@ -935,9 +935,6 @@ void *persistRestore(persist *p) {
         return NULL;
     }
 
-    /* Remember what this snapshot already includes so a subsequent WAL
-     * replay skips ops folded into it (crash-consistent compaction). */
-    p->snapshotWalSequence = header.walSequence;
     if (header.envelopeLen == 0 ||
         header.envelopeLen >
             FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD + (uint64_t)(64 * 1024)) {
@@ -981,6 +978,13 @@ void *persistRestore(persist *p) {
         return NULL;
     }
 
+    /* Only a snapshot that restored includes anything: from now on WAL
+     * replay skips the ops folded into it (crash-consistent compaction).
+     * A failed restore leaves the watermark alone, so rebuilding from the
+     * WAL alone applies every entry. */
+    if (structure) {
+        p->snapshotWalSequence = header.walSequence;
+    }
     return structure;
 }
 
@@ -5779,6 +5783,50 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Restoring the byte should re-pass verify");
             }
 
+            persistClose(p);
+        }
+
+        TEST("a snapshot that fails to restore claims no WAL entries") {
+            /* The snapshot header names the WAL sequence it includes, and
+             * replay skips entries below it.  A snapshot whose body fails
+             * to verify included nothing, so rebuilding from the WAL onto
+             * an empty structure must apply every entry. */
+            persistConfig config = persistDefaultConfig();
+            persist *p = persistCreate(&persistOpsIntset, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistAttachWAL(p, persistStoreMemory(0));
+
+            cleaner(intsetFree) intset *is = intsetNew();
+            for (int64_t v = 1; v <= 5; v++) {
+                bool added = false;
+                intsetAdd(&is, v * 1000, &added);
+                persistLogOp(p, PERSIST_OP_INSERT, &(int64_t){v * 1000}, 1);
+            }
+            /* The header records sequence 5; the WAL still holds 0..4 */
+            if (!persistSnapshot(p, is)) {
+                ERRR("snapshot setup failed");
+            }
+
+            size_t storeLen = 0;
+            const uint8_t *storeBytes =
+                persistStoreMemoryBuffer(snapStore, &storeLen);
+            const size_t target = storeLen - 2;
+            ((uint8_t *)storeBytes)[target] ^= 0x40u;
+            if (persistRestore(p)) {
+                ERRR("a damaged snapshot body restored");
+            }
+
+            cleaner(intsetFree) intset *rebuilt = intsetNew();
+            if (!persistReplayWAL(p, &rebuilt)) {
+                ERRR("replay onto an empty set failed");
+            }
+            persistStats stats;
+            persistGetStats(p, &stats);
+            if (intsetCount(rebuilt) != 5 || stats.entriesSkipped != 0) {
+                ERR("rebuilt %zu of 5 members, %" PRIu64 " entries skipped",
+                    (size_t)intsetCount(rebuilt), stats.entriesSkipped);
+            }
             persistClose(p);
         }
 
