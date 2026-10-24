@@ -853,6 +853,55 @@ static void benchMultiOrderedSet(void) {
                 monoNowSec() - t0);
     }
 
+    /* Bulk removals from a fresh n-member set (score i for member i), per
+     * row removed: 1000-score windows by score, 1000-rank windows by rank,
+     * then pops of 1000 from the bottom */
+    {
+        cleaner(multiOrderedSetFree) multiOrderedSet *bulk =
+            multiOrderedSetNew();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox s = databoxNewSigned(i);
+            const databox m = perfContainerKey(keys, i);
+            sink += multiOrderedSetAdd(&bulk, &s, &m);
+        }
+
+        const uint32_t windows = 20;
+        size_t gone = 0;
+        t0 = monoNowSec();
+        for (uint32_t w = 0; w < windows; w++) {
+            const int64_t lo = (int64_t)(n / 2 + w * 1000);
+            const mosRangeSpec r = {.min = databoxNewSigned(lo),
+                                    .max = databoxNewSigned(lo + 999)};
+            gone += multiOrderedSetRemoveRangeByScore(&bulk, &r);
+        }
+        emitRow("multiOrderedSet", "removeRangeByScore", 0, (uint32_t)gone,
+                monoNowSec() - t0);
+
+        gone = 0;
+        t0 = monoNowSec();
+        for (uint32_t w = 0; w < windows; w++) {
+            gone += multiOrderedSetRemoveRangeByRank(&bulk, n / 4, n / 4 + 999);
+        }
+        emitRow("multiOrderedSet", "removeRangeByRank", 0, (uint32_t)gone,
+                monoNowSec() - t0);
+
+        databox popMembers[1000];
+        databox popScores[1000];
+        gone = 0;
+        t0 = monoNowSec();
+        for (uint32_t w = 0; w < windows; w++) {
+            const size_t popped =
+                multiOrderedSetPopMin(&bulk, 1000, popMembers, popScores);
+            for (size_t p = 0; p < popped; p++) {
+                databoxFreeData(&popMembers[p]);
+                databoxFreeData(&popScores[p]);
+            }
+            gone += popped;
+        }
+        emitRow("multiOrderedSet", "popMin", 0, (uint32_t)gone,
+                monoNowSec() - t0);
+    }
+
     perfContainerSink = sink;
 }
 

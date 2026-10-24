@@ -328,29 +328,35 @@ static void insertRow(multiOrderedSetFull *m, const databox *score,
     }
 }
 
-/* Remove entry from specific sub-map */
-static void removeFromSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
-                             flexEntry *entry) {
+/* Delete the 'rows' rows of sub-map 'mapIdx' that start at 'entry', in
+ * one flex delete (their pool ids released first; the member index is the
+ * caller's).  The middle, total and rangeBox are updated once. */
+static void deleteRows_(multiOrderedSetFull *m, uint32_t mapIdx,
+                        flexEntry *entry, size_t rows) {
     flex *map = getSubMap(m, mapIdx);
-    if (!map) {
+    if (!map || rows == 0) {
         return;
     }
 
-    /* In pool mode, release the member before deleting */
     if (m->pool) {
-        flexEntry *memberEntry = flexNext(map, entry);
-        if (memberEntry) {
+        flexEntry *e = entry;
+        for (size_t i = 0; i < rows && e; i++) {
+            flexEntry *memberEntry = flexNext(map, e);
+            if (!memberEntry) {
+                break;
+            }
             databox memberOrId;
             databoxWide memberOrIdWide;
             flexGetByTypeInto(memberEntry, &memberOrId, &memberOrIdWide);
             releasePoolMember(m, &memberOrId);
+            e = flexNext(map, memberEntry);
         }
     }
 
-    flexDeleteCount(&map, &entry, MOS_ELEMENTS_PER_ENTRY);
+    flexDeleteCount(&map, &entry, (uint32_t)(rows * MOS_ELEMENTS_PER_ENTRY));
     setSubMap(m, mapIdx, map);
     updateMiddle(m, mapIdx);
-    m->totalEntries--;
+    m->totalEntries -= rows;
 
     /* Update rangeBox - check if map has entries before reading head.
      * flexHead() returns non-NULL even for empty flex (points past header),
@@ -360,6 +366,34 @@ static void removeFromSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
     if (rangeScore) {
         rangeBoxRefresh(rangeScore, flexCount(map) > 0 ? flexHead(map) : NULL);
     }
+}
+
+/* Take the members of the 'rows' rows from 'first' out of the member
+ * index, copying each member and score out (owned) into 'members' and
+ * 'scores' when they are not NULL.  Stops before a row whose member
+ * cannot be read (only a damaged pool), which stays.  Returns the rows
+ * taken, which the caller then deletes with deleteRows_. */
+static size_t mosFullDropMembers_(multiOrderedSetFull *m, const flex *map,
+                                  flexEntry *first, size_t rows,
+                                  databox *members, databox *scores) {
+    size_t taken = 0;
+    for (flexEntry *e = first; taken < rows && e; taken++) {
+        flexEntry *memberEntry = flexNext(map, e);
+        databox member = {{0}};
+        databoxWide memberWide;
+        if (!memberEntry || !readMember(m, memberEntry, &member, &memberWide)) {
+            break;
+        }
+
+        if (members) {
+            mosReadOwned(e, &scores[taken]);
+            members[taken] = databoxCopy(&member);
+        }
+        multidictDelete(m->memberIndex, &member);
+        e = flexNext(map, memberEntry);
+    }
+
+    return taken;
 }
 
 /* Reclaim an emptied sub-map slot so the first rows stay ascending for
@@ -888,7 +922,7 @@ static void removeMemberRow(multiOrderedSetFull *m, const databox *member,
     uint32_t mapIdx;
     flexEntry *entry = findEntryForScore(m, member, old, &mapIdx);
     if (entry) {
-        removeFromSubMap(m, mapIdx, entry);
+        deleteRows_(m, mapIdx, entry, 1);
         reclaimEmptySubMap(m, mapIdx);
     }
 }
@@ -1039,6 +1073,12 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
         if (!entry) {
             entry = flexHeadIfAny(map);
         }
+
+        /* Rows are in score order, so this sub-map's rows in the range are
+         * one span: after any rows equal to an exclusive minimum, up to the
+         * first past the maximum */
+        flexEntry *spanStart = NULL;
+        size_t spanRows = 0;
         while (entry) {
             flexEntry *memberEntry = flexNext(map, entry);
             if (!memberEntry) {
@@ -1048,41 +1088,25 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
             databox score;
             databoxWide scoreWide;
             flexGetByTypeInto(entry, &score, &scoreWide);
-
             if (mosScoreInRange(&score, &range->min, range->minExclusive,
                                 &range->max, range->maxExclusive)) {
-                flexEntry *nextEntry = flexNext(map, memberEntry);
-
-                /* In pool mode, convert pool ID to member for memberIndex */
-                databox member = {{0}};
-                databoxWide memberWide;
-                if (!readMember(m, memberEntry, &member, &memberWide)) {
-                    entry = nextEntry;
-                    continue;
-                }
-
-                /* Remove from member index */
-                multidictDelete(m->memberIndex, &member);
-
-                /* Remove from score map.  Removing shifts the following
-                 * pairs down, may move the flex and may shrink its
-                 * header: the next pair then starts where this one did,
-                 * measured from the head */
-                const size_t offset = (size_t)(entry - flexHead(map));
-                removeFromSubMap(m, mapIdx, entry);
-                removed++;
-
-                map = getSubMap(m, mapIdx);
-                entry = nextEntry ? flexHead(map) + offset : NULL;
+                spanStart = spanStart ? spanStart : entry;
+                spanRows++;
             } else {
-                int cmp = databoxCompare(&score, &range->max);
+                const int cmp = databoxCompare(&score, &range->max);
                 if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                     pastMax = true;
                     break;
                 }
-                entry = flexNext(map, memberEntry);
             }
+            entry = flexNext(map, memberEntry);
         }
+
+        const size_t taken =
+            mosFullDropMembers_(m, map, spanStart, spanRows, NULL, NULL);
+        deleteRows_(m, mapIdx, spanStart, taken);
+        removed += taken;
+        pastMax = pastMax || taken < spanRows; /* a damaged pool stops it */
     }
 
     /* Bulk loop held live mapIdx/map, so reclaim emptied sub-maps now (backward
@@ -1101,52 +1125,28 @@ size_t multiOrderedSetFullRemoveRangeByRank(multiOrderedSetFull *m,
     /* From the row at rank 'start' (whole sub-maps skipped by count) to
      * rank 'stop' */
     size_t removed = 0;
-    int64_t currentRank = start;
+    uint64_t left = (uint64_t)(stop - start) + 1; /* rows still to remove */
     uint64_t local;
     uint32_t mapIdx = mosFullLocateRank_(m, (uint64_t)start, &local);
-    for (bool first = true; mapIdx < m->mapCount && currentRank <= stop;
-         mapIdx++, first = false) {
+    for (; mapIdx < m->mapCount && left > 0; mapIdx++, local = 0) {
         flex *map = getSubMap(m, mapIdx);
         if (!map) {
             continue;
         }
 
-        flexEntry *entry =
-            first ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY))
-                  : flexHeadIfAny(map);
-        while (entry && currentRank <= stop) {
-            flexEntry *memberEntry = flexNext(map, entry);
-            if (!memberEntry) {
-                break;
-            }
-
-            if (currentRank >= start) {
-                /* In pool mode, convert pool ID to member for memberIndex */
-                databox member = {{0}};
-                databoxWide memberWide;
-                if (!readMember(m, memberEntry, &member, &memberWide)) {
-                    currentRank++;
-                    entry = flexNext(map, memberEntry);
-                    continue;
-                }
-
-                flexEntry *nextEntry = flexNext(map, memberEntry);
-
-                /* Removing shifts the following pairs down, may move the
-                 * flex and may shrink its header: the next pair then
-                 * starts where this one did, measured from the head */
-                const size_t offset = (size_t)(entry - flexHead(map));
-                multidictDelete(m->memberIndex, &member);
-                removeFromSubMap(m, mapIdx, entry);
-                removed++;
-
-                map = getSubMap(m, mapIdx);
-                entry = nextEntry ? flexHead(map) + offset : NULL;
-            } else {
-                entry = flexNext(map, memberEntry);
-            }
-
-            currentRank++;
+        /* This sub-map's share: one span from row 'local' */
+        const uint64_t inMap = subMapCount(map) - local;
+        const size_t rows = (size_t)(inMap < left ? inMap : left);
+        flexEntry *spanStart =
+            rows ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY))
+                 : NULL;
+        const size_t taken =
+            mosFullDropMembers_(m, map, spanStart, rows, NULL, NULL);
+        deleteRows_(m, mapIdx, spanStart, taken);
+        removed += taken;
+        left -= rows;
+        if (taken < rows) {
+            break; /* a damaged pool stops it */
         }
     }
 
@@ -1167,34 +1167,17 @@ size_t multiOrderedSetFullPopMin(multiOrderedSetFull *m, size_t count,
             continue;
         }
 
-        while (popped < count) {
-            flexEntry *head = flexHead(map);
-            if (!head) {
-                break;
-            }
-
-            flexEntry *memberEntry = flexNext(map, head);
-            if (!memberEntry) {
-                break;
-            }
-
-            /* In pool mode, convert pool ID back to member string */
-            databox member = {{0}};
-            databoxWide memberWide;
-            if (!readMember(m, memberEntry, &member, &memberWide)) {
-                break;
-            }
-
-            /* Self-contained results: copy before the entry goes away */
-            mosReadOwned(head, &scores[popped]);
-            members[popped] = databoxCopy(&member);
-
-            multidictDelete(m->memberIndex, &member);
-            removeFromSubMap(m, mapIdx, head);
-
-            /* Refresh map pointer after removal */
-            map = getSubMap(m, mapIdx);
-            popped++;
+        /* This sub-map's share: one span from its head, copied out
+         * (self-contained) before it goes */
+        const size_t inMap = subMapCount(map);
+        const size_t rows = inMap < count - popped ? inMap : count - popped;
+        flexEntry *head = rows ? flexHead(map) : NULL;
+        const size_t taken = mosFullDropMembers_(
+            m, map, head, rows, members + popped, scores + popped);
+        deleteRows_(m, mapIdx, head, taken);
+        popped += taken;
+        if (taken < rows) {
+            break; /* a damaged pool stops it */
         }
     }
 
@@ -1242,7 +1225,7 @@ size_t multiOrderedSetFullPopMax(multiOrderedSetFull *m, size_t count,
             members[popped] = databoxCopy(&member);
 
             multidictDelete(m->memberIndex, &member);
-            removeFromSubMap(m, mapIdx, entry);
+            deleteRows_(m, mapIdx, entry, 1);
 
             map = getSubMap(m, mapIdx);
             popped++;
@@ -2225,6 +2208,28 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                         pooled, around[a].rank, score.data.i64,
                         around[a].score);
                 }
+            }
+
+            /* Popping 500 from the bottom: the score-0 run (400 rows over
+             * several sub-maps), then 100 of score 1, each owned */
+            databox popMembers[500];
+            databox popScores[500];
+            const size_t popped =
+                multiOrderedSetFullPopMin(m, 500, popMembers, popScores);
+            bool popOrder = popped == 500;
+            for (size_t p = 0; p < popped; p++) {
+                const int64_t want = p < 400 ? 0 : 1;
+                popOrder = popOrder && popScores[p].data.i64 == want &&
+                           databoxLen(&popMembers[p]) > 0 &&
+                           !multiOrderedSetFullExists(m, &popMembers[p]);
+                databoxFreeData(&popMembers[p]);
+                databoxFreeData(&popScores[p]);
+            }
+            if (!popOrder || multiOrderedSetFullCount(m) != n - 2100 ||
+                mosFullCheckInvariants(m) != 0) {
+                ERR("pooled %d: PopMin gave %zu in the wrong order or left "
+                    "%zu",
+                    pooled, popped, multiOrderedSetFullCount(m));
             }
             multiOrderedSetFullFree(m);
         }
