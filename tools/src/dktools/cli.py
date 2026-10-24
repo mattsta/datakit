@@ -11,6 +11,7 @@ from . import (
     atomicaudit,
     coverage,
     leakcheck,
+    outputaudit,
     perfcompare,
     perfdiff,
     procs,
@@ -105,6 +106,23 @@ def main(argv: list[str] | None = None) -> int:
         "one-sided",
     )
     at.add_argument(
+        "--out", type=Path, default=None, help="report output path (default: stdout)"
+    )
+
+    oa = sub.add_parser(
+        "outputaudit",
+        help="library code writing to stdout/stderr (outside tests and repr/print)",
+    )
+    oa.add_argument(
+        "mode",
+        choices=("report", "check"),
+        help="report: markdown listing; check: exit nonzero while any "
+        "unrequested output remains",
+    )
+    oa.add_argument(
+        "paths", nargs="*", type=Path, help="only these files (repo-relative)"
+    )
+    oa.add_argument(
         "--out", type=Path, default=None, help="report output path (default: stdout)"
     )
 
@@ -580,6 +598,24 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(atomicaudit.summary_line(result))
         for v in result.violations:
             print(f"  VIOLATION {v.path}:{v.line}: {v.message}")
+        return 0 if result.clean else 1
+
+    if args.command == "outputaudit":
+        result = outputaudit.run_audit(args.repo, list(args.paths) or None)
+        if args.mode == "report":
+            report = outputaudit.render_report(result)
+            if args.out is None:
+                print(outputaudit.summary_line(result), file=sys.stderr)
+                sys.stdout.write(report)
+                return 0
+            print(outputaudit.summary_line(result))
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(report)
+            print(f"report: {args.out}")
+            return 0
+        print(outputaudit.summary_line(result))
+        for s in result.by_category("unrequested"):
+            print(f"  UNREQUESTED {s.path}:{s.line}: {s.call} to {s.target} in {s.context}")
         return 0 if result.clean else 1
 
     if args.command == "allocaudit":
