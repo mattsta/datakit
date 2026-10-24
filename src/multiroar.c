@@ -3995,6 +3995,46 @@ int multiroarTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    TEST("bitmap first/last set bit against a per-bit scan, any length") {
+        /* Lengths with and without a partial last word: no bit, every
+         * single bit, and random fills; both scans agree with walking
+         * the bits one at a time (UINT64_MAX for none) */
+        static const uint64_t lens[] = {1, 3, 7, 8, 9, 15, 16, 17, 23, 64};
+        uint8_t bitmap[64];
+        uint64_t rng = 0xb17;
+        for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
+            const uint64_t bytes = lens[l];
+            for (uint64_t trial = 0; trial < bytes * 8 + 1 + 40; trial++) {
+                memset(bitmap, 0, sizeof(bitmap));
+                if (trial > 0 && trial <= bytes * 8) {
+                    bitmap[(trial - 1) / 8] =
+                        (uint8_t)(1u << ((trial - 1) % 8));
+                } else if (trial > bytes * 8) {
+                    for (uint64_t i = 0; i < bytes; i++) {
+                        const uint64_t r = splitmix64(&rng);
+                        /* mostly zero bytes, so the scans must skip */
+                        bitmap[i] = (r & 7) == 0 ? (uint8_t)(r >> 8) : 0;
+                    }
+                }
+                uint64_t first = UINT64_MAX;
+                uint64_t last = UINT64_MAX;
+                for (uint64_t bit = 0; bit < bytes * 8; bit++) {
+                    if (bitmap[bit / 8] >> (bit % 8) & 1) {
+                        first = first == UINT64_MAX ? bit : first;
+                        last = bit;
+                    }
+                }
+                if (findFirstSetBitInBitmap(bitmap, bytes) != first ||
+                    findLastSetBitInBitmap(bitmap, bytes) != last) {
+                    ERR("%" PRIu64 " bytes, trial %" PRIu64 ": first %" PRIu64
+                        " last %" PRIu64 ", want %" PRIu64 " %" PRIu64,
+                        bytes, trial, findFirstSetBitInBitmap(bitmap, bytes),
+                        findLastSetBitInBitmap(bitmap, bytes), first, last);
+                }
+            }
+        }
+    }
+
     TEST("every chunk form against a bit-array oracle") {
         /* Forms per chunk number: a sparse listing, a bitmap, a listing
          * of the bits not set, all set, empty.  The three roars put a
