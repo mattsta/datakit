@@ -825,15 +825,13 @@ void blake3HasherUpdate(blake3Hasher *self, const void *input,
             input_len -= BLAKE3_BLOCK_LEN;
         }
 
-        /* (5) Hold back the remaining 1..64 bytes in buf. */
+        /* (5) Hold back the remaining 1..64 bytes in buf.  The chunk has
+         * room: buf is empty, so the chunk holds whole blocks, and a full
+         * one would have been drained by (1). */
         if (input_len > 0) {
-            const size_t chunk_room =
-                BLAKE3_CHUNK_LEN - chunk_bytes_consumed(self);
-            size_t take =
+            const size_t take =
                 input_len < BLAKE3_BLOCK_LEN ? input_len : BLAKE3_BLOCK_LEN;
-            if (take > chunk_room) {
-                take = chunk_room;
-            }
+            assert(take <= BLAKE3_CHUNK_LEN - chunk_bytes_consumed(self));
             memcpy(self->buf, in, take);
             self->buf_len = (uint8_t)take;
             in += take;
@@ -894,8 +892,11 @@ static blake3Output hasher_final_output(const blake3Hasher *self) {
         stack_len--;
     }
 
-    /* stack_len was zero on entry but we had chunk data: root is the
-     * single chunk's output. */
+    /* Unreachable: one CV on the stack and an empty chunk means a power
+     * of two chunks, whose last push folded and saved the root's pair
+     * above; only a total of 1 pushes without folding, and chunk 0 is
+     * completed only when more input follows it */
+    assert(NULL && "one stacked CV, an empty chunk and no root pair");
     return chunk_output(self);
 }
 
@@ -1201,6 +1202,53 @@ int blake3Test(int argc, char *argv[]) {
                 }
             }
         }
+    }
+
+    TEST("blake3 batches after a mid-stream chunk drain match scalar") {
+        /* A first update of p bytes, then one of the rest (4+ chunks):
+         * when p ends a chunk, the second update drains it and batches
+         * the rest, possibly all of it.  Every split, under the SIMD
+         * dispatch, gives the forced-scalar one-shot digest (64 bytes
+         * of output, so the root's XOF is compared too) */
+        static const size_t totals[] = {5 * 1024,      5 * 1024 + 1, 8 * 1024,
+                                        9 * 1024,      16 * 1024,    17 * 1024,
+                                        17 * 1024 + 63};
+        static const size_t splits[] = {1,    63,   64,   1023, 1024,
+                                        1025, 2048, 3072, 4096, 4 * 1024 + 1};
+        const size_t maxTotal = 17 * 1024 + 63;
+        cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(maxTotal);
+        fill_test_input(buf, maxTotal);
+        const blake3ForceImpl saved = blake3GetForceImpl();
+        for (size_t t = 0; t < sizeof(totals) / sizeof(*totals); t++) {
+            uint8_t want[64];
+            blake3SetForceImpl(BLAKE3_IMPL_SCALAR);
+            blake3Hasher ref;
+            blake3HasherInit(&ref);
+            blake3HasherUpdate(&ref, buf, totals[t]);
+            blake3HasherFinalize(&ref, want, sizeof(want));
+            for (size_t s = 0; s < sizeof(splits) / sizeof(*splits); s++) {
+                const size_t p = splits[s];
+                if (p >= totals[t]) {
+                    continue;
+                }
+                for (int mode = 0; mode < 2; mode++) {
+                    blake3SetForceImpl(mode ? BLAKE3_IMPL_SIMD
+                                            : BLAKE3_IMPL_AUTO);
+                    blake3Hasher h;
+                    blake3HasherInit(&h);
+                    blake3HasherUpdate(&h, buf, p);
+                    blake3HasherUpdate(&h, buf + p, totals[t] - p);
+                    uint8_t got[64];
+                    blake3HasherFinalize(&h, got, sizeof(got));
+                    if (memcmp(got, want, sizeof(want)) != 0) {
+                        ERR("total %zu split at %zu (mode %d): digest "
+                            "differs from scalar",
+                            totals[t], p, mode);
+                    }
+                }
+            }
+        }
+        blake3SetForceImpl(saved);
     }
 
     TEST("blake3 chunk-boundary inputs are stable") {
