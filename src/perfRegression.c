@@ -17,6 +17,7 @@
 #include "clusterMailbox.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "dkTestTmp.h"
 #include "flexEnvelope.h"
 #include "hash/sha256ArmCrypto.h"
 #include "hmac.h"
@@ -27,6 +28,8 @@
 #include "multidict.h"
 #include "multimapAtom.h"
 #include "multimapAtomDense.h"
+#include "persist/multidictP.h"
+#include "persist/persistCtx.h"
 #include "rapidhash.h"
 #include "sha256.h"
 #include "stringPool.h"
@@ -905,6 +908,78 @@ static void benchMultiOrderedSet(void) {
     perfContainerSink = sink;
 }
 
+/* What a persisted change costs against the lookup its wrapper adds:
+ * multidictReplaceP (check, log, apply; no sync, no compaction) beside a
+ * plain multidictReplace and the multidictExistsNoTouch the wrapper runs
+ * first, over the same present keys (only when asked for by name) */
+static void benchMultidictP(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char base[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "perfMultidictP", base, sizeof(base))) {
+        return;
+    }
+
+    persistCtxConfig config = persistCtxDefaultConfig();
+    config.syncMode = PERSIST_CTX_SYNC_NONE;
+    config.compactAfterOps = 0;
+    config.compactAfterBytes = 0;
+    persistCtx *ctx = persistCtxNew(base, &config);
+    multidictP *dp = ctx ? multidictNewP(ctx) : NULL;
+    if (!dp) {
+        persistCtxFree(ctx);
+        return;
+    }
+
+    uint64_t sink = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += (uint64_t)multidictAddP(dp, &k, &v, NULL);
+    }
+
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, (i * 7919u) % n);
+        const databox v = databoxNewSigned(-(int64_t)i);
+        sink += (uint64_t)multidictReplaceP(dp, &k, &v);
+    }
+    emitRow("multidictP", "replaceP", 0, n, monoNowSec() - t0);
+
+    multidict *d = multidictGetP(dp);
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, (i * 7919u) % n);
+        const databox v = databoxNewSigned((int64_t)i);
+        sink += (uint64_t)multidictReplace(d, &k, &v);
+    }
+    emitRow("multidictP", "replacePlain", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, (i * 7919u) % n);
+        sink += multidictExistsNoTouch(d, &k);
+    }
+    emitRow("multidictP", "existsNoTouch", 0, n, monoNowSec() - t0);
+
+    /* The wrapper's two searches without the log between them: the check
+     * leaves the key's slot warm for the replace */
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, (i * 7919u) % n);
+        const databox v = databoxNewSigned((int64_t)i + 1);
+        if (multidictExistsNoTouch(d, &k)) {
+            sink += (uint64_t)multidictReplace(d, &k, &v);
+        }
+    }
+    emitRow("multidictP", "existsThenReplace", 0, n, monoNowSec() - t0);
+
+    multidictCloseP(dp);
+    persistCtxFree(ctx);
+    perfContainerSink = sink;
+}
+
 /* A 600000-member set, past the size where the Full tier's sub-map count
  * once stopped growing: adds of the last 100000, then ranks and score
  * lookups spread over the set (only when asked for by name) */
@@ -1307,6 +1382,10 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfNamed("multiOrderedSetLarge")) {
             benchMultiOrderedSetLarge();
+        }
+
+        if (perfNamed("multidictP")) {
+            benchMultidictP();
         }
 
         if (perfWanted("multiOrderedSet")) {
