@@ -16,10 +16,29 @@
 #endif
 
 #include "cleaner.h"
+#include "dkDiag.h"
 
 #include <assert.h>
 
 defcleaner(void *, zfree);
+
+/* A container call given a native multiarray (its own macro API owns it):
+ * refused with a defined answer, and reported as misuse
+ * (DK_DIAG_MULTIARRAY_NATIVE).  NULL is refused the same way without a
+ * report: NULL is every container call's "nothing" */
+__attribute__((cold, noinline)) static void
+maNativeRefused_(const char *function, int line) {
+    dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIARRAY_NATIVE, function, __FILE__,
+                  line,
+                  "a container call was given a native multiarray (use the "
+                  "multiarrayNative* macros)");
+}
+#define MA_NATIVE_REFUSED_(m)                                                  \
+    do {                                                                       \
+        if ((m) != NULL) {                                                     \
+            maNativeRefused_(__func__, __LINE__);                              \
+        }                                                                      \
+    } while (0)
 
 #define mars(m) ((multiarraySmall *)_MULTIARRAY_USE(m))
 #define marm(m) ((multiarrayMedium *)_MULTIARRAY_USE(m))
@@ -38,6 +57,7 @@ defcleaner(void *, zfree);
             ret multiarrayLarge##func(marl(m), __VA_ARGS__);                   \
             break;                                                             \
         default: /* native (or NULL): refused by the caller's fallback */      \
+            MA_NATIVE_REFUSED_(m);                                             \
             break;                                                             \
         }                                                                      \
     } while (0)
@@ -59,6 +79,7 @@ defcleaner(void *, zfree);
             ret multiarrayLarge##func(marl(m));                                \
             break;                                                             \
         default: /* native (or NULL): refused by the caller's fallback */      \
+            MA_NATIVE_REFUSED_(m);                                             \
             break;                                                             \
         }                                                                      \
     } while (0)
@@ -150,6 +171,7 @@ void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
         multiarrayLargeDeleteTaking(marl(*m), (int32_t)idx, out);
         break;
     default: /* native or NULL: refused, 'out' untouched */
+        MA_NATIVE_REFUSED_(*m);
         break;
     }
 }
@@ -167,6 +189,7 @@ void multiarrayDeleteRange(multiarray **m, multiarrayIdx start,
         multiarrayLargeDeleteRange(marl(*m), start, count);
         break;
     default: /* native or NULL: refused */
+        MA_NATIVE_REFUSED_(*m);
         break;
     }
 }
@@ -223,6 +246,7 @@ void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
         break;
     }
     default: /* native or NULL: an iterator that yields nothing */
+        MA_NATIVE_REFUSED_(m);
         break;
     }
 }
@@ -233,6 +257,7 @@ void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
                              .type = (uint8_t)_multiarrayType(m),
                              .forward = forward};
     if (_multiarrayType(m) == MULTIARRAY_TYPE_NATIVE) {
+        MA_NATIVE_REFUSED_(m);
         return; /* native or NULL: an iterator that yields nothing */
     }
     assert(idx < multiarrayCount(m));
@@ -342,6 +367,7 @@ uint16_t multiarrayElementLen(const multiarray *m) {
     case MULTIARRAY_TYPE_LARGE:
         return marl(m)->len;
     default: /* native or NULL */
+        MA_NATIVE_REFUSED_(m);
         return 0;
     }
 }
@@ -355,6 +381,7 @@ uint16_t multiarrayRowMax(const multiarray *m) {
     case MULTIARRAY_TYPE_LARGE:
         return marl(m)->rowMax;
     default: /* native or NULL */
+        MA_NATIVE_REFUSED_(m);
         return 0;
     }
 }
@@ -398,6 +425,7 @@ void multiarrayCopyTo(const multiarray *m, void *out) {
         break;
     }
     default: /* native or NULL: nothing copied */
+        MA_NATIVE_REFUSED_(m);
         break;
     }
 }
@@ -631,33 +659,63 @@ int multiarrayTest(int argc, char *argv[]) {
         s16 one = {.a = 11};
         multiarrayNativeInsert(nat, s16, 64, count, 0, &one);
         multiarray *const subjects[2] = {nat, NULL};
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
         for (size_t i = 0; i < 2; i++) {
             multiarray *m = subjects[i];
             s16 probe = {.a = 99};
             s16 out = {.a = 77};
             uint8_t copied[sizeof(s16)] = {0xEE};
+            /* A call on the native array reports the misuse once; one on
+             * NULL ("nothing") reports nothing */
+            const uint64_t want = i == 0 ? 1 : 0;
+#define MA_REPORTS_(call)                                                      \
+    do {                                                                       \
+        const uint64_t c0_ = dkDiagCount();                                    \
+        call;                                                                  \
+        dkDiagnostic d_;                                                       \
+        if (dkDiagCount() - c0_ != want ||                                     \
+            (want &&                                                           \
+             (!dkDiagLast(&d_) || d_.code != DK_DIAG_MULTIARRAY_NATIVE))) {    \
+            ERR("%s on %s reported %" PRIu64 " times", #call,                  \
+                i ? "NULL" : "a native multiarray", dkDiagCount() - c0_);      \
+        }                                                                      \
+    } while (0)
             multiarrayIter it;
-            multiarrayIteratorInit(m, &it, true);
-            const void *first = multiarrayIteratorNext(&it);
-            multiarrayIteratorInitAt(m, &it, 0, false);
-            const void *firstAt = multiarrayIteratorNext(&it);
-            multiarrayInsert(&m, 0, &probe);
-            multiarrayDelete(&m, 0);
-            multiarrayPop(&m, 0, &out);
-            multiarrayDeleteRange(&m, 0, 1);
-            multiarrayReplace(m, 0, &probe);
-            multiarrayRotate(&m);
-            multiarrayCopyTo(m, copied);
-            if (multiarrayCount(m) || multiarrayBytes(m) ||
-                multiarrayGet(m, 0) || multiarrayGetHead(m) ||
-                multiarrayGetTail(m) || multiarrayElementLen(m) ||
-                multiarrayRowMax(m) || first || firstAt || out.a != 77 ||
+            const void *first = NULL;
+            const void *firstAt = NULL;
+            size_t counted = 0;
+            size_t bytes = 0;
+            const void *got[3] = {NULL, NULL, NULL};
+            uint16_t lens[2] = {0, 0};
+            MA_REPORTS_(multiarrayIteratorInit(m, &it, true));
+            first = multiarrayIteratorNext(&it);
+            MA_REPORTS_(multiarrayIteratorInitAt(m, &it, 0, false));
+            firstAt = multiarrayIteratorNext(&it);
+            MA_REPORTS_(multiarrayInsert(&m, 0, &probe));
+            MA_REPORTS_(multiarrayDelete(&m, 0));
+            MA_REPORTS_(multiarrayPop(&m, 0, &out));
+            MA_REPORTS_(multiarrayDeleteRange(&m, 0, 1));
+            MA_REPORTS_(multiarrayReplace(m, 0, &probe));
+            MA_REPORTS_(multiarrayRotate(&m));
+            MA_REPORTS_(multiarrayCopyTo(m, copied));
+            MA_REPORTS_(counted = multiarrayCount(m));
+            MA_REPORTS_(bytes = multiarrayBytes(m));
+            MA_REPORTS_(got[0] = multiarrayGet(m, 0));
+            MA_REPORTS_(got[1] = multiarrayGetHead(m));
+            MA_REPORTS_(got[2] = multiarrayGetTail(m));
+            MA_REPORTS_(lens[0] = multiarrayElementLen(m));
+            MA_REPORTS_(lens[1] = multiarrayRowMax(m));
+#undef MA_REPORTS_
+            if (counted || bytes || got[0] || got[1] || got[2] || lens[0] ||
+                lens[1] || first || firstAt || out.a != 77 ||
                 copied[0] != 0xEE || m != subjects[i]) {
                 ERR("the container API acted on %s",
                     i ? "NULL" : "a native multiarray");
             }
             multiarrayFree(NULL);
         }
+        dkDiagSetPrintMode(priorPrint);
         s16 *held = NULL;
         multiarrayNativeGet(nat, s16, held, 0);
         if (!held || held->a != 11) {
