@@ -865,7 +865,9 @@ void *persistRestore(persist *p);
  * lastSyncError), and the next sync tries again. */
 typedef enum persistLogResult {
     PERSIST_LOG_REFUSED = 0,     /* not logged (encode or write failed, WAL
-                                    refused): apply nothing */
+                                    refused, or the WAL holds an entry no
+                                    reader can pass, until persistCompact):
+                                    apply nothing */
     PERSIST_LOG_BUFFERED = 1,    /* logged; the sync policy writes it out
                                     later (SYNC_NONE, or EVERYSEC between
                                     syncs) */

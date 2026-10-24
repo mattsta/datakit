@@ -47,16 +47,6 @@ defcleanerName(char *, zfree, Chars);
 defcleanerName(bool *, zfree, Bools);
 defcleaner(mflexState *, mflexStateFree);
 
-/* Scope-exit cleaner for the fixed 2-slot mflex state array the read-only
- * multilist iterator requires: frees whichever slots were created. */
-static DK_FN_UNUSED void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
-    for (size_t i = 0; i < 2; i++) {
-        if ((*arr)[i]) {
-            mflexStateFree((*arr)[i]);
-        }
-    }
-}
-
 #ifndef XXH_STATIC_LINKING_ONLY
 #define XXH_STATIC_LINKING_ONLY
 #endif
@@ -1422,23 +1412,24 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
  * the last entry that read completely, having met `stop` there.  A torn
  * tail (a crash mid-append) is cut off, so what is logged next follows
  * complete entries and a later recovery reaches it.  A bad entry is left
- * in place (it may only need the right key); appends then go to the end
- * of the store. */
+ * in place (it may only need the right key), and the WAL stays
+ * unappendable: readers stop at it, so nothing appended after it would
+ * ever replay.  Logging resumes once it reads (the right key bound) or
+ * after persistCompact starts a fresh WAL. */
 static bool persistWALResume(persist *p, int64_t goodEnd, int stop) {
     persistStore *store = p->walStore;
-    int64_t append = goodEnd;
+    if (stop == PERSIST_WAL_BAD) {
+        p->walInitialized = false;
+        return false;
+    }
     if (stop == PERSIST_WAL_TORN) {
         if (store->seek(store->ctx, goodEnd, SEEK_SET) != goodEnd ||
             !store->truncate || !store->truncate(store->ctx)) {
             return false;
         }
-    } else if (stop == PERSIST_WAL_BAD) {
-        append = store->seek(store->ctx, 0, SEEK_END);
-        if (append < 0) {
-            return false;
-        }
     }
 
+    const int64_t append = goodEnd;
     p->walAppendOffset = append;
     p->walCursorMoved = true;
     p->walInitialized = true;
@@ -1538,16 +1529,21 @@ bool persistReplayWAL(persist *p, void *structure) {
     }
 
     /* A torn or bad entry ends the WAL: strict recovery fails there;
-     * lenient recovery keeps what came before, and the WAL resumes
-     * after it (a torn tail is cut off) */
+     * lenient recovery keeps what came before.  A torn tail is cut off and
+     * logging resumes; after a bad entry appends are refused until
+     * persistCompact (see persistWALResume), which does not fail the
+     * lenient replay itself. */
     if (rc == PERSIST_WAL_TORN || rc == PERSIST_WAL_BAD) {
         p->stats.entriesSkipped++;
         if (p->config.strictRecovery) {
+            if (rc == PERSIST_WAL_BAD) {
+                p->walInitialized = false; /* no appends past it */
+            }
             return false;
         }
     }
 
-    return persistWALResume(p, goodEnd, rc);
+    return persistWALResume(p, goodEnd, rc) || rc == PERSIST_WAL_BAD;
 }
 
 typedef struct persistIterateCtx {
@@ -9636,6 +9632,68 @@ int persistTest(int argc, char *argv[]) {
             ERR("%" PRIu64 " entries, %" PRIu64 " sync failures, %" PRIu64
                 " syncs",
                 stats.walEntries, stats.syncFailures, stats.syncCount);
+        }
+    }
+
+    TEST("a WAL with a bad entry takes no appends until compacted") {
+        /* Readers stop at a bad entry, so an op appended after one would
+         * be reported logged and never replayed.  Appends are refused
+         * instead; compaction (snapshot + fresh WAL) resumes logging. */
+        persistConfig cfg = persistDefaultConfig();
+        cfg.strictRecovery = false;
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsIntset, &cfg);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistStore *wal = persistStoreMemory(0);
+        persistAttachWAL(p, wal);
+        cleaner(intsetFree) intset *empty = intsetNew();
+        persistSnapshot(p, empty);
+        for (int64_t v = 1; v <= 3; v++) {
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+        }
+        persistSync(p);
+
+        /* Damage the second entry's envelope */
+        size_t walLen = 0;
+        uint8_t *bytes = (uint8_t *)persistStoreMemoryBuffer(wal, &walLen);
+        size_t at = sizeof(persistWALHeader);
+        uint32_t entryLen = 0;
+        memcpy(&entryLen, bytes + at, sizeof(entryLen));
+        at += sizeof(entryLen) + entryLen;
+        memcpy(&entryLen, bytes + at, sizeof(entryLen));
+        assert(at + sizeof(entryLen) + entryLen <= walLen);
+        bytes[at + sizeof(entryLen) + entryLen / 2] ^= 0x10u;
+
+        cleaner(intsetFree) intset *partial = persistRecover(p);
+        if (!partial || intsetCount(partial) != 1) {
+            ERR("lenient recovery kept %zu members, want 1",
+                partial ? (size_t)intsetCount(partial) : (size_t)0);
+        }
+        const int64_t later = 99;
+        if (persistLogOp(p, PERSIST_OP_INSERT, &later, 1) !=
+            PERSIST_LOG_REFUSED) {
+            ERRR("an op was appended after a bad entry");
+        }
+
+        if (!partial || !persistCompact(p, partial)) {
+            ERRR("compaction failed");
+        } else {
+            if (persistLogOp(p, PERSIST_OP_INSERT, &later, 1) ==
+                PERSIST_LOG_REFUSED) {
+                ERRR("compaction did not resume logging");
+            }
+            persistSync(p);
+            cleaner(intsetFree) intset *again = persistRecover(p);
+            bool found = false;
+            if (again) {
+                found = intsetFind(again, later);
+            }
+            if (!again || intsetCount(again) != 2 || !found) {
+                ERR("recovery after compaction holds %zu members, op logged "
+                    "after it %s",
+                    again ? (size_t)intsetCount(again) : (size_t)0,
+                    found ? "present" : "missing");
+            }
         }
     }
 

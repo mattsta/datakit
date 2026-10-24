@@ -127,10 +127,14 @@ includes, so nothing is applied twice.
 
 - **Lenient** (default): an entry that verifies but does not apply is
   skipped and counted (`persistStats.entriesSkipped`).  Replay stops at the
-  first entry that fails verification; that entry stays in place (it may
-  only need the right key) and new entries are appended after it.  A torn
-  tail (the last entry cut short by a crash) is truncated at the last
-  complete entry, so the WAL keeps growing from a clean end.
+  first entry that fails verification and keeps what came before.  That
+  entry stays in place (it may only need the right key), and since no
+  reader can pass it, the WAL takes no appends while it is there: every
+  `persistLogOp` (and P-wrapper op) returns `PERSIST_LOG_REFUSED` until the
+  WAL reads again (the right key bound) or `persistCompact` writes a
+  snapshot of the recovered structure and starts a fresh WAL.  A torn tail
+  (the last entry cut short by a crash) is truncated at the last complete
+  entry, so the WAL keeps growing from a clean end.
 - **Strict** (`strictRecovery = true`): an entry that fails to verify or
   apply fails the recovery, and the open returns NULL.
 
