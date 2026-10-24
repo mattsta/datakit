@@ -1336,10 +1336,10 @@ static bool sealRunCipher(uint8_t *out, size_t aad_len,
                           const flexEnvelopeAlgoDesc *d, bool fromRing) {
     uint8_t *ciphertext_out = out + aad_len;
     uint8_t *tag_out = ciphertext_out + plaintext_len;
+    /* Both callers (sealEmitHeader for one-shot Seal, sealFinalize) have
+     * refused a key whose length is not the algorithm's */
+    assert(params->key && params->key_len == sealKeyLen(params->algo));
     if (params->algo == FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305) {
-        if (params->key_len != CHACHA20_POLY1305_KEY_LEN) {
-            return false;
-        }
         if (!chacha20poly1305Seal(params->key, params->nonce, out, aad_len,
                                   plaintext, (size_t)plaintext_len,
                                   ciphertext_out, tag_out)) {
@@ -1347,12 +1347,6 @@ static bool sealRunCipher(uint8_t *out, size_t aad_len,
         }
     } else if (params->algo == FLEX_ENV_ALGO_AEAD_AES128_GCM ||
                params->algo == FLEX_ENV_ALGO_AEAD_AES256_GCM) {
-        const size_t expect = (params->algo == FLEX_ENV_ALGO_AEAD_AES128_GCM)
-                                  ? AES128_KEY_LEN
-                                  : AES256_KEY_LEN;
-        if (params->key_len != expect) {
-            return false;
-        }
         aesGcmKey k;
         /* A key resolved from the keyring has its expanded schedule
          * cached on the slot: copy it rather than expand again. */
