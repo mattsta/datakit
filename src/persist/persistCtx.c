@@ -478,6 +478,34 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+bool persistCtxTestRefuseLogsBegin(persistCtx *ctx, persistCtxTestRefusal *r) {
+    *r = (persistCtxTestRefusal){0};
+    if (!ctx || !ctx->p) {
+        return false;
+    }
+
+    /* A fresh store is readied on its first log by a header write, which
+     * fails, so the very next log is refused whatever the buffering */
+    r->original = persistWALStore(ctx->p);
+    r->failing = persistStoreFaulty(persistStoreMemory(0), false);
+    persistStoreFaultyArm(r->failing, PERSIST_FAULT_WRITE, 0);
+    if (!persistAttachWAL(ctx->p, r->failing)) {
+        r->failing->close(r->failing->ctx);
+        *r = (persistCtxTestRefusal){0};
+        return false;
+    }
+    return true;
+}
+
+void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r) {
+    if (r->failing) {
+        persistStoreFaultyDisarm(r->failing);
+        persistAttachWAL(ctx->p, r->original);
+        r->failing->close(r->failing->ctx);
+    }
+    *r = (persistCtxTestRefusal){0};
+}
+
 #include "../ctest.h"
 #include "../dkTestTmp.h"
 #include "flexP.h"

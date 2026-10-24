@@ -327,6 +327,22 @@ if (multidictAddNX(d, &key, &val) == MULTIDICT_OK_INSERTED) {
 `multidictReplace` return `MULTIDICT_ERR` when it does not. `ERR` here means
 "precondition not met", not "something broke".
 
+### Read-Modify-Write in One Search
+
+```c
+/* 'update' sees the stored value and fills the new one, or returns false
+ * to change nothing: 1 rewritten (one LRU use), 0 refused, -1 absent */
+int32_t multidictUpdateValue(multidict *d, const databox *keybox,
+                             multidictValueUpdate *update, void *ctx);
+```
+
+The key is found once and the value is rewritten where it was found.  The
+callback may do work of its own before deciding (it must not change the same
+dict): the persisted wrapper `multidictReplaceP` logs the change from inside
+it and declines when the log is refused, so a replace logs and applies in one
+search with nothing to undo.  `AddXX` and `Replace` are this call with a
+callback that always takes the new value.
+
 ### Bulk Insert and Delete
 
 ```c

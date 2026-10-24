@@ -354,6 +354,14 @@ multidictResult multidictAddXX(multidict *d, const databox *keybox,
                                const databox *valbox);
 multidictResult multidictReplace(multidict *d, const databox *keybox,
                                  const databox *valbox);
+/* Rewrite a present key's value in one search: 'update' sees the stored
+ * value (borrowed, valid during the call) and fills the new one, or
+ * returns false to leave everything unchanged (it may do work of its own
+ * first, such as logging the change, but must not touch this dict).
+ * Returns 1 when rewritten (the call's one LRU use), 0 when 'update'
+ * refused (no LRU use), -1 when the key is absent. */
+int32_t multidictUpdateValue(multidict *d, const databox *keybox,
+                             multidictValueUpdate *update, void *ctx);
 
 /* Atomic Get-and-Delete Operations */
 bool multidictGetAndDelete(multidict *d, const databox *keybox,

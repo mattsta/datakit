@@ -161,28 +161,49 @@ persistLogResult multidictAddP(multidictP *d, const databox *key,
     return logged;
 }
 
+typedef struct mdpReplace_ {
+    persistCtx *ctx;
+    const databox *args[2];
+    persistLogResult logged;
+} mdpReplace_;
+
+/* Inside the dict's one search, with the key found: log the replace,
+ * then rewrite the value, or decline when the log is refused (nothing
+ * changes and nothing was logged) */
+static bool mdpLogThenReplace_(void *ctx, const databox *current,
+                               databox *replacement) {
+    (void)current;
+    mdpReplace_ *r = ctx;
+    r->logged = persistCtxLogOp(r->ctx, PERSIST_OP_REPLACE, r->args, 2);
+    if (r->logged == PERSIST_LOG_REFUSED) {
+        return false;
+    }
+
+    *replacement = *r->args[1];
+    return true;
+}
+
 persistLogResult multidictReplaceP(multidictP *d, const databox *key,
                                    const databox *val) {
     if (!d || !d->d || !d->ctx || !key || !val) {
         return PERSIST_LOG_REFUSED;
     }
 
-    /* multidictReplace changes only a present key: an absent key logs
-     * nothing (replaying it would change nothing either).  The check is
-     * no LRU use; the replace below is the call's one use. */
-    if (!multidictExistsNoTouch(d->d, key)) {
+    /* One search: an absent key logs nothing (replaying it would change
+     * nothing either); a present one is logged and rewritten where it was
+     * found, and that is the call's one LRU use */
+    mdpReplace_ r = {.ctx = d->ctx, .args = {key, val}};
+    const int32_t rewritten =
+        multidictUpdateValue(d->d, key, mdpLogThenReplace_, &r);
+    if (rewritten < 0) {
         return PERSIST_LOG_UNCHANGED;
     }
-
-    const databox *args[] = {key, val};
-    const persistLogResult logged =
-        persistCtxLogOp(d->ctx, PERSIST_OP_REPLACE, args, 2);
-    if (logged == PERSIST_LOG_REFUSED) {
-        return logged;
+    if (rewritten == 0) {
+        return PERSIST_LOG_REFUSED;
     }
-    multidictReplace(d->d, key, val);
+
     persistCtxMaybeCompact(d->ctx, d->d, &persistOpsMultidict);
-    return logged;
+    return r.logged;
 }
 
 persistLogResult multidictDeleteP(multidictP *d, const databox *key) {
@@ -1172,6 +1193,56 @@ int multidictPTest(int argc, char *argv[]) {
         persistCtxGetStats(ctx, &stats);
         if (stats.totalOps != ops) {
             ERRR("no-op mutations were logged");
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multidictP a refused log changes nothing (replace, delete)") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multidictP *d = multidictNewP(ctx);
+        multidictEnableLRU(multidictGetP(d), 4);
+        const databox key = databoxNewBytesString("the refused key");
+        const databox kept =
+            databoxNewBytesString("a value long enough to live on the heap");
+        const databox other = databoxNewBytesString("other");
+        const databox newer = DATABOX_SIGNED(99);
+        multidictAddP(d, &key, &kept, NULL);
+        multidictAddP(d, &other, &newer, NULL);
+        const int level = multidictGetLRULevel(multidictGetP(d), &key);
+
+        persistCtxTestRefusal refusal;
+        if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
+            ERRR("could not arm a refusing WAL");
+        }
+        const persistLogResult replaced = multidictReplaceP(d, &key, &newer);
+        const persistLogResult deleted = multidictDeleteP(d, &key);
+        persistCtxTestRefuseLogsEnd(ctx, &refusal);
+
+        databox got = {{0}};
+        if (replaced != PERSIST_LOG_REFUSED || deleted != PERSIST_LOG_REFUSED ||
+            !multidictFindP(d, &key, &got) ||
+            databoxCompare(&got, &kept) != 0 || multidictCountP(d) != 2) {
+            ERR("a refused replace (%d) or delete (%d) changed the dict",
+                replaced, deleted);
+        }
+        if (multidictGetLRULevel(multidictGetP(d), &key) < level) {
+            ERRR("a refused change lost the key's LRU level");
+        }
+
+        /* Logging works again, and a reopen holds only what was logged */
+        if (multidictReplaceP(d, &key, &newer) == PERSIST_LOG_REFUSED) {
+            ERRR("the context did not log again after the refusal");
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+        ctx = persistCtxOpen(basePath, NULL);
+        d = multidictOpenP(ctx);
+        if (!d || multidictCountP(d) != 2 || !multidictFindP(d, &key, &got) ||
+            databoxCompare(&got, &newer) != 0) {
+            ERRR("a reopen did not hold exactly the logged changes");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);

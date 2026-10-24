@@ -1372,6 +1372,19 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
     return MULTIDICT_OK_INSERTED;
 }
 
+int32_t multidictUpdateValue(multidict *d, const databox *keybox,
+                             multidictValueUpdate *update, void *ctx) {
+    if (unlikely(!d || !keybox || !update)) {
+        return -1;
+    }
+
+    const int32_t result = multidictUpdate_(d, keybox, update, ctx);
+    if (result > 0) {
+        multidictLRUOnAccess(d, keybox);
+    }
+    return result;
+}
+
 /* AddXX's rewrite: the new value, whatever was stored */
 static bool mdReplaceUpdate_(void *ctx, const databox *current,
                              databox *replacement) {
@@ -1380,21 +1393,17 @@ static bool mdReplaceUpdate_(void *ctx, const databox *current,
     return true;
 }
 
-/* Add only if key DOES exist (update existing only) */
+/* Add only if key DOES exist (update existing only): the value rewritten
+ * in place in one search, the call's one LRU use */
 multidictResult multidictAddXX(multidict *d, const databox *keybox,
                                const databox *valbox) {
-    if (unlikely(!d || !keybox || !valbox)) {
+    if (unlikely(!valbox)) {
         return MULTIDICT_ERR;
     }
 
-    /* Rewrite the value in place, in one search; the rewrite is the one
-     * LRU use this call makes */
-    if (multidictUpdate_(d, keybox, mdReplaceUpdate_, (void *)valbox) < 0) {
-        return MULTIDICT_ERR; /* Key doesn't exist - XX fails */
-    }
-
-    multidictLRUOnAccess(d, keybox);
-    return MULTIDICT_OK_REPLACED;
+    return multidictUpdateValue(d, keybox, mdReplaceUpdate_, (void *)valbox) > 0
+               ? MULTIDICT_OK_REPLACED
+               : MULTIDICT_ERR; /* Key doesn't exist - XX fails */
 }
 
 /* Explicit replace - fails if key doesn't exist (same as XX, explicit intent)

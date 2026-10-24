@@ -225,4 +225,14 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats);
 
 #ifdef DATAKIT_TEST
 int persistCtxTest(int argc, char *argv[]);
+
+/* Tests of a wrapper's refused log: between Begin and End every log
+ * through 'ctx' is refused (its WAL is a store whose writes fail);
+ * End puts the context's own WAL store back. */
+typedef struct persistCtxTestRefusal {
+    persistStore *original;
+    persistStore *failing;
+} persistCtxTestRefusal;
+bool persistCtxTestRefuseLogsBegin(persistCtx *ctx, persistCtxTestRefusal *r);
+void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r);
 #endif
