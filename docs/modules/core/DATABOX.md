@@ -715,20 +715,39 @@ versus `==` (values).
 
 Comparing a `DATABOX_VOID` box asserts in debug builds.
 
-## Canonical Numerals
+## Canonical Numerals and Minimal Storage
 
-These two functions turn a byte string that spells a number into that
-number, in its minimum representation. They are an explicit, opt-in
-conversion: flex's auto-convert push path (`flexPushBytes`, `flexPushByType`)
-uses them, while flex's exact path, datakit's containers and persistence
-never do. Call them yourself when you want numeral strings stored as numbers.
+These functions give a value its minimal-storage form: a byte string that
+spells a number becomes that number, and a real holding a whole number
+becomes that integer. They are an explicit, opt-in conversion: flex's
+auto-convert push path (`flexPushBytes`, `flexPushByType`, ...) uses them,
+while flex's exact path, every datakit container (multilist, multimap,
+multidict, multiOrderedSet, multilru, ...) and persistence never do.
+Containers store exactly the box they are given.  **For minimal storage in a
+container, pass each box through `databoxCanonical` before writing it:**
+
+```c
+databoxBig scratch;
+const databox *stored = databoxCanonical(&value, &scratch); /* "42" -> 42,
+                                                             5.0 -> 5 */
+multimapInsert(&m, (const databox *[]){&key, stored});
+```
+
+Either way, numbers are one value to every comparison and key match: 5 and
+5.0 are the same multimap or multidict key whichever form was stored.
 
 ```c
 /* true, with *out holding the canonical number, when 'in' is a BYTES or
  * BYTES_EMBED numeral; false, with *out untouched, otherwise. */
 bool databoxCanonicalNumeral(const databox *in, databoxBig *out);
 
-/* 'in' itself, or 'scratch' holding the canonical numeral of 'in'. */
+/* true, with *out the SIGNED_64 / UNSIGNED_64 it equals, for a FLOAT_32 or
+ * DOUBLE_64 holding a whole number in [-2^63, 2^64); -0.0, fractions,
+ * infinities and NaN stay reals */
+bool databoxIntegralRealAsInteger(const databox *in, databox *out);
+
+/* 'in' itself, or 'scratch' holding the minimal form of 'in': a numeral
+ * string's number, or a whole real's integer */
 static inline const databox *databoxCanonical(const databox *in,
                                               databoxBig *scratch);
 ```
@@ -744,8 +763,10 @@ static inline const databox *databoxCanonical(const databox *in,
 
 The 64-bit forms are exactly what `StrScanScanReliable` accepts; the 128-bit
 forms are the integers beyond 64 bits that `StrScanScanReliableConvert128`
-accepts. Only `DATABOX_BYTES` and `DATABOX_BYTES_EMBED` are canonicalized;
-every other type, numbers included, passes through.
+accepts. `databoxCanonicalNumeral` reads only `DATABOX_BYTES` and
+`DATABOX_BYTES_EMBED`; `databoxCanonical` also turns a whole real box into
+its integer, and passes every other type through.  A numeral keeps its
+spelling: `"22.0"` is the real 22.0 (it prints back as `"22.0"`), not 22.
 
 Ownership and lifetime:
 

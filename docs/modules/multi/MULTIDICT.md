@@ -920,7 +920,11 @@ A type's `keyCompare` decides when two byte-string keys (`DATABOX_BYTES`,
   gets the class's `privdata`.
 
 Integer, float and other non-byte-string keys match by value, exactly, in
-every type.
+every type: signed and unsigned 5, `5.0f`, `5.0` and a 128-bit 5 are one key,
+as are `-0.0` and 0 (they hash by value, through `databoxNumericHashKey`).
+The dict stores the key box exactly as given; for minimal storage pass it
+through `databoxCanonical` first (see DATABOX.md, "Canonical Numerals and
+Minimal Storage").
 
 Matching applies to every operation that looks a key up: add, the
 conditional adds and replace, find, exists, delete, get-and-delete,
