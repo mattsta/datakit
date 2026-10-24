@@ -1844,12 +1844,20 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
                             RAPIDHASH_MODE_FAST, 0, NULL);
         return true;
     case FLEX_ENV_ALGO_XXH3_64:
-    case FLEX_ENV_ALGO_XXH3_128:
-        /* The envelope streaming API does not offer XXH3: Init refuses
-         * it, and streaming callers use XXH64 for an unkeyed checksum or
-         * a keyed algorithm for authentication.  One-shot wrap and
-         * unwrap support XXH3_64 and XXH3_128. */
-        return false;
+    case FLEX_ENV_ALGO_XXH3_128: {
+        /* XXH3's state must be 64-byte aligned (its SIMD accumulators use
+         * aligned stores).  The context type carries that alignment, so
+         * stack, static and _Alignas storage have it, but a plain
+         * malloc of the context need not: refuse rather than fault. */
+        if (((uintptr_t)u_state & 63u) != 0) {
+            return false;
+        }
+
+        XXH3_state_t *s = (XXH3_state_t *)u_state;
+        return (algo == FLEX_ENV_ALGO_XXH3_64
+                    ? XXH3_64bits_reset(s)
+                    : XXH3_128bits_reset(s)) == XXH_OK;
+    }
     case FLEX_ENV_ALGO_BLAKE3_KEYED: {
         /* BLAKE3 keyed mode is defined ONLY for a 32-byte key. Anything
          * shorter MUST be refused — silent zero-padding would shrink
@@ -1923,9 +1931,8 @@ static bool streamHashUpdate(uint16_t algo, void *u_state, hmacCtx *hmac,
     case FLEX_ENV_ALGO_XXH3_64:
         return XXH3_64bits_update((XXH3_state_t *)u_state, data, len) == XXH_OK;
     case FLEX_ENV_ALGO_XXH3_128:
-        /* XXH3 128-bit streaming shares the same update function as the
-         * 64-bit variant; only reset/digest differ (see xxhash.h). */
-        return XXH3_64bits_update((XXH3_state_t *)u_state, data, len) == XXH_OK;
+        return XXH3_128bits_update((XXH3_state_t *)u_state, data, len) ==
+               XXH_OK;
     case FLEX_ENV_ALGO_BLAKE3_KEYED:
         blake3HasherUpdate((blake3Hasher *)u_state, data, len);
         return true;
@@ -2588,10 +2595,9 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * stream accepts it fed in any chunk size, and a byte flipped in
          * the payload (or, for tiny ones, the digest) fails both
          * verifiers */
-        /* Every algorithm the stream offers (it refuses XXH3; see the
-         * "wrap stream refuses XXH3" test) */
         static const flexEnvelopeAlgo algos[] = {
-            FLEX_ENV_ALGO_XXH64,        FLEX_ENV_ALGO_RAPIDHASH,
+            FLEX_ENV_ALGO_XXH64,        FLEX_ENV_ALGO_XXH3_64,
+            FLEX_ENV_ALGO_XXH3_128,     FLEX_ENV_ALGO_RAPIDHASH,
             FLEX_ENV_ALGO_BLAKE3_KEYED, FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_HMAC_BLAKE3,
         };
@@ -3893,14 +3899,10 @@ int flexEnvelopeTest(int argc, char *argv[]) {
     {
         /* Round-trip equivalence: streaming wrap output must match
          * one-shot wrap byte-for-byte across algorithms and chunk
-         * sizes.
-         *
-         * XXH3_64 / XXH3_128 are excluded because the streaming API
-         * does not offer them (see streamHashInit and the "refuses
-         * XXH3" test below). Streaming envelopes are restricted to
-         * XXH64, rapidhash and the keyed algorithms. */
+         * sizes. */
         const flexEnvelopeAlgo all_algos[] = {
-            FLEX_ENV_ALGO_XXH64,        FLEX_ENV_ALGO_RAPIDHASH,
+            FLEX_ENV_ALGO_XXH64,        FLEX_ENV_ALGO_XXH3_64,
+            FLEX_ENV_ALGO_XXH3_128,     FLEX_ENV_ALGO_RAPIDHASH,
             FLEX_ENV_ALGO_BLAKE3_KEYED, FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_HMAC_BLAKE3,
         };
@@ -4113,19 +4115,31 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("envelope: wrap stream refuses XXH3 (not offered for streaming)") {
+    TEST("envelope: XXH3 streams only from 64-byte aligned state") {
+        /* An aligned context (stack, static, _Alignas) streams XXH3 (the
+         * stream differential checks the bytes); a state at an address
+         * a plain malloc may give is refused before it is touched */
         flexEnvelopeWrapStream ctx;
         uint8_t header[64];
         size_t hw = 0;
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH3_64};
-        if (flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header, sizeof(header),
-                                       &hw)) {
-            ERRR("wrap stream Init accepted XXH3_64");
-        }
+        const bool ok64 = flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header,
+                                                     sizeof(header), &hw);
         wp.algo = FLEX_ENV_ALGO_XXH3_128;
-        if (flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header, sizeof(header),
-                                       &hw)) {
-            ERRR("wrap stream Init accepted XXH3_128");
+        const bool ok128 = flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header,
+                                                      sizeof(header), &hw);
+        _Alignas(64) uint8_t raw[sizeof(XXH3_state_t) + 64];
+        hmacCtx hmac;
+        uint8_t storage[8];
+        const bool off16 =
+            streamHashInit(FLEX_ENV_ALGO_XXH3_64, raw + 16, &hmac, storage,
+                           sizeof(storage), NULL, 0, NULL);
+        const bool off0 =
+            streamHashInit(FLEX_ENV_ALGO_XXH3_128, raw, &hmac, storage,
+                           sizeof(storage), NULL, 0, NULL);
+        if (!ok64 || !ok128 || off16 || !off0) {
+            ERR("XXH3 stream init: aligned %d/%d, misaligned %d, raw %d", ok64,
+                ok128, off16, off0);
         }
     }
 

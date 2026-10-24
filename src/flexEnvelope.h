@@ -606,6 +606,11 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
  * the hot path. sizeof is bounded (under 16 KiB) regardless of total
  * payload size.
  *
+ * Every checksum and keyed algorithm streams.  XXH3_64 and XXH3_128 need
+ * the context at its type's 64-byte alignment, which stack, static and
+ * _Alignas storage have; Init refuses them for a context at a lesser
+ * address (a plain malloc of the context may give one).
+ *
  * Both contexts internally union the per-algorithm running-hash state
  * (XXH64_state_t / XXH3_state_t / blake3Hasher) and embed an HMAC
  * scratch area sized for the worst case (2 * blake3Hasher + 1 block). */
