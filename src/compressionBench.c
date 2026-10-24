@@ -20,6 +20,8 @@
  * Dataset sizes: 100 (small), 10000 (medium), 1000000 (large)
  */
 
+#include "compressionBench.h"
+
 #include "cleaner.h"
 #include "databox.h"
 #include "datakit.h"

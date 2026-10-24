@@ -866,7 +866,7 @@ void multimapAtomRepr(const multimapAtom *ma) {
 }
 
 /* Callback for iterator */
-bool populateSet(void *userData, const databox *elements[]) {
+static bool populateSet(void *userData, const databox *elements[]) {
     multimap **setMap = userData;
 
     multimapInsert(setMap, elements);

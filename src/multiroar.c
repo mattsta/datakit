@@ -131,7 +131,11 @@ __attribute__((unused)) static const uint64_t
 #define PACK_STORAGE_SLOT_STORAGE_TYPE uint16_t
 #define PACK_STORAGE_MICRO_PROMOTION_TYPE uint16_t
 #define PACK_FUNCTION_PREFIX varintPacked
+/* This file's own copy of the template functions */
+#undef PACKED_STATIC
+#define PACKED_STATIC __attribute__((unused)) static
 #include "../deps/varint/src/varintPacked.h"
+#undef PACKED_STATIC
 
 /* ====================================================================
  * Management Macros
@@ -3784,7 +3788,7 @@ multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
 #include "ctest.h"
 #include "timeUtil.h"
 
-void multiroarRepr(multiroar *r, uint64_t highest) {
+static void multiroarRepr(multiroar *r, uint64_t highest) {
     for (uint64_t i = 0; i < divCeil(highest, BITMAP_SIZE_IN_BITS); i++) {
         databox value;
         const databox chunkKey = databoxNewUnsigned(i);
@@ -3796,7 +3800,7 @@ void multiroarRepr(multiroar *r, uint64_t highest) {
     }
 }
 
-void multiroarTestCompare(multiroar *r, uint64_t highest) {
+static void multiroarTestCompare(multiroar *r, uint64_t highest) {
     const uint64_t b = multimapBytes(r->map);
     printf("Final size: %" PRIu64 " bytes; Highest bit set: %" PRIu64
            "; Size if linear: %" PRIu64 " "

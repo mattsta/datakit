@@ -1437,7 +1437,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             } else if (cases[i].op == '-') {
                 ok = StrSubInt64(&v, cases[i].b);
             } else {
-                ok = StrMulInt64(&v, cases[i].b) == 0;
+                ok = StrMulInt64(&v, cases[i].b);
             }
 
             const int64_t want = cases[i].ok ? cases[i].want : cases[i].a;

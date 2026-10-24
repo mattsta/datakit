@@ -507,7 +507,7 @@ DK_STATIC DK_FN_UNUSED void conformMapsMerge(multimapFull *m) {
  * pointers and provide a clean array of inside pointers to the function.
  * (otherwise, the struct 'm_' will get rewritten and the array pointers it had
  * inside will be gone before we get a chance to use them!) */
-multimapFull *multimapFullNewFromManyGrow_(
+static multimapFull *multimapFullNewFromManyGrow_(
     void *m_, flex *map[], const multimapFullMiddle middle[],
     const size_t count, const multimapElements elementsPerEntry,
     const bool mapIsSet, const bool useReference,
@@ -1825,8 +1825,9 @@ bool multimapFullGetUnderlyingEntry(multimapFull *m, const databox *key,
     return !!me->fe;
 }
 
-bool multimapFullGetUnderlyingEntryGetEntry(multimapFull *m, const databox *key,
-                                            multimapEntry *me) {
+static bool multimapFullGetUnderlyingEntryGetEntry(multimapFull *m,
+                                                   const databox *key,
+                                                   multimapEntry *me) {
     me->mapIdx = multimapFullBinarySearch(m, key);
     me->map = getMapPtr(m, me->mapIdx);
     me->fe = flexFindByTypeSortedWithMiddleGetEntry(
@@ -2656,7 +2657,7 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
 #define multimapFullReport(m) multimapFullReport_(m, true)
 #define multimapFullReportSizeOnly(m) multimapFullReport_(m, false)
 
-void multimapFullConforms(const multimapFull *m) {
+static void multimapFullConforms(const multimapFull *m) {
     for (multimapFullIdx i = 0; i < m->count; i++) {
         if (i > 0 && flexCount(getMap(m, i)) == 0) {
             multimapFullRepr(m);

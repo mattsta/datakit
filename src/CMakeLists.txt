@@ -612,6 +612,11 @@ add_library(${PROJECT_NAME} OBJECT
     persist/contract/atomContractTest.c
 )
 
+# Every function datakit defines with external linkage must have a prior
+# declaration (its header), or it is unreachable API; the rest are static.
+# Vendored deps build in their own targets and keep their own warnings.
+target_compile_options(${PROJECT_NAME} PRIVATE -Wmissing-prototypes)
+
 # ============================================================================
 # Fenwick Tree Template System (2-Tier Architecture)
 # ============================================================================

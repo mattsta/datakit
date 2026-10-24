@@ -2427,19 +2427,21 @@ void flexInsertDouble(flex **const ff, flexEntry *const fe, double dvalue) {
     }
 }
 
-void flexInsertTrue(flex **const ff, flexEntry *const fe, void *none) {
+/* The push macro's insert shape for the payload-less types; public
+ * inserts of TRUE/FALSE/NULL go through flexInsertByType */
+static void flexInsertTrue(flex **const ff, flexEntry *const fe, void *none) {
     DK_NOTUSED(none);
     flexEncoding encoding = FLEX_TRUE;
     flexInsert_(ff, fe, encoding, NULL, 0);
 }
 
-void flexInsertFalse(flex **const ff, flexEntry *const fe, void *none) {
+static void flexInsertFalse(flex **const ff, flexEntry *const fe, void *none) {
     DK_NOTUSED(none);
     flexEncoding encoding = FLEX_FALSE;
     flexInsert_(ff, fe, encoding, NULL, 0);
 }
 
-void flexInsertNull(flex **const ff, flexEntry *const fe, void *none) {
+static void flexInsertNull(flex **const ff, flexEntry *const fe, void *none) {
     DK_NOTUSED(none);
     flexEncoding encoding = FLEX_NULL;
     flexInsert_(ff, fe, encoding, NULL, 0);
@@ -2907,8 +2909,8 @@ DK_STATIC void flexForceReplaceUnsigned__(flex **const ff, flexEntry *const fe,
     flexInsertReplace_(ff, fe, flexEncodingUnsigned(u), &u, sizeof(u));
 }
 
-bool flexReplaceInteger__(flex **const ff, flexEntry *const fe,
-                          const databox *box) {
+static bool flexReplaceInteger__(flex **const ff, flexEntry *const fe,
+                                 const databox *box) {
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
 

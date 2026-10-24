@@ -56,3 +56,7 @@ void bigmathExponent(uint64_t base, uint64_t exp, bigmath *result);
 uint64_t bigmathToNativeUnsigned(bigmath *b);
 int64_t bigmathToNativeSigned(bigmath *b);
 void bigmathReset(bigmath *b);
+
+#ifdef DATAKIT_TEST
+int bigmathTest(int argc, char *argv[]);
+#endif

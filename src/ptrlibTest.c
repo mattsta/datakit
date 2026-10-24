@@ -24,6 +24,10 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
 
+/* ptrlib.h is a guard-less config-macro header, so the test entry point is
+ * declared here and in datakit-test.c rather than there */
+int ptrlibTest(int argc, char *argv[]);
+
 int ptrlibTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;

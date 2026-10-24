@@ -919,16 +919,14 @@ bool StrSubInt64(int64_t *pA, int64_t iB) {
     return StrAddInt64(pA, -iB);
 }
 
-/* Unlike the add and subtract helpers, returns 0 on success and 1 on
- * overflow (leaving *pA unchanged), as sqlite3MulInt64 does. */
-int32_t StrMulInt64(int64_t *pA, int64_t iB) {
+bool StrMulInt64(int64_t *pA, int64_t iB) {
     int64_t product;
     if (__builtin_mul_overflow(*pA, iB, &product)) {
-        return 1;
+        return false;
     }
 
     *pA = product;
-    return 0;
+    return true;
 }
 
 /*

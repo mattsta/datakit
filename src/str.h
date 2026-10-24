@@ -126,6 +126,12 @@ void *StrHexToBlob(const char *z, int32_t n);
 /* |x|, with INT32_MIN giving INT32_MAX */
 int32_t StrAbsInt32(int32_t x);
 
+/* *pA = *pA + iB, - iB or * iB when the result fits int64_t: true; false
+ * on overflow, with *pA unchanged */
+bool StrAddInt64(int64_t *pA, int64_t iB);
+bool StrSubInt64(int64_t *pA, int64_t iB);
+bool StrMulInt64(int64_t *pA, int64_t iB);
+
 /* Remove SQL quotes in place: 'a''b' -> a'b, "x", `x` and [x] alike; a
  * string not starting with a quote is left as is */
 void StrDequote(char *z);

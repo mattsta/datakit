@@ -127,10 +127,13 @@ size_t intersectIntOneSidedGalloping(const uint32_t *smallset,
 }
 
 /**
- * Fast scalar scheme designed by N. Kurz.
+ * Fast scalar scheme designed by N. Kurz.  The x86 kernels and the generic
+ * fallback use it; arm64's dispatch does not.
  */
-size_t scalar(const uint32_t *A, const size_t lenA, const uint32_t *B,
-              const size_t lenB, uint32_t *out) {
+__attribute__((unused)) static size_t scalar(const uint32_t *A,
+                                             const size_t lenA,
+                                             const uint32_t *B,
+                                             const size_t lenB, uint32_t *out) {
     const uint32_t *const initout = out;
     if (lenA == 0 || lenB == 0) {
         return 0;
@@ -167,8 +170,9 @@ size_t scalar(const uint32_t *A, const size_t lenA, const uint32_t *B,
     return (out - initout); // NOTREACHED
 }
 
-size_t match_scalar(const uint32_t *A, const size_t lenA, const uint32_t *B,
-                    const size_t lenB, uint32_t *out) {
+__attribute__((unused)) static size_t
+match_scalar(const uint32_t *A, const size_t lenA, const uint32_t *B,
+             const size_t lenB, uint32_t *out) {
     const uint32_t *initout = out;
     if (lenA == 0 || lenB == 0) {
         return 0;
@@ -722,8 +726,9 @@ size_t intersectInt(const uint32_t *set1, const size_t length1,
  * ARM NEON version of v1 intersection algorithm.
  * Intersects two sorted arrays using NEON SIMD operations.
  */
-size_t v1_neon(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
-               size_t lenFreq, uint32_t *matchOut) {
+static size_t v1_neon(const uint32_t *rare, size_t lenRare,
+                      const uint32_t *freq, size_t lenFreq,
+                      uint32_t *matchOut) {
     assert(lenRare <= lenFreq);
     const uint32_t *matchOrig = matchOut;
     if (lenFreq == 0 || lenRare == 0) {
@@ -815,8 +820,9 @@ FINISH_SCALAR:
  * ARM NEON version of v3 intersection algorithm.
  * Better for larger size differences between arrays.
  */
-size_t v3_neon(const uint32_t *rare, const size_t lenRare, const uint32_t *freq,
-               const size_t lenFreq, uint32_t *out) {
+static size_t v3_neon(const uint32_t *rare, const size_t lenRare,
+                      const uint32_t *freq, const size_t lenFreq,
+                      uint32_t *out) {
     if (lenFreq == 0 || lenRare == 0) {
         return 0;
     }
@@ -868,9 +874,9 @@ FINISH_SCALAR:;
  * ARM NEON version of SIMD galloping intersection.
  * Good for highly skewed distributions.
  */
-size_t SIMDgalloping_neon(const uint32_t *rare, const size_t lenRare,
-                          const uint32_t *freq, const size_t lenFreq,
-                          uint32_t *out) {
+static size_t SIMDgalloping_neon(const uint32_t *rare, const size_t lenRare,
+                                 const uint32_t *freq, const size_t lenFreq,
+                                 uint32_t *out) {
     if (lenFreq == 0 || lenRare == 0) {
         return 0;
     }

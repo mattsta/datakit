@@ -284,6 +284,9 @@ void flexInsertDouble(flex **ff, flexEntry *fe, double dvalue);
 void flexInsertByType(flex **ff, flexEntry *fe, const databox *box);
 bool flexInsertByTypeSortedWithMiddle(flex **ff, const databox *box,
                                       flexEntry **middleEntry);
+/* Insert 'box' at its sorted place in a sorted set (one element per
+ * entry), searching from the flex's own middle; duplicates are kept */
+void flexInsertByTypeSorted(flex **ff, const databox *box);
 flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
     const flex *const f, const uint_fast32_t elementsPerEntry,
     const databox *compareAgainst, const flexEntry *middleFE);

@@ -1029,7 +1029,8 @@ DK_STATIC void hyperloglogSparseRegisterHistogram(uint8_t *sparse,
 
 /* Implements the register histogram calculation for uint8_t data type
  * which is only used internally as speedup for PFCOUNT with multiple keys. */
-void hyperloglogRawRegisterHistogram(uint8_t *registers, int32_t *reghisto) {
+static void hyperloglogRawRegisterHistogram(uint8_t *registers,
+                                            int32_t *reghisto) {
 #if HLL_USE_SSE
     /* SSE2 optimized: check 16 bytes at a time for all-zeros */
     const __m128i *vec = (const __m128i *)registers;
@@ -1099,9 +1100,10 @@ void hyperloglogRawRegisterHistogram(uint8_t *registers, int32_t *reghisto) {
 #endif
 }
 
+#ifdef DATAKIT_TEST
 /* Scalar baseline for benchmarking comparison */
-void hyperloglogRawRegisterHistogramScalar(uint8_t *registers,
-                                           int32_t *reghisto) {
+static void hyperloglogRawRegisterHistogramScalar(uint8_t *registers,
+                                                  int32_t *reghisto) {
     const uint64_t *word = (uint64_t *)registers;
     uint8_t *bytes;
 
@@ -1122,6 +1124,7 @@ void hyperloglogRawRegisterHistogramScalar(uint8_t *registers,
         word++;
     }
 }
+#endif
 
 /* Helper function sigma as defined in
  * "New cardinality estimation algorithms for HyperLogLog sketches"

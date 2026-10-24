@@ -4,6 +4,7 @@
 #include <assert.h>
 
 #if DK_OS_LINUX || DK_OS_APPLE
+#include "setproctitle.h"
 #define SETPROCTITLE_PAD '\0'
 
 /* Original comment from nginx */

@@ -6,8 +6,9 @@
 #include "offsetArray.h"
 #include "datakit.h"
 
-/* Placeholder for non-test builds */
-const char *offsetArrayDummy_(void) {
+/* Keeps the translation unit non-empty in non-test builds (offsetArray is
+ * header-only) */
+__attribute__((unused)) static const char *offsetArrayDummy_(void) {
     return "offsetArray";
 }
 

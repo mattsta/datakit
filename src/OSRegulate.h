@@ -148,7 +148,7 @@ size_t OSRegulateCPUCountGet(void);
 
 /* Networking */
 bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength);
-int OSRegulateTFOMode();
+int OSRegulateTFOMode(void);
 
 /* Files */
 bool OSRegulateAdjustOpenFilesLimit(const size_t requestedFdCount,

@@ -641,9 +641,9 @@ bool intsetBigIteratorNextBox(intsetBigIterator *restrict isbIter,
     return false;
 }
 
-bool intsetBigIteratorNextBucket(intsetBigIterator *restrict isbIter,
-                                 databoxBig *restrict bucket,
-                                 databox *restrict val) {
+static bool intsetBigIteratorNextBucket(intsetBigIterator *restrict isbIter,
+                                        databoxBig *restrict bucket,
+                                        databox *restrict val) {
     /* else, we need to fetch a new map and start iterating again */
     databox *elements[] = {(databox *)bucket, val};
     if (multimapIteratorNext(&isbIter->iter, elements)) {
@@ -719,8 +719,9 @@ bool intsetBigSubset(const intsetBig *const a, const intsetBig *const b) {
     return true;
 }
 
-bool intsetBigAddByBucketDirectOverwriteBulk(intsetBig *isb, databoxBig *bucket,
-                                             intsetU32 *iu32) {
+static bool intsetBigAddByBucketDirectOverwriteBulk(intsetBig *isb,
+                                                    databoxBig *bucket,
+                                                    intsetU32 *iu32) {
     /* NOTE: These MODIFY isb->i and requires INVALIDATING any iterator you
      *       currently have open! */
     if (intsetU32Count(iu32) > 0) {
@@ -738,7 +739,7 @@ bool intsetBigAddByBucketDirectOverwriteBulk(intsetBig *isb, databoxBig *bucket,
     return false;
 }
 
-bool intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
+static bool intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
     intsetBig *isb, databoxBig *bucket, intsetU32 *iu32,
     multimapIterator *mmIter) {
     const bool didIt =

@@ -1574,7 +1574,7 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
 }
 
 /* Destroy an entire multidictionary */
-void _multidictClearHt(multidict *d, multidictHT *ht) {
+static void _multidictClearHt(multidict *d, multidictHT *ht) {
     /* Free all slots */
     for (uint32_t i = 0; i < ht->size; i++) {
         ht->count -= d->shared->freeSlot(d->shared, ht->table[i]);

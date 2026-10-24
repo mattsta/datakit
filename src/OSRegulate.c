@@ -804,7 +804,7 @@ osrProcStatRssPages_(const char *stat, uint64_t maxPages, uint64_t *pages) {
  *  - 1: Client
  *  - 2: Server
  *  - 3: Client and Server */
-int OSRegulateTFOMode() {
+int OSRegulateTFOMode(void) {
     int tfo = 0;
 
     if (linuxKernelHasTFOServerIPv4) {

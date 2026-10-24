@@ -110,7 +110,7 @@
 /* ptrlib is a guard-less config-macro header; its test entry point is
  * declared here rather than in the header */
 extern int ptrlibTest(int argc, char *argv[]);
-extern int bigmathTest(int argc, char *argv[]);
+#include "bigmath.h"
 #include "rapidhash.h"
 #include "segment/segmentI64.h" /* New 2-tier template system */
 #include "sha256.h"

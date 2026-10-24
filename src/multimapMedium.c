@@ -371,9 +371,9 @@ bool multimapMediumGetUnderlyingEntry(multimapMedium *m, const databox *key,
     return abstractGetUnderlyingEntry(m, key, me, false, NULL);
 }
 
-bool multimapMediumGetUnderlyingEntryGetEntry(multimapMedium *m,
-                                              const databox *key,
-                                              multimapEntry *me) {
+static bool multimapMediumGetUnderlyingEntryGetEntry(multimapMedium *m,
+                                                     const databox *key,
+                                                     multimapEntry *me) {
     /* Position variant: unlike the exact-match search used for direct
      * entry lookup, this returns the insertion point for any key, so
      * "start at or after K" works for keys that don't exist. */

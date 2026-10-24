@@ -30,7 +30,11 @@ typedef uint64_t linearBloomCount;
 #define PACK_STORAGE_SLOT_STORAGE_TYPE linearBloomCount
 #define PACK_STORAGE_MICRO_PROMOTION_TYPE linearBloomCount
 #define PACK_FUNCTION_PREFIX varintPacked
+/* Each including file's own copy of the template functions */
+#undef PACKED_STATIC
+#define PACKED_STATIC __attribute__((unused)) static
 #include "../deps/varint/src/varintPacked.h"
+#undef PACKED_STATIC
 
 /* Counting-Bloom counters saturate: a counter at the 3-bit maximum stays
  * there, and decay never takes a counter below 0. */
