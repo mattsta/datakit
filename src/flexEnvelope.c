@@ -2714,12 +2714,37 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(payload); i++) {
             payload[i] = (uint8_t)(i ^ 0x5c);
         }
-        enum { ENV_XXH, ENV_HMAC, ENV_BLAKE3K, ENV_COUNT };
+        enum {
+            ENV_XXH,
+            ENV_HMAC,
+            ENV_BLAKE3K,
+            ENV_COUNT,
+            ENV_NONE = ENV_COUNT
+        };
         static const flexEnvelopeAlgo envAlgo[ENV_COUNT] = {
             FLEX_ENV_ALGO_XXH64, FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_BLAKE3_KEYED};
-        static uint8_t env[ENV_COUNT][256];
-        size_t envLen[ENV_COUNT];
+        static uint8_t env[ENV_COUNT + 1][256];
+        size_t envLen[ENV_COUNT + 1];
+        {
+            /* No wrap emits algo NONE: built by hand, as a peer could
+             * send one (header, then the payload, no digest) */
+            uint8_t *w = env[ENV_NONE];
+            size_t pos = 0;
+            size_t width = 0;
+            w[pos++] = FLEX_ENVELOPE_MAGIC_0;
+            w[pos++] = FLEX_ENVELOPE_MAGIC_1;
+            varintSplitFullPut_(w + pos, width, (uint64_t)1);
+            pos += width;
+            varintSplitFullPut_(w + pos, width, (uint64_t)FLEX_ENV_ALGO_NONE);
+            pos += width;
+            varintSplitFullPut_(w + pos, width, (uint64_t)0);
+            pos += width;
+            varintSplitFullPut_(w + pos, width, (uint64_t)sizeof(payload));
+            pos += width;
+            memcpy(w + pos, payload, sizeof(payload));
+            envLen[ENV_NONE] = pos + sizeof(payload);
+        }
         for (int e = 0; e < ENV_COUNT; e++) {
             const bool keyed = FLEX_ENV_ALGO_IS_KEYED(envAlgo[e]);
             const flexEnvelopeWrapParams wp = {.key = keyed ? key : NULL,
@@ -2767,6 +2792,14 @@ int flexEnvelopeTest(int argc, char *argv[]) {
              0,
              true},
             {ENV_XXH, {0}, 2, false}, /* header cut short */
+            /* an unauthenticated frame only when asked for */
+            {ENV_NONE, {0}, 0, false},
+            {ENV_NONE, {.opts = FLEX_ENV_VERIFY_ALLOW_NONE_ALGO}, 0, true},
+            {ENV_NONE,
+             {.opts = FLEX_ENV_VERIFY_ALLOW_NONE_ALGO |
+                      FLEX_ENV_VERIFY_REQUIRE_HMAC},
+             0,
+             false},
         };
         for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
             const uint8_t *buf = env[cases[c].env];
