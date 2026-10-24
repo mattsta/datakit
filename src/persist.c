@@ -1106,6 +1106,19 @@ static bool persistWALInit(persist *p) {
     return persistWALWriteHeader(p);
 }
 
+bool persistWALReady(persist *p) {
+    if (!p || !p->walStore) {
+        return false;
+    }
+    if (!p->walInitialized) {
+        if (!persistWALInit(p)) {
+            return false;
+        }
+        p->walInitialized = true;
+    }
+    return true;
+}
+
 /* Write `len` bytes at the WAL's append offset */
 static bool persistWALAppend(persist *p, const void *data, size_t len) {
     persistStore *store = p->walStore;
@@ -1239,11 +1252,8 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         return PERSIST_LOG_REFUSED;
     }
 
-    if (!p->walInitialized) {
-        if (!persistWALInit(p)) {
-            return PERSIST_LOG_REFUSED;
-        }
-        p->walInitialized = true;
+    if (!persistWALReady(p)) {
+        return PERSIST_LOG_REFUSED;
     }
 
     /* NULL refuses the op (an op without a body still returns a buffer) */

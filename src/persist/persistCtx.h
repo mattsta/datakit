@@ -107,6 +107,11 @@ void persistCtxFree(persistCtx *ctx);
  * ============================================================================
  */
 
+/* Whether the WAL takes an append now (persistWALReady): a change a
+ * wrapper persists by snapshot instead of by log is refused exactly when
+ * this is false, as a logged change would be */
+bool persistCtxCanLog(persistCtx *ctx);
+
 /* Log an operation to the WAL and sync as the context's syncMode asks.
  * Apply the change exactly when the result is not PERSIST_LOG_REFUSED;
  * a failed sync reports PERSIST_LOG_NOT_DURABLE (never undoing the op)

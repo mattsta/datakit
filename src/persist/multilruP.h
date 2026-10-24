@@ -111,7 +111,9 @@ persistLogResult multilruDeleteP(multilruP *mlru, multilruPtr ptr);
 
 /* ============================================================================
  * Configuration: a new limit is applied, evicted to at once (each step
- * logged) and made durable by a snapshot (NOT_DURABLE when that fails)
+ * logged) and made durable by a snapshot (NOT_DURABLE when that fails);
+ * REFUSED, with nothing changed, whenever a logged change would be (a WAL
+ * past a bad entry, until an explicit compaction)
  * ============================================================================
  */
 

@@ -193,6 +193,10 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
  * ============================================================================
  */
 
+bool persistCtxCanLog(persistCtx *ctx) {
+    return ctx && ctx->p && persistWALReady(ctx->p);
+}
+
 persistLogResult persistCtxLogOp(persistCtx *ctx, persistOp op,
                                  const void *args, size_t argc) {
     if (!ctx || !ctx->p) {
@@ -474,6 +478,53 @@ int persistCtxTest(int argc, char *argv[]) {
             if (!persistCtxExists(path)) {
                 ERRR("Context should exist now");
             }
+        }
+    }
+
+    TEST("a context bound to one structure type refuses every other") {
+        /* Bound to each type in turn: the same type initializes again;
+         * every other type is refused by init, recover, snapshot and
+         * compaction before its codecs see the structure */
+        static const persistOps *const types[] = {
+            &persistOpsFlex,        &persistOpsIntset,
+            &persistOpsIntsetBig,   &persistOpsMultiroar,
+            &persistOpsHyperloglog, &persistOpsMultilist,
+            &persistOpsMultimap,    &persistOpsMultidict,
+            &persistOpsMultiarray,  &persistOpsMultiOrderedSet,
+            &persistOpsMultiLRU,
+        };
+        const size_t n = sizeof(types) / sizeof(*types);
+        uint64_t untouched = 0x5e17; /* never read by a refused call */
+        for (size_t bound = 0; bound < n; bound++) {
+            char path[PATH_MAX];
+            char name[32];
+            snprintf(name, sizeof(name), "persistCtxBound%zu", bound);
+            if (!dkTestTmpDirPath(&tmp, name, path, sizeof(path))) {
+                ERR("could not create a scratch directory: %s",
+                    strerror(errno));
+                break;
+            }
+            persistCtx *ctx = persistCtxNew(path, NULL);
+            if (!persistCtxInitForType(ctx, types[bound]) ||
+                !persistCtxInitForType(ctx, types[bound])) {
+                ERR("%s: could not bind", types[bound]->name);
+            }
+            size_t accepted = 0;
+            for (size_t other = 0; other < n; other++) {
+                if (other == bound) {
+                    continue;
+                }
+                accepted += persistCtxInitForType(ctx, types[other]);
+                accepted += persistCtxRecover(ctx, types[other]) != NULL;
+                accepted +=
+                    persistCtxSaveSnapshot(ctx, &untouched, types[other]);
+                accepted += persistCtxCompact(ctx, &untouched, types[other]);
+            }
+            if (accepted || untouched != 0x5e17) {
+                ERR("%s: %zu calls of other types accepted", types[bound]->name,
+                    accepted);
+            }
+            persistCtxFree(ctx);
         }
     }
 

@@ -363,7 +363,11 @@ persistLogResult multilruDeleteP(multilruP *mlru, multilruPtr ptr) {
  * records it). */
 static persistLogResult multilruPSetLimit(multilruP *mlru, bool count,
                                           uint64_t limit) {
-    if (!mlru || !mlru->mlru || !mlru->ctx) {
+    /* A limit is persisted by the compaction below, not by a log entry,
+     * but is refused when a logged change would be: past a bad WAL entry
+     * that compaction would also drop the damaged tail, which only an
+     * explicit compaction may do, and the evictions could not be logged */
+    if (!mlru || !mlru->mlru || !persistCtxCanLog(mlru->ctx)) {
         return PERSIST_LOG_REFUSED;
     }
     if (count) {
@@ -1604,9 +1608,82 @@ static int test_multilruP_recency_order(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multilruP_damagedWal(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multilruPTest_damagedWal", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multilruP after a damaged WAL entry: refused until compacted")
+
+    /* Three inserts with the last entry damaged: lenient recovery keeps
+     * the first two (under their handles); an insert, a promote, a
+     * weight update, a delete, a remove-minimum and both limit changes
+     * are then refused and change nothing; after a compaction an insert
+     * is logged, and a reopen holds three entries */
+    ptestCleanupFiles(basePath);
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 100);
+    const multilruPtr h1 = mlruTestInsert(mlru, 0);
+    const multilruPtr h2 = mlruTestInsert(mlru, 0);
+    mlruTestInsert(mlru, 0);
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+    if (!ptestDamageLastWalEntry(basePath)) {
+        ERRR("could not damage the WAL");
+    }
+
+    ctx = persistCtxOpen(basePath, NULL);
+    mlru = multilruOpenP(ctx);
+    if (!mlru || multilruCountP(mlru) != 2) {
+        ERR("lenient recovery kept %zu entries, want 2",
+            mlru ? multilruCountP(mlru) : (size_t)0);
+    }
+    multilruPtr handle = 1;
+    multilruPtr removed = 1;
+    if (mlru &&
+        (multilruInsertP(mlru, &handle) != PERSIST_LOG_REFUSED || handle ||
+         multilruIncreaseP(mlru, h1) != PERSIST_LOG_REFUSED ||
+         multilruUpdateWeightP(mlru, h2, 9) != PERSIST_LOG_REFUSED ||
+         multilruDeleteP(mlru, h1) != PERSIST_LOG_REFUSED ||
+         multilruRemoveMinimumP(mlru, &removed) != PERSIST_LOG_REFUSED ||
+         multilruSetMaxCountP(mlru, 1) != PERSIST_LOG_REFUSED ||
+         multilruSetMaxWeightP(mlru, 1) != PERSIST_LOG_REFUSED ||
+         multilruCountP(mlru) != 2 || multilruGetMaxCountP(mlru) == 1 ||
+         multilruGetMaxWeightP(mlru) == 1)) {
+        ERRR("a change after the damaged entry was applied or logged");
+    }
+    if (mlru &&
+        (!multilruCompactP(mlru) ||
+         multilruInsertP(mlru, &handle) == PERSIST_LOG_REFUSED || !handle)) {
+        ERRR("compaction did not resume logging");
+    }
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+
+    ctx = persistCtxOpen(basePath, NULL);
+    mlru = multilruOpenP(ctx);
+    if (!mlru || multilruCountP(mlru) != 3) {
+        ERR("reopen holds %zu entries, want 3",
+            mlru ? multilruCountP(mlru) : (size_t)0);
+    }
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multilruPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multilruP_damagedWal(argc, argv);
     err += test_multilruP_recency_order(argc, argv);
     err += test_multilruP_weight_limit(argc, argv);
     err += test_multilruP_demotions_replay(argc, argv);

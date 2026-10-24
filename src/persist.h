@@ -882,6 +882,13 @@ typedef enum persistLogResult {
                                     logged or applied */
 } persistLogResult;
 
+/* Ready the WAL for an append, as persistLogOp does first: false when the
+ * next op would be refused for the WAL itself (none attached, or a WAL
+ * past a bad entry, which takes no appends until persistCompact).  For a
+ * change persisted some other way (a snapshot), so it is refused exactly
+ * when a logged change would be. */
+bool persistWALReady(persist *p);
+
 /* Log an operation (appends to WAL), syncing as the config's syncMode
  * asks */
 persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
