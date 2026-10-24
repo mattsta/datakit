@@ -5225,8 +5225,11 @@ const persistOps persistOpsMultiLRU = {
  * ============================================================================
  */
 #ifdef DATAKIT_TEST
+#include "atomPersist.h"
 #include "ctest.h"
 #include "dkTestTmp.h"
+#include "multiFenwick.h"
+#include "multiFenwickFlat.h"
 #include "str.h" /* splitmix64 */
 
 /* Free a test multidict together with the default class it holds; the
@@ -7266,6 +7269,42 @@ int persistTest(int argc, char *argv[]) {
             {&persistOpsMultiLRU,
              {{PERSIST_OP_INSERT, NULL, 1},
               {PERSIST_OP_INSERT, holeRow, 2},
+              {PERSIST_OP_CLEAR, NULL, 0}},
+             3,
+             false},
+            {&persistOpsStringPool,
+             {{PERSIST_OP_INSERT, row, 1},
+              {PERSIST_OP_INSERT, holeRow, 2},
+              {unknownOp, row, 2}},
+             3,
+             true},
+            {&persistOpsAtomPool,
+             {{PERSIST_OP_INSERT, row, 1},
+              {PERSIST_OP_NUM_INCR, holeRow, 2},
+              {unknownOp, row, 2}},
+             3,
+             true},
+            {&persistOpsMultiFenwick,
+             {{PERSIST_OP_NUM_INCR, row, 1},
+              {PERSIST_OP_UPDATE, holeRow, 2},
+              {unknownOp, row, 2}},
+             3,
+             true},
+            {&persistOpsMultiFenwickFlat,
+             {{PERSIST_OP_NUM_INCR, row, 1},
+              {PERSIST_OP_UPDATE, holeRow, 2},
+              {unknownOp, row, 2}},
+             3,
+             true},
+            {&persistOpsMultimapAtom,
+             {{PERSIST_OP_INSERT, row, 1},
+              {PERSIST_OP_DELETE, NULL, 1},
+              {PERSIST_OP_CLEAR, NULL, 0}},
+             3,
+             false},
+            {&persistOpsHmacKeyring,
+             {{PERSIST_OP_UPDATE, row, 1},
+              {PERSIST_OP_UPDATE, holeRow, 2},
               {PERSIST_OP_CLEAR, NULL, 0}},
              3,
              false},
