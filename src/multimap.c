@@ -4050,6 +4050,53 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("one-row maps take smaller keys in a new map before them") {
+        /* 1000-byte values under a 512-byte map limit: every row sits
+         * alone in its map.  Keys inserted descending each sort before
+         * every map (a new map before map 0), then odd keys land between
+         * maps; the result is the Full tier, in key order, every row
+         * found with its value, and the map verifies */
+        static char big[1000];
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        const int64_t keys[] = {100, 90, 80, 70, 60, 50, 40, 30,
+                                20,  10, 55, 15, 95, 5,  65};
+        enum { NK = sizeof(keys) / sizeof(*keys) };
+        for (size_t i = 0; i < NK; i++) {
+            memset(big, (int)('a' + i % 26), sizeof(big));
+            const databox k = databoxNewSigned(keys[i]);
+            const databox v = databoxNewBytes(big, sizeof(big));
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&m, row);
+        }
+        multimapVerify(m);
+        bool ok =
+            multimapType_(m) == MULTIMAP_TYPE_FULL && multimapCount(m) == NK;
+        for (size_t i = 0; ok && i < NK; i++) {
+            const databox k = databoxNewSigned(keys[i]);
+            databox got = {{0}};
+            databox *out[1] = {&got};
+            ok = multimapLookup(m, &k, out) && databoxLen(&got) == 1000 &&
+                 ((const char *)databoxBytes(&got))[0] == (char)('a' + i % 26);
+        }
+        multimapIterator it;
+        multimapIteratorInit(m, &it, true);
+        databox kb = {{0}};
+        databox vb = {{0}};
+        databox *rowOut[2] = {&kb, &vb};
+        int64_t prev = INT64_MIN;
+        size_t seen = 0;
+        while (ok && multimapIteratorNext(&it, rowOut)) {
+            ok = kb.data.i > prev;
+            prev = kb.data.i;
+            seen++;
+        }
+        if (!ok || seen != NK) {
+            ERR("one-row maps: type %d, count %zu, %zu rows in order",
+                (int)multimapType_(m), multimapCount(m), seen);
+        }
+    }
+
     TEST("ReplaceEntryWithReference grows values in a reference-keyed map") {
         /* Every third row's value replaced by a 600-byte one through the
          * reference-aware replace (Full sub-maps grow past their limit and
