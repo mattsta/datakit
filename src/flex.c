@@ -1348,11 +1348,16 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
         return 64 / 8;
 #if FLEX_ENABLE_PTR_MDSC
     case FLEX_EXTERNAL_MDSC_48B:
-        varintExternalPutFixedWidth(fe, *(uint64_t *)data, 6);
-        return 48 / 8;
-    case FLEX_EXTERNAL_MDSC_64B:
-        varintExternalPutFixedWidth(fe, *(uint64_t *)data, 8);
-        return 64 / 8;
+    case FLEX_EXTERNAL_MDSC_64B: {
+        /* 'data' is the box's pointer: its bits are read through memcpy,
+         * since a uint64_t read of a pointer object breaks strict
+         * aliasing */
+        uintptr_t bits = 0;
+        memcpy(&bits, data, sizeof(bits));
+        const size_t bytes = encoding == FLEX_EXTERNAL_MDSC_48B ? 6 : 8;
+        varintExternalPutFixedWidth(fe, (uint64_t)bits, bytes);
+        return bytes;
+    }
 #endif
     case FLEX_CONTAINER_REFERENCE_EXTERNAL_8:
     case FLEX_CONTAINER_REFERENCE_EXTERNAL_16:
@@ -11625,6 +11630,41 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         printf("SUCCESS\n\n");
         flexFree(f);
+    }
+
+    printf("Test pointer entries keep their mdsc strings:\n");
+    {
+        /* Entries referencing mdsc strings (stored as the pointer's bits;
+         * a userspace pointer fits the 6-byte form) read back as the same
+         * pointer, with the string's length */
+        static const char *const texts[] = {"", "x", "a longer mdsc text"};
+        enum { N_TEXTS = sizeof(texts) / sizeof(*texts) };
+        mdsc *strs[N_TEXTS];
+        cleaner(flexFree) flex *pf = flexNew();
+        for (size_t i = 0; i < N_TEXTS; i++) {
+            strs[i] = mdscnew(texts[i]);
+            const databox box = {.type = DATABOX_PTR_MDSC, .data.ptr = strs[i]};
+            flexPushByType(&pf, &box, FLEX_ENDPOINT_TAIL);
+        }
+        int32_t bad = 0;
+        flexEntry *pfe = flexHead(pf);
+        for (size_t i = 0; i < N_TEXTS; i++) {
+            databox got = {{0}};
+            flexGetByType(pfe, &got);
+            if (got.type != DATABOX_PTR_MDSC || got.data.ptr != strs[i] ||
+                got.len != strlen(texts[i])) {
+                printf("  FAIL: pointer entry %zu read back as %p (%zu)\n", i,
+                       got.data.ptr, (size_t)got.len);
+                bad++;
+            }
+            pfe = flexNext(pf, pfe);
+        }
+        for (size_t i = 0; i < N_TEXTS; i++) {
+            mdscfree(strs[i]);
+        }
+        if (bad) {
+            return bad;
+        }
     }
 
     printf("Test integer range encodings:\n");
