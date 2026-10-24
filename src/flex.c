@@ -5083,9 +5083,19 @@ void flexInsertByTypeSorted(flex **const ff, const databox *box) {
 void flexInsertByTypeSortedWithReference(
     flex **const ff, const databox *box,
     const multimapAtom *const referenceContainer) {
+    /* A reference is placed by the value it resolves to (the rows compare
+     * by their resolved values) and stored as the reference; any other
+     * box is placed and stored as itself */
+    databox key = *box;
+    databoxWide slot;
+    if (key.type == DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
+        flexResolveReferenceInto_(&key, &slot, referenceContainer);
+    }
+
+    const databox *keyPtr = &key;
     bool found = false;
     flexEntry *const fe = flexFindPositionByTypeSortedWithReference_(
-        *ff, 1, &box, &found, flexMiddle(*ff, 1), 1, referenceContainer);
+        *ff, 1, &keyPtr, &found, flexMiddle(*ff, 1), 1, referenceContainer);
     flexInsertByType(ff, fe, box);
 }
 
@@ -8070,6 +8080,86 @@ static uint64_t flexTestWideRand(uint64_t *state) {
  * narrow values.  Every insert and find probes through the reference
  * container, so each probe resolves a wide atom into the probe's slot;
  * a type-only resolve would make databoxCompare read through NULL. */
+/* A reference-sorted set (one element per entry) built with
+ * flexInsertByTypeSortedWithReference stays in the order of the values its
+ * references resolve to, and flexGetByTypeSortedWithMiddleWithReference
+ * returns each key's position: its row when present, else the row it
+ * would precede (the end past the last) */
+static int32_t flexTestReferenceSet(void) {
+    int32_t bad = 0;
+    static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
+                                  "banana", "cherry", "date", "grape"};
+    enum { W = sizeof(words) / sizeof(words[0]) };
+    cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+    cleaner(flexFree) flex *f = flexNew();
+    for (size_t i = 0; i < W; i++) {
+        databox ref = databoxNewBytesString(words[(i * 3) % W]);
+        multimapAtomInsertConvert(atoms, &ref);
+        flexInsertByTypeSortedWithReference(&f, &ref, atoms);
+    }
+
+    static const char *sorted[] = {"apple", "banana", "cherry", "date",
+                                   "fig",   "grape",  "kiwi",   "pear"};
+    size_t at = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe), at++) {
+        databox got;
+        databoxWide slot;
+        flexGetByTypeIntoWithReference(fe, &got, &slot, atoms);
+        if (at >= W || databoxLen(&got) != strlen(sorted[at]) ||
+            memcmp(databoxBytes(&got), sorted[at], strlen(sorted[at])) != 0) {
+            databox raw;
+            flexGetByType(fe, &raw);
+            printf("  FAIL: reference set position %zu out of order: "
+                   "resolves to type %d \"%.*s\", stored type %d %" PRIu64 "\n",
+                   at, (int)got.type,
+                   DATABOX_IS_BYTES(&got) ? (int)databoxLen(&got) : 0,
+                   DATABOX_IS_BYTES(&got) ? (const char *)databoxBytes(&got)
+                                          : "",
+                   (int)raw.type, raw.data.u64);
+            bad++;
+        }
+    }
+    if (at != W) {
+        printf("  FAIL: reference set holds %zu of %d\n", at, (int)W);
+        bad++;
+    }
+
+    /* Present keys, keys between, before all and past all */
+    static const struct {
+        const char *probe;
+        const char *lands; /* NULL: the end */
+    } probes[] = {
+        {"apple", "apple"}, {"pear", "pear"},    {"date", "date"},
+        {"aaa", "apple"},   {"coconut", "date"}, {"lime", "pear"},
+        {"zzz", NULL},
+    };
+    for (size_t i = 0; i < sizeof(probes) / sizeof(*probes); i++) {
+        const databox key = databoxNewBytesString(probes[i].probe);
+        flexEntry *fe = flexGetByTypeSortedWithMiddleWithReference(
+            f, 1, &key, flexMiddle(f, 1), atoms);
+        bool ok;
+        if (!probes[i].lands) {
+            ok = fe == GET_END(f);
+        } else {
+            databox got;
+            databoxWide slot;
+            ok = fe && fe != GET_END(f);
+            if (ok) {
+                flexGetByTypeIntoWithReference(fe, &got, &slot, atoms);
+                ok = databoxLen(&got) == strlen(probes[i].lands) &&
+                     memcmp(databoxBytes(&got), probes[i].lands,
+                            strlen(probes[i].lands)) == 0;
+            }
+        }
+        if (!ok) {
+            printf("  FAIL: reference set probe \"%s\" landed wrong\n",
+                   probes[i].probe);
+            bad++;
+        }
+    }
+    return bad;
+}
+
 static int32_t flexTestWideReferenceSorted(void) {
     int32_t bad = 0;
     enum { NARROW_REF_KEYS = 4, REF_KEYS_MAX = 16 };
@@ -10860,6 +10950,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify a reference-sorted set inserts and positions by value:\n");
+    {
+        const int32_t bad = flexTestReferenceSet();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " reference set checks\n", bad);
             return bad;
         }
         printf("  ok\n");

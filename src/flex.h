@@ -430,6 +430,23 @@ flexEntry *flexFindByTypeSortedWithMiddleWithReference(
     const databox *compareAgainst, const flexEntry *middleFE,
     const struct multimapAtom *referenceContainer);
 
+/* The position of 'compareAgainst' (a value, not a reference) in a sorted
+ * flex whose rows may hold references into 'referenceContainer': its row
+ * when present, else the row it would precede (the end past the last).
+ * The Find form above returns NULL on a miss instead. */
+flexEntry *flexGetByTypeSortedWithMiddleWithReference(
+    const flex *f, uint_fast32_t elementsPerEntry,
+    const databox *compareAgainst, const flexEntry *middleFE,
+    const struct multimapAtom *referenceContainer);
+
+/* Insert 'box' into a sorted set (one element per entry) whose entries may
+ * be references into 'referenceContainer': a reference is placed by the
+ * value it resolves to and stored as the reference; any other box is
+ * placed and stored as itself. */
+void flexInsertByTypeSortedWithReference(
+    flex **ff, const databox *box,
+    const struct multimapAtom *referenceContainer);
+
 /* Compare entire map entries */
 int flexCompareEntries(const flex *f, const databox *const *elements,
                        uint_fast32_t elementsPerEntry, int_fast32_t offset);
