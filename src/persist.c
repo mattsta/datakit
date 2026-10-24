@@ -3334,7 +3334,7 @@ const persistOps persistOpsMultiroar = {
  * The HLL is stored internally as an mdsc-prefixed byte buffer
  * (hyperloglog* and mdsc* are layout-compatible — toHLL/toMDSC inside
  * hyperloglog.c are file-static identity casts). Snapshots are the
- * raw bytes; restore mdscnewlen's a fresh copy; PFADD deltas carry
+ * raw bytes; restore mdscnewlen's a fresh copy; add deltas carry
  * the value bytes that hyperloglogAdd hashes internally.
  */
 #include "hyperloglog.h"
@@ -3367,6 +3367,10 @@ static void *hyperloglogPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
+    /* The header's cached count came with the bytes: recount once rather
+     * than trust it */
+    hyperloglogInvalidateCache(h);
+
     /* @own: caller; free=hyperloglogFree */
     hyperloglog *out = h;
     h = NULL;
@@ -3392,7 +3396,7 @@ static size_t hyperloglogPersistEstimateSize(const void *structure) {
 
 static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
                                            size_t argc, size_t *len) {
-    /* For PFADD: args points at the raw value bytes; argc is the
+    /* For an add: args points at the raw value bytes; argc is the
      * byte count. hyperloglogAdd hashes internally, so the WAL
      * carries the original member bytes verbatim.
      *
@@ -3430,12 +3434,8 @@ static bool hyperloglogPersistApplyOp(void *structure, persistOp op,
      * (sparse → dense conversion). */
     hyperloglog **r = structure;
     if (op == PERSIST_OP_INSERT) {
+        /* An add that changes a register invalidates the cached count */
         hyperloglogAdd(r, data, len);
-        /* hyperloglogAdd's DENSE arm sets registers without touching
-         * the cached cardinality (only the sparse arm invalidates
-         * internally) — without this, a dense HLL that absorbed folds
-         * keeps serving its stale cached count. */
-        hyperloglogInvalidateCache(*r);
         return true;
     }
     if (op == PERSIST_OP_MERGE) {

@@ -216,8 +216,9 @@ hyperloglogFree(hll);
 ### Counting Cardinality
 
 ```c
-/* Get cardinality estimate
- * invalid: optional pointer, set to true if HLL is corrupted
+/* Get cardinality estimate: the cached value when valid, else counted
+ * and cached (an add that changes a register invalidates the cache).
+ * invalid: optional pointer, set to true if HLL is corrupted (count 0)
  * Returns: estimated count of unique elements
  */
 uint64_t hyperloglogCount(hyperloglog *h, bool *invalid);
@@ -254,8 +255,8 @@ bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src);
 /* LOW-LEVEL accumulator: folds 'hdr' into 'target', where 'target'
  * MUST already be a RAW scratch (one byte per register) and 'hdr' must
  * NOT be RAW.  Both conditions are asserted.  This is the primitive
- * hyperloglogMergeInto and pfmerge are built from — it is not a merge
- * of two ordinary HLLs. */
+ * hyperloglogMergeInto and the union calls are built from — it is not a
+ * merge of two ordinary HLLs. */
 bool hyperloglogMerge(hyperloglog *target, const hyperloglog *hdr);
 
 /* Materialize a RAW scratch into a fresh storable HLL
@@ -294,9 +295,24 @@ hyperloglogFree(serverB);
 hyperloglogFree(total);
 ```
 
-`pfmerge` is the other route: it accumulates every input into a RAW
-scratch and returns a **new** HLL, choosing dense output if any input was
-dense.
+The union calls are the other route, over an array of sketches; the
+inputs are never modified:
+
+```c
+/* The cardinality of the union of n sketches, without building it.
+ * 0 with *invalid set (when given) if any input is corrupt; 0 for n == 0. */
+uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
+                               bool *invalid);
+
+/* A NEW sketch holding the union (dense if any input is dense);
+ * NULL if any input is corrupt; an empty sketch for n == 0. */
+hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n);
+
+/* Example: a week from its days */
+const hyperloglog *days[2] = {monday, tuesday};
+uint64_t weekly = hyperloglogCountUnion(days, 2, NULL);
+hyperloglog *week = hyperloglogNewUnion(days, 2); /* caller frees */
+```
 
 ### Utility Functions
 
@@ -325,79 +341,15 @@ if (hyperloglogDetect(hll)) {
 hyperloglogFree(hll);
 ```
 
-## User-Friendly API (pfadd, pfcount, pfmerge)
+### The cached count
 
-Convenience functions with variadic arguments:
-
-```c
-/* Add multiple elements (NULL-terminated)
- * Format: pfadd(&hll, data1, len1, data2, len2, ..., NULL)
- * Lengths are passed through the varargs as uintptr_t-width values.
- * If *hh is NULL, a new sparse HLL is created and stored back.
- * Returns: how many adds reported a register change.
- */
-int pfadd(hyperloglog **hh, ...);
-
-/* Count a single HLL, using and refreshing its cached cardinality.
- * UINT64_MAX if the sketch is corrupt. */
-uint64_t pfcountSingle(hyperloglog *h);
-
-/* Count the UNION cardinality of several HLLs (NULL-terminated).
- * Does not modify the inputs.  UINT64_MAX if any of them is corrupt. */
-uint64_t pfcount(hyperloglog *h, ...);
-
-/* Merge several HLLs (NULL-terminated).
- * Returns a NEWLY ALLOCATED merged HyperLogLog; the inputs are
- * untouched and the caller frees all of them plus the result.
- * The result is dense if any input was dense, otherwise sparse. */
-hyperloglog *pfmerge(hyperloglog *h, ...);
-```
-
-**`pfadd`'s return value** counts the adds that changed a register; an
-element already represented changes nothing and is not an error, so a
-return of `0` means no register moved, not that nothing was accepted. It
-is `-1` if the sketch is corrupt (the adds stop there). Use
-`hyperloglogAdd` in a loop when you need a per-element result.
-
-`pfcountSingle` writes the freshly computed estimate back into the header's
+`hyperloglogCount` writes a freshly computed estimate into the header's
 cached-cardinality field, so a "read" can dirty the object — relevant when
 deciding whether a read should trigger a persist or a cross-node write.
-
-### Example: Using Friendly API
-
-```c
-/* Add multiple elements at once */
-hyperloglog *visitors = hyperloglogNew();
-
-const char *user1 = "alice", *user2 = "bob", *user3 = "charlie";
-int updated = pfadd(&visitors,
-    user1, strlen(user1),
-    user2, strlen(user2),
-    user3, strlen(user3),
-    NULL);  // NULL terminates the list
-
-printf("Updated %d registers\n", updated);
-
-/* Count */
-uint64_t count = pfcountSingle(visitors);
-printf("Unique visitors: %" PRIu64 "\n", count);
-
-/* Merge multiple HLLs */
-hyperloglog *monday = hyperloglogNew();
-hyperloglog *tuesday = hyperloglogNew();
-
-pfadd(&monday, "user1", 5, "user2", 5, NULL);
-pfadd(&tuesday, "user2", 5, "user3", 5, NULL);
-
-hyperloglog *week = pfmerge(monday, tuesday, NULL);
-count = pfcountSingle(week);
-printf("Unique visitors this week: %" PRIu64 "\n", count);  /* ~3 */
-
-hyperloglogFree(visitors);
-hyperloglogFree(monday);
-hyperloglogFree(tuesday);
-hyperloglogFree(week);
-```
+`hyperloglogAdd` returns 1 when a register changed (and invalidates the
+cache), 0 for an element already represented (not an error), -1 for a
+corrupt sketch.  A restored snapshot recounts once rather than trusting the
+stored cache.
 
 ## Sparse vs Dense Modes
 

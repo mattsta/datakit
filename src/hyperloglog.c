@@ -240,15 +240,6 @@ static const uint64_t serverSparseMaxBytes = 4096;
 #define toHLLIn(mdsc_) ((hyperloglog **)&(mdsc_))
 #define toMDSC(hyperloglog_) ((mdsc *)(hyperloglog_))
 
-#define HLL_MERGE(max, current, failure)                                       \
-    do {                                                                       \
-        /* Merge with this HLL with our 'max' HHL by setting max[i]            \
-         * to MAX(max[i],hyperloglog[i]). */                                   \
-        if (hyperloglogMerge((max), (current)) == false) {                     \
-            return (failure);                                                  \
-        }                                                                      \
-    } while (0)
-
 /* The cached cardinality signals validity of the cached value. */
 #define HLL_INVALIDATE_CACHE(hdr)                                              \
     do {                                                                       \
@@ -1226,16 +1217,44 @@ DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
     return (uint64_t)E;
 }
 
+/* The cached cardinality when valid; else counted, and cached unless the
+ * sketch is corrupt (0 and *invalid set then) */
 uint64_t hyperloglogCount(hyperloglog *hdr, bool *invalid) {
-    return hyperloglogCount_(hdr, invalid);
+    bool bad = false;
+    if (HLL_VALID_CACHE(hdr)) {
+        if (invalid) {
+            *invalid = false;
+        }
+        return hdr->cardinality;
+    }
+
+    const uint64_t card = hyperloglogCount_(hdr, &bad);
+    if (invalid) {
+        *invalid = bad;
+    }
+    if (bad) {
+        return 0;
+    }
+
+    if (card < HLL_CARDINALITY_MAX) {
+        hdr->cardinality = card;
+        hdr->cardinalityValid = true;
+    }
+
+    return card;
 }
 
 /* Call hyperloglogDenseAdd() or hyperloglogSparseAdd() according to the HLL
- * encoding. */
+ * encoding.  An add that changes a register invalidates the cached
+ * cardinality (the sparse path does so itself). */
 int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size) {
     hyperloglogHeader *hdr = *inHll;
     if (hdr->encoding == HLL_DENSE) {
-        return hyperloglogDenseAdd(hdr->registers, data, size);
+        const int changed = hyperloglogDenseAdd(hdr->registers, data, size);
+        if (changed > 0) {
+            HLL_INVALIDATE_CACHE(hdr);
+        }
+        return changed;
     }
 
     /* else, is sparse */
@@ -1477,115 +1496,34 @@ bool hyperloglogDetect(hyperloglog *h) {
     return true;
 }
 
-/* Add elements to HLL.
- * Parameters alternate: data, len, data2, len2, ..., NULL
- * Return value is the number of elements that updated a register
- * (already-represented elements are no-ops, not errors), or -1 if the
- * HLL is corrupt.  '*hh' is always updated (created if NULL on entry). */
-int pfadd(hyperloglog **hh, ...) {
-    hyperloglog *h = *hh;
-    uint_fast32_t updated = 0;
-
-    if (!h) {
-        /* @own: caller; free=hyperloglogFree */
-        h = hyperloglogNew();
-    }
-
-    va_list ap;
-    va_start(ap, hh);
-    /* Perform the low level ADD operation for every element. */
-    bool corrupt = false;
-    for (;;) {
-        /* Args alternate: data, len, data2, len2, ..., NULL */
-        uint8_t *argData = va_arg(ap, uint8_t *);
-        if (!argData) {
-            break;
+/* Fold every sketch of 'hlls' into the RAW scratch 'raw' (register-wise
+ * max), noting whether any is dense; false if one is corrupt */
+static bool hyperloglogFoldAll_(hyperloglog *raw,
+                                const hyperloglog *const *hlls, size_t n,
+                                bool *anyDense) {
+    for (size_t i = 0; i < n; i++) {
+        if (!hyperloglogMerge(raw, hlls[i])) {
+            return false;
         }
-
-        /* We are cheating the type system by storing the length as a
-         * direct pointer value then casting back to an integer type. */
-        const uintptr_t argLen = va_arg(ap, uintptr_t);
-
-        /* hyperloglogAdd: 1 = register updated, 0 = no change (an
-         * already-represented element; NOT an error), -1 = corrupt. */
-        const int added = hyperloglogAdd(&h, argData, argLen);
-        if (added > 0) {
-            updated++;
-        } else if (added < 0) {
-            corrupt = true;
-            break;
+        if (hlls[i]->encoding == HLL_DENSE) {
+            *anyDense = true;
         }
     }
-    va_end(ap);
-
-    if (updated) {
-        HLL_INVALIDATE_CACHE(h);
-    }
-
-    /* Always hand back the (possibly newly created or realloc'd) HLL,
-     * even on the corruption path, so the caller can free it. */
-    *hh = h;
-    return corrupt ? -1 : (int)updated;
+    return true;
 }
 
-/* The approximated cardinality of one sketch (its cached value when valid,
- * else counted and cached). */
-uint64_t pfcountSingle(hyperloglog *h) {
-    uint64_t card;
-
-#if 0
-    if (hyperloglogDetect(h) == false) {
-        return -1;
-    }
-#endif
-
-    /* Check if the cached cardinality is valid. */
-    hyperloglog *hdr = h;
-    if (HLL_VALID_CACHE(hdr)) {
-        /* Just return the cached value. */
-        card = hdr->cardinality;
-    } else {
-        bool invalid = false;
-        /* Recompute it and update the cached value. */
-        card = hyperloglogCount(hdr, &invalid);
-        if (invalid) {
-            return -1;
-        }
-
-        if (card < HLL_CARDINALITY_MAX) {
-            /* You've got bigger problems if your count
-             * reaches 2^61 - 1... */
-            hdr->cardinality = card;
-            hdr->cardinalityValid = true;
-        }
-
-        /* Note: this read can modify the HLL because it updates
-         * the cached cardinality. It's a policy decision whether
-         * this cache update should constitute a new cross-node
-         * persisting wite. */
-    }
-
-    return card;
-}
-
-DK_INLINE_ALWAYS uint64_t pfvcount(hyperloglog *first, va_list ap) {
-    /* Several sketches: the cardinality of their union, counted from the
-     * merge of all of them. */
+uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
+                               bool *invalid) {
     hllStatic max = {0};
+    hyperloglog *raw = toHLL(max);
+    raw->encoding = HLL_RAW; /* Special internal-only encoding. */
 
-    /* Compute an HLL with M[i] = MAX(M[i]_j). */
-    hyperloglog *hdr = toHLL(max);
-    hdr->encoding = HLL_RAW; /* Special internal-only encoding. */
-
-    HLL_MERGE(hdr, first, -1);
-
-    hyperloglog *current;
-    while ((current = va_arg(ap, hyperloglog *))) {
-        HLL_MERGE(hdr, current, -1);
+    bool anyDense = false;
+    const bool ok = hyperloglogFoldAll_(raw, hlls, n, &anyDense);
+    if (invalid) {
+        *invalid = !ok;
     }
-
-    /* Compute cardinality of the resulting set. */
-    return hyperloglogCount_(hdr, NULL);
+    return ok ? hyperloglogCount_(raw, NULL) : 0;
 }
 
 hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense) {
@@ -1654,50 +1592,19 @@ bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src) {
     return true;
 }
 
-/* Returns merged count of all input parameters. */
-uint64_t pfcount(hyperloglog *h, ...) {
-    va_list ap;
-    va_start(ap, h);
-    const uint64_t count = pfvcount(h, ap);
-    va_end(ap);
-    return count;
-}
-
-/* Merge the NULL-terminated list of sketches after 'first' into a new
- * sketch holding their union */
-DK_INLINE_ALWAYS hyperloglog *pfvmerge(hyperloglog *first, va_list ap) {
+hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n) {
     hllStatic max = {0};
-    hyperloglog *restrict total = toHLL(max);
-    total->encoding = HLL_RAW; /* Special internal-only encoding. */
-    bool useDense = false;
+    hyperloglog *raw = toHLL(max);
+    raw->encoding = HLL_RAW; /* Special internal-only encoding. */
 
-    HLL_MERGE(total, first, NULL);
-    /* Compute an HLL with M[i] = MAX(M[i]_j).
-     * We we the maximum into the max array of registers. We'll write
-     * it to the target variable later. */
-    hyperloglog *current;
-    while ((current = va_arg(ap, hyperloglog *))) {
-        HLL_MERGE(total, current, NULL);
-        if (current->encoding == HLL_DENSE) {
-            useDense = true;
-        }
+    /* Dense when any input is (a union is at least as full as each) */
+    bool anyDense = false;
+    if (!hyperloglogFoldAll_(raw, hlls, n, &anyDense)) {
+        return NULL;
     }
 
-    /* Materialize through the shared RAW-to-live constructor: it reads
-     * through total->registers (the register array starts AFTER the
-     * header in the scratch buffer — indexing `max` directly read
-     * header bytes as registers 0..7), handles mid-loop sparse-to-dense
-     * promotion, and invalidates the cache. */
-    return hyperloglogNewFromRaw(total, useDense);
-}
-
-/* Returns newly allocated hyperloglog having cardinality of all inputs. */
-hyperloglog *pfmerge(hyperloglog *h, ...) {
-    va_list ap;
-    va_start(ap, h);
-    hyperloglog *restrict const merged = pfvmerge(h, ap);
-    va_end(ap);
-    return merged;
+    /* @own: caller; free=hyperloglogFree */
+    return hyperloglogNewFromRaw(raw, anyDense);
 }
 
 /* ========================== Testing / Debugging  ========================== */
@@ -1711,9 +1618,6 @@ hyperloglog *pfmerge(hyperloglog *h, ...) {
 defcleanerName(uint8_t *, zfree, U8);
 defcleaner(hyperloglog *, hyperloglogFree);
 
-/* PFSELFTEST
- * This command performs a self-test of the HLL registers implementation.
- * Something that is not easy to test from within the outside. */
 /* Register-access cycles; the approximation test adds 10000x as many
  * elements (10M), still crossing every sparse/dense checkpoint */
 #define HLL_TEST_CYCLES 1000
@@ -1795,7 +1699,10 @@ int hyperloglogTest(int argc, char *argv[]) {
                    j, (float)j / testCount * 100);
         }
         ele = j ^ seed;
-        hyperloglogDenseAdd(hdr->registers, (uint8_t *)&ele, sizeof(ele));
+        /* Through hyperloglogAdd, as a caller would: it invalidates the
+         * cached count when a register changes (a dense add never moves
+         * the buffer) */
+        hyperloglogAdd(&hdr, &ele, sizeof(ele));
         hyperloglogAdd(&h, &ele, sizeof(ele));
 
         /* Make sure for small cardinalities we use sparse encoding. */
@@ -1867,12 +1774,13 @@ cleanup:
             hyperloglogAdd(&h2, &v2, sizeof(v2));
         }
 
-        uint64_t count1 = pfcountSingle(h1);
-        uint64_t count2 = pfcountSingle(h2);
+        uint64_t count1 = hyperloglogCount(h1, NULL);
+        uint64_t count2 = hyperloglogCount(h2, NULL);
 
         /* Merge h2 into a new HLL that also has h1's data */
-        hyperloglog *merged = pfmerge(h1, h2, (hyperloglog *)NULL);
-        uint64_t countMerged = pfcountSingle(merged);
+        const hyperloglog *pair[2] = {h1, h2};
+        hyperloglog *merged = hyperloglogNewUnion(pair, 2);
+        uint64_t countMerged = hyperloglogCount(merged, NULL);
 
         /* Merged count should be approximately count1 + count2 */
         /* Allow 10% error margin */
@@ -1918,11 +1826,11 @@ cleanup:
         uint64_t startTime = timeUtilMonotonicNs();
 
         for (int iter = 0; iter < mergeIterations; iter++) {
-            hyperloglog *result =
-                pfmerge(hlls[0], hlls[1], (hyperloglog *)NULL);
+            const hyperloglog *first[2] = {hlls[0], hlls[1]};
+            hyperloglog *result = hyperloglogNewUnion(first, 2);
             for (int i = 2; i < numHlls; i++) {
-                hyperloglog *newResult =
-                    pfmerge(result, hlls[i], (hyperloglog *)NULL);
+                const hyperloglog *next[2] = {result, hlls[i]};
+                hyperloglog *newResult = hyperloglogNewUnion(next, 2);
                 hyperloglogFree(result);
                 result = newResult;
             }
@@ -2016,8 +1924,6 @@ cleanup:
         printf("  Speedup: %.2fx\n", speedup);
     }
 
-    /* pfadd contract: every vararg element is added, duplicates are
-     * no-ops rather than failures, and a NULL *hh is populated. */
     printf("Testing the estimator's tau against its series...\n");
     {
         /* tau(x) = (1 - x - sum_k (1 - x^(2^-k))^2 2^-k) / 3, summed here
@@ -2051,19 +1957,23 @@ cleanup:
         unk->encoding = 3; /* the 2-bit field's one unused value */
         bool invalid = false;
         const uint64_t count = hyperloglogCount(unk, &invalid);
-        /* The convenience counts report a corrupt sketch as UINT64_MAX */
+        /* A union over a corrupt sketch: no count, no sketch, and a
+         * corrupt count is never cached */
         hyperloglog *fine = hyperloglogNewDense();
-        unk->encoding = 3;
-        HLL_INVALIDATE_CACHE(unk);
-        const uint64_t single = pfcountSingle(unk);
-        const uint64_t unionOf = pfcount(fine, unk, (hyperloglog *)NULL);
+        const hyperloglog *withBad[2] = {fine, unk};
+        bool unionBad = false;
+        const uint64_t unionOf = hyperloglogCountUnion(withBad, 2, &unionBad);
+        hyperloglog *unionSketch = hyperloglogNewUnion(withBad, 2);
+        bool again = false;
+        hyperloglogCount(unk, &again);
         unk->encoding = saved;
         hyperloglogFree(fine);
-        if (single != UINT64_MAX || unionOf != UINT64_MAX) {
-            printf("  [FAIL] corrupt sketch: single %" PRIu64 ", union %" PRIu64
-                   "\n",
-                   single, unionOf);
+        if (unionOf != 0 || !unionBad || unionSketch || !again) {
+            printf("  [FAIL] corrupt sketch: union %" PRIu64
+                   " (invalid %d), sketch %p, recount invalid %d\n",
+                   unionOf, unionBad, (void *)unionSketch, again);
             errors++;
+            hyperloglogFree(unionSketch);
         }
         if (count != 0 || !invalid) {
             printf("  [FAIL] unknown encoding: count %" PRIu64 ", invalid %d\n",
@@ -2117,39 +2027,39 @@ cleanup:
         hyperloglogFree(oracle);
     }
 
-    printf("Testing pfadd batches...\n");
+    printf("Testing the cached count across adds, both encodings...\n");
     {
-        hyperloglog *ph = NULL;
-        const int rc = pfadd(&ph, "alpha", (uintptr_t)5, "beta", (uintptr_t)4,
-                             "gamma", (uintptr_t)5, NULL);
-        if (!ph || rc != 3) {
-            printf("  [FAIL] pfadd batch: rc %d (expected 3), ph %p\n", rc,
-                   (void *)ph);
-            errors++;
+        /* Counting caches the estimate; an add that changes a register
+         * invalidates it (the dense path used not to, so a dense sketch
+         * kept serving its old count), a repeat add changes nothing */
+        for (int dense = 0; dense <= 1; dense++) {
+            cleaner(hyperloglogFree) hyperloglog *sk =
+                dense ? hyperloglogNewDense() : hyperloglogNewSparse();
+            static const char *const words[] = {"alpha", "beta", "gamma"};
+            for (size_t i = 0; i < 3; i++) {
+                hyperloglogAdd(&sk, words[i], strlen(words[i]));
+            }
+            bool invalid = false;
+            const uint64_t three = hyperloglogCount(sk, &invalid);
+            const int repeat = hyperloglogAdd(&sk, "alpha", 5);
+            const uint64_t stillThree = hyperloglogCount(sk, &invalid);
+            const int fresh = hyperloglogAdd(&sk, "delta", 5);
+            const uint64_t four = hyperloglogCount(sk, &invalid);
+            if (three != 3 || repeat != 0 || stillThree != 3 || fresh != 1 ||
+                four != 4 || invalid) {
+                printf("  [FAIL] %s cache: %" PRIu64 ", repeat %d, %" PRIu64
+                       ", fresh %d, %" PRIu64 "\n",
+                       dense ? "dense" : "sparse", three, repeat, stillThree,
+                       fresh, four);
+                errors++;
+            }
         }
-
-        /* Re-adding the same elements must be a clean no-op batch, and
-         * a fresh element after a duplicate must still land. */
-        const int rc2 =
-            pfadd(&ph, "alpha", (uintptr_t)5, "delta", (uintptr_t)5, NULL);
-        bool invalid = false;
-        const uint64_t est = hyperloglogCount(ph, &invalid);
-        if (rc2 < 0 || invalid || est != 4) {
-            printf("  [FAIL] pfadd dedupe: rc2 %d, invalid %d, count %" PRIu64
-                   " (expected 4)\n",
-                   rc2, (int)invalid, est);
-            errors++;
-        } else {
-            printf("  [OK] pfadd: batch adds, duplicate no-ops, exact "
-                   "4-element count\n");
-        }
-
-        hyperloglogFree(ph);
     }
 
     {
-        /* A copy is independent of its source; pfcount over several HLLs
-         * counts their union, the same as merging them first */
+        /* A copy is independent of its source; the union count of several
+         * sketches equals the count of their merge and of the new union
+         * sketch; no sketches count 0 and union to an empty sketch */
         cleaner(hyperloglogFree) hyperloglog *a = hyperloglogNewSparse();
         cleaner(hyperloglogFree) hyperloglog *b = hyperloglogNew();
         bool invalid = false;
@@ -2178,19 +2088,25 @@ cleanup:
 
         cleaner(hyperloglogFree) hyperloglog *merged = hyperloglogCopy(a);
         hyperloglogMergeInto(&merged, b);
-        const uint64_t unionCount = pfcount(a, b, NULL);
+        const hyperloglog *ab[2] = {a, b};
+        const uint64_t unionCount = hyperloglogCountUnion(ab, 2, &invalid);
         const uint64_t mergedCount = hyperloglogCount(merged, &invalid);
+        cleaner(hyperloglogFree) hyperloglog *u = hyperloglogNewUnion(ab, 2);
+        cleaner(hyperloglogFree) hyperloglog *none = hyperloglogNewUnion(ab, 0);
         if (hyperloglogCount(a, &invalid) != countA ||
             unionCount != mergedCount || unionCount < 1400 ||
-            unionCount > 1600) {
-            printf("  [FAIL] copy/pfcount: a %" PRIu64 " (was %" PRIu64
+            unionCount > 1600 || !u ||
+            hyperloglogCount(u, &invalid) != unionCount || !none ||
+            hyperloglogCount(none, &invalid) != 0 ||
+            hyperloglogCountUnion(ab, 0, &invalid) != 0 || invalid) {
+            printf("  [FAIL] copy/union: a %" PRIu64 " (was %" PRIu64
                    "), union %" PRIu64 ", merged %" PRIu64 "\n",
                    hyperloglogCount(a, &invalid), countA, unionCount,
                    mergedCount);
             errors++;
         } else {
-            printf("  [OK] copy independent; pfcount union %" PRIu64
-                   " == merged\n",
+            printf("  [OK] copy independent; union count %" PRIu64
+                   " == merged == union sketch\n",
                    unionCount);
         }
     }
