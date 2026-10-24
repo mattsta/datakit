@@ -5581,6 +5581,79 @@ static int testFuzzSerializationRoundtrip(void) {
         }
     }
 
+    TEST("ketama walk matches a linear scan on both sides of 32 vnodes") {
+        /* Rings of 6, 15, 30, 32 and 120 vnodes (the search switches
+         * strategy at 32): for each key, the walk's nodes in order are the
+         * distinct nodes met scanning the sorted vnodes from the first
+         * hash point at or after the key's hash, wrapping */
+        static const struct {
+            uint32_t nodes;
+            uint32_t perNode;
+        } shapes[] = {{3, 2}, {3, 5}, {3, 10}, {4, 8}, {3, 40}};
+        for (size_t s = 0; s < sizeof(shapes) / sizeof(*shapes); s++) {
+            clusterRingConfig config = {
+                .name = "ketama-walk",
+                .strategyType = CLUSTER_STRATEGY_KETAMA,
+                .vnodes = {.vnodeMultiplier = 100,
+                           .minVnodesPerNode = shapes[s].perNode,
+                           .maxVnodesPerNode = shapes[s].perNode},
+            };
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
+            for (uint32_t n = 1; n <= shapes[s].nodes; n++) {
+                clusterNodeConfig nc = {
+                    .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
+                clusterRingAddNode(ring, &nc);
+            }
+            clusterRingSortVnodes(ring);
+            const clusterKetamaData *data = &ring->vnodes;
+            if (data->vnodeCount != shapes[s].nodes * shapes[s].perNode) {
+                ERR("shape %zu: %u vnodes, want %u", s, data->vnodeCount,
+                    shapes[s].nodes * shapes[s].perNode);
+                continue;
+            }
+            size_t wrong = 0;
+            for (uint32_t k = 0; k < 2000; k++) {
+                char key[24];
+                const uint32_t len =
+                    (uint32_t)snprintf(key, sizeof(key), "walk-%u", k);
+                const uint64_t hash = clusterHash64(key, len, ring->hashSeed);
+                uint32_t lo = 0;
+                while (lo < data->vnodeCount &&
+                       data->vnodes[lo].hashPoint < hash) {
+                    lo++;
+                }
+                lo = lo == data->vnodeCount ? 0 : lo;
+                const clusterNode *want[8];
+                uint32_t nWant = 0;
+                for (uint32_t i = 0;
+                     i < data->vnodeCount && nWant < shapes[s].nodes; i++) {
+                    const clusterNode *node =
+                        data->vnodes[(lo + i) % data->vnodeCount].nodePtr;
+                    bool seen = false;
+                    for (uint32_t j = 0; j < nWant; j++) {
+                        seen = seen || want[j] == node;
+                    }
+                    if (!seen) {
+                        want[nWant++] = node;
+                    }
+                }
+                const clusterNode *got[8];
+                const uint32_t nGot = clusterKetamaWalk(ring, key, len, got,
+                                                        shapes[s].nodes, -1.0);
+                bool same = nGot == nWant;
+                for (uint32_t j = 0; same && j < nGot; j++) {
+                    same = got[j] == want[j];
+                }
+                wrong += !same;
+            }
+            if (wrong) {
+                ERR("shape %zu (%u vnodes): %zu of 2000 walks differ", s,
+                    data->vnodeCount, wrong);
+            }
+        }
+    }
+
     TEST("FUZZ: Serialization with random data") {
         for (int trial = 0; trial < 10; trial++) {
             clusterRingConfig config = {
