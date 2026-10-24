@@ -1996,18 +1996,6 @@ bool multimapFullExistsWithReference(const multimapFull *m, const databox *key,
     return false;
 }
 
-bool multimapFullExistsFullWidthWithReference(
-    multimapFull *m, const databox *elements[],
-    const multimapAtom *referenceContainer) {
-    const multimapFullIdx mapIdx =
-        multimapFullBinarySearchFullWidth(m, elements);
-    assert(mapIdx < m->count);
-    const flex *map = getMap(m, mapIdx);
-    return !!flexFindByTypeSortedWithMiddleFullWidthWithReference(
-        map, m->elementsPerEntry, elements, GET_MIDDLE(m, mapIdx, map),
-        referenceContainer);
-}
-
 /* ====================================================================
  * Single-Key Lookup API
  * ==================================================================== */
@@ -2271,13 +2259,6 @@ bool multimapFullDeleteWithFound(multimapFull *m, const databox *key,
     const databox *elements[1] = {key};
     return abstractDelete(m, elements, false, false, NULL, foundReference, NULL,
                           false);
-}
-
-bool multimapFullDeleteFullWidthWithReference(
-    multimapFull *m, const databox *elements[],
-    const multimapAtom *referenceContainer, databox *foundReference) {
-    return abstractDelete(m, elements, true, true, referenceContainer,
-                          foundReference, NULL, false);
 }
 
 bool multimapFullRandomValue(multimapFull *m, const bool fromTail,

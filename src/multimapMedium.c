@@ -530,7 +530,7 @@ DK_INLINE_ALWAYS void multimapMediumConform_(multimapMedium *m,
     }
 }
 
-void multimapMediumDeleteEntry(multimapMedium *m, multimapEntry *me) {
+static void multimapMediumDeleteEntry(multimapMedium *m, multimapEntry *me) {
     /* Step 1: pick victim map */
     const size_t mapIdx = me->mapIdx;
 

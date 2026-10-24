@@ -95,6 +95,13 @@ void multimapDeleteEntryWithReference(
     const struct multimapAtom *referenceContainer);
 void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
 void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
+/* multimapReplaceEntry for a map whose keys are references into
+ * 'referenceContainer': the replace may then re-balance the Full tier's
+ * sub-maps (resolving keys through the references), which the plain
+ * form must not do without the container */
+void multimapReplaceEntryWithReference(
+    multimap **m, multimapEntry *me, const databox *box,
+    const struct multimapAtom *referenceContainer);
 
 bool multimapExists(const multimap *m, const databox *key);
 bool multimapExistsFullWidth(const multimap *m, const databox *elements[]);
@@ -126,6 +133,12 @@ bool multimapExistsWithReference(const multimap *m, const databox *key,
  * InsertReplacing's replacedOut, DeleteReporting's removedOut and
  * DeleteWithFound / DeleteWithReference's foundReference. */
 bool multimapLookup(const multimap *m, const databox *key, databox *elements[]);
+/* multimapLookup for a map whose keys are references into
+ * 'referenceContainer' (written by the WithReference inserts): 'key' is the
+ * value, found by what the stored references resolve to */
+bool multimapLookupWithReference(const multimap *m, const databox *key,
+                                 databox *elements[],
+                                 const struct multimapAtom *referenceContainer);
 
 /* NOTE: despite the scalar-looking `databox **found`, this fills a
  * FULL-WIDTH pointer array (elementsPerEntry boxes) when non-NULL -

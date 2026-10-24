@@ -234,14 +234,6 @@ bool multimapSmallExistsWithReference(multimapSmall *m, const databox *key,
     return false;
 }
 
-bool multimapSmallExistsFullWidthWithReference(
-    multimapSmall *m, const databox *elements[],
-    const multimapAtom *referenceContainer) {
-    return !!flexFindByTypeSortedWithMiddleFullWidthWithReference(
-        m->map, m->elementsPerEntry, elements, GET_MIDDLE(m),
-        referenceContainer);
-}
-
 DK_INLINE_ALWAYS bool abstractLookup(multimapSmall *m, const databox *key,
                                      databox *elements[],
                                      const bool useReference,
@@ -271,6 +263,12 @@ DK_INLINE_ALWAYS bool abstractLookup(multimapSmall *m, const databox *key,
 bool multimapSmallLookup(multimapSmall *m, const databox *key,
                          databox *elements[]) {
     return abstractLookup(m, key, elements, false, NULL);
+}
+
+bool multimapSmallLookupWithReference(multimapSmall *m, const databox *key,
+                                      databox *elements[],
+                                      const multimapAtom *referenceContainer) {
+    return abstractLookup(m, key, elements, true, referenceContainer);
 }
 
 bool multimapSmallRandomValue(multimapSmall *m, const bool fromTail,
@@ -318,7 +316,7 @@ bool multimapSmallRandomValue(multimapSmall *m, const bool fromTail,
     return true;
 }
 
-void multimapSmallDeleteEntry(multimapSmall *m, multimapEntry *me) {
+static void multimapSmallDeleteEntry(multimapSmall *m, multimapEntry *me) {
     flex **map = me->map;
     flexEntry *middle = GET_MIDDLE(m);
 
@@ -429,13 +427,6 @@ bool multimapSmallDeleteWithFound(multimapSmall *m, const databox *key,
     const databox *elements[1] = {key};
     return abstractDelete(m, elements, false, true, NULL, foundReference, NULL,
                           false);
-}
-
-bool multimapSmallDeleteFullWidthWithReference(
-    multimapSmall *m, const databox *elements[],
-    const multimapAtom *referenceContainer, databox *foundReference) {
-    return abstractDelete(m, elements, true, true, referenceContainer,
-                          foundReference, NULL, false);
 }
 
 /* Row entry at position 'keyIndex' (0-based forward; negative =

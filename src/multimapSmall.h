@@ -43,6 +43,9 @@ bool multimapSmallExistsWithReference(
 
 bool multimapSmallLookup(multimapSmall *m, const databox *key,
                          databox *elements[]);
+bool multimapSmallLookupWithReference(
+    multimapSmall *m, const databox *key, databox *elements[],
+    const struct multimapAtom *referenceContainer);
 /* fromTail == false: uniform random row; true: the last row, every call.
  * See multimapFull.h. */
 bool multimapSmallRandomValue(multimapSmall *m, bool fromTail,

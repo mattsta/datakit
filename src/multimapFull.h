@@ -79,6 +79,9 @@ bool multimapFullExistsWithReference(
 
 bool multimapFullLookup(multimapFull *m, const databox *key,
                         databox *elements[]);
+bool multimapFullLookupWithReference(
+    multimapFull *m, const databox *key, databox *elements[],
+    const struct multimapAtom *referenceContainer);
 /* Select one row.  fromTail == false picks a row uniformly at random across
  * all sub-maps.  fromTail == true returns the container's last row (its
  * greatest key) on every call; it is a positional selector, not a sample.

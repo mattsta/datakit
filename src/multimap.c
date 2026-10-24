@@ -591,7 +591,8 @@ bool multimapGetUnderlyingEntryWithReference(
                     referenceContainer);
 }
 
-void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx, flex **map) {
+static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
+                                  flex **map) {
     const multimapType type = multimapType_(*m);
     if (type == MULTIMAP_TYPE_SMALL || type == MULTIMAP_TYPE_MEDIUM) {
         const uint32_t depth = COMPRESS_DEPTH(*m);
@@ -713,6 +714,12 @@ bool multimapExistsWithReference(
 bool multimapLookup(const multimap *m, const databox *key,
                     databox *elements[]) {
     MULTIMAP_RETURN(m, Lookup, key, elements);
+}
+
+bool multimapLookupWithReference(const multimap *m, const databox *key,
+                                 databox *elements[],
+                                 const multimapAtom *referenceContainer) {
+    MULTIMAP_RETURN(m, LookupWithReference, key, elements, referenceContainer);
 }
 
 bool multimapDelete(multimap **m, const databox *key) {
@@ -1306,6 +1313,9 @@ void multimapVerify(const multimap *m) {
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
+
+#include "multimapAtom.h"
+defcleaner(multimapAtom *, multimapAtomFree);
 
 #include "str.h" /* for xoroshiro128plus */
 
@@ -3984,6 +3994,57 @@ int multimapTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
+
+    TEST("LookupWithReference finds rows keyed by atom references, every "
+         "tier") {
+        /* Rows inserted under a surrogate atom reference (the stored key)
+         * are found by the key's value through the atom table in the
+         * Small, Medium and Full tiers; an absent key is not */
+        static const size_t sizes[] = {3, 100, 150, 200, 300, 2000};
+        unsigned tiers = 0;
+        for (size_t t = 0; t < sizeof(sizes) / sizeof(*sizes); t++) {
+            cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+            for (size_t i = 0; i < sizes[t]; i++) {
+                char buf[24];
+                snprintf(buf, sizeof(buf), "lookup-key-%05zu",
+                         (i * 7) % sizes[t]);
+                const databox key = databoxNewBytesString(buf);
+                databox ref = key;
+                multimapAtomInsertConvert(atoms, &ref);
+                const databox val = databoxNewUnsigned((i * 7) % sizes[t]);
+                const databox *row[2] = {&key, &val};
+                multimapInsertWithSurrogateKey(&m, row, &ref, atoms);
+            }
+            tiers |= 1u << multimapType_(m);
+            size_t missed = 0;
+            for (size_t i = 0; i < sizes[t]; i++) {
+                char buf[24];
+                snprintf(buf, sizeof(buf), "lookup-key-%05zu", i);
+                const databox key = databoxNewBytesString(buf);
+                databox got = {{0}};
+                databox *out[1] = {&got};
+                if (!multimapLookupWithReference(m, &key, out, atoms) ||
+                    got.data.u64 != i) {
+                    missed++;
+                }
+            }
+            const databox absent = databoxNewBytesString("lookup-key-absent");
+            databox got = {{0}};
+            databox *out[1] = {&got};
+            if (missed || multimapLookupWithReference(m, &absent, out, atoms)) {
+                ERR("lookup by reference: %zu of %zu missed (size %zu)", missed,
+                    sizes[t], sizes[t]);
+            }
+            multimapFree(m);
+        }
+        const unsigned all = (1u << MULTIMAP_TYPE_SMALL) |
+                             (1u << MULTIMAP_TYPE_MEDIUM) |
+                             (1u << MULTIMAP_TYPE_FULL);
+        if ((tiers & all) != all) {
+            ERR("lookup by reference: tiers seen 0x%x, want 0x%x", tiers, all);
+        }
+    }
 
     TEST("delete by entry through every tier") {
         err += multimapDeleteEntrySweep_();
