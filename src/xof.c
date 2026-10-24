@@ -59,18 +59,12 @@ void xofAppend(xof *restrict const x, size_t *restrict const bitsUsed,
                int_fast32_t *restrict const prevLeadingZeroes,
                int_fast32_t *restrict const prevTrailingZeroes,
                const double prevVal, const double newVal) {
-/* Get binary representation of the doubles */
-#if XOF_DIRECT_ACCESS
-    /* -fno-strict-aliasing */
-    const uint64_t o = *(uint64_t *)&prevVal;
-    const uint64_t v = *(uint64_t *)&newVal;
-#else
-    /* -fstrict-aliasing */
+    /* The doubles' bits: memcpy is the defined way to read them (and
+     * compiles to a register move) */
     uint64_t o = 0;
     uint64_t v = 0;
     memcpy(&o, &prevVal, sizeof(prevVal));
     memcpy(&v, &newVal, sizeof(newVal));
-#endif
 
     /* __builtin_clzll/ctzll take a 64-bit unsigned argument. */
     const uint64_t compared = o ^ v;
