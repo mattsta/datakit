@@ -2053,19 +2053,21 @@ cleanup:
          * added */
         hyperloglog *few = hyperloglogNewSparse();
         hyperloglog *many = hyperloglogNewDense();
+        /* hashed by strlen: the bytes in the buffer, never snprintf's
+         * would-have-written length */
         char elem[24];
         for (int i = 0; i < 10; i++) {
-            const int n = snprintf(elem, sizeof(elem), "few-%d", i);
-            hyperloglogAdd(&few, elem, (size_t)n);
+            snprintf(elem, sizeof(elem), "few-%d", i);
+            hyperloglogAdd(&few, elem, strlen(elem));
         }
         for (int i = 0; i < 5000; i++) {
-            const int n = snprintf(elem, sizeof(elem), "many-%d", i);
-            hyperloglogAdd(&many, elem, (size_t)n);
+            snprintf(elem, sizeof(elem), "many-%d", i);
+            hyperloglogAdd(&many, elem, strlen(elem));
         }
         hyperloglog *oracle = hyperloglogCopy(many);
         for (int i = 0; i < 10; i++) {
-            const int n = snprintf(elem, sizeof(elem), "few-%d", i);
-            hyperloglogAdd(&oracle, elem, (size_t)n);
+            snprintf(elem, sizeof(elem), "few-%d", i);
+            hyperloglogAdd(&oracle, elem, strlen(elem));
         }
         const bool wasSparse = isSparse(few);
         const bool merged = hyperloglogMergeInto(&few, many);
