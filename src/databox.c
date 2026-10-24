@@ -3146,6 +3146,97 @@ int databoxTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("databoxCompare: every numeric type pair against exact values") {
+        /* Values held as twice themselves (halves stay exact), each in
+         * every numeric type that represents it exactly: every pair of
+         * boxes compares with the sign of their exact difference */
+        static const __int128 twice[] = {-((__int128)1 << 65),
+                                         -10,
+                                         -5,
+                                         0,
+                                         5,
+                                         6,
+                                         (__int128)1 << 41,
+                                         ((__int128)1 << 41) + 1,
+                                         (__int128)1 << 63,
+                                         (__int128)1 << 66,
+                                         ((__int128)UINT64_MAX) * 2};
+        static const databoxType types[] = {
+            DATABOX_SIGNED_64, DATABOX_UNSIGNED_64, DATABOX_FLOAT_32,
+            DATABOX_DOUBLE_64, DATABOX_SIGNED_128,  DATABOX_UNSIGNED_128};
+        enum { NV = sizeof(twice) / sizeof(*twice) };
+        enum { NT = sizeof(types) / sizeof(*types) };
+        databoxBig boxes[NV * NT];
+        __int128 value2[NV * NT];
+        size_t n = 0;
+        for (size_t v = 0; v < NV; v++) {
+            const __int128 t = twice[v];
+            const bool integral = t % 2 == 0;
+            const __int128 whole = t / 2;
+            for (size_t k = 0; k < NT; k++) {
+                databoxBig *b = &boxes[n];
+                memset(b, 0, sizeof(*b));
+                bool ok = false;
+                switch (types[k]) {
+                case DATABOX_SIGNED_64:
+                    ok = integral && whole >= INT64_MIN && whole <= INT64_MAX;
+                    *b = DATABOX_BIG_SIGNED((int64_t)whole);
+                    break;
+                case DATABOX_UNSIGNED_64:
+                    ok = integral && whole >= 0 && whole <= UINT64_MAX;
+                    *b = DATABOX_BIG_UNSIGNED((uint64_t)whole);
+                    break;
+                case DATABOX_FLOAT_32: {
+                    const float f = (float)((double)t / 2.0);
+                    ok = (__int128)((double)f * 2.0) == t;
+                    b->type = DATABOX_FLOAT_32;
+                    b->data.f32 = f;
+                    break;
+                }
+                case DATABOX_DOUBLE_64: {
+                    const double d = (double)t / 2.0;
+                    ok = (__int128)(d * 2.0) == t;
+                    b->type = DATABOX_DOUBLE_64;
+                    b->data.d64 = d;
+                    break;
+                }
+                case DATABOX_SIGNED_128:
+                    ok = integral;
+                    DATABOX_BIG_SIGNED_128(b, whole);
+                    break;
+                case DATABOX_UNSIGNED_128:
+                    ok = integral && whole >= 0;
+                    DATABOX_BIG_UNSIGNED_128(b, (__uint128_t)whole);
+                    break;
+                default:
+                    break;
+                }
+                if (ok) {
+                    value2[n++] = t;
+                }
+            }
+        }
+        size_t wrong = 0;
+        for (size_t i = 0; i < n; i++) {
+            for (size_t j = 0; j < n; j++) {
+                const int want = value2[i] < value2[j]   ? -1
+                                 : value2[i] > value2[j] ? 1
+                                                         : 0;
+                const int got = databoxCompare((const databox *)&boxes[i],
+                                               (const databox *)&boxes[j]);
+                if ((got > 0) - (got < 0) != want) {
+                    if (wrong++ < 4) {
+                        ERR("types %d vs %d: compare %d, want %d",
+                            (int)boxes[i].type, (int)boxes[j].type, got, want);
+                    }
+                }
+            }
+        }
+        if (wrong) {
+            ERR("%zu of %zu numeric comparisons wrong", wrong, n * n);
+        }
+    }
+
     TEST("databoxGetBytes: every bytes-carrying type, false for the rest") {
         /* BYTES, NEVER_FREE, embedded bytes and an mdsc string give their
          * bytes; booleans, null and a 128-bit integer have no byte form
