@@ -47,11 +47,6 @@ void flexFree(flex *f);
  *     see flexGetByType.
  *   - It does not verify reverse-traversal trailers, so walk untrusted
  *     bytes forward only (flexHead / flexNext, not flexTail / flexPrev).
- *   - It does not verify the contents of nested containers.  A
- *     container box decoded from validated bytes points at nested flex
- *     bytes nobody has checked; validate them before reading them
- *     (flexPeekTotalBytes(start, len, &total), then
- *     flexValidateBufferDeep(start, total)).
  *
  * flexTest runs every single-byte mutation of several valid flexes
  * through these functions and decodes every buffer the deep check
@@ -300,7 +295,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
  * the key; every slot is VOID when nothing was replaced).  'replacedOut'
  * may alias the value boxes in 'box' (new values in, old values out).
  * Only inline payloads (integers up to 64 bits, reals, pointers,
- * references) stay valid.  A BYTES or container slot reports where the
+ * references) stay valid.  A BYTES slot reports where the
  * old entry was, and the replace rewrites those bytes in place even when
  * the flex is not reallocated, so such a slot must not be read; a caller
  * that needs an old variable-length value reads it with flexGetByTypeCopy
@@ -496,14 +491,8 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
 /* Retrieve data
  *
  * flexGetByType decodes the entry at 'fe' into 'box' without copying:
- *   - BYTES and container boxes point into the flex, so they are valid
- *     only until the flex changes.
- *   - A nested container (DATABOX_CONTAINER_FLEX_*) reports 'len' as the
- *     nested flex's bytes plus the reverse-traversal trailer stored after
- *     it, so 'len' is larger than flexBytes(data.bytes.start).  Use
- *     flexBytes for the nested flex's size.  Inserting or pushing the box
- *     back sizes the entry from the nested flex and ignores 'len', so a
- *     box read here round-trips.
+ *   - BYTES boxes point into the flex, so they are valid only until the
+ *     flex changes.
  *   - A 96/128-bit integer is written through data.i128 / data.u128 only
  *     when 'box' is a databoxBig set up with DATABOX_BIG_INIT.  Into a
  *     plain databox (big == 0) only the type is reported (SIGNED_128 or
@@ -541,14 +530,14 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
  * It is flexGetByTypeInto with 'extra' as the slot, after clearing the
  * header.
  * Any other value has big = 0, so its leading 16 bytes can be copied out
- * as a plain databox.  BYTES and containers borrow from the flex as with
+ * as a plain databox.  BYTES borrow from the flex as with
  * flexGetByType, and a wide value borrows from 'box' itself: copy the box
  * with databoxCopy (owned) or databoxBigCopyFrom (re-homed) to keep it
  * past either.  flexGetNextByTypeBig is flexGetNextByType decoding with
  * flexGetByTypeBig.
  *
  * flexGetByTypeCopy produces a self-contained value that never borrows
- * from the flex: BYTES and containers are copied to the heap
+ * from the flex: BYTES are copied to the heap
  * (allocated = 1).  A 96/128-bit value is written into the storage 'box'
  * already points at when 'box->big' is set (a DATABOX_BIG_INIT'd
  * databoxBig, or a box that already owns a wide heap payload), leaving
@@ -625,7 +614,7 @@ flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip);
  *   flexFindByType: by the box's type: bytes match bytes as above;
  *     integers, reals and 96/128-bit integers match any numeric entry of
  *     equal value (databoxCompare, so a NaN finds a NaN); TRUE, FALSE and
- *     NULL match only themselves.  Other types (containers, pointers) match
+ *     NULL match only themselves.  Other types (references, pointers) match
  *     nothing. */
 flexEntry *flexFindSigned(const flex *f, flexEntry *fe, int64_t val,
                           uint32_t skip);

@@ -8,7 +8,7 @@
 
 - **Pointer-free design**: Single contiguous memory allocation with no internal pointers
 - **Variable-length encoding**: Automatic selection of minimal storage size for each element
-- **Multi-type storage**: Seamlessly stores integers, floats, strings, booleans, and nested containers
+- **Multi-type storage**: Seamlessly stores integers, floats, strings, booleans, and references
 - **Compact representation**: 2-byte overhead for empty flex, minimal per-entry overhead
 - **Bidirectional traversal**: Efficient forward and backward iteration
 - **Sorted operations**: Binary search with optional middle-entry hint for O(log n) performance
@@ -129,17 +129,8 @@ typedef enum flexType {
     /* ... _16, _24, _32, _40, _48, _56 ... */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_64,  /* 236 */
 
-    /* 4 container types (237-240) — order must match databox's
-     * DATABOX_CONTAINER_FLEX_* order */
-    FLEX_CONTAINER_MAP,    /* 237 */
-    FLEX_CONTAINER_LIST,   /* 238 */
-    FLEX_CONTAINER_SET,    /* 239 */
-    FLEX_CONTAINER_TUPLE,  /* 240 */
-    FLEX_CONTAINER_COMPRESSED, /* 241 - reserved: a compressed nested
-                                * container, kind in the payload; no
-                                * writer, refused on read */
-
-    /* 242-251 unassigned (refused on read) */
+    /* 237-251 unassigned (refused on read; 237-241 were nested-container
+     * tags, removed: see "Nesting" below) */
 
     /* Immediate (single-byte) types: FLEX_IS_IMMEDIATE(enc) is enc >= 252 */
     FLEX_BYTES_EMPTY = 252,  /* zero-length byte array */
@@ -2060,21 +2051,17 @@ Flex serves as the underlying storage for these higher-level structures:
 /* These modules provide higher-level APIs on top of flex */
 ```
 
-### As Nested Container
+### Nesting
 
-Four container types (`FLEX_CONTAINER_MAP`, `_LIST`, `_SET`, `_TUPLE`)
-hold a nested flex.  The insert paths (`flexPushByType`, insert, replace,
-the multi-element appends) store a `DATABOX_CONTAINER_FLEX_*` box whose
-`data.bytes.start` is a flex, whole, sized from that flex's own header;
-`flexGetByType` reads the entry back as the matching box pointing into the
-outer flex, and `flexGetByTypeCopy` copies the nested buffer out.
+flex has no nested-container type.  Earlier tags for one (an entry holding
+a whole serialized flex, labelled map / list / set / tuple, plus a reserved
+compressed form) were removed: nothing built or read them, the labels
+enforced nothing, and validation never looked inside.  The design notes for
+doing it properly, in place or by reference, are in the comment where the
+tags were (flex.c's encoding table).
 
-Compressed nested containers (`DATABOX_CONTAINER_CFLEX_*` boxes) have one
-reserved tag (`FLEX_CONTAINER_COMPRESSED`, 241) and no writer yet: every
-insert path refuses one with the fatal `DK_DIAG_FLEX_BOX_UNENCODABLE`
-([diagnostics](../core/DIAGNOSTICS.md)), and the validators refuse the tag.
-
-A flex can also travel inside another as plain bytes, re-wrapped on read:
+A flex can travel inside another as plain bytes, re-wrapped on read.  It is
+then a frozen copy: to change it, read it out, edit, and replace the entry.
 
 ```c
 flex *inner = flexNew();
@@ -2086,10 +2073,10 @@ flex *outer = flexNew();
 flexPushBytes(&outer, inner, flexBytes(inner), FLEX_ENDPOINT_TAIL);
 flexFree(inner);   /* the bytes were copied into 'outer' */
 
-/* Read back, validating before iterating the nested bytes */
+/* Read back, validating every entry before iterating the nested bytes */
 databox box = {{0}};
 flexGetByType(flexHead(outer), &box);
-if (flexValidateBuffer(databoxBytes(&box), box.len)) {
+if (flexValidateBufferDeep(databoxBytes(&box), box.len)) {
     const flex *nested = (const flex *)databoxBytes(&box);
     assert(flexCount(nested) == 3);
 }
@@ -2350,7 +2337,7 @@ The flex encoding is inspired by:
 Key improvements over predecessors:
 
 - Symmetric forward/backward encoding for O(1) reverse traversal
-- Wider type support (128-bit ints, float16, nested containers)
+- Wider type support (128-bit ints, float16)
 - Better sorted operation support with middle hints
 - Reference types for deduplication
 - Compression support

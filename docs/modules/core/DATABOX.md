@@ -139,34 +139,25 @@ typedef enum databoxType {
     DATABOX_BYTES_NEVER_FREE = 21, /* Bytes we don't own */
     DATABOX_BYTES_OFFSET = 22,     /* Offset into external buffer */
 
-    /* Container types */
+    /* A reference into a structure kept elsewhere */
     DATABOX_CONTAINER_REFERENCE_EXTERNAL = 17,
-    DATABOX_CONTAINER_FLEX_MAP = 23,
-    DATABOX_CONTAINER_FLEX_LIST = 24,
-    DATABOX_CONTAINER_FLEX_SET = 25,
-    DATABOX_CONTAINER_FLEX_TUPLE = 26,
-    DATABOX_CONTAINER_CFLEX_MAP = 27,
-    DATABOX_CONTAINER_CFLEX_LIST = 28,
-    DATABOX_CONTAINER_CFLEX_SET = 29,
-    DATABOX_CONTAINER_CFLEX_TUPLE = 30,
 
-    DATABOX_PTR_MDSC = 31,    /* only when DATABOX_ENABLE_PTR_MDSC */
+    DATABOX_PTR_MDSC = 23,    /* only when DATABOX_ENABLE_PTR_MDSC */
 
     DATABOX_MAX = 255         /* the type field is ONE byte */
 } databoxType;
 ```
 
-Ordering is load-bearing in three places, so do not renumber:
+Ordering is load-bearing in two places, so do not renumber:
 
 - `SIGNED_64` / `UNSIGNED_64` / `SIGNED_128` / `UNSIGNED_128` / `FLOAT_32` /
   `DOUBLE_64` must stay adjacent at 2..7 (range checks and numeric-class
   compares depend on it).
 - `type >= DATABOX_BYTES` is the "has a `len`" test, so every
-  variable-length and container type sits at or above 18.
-- `DATABOX_CONTAINER_OFFSET(encoding)` is
-  `encoding - DATABOX_CONTAINER_FLEX_MAP`, so the four FLEX container types
-  stay in the order of flex's `FLEX_CONTAINER_MAP`..`_TUPLE`.  (The four
-  CFLEX types have no flex encoding yet; flex refuses them.)
+  variable-length type sits at or above 18.
+
+Nested-container boxes (`DATABOX_CONTAINER_FLEX_*`, `_CFLEX_*`) were removed
+with flex's nested-container encodings; see FLEX.md, "Nesting".
 
 ## Creation Functions
 
@@ -376,11 +367,8 @@ assert(box.data.d64 == 3.14);
 #define DATABOX_IS_TRUEISH(box)   /* True if not false/null/0 */
 #define DATABOX_IS_FALSEISH(box)  /* True if false/null/0 */
 
-/* Size of the value: 'len' for BYTES and containers, else 8 */
+/* Size of the value: 'len' for the byte types, 16 for 96/128-bit, else 8 */
 #define DATABOX_SIZE(box)
-
-/* Index of a container encoding within its family (FLEX_MAP == 0) */
-#define DATABOX_CONTAINER_OFFSET(encoding)
 
 /* Example usage */
 databox num = databoxNewSigned(42);
@@ -494,7 +482,6 @@ All three give a copy independent of the source's storage, by type:
 | --------------------------------------- | ------------------------------------------------------- |
 | `BYTES`, `BYTES_NEVER_FREE`             | owned `BYTES` on the heap, or `BYTES_EMBED` if ≤ 8 bytes |
 | `BYTES_EMBED`                           | itself (the bytes ride inside the box)                  |
-| flex aggregate (`CONTAINER_FLEX_*`/`CFLEX_*`) | a heap copy under the same type                   |
 | `PTR_MDSC`                              | a new mdsc string                                       |
 | `BYTES_VOID`, `BYTES_OFFSET`            | not copied (no bytes of their own)                      |
 

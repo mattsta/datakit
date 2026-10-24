@@ -71,17 +71,10 @@ typedef enum databoxType {
      * represents intent to use as a byte string eventually. */
     DATABOX_BYTES_OFFSET = 22,
 
-    /* Embedded flex aggregates */
-    DATABOX_CONTAINER_FLEX_MAP,
-    DATABOX_CONTAINER_FLEX_LIST,
-    DATABOX_CONTAINER_FLEX_SET,
-    DATABOX_CONTAINER_FLEX_TUPLE,
-
-    /* Embedded cflex aggregates */
-    DATABOX_CONTAINER_CFLEX_MAP,
-    DATABOX_CONTAINER_CFLEX_LIST,
-    DATABOX_CONTAINER_CFLEX_SET,
-    DATABOX_CONTAINER_CFLEX_TUPLE,
+/* Nested-container boxes were removed with flex's nested-container
+ * encodings (2026-10; see flex.c's encoding table for the design
+ * notes): DATABOX_CONTAINER_FLEX_{MAP,LIST,SET,TUPLE} pointed at a
+ * nested flex, DATABOX_CONTAINER_CFLEX_* at a compressed one. */
 
 #if DATABOX_ENABLE_PTR_MDSC
     DATABOX_PTR_MDSC,
@@ -291,9 +284,6 @@ typedef struct databoxStr {
         (box)->type == DATABOX_UNSIGNED_128)                                   \
          ? 16                                                                  \
          : 8)
-
-#define DATABOX_CONTAINER_OFFSET(encoding)                                     \
-    ((encoding) - DATABOX_CONTAINER_FLEX_MAP)
 
 /* C99 Compound Literals */
 /* These look nice, but the compiler implements them by creating a temporary

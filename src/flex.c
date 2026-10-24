@@ -233,23 +233,28 @@ typedef enum flexType {
     FLEX_CONTAINER_REFERENCE_EXTERNAL_56, /* to 72PB + 281T + ... */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_64, /* to 18EB + ... */
 
-    /************ BEGIN BOX MARKER TYPES ************/
-    /* Note: the order of the next 4 types matters: it matches
-     * DATABOX_CONTAINER_FLEX_MAP..TUPLE in the databox type enum. */
-    /* 4 container holder types.
-     *   value is a flex with conforming layout for type specified. */
-    FLEX_CONTAINER_MAP, /* map is our embedded K/V pair type */
-    FLEX_CONTAINER_LIST,
-    FLEX_CONTAINER_SET,
-    FLEX_CONTAINER_TUPLE,
-
-    /* Reserved: one compressed nested container, its kind (map, list,
-     * set, tuple) carried in the payload.  Nothing writes it yet; read
-     * and validation refuse it. */
-    FLEX_CONTAINER_COMPRESSED, /* 241 */
-
-    /* 242-251 are unassigned.  An addition here updates the "embedded
-     * types" test's accounting. */
+    /* 237-251 are unassigned; read and validation refuse them.  An
+     * addition here updates the "embedded types" test's accounting.
+     *
+     * Nested containers were removed (2026-10): bytes 237-240 tagged an
+     * entry holding a whole serialized flex in place (MAP, LIST, SET,
+     * TUPLE: [TAG][inner flex, its own total-bytes header][inner size
+     * reversed][TAG]), and 241 was reserved for a compressed one.  Nothing
+     * built or read them, the kinds were labels only (a "map" did not
+     * pair keys, a "set" did not dedupe), and validation never looked
+     * inside.  A value nested that way is a frozen snapshot: editing it
+     * means copying it out, changing it and replacing the whole entry.
+     *
+     * If nesting returns, decide the model first:
+     *   - in place (as above): the outer flex owns a serialized copy; walk
+     *     it by entering the inner flex; validation must descend into it
+     *     with a depth limit; edits rewrite the entry;
+     *   - by reference: the entry holds a reference to a structure kept
+     *     elsewhere (as FLEX_CONTAINER_REFERENCE_EXTERNAL_* do for ids),
+     *     which stays editable, and serializing the outer value means
+     *     walking and serializing what the references point at.
+     * Then build the smallest piece (one kind, its writer, reader and
+     * recursive validation, tested) before adding kinds or compression. */
 
     /************ BEGIN IMMEDIATE TYPES ************/
     /* 4 immediate value types (one byte, no payload); our highest type
@@ -308,8 +313,6 @@ typedef enum flexType {
 #define EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding)                        \
     (((encoding) - FLEX_CONTAINER_REFERENCE_EXTERNAL_8) + 1)
 
-#define FLEX_CONTAINER_OFFSET(type) ((type) - FLEX_CONTAINER_MAP)
-
 /* ====================================================================
  * Macros for accessing flex metadata contents
  * ==================================================================== */
@@ -334,10 +337,6 @@ typedef enum flexType {
 #define FLEX_IS_REF_EXTERNAL(enc)                                              \
     ((enc) >= FLEX_CONTAINER_REFERENCE_EXTERNAL_8 &&                           \
      (enc) <= FLEX_CONTAINER_REFERENCE_EXTERNAL_64)
-
-/* Identify a nested container (a flex inside the entry) */
-#define FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(enc)                              \
-    ((enc) >= FLEX_CONTAINER_MAP && (enc) <= FLEX_CONTAINER_TUPLE)
 
 /* Empty container header: 2 bytes (split varint) + 0 count (tagged varint) */
 #define FLEX_EMPTY_HEADER_SIZE (sizeof(uint8_t) + sizeof(uint8_t))
@@ -407,9 +406,9 @@ typedef uint_fast8_t flexData;
 #define FLEX_ENTRY_SIZE_TOTAL(fed)                                             \
     (size_t)(FLEX_ENTRY_META_SIZE(fed) + (fed)->len)
 
-DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncodingWithInnerEntry(
-    const flexEncoding encoding, const flexEntry *innerFe,
-    varintWidth *encodingSize, const bool isForward);
+DK_INLINE_ALWAYS
+    size_t flexDataSizeForFixedWidthEncoding(const flexEncoding encoding,
+                                             varintWidth *encodingSize);
 
 DK_INLINE_ALWAYS void abstractGetLength(const flexEntry *restrict fe,
                                         varintWidth *restrict lensize,
@@ -423,8 +422,7 @@ DK_INLINE_ALWAYS void abstractGetLength(const flexEntry *restrict fe,
             varintSplitFullNoZeroReversedGet_(fe, *lensize, *len);
         }
     } else {
-        *len = flexDataSizeForFixedWidthEncodingWithInnerEntry(
-            encoding, isForward ? fe + 1 : fe - 1, lensize, isForward);
+        *len = flexDataSizeForFixedWidthEncoding(encoding, lensize);
     }
 }
 
@@ -764,14 +762,12 @@ DK_INLINE_ALWAYS size_t flexRawEntryLength(flexEntry *const fe) {
  * ==================================================================== */
 /* Payload size for every encoding whose size depends on the encoding
  * byte alone: fixed-width numbers and references plus the immediates.
- * Every other value is absent: the container tags (sized by their inner
- * varint), the reserved compressed container tag, the unassigned bytes
- * 242-251, FLEX_REAL_32D/64D, and the MDSC references when
- * FLEX_ENABLE_PTR_MDSC is off.
+ * Every other value is absent: the unassigned bytes 237-251,
+ * FLEX_REAL_32D/64D, and the MDSC references when FLEX_ENABLE_PTR_MDSC is
+ * off.
  *
  * This one case list expands into two switches: the decode-size switch
- * (flexDataSizeForFixedWidthEncodingWithInnerEntry, which adds the
- * container cases and asserts on anything else) and
+ * (flexDataSizeForFixedWidthEncoding, which asserts on anything else) and
  * flexFixedWidthPayloadSize (used by flexRawEntryLengthSafe, which
  * rejects anything else).  Sharing the list keeps the decoder and the
  * validator in step; expanding it in place keeps the decode path a
@@ -853,9 +849,8 @@ DK_INLINE_ALWAYS bool flexFixedWidthPayloadSize(const flexEncoding encoding,
 }
 
 /* Return bytes needed to store fixed type encoded by 'encoding' */
-DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncodingWithInnerEntry(
-    const flexEncoding encoding, const flexEntry *innerFe,
-    varintWidth *encodingSize, const bool isForward) {
+DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncoding(
+    const flexEncoding encoding, varintWidth *encodingSize) {
     assert(encoding >= FLEX_NEG_8B);
 
     if (encodingSize) {
@@ -866,21 +861,6 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncodingWithInnerEntry(
 
     switch (encoding) {
         FLEX_FIXED_WIDTH_CASES_(encoding, FLEX_FIXED_WIDTH_RETURN_)
-    case FLEX_CONTAINER_MAP:
-    case FLEX_CONTAINER_LIST:
-    case FLEX_CONTAINER_SET:
-    case FLEX_CONTAINER_TUPLE: {
-        size_t len;
-        varintWidth lensize;
-        if (isForward) {
-            varintSplitFullNoZeroGet_(innerFe, lensize, len);
-        } else {
-            varintSplitFullNoZeroReversedGet_(innerFe, lensize, len);
-        }
-
-        /* [DATA WITH EMBEDDED LENGTH][REVERSE LENGTH] */
-        return len + lensize;
-    }
     default:
         /* Writers never emit an encoding outside the table, and the
          * validators reject one. */
@@ -1360,19 +1340,6 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
         width = EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding);
         varintExternalPutFixedWidthQuick_(fe, *(uint64_t *)data, width);
         return width;
-    case FLEX_CONTAINER_MAP:
-    case FLEX_CONTAINER_LIST:
-    case FLEX_CONTAINER_SET:
-    case FLEX_CONTAINER_TUPLE:
-        /* write flex directly, it already starts with
-         * a valid string length encoding */
-        memmove(fe, data, len);
-
-        /* write reverse length after the nested flex, where reverse
-         * traversal reads it */
-        varintWidth refWidth;
-        varintSplitFullNoZeroReversedPutForward_(fe + len, refWidth, len);
-        return len + refWidth;
     case FLEX_BYTES_EMPTY:
     case FLEX_TRUE:
     case FLEX_FALSE:
@@ -1568,15 +1535,6 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
         r->data.u64 =
             flexEncodingReferenceUnsignedDecode(encoding, r->data.u64);
         r->type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
-        break;
-    case FLEX_CONTAINER_MAP:
-    case FLEX_CONTAINER_LIST:
-    case FLEX_CONTAINER_SET:
-    case FLEX_CONTAINER_TUPLE:
-        r->type =
-            DATABOX_CONTAINER_FLEX_MAP + FLEX_CONTAINER_OFFSET(entry->encoding);
-        r->data.bytes.start = d;
-        r->len = entry->len;
         break;
     case FLEX_BYTES_EMPTY:
         r->type = DATABOX_BYTES;
@@ -1913,12 +1871,10 @@ abstractInsertSizeFromInsertContents(flexInsertContents *contents) {
     }
 #endif
 
-    /* Here, 'contents->data' is only used to lookup the inner size of
-     * an embedded FLEX if our type is DATABOX_CONTAINER_FLEX_* */
-    insertSize += FLEX_IS_STR(contents->encoding)
-                      ? contents->len
-                      : flexDataSizeForFixedWidthEncodingWithInnerEntry(
-                            contents->encoding, contents->data, NULL, true);
+    insertSize +=
+        FLEX_IS_STR(contents->encoding)
+            ? contents->len
+            : flexDataSizeForFixedWidthEncoding(contents->encoding, NULL);
 
     const uint_fast8_t encodingSize =
         flexEncodingLength(contents->encoding, contents->len);
@@ -2539,22 +2495,6 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
     case DATABOX_NULL:
         flexInsert_(ff, fe, FLEX_NULL, NULL, 0);
         break;
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE: {
-        /* Nested flex, stored whole; same encoding as insertContentsFromBox.
-         * The entry is sized from the nested flex's own header, never from
-         * 'len': flexGetByType reports a container's len with its reverse
-         * trailer included, so a box read back from a flex carries a len
-         * larger than the nested flex, and the insert reserves space from
-         * the header. */
-        const flex *const inner = box->data.bytes.start;
-        flexInsert_(ff, fe,
-                    FLEX_CONTAINER_MAP + DATABOX_CONTAINER_OFFSET(box->type),
-                    inner, flexBytes(inner));
-        break;
-    }
     default:
         flexBoxTypeUnsupported_(box, "flexInsertByType");
     }
@@ -2808,21 +2748,6 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
         c->data = (uint64_t *)&box->data.u64;
         c->len = sizeof(box->data.u64);
         break;
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-        /* Derive flex encoding from box encoding using enum offset math */
-        c->encoding = FLEX_CONTAINER_MAP + DATABOX_CONTAINER_OFFSET(box->type);
-        c->data = box->data.bytes.start;
-        /* Sized from the nested flex's own header, never from 'len': the
-         * insert reserves space from that header, and flexGetByType
-         * reports a container's len with its reverse trailer included. */
-        c->len = flexBytes(c->data);
-        break;
-    /* A compressed nested container has no flex encoding (its tags are
-     * reserved and refused on read): refused with the other unencodable
-     * boxes (the default below), as flexInsertByType refuses it */
     case DATABOX_TRUE:
         c->encoding = FLEX_TRUE;
         break;
@@ -3327,10 +3252,6 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
         break;
     case DATABOX_SIGNED_128:
     case DATABOX_UNSIGNED_128:
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
     case DATABOX_CONTAINER_REFERENCE_EXTERNAL:
 #if FLEX_ENABLE_PTR_MDSC
     case DATABOX_PTR_MDSC:
@@ -4076,19 +3997,9 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
             return;
         }
 
-        /* Nothing here borrows a wide pointer, and only a copied
-         * subcontainer below owns memory. */
+        /* Nothing here borrows a wide pointer or owns memory */
         box->big = false;
         box->allocated = false;
-        if (FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(entry.encoding)) {
-            /* copy the flex or cflex at 'box->data' to
-             * newly allocated memory then attach it to the box. */
-            /* @own: caller; free=databoxFreeData */
-            void *tmp = zcalloc(1, box->len);
-            memcpy(tmp, databoxBytes(box), databoxLen(box));
-            box->data.bytes.start = tmp;
-            box->allocated = true;
-        }
     }
 }
 
@@ -5938,14 +5849,13 @@ bool flexPeekTotalBytes(const uint8_t *buf, size_t buflen, size_t *out_total) {
 }
 
 /* Class of an entry's encoding byte, for the validate walk.  Every byte
- * value maps to one class; UNKNOWN covers the reserved compressed
- * container tag, the unassigned bytes 242-251, FLEX_REAL_32D/64D, and the
- * MDSC references when mdsc support is compiled out. */
+ * value maps to one class; UNKNOWN covers the unassigned bytes 237-251,
+ * FLEX_REAL_32D/64D, and the MDSC references when mdsc support is
+ * compiled out. */
 typedef enum flexEntryClass {
     FLEX_ENTRY_CLASS_UNKNOWN = 0,
     FLEX_ENTRY_CLASS_IMMEDIATE,
     FLEX_ENTRY_CLASS_STRING,
-    FLEX_ENTRY_CLASS_CONTAINER,
     FLEX_ENTRY_CLASS_FIXED
 } flexEntryClass;
 
@@ -5960,16 +5870,6 @@ DK_INLINE_ALWAYS flexEntryClass flexEntryClassify(const flexEncoding encoding,
 
     if (FLEX_IS_STR(encoding)) {
         return FLEX_ENTRY_CLASS_STRING;
-    }
-
-    switch (encoding) {
-    case FLEX_CONTAINER_MAP:
-    case FLEX_CONTAINER_LIST:
-    case FLEX_CONTAINER_SET:
-    case FLEX_CONTAINER_TUPLE:
-        return FLEX_ENTRY_CLASS_CONTAINER;
-    default:
-        break;
     }
 
     /* Everything left is either sizable from the encoding byte alone or
@@ -6022,25 +5922,6 @@ DK_INLINE_ALWAYS bool flexRawEntryLengthSafe(const flexEntry *const fe,
                                       &payload_len)) {
             return false;
         }
-        break;
-    }
-
-    case FLEX_ENTRY_CLASS_CONTAINER: {
-        /* Byte 0 is the container tag, mirrored by a one-byte trailer.
-         * The data segment starts at fe + 1 with its own split varint,
-         * and that varint's bytes count as payload. */
-        varintWidth innerWidth = 0;
-        uint64_t innerLen = 0;
-        /* Bytes after the tag; zero makes the decode refuse. */
-        if (!flexSplitVarintTryDecode(fe + 1, remaining - 1, &innerWidth,
-                                      &innerLen)) {
-            return false;
-        }
-        if (innerLen > (UINT64_MAX - (uint64_t)innerWidth)) {
-            return false;
-        }
-        encodingSize = VARINT_WIDTH_8B; /* one side of the encoding */
-        payload_len = innerLen + (uint64_t)innerWidth;
         break;
     }
 
@@ -7428,9 +7309,8 @@ static int32_t flexTestWideDecoders(void) {
  *
  * Corpus: strings (split-varint lengths of one, two and three bytes),
  * integers and immediates, 96/128-bit integers, reals, references and
- * empty bytes (the fixed-width table), nested containers (inner varints
- * of one and two bytes), and a flex whose total-bytes header varint is
- * multi-byte. */
+ * empty bytes (the fixed-width table), and a flex whose total-bytes
+ * header varint is multi-byte. */
 #define FLEX_SWEEP_BYTE_VALUES 256
 #define FLEX_SWEEP_PEEK_SLACK 16
 
@@ -7457,21 +7337,7 @@ static bool flexValidateSweepTrailerIntact(const flexEntry *const fe,
                memcmp(fe + entryLen - width, expected, width) == 0;
     }
 
-    if (fe[entryLen - 1] != encoding) {
-        return false;
-    }
-
-    if (FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(encoding)) {
-        /* [TAG][NESTED FLEX][NESTED SIZE REVERSED][TAG] */
-        varintWidth innerWidth;
-        size_t innerLen;
-        varintSplitFullNoZeroGet_(fe + 1, innerWidth, innerLen);
-        varintSplitFullNoZeroReversedPutForward_(expected, width, innerLen);
-        return width == innerWidth && entryLen == innerLen + width + 2 &&
-               memcmp(fe + 1 + innerLen, expected, width) == 0;
-    }
-
-    return true;
+    return fe[entryLen - 1] == encoding;
 }
 
 /* Decode a buffer flexValidateBufferDeep accepted.  'seen' has room for
@@ -7513,9 +7379,7 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
         flexGetByTypeBig(fe, &big);
 
         /* Variable-length payloads must lie inside the buffer. */
-        const bool variable = big.type == DATABOX_BYTES ||
-                              (big.type >= DATABOX_CONTAINER_FLEX_MAP &&
-                               big.type <= DATABOX_CONTAINER_FLEX_TUPLE);
+        const bool variable = big.type == DATABOX_BYTES;
         const uint8_t *const start = (const uint8_t *)big.data.bytes.start;
         if (variable && big.len &&
             (start < fe || start >= end || big.len > (size_t)(end - start))) {
@@ -7679,31 +7543,6 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
     return err;
 }
 
-/* Read the entry at 'index' of 'outer' (walking from the head for a
- * non-negative index, from the tail otherwise) and require it to be a
- * nested FLEX_MAP whose bytes equal 'inner'.  Returns the number of
- * failures. */
-static int32_t flexValidateSweepCheckNested(const flex *const outer,
-                                            const int32_t index,
-                                            const flex *const inner) {
-    int err = 0;
-    databox got = {{0}};
-    const flexEntry *const fe = flexIndexDirect(outer, index);
-    if (fe) {
-        flexGetByType(fe, &got);
-    }
-
-    if (got.type != DATABOX_CONTAINER_FLEX_MAP ||
-        flexBytes(got.data.bytes.start) != flexBytes(inner) ||
-        memcmp(got.data.bytes.start, inner, flexBytes(inner)) != 0) {
-        ERR("nested: entry at index %" PRId32
-            " is not the nested map (type %d)",
-            index, (int)got.type);
-    }
-
-    return err;
-}
-
 int32_t flexValidateTotalitySweep(void) {
     int err = 0;
 
@@ -7796,48 +7635,6 @@ int32_t flexValidateTotalitySweep(void) {
 
         flexPushBytes(&fixed, "", 0, FLEX_ENDPOINT_TAIL);
         err += flexValidateTotalitySweepOne("fixed-width", fixed, 0, 0);
-    }
-
-    TEST("validator totality: nested containers") {
-        /* Nested container entries: the inner-varint path, which is a
-         * second split varint inside one entry's payload.  'inner' needs
-         * a one-byte inner varint, 'wide' a two-byte one. */
-        cleaner(flexFree) flex *inner = flexNew();
-        flexPushBytes(&inner, "inner", strlen("inner"), FLEX_ENDPOINT_TAIL);
-        flexPushSigned(&inner, -12345, FLEX_ENDPOINT_TAIL);
-
-        cleaner(flexFree) flex *wide = flexNew();
-        static const char longMember[] = "a nested member long enough that "
-                                         "its flex needs more than 64 bytes";
-        flexPushBytes(&wide, longMember, strlen(longMember),
-                      FLEX_ENDPOINT_TAIL);
-        flexPushSigned(&wide, 99, FLEX_ENDPOINT_TAIL);
-        assert(flexBytes(wide) > 64);
-
-        cleaner(flexFree) flex *outer = flexNew();
-        flexPushBytes(&outer, "before", strlen("before"), FLEX_ENDPOINT_TAIL);
-        const databox nested = {.data.bytes.start = inner,
-                                .type = DATABOX_CONTAINER_FLEX_MAP,
-                                .len = flexBytes(inner)};
-        flexPushByType(&outer, &nested, FLEX_ENDPOINT_TAIL);
-        const databox nestedWide = {.data.bytes.start = wide,
-                                    .type = DATABOX_CONTAINER_FLEX_MAP,
-                                    .len = flexBytes(wide)};
-        flexPushByType(&outer, &nestedWide, FLEX_ENDPOINT_TAIL);
-        flexPushSigned(&outer, 7, FLEX_ENDPOINT_TAIL);
-
-        /* Each container must read back whole, from the head (forward
-         * sizing) and from the tail (reverse trailer). */
-        if (flexCount(outer) != 4) {
-            ERR("nested: expected 4 entries, found %zu", flexCount(outer));
-        } else {
-            err += flexValidateSweepCheckNested(outer, 1, inner);
-            err += flexValidateSweepCheckNested(outer, -3, inner);
-            err += flexValidateSweepCheckNested(outer, 2, wide);
-            err += flexValidateSweepCheckNested(outer, -2, wide);
-        }
-
-        err += flexValidateTotalitySweepOne("nested", outer, 0, 0);
     }
 
     TEST("validator totality: a multi-byte total-bytes header") {
@@ -8855,7 +8652,6 @@ static int32_t flexTestTypedFind(void) {
     const databox probe15 = databoxNewReal(1.5);
     const databox probeNan = databoxNewReal(-NAN);
     const databox probeMissing = databoxNewReal(2.5);
-    const databox probeContainer = {.type = DATABOX_CONTAINER_FLEX_LIST};
     const struct {
         const char *what;
         const flexEntry *got;
@@ -8880,7 +8676,6 @@ static int32_t flexTestTypedFind(void) {
         {"by type 2^100", flexFindByType(f, head, (const databox *)&wide, 0),
          11},
         {"by type missing 2.5", flexFindByType(f, head, &probeMissing, 0), -1},
-        {"by type container", flexFindByType(f, head, &probeContainer, 0), -1},
     };
     for (size_t i = 0; i < COUNT_ARRAY(checks); i++) {
         const int32_t at = flexTestIndexOf(f, checks[i].got);
@@ -9343,7 +9138,7 @@ static void flexTestFatalHook_(const dkDiagnostic *d, void *ctx) {
     }
 }
 
-static bool flexTestBoxAborts_(int32_t path, const databoxBig *given) {
+static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
     fflush(stdout);
     fflush(stderr);
     const pid_t kid = fork();
@@ -9361,7 +9156,9 @@ static bool flexTestBoxAborts_(int32_t path, const databoxBig *given) {
 
         cleaner(flexFree) flex *f = flexNew();
         flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
-        databoxBig deferred = *given;
+        databoxBig deferred;
+        memset(&deferred, 0, sizeof(deferred));
+        deferred.type = type;
         databox *const box = (databox *)&deferred;
         const databox *row[1] = {box};
         switch (path) {
@@ -9388,14 +9185,6 @@ static bool flexTestBoxAborts_(int32_t path, const databoxBig *given) {
     }
 
     return WIFEXITED(status) && WEXITSTATUS(status) == FLEX_TEST_ABORT_STATUS;
-}
-
-/* flexTestBoxAborts_ for a box of 'type' and nothing else (no payload) */
-static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
-    databoxBig box;
-    memset(&box, 0, sizeof(box));
-    box.type = type;
-    return flexTestBoxAborts_(path, &box);
 }
 
 /* The decimal spelling of a numeric box read back from a flex: integers in
@@ -9911,35 +9700,6 @@ int32_t flexTest(int32_t argc, char **argv) {
                 ERR("path %" PRId32 " did not abort", path);
             }
         }
-
-        /* A real compressed flex as a nested container: no flex encoding
-         * exists for one yet (the tags are reserved and refused on read),
-         * so every path refuses it the same way instead of writing an entry
-         * nothing can read back */
-        cleaner(flexFree) flex *inner = flexNew();
-        for (int i = 0; i < 64; i++) {
-            flexPushBytes(&inner, "repeat repeat repeat repeat", 27,
-                          FLEX_ENDPOINT_TAIL);
-        }
-        const size_t cSize = flexBytes(inner) + 64;
-        cleaner(zfree) void *cBuf = zcalloc(1, cSize);
-        if (!flexConvertToCFlex(inner, cBuf, cSize)) {
-            ERRR("a repetitive flex did not compress");
-        }
-        for (int32_t kind = 0; kind < 4; kind++) {
-            databoxBig box;
-            memset(&box, 0, sizeof(box));
-            box.type = DATABOX_CONTAINER_CFLEX_MAP + kind;
-            box.data.bytes.start = cBuf;
-            box.len = cflexBytes(cBuf);
-            for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
-                if (!flexTestBoxAborts_(path, &box)) {
-                    ERR("compressed container kind %" PRId32
-                        " through path %" PRId32 " did not abort",
-                        kind, path);
-                }
-            }
-        }
     }
 
     TEST("inserting or encoding a deferred wide box fails fast") {
@@ -10203,94 +9963,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(flexFree) flex *empty = flexNew();
         if (flexFind(empty, "x", 1, 0) != NULL) {
             ERRR("flexFind on an empty flex found an entry");
-        }
-    }
-
-    TEST("a nested container read back with flexGetByType writes back "
-         "whole") {
-        /* Nested sizes on both sides of the 1/2-byte (64/65) and 2/3-byte
-         * (16447/16448) boundaries of the size varint the trailer holds.
-         * No flex is exactly 65 or 16448 bytes: the byte that would make
-         * it so also widens its own total-bytes varint. */
-        static const size_t innerSizes[] = {62,    63,    64,    66,   67,
-                                            16446, 16447, 16449, 16450};
-        enum { ROUND_TRIP_FILL_ = 16448 };
-        cleanerName(zfree, Bytes) uint8_t *fill = zmalloc(ROUND_TRIP_FILL_);
-        memset(fill, 'n', ROUND_TRIP_FILL_);
-
-        for (size_t s = 0; s < COUNT_ARRAY(innerSizes); s++) {
-            /* One string sized near the target, padded with one-byte TRUE
-             * entries to land on it exactly. */
-            const size_t target = innerSizes[s];
-            cleaner(flexFree) flex *inner = NULL;
-            for (size_t len = target - 12; len < target && !inner; len++) {
-                cleaner(flexFree) flex *candidate = flexNew();
-                flexPushBytes(&candidate, fill, len, FLEX_ENDPOINT_TAIL);
-                const databox t = {.type = DATABOX_TRUE};
-                while (flexBytes(candidate) < target) {
-                    flexPushByType(&candidate, &t, FLEX_ENDPOINT_TAIL);
-                }
-
-                if (flexBytes(candidate) == target) {
-                    inner = candidate;
-                    candidate = NULL;
-                }
-            }
-
-            if (!inner) {
-                ERR("no nested flex of %zu bytes", target);
-                continue;
-            }
-
-            cleaner(flexFree) flex *outer = flexNew();
-            const databox nested = {.data.bytes.start = inner,
-                                    .type = DATABOX_CONTAINER_FLEX_MAP,
-                                    .len = flexBytes(inner)};
-            flexPushByType(&outer, &nested, FLEX_ENDPOINT_TAIL);
-
-            /* The read-back len includes the trailer after the nested
-             * flex, so it is larger than the nested flex. */
-            databox got = {{0}};
-            flexGetByType(flexHead(outer), &got);
-            if (got.len <= flexBytes(inner)) {
-                ERR("%zu: read-back len %zu", target, (size_t)got.len);
-            }
-
-            /* Push at both ends, insert in the middle, and replace: the
-             * first three go through flexInsertByType, the replace through
-             * insertContentsFromBox. */
-            cleaner(flexFree) flex *copy = flexNew();
-            flexPushBytes(&copy, "first", strlen("first"), FLEX_ENDPOINT_TAIL);
-            flexPushByType(&copy, &got, FLEX_ENDPOINT_TAIL);
-            flexPushByType(&copy, &got, FLEX_ENDPOINT_HEAD);
-            flexInsertByType(&copy, flexIndex(copy, 1), &got);
-            flexReplaceByType(&copy, flexIndex(copy, 2), &got);
-
-            /* A sorted row goes through insertContentsFromBox too. */
-            cleaner(flexFree) flex *sorted = flexNew();
-            flexEntry *mid = NULL;
-            const databox key = databoxNewSigned(1);
-            const databox *row[2] = {&key, &got};
-            flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&sorted, 2, row,
-                                                               &mid, true);
-
-            if (!flexValidateBufferDeep(copy, flexBytes(copy)) ||
-                flexCount(copy) != 4 ||
-                !flexValidateBufferDeep(sorted, flexBytes(sorted)) ||
-                flexCount(sorted) != 2) {
-                ERR("%zu: written flexes are malformed", target);
-                continue;
-            }
-
-            /* Every copy reads back whole from the head (forward sizing)
-             * and from the tail (the trailer). */
-            for (int32_t i = 0; i < 4; i++) {
-                err += flexValidateSweepCheckNested(copy, i, inner);
-                err += flexValidateSweepCheckNested(copy, i - 4, inner);
-            }
-
-            err += flexValidateSweepCheckNested(sorted, 1, inner);
-            err += flexValidateSweepCheckNested(sorted, -1, inner);
         }
     }
 
@@ -10746,28 +10418,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             ERR("self-pushed string: %zu entries or malformed",
                 flexCount(self));
         }
-
-        /* A nested container pushed onto the flex holding it. */
-        cleaner(flexFree) flex *inner = flexNew();
-        flexPushBytes(&inner, "inner", strlen("inner"), FLEX_ENDPOINT_TAIL);
-        flexPushSigned(&inner, -12345, FLEX_ENDPOINT_TAIL);
-        cleaner(flexFree) flex *selfNested = flexNew();
-        const databox nested = {.data.bytes.start = inner,
-                                .type = DATABOX_CONTAINER_FLEX_MAP,
-                                .len = flexBytes(inner)};
-        flexPushByType(&selfNested, &nested, FLEX_ENDPOINT_TAIL);
-        flexGetByType(flexHead(selfNested), &got);
-        flexPushByType(&selfNested, &got, FLEX_ENDPOINT_TAIL);
-        if (flexCount(selfNested) != 2 ||
-            !flexValidateBufferDeep(selfNested, flexBytes(selfNested))) {
-            ERR("self-pushed container: %zu entries or malformed",
-                flexCount(selfNested));
-        } else {
-            for (int32_t i = 0; i < 2; i++) {
-                err += flexValidateSweepCheckNested(selfNested, i, inner);
-                err += flexValidateSweepCheckNested(selfNested, i - 2, inner);
-            }
-        }
     }
 
     TEST("delete cursors across header shrinks") {
@@ -10782,7 +10432,8 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("embedded types") {
         const uint32_t numberOfImmediateTypes = 4;
-        const uint32_t highestNonStaticNumericType = FLEX_CONTAINER_TUPLE;
+        const uint32_t highestNonStaticNumericType =
+            FLEX_CONTAINER_REFERENCE_EXTERNAL_64;
         const uint32_t lowestTopDownType = FLEX_BYTES_EMPTY;
         const uint32_t typeCount =
             highestNonStaticNumericType - FLEX_UINT_8B + numberOfImmediateTypes;
@@ -10807,7 +10458,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * the *maximum* type byte positions to ensure integrity of
          * insert and traversal operations
          * (because we check with (encoding >= FLEX_NULL)) */
-        assert(FLEX_CONTAINER_COMPRESSED == 241);
+        assert(FLEX_CONTAINER_REFERENCE_EXTERNAL_64 == 236);
         assert(FLEX_BYTES_EMPTY == 252);
         assert(FLEX_TRUE == 253);
         assert(FLEX_FALSE == 254);
@@ -14339,19 +13990,12 @@ int32_t flexTest(int32_t argc, char **argv) {
      * Branches covered:
      *   A) remaining == 0 at entry start (cursor lands at end with
      *      claimed_count still expecting an entry).
-     *   B) FORWARD_DECLARE_SUBCONTAINER with remaining < 2 (only the
-     *      encoding tag byte fits; the mandatory inner varint width
-     *      check has no byte to read).
-     *   C) STR encoding whose split-varint width claim exceeds the
+     *   B) STR encoding whose split-varint width claim exceeds the
      *      buffer remainder (varint header byte says "this varint is
      *      9 bytes wide" but only 1 byte left).
-     *   D) STR encoding whose meta + payload total overshoots the
+     *   C) STR encoding whose meta + payload total overshoots the
      *      remaining bytes by exactly 1 (payload claimed = remaining,
      *      so meta + payload = remaining + meta > remaining).
-     *   E) FORWARD_DECLARE_SUBCONTAINER whose inner-varint width
-     *      claim exceeds (remaining - 1), where the encoding tag
-     *      consumed byte 0 but the inner varint cannot fit in what's
-     *      left.
      * ================================================================ */
 
     TEST("flexRawEntryLengthSafe corner: remaining==0 at entry start (count "
@@ -14374,25 +14018,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Sanity: cheap envelope check passes. */
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         /* Deep check rejects via the remaining==0 corner. */
-        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-    }
-
-    TEST("flexRawEntryLengthSafe corner: FORWARD_DECLARE_SUBCONTAINER with "
-         "remaining==1 (tag byte but no room for inner varint)") {
-        /* Build a buffer with one container-tag entry byte and nothing
-         * after it.  Layout: total_bytes=3 (1B tot-varint + 1B count
-         * + 1B tag), count=1, single entry = container tag.
-         * remaining at entry start is exactly 1; the container branch
-         * in flexRawEntryLengthSafe needs at least 2 bytes (tag +
-         * inner varint header) so the `if (remaining < 2) return false`
-         * guard fires. */
-        uint8_t buf[3];
-        buf[0] = 0x02u; /* split-varint: total_bytes = 3 (byte = 3-1) */
-        buf[1] = 0x01u; /* tagged-varint: count = 1 */
-        buf[2] = (uint8_t)FLEX_CONTAINER_MAP; /* container tag */
-        /* Sanity: cheap envelope passes. */
-        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
-        /* Deep walker rejects via the container remaining<2 corner. */
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
     }
 
@@ -14432,26 +14057,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         buf[2] = 0x02u; /* STR length-varint claiming payload_len = 3 */
         buf[3] = 0xAAu;
         buf[4] = 0xBBu;
-        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
-        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
-    }
-
-    TEST("flexRawEntryLengthSafe corner: container inner-varint width "
-         "exceeds (remaining - 1)") {
-        /* Build a buffer with a container tag followed by an inner
-         * varint header byte that claims a 9-byte varint width — but
-         * only 1 byte (the header byte itself) is available after the
-         * outer tag.  Tag consumes byte 0 of the entry, leaving
-         * `remaining - 1` bytes for the inner varint.  The container
-         * branch's `if (inner_varint_width > (remaining - 1)) return
-         * false` guard fires.
-         *
-         * Layout: total=4, count=1, entry = [TAG][INNER_HEADER]. */
-        uint8_t buf[4];
-        buf[0] = 0x03u; /* split-varint: total_bytes = 4 (byte = 4-1) */
-        buf[1] = 0x01u; /* tagged-varint: count = 1 */
-        buf[2] = (uint8_t)FLEX_CONTAINER_MAP; /* container tag */
-        buf[3] = 0xC8u; /* inner split-varint header claiming 9 bytes */
         assert(flexValidateBuffer(buf, sizeof(buf)) == true);
         assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
     }
@@ -14506,25 +14111,22 @@ int32_t flexTest(int32_t argc, char **argv) {
     /* ================================================================
      * FLEX VALIDATOR REJECTS ENCODINGS THE SIZE HELPER CANNOT HANDLE
      *
-     * Above the four implemented container tags sit the reserved
-     * compressed container (241) and the unassigned bytes 242..251.
-     * None is sizable by flexDataSizeForFixedWidthEncodingWithInnerEntry
-     * (they land on its assert(NULL) default), so the validator must
-     * reject them: a fuzzed tag byte cannot tunnel through to a
-     * fail-loud abort.
+     * Between the references and the immediates sit the unassigned
+     * bytes 237..251 (once the nested-container tags).  None is sizable
+     * by flexDataSizeForFixedWidthEncoding (they land on its
+     * assert(NULL) default), so the validator must reject them: a
+     * fuzzed tag byte cannot tunnel through to a fail-loud abort.
      *
      * Similarly the fixed-width range carries two declared-but-unused
      * encodings (FLEX_REAL_32D, FLEX_REAL_64D); the validator must
      * also reject those before they reach the helper.
      * ================================================================ */
-    TEST("flexValidateBufferDeep rejects unimplemented container "
-         "encodings") {
-        /* The reserved compressed container and every unassigned byte
-         * after it, up to the immediates: build a buffer with a single
-         * entry whose tag byte is each and confirm the deep validator
-         * rejects it */
-        for (uint32_t tag = FLEX_CONTAINER_COMPRESSED; tag < FLEX_BYTES_EMPTY;
-             tag++) {
+    TEST("flexValidateBufferDeep rejects the unassigned encodings") {
+        /* Every unassigned byte between the references and the
+         * immediates: build a buffer with a single entry whose tag byte
+         * is each and confirm the deep validator rejects it */
+        for (uint32_t tag = FLEX_CONTAINER_REFERENCE_EXTERNAL_64 + 1;
+             tag < FLEX_BYTES_EMPTY; tag++) {
             uint8_t buf[4];
             buf[0] = 0x03u;        /* split-varint: total_bytes = 4 */
             buf[1] = 0x01u;        /* tagged-varint: count = 1 */

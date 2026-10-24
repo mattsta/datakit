@@ -28,14 +28,6 @@ bool databoxGetBytes(databox *box, uint8_t **buf, size_t *len) {
         break;
     case DATABOX_BYTES:
     case DATABOX_BYTES_NEVER_FREE:
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-    case DATABOX_CONTAINER_CFLEX_MAP:
-    case DATABOX_CONTAINER_CFLEX_LIST:
-    case DATABOX_CONTAINER_CFLEX_SET:
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
         *buf = box->data.bytes.start;
         *len = box->len;
         break;
@@ -77,14 +69,6 @@ bool databoxGetSize(const databox *box, size_t *len) {
 #if DATABOX_ENABLE_PTR_MDSC
     case DATABOX_PTR_MDSC:
 #endif
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-    case DATABOX_CONTAINER_CFLEX_MAP:
-    case DATABOX_CONTAINER_CFLEX_LIST:
-    case DATABOX_CONTAINER_CFLEX_SET:
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
         *len = box->len;
         break;
     case DATABOX_SIGNED_64:
@@ -286,19 +270,6 @@ static bool databoxOwnBytes_(databox *box) {
             memcpy(box->data.bytes.start, bytes, len);
         }
         return true;
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-    case DATABOX_CONTAINER_CFLEX_MAP:
-    case DATABOX_CONTAINER_CFLEX_LIST:
-    case DATABOX_CONTAINER_CFLEX_SET:
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
-        box->allocated = true;
-        /* @own: container; free=databoxFreeData */
-        box->data.bytes.start = zmalloc(len);
-        memcpy(box->data.bytes.start, bytes, len);
-        return true;
 #if DATABOX_ENABLE_PTR_MDSC
     case DATABOX_PTR_MDSC:
         box->allocated = true;
@@ -374,10 +345,8 @@ void databoxBigCopyFrom(databoxBig *dst, const databox *src) {
 void databoxFreeData(databox *box) {
     if (box) {
         if (box->allocated) {
-            /* Owned bytes: plain, or an embedded flex aggregate's copy */
-            if (box->type == DATABOX_BYTES ||
-                (box->type >= DATABOX_CONTAINER_FLEX_MAP &&
-                 box->type <= DATABOX_CONTAINER_CFLEX_TUPLE)) {
+            /* Owned bytes */
+            if (box->type == DATABOX_BYTES) {
                 zfree(box->data.ptr);
                 box->data.ptr = NULL;
                 box->allocated = false;
@@ -1237,30 +1206,6 @@ const char *databoxReprStr(const databox *const box) {
     case DATABOX_BYTES_EMBED:
         snprintf(buf, bufLen, "{BYTES EMBED: %.*s}", (int)box->len,
                  box->data.bytes.cembed);
-        break;
-    case DATABOX_CONTAINER_FLEX_MAP:
-        snprintf(buf, bufLen, "{FLEX MAP}");
-        break;
-    case DATABOX_CONTAINER_FLEX_LIST:
-        snprintf(buf, bufLen, "{FLEX LIST}");
-        break;
-    case DATABOX_CONTAINER_FLEX_SET:
-        snprintf(buf, bufLen, "{FLEX SET}");
-        break;
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-        snprintf(buf, bufLen, "{FLEX TUPLE}");
-        break;
-    case DATABOX_CONTAINER_CFLEX_MAP:
-        snprintf(buf, bufLen, "{CFLEX MAP}");
-        break;
-    case DATABOX_CONTAINER_CFLEX_LIST:
-        snprintf(buf, bufLen, "{CFLEX LIST}");
-        break;
-    case DATABOX_CONTAINER_CFLEX_SET:
-        snprintf(buf, bufLen, "{CFLEX SET}");
-        break;
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
-        snprintf(buf, bufLen, "{CFLEX TUPLE}");
         break;
     default:
         snprintf(buf, bufLen, "{INVALID TYPE!}");
@@ -3396,8 +3341,6 @@ int databoxTest(int argc, char *argv[]) {
         uint8_t text20[] = "twenty bytes of text";
         cleaner(mdscfree) mdsc *mds20 = mdscnew("an mdsc of 23 bytes!!!");
         cleaner(mdscfree) mdsc *mds3 = mdscnew("xyz");
-        cleaner(flexFree) flex *fl = flexNew();
-        flexPushSigned(&fl, 42, FLEX_ENDPOINT_TAIL);
         struct {
             databox box;
             databoxType want;
@@ -3414,10 +3357,6 @@ int databoxTest(int argc, char *argv[]) {
              DATABOX_PTR_MDSC},
             {{.type = DATABOX_PTR_MDSC, .data.ptr = mds3, .len = 3},
              DATABOX_PTR_MDSC},
-            {{.type = DATABOX_CONTAINER_FLEX_LIST,
-              .data.bytes.start = fl,
-              .len = flexBytes(fl)},
-             DATABOX_CONTAINER_FLEX_LIST},
         };
         for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
             for (int inPlace = 0; inPlace <= 1; inPlace++) {

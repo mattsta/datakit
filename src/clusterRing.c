@@ -2248,17 +2248,6 @@ static bool clusterKeyBytes(const databox *key, uint8_t scratch[16],
         *len = (uint32_t)key->len;
         return true;
 #endif
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-    case DATABOX_CONTAINER_CFLEX_MAP:
-    case DATABOX_CONTAINER_CFLEX_LIST:
-    case DATABOX_CONTAINER_CFLEX_SET:
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
-        *data = key->data.bytes.start;
-        *len = (uint32_t)key->len;
-        return true;
     case DATABOX_SIGNED_64:
     case DATABOX_UNSIGNED_64:
         memcpy(scratch, &key->data.u64, sizeof(key->data.u64));
@@ -7313,7 +7302,7 @@ static int testAffinityOracleAndKeyTypes(void) {
             const clusterNodeConfig nc = {.id = 1 + i};
             clusterRingAddNode(ring, &nc);
         }
-        static uint8_t flexBytes[] = {1, 2, 3, 4, 5};
+        static uint8_t sharedBytes[] = {1, 2, 3, 4, 5};
         __uint128_t wide = ((__uint128_t)0x1234 << 64) | 0x5678;
         databox keys[10] = {
             databoxNewBytesString("a key"),
@@ -7327,9 +7316,9 @@ static int testAffinityOracleAndKeyTypes(void) {
         keys[7] = (databox){.type = DATABOX_FLOAT_32, .data.f32 = 2.5f};
         keys[8] = (databox){
             .type = DATABOX_UNSIGNED_128, .data.u128 = &wide, .big = 1};
-        keys[9] = (databox){.type = DATABOX_CONTAINER_FLEX_LIST,
-                            .data.bytes.start = flexBytes,
-                            .len = sizeof(flexBytes)};
+        keys[9] = (databox){.type = DATABOX_BYTES_NEVER_FREE,
+                            .data.bytes.start = sharedBytes,
+                            .len = sizeof(sharedBytes)};
         for (size_t i = 0; i < 10; i++) {
             clusterPlacement a;
             clusterPlacement b;
