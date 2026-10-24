@@ -32,8 +32,10 @@ Dynamic Storage Allocation", JACM 21(8), July 1974
 - Process-shared capable (`mmap`, fork-safe pools)
 - SIMD-accelerated `calloc` zeroing and multi-extent ownership lookup
 - Optional pressure callbacks and opt-in relocating compaction
-- Safety-violation counting on every tier (double-free, out-of-bounds,
-  misaligned, unowned pointer), surfaced as `memboundStats.safetyViolations`
+- Exact free validation on every tier: a free is honoured only for the start
+  of a block currently handed out (a double free, an interior, misaligned,
+  unowned or pre-reset pointer is refused), counted in
+  `memboundStats.safetyViolations` on STANDARD, ENTERPRISE and COMPACT
 
 ## Tiers at a glance
 
@@ -320,12 +322,13 @@ callback and call `memboundCompact`.
 - **Shared-after-fork**: a pool in shared memory is shared, not duplicated.
 - **Always check allocation results** and `memboundShutdownSafe`'s return value
   to catch leaks.
-- **Invalid frees are swallowed, not fatal.** A double-free, out-of-bounds
-  pointer, misaligned pointer, or pointer from another pool is validated before
-  any state changes, silently ignored, and counted. Check
-  `memboundStats.safetyViolations` — a non-zero value is a bug in your code, and
-  nothing else will tell you about it. Assert it is zero at checkpoints in debug
-  builds; log it in production.
+- **Invalid frees are swallowed, not fatal.** A double-free, a pointer into a
+  block's interior, an out-of-bounds or misaligned pointer, a pointer from
+  another pool, or one handed out before `memboundReset` is validated before
+  any state changes, silently ignored, and counted (MICRO refuses without
+  counting). Check `memboundStats.safetyViolations` — a non-zero value is a bug
+  in your code, and nothing else will tell you about it. Assert it is zero at
+  checkpoints in debug builds; log it in production.
 - **Lifetime/peak/pressure/lock stats are STANDARD and ENTERPRISE only.** On
   MICRO and COMPACT `totalAllocations`, `peakBytesUsed`, `usagePercent`, and the
   lock-contention fields read as 0 (and `currentPressure` as `LOW`) — that is

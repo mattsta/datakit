@@ -388,7 +388,7 @@ typedef struct memboundMicro {
     uint8_t atomShift; /* 1 byte: log2(szAtom) */
     uint16_t szAtom;   /* 2 bytes: Atom size (power of 2) */
     uint16_t nBlock;   /* 2 bytes: Number of blocks (max 256 for 64KB/256) */
-    uint16_t poolSize; /* 2 bytes: Total pool size (max 64KB) */
+    uint16_t poolSize; /* 2 bytes: Pool data bytes (nBlock * szAtom) */
 
     /* Pool memory (allocated separately, pointed to) */
     uint8_t *zPool; /* 8 bytes: Memory pool */
@@ -585,6 +585,8 @@ struct membound {
 /* Extent lifecycle */
 memboundExtent *memboundExtentCreate(size_t size);
 void memboundExtentDestroy(memboundExtent *extent);
+/* space must be zero-filled (a fresh mapping): its control bytes are read
+ * as "no head" without being cleared */
 bool memboundExtentInit(memboundExtent *extent, void *space, size_t len);
 void memboundExtentReset(memboundExtent *extent);
 
@@ -731,10 +733,18 @@ _Static_assert(sizeof(MemboundLink) == 16, "MemboundLink must be 16 bytes");
 _Static_assert(sizeof(MemboundLink) <= MEMBOUND_MIN_ATOM,
                "a free atom must hold its MemboundLink");
 
-/* Masks used for aCtrl[] elements */
+/* Masks used for aCtrl[] elements (STANDARD and MICRO; COMPACT uses the same
+ * scheme with its own masks).  One byte per atom:
+ *   - head atom of a checked-out block: MEMBOUND_CTRL_ALLOC | log2(atoms)
+ *   - head atom of a free block:        log2(atoms)
+ *   - every other atom:                 0
+ * So a pointer is a live block exactly when it is atom-aligned and its byte
+ * has MEMBOUND_CTRL_ALLOC: a double free, a pointer into a block's interior,
+ * or one never handed out all read clear.  A fresh (zeroed) mapping holds
+ * the invariant before any head is written. */
 enum memboundCtrl {
-    MEMBOUND_CTRL_LOGSIZE = 0x1f, /* Log2 size of this block */
-    MEMBOUND_CTRL_FREE = 0x20     /* True if not checked out */
+    MEMBOUND_CTRL_LOGSIZE = 0x1f, /* Log2 size of this block (heads only) */
+    MEMBOUND_CTRL_ALLOC = 0x20    /* Head of a checked-out block */
 };
 
 /* Convert block index to MemboundLink pointer */

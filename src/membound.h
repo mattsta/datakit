@@ -258,14 +258,20 @@
  * occurs, the original error may be thousands of operations in the past.
  * membound tracks safety violations to catch bugs early:
  *
- * What we detect (all tiers):
- *   - Double-free: Freeing a pointer that's already free
+ * What we refuse (all tiers): any pointer that is not the start of a block
+ * currently handed out, exactly:
+ *   - Double-free: Freeing a pointer that's already free (including one
+ *     whose block has since merged with its buddy)
+ *   - Interior: A pointer inside a block, live or free, other than its start
  *   - Out-of-bounds: Pointer outside any extent's memory region
  *   - Misaligned: Pointer not aligned to atom boundary
  *   - Invalid extent: Pointer doesn't belong to any known extent
+ *   - Stale: A pointer handed out before memboundReset()
  *
  * How it works:
  *   - Every free validates the pointer BEFORE modifying any state
+ *   - STANDARD, ENTERPRISE and COMPACT count each refusal; MICRO refuses
+ *     without counting (its struct has no counter, to stay small)
  *   - Violations increment an atomic counter (thread-safe)
  *   - Invalid frees are silently ignored (no crash, no corruption)
  *   - Counter accessible via memboundStats.safetyViolations
@@ -384,13 +390,17 @@ typedef void (*memboundRelocationCallback)(void *oldPtr, void *newPtr,
  *     * SMALL:  size <= sizeClassSmall (default 1KB)
  *     * MEDIUM: up to sizeClassMedium (default 64KB)
  *     * LARGE:  > sizeClassMedium
+ *   - An extent is claimed by the first class that allocates from it while
+ *     unclaimed; a class with no extent of its own that has room uses any
+ *     extent with room before the pool maps more memory, and an extent the
+ *     pool grows for a class with no extent becomes that class's
  *   - Best for: Mixed workloads, database-style access
  *   - Trade-off: Requires more extents
  *
  * ADAPTIVE:
- *   - Dynamically switches between BEST_FIT and WORST_FIT
- *   - Uses BEST_FIT when fragmentation < threshold
- *   - Switches to WORST_FIT when fragmentation increases
+ *   - Chooses per allocation from the pool's fragmentation ratio
+ *   - FIRST_FIT while fragmentation < fragmentationThreshold
+ *   - BEST_FIT at or above it, packing into the fullest extents
  *   - Best for: Unpredictable workloads, self-tuning systems
  *
  * Additional controls:
@@ -475,7 +485,7 @@ typedef struct memboundExtentInfo {
     size_t bytesUsed;        /* Currently allocated bytes */
     size_t allocationCount;  /* Outstanding allocations */
     const void *baseAddress; /* Pool start address (for ownership) */
-    size_t index;            /* Extent index (0 = primary) */
+    size_t index;            /* Position in base-address order */
 } memboundExtentInfo;
 
 /* ====================================================================
@@ -735,8 +745,9 @@ bool memboundOwns(const membound *m, const void *p);
  * Extent Information (for diagnostics)
  * ==================================================================== */
 
-/* Get information about a specific extent (0-indexed).
- * Returns true if index is valid, false otherwise. */
+/* Get information about a specific extent, 0 to memboundExtentCount() - 1,
+ * in ascending base-address order (not creation order; the primary extent
+ * may be at any index).  Returns true if index is valid, false otherwise. */
 bool memboundGetExtentInfo(const membound *m, size_t index,
                            memboundExtentInfo *info);
 

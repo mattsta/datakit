@@ -80,8 +80,9 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
         return false;
     }
 
-    /* Double-free check */
-    if (owner->aCtrl[iBlock] & MEMBOUND_CTRL_FREE) {
+    /* Not the head of a checked-out block: a double free, or a pointer into
+     * a block's interior */
+    if (!(owner->aCtrl[iBlock] & MEMBOUND_CTRL_ALLOC)) {
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
@@ -100,6 +101,15 @@ static inline bool memboundValidateFree(membound *m, memboundExtent *owner,
  * one fails (then it disarms), so tests reach every mmap failure path.
  * Armed only by single-threaded tests. */
 static int64_t memboundTestMapFailIn = -1;
+
+/* Test builds only: bytes mapped minus bytes unmapped, so a test can prove
+ * a create/destroy pair returns every byte it mapped */
+static _Atomic int64_t memboundTestMappedBytes = 0;
+
+static int64_t memboundTestMapped(void) {
+    /* @sync: relaxed counter */
+    return atomic_load_explicit(&memboundTestMappedBytes, memory_order_relaxed);
+}
 #endif
 
 static void *memboundMAP(const size_t len) {
@@ -113,12 +123,22 @@ static void *memboundMAP(const size_t len) {
     if (z == MAP_FAILED) {
         return NULL;
     }
+#ifdef DATAKIT_TEST
+    /* @sync: relaxed counter */
+    atomic_fetch_add_explicit(&memboundTestMappedBytes, (int64_t)len,
+                              memory_order_relaxed);
+#endif
     return z;
 }
 
 static void memboundUNMAP(void *ptr, size_t len) {
     if (ptr && len > 0) {
         munmap(ptr, len);
+#ifdef DATAKIT_TEST
+        /* @sync: relaxed counter */
+        atomic_fetch_sub_explicit(&memboundTestMappedBytes, (int64_t)len,
+                                  memory_order_relaxed);
+#endif
     }
 }
 
@@ -585,6 +605,8 @@ static void memboundExtentLink(memboundExtent *e, int64_t i, int iLogsize) {
  * Extent Lifecycle
  * ==================================================================== */
 
+static void memboundExtentBuildFreelists(memboundExtent *extent);
+
 bool memboundExtentInit(memboundExtent *extent, void *space, size_t len) {
     if (!extent || !space || len == 0) {
         return false;
@@ -626,8 +648,10 @@ bool memboundExtentInit(memboundExtent *extent, void *space, size_t len) {
     extent->prev = NULL;
     extent->sortedIndex = 0;
 
-    /* Initialize free lists */
-    memboundExtentReset(extent);
+    /* Initialize free lists.  space is a fresh mapping, so every control
+     * byte is already 0 (not a head); clearing it would only commit the
+     * control pages early. */
+    memboundExtentBuildFreelists(extent);
 
     return true;
 }
@@ -637,6 +661,14 @@ void memboundExtentReset(memboundExtent *extent) {
         return;
     }
 
+    /* Drop every head, live or free, then rebuild */
+    memset(extent->aCtrl, 0, (size_t)extent->nBlock);
+    memboundExtentBuildFreelists(extent);
+}
+
+/* The free lists of an extent whose control bytes are all 0: the largest
+ * blocks that tile nBlock atoms, each written as a free head */
+static void memboundExtentBuildFreelists(memboundExtent *extent) {
     /* Clear all free lists */
     for (int i = 0; i <= MEMBOUND_LOGMAX; i++) {
         extent->aiFreelist[i] = -1;
@@ -648,7 +680,7 @@ void memboundExtentReset(memboundExtent *extent) {
     for (int ii = MEMBOUND_LOGMAX; ii >= 0; ii--) {
         int64_t nAlloc = (1LL << ii);
         if ((iOffset + nAlloc) <= extent->nBlock) {
-            extent->aCtrl[iOffset] = ii | MEMBOUND_CTRL_FREE;
+            extent->aCtrl[iOffset] = (uint8_t)ii;
             memboundExtentLink(extent, iOffset, ii);
             iOffset += nAlloc;
         }
@@ -746,11 +778,11 @@ void *memboundExtentAlloc(memboundExtent *extent, size_t nBytes) {
     while (iBin > iLogsize) {
         iBin--;
         int64_t newSize = 1LL << iBin;
-        extent->aCtrl[i + newSize] = MEMBOUND_CTRL_FREE | iBin;
+        extent->aCtrl[i + newSize] = (uint8_t)iBin;
         memboundExtentLink(extent, i + newSize, iBin);
     }
 
-    extent->aCtrl[i] = iLogsize;
+    extent->aCtrl[i] = (uint8_t)(MEMBOUND_CTRL_ALLOC | iLogsize);
 
     /* Update statistics (under the global lock). */
     extent->nAlloc++;
@@ -779,20 +811,16 @@ void memboundExtentFree(memboundExtent *extent, void *pOld) {
                                  iBlock >= 0 && iBlock < extent->nBlock);
     MEMBOUND_SAFETY_CHECK_EXTENT(
         extent, ((uint8_t *)pOld - extent->zPool) % extent->szAtom == 0);
+    /* Only the head of a checked-out block has ALLOC: this refuses a double
+     * free and a pointer into any block's interior */
     MEMBOUND_SAFETY_CHECK_EXTENT(extent,
-                                 (extent->aCtrl[iBlock] & MEMBOUND_CTRL_FREE) ==
-                                     0); /* Double-free check */
+                                 (extent->aCtrl[iBlock] & MEMBOUND_CTRL_ALLOC));
 
     int iLogsize = extent->aCtrl[iBlock] & MEMBOUND_CTRL_LOGSIZE;
     int64_t size = 1LL << iLogsize;
 
+    /* Internal consistency checks, all before any state changes */
     MEMBOUND_SAFETY_CHECK_EXTENT(extent, iBlock + size - 1 < extent->nBlock);
-
-    extent->aCtrl[iBlock] |= MEMBOUND_CTRL_FREE;
-    extent->aCtrl[iBlock + size - 1] |= MEMBOUND_CTRL_FREE;
-
-    /* These are internal consistency checks - if they fail, something is very
-     * wrong */
     MEMBOUND_SAFETY_CHECK_EXTENT(extent, extent->currentCount > 0);
     MEMBOUND_SAFETY_CHECK_EXTENT(
         extent,
@@ -800,16 +828,13 @@ void memboundExtentFree(memboundExtent *extent, void *pOld) {
     extent->currentCount--;
     extent->currentOut -= (uint64_t)size * (uint64_t)extent->szAtom;
 
-    extent->aCtrl[iBlock] = MEMBOUND_CTRL_FREE | iLogsize;
+    extent->aCtrl[iBlock] = (uint8_t)iLogsize; /* a free head */
 
     /* Coalesce with buddies */
     while (iLogsize < MEMBOUND_LOGMAX) {
         int64_t iBuddy;
         if ((iBlock >> iLogsize) & 1) {
-            iBuddy = iBlock - size;
-            if (unlikely(iBuddy < 0)) {
-                break; /* Safety: invalid buddy index */
-            }
+            iBuddy = iBlock - size; /* bit iLogsize set: iBlock >= size */
         } else {
             iBuddy = iBlock + size;
             if (iBuddy >= extent->nBlock) {
@@ -817,19 +842,22 @@ void memboundExtentFree(memboundExtent *extent, void *pOld) {
             }
         }
 
-        if (extent->aCtrl[iBuddy] != (MEMBOUND_CTRL_FREE | iLogsize)) {
+        /* The buddy's first atom is always a head (of the buddy, or of its
+         * first piece if split), so this byte equals iLogsize exactly when
+         * the whole buddy is one free block */
+        if (extent->aCtrl[iBuddy] != iLogsize) {
             break;
         }
 
         memboundExtentUnlink(extent, iBuddy, iLogsize);
         iLogsize++;
         if (iBuddy < iBlock) {
-            extent->aCtrl[iBlock] = 0;
-            extent->aCtrl[iBuddy] = MEMBOUND_CTRL_FREE | iLogsize;
+            extent->aCtrl[iBlock] = 0; /* now interior */
+            extent->aCtrl[iBuddy] = (uint8_t)iLogsize;
             iBlock = iBuddy;
         } else {
-            extent->aCtrl[iBlock] = MEMBOUND_CTRL_FREE | iLogsize;
-            extent->aCtrl[iBuddy] = 0;
+            extent->aCtrl[iBlock] = (uint8_t)iLogsize;
+            extent->aCtrl[iBuddy] = 0; /* now interior */
         }
         size *= 2;
     }
@@ -1896,7 +1924,7 @@ static pthread_once_t memboundTLSOnce = PTHREAD_ONCE_INIT;
 
 /* Defined just above memboundFree; the free body run under the global lock.
  * Used by the deferred-free flush (caller holds the pool lock). */
-static void memboundFreeLockedStandard(membound *m, void *pPrior);
+static bool memboundFreeLockedStandard(membound *m, void *pPrior);
 static void memboundTLSFlushDeferred(memboundTLSCache *c);
 
 static bool memboundUsesThreadCache(const membound *m) {
@@ -2371,30 +2399,33 @@ void *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment) {
 /* The global-lock free body: lookup, validate, release, account, and
  * opportunistically shrink. The caller MUST hold the pool lock. Invalid
  * pointers bump the violation counter and are skipped (no early unlock — the
- * caller owns the lock). */
-static void memboundFreeLockedStandard(membound *m, void *pPrior) {
+ * caller owns the lock). Returns whether the block was freed. */
+static bool memboundFreeLockedStandard(membound *m, void *pPrior) {
     memboundExtent *owner = memboundIndexLookup(&m->index, pPrior);
     if (!owner) {
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&m->safetyViolations, 1,
                                   memory_order_relaxed);
-        return;
+        return false;
     }
     if (!memboundValidateFree(m, owner, pPrior)) {
-        return;
+        return false;
     }
     size_t freedSize = memboundExtentSize(owner, pPrior);
     memboundExtentFree(owner, pPrior);
     m->currentOut -= freedSize;
     m->currentCount--;
+
+    /* An extent left empty is released when auto-release is on
+     * (shrinkThreshold > 0; an empty extent's occupancy is 0, below any
+     * threshold), except the primary.  Checking only the extent just freed
+     * from keeps this O(1); explicit memboundShrink covers threshold 0. */
     if (m->mode == MEMBOUND_MODE_DYNAMIC &&
         m->strategy.shrinkThreshold > 0.0f && owner->currentCount == 0 &&
         owner != m->primary) {
-        float occ = memboundExtentOccupancy(owner);
-        if (occ < m->strategy.shrinkThreshold) {
-            memboundReleaseExtent(m, owner);
-        }
+        memboundReleaseExtent(m, owner);
     }
+    return true;
 }
 
 void memboundFree(membound *m, void *pPrior) {
@@ -2424,47 +2455,9 @@ void memboundFree(membound *m, void *pPrior) {
 
     /* STANDARD and ENTERPRISE tiers use full membound struct */
     memboundEnter(m);
-
-    /* Find owning extent */
-    memboundExtent *owner = memboundIndexLookup(&m->index, pPrior);
-    if (!owner) {
-        /* Pointer doesn't belong to any extent - invalid free */
-        /* @sync: relaxed counter */
-        atomic_fetch_add_explicit(&m->safetyViolations, 1,
-                                  memory_order_relaxed);
-        memboundLeave(m);
+    if (!memboundFreeLockedStandard(m, pPrior)) {
+        memboundLeave(m); /* refused: nothing changed, no pressure change */
         return;
-    }
-
-    /* Validate the free operation and track violations */
-    if (!memboundValidateFree(m, owner, pPrior)) {
-        memboundLeave(m);
-        return;
-    }
-
-    size_t freedSize = memboundExtentSize(owner, pPrior);
-
-    /* Free under the global lock (single lock domain). */
-    memboundExtentFree(owner, pPrior);
-
-    /* Update aggregate stats */
-    m->currentOut -= freedSize;
-    m->currentCount--;
-
-    /* Release this extent if it is now empty after the free operation.
-     * This is O(1) - we only check the single extent we just freed from.
-     *
-     * Note: We release if empty AND below shrinkThreshold. This is an
-     * optimization to avoid releasing/reallocating extents that are briefly
-     * empty during high-churn workloads. If shrinkThreshold is 0, automatic
-     * release is disabled (use explicit memboundShrink instead). */
-    if (m->mode == MEMBOUND_MODE_DYNAMIC &&
-        m->strategy.shrinkThreshold > 0.0f && owner->currentCount == 0 &&
-        owner != m->primary) {
-        float occ = memboundExtentOccupancy(owner);
-        if (occ < m->strategy.shrinkThreshold) {
-            memboundReleaseExtent(m, owner);
-        }
     }
 
     /* Capture callback info while holding lock */
@@ -2744,7 +2737,7 @@ static bool memboundDrainExtent(membound *m, memboundExtent *e,
                                 memboundRelocationCallback cb, void *userData) {
     /* Snapshot E's live blocks before relocation mutates its control bytes.
      * Walk the buddy partition head-to-head: each head byte stores the block's
-     * log-size, and FREE distinguishes free vs. allocated heads. */
+     * log-size, and ALLOC distinguishes allocated vs. free heads. */
     size_t cap = 16;
     size_t n = 0;
     cleanerName(zfree, RelocBlocks) memboundRelocBlock *blocks =
@@ -2757,7 +2750,7 @@ static bool memboundDrainExtent(membound *m, memboundExtent *e,
         const uint8_t c = e->aCtrl[i];
         const int logsize = c & MEMBOUND_CTRL_LOGSIZE;
         const int64_t blockAtoms = 1LL << logsize;
-        if (!(c & MEMBOUND_CTRL_FREE)) {
+        if (c & MEMBOUND_CTRL_ALLOC) {
             if (n == cap) {
                 cap *= 2;
                 memboundRelocBlock *grown =
@@ -3412,6 +3405,28 @@ static void memboundMicroLink(memboundMicro *m, int16_t i, int iLogsize) {
     m->freelistBitmap |= (1U << iLogsize);
 }
 
+/* The free lists of a pool whose control bytes are all 0: the largest
+ * blocks that tile nBlock atoms, each written as a free head */
+static void memboundMicroBuildFreelists(memboundMicro *m) {
+    for (int i = 0; i <= MEMBOUND_MICRO_LOGMAX; i++) {
+        m->aiFreelist[i] = -1;
+    }
+    m->freelistBitmap = 0;
+
+    int16_t iOffset = 0;
+    for (int ii = MEMBOUND_MICRO_LOGMAX; ii >= 0; ii--) {
+        int16_t nAlloc = (1 << ii);
+        if ((iOffset + nAlloc) <= m->nBlock) {
+            m->aCtrl[iOffset] = (uint8_t)ii;
+            memboundMicroLink(m, iOffset, ii);
+            iOffset += nAlloc;
+        }
+    }
+
+    m->currentOut = 0;
+    m->currentCount = 0;
+}
+
 memboundMicro *memboundMicroCreate(size_t size) {
     /* Enforce MICRO tier limits */
     if (size == 0 || size > MEMBOUND_MICRO_MAX_POOL) {
@@ -3460,27 +3475,9 @@ memboundMicro *memboundMicroCreate(size_t size) {
     m->atomShift = nMinLog;
     m->szAtom = szAtom;
     m->nBlock = nBlock;
-    m->poolSize = totalSize; /* Total mmap size for cleanup */
-    m->currentOut = 0;
-    m->currentCount = 0;
-    m->freelistBitmap = 0;
-
-    /* Initialize freelists */
-    for (int i = 0; i <= MEMBOUND_MICRO_LOGMAX; i++) {
-        m->aiFreelist[i] = -1;
-    }
-
-    /* Build initial free list from largest possible blocks */
-    int16_t iOffset = 0;
-    for (int ii = MEMBOUND_MICRO_LOGMAX; ii >= 0; ii--) {
-        int16_t nAlloc = (1 << ii);
-        if ((iOffset + nAlloc) <= m->nBlock) {
-            m->aCtrl[iOffset] = ii | MEMBOUND_CTRL_FREE;
-            memboundMicroLink(m, iOffset, ii);
-            iOffset += nAlloc;
-        }
-    }
-
+    m->poolSize = (uint16_t)poolDataSize; /* at most 255 atoms of 256 */
+    /* The mapping was zeroed above: every control byte is "no head" */
+    memboundMicroBuildFreelists(m);
     return m;
 }
 
@@ -3488,7 +3485,9 @@ void memboundMicroDestroy(memboundMicro *m) {
     if (!m) {
         return;
     }
-    memboundUNMAP(m, m->poolSize);
+    /* The one mapping: struct, pool data, one control byte per atom.  Up to
+     * 65599 bytes, so it is not stored in a 16-bit field. */
+    memboundUNMAP(m, sizeof(memboundMicro) + m->poolSize + m->nBlock);
 }
 
 void memboundMicroReset(memboundMicro *m) {
@@ -3496,25 +3495,9 @@ void memboundMicroReset(memboundMicro *m) {
         return;
     }
 
-    /* Clear all free lists */
-    for (int i = 0; i <= MEMBOUND_MICRO_LOGMAX; i++) {
-        m->aiFreelist[i] = -1;
-    }
-    m->freelistBitmap = 0;
-
-    /* Rebuild free list from largest possible blocks */
-    int16_t iOffset = 0;
-    for (int ii = MEMBOUND_MICRO_LOGMAX; ii >= 0; ii--) {
-        int16_t nAlloc = (1 << ii);
-        if ((iOffset + nAlloc) <= m->nBlock) {
-            m->aCtrl[iOffset] = ii | MEMBOUND_CTRL_FREE;
-            memboundMicroLink(m, iOffset, ii);
-            iOffset += nAlloc;
-        }
-    }
-
-    m->currentOut = 0;
-    m->currentCount = 0;
+    /* Drop every head, live or free, then rebuild */
+    memset(m->aCtrl, 0, m->nBlock);
+    memboundMicroBuildFreelists(m);
 }
 
 void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
@@ -3561,11 +3544,11 @@ void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
     while (iBin > iLogsize) {
         iBin--;
         int16_t newSize = (1 << iBin);
-        m->aCtrl[i + newSize] = MEMBOUND_CTRL_FREE | iBin;
+        m->aCtrl[i + newSize] = (uint8_t)iBin;
         memboundMicroLink(m, i + newSize, iBin);
     }
 
-    m->aCtrl[i] = iLogsize;
+    m->aCtrl[i] = (uint8_t)(MEMBOUND_CTRL_ALLOC | iLogsize);
 
     /* Update statistics */
     m->currentCount++;
@@ -3574,23 +3557,35 @@ void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
     return (void *)&m->zPool[i * m->szAtom];
 }
 
+/* The atom index of p, or -1 when p is not the start of an atom inside the
+ * pool.  The offset is taken as an unsigned integer, so a pointer below the
+ * pool wraps to a huge offset and fails the one range test (an index cast
+ * to 16 bits would wrap a pointer 16 MiB away back into range). */
+static inline int32_t memboundMicroAtomOf(const memboundMicro *m,
+                                          const void *p) {
+    const uintptr_t off = (uintptr_t)p - (uintptr_t)m->zPool;
+    if (off >= (uintptr_t)m->nBlock * m->szAtom ||
+        (off & ((uintptr_t)m->szAtom - 1)) != 0) {
+        return -1;
+    }
+    return (int32_t)(off >> m->atomShift);
+}
+
 void memboundMicroFree(memboundMicro *m, void *pOld) {
     if (!m || !pOld) {
         return;
     }
 
-    int16_t iBlock = (int16_t)(((uint8_t *)pOld - m->zPool) >> m->atomShift);
-
     /* Runtime safety checks - MICRO tier doesn't track violations for minimal
-     * overhead */
-    if (unlikely(iBlock < 0 || iBlock >= m->nBlock)) {
-        return;
+     * overhead.  All of them run before any state changes, so a refused
+     * free leaves the pool exactly as it was. */
+    const int32_t atom = memboundMicroAtomOf(m, pOld);
+    if (unlikely(atom < 0)) {
+        return; /* Not a block start this pool owns */
     }
-    if (unlikely(((uint8_t *)pOld - m->zPool) % m->szAtom != 0)) {
-        return;
-    }
-    if (unlikely(m->aCtrl[iBlock] & MEMBOUND_CTRL_FREE)) {
-        return; /* Double-free */
+    int16_t iBlock = (int16_t)atom;
+    if (unlikely(!(m->aCtrl[iBlock] & MEMBOUND_CTRL_ALLOC))) {
+        return; /* Double free, or a pointer into a block's interior */
     }
 
     int iLogsize = m->aCtrl[iBlock] & MEMBOUND_CTRL_LOGSIZE;
@@ -3599,29 +3594,20 @@ void memboundMicroFree(memboundMicro *m, void *pOld) {
     if (unlikely(iBlock + size - 1 >= m->nBlock)) {
         return;
     }
-
-    m->aCtrl[iBlock] |= MEMBOUND_CTRL_FREE;
-    m->aCtrl[iBlock + size - 1] |= MEMBOUND_CTRL_FREE;
-
-    if (unlikely(m->currentCount == 0)) {
+    if (unlikely(m->currentCount == 0 ||
+                 m->currentOut < (uint32_t)size * m->szAtom)) {
         return;
     }
-    if (unlikely(m->currentOut < ((uint16_t)size * (uint16_t)m->szAtom))) {
-        return;
-    }
+
     m->currentCount--;
     m->currentOut -= (uint16_t)size * (uint16_t)m->szAtom;
-
-    m->aCtrl[iBlock] = MEMBOUND_CTRL_FREE | iLogsize;
+    m->aCtrl[iBlock] = (uint8_t)iLogsize; /* a free head */
 
     /* Coalesce with buddies */
     while (iLogsize < MEMBOUND_MICRO_LOGMAX) {
         int16_t iBuddy;
         if ((iBlock >> iLogsize) & 1) {
-            iBuddy = iBlock - size;
-            if (unlikely(iBuddy < 0)) {
-                break; /* Safety: invalid buddy index */
-            }
+            iBuddy = iBlock - size; /* bit iLogsize set: iBlock >= size */
         } else {
             iBuddy = iBlock + size;
             if (iBuddy >= m->nBlock) {
@@ -3629,19 +3615,21 @@ void memboundMicroFree(memboundMicro *m, void *pOld) {
             }
         }
 
-        if (m->aCtrl[iBuddy] != (MEMBOUND_CTRL_FREE | iLogsize)) {
+        /* The buddy's first atom is always a head, so this equals
+         * iLogsize exactly when the whole buddy is one free block */
+        if (m->aCtrl[iBuddy] != iLogsize) {
             break;
         }
 
         memboundMicroUnlink(m, iBuddy, iLogsize);
         iLogsize++;
         if (iBuddy < iBlock) {
-            m->aCtrl[iBlock] = 0;
-            m->aCtrl[iBuddy] = MEMBOUND_CTRL_FREE | iLogsize;
+            m->aCtrl[iBlock] = 0; /* now interior */
+            m->aCtrl[iBuddy] = (uint8_t)iLogsize;
             iBlock = iBuddy;
         } else {
-            m->aCtrl[iBlock] = MEMBOUND_CTRL_FREE | iLogsize;
-            m->aCtrl[iBuddy] = 0;
+            m->aCtrl[iBlock] = (uint8_t)iLogsize;
+            m->aCtrl[iBuddy] = 0; /* now interior */
         }
         size *= 2;
     }
@@ -3662,9 +3650,10 @@ size_t memboundMicroSize(const memboundMicro *m, const void *ptr) {
     if (!m || !ptr) {
         return 0;
     }
-    const int16_t i =
-        (int16_t)(((const uint8_t *)ptr - m->zPool) >> m->atomShift);
-    assert(i >= 0 && i < m->nBlock);
+    const int32_t i = memboundMicroAtomOf(m, ptr);
+    if (i < 0) {
+        return 0;
+    }
     return (size_t)m->szAtom << (m->aCtrl[i] & MEMBOUND_CTRL_LOGSIZE);
 }
 
@@ -3895,7 +3884,9 @@ void memboundCompactPoolReset(memboundCompactPool *m) {
         m->aiFreelist[i] = -1;
     }
 
-    /* Reset control array and rebuild freelists */
+    /* Drop every head, live or free (a live head left in place would read
+     * as allocated inside a free block), then rebuild the freelists */
+    memset(m->aCtrl, 0, (size_t)m->nBlock);
     int nBlock = m->nBlock;
     for (int ii = MEMBOUND_COMPACT_LOGMAX; ii >= 0; ii--) {
         int nAlloc = (1 << ii);
@@ -4031,10 +4022,16 @@ void memboundCompactPoolFree(memboundCompactPool *m, void *pOld) {
             break;
         }
 
-        /* Coalesce */
+        /* Coalesce.  The upper half's head becomes interior and must read
+         * as not allocated: left holding its allocated bit, a second free
+         * of it (or a later free of that interior address) would pass the
+         * allocated-bit check. */
         memboundCompactUnlink(m, iBuddy, iLogsize);
         if (iBuddy < iBlock) {
+            m->aCtrl[iBlock] = 0;
             iBlock = iBuddy;
+        } else {
+            m->aCtrl[iBuddy] = 0;
         }
         iLogsize++;
     }
@@ -4267,6 +4264,193 @@ static void testRelocCb(void *oldPtr, void *newPtr, size_t size,
     if (oldPtr == testRelocWatchOld) {
         testRelocWatchNew = newPtr;
     }
+}
+
+/* The base address of the extent holding p, or NULL */
+static const void *memboundTestExtentOf(const membound *m, const void *p) {
+    memboundExtentInfo info;
+    for (size_t i = 0; memboundGetExtentInfo(m, i, &info); i++) {
+        const uint8_t *base = info.baseAddress;
+        if ((const uint8_t *)p >= base &&
+            (const uint8_t *)p < base + info.capacity) {
+            return base;
+        }
+    }
+    return NULL;
+}
+
+/* Randomized compaction: the live blocks an application holds, each with
+ * its requested size and fill byte.  The relocation callback updates the
+ * table the way an application updates its references. */
+typedef struct memboundTestLive {
+    uint8_t *ptr;
+    size_t size;
+    uint8_t fill;
+} memboundTestLive;
+
+typedef struct memboundTestLiveSet {
+    memboundTestLive blocks[256];
+    size_t n;
+    size_t moves;
+    size_t unknownMoves;
+} memboundTestLiveSet;
+
+static void memboundTestLiveRelocCb(void *oldPtr, void *newPtr, size_t size,
+                                    void *userData) {
+    memboundTestLiveSet *set = userData;
+    set->moves++;
+    for (size_t i = 0; i < set->n; i++) {
+        if (set->blocks[i].ptr == oldPtr) {
+            if (size < set->blocks[i].size ||
+                memcmp(oldPtr, newPtr, set->blocks[i].size) != 0) {
+                set->unknownMoves++; /* short block or bytes not copied */
+            }
+            set->blocks[i].ptr = newPtr;
+            return;
+        }
+    }
+    set->unknownMoves++; /* moved a block the application never held */
+}
+
+static int memboundTestLiveCompare(const void *a, const void *b) {
+    const uintptr_t x = (uintptr_t)((const memboundTestLive *)a)->ptr;
+    const uintptr_t y = (uintptr_t)((const memboundTestLive *)b)->ptr;
+    return (x > y) - (x < y);
+}
+
+/* Every held block is owned, keeps its bytes, and overlaps no other */
+static int memboundTestLiveCheck(membound *m, memboundTestLiveSet *set,
+                                 const char *when) {
+    int bad = 0;
+    if (memboundCurrentAllocationCount(m) != set->n) {
+        printf("ERROR: %s: pool counts %zu allocations, application holds "
+               "%zu\n",
+               when, memboundCurrentAllocationCount(m), set->n);
+        bad++;
+    }
+    qsort(set->blocks, set->n, sizeof(*set->blocks), memboundTestLiveCompare);
+    for (size_t i = 0; i < set->n; i++) {
+        const memboundTestLive *b = &set->blocks[i];
+        if (!memboundOwns(m, b->ptr) ||
+            memboundUsableSize(m, b->ptr) < b->size) {
+            printf("ERROR: %s: block %zu not owned or too small\n", when, i);
+            bad++;
+            continue;
+        }
+        for (size_t j = 0; j < b->size; j++) {
+            if (b->ptr[j] != b->fill) {
+                printf("ERROR: %s: block %zu byte %zu changed\n", when, i, j);
+                bad++;
+                break;
+            }
+        }
+        if (i + 1 < set->n && b->ptr + b->size > set->blocks[i + 1].ptr) {
+            printf("ERROR: %s: blocks %zu and %zu overlap\n", when, i, i + 1);
+            bad++;
+        }
+    }
+    return bad;
+}
+
+static size_t memboundTestAtom(const membound *m) {
+    if (memboundIsMicro(m)) {
+        return ((const memboundMicro *)m)->szAtom;
+    }
+    if (memboundIsCompact(m)) {
+        return (size_t)((const memboundCompactPool *)m)->szAtom;
+    }
+    return MEMBOUND_MIN_ATOM;
+}
+
+/* Random allocs and frees mixed with frees the pool must refuse: a second
+ * free of an earlier block (often one already merged with its buddy), a
+ * pointer into a live block's interior, a pointer off the atom grid.  A
+ * refused free must change nothing; live blocks keep their bytes and never
+ * overlap. */
+static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
+    int bad = 0;
+    memboundTestLiveSet live = {0};
+    void *freed[32] = {0};
+    size_t nFreed = 0;
+    const size_t atom = memboundTestAtom(m);
+    uint64_t r = seed;
+
+    for (int op = 0; op < ops; op++) {
+        r ^= r << 13;
+        r ^= r >> 7;
+        r ^= r << 17;
+        const unsigned kind = (unsigned)(r % 10);
+        const size_t which = live.n ? (size_t)(r >> 8) % live.n : 0;
+        void *target = NULL;
+
+        if (kind < 5 || live.n == 0) {
+            if (live.n < 64) {
+                const size_t size = 1 + (size_t)((r >> 16) % 3000);
+                uint8_t *p = memboundAlloc(m, size);
+                if (p) {
+                    const uint8_t fill = (uint8_t)(op * 7 + 3);
+                    memset(p, fill, size);
+                    live.blocks[live.n++] = (memboundTestLive){p, size, fill};
+                }
+            }
+            continue;
+        }
+        if (kind < 7) {
+            void *p = live.blocks[which].ptr;
+            memboundFree(m, p);
+            live.blocks[which] = live.blocks[--live.n];
+            freed[nFreed++ % 32] = p;
+            continue;
+        }
+        if (kind == 7) {
+            /* A pointer freed earlier, unless it was handed out again */
+            if (nFreed == 0) {
+                continue;
+            }
+            target = freed[(size_t)(r >> 24) % (nFreed < 32 ? nFreed : 32)];
+            for (size_t i = 0; i < live.n && target; i++) {
+                if (live.blocks[i].ptr == target) {
+                    target = NULL;
+                }
+            }
+        } else if (kind == 8) {
+            const size_t usable = memboundUsableSize(m, live.blocks[which].ptr);
+            if (usable <= atom) {
+                continue;
+            }
+            const size_t k = 1 + (size_t)(r >> 24) % (usable / atom - 1);
+            target = live.blocks[which].ptr + k * atom;
+        } else {
+            target =
+                live.blocks[which].ptr + 1 + (size_t)(r >> 24) % (atom - 1);
+        }
+        if (!target) {
+            continue;
+        }
+        memboundFree(m, target);
+        if (memboundCurrentAllocationCount(m) != live.n) {
+            printf("ERROR: tier %d op %d: refused free (kind %u) changed the "
+                   "count to %zu, want %zu\n",
+                   memboundGetTier(m), op, kind,
+                   memboundCurrentAllocationCount(m), live.n);
+            bad++;
+            break;
+        }
+        if (op % 64 == 0) {
+            bad += memboundTestLiveCheck(m, &live, "bad-free run");
+        }
+    }
+
+    bad += memboundTestLiveCheck(m, &live, "bad-free run end");
+    for (size_t i = 0; i < live.n; i++) {
+        memboundFree(m, live.blocks[i].ptr);
+    }
+    if (memboundCurrentAllocationCount(m) != 0) {
+        printf("ERROR: tier %d: %zu allocations after freeing all\n",
+               memboundGetTier(m), memboundCurrentAllocationCount(m));
+        bad++;
+    }
+    return bad;
 }
 
 /* ================================================================
@@ -5238,6 +5422,178 @@ int memboundTest(int argc, char *argv[]) {
         membound *mSmall = memboundCreateMicro(1024);
         assert(mSmall != NULL);
         memboundShutdown(mSmall);
+    }
+
+    TEST("every tier unmaps exactly the bytes it mapped") {
+        /* Micro sizes up to the limit, where struct + pool + control bytes
+         * pass 65535 */
+        for (size_t size = 256; size <= MEMBOUND_MICRO_MAX_POOL;
+             size += size < 65000 ? 4093 : 7) {
+            const int64_t before = memboundTestMapped();
+            membound *m = memboundCreateMicro(size);
+            if (!m) {
+                continue;
+            }
+            void *p = memboundAlloc(m, 300);
+            memboundFree(m, p);
+            memboundShutdown(m);
+            if (memboundTestMapped() != before) {
+                ERR("MICRO pool of %zu bytes left %" PRId64
+                    " bytes mapped after shutdown",
+                    size, memboundTestMapped() - before);
+            }
+        }
+
+        const int64_t before = memboundTestMapped();
+        membound *pools[4] = {
+            memboundCreate(1 << 20),
+            memboundCreateDynamic(64 << 10, 4 << 20, 64 << 10),
+            memboundCreateCompact(1 << 16, false),
+            memboundCreateEnterprise(64 << 10, 4 << 20),
+        };
+        for (size_t i = 0; i < 4; i++) {
+            assert(pools[i]);
+            /* Grow the dynamic pools past their first extent */
+            void *ptrs[48] = {0};
+            for (size_t j = 0; j < 48; j++) {
+                ptrs[j] = memboundAlloc(pools[i], 4096);
+            }
+            for (size_t j = 0; j < 48; j++) {
+                memboundFree(pools[i], ptrs[j]);
+            }
+            memboundShutdown(pools[i]);
+        }
+        if (memboundTestMapped() != before) {
+            ERR("pools left %" PRId64 " bytes mapped after shutdown",
+                memboundTestMapped() - before);
+        }
+    }
+
+    TEST("every tier refuses double, interior and off-grid frees exactly") {
+        for (uint64_t seed = 1; seed <= 6; seed++) {
+            membound *pools[5] = {
+                memboundCreate(1 << 18),
+                memboundCreateDynamic(1 << 16, 0, 1 << 16),
+                memboundCreateEnterprise(1 << 16, 8 << 20),
+                memboundCreateMicro(MEMBOUND_MICRO_MAX_POOL),
+                memboundCreateCompact(1 << 18, false),
+            };
+            for (size_t t = 0; t < 5; t++) {
+                assert(pools[t]);
+                err += memboundTestBadFreeRun(
+                    pools[t], seed * 0x9E3779B97F4A7C15ULL + t, 1500);
+                memboundShutdown(pools[t]);
+            }
+        }
+    }
+
+    TEST("reset clears every head: no freed or stale pointer frees after "
+         "it") {
+        membound *pools[4] = {
+            memboundCreate(1 << 16),
+            memboundCreateDynamic(1 << 16, 0, 1 << 16),
+            memboundCreateMicro(8192),
+            memboundCreateCompact(1 << 16, false),
+        };
+        for (size_t t = 0; t < 4; t++) {
+            membound *m = pools[t];
+            assert(m);
+            void *stale[6];
+            for (size_t i = 0; i < 6; i++) {
+                stale[i] = memboundAlloc(m, 200 + i * 300);
+                assert(stale[i]);
+            }
+            memboundReset(m);
+            /* One big block now spans where the stale heads were */
+            const size_t bigSize = 4096;
+            uint8_t *big = memboundAlloc(m, bigSize);
+            assert(big);
+            memset(big, 0x77, bigSize);
+            for (size_t i = 0; i < 6; i++) {
+                if (stale[i] != big) {
+                    memboundFree(m, stale[i]);
+                }
+            }
+            if (memboundCurrentAllocationCount(m) != 1) {
+                ERR("pool %zu: a pointer from before reset freed a block "
+                    "(%zu allocations)",
+                    t, memboundCurrentAllocationCount(m));
+            }
+            for (size_t i = 0; i < bigSize; i++) {
+                if (big[i] != 0x77) {
+                    ERR("pool %zu: the live block changed", t);
+                    break;
+                }
+            }
+            memboundFree(m, big);
+            memboundShutdown(m);
+        }
+    }
+
+    TEST("MICRO: free and size refuse pointers the pool does not own") {
+        membound *m = memboundCreateMicro(4096);
+        membound *other = memboundCreateMicro(4096);
+        assert(m && other);
+        uint8_t *a = memboundAlloc(m, 256);
+        uint8_t *b = memboundAlloc(m, 512);
+        uint8_t *o = memboundAlloc(other, 256);
+        assert(a && b && o);
+        memset(a, 0xA5, 256);
+
+        /* Atom-aligned pointers 16 MiB away: (offset >> 8) is the index
+         * of a plus a multiple of 65536 */
+        const uintptr_t far = (uintptr_t)1 << 24;
+        void *foreign[] = {
+            (void *)((uintptr_t)a + far),
+            (void *)((uintptr_t)a - far),
+            (void *)((uintptr_t)a + 4 * far),
+            o,
+            a + 1,
+            b + 256, /* on the grid, inside the live block */
+        };
+        for (size_t i = 0; i < sizeof(foreign) / sizeof(*foreign); i++) {
+            if (i < 4 && memboundUsableSize(m, foreign[i]) != 0) {
+                ERR("foreign pointer %zu reports %zu usable bytes", i,
+                    memboundUsableSize(m, foreign[i]));
+            }
+            memboundFree(m, foreign[i]);
+            if (memboundCurrentAllocationCount(m) != 2) {
+                ERR("freeing foreign pointer %zu changed the count to %zu", i,
+                    memboundCurrentAllocationCount(m));
+                break;
+            }
+        }
+
+        /* A refused free released nothing: the pool still hands out
+         * other blocks, never a or b */
+        uint8_t *c = memboundAlloc(m, 256);
+        if (!c || c == a || (c >= b && c < b + 512)) {
+            ERRR("a live block was handed out again");
+        }
+        for (size_t i = 0; i < 256; i++) {
+            if (a[i] != 0xA5) {
+                ERRR("a live block was overwritten");
+                break;
+            }
+        }
+
+        /* Double free releases once */
+        memboundFree(m, c);
+        memboundFree(m, c);
+        if (memboundCurrentAllocationCount(m) != 2) {
+            ERR("double free left %zu allocations, want 2",
+                memboundCurrentAllocationCount(m));
+        }
+
+        memboundFree(m, NULL);
+        memboundFree(m, a);
+        memboundFree(m, b);
+        if (memboundCurrentAllocationCount(m) != 0) {
+            ERRR("freeing the live blocks did not empty the pool");
+        }
+        memboundFree(other, o);
+        memboundShutdown(m);
+        memboundShutdown(other);
     }
 
     TEST("MICRO: Repeated alloc/free stress") {
@@ -6298,6 +6654,57 @@ int memboundTest(int argc, char *argv[]) {
         memboundShutdown(m);
     }
 
+    TEST("Strategy: size-class claims, shares before growing, then grows "
+         "for the class") {
+        membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+        assert(m);
+        memboundSetStrategy(m, MEMBOUND_STRATEGY_SIZE_CLASS);
+
+        /* The small class claims the only extent */
+        void *small = memboundAlloc(m, 256);
+        const void *first = memboundTestExtentOf(m, small);
+        assert(first);
+
+        /* Medium has no extent of its own: it shares the small class's
+         * extent rather than map more memory */
+        void *ptrs[40] = {0};
+        size_t n = 0;
+        ptrs[n++] = memboundAlloc(m, 4096);
+        if (memboundExtentCount(m) != 1 ||
+            memboundTestExtentOf(m, ptrs[0]) != first) {
+            ERRR("medium allocation grew the pool while an extent had room");
+        }
+
+        /* Fill until the pool grows: the extent grown for medium is
+         * medium's, so later medium allocations land there */
+        while (memboundExtentCount(m) == 1 && n < 40) {
+            ptrs[n++] = memboundAlloc(m, 4096);
+        }
+        assert(memboundExtentCount(m) == 2 && n < 40);
+        const void *grown = memboundTestExtentOf(m, ptrs[n - 1]);
+        if (grown == first) {
+            ERRR("the allocation that grew the pool is not in the new extent");
+        }
+        for (int i = 0; i < 4 && n < 40; i++) {
+            ptrs[n] = memboundAlloc(m, 4096);
+            if (memboundTestExtentOf(m, ptrs[n]) != grown) {
+                ERR("medium allocation %d after growth missed medium's "
+                    "extent",
+                    i);
+            }
+            n++;
+        }
+
+        for (size_t i = 0; i < n; i++) {
+            memboundFree(m, ptrs[i]);
+        }
+        memboundFree(m, small);
+        if (memboundCurrentAllocationCount(m) != 0) {
+            ERRR("allocations remain after freeing all");
+        }
+        memboundShutdown(m);
+    }
+
     TEST("Strategy: adaptive switches on fragmentation") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
         assert(m != NULL);
@@ -6671,6 +7078,83 @@ int memboundTest(int argc, char *argv[]) {
         memboundFree(m, moved);
         memboundFree(m, arr[k - 1]);
         memboundShutdown(m);
+    }
+
+    TEST("Compact: random layouts keep every held block intact") {
+        /* Mixed sizes over several 64 KiB extents, holes punched at
+         * random, then compaction: blocks move into the fullest extent
+         * with room, fall back to any extent when that one is too
+         * fragmented, or stay when nothing has room */
+        uint64_t rng = 0x9E3779B97F4A7C15ULL;
+        size_t totalMoves = 0;
+        size_t totalReleased = 0;
+        for (int scenario = 0; scenario < 40; scenario++) {
+            const int64_t mappedBefore = memboundTestMapped();
+            membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+            assert(m);
+            memboundTestLiveSet set = {0};
+            memboundSetRelocationCallback(m, memboundTestLiveRelocCb, &set);
+
+            const size_t target = 40 + (size_t)(scenario % 5) * 40;
+            while (set.n < target) {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                const size_t size = 200 + (size_t)(rng % 9000);
+                uint8_t *p = memboundAlloc(m, size);
+                assert(p);
+                const uint8_t fill = (uint8_t)(set.n * 37 + 1);
+                memset(p, fill, size);
+                set.blocks[set.n++] = (memboundTestLive){p, size, fill};
+            }
+            /* Free a random share of the blocks, from 30% to 90% */
+            const uint64_t keepPct = 10 + (uint64_t)(scenario % 7) * 10;
+            for (size_t i = 0; i < set.n;) {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                if (rng % 100 >= keepPct) {
+                    memboundFree(m, set.blocks[i].ptr);
+                    set.blocks[i] = set.blocks[--set.n];
+                } else {
+                    i++;
+                }
+            }
+
+            err += memboundTestLiveCheck(m, &set, "before compaction");
+            const size_t extentsBefore = memboundExtentCount(m);
+            const size_t released = memboundCompact(m);
+            totalReleased += released;
+            totalMoves += set.moves;
+            if (set.unknownMoves) {
+                ERR("scenario %d: %zu moves the application could not map",
+                    scenario, set.unknownMoves);
+            }
+            if (memboundExtentCount(m) != extentsBefore - released) {
+                ERR("scenario %d: %zu extents, %zu released, %zu remain",
+                    scenario, extentsBefore, released, memboundExtentCount(m));
+            }
+            err += memboundTestLiveCheck(m, &set, "after compaction");
+
+            /* The compacted pool keeps working */
+            for (size_t i = 0; i < set.n; i++) {
+                memboundFree(m, set.blocks[i].ptr);
+            }
+            if (memboundCurrentAllocationCount(m) != 0) {
+                ERR("scenario %d: %zu allocations after freeing all", scenario,
+                    memboundCurrentAllocationCount(m));
+            }
+            memboundShutdown(m);
+            if (memboundTestMapped() != mappedBefore) {
+                ERR("scenario %d: %" PRId64 " bytes left mapped", scenario,
+                    memboundTestMapped() - mappedBefore);
+            }
+        }
+        /* The layouts must actually exercise relocation */
+        if (totalMoves == 0 || totalReleased == 0) {
+            ERR("compaction moved %zu blocks and released %zu extents",
+                totalMoves, totalReleased);
+        }
     }
 
     /* ================================================================
@@ -7109,6 +7593,57 @@ int memboundTest(int argc, char *argv[]) {
         assert(stats.safetyViolations == 0);
 
         memboundShutdown(m);
+    }
+
+    TEST("Safety: STANDARD and ENTERPRISE refuse and count bad frees") {
+        membound *pools[3] = {
+            memboundCreate(1 << 16),
+            memboundCreateDynamic(1 << 16, 0, 1 << 16),
+            memboundCreateEnterprise(1 << 16, 1 << 20),
+        };
+        for (size_t t = 0; t < 3; t++) {
+            membound *m = pools[t];
+            assert(m);
+            uint8_t *keep = memboundAlloc(m, 1000);
+            uint8_t *p = memboundAlloc(m, 300);
+            assert(keep && p);
+            memset(keep, 0x5A, 1000);
+            memboundFree(m, p);
+
+            int stackVar = 0;
+            void *bad[] = {
+                p,           /* double free */
+                &stackVar,   /* no extent holds it */
+                keep + 1,    /* inside a block, off the atom grid */
+                keep + 1001, /* off the grid past the block */
+                keep + 256,  /* on the grid, inside the live block */
+            };
+            for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+                memboundStats before;
+                memboundStats after;
+                memboundGetStats(m, &before);
+                memboundFree(m, bad[i]);
+                memboundGetStats(m, &after);
+                if (after.safetyViolations != before.safetyViolations + 1 ||
+                    memboundCurrentAllocationCount(m) != 1) {
+                    ERR("pool %zu bad free %zu: %" PRIu64 " -> %" PRIu64
+                        " violations, %zu allocations",
+                        t, i, before.safetyViolations, after.safetyViolations,
+                        memboundCurrentAllocationCount(m));
+                }
+            }
+            for (size_t i = 0; i < 1000; i++) {
+                if (keep[i] != 0x5A) {
+                    ERR("pool %zu: a refused free changed a live block", t);
+                    break;
+                }
+            }
+            memboundFree(m, keep);
+            if (memboundCurrentAllocationCount(m) != 0) {
+                ERR("pool %zu: the live block did not free", t);
+            }
+            memboundShutdown(m);
+        }
     }
 
     TEST("Safety: COMPACT tier tracks violations") {
