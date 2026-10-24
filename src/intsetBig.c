@@ -499,7 +499,7 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
     multimapFree(isb->i);
     /* The rows ascend by key (checked above), so this never refuses */
     /* @own: container; free=multimapFree */
-    isb->i = multimapNewFromDump(2, false, rows);
+    isb->i = multimapNewFromDump(2, false, false, FLEX_CAP_LEVEL_2048, rows);
     isb->count = total;
     return isb;
 

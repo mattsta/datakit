@@ -36,13 +36,23 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
                                  const struct multimapAtom *referenceContainer);
 /* The tier currently holding the rows (Small, Medium or Full) */
 multimapType multimapGetType(const multimap *m);
-/* A multimap holding `rows` (full-width rows, as multimapDump writes them);
- * a dump larger than the Medium tier holds is cut straight into Full's
- * inner maps in O(rows), with no per-row insert.  Takes `rows`.  NULL,
- * with `rows` freed, when the rows are not whole or not in the multimap's
- * row order (ascending by whole row; a set's rows strictly ascending). */
+/* A multimap holding `rows` (full-width rows, as multimapDump writes them),
+ * configured as multimapNewConfigure configures one (`isSet`, `compress`,
+ * `limit`): a dump larger than the Medium tier holds under `limit` is cut
+ * straight into Full's inner maps of about `limit` bytes in O(rows), with
+ * no per-row insert, and later inserts split at `limit` too.  Takes `rows`.
+ * NULL, with `rows` freed, when the rows are not whole or not in the
+ * multimap's row order (ascending by whole row; a set's rows strictly
+ * ascending). */
 multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
+                              bool compress, flexCapSizeLimit limit,
                               flex *rows);
+
+/* The configuration a multimap was made with, in every tier: its size
+ * limit (when a tier grows, and the size of Full's inner maps) and whether
+ * it compresses */
+flexCapSizeLimit multimapSizeLimit(const multimap *m);
+bool multimapCompresses(const multimap *m);
 
 bool multimapInsert(multimap **m, const databox *elements[]);
 /* multimapInsert that also reports the value entries a replace overwrote

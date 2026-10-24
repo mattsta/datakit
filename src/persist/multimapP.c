@@ -384,6 +384,39 @@ int multimapPTest(int argc, char *argv[]) {
         return err;
     }
 
+    TEST("multimapP keeps its size limit and compression across reopens") {
+        /* Configured with the 512-byte limit and compression: a reopen
+         * through the WAL, and one after a compaction (a Full snapshot),
+         * both come back with that configuration and every row */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multimapP *m =
+            multimapNewConfigureP(ctx, 2, false, true, FLEX_CAP_LEVEL_512);
+        for (int64_t k = 0; m && k < 1500; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(k);
+            const databox *row[] = {&key, &val};
+            multimapInsertP(m, row, NULL);
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+        for (int compacted = 0; compacted <= 1; compacted++) {
+            ctx = persistCtxOpen(basePath, NULL);
+            m = multimapOpenP(ctx);
+            const multimap *raw = m ? multimapGetP(m) : NULL;
+            if (!raw || multimapSizeLimit(raw) != FLEX_CAP_LEVEL_512 ||
+                !multimapCompresses(raw) || multimapCountP(m) != 1500) {
+                ERR("reopen %d lost the configuration or rows", compacted);
+            }
+            if (m && !compacted && !multimapCompactP(m)) {
+                ERRR("compaction failed");
+            }
+            multimapCloseP(m);
+            persistCtxFree(ctx);
+        }
+        ptestCleanupFiles(basePath);
+    }
+
     TEST("multimapP create empty and close") {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
