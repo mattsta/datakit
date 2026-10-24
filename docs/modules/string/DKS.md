@@ -753,6 +753,14 @@ as one. Pick the one that matches what you are doing: buffer sizing wants
 bytes, indexing wants codepoints, terminal layout wants cells, and
 user-visible truncation wants graphemes.
 
+Grapheme boundaries follow the UAX #29 rules decided by adjacent pairs:
+CR LF, controls, Hangul syllable sequences, combining marks, the zero width
+joiner and non-joiner, emoji skin-tone modifiers and tag characters stay
+attached.  Two rules need more than a pair and are approximated: an emoji
+ZWJ sequence joins on ZWJ + pictograph without checking what precedes the
+ZWJ, and consecutive regional indicators always join, so two adjacent flags
+count as one cluster.
+
 ## Utility Functions
 
 ### From Integer

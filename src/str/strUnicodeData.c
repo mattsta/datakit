@@ -205,6 +205,16 @@ bool StrUnicodeIsLetter(uint32_t cp) {
         return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
     }
 
+    /* Latin-1 Supplement: the accented letters (not the multiplication
+     * and division signs between them), and the ordinal indicators and
+     * micro sign */
+    if (cp >= 0x00C0 && cp <= 0x00FF) {
+        return cp != 0x00D7 && cp != 0x00F7;
+    }
+    if (cp == 0x00AA || cp == 0x00B5 || cp == 0x00BA) {
+        return true;
+    }
+
     /* Latin Extended-A */
     if (cp >= 0x0100 && cp <= 0x017F) {
         return true;
@@ -229,12 +239,12 @@ bool StrUnicodeIsLetter(uint32_t cp) {
             return true;
         }
         if (cp >= 0x0388 && cp <= 0x03FF) {
-            return true;
+            return cp != 0x03F6; /* the reversed lunate epsilon is a symbol */
         }
     }
-    /* Cyrillic */
+    /* Cyrillic, less the thousands sign and the combining marks */
     if (cp >= 0x0400 && cp <= 0x04FF) {
-        return true;
+        return cp < 0x0482 || cp > 0x0489;
     }
     /* Hebrew letters */
     if (cp >= 0x05D0 && cp <= 0x05EA) {
@@ -435,8 +445,16 @@ int StrUnicodeGraphemeBreak(uint32_t cp) {
         return GBP_Extend;
     }
 
+    /* Also Extend (Grapheme_Extend / Emoji_Modifier): the zero width
+     * non-joiner, the emoji skin-tone modifiers, and the tag characters of
+     * emoji tag sequences (subdivision flags) */
+    if (cp == 0x200C || (cp >= 0x1F3FB && cp <= 0x1F3FF) ||
+        (cp >= 0xE0020 && cp <= 0xE007F)) {
+        return GBP_Extend;
+    }
+
     /* Format characters that are Control */
-    if (cp == 0x200B || cp == 0x200C) {
+    if (cp == 0x200B) {
         return GBP_Control;
     }
     if (cp >= 0x2060 && cp <= 0x206F) {
@@ -447,6 +465,21 @@ int StrUnicodeGraphemeBreak(uint32_t cp) {
     }
 
     return GBP_Other;
+}
+
+/* Extended_Pictographic, for GB11: the emoji blocks (less the regional
+ * indicators and skin-tone modifiers, which have their own properties) and
+ * the older symbol ranges emoji sequences use */
+static bool strUnicodeIsExtPict(uint32_t cp) {
+    if (cp >= 0x1F000 && cp <= 0x1FAFF) {
+        return !(cp >= 0x1F1E6 && cp <= 0x1F1FF) &&
+               !(cp >= 0x1F3FB && cp <= 0x1F3FF);
+    }
+    return (cp >= 0x1FC00 && cp <= 0x1FFFD) || (cp >= 0x2600 && cp <= 0x27BF) ||
+           (cp >= 0x2B00 && cp <= 0x2BFF) || (cp >= 0x2190 && cp <= 0x21FF) ||
+           (cp >= 0x2300 && cp <= 0x23FF) || cp == 0x00A9 || cp == 0x00AE ||
+           cp == 0x203C || cp == 0x2049 || cp == 0x2122 || cp == 0x2139 ||
+           cp == 0x3030 || cp == 0x303D || cp == 0x3297 || cp == 0x3299;
 }
 
 /* Check if there's a grapheme break between two codepoints */
@@ -500,8 +533,12 @@ bool StrUnicodeIsGraphemeBreak(uint32_t cp1, uint32_t cp2) {
         return false;
     }
 
-    /* GB11: ZWJ x (Extended_Pictographic) - simplified, assume emoji follow ZWJ
-     */
+    /* GB11: ExtPict Extend* ZWJ x ExtPict.  A pair cannot see what precedes
+     * the ZWJ, so this joins ZWJ x ExtPict (emoji ZWJ sequences) */
+    if (gbp1 == GBP_ZWJ && strUnicodeIsExtPict(cp2)) {
+        return false;
+    }
+
     /* GB12/13: Regional_Indicator handling needs state, simplified here */
     if (gbp1 == GBP_Regional_Indicator && gbp2 == GBP_Regional_Indicator) {
         /* This is a simplification - proper handling needs to count RI pairs */

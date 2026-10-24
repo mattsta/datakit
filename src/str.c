@@ -721,6 +721,194 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("StrUtf8 width functions agree with each other, invalid bytes too") {
+        /* Random strings of narrow, wide, zero-width and invalid pieces
+         * (each invalid byte is one cell).  The whole width is the same
+         * by every route; truncation keeps the longest prefix that fits
+         * and splits no character; the index at a width reaches it (one
+         * less when a wide character straddles it); pad, wide and narrow
+         * queries follow. */
+        static const struct {
+            const char *bytes;
+            size_t len;
+        } pieces[] = {
+            {"a", 1},
+            {"\xe4\xb8\xad", 3}, /* wide */
+            {"\xcc\x81", 2},     /* combining: zero width */
+            {"\xf0\x9f\x98\x80", 4},
+            {"\xff", 1},
+            {"\xe4\xb8", 2}, /* truncated */
+            {"\x80", 1},
+            {"\xc0\x80", 2},     /* overlong */
+            {"\xed\xa0\x80", 3}, /* surrogate */
+        };
+        uint64_t rng = 0x07f8;
+        for (int iter = 0; iter < 3000 && !err; iter++) {
+            uint8_t s[64];
+            size_t L = 0;
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            const size_t count = (size_t)((rng >> 33) % 12);
+            for (size_t k = 0; k < count; k++) {
+                rng = rng * 6364136223846793005ULL + 1;
+                const size_t p =
+                    (size_t)((rng >> 40) % (sizeof(pieces) / sizeof(*pieces)));
+                memcpy(s + L, pieces[p].bytes, pieces[p].len);
+                L += pieces[p].len;
+            }
+
+            const size_t W = StrUtf8Width(s, L);
+            bool hasWide = false;
+            bool narrow = true;
+            for (size_t i = 0; i < L;) {
+                const uint8_t *pos = s + i;
+                size_t rem = L - i;
+                const uint32_t cp = StrUtf8Decode(&pos, &rem);
+                if (cp == 0xFFFFFFFF) {
+                    i++;
+                    continue;
+                }
+                const int w = StrUnicodeEastAsianWidth(cp);
+                hasWide = hasWide || w == 2;
+                narrow = narrow && w == 1;
+                i = (size_t)(pos - s);
+            }
+            if (StrUtf8WidthN(s, L, SIZE_MAX) != W ||
+                StrUtf8WidthN(s, L, 0) != 0 ||
+                StrUtf8WidthBetween(s, L, 0, L) != W ||
+                StrUtf8WidthBetween(s, L, L, L + 4) != 0 ||
+                StrUtf8WidthBetween(s, L, 3, 1) != 0 ||
+                StrUtf8WidthAt(s, L, L + 10) != W ||
+                StrUtf8PadWidth(s, L, W + 3) != 3 ||
+                StrUtf8PadWidth(s, L, W) != 0 ||
+                StrUtf8HasWide(s, L) != hasWide ||
+                StrUtf8IsNarrow(s, L) != narrow) {
+                ERR("iter %d: whole-string width queries disagree (W %zu)",
+                    iter, W);
+                break;
+            }
+
+            for (size_t w = 0; w <= W + 1; w++) {
+                const size_t t = StrUtf8TruncateWidth(s, L, w);
+                /* the next character (or invalid byte) after t */
+                size_t next = t;
+                if (t < L) {
+                    const uint8_t *pos = s + t;
+                    size_t rem = L - t;
+                    next = StrUtf8Decode(&pos, &rem) == 0xFFFFFFFF
+                               ? t + 1
+                               : (size_t)(pos - s);
+                }
+                const size_t at = StrUtf8IndexAtWidth(s, L, w);
+                const size_t atWidth = StrUtf8Width(s, at);
+                if (t > L || StrUtf8Width(s, t) > w || (t == L) != (W <= w) ||
+                    (t < L && StrUtf8Width(s, next) <= w) || at > L ||
+                    atWidth > w || (W >= w && atWidth + 1 < w) ||
+                    (W < w && at != L)) {
+                    ERR("iter %d width %zu: truncate %zu / index %zu wrong",
+                        iter, w, t, at);
+                    break;
+                }
+            }
+        }
+    }
+
+    TEST("StrUnicodeIsLetter: letters of each script, and the non-letters "
+         "beside them") {
+        static const uint32_t letters[] = {'A',
+                                           'z',
+                                           0x00C0 /* À */,
+                                           0x00E9 /* é */,
+                                           0x00F1 /* ñ */,
+                                           0x00DF /* ß */,
+                                           0x00FF /* ÿ */,
+                                           0x00AA /* ª */,
+                                           0x00B5 /* µ */,
+                                           0x0101,
+                                           0x0250 - 1,
+                                           0x0391 /* Α */,
+                                           0x03C9 /* ω */,
+                                           0x0416 /* Ж */,
+                                           0x05D0 /* א */,
+                                           0x0628 /* ب */,
+                                           0x4E2D /* 中 */,
+                                           0x3042 /* あ */,
+                                           0x30A2 /* ア */,
+                                           0xAC00 /* 가 */};
+        static const uint32_t others[] = {'0',
+                                          '9',
+                                          ' ',
+                                          '_',
+                                          0x00D7 /* × */,
+                                          0x00F7 /* ÷ */,
+                                          0x00B7 /* · */,
+                                          0x00BF /* ¿ */,
+                                          0x037E /* Greek ; */,
+                                          0x0387 /* · */,
+                                          0x03F6,
+                                          0x0482 /* ҂ */,
+                                          0x0483 /* combining */,
+                                          0x0660 /* Arabic 0 */,
+                                          0x3000 /* ideographic space */};
+        for (size_t i = 0; i < sizeof(letters) / sizeof(*letters); i++) {
+            if (!StrUnicodeIsLetter(letters[i])) {
+                ERR("U+%04" PRIX32 " is a letter", letters[i]);
+            }
+        }
+        for (size_t i = 0; i < sizeof(others) / sizeof(*others); i++) {
+            if (StrUnicodeIsLetter(others[i])) {
+                ERR("U+%04" PRIX32 " is not a letter", others[i]);
+            }
+        }
+        /* The digits it knows */
+        static const uint32_t digits[] = {'5', 0xFF15, 0x0665, 0x06F5, 0x096B};
+        for (size_t i = 0; i < sizeof(digits) / sizeof(*digits); i++) {
+            if (!StrUnicodeIsDigit(digits[i]) ||
+                StrUnicodeIsLetter(digits[i])) {
+                ERR("U+%04" PRIX32 " is a digit, not a letter", digits[i]);
+            }
+        }
+    }
+
+    TEST("StrUnicodeIsGraphemeBreak follows the segmentation rules") {
+        /* Pairs from UAX #29's rules: false where the rule joins, true
+         * where it breaks */
+        static const struct {
+            uint32_t a;
+            uint32_t b;
+            bool brk;
+            const char *rule;
+        } pairs[] = {
+            {0x000D, 0x000A, false, "GB3 CR x LF"},
+            {0x000A, 0x0061, true, "GB4 LF /"},
+            {0x0061, 0x200B, true, "GB5 / ZWSP (Control)"},
+            {0x200B, 0x0061, true, "GB4 ZWSP (Control) /"},
+            {0x1100, 0x1161, false, "GB6 L x V"},
+            {0x1100, 0xAC00, false, "GB6 L x LV"},
+            {0xAC00, 0x11A8, false, "GB7 LV x T"},
+            {0x1161, 0x11A8, false, "GB7 V x T"},
+            {0xAC01, 0x11A8, false, "GB8 LVT x T"},
+            {0x11A8, 0x1100, true, "T / L"},
+            {0x0061, 0x0308, false, "GB9 x Extend"},
+            {0x0061, 0x200C, false, "GB9 x ZWNJ (Extend)"},
+            {0x1F44D, 0x1F3FB, false, "GB9 emoji x skin tone"},
+            {0x1F3F4, 0xE0067, false, "GB9 x tag"},
+            {0xE0067, 0xE007F, false, "GB9 tag x cancel tag"},
+            {0x1F468, 0x200D, false, "GB9 x ZWJ"},
+            {0x200D, 0x1F469, false, "GB11 ZWJ x ExtPict"},
+            {0x200D, 0x2764, false, "GB11 ZWJ x heart"},
+            {0x200D, 0x0061, true, "ZWJ / letter"},
+            {0x1F1E6, 0x1F1E7, false, "GB12 RI x RI"},
+            {0x0061, 0x0062, true, "GB999"},
+        };
+        for (size_t i = 0; i < sizeof(pairs) / sizeof(*pairs); i++) {
+            if (StrUnicodeIsGraphemeBreak(pairs[i].a, pairs[i].b) !=
+                pairs[i].brk) {
+                ERR("%s: U+%04" PRIX32 " U+%04" PRIX32 " wrong", pairs[i].rule,
+                    pairs[i].a, pairs[i].b);
+            }
+        }
+    }
+
     TEST("StrBloom / StrBloomBig: full bit range usable") {
         /* 64-bit filter round-trip */
         StrBloomFilter small = 0;
