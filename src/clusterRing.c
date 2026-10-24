@@ -1435,20 +1435,20 @@ clusterResult clusterRingRemoveNode(clusterRing *ring, uint64_t nodeId) {
     /* Compact array */
     clusterRingCompactNodeArray(ring);
 
-    /* Invoke state callback before freeing */
-    if (ring->stateCallback) {
-        ring->stateCallback(ring, nodeId, node->state, CLUSTER_NODE_DOWN,
-                            ring->stateCallbackData);
-    }
-
-    /* Free node, then rebuild the state that pointed at it */
-    clusterNodeFreeInternal(node);
+    /* Rebuild the state that pointed at the node before the callback, as
+     * a state change does: a callback that places keys sees the ring
+     * without it (the Jump buckets used to still hold it) */
+    const clusterNodeState oldState = node->state;
     clusterRingRefreshHealthy(ring);
-
-    /* Update version */
     ring->version++;
     ring->lastModified = clusterGetTimeMs();
 
+    if (ring->stateCallback) {
+        ring->stateCallback(ring, nodeId, oldState, CLUSTER_NODE_DOWN,
+                            ring->stateCallbackData);
+    }
+
+    clusterNodeFreeInternal(node);
     return CLUSTER_OK;
 }
 
@@ -5097,6 +5097,45 @@ static void testStateCallback(clusterRing *ring, uint64_t nodeId,
     data->callCount++;
 }
 
+typedef struct testPlaceOnRemove {
+    uint64_t removing;
+    int calls;
+    int placed;
+    int namedRemoved;
+    clusterNodeState oldState;
+    clusterNodeState newState;
+} testPlaceOnRemove;
+
+/* Places 200 keys from inside the callback for the node being removed */
+static void testPlaceOnRemoveCallback(clusterRing *ring, uint64_t nodeId,
+                                      clusterNodeState oldState,
+                                      clusterNodeState newState,
+                                      void *userData) {
+    testPlaceOnRemove *t = userData;
+    if (nodeId != t->removing) {
+        return;
+    }
+    t->calls++;
+    t->oldState = oldState;
+    t->newState = newState;
+    for (uint32_t k = 0; k < 200; k++) {
+        char key[16];
+        const int n = snprintf(key, sizeof(key), "rm%u", k);
+        clusterPlacement p;
+        if (clusterRingLocate(ring, key, (uint32_t)n, &p) != CLUSTER_OK) {
+            continue;
+        }
+        t->placed++;
+        for (size_t i = 0; i < clusterPlacementReplicaCount(&p); i++) {
+            const clusterNode *node = clusterPlacementGetReplica(&p, i);
+            if (node && node->id == t->removing) {
+                t->namedRemoved++;
+            }
+        }
+        clusterPlacementFree(&p);
+    }
+}
+
 static int testCallbacks(void) {
     int err = 0;
 
@@ -5136,6 +5175,42 @@ static int testCallbacks(void) {
             cbData.newState != CLUSTER_NODE_DOWN) {
             ERRR("Wrong states in callback");
             err++;
+        }
+    }
+
+    TEST("a callback placing keys during a removal sees the ring without "
+         "the node") {
+        /* 70 nodes (past the 64-node seen bitmap) under every built-in
+         * strategy; removing node 70 calls back with (70, UP, DOWN), and
+         * 200 placements made inside the callback never name node 70 */
+        static const clusterStrategyType strategies[] = {
+            CLUSTER_STRATEGY_KETAMA, CLUSTER_STRATEGY_JUMP,
+            CLUSTER_STRATEGY_RENDEZVOUS, CLUSTER_STRATEGY_MAGLEV,
+            CLUSTER_STRATEGY_BOUNDED};
+        for (size_t s = 0; s < sizeof(strategies) / sizeof(*strategies); s++) {
+            clusterRingConfig config = {
+                .name = "remove-callback",
+                .strategyType = strategies[s],
+                .defaultQuorum = {.replicaCount = 3},
+            };
+            cleaner(clusterRingFree) clusterRing *r = clusterRingNew(&config);
+            for (uint64_t i = 1; i <= 70; i++) {
+                clusterNodeConfig nodeConfig = {
+                    .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
+                clusterRingAddNode(r, &nodeConfig);
+            }
+            testPlaceOnRemove place = {.removing = 70};
+            clusterRingSetNodeStateCallback(r, testPlaceOnRemoveCallback,
+                                            &place);
+            if (clusterRingRemoveNode(r, 70) != CLUSTER_OK ||
+                place.calls != 1 || place.oldState != CLUSTER_NODE_UP ||
+                place.newState != CLUSTER_NODE_DOWN || place.placed != 200 ||
+                place.namedRemoved) {
+                ERR("strategy %d: %d calls, %d placed, %d named the removed "
+                    "node",
+                    (int)strategies[s], place.calls, place.placed,
+                    place.namedRemoved);
+            }
         }
     }
 
