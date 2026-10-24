@@ -9375,6 +9375,45 @@ static int32_t flexTestReplaceSign(void) {
         }
     }
 
+    /* A boolean increments from 0 or 1 and becomes that integer, to either
+     * side of zero; by zero it stays the boolean */
+    {
+        const struct {
+            bool start;
+            int64_t by;
+        } bools[] = {
+            {true, 5}, {false, 1}, {true, -1}, {true, -5}, {false, -2}};
+        for (size_t i = 0; i < sizeof(bools) / sizeof(bools[0]); i++) {
+            cleaner(flexFree) flex *f = flexNew();
+            const databox b = {.type = bools[i].start ? DATABOX_TRUE
+                                                      : DATABOX_FALSE};
+            flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&f, &b, FLEX_ENDPOINT_TAIL);
+            flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+            const int64_t want = (int64_t)bools[i].start + bools[i].by;
+            int64_t got = 99;
+            if (!flexIncrbySigned(&f, flexNext(f, flexHead(f)), bools[i].by,
+                                  &got) ||
+                got != want ||
+                !flexTestReplaceReadsBack(f, flexTestWideS(want))) {
+                printf("  FAIL: boolean %d incremented by %" PRId64 "\n",
+                       bools[i].start, bools[i].by);
+                bad++;
+            }
+        }
+        cleaner(flexFree) flex *f = flexNew();
+        const databox t = {.type = DATABOX_TRUE};
+        flexPushByType(&f, &t, FLEX_ENDPOINT_TAIL);
+        int64_t got = 99;
+        databox after = {{0}};
+        const bool incremented = flexIncrbySigned(&f, flexHead(f), 0, &got);
+        flexGetByType(flexHead(f), &after);
+        if (!incremented || got != 1 || after.type != DATABOX_TRUE) {
+            printf("  FAIL: boolean incremented by zero\n");
+            bad++;
+        }
+    }
+
     /* Increment policy: by zero succeeds unchanged; a result outside the
      * value's range is refused, leaving the value unchanged.  The value
      * sits between "a" and "b", as flexTestReplaceReadsBack expects. */
