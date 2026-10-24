@@ -3631,11 +3631,13 @@ bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,
 
 int flexFactorySelfTest(void) {
     int fails = 0;
+    /* A failed check is an INTERNAL DK_DIAG_SELF_TEST_FAILED diagnostic at
+     * the check's line */
 #define FFT(cond)                                                              \
     do {                                                                       \
         if (!(cond)) {                                                         \
-            fprintf(stderr, "flexFactorySelfTest FAIL: %s (%s:%d)\n", #cond,   \
-                    __FILE__, __LINE__);                                       \
+            DK_DIAG_INTERNAL(DK_DIAG_SELF_TEST_FAILED,                         \
+                             "flexFactorySelfTest: %s", #cond);                \
             fails++;                                                           \
         }                                                                      \
     } while (0)
@@ -3804,9 +3806,6 @@ int flexFactorySelfTest(void) {
         flexFree(f);
     }
 
-    if (fails == 0) {
-        fprintf(stderr, "flexFactorySelfTest: OK\n");
-    }
 #undef FFT
     return fails;
 }

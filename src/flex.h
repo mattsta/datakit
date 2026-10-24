@@ -268,7 +268,8 @@ bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,
                             databoxBig *b);
 
 /* Self-test for the flex<->databox factory (round-trip + defensive unwrap).
- * Returns the number of failed checks (0 == all passed). */
+ * Returns the number of failed checks (0 == all passed); each failure is
+ * also an INTERNAL DK_DIAG_SELF_TEST_FAILED diagnostic (dkDiag.h). */
 int flexFactorySelfTest(void);
 
 /* Insert at existing position 'fe'.  flexInsertBytes canonicalizes a numeral
