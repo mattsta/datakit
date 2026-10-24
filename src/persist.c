@@ -7069,6 +7069,40 @@ int persistTest(int argc, char *argv[]) {
         persistClose(p);
     }
 
+    TEST("count and size hooks track the structure (ordered set, LRU)") {
+        /* estimateSize is a pre-allocation hint that follows the
+         * in-memory size: growing the structure must grow it */
+        multiOrderedSet *mos = multiOrderedSetNew();
+        multilru *lru = multilruNew();
+        const size_t mosEmpty = persistOpsMultiOrderedSet.estimateSize(mos);
+        const size_t lruEmpty = persistOpsMultiLRU.estimateSize(lru);
+        char name[32];
+        for (int64_t i = 0; i < 300; i++) {
+            const int n = snprintf(name, sizeof(name), "member-%" PRId64, i);
+            const databox score = DATABOX_SIGNED(i * 3);
+            const databox member =
+                DATABOX_WITH_BYTES((uint8_t *)name, (size_t)n);
+            multiOrderedSetAdd(&mos, &score, &member);
+            (void)multilruInsert(lru);
+        }
+        if (persistOpsMultiOrderedSet.count(mos) != 300 ||
+            persistOpsMultiLRU.count(lru) != 300) {
+            ERR("count hooks report %zu and %zu, want 300",
+                persistOpsMultiOrderedSet.count(mos),
+                persistOpsMultiLRU.count(lru));
+        }
+        if (persistOpsMultiOrderedSet.estimateSize(mos) <= mosEmpty ||
+            persistOpsMultiLRU.estimateSize(lru) <= lruEmpty) {
+            ERRR("a size hook did not grow with 300 elements");
+        }
+        if (persistOpsMultiOrderedSet.estimateSize(NULL) != 0 ||
+            persistOpsMultiLRU.estimateSize(NULL) != 0) {
+            ERRR("a size hook sized a NULL structure");
+        }
+        multiOrderedSetFree(mos);
+        multilruFree(lru);
+    }
+
     TEST("an op the descriptor cannot replay is refused, never logged") {
         /* Before, an encoder's refusal (NULL) read as "no body", so the op
          * was logged and a strict recovery then failed on it forever */
