@@ -4122,6 +4122,26 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarDice(a, b) != (2.0 * nAnd) / (double)(na + nb)) {
             ERRR("relations or similarity disagree with the oracle");
         }
+
+        /* Uneven chunk counts both ways round, and an empty roar */
+        cleaner(multiroarFree) multiroar *one = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *none = multiroarBitNew();
+        const uint64_t p = 2 * BITMAP_SIZE_IN_BITS + 5;
+        multiroarBitSet(one, p);
+        const uint64_t inA = mrOracleGet(o[0], p);
+        const double jOne = (double)inA / (double)(na + 1 - inA);
+        if (multiroarJaccard(a, one) != jOne ||
+            multiroarJaccard(one, a) != jOne ||
+            multiroarHammingDistance(a, one) != na + 1 - 2 * inA ||
+            multiroarHammingDistance(one, a) != na + 1 - 2 * inA ||
+            multiroarOverlap(one, a) != (double)inA ||
+            multiroarHammingDistance(a, none) != na ||
+            multiroarJaccard(a, none) != 0.0 ||
+            multiroarJaccard(none, none) != 1.0 ||
+            multiroarOverlap(a, none) != 0.0 || multiroarDice(a, none) != 0.0 ||
+            multiroarDice(none, none) != 1.0) {
+            ERRR("similarity with uneven or empty roars");
+        }
     }
 
     TEST("create") {

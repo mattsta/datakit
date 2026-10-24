@@ -365,7 +365,9 @@ DK_INLINE_ALWAYS bool mosClampRankRange(int64_t *start, int64_t *stop,
     if (e >= n) {
         e = n - 1;
     }
-    if (n == 0 || s > e || s >= n || e < 0) {
+    /* With e clamped below n, a start past the end, a stop before the
+     * first row and an empty set (e == -1) all leave s > e */
+    if (s > e) {
         return false;
     }
     *start = s;

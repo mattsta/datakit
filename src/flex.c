@@ -8094,11 +8094,14 @@ static int32_t flexTestReferenceSet(void) {
     enum { W = sizeof(words) / sizeof(words[0]) };
     cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
     cleaner(flexFree) flex *f = flexNew();
-    for (size_t i = 0; i < W; i++) {
+    for (size_t i = 0; i < W - 1; i++) {
         databox ref = databoxNewBytesString(words[(i * 3) % W]);
         multimapAtomInsertConvert(atoms, &ref);
         flexInsertByTypeSortedWithReference(&f, &ref, atoms);
     }
+    /* A plain value among the references is placed and stored as itself */
+    const databox plain = databoxNewBytesString(words[((W - 1) * 3) % W]);
+    flexInsertByTypeSortedWithReference(&f, &plain, atoms);
 
     static const char *sorted[] = {"apple", "banana", "cherry", "date",
                                    "fig",   "grape",  "kiwi",   "pear"};
