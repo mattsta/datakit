@@ -227,6 +227,42 @@ DK_INLINE_ALWAYS bool mosScoreAdd(const databox *base, const databox *delta,
     return true;
 }
 
+/* How a present member's score meets an operand in the tiers' Combine
+ * (one member search, then the new score): INCR is IncrBy (mosScoreAdd's
+ * exact policy); SUM / MIN / MAX are the set operations' aggregates, on
+ * doubles as they always combine */
+typedef enum mosCombineOp {
+    MOS_COMBINE_INCR = 0,
+    MOS_COMBINE_SUM,
+    MOS_COMBINE_MIN,
+    MOS_COMBINE_MAX
+} mosCombineOp;
+
+/* The new score for a member holding 'current', met by 'operand'.  INCR
+ * can refuse (false, '*out' unwritten); the aggregates always combine (a
+ * non-numeric score counts as 0.0, as the set operations read it). */
+DK_INLINE_ALWAYS bool mosCombine(const databox *current, const databox *operand,
+                                 mosCombineOp op, databox *out) {
+    if (op == MOS_COMBINE_INCR) {
+        return mosScoreAdd(current, operand, out);
+    }
+
+    double a;
+    double b;
+    if (!mosScoreToDouble(current, &a)) {
+        a = 0.0;
+    }
+    if (!mosScoreToDouble(operand, &b)) {
+        b = 0.0;
+    }
+
+    const double combined = op == MOS_COMBINE_SUM   ? a + b
+                            : op == MOS_COMBINE_MIN ? (a < b ? a : b)
+                                                    : (a > b ? a : b);
+    DATABOX_SET_DOUBLE(out, combined);
+    return true;
+}
+
 /* ====================================================================
  * Entry Reading/Writing Helpers
  * ====================================================================

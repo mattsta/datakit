@@ -52,8 +52,10 @@ bool multiOrderedSetFullAddGetPrevious(multiOrderedSetFull *m,
                                        const databox *score,
                                        const databox *member,
                                        databox *prevScore);
-bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
-                               const databox *member, databox *result);
+/* As multiOrderedSetSmallCombine */
+bool multiOrderedSetFullCombine(multiOrderedSetFull *m, const databox *operand,
+                                const databox *member, mosCombineOp op,
+                                databox *result);
 
 /* ====================================================================
  * Deletion

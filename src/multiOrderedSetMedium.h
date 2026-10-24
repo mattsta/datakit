@@ -38,8 +38,10 @@ bool multiOrderedSetMediumAddGetPrevious(multiOrderedSetMedium *m,
                                          const databox *score,
                                          const databox *member,
                                          databox *prevScore);
-bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
-                                 const databox *member, databox *result);
+/* As multiOrderedSetSmallCombine */
+bool multiOrderedSetMediumCombine(multiOrderedSetMedium *m,
+                                  const databox *operand, const databox *member,
+                                  mosCombineOp op, databox *result);
 
 /* ====================================================================
  * Deletion

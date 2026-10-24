@@ -33,8 +33,11 @@ bool multiOrderedSetSmallAddGetPrevious(multiOrderedSetSmall *m,
                                         const databox *score,
                                         const databox *member,
                                         databox *prevScore);
-bool multiOrderedSetSmallIncrBy(multiOrderedSetSmall *m, const databox *delta,
-                                const databox *member, databox *result);
+/* One member search, then the score 'op' makes of the present score and
+ * 'operand' (an absent member gets 'operand'); IncrBy is op INCR */
+bool multiOrderedSetSmallCombine(multiOrderedSetSmall *m,
+                                 const databox *operand, const databox *member,
+                                 mosCombineOp op, databox *result);
 
 /* ====================================================================
  * Deletion

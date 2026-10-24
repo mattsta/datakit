@@ -931,21 +931,22 @@ bool multiOrderedSetFullAddGetPrevious(multiOrderedSetFull *m,
     return existed;
 }
 
-bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
-                               const databox *member, databox *result) {
+bool multiOrderedSetFullCombine(multiOrderedSetFull *m, const databox *operand,
+                                const databox *member, mosCombineOp op,
+                                databox *result) {
     databox existingScore;
     databoxWide existingScoreWide;
     const bool existed =
         findScore(m, member, &existingScore, &existingScoreWide);
 
     if (existed) {
-        if (!mosScoreAdd(&existingScore, delta, result)) {
+        if (!mosCombine(&existingScore, operand, op, result)) {
             return false;
         }
 
         removeMemberRow(m, member, &existingScore);
     } else {
-        *result = *delta;
+        *result = *operand;
     }
 
     setMemberScore(m, member, result, existed);

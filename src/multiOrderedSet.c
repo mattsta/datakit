@@ -290,6 +290,18 @@ bool multiOrderedSetAddGetPrevious(multiOrderedSet **mos, const databox *score,
     return result;
 }
 
+/* One member search: the tier's Combine makes the member's new score
+ * from its present one and 'operand' by 'op' (an absent member gets
+ * 'operand'), then the set upgrades if it grew past its tier */
+static bool mosCombineAt_(multiOrderedSet **mos, const databox *operand,
+                          const databox *member, mosCombineOp op,
+                          databox *result) {
+    bool ret;
+    MOS_SETRESULT(ret, *mos, Combine, operand, member, op, result);
+    mosUpgradeIfNecessary(mos);
+    return ret;
+}
+
 bool multiOrderedSetIncrBy(multiOrderedSet **mos, const databox *delta,
                            const databox *member, databox *result) {
     /* Increment policy: the delta must be a 64-bit integer or a finite real
@@ -305,10 +317,7 @@ bool multiOrderedSetIncrBy(multiOrderedSet **mos, const databox *delta,
         return false;
     }
 
-    bool ret;
-    MOS_SETRESULT(ret, *mos, IncrBy, delta, member, result);
-    mosUpgradeIfNecessary(mos);
-    return ret;
+    return mosCombineAt_(mos, delta, member, MOS_COMBINE_INCR, result);
 }
 
 /* ====================================================================
@@ -493,6 +502,11 @@ multiOrderedSet *multiOrderedSetUnion(const multiOrderedSet *sets[],
     /* @own: caller; free=multiOrderedSetFree */
     multiOrderedSet *result = multiOrderedSetNew();
 
+    /* Any other aggregate value sums, as applyAggregate does */
+    const mosCombineOp op = aggregate == MOS_AGGREGATE_MIN   ? MOS_COMBINE_MIN
+                            : aggregate == MOS_AGGREGATE_MAX ? MOS_COMBINE_MAX
+                                                             : MOS_COMBINE_SUM;
+
     for (size_t i = 0; i < numSets; i++) {
         if (!sets[i]) {
             continue;
@@ -512,23 +526,14 @@ multiOrderedSet *multiOrderedSetUnion(const multiOrderedSet *sets[],
                 break;
             }
 
-            /* Check if member already exists in result */
-            databox existingScore;
-            databoxWide existingScoreWide;
-            mosBoxAim(&existingScore, &existingScoreWide);
-            if (multiOrderedSetGetScore(result, &member, &existingScore)) {
-                /* Combine scores using aggregate */
-                databox newScore;
-                applyAggregate(&newScore, &existingScore, &score, 1.0, weight,
-                               aggregate);
-                multiOrderedSetAdd(&result, &newScore, &member);
-            } else {
-                /* New member, add with weighted score */
-                databox weightedScore;
-                double val = mosDataboxToDouble(&score) * weight;
-                DATABOX_SET_DOUBLE(&weightedScore, val);
-                multiOrderedSetAdd(&result, &weightedScore, &member);
-            }
+            /* One search: a new member gets its weighted score, a present
+             * one the aggregate of its score and the weighted one */
+            databox weightedScore;
+            DATABOX_SET_DOUBLE(&weightedScore,
+                               mosDataboxToDouble(&score) * weight);
+            databox combined;
+            (void)mosCombineAt_(&result, &weightedScore, &member, op,
+                                &combined);
         }
     }
 
@@ -1423,6 +1428,8 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
 defcleanerName(databox *, zfree, Boxes);
 defcleanerName(uint8_t *, zfree, Seen);
 defcleanerName(uint32_t *, zfree, U32);
+defcleanerName(double *, zfree, Doubles);
+defcleanerName(bool *, zfree, Bools);
 
 /* Pair 'i' of the RandomMembers sets: member "rm-NNNNNN", score 3 * i */
 static void mosRandomPair_(size_t i, char *buf, size_t bufLen, databox *member,
@@ -2214,6 +2221,102 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         member = databoxNewBytes("b", 1);
         multiOrderedSetGetScore(result, &member, &gotScore);
         assert(mosDataboxToDouble(&gotScore) == 5.0); /* 2 + 3 */
+    }
+
+    TEST("multiOrderedSet: weighted union in every tier matches an oracle, "
+         "per aggregate") {
+        /* Three sets over members 0..n-1: set i holds the members not
+         * divisible by i + 2, scored j * (i + 1) + 0.25, weighted 1, 0.5,
+         * 3.  The oracle combines in the same order the union does (the
+         * first appearance weighted, each later one aggregated), so every
+         * score must match exactly. */
+        static const uint32_t sizes[] = {20, 300, 4000};
+        static const multiOrderedSetType tiers[] = {
+            MOS_TYPE_SMALL, MOS_TYPE_MEDIUM, MOS_TYPE_FULL};
+        static const double weights[3] = {1.0, 0.5, 3.0};
+        static const mosAggregate hows[] = {
+            MOS_AGGREGATE_SUM, MOS_AGGREGATE_MIN, MOS_AGGREGATE_MAX};
+        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
+            const uint32_t n = sizes[s];
+            multiOrderedSet *in[3] = {NULL, NULL, NULL};
+            for (uint32_t i = 0; i < 3; i++) {
+                /* @own: caller; free=multiOrderedSetFree */
+                in[i] = multiOrderedSetNew();
+                for (uint32_t j = 0; j < n; j++) {
+                    if (j % (i + 2) != 0) {
+                        char key[16];
+                        const int klen = snprintf(key, sizeof(key), "m%u", j);
+                        const databox member = databoxNewBytes(key, klen);
+                        const databox score =
+                            databoxNewReal((double)j * (i + 1) + 0.25);
+                        multiOrderedSetAdd(&in[i], &score, &member);
+                    }
+                }
+            }
+
+            for (size_t h = 0; h < COUNT_ARRAY(hows); h++) {
+                cleanerName(zfree, Doubles) double *want =
+                    zcalloc(n, sizeof(*want));
+                cleanerName(zfree, Bools) bool *seen =
+                    zcalloc(n, sizeof(*seen));
+                uint32_t members = 0;
+                for (uint32_t i = 0; i < 3; i++) {
+                    for (uint32_t j = 0; j < n; j++) {
+                        if (j % (i + 2) == 0) {
+                            continue;
+                        }
+                        const double w =
+                            ((double)j * (i + 1) + 0.25) * weights[i];
+                        if (!seen[j]) {
+                            seen[j] = true;
+                            want[j] = w;
+                            members++;
+                        } else if (hows[h] == MOS_AGGREGATE_SUM) {
+                            want[j] = want[j] + w;
+                        } else if (hows[h] == MOS_AGGREGATE_MIN) {
+                            want[j] = want[j] < w ? want[j] : w;
+                        } else {
+                            want[j] = want[j] > w ? want[j] : w;
+                        }
+                    }
+                }
+
+                const multiOrderedSet *sets[3] = {in[0], in[1], in[2]};
+                cleaner(multiOrderedSetFree) multiOrderedSet *u =
+                    multiOrderedSetUnion(sets, weights, 3, hows[h]);
+                if (multiOrderedSetCount(u) != members ||
+                    mosType_(u) != tiers[s]) {
+                    ERR("size %u aggregate %d: %zu members (want %u), tier "
+                        "%d (want %d)",
+                        n, (int)hows[h], multiOrderedSetCount(u), members,
+                        (int)mosType_(u), (int)tiers[s]);
+                    continue;
+                }
+                for (uint32_t j = 0; j < n; j++) {
+                    char key[16];
+                    const int klen = snprintf(key, sizeof(key), "m%u", j);
+                    const databox member = databoxNewBytes(key, klen);
+                    databox got;
+                    databoxWide gotWide;
+                    mosBoxAim(&got, &gotWide);
+                    const bool present =
+                        multiOrderedSetGetScore(u, &member, &got);
+                    if (present != seen[j] ||
+                        (present && mosDataboxToDouble(&got) != want[j])) {
+                        ERR("size %u aggregate %d member %u: present %d "
+                            "score %g (want %d, %g)",
+                            n, (int)hows[h], j, present,
+                            present ? mosDataboxToDouble(&got) : 0.0, seen[j],
+                            want[j]);
+                        break;
+                    }
+                }
+            }
+
+            for (uint32_t i = 0; i < 3; i++) {
+                multiOrderedSetFree(in[i]);
+            }
+        }
     }
 
     TEST("multiOrderedSet: intersection") {

@@ -346,8 +346,9 @@ bool multiOrderedSetMediumAddGetPrevious(multiOrderedSetMedium *m,
     return false;
 }
 
-bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
-                                 const databox *member, databox *result) {
+bool multiOrderedSetMediumCombine(multiOrderedSetMedium *m,
+                                  const databox *operand, const databox *member,
+                                  mosCombineOp op, databox *result) {
     int existingMap;
     flexEntry *existing = findMemberAnyMap(m, member, &existingMap);
 
@@ -356,7 +357,7 @@ bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
         databoxWide currentScoreWide;
         flexGetByTypeInto(existing, &currentScore, &currentScoreWide);
 
-        if (!mosScoreAdd(&currentScore, delta, result)) {
+        if (!mosCombine(&currentScore, operand, op, result)) {
             return false;
         }
 
@@ -364,9 +365,9 @@ bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
         return true;
     }
 
-    *result = *delta;
-    int targetMap = getMapIndexForScore(m, delta);
-    insertIntoMap(m, targetMap, delta, member);
+    *result = *operand;
+    int targetMap = getMapIndexForScore(m, operand);
+    insertIntoMap(m, targetMap, operand, member);
     return true;
 }
 

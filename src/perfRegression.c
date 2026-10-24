@@ -778,6 +778,34 @@ static void benchMultiOrderedSet(void) {
     }
     emitRow("multiOrderedSet", "getRank", 0, ranks, monoNowSec() - t0);
 
+    /* Union of two halves overlapping by half of each (n/2 members each,
+     * n/4 shared), per input member: SUM and MAX combine the shared ones */
+    {
+        cleaner(multiOrderedSetFree) multiOrderedSet *a = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *b = multiOrderedSetNew();
+        for (uint32_t i = 0; i < n / 2; i++) {
+            const databox sa = databoxNewSigned(i);
+            const databox ma = perfContainerKey(keys, i);
+            sink += multiOrderedSetAdd(&a, &sa, &ma);
+            const databox sb = databoxNewSigned((int64_t)n - i);
+            const databox mb = perfContainerKey(keys, n / 4 + i);
+            sink += multiOrderedSetAdd(&b, &sb, &mb);
+        }
+        const multiOrderedSet *both[2] = {a, b};
+        static const struct {
+            mosAggregate how;
+            const char *name;
+        } unions[] = {{MOS_AGGREGATE_SUM, "unionSum"},
+                      {MOS_AGGREGATE_MAX, "unionMax"}};
+        for (size_t u = 0; u < 2; u++) {
+            t0 = monoNowSec();
+            cleaner(multiOrderedSetFree) multiOrderedSet *un =
+                multiOrderedSetUnion(both, NULL, 2, unions[u].how);
+            emitRow("multiOrderedSet", unions[u].name, 0, n, monoNowSec() - t0);
+            sink += multiOrderedSetCount(un);
+        }
+    }
+
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox m = perfContainerKey(keys, i);

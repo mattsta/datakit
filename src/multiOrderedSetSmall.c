@@ -178,18 +178,17 @@ bool multiOrderedSetSmallAddGetPrevious(multiOrderedSetSmall *m,
     return false; /* New insert */
 }
 
-bool multiOrderedSetSmallIncrBy(multiOrderedSetSmall *m, const databox *delta,
-                                const databox *member, databox *result) {
+bool multiOrderedSetSmallCombine(multiOrderedSetSmall *m,
+                                 const databox *operand, const databox *member,
+                                 mosCombineOp op, databox *result) {
     flexEntry *existing = mosFindMemberLinear(m->map, member);
 
     if (existing) {
-        /* Get current score */
         databox currentScore;
         databoxWide currentScoreWide;
         flexGetByTypeInto(existing, &currentScore, &currentScoreWide);
 
-        /* Add delta to current score */
-        if (!mosScoreAdd(&currentScore, delta, result)) {
+        if (!mosCombine(&currentScore, operand, op, result)) {
             return false; /* Type mismatch or overflow */
         }
 
@@ -197,9 +196,9 @@ bool multiOrderedSetSmallIncrBy(multiOrderedSetSmall *m, const databox *delta,
         return true;
     }
 
-    /* Member doesn't exist: use delta as initial score */
-    *result = *delta;
-    mosInsertSorted(m, delta, member);
+    /* Member doesn't exist: the operand is its score */
+    *result = *operand;
+    mosInsertSorted(m, operand, member);
     return true;
 }
 
