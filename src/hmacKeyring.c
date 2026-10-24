@@ -2384,6 +2384,73 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringFree(dst);
     }
 
+    TEST("snapshot/restore: well-formed flexes of the wrong shape, short "
+         "buffers and bad reservations are refused") {
+        cleaner(hmacKeyringFree) hmacKeyring *src = hmacKeyringCreate();
+        cleaner(hmacKeyringFree) hmacKeyring *dst = hmacKeyringCreate();
+        const uint8_t key[16] = {0x42};
+        hmacKeyringInstallUnsalted(src, 9u, &hmacAlgoSHA256, key, sizeof(key));
+
+        /* No entries; and a floor followed by one entry of a slot row */
+        cleaner(flexFree) flex *none = flexNew();
+        cleaner(flexFree) flex *partial = flexNew();
+        flexPushUnsigned(&partial, 0, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&partial, 9, FLEX_ENDPOINT_TAIL);
+        if (hmacKeyringRestore(dst, (const uint8_t *)none, flexBytes(none)) ||
+            hmacKeyringRestore(dst, (const uint8_t *)partial,
+                               flexBytes(partial)) ||
+            hmacKeyringSize(dst) != 0u) {
+            ERRR("a flex with no floor or a partial slot row restored");
+        }
+
+        /* A buffer one byte short of the snapshot: refused, nothing
+         * written or reported */
+        uint8_t buf[256];
+        size_t written = 0;
+        if (!hmacKeyringSnapshot(src, buf, sizeof(buf), &written)) {
+            ERRR("snapshot into a roomy buffer failed");
+        }
+        uint8_t shortBuf[256];
+        memset(shortBuf, 0xEE, sizeof(shortBuf));
+        size_t shortWritten = 77;
+        if (hmacKeyringSnapshot(src, shortBuf, written - 1, &shortWritten) ||
+            shortWritten != 77 || shortBuf[0] != 0xEE) {
+            ERRR("a short snapshot buffer was written or reported");
+        }
+
+        /* A reservation record names a 32-bit nonzero key id and an
+         * unsigned limit; anything else is refused */
+        const struct {
+            databox id;
+            databox limit;
+        } bad[] = {
+            {databoxNewUnsigned(0), databoxNewUnsigned(10)},
+            {databoxNewUnsigned((uint64_t)UINT32_MAX + 1),
+             databoxNewUnsigned(10)},
+            {databoxNewSigned(-3), databoxNewUnsigned(10)},
+            {databoxNewUnsigned(9), databoxNewSigned(-10)},
+        };
+        hmacKeyring *target = src;
+        for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+            cleaner(flexFree) flex *rec = flexNew();
+            flexPushByType(&rec, &bad[i].id, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&rec, &bad[i].limit, FLEX_ENDPOINT_TAIL);
+            if (persistOpsHmacKeyring.applyOp(&target, PERSIST_OP_UPDATE,
+                                              (const uint8_t *)rec,
+                                              flexBytes(rec))) {
+                ERR("reservation record %zu was applied", i);
+            }
+        }
+        cleaner(flexFree) flex *good = flexNew();
+        flexPushUnsigned(&good, 9, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&good, 10, FLEX_ENDPOINT_TAIL);
+        if (persistOpsHmacKeyring.applyOp(&target, PERSIST_OP_INSERT,
+                                          (const uint8_t *)good,
+                                          flexBytes(good))) {
+            ERRR("a reservation under another op was applied");
+        }
+    }
+
     TEST("snapshot/restore: a valid header over a corrupt key entry is "
          "refused") {
         hmacKeyring *src = hmacKeyringCreate();
