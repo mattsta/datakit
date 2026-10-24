@@ -2669,15 +2669,13 @@ clusterResult clusterRingRemoveKeySpace(clusterRing *ring, const char *name) {
 
     databox keybox = {
         .type = DATABOX_BYTES, .data.ptr = (void *)name, .len = strlen(name)};
+    /* Found and removed from the dict in one search */
     databox valbox;
-    if (!multidictFind(ring->keySpaceByName, &keybox, &valbox)) {
+    if (!multidictGetAndDelete(ring->keySpaceByName, &keybox, &valbox)) {
         return CLUSTER_ERR_NOT_FOUND;
     }
 
     clusterKeySpace *ks = (clusterKeySpace *)valbox.data.ptr;
-
-    /* Remove from dict */
-    multidictDelete(ring->keySpaceByName, &keybox);
 
     /* Find and remove from array */
     for (uint32_t i = 0; i < ring->keySpaceCount; i++) {

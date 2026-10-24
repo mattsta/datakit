@@ -166,9 +166,9 @@ multiTimerId multiTimerRegister(multiTimer *t,
     return e.id;
 }
 
-/* Extend stopLowest/stopHighest for a stop entry about to be added */
+/* Extend stopLowest/stopHighest for a stop entry just added */
 static void stopBoundsExtend(multiTimer *t, multiTimerId id) {
-    if (multimapCount(t->stopEvents) == 0) {
+    if (multimapCount(t->stopEvents) == 1) {
         /* First stop event - initialize both bounds */
         t->stopLowest = id;
         t->stopHighest = id;
@@ -216,16 +216,15 @@ bool multiTimerUnregister(multiTimer *t, multiTimerId id) {
     const databox stop = databoxNewUnsigned(id);
     const databox *stopTimer[1] = {&stop};
 
-    /* Double-unregister must not plant a duplicate stop entry */
-    if (multimapExists(t->stopEvents, &stop)) {
+    /* One search plants the stop entry; a double unregister finds it
+     * there and plants no duplicate.  The id may already be gone (fired,
+     * or dying in the current batch); readers reconcile lazily via
+     * stopsMaybeStale, keeping this call O(log n) */
+    if (!multimapInsertIfAbsent(&t->stopEvents, stopTimer)) {
         return true;
     }
 
-    /* The id may already be gone (fired, or dying in the current
-     * batch); readers reconcile lazily via stopsMaybeStale, keeping
-     * this call O(log n) */
     stopBoundsExtend(t, id);
-    multimapInsert(&t->stopEvents, stopTimer);
     t->stopPending++;
     t->stopsMaybeStale = true;
 
