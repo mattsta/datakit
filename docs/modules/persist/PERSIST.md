@@ -164,6 +164,18 @@ fail with `PERSIST_ERR_KEY_GENERATION_MISMATCH`.  A file written under a
 different key id fails verification with `PERSIST_ERR_KEY_ID_MISMATCH`, and
 `persistLastExpectedKeyId` names the id the file wants.
 
+Rotating to a new key id: the snapshot and the open WAL name the old id,
+so after `persistRebindKeyring` to the new one appends are refused
+(`PERSIST_ERR_KEY_ID_MISMATCH`) until `persistCompact` rewrites both under
+the new key.  Rotate as rebind, compact, continue.  `persistSetIntegrityKey`
+replaces every earlier key source (a keyring binding and a prepared key
+included); set a prepared form of the new key after it.
+
+A `persistCtx` holds one structure's files: the first `*NewP` / `*OpenP`
+binds it to that structure's type, and every other type is refused on it.
+Attaching a new snapshot or WAL store to a `persist` starts that store
+fresh (entries still buffered go to the store they were logged to first).
+
 ## Formats and Versions
 
 Each file header carries two version stamps: one for the file framing
