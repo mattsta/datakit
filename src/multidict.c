@@ -2337,20 +2337,12 @@ bool multidictEnableLRU(multidict *d, size_t levels) {
         return true;
     }
 
-    /* Create multilru with specified levels */
+    /* Create multilru with specified levels (allocation fails fast) */
     d->lru = multilruNewWithLevels(levels > 0 ? levels : 7);
-    if (!d->lru) {
-        return false;
-    }
 
     /* Create auxiliary keyToPtr dict (using same type as main dict) */
     /* @own: container; free=multidictDisableLRU */
     d->lruKeyToPtr = multidictNew(d->type, d->shared, d->seed);
-    if (!d->lruKeyToPtr) {
-        multilruFree(d->lru);
-        d->lru = NULL;
-        return false;
-    }
 
     d->lruPtrToKey = NULL;
     d->lruPtrToKeySize = 0;
