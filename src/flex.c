@@ -4269,9 +4269,9 @@ void flexDeleteUpToInclusive(flex **ff, flexEntry *fe) {
      *   - discover the index of 'fe' in '*ff'
      *   - delete from [head, index]. */
 
-    /* If we got here without a valid entry, don't crash, just
-     * give up because we can't delete anything reasonable. */
-    if (!fe) {
+    /* No entry (an empty flex, or the entry before the head): there is
+     * nothing up to it to delete */
+    if (!fe || flexCount(*ff) == 0) {
         return;
     }
 
@@ -4284,15 +4284,10 @@ void flexDeleteUpToInclusive(flex **ff, flexEntry *fe) {
         return;
     }
 
-    if (fe == head) {
-        /* nothing to delete */
-        return;
-    }
-
     flexEntry *current = fe;
 
-    /* '1' because if 'fe' == 'head', then we don't enter the while
-     * loop and the first entry would never be counted */
+    /* '1' counts 'fe' itself: when 'fe' is the head the loop never runs
+     * and the head alone is deleted */
     int_fast32_t discoveredCount = 1;
     while (current != head) {
         /* count elements from current back to head */
@@ -4305,14 +4300,15 @@ void flexDeleteUpToInclusive(flex **ff, flexEntry *fe) {
 
 void flexDeleteUpToInclusivePlusN(flex **ff, flexEntry *fe,
                                   const int32_t nMore) {
-    flexEntry *const tail = flexTail(*ff);
-    for (int_fast32_t i = 0; i < nMore; i++) {
-        if (fe > tail) {
-            fe = tail;
+    /* Move 'nMore' entries on, stopping at the tail: running past the end
+     * deletes through the end (flexNext there is NULL, which would
+     * delete nothing) */
+    for (int_fast32_t i = 0; fe && i < nMore; i++) {
+        flexEntry *const next = flexNext(*ff, fe);
+        if (!next) {
             break;
         }
-
-        fe = flexNext(*ff, fe);
+        fe = next;
     }
 
     flexDeleteUpToInclusive(ff, fe);
@@ -8161,6 +8157,51 @@ static int32_t flexTestUntrustedGetters(void) {
     return bad;
 }
 
+/* flexDeleteUpToInclusive(fe) removes the head through fe; ...PlusN(fe, n)
+ * first moves fe n entries on, stopping at the tail.  Over [0..5]: every
+ * start (and NULL, which deletes nothing) with n from 0 past the end, and
+ * the remaining values checked against the model. */
+static int32_t flexTestDeleteUpTo(void) {
+    int32_t bad = 0;
+    enum { N = 6 };
+    for (int32_t start = -1; start < N; start++) {
+        for (int32_t more = 0; more <= N + 1; more++) {
+            cleaner(flexFree) flex *f = flexNew();
+            for (int64_t v = 0; v < N; v++) {
+                flexPushSigned(&f, v, FLEX_ENDPOINT_TAIL);
+            }
+            flexEntry *fe = start < 0 ? NULL : flexIndex(f, start);
+            int32_t firstKept = 0;
+            if (start >= 0) {
+                const int32_t last =
+                    start + more < N - 1 ? start + more : N - 1;
+                firstKept = last + 1;
+            }
+            if (more == 0) {
+                flexDeleteUpToInclusive(&f, fe);
+            } else {
+                flexDeleteUpToInclusivePlusN(&f, fe, more);
+            }
+
+            bool ok = flexCount(f) == (size_t)(N - firstKept);
+            flexEntry *at = flexHeadIfAny(f);
+            for (int64_t v = firstKept; ok && v < N; v++) {
+                databox got = {{0}};
+                flexGetByType(at, &got);
+                ok = got.data.i64 == v;
+                at = flexNext(f, at);
+            }
+            if (!ok) {
+                printf("  FAIL: delete up to %" PRId32 " plus %" PRId32
+                       " left %zu entries, want values %" PRId32 "..%d\n",
+                       start, more, flexCount(f), firstKept, N - 1);
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
+
 static int32_t flexTestReferenceSet(void) {
     int32_t bad = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
@@ -11029,6 +11070,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify delete-up-to removes the head through the entry:\n");
+    {
+        const int32_t bad = flexTestDeleteUpTo();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " delete-up-to checks\n", bad);
             return bad;
         }
         printf("  ok\n");

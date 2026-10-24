@@ -7486,6 +7486,51 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("delete by <= removes exactly the rows at or below the bound") {
+        /* Keys 10, 20, ... in maps of 1, 2 and 3 elements per row and
+         * every tier; bounds below, at and between the first keys, in
+         * the middle, at the top and above it.  With one element per
+         * row the row before the first kept one can be the map's head. */
+        static const int32_t sizes[] = {6, 400, 4000};
+        static const int64_t bounds[] = {5, 10, 15, 20, 25, 1005, -1, -2};
+        for (uint32_t width = 1; width <= 3; width++) {
+            for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+                for (size_t b = 0; b < sizeof(bounds) / sizeof(*bounds); b++) {
+                    const int32_t n = sizes[s];
+                    cleaner(multimapFree) multimap *m = multimapNew(width);
+                    for (int32_t i = n; i >= 1; i--) {
+                        databox row[3] = {databoxNewSigned((int64_t)i * 10),
+                                          databoxNewSigned(i),
+                                          databoxNewSigned(-i)};
+                        const databox *ptrs[3] = {&row[0], &row[1], &row[2]};
+                        multimapInsert(&m, ptrs);
+                    }
+                    /* -1: the top key; -2: above it */
+                    const int64_t bound = bounds[b] == -1 ? (int64_t)n * 10
+                                          : bounds[b] == -2
+                                              ? (int64_t)n * 10 + 5
+                                              : bounds[b];
+                    const multimapPredicate pred = {
+                        .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                        .compareAgainst = databoxNewSigned(bound)};
+                    multimapDeleteByPredicate(&m, &pred);
+
+                    const int64_t gone = bound / 10 < n ? bound / 10 : n;
+                    const size_t want = (size_t)(n - gone);
+                    const databox below = databoxNewSigned(gone * 10);
+                    const databox above = databoxNewSigned((gone + 1) * 10);
+                    if (multimapCount(m) != want ||
+                        (gone > 0 && multimapExists(m, &below)) ||
+                        (gone < n && !multimapExists(m, &above))) {
+                        ERR("width %u, %d rows, <= %" PRId64
+                            ": %zu rows left, want %zu",
+                            width, n, bound, multimapCount(m), want);
+                    }
+                }
+            }
+        }
+    }
+
     TEST("a NaN key can be found and deleted (keys use identity order)") {
         /* databoxEqual says NaN != NaN, but key identity is the total
          * order, where every NaN is one position: a stored NaN key stays
