@@ -371,6 +371,82 @@ int flexPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("flexP after a damaged WAL entry: refused until compacted") {
+        /* Three pushes; the last WAL entry's digest damaged on disk.
+         * Lenient recovery keeps two; the WAL then takes no appends (a
+         * push is refused and changes nothing), compaction resumes
+         * logging, and a reopen holds the two kept values and the new
+         * one. */
+        ptestCleanupFiles(basePath);
+        {
+            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            flexP *f = flexNewP(ctx);
+            for (int64_t v = 1; v <= 3; v++) {
+                const databox box = DATABOX_SIGNED(v * 11);
+                flexPushTailP(f, &box);
+            }
+            flexCloseP(f);
+            persistCtxFree(ctx);
+        }
+
+        char walPath[PATH_MAX + 8];
+        snprintf(walPath, sizeof(walPath), "%s.wal", basePath);
+        FILE *wal = fopen(walPath, "r+b");
+        if (!wal || fseek(wal, -3, SEEK_END) != 0) {
+            ERRR("could not open the WAL to damage it");
+        } else {
+            const int c = fgetc(wal);
+            fseek(wal, -3, SEEK_END);
+            fputc(c ^ 0x5a, wal);
+        }
+        if (wal) {
+            fclose(wal);
+        }
+
+        {
+            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            flexP *f = flexOpenP(ctx);
+            if (!f || flexCountP(f) != 2) {
+                ERR("lenient recovery kept %zu values, want 2",
+                    f ? flexCountP(f) : (size_t)0);
+            }
+            const databox later = DATABOX_SIGNED(99);
+            if (f && flexPushTailP(f, &later) != PERSIST_LOG_REFUSED) {
+                ERRR("a push after the damaged entry was logged");
+            }
+            if (f && flexCountP(f) != 2) {
+                ERRR("a refused push changed the flex");
+            }
+            if (f && (!flexCompactP(f) ||
+                      flexPushTailP(f, &later) == PERSIST_LOG_REFUSED ||
+                      flexCountP(f) != 3)) {
+                ERRR("compaction did not resume logging");
+            }
+            if (f) {
+                flexCloseP(f);
+            }
+            persistCtxFree(ctx);
+        }
+
+        {
+            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            flexP *f = flexOpenP(ctx);
+            databox got = {{0}};
+            if (f && flexCountP(f) == 3) {
+                flexGetByTypeP(f, flexIndexP(f, -1), &got);
+            }
+            if (!f || flexCountP(f) != 3 || got.data.i64 != 99) {
+                ERR("reopen holds %zu values, want 11, 22, 99",
+                    f ? flexCountP(f) : (size_t)0);
+            }
+            if (f) {
+                flexCloseP(f);
+            }
+            persistCtxFree(ctx);
+        }
+        ptestCleanupFiles(basePath);
+    }
+
     TEST("flexP all data types recovery round-trip") {
         ptestCleanupFiles(basePath);
         ptestBoxTracker tracker;
