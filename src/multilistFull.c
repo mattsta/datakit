@@ -1756,8 +1756,8 @@ void multilistFullRepr(multilistFull *ml) {
 
 #define multilistFullPush_(WHAT, a, b, c, d)                                   \
     do {                                                                       \
-        databox pushBox_ = databoxNewBytesString(c);                           \
-        pushBox_.len = d;                                                      \
+        /* by its given length: 'c' need not be NUL-terminated */              \
+        databox pushBox_ = databoxNewBytes(c, d);                              \
         multilistFullPushByType##WHAT(a, b, &pushBox_);                        \
     } while (0)
 
@@ -2326,6 +2326,39 @@ int multilistFullTest(int argc, char *argv[]) {
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             multilistFullRotate(ml, s);
             mlVerify(ml, 1, 0, 0, 0);
+            multilistFullFree(ml);
+        }
+
+        TEST("rotate two values in two nodes swaps them") {
+            /* At fill 1 a value of 80 bytes fills a node: two values are
+             * two nodes, which rotate by swapping; twice is the identity */
+            char a[80];
+            char b[80];
+            memset(a, 'a', sizeof(a));
+            memset(b, 'b', sizeof(b));
+            multilistFull *ml = multilistFullNew(1, depth[_i]);
+            multilistFullPushTail(ml, s0, a, sizeof(a));
+            multilistFullPushTail(ml, s0, b, sizeof(b));
+            static const char orders[3][2] = {
+                {'a', 'b'}, {'b', 'a'}, {'a', 'b'}};
+            for (int r = 0; r < 3; r++) {
+                if (r > 0) {
+                    multilistFullRotate(ml, s);
+                }
+                for (int i = 0; i < 2; i++) {
+                    multilistEntry entry;
+                    const bool found =
+                        multilistFullIndex(ml, s0, i, &entry, true);
+                    if (ml->count != 2 || !found ||
+                        databoxLen(&entry.box) != sizeof(a) ||
+                        ((const char *)databoxBytes(&entry.box))[0] !=
+                            orders[r][i]) {
+                        ERR("(%zu nodes, found %d) after %d rotations, value "
+                            "%d is not '%c'",
+                            (size_t)ml->count, found, r, i, orders[r][i]);
+                    }
+                }
+            }
             multilistFullFree(ml);
         }
 
