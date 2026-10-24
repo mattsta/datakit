@@ -392,8 +392,7 @@ int listTest(int argc, char *argv[]) {
     int32_t err = 0;
 
     /* Test listCreate and listRelease */
-    printf("Testing listCreate and listRelease...\n");
-    {
+    TEST("listCreate and listRelease") {
         cleaner(listRelease) list *l = listCreate();
         if (l == NULL) {
             ERR("listCreate returned NULL%s", "");
@@ -413,8 +412,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listAddNodeHead */
-    printf("Testing listAddNodeHead...\n");
-    {
+    TEST("listAddNodeHead") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
@@ -442,8 +440,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listAddNodeTail */
-    printf("Testing listAddNodeTail...\n");
-    {
+    TEST("listAddNodeTail") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
@@ -471,8 +468,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listDelNode */
-    printf("Testing listDelNode...\n");
-    {
+    TEST("listDelNode") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3};
 
@@ -510,8 +506,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listGetIterator and listNext (head to tail) */
-    printf("Testing listGetIterator head to tail...\n");
-    {
+    TEST("listGetIterator head to tail") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
@@ -543,8 +538,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listGetIterator and listNext (tail to head) */
-    printf("Testing listGetIterator tail to head...\n");
-    {
+    TEST("listGetIterator tail to head") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
@@ -576,8 +570,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listRewind and listRewindTail */
-    printf("Testing listRewind and listRewindTail...\n");
-    {
+    TEST("listRewind and listRewindTail") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3};
 
@@ -603,8 +596,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listDup */
-    printf("Testing listDup...\n");
-    {
+    TEST("listDup") {
         cleaner(listRelease) list *orig = listCreate();
         int32_t values[] = {10, 20, 30, 40, 50};
 
@@ -647,8 +639,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listSearchKey */
-    printf("Testing listSearchKey...\n");
-    {
+    TEST("listSearchKey") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {100, 200, 300, 400, 500};
 
@@ -674,8 +665,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listIndex */
-    printf("Testing listIndex...\n");
-    {
+    TEST("listIndex") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {10, 20, 30, 40, 50};
 
@@ -728,8 +718,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test listRotate */
-    printf("Testing listRotate...\n");
-    {
+    TEST("listRotate") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
@@ -767,8 +756,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test empty list rotation */
-    printf("Testing listRotate on empty/single-element list...\n");
-    {
+    TEST("listRotate on an empty or single-element list") {
         cleaner(listRelease) list *l = listCreate();
 
         /* Rotate empty list should not crash */
@@ -792,8 +780,7 @@ int listTest(int argc, char *argv[]) {
     }
 
     /* Test deletion during iteration */
-    printf("Testing deletion during iteration...\n");
-    {
+    TEST("deletion during iteration") {
         cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
@@ -831,8 +818,7 @@ int listTest(int argc, char *argv[]) {
         listReleaseIterator(iter);
     }
 
-    printf("Testing listInsertNode...\n");
-    {
+    TEST("listInsertNode") {
         /* 1 2 3, then insert at both ends and in the middle, from both
          * sides; both walks must give the same order and the ends must
          * follow */

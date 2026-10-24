@@ -495,8 +495,7 @@ int bbitsTest(int argc, char *argv[]) {
     int32_t err = 0;
 
     /* Test bbitsDodDod end-to-end write and read verification */
-    printf("Testing bbitsDodDod write/read with value verification...\n");
-    {
+    TEST("bbitsDodDod write/read with value verification") {
         bbitsDodDod dd = {0};
         const size_t numElements = 100;
 
@@ -552,8 +551,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test bbitsDodDod with larger dataset spanning multiple bitmap segments */
-    printf("Testing bbitsDodDod with large dataset (multiple segments)...\n");
-    {
+    TEST("bbitsDodDod with a large dataset (multiple segments)") {
         bbitsDodDod dd = {0};
         const size_t numElements = 5000;
 
@@ -611,8 +609,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test bbitsDodXof end-to-end write and read verification */
-    printf("Testing bbitsDodXof write/read with value verification...\n");
-    {
+    TEST("bbitsDodXof write/read with value verification") {
         bbitsDodXof dx = {0};
         const size_t numElements = 100;
 
@@ -669,8 +666,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test bbitsDodXof with larger dataset spanning multiple segments */
-    printf("Testing bbitsDodXof with large dataset (multiple segments)...\n");
-    {
+    TEST("bbitsDodXof with a large dataset (multiple segments)") {
         bbitsDodXof dx = {0};
         const size_t numElements = 5000;
 
@@ -728,8 +724,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test empty structure handling */
-    printf("Testing empty structure handling...\n");
-    {
+    TEST("empty structure handling") {
         bbitsDodDod dd = {0};
         ssize_t count = -1;
         uint64_t *keys = NULL;
@@ -754,8 +749,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test offset reading */
-    printf("Testing offset-based reading...\n");
-    {
+    TEST("offset-based reading") {
         bbitsDodDod dd = {0};
         const size_t numElements = 50;
 
@@ -800,8 +794,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test free on empty structures */
-    printf("Testing free on empty structures...\n");
-    {
+    TEST("free on empty structures") {
         bbitsDodDod dd = {0};
         bbitsDodDodFree(&dd); /* Should not crash */
 
@@ -810,8 +803,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test negative offset (from end) */
-    printf("Testing negative offset (from end)...\n");
-    {
+    TEST("a negative offset (from the end)") {
         bbitsDodDod dd = {0};
         const size_t numElements = 100;
 
@@ -855,8 +847,7 @@ int bbitsTest(int argc, char *argv[]) {
     }
 
     /* Test statistics calculation */
-    printf("Testing statistics calculation...\n");
-    {
+    TEST("statistics calculation") {
         bbitsDodDod dd = {0};
 
         /* Write known values: 10, 20, 30, 40, 50 - mean should be 30 */
@@ -896,8 +887,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Reads that start at or past the end are refused; reads that run past
      * the end stop at the end and report the shorter count. */
-    printf("Testing offset/count range clamping...\n");
-    {
+    TEST("offset/count range clamping") {
         /* Irregular values so the DoD stream spills into several segments */
 #define BBITS_CLAMP_VAL(i) (((uint64_t)(i) * 2654435761u) % 1000003)
         const size_t numElements = 5000;
@@ -1015,8 +1005,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* mean/variance/stddev are population statistics; check them against a
      * two-pass computation over the generated values themselves */
-    printf("Testing statistics against a two-pass oracle...\n");
-    {
+    TEST("statistics against a two-pass oracle") {
 #define BBITS_STAT_DOD(i) (((uint64_t)(i) * 2654435761u) % 1000003)
 #define BBITS_STAT_XOF(i) ((double)(i) * 0.123 - 77.0)
         const size_t numElements = 3000;

@@ -2647,68 +2647,86 @@ int intersectIntTest(int argc, char *argv[]) {
 
     int32_t err = 0;
 
-    printf("Testing scalar...\n");
-    err |= runTestsForFunction(scalar, "scalar");
+    TEST("scalar") {
+        err += runTestsForFunction(scalar, "scalar");
+    }
 
-    printf("Testing match_scalar...\n");
-    err |= runTestsForFunction(match_scalar, "match_scalar");
+    TEST("match_scalar") {
+        err += runTestsForFunction(match_scalar, "match_scalar");
+    }
 
-    printf("Testing intersectInt (main heuristic)...\n");
-    err |= runTestsForFunction(intersectInt, "intersectInt");
+    TEST("intersectInt (main heuristic)") {
+        err += runTestsForFunction(intersectInt, "intersectInt");
+    }
 
-    printf("Testing intersectIntOneSidedGalloping...\n");
-    err |= runTestsForFunction(intersectIntOneSidedGalloping,
-                               "intersectIntOneSidedGalloping");
+    TEST("intersectIntOneSidedGalloping") {
+        err += runTestsForFunction(intersectIntOneSidedGalloping,
+                                   "intersectIntOneSidedGalloping");
+    }
 
 #if defined(__x86_64__) || defined(__i386__)
-    printf("Testing v1 (wrapped)...\n");
-    err |= runTestsForFunction(wrapV1, "v1");
+    TEST("v1 (wrapped)") {
+        err += runTestsForFunction(wrapV1, "v1");
+    }
 
-    printf("Testing v3 (wrapped)...\n");
-    err |= runTestsForFunction(wrapV3, "v3");
+    TEST("v3 (wrapped)") {
+        err += runTestsForFunction(wrapV3, "v3");
+    }
 
-    printf("Testing SIMDgalloping (wrapped)...\n");
-    err |= runTestsForFunction(wrapSIMDgalloping, "SIMDgalloping");
+    TEST("SIMDgalloping (wrapped)") {
+        err += runTestsForFunction(wrapSIMDgalloping, "SIMDgalloping");
+    }
 
-    printf("Testing highlyscalable_intersect_SIMD...\n");
-    err |= runTestsForFunction(highlyscalable_intersect_SIMD,
-                               "highlyscalable_intersect_SIMD");
+    TEST("highlyscalable_intersect_SIMD") {
+        err += runTestsForFunction(highlyscalable_intersect_SIMD,
+                                   "highlyscalable_intersect_SIMD");
+    }
 
-    printf("Testing lemire_highlyscalable_intersect_SIMD...\n");
-    err |= runTestsForFunction(lemire_highlyscalable_intersect_SIMD,
-                               "lemire_highlyscalable_intersect_SIMD");
+    TEST("lemire_highlyscalable_intersect_SIMD") {
+        err += runTestsForFunction(lemire_highlyscalable_intersect_SIMD,
+                                   "lemire_highlyscalable_intersect_SIMD");
+    }
 #endif /* x86 tests */
 
 #if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
-    printf("Testing v1_neon (wrapped)...\n");
-    err |= runTestsForFunction(wrapV1Neon, "v1_neon");
+    TEST("v1_neon (wrapped)") {
+        err += runTestsForFunction(wrapV1Neon, "v1_neon");
+    }
 
-    printf("Testing v3_neon (wrapped)...\n");
-    err |= runTestsForFunction(wrapV3Neon, "v3_neon");
+    TEST("v3_neon (wrapped)") {
+        err += runTestsForFunction(wrapV3Neon, "v3_neon");
+    }
 
-    printf("Testing SIMDgalloping_neon (wrapped)...\n");
-    err |= runTestsForFunction(wrapSIMDgallopingNeon, "SIMDgalloping_neon");
+    TEST("SIMDgalloping_neon (wrapped)") {
+        err += runTestsForFunction(wrapSIMDgallopingNeon, "SIMDgalloping_neon");
+    }
 #endif /* ARM NEON tests */
 
 #if __AVX2__
-    printf("Testing intersectIntAVX2...\n");
-    err |= runTestsForFunction(intersectIntAVX2, "intersectIntAVX2");
+    TEST("intersectIntAVX2") {
+        err += runTestsForFunction(intersectIntAVX2, "intersectIntAVX2");
+    }
 
-    printf("Testing v1_avx2 (wrapped)...\n");
-    err |= runTestsForFunction(wrapV1AVX2, "v1_avx2");
+    TEST("v1_avx2 (wrapped)") {
+        err += runTestsForFunction(wrapV1AVX2, "v1_avx2");
+    }
 
-    printf("Testing v3_avx2 (wrapped)...\n");
-    err |= runTestsForFunction(wrapV3AVX2, "v3_avx2");
+    TEST("v3_avx2 (wrapped)") {
+        err += runTestsForFunction(wrapV3AVX2, "v3_avx2");
+    }
 
-    printf("Testing SIMDgalloping_avx2 (wrapped)...\n");
-    err |= runTestsForFunction(wrapSIMDgallopingAVX2, "SIMDgalloping_avx2");
+    TEST("SIMDgalloping_avx2 (wrapped)") {
+        err += runTestsForFunction(wrapSIMDgallopingAVX2, "SIMDgalloping_avx2");
+    }
 #endif
 
-    printf("Running scalar vs SIMD stress tests...\n");
-    err |= stressTestScalarVsSIMD();
+    TEST("scalar against SIMD stress") {
+        err += stressTestScalarVsSIMD();
+    }
 
-    printf("Testing cross-algorithm consistency...\n");
-    err |= testConsistency();
+    TEST("cross-algorithm consistency") {
+        err += testConsistency();
+    }
 
     TEST_FINAL_RESULT;
 }

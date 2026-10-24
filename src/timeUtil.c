@@ -91,8 +91,7 @@ int timeUtilTest(int argc, char *argv[]) {
     int32_t err = 0;
 
     /* Test that time values are non-zero and reasonable */
-    printf("Testing basic time functions...\n");
-    {
+    TEST("basic time functions") {
         uint64_t us = timeUtilUs();
         uint64_t ms = timeUtilMs();
         uint64_t s = timeUtilS();
@@ -131,8 +130,7 @@ int timeUtilTest(int argc, char *argv[]) {
     }
 
     /* Test monotonic time increases */
-    printf("Testing monotonic time increases...\n");
-    {
+    TEST("monotonic time increases") {
         uint64_t ns1 = timeUtilMonotonicNs();
         uint64_t us1 = timeUtilMonotonicUs();
         uint64_t ms1 = timeUtilMonotonicMs();
@@ -167,8 +165,7 @@ int timeUtilTest(int argc, char *argv[]) {
     }
 
     /* Test relationships between monotonic functions */
-    printf("Testing monotonic time relationships...\n");
-    {
+    TEST("monotonic time relationships") {
         uint64_t ns = timeUtilMonotonicNs();
         uint64_t us = timeUtilMonotonicUs();
         uint64_t ms = timeUtilMonotonicMs();
@@ -193,8 +190,7 @@ int timeUtilTest(int argc, char *argv[]) {
     }
 
     /* Test that repeated calls don't return the same value */
-    printf("Testing time resolution...\n");
-    {
+    TEST("time resolution") {
         uint64_t ns1 = timeUtilMonotonicNs();
         uint64_t ns2 = timeUtilMonotonicNs();
         uint64_t ns3 = timeUtilMonotonicNs();
