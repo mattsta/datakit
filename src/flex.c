@@ -11732,6 +11732,36 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
+    printf("Test empty bytes given as (NULL, 0) store as the empty string:\n");
+    {
+        /* No bytes may come with no pointer: each push stores an empty
+         * string (without passing NULL to memcpy, which UBSan reports) */
+        cleaner(flexFree) flex *e = flexNew();
+        flexPushBytes(&e, NULL, 0, FLEX_ENDPOINT_TAIL);
+        flexPushBytesExact(&e, NULL, 0, FLEX_ENDPOINT_HEAD);
+        const databox nothing = {
+            .type = DATABOX_BYTES, .data.bytes.start = NULL, .len = 0};
+        flexPushByType(&e, &nothing, FLEX_ENDPOINT_TAIL);
+        flexInsertByType(&e, flexIndex(e, 1), &nothing);
+        int32_t bad = 0;
+        if (flexCount(e) != 4) {
+            bad++;
+        }
+        for (int32_t i = 0; i < 4 && !bad; i++) {
+            databox got = {{0}};
+            flexGetByType(flexIndex(e, i), &got);
+            if ((got.type != DATABOX_BYTES &&
+                 got.type != DATABOX_BYTES_EMBED) ||
+                got.len != 0) {
+                bad++;
+            }
+        }
+        if (bad) {
+            printf("  FAIL: (NULL, 0) did not store empty strings\n");
+            return bad;
+        }
+    }
+
     printf("Test never-free bytes are bytes to every box entry point:\n");
     {
         /* The same strings as BYTES boxes and as NEVER_FREE boxes, through
