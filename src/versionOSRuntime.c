@@ -59,6 +59,8 @@ int versionOSRuntimeTest(int argc, char *argv[]) {
             {"", 0, 0, 0},
             {"abc", 0, 0, 0},
             {"1.2.3.4", 1, 2, 3},
+            {"5.4abc", 5, 4, 0},
+            {"7~rc1", 7, 0, 0},
         };
         for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
             const uint64_t got = versionOSRuntimeParse(cases[i].release);
@@ -86,6 +88,9 @@ int versionOSRuntimeTest(int argc, char *argv[]) {
         /* The running kernel was read at startup */
         if (versionOSRuntimeKernelVersion == 0 || !osVersionGTE(1, 0, 0)) {
             ERRR("the running kernel version was not read");
+        }
+        if (osVersionGTE(65535, 65535, 65534)) {
+            ERRR("a version above any real kernel compared as reached");
         }
     }
 
