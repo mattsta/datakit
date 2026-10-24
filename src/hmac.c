@@ -510,17 +510,16 @@ static void digestToHex(const uint8_t *h, size_t n, char *out) {
     out[n * 2] = 0;
 }
 
-/* Returns 1 (the failure count to add) so callers can fold it into their
- * local `err` counter — ctest.h's ERR macro updates a name in lexical
- * scope, so we can't invoke it from this helper directly. */
+/* Reports the mismatch and returns its failure count (1) for the caller to
+ * add to its own */
 static int reportMismatch(const char *name, const uint8_t *got,
                           const uint8_t *expected, size_t n) {
     char gotHex[129], expHex[129];
     digestToHex(got, n, gotHex);
     digestToHex(expected, n, expHex);
-    printf("ERROR! vector '%s': got %s, expected %s\n", name, gotHex, expHex);
-    fflush(stdout);
-    return 1;
+    int err = 0;
+    ERR("vector '%s': got %s, expected %s", name, gotHex, expHex);
+    return err;
 }
 
 static void runBench(size_t payload, uint32_t iters) {

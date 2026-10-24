@@ -260,6 +260,7 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
 }
 
 #ifdef DATAKIT_TEST
+#include "ctest.h"
 #include "perf.h"
 #include <assert.h>
 #include <inttypes.h>
@@ -318,18 +319,17 @@ FLOAT16_TEST_ATTRS int float16Test(int argc, char *argv[]) {
 
     /* bfloat16 is exactly the high half of a float: every pattern decodes
      * to that float bit for bit and encodes back to itself. */
-    for (uint32_t i = 0; i <= UINT16_MAX; i++) {
-        const float decoded = bfloat16Decode((uint16_t)i);
-        uint32_t bits;
-        memcpy(&bits, &decoded, sizeof(bits));
-        if (bits != i << 16) {
-            printf("bfloat16Decode(0x%04" PRIx32 ") gave bits 0x%08" PRIx32
-                   "\n",
-                   i, bits);
-            err++;
-        } else if (bfloat16Encode(decoded) != i) {
-            printf("bfloat16 0x%04" PRIx32 " did not round-trip\n", i);
-            err++;
+    TEST("bfloat16: every pattern decodes to its float and round-trips") {
+        for (uint32_t i = 0; i <= UINT16_MAX; i++) {
+            const float decoded = bfloat16Decode((uint16_t)i);
+            uint32_t bits;
+            memcpy(&bits, &decoded, sizeof(bits));
+            if (bits != i << 16) {
+                ERR("bfloat16Decode(0x%04" PRIx32 ") gave bits 0x%08" PRIx32, i,
+                    bits);
+            } else if (bfloat16Encode(decoded) != i) {
+                ERR("bfloat16 0x%04" PRIx32 " did not round-trip", i);
+            }
         }
     }
 
@@ -549,135 +549,130 @@ FLOAT16_TEST_ATTRS int float16Test(int argc, char *argv[]) {
     /* ================================================================
      * Batch Conversion Benchmarks: SIMD vs Scalar
      * ================================================================ */
-    printf("==========================================\n\n");
-    printf("Batch Float16 Conversion Benchmarks:\n\n");
+    TEST("batch float16 conversion: SIMD matches scalar (with timings)") {
+        /* Allocate test arrays */
+        const size_t batchSize = 1024;
+        const size_t batchIterations = testers / batchSize;
+        float *srcFloats = malloc(batchSize * sizeof(float));
+        uint16_t *dstHalfs = malloc(batchSize * sizeof(uint16_t));
+        float *dstFloats = malloc(batchSize * sizeof(float));
 
-    /* Allocate test arrays */
-    const size_t batchSize = 1024;
-    const size_t batchIterations = testers / batchSize;
-    float *srcFloats = malloc(batchSize * sizeof(float));
-    uint16_t *dstHalfs = malloc(batchSize * sizeof(uint16_t));
-    float *dstFloats = malloc(batchSize * sizeof(float));
-
-    /* Initialize source with varied values */
-    for (size_t i = 0; i < batchSize; i++) {
-        srcFloats[i] = (float)i * 0.01f + in;
-    }
-
-    /* Benchmark batch encode: Scalar */
-    {
-        TIME_INIT;
-        for (size_t i = 0; i < batchIterations; i++) {
-            float16EncodeBatchScalar(srcFloats, dstHalfs, batchSize);
-        }
-        TIME_FINISH(batchIterations * batchSize, "float16EncodeBatch SCALAR");
-    }
-
-    /* Store scalar results for verification */
-    uint16_t *scalarHalfs = malloc(batchSize * sizeof(uint16_t));
-    float16EncodeBatchScalar(srcFloats, scalarHalfs, batchSize);
-
-    /* Benchmark batch encode: SIMD */
-    {
-        TIME_INIT;
-        for (size_t i = 0; i < batchIterations; i++) {
-            float16EncodeBatch(srcFloats, dstHalfs, batchSize);
-        }
-        TIME_FINISH(batchIterations * batchSize, "float16EncodeBatch SIMD");
-    }
-
-    /* Verify correctness: SIMD encode matches scalar */
-    float16EncodeBatch(srcFloats, dstHalfs, batchSize);
-    {
-        size_t mismatches = 0;
+        /* Initialize source with varied values */
         for (size_t i = 0; i < batchSize; i++) {
-            if (dstHalfs[i] != scalarHalfs[i]) {
-                if (mismatches < 5) {
-                    /* Show original value, both encoded values, and decoded
-                     * difference */
-                    float simdDecoded = float16Decode(dstHalfs[i]);
-                    float scalarDecoded = float16Decode(scalarHalfs[i]);
-                    printf("  Encode mismatch at %zu:\n"
-                           "    Original: %.10g\n"
-                           "    SIMD:   encoded=%u decoded=%.10g\n"
-                           "    Scalar: encoded=%u decoded=%.10g\n"
-                           "    Difference: %.10g\n",
-                           i, srcFloats[i], dstHalfs[i], simdDecoded,
-                           scalarHalfs[i], scalarDecoded,
-                           simdDecoded - scalarDecoded);
+            srcFloats[i] = (float)i * 0.01f + in;
+        }
+
+        /* Benchmark batch encode: Scalar */
+        {
+            TIME_INIT;
+            for (size_t i = 0; i < batchIterations; i++) {
+                float16EncodeBatchScalar(srcFloats, dstHalfs, batchSize);
+            }
+            TIME_FINISH(batchIterations * batchSize,
+                        "float16EncodeBatch SCALAR");
+        }
+
+        /* Store scalar results for verification */
+        uint16_t *scalarHalfs = malloc(batchSize * sizeof(uint16_t));
+        float16EncodeBatchScalar(srcFloats, scalarHalfs, batchSize);
+
+        /* Benchmark batch encode: SIMD */
+        {
+            TIME_INIT;
+            for (size_t i = 0; i < batchIterations; i++) {
+                float16EncodeBatch(srcFloats, dstHalfs, batchSize);
+            }
+            TIME_FINISH(batchIterations * batchSize, "float16EncodeBatch SIMD");
+        }
+
+        /* Verify correctness: SIMD encode matches scalar */
+        float16EncodeBatch(srcFloats, dstHalfs, batchSize);
+        {
+            size_t mismatches = 0;
+            for (size_t i = 0; i < batchSize; i++) {
+                if (dstHalfs[i] != scalarHalfs[i]) {
+                    if (mismatches < 5) {
+                        /* Show original value, both encoded values, and decoded
+                         * difference */
+                        float simdDecoded = float16Decode(dstHalfs[i]);
+                        float scalarDecoded = float16Decode(scalarHalfs[i]);
+                        printf("  Encode mismatch at %zu:\n"
+                               "    Original: %.10g\n"
+                               "    SIMD:   encoded=%u decoded=%.10g\n"
+                               "    Scalar: encoded=%u decoded=%.10g\n"
+                               "    Difference: %.10g\n",
+                               i, srcFloats[i], dstHalfs[i], simdDecoded,
+                               scalarHalfs[i], scalarDecoded,
+                               simdDecoded - scalarDecoded);
+                    }
+                    mismatches++;
                 }
-                mismatches++;
+            }
+            if (mismatches) {
+                ERR("encode: SIMD differs from scalar for %zu of %zu values",
+                    mismatches, batchSize);
             }
         }
-        if (mismatches == 0) {
-            printf("  [OK] Encode: SIMD matches Scalar for all %zu values\n",
-                   batchSize);
-        } else {
-            printf("  [FAIL] Encode: %zu mismatches out of %zu\n", mismatches,
-                   batchSize);
+
+        /* Benchmark batch decode: Scalar */
+        {
+            TIME_INIT;
+            for (size_t i = 0; i < batchIterations; i++) {
+                float16DecodeBatchScalar(dstHalfs, dstFloats, batchSize);
+            }
+            TIME_FINISH(batchIterations * batchSize,
+                        "float16DecodeBatch SCALAR");
         }
-    }
 
-    /* Benchmark batch decode: Scalar */
-    {
-        TIME_INIT;
-        for (size_t i = 0; i < batchIterations; i++) {
-            float16DecodeBatchScalar(dstHalfs, dstFloats, batchSize);
+        /* Store scalar decode results for verification */
+        float *scalarFloats = malloc(batchSize * sizeof(float));
+        float16DecodeBatchScalar(dstHalfs, scalarFloats, batchSize);
+
+        /* Benchmark batch decode: SIMD */
+        {
+            TIME_INIT;
+            for (size_t i = 0; i < batchIterations; i++) {
+                float16DecodeBatch(dstHalfs, dstFloats, batchSize);
+            }
+            TIME_FINISH(batchIterations * batchSize, "float16DecodeBatch SIMD");
         }
-        TIME_FINISH(batchIterations * batchSize, "float16DecodeBatch SCALAR");
-    }
 
-    /* Store scalar decode results for verification */
-    float *scalarFloats = malloc(batchSize * sizeof(float));
-    float16DecodeBatchScalar(dstHalfs, scalarFloats, batchSize);
-
-    /* Benchmark batch decode: SIMD */
-    {
-        TIME_INIT;
-        for (size_t i = 0; i < batchIterations; i++) {
-            float16DecodeBatch(dstHalfs, dstFloats, batchSize);
-        }
-        TIME_FINISH(batchIterations * batchSize, "float16DecodeBatch SIMD");
-    }
-
-    /* Verify correctness: SIMD decode matches scalar */
-    float16DecodeBatch(dstHalfs, dstFloats, batchSize);
-    {
-        size_t mismatches = 0;
-        for (size_t i = 0; i < batchSize; i++) {
-            if (dstFloats[i] != scalarFloats[i]) {
-                if (mismatches < 5) {
-                    printf("  Decode mismatch at %zu:\n"
-                           "    Encoded: %u\n"
-                           "    SIMD decoded:   %.10g\n"
-                           "    Scalar decoded: %.10g\n"
-                           "    Difference: %.10g\n",
-                           i, dstHalfs[i], dstFloats[i], scalarFloats[i],
-                           dstFloats[i] - scalarFloats[i]);
+        /* Verify correctness: SIMD decode matches scalar */
+        float16DecodeBatch(dstHalfs, dstFloats, batchSize);
+        {
+            size_t mismatches = 0;
+            for (size_t i = 0; i < batchSize; i++) {
+                if (dstFloats[i] != scalarFloats[i]) {
+                    if (mismatches < 5) {
+                        printf("  Decode mismatch at %zu:\n"
+                               "    Encoded: %u\n"
+                               "    SIMD decoded:   %.10g\n"
+                               "    Scalar decoded: %.10g\n"
+                               "    Difference: %.10g\n",
+                               i, dstHalfs[i], dstFloats[i], scalarFloats[i],
+                               dstFloats[i] - scalarFloats[i]);
+                    }
+                    mismatches++;
                 }
-                mismatches++;
+            }
+            if (mismatches) {
+                ERR("decode: SIMD differs from scalar for %zu of %zu values",
+                    mismatches, batchSize);
             }
         }
-        if (mismatches == 0) {
-            printf("  [OK] Decode: SIMD matches Scalar for all %zu values\n",
-                   batchSize);
-        } else {
-            printf("  [FAIL] Decode: %zu mismatches out of %zu\n", mismatches,
-                   batchSize);
-        }
-    }
 
-    free(srcFloats);
-    free(dstHalfs);
-    free(dstFloats);
-    free(scalarHalfs);
-    free(scalarFloats);
+        free(srcFloats);
+        free(dstHalfs);
+        free(dstFloats);
+        free(scalarHalfs);
+        free(scalarFloats);
+    }
 
     /* Suppress unused value warnings from benchmark accumulators */
     (void)incr;
     (void)incrf;
 
-    return err;
+    TEST_FINAL_RESULT;
 }
 
 #endif

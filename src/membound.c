@@ -4324,35 +4324,30 @@ static int memboundTestLiveCompare(const void *a, const void *b) {
 /* Every held block is owned, keeps its bytes, and overlaps no other */
 static int memboundTestLiveCheck(membound *m, memboundTestLiveSet *set,
                                  const char *when) {
-    int bad = 0;
+    int err = 0;
     if (memboundCurrentAllocationCount(m) != set->n) {
-        printf("ERROR: %s: pool counts %zu allocations, application holds "
-               "%zu\n",
-               when, memboundCurrentAllocationCount(m), set->n);
-        bad++;
+        ERR("%s: pool counts %zu allocations, application holds %zu", when,
+            memboundCurrentAllocationCount(m), set->n);
     }
     qsort(set->blocks, set->n, sizeof(*set->blocks), memboundTestLiveCompare);
     for (size_t i = 0; i < set->n; i++) {
         const memboundTestLive *b = &set->blocks[i];
         if (!memboundOwns(m, b->ptr) ||
             memboundUsableSize(m, b->ptr) < b->size) {
-            printf("ERROR: %s: block %zu not owned or too small\n", when, i);
-            bad++;
+            ERR("%s: block %zu not owned or too small", when, i);
             continue;
         }
         for (size_t j = 0; j < b->size; j++) {
             if (b->ptr[j] != b->fill) {
-                printf("ERROR: %s: block %zu byte %zu changed\n", when, i, j);
-                bad++;
+                ERR("%s: block %zu byte %zu changed", when, i, j);
                 break;
             }
         }
         if (i + 1 < set->n && b->ptr + b->size > set->blocks[i + 1].ptr) {
-            printf("ERROR: %s: blocks %zu and %zu overlap\n", when, i, i + 1);
-            bad++;
+            ERR("%s: blocks %zu and %zu overlap", when, i, i + 1);
         }
     }
-    return bad;
+    return err;
 }
 
 static size_t memboundTestAtom(const membound *m) {
@@ -4371,7 +4366,7 @@ static size_t memboundTestAtom(const membound *m) {
  * refused free must change nothing; live blocks keep their bytes and never
  * overlap. */
 static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
-    int bad = 0;
+    int err = 0;
     memboundTestLiveSet live = {0};
     void *freed[32] = {0};
     size_t nFreed = 0;
@@ -4432,28 +4427,26 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
         }
         memboundFree(m, target);
         if (memboundCurrentAllocationCount(m) != live.n) {
-            printf("ERROR: tier %d op %d: refused free (kind %u) changed the "
-                   "count to %zu, want %zu\n",
-                   memboundGetTier(m), op, kind,
-                   memboundCurrentAllocationCount(m), live.n);
-            bad++;
+            ERR("tier %d op %d: refused free (kind %u) changed the count to "
+                "%zu, want %zu",
+                memboundGetTier(m), op, kind, memboundCurrentAllocationCount(m),
+                live.n);
             break;
         }
         if (op % 64 == 0) {
-            bad += memboundTestLiveCheck(m, &live, "bad-free run");
+            err += memboundTestLiveCheck(m, &live, "bad-free run");
         }
     }
 
-    bad += memboundTestLiveCheck(m, &live, "bad-free run end");
+    err += memboundTestLiveCheck(m, &live, "bad-free run end");
     for (size_t i = 0; i < live.n; i++) {
         memboundFree(m, live.blocks[i].ptr);
     }
     if (memboundCurrentAllocationCount(m) != 0) {
-        printf("ERROR: tier %d: %zu allocations after freeing all\n",
-               memboundGetTier(m), memboundCurrentAllocationCount(m));
-        bad++;
+        ERR("tier %d: %zu allocations after freeing all", memboundGetTier(m),
+            memboundCurrentAllocationCount(m));
     }
-    return bad;
+    return err;
 }
 
 /* ================================================================
@@ -4772,7 +4765,7 @@ static void *statsRaceReader(void *arg) {
  * writable and counted, and teardown works.  *fired reports whether the
  * armed mapping was reached.  Returns the violations. */
 static int memboundTestMapFailRun(int kind, bool *fired) {
-    int bad = 0;
+    int err = 0;
     membound *m = kind == 0   ? memboundCreateDynamic(1 << 16, 0, 1 << 16)
                   : kind == 1 ? memboundCreateEnterprise(1 << 16, 0)
                   : kind == 2 ? memboundCreateFixed(1 << 16)
@@ -4796,10 +4789,8 @@ static int memboundTestMapFailRun(int kind, bool *fired) {
             memset(more, 0xcd, 6000);
         }
         if (memboundCurrentAllocationCount(m) != live) {
-            printf("ERROR: map failure, kind %d: %zu allocations counted, "
-                   "%zu made\n",
-                   kind, memboundCurrentAllocationCount(m), live);
-            bad++;
+            ERR("map failure, kind %d: %zu allocations counted, %zu made", kind,
+                memboundCurrentAllocationCount(m), live);
         }
         for (int i = 0; i < 24; i++) {
             memboundFree(m, ptrs[i]);
@@ -4810,7 +4801,7 @@ static int memboundTestMapFailRun(int kind, bool *fired) {
     }
     *fired = memboundTestMapFailIn < 0;
     memboundTestMapFailIn = -1;
-    return bad;
+    return err;
 }
 
 int memboundTest(int argc, char *argv[]) {

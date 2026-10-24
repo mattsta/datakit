@@ -1862,12 +1862,15 @@ static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
                       int step, uint64_t *rng) {
     static int64_t list[MOSF_N];
     const int64_t n = mosfList_(present, list);
+    int err = 0;
     if (multiOrderedSetFullCount(m) != (size_t)n) {
-        printf("ERROR: step %d: count %zu, oracle %" PRId64 "\n", step,
-               multiOrderedSetFullCount(m), n);
-        return 1;
+        ERR("step %d: count %zu, oracle %" PRId64, step,
+            multiOrderedSetFullCount(m), n);
+        return err;
     }
-    int bad = mosFullCheckInvariants(m) != 0;
+    if (mosFullCheckInvariants(m) != 0) {
+        ERR("step %d: invariants broken", step);
+    }
 
     /* Ranks past either end refuse */
     databox member;
@@ -1876,8 +1879,7 @@ static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
     if (multiOrderedSetFullGetByRank(m, n, &member, &score) ||
         multiOrderedSetFullGetByRank(m, -n - 1, &member, &score) ||
         multiOrderedSetFullIteratorInitAtRank(m, &it, n, true)) {
-        printf("ERROR: step %d: a rank past the end answered\n", step);
-        bad++;
+        ERR("step %d: a rank past the end answered", step);
     }
 
     /* Sampled ranks, from the front and the back, and a short walk */
@@ -1888,15 +1890,12 @@ static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
             !mosfIs_(&member, &score, s) ||
             !multiOrderedSetFullGetByRank(m, r - n, &member, &score) ||
             !mosfIs_(&member, &score, s)) {
-            printf("ERROR: step %d: rank %" PRId64 " is not %" PRId64 "\n",
-                   step, r, s);
-            bad++;
+            ERR("step %d: rank %" PRId64 " is not %" PRId64, step, r, s);
             continue;
         }
         const bool forward = k % 2 == 0;
         if (!multiOrderedSetFullIteratorInitAtRank(m, &it, r, forward)) {
-            printf("ERROR: step %d: iterator at rank %" PRId64 "\n", step, r);
-            bad++;
+            ERR("step %d: iterator at rank %" PRId64, step, r);
             continue;
         }
         for (int64_t w = 0; w < 4; w++) {
@@ -1905,21 +1904,17 @@ static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
                 multiOrderedSetFullIteratorNext(&it, &member, &score);
             if (at < 0 || at >= n) {
                 if (more) {
-                    printf("ERROR: step %d: walk ran past the end\n", step);
-                    bad++;
+                    ERR("step %d: walk ran past the end", step);
                 }
                 break;
             }
             if (!more || !mosfIs_(&member, &score, list[at])) {
-                printf("ERROR: step %d: walk from %" PRId64 " step %" PRId64
-                       "\n",
-                       step, r, w);
-                bad++;
+                ERR("step %d: walk from %" PRId64 " step %" PRId64, step, r, w);
                 break;
             }
         }
     }
-    return bad;
+    return err;
 }
 
 int multiOrderedSetFullTest(int argc, char *argv[]) {
@@ -1976,6 +1971,8 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             const databox m007 = databoxNewBytesString("m007");
             databox members[2];
             databox scores[2];
+            const size_t picked =
+                multiOrderedSetFullRandomMembers(mos, 2, members, scores);
             if (multiOrderedSetFullCount(mos) != 0 ||
                 multiOrderedSetFullCountByScore(mos, &all) != 0 ||
                 multiOrderedSetFullIteratorInitAtScore(mos, &iter, &zero,
@@ -1985,8 +1982,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 multiOrderedSetFullLast(mos, &m, &s) ||
                 multiOrderedSetFullGetRank(mos, &m007) != -1 ||
                 multiOrderedSetFullGetReverseRank(mos, &m007) != -1 ||
-                multiOrderedSetFullRandomMembers(mos, 2, members, scores) !=
-                    0) {
+                picked != 0) {
                 ERR("%s set: found a row", emptied ? "an emptied" : "a new");
             }
             multiOrderedSetFullFree(mos);

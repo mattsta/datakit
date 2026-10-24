@@ -1178,11 +1178,12 @@ static void printHexLine(const char *label, const uint8_t *p, size_t n) {
 
 static int reportMismatch(const char *name, const uint8_t *got,
                           const uint8_t *expected, size_t n) {
-    printf("ERROR! '%s' mismatch (%zu bytes)\n", name, n);
+    int err = 0;
+    ERR("'%s' mismatch (%zu bytes)", name, n);
     printHexLine("  got: ", got, n);
     printHexLine("  exp: ", expected, n);
     fflush(stdout);
-    return 1;
+    return err;
 }
 
 /* ---- RFC 8439 §2.4.2 ChaCha20 encryption test vector ---------------- */
@@ -1479,8 +1480,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                                        rfc_2_8_2_aad, sizeof(rfc_2_8_2_aad), ct,
                                        sizeof(ct), tag, pt);
         if (!ok) {
-            printf("ERROR! 2.8.2 Open returned false on its own seal output\n");
-            err++;
+            ERRR("2.8.2 Open returned false on its own seal output");
         }
         if (!bytesEqual(pt, rfc_2_8_2_plaintext, sizeof(pt))) {
             err += reportMismatch("2.8.2 plaintext", pt, rfc_2_8_2_plaintext,
@@ -1506,8 +1506,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             chacha20poly1305Open(rfc_a5_key, rfc_a5_nonce, rfc_a5_aad,
                                  sizeof(rfc_a5_aad), ct, sizeof(ct), tag, pt);
         if (!ok) {
-            printf("ERROR! A.5 Open returned false\n");
-            err++;
+            ERRR("A.5 Open returned false");
         }
         if (!bytesEqual(pt, rfc_a5_plaintext, sizeof(pt))) {
             err += reportMismatch("A.5 plaintext", pt, rfc_a5_plaintext,
@@ -1534,12 +1533,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             bool ok =
                 chacha20poly1305Open(key, nonce, NULL, 0, ct, n, tag, out);
             if (!ok) {
-                printf("ERROR! round-trip Open failed size=%zu\n", n);
-                err++;
+                ERR("round-trip Open failed size=%zu", n);
             }
             if (n > 0 && memcmp(pt, out, n) != 0) {
-                printf("ERROR! round-trip mismatch size=%zu\n", n);
-                err++;
+                ERR("round-trip mismatch size=%zu", n);
             }
         }
     }
@@ -1575,14 +1572,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                 bool ok = chacha20poly1305Open(key, nonce, aad, alen, ct, n,
                                                tag, out);
                 if (!ok) {
-                    printf("ERROR! aad round-trip Open failed n=%zu aad=%zu\n",
-                           n, alen);
-                    err++;
+                    ERR("aad round-trip Open failed n=%zu aad=%zu", n, alen);
                 }
                 if (n > 0 && memcmp(pt, out, n) != 0) {
-                    printf("ERROR! aad round-trip mismatch n=%zu aad=%zu\n", n,
-                           alen);
-                    err++;
+                    ERR("aad round-trip mismatch n=%zu aad=%zu", n, alen);
                 }
             }
         }
@@ -1602,12 +1595,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* buf now holds ciphertext.  Decrypt in place. */
         bool ok = chacha20poly1305Open(key, nonce, NULL, 0, buf, n, tag, buf);
         if (!ok) {
-            printf("ERROR! in-place Open returned false\n");
-            err++;
+            ERRR("in-place Open returned false");
         }
         if (memcmp(buf, ref, n) != 0) {
-            printf("ERROR! in-place mismatch after Seal/Open\n");
-            err++;
+            ERRR("in-place mismatch after Seal/Open");
         }
     }
 
@@ -1630,8 +1621,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             bool ok = chacha20poly1305Open(key, nonce, aad, sizeof(aad), ct, n,
                                            tag, out);
             if (ok) {
-                printf("ERROR! tamper ct[%zu] accepted\n", i);
-                err++;
+                ERR("tamper ct[%zu] accepted", i);
             }
             ct[i] = saved;
         }
@@ -1655,8 +1645,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             bool ok = chacha20poly1305Open(key, nonce, aad, sizeof(aad), ct, n,
                                            bad, out);
             if (ok) {
-                printf("ERROR! tamper tag[%zu] accepted\n", i);
-                err++;
+                ERR("tamper tag[%zu] accepted", i);
             }
         }
     }
@@ -1678,8 +1667,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             bool ok = chacha20poly1305Open(key, nonce, aad, sizeof(aad), ct, n,
                                            tag, out);
             if (ok) {
-                printf("ERROR! tamper aad[%zu] accepted\n", i);
-                err++;
+                ERR("tamper aad[%zu] accepted", i);
             }
             aad[i] = saved;
         }
@@ -1698,16 +1686,14 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         memcpy(bad_nonce, nonce, 12);
         bad_nonce[0] ^= 0x01;
         if (chacha20poly1305Open(key, bad_nonce, NULL, 0, ct, n, tag, out)) {
-            printf("ERROR! bad nonce accepted\n");
-            err++;
+            ERRR("bad nonce accepted");
         }
 
         uint8_t bad_key[32];
         memcpy(bad_key, key, 32);
         bad_key[31] ^= 0x80;
         if (chacha20poly1305Open(bad_key, nonce, NULL, 0, ct, n, tag, out)) {
-            printf("ERROR! bad key accepted\n");
-            err++;
+            ERRR("bad key accepted");
         }
     }
 
@@ -1728,15 +1714,12 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         bool ok =
             chacha20poly1305Open(key, nonce, NULL, 0, ct, n, bad_tag, out);
         if (ok) {
-            printf("ERROR! bad-tag Open returned true\n");
-            err++;
+            ERRR("bad-tag Open returned true");
         }
         for (size_t i = 0; i < n; i++) {
             if (out[i] != 0) {
-                printf("ERROR! plaintext[%zu]=0x%02x not zeroed after failed "
-                       "Open\n",
-                       i, out[i]);
-                err++;
+                ERR("plaintext[%zu]=0x%02x not zeroed after a failed Open", i,
+                    out[i]);
                 break;
             }
         }
@@ -1886,16 +1869,15 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             args[i].iters = 256;
             int rc = pthread_create(&threads[i], NULL, mtWorker, &args[i]);
             if (rc != 0) {
-                printf("ERROR! pthread_create rc=%d\n", rc);
-                err++;
+                ERR("pthread_create rc=%d", rc);
             }
         }
         for (uint32_t i = 0; i < kThreads; i++) {
             pthread_join(threads[i], NULL);
             if (args[i].errors != 0) {
-                printf("ERROR! thread %u: %" PRId64 " errors\n", i,
-                       args[i].errors);
-                err += (int)args[i].errors;
+                /* one report for the thread, counting all its errors */
+                ERR("thread %u: %" PRId64 " errors", i, args[i].errors);
+                err += (int)args[i].errors - 1;
             }
         }
     }

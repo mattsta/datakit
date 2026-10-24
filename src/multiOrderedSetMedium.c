@@ -1003,6 +1003,7 @@ static bool mosmIs_(const databox *member, const databox *score, int64_t s) {
 /* Every read of 'm' against 'present'; returns the mismatches */
 static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
                       int step) {
+    int err = 0;
     int64_t order[MOSM_N];
     int64_t n = 0;
     for (int64_t s = 0; s < MOSM_N; s++) {
@@ -1011,9 +1012,9 @@ static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
         }
     }
     if ((int64_t)multiOrderedSetMediumCount(m) != n) {
-        printf("ERROR: step %d: count %zu, want %" PRId64 "\n", step,
-               multiOrderedSetMediumCount(m), n);
-        return 1;
+        ERR("step %d: count %zu, want %" PRId64, step,
+            multiOrderedSetMediumCount(m), n);
+        return err;
     }
     databox mb;
     databox sb;
@@ -1029,12 +1030,12 @@ static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
         databox ls = {{0}};
         const bool hf = multiOrderedSetMediumFirst(m, &fm, &fs);
         const bool hl = multiOrderedSetMediumLast(m, &lm, &ls);
-        printf("ERROR: step %d: first %d (score %" PRId64 "), last %d (score "
-               "%" PRId64 "); want %" PRId64 " entries, %" PRId64 "..%" PRId64
-               "; map sizes %zu/%zu\n",
-               step, hf, fs.data.i64, hl, ls.data.i64, n, n ? order[0] : -1,
-               n ? order[n - 1] : -1, mapCount(m->map[0]), mapCount(m->map[1]));
-        return 1;
+        ERR("step %d: first %d (score %" PRId64 "), last %d (score %" PRId64
+            "); want %" PRId64 " entries, %" PRId64 "..%" PRId64
+            "; map sizes %zu/%zu",
+            step, hf, fs.data.i64, hl, ls.data.i64, n, n ? order[0] : -1,
+            n ? order[n - 1] : -1, mapCount(m->map[0]), mapCount(m->map[1]));
+        return err;
     }
     for (int dir = 0; dir < 2; dir++) {
         mosIterator it;
@@ -1043,17 +1044,15 @@ static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
         while (multiOrderedSetMediumIteratorNext(&it, &mb, &sb)) {
             if (k >= n ||
                 !mosmIs_(&mb, &sb, dir == 0 ? order[k] : order[n - 1 - k])) {
-                printf("ERROR: step %d: iteration %d at %" PRId64 "\n", step,
-                       dir, k);
-                return 1;
+                ERR("step %d: iteration %d at %" PRId64, step, dir, k);
+                return err;
             }
             k++;
         }
         if (k != n) {
-            printf("ERROR: step %d: iteration %d gave %" PRId64 " of %" PRId64
-                   "\n",
-                   step, dir, k, n);
-            return 1;
+            ERR("step %d: iteration %d gave %" PRId64 " of %" PRId64, step, dir,
+                k, n);
+            return err;
         }
     }
     for (int64_t r = 0; r < n; r++) {
@@ -1068,11 +1067,11 @@ static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
             !multiOrderedSetMediumIteratorInitAtRank(m, &it, r, r % 2 == 0) ||
             !multiOrderedSetMediumIteratorNext(&it, &mb, &sb) ||
             !mosmIs_(&mb, &sb, order[r])) {
-            printf("ERROR: step %d: rank %" PRId64 "\n", step, r);
-            return 1;
+            ERR("step %d: rank %" PRId64, step, r);
+            return err;
         }
     }
-    return 0;
+    return err;
 }
 
 int multiOrderedSetMediumTest(int argc, char *argv[]) {

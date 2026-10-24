@@ -5621,14 +5621,13 @@ static int persistTestDecoderMatrix(const persistOps *ops, void *start) {
         len[n++] = randomLens[r];
     }
 
-    int bad = 0;
+    int err = 0;
     void *tok = ops->foldEnter ? ops->foldEnter() : NULL;
     /* The structure: `start` for a type without newEmpty, which the
      * matrix then owns */
     void *s = start ? start : ops->newEmpty ? ops->newEmpty() : NULL;
     if (!s) {
-        printf("ERROR: %s: no structure to apply ops to\n", ops->name);
-        bad++;
+        ERR("%s: no structure to apply ops to", ops->name);
     }
     for (int code = 0; s && code <= 256; code++) {
         if (code > 40 && code != 99 && code != 255 && code != 256) {
@@ -5645,18 +5644,16 @@ static int persistTestDecoderMatrix(const persistOps *ops, void *start) {
                 uint8_t *after = ops->snapshot(s, &afterLen);
                 if (!before || !after || afterLen != beforeLen ||
                     memcmp(before, after, beforeLen) != 0) {
-                    printf("ERROR: %s: refused op %d (payload %zu) changed "
-                           "the structure\n",
-                           ops->name, code, p);
-                    bad++;
+                    ERR("%s: refused op %d (payload %zu) changed the "
+                        "structure",
+                        ops->name, code, p);
                 }
                 zfree(after);
             }
             zfree(before);
             if (ops->validate && !ops->validate(s)) {
-                printf("ERROR: %s: op %d (payload %zu, %s) left it invalid\n",
-                       ops->name, code, p, ok ? "accepted" : "refused");
-                bad++;
+                ERR("%s: op %d (payload %zu, %s) left it invalid", ops->name,
+                    code, p, ok ? "accepted" : "refused");
             }
         }
     }
@@ -5666,7 +5663,7 @@ static int persistTestDecoderMatrix(const persistOps *ops, void *start) {
     if (ops->foldExit) {
         ops->foldExit(tok);
     }
-    return bad;
+    return err;
 }
 
 /* Rewrite the header at the start of memory store `store`, whose known
@@ -5816,18 +5813,17 @@ static int persistTestRestoreConsistent(const persistOps *ops,
     size_t againLen = 0;
     cleanerName(zfree, Bytes) uint8_t *again = ops->snapshot(r, &againLen);
     void *r2 = again ? ops->restore(again, againLen) : NULL;
-    int bad = 0;
+    int err = 0;
     if (!r2 || ops->count(r2) != n) {
-        printf("ERROR: %s: %s at %zu restored %zu elements that do not "
-               "restore again (%s)\n",
-               ops->name, how, at, n, r2 ? "count changed" : "refused");
-        bad = 1;
+        ERR("%s: %s at %zu restored %zu elements that do not restore again "
+            "(%s)",
+            ops->name, how, at, n, r2 ? "count changed" : "refused");
     }
     if (r2) {
         ops->free(r2);
     }
     ops->free(r);
-    return bad;
+    return err;
 }
 
 /* An encoder claiming a body one byte past the WAL entry limit; the size

@@ -1654,22 +1654,22 @@ static bool testIntersection(intersectFn fn, const char *fnName,
 
     size_t result = fn(a, lenA, b, lenB, out);
 
+    int err = 0;
     if (result != expectedLen) {
-        printf("[%s] FAIL: Expected length %" PRIu64 ", got %" PRIu64 "\n",
-               fnName, (uint64_t)expectedLen, (uint64_t)result);
-        return false;
+        ERR("[%s] expected length %" PRIu64 ", got %" PRIu64, fnName,
+            (uint64_t)expectedLen, (uint64_t)result);
+        return err == 0;
     }
 
     for (size_t i = 0; i < expectedLen; i++) {
         if (out[i] != expected[i]) {
-            printf("[%s] FAIL: at index %" PRIu64 ", expected %" PRIu32
-                   ", got %" PRIu32 "\n",
-                   fnName, (uint64_t)i, expected[i], out[i]);
-            return false;
+            ERR("[%s] at index %" PRIu64 ", expected %" PRIu32 ", got %" PRIu32,
+                fnName, (uint64_t)i, expected[i], out[i]);
+            break;
         }
     }
 
-    return true;
+    return err == 0;
 }
 
 /* Test empty arrays */
@@ -2072,17 +2072,15 @@ static int32_t compareResults(const char *testName, const uint32_t *out1,
                               const char *name1, const char *name2) {
     int32_t err = 0;
     if (len1 != len2) {
-        printf("  [%s] FAIL: %s returned %" PRIu64 ", %s returned %" PRIu64
-               "\n",
-               testName, name1, (uint64_t)len1, name2, (uint64_t)len2);
-        return 1;
+        ERR("[%s] %s returned %" PRIu64 ", %s returned %" PRIu64, testName,
+            name1, (uint64_t)len1, name2, (uint64_t)len2);
+        return err;
     }
     for (size_t i = 0; i < len1; i++) {
         if (out1[i] != out2[i]) {
-            printf("  [%s] FAIL: mismatch at index %" PRIu64 ": %s=%" PRIu32
-                   ", %s=%" PRIu32 "\n",
-                   testName, (uint64_t)i, name1, out1[i], name2, out2[i]);
-            err++;
+            ERR("[%s] mismatch at index %" PRIu64 ": %s=%" PRIu32
+                ", %s=%" PRIu32,
+                testName, (uint64_t)i, name1, out1[i], name2, out2[i]);
             if (err >= 10) {
                 printf("  [%s] ... (stopping after 10 errors)\n", testName);
                 break;
@@ -2110,12 +2108,12 @@ static int32_t stressTestSizes(void) {
     uint32_t *out_simd = malloc(8192 * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        printf("  FAIL: Memory allocation failed\n");
+        ERRR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
         free(out_simd);
-        return 1;
+        return err;
     }
 
     for (size_t si = 0; si < numSizes; si++) {
@@ -2162,12 +2160,12 @@ static int32_t stressTestRandom(void) {
     uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        printf("  FAIL: Memory allocation failed\n");
+        ERRR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
         free(out_simd);
-        return 1;
+        return err;
     }
 
     /* Test with different random seeds and densities */
@@ -2223,12 +2221,12 @@ static int32_t stressTestEdgeCases(void) {
     uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        printf("  FAIL: Memory allocation failed\n");
+        ERRR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
         free(out_simd);
-        return 1;
+        return err;
     }
 
     /* Test 1: No overlap - disjoint ranges */
@@ -2242,8 +2240,7 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("no_overlap", out_scalar, len_scalar, out_simd,
                               len_simd, "scalar", "intersectInt");
         if (len_scalar != 0 || len_simd != 0) {
-            printf("  [no_overlap] FAIL: Expected 0 results\n");
-            err = 1;
+            ERRR("[no_overlap] expected 0 results");
         }
     }
 
@@ -2258,11 +2255,8 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("complete_overlap", out_scalar, len_scalar,
                               out_simd, len_simd, "scalar", "intersectInt");
         if (len_scalar != 500) {
-            printf(
-                "  [complete_overlap] FAIL: Expected 500 results, got %" PRIu64
-                "\n",
+            ERR("[complete_overlap] expected 500 results, got %" PRIu64,
                 (uint64_t)len_scalar);
-            err = 1;
         }
     }
 
@@ -2281,8 +2275,7 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("single_overlap_start", out_scalar, len_scalar,
                               out_simd, len_simd, "scalar", "intersectInt");
         if (len_scalar != 1 || out_scalar[0] != 42) {
-            printf("  [single_overlap_start] FAIL: Expected [42]\n");
-            err = 1;
+            ERRR("[single_overlap_start] expected [42]");
         }
     }
 
@@ -2301,8 +2294,7 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("single_overlap_end", out_scalar, len_scalar,
                               out_simd, len_simd, "scalar", "intersectInt");
         if (len_scalar != 1 || out_scalar[0] != 99999) {
-            printf("  [single_overlap_end] FAIL: Expected [99999]\n");
-            err = 1;
+            ERRR("[single_overlap_end] expected [99999]");
         }
     }
 
@@ -2375,12 +2367,12 @@ static int32_t stressTestSkewedRatios(void) {
     uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        printf("  FAIL: Memory allocation failed\n");
+        ERRR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
         free(out_simd);
-        return 1;
+        return err;
     }
 
     /* Test ratios that trigger different algorithm selections:
@@ -2447,14 +2439,14 @@ static int32_t stressTestPlatformSIMD(void) {
     uint32_t *out_gallop = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_v1 || !out_v3 || !out_gallop) {
-        printf("  FAIL: Memory allocation failed\n");
+        ERRR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
         free(out_v1);
         free(out_v3);
         free(out_gallop);
-        return 1;
+        return err;
     }
 
     uint32_t seed = 0xCAFEBABE;

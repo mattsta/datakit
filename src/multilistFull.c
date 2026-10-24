@@ -1765,12 +1765,6 @@ static void multilistFullInsertAfter(multilistFull *ml, mflexState *state[2],
 
 CTEST_INCLUDE_GEN(str)
 
-#define yell(str, ...)                                                         \
-    do {                                                                       \
-        printf("ERROR! " str "\n\n", __VA_ARGS__);                             \
-        assert(NULL);                                                          \
-    } while (0)
-
 #define OK printf("\tOK\n")
 
 /* Build with -DML_TEST_VERBOSE=1 to print list shapes as the tests run */
@@ -1853,7 +1847,7 @@ static int multilistFullCompare(flexEntry *p1, const void *val, int vcount) {
 static int mlVerify_(multilistFull *ml, mflexState *state[2], mlNodeId count,
                      uint32_t values, uint32_t headValues,
                      uint32_t tailValues) {
-    int errors = 0;
+    int err = 0;
 
 #if 0
     printf("[");
@@ -1865,57 +1859,32 @@ static int mlVerify_(multilistFull *ml, mflexState *state[2], mlNodeId count,
 
     mlInfo(ml);
     if (values != ml->values) {
-        yell("multilistFull values wrong: expected %d, got %" PRIu64 "", values,
-             ml->values);
-        errors++;
+        ERR("multilistFull values wrong: expected %d, got %" PRIu64, values,
+            ml->values);
     }
 
-#if 0
-    if (count != ml->count) {
-        yell("mflex count wrong: expected %d, got %u", count, ml->count);
-        errors++;
-    }
-
-    if (headValues != mflexCount(mlHead(ml))) {
-        yell("multilistFull head values wrong: expected %d, got %zu",
-             headValues, mflexCount(mlHead(ml)));
-        errors++;
-    }
-
-    if (tailValues != mflexCount(mlTail(ml))) {
-        yell("multilistFull tail values wrong: expected %d, got %zu",
-             tailValues, mflexCount(mlTail(ml)));
-        errors++;
-    }
-#else
-    /* We moved from optional entry-level accounting to
-     * mandatory size-based accounting, so these checks
-     * are no longer valid. */
+    /* Node and per-end counts are not checked: accounting is by size, so
+     * the node count and the head and tail entry counts follow the bytes */
     (void)count;
     (void)headValues;
     (void)tailValues;
-#endif
 
     int loopr = itrprintr(ml, state, false);
     if (loopr != (int)ml->values) {
-        yell("multilistFull cached values not match actual values: expected "
-             "%" PRIu64 ", got actual "
-             "%d",
-             ml->values, loopr);
-        errors++;
+        ERR("multilistFull cached values do not match the actual values: "
+            "expected %" PRIu64 ", got %d",
+            ml->values, loopr);
     }
 
     int rloopr = itrprintrRev(ml, state, false);
     if (loopr != rloopr) {
-        yell("multilistFull has different forward values than reverse values!  "
-             "Forward values is %d, reverse values is %d.",
-             loopr, rloopr);
-        errors++;
+        ERR("multilistFull forward values %d differ from reverse values %d",
+            loopr, rloopr);
     }
 
-    if (ml->count == 0 && !errors) {
+    if (ml->count == 0 && !err) {
         OK;
-        return errors;
+        return err;
     }
 
     if (multilistFullAllowsCompression(ml)) {
@@ -1926,34 +1895,31 @@ static int mlVerify_(multilistFull *ml, mflexState *state[2], mlNodeId count,
             mflex *node = getNode(at);
             if (node && (at < lowRaw || at >= highRaw)) {
                 if (mflexIsCompressed(node)) {
-                    yell("Node %d is "
-                         "compressed at depth %d ((%u, %u); total "
-                         "nodes: %u; size (uncomp): %zu; size (comp): %zu)",
-                         at, ml->compress, lowRaw, highRaw, ml->count,
-                         mflexBytesUncompressed(node),
-                         mflexBytesCompressed(node));
-                    errors++;
+                    ERR("node %d is compressed at depth %d ((%u, %u); total "
+                        "nodes: %u; size (uncomp): %zu; size (comp): %zu)",
+                        at, ml->compress, lowRaw, highRaw, ml->count,
+                        mflexBytesUncompressed(node),
+                        mflexBytesCompressed(node));
                 }
             } else {
                 if (!mflexIsCompressed(node) &&
                     mflexBytesUncompressed(node) > 64) {
-                    yell("Node %d is NOT "
-                         "compressed at depth %d ((%u, %u); total "
-                         "nodes: %u; size (uncomp): %zu; size (comp): %zu)",
-                         at, ml->compress, lowRaw, highRaw, ml->count,
-                         mflexBytesUncompressed(node),
-                         mflexBytesCompressed(node));
-                    errors++;
+                    ERR("node %d is NOT compressed at depth %d ((%u, %u); "
+                        "total nodes: %u; size (uncomp): %zu; size (comp): "
+                        "%zu)",
+                        at, ml->compress, lowRaw, highRaw, ml->count,
+                        mflexBytesUncompressed(node),
+                        mflexBytesCompressed(node));
                 }
             }
         }
     }
 
-    if (!errors) {
+    if (!err) {
         OK;
     }
 
-    return errors;
+    return err;
 }
 
 /* main test, but callable from other files */
