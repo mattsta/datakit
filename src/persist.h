@@ -702,8 +702,11 @@ void persistGetConfig(const persist *p, persistConfig *config);
  * BLAKE3_KEYED the key MUST be exactly 32 bytes; shorter/longer keys
  * cause snapshot/log to fail.
  *
- * Passing NULL/0 clears any previously set key. Returns false if the
- * persist handle is NULL. Safe to call before any snapshot/log so that
+ * Passing NULL/0 clears any previously set key. Either way it replaces
+ * every earlier key source: an attached keyring and a prepared key are
+ * dropped (set a prepared form of the new key after this call). Returns
+ * false if the persist handle is NULL. Safe to call before any
+ * snapshot/log so that
  * the very first write is keyed. Re-keying is supported between writes
  * but does NOT re-key already-written data on disk; readers will see the
  * new key applied to subsequent reads. */

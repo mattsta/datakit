@@ -438,10 +438,15 @@ bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
         return false;
     }
     /* Direct-key API: detach from any attached keyring binding so the
-     * resolver doesn't override the caller's explicit choice. */
+     * resolver doesn't override the caller's explicit choice, and drop
+     * any prepared key: verification prefers a prepared key to the raw
+     * one, so one left from a keyring would verify under the old key (and
+     * point into the keyring after it is freed).  A prepared form of the
+     * new key is set after this, with persistSetIntegrityPreparedKey. */
     p->attachedKeyring = NULL;
     p->attachedKeyId = 0u;
     p->attachedGeneration = 0u;
+    p->integrityPreparedKey = NULL;
     if (key == NULL || key_len == 0) {
         p->integrityKey = NULL;
         p->integrityKeyLen = 0;
@@ -10339,6 +10344,47 @@ int persistTest(int argc, char *argv[]) {
         const persistStats zero = {0};
         if (memcmp(&stats, &zero, sizeof(stats)) != 0) {
             ERRR("ResetStats left a counter set");
+        }
+    }
+
+    TEST("a direct key replaces an attached keyring's prepared key too") {
+        /* Attached to a keyring, then given a direct key (and the keyring
+         * freed): snapshots and WAL entries written under the direct key
+         * read back under it, so verification uses no key left over from
+         * the keyring (its prepared key would win, and dangle); clearing
+         * the key then refuses keyed reads instead of using one */
+        static const uint8_t direct[] = "a direct key after the keyring";
+        persistConfig config = persistDefaultConfig();
+        config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsFlex, &config);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        {
+            hmacKeyring *ring = hmacKeyringCreate();
+            const uint8_t ringKey[32] = {0x51, 0x62, 0x73};
+            if (!hmacKeyringInstallUnsalted(ring, 5u, &hmacAlgoSHA256, ringKey,
+                                            sizeof(ringKey)) ||
+                !persistAttachKeyring(p, ring, 5u)) {
+                ERRR("keyring attach failed");
+            }
+            persistSetIntegrityKey(p, direct, sizeof(direct));
+            hmacKeyringFree(ring);
+        }
+        cleaner(flexFree) flex *empty = flexNew();
+        persistSnapshot(p, empty);
+        persistTestPushRange(p, 0, 3);
+        persistSync(p);
+        const int64_t want[] = {0, 1, 2};
+        if (!persistTestRecoversTo(p, want, 3) || !persistVerifySnapshot(p) ||
+            !persistVerifyWAL(p)) {
+            ERRR("data written under the direct key did not read back");
+        }
+        persistSetIntegrityKey(p, NULL, 0);
+        void *unkeyed = persistRecover(p);
+        if (unkeyed || persistVerifySnapshot(p)) {
+            ERRR("a cleared key still verified keyed data");
+            flexFree(unkeyed);
         }
     }
 
