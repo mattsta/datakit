@@ -31,21 +31,6 @@ static uint64_t mosRandomState = 0x12345678ABCDEF01ULL;
  * Internal Helpers
  * ==================================================================== */
 
-/* Find entry position for a score (binary search).
- * Returns the entry where we should insert, or the entry with matching score.
- * 'found' is set to true if exact score match found. */
-static __attribute__((unused)) flexEntry *
-mosFindScorePosition(const multiOrderedSetSmall *m, const databox *score,
-                     const flexEntry *middle, bool *found) {
-    *found = false;
-    flexEntry *entry = flexFindByTypeSortedWithMiddle(
-        m->map, MOS_ELEMENTS_PER_ENTRY, score, (flexEntry *)middle);
-    if (entry) {
-        *found = true;
-    }
-    return entry;
-}
-
 /* Insert (score, member) pair in sorted position */
 static void mosInsertSorted(multiOrderedSetSmall *m, const databox *score,
                             const databox *member) {
@@ -825,6 +810,43 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         }
 
         multiOrderedSetSmallFree(mos);
+    }
+
+    TEST("multiOrderedSetSmall — popping more than there are takes them all") {
+        /* Three members, either end asked for 10: all 3 come back in that
+         * end's order, the set is left empty, and a further pop gives 0 */
+        for (int fromMax = 0; fromMax <= 1; fromMax++) {
+            multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+            for (int i = 0; i < 3; i++) {
+                databox score = databoxNewSigned(i * 10);
+                char buf[8];
+                snprintf(buf, sizeof(buf), "m%d", i);
+                databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
+                multiOrderedSetSmallAdd(mos, &score, &member);
+            }
+            databox members[10];
+            databox scores[10];
+            const size_t popped =
+                fromMax ? multiOrderedSetSmallPopMax(mos, 10, members, scores)
+                        : multiOrderedSetSmallPopMin(mos, 10, members, scores);
+            bool ordered = popped == 3;
+            for (size_t j = 0; ordered && j < 3; j++) {
+                const int64_t want =
+                    fromMax ? (int64_t)(2 - j) * 10 : (int64_t)j * 10;
+                ordered = scores[j].data.i == want;
+            }
+            for (size_t j = 0; j < popped; j++) {
+                databoxFreeData(&members[j]);
+            }
+            if (!ordered || multiOrderedSetSmallCount(mos) != 0 ||
+                multiOrderedSetSmallPopMin(mos, 1, members, scores) != 0 ||
+                multiOrderedSetSmallPopMax(mos, 1, members, scores) != 0) {
+                ERR("from %s: popped %zu, ordered %d, %zu left",
+                    fromMax ? "max" : "min", popped, ordered,
+                    multiOrderedSetSmallCount(mos));
+            }
+            multiOrderedSetSmallFree(mos);
+        }
     }
 
     TEST("multiOrderedSetSmall — pop min/max") {
