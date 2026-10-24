@@ -3237,6 +3237,17 @@ int databoxTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("DATABOX_SIZE counts a 128-bit value as 16 bytes") {
+        databoxBig wide;
+        DATABOX_BIG_SIGNED_128(&wide, -((__int128)1 << 100));
+        const databox small = databoxNewSigned(-3);
+        const databox text = databoxNewBytes("twelve bytes", 12);
+        if (DATABOX_SIZE((const databox *)&wide) != 16 ||
+            DATABOX_SIZE(&small) != 8 || DATABOX_SIZE(&text) != 12) {
+            ERRR("DATABOX_SIZE misjudged a value");
+        }
+    }
+
     TEST("databoxGetBytes: every bytes-carrying type, false for the rest") {
         /* BYTES, NEVER_FREE, embedded bytes and an mdsc string give their
          * bytes; booleans, null and a 128-bit integer have no byte form

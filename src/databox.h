@@ -284,7 +284,14 @@ typedef struct databoxStr {
     uint8_t bytes[];
 } databoxStr;
 
-#define DATABOX_SIZE(box) (((box)->type >= DATABOX_BYTES) ? (box)->len : 8)
+/* Bytes a box's value takes, as a fill estimate: its length for the byte
+ * types, 16 for a 96/128-bit integer, 8 for anything else */
+#define DATABOX_SIZE(box)                                                      \
+    (((box)->type >= DATABOX_BYTES) ? (box)->len                               \
+     : ((box)->type == DATABOX_SIGNED_128 ||                                   \
+        (box)->type == DATABOX_UNSIGNED_128)                                   \
+         ? 16                                                                  \
+         : 8)
 
 #define DATABOX_CONTAINER_OFFSET(encoding)                                     \
     ((encoding) - DATABOX_CONTAINER_FLEX_MAP)
