@@ -1851,6 +1851,81 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         assert(count == 5);
     }
 
+    TEST("multiOrderedSet: IncrBy inserts, updates and refuses in every tier") {
+        static const struct {
+            int64_t n;
+            multiOrderedSetType tier;
+        } tiers[] = {{60, MOS_TYPE_SMALL},
+                     {400, MOS_TYPE_MEDIUM},
+                     {1200, MOS_TYPE_FULL}};
+        for (size_t t = 0; t < sizeof(tiers) / sizeof(*tiers); t++) {
+            const int64_t n = tiers[t].n;
+            cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                multiOrderedSetNew();
+            for (int64_t i = 0; i < n; i++) {
+                char buf[24];
+                snprintf(buf, sizeof(buf), "i%05" PRId64, i);
+                const databox member = databoxNewBytesString(buf);
+                const databox score = databoxNewSigned(i);
+                multiOrderedSetAdd(&mos, &score, &member);
+            }
+            if (mosType_(mos) != tiers[t].tier) {
+                ERR("%" PRId64 " members built tier %d", n, mosType_(mos));
+                continue;
+            }
+
+            /* A missing member joins at the delta: after the 6 members
+             * scored 0..5 ("i00005" < "newbie" at the tie) */
+            databox result = {{0}};
+            const databox five = databoxNewSigned(5);
+            const databox newbie = databoxNewBytesString("newbie");
+            if (!multiOrderedSetIncrBy(&mos, &five, &newbie, &result) ||
+                result.data.i64 != 5 ||
+                multiOrderedSetCount(mos) != (size_t)n + 1 ||
+                multiOrderedSetGetRank(mos, &newbie) != 6) {
+                ERR("tier %d: IncrBy of a missing member", tiers[t].tier);
+            }
+
+            /* An existing member moves */
+            const databox three = databoxNewSigned(3);
+            const databox ten = databoxNewBytesString("i00010");
+            databox got;
+            if (!multiOrderedSetIncrBy(&mos, &three, &ten, &result) ||
+                !multiOrderedSetGetScore(mos, &ten, &got) ||
+                got.data.i64 != 13) {
+                ERR("tier %d: IncrBy of an existing member", tiers[t].tier);
+            }
+
+            /* Up to UINT64_MAX fits; one past it, or a 96/128-bit delta,
+             * or an inf / NaN result is refused and changes nothing */
+            const databox zero = databoxNewBytesString("i00000");
+            const databox top = databoxNewUnsigned(UINT64_MAX);
+            const databox one = databoxNewSigned(1);
+            databoxBig wide;
+            DATABOX_BIG_SIGNED_128(&wide, (__int128_t)1 << 100);
+            const databox inf = DATABOX_DOUBLE(INFINITY);
+            const databox nan = DATABOX_DOUBLE(NAN);
+            const databox fresh = databoxNewBytesString("fresh");
+            const size_t before = (size_t)n + 1;
+            if (!multiOrderedSetIncrBy(&mos, &top, &zero, &result) ||
+                result.type != DATABOX_UNSIGNED_64 ||
+                result.data.u64 != UINT64_MAX ||
+                multiOrderedSetIncrBy(&mos, &one, &zero, &result) ||
+                multiOrderedSetIncrBy(&mos, (const databox *)&wide, &fresh,
+                                      &result) ||
+                multiOrderedSetIncrBy(&mos, &inf, &ten, &result) ||
+                multiOrderedSetIncrBy(&mos, &nan, &ten, &result) ||
+                multiOrderedSetCount(mos) != before ||
+                multiOrderedSetExists(mos, &fresh) ||
+                !multiOrderedSetGetScore(mos, &zero, &got) ||
+                got.type != DATABOX_UNSIGNED_64 || got.data.u64 != UINT64_MAX ||
+                !multiOrderedSetGetScore(mos, &ten, &got) ||
+                got.data.i64 != 13) {
+                ERR("tier %d: a refused IncrBy changed the set", tiers[t].tier);
+            }
+        }
+    }
+
     TEST("multiOrderedSet: score updates keep oracle order in every tier") {
         err += mosUpdateOracle_(60, MOS_TYPE_SMALL);
         err += mosUpdateOracle_(400, MOS_TYPE_MEDIUM);
