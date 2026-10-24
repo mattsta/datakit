@@ -548,20 +548,14 @@ static void *multiFenwickFlatPersistRestore_(const uint8_t *data, size_t len) {
 
 static uint8_t *multiFenwickFlatPersistEncodeOp_(persistOp op, const void *args,
                                                  size_t argc, size_t *len) {
-    const databox *const *boxes = args;
     *len = 0;
-    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2 ||
-        !boxes) {
-        /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
     }
-
-    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-    if (f) {
-        *len = flexBytes(f);
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2) {
+        return NULL; /* nothing else is replayed */
     }
-
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 static bool multiFenwickFlatPersistApplyOp_(void *structure, persistOp op,

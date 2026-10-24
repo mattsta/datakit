@@ -712,19 +712,15 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
 static uint8_t *stringPoolPersistEncodeOp_(persistOp op, const void *args,
                                            size_t argc, size_t *len) {
     *len = 0;
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
     const bool shaped = (op == PERSIST_OP_INSERT && argc == 2) ||
                         (op == PERSIST_OP_NUM_INCR && argc == 2);
-    if (!shaped || !args) {
-        /* CLEAR carries no operand */
+    if (!shaped) {
         return NULL;
     }
-
-    flex *f = flexNewFromDataboxPtrsExact(args, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 static bool stringPoolPersistApplyOp_(void *structure, persistOp op,

@@ -1207,6 +1207,28 @@ static bool persistWALWrite(persist *p, const void *data, size_t len) {
  * checksum. */
 #define PERSIST_WAL_ENTRY_PREAMBLE_LEN ((size_t)9) /* seq(8) + op(1) */
 
+uint8_t *persistOpNoBody(size_t *len) {
+    *len = 0;
+    /* @own: caller; free=zfree */
+    return zmalloc(1);
+}
+
+uint8_t *persistOpEncodeBoxes(const databox *const *boxes, size_t n,
+                              size_t *len) {
+    *len = 0;
+    if (!boxes || n == 0) {
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!boxes[i]) {
+            return NULL;
+        }
+    }
+    flex *f = flexNewFromDataboxPtrsExact(boxes, n);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
 persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
                               size_t argc) {
     if (!p || !p->walStore || !p->ops->encodeOp) {
@@ -1226,9 +1248,10 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         p->walInitialized = true;
     }
 
+    /* NULL refuses the op (an op without a body still returns a buffer) */
     size_t opDataLen = 0;
     uint8_t *opData = p->ops->encodeOp(op, args, argc, &opDataLen);
-    if (!opData && opDataLen > 0) {
+    if (!opData) {
         return PERSIST_LOG_REFUSED;
     }
 
@@ -2636,15 +2659,13 @@ static uint8_t *flexPersistEncodeOp(persistOp op, const void *args, size_t argc,
 
         /* The value as a 1-element flex, stored exactly as given, so
          * 128-bit values and numeral-looking strings replay unchanged */
-        flex *f = flexNewFromDataboxExact(box);
-        if (f) {
-            *len = flexBytes(f);
-        }
-        return (uint8_t *)f;
+        return persistOpEncodeBoxes(&box, 1, len);
     }
 
+    case PERSIST_OP_CLEAR:
+        return persistOpNoBody(len);
+
     default:
-        /* CLEAR has no operand */
         return NULL;
     }
 }
@@ -2809,6 +2830,10 @@ static uint8_t *intsetPersistEncodeOp(persistOp op, const void *args,
     case PERSIST_OP_DELETE: {
         /* args is int64_t* */
         const int64_t *value = args;
+        if (!value) {
+            *len = 0;
+            return NULL;
+        }
         *len = sizeof(int64_t);
         /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
@@ -2817,8 +2842,7 @@ static uint8_t *intsetPersistEncodeOp(persistOp op, const void *args,
     }
 
     case PERSIST_OP_CLEAR:
-        *len = 0;
-        return NULL;
+        return persistOpNoBody(len);
 
     default:
         *len = 0;
@@ -3010,9 +3034,11 @@ static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
     (void)argc;
     *len = 0;
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
     if (op != PERSIST_OP_INSERT && op != PERSIST_OP_DELETE) {
-        /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+        return NULL; /* nothing else is replayed */
     }
 
     /* args is a const databoxBig *.  Only numeric members belong in an
@@ -3024,10 +3050,6 @@ static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
         return NULL;
     }
     flex *f = flexNewFromDataboxBigExact(b);
-    if (!f) {
-        *len = 0;
-        return NULL;
-    }
     *len = flexBytes(f);
     return (uint8_t *)f;
 }
@@ -3121,6 +3143,10 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
     case PERSIST_OP_DELETE: {
         /* args is uint64_t[argc]: the position, then (a value-mode
          * INSERT) the value */
+        if (!args) {
+            *len = 0;
+            return NULL;
+        }
         const size_t words = op == PERSIST_OP_INSERT && argc == 2 ? 2 : 1;
         *len = words * sizeof(uint64_t);
         /* @own: caller; free=zfree */
@@ -3135,6 +3161,10 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
         /* args is uint64_t[2] ([start, extent]) — same fixed-width
          * raw framing as the single-position ops. */
         const uint64_t *range = args;
+        if (!range) {
+            *len = 0;
+            return NULL;
+        }
         *len = 2 * sizeof(uint64_t);
         /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
@@ -3143,8 +3173,7 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
     }
 
     case PERSIST_OP_CLEAR:
-        *len = 0;
-        return NULL;
+        return persistOpNoBody(len);
 
     default:
         *len = 0;
@@ -3330,12 +3359,17 @@ static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
      * (an mdsc-prefixed hyperloglog, the snapshot shape); the fold
      * max-merges it into the destination.  Same verbatim-bytes contract. */
     if (op == PERSIST_OP_INSERT || op == PERSIST_OP_MERGE) {
-        uint8_t *buf = NULL;
-        if (argc > 0) {
-            /* @own: caller; free=zfree */
-            buf = zmalloc(argc);
-            memcpy(buf, args, argc);
+        /* Zero bytes are a body too: the empty member, the empty union */
+        if (argc == 0) {
+            return persistOpNoBody(len);
         }
+        if (!args) {
+            *len = 0;
+            return NULL;
+        }
+        /* @own: caller; free=zfree */
+        uint8_t *buf = zmalloc(argc);
+        memcpy(buf, args, argc);
         *len = argc;
         return buf;
     }
@@ -3512,60 +3546,26 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
     /* args is const databox** for multimap operations */
     const databox *const *boxes = args;
 
+    /* Every op's body is its boxes as a self-describing exact flex (flex
+     * records each element's length, so a BYTES value need not be last):
+     *   INSERT:   the row, all argc elements
+     *   DELETE:   the key alone, or the full row (multimapDeleteFullWidth,
+     *             which picks one row of a set's key)
+     *   NUM_INCR: [key, field offset (unsigned), delta (signed)] */
     switch (op) {
-    case PERSIST_OP_INSERT: {
-        /* All argc member boxes as a self-describing flex (no [argc] byte, no
-         * per-type length games — flex records each element's length, which
-         * the old hand-rolled multi-value path could not do for a non-last
-         * BYTES value). */
-        if (argc == 0 || !boxes) {
-            *len = 0;
-            return NULL;
-        }
-        flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-        if (!f) {
-            *len = 0;
-            return NULL;
-        }
-        *len = flexBytes(f);
-        return (uint8_t *)f;
-    }
+    case PERSIST_OP_INSERT:
+    case PERSIST_OP_DELETE:
+        return persistOpEncodeBoxes(boxes, argc, len);
 
-    case PERSIST_OP_DELETE: {
-        /* One element: delete by key.  The full row (multimapDeleteFullWidth,
-         * which picks one row of a set's key): every element. */
-        if (argc < 1 || !boxes || !boxes[0]) {
+    case PERSIST_OP_NUM_INCR:
+        if (argc != 3) {
             *len = 0;
             return NULL;
         }
-        flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-        if (!f) {
-            *len = 0;
-            return NULL;
-        }
-        *len = flexBytes(f);
-        return (uint8_t *)f;
-    }
-
-    case PERSIST_OP_NUM_INCR: {
-        /* multimapFieldIncr: args are [key, field offset (unsigned), delta
-         * (signed)], stored as a 3-element flex */
-        if (argc != 3 || !boxes || !boxes[0] || !boxes[1] || !boxes[2]) {
-            *len = 0;
-            return NULL;
-        }
-        flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-        if (!f) {
-            *len = 0;
-            return NULL;
-        }
-        *len = flexBytes(f);
-        return (uint8_t *)f;
-    }
+        return persistOpEncodeBoxes(boxes, argc, len);
 
     case PERSIST_OP_CLEAR:
-        *len = 0;
-        return NULL;
+        return persistOpNoBody(len);
 
     default:
         *len = 0;
@@ -3793,30 +3793,19 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
     case PERSIST_OP_PUSH_TAIL: {
         /* args is a single const databox* — the pushed value — as a 1-element
          * flex. */
-        flex *f = flexNewFromDataboxExact((const databox *)args);
-        if (!f) {
-            *len = 0;
-            return NULL;
-        }
-        *len = flexBytes(f);
-        return (uint8_t *)f;
+        const databox *box = args;
+        return persistOpEncodeBoxes(&box, 1, len);
     }
 
     case PERSIST_OP_POP_HEAD:
     case PERSIST_OP_POP_TAIL:
     case PERSIST_OP_CLEAR:
-        /* No arguments needed */
-        *len = 0;
-        return NULL;
-
     case PERSIST_OP_ROTATE:
-        /* No arguments needed */
-        *len = 0;
-        return NULL;
+        return persistOpNoBody(len);
 
     case PERSIST_OP_DELETE_AT:
     case PERSIST_OP_TRIM:
-    case PERSIST_OP_REPLACE: {
+    case PERSIST_OP_REPLACE:
         /* args is const databox*[2]: DELETE_AT = [start, count], TRIM =
          * [head_cut, tail_cut], REPLACE = [index, value] — all as a
          * 2-element flex. */
@@ -3824,14 +3813,7 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
             *len = 0;
             return NULL;
         }
-        flex *f = flexNewFromDataboxPtrsExact((const databox *const *)args, 2);
-        if (!f) {
-            *len = 0;
-            return NULL;
-        }
-        *len = flexBytes(f);
-        return (uint8_t *)f;
-    }
+        return persistOpEncodeBoxes(args, 2, len);
 
     default:
         *len = 0;
@@ -4320,32 +4302,27 @@ static size_t multidictPersistEstimateSize(const void *structure) {
 static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
     *len = 0;
-    flex *f = NULL;
     switch (op) {
     case PERSIST_OP_INSERT:
     case PERSIST_OP_REPLACE:
         /* args is const databox*[] with [key, val] */
-        if (argc >= 2 && args) {
-            f = flexNewFromDataboxPtrsExact(args, 2);
+        if (argc < 2) {
+            return NULL;
         }
-        break;
+        return persistOpEncodeBoxes(args, 2, len);
 
-    case PERSIST_OP_DELETE:
+    case PERSIST_OP_DELETE: {
         /* args is const databox* (key only) */
-        if (args) {
-            f = flexNewFromDataboxExact(args);
-        }
-        break;
+        const databox *key = args;
+        return persistOpEncodeBoxes(&key, 1, len);
+    }
+
+    case PERSIST_OP_CLEAR:
+        return persistOpNoBody(len);
 
     default:
-        /* CLEAR has no operand */
-        break;
+        return NULL;
     }
-
-    if (f) {
-        *len = flexBytes(f);
-    }
-    return (uint8_t *)f;
 }
 
 static bool multidictPersistApplyOp(void *structure, persistOp op,
@@ -4522,20 +4499,17 @@ static uint8_t *multiarrayPersistEncodeOp(persistOp op, const void *args,
     const databox *const *boxes = args;
     *len = 0;
 
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
     const size_t want = op == PERSIST_OP_INSERT_AT   ? 2
                         : op == PERSIST_OP_UPDATE    ? 2
                         : op == PERSIST_OP_DELETE_AT ? 1
                                                      : 0;
-    if (want == 0 || argc != want || !boxes) {
-        /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+    if (want == 0 || argc != want) {
+        return NULL; /* nothing else is replayed */
     }
-
-    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(boxes, argc, len);
 }
 
 static bool multiarrayPersistApplyOp(void *structure, persistOp op,
@@ -4882,6 +4856,10 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
      * Cast it properly to access elements */
     const void *const *argsArray = args;
     const multilruPtr *handlePtr = (const multilruPtr *)argsArray[0];
+    if (!handlePtr || (nargs >= 2 && !argsArray[1])) {
+        *len = 0;
+        return NULL;
+    }
     uint64_t handle = (uint64_t)*handlePtr;
 
     switch (op) {
@@ -5138,19 +5116,16 @@ static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
     const databox *const *boxes = args;
     *len = 0;
 
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
     const size_t want = op == PERSIST_OP_INSERT   ? 2
                         : op == PERSIST_OP_DELETE ? 1
                                                   : 0;
-    if (want == 0 || argc != want || !boxes) {
-        /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+    if (want == 0 || argc != want) {
+        return NULL; /* nothing else is replayed */
     }
-
-    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(boxes, argc, len);
 }
 
 static bool multiOrderedSetPersistApplyOp(void *structure, persistOp op,
@@ -7036,6 +7011,153 @@ int persistTest(int argc, char *argv[]) {
 
         err += persistTestMlVerify(recovered, ids, n, "recovered list");
         persistClose(p);
+    }
+
+    TEST("an op the descriptor cannot replay is refused, never logged") {
+        /* Before, an encoder's refusal (NULL) read as "no body", so the op
+         * was logged and a strict recovery then failed on it forever */
+        const databox key = DATABOX_SIGNED(7);
+        const databox val = DATABOX_SIGNED(9);
+        const databox *row[2] = {&key, &val};
+        const databox *holeRow[2] = {&key, NULL};
+        const persistOp unknownOp = (persistOp)99;
+        typedef struct badCall {
+            persistOp op;
+            const void *args;
+            size_t argc;
+        } badCall;
+        const struct {
+            const persistOps *ops;
+            badCall bad[4];
+            size_t nBad;
+            bool clears; /* applyOp replays a bodyless CLEAR */
+        } cases[] = {
+            {&persistOpsFlex,
+             {{PERSIST_OP_PUSH_TAIL, NULL, 1}, {unknownOp, &key, 1}},
+             2,
+             true},
+            {&persistOpsIntset,
+             {{PERSIST_OP_INSERT, NULL, 1}, {unknownOp, NULL, 0}},
+             2,
+             true},
+            {&persistOpsIntsetBig,
+             {{PERSIST_OP_INSERT, NULL, 1}, {unknownOp, NULL, 0}},
+             2,
+             true},
+            {&persistOpsMultiroar,
+             {{PERSIST_OP_INSERT, NULL, 1},
+              {PERSIST_OP_SET_RANGE, NULL, 2},
+              {unknownOp, NULL, 0}},
+             3,
+             true},
+            {&persistOpsHyperloglog,
+             {{PERSIST_OP_INSERT, NULL, 5}, {unknownOp, NULL, 0}},
+             2,
+             false},
+            {&persistOpsMultimap,
+             {{PERSIST_OP_INSERT, row, 0},
+              {PERSIST_OP_INSERT, holeRow, 2},
+              {PERSIST_OP_NUM_INCR, row, 2},
+              {unknownOp, row, 2}},
+             4,
+             true},
+            {&persistOpsMultilist,
+             {{PERSIST_OP_PUSH_TAIL, NULL, 1},
+              {PERSIST_OP_DELETE_AT, row, 1},
+              {PERSIST_OP_REPLACE, holeRow, 2},
+              {unknownOp, NULL, 0}},
+             4,
+             true},
+            {&persistOpsMultidict,
+             {{PERSIST_OP_INSERT, row, 1},
+              {PERSIST_OP_INSERT, holeRow, 2},
+              {PERSIST_OP_DELETE, NULL, 1},
+              {unknownOp, row, 2}},
+             4,
+             true},
+            {&persistOpsMultiOrderedSet,
+             {{PERSIST_OP_INSERT, row, 1},
+              {PERSIST_OP_INSERT, holeRow, 2},
+              {unknownOp, row, 2}},
+             3,
+             true},
+            {&persistOpsMultiarray,
+             {{PERSIST_OP_INSERT_AT, row, 1}, {unknownOp, row, 2}},
+             2,
+             true},
+            {&persistOpsMultiLRU,
+             {{PERSIST_OP_INSERT, NULL, 1},
+              {PERSIST_OP_INSERT, holeRow, 2},
+              {PERSIST_OP_CLEAR, NULL, 0}},
+             3,
+             false},
+        };
+
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            const persistOps *ops = cases[c].ops;
+            persistConfig cfg = persistDefaultConfig();
+            cfg.strictRecovery = true;
+            persist *p = persistCreate(ops, &cfg);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            persistAttachWAL(p, persistStoreMemory(0));
+            void *empty = ops->newEmpty ? ops->newEmpty() : NULL;
+            if (empty) {
+                persistSnapshot(p, empty);
+                ops->free(empty);
+            }
+
+            uint64_t logged = 0;
+            for (size_t b = 0; b < cases[c].nBad; b++) {
+                const badCall *bc = &cases[c].bad[b];
+                if (persistLogOp(p, bc->op, bc->args, bc->argc) !=
+                    PERSIST_LOG_REFUSED) {
+                    ERR("%s: bad call %zu (op %d, argc %zu) was logged",
+                        ops->name, b, (int)bc->op, bc->argc);
+                    logged++;
+                }
+            }
+            if (cases[c].clears) {
+                if (persistLogOp(p, PERSIST_OP_CLEAR, NULL, 0) ==
+                    PERSIST_LOG_REFUSED) {
+                    ERR("%s: CLEAR was refused", ops->name);
+                } else {
+                    logged++;
+                }
+            }
+            if (ops == &persistOpsHyperloglog) {
+                /* The empty member and the empty union are bodies */
+                if (persistLogOp(p, PERSIST_OP_INSERT, NULL, 0) ==
+                        PERSIST_LOG_REFUSED ||
+                    persistLogOp(p, PERSIST_OP_MERGE, NULL, 0) ==
+                        PERSIST_LOG_REFUSED) {
+                    ERRR("hyperloglog: an empty member or union was refused");
+                } else {
+                    logged += 2;
+                }
+            }
+
+            persistStats stats;
+            persistGetStats(p, &stats);
+            if (stats.walEntries != logged) {
+                ERR("%s: %" PRIu64 " WAL entries, %" PRIu64 " logged",
+                    ops->name, stats.walEntries, logged);
+            }
+
+            if (ops->newEmpty) {
+                persistSync(p);
+                void *recovered = persistRecover(p);
+                persistGetStats(p, &stats);
+                if (!recovered || stats.entriesSkipped != 0) {
+                    ERR("%s: strict recovery %s, %" PRIu64 " entries skipped",
+                        ops->name, recovered ? "succeeded" : "failed",
+                        stats.entriesSkipped);
+                }
+                if (recovered) {
+                    ops->free(recovered);
+                }
+            }
+            persistClose(p);
+        }
     }
 
     TEST("multilist WAL: POP identity with 96/128-bit operands") {

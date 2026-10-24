@@ -743,16 +743,10 @@ static uint8_t *multimapAtomPersistEncodeOp_(persistOp op, const void *args,
     const bool shaped = (op == PERSIST_OP_INSERT && argc == 2) ||
                         (op == PERSIST_OP_NUM_INCR && argc == 2) ||
                         (op == PERSIST_OP_DELETE && argc == 1);
-    if (!shaped || !args) {
+    if (!shaped) {
         return NULL;
     }
-
-    flex *f = flexNewFromDataboxPtrsExact(args, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 /* The id box of a WAL op as a reference to a live atom */

@@ -1185,16 +1185,11 @@ static void hkrPersistFree(void *structure) {
 /* The one WAL op: a nonce reservation [id, limit]. */
 static uint8_t *hkrPersistEncodeOp(persistOp op, const void *args, size_t argc,
                                    size_t *len) {
-    const databox *const *boxes = args;
     *len = 0;
-    if (op != PERSIST_OP_UPDATE || argc != 2 || boxes == NULL) {
+    if (op != PERSIST_OP_UPDATE || argc != 2) {
         return NULL;
     }
-    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-    if (f != NULL) {
-        *len = flexBytes(f);
-    }
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 static bool hkrPersistApplyOp(void *structure, persistOp op,

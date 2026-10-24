@@ -551,18 +551,13 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
 static uint8_t *atomPoolPersistEncodeOp_(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
     *len = 0;
-    if ((op != PERSIST_OP_INSERT && op != PERSIST_OP_NUM_INCR) || argc != 2 ||
-        !args) {
-        /* CLEAR carries no operand */
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
+    if ((op != PERSIST_OP_INSERT && op != PERSIST_OP_NUM_INCR) || argc != 2) {
         return NULL;
     }
-
-    flex *f = flexNewFromDataboxPtrsExact(args, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 /* The pool's ops are its backend's with the pool's 1-based ids: a TREE

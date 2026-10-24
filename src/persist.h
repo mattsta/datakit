@@ -111,6 +111,7 @@
  * ============================================================================
  */
 
+#include "databox.h"
 #include "dkFormat.h"
 
 #include <stdbool.h>
@@ -459,11 +460,15 @@ struct persistOps {
 
     /* ---- WAL Operations ---- */
 
-    /* Encode a single operation to buffer.
+    /* Encode a single operation's body for the WAL.
      * op: operation type
      * args: operation-specific arguments (databox array or structure-specific)
      * argc: number of arguments
-     * Returns allocated buffer, sets *len. NULL on error. */
+     * Returns the body (freed with zfree) and sets *len.  NULL refuses the
+     * op: persistLogOp then writes nothing and returns
+     * PERSIST_LOG_REFUSED, so an op applyOp could never replay (unknown,
+     * missing or NULL arguments) never reaches the WAL.  An op that has no
+     * body (CLEAR, an end pop) returns persistOpNoBody(len). */
     uint8_t *(*encodeOp)(persistOp op, const void *args, size_t argc,
                          size_t *len);
 
@@ -877,6 +882,17 @@ typedef enum persistLogResult {
  * asks */
 persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
                               size_t argc);
+
+/* For an encodeOp implementation: the body of an op that has none (CLEAR,
+ * an end pop), a zero-length buffer the caller frees with zfree.  Sets
+ * *len to 0. */
+uint8_t *persistOpNoBody(size_t *len);
+
+/* For an encodeOp implementation: the n boxes as an exact flex (each
+ * stored as given), or NULL to refuse when boxes is NULL, n is 0 or any
+ * element is NULL.  Sets *len to the body's length (0 when refused). */
+uint8_t *persistOpEncodeBoxes(const databox *const *boxes, size_t n,
+                              size_t *len);
 
 /* Replay WAL entries, applying each to structure */
 bool persistReplayWAL(persist *p, void *structure);
