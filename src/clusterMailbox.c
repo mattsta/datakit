@@ -1837,6 +1837,68 @@ int clusterMailboxTest(int argc, char *argv[]) {
         0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xfe, 0xff};
     const hmacKeyId K1 = 100u;
 
+    TEST("Seal fits its frame exactly within SealedSize, and no smaller") {
+        /* For header fields of every varint width and payloads around
+         * the envelope's size steps: the frame fits SealedSize, Seal into
+         * exactly its own length succeeds with the same bytes, one byte
+         * less is refused and counted, and the frame ingests */
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        clusterMailbox *mb =
+            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *rx =
+            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        static const uint32_t origins[] = {1, 300, UINT32_MAX};
+        static const uint64_t seqs[] = {1, 70000, UINT64_MAX / 3};
+        static const size_t lens[] = {0, 1, 100, 127, 128, 300, 70000};
+        static uint8_t payload[70000];
+        static uint8_t frame[70200];
+        static uint8_t exact[70200];
+        memset(payload, 0x3c, sizeof(payload));
+        uint64_t refusals = 0;
+        for (size_t o = 0; o < 3; o++) {
+            for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
+                /* Increasing per origin, a different width per origin */
+                const uint64_t seq = seqs[o] + l;
+                size_t n = 0;
+                const size_t bound = clusterMailboxSealedSize(mb, lens[l]);
+                const bool ok =
+                    clusterMailboxSeal(mb, origins[o], seq, 7, payload, lens[l],
+                                       K1, frame, sizeof(frame), &n);
+                size_t n2 = 0;
+                const bool okExact =
+                    ok && clusterMailboxSeal(mb, origins[o], seq, 7, payload,
+                                             lens[l], K1, exact, n, &n2);
+                const bool shortRefused =
+                    ok && n > 0 &&
+                    !clusterMailboxSeal(mb, origins[o], seq, 7, payload,
+                                        lens[l], K1, exact, n - 1, NULL);
+                refusals += shortRefused;
+                const bool ingested =
+                    ok && clusterMailboxIngest(rx, frame, n, K1) ==
+                              CLUSTER_MAILBOX_OK;
+                if (!ok || n > bound || !okExact || n2 != n ||
+                    memcmp(frame, exact, n) != 0 || !shortRefused ||
+                    !ingested) {
+                    ERR("seal size: origin %" PRIu32 " len %zu: ok %d, %zu of "
+                        "%zu, exact %d, short refused %d, ingested %d",
+                        origins[o], lens[l], ok, n, bound, okExact,
+                        shortRefused, ingested);
+                }
+            }
+        }
+        clusterMailboxStats st;
+        clusterMailboxGetStats(mb, &st);
+        if (st.seal_param_error != refusals) {
+            ERR("seal size: %" PRIu64 " refusals counted, %" PRIu64 " made",
+                st.seal_param_error, refusals);
+        }
+        clusterMailboxFree(rx);
+        clusterMailboxFree(mb);
+        hmacKeyringFree(ring);
+    }
+
     /* Frames from a peer on a protocol this build does not read (newer
      * version, unknown must-understand feature) are refused with their
      * own result and counter, never applied; unknown ignorable features
