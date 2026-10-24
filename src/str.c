@@ -689,6 +689,38 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("StrDigitCount: every power-of-ten boundary, every width") {
+        /* 10^k - 1 has k digits and 10^k has k + 1, for each width's
+         * whole range (the 128-bit count recurses above 10^12), plus 0,
+         * each maximum and the signed extremes */
+        __uint128_t p = 10;
+        for (size_t k = 1; k <= 38; k++, p *= 10) {
+            if (StrDigitCountUInt128(p - 1) != k ||
+                StrDigitCountUInt128(p) != k + 1) {
+                ERR("128-bit count wrong at 10^%zu", k);
+            }
+            if (k <= 19 &&
+                (StrDigitCountUInt64((uint64_t)(p - 1)) != k ||
+                 (k < 19 && StrDigitCountUInt64((uint64_t)p) != k + 1))) {
+                ERR("64-bit count wrong at 10^%zu", k);
+            }
+            if (k <= 9 && (StrDigitCountUInt32((uint32_t)(p - 1)) != k ||
+                           StrDigitCountUInt32((uint32_t)p) != k + 1)) {
+                ERR("32-bit count wrong at 10^%zu", k);
+            }
+        }
+        if (StrDigitCountUInt128(0) != 1 || StrDigitCountUInt64(0) != 1 ||
+            StrDigitCountUInt32(0) != 1 ||
+            StrDigitCountUInt128(~(__uint128_t)0) != 39 ||
+            StrDigitCountUInt64(UINT64_MAX) != 20 ||
+            StrDigitCountUInt32(UINT32_MAX) != 10 ||
+            StrDigitCountInt64(INT64_MIN) != 20 ||
+            StrDigitCountInt64(INT64_MAX) != 19 ||
+            StrDigitCountInt64(-1) != 2 || StrDigitCountInt64(0) != 1) {
+            ERRR("digit count wrong at 0, a maximum or a signed extreme");
+        }
+    }
+
     TEST("StrBloom / StrBloomBig: full bit range usable") {
         /* 64-bit filter round-trip */
         StrBloomFilter small = 0;
