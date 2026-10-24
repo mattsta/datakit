@@ -417,7 +417,12 @@ bool persistAttachWAL(persist *p, persistStore *store) {
     if (!p || !store) {
         return false;
     }
+    /* A new store is readied (walked, or given a header) on first use:
+     * nothing of the previous store's position or verdict carries over */
     p->walStore = store;
+    p->walInitialized = false;
+    p->walCursorMoved = false;
+    p->walAppendOffset = 0;
     return true;
 }
 
@@ -9200,6 +9205,33 @@ int persistTest(int argc, char *argv[]) {
 #undef PERSIST_TEST_FILE_IS
         s->close(s->ctx);
         zfree(s);
+    }
+
+    TEST("a newly attached WAL store starts with its own header") {
+        /* Logging to one WAL store, then attaching an empty one: the
+         * next entries go to the new store from its start, under a header
+         * of its own, and a persist reading only that store replays them */
+        persist *p = persistCreate(&persistOpsIntset, NULL);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        cleaner(intsetFree) intset *empty = intsetNew();
+        persistSnapshot(p, empty);
+        for (int64_t v = 1; v <= 3; v++) {
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+        }
+        persistStore *second = persistStoreMemory(0);
+        persistStore *first = persistWALStore(p);
+        persistAttachWAL(p, second);
+        const int64_t v = 42;
+        const bool logged =
+            persistLogOp(p, PERSIST_OP_INSERT, &v, 1) != PERSIST_LOG_REFUSED;
+        persistSync(p);
+        if (!logged || !persistVerifyWAL(p)) {
+            ERRR("an entry on a newly attached WAL store does not verify");
+        }
+        first->close(first->ctx);
+        zfree(first);
+        persistClose(p);
     }
 
     TEST("strict recovery past a bad WAL entry fails and appends nothing") {
