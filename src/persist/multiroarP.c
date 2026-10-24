@@ -993,9 +993,123 @@ static int test_multiroarP_damagedWal(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_kinds", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiroarP value kinds, mode refusals and readers without a roar")
+
+    /* A non-negative signed value, true and false store as 5, 1 and 0
+     * (0 is a stored value, not an absence) and survive a crash; removing
+     * an empty position logs nothing and reports nothing removed; bit ops
+     * on a value roar and value ops without a value are refused */
+    ptestCleanupFiles(basePath);
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multiroarP *r = multiroarValueNewP(ctx, 8, 0, 0);
+    if (!r) {
+        ERRR("value-mode multiroarP not created");
+        persistCtxFree(ctx);
+        return err;
+    }
+    const databox five = databoxNewSigned(5);
+    const databox yes = DATABOX_BOX_TRUE;
+    const databox no = DATABOX_BOX_FALSE;
+    if (!multiroarValueSetP(r, 10, &five) || !multiroarValueSetP(r, 11, &yes) ||
+        !multiroarValueSetP(r, 12, &no)) {
+        ERRR("a signed or boolean value was refused");
+    }
+    bool removed = true;
+    if (multiroarValueRemoveP(r, 13, &removed) != PERSIST_LOG_UNCHANGED ||
+        removed) {
+        ERRR("removing an empty position was logged or reported");
+    }
+    bool changed = true;
+    if (multiroarValueSetP(r, 14, NULL) != PERSIST_LOG_REFUSED ||
+        multiroarBitSetP(r, 1, &changed) != PERSIST_LOG_REFUSED || changed ||
+        multiroarRemoveP(r, 10, &changed) != PERSIST_LOG_REFUSED || changed ||
+        multiroarBitSetRangeP(r, 0, 4) != PERSIST_LOG_REFUSED ||
+        multiroarBitClearRangeP(r, 0, 4) != PERSIST_LOG_REFUSED ||
+        multiroarValueCountP(r) != 3) {
+        ERRR("a bit op or an absent value changed a value roar");
+    }
+
+    /* Crash: no close */
+    persistCtxFree(ctx);
+    multiroarFree(r->r);
+    zfree(r);
+
+    ctx = persistCtxNew(basePath, NULL);
+    r = multiroarOpenP(ctx);
+    static const uint64_t want[3] = {5, 1, 0};
+    for (uint64_t i = 0; r && i < 3; i++) {
+        databox got = {{0}};
+        if (!multiroarValueGetP(r, 10 + i, &got) ||
+            got.type != DATABOX_UNSIGNED_64 || got.data.u != want[i]) {
+            ERR("position %" PRIu64 " did not recover as %" PRIu64, 10 + i,
+                want[i]);
+        }
+    }
+    if (!r || multiroarValueCountP(r) != 3) {
+        ERRR("recovery lost a value");
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    /* A bit roar: an empty range changes and logs nothing, and value
+     * removal is refused */
+    ctx = persistCtxNew(basePath, NULL);
+    r = multiroarNewP(ctx);
+    persistCtxStats before = {0};
+    persistCtxStats after = {0};
+    multiroarGetStatsP(r, &before);
+    if (multiroarBitSetRangeP(r, 7, 0) != PERSIST_LOG_UNCHANGED ||
+        multiroarBitClearRangeP(r, 7, 0) != PERSIST_LOG_UNCHANGED ||
+        multiroarValueRemoveP(r, 7, &removed) != PERSIST_LOG_REFUSED ||
+        removed || !multiroarIsEmptyP(r)) {
+        ERRR("an empty range or a value removal changed a bit roar");
+    }
+    multiroarGetStatsP(r, &after);
+    if (after.totalOps != before.totalOps) {
+        ERRR("an empty range was logged");
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    /* Every reader answers "nothing" for no roar; controls refuse */
+    uint64_t pos = 99;
+    persistCtxStats untouched = {.totalOps = 77};
+    multiroarCloseP(NULL);
+    multiroarGetStatsP(NULL, &untouched);
+    if (multiroarGetRawP(NULL) || multiroarBitCountP(NULL) ||
+        multiroarMemoryUsageP(NULL) || !multiroarIsEmptyP(NULL) ||
+        multiroarValueGetP(NULL, 0, NULL) || multiroarValueCountP(NULL) ||
+        multiroarBitGetP(NULL, 0) || multiroarMinP(NULL, &pos) ||
+        multiroarMaxP(NULL, &pos) || multiroarRankP(NULL, 5) ||
+        multiroarSelectP(NULL, 0, &pos) || pos != 99 || multiroarSyncP(NULL) ||
+        multiroarCompactP(NULL) ||
+        multiroarValueRemoveP(NULL, 0, NULL) != PERSIST_LOG_REFUSED ||
+        untouched.totalOps != 77) {
+        ERRR("a reader or control answered for no roar");
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 int multiroarPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiroarP_valueKindsAndModes(argc, argv);
     err += test_multiroarP_damagedWal(argc, argv);
     err += test_multiroarP_lifecycleRefusals(argc, argv);
     err += test_multiroarP_values(argc, argv);
