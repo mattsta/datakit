@@ -139,6 +139,10 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
 
     /* A live wrapper holds the context: no second structure on it */
     if (ctx->claimed) {
+        DK_DIAG(DK_DIAG_PERSIST_CTX_CLAIMED,
+                "%s is held by a live wrapper; close it before opening "
+                "another",
+                ctx->basePath);
         return false;
     }
 
@@ -146,7 +150,13 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
      * structure's snapshot and WAL, which another type's codecs would
      * misread (or write over) */
     if (ctx->p) {
-        return persistGetOps(ctx->p) == ops;
+        const persistOps *bound = persistGetOps(ctx->p);
+        if (bound != ops) {
+            DK_DIAG(DK_DIAG_PERSIST_CTX_WRONG_TYPE, "%s is bound to %s, not %s",
+                    ctx->basePath, bound->name, ops->name);
+            return false;
+        }
+        return true;
     }
 
     /* Create persist config from ctx config */
@@ -206,7 +216,12 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
 }
 
 bool persistCtxClaim(persistCtx *ctx) {
-    if (!ctx || ctx->claimed) {
+    if (!ctx) {
+        return false;
+    }
+    if (ctx->claimed) {
+        DK_DIAG(DK_DIAG_PERSIST_CTX_CLAIMED,
+                "%s is already held by a live wrapper", ctx->basePath);
         return false;
     }
     ctx->claimed = true;
@@ -337,7 +352,13 @@ bool persistCtxSync(persistCtx *ctx) {
 
 bool persistCtxCompact(persistCtx *ctx, void *structure,
                        const persistOps *ops) {
-    if (!ctx || !ctx->p || !structure || persistGetOps(ctx->p) != ops) {
+    if (!ctx || !ctx->p || !structure || !ops) {
+        return false;
+    }
+    const persistOps *bound = persistGetOps(ctx->p);
+    if (bound != ops) {
+        DK_DIAG(DK_DIAG_PERSIST_CTX_WRONG_TYPE, "%s is bound to %s, not %s",
+                ctx->basePath, bound->name, ops->name);
         return false;
     }
 
@@ -594,6 +615,9 @@ int persistCtxTest(int argc, char *argv[]) {
         };
         const size_t n = sizeof(types) / sizeof(*types);
         uint64_t untouched = 0x5e17; /* never read by a refused call */
+        /* Each refused call reports DK_DIAG_PERSIST_CTX_WRONG_TYPE once */
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
         for (size_t bound = 0; bound < n; bound++) {
             char path[PATH_MAX];
             char name[32];
@@ -604,10 +628,14 @@ int persistCtxTest(int argc, char *argv[]) {
                 break;
             }
             persistCtx *ctx = persistCtxNew(path, NULL);
+            const uint64_t beforeBind = dkDiagCount();
             if (!persistCtxInitForType(ctx, types[bound]) ||
-                !persistCtxInitForType(ctx, types[bound])) {
-                ERR("%s: could not bind", types[bound]->name);
+                !persistCtxInitForType(ctx, types[bound]) ||
+                dkDiagCount() != beforeBind) {
+                ERR("%s: could not bind, or binding reported",
+                    types[bound]->name);
             }
+            const uint64_t beforeOthers = dkDiagCount();
             size_t accepted = 0;
             for (size_t other = 0; other < n; other++) {
                 if (other == bound) {
@@ -623,8 +651,17 @@ int persistCtxTest(int argc, char *argv[]) {
                 ERR("%s: %zu calls of other types accepted", types[bound]->name,
                     accepted);
             }
+            dkDiagnostic d;
+            if (dkDiagCount() - beforeOthers != 4 * (n - 1) ||
+                !dkDiagLast(&d) || d.code != DK_DIAG_PERSIST_CTX_WRONG_TYPE ||
+                !strstr(d.message, types[bound]->name)) {
+                ERR("%s: %" PRIu64 " wrong-type reports, want %zu",
+                    types[bound]->name, dkDiagCount() - beforeOthers,
+                    4 * (n - 1));
+            }
             persistCtxFree(ctx);
         }
+        dkDiagSetPrintMode(priorPrint);
     }
 
     TEST("a live wrapper holds its context until it closes") {
@@ -639,17 +676,29 @@ int persistCtxTest(int argc, char *argv[]) {
             flexP *first = flexNewP(ctx);
             const databox one = DATABOX_SIGNED(1);
             flexPushTailP(first, &one);
+            /* Each refusal reports DK_DIAG_PERSIST_CTX_CLAIMED once */
+            const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+            dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+            const uint64_t beforeRefusals = dkDiagCount();
             flexP *second = flexNewP(ctx);
             flexP *opened = flexOpenP(ctx);
+            dkDiagnostic d;
+            const bool reported = dkDiagCount() - beforeRefusals == 2 &&
+                                  dkDiagLast(&d) &&
+                                  d.code == DK_DIAG_PERSIST_CTX_CLAIMED;
+            dkDiagSetPrintMode(priorPrint);
             const bool refused = first && !second && !opened;
             flexCloseP(second);
             flexCloseP(opened);
             flexCloseP(first);
 
+            const uint64_t beforeReopen = dkDiagCount();
             flexP *again = flexOpenP(ctx);
-            if (!refused || !again || flexCountP(again) != 1) {
-                ERR("live wrapper refused %d, reopen %s with %zu values",
-                    refused, again ? "made" : "refused",
+            if (!refused || !reported || !again || flexCountP(again) != 1 ||
+                dkDiagCount() != beforeReopen) {
+                ERR("live wrapper refused %d (reported %d), reopen %s with "
+                    "%zu values",
+                    refused, reported, again ? "made" : "refused",
                     again ? flexCountP(again) : (size_t)0);
             }
             flexCloseP(again);
