@@ -4272,6 +4272,46 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("envelope: wrap stream Final refuses misuse and poisons the stream") {
+        /* An HMAC-SHA256 stream declared for 8 payload bytes: Final after
+         * 7, into a 31-byte digest buffer, or into a NULL one is refused,
+         * and so is every later Update or Final on that stream; the same
+         * calls done right succeed */
+        static const uint8_t key[] = "stream misuse key";
+        static const uint8_t payload[8] = "payload";
+        flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_HMAC_SHA256,
+                                     .key = key,
+                                     .key_len = sizeof(key)};
+        for (int misuse = 0; misuse < 4; misuse++) {
+            flexEnvelopeWrapStream ctx;
+            uint8_t header[64];
+            uint8_t digest[32];
+            size_t hw = 0;
+            size_t written = 99;
+            if (!flexEnvelopeWrapStreamInit(&ctx, sizeof(payload), &wp, header,
+                                            sizeof(header), &hw) ||
+                !flexEnvelopeWrapStreamUpdate(&ctx, payload,
+                                              misuse == 0 ? 7 : 8)) {
+                ERR("misuse %d: stream setup failed", misuse);
+                continue;
+            }
+            const bool ok = flexEnvelopeWrapStreamFinal(
+                &ctx, misuse == 2 ? NULL : digest,
+                misuse == 1 ? 31 : sizeof(digest), &written);
+            if (misuse == 3) {
+                if (!ok || written != 32) {
+                    ERRR("a correct Final was refused");
+                }
+                continue;
+            }
+            if (ok || flexEnvelopeWrapStreamUpdate(&ctx, payload, 1) ||
+                flexEnvelopeWrapStreamFinal(&ctx, digest, sizeof(digest),
+                                            &written)) {
+                ERR("misuse %d: accepted, or the stream stayed usable", misuse);
+            }
+        }
+    }
+
     TEST("envelope: XXH3 streams only from 64-byte aligned state") {
         /* An aligned context (stack, static, _Alignas) streams XXH3 (the
          * stream differential checks the bytes); a state at an address
