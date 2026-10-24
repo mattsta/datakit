@@ -851,6 +851,96 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("the restore validator refuses each broken invariant") {
+        /* A log of 5 tuples validates; each corruption below (applied to
+         * it, then undone) is refused: a capacity that is no power of two
+         * or a mask that does not fit it, a count over the load limit or
+         * off by one, a slot whose hash is not its tuple's, a FIFO head
+         * missing or out of range, a head with a predecessor, a tail with
+         * a successor, a list that loops, a link whose prev is wrong; and
+         * an empty log whose head is set */
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
+        for (uint8_t i = 0; i < 5; i++) {
+            uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {i, 0x5a};
+            aeadNonceLogObserve(log, 7u, nonce);
+        }
+        const size_t cap = log->cap;
+        const aeadNonceLog saved = *log;
+        cleanerName(zfree, Slots) aeadNonceLogSlot *slotsCopy =
+            zmalloc(cap * sizeof(*slotsCopy));
+        cleanerName(zfree, Links) aeadNonceLogLink *linksCopy =
+            zmalloc(cap * sizeof(*linksCopy));
+        memcpy(slotsCopy, log->slots, cap * sizeof(*slotsCopy));
+        memcpy(linksCopy, log->links, cap * sizeof(*linksCopy));
+        if (!anlPersistValidate(log)) {
+            ERRR("a valid log did not validate");
+        }
+        const size_t head = log->fifo_head;
+        const size_t second = log->links[head].next;
+        for (int c = 0; c < 11; c++) {
+            switch (c) {
+            case 0:
+                log->cap = cap + 1;
+                break;
+            case 1:
+                log->mask = cap;
+                break;
+            case 2:
+                log->count = aeadNonceLogLoadLimit(cap) + 1;
+                break;
+            case 3:
+                log->count = saved.count - 1;
+                break;
+            case 4:
+                log->slots[head].hash ^= 1u;
+                break;
+            case 5:
+                log->fifo_head = AEAD_NONCE_LOG_NIL;
+                break;
+            case 6:
+                log->fifo_head = cap;
+                break;
+            case 7:
+                log->links[head].prev = second;
+                break;
+            case 8:
+                log->links[log->fifo_tail].next = head;
+                break;
+            case 9:
+                log->links[second].prev = second;
+                break;
+            case 10:
+                log->fifo_tail = AEAD_NONCE_LOG_NIL;
+                break;
+            }
+            if (anlPersistValidate(log)) {
+                ERR("corruption %d was accepted", c);
+            }
+            /* undo: restore the fields and both arrays */
+            aeadNonceLogSlot *slots = log->slots;
+            aeadNonceLogLink *links = log->links;
+            log->cap = saved.cap;
+            log->mask = saved.mask;
+            log->count = saved.count;
+            log->fifo_head = saved.fifo_head;
+            log->fifo_tail = saved.fifo_tail;
+            memcpy(slots, slotsCopy, cap * sizeof(*slotsCopy));
+            memcpy(links, linksCopy, cap * sizeof(*linksCopy));
+        }
+        if (!anlPersistValidate(log)) {
+            ERRR("the restored log did not validate");
+        }
+        cleaner(aeadNonceLogFree) aeadNonceLog *empty = aeadNonceLogCreate(0);
+        empty->fifo_head = 0;
+        if (anlPersistValidate(empty)) {
+            ERRR("an empty log with a FIFO head validated");
+        }
+        empty->fifo_head = AEAD_NONCE_LOG_NIL;
+        if (!anlPersistValidate(empty) || anlPersistValidate(NULL)) {
+            ERRR("an empty log, or NULL, validated wrongly");
+        }
+    }
+
     TEST("create/free round-trip") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         if (log == NULL) {
