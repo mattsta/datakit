@@ -3254,7 +3254,7 @@ int databoxTest(int argc, char *argv[]) {
          * and give false (not a debug assertion) */
         uint8_t text[] = "some bytes to read";
         cleaner(mdscfree) mdsc *str = mdscnew("mdsc bytes");
-        databox carriers[] = {
+        databox withBytes[] = {
             {.type = DATABOX_BYTES, .data.bytes.start = text, .len = 18},
             {.type = DATABOX_BYTES_NEVER_FREE,
              .data.bytes.start = text,
@@ -3264,14 +3264,14 @@ int databoxTest(int argc, char *argv[]) {
         };
         static const char *const want[] = {
             "some bytes to read", "some bytes to read", "tiny", "mdsc bytes"};
-        for (size_t i = 0; i < sizeof(carriers) / sizeof(*carriers); i++) {
+        for (size_t i = 0; i < sizeof(withBytes) / sizeof(*withBytes); i++) {
             uint8_t *buf = NULL;
             size_t len = 0;
             size_t size = 0;
-            if (!databoxGetBytes(&carriers[i], &buf, &len) ||
+            if (!databoxGetBytes(&withBytes[i], &buf, &len) ||
                 len != strlen(want[i]) || memcmp(buf, want[i], len) != 0 ||
-                !databoxGetSize(&carriers[i], &size) || size != len) {
-                ERR("carrier %zu: no bytes, the wrong ones, or another size",
+                !databoxGetSize(&withBytes[i], &size) || size != len) {
+                ERR("bytes box %zu: no bytes, the wrong ones, or another size",
                     i);
             }
         }
