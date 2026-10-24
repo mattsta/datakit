@@ -1,6 +1,14 @@
 #ifndef CTEST_H
 #define CTEST_H
 
+/* Tests check with assert() as well as ERR, so a test build must keep
+ * assertions: the build passes -UNDEBUG after any -DNDEBUG of the build
+ * type, and a build where NDEBUG survives fails here instead of running
+ * tests whose asserts compiled away */
+#if defined(DATAKIT_TEST) && defined(NDEBUG)
+#error "DATAKIT_TEST code needs assertions: NDEBUG must not be defined"
+#endif
+
 #include <stdio.h>
 #include <string.h> /* strchr */
 
