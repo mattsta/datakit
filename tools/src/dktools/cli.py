@@ -10,6 +10,7 @@ from . import (
     allocaudit,
     atomicaudit,
     coverage,
+    fusionscan,
     leakcheck,
     outputaudit,
     perfcompare,
@@ -123,6 +124,18 @@ def main(argv: list[str] | None = None) -> int:
         "paths", nargs="*", type=Path, help="only these files (repo-relative)"
     )
     oa.add_argument(
+        "--out", type=Path, default=None, help="report output path (default: stdout)"
+    )
+
+    fs = sub.add_parser(
+        "fusionscan",
+        help="read-then-write pairs on one container and key (two searches "
+        "where one could do), for review",
+    )
+    fs.add_argument(
+        "paths", nargs="*", type=Path, help="only these files (repo-relative)"
+    )
+    fs.add_argument(
         "--out", type=Path, default=None, help="report output path (default: stdout)"
     )
 
@@ -617,6 +630,19 @@ def _dispatch(args: argparse.Namespace) -> int:
         for s in result.by_category("unrequested"):
             print(f"  UNREQUESTED {s.path}:{s.line}: {s.call} to {s.target} in {s.context}")
         return 0 if result.clean else 1
+
+    if args.command == "fusionscan":
+        pairs = fusionscan.run_scan(args.repo, list(args.paths) or None)
+        report = fusionscan.render_report(pairs)
+        if args.out is None:
+            print(fusionscan.summary_line(pairs), file=sys.stderr)
+            sys.stdout.write(report)
+            return 0
+        print(fusionscan.summary_line(pairs))
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(report)
+        print(f"report: {args.out}")
+        return 0
 
     if args.command == "allocaudit":
         if args.jobs is not None and args.jobs < 1:

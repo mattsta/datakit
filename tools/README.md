@@ -105,6 +105,25 @@ It is enforced as the ctest test `libraryOutput` (beside
 `atomicOrdering`), and `verify` and `validate` run it on the tree they
 build (the `output` line).
 
+## fusionscan — two searches where one could do
+
+`fusionscan` lists, for review, every function in library code that reads
+a container by a key (a call whose name after its family is Find, Exists,
+Lookup, Get, Contains, Has, Search or Peek) and then writes the same
+container by the same key (Insert, Add, Delete, Remove, Replace, Set,
+Incr, Update, Push, Append, Resize, Del, Put).  Families are the header
+names under `src/`, longest first, so `multiOrderedSetExists` is family
+`multiOrderedSet`; containers and keys compare by root identifier.  A read
+whose result a write takes (the write acts where the read landed) is not
+paired.  Test-only files, in-file test code, `#if 0` and macro bodies are
+skipped.  It is a review list, not a gate: some pairs are needed (the read
+decides what the write cannot).
+
+```sh
+uv run dktools fusionscan                  # markdown table to stdout
+uv run dktools fusionscan --out report.md  # summary line, report to a file
+```
+
 The allocation audit is enforced as the ctest test `allocOwnership`
 (registered in `src/CMakeLists.txt` whenever `uv` is on PATH), so it
 runs with plain `ctest`, `datakit-check`, and `datakit-quickcheck`.
