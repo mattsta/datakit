@@ -990,6 +990,10 @@ default for 0.2-0.6% more memory; larger limits are slower for reads and
 writes alike. Rows near the limit in size (a multiroar chunk is up to a 1 KB
 bitmap) need a limit well above one row, or every submap holds one row.
 
+`dktools tune NAME` measures the same trade on the machine it runs on, for
+multimap, multiOrderedSet and multilist, and recommends a limit per family
+(see tools/README.md).
+
 ```c
 /* Many small rows, random access: shorter walks inside each submap */
 multimap *index = multimapNewLimit(2, FLEX_CAP_LEVEL_1024);

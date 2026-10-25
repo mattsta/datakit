@@ -953,48 +953,138 @@ static uint32_t perfScatter(uint32_t i) {
     return (i * 7919u) % PERF_CONTAINER_N;
 }
 
-/* A multimap's speed against its density, by sub-map size limit: 100000
- * (16-byte key, integer) rows inserted in a scattered order, then looked
- * up; each insert row's bytes column is the filled map's total bytes.  A
- * larger limit packs rows denser and walks longer inside each sub-map
- * (a flex's entries are variable-length, so its binary search steps
- * entry by entry); a smaller one routes across more sub-maps (only when
- * asked for by name). */
+/* ---- Size-limit sweeps ("<family>Limits" modules, run only by name;
+ * `dktools tune` reads them back) ----
+ *
+ * Each family's speed against its density, by size limit: PERF_CONTAINER_N
+ * values filled and used in scattered orders at every limit below.  Row
+ * names are '<op><limit bytes>' (insert1024), and each fill row's bytes
+ * column is the filled container's total bytes (dkTierStats).  A larger
+ * limit packs values denser and walks longer inside each unit (a flex's
+ * entries are variable-length, so a search steps entry by entry); a
+ * smaller one routes across more units, and anything that walks units
+ * one by one (a rank) grows with their count. */
+static const flexCapSizeLimit perfSweepLimits[] = {
+    FLEX_CAP_LEVEL_256,  FLEX_CAP_LEVEL_512,  FLEX_CAP_LEVEL_1024,
+    FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_4096, FLEX_CAP_LEVEL_8192,
+};
+
+/* One timed limit row: the body runs once for each i in [0, n); 'bytes'
+ * is read after the loop */
+#define PERF_LIMIT_ROW(module, op, limit, bytes, n, ...)                       \
+    do {                                                                       \
+        const double rowStart_ = monoNowSec();                                 \
+        for (uint32_t i = 0; i < (n); i++) {                                   \
+            __VA_ARGS__;                                                       \
+        }                                                                      \
+        const double rowSecs_ = monoNowSec() - rowStart_;                      \
+        char rowName_[48];                                                     \
+        snprintf(rowName_, sizeof(rowName_), "%s%u", (op),                     \
+                 flexOptimizationSizeLimit[(limit)]);                          \
+        emitRow((module), rowName_, (bytes), (n), rowSecs_);                   \
+    } while (0)
+
+static uint64_t perfMultimapTotal(const multimap *m) {
+    dkTierStats s;
+    multimapStats(m, &s);
+    return s.totalBytes;
+}
+
+/* multimap: (16-byte key, integer) rows inserted, looked up, deleted */
 static void benchMultimapLimits(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
-    static const struct {
-        flexCapSizeLimit limit;
-        const char *insert;
-        const char *exists;
-    } limits[] = {
-        {FLEX_CAP_LEVEL_256, "insert256", "exists256"},
-        {FLEX_CAP_LEVEL_512, "insert512", "exists512"},
-        {FLEX_CAP_LEVEL_1024, "insert1024", "exists1024"},
-        {FLEX_CAP_LEVEL_2048, "insert2048", "exists2048"},
-        {FLEX_CAP_LEVEL_4096, "insert4096", "exists4096"},
-        {FLEX_CAP_LEVEL_8192, "insert8192", "exists8192"},
-    };
     uint64_t sink = 0;
-    for (size_t l = 0; l < COUNT_ARRAY(limits); l++) {
-        cleaner(multimapFree) multimap *m =
-            multimapNewLimit(2, limits[l].limit);
-        double t0 = monoNowSec();
-        for (uint32_t i = 0; i < n; i++) {
+    for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
+        const flexCapSizeLimit limit = perfSweepLimits[l];
+        cleaner(multimapFree) multimap *m = multimapNewLimit(2, limit);
+        PERF_LIMIT_ROW(
+            "multimapLimits", "insert", limit, perfMultimapTotal(m), n,
             const databox k = perfContainerKey(keys, perfScatter(i));
             const databox v = databoxNewSigned(i);
-            const databox *row[2] = {&k, &v};
-            sink += multimapInsert(&m, row);
-        }
-        emitRow("multimapLimits", limits[l].insert, multimapBytes(m), n,
-                monoNowSec() - t0);
+            const databox *row[2] = {&k, &v}; sink += multimapInsert(&m, row));
+        PERF_LIMIT_ROW("multimapLimits", "exists", limit, 0, n,
+                       const databox k =
+                           perfContainerKey(keys, (i * 104729u) % n);
+                       sink += multimapExists(m, &k));
+        PERF_LIMIT_ROW("multimapLimits", "delete", limit, 0, n,
+                       const databox k = perfContainerKey(keys, perfScatter(i));
+                       sink += multimapDelete(&m, &k));
+    }
 
-        t0 = monoNowSec();
-        for (uint32_t i = 0; i < n; i++) {
+    perfContainerSink = sink;
+}
+
+static uint64_t perfOrderedSetTotal(const multiOrderedSet *mos) {
+    dkTierStats s;
+    multiOrderedSetStats(mos, &s);
+    return s.totalBytes;
+}
+
+/* multiOrderedSet: (integer score, 16-byte member) pairs added, scored,
+ * ranked (a rank walks sub-maps one by one) and removed */
+static void benchMultiOrderedSetLimits(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
+        const flexCapSizeLimit limit = perfSweepLimits[l];
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNewLimit(limit);
+        PERF_LIMIT_ROW("multiOrderedSetLimits", "add", limit,
+                       perfOrderedSetTotal(mos), n,
+                       const databox k = perfContainerKey(keys, perfScatter(i));
+                       const databox s = databoxNewSigned(perfScatter(i));
+                       sink += multiOrderedSetAdd(&mos, &s, &k));
+        PERF_LIMIT_ROW(
+            "multiOrderedSetLimits", "getScore", limit, 0, n,
             const databox k = perfContainerKey(keys, (i * 104729u) % n);
-            sink += multimapExists(m, &k);
-        }
-        emitRow("multimapLimits", limits[l].exists, 0, n, monoNowSec() - t0);
+            databox s = {{0}}; sink += multiOrderedSetGetScore(mos, &k, &s));
+        PERF_LIMIT_ROW("multiOrderedSetLimits", "getRank", limit, 0, n / 10,
+                       const databox k =
+                           perfContainerKey(keys, (i * 104729u) % n);
+                       sink += (uint64_t)multiOrderedSetGetRank(mos, &k));
+        PERF_LIMIT_ROW("multiOrderedSetLimits", "remove", limit, 0, n,
+                       const databox k = perfContainerKey(keys, perfScatter(i));
+                       sink += multiOrderedSetRemove(&mos, &k));
+    }
+
+    perfContainerSink = sink;
+}
+
+static void perfFillList(multilist **ml, mflexState *s);
+
+static uint64_t perfListTotal(const multilist *ml) {
+    dkTierStats s;
+    multilistStats(ml, &s);
+    return s.totalBytes;
+}
+
+/* multilist: integers pushed, read by index, deleted at scattered
+ * positions, then refilled and drained from the head as a queue */
+static void benchMultilistLimits(void) {
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
+    uint64_t sink = 0;
+    for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
+        const flexCapSizeLimit limit = perfSweepLimits[l];
+        cleaner(multilistFree) multilist *ml = multilistNew(limit, 0);
+        PERF_LIMIT_ROW("multilistLimits", "pushTail", limit, perfListTotal(ml),
+                       n,
+                       const databox b = databoxNewSigned((int64_t)i * 1000003);
+                       multilistPushByTypeTail(&ml, s, &b));
+        PERF_LIMIT_ROW("multilistLimits", "index", limit, 0, n,
+                       multilistEntry e;
+                       sink += multilistIndexGet(ml, s, perfScatter(i), &e)
+                                   ? (uint64_t)e.box.data.i
+                                   : 0);
+        PERF_LIMIT_ROW("multilistLimits", "delete", limit, 0, n,
+                       sink += multilistDelRange(
+                           &ml, s, (int64_t)((i * 7919u) % (n - i)), 1));
+        perfFillList(&ml, s);
+        PERF_LIMIT_ROW(
+            "multilistLimits", "popHead", limit, 0, n, databox got = {{0}};
+            sink += multilistPopHead(&ml, s, &got); databoxFreeData(&got));
     }
 
     perfContainerSink = sink;
@@ -1781,6 +1871,14 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfNamed("multimapLimits")) {
             benchMultimapLimits();
+        }
+
+        if (perfNamed("multiOrderedSetLimits")) {
+            benchMultiOrderedSetLimits();
+        }
+
+        if (perfNamed("multilistLimits")) {
+            benchMultilistLimits();
         }
 
         if (perfWanted("multiroar")) {

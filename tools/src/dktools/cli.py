@@ -23,6 +23,7 @@ from . import (
     procs,
     testtime,
     toolchain,
+    tune,
     validate,
     vendorsync,
     verify,
@@ -398,6 +399,34 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(pc)
 
+    tu = sub.add_parser(
+        "tune",
+        help="measure each tiered family's speed and memory against its "
+        "size limit on this machine and recommend a limit per family",
+    )
+    tu.add_argument("name", help="work-dir name under ROOT/tune")
+    tu.add_argument(
+        "--families",
+        default=None,
+        help=f"comma-separated families (default: {','.join(tune.FAMILIES)})",
+    )
+    tu.add_argument("--runs", type=int, default=5, help="sweep runs (default 5)")
+    tu.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    tu.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
+    )
+    tu.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(tu)
+
     lc = sub.add_parser(
         "leakcheck",
         help="leakage gate over the staged diff, a range, or the tree "
@@ -705,6 +734,19 @@ def _dispatch(args: argparse.Namespace) -> int:
                 runs=args.runs,
                 tolerance=args.tolerance,
                 bench_paths=args.bench_path or list(perfcompare.DEFAULT_BENCH_PATHS),
+                compiler=toolchain.from_args(args.compiler, args),
+                root=args.root,
+                jobs=args.jobs,
+            ),
+        )
+
+    if args.command == "tune":
+        return tune.run(
+            args.repo,
+            tune.TuneOptions(
+                name=args.name,
+                families=tune.parse_families(args.families),
+                runs=args.runs,
                 compiler=toolchain.from_args(args.compiler, args),
                 root=args.root,
                 jobs=args.jobs,

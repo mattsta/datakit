@@ -590,6 +590,25 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
   root, where the TSVs are generated, use
   `uv run --project tools dktools perfdiff perf.baseline.tsv perf.current.tsv`.
 
+## tune — size limits measured on this machine
+
+```sh
+uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist] [--runs N]
+```
+
+- Builds HEAD plus the changed tracked paths with the perf preset under
+  `ROOT/tune/NAME`, then runs perfRegression's size-limit sweeps
+  (`<family>Limits`: every operation at every limit from 256 B to 8 KB,
+  100,000 values, rows named `<op><limit>`) `--runs` times.
+- Prints, per family and limit, the median ns/op of each operation, the
+  filled container's total bytes, and a cost: the geometric mean of each
+  operation's ns over its best ns at any limit (1.00 = best at everything).
+- Recommends the lowest-cost limit; limits within 2% of it tie on speed,
+  and among ties the one holding the data in the fewest bytes wins (density
+  first). Also prints the machine's cache sizes (sysfs on Linux, sysctl on
+  macOS). `result.txt` and `result.json` (per family: limit, ties, costs)
+  are kept in the work directory.
+
 ## perfcompare — a change's performance against a base revision
 
 Builds a base revision and the working tree side by side and times them

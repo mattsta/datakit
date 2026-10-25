@@ -131,7 +131,10 @@ def table(
 
 
 @dataclass
-class _Side:
+class Side:
+    """One perf build: its label, tree, export directory and config
+    (perfcompare builds two, tune one)."""
+
     label: str
     tree: str
     src: Path
@@ -142,7 +145,7 @@ class _Side:
         return self.config.binary_dir(self.src) / "src" / "datakit-test"
 
 
-def _build(side: _Side, work: Path, jobs: int) -> steps.Step:
+def build_side(side: Side, work: Path, jobs: int) -> steps.Step:
     """Configure and build `side`'s datakit-test; the failing step or the
     build step."""
     configure = steps.run_logged(
@@ -195,10 +198,10 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         src = work / label
         gitutil.export_tree(repo, tree, src)
         config.check_presets_file(src)
-        sides.append(_Side(label, tree, src, config))
+        sides.append(Side(label, tree, src, config))
 
     for side in sides:
-        step = _build(side, work, jobs)
+        step = build_side(side, work, jobs)
         if not step.ok:
             sys.stdout.write(
                 f"perfcompare {name}: FAIL ({step.name} {step.describe_failure()}, "
