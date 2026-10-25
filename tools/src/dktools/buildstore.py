@@ -4,7 +4,8 @@ Every build lives under the repository's ``build/`` directory:
 
   build/<preset>/                 a CMakePresets.json configure preset
   build/dktools/<kind>/<name>/    a dktools work directory (verify,
-                                  validate, coverage, perfcompare)
+                                  validate, coverage, perfcompare,
+                                  historyscrub)
 
 A dktools work directory is *claimed* when a run makes it: a manifest
 (``.dkbuild.json``: kind, name, revision, command, created, last used,

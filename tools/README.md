@@ -179,11 +179,11 @@ uv run --project tools dktools format check --all      # every file; rewrites no
 uv run --project tools dktools format write PATH...    # just these
 ```
 
-| files      | formatter                                                                                                                     |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `.c`, `.h` | clang-format with the repository's `.clang-format`, from the clang 22 bin directory (`$DKTOOLS_LLVM_DIR`)                     |
-| `.md`      | prettier (reads `.prettierignore`)                                                                                            |
-| `.py`      | `uv tool run ruff check --select SIM,PTH,I,UP,FURB,PGH --extend-select F401 --ignore SIM102,SIM110 --fix`, then `ruff format` |
+| files      | formatter                                                                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.c`, `.h` | clang-format with the repository's `.clang-format`, from the clang 22 bin directory (`$DKTOOLS_LLVM_DIR`)                                       |
+| `.md`      | prettier (reads `.prettierignore`)                                                                                                              |
+| `.py`      | `ruff check --select SIM,PTH,I,UP,FURB,PGH --extend-select F401 --ignore SIM102,SIM110 --fix`, then `ruff format`; the ruff locked in `uv.lock` |
 
 - `deps/` is vendored and never touched. Without `PATH`s or `--all`,
   the files are those changed from HEAD plus untracked ones git does
@@ -197,6 +197,46 @@ uv run --project tools dktools format write PATH...    # just these
   build (the `format` line / `## Formatting` section). Never run the
   formatters by hand: this command is the one place their flags live
   (`src/dktools/formatting.py`).
+- Every program dktools runs is either a locked dependency of this
+  project (`ruff`, `git-filter-repo`) or part of the toolchain
+  (clang-format beside clang 22). prettier is the exception: it is
+  not a Python package and comes from `PATH`.
+
+## historyscrub — remove text from every version of files in history
+
+```sh
+uv run --project tools dktools historyscrub check   --from-commit REV [--forbid REGEX]...
+uv run --project tools dktools historyscrub rewrite --from-commit REV [--forbid REGEX]... [--name N]
+uv run --project tools dktools historyscrub map OLDHASH... [--name N]
+```
+
+- The edits are the hunks of commit `REV`: each hunk's old lines
+  become its new lines, in every version of that file in every ref.
+  `REV` then changes nothing and the rewrite drops it, so history
+  reads as if the text was never there. Only modified files, and
+  hunks that remove or replace lines, qualify.
+- `check` changes nothing. It reports each file's versions in history
+  and how many the edits change, any version still matching a
+  `--forbid` pattern after the edits (a variant the edits miss), and
+  any other path holding a hunk's old text. It exits 1 unless clean.
+- `rewrite` refuses unless `check` is clean and no tracked file has
+  changes. It then:
+  - writes a bundle of every ref to
+    `build/dktools/historyscrub/NAME/backup.bundle` (the one copy of
+    the old history; collected with the other builds after 14 days);
+  - rewrites every ref with git filter-repo, which also rewrites old
+    hashes quoted in commit messages;
+  - verifies that the check is clean, every ref still exists, only
+    the commits the edits emptied were dropped, and HEAD's tree is
+    unchanged when HEAD already held the edits;
+  - expires reflogs and prunes, so the old objects leave the
+    repository.
+
+  Remotes stay configured, and nothing is pushed.
+
+- `map` translates old commit hashes (unique prefixes) to new ones
+  through the run's commit map, for hashes recorded outside commit
+  messages.
 
 ## builds — the build inventory and its garbage collection
 

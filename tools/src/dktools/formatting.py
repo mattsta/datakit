@@ -8,7 +8,8 @@ Each kind of file has one formatter:
 - Markdown (``.md``): prettier (which reads ``.prettierignore`` from the
   directory it runs in);
 - Python (``.py``): ``ruff check --fix`` with ``RUFF_RULES``, then
-  ``ruff format``, both through ``uv tool run``.
+  ``ruff format``, the ruff locked in ``tools/uv.lock`` (dktools' own
+  environment, never a global install).
 
 ``write`` rewrites files in place and reports the files it changed;
 ``check`` changes nothing and reports the files a write would change.
@@ -24,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -257,7 +259,9 @@ def _prettier_check(root: Path, files: list[str], report: Report):
 
 
 def _ruff(*args: str) -> list[str]:
-    return [gitutil.require_program("uv"), "tool", "run", "ruff", *args]
+    """ruff from dktools' own environment (a locked dependency in
+    tools/uv.lock), never a global install."""
+    return [sys.executable, "-m", "ruff", *args]
 
 
 _RUFF_FINDING = re.compile(r"^(?P<file>[^:]+):\d+:\d+: ")

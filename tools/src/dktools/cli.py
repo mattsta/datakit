@@ -15,6 +15,7 @@ from . import (
     formatting,
     fusionscan,
     gitutil,
+    historyscrub,
     leakcheck,
     outputaudit,
     perfcompare,
@@ -192,6 +193,45 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="gc: list what would go, remove nothing",
+    )
+
+    hs = sub.add_parser(
+        "historyscrub",
+        help="remove text from every version of files in history: the "
+        "hunks of one commit, applied to every ref (local only; never pushes)",
+    )
+    hs.add_argument(
+        "action",
+        choices=("check", "rewrite", "map"),
+        help="check: what the edits would change and what they miss; "
+        "rewrite: back up, rewrite every ref, verify, prune; map: old "
+        "commit hashes to new through a rewrite's commit map",
+    )
+    hs.add_argument(
+        "hashes", nargs="*", help="map: old commit hashes (unique prefixes)"
+    )
+    hs.add_argument(
+        "--from-commit",
+        metavar="REV",
+        help="check/rewrite: the commit whose hunks are the edits",
+    )
+    hs.add_argument(
+        "--forbid",
+        action="append",
+        default=[],
+        metavar="REGEX",
+        help="check/rewrite: no version of an edited file may match this "
+        "after the edits (repeatable; catches variants the edits miss)",
+    )
+    hs.add_argument(
+        "--name", default="scrub", help="work-dir name under ROOT/historyscrub"
+    )
+    hs.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
     )
 
     fm = sub.add_parser(
@@ -745,6 +785,34 @@ def _dispatch(args: argparse.Namespace) -> int:
             print(f"{verb} {b.kind:<12} {buildstore.human(b.size):>9}  {b.path}")
         freed = sum(b.size or 0 for b in removed)
         print(f"{verb} {len(removed)} builds, {buildstore.human(freed)}")
+        return 0
+
+    if args.command == "historyscrub":
+        scratch = gitutil.scratch_root(args.root, args.repo).resolve()
+        name = gitutil.check_name(args.name)
+        if args.action == "map":
+            work = scratch / "historyscrub" / name
+            for old, new in historyscrub.translate(work, args.hashes):
+                print(f"{old} {new}")
+            return 0
+        if args.hashes:
+            raise ToolError(f"{args.action} takes no hashes")
+        if not args.from_commit:
+            raise ToolError(f"{args.action} needs --from-commit REV")
+        edits = historyscrub.edits_from_commit(args.repo, args.from_commit)
+        if args.action == "check":
+            found = historyscrub.scan(args.repo, edits, args.forbid)
+            for line in found.lines():
+                print(line)
+            print(f"historyscrub check: {'clean' if found.clean else 'NOT CLEAN'}")
+            return 0 if found.clean else 1
+        done = historyscrub.rewrite(args.repo, scratch, name, edits, args.forbid)
+        print(f"rewrote {done.rewritten} commits; dropped {len(done.dropped)}:")
+        for old in done.dropped:
+            print(f"  dropped {old[:10]}")
+        print(f"HEAD {done.old_head[:10]} -> {done.new_head[:10]}")
+        print(f"backup of the old history: {done.bundle}")
+        print("historyscrub rewrite: ok (verified, reflogs expired, pruned)")
         return 0
 
     if args.command == "format":
