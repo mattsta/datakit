@@ -181,6 +181,10 @@ DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
 
             multiOrderedSetFull *full =
                 multiOrderedSetFullNewFromMedium(medium, maps, middles);
+            /* Sub-maps split at the set's own size limit, as multimap's
+             * inner maps do (a fixed size would leave a small-limit set's
+             * Full in one sub-map, and a large-limit set's sub-maps short) */
+            full->maxMapSize = flexOptimizationSizeLimit[limit];
 
             *m = MOS_TAG_(full, MOS_TYPE_FULL);
             *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
@@ -2421,17 +2425,12 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                             s.dataBytes + sizeof(multiOrderedSetMedium) &&
                         s.dataBytes == multiOrderedSetBytes(mos);
             } else {
-                /* Full's sub-maps split at maxMapSize, not at the set's
-                 * size limit, so a set promoted at 3 x 64 bytes still holds
-                 * one sub-map here */
+                /* Full's sub-maps split at the set's own size limit */
                 const multiOrderedSetFull *f = mosf(mos);
                 shape = s.units == f->mapCount && s.units >= 1 &&
-                        s.unitLimit == f->maxMapSize &&
+                        s.unitLimit == limit && f->maxMapSize == limit &&
                         s.totalBytes > multiOrderedSetBytes(mos) &&
                         s.dataBytes < multiOrderedSetBytes(mos);
-                printf("    Full after promotion: %u sub-map(s), %" PRIu64
-                       " data bytes, %" PRIu64 " total\n",
-                       s.units, s.dataBytes, s.totalBytes);
             }
             if (s.tier != want || s.count != (uint64_t)next || !shape ||
                 s.totalBytes <= s.dataBytes) {

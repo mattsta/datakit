@@ -37,11 +37,11 @@ a wide value lands when it is read.
 
 The set promotes itself as it grows (never back; `Reset` empties it):
 
-| tier   | layout                                                                                      | member lookup | finding a score's place                      |
-| ------ | ------------------------------------------------------------------------------------------- | ------------- | -------------------------------------------- |
-| Small  | one flex of `[score, member, ...]`                                                          | scan          | binary search                                |
-| Medium | two flexes split by score                                                                   | scan of both  | binary search                                |
-| Full   | a multidict member -> score, plus sub-maps (flexes of about 4 KB) holding the rows in order | hash          | binary search to the sub-map, then within it |
+| tier   | layout                                                                                                                       | member lookup | finding a score's place                      |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------- | -------------------------------------------- |
+| Small  | one flex of `[score, member, ...]`                                                                                           | scan          | binary search                                |
+| Medium | two flexes split by score                                                                                                    | scan of both  | binary search                                |
+| Full   | a multidict member -> score, plus sub-maps (flexes split at the set's size limit, 2 KB by default) holding the rows in order | hash          | binary search to the sub-map, then within it |
 
 In Small and Medium a rank by member is a scan, as the member lookup is.
 
@@ -79,9 +79,10 @@ grow with the sub-map's size.
 | `PopMax`                                                | from the last sub-map, row by row (deleting from a tail moves nothing)                                                        |
 | iteration                                               | O(1) per step                                                                                                                 |
 
-Rank positioning is linear in the number of sub-maps (about one per 4 KB of
-rows). That is cheap through hundreds of thousands of members; a set far
-larger that is rank-heavy would want per-node row totals (not built).
+Rank positioning is linear in the number of sub-maps (about one per size
+limit of rows: 2 KB by default). That is cheap through hundreds of
+thousands of members; a set far larger that is rank-heavy would want
+per-node row totals (not built), or a larger size limit.
 
 Measured numbers per operation live in
 [PERFORMANCE_BASELINES.md](../../PERFORMANCE_BASELINES.md), and
