@@ -150,6 +150,7 @@ static inline double mosDataboxToDouble(const databox *box) {
 
 DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
     const uint32_t limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = COMPRESS_DEPTH(*m); /* carried into every tier */
     const multiOrderedSetType type = mosType_(*m);
 
     if (type == MOS_TYPE_SMALL) {
@@ -165,7 +166,7 @@ DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
                 small, small->map, small->middle);
             /* Small struct freed by NewFromSmall, just update pointer */
             *m = MOS_TAG_(medium, MOS_TYPE_MEDIUM);
-            *m = SET_COMPRESS_LIMIT(*m, limit);
+            *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
         }
     } else if (type == MOS_TYPE_MEDIUM) {
         multiOrderedSetMedium *medium = mosm(*m);
@@ -182,11 +183,87 @@ DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
                 multiOrderedSetFullNewFromMedium(medium, maps, middles);
 
             *m = MOS_TAG_(full, MOS_TYPE_FULL);
-            *m = SET_COMPRESS_LIMIT(*m, limit);
+            *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
         }
     }
     /* Full tier does not promote further */
 }
+
+/* After a removal: move a drained Full or Medium down to the tier its
+ * rows fit with room to grow, as multimap does.  L is the size limit's
+ * cutoff; tiers grow past L (Small) and 3L (Medium) and shrink well
+ * below: Full (three sub-maps at most) -> Medium at <= 1.5L, or straight
+ * to Small at <= L/2; Medium -> Small at <= L/2.  O(1) unless it moves;
+ * rows move once, bounded by 1.5L.  A pooled Full (rows hold pool ids)
+ * stays Full. */
+static void mosShrinkIfNecessary(multiOrderedSet **m) {
+    const uint32_t limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = COMPRESS_DEPTH(*m);
+    const size_t L = flexOptimizationSizeLimit[limit];
+    flex *rows = NULL;
+
+    switch (mosType_(*m)) {
+    case MOS_TYPE_FULL: {
+        multiOrderedSetFull *full = mosf(*m);
+        dkTierStats s;
+        if (full->mapCount > 3) {
+            return;
+        }
+        multiOrderedSetFullStats(full, &s);
+        if (s.dataBytes > L + L / 2 ||
+            !(rows = multiOrderedSetFullTakeRows(full))) {
+            return;
+        }
+        break;
+    }
+    case MOS_TYPE_MEDIUM: {
+        multiOrderedSetMedium *medium = mosm(*m);
+        if (multiOrderedSetMediumBytes(medium) > L / 2) {
+            return;
+        }
+        /* map[0] holds only scores below map[1]'s: appending keeps order */
+        rows = medium->map[0];
+        flexBulkAppendFlex(&rows, medium->map[1]);
+        flexFree(medium->map[1]);
+        zfree(medium);
+        break;
+    }
+    default:
+        return;
+    }
+
+    /* @own: caller; free=multiOrderedSetFree */
+    multiOrderedSetSmall *small = multiOrderedSetSmallNew();
+    flexFree(small->map);
+    small->map = rows;
+    small->middle =
+        flexCount(rows)
+            ? (uint32_t)(flexMiddle(rows, MOS_ELEMENTS_PER_ENTRY) - rows)
+            : FLEX_EMPTY_SIZE;
+    *m = MOS_TAG_(small, MOS_TYPE_SMALL);
+
+    /* Rows above L/2 (from a Full) belong in Medium, split as an upgrade
+     * splits them */
+    if (flexBytes(rows) > L / 2 &&
+        multiOrderedSetSmallCount(small) >= MOS_MIN_ENTRIES_FOR_PROMOTION) {
+        multiOrderedSetMedium *medium =
+            multiOrderedSetMediumNewFromSmall(small, small->map, small->middle);
+        *m = MOS_TAG_(medium, MOS_TYPE_MEDIUM);
+    }
+    *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
+}
+
+/* A removal entry point: the tier's call, then a shrink when it removed
+ * ('type' is the call's result: bool, or a count of rows removed) */
+#define MOS_REMOVE_(type, m, func, ...)                                        \
+    do {                                                                       \
+        type removed_;                                                         \
+        MOS_SETRESULT(removed_, *(m), func, __VA_ARGS__);                      \
+        if (removed_) {                                                        \
+            mosShrinkIfNecessary(m);                                           \
+        }                                                                      \
+        return removed_;                                                       \
+    } while (0)
 
 /* ====================================================================
  * Creation / Destruction
@@ -356,38 +433,37 @@ bool multiOrderedSetIncrBy(multiOrderedSet **mos, const databox *delta,
  * ==================================================================== */
 
 bool multiOrderedSetRemove(multiOrderedSet **mos, const databox *member) {
-    /* TODO: auto-shrink behavior? */
-    MOS_RETURN(*mos, Remove, member);
+    MOS_REMOVE_(bool, mos, Remove, member);
 }
 
 bool multiOrderedSetRemoveGetScore(multiOrderedSet **mos, const databox *member,
                                    databox *score) {
-    MOS_RETURN(*mos, RemoveGetScore, member, score);
+    MOS_REMOVE_(bool, mos, RemoveGetScore, member, score);
 }
 
 bool multiOrderedSetRemoveIf(multiOrderedSet **mos, const databox *member,
                              flexProceed *proceed, void *ctx) {
-    MOS_RETURN(*mos, RemoveIf, member, proceed, ctx);
+    MOS_REMOVE_(bool, mos, RemoveIf, member, proceed, ctx);
 }
 
 size_t multiOrderedSetRemoveRangeByScore(multiOrderedSet **mos,
                                          const mosRangeSpec *range) {
-    MOS_RETURN(*mos, RemoveRangeByScore, range);
+    MOS_REMOVE_(size_t, mos, RemoveRangeByScore, range);
 }
 
 size_t multiOrderedSetRemoveRangeByRank(multiOrderedSet **mos, int64_t start,
                                         int64_t stop) {
-    MOS_RETURN(*mos, RemoveRangeByRank, start, stop);
+    MOS_REMOVE_(size_t, mos, RemoveRangeByRank, start, stop);
 }
 
 size_t multiOrderedSetPopMin(multiOrderedSet **mos, size_t count,
                              databox *members, databox *scores) {
-    MOS_RETURN(*mos, PopMin, count, members, scores);
+    MOS_REMOVE_(size_t, mos, PopMin, count, members, scores);
 }
 
 size_t multiOrderedSetPopMax(multiOrderedSet **mos, size_t count,
                              databox *members, databox *scores) {
-    MOS_RETURN(*mos, PopMax, count, members, scores);
+    MOS_REMOVE_(size_t, mos, PopMax, count, members, scores);
 }
 
 /* ====================================================================
@@ -2364,6 +2440,36 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                     want, s.tier, s.units, s.count, s.unitLimit, s.dataBytes,
                     s.totalBytes);
             }
+        }
+    }
+
+    TEST("multiOrderedSet: the compress setting survives growth, shrink and "
+         "copy") {
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNewCompress(FLEX_CAP_LEVEL_64);
+        int64_t next = 0;
+        while (mosType_(mos) != MOS_TYPE_FULL) {
+            const databox b = databoxNewSigned(next++);
+            multiOrderedSetAdd(&mos, &b, &b);
+        }
+        if (COMPRESS_DEPTH(mos) != 1 ||
+            COMPRESS_LIMIT(mos) != FLEX_CAP_LEVEL_64) {
+            ERR("Full kept depth %u limit %u", (uint32_t)COMPRESS_DEPTH(mos),
+                (uint32_t)COMPRESS_LIMIT(mos));
+        }
+        while (next > 1) {
+            const databox b = databoxNewSigned(--next);
+            multiOrderedSetRemove(&mos, &b);
+        }
+        if (mosType_(mos) != MOS_TYPE_SMALL || COMPRESS_DEPTH(mos) != 1 ||
+            COMPRESS_LIMIT(mos) != FLEX_CAP_LEVEL_64) {
+            ERR("drained to tier %d with depth %u limit %u", mosType_(mos),
+                (uint32_t)COMPRESS_DEPTH(mos), (uint32_t)COMPRESS_LIMIT(mos));
+        }
+        cleaner(multiOrderedSetFree) multiOrderedSet *copy =
+            multiOrderedSetCopy(mos);
+        if (COMPRESS_DEPTH(copy) != 1) {
+            ERRR("a copy lost the compress setting");
         }
     }
 

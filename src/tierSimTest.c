@@ -305,6 +305,7 @@ static const simOps simFamilies[] = {
      .verify = mmVerify},
     {.name = "multiOrderedSet",
      .valueIsKey = true,
+     .shrinks = true,
      .coalesces = true,
      .growTo = 2000,
      .make = mosMake,

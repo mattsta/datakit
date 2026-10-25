@@ -889,6 +889,35 @@ void multiOrderedSetFullFree(multiOrderedSetFull *m) {
     zfree(m);
 }
 
+/* Hand a pool-free Full's rows over as one flex (its sub-maps appended in
+ * order: every row of a sub-map sorts before the next's) and free the
+ * rest of it: member index, per-sub-map arrays and range boxes, struct.
+ * NULL, with nothing freed, for a pooled set (its rows hold pool ids,
+ * which only Full resolves). */
+flex *multiOrderedSetFullTakeRows(multiOrderedSetFull *m) {
+    if (m->pool) {
+        return NULL;
+    }
+
+    flex *rows = getSubMap(m, 0);
+    for (uint32_t i = 1; i < m->mapCount; i++) {
+        flex *next = getSubMap(m, i);
+        flexBulkAppendFlex(&rows, next);
+        flexFree(next);
+    }
+
+    multidictFree(m->memberIndex);
+    if (m->mdClass) {
+        multidictDefaultClassFree(m->mdClass);
+    }
+    rangeBoxReleaseAll(m);
+    multiarrayNativeFree(m->scoreMap);
+    multiarrayNativeFree(m->middle);
+    multiarrayNativeFree(m->rangeBox);
+    zfree(m);
+    return rows;
+}
+
 void multiOrderedSetFullReset(multiOrderedSetFull *m) {
     /* If using pool, release all member IDs from scoreMaps */
     if (m->pool) {
