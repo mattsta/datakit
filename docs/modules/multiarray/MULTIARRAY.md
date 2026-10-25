@@ -1,5 +1,8 @@
 # multiarray - Scale-Aware Dynamic Array
 
+The lifecycle, `multiarrayStats`, the tier rules and `multiarrayCompact` are
+shared with the other tiered containers: [Tiered containers](../core/TIERS.md).
+
 ## Overview
 
 `multiarray` is a **scale-aware dynamic array** that transitions between internal

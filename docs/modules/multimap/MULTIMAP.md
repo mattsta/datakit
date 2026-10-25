@@ -1,5 +1,9 @@
 # multimap - Scale-Aware Sorted Key-Value Store
 
+The lifecycle, `multimapStats`, the size-limit default, the tier rules and
+`multimapCompact` are shared with the other tiered containers:
+[Tiered containers](../core/TIERS.md).
+
 ## Overview
 
 `multimap` is a **self-optimizing sorted key-value container** that automatically

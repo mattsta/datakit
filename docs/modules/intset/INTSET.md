@@ -1,5 +1,8 @@
 # intset - Variable-Width Integer Set
 
+The lifecycle, `intsetStats`, the tier rules and `intsetCompact` are shared
+with the other tiered containers: [Tiered containers](../core/TIERS.md).
+
 ## Overview
 
 `intset` is a **memory-efficient sorted set of signed integers** built as a

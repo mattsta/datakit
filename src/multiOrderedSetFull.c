@@ -446,12 +446,12 @@ static void reclaimEmptySubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
     dropSubMapSlot_(m, mapIdx);
 }
 
-/* Merge sub-map 'mapIdx + 1' into 'mapIdx' when both fit in three quarters
- * of a sub-map: every row of a sub-map sorts before every row of the
- * next, so appending keeps the order.  The quarter of headroom keeps a
- * score update (a remove, then an insert) from merging a pair that its
- * insert splits again: a split leaves halves summing past maxMapSize,
- * which deletes must shrink by a quarter before they merge. */
+/* Merge sub-map 'mapIdx + 1' into 'mapIdx' when both fit in half a
+ * sub-map: every row of a sub-map sorts before every row of the next, so
+ * appending keeps the order.  The headroom keeps a score update (a
+ * remove, then an insert) from merging a pair that its insert splits
+ * again: a split leaves halves summing past maxMapSize, which deletes
+ * must shrink by half before they merge. */
 static bool mergeSubMapWithNext_(multiOrderedSetFull *m, uint32_t mapIdx) {
     if (mapIdx + 1 >= m->mapCount) {
         return false;

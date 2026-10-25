@@ -5,6 +5,10 @@ ascending score, and a member's score and rank are found by the member. It
 answers what a sorted map cannot cheaply: "what is X's score", "what rank is
 X", alongside score ranges, ranks and set algebra.
 
+The lifecycle, `multiOrderedSetStats`, the size-limit default, the tier rules
+and `multiOrderedSetCompact` are shared with the other tiered containers:
+[Tiered containers](../core/TIERS.md).
+
 ```c
 #include "multiOrderedSet.h"
 

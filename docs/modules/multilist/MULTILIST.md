@@ -1,5 +1,9 @@
 # multilist - Scale-Aware Linked List
 
+The lifecycle, `multilistStats`, the size-limit default, the tier rules and
+`multilistCompact` are shared with the other tiered containers:
+[Tiered containers](../core/TIERS.md).
+
 ## Overview
 
 `multilist` is a **high-performance linked list** that stores multiple elements per node instead of one element per node. By packing multiple values into compact memory arrays (flex), multilist reduces pointer overhead and improves cache locality compared to traditional linked lists.

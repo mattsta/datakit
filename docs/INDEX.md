@@ -15,6 +15,7 @@
 
 - [databox](modules/core/DATABOX.md) - Universal 16-byte container for any data type
 - [Diagnostics (dkDiag)](modules/core/DIAGNOSTICS.md) - How datakit reports misuse and conditions without printing
+- [Tiered containers](modules/core/TIERS.md) - The lifecycle, stats, size-limit defaults, tier rules and Compact shared by multimap, multiOrderedSet, multilist, multiarray and intset
 
 Core platform plumbing has no standalone guide; read the headers
 directly: `src/datakit.h` (platform abstraction and shared macros),
