@@ -893,6 +893,28 @@ multimapReset(&m);  /* reuse the container */
 multimapFree(m);    /* destroy */
 ```
 
+### Compacting
+
+```c
+void multimapCompact(multimap **m);
+void multimapCompactWithReference(multimap **m,
+                                  const multimapAtom *referenceContainer);
+```
+
+Inserts split Full's inner maps in half, so a map built by inserts holds
+inner maps about half to three-quarters full. `multimapCompact()` refills
+each inner map to the limit with the leading rows of the next (every map
+but the last ends within one row of the limit), then moves the map to the
+smallest tier that holds its bytes without growing: Small at L or less,
+Medium at 3L or less. Rows and their order are unchanged. It costs
+O(bytes) and rewrites `*m`; the next insert may split or grow again. A map
+of references uses `multimapCompactWithReference()`, which resolves the
+keys that begin each inner map.
+
+Compacting 3,000 two-integer rows at a 512-byte limit packs 90 inner maps
+into 48 and the map from 26,480 to 25,178 bytes (the multimap test prints
+these figures).
+
 `multimapDump()` returns a freshly allocated `flex` containing every row
 concatenated; free it with `flexFree()`.
 

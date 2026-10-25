@@ -478,6 +478,82 @@ DK_INLINE_ALWAYS bool mergeSimple(multimapFull *m, multimapFullIdx mapIdx,
     return false;
 }
 
+/* Bytes a refill leaves unused below maxSize: room for the flex header to
+ * grow as its byte count does, so a refilled map is never over the limit */
+#define MULTIMAP_FULL_COMPACT_SLACK 8
+
+/* Fill every inner map, left to right, to its limit with the leading rows
+ * of the map after it; a map whose rows all fit joins its neighbour.  The
+ * rows and their order are unchanged, only where maps begin moves, so
+ * every map but the last ends within one row of maxSize.  A map whose
+ * head moved gets its range box refreshed (through the references for a
+ * map of references). */
+DK_INLINE_ALWAYS void
+multimapFullCompact_(multimapFull *m, const bool useReference,
+                     const multimapAtom *referenceContainer) {
+    const multimapElements elements = m->elementsPerEntry;
+    multimapFullIdx i = 0;
+    while (i + 1 < m->count) {
+        flex **map = getMapPtr(m, i);
+        flex **next = getMapPtr(m, i + 1);
+        const size_t have = flexBytes(*map);
+        if (have + flexBytes(*next) <= m->maxSize) {
+            flexBulkAppendFlex(map, *next);
+            flexFree(*next);
+            SET_MIDDLE_FORCE(m, i, *map);
+            reallocDecrCount(m, i + 1);
+            continue;
+        }
+
+        /* The most leading rows of 'next' that fit in the room left (it
+         * keeps at least one row: all of them fitting merged above) */
+        const size_t room =
+            m->maxSize > have + MULTIMAP_FULL_COMPACT_SLACK
+                ? m->maxSize - have - MULTIMAP_FULL_COMPACT_SLACK
+                : 0;
+        const size_t total = flexCount(*next) / elements;
+        const uint8_t *head = (const uint8_t *)flexHead(*next);
+        flexEntry *fe = flexHead(*next);
+        size_t rows = 0;
+        while (rows + 1 < total) {
+            flexEntry *after = fe;
+            for (multimapElements e = 0; e < elements; e++) {
+                after = flexNext(*next, after);
+            }
+            if ((size_t)((const uint8_t *)after - head) > room) {
+                break;
+            }
+            fe = after;
+            rows++;
+        }
+
+        if (rows) {
+            flex *moved = flexSplitRange(next, 0, (uint32_t)(rows * elements));
+            flexBulkAppendFlex(map, moved);
+            flexFree(moved);
+            SET_MIDDLE_FORCE(m, i, *map);
+            SET_MIDDLE_FORCE(m, i + 1, *next);
+            if (useReference) {
+                updateRangeBoxForIdxWithReference(m, i + 1, *next,
+                                                  referenceContainer);
+            } else {
+                updateRangeBoxForIdx(m, i + 1, *next);
+            }
+        }
+
+        i++;
+    }
+}
+
+void multimapFullCompact(multimapFull *m) {
+    multimapFullCompact_(m, false, NULL);
+}
+
+void multimapFullCompactWithReference(multimapFull *m,
+                                      const multimapAtom *referenceContainer) {
+    multimapFullCompact_(m, true, referenceContainer);
+}
+
 /* Iterate over all maps and conform them (pairwise) to <= maxSize */
 #if 0
 DK_STATIC DK_FN_UNUSED void conformMapsMerge(multimapFull *m) {

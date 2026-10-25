@@ -244,6 +244,18 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
  * and compression, freeing a larger tier's structures (a Small keeps its
  * allocation).  Rewrites '*m'. */
 void multimapReset(multimap **m);
+/* Pack the rows into the densest layout they allow: each of Full's inner
+ * maps fills to the limit with the leading rows of the next (so every map
+ * but the last ends within a row of the limit), then the map moves to the
+ * smallest tier that holds its bytes without growing (Small at L or less,
+ * Medium at 3L or less; L is the limit's byte cutoff).  Rows and their
+ * order are unchanged; the next insert may grow it again.  O(bytes);
+ * rewrites '*m'.  A map of references compacts with
+ * multimapCompactWithReference, which resolves the keys that begin each
+ * inner map. */
+void multimapCompact(multimap **m);
+void multimapCompactWithReference(
+    multimap **m, const struct multimapAtom *referenceContainer);
 void multimapFree(multimap *m);
 
 void multimapEntryResize(multimap **m, const databox *key, size_t newSize);

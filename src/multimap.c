@@ -514,11 +514,18 @@ static void multimapUpgradeIfNecessary(multimap **m, const uint_fast32_t depth,
  *   Full (three inner maps at most) -> Medium at <= 1.5L, or straight to
  *   Small at <= L/2;  Medium -> Small at <= L/2.
  * The check is O(1): Full is only measured once it is down to three
- * inner maps.  Rows move once, in O(bytes) bounded by 1.5L. */
-static void multimapShrinkIfNecessary_(multimap **m) {
+ * inner maps.  Rows move once, in O(bytes) bounded by 1.5L.
+ *
+ * multimapMoveDown_ is the move itself: a Full of at most 'fullMaps' inner
+ * maps and 'fullBytes' bytes, or a Medium of at most 'smallBytes', becomes
+ * a Small; rows past 'smallBytes' then split into a Medium.  A shrink
+ * passes the thresholds above, multimapCompact the growth points
+ * themselves (3L, L).  Neither builds Full's range boxes, so both are
+ * right for maps of references. */
+DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
+                                        size_t fullBytes, size_t smallBytes) {
     const uint32_t depth = COMPRESS_DEPTH(*m);
     const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
-    const size_t L = flexOptimizationSizeLimit[limit];
     flex *rows = NULL;
     multimapElements elementsPerEntry;
     bool isSet;
@@ -526,7 +533,7 @@ static void multimapShrinkIfNecessary_(multimap **m) {
     switch (multimapType_(*m)) {
     case MULTIMAP_TYPE_FULL: {
         multimapFull *full = mmf(*m);
-        if (full->count > 3 || multimapFullBytes(full) > L + L / 2) {
+        if (full->count > fullMaps || multimapFullBytes(full) > fullBytes) {
             return;
         }
         elementsPerEntry = full->elementsPerEntry;
@@ -538,7 +545,7 @@ static void multimapShrinkIfNecessary_(multimap **m) {
     }
     case MULTIMAP_TYPE_MEDIUM: {
         multimapMedium *medium = mmm(*m);
-        if (multimapMediumBytes(medium) > L / 2) {
+        if (multimapMediumBytes(medium) > smallBytes) {
             return;
         }
         elementsPerEntry = medium->elementsPerEntry;
@@ -561,14 +568,37 @@ static void multimapShrinkIfNecessary_(multimap **m) {
     multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
     *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_SMALL);
 
-    /* Rows above L/2 (from a Full) belong in Medium, which needs two whole
-     * rows to split, as an upgrade does */
-    if (flexBytes(rows) > L / 2 && flexCount(rows) > elementsPerEntry * 2) {
+    /* Rows above 'smallBytes' (from a Full) belong in Medium, which needs
+     * two whole rows to split, as an upgrade does */
+    if (flexBytes(rows) > smallBytes &&
+        flexCount(rows) > elementsPerEntry * 2) {
         multimapMedium *medium = multimapMediumNewFromOneGrow(
             small, small->map, small->middle, elementsPerEntry, isSet);
         tagged = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
         *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_MEDIUM);
     }
+}
+
+static void multimapShrinkIfNecessary_(multimap **m) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    multimapMoveDown_(m, 3, L + L / 2, L / 2);
+}
+
+void multimapCompact(multimap **m) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    if (multimapType_(*m) == MULTIMAP_TYPE_FULL) {
+        multimapFullCompact(mmf(*m));
+    }
+    multimapMoveDown_(m, UINT32_MAX, 3 * L, L);
+}
+
+void multimapCompactWithReference(multimap **m,
+                                  const multimapAtom *referenceContainer) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    if (multimapType_(*m) == MULTIMAP_TYPE_FULL) {
+        multimapFullCompactWithReference(mmf(*m), referenceContainer);
+    }
+    multimapMoveDown_(m, UINT32_MAX, 3 * L, L);
 }
 
 /* A delete entry point: the tier's call, then a shrink when it removed */
@@ -5745,6 +5775,127 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
 
+        multimapVerify(m);
+    }
+
+    TEST("Compact: rows unchanged, smallest tier, packed inner maps") {
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        const int64_t rows = 3000;
+        for (int64_t i = 0; i < rows; i++) {
+            const databox kb = databoxNewSigned(i);
+            const databox vb = databoxNewSigned(i * 3);
+            const databox *row[2] = {&kb, &vb};
+            multimapInsert(&m, row);
+        }
+
+        /* Compact after the fill, then at points down the drain: three of
+         * every four rows gone, then most of the rest, then nearly all */
+        const int64_t keepEvery[] = {1, 4, 40, 400, 3000};
+        for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery); p++) {
+            for (int64_t i = 0; i < rows; i++) {
+                if (i % keepEvery[p]) {
+                    const databox kb = databoxNewSigned(i);
+                    multimapDelete(&m, &kb);
+                }
+            }
+
+            dkTierStats before;
+            multimapStats(m, &before);
+            /* @own: caller; free=flexFree */
+            flex *dumpBefore = multimapDump(m);
+            multimapCompact(&m);
+            /* @own: caller; free=flexFree */
+            flex *dumpAfter = multimapDump(m);
+            dkTierStats s;
+            multimapStats(m, &s);
+            const uint64_t L = s.unitLimit;
+            const uint64_t rowsLeft = s.count;
+            bool tierOk;
+            switch (s.tier) {
+            case MULTIMAP_TYPE_SMALL:
+                tierOk = s.dataBytes <= L || rowsLeft <= 2;
+                break;
+            case MULTIMAP_TYPE_MEDIUM:
+                tierOk = s.dataBytes > L;
+                break;
+            default:
+                /* Packed: every inner map but the last within a row (these
+                 * are under 16 bytes) and the refill slack of the limit */
+                tierOk = s.dataBytes > 3 * L &&
+                         s.units <= s.dataBytes / (L - 16 - 8) + 1;
+                break;
+            }
+            if (flexBytes(dumpBefore) != flexBytes(dumpAfter) ||
+                memcmp(dumpBefore, dumpAfter, flexBytes(dumpBefore)) != 0 ||
+                !tierOk || s.units > before.units || s.count != before.count) {
+                ERR("keep 1 in %" PRId64 ": compacted tier %u units %u (was "
+                    "tier %u units %u), %" PRIu64 " data bytes, rows %s",
+                    keepEvery[p], s.tier, s.units, before.tier, before.units,
+                    s.dataBytes,
+                    flexBytes(dumpBefore) == flexBytes(dumpAfter) ? "same"
+                                                                  : "changed");
+            }
+            printf("  keep 1 in %4" PRId64
+                   ": tier %u, %4u inner maps, %6" PRIu64
+                   " bytes -> tier %u, %4u, %6" PRIu64 "\n",
+                   keepEvery[p], before.tier, before.units, before.totalBytes,
+                   s.tier, s.units, s.totalBytes);
+            flexFree(dumpBefore);
+            flexFree(dumpAfter);
+            multimapVerify(m);
+
+            /* Still takes rows (and grows) as before */
+            const databox kb = databoxNewSigned(rows + (int64_t)p);
+            const databox vb = databoxNewSigned(1);
+            const databox *row[2] = {&kb, &vb};
+            multimapInsert(&m, row);
+            if (!multimapExists(m, &kb)) {
+                ERR("keep 1 in %" PRId64 ": an insert after Compact is lost",
+                    keepEvery[p]);
+            }
+            multimapDelete(&m, &kb);
+        }
+    }
+
+    TEST("Compact on a map of references keeps every lookup") {
+        cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        const size_t keys = 1500;
+        for (size_t i = 0; i < keys; i++) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "compact-key-%05zu", i);
+            const databox key = databoxNewBytesString(buf);
+            databox ref = key;
+            multimapAtomInsertConvert(atoms, &ref);
+            const databox val = databoxNewUnsigned(i);
+            const databox *row[2] = {&key, &val};
+            multimapInsertWithSurrogateKey(&m, row, &ref, atoms);
+        }
+
+        dkTierStats before;
+        multimapStats(m, &before);
+        multimapCompactWithReference(&m, atoms);
+        dkTierStats s;
+        multimapStats(m, &s);
+        printf("  references: %u inner maps -> %u (%" PRIu64 " data bytes)\n",
+               before.units, s.units, s.dataBytes);
+        size_t wrong = 0;
+        for (size_t i = 0; i < keys; i++) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "compact-key-%05zu", i);
+            const databox key = databoxNewBytesString(buf);
+            databox got = {{0}};
+            databox *out[1] = {&got};
+            wrong += !multimapLookupWithReference(m, &key, out, atoms) ||
+                     got.data.u64 != i;
+        }
+        if (wrong || s.count != keys || s.tier != MULTIMAP_TYPE_FULL ||
+            s.units >= before.units) {
+            ERR("%zu lookups wrong; units %u -> %u, tier %u", wrong,
+                before.units, s.units, s.tier);
+        }
         multimapVerify(m);
     }
 

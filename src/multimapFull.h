@@ -147,6 +147,11 @@ int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
                               uint32_t fieldOffset, int64_t incrBy);
 
 void multimapFullReset(multimapFull *m);
+/* Refill every inner map to the limit from the next one (see
+ * multimapCompact) */
+void multimapFullCompact(multimapFull *m);
+void multimapFullCompactWithReference(
+    multimapFull *m, const struct multimapAtom *referenceContainer);
 void multimapFullFree(multimapFull *m);
 
 bool multimapFullFirst(multimapFull *m, databox *elements[]);
