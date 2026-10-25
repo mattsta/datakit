@@ -904,6 +904,43 @@ DK_STATIC inline bool multilistFullIsMergeable_(const multilistFull *ml,
 #endif
 }
 
+/* Whether a delete may merge nodes 'a' and 'b' (a before b): both fit in
+ * half the node size (the headroom keeps an insert from splitting what a
+ * delete just merged), and both are uncompressed.  A compressed node
+ * opens into the decompression buffer, which appending would reallocate
+ * behind the buffer's owner, and the merged node can become an end node
+ * (which must never stay compressed).  A list with no node size (fill
+ * outside the size table) never merges here. */
+DK_STATIC bool multilistFullDeleteMergeFits_(const multilistFull *ml,
+                                             mlNodeId a, mlNodeId b) {
+    if (ml->fill >= flexOptimizationSizeLimits ||
+        mflexIsCompressed(getNode(a)) || mflexIsCompressed(getNode(b))) {
+        return false;
+    }
+    return mflexBytesUncompressed(getNode(a)) +
+               mflexBytesUncompressed(getNode(b)) <=
+           flexOptimizationSizeLimit[ml->fill] / 2;
+}
+
+/* After a range delete left node 'nodeIdx' (closed) holding values:
+ * merge it with its next neighbour, or else its previous one, when the
+ * pair fits, so scattered deletes don't leave many nearly empty nodes */
+DK_STATIC void multilistFullCoalesce_(multilistFull *ml, mflexState *state,
+                                      mlNodeId nodeIdx) {
+    mflexState *pair[2] = {state, state};
+    bool merged = false;
+    if (nodeIdx + 1 < ml->count &&
+        multilistFullDeleteMergeFits_(ml, nodeIdx, nodeIdx + 1)) {
+        merged = multilistFullMflexMerge_(ml, pair, nodeIdx, nodeIdx + 1);
+    } else if (nodeIdx > 0 && nodeIdx < ml->count &&
+               multilistFullDeleteMergeFits_(ml, nodeIdx - 1, nodeIdx)) {
+        merged = multilistFullMflexMerge_(ml, pair, nodeIdx - 1, nodeIdx);
+    }
+    if (merged) {
+        multilistFullCompressRenew__(ml, state); /* node positions moved */
+    }
+}
+
 /* Attempt to merge flexes within two nodes on either side of 'center'.
  *
  * We attempt to merge:
@@ -1173,6 +1210,10 @@ bool multilistFullDelRange(multilistFull *ml, mflexState *state,
         entry.offset = 0;
     }
 
+    /* Merge around the cut once: the node the range started in, or the
+     * last node when the range ran to the end */
+    multilistFullCoalesce_(
+        ml, state, entry.nodeIdx < ml->count ? entry.nodeIdx : ml->count - 1);
     return true;
 }
 
@@ -1710,6 +1751,8 @@ bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
         /* The element is about to be deleted, so hand out an owned copy. */
         multilistPopCopy_(fe, box);
 
+        /* No merge check: a pop only shrinks an end node until it empties
+         * and goes, leaving at most one sparse node at each end */
         if (!multilistFullDelIndex(ml, state, nodeIdx, &f, &fe)) {
             mflexCloseShrink(node, state, f);
         }

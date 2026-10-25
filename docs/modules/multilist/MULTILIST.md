@@ -467,6 +467,12 @@ bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
 void multilistDelEntry(multilistIterator *iter, multilistEntry *entry);
 ```
 
+In Full, a range delete that leaves a node holding elements merges it with
+its next neighbour, or else its previous one, when both are uncompressed and
+the pair fits in half a node, so scattered deletes leave nodes dense. Pops
+don't check: they only shrink an end node until it empties and goes.
+`DelEntry` doesn't merge either: the iterator keeps its position.
+
 ```c
 /* Example: Delete range */
 mflexState *state = mflexStateCreate();

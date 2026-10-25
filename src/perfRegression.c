@@ -23,9 +23,11 @@
 #include "hmac.h"
 #include "hmacKeyring.h"
 #include "membound.h"
+#include "mflex.h"
 #include "multiOrderedSet.h"
 #include "multiarray.h"
 #include "multidict.h"
+#include "multilist.h"
 #include "multimapAtom.h"
 #include "multimapAtomDense.h"
 #include "persist/intsetP.h"
@@ -621,6 +623,8 @@ defcleaner(stringPool *, stringPoolFree);
 defcleaner(intset *, intsetFree);
 defcleaner(multimap *, multimapFree);
 defcleaner(multiroar *, multiroarFree);
+defcleaner(multilist *, multilistFree);
+defcleaner(mflexState *, mflexStateFree);
 
 /* PERF_CONTAINER_N keys, each PERF_CONTAINER_KEY bytes plus a NUL */
 static char *perfContainerKeys(void) {
@@ -1446,6 +1450,43 @@ static void benchMultiarrayTier(const char *tier, uint32_t n) {
     perfContainerSink = sink;
 }
 
+/* PERF_CONTAINER_N integers of varying widths pushed onto the tail */
+static void perfFillList(multilist **ml, mflexState *s) {
+    for (uint32_t i = 0; i < PERF_CONTAINER_N; i++) {
+        const databox b = databoxNewSigned((int64_t)i * 1000003);
+        multilistPushByTypeTail(ml, s, &b);
+    }
+}
+
+/* A multilist at the default size limit used as a queue and as a list:
+ * tail pushes, scattered index reads, drains from the head and from the
+ * tail, and scattered single deletes (each drain empties the list and an
+ * untimed refill follows) */
+static void benchMultilist(void) {
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
+    cleaner(multilistFree) multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    uint64_t sink = 0;
+
+    PERF_ROW("multilist", "pushTail", n,
+             const databox b = databoxNewSigned((int64_t)i * 1000003);
+             multilistPushByTypeTail(&ml, s, &b));
+    PERF_ROW("multilist", "indexScattered", n, multilistEntry e;
+             sink += multilistIndexGet(ml, s, perfScatter(i), &e)
+                         ? (uint64_t)e.box.data.i
+                         : 0);
+    PERF_ROW("multilist", "popHead", n, databox got = {{0}};
+             sink += multilistPopHead(&ml, s, &got); databoxFreeData(&got));
+    perfFillList(&ml, s);
+    PERF_ROW("multilist", "popTail", n, databox got = {{0}};
+             sink += multilistPopTail(&ml, s, &got); databoxFreeData(&got));
+    perfFillList(&ml, s);
+    PERF_ROW("multilist", "deleteScattered", n,
+             sink +=
+             multilistDelRange(&ml, s, (int64_t)((i * 7919u) % (n - i)), 1));
+    perfContainerSink = sink;
+}
+
 /* A reusing atom table of PERF_CONTAINER_N string atoms: interning new
  * and present values, retains and releases by value (the last release
  * deletes), and deletes by id */
@@ -1760,6 +1801,10 @@ int perfRegressionTest(int argc, char *argv[]) {
             benchMultiarrayTier("small", 48);
             benchMultiarrayTier("medium", 2048);
             benchMultiarrayTier("large", 16384);
+        }
+
+        if (perfWanted("multilist")) {
+            benchMultilist();
         }
 
         /* membound allocator: per-op alloc/free cost for the three
