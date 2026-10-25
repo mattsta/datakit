@@ -190,7 +190,7 @@ persistLogResult multiOrderedSetResetP(multiOrderedSetP *mos) {
         return logged;
     }
     if (mos->mos) {
-        multiOrderedSetReset(mos->mos);
+        multiOrderedSetReset(&mos->mos);
     }
     persistCtxMaybeCompact(mos->ctx, mos->mos, &persistOpsMultiOrderedSet);
     return logged;

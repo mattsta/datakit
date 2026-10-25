@@ -372,7 +372,7 @@ that touches them.
 **Merging.** When a delete leaves two adjacent submaps whose combined size fits
 under `maxSize`, they are merged and one slot is reclaimed. A submap that
 becomes completely empty is freed and its `map`/`middle`/`rangeBox` slots are
-removed. `multimapReset()` collapses everything back to a single empty submap.
+removed. `multimapReset()` frees the Full and leaves an empty Small.
 
 ### Characteristics
 

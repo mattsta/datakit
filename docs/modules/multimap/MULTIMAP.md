@@ -612,8 +612,8 @@ Every delete entry point (`Delete`, `DeleteReporting`, `DeleteTaking`,
 `DeleteRandomValue`, `DeleteByPosition`, `DeleteByPredicate`, `DeleteEntry`)
 can move the map to a smaller variant once it drains (see "Automatic Tier
 Thresholds"), so like an insert it may rewrite `*m`. Full also frees
-submaps that become empty, and collapses to a single empty submap on
-`multimapReset()`.
+submaps that become empty; `multimapReset()` replaces any tier with an
+empty Small.
 
 ### Predicate-Based Deletion
 
@@ -877,18 +877,19 @@ multimapCopyKeys(&keysOnly, sourceMap);
 ## Memory Management
 
 ```c
-void multimapReset(multimap *m);  /* drop all rows, keep the container */
+void multimapReset(multimap **m); /* drop all rows: an empty Small */
 void multimapFree(multimap *m);   /* destroy; NULL-safe */
 ```
 
-`multimapReset()` does not change the variant, but Full collapses back to a
-single empty submap so emptied submaps cannot keep stale metadata alive.
+`multimapReset()` leaves an empty Small with the same row width, set mode,
+limit and compression. A Small keeps its allocation; a Medium or Full is
+freed, so a reset map holds no larger tier's structures. It rewrites `*m`.
 `multimapFree(NULL)` is a no-op.
 
 ```c
 multimap *m = multimapNew(2);
 /* ... use it ... */
-multimapReset(m);   /* reuse the container */
+multimapReset(&m);  /* reuse the container */
 multimapFree(m);    /* destroy */
 ```
 

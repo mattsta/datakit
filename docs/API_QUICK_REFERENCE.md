@@ -163,10 +163,14 @@ mdsfree(s);             // mds string  (mdscfree for mdsc)
 mflexStateFree(state);  // mflex state
 ```
 
-### "I want to clear but keep allocated"
+### "I want to clear and reuse"
 
 ```c
-multimapReset(m);       // multimap
+multimapReset(&m);      // multimap (back to an empty Small)
+multiOrderedSetReset(&mos);
+multilistReset(&ml);
+multiarrayReset(&ma);
+intsetReset(&is);
 flexReset(&f);          // flex
 mflexReset(&mf);        // mflex
 ```

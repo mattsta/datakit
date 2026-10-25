@@ -100,7 +100,7 @@ static void *pcMultimapBuild(const persistContractBuild *b) {
         }
 
         if (b->size >= 100 && i == b->size / 3) {
-            multimapReset(m);
+            multimapReset(&m);
             persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
         }
     }

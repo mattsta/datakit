@@ -4025,7 +4025,7 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
     }
 
     case PERSIST_OP_CLEAR: {
-        multimapReset(*m);
+        multimapReset(m);
         return true;
     }
 
@@ -5556,7 +5556,7 @@ static bool multiOrderedSetPersistApplyOp(void *structure, persistOp op,
 
     case PERSIST_OP_CLEAR: {
         if (*mos) {
-            multiOrderedSetReset(*mos);
+            multiOrderedSetReset(mos);
         }
         return true;
     }

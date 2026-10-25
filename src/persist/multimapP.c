@@ -241,7 +241,7 @@ persistLogResult multimapResetP(multimapP *m) {
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
-    multimapReset(m->m);
+    multimapReset(&m->m);
 
     /* The WAL is all stale now: compaction makes the empty map the
      * snapshot (best effort: on failure the WAL still replays to it) */

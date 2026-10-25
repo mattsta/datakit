@@ -1043,8 +1043,29 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
 
 #endif
 
-void multimapReset(multimap *m) {
-    MULTIMAP_SINGLE_NORETURN(m, Reset);
+void multimapReset(multimap **m) {
+    multimapElements elementsPerEntry;
+    switch (multimapType_(*m)) {
+    case MULTIMAP_TYPE_SMALL:
+        multimapSmallReset(mms(*m));
+        return;
+    case MULTIMAP_TYPE_MEDIUM:
+        elementsPerEntry = mmm(*m)->elementsPerEntry;
+        break;
+    case MULTIMAP_TYPE_FULL:
+        elementsPerEntry = mmf(*m)->elementsPerEntry;
+        break;
+    default:
+        assert(NULL);
+        __builtin_unreachable();
+    }
+
+    const bool isSet = multimapIsSet(*m);
+    const bool compress = multimapCompresses(*m);
+    const flexCapSizeLimit limit = multimapLimit(*m);
+    multimapFree(*m);
+    /* @own: caller; free=multimapFree */
+    *m = multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
 }
 
 void multimapFree(multimap *m) {
@@ -5727,6 +5748,51 @@ int multimapTest(int argc, char *argv[]) {
         multimapVerify(m);
     }
 
+    TEST("Reset from every tier: an empty Small keeping its configuration") {
+        const struct {
+            bool isSet;
+            bool compress;
+            flexCapSizeLimit limit;
+        } configs[] = {{false, false, FLEX_CAP_LEVEL_64},
+                       {true, true, FLEX_CAP_LEVEL_128}};
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            for (int32_t tier = MULTIMAP_TYPE_SMALL; tier <= MULTIMAP_TYPE_FULL;
+                 tier++) {
+                cleaner(multimapFree) multimap *m = multimapNewConfigure(
+                    2, configs[c].isSet, configs[c].compress, configs[c].limit);
+                int64_t next = 0;
+                do {
+                    const databox kb = databoxNewSigned(next);
+                    const databox vb = databoxNewSigned(next * 3);
+                    const databox *row[2] = {&kb, &vb};
+                    multimapInsert(&m, row);
+                    next++;
+                } while (multimapGetType(m) != (multimapType)tier);
+
+                multimapReset(&m);
+                const databox kb = databoxNewSigned(7);
+                const databox vb = databoxNewSigned(8);
+                if (multimapGetType(m) != MULTIMAP_TYPE_SMALL ||
+                    multimapCount(m) != 0 || multimapExists(m, &kb) ||
+                    multimapIsSet(m) != configs[c].isSet ||
+                    multimapCompresses(m) != configs[c].compress ||
+                    multimapLimit(m) != configs[c].limit) {
+                    ERR("config %zu tier %d: reset to tier %d, count %zu", c,
+                        tier, multimapGetType(m), multimapCount(m));
+                }
+
+                /* Rows of the same width go back in */
+                const databox *row[2] = {&kb, &vb};
+                multimapInsert(&m, row);
+                if (multimapCount(m) != 1 || !multimapExists(m, &kb)) {
+                    ERR("config %zu tier %d: a row after Reset is missing", c,
+                        tier);
+                }
+                multimapVerify(m);
+            }
+        }
+    }
+
     TEST("stats: tier, inner maps, rows and bytes in every tier") {
         cleaner(multimapFree) multimap *m =
             multimapNewLimit(2, FLEX_CAP_LEVEL_64);
@@ -7705,7 +7771,7 @@ int multimapTest(int argc, char *argv[]) {
                 ERR("cycle %d: expected 40, got %zu", cycle, multimapCount(m));
             }
 
-            multimapReset(m);
+            multimapReset(&m);
             if (multimapCount(m) != 0) {
                 ERR("cycle %d: expected 0 after reset, got %zu", cycle,
                     multimapCount(m));

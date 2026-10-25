@@ -634,7 +634,7 @@ bool timerWheelStopAll(timerWheel *tw) {
 
     freeAllWheelSlots(tw);
     memset(tw->wheel0Occupied, 0, sizeof(tw->wheel0Occupied));
-    multimapReset(tw->overflow);
+    multimapReset(&tw->overflow);
     flexReset(&tw->pendingTimers);
     tw->timerCount = 0;
     tw->cancelledPending = 0;

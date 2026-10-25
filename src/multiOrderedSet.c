@@ -320,8 +320,19 @@ void multiOrderedSetFree(multiOrderedSet *mos) {
     }
 }
 
-void multiOrderedSetReset(multiOrderedSet *mos) {
-    MOS_SINGLE_NORETURN(mos, Reset);
+void multiOrderedSetReset(multiOrderedSet **mos) {
+    if (mosType_(*mos) == MOS_TYPE_SMALL) {
+        multiOrderedSetSmallReset(moss(*mos));
+        return;
+    }
+
+    const flexCapSizeLimit limit = COMPRESS_LIMIT(*mos);
+    const uint32_t depth = COMPRESS_DEPTH(*mos);
+    multiOrderedSetFree(*mos);
+    /* @own: caller; free=multiOrderedSetFree */
+    multiOrderedSet *created =
+        MOS_TAG_(multiOrderedSetSmallNew(), MOS_TYPE_SMALL);
+    *mos = SET_COMPRESS_DEPTH_LIMIT(created, depth, limit);
 }
 
 /* ====================================================================
@@ -2403,6 +2414,47 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetFree(mos);
     }
 
+    TEST("multiOrderedSet: Reset from every tier gives an empty Small with "
+         "the same limit and compression") {
+        for (int32_t compress = 0; compress < 2; compress++) {
+            for (int32_t tier = MOS_TYPE_SMALL; tier <= MOS_TYPE_FULL; tier++) {
+                cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                    compress ? multiOrderedSetNewCompress(FLEX_CAP_LEVEL_64)
+                             : multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
+                const uint32_t depth = COMPRESS_DEPTH(mos);
+                int64_t next = 0;
+                do {
+                    databox score;
+                    DATABOX_SET_DOUBLE(&score, (double)next);
+                    const databox member = databoxNewSigned(next);
+                    multiOrderedSetAdd(&mos, &score, &member);
+                    next++;
+                } while (mosType_(mos) != (multiOrderedSetType)tier);
+
+                multiOrderedSetReset(&mos);
+                const databox member = databoxNewSigned(5);
+                if (mosType_(mos) != MOS_TYPE_SMALL ||
+                    multiOrderedSetCount(mos) != 0 ||
+                    multiOrderedSetExists(mos, &member) ||
+                    multiOrderedSetLimit(mos) != FLEX_CAP_LEVEL_64 ||
+                    COMPRESS_DEPTH(mos) != depth) {
+                    ERR("compress %d tier %d: reset to tier %d, count %zu",
+                        compress, tier, mosType_(mos),
+                        multiOrderedSetCount(mos));
+                }
+
+                databox score;
+                DATABOX_SET_DOUBLE(&score, 1.5);
+                multiOrderedSetAdd(&mos, &score, &member);
+                if (multiOrderedSetCount(mos) != 1 ||
+                    !multiOrderedSetExists(mos, &member)) {
+                    ERR("compress %d tier %d: a member after Reset is missing",
+                        compress, tier);
+                }
+            }
+        }
+    }
+
     TEST("multiOrderedSet: stats and limit in every tier") {
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
             multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
@@ -4056,7 +4108,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                     multiOrderedSetCount(mos));
             }
 
-            multiOrderedSetReset(mos);
+            multiOrderedSetReset(&mos);
             if (multiOrderedSetCount(mos) != 0) {
                 ERR("cycle %d: expected 0 after reset, got %zu", cycle,
                     multiOrderedSetCount(mos));

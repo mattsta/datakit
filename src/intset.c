@@ -36,6 +36,12 @@ void intsetFree(intset *is) {
     }
 }
 
+void intsetReset(intset **is) {
+    intsetFree(*is);
+    /* @own: caller; free=intsetFree */
+    *is = intsetNew();
+}
+
 /* Upgrade small to medium */
 static intset *intsetUpgradeSmallToMedium(intsetSmall *small) {
     intsetMedium *medium = intsetMediumFromSmall(small);

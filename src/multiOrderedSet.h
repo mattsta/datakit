@@ -195,19 +195,20 @@
  * TIER PROMOTION STRATEGY
  * ─────────────────────────────────────────
  *
- * Small → Medium: When flex exceeds size limit (~4KB default)
- *   - Splits single flex into indexed array of smaller flexes
- *   - Improves binary search by reducing search space per flex
+ * L is the set's size limit (multiOrderedSetLimit; the process default,
+ * 2048 bytes until changed, for multiOrderedSetNew).
  *
- * Medium → Full: When total entries exceed threshold (~200 default)
- *   - Adds hash table for O(1) member lookups
- *   - Significant memory increase, but necessary for performance
- *   - Threshold tunable via flexCapSizeLimit parameter
+ * Small → Medium: when the flex grows past L
+ *   - Splits it into two flexes by score
  *
- * Demotion (shrinking) is NOT implemented:
- *   - Simplifies code, avoids hysteresis oscillation
- *   - Most workloads grow monotonically or stay stable
- *   - Use multiOrderedSetReset() to manually shrink if needed
+ * Medium → Full: when the two flexes together grow past 3L
+ *   - Adds a hash table for O(1) member lookups
+ *   - Rows move into sub-maps that split at L
+ *
+ * Removals move a drained set back down, well below those points: Full
+ * holding three sub-maps or fewer becomes Medium at 1.5L or less (Small
+ * at L/2), and Medium becomes Small at L/2.  multiOrderedSetReset
+ * returns to an empty Small at once.
  *
  * ==================================================================== */
 
@@ -283,8 +284,10 @@ multiOrderedSet *multiOrderedSetCopy(const multiOrderedSet *mos);
 /* Free a multiOrderedSet */
 void multiOrderedSetFree(multiOrderedSet *mos);
 
-/* Reset to empty state without deallocating */
-void multiOrderedSetReset(multiOrderedSet *mos);
+/* Empty the set: an empty Small with the same limit and compression,
+ * freeing a larger tier's structures (a Small keeps its allocation).
+ * Rewrites '*mos'. */
+void multiOrderedSetReset(multiOrderedSet **mos);
 
 /* ====================================================================
  * Basic Statistics

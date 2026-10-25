@@ -238,7 +238,7 @@ bool multiTimerStopAll(multiTimer *t) {
      * can be dropped wholesale. */
     t->stoppedUpTo = t->nextTimerId;
     if (multimapCount(t->stopEvents) > 0) {
-        multimapReset(t->stopEvents);
+        multimapReset(&t->stopEvents);
     }
     t->stopLowest = 0;
     t->stopHighest = 0;
@@ -252,8 +252,8 @@ bool multiTimerStopAll(multiTimer *t) {
         return true;
     }
 
-    multimapReset(t->scheduled);
-    multimapReset(t->pendingScheduling);
+    multimapReset(&t->scheduled);
+    multimapReset(&t->pendingScheduling);
     t->stopPending = 0;
     return true;
 }
@@ -305,7 +305,7 @@ static bool cleanupTimersUpTo(multiTimer *t, size_t processedTimersCount,
     /* If we processed every existing timer, just remove all
      * currently existing timers. */
     if (processedTimersCount == multimapCount(t->scheduled)) {
-        multimapReset(t->scheduled);
+        multimapReset(&t->scheduled);
     } else {
         /* else, we need to selectively remove only a subset of
          * currently active timers. */
@@ -334,7 +334,7 @@ static bool rescheduleTimers(multiTimer *t) {
             multimapProcessUntil(t->pendingScheduling, &predicateAll, true,
                                  timerCopyRunner, t);
 
-            multimapReset(t->pendingScheduling);
+            multimapReset(&t->pendingScheduling);
         }
 
         return true;
@@ -516,7 +516,7 @@ void multiTimerProcessTimerEvents(multiTimer *t) {
     if (multimapCount(t->scheduled) == 0 &&
         multimapCount(t->pendingScheduling) == 0) {
         if (multimapCount(t->stopEvents) > 0) {
-            multimapReset(t->stopEvents);
+            multimapReset(&t->stopEvents);
         }
         t->stopLowest = 0;
         t->stopHighest = 0;

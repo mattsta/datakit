@@ -509,6 +509,30 @@ void multiarrayFree(multiarray *m) {
     MULTIARRAY_SINGLE_NORETURN(m, Free);
 }
 
+void multiarrayReset(multiarray **m) {
+    switch (_multiarrayType(*m)) {
+    case MULTIARRAY_TYPE_SMALL: {
+        multiarraySmall *s = mars(*m);
+        /* @own: container; free=multiarraySmallFree */
+        s->data = zrealloc(s->data, s->len);
+        s->count = 0;
+        return;
+    }
+    case MULTIARRAY_TYPE_MEDIUM:
+    case MULTIARRAY_TYPE_LARGE: {
+        const uint16_t len = multiarrayElementLen(*m);
+        const uint16_t rowMax = multiarrayRowMax(*m);
+        multiarrayFree(*m);
+        /* @own: caller; free=multiarrayFree */
+        *m = multiarrayNew(len, rowMax);
+        return;
+    }
+    default: /* native or NULL: refused */
+        MA_NATIVE_REFUSED_(*m);
+        return;
+    }
+}
+
 uint16_t multiarrayElementLen(const multiarray *m) {
     switch (_multiarrayType(m)) {
     case MULTIARRAY_TYPE_SMALL:
@@ -1039,6 +1063,34 @@ int multiarrayTest(int argc, char *argv[]) {
         err += multiarrayOracleSoak_(2, 7, 8, MULTIARRAY_TYPE_SMALL, 1);
         err += multiarrayOracleSoak_(12, 50, 8, MULTIARRAY_TYPE_MEDIUM, 2);
         err += multiarrayOracleSoak_(120, 400, 8, MULTIARRAY_TYPE_LARGE, 3);
+    }
+
+    TEST("Reset from every tier gives an empty Small of the same shape") {
+        for (int32_t tier = MULTIARRAY_TYPE_SMALL;
+             tier <= MULTIARRAY_TYPE_LARGE; tier++) {
+            cleaner(multiarrayFree) multiarray *m =
+                multiarrayNew(sizeof(int64_t), 8);
+            int64_t next = 0;
+            do {
+                multiarrayInsert(&m, (multiarrayIdx)next, &next);
+                next++;
+            } while (_multiarrayType(m) != (multiarrayType)tier);
+
+            multiarrayReset(&m);
+            if (_multiarrayType(m) != MULTIARRAY_TYPE_SMALL ||
+                multiarrayCount(m) != 0 || multiarrayGetHead(m) ||
+                multiarrayElementLen(m) != sizeof(int64_t) ||
+                multiarrayRowMax(m) != 8) {
+                ERR("tier %d: reset to tier %d with %zu elements", tier,
+                    _multiarrayType(m), multiarrayCount(m));
+            }
+            int64_t v = 41;
+            multiarrayInsert(&m, 0, &v);
+            const int64_t *got = multiarrayGet(m, 0);
+            if (multiarrayCount(m) != 1 || !got || *got != 41) {
+                ERR("tier %d: an element after Reset is missing", tier);
+            }
+        }
     }
 
     TEST("stats: tier, nodes, elements and bytes in every tier") {

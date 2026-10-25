@@ -167,6 +167,9 @@ typedef uint32_t multiarrayIdx;
  * tier already finds the index, so in-range calls cost what they did. */
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax);
 void multiarrayFree(multiarray *m);
+/* Empty the array: an empty Small with the same element width and rowMax,
+ * freeing a larger tier's nodes.  Rewrites '*m'. */
+void multiarrayReset(multiarray **m);
 
 void *multiarrayGet(multiarray *m, multiarrayIdx idx);
 void *multiarrayGetHead(multiarray *m);

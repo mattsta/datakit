@@ -30,6 +30,9 @@ intset *intsetNew(void);
 
 /* Free intset */
 void intsetFree(intset *is);
+/* Empty the set: a new empty Small, freeing every tier's arrays.
+ * Rewrites '*is'. */
+void intsetReset(intset **is);
 
 /* Add value to intset
  * is: pointer to intset pointer (may be modified due to reallocation/upgrade)

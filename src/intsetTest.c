@@ -213,6 +213,28 @@ int intsetTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Reset from every tier gives an empty Small that takes new members") {
+        /* A 16-bit, then a 32-bit, then a 64-bit member reach each tier */
+        const int64_t reach[] = {7, 100000, INT64_MAX};
+        for (size_t t = 0; t < COUNT_ARRAY(reach); t++) {
+            cleaner(intsetFree) intset *is = intsetNew();
+            for (size_t i = 0; i <= t; i++) {
+                intsetAdd(&is, reach[i], NULL);
+            }
+            intsetReset(&is);
+            dkTierStats s;
+            intsetStats(is, &s);
+            if (s.tier != 1 || intsetCount(is) != 0 || intsetFind(is, 7)) {
+                ERR("tier %zu: reset to tier %u with %zu members", t + 1,
+                    s.tier, intsetCount(is));
+            }
+            intsetAdd(&is, -2, NULL);
+            if (intsetCount(is) != 1 || !intsetFind(is, -2)) {
+                ERR("tier %zu: a member after Reset is missing", t + 1);
+            }
+        }
+    }
+
     TEST("memory efficiency - tiered vs monolithic") {
         cleaner(intsetFree) intset *is = intsetNew();
 

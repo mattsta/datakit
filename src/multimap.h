@@ -240,7 +240,10 @@ bool multimapFieldIncrByIf(multimap **m, const databox *key,
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 
-void multimapReset(multimap *m);
+/* Empty the map: an empty Small with the same row width, set mode, limit
+ * and compression, freeing a larger tier's structures (a Small keeps its
+ * allocation).  Rewrites '*m'. */
+void multimapReset(multimap **m);
 void multimapFree(multimap *m);
 
 void multimapEntryResize(multimap **m, const databox *key, size_t newSize);
