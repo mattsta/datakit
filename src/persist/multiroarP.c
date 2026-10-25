@@ -145,19 +145,24 @@ static persistLogResult multiroarBitChangeP(multiroarP *r, uint64_t position,
     if (!multiroarBitModeP(r)) {
         return PERSIST_LOG_REFUSED;
     }
-    if (multiroarBitGet(r->r, position) == adding) {
+
+    /* Changed by the one search that reports the bit's previous state,
+     * then logged; a refused log flips the bit back, which restores it */
+    const bool wasSet = adding ? multiroarBitSet(r->r, position)
+                               : multiroarRemove(r->r, position);
+    if (wasSet == adding) {
         return PERSIST_LOG_UNCHANGED;
     }
 
     const persistLogResult logged = persistCtxLogOp(
         r->ctx, adding ? PERSIST_OP_INSERT : PERSIST_OP_DELETE, &position, 1);
     if (logged == PERSIST_LOG_REFUSED) {
+        if (adding) {
+            multiroarRemove(r->r, position);
+        } else {
+            multiroarBitSet(r->r, position);
+        }
         return logged;
-    }
-    if (adding) {
-        multiroarBitSet(r->r, position);
-    } else {
-        multiroarRemove(r->r, position);
     }
     if (changed) {
         *changed = true;
@@ -265,16 +270,19 @@ persistLogResult multiroarValueRemoveP(multiroarP *r, uint64_t position,
     if (!r || !r->r || !r->ctx || !multiroarValueWidth(r->r)) {
         return PERSIST_LOG_REFUSED;
     }
-    if (!multiroarValueGetP(r, position, NULL)) {
+    /* Removed by the one search that finds the value, then logged; a
+     * refused log stores the removed value again, which restores it */
+    databox was = {{0}};
+    if (!multiroarValueRemoveGetRemoved(r->r, position, &was)) {
         return PERSIST_LOG_UNCHANGED; /* nothing there: nothing to log */
     }
 
     const persistLogResult logged =
         persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &position, 1);
     if (logged == PERSIST_LOG_REFUSED) {
+        multiroarValueSet(r->r, position, &was);
         return logged;
     }
-    multiroarValueRemoveGetRemoved(r->r, position, NULL);
     if (removed) {
         *removed = true;
     }
@@ -1104,9 +1112,118 @@ static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+/* Under a refusing WAL every change is refused and the roar equals its
+ * copy from before; logging then works again and a reopen holds only the
+ * logged change.  The bits cover a sparse chunk, a dense range, a chunk
+ * holding one bit (removed whole by a remove) and a chunk not yet there
+ * (made by a set). */
+static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char bitPath[PATH_MAX];
+    char valuePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_refusedBits", bitPath,
+                          sizeof(bitPath)) ||
+        !dkTestTmpDirPath(&tmp, "multiroarPTest_refusedValues", valuePath,
+                          sizeof(valuePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiroarP a refused log changes nothing (bit set, bit remove, "
+         "value remove)")
+
+    persistCtx *ctx = persistCtxNew(bitPath, NULL);
+    multiroarP *r = multiroarNewP(ctx);
+    multiroarBitSetP(r, 5, NULL);
+    multiroarBitSetP(r, 70000, NULL);
+    multiroarBitSetRangeP(r, 200000, 20000);
+    cleaner(multiroarFree) multiroar *want =
+        multiroarDuplicate(multiroarGetRawP(r));
+
+    persistCtxTestRefusal refusal;
+    if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
+        ERRR("could not arm a refusing WAL");
+    }
+    bool changed = true;
+    const persistLogResult bits[] = {
+        multiroarBitSetP(r, 6, &changed),
+        multiroarBitSetP(r, UINT64_C(1) << 40, &changed),
+        multiroarRemoveP(r, 5, &changed),
+        multiroarRemoveP(r, 70000, &changed),
+        multiroarRemoveP(r, 210000, &changed),
+    };
+    persistCtxTestRefuseLogsEnd(ctx, &refusal);
+    for (size_t i = 0; i < COUNT_ARRAY(bits); i++) {
+        if (bits[i] != PERSIST_LOG_REFUSED) {
+            ERR("bit change %zu not refused (%d)", i, bits[i]);
+        }
+    }
+    if (changed || !multiroarEquals(multiroarGetRawP(r), want)) {
+        ERRR("a refused bit change changed the roar");
+    }
+    if (multiroarBitSetP(r, 6, NULL) == PERSIST_LOG_REFUSED) {
+        ERRR("the context did not log again after the refusal");
+    }
+    multiroarBitSet(want, 6);
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    ctx = persistCtxOpen(bitPath, NULL);
+    r = multiroarOpenP(ctx);
+    if (!r || !multiroarEquals(multiroarGetRawP(r), want)) {
+        ERRR("a reopen did not hold exactly the logged bits");
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+
+    ctx = persistCtxNew(valuePath, NULL);
+    r = multiroarValueNewP(ctx, 8, 1000, 1);
+    const databox v200 = databoxNewUnsigned(200);
+    const databox v0 = databoxNewUnsigned(0);
+    multiroarValueSetP(r, 7, &v200);
+    multiroarValueSetP(r, 9, &v0);
+    cleaner(multiroarFree) multiroar *wantValues =
+        multiroarDuplicate(multiroarGetRawP(r));
+
+    if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
+        ERRR("could not arm a refusing WAL");
+    }
+    const persistLogResult values[] = {
+        multiroarValueRemoveP(r, 7, &changed),
+        multiroarValueRemoveP(r, 9, &changed),
+    };
+    const persistLogResult absent = multiroarValueRemoveP(r, 500, &changed);
+    persistCtxTestRefuseLogsEnd(ctx, &refusal);
+    if (values[0] != PERSIST_LOG_REFUSED || values[1] != PERSIST_LOG_REFUSED ||
+        absent != PERSIST_LOG_UNCHANGED || changed ||
+        !multiroarEquals(multiroarGetRawP(r), wantValues)) {
+        ERR("refused value removes (%d, %d; absent %d) changed the roar",
+            values[0], values[1], absent);
+    }
+    if (multiroarValueRemoveP(r, 7, NULL) == PERSIST_LOG_REFUSED) {
+        ERRR("the context did not log again after the refusal");
+    }
+    multiroarValueRemoveGetRemoved(wantValues, 7, NULL);
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    ctx = persistCtxOpen(valuePath, NULL);
+    r = multiroarOpenP(ctx);
+    if (!r || !multiroarEquals(multiroarGetRawP(r), wantValues)) {
+        ERRR("a reopen did not hold exactly the logged values");
+    }
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+
+    TEST_FINAL_RESULT;
+}
+
 int multiroarPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiroarP_refusedLogs(argc, argv);
     err += test_multiroarP_valueKindsAndModes(argc, argv);
     err += test_multiroarP_damagedWal(argc, argv);
     err += test_multiroarP_lifecycleRefusals(argc, argv);

@@ -361,6 +361,9 @@ Contracts:
   value that cannot be stored (not an integer or boolean, negative, wider than
   `bitWidth`, NULL).  `Get`/`RemoveGetRemoved` return whether the position
   held a value, and false in those cases.
+- Each call is one search of the position map: `SetGetPrevious` reports the
+  overwritten value from the replacing insert, and `RemoveGetRemoved` the
+  removed one from the delete.
 
 ## Modes
 

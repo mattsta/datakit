@@ -914,20 +914,18 @@ multiroarValueSetResult multiroarValueSetGetPrevious(multiroar *r,
         return MULTIROAR_VALUE_REFUSED;
     }
 
+    /* One search: the replacing insert reports the value it overwrote
+     * (integers come back by value, valid after the map changes) */
     const databox key = databoxNewUnsigned(position);
-
+    const databox store = databoxNewUnsigned(v);
+    const databox *elements[ELEMENTS_PER_ENTRY] = {&key, &store};
     databox prev = {{0}};
-    databox *lookup[1] = {&prev};
-    const bool previouslySet = multimapLookup(r->map, &key, lookup);
+    const bool previouslySet =
+        multimapInsertReplacing(&r->map, elements, &prev);
     if (previouslySet && overwritten) {
-        /* Integer values live by-value inside the box, so this copy
-         * stays valid after the insert below mutates the map. */
         *overwritten = prev;
     }
 
-    const databox store = databoxNewUnsigned(v);
-    const databox *elements[ELEMENTS_PER_ENTRY] = {&key, &store};
-    multimapInsert(&r->map, elements);
     return previouslySet ? MULTIROAR_VALUE_REPLACED : MULTIROAR_VALUE_ADDED;
 }
 
@@ -1006,10 +1004,10 @@ bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
         return false;
     }
 
+    /* One search: the delete reports the value it removed (by value) */
     const databox key = databoxNewUnsigned(position);
     databox prev = {{0}};
-    databox *lookup[1] = {&prev};
-    if (!multimapLookup(r->map, &key, lookup)) {
+    if (!multimapDeleteReporting(&r->map, &key, &prev)) {
         return false;
     }
 
@@ -1017,7 +1015,7 @@ bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
         *removed = prev;
     }
 
-    return multimapDelete(&r->map, &key);
+    return true;
 }
 
 /* ====================================================================
@@ -4196,7 +4194,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Each refused bit call reports the misuse exactly once (run again:
          * a refused call changes nothing) */
-#define MR_REPORTS_ONCE_(call)                                               \
+#define MR_REPORTS_ONCE_(call)                                                 \
     do {                                                                       \
         const uint64_t c0_ = dkDiagCount();                                    \
         (void)(call);                                                          \

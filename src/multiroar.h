@@ -20,7 +20,9 @@ multiroar *multiroarDuplicate(const multiroar *r);
  * MULTIROAR_VALUE_REFUSED / false.  Mode-free calls (New/Free, Duplicate,
  * Clear, IsEmpty, Equals, MemoryUsage, Serialize*) take either. */
 
-/* Bit mode; 'r' modified in place */
+/* Bit mode; 'r' modified in place.  BitSet and Remove return whether the
+ * bit was set before the call (false too for a value-mode roar, which they
+ * leave unchanged). */
 bool multiroarBitSet(multiroar *r, uint64_t position);
 bool multiroarBitGet(const multiroar *r, uint64_t position);
 void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent);
