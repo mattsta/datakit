@@ -127,24 +127,32 @@ static persistLogResult intsetChangeP(intsetP *is, int64_t value, bool adding,
     if (!is || !is->is || !is->ctx) {
         return PERSIST_LOG_REFUSED;
     }
-    if (intsetFind(is->is, value) == adding) {
+    /* Changed by the one search that reports whether the value was there,
+     * then logged; a refused log makes the opposite change, which restores
+     * the values */
+    bool success = false;
+    if (adding) {
+        intsetAdd(&is->is, value, &success);
+    } else {
+        intsetRemove(&is->is, value, &success);
+    }
+    if (!success) {
         return PERSIST_LOG_UNCHANGED;
     }
 
     const persistLogResult logged = persistCtxLogOp(
         is->ctx, adding ? PERSIST_OP_INSERT : PERSIST_OP_DELETE, &value, 1);
     if (logged == PERSIST_LOG_REFUSED) {
+        bool undone;
+        if (adding) {
+            intsetRemove(&is->is, value, &undone);
+        } else {
+            intsetAdd(&is->is, value, &undone);
+        }
         return logged;
     }
-
-    bool success;
-    if (adding) {
-        intsetAdd(&is->is, value, &success);
-    } else {
-        intsetRemove(&is->is, value, &success);
-    }
     if (changed) {
-        *changed = success;
+        *changed = true;
     }
     persistCtxMaybeCompact(is->ctx, is->is, &persistOpsIntset);
     return logged;
@@ -243,6 +251,22 @@ static bool verifyIntsetMatchesTracker(intsetP *is,
             printf("  [verify] Mismatch at index %u: intset=%" PRId64
                    ", tracker=%" PRId64 "\n",
                    i, isValue, tracker->values[i]);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Whether 'is' holds exactly the ascending 'values' */
+static bool intsetPHolds_(intset *is, const int64_t *values, size_t n) {
+    if (intsetCount(is) != n) {
+        return false;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        int64_t got;
+        if (!intsetGet(is, (uint32_t)i, &got) || got != values[i]) {
             return false;
         }
     }
@@ -1005,6 +1029,58 @@ int intsetPTest(int argc, char *argv[]) {
         if (!is || intsetCountP(is) != 3 || !intsetFindP(is, 10) ||
             !intsetFindP(is, 20) || !intsetFindP(is, 40)) {
             ERRR("reopen does not hold 10, 20, 40");
+        }
+        intsetCloseP(is);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("intsetP a refused log changes nothing (add, remove)") {
+        /* 16-bit values, so the refused add of a 64-bit value would widen
+         * the set */
+        static const int64_t held[] = {-3, 7, 300};
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        intsetP *is = intsetNewP(ctx);
+        for (size_t i = 0; i < COUNT_ARRAY(held); i++) {
+            intsetAddP(is, held[i], NULL);
+        }
+
+        persistCtxTestRefusal refusal;
+        if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
+            ERRR("could not arm a refusing WAL");
+        }
+        bool changed = true;
+        const persistLogResult results[] = {
+            intsetAddP(is, 8, &changed),
+            intsetAddP(is, INT64_MAX, &changed),
+            intsetRemoveP(is, 7, &changed),
+            intsetRemoveP(is, -3, &changed),
+        };
+        const persistLogResult present = intsetAddP(is, 300, &changed);
+        persistCtxTestRefuseLogsEnd(ctx, &refusal);
+        for (size_t i = 0; i < COUNT_ARRAY(results); i++) {
+            if (results[i] != PERSIST_LOG_REFUSED) {
+                ERR("change %zu not refused (%d)", i, results[i]);
+            }
+        }
+        if (present != PERSIST_LOG_UNCHANGED || changed ||
+            !intsetPHolds_(intsetGetRawP(is), held, COUNT_ARRAY(held))) {
+            ERRR("a refused change changed the set");
+        }
+
+        /* Logging works again, and a reopen holds only what was logged */
+        if (intsetAddP(is, 40000, NULL) == PERSIST_LOG_REFUSED) {
+            ERRR("the context did not log again after the refusal");
+        }
+        intsetCloseP(is);
+        persistCtxFree(ctx);
+        ctx = persistCtxOpen(basePath, NULL);
+        is = intsetOpenP(ctx);
+        static const int64_t logged[] = {-3, 7, 300, 40000};
+        if (!is ||
+            !intsetPHolds_(intsetGetRawP(is), logged, COUNT_ARRAY(logged))) {
+            ERRR("a reopen did not hold exactly the logged changes");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);

@@ -101,7 +101,7 @@ structure as it was:
 - **Applied by the search that decides, undone on a refused log** (the undo
   restores exactly what was there and costs nothing when the log succeeds):
   `multimapInsertIfNotExistsP`, `multiroarBitSetP`, `multiroarRemoveP`,
-  `multiroarValueRemoveP`.
+  `multiroarValueRemoveP`, `intsetAddP`, `intsetRemoveP`.
 
 Durability is **best effort with notification**.  A failed flush or sync
 never undoes, blocks or aborts an operation: the result is NOT_DURABLE, the
