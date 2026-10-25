@@ -216,7 +216,7 @@ void intsetRemove(intset **is, int64_t value, bool *success) {
 }
 
 /* Find if value exists */
-bool intsetFind(intset *is, int64_t value) {
+bool intsetFind(const intset *is, int64_t value) {
     if (!is) {
         return false;
     }
@@ -352,7 +352,7 @@ bool intsetIteratorNext(intsetIterator *it, int64_t *value) {
 
 /* Get value at position: the run holding it, then an index (O(log n) for
  * the run boundaries, never a walk) */
-bool intsetGet(intset *is, uint32_t pos, int64_t *value) {
+bool intsetGet(const intset *is, uint32_t pos, int64_t *value) {
     intsetIterator it;
     intsetIteratorInit(&it, is);
     uint64_t at = pos;
@@ -369,7 +369,7 @@ bool intsetGet(intset *is, uint32_t pos, int64_t *value) {
 }
 
 /* Get random value */
-int64_t intsetRandom(intset *is) {
+int64_t intsetRandom(const intset *is) {
     size_t count = intsetCount(is);
     if (count == 0) {
         return 0;
@@ -501,7 +501,7 @@ bool intsetMax(const intset *is, int64_t *value) {
 }
 
 /* Get total bytes */
-size_t intsetBytes(intset *is) {
+size_t intsetBytes(const intset *is) {
     if (!is) {
         return 0;
     }
@@ -529,7 +529,7 @@ size_t intsetBytes(intset *is) {
     return 0;
 }
 
-void intsetStats(intset *is, dkTierStats *out) {
+void intsetStats(const intset *is, dkTierStats *out) {
     *out = (dkTierStats){0};
     if (!is) {
         return;
