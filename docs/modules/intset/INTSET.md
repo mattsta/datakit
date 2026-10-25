@@ -161,6 +161,12 @@ Because the tier is encoded in the pointer, **every mutating call may return
 a different `intset *`** — both for reallocation and for a tier change. That
 is why `intsetAdd` and `intsetRemove` take `intset **`.
 
+Removes never move a set down a tier: one add of a wide value would move it
+straight back up. When the wide values are gone for good,
+`intsetCompact(&is)` moves the set to the narrowest tier its values allow.
+A Full with no 64-bit values becomes a Medium, its arrays moved rather than
+copied. A Medium with no 32-bit values becomes a Small.
+
 ## API Reference
 
 ### Creation and Destruction
@@ -171,6 +177,11 @@ intset *intsetNew(void);
 
 /* Free intset */
 void intsetFree(intset *is);
+
+/* Empty it (a new Small), a deep copy, and the narrowest tier */
+void intsetReset(intset **is);
+intset *intsetCopy(const intset *is);
+void intsetCompact(intset **is);
 
 /* Example */
 intset *ids = intsetNew();

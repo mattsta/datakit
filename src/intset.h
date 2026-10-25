@@ -35,6 +35,13 @@ void intsetFree(intset *is);
 void intsetReset(intset **is);
 /* A deep copy in the same tier */
 intset *intsetCopy(const intset *is);
+/* Move to the narrowest tier the values allow: a Full holding no 64-bit
+ * values becomes a Medium (its arrays move, nothing is copied), and a
+ * Medium holding no 32-bit values becomes a Small, within the counts and
+ * bytes those tiers hold.  Removes never move a set down (one add of a
+ * wide value would move it straight back up), so this is the call for a
+ * set whose wide values are gone for good.  Rewrites '*is'. */
+void intsetCompact(intset **is);
 
 /* Add value to intset
  * is: pointer to intset pointer (may be modified due to reallocation/upgrade)

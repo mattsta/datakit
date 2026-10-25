@@ -256,6 +256,66 @@ int intsetTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Compact moves to the narrowest tier the values allow") {
+        cleaner(intsetFree) intset *is = intsetNew();
+        for (int64_t v = -300; v < 300; v += 7) {
+            intsetAdd(&is, v, NULL);
+        }
+        const int64_t wide[] = {100000, -70000, INT64_MAX, INT64_MIN + 1};
+        for (size_t i = 0; i < COUNT_ARRAY(wide); i++) {
+            intsetAdd(&is, wide[i], NULL);
+        }
+
+        /* A 64-bit value left: Full stays Full */
+        intsetRemove(&is, INT64_MAX, NULL);
+        dkTierStats s;
+        intsetCompact(&is);
+        intsetStats(is, &s);
+        if (s.tier != 3) {
+            ERR("a Full still holding a 64-bit value compacted to tier %u",
+                s.tier);
+        }
+
+        /* Removal step, then the tier Compact must reach: no 64-bit values
+         * (Medium), then no 32-bit values (Small) */
+        const int64_t drop[] = {INT64_MIN + 1, 100000, -70000};
+        const uint8_t want[] = {2, 2, 1};
+        for (size_t i = 0; i < COUNT_ARRAY(drop); i++) {
+            intsetRemove(&is, drop[i], NULL);
+            dkTierStats was;
+            intsetStats(is, &was);
+            cleaner(intsetFree) intset *before = intsetCopy(is);
+            intsetCompact(&is);
+            intsetStats(is, &s);
+            bool same = s.count == was.count;
+            intsetIterator ia;
+            intsetIterator ib;
+            intsetIteratorInit(&ia, before);
+            intsetIteratorInit(&ib, is);
+            int64_t va;
+            int64_t vb;
+            while (intsetIteratorNext(&ia, &va)) {
+                same &= intsetIteratorNext(&ib, &vb) && va == vb;
+            }
+            same &= !intsetIteratorNext(&ib, &vb);
+            printf("  after removing %" PRId64 ": tier %u, %" PRIu64
+                   " bytes -> tier %u, %" PRIu64 "\n",
+                   drop[i], was.tier, was.totalBytes, s.tier, s.totalBytes);
+            if (!same || s.tier != want[i] || s.totalBytes > was.totalBytes) {
+                ERR("after removing %" PRId64 ": tier %u (want %u), members "
+                    "%s",
+                    drop[i], s.tier, want[i], same ? "same" : "changed");
+            }
+        }
+
+        /* A wide value grows it back as usual */
+        intsetAdd(&is, INT64_MAX, NULL);
+        intsetStats(is, &s);
+        if (s.tier != 3 || !intsetFind(is, INT64_MAX) || !intsetFind(is, -6)) {
+            ERRR("a 64-bit add after Compact did not grow the set back");
+        }
+    }
+
     TEST("Reset from every tier gives an empty Small that takes new members") {
         /* A 16-bit, then a 32-bit, then a 64-bit member reach each tier */
         const int64_t reach[] = {7, 100000, INT64_MAX};

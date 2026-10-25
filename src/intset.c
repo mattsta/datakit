@@ -73,6 +73,49 @@ intset *intsetCopy(const intset *is) {
     return NULL;
 }
 
+void intsetCompact(intset **is) {
+    if (INTSET_TYPE(*is) == INTSET_TYPE_FULL) {
+        intsetFull *full = INTSET_UNTAG(*is);
+        const uint64_t count = full->count16 + full->count32;
+        const size_t bytes = sizeof(intsetMedium) +
+                             full->count16 * sizeof(int16_t) +
+                             full->count32 * sizeof(int32_t);
+        if (full->count64 || count >= INTSET_MEDIUM_MAX_COUNT ||
+            bytes >= INTSET_MEDIUM_MAX_BYTES) {
+            return;
+        }
+
+        /* The 16- and 32-bit arrays move into a Medium as they are */
+        /* @own: caller; free=intsetFree */
+        intsetMedium *medium = zmalloc(sizeof(*medium));
+        *medium = (intsetMedium){.count16 = (uint32_t)full->count16,
+                                 .count32 = (uint32_t)full->count32,
+                                 .values16 = full->values16,
+                                 .values32 = full->values32};
+        zfree(full->values64);
+        zfree(full);
+        *is = INTSET_TAG(medium, INTSET_TYPE_MEDIUM);
+    }
+
+    if (INTSET_TYPE(*is) == INTSET_TYPE_MEDIUM) {
+        intsetMedium *medium = INTSET_UNTAG(*is);
+        const size_t bytes =
+            sizeof(intsetSmall) + medium->count16 * sizeof(int16_t);
+        if (medium->count32 || medium->count16 >= INTSET_SMALL_MAX_COUNT ||
+            bytes >= INTSET_SMALL_MAX_BYTES) {
+            return;
+        }
+
+        /* @own: caller; free=intsetFree */
+        intsetSmall *small =
+            medium->count16
+                ? intsetSmallFromArray(medium->values16, medium->count16)
+                : intsetSmallNew();
+        intsetMediumFree(medium);
+        *is = INTSET_TAG(small, INTSET_TYPE_SMALL);
+    }
+}
+
 void intsetReset(intset **is) {
     intsetFree(*is);
     /* @own: caller; free=intsetFree */
