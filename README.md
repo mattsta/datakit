@@ -186,6 +186,7 @@ auto-discovers CTest targets from it.
 - [Building Guide](docs/development/BUILDING.md) - Detailed build instructions
 - [Debugging Guide](docs/development/DEBUGGING.md) - Troubleshooting techniques
 - [Contributing Guide](docs/development/CONTRIBUTING.md) - Style and workflow
+- [Change Runbook](docs/development/RUNBOOK.md) - The checklist every change follows: test, format, verify, measure, commit
 
 ### Performance
 
@@ -199,3 +200,7 @@ This is a recently updated development snapshot.
 Many components are complete and now fully documented.
 
 Some components are a first or second draft and need another feature refactoring cycle or two.
+
+## License
+
+The Sovereign Individual's Covenant License, v1.0: free for individuals' own projects; no rights for corporate or other commercial use without a separate written license. See [LICENSE](LICENSE).

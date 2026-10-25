@@ -14,18 +14,19 @@ This guide covers the development workflow, coding standards, and best practices
 
 ## License Considerations
 
-**IMPORTANT**: Datakit uses a proprietary license:
+**IMPORTANT**: Datakit is licensed under the Sovereign Individual's
+Covenant License, v1.0 ([LICENSE](../../LICENSE)):
 
-```
-Copyright 2016-2024 Matt Stancliff <matt@genges.com>
-Licensed under Zero Usage Unless Compensated.
-Rates vary between use cases and scale.
-```
+- Individuals may use, copy, modify and learn from it for their own
+  individual projects, free of charge.
+- No rights are granted to corporations or any other commercial entity,
+  their employees acting for them, or AI training. Any such use needs a
+  separate written commercial license from the author.
 
 **Before contributing:**
 
 - Understand that this is **not an open source project**
-- Usage requires compensation/licensing
+- Commercial use requires a separate license
 - Contact the copyright holder before making contributions
 - Contributions may require a contributor agreement
 - Check with Matt Stancliff (matt@genges.com) for contribution terms
@@ -862,6 +863,7 @@ For questions or clarifications:
 
 ## Resources
 
+- [RUNBOOK.md](RUNBOOK.md) - The step-by-step checklist for every change
 - [BUILDING.md](BUILDING.md) - Build instructions
 - [TESTING.md](TESTING.md) - Testing guide
 - [DEBUGGING.md](DEBUGGING.md) - Debugging techniques

@@ -151,6 +151,7 @@ installed. They carry their own upstream documentation:
 - [Running Tests](development/TESTING.md) - Test suite guide
 - [Building from Source](development/BUILDING.md) - Detailed build instructions
 - [Contributing Guidelines](development/CONTRIBUTING.md) - How to contribute
+- [Change Runbook](development/RUNBOOK.md) - The checklist every change follows
 - [Debugging Tips](development/DEBUGGING.md) - Common issues and solutions
 
 ## Examples and Recipes
@@ -162,7 +163,7 @@ installed. They carry their own upstream documentation:
 ## About
 
 - **Version**: 0.3.0
-- **License**: Zero Usage Unless Compensated (2016-2024)
+- **License**: The Sovereign Individual's Covenant License, v1.0 ([LICENSE](../LICENSE))
 - **Author**: Matt Stancliff
 - **Status**: Development snapshot - some components complete, others in refinement
 

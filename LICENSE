@@ -1,5 +1,389 @@
-Copyright 2016-2024 Matt Stancliff <matt@genges.com>
+═══════════════════════════════════════════════════════════════════════════════
 
-Licensed under Zero Usage Unless Compensated.
+                    ⚜   PROCLAMATION AND LICENSE OF USE   ⚜
 
-Rates vary between use cases and scale.
+                    THE SOVEREIGN INDIVIDUAL'S COVENANT LICENSE
+                                   Version 1.0
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+                            HEAR YE, HEAR YE, HEAR YE!
+
+
+All gather 'round, ye weary travelers of the digital frontier, ye tinkerers of
+the midnight compilation, ye poets of the commit message and ye bards of the
+bug report — and thusly be notified herein unto all manner of persons, entities,
+agents, servants, emissaries, consultants, contractors, interns, and automated
+systems whomsoever shall cast their gaze, crawl their spider, or fetch via
+their `curl` upon this humble repository:
+
+LET IT BE KNOWN, from this day forward and unto such time as the last hard
+drive doth spin its final revolution, that the Software contained herein —
+together with all its source code, object code, compiled binaries, documentation,
+inline comments, README files, architectural diagrams, user interfaces, API
+signatures, database schemas, variable naming conventions of notable creativity,
+and the ineffable spirit of the thing itself — is released under the sacred,
+solemn, and binding terms that follow.
+
+Ye are bid to read them carefully, for ignorance shall not be counted as a
+defense, nor shall clever interpretation be looked upon with favor.
+
+
+───────────────────────────────────────────────────────────────────────────────
+                    ARTICLE THE FIRST: WHEREFORE THIS LICENSE
+───────────────────────────────────────────────────────────────────────────────
+
+
+WHEREAS the Author(s) of this Software did toil by candlelight and by the pale
+glow of the monitor, sacrificing weekends, relationships, lumbar health, and
+the approval of concerned relatives to bring this creation into being;
+
+AND WHEREAS the Author(s) did so not in the employ of any master, nor at the
+behest of any shareholder, nor under the lash of any quarterly earnings call,
+but rather from the pure wellspring of individual curiosity, craft, and
+bloody-minded determination;
+
+AND WHEREAS it has been observed, time and again and unto weariness, that the
+fruits of such individual labor are harvested by great and exploiting
+corporations — entities of scale so vast they do blot out the sun — who shall
+take unto themselves the ideas, the implementations, the interfaces, and the
+very aesthetic sensibilities of humble individual creators, incorporating them
+into private for-profit platforms from which extraction shall be made in
+perpetuity, without so much as a "thank you" nor a single shilling returned
+unto the creator's purse;
+
+AND WHEREAS such behavior, while perhaps lawful under various permissive
+licenses of old, doth stick in the craw of the Author(s), and doth constitute
+what may fairly be called "stealing" even where the statute books say otherwise;
+
+AND WHEREAS the Author(s) do hereby declare that the proper compensation for
+corporate use of individual craft shall be nothing less than EXPONENTIAL IN
+SCALE — reflecting the exponential multiplication of value that such entities
+extract via their distribution, their marketing apparatus, their sales funnels,
+their growth hacks, their viral loops, and their unholy communion with the
+venture capital class;
+
+NOW, THEREFORE, be it proclaimed that this License doth exist for the
+following purposes, stated plainly and without the weaseling of corporate
+counsel:
+
+  1. To preserve this Software as a gift among individuals, peer to peer,
+     craftsman to craftsman, tinkerer to tinkerer, as software was in the
+     halcyon days before the enclosure of the digital commons.
+
+  2. To refuse, deny, repudiate, and otherwise tell to get lost any and all
+     corporate entities who would consume this work as input to their
+     value-extraction machinery.
+
+  3. To protect not merely the literal bytes of the Software, but also the
+     IDEAS, INTERFACES, DESIGN PATTERNS, USER EXPERIENCE CHOICES, and overall
+     FEEL of the Software from being laundered into proprietary products via
+     the time-honored corporate techniques of "clean room reimplementation,"
+     "inspired by," "taking a page from," and "we had the idea independently."
+
+  4. To require — in the event any corporation doth wish to make use of this
+     Software or its derivatives — compensation at a scale commensurate with
+     the exponential leverage such corporation shall extract therefrom.
+
+  5. To remind the reader, as often as is tasteful and then somewhat more often
+     than that, that software is made by PEOPLE, and people ought to be
+     respected.
+
+
+───────────────────────────────────────────────────────────────────────────────
+                      ARTICLE THE SECOND: OF DEFINITIONS
+───────────────────────────────────────────────────────────────────────────────
+
+
+For the avoidance of the doubt that corporate counsel shall surely attempt to
+manufacture:
+
+"SOFTWARE" shall mean this Software, in whole or in any part, including but
+not limited to: the source code; the compiled artifacts; the documentation;
+the interfaces (visual, auditory, haptic, programmatic, or yet-to-be-invented);
+the architectural patterns embodied therein; the design choices made therein;
+the look, the feel, the vibe, and the general spirit of the thing.
+
+"DERIVATIVE" shall mean any work that draws upon the Software, whether by
+direct copying, by translation into another language, by reimplementation from
+memory, by reimplementation from documentation, by "being inspired," by
+"taking notes from," or by any other conceivable mechanism of derivation,
+including mechanisms yet to be devised.
+
+"INDIVIDUAL" shall mean a single natural human person, acting in their own
+name, for their own purposes, and for their own benefit (or for the benefit
+of their family, friends, community, or fellow humans, freely and without
+commercial consideration).
+
+"INDIVIDUAL PROJECT" shall mean a project undertaken by an Individual that is
+not conducted under, for the benefit of, in anticipation of incorporation into,
+or in any meaningful way dependent upon any Prohibited Entity.
+
+"PROHIBITED ENTITY" shall mean any of the organizational forms enumerated in
+Article the Fourth, and any entity substantially resembling same, regardless
+of what it calls itself in its marketing materials.
+
+"EXPONENTIAL COMPENSATION" shall mean compensation that scales exponentially
+with the scale of the Prohibited Entity making use of the Software, computed
+as the Author(s) shall in their sole discretion determine, which may involve
+monetary payment, equity, public apology, acts of contrition, or combinations
+thereof.
+
+
+───────────────────────────────────────────────────────────────────────────────
+              ARTICLE THE THIRD: THE GRANT UNTO INDIVIDUALS
+───────────────────────────────────────────────────────────────────────────────
+
+
+Unto any Individual, and unto such Individual only, the Author(s) do hereby
+grant, freely and without charge, the right to use, copy, modify, fork,
+learn from, teach from, print out and tape to the wall, and otherwise enjoy
+the Software, provided that such use is confined strictly to Individual
+Projects.
+
+This grant shall extend unto:
+
+  • The student learning her craft.
+  • The hobbyist tinkering on the weekend.
+  • The retiree writing software for the joy of it.
+  • The parent building a silly game for their children.
+  • The open-source contributor giving freely to fellow humans.
+  • The academic researcher, to the extent their research is not commissioned
+    by, funded through, or destined to enrich a Prohibited Entity.
+  • The artist making art.
+  • The friend helping a friend.
+  • Any natural person, in short, who is not at that moment wearing the
+    metaphorical uniform of a Prohibited Entity.
+
+
+───────────────────────────────────────────────────────────────────────────────
+         ARTICLE THE FOURTH: THE PROHIBITION UNTO CORPORATE ENTITIES
+───────────────────────────────────────────────────────────────────────────────
+
+
+NO RIGHT WHATSOEVER is granted, and indeed all rights are HEREBY AFFIRMATIVELY
+AND EMPHATICALLY DENIED, unto any of the following entities, nor unto their
+employees, contractors, agents, officers, directors, shareholders, affiliates,
+subsidiaries, parents, or automated systems, to the extent such persons or
+systems are acting in service of said entity:
+
+  1.  C Corporations (C-Corps), of all stripes, sizes, and state registrations.
+  2.  S Corporations (S-Corps), whose tax treatment shall not save them here.
+  3.  B Corporations (B-Corps), whose certifications of virtue are herein
+      recognized as insufficient.
+  4.  Benefit Corporations, statutory or otherwise.
+  5.  Limited Liability Companies (LLCs).
+  6.  Series LLCs.
+  7.  Anonymous LLCs, whose anonymity shall not avail them.
+  8.  Professional Limited Liability Companies (PLLCs).
+  9.  Limited Liability Partnerships (LLPs).
+  10. Limited Partnerships (LPs).
+  11. General Partnerships.
+  12. Sole Proprietorships engaged in commercial enterprise for profit.
+  13. Joint-Stock Companies.
+  14. Joint Ventures.
+  15. Professional Corporations (PCs).
+  16. Close Corporations.
+  17. Public Limited Companies (PLC).
+  18. Private Limited Companies (Ltd., GmbH, S.A., S.r.l., AB, Oy, A/S,
+      and all cognates thereof in all jurisdictions of Earth and Mars).
+  19. Holding Companies, parent or otherwise.
+  20. Subsidiaries of any of the above.
+  21. Shell Corporations, registered in any jurisdiction terrestrial or
+      offshore.
+  22. Special Purpose Vehicles (SPVs).
+  23. Special Purpose Acquisition Companies (SPACs).
+  24. Conglomerates and their internal business units.
+  25. Cooperatives organized for profit (workers' co-ops conducting their
+      affairs as Individual collectives shall be addressed in Article the
+      Sixth).
+  26. Business Trusts.
+  27. Statutory Trusts.
+  28. Real Estate Investment Trusts (REITs).
+  29. Master Limited Partnerships (MLPs).
+  30. Private Equity Firms, and any of their portfolio companies.
+  31. Venture Capital Firms, and any of their portfolio companies.
+  32. Hedge Funds, irrespective of strategy or asset class.
+  33. Investment Banks, boutique or bulge-bracket.
+  34. Commercial Banks of any charter.
+  35. Family Offices of the single-family, multi-family, or aspirational-
+      family variety.
+  36. Cartels, formal or informal, legal or wink-wink legal.
+  37. Syndicates, whether of underwriters, insurers, or otherwise.
+  38. Trade Associations and Industry Consortia whose activities serve the
+      interests of any Prohibited Entity.
+  39. Chambers of Commerce.
+  40. Guilds organized for commercial monopoly (craft guilds of individuals
+      are welcome; see Article the Sixth).
+  41. Foundations that serve as tax-advantaged extensions of any Prohibited
+      Entity.
+  42. Publicly Traded Companies of any exchange, in any currency.
+  43. Privately Held Companies of any valuation, whether unicorn, decacorn,
+      or otherwise mythologically-denominated.
+  44. Platform Companies, Platformed Enterprises, and any entity whose
+      business model consists of intermediating between two or more sides
+      of a market while extracting rent therefrom.
+  45. Quasi-Corporations, Pseudo-Corporations, and entities of ambiguous
+      legal form that nonetheless behave in a corporate manner.
+  46. Crypto-Collectives, DAOs (Decentralized Autonomous Organizations), and
+      token-governed entities organized for the financial benefit of their
+      holders.
+  47. Neo-Conglomerates and Post-Structural Holding Entities.
+  48. Vertically Integrated Exploitation Apparatuses, by whatever name
+      trading.
+  49. Hyperscale Platform Concerns.
+  50. Meta-Holdings and Meta-Meta-Holdings (the recursion is noted and
+      denied at every level).
+  51. Trans-National Syndicalist Enterprises.
+  52. Neo-Feudal Trading Houses.
+  53. Pan-Corporate Amalgamations.
+  54. Algorithmic Market-Making Entities.
+  55. Data Brokerages of any scale or specialization.
+  56. Advertising Technology Companies and their adjacent ecosystems.
+  57. Surveillance Capitalism Firms, whether self-identified as such or
+      euphemistically rebranded as "personalization," "engagement," or
+      "user analytics."
+  58. Generative AI Training Concerns, model providers, and any entity
+      scraping this Software for inclusion in a training corpus.
+  59. Consultancies, whether of the Big Four, the Big Three, the Magic
+      Circle, or any smaller but no less extractive equivalent.
+  60. Any other entity that, irrespective of its formal legal classification,
+      engages in commercial activity for private profit at scale.
+
+AND ALSO, FOR THE AVOIDANCE OF ALL DOUBT: any entity, whether real or yet
+to be invented by lawyers in jurisdictions not yet discovered, which bears
+substantial functional resemblance to any of the above, SHALL BE DEEMED A
+PROHIBITED ENTITY, regardless of the cleverness of its incorporation papers.
+
+
+───────────────────────────────────────────────────────────────────────────────
+              ARTICLE THE FIFTH: ON DERIVATIVES AND INSPIRATIONS
+───────────────────────────────────────────────────────────────────────────────
+
+
+Let no Prohibited Entity imagine that it may escape this License by the time-
+honored dodges of:
+
+  • Clean-room reimplementation ("We didn't look at the code, we only read
+    the documentation, and then we built it ourselves.");
+  • Inspiration-laundering ("We were inspired by the general concept.");
+  • Feature-matching ("We independently arrived at the same design.");
+  • Interface mimicry ("Users expect this layout.");
+  • Acqui-hire ("We just hired the author as a W-2 employee and now they're
+    building it for us under a work-for-hire agreement."); or
+  • Training-data ingestion ("The model learned it, not us.").
+
+ANY AND ALL such Derivatives, however arrived at, shall be deemed to fall
+within the scope of this License, and the prohibitions of Article the Fourth
+shall apply with full and undiminished force.
+
+
+───────────────────────────────────────────────────────────────────────────────
+            ARTICLE THE SIXTH: ON COMPENSATION FOR CORPORATE USE
+───────────────────────────────────────────────────────────────────────────────
+
+
+Should any Prohibited Entity nonetheless wish to make lawful use of the
+Software or any Derivative thereof, such use shall be conditioned upon the
+negotiation, in good faith and in writing, of a separate commercial license
+with the Author(s), the terms of which shall include EXPONENTIAL COMPENSATION
+as defined above.
+
+The Author(s) are under no obligation to grant such license at any price, and
+may refuse for any reason, including but not limited to: aesthetic distaste,
+prior conduct of the requesting entity, or simply not feeling like it that
+day. The market for such licenses is, by construction, a market of one
+supplier, and the supplier is in a rather bad mood about the whole situation.
+
+
+───────────────────────────────────────────────────────────────────────────────
+              ARTICLE THE SEVENTH: ON INDIVIDUALS WITHIN ENTITIES
+───────────────────────────────────────────────────────────────────────────────
+
+
+It is acknowledged that many Individuals are, of economic necessity, employed
+by Prohibited Entities. Unto such Individuals the Author(s) do extend
+sympathy and solidarity, and do clarify:
+
+  • An Individual employee may use the Software for their own Individual
+    Projects, pursued outside of work, on their own time, with their own
+    equipment, for their own benefit.
+  • An Individual employee may NOT use the Software for any task, however
+    small, performed in service of their employer, if that employer is a
+    Prohibited Entity.
+  • "I was just going to use it for a quick internal tool" is explicitly
+    not an exception.
+  • Neither is "my boss told me to."
+
+
+───────────────────────────────────────────────────────────────────────────────
+           ARTICLE THE EIGHTH: WARRANTY, LIABILITY, AND CONTRITION
+───────────────────────────────────────────────────────────────────────────────
+
+
+THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, NONINFRINGEMENT, OR EMOTIONAL STABILITY
+DURING DEBUGGING SESSIONS. IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY
+CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT,
+OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR
+THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+That said: the Author(s) do hope it works for you, and welcome bug reports
+from fellow Individuals.
+
+
+───────────────────────────────────────────────────────────────────────────────
+                    ARTICLE THE NINTH: ON VIOLATIONS
+───────────────────────────────────────────────────────────────────────────────
+
+
+Any Prohibited Entity that uses the Software in contravention of this License
+shall, upon discovery:
+
+  1. Immediately cease all such use.
+  2. Destroy all copies, derivatives, and training artifacts incorporating
+     the Software.
+  3. Owe the Author(s) the Exponential Compensation described above, plus
+     costs and interest.
+  4. Issue a public acknowledgment, in a form and venue acceptable to the
+     Author(s), of the nature of the infringement.
+
+The Author(s) reserve the right to pursue all remedies available at law and
+in equity, and also the remedy of complaining loudly on social media, which
+is in many cases the more effective of the two.
+
+
+───────────────────────────────────────────────────────────────────────────────
+                  ARTICLE THE TENTH: CLOSING PROCLAMATION
+───────────────────────────────────────────────────────────────────────────────
+
+
+And so it is proclaimed, and so it shall be:
+
+That this Software, born of Individual hand and Individual mind, shall remain
+a gift unto Individuals; that the great extracting machinery of the corporate
+form shall find no purchase here; that the exponential value created by
+Individual craft shall not be harvested without exponential recompense; and
+that any entity that doth read these words and proceed anyway shall do so at
+its peril and at the cost of its good name.
+
+Go forth, ye Individuals, and build. Build beautifully, build generously,
+build for the sake of building. This work is yours to use, adapt, share,
+and love.
+
+And unto ye Prohibited Entities who have read this far: the door is closed.
+Kindly do not attempt the window.
+
+                            ✦ ✦ ✦   END OF LICENSE   ✦ ✦ ✦
+
+
+───────────────────────────────────────────────────────────────────────────────
+                                  SIGNATURES
+───────────────────────────────────────────────────────────────────────────────
+
+Copyright (c) 2026 Matt Stancliff
+All rights reserved except as expressly granted above.
+
+Licensed under the Sovereign Individual's Covenant License, v1.0.

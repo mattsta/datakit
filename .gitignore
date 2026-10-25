@@ -4,6 +4,12 @@ build/
 build-*/
 compile_commands.json
 
+# Markdown at the repository root is local working material (agent
+# notes such as CLAUDE.md); only the README is published. Public docs
+# live in docs/.
+/*.md
+!/README.md
+
 # Internal working material (plans, designs, audits, session notes,
 # scratch). Never committed; docs/ holds only the curated public docs.
 # Promote a file by moving it into docs/ and committing it explicitly.
