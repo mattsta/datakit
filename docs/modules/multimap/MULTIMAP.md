@@ -1000,7 +1000,8 @@ multimap *index = multimapNewLimit(2, FLEX_CAP_LEVEL_1024);
 ```
 
 `multimapNew` and `multimapSetNew` take their limit from a process default,
-2048 until changed. Setting it once at startup (as `dktools tune` prints)
+2048 until changed: the densest limit that is less than 15% slower than the
+fastest above, as `dktools tune` chooses. Setting it once at startup (as `dktools tune` prints)
 moves every map made afterwards; maps already made keep their limit, and
 constructors taking a limit ignore the default:
 

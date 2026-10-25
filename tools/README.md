@@ -603,9 +603,9 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
 - Prints, per family and limit, the median ns/op of each operation, the
   filled container's total bytes, and a cost: the geometric mean of each
   operation's ns over its best ns at any limit (1.00 = best at everything).
-- Recommends the lowest-cost limit; limits within 2% of it tie on speed,
-  and among ties the one holding the data in the fewest bytes wins (density
-  first). Also prints the machine's cache sizes (sysfs on Linux, sysctl on
+- Limits costing less than 15% over the lowest cost tie on speed, and among
+  ties the one holding the data in the fewest bytes is recommended: density
+  first, unless a denser limit is 15% or more slower. Also prints the machine's cache sizes (sysfs on Linux, sysctl on
   macOS). `result.txt` and `result.json` (per family: limit, ties, the
   call that applies it, costs) are kept in the work directory.
 - Each recommendation names its call: multimap's and multiOrderedSet's

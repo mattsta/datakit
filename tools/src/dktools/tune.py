@@ -18,8 +18,9 @@ Per family the result shows, per limit: the median ns/op of every
 operation, the filled container's total bytes, and a cost.  The cost is
 the geometric mean over the operations of (ns at this limit / the best
 ns at any limit), so every operation counts equally and 1.00 means best
-at everything.  The recommended limit has the lowest cost; any limit
-within ``TIE`` of it is listed beside it.  The machine's cache sizes are
+at everything.  Limits costing less than ``TIE`` (15%) over the lowest
+cost tie on speed; the recommended one holds the data in the fewest
+bytes, and the other ties are listed beside it.  The machine's cache sizes are
 printed too: a unit that fits a cache level stays hot, which is what the
 sweep measures.  The table is also written to ``result.txt`` and the
 recommendations to ``result.json``.
@@ -41,8 +42,10 @@ from . import buildstore, gitutil, perfcompare, perfdiff, procs, steps, toolchai
 from .gitutil import ToolError
 
 FAMILIES = ("multimap", "multiOrderedSet", "multilist")
-#: Limits within this fraction of the best cost are ties.
-TIE = 0.02
+#: Limits costing less than this fraction over the best cost tie on speed,
+#: and among ties the densest wins: memory first unless a limit is 15% or
+#: more slower (a runtime default lets a caller trade back).
+TIE = 0.15
 #: The dkTierFamily whose process default each family's plain constructor
 #: reads (dkTierLimit.h); multilist has none, its constructors take a limit.
 DEFAULT_SETTERS = {
@@ -105,7 +108,7 @@ class Sweep:
         if not costs:
             raise ToolError("no limit rows to recommend from")
         lowest = min(costs.values())
-        tied = [limit for limit in sorted(costs) if costs[limit] <= lowest * (1 + TIE)]
+        tied = [limit for limit in sorted(costs) if costs[limit] < lowest * (1 + TIE)]
         best = min(
             tied,
             key=lambda limit: (self.bytes.get(limit, math.inf), costs[limit]),

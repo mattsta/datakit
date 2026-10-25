@@ -73,6 +73,21 @@ class Sweeps(unittest.TestCase):
         )
         self.assertEqual(sweep.recommend(), (1024, [256, 512]))
 
+    def test_density_wins_below_a_fifteen_percent_slowdown(self) -> None:
+        # The measured multimap shape: 1024 fastest, 2048 ~12% slower and
+        # denser, 4096 densest but ~44% slower.
+        sweep = tune.Sweep(
+            ns={1024: {"a": 100.0}, 2048: {"a": 112.0}, 4096: {"a": 144.0}},
+            bytes={1024: 2_244_129, 2048: 2_239_704, 4096: 2_237_182},
+        )
+        self.assertEqual(sweep.recommend(), (2048, [1024]))
+        # 16% slower is a collapse, not a tie, however much denser
+        edge = tune.Sweep(
+            ns={1024: {"a": 100.0}, 2048: {"a": 116.0}},
+            bytes={1024: 2, 2048: 1},
+        )
+        self.assertEqual(edge.recommend(), (1024, []))
+
     def test_render_marks_the_recommendation(self) -> None:
         found = {
             "multimap": tune.Sweep(
