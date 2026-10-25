@@ -1757,6 +1757,17 @@ DK_STATIC void bitmapRangeApply_(uint8_t *bitmap, uint32_t lo, uint32_t hi,
  * disappears directly; a partial one is expanded to a bitmap, edited and
  * stored back in its smallest form.  Clearing visits only chunks that
  * exist, so clearing a huge sparse range costs nothing for empty space. */
+/* The bits [lo, hi) of 'chunk' that the range [start, end) covers, from
+ * its first chunk to its last; true when that is the whole chunk */
+DK_INLINE_ALWAYS bool mrRangeSpan_(uint64_t chunk, uint64_t first,
+                                   uint64_t last, uint64_t start, uint64_t end,
+                                   uint32_t *lo, uint32_t *hi) {
+    const uint64_t chunkStart = chunk * BITMAP_SIZE_IN_BITS;
+    *lo = chunk == first ? (uint32_t)(start - chunkStart) : 0;
+    *hi = chunk == last ? (uint32_t)(end - chunkStart) : BITMAP_SIZE_IN_BITS;
+    return *lo == 0 && *hi == BITMAP_SIZE_IN_BITS;
+}
+
 DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
                                     uint64_t extent, multiroarRangeOp_ op) {
     if (!r || extent == 0 || MR_BIT_OP_REFUSED_(r)) {
@@ -1773,7 +1784,14 @@ DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
     for (uint64_t chunk = first;;) {
         databox key = databoxNewUnsigned(chunk);
         multimapEntry me;
-        bool exists = multimapGetUnderlyingEntry(r->map, &key, &me);
+        uint32_t lo;
+        uint32_t hi;
+        bool whole = mrRangeSpan_(chunk, first, last, start, end, &lo, &hi);
+
+        /* A whole chunk's set needs no lookup: its insert replaces a
+         * present row, one search either way */
+        bool exists = !(whole && op == MULTIROAR_RANGE_SET_) &&
+                      multimapGetUnderlyingEntry(r->map, &key, &me);
         if (op == MULTIROAR_RANGE_CLEAR_ && !exists) {
             /* Skip to the next chunk that exists */
             multimapIterator iter;
@@ -1787,13 +1805,8 @@ DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
             key = databoxNewUnsigned(chunk);
             exists = multimapGetUnderlyingEntry(r->map, &key, &me);
             assert(exists);
+            whole = mrRangeSpan_(chunk, first, last, start, end, &lo, &hi);
         }
-
-        const uint64_t chunkStart = chunk * BITMAP_SIZE_IN_BITS;
-        const uint32_t lo = chunk == first ? (uint32_t)(start - chunkStart) : 0;
-        const uint32_t hi =
-            chunk == last ? (uint32_t)(end - chunkStart) : BITMAP_SIZE_IN_BITS;
-        const bool whole = lo == 0 && hi == BITMAP_SIZE_IN_BITS;
 
         if (whole && op == MULTIROAR_RANGE_CLEAR_) {
             /* The row just located goes (a clear reaches only present

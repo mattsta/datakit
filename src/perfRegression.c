@@ -968,6 +968,15 @@ static void benchMultiroar(void) {
     t0 = monoNowSec();
     multiroarBitClearRange(r, 0, (uint64_t)n * 8192);
     emitRow("multiroar", "clearRangeWhole", 0, n, monoNowSec() - t0);
+
+    /* Whole chunks set: first into absent chunks, then over full ones */
+    t0 = monoNowSec();
+    multiroarBitSetRange(r, 0, (uint64_t)n * 8192);
+    emitRow("multiroar", "setRangeWholeNew", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    multiroarBitSetRange(r, 0, (uint64_t)n * 8192);
+    emitRow("multiroar", "setRangeWholeFull", 0, n, monoNowSec() - t0);
     perfContainerSink = multiroarBitCount(r) + multiroarBitCount(b);
 }
 
