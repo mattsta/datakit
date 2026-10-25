@@ -559,6 +559,51 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
     (void)argv;
     int err = 0;
 
+    TEST("delete by value frees its id; a replayed insert past the next id "
+         "leaves the ids it skips as holes") {
+        multimapAtomDense *d = multimapAtomDenseNew();
+        databox a = databoxNewSigned(1);
+        databox b = databoxNewSigned(2);
+        multimapAtomDenseInsertConvert(d, &a); /* id 0 */
+        multimapAtomDenseInsertConvert(d, &b); /* id 1 */
+        const databox one = databoxNewSigned(1);
+        if (!multimapAtomDenseDelete(d, &one) ||
+            multimapAtomDenseCount(d) != 1 ||
+            multimapAtomDenseDelete(d, &one)) {
+            ERRR("a delete by value did not remove exactly that atom");
+        }
+        databox c = databoxNewSigned(3);
+        multimapAtomDenseInsertConvert(d, &c);
+        if (c.data.u != 0 || d->holes) {
+            ERR("the freed id came back as %" PRIu64, (uint64_t)c.data.u);
+        }
+
+        /* A WAL insert under id 6 while the next id is 2: 2..5 are holes,
+         * filled lowest first, and the next new id is 7 */
+        const databox id6 = databoxNewUnsigned(6);
+        const databox nine = databoxNewSigned(9);
+        const databox *args[2] = {&id6, &nine};
+        size_t len = 0;
+        uint8_t *body = persistOpsMultimapAtomDense.encodeOp(PERSIST_OP_INSERT,
+                                                             args, 2, &len);
+        multimapAtomDense *target = d;
+        if (!body || !persistOpsMultimapAtomDense.applyOp(
+                         &target, PERSIST_OP_INSERT, body, len)) {
+            ERRR("the replayed insert was refused");
+        }
+        zfree(body);
+        const uint64_t want[] = {2, 3, 4, 5, 7};
+        for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
+            databox x = databoxNewSigned(100 + (int64_t)i);
+            multimapAtomDenseInsertConvert(d, &x);
+            if (x.data.u != want[i]) {
+                ERR("atom %zu got id %" PRIu64 ", want %" PRIu64, i,
+                    (uint64_t)x.data.u, want[i]);
+            }
+        }
+        multimapAtomDenseFree(d);
+    }
+
     TEST("lowest free id first, holes filled lowest first") {
         multimapAtomDense *d = multimapAtomDenseNew();
         databox v[8];
