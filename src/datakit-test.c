@@ -107,6 +107,7 @@
 #include "persist/persistCtx.h"
 #include "portableRandom.h"
 #include "ptrPrevNext.h"
+#include "tierSim.h" /* one simulation over every tiered family */
 #include "versionOSRuntime.h"
 
 /* ptrlib is a guard-less config-macro header; its test entry point is
@@ -12669,7 +12670,7 @@ static const TestEntry testRegistry[] = {
     T_A_ADJ(atomPool, "ap,apool"), T_ADJ(multiarray), T_ADJ(multiarraySmall),
     T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge), T_ADJ(multiroar),
     T_A_ADJ(multiOrderedSet, "mos"), T_A_ADJ(multilru, "lru,mlru"), T_ADJ(list),
-    T_A_ADJ(ptrPrevNext, "ppn"),
+    T_A_ADJ(ptrPrevNext, "ppn"), T_A(tierSim, "sim"),
 
     /* Numeric types */
     T_A(float16, "f16"), T_A_ADJ(floatExtended, "float128,fe"), T(intset),

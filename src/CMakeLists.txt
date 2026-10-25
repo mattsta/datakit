@@ -553,6 +553,9 @@ add_library(${PROJECT_NAME} OBJECT
     intsetTest.c
     intsetU32.c
 
+    # One simulation driving every tiered family through its tier changes
+    tierSimTest.c
+
     # Fenwick & Segment tree implementations (2-tier template system)
     # Note: Old fenwick.c, segment.c files moved to old/ directory
     # Using new type-specific implementations added via add_subdirectory()
