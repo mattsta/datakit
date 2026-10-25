@@ -230,6 +230,12 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
 flex *flexNewFromDataboxExact(const databox *box);
 flex *flexNewFromDataboxesExact(const databox *boxes, size_t n);
 flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n);
+/* The flex flexNewFromDataboxPtrsExact makes, written into 'dst' instead
+ * of a new allocation: returns the bytes it takes, and writes them only
+ * when they fit 'cap' (a caller with a fixed buffer checks the return
+ * against its capacity and falls back when it is larger). */
+size_t flexEncodeDataboxPtrsExact(void *dst, size_t cap,
+                                  const databox *const *boxes, size_t n);
 
 /* databoxBig arm of the factory — for values that may exceed 64 bits (numeric
  * quantum sets / intsetBig).  A plain databox cannot hold a 128-bit value

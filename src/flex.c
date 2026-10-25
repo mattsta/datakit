@@ -3375,6 +3375,60 @@ flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n) {
     return flexNewFromBoxes_(NULL, boxes, n, true);
 }
 
+size_t flexEncodeDataboxPtrsExact(void *dst, size_t cap,
+                                  const databox *const *boxes, size_t n) {
+    /* Rows wider than the stack scratch are built and copied */
+    enum { ENCODE_STACK_ELEMENTS_ = 8 };
+    if (n > ENCODE_STACK_ELEMENTS_) {
+        cleaner(flexFree) flex *made = flexNewFromDataboxPtrsExact(boxes, n);
+        const size_t bytes = flexBytes(made);
+        if (bytes <= cap) {
+            memcpy(dst, made, bytes);
+        }
+        return bytes;
+    }
+
+    /* The appends' encoding of each box, as flexAppendMultipleExact makes
+     * it (a NULL box is null) */
+    databox copy[ENCODE_STACK_ELEMENTS_];
+    flexInsertContents content[ENCODE_STACK_ELEMENTS_];
+    __int128_t bigBuffer[ENCODE_STACK_ELEMENTS_];
+    size_t entryBytes = 0;
+    for (size_t i = 0; i < n; i++) {
+        copy[i] = boxes[i] ? *boxes[i] : DATABOX_BOX_NULL;
+        insertContentsFromBox(&copy[i], &content[i], CONVERSION_OVERRIDE_NONE,
+                              i, bigBuffer);
+        entryBytes += abstractInsertSizeFromInsertContents(&content[i]);
+    }
+
+    /* The header: total bytes (whose width counts itself) then the count */
+    const varintWidth countWidth = varintTaggedLenQuick(n);
+    varintWidth totalWidth = 1;
+    size_t total = totalWidth + countWidth + entryBytes;
+    for (varintWidth w;
+         (w = flexVarintSplitFullNoZeroLenEmbedded_(total)) != totalWidth;) {
+        totalWidth = w;
+        total = totalWidth + countWidth + entryBytes;
+    }
+
+    if (total > cap) {
+        return total;
+    }
+
+    flexEntry *f = dst;
+    int_fast8_t encodedLen;
+    varintSplitFullNoZeroPut_(f, encodedLen, total);
+    assert((varintWidth)encodedLen == totalWidth);
+    varintTaggedPut64FixedWidthQuick_(f + encodedLen, n, countWidth);
+    flexEntry *fe = f + encodedLen + countWidth;
+    for (size_t i = 0; i < n; i++) {
+        abstractWriteFullEntry(&fe, &content[i]);
+    }
+
+    assert((size_t)(fe - f) == total);
+    return total;
+}
+
 bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
     if (!buf || !out) {
         return false;
@@ -14081,6 +14135,68 @@ int32_t flexTest(int32_t argc, char **argv) {
      * The varint library's own tests cover varintExternalGet's
      * assertion-free fallback.
      * ================================================================ */
+    TEST("flexEncodeDataboxPtrsExact writes the bytes "
+         "flexNewFromDataboxPtrsExact makes") {
+        /* Rows of 0..10 boxes (past the 8 kept on the stack) of every kind:
+         * integers of each width and sign, reals, booleans, null, 96/128-bit
+         * values, strings from empty to 70000 bytes (the header's varints
+         * widen).  Each is written whole and exactly into a buffer that
+         * fits, and not at all into one a byte short. */
+        static char text[70000];
+        memset(text, 'q', sizeof(text));
+        databoxBig wideS;
+        DATABOX_BIG_SIGNED_128(&wideS, -((__int128_t)1 << 100));
+        databoxBig wideU;
+        DATABOX_BIG_UNSIGNED_128(&wideU, ((__uint128_t)1 << 90) + 3);
+        const databox kinds[] = {
+            DATABOX_SIGNED(-1),
+            DATABOX_SIGNED(INT64_MIN),
+            DATABOX_UNSIGNED(7),
+            DATABOX_UNSIGNED(UINT64_MAX),
+            DATABOX_UNSIGNED(70000),
+            DATABOX_DOUBLE(1.5),
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_FALSE,
+            DATABOX_BOX_NULL,
+            *(const databox *)&wideS,
+            *(const databox *)&wideU,
+            databoxNewBytes(text, 0),
+            databoxNewBytes(text, 15),
+            databoxNewBytes(text, 300),
+            databoxNewBytes(text, sizeof(text)),
+        };
+        uint64_t rng = 0x5DEECE66DULL;
+        for (int row = 0; row < 500; row++) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            const size_t n = row == 0 ? 0 : (size_t)((rng >> 40) % 11);
+            const databox *ptrs[10];
+            for (size_t i = 0; i < n; i++) {
+                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                ptrs[i] = &kinds[(rng >> 33) % COUNT_ARRAY(kinds)];
+            }
+            cleaner(flexFree) flex *made = flexNewFromDataboxPtrsExact(ptrs, n);
+            const size_t want = flexBytes(made);
+            const size_t need = flexEncodeDataboxPtrsExact(NULL, 0, ptrs, n);
+            if (need != want) {
+                ERR("row %d: %zu bytes needed, the flex has %zu", row, need,
+                    want);
+                break;
+            }
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(need + 1);
+            memset(buf, 0xAB, need + 1);
+            if (flexEncodeDataboxPtrsExact(buf, need - 1, ptrs, n) != need ||
+                buf[0] != 0xAB) {
+                ERR("row %d: a short buffer was written", row);
+                break;
+            }
+            if (flexEncodeDataboxPtrsExact(buf, need, ptrs, n) != need ||
+                memcmp(buf, made, need) != 0 || buf[need] != 0xAB) {
+                ERR("row %d: the written bytes differ from the flex", row);
+                break;
+            }
+        }
+    }
+
     TEST("varintExternalGet rejects out-of-range widths") {
         /* Provide a buffer big enough that, absent the guard, a width=16
          * load would silently read 16 bytes and write all 16 into the
