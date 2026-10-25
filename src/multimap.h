@@ -206,7 +206,9 @@ bool multimapDeleteRandomValue(multimap **m, bool fromTail, databox **deleted);
  *
  * multimapFieldIncrBy returns true with the new value in '*newValue' (if
  * non-NULL); it returns false, changing nothing, for a missing key, a field
- * that is not such a counter, or a result outside int64.
+ * that is not such a counter, a result outside int64, or a set (a set's
+ * values order its rows, so changing one in place would misplace the row;
+ * delete the row and insert the new one instead).
  *
  * multimapFieldIncr returns the new value, or on any refusal the current
  * value (0 for a missing key or a non-counter field); it cannot report a

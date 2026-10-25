@@ -1154,6 +1154,9 @@ int multimapPTest(int argc, char *argv[]) {
             multimapDeleteFullWidthP(m, gone) != PERSIST_LOG_UNCHANGED) {
             ERRR("Full-row delete found no row, or deleted it twice");
         }
+        if (multimapFieldIncrP(m, &one, 1, 1, NULL) != PERSIST_LOG_REFUSED) {
+            ERRR("an increment in a set was not refused");
+        }
         multimapCloseP(m);
         persistCtxFree(ctx);
 

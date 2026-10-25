@@ -752,6 +752,9 @@ Behavior, exactly as implemented:
   key, any other field (bytes, a `DATABOX_UNSIGNED_64` above `INT64_MAX`), or a
   sum outside `int64_t` is **refused**: `multimapFieldIncrBy` returns false and
   the map is unchanged. The sum is exact.
+- A set refuses every increment: its values are part of each row's sort order,
+  so a value changed in place would leave the row out of order for full-width
+  searches. Delete the row and insert the new one instead.
 - `incrBy == 0` returns the current value and writes nothing.
 - Booleans participate: `FALSE` acts as 0 and `TRUE` as 1. `FALSE + 1` becomes
   `TRUE`, `TRUE - 1` becomes `FALSE`, and any other result makes the field an

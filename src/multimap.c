@@ -812,7 +812,9 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
 static bool multimapFieldCounter_(multimap *m, const databox *key,
                                   uint32_t fieldOffset, multimapEntry *me,
                                   databox *field, int64_t *value) {
-    if (!multimapGetUnderlyingEntry(m, key, me)) {
+    /* A set's values order its rows (they are part of each row's
+     * identity), so none is a counter to rewrite in place */
+    if (multimapIsSet(m) || !multimapGetUnderlyingEntry(m, key, me)) {
         return false;
     }
 
@@ -8027,6 +8029,36 @@ int multimapTest(int argc, char *argv[]) {
             multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
             ERRR("a non-counter field or missing key was not refused");
         }
+    }
+
+    TEST("FieldIncrBy refuses a set: its values order the rows") {
+        /* (1, 1) (1, 5) (2, 3): raising (1, 1) to 11 in place would sit it
+         * before (1, 5), and full-width searches would stop finding rows */
+        cleaner(multimapFree) multimap *set = multimapSetNew(2);
+        static const int64_t rows[][2] = {{1, 1}, {1, 5}, {2, 3}};
+        for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
+            const databox k = databoxNewSigned(rows[i][0]);
+            const databox v = databoxNewSigned(rows[i][1]);
+            const databox *row[] = {&k, &v};
+            multimapInsert(&set, row);
+        }
+        const databox one = databoxNewSigned(1);
+        const databox two = databoxNewSigned(2);
+        int64_t now = -1;
+        if (multimapFieldIncrBy(&set, &one, 1, 10, &now) ||
+            multimapFieldIncrBy(&set, &two, 1, 1, &now) || now != -1 ||
+            multimapFieldIncr(&set, &one, 1, 10) != 0) {
+            ERRR("an increment in a set was not refused");
+        }
+        for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
+            const databox k = databoxNewSigned(rows[i][0]);
+            const databox v = databoxNewSigned(rows[i][1]);
+            const databox *row[] = {&k, &v};
+            if (!multimapExistsFullWidth(set, row)) {
+                ERR("row %zu lost after a refused increment", i);
+            }
+        }
+        multimapVerify(set);
     }
 
     TEST("FieldIncrByIf: asked once a change will apply; declining changes "
