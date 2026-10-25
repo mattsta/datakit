@@ -209,6 +209,8 @@ void flexGetStatsP(const flexP *f, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+#include "../dkDiag.h"
+#include "intsetP.h"
 #include "persistTestCommon.h"
 
 /* Helper to verify flex matches tracker exactly - returns true if match */
@@ -270,6 +272,53 @@ int flexPTest(int argc, char *argv[]) {
         }
 
         flexCloseP(f);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("flexP refusals change nothing: a refused log, missing arguments, "
+         "a held or other-type context") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        flexP *f = flexNewP(ctx);
+        const databox one = DATABOX_SIGNED(1);
+        flexPushTailP(f, &one);
+        PTEST_EXPECT_REFUSED(ctx, flexPushTailP(f, &one),
+                             flexPushHeadP(f, &one), flexResetP(f));
+        if (flexCountP(f) != 1) {
+            ERR("refused changes left %zu entries, not 1", flexCountP(f));
+        }
+
+        /* Missing arguments: refused or empty answers */
+        databox got = {{0}};
+        if (flexPushTailP(NULL, &one) || flexPushHeadP(f, NULL) ||
+            flexResetP(NULL) || flexNewP(NULL) || flexOpenP(NULL) ||
+            flexGetP(NULL) || flexCountP(NULL) || flexBytesP(NULL) ||
+            flexIndexP(NULL, 0) || flexSyncP(NULL) || flexCompactP(NULL)) {
+            ERRR("a call without its wrapper or value was not refused");
+        }
+        flexGetByTypeP(NULL, NULL, &got);
+        flexGetStatsP(NULL, NULL);
+        flexCloseP(NULL);
+
+        /* A held context takes no second wrapper; once it is let go, it
+         * stays bound to flex, so another type's wrapper is refused */
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+        flexP *second = NULL;
+        DK_DIAG_EXPECT_REPORTS("a held context", 1, DK_DIAG_PERSIST_CTX_CLAIMED,
+                               second = flexNewP(ctx));
+        flexCloseP(f);
+        intsetP *other = NULL;
+        DK_DIAG_EXPECT_REPORTS("a flex context", 1,
+                               DK_DIAG_PERSIST_CTX_WRONG_TYPE,
+                               other = intsetNewP(ctx));
+        dkDiagSetPrintMode(priorPrint);
+        if (second || other) {
+            ERRR("a held or other-type context took a wrapper");
+        }
+        intsetCloseP(other);
+        flexCloseP(second);
         persistCtxFree(ctx);
         ptestCleanupFiles(basePath);
     }

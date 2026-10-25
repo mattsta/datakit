@@ -1672,8 +1672,91 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+/* Under a refusing WAL every change is refused and the LRU is as it was
+ * (count, weights, each entry's level, the limits); calls missing their
+ * wrapper are refused or answer empty */
+static int test_multilruP_refusals(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multilruPTest_refusals", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multilruP refusals change nothing: a refused log, missing "
+         "arguments")
+
+    ptestCleanupFiles(basePath);
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    const multilruConfig config = {.maxLevels = 4, .enableWeights = true};
+    multilruP *mlru = multilruNewWithConfigP(ctx, &config);
+    multilruPtr a = 0;
+    multilruPtr b = 0;
+    multilruInsertWeightedP(mlru, 5, &a);
+    multilruInsertWeightedP(mlru, 7, &b);
+    multilruIncreaseP(mlru, b);
+    const size_t levelA = multilruGetLevelP(mlru, a);
+    const size_t levelB = multilruGetLevelP(mlru, b);
+    const uint64_t maxCount = multilruGetMaxCountP(mlru);
+    const uint64_t maxWeight = multilruGetMaxWeightP(mlru);
+
+    multilruPtr fresh = 0;
+    multilruPtr out = 0;
+    PTEST_EXPECT_REFUSED(
+        ctx, multilruInsertP(mlru, &fresh),
+        multilruInsertWeightedP(mlru, 3, &fresh), multilruIncreaseP(mlru, a),
+        multilruUpdateWeightP(mlru, a, 50), multilruRemoveMinimumP(mlru, &out),
+        multilruDeleteP(mlru, b), multilruSetMaxCountP(mlru, 1),
+        multilruSetMaxWeightP(mlru, 1));
+    if (multilruCountP(mlru) != 2 || multilruTotalWeightP(mlru) != 12 ||
+        multilruGetWeightP(mlru, a) != 5 || fresh != 0 || out != 0) {
+        ERR("refused changes left count %zu, weight %" PRIu64
+            ", a's weight %" PRIu64 ", handles %" PRIu64 " %" PRIu64,
+            multilruCountP(mlru), multilruTotalWeightP(mlru),
+            multilruGetWeightP(mlru, a), (uint64_t)fresh, (uint64_t)out);
+    }
+    if (multilruGetLevelP(mlru, a) != levelA ||
+        multilruGetLevelP(mlru, b) != levelB) {
+        ERR("refused changes moved levels %zu %zu to %zu %zu", levelA, levelB,
+            multilruGetLevelP(mlru, a), multilruGetLevelP(mlru, b));
+    }
+    if (multilruGetMaxCountP(mlru) != maxCount ||
+        multilruGetMaxWeightP(mlru) != maxWeight) {
+        ERR("refused limit changes left limits %" PRIu64 " %" PRIu64,
+            multilruGetMaxCountP(mlru), multilruGetMaxWeightP(mlru));
+    }
+
+    /* Missing arguments: refused or empty answers */
+    if (multilruInsertP(NULL, &fresh) || multilruIncreaseP(NULL, a) ||
+        multilruUpdateWeightP(NULL, a, 1) ||
+        multilruRemoveMinimumP(NULL, &out) || multilruDeleteP(NULL, a) ||
+        multilruSetMaxCountP(NULL, 1) || multilruSetMaxWeightP(NULL, 1) ||
+        multilruNewP(NULL) || multilruOpenP(NULL) || multilruGetRawP(NULL) ||
+        multilruCountP(NULL) || multilruBytesP(NULL) ||
+        multilruTotalWeightP(NULL) || multilruIsPopulatedP(NULL, a) ||
+        multilruSyncP(NULL) || multilruCompactP(NULL) ||
+        multilruGetMaxCountP(NULL) || multilruGetMaxWeightP(NULL)) {
+        ERRR("a call without its wrapper was not refused");
+    }
+    multilruGetStatsP(NULL, NULL);
+    multilruCloseP(NULL);
+
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multilruPTest(int argc, char *argv[]) {
     int err = 0;
+
+    err += test_multilruP_refusals(argc, argv);
 
     err += test_multilruP_damagedWal(argc, argv);
     err += test_multilruP_recency_order(argc, argv);

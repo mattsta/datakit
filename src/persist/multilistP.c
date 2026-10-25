@@ -606,6 +606,67 @@ int multilistPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("multilistP refusals change nothing: a refused log, missing "
+         "arguments") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
+        const databox ten = DATABOX_SIGNED(10);
+        const databox twenty = DATABOX_SIGNED(20);
+        multilistPushTailP(ml, &ten);
+        multilistPushTailP(ml, &twenty);
+        databox popped = {{0}};
+        PTEST_EXPECT_REFUSED(
+            ctx, multilistPushHeadP(ml, &ten), multilistPushTailP(ml, &ten),
+            multilistPopHeadP(ml, &popped), multilistPopTailP(ml, &popped),
+            multilistDelRangeP(ml, 0, 1),
+            multilistReplaceAtIndexP(ml, 0, &twenty), multilistResetP(ml));
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        multilistEntry head = {0};
+        multilistEntry tail = {0};
+        if (multilistCountP(ml) != 2 ||
+            !multilistIndexGetP(ml, state, 0, &head) ||
+            !databoxEqual(&head.box, &ten) ||
+            !multilistIndexGetP(ml, state, 1, &tail) ||
+            !databoxEqual(&tail.box, &twenty)) {
+            ERRR("a refused change changed the list");
+        }
+
+        /* Missing arguments: refused or empty answers; an empty list's
+         * pop changes nothing */
+        persistCtxStats stats;
+        multilistGetStatsP(ml, &stats);
+        const uint64_t ops = stats.totalOps;
+        if (multilistPushTailP(NULL, &ten) || multilistPushHeadP(ml, NULL) ||
+            multilistPopHeadP(NULL, &popped) ||
+            multilistDelRangeP(NULL, 0, 1) ||
+            multilistReplaceAtIndexP(NULL, 0, &ten) ||
+            multilistReplaceAtIndexP(ml, 0, NULL) || multilistResetP(NULL) ||
+            multilistNewP(NULL, FLEX_CAP_LEVEL_2048, 0) ||
+            multilistOpenP(NULL) || multilistGetP(NULL) ||
+            multilistCountP(NULL) || multilistBytesP(NULL) ||
+            multilistIndexGetP(NULL, state, 0, &head) || multilistSyncP(NULL) ||
+            multilistCompactP(NULL)) {
+            ERRR("a call without its wrapper or value was not refused");
+        }
+        multilistIterator iter;
+        mflexState *states[2] = {state, state};
+        multilistIteratorInitP(NULL, states, &iter, true, true);
+        multilistGetStatsP(NULL, NULL);
+        multilistCloseP(NULL);
+        multilistResetP(ml);
+        if (multilistPopTailP(ml, &popped) != PERSIST_LOG_UNCHANGED) {
+            ERRR("an empty list's pop was logged");
+        }
+        multilistGetStatsP(ml, &stats);
+        if (stats.totalOps != ops + 1) {
+            ERR("%" PRIu64 " ops logged for one reset", stats.totalOps - ops);
+        }
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST("multilistP push tail with all data types") {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);

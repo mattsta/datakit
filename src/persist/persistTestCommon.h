@@ -21,6 +21,31 @@
 #include <unistd.h>
 
 /* ============================================================================
+ * Refused Logs
+ * ============================================================================
+ */
+
+/* Each call in the list runs while 'ctx' refuses every log write and must
+ * return PERSIST_LOG_REFUSED; the caller then checks its structure is as
+ * it was.  (ctest.h's ERR and an 'err' in scope.) */
+#define PTEST_EXPECT_REFUSED(ctx, ...)                                         \
+    do {                                                                       \
+        persistCtxTestRefusal refusal_;                                        \
+        if (!persistCtxTestRefuseLogsBegin((ctx), &refusal_)) {                \
+            ERRR("could not arm a refusing WAL");                              \
+            break;                                                             \
+        }                                                                      \
+        const persistLogResult refused_[] = {__VA_ARGS__};                     \
+        persistCtxTestRefuseLogsEnd((ctx), &refusal_);                         \
+        for (size_t r_ = 0; r_ < COUNT_ARRAY(refused_); r_++) {                \
+            if (refused_[r_] != PERSIST_LOG_REFUSED) {                         \
+                ERR("call %zu under a refusing WAL returned %d", r_,           \
+                    (int)refused_[r_]);                                        \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
+/* ============================================================================
  * Test Data Generators
  * ============================================================================
  */
