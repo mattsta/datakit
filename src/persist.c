@@ -1280,6 +1280,9 @@ static bool persistWALWrite(persist *p, const void *data, size_t len) {
  * checksum. */
 #define PERSIST_WAL_ENTRY_PREAMBLE_LEN ((size_t)9) /* seq(8) + op(1) */
 
+/* Payloads up to this size are built on the stack */
+#define PERSIST_WAL_STACK_PAYLOAD ((size_t)256)
+
 uint8_t *persistOpNoBody(size_t *len) {
     *len = 0;
     /* @own: caller; free=zfree */
@@ -1333,14 +1336,35 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         return PERSIST_LOG_REFUSED;
     }
 
-    /* Braced so both scratch buffers - each up to a full WAL entry -
-     * are released before the sync barrier below, and the payload copy
-     * goes as soon as it is wrapped into the envelope. */
+    /* Braced so the scratch buffers - each up to a full WAL entry - are
+     * released before the sync barrier below.  A small payload is built
+     * on the stack, and an entry that fits the WAL buffer's free space is
+     * wrapped straight into it, so the common entry allocates nothing
+     * here and its envelope is written once. */
     {
-        cleanerName(zfree, Bytes) uint8_t *envelope = zmalloc(envelopeLen);
+        /* Where this entry starts in the WAL stream (the store's append
+         * offset plus the bytes buffered ahead of it): a failed write
+         * rolls back to it, so no partial entry is left for later
+         * entries to follow */
+        const int64_t entryStart =
+            p->walAppendOffset + (int64_t)p->walBufferUsed;
+        const uint32_t envelopeLen32 = (uint32_t)envelopeLen;
+        const size_t entryLen = sizeof(envelopeLen32) + envelopeLen;
+        uint8_t *inBuffer =
+            p->walBuffer &&
+                    p->config.walBufferSize - p->walBufferUsed >= entryLen
+                ? p->walBuffer + p->walBufferUsed
+                : NULL;
+        cleanerName(zfree, Bytes) uint8_t *envelopeHeap =
+            inBuffer ? NULL : zmalloc(envelopeLen);
+        uint8_t *envelope =
+            inBuffer ? inBuffer + sizeof(envelopeLen32) : envelopeHeap;
 
         {
-            cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(payloadLen);
+            uint8_t payloadStack[PERSIST_WAL_STACK_PAYLOAD];
+            cleanerName(zfree, Bytes) uint8_t *payloadHeap =
+                payloadLen > sizeof(payloadStack) ? zmalloc(payloadLen) : NULL;
+            uint8_t *payload = payloadHeap ? payloadHeap : payloadStack;
             memcpy(payload, &p->walSequence, sizeof(uint64_t));
             payload[sizeof(uint64_t)] = (uint8_t)op;
             if (opData && opDataLen > 0) {
@@ -1358,15 +1382,19 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
             }
         }
 
-        /* Where this entry starts in the WAL stream (the store's append
-         * offset plus the bytes buffered ahead of it): a failed write
-         * rolls back to it, so no partial entry is left for later
-         * entries to follow */
-        const int64_t entryStart =
-            p->walAppendOffset + (int64_t)p->walBufferUsed;
-        const uint32_t envelopeLen32 = (uint32_t)envelopeLen;
-        if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32)) ||
-            !persistWALWrite(p, envelope, envelopeLen)) {
+        bool written;
+        if (inBuffer) {
+            /* The envelope is already in place behind its length */
+            memcpy(inBuffer, &envelopeLen32, sizeof(envelopeLen32));
+            p->walBufferUsed += entryLen;
+            written = p->walBufferUsed < p->config.walBufferSize ||
+                      persistWALFlush(p);
+        } else {
+            written =
+                persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32)) &&
+                persistWALWrite(p, envelope, envelopeLen);
+        }
+        if (!written) {
             persistWALRollback(p, entryStart);
             return PERSIST_LOG_REFUSED;
         }
@@ -10292,6 +10320,38 @@ int persistTest(int argc, char *argv[]) {
             if (!persistTestRecoversTo(p, want, 5)) {
                 ERR("buffer %zu: entries after a failed write were lost",
                     buffers[b]);
+            }
+        }
+    }
+
+    TEST("WAL entries recover whatever the buffer size (whole in the buffer, "
+         "ending at its end, across a flush, larger than it)") {
+        /* Integers and 1..300-byte strings through buffer sizes from 0
+         * (unbuffered) to past several entries; recovery holds exactly
+         * what was logged, in order */
+        static char text[300];
+        memset(text, 'x', sizeof(text));
+        for (size_t size = 0; size <= 420; size += (size < 80 ? 1 : 37)) {
+            persistConfig config = persistDefaultConfig();
+            config.walBufferSize = size;
+            cleaner(persistClose) persist *p = persistTestFlexPersist(&config);
+            cleaner(flexFree) flex *want = flexNew();
+            for (size_t i = 0; i < 40; i++) {
+                const size_t len = (i * 53) % sizeof(text) + 1;
+                const databox box = i % 3 == 0
+                                        ? databoxNewSigned((int64_t)i * 1000003)
+                                        : databoxNewBytes(text, len);
+                if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1)) {
+                    ERR("buffer %zu: entry %zu refused", size, i);
+                    break;
+                }
+                flexPushByTypeExact(&want, &box, FLEX_ENDPOINT_TAIL);
+            }
+            persistSync(p);
+            cleaner(flexFree) flex *got = persistRecover(p);
+            if (!got || flexBytes(got) != flexBytes(want) ||
+                memcmp(got, want, flexBytes(want)) != 0) {
+                ERR("buffer %zu: recovery differs from what was logged", size);
             }
         }
     }
