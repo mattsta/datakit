@@ -505,6 +505,81 @@ static void multimapUpgradeIfNecessary(multimap **m, const uint_fast32_t depth,
     multimapUpgradeIfNecessary_(m, depth, limit, false, NULL);
 }
 
+/* After a delete: move a drained Full or Medium down to the tier its rows
+ * fit with room to grow.  L is the size limit's cutoff; tiers grow past L
+ * (Small) and 3L (Medium), and shrink well below those, so a tier a
+ * shrink enters takes real growth to leave (no flapping at a boundary):
+ *   Full (three inner maps at most) -> Medium at <= 1.5L, or straight to
+ *   Small at <= L/2;  Medium -> Small at <= L/2.
+ * The check is O(1): Full is only measured once it is down to three
+ * inner maps.  Rows move once, in O(bytes) bounded by 1.5L. */
+static void multimapShrinkIfNecessary_(multimap **m) {
+    const uint32_t depth = COMPRESS_DEPTH(*m);
+    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const size_t L = flexOptimizationSizeLimit[limit];
+    flex *rows = NULL;
+    multimapElements elementsPerEntry;
+    bool isSet;
+
+    switch (multimapType_(*m)) {
+    case MULTIMAP_TYPE_FULL: {
+        multimapFull *full = mmf(*m);
+        if (full->count > 3 || multimapFullBytes(full) > L + L / 2) {
+            return;
+        }
+        elementsPerEntry = full->elementsPerEntry;
+        isSet = full->mapIsSet;
+        /* @own: container; free=flexFree */
+        rows = multimapFullDump(full);
+        multimapFullFree(full);
+        break;
+    }
+    case MULTIMAP_TYPE_MEDIUM: {
+        multimapMedium *medium = mmm(*m);
+        if (multimapMediumBytes(medium) > L / 2) {
+            return;
+        }
+        elementsPerEntry = medium->elementsPerEntry;
+        isSet = medium->mapIsSet;
+        rows = medium->map[0];
+        flexBulkAppendFlex(&rows, medium->map[1]);
+        flexFree(medium->map[1]);
+        zfree(medium);
+        break;
+    }
+    default:
+        return;
+    }
+
+    /* @own: caller; free=multimapFree */
+    multimapSmall *small = multimapSmallNew(elementsPerEntry, isSet);
+    flexFree(small->map);
+    small->map = rows;
+    small->middle = (uint32_t)(flexMiddle(rows, elementsPerEntry) - rows);
+    multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
+    *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_SMALL);
+
+    /* Rows above L/2 (from a Full) belong in Medium, which needs two whole
+     * rows to split, as an upgrade does */
+    if (flexBytes(rows) > L / 2 && flexCount(rows) > elementsPerEntry * 2) {
+        multimapMedium *medium = multimapMediumNewFromOneGrow(
+            small, small->map, small->middle, elementsPerEntry, isSet);
+        tagged = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
+        *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_MEDIUM);
+    }
+}
+
+/* A delete entry point: the tier's call, then a shrink when it removed */
+#define MULTIMAP_DELETE_(m, func, ...)                                         \
+    do {                                                                       \
+        bool deleted_;                                                         \
+        MULTIMAP_SETRESULT(deleted_, *(m), func, __VA_ARGS__);                 \
+        if (deleted_) {                                                        \
+            multimapShrinkIfNecessary_(m);                                     \
+        }                                                                      \
+        return deleted_;                                                       \
+    } while (0)
+
 static void multimapUpgradeIfNecessaryWithReference(
     multimap **m, const uint_fast32_t depth, const flexCapSizeLimit limit,
     const multimapAtom *restrict referenceContainer) {
@@ -672,11 +747,13 @@ static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
 
 void multimapDeleteEntry(multimap **m, multimapEntry *me) {
     MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, NULL);
+    multimapShrinkIfNecessary_(m);
 }
 
 void multimapDeleteEntryWithReference(multimap **m, multimapEntry *me,
                                       const multimapAtom *referenceContainer) {
     MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, referenceContainer);
+    multimapShrinkIfNecessary_(m);
 }
 
 bool multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen) {
@@ -804,40 +881,32 @@ bool multimapLookupWithReference(const multimap *m, const databox *key,
 }
 
 bool multimapDelete(multimap **m, const databox *key) {
-    /* TODO: auto-shrink behavior?  How to decide when to shrink
-     * from Full -> Medium -> Small? */
-    MULTIMAP_RETURN(*m, Delete, key);
+    MULTIMAP_DELETE_(m, Delete, key);
 }
 
 bool multimapDeleteReporting(multimap **m, const databox *key,
                              databox *removedOut) {
-    MULTIMAP_RETURN(*m, DeleteReporting, key, removedOut);
+    MULTIMAP_DELETE_(m, DeleteReporting, key, removedOut);
 }
 
 bool multimapDeleteTaking(multimap **m, const databox *key, databox *takenOut) {
-    MULTIMAP_RETURN(*m, DeleteTaking, key, takenOut);
+    MULTIMAP_DELETE_(m, DeleteTaking, key, takenOut);
 }
 
 bool multimapDeleteWithReference(multimap **m, const databox *key,
                                  const struct multimapAtom *referenceContainer,
                                  databox *foundReference) {
-    /* TODO: auto-shrink behavior?  How to decide when to shrink
-     * from Full -> Medium -> Small? */
-    MULTIMAP_RETURN(*m, DeleteWithReference, key, referenceContainer,
-                    foundReference);
+    MULTIMAP_DELETE_(m, DeleteWithReference, key, referenceContainer,
+                     foundReference);
 }
 
 bool multimapDeleteWithFound(multimap **m, const databox *key,
                              databox *foundReference) {
-    /* TODO: auto-shrink behavior?  How to decide when to shrink
-     * from Full -> Medium -> Small? */
-    MULTIMAP_RETURN(*m, DeleteWithFound, key, foundReference);
+    MULTIMAP_DELETE_(m, DeleteWithFound, key, foundReference);
 }
 
 bool multimapDeleteFullWidth(multimap **m, const databox *elements[]) {
-    /* TODO: auto-shrink behavior?  How to decide when to shrink
-     * from Full -> Medium -> Small? */
-    MULTIMAP_RETURN(*m, DeleteFullWidth, elements);
+    MULTIMAP_DELETE_(m, DeleteFullWidth, elements);
 }
 
 bool multimapRandomValue(multimap *m, const bool fromTail, databox **found,
@@ -847,7 +916,7 @@ bool multimapRandomValue(multimap *m, const bool fromTail, databox **found,
 
 bool multimapDeleteRandomValue(multimap **m, const bool fromTail,
                                databox **deleted) {
-    MULTIMAP_RETURN(*m, DeleteRandomValue, fromTail, deleted);
+    MULTIMAP_DELETE_(m, DeleteRandomValue, fromTail, deleted);
 }
 
 #if 0
@@ -998,7 +1067,7 @@ bool multimapLookupByPosition(multimap *m, int64_t keyIndex,
  * false when the position is out of range.  Deletes the EXACT addressed
  * row (safe for duplicate keys and surrogate-keyed maps). */
 bool multimapDeleteByPosition(multimap **m, int64_t keyIndex) {
-    MULTIMAP_RETURN(*m, DeleteByPosition, keyIndex);
+    MULTIMAP_DELETE_(m, DeleteByPosition, keyIndex);
 }
 
 bool multimapFirst(multimap *m, databox *elements[]) {
@@ -1055,7 +1124,7 @@ bool multimapProcessPredicate(const multimapPredicate *p,
 }
 
 bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p) {
-    MULTIMAP_RETURN(*m, DeleteByPredicate, p);
+    MULTIMAP_DELETE_(m, DeleteByPredicate, p);
 }
 
 bool multimapIteratorInitAt(const multimap *m, multimapIterator *iter,

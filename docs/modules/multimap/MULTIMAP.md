@@ -63,8 +63,11 @@ When you call `multimapInsert()`, the implementation:
 Because the upgrade reallocates the container struct in place, every mutating
 entry point takes `multimap **`.
 
-There is no automatic downgrade: a map that reached Full stays Full even after
-deletions (Full does reclaim emptied submaps internally).
+Deletes move a drained map back down, well below the growth points so a map
+never flips back and forth at a boundary: Full (down to three submaps)
+becomes Medium at 1.5 × the limit, or Small at half the limit, and Medium
+becomes Small at half the limit. Full also reclaims emptied submaps and
+merges neighbours as it shrinks. See "Automatic Tier Thresholds" below.
 
 ## Data Structures
 
@@ -604,8 +607,12 @@ if (multimapDeleteWithFound(&m, &key, &deletedRef)) {
 }
 ```
 
-Deletion never shrinks a container back to a smaller variant. Full does free
-submaps that become empty and collapses to a single empty submap on
+Every delete entry point (`Delete`, `DeleteReporting`, `DeleteTaking`,
+`DeleteFullWidth`, `DeleteWithReference`, `DeleteWithFound`,
+`DeleteRandomValue`, `DeleteByPosition`, `DeleteByPredicate`, `DeleteEntry`)
+can move the map to a smaller variant once it drains (see "Automatic Tier
+Thresholds"), so like an insert it may rewrite `*m`. Full also frees
+submaps that become empty, and collapses to a single empty submap on
 `multimapReset()`.
 
 ### Predicate-Based Deletion
@@ -925,9 +932,9 @@ the search seed.
 Full's metadata lives in three `multiarray` containers, which add their own
 allocation overhead on top of the per-submap figures.
 
-### Automatic Upgrade Thresholds
+### Automatic Tier Thresholds
 
-As implemented in `multimapUpgradeIfNecessary_()`:
+Growth, as implemented in `multimapUpgradeIfNecessary_()`:
 
 ```c
 /* Small -> Medium */
@@ -943,6 +950,20 @@ The Small guard needs at least two complete rows so the split produces two
 non-empty halves. The Medium guard requires both submaps to be non-empty for the
 same reason. Thresholds are checked after every `Insert`, `InsertFullWidth`,
 `Append` and `InsertWithSurrogateKey`.
+
+Shrinking, as implemented in `multimapShrinkIfNecessary_()` after every
+delete that removed a row (with L = `flexOptimizationSizeLimit[limit]`):
+
+| From   | Condition                              | To                                  |
+| ------ | -------------------------------------- | ----------------------------------- |
+| Full   | at most 3 submaps and bytes <= 1.5 × L | Medium (or Small when bytes <= L/2) |
+| Medium | bytes <= L/2                           | Small                               |
+
+Each shrink point sits well below its growth point (L and 3L), so a map that
+just shrank needs real growth to grow again: no flapping when inserts and
+deletes alternate at a boundary. The check is O(1) (Full is only measured once
+it is down to three submaps), and the rows move once, in O(bytes) bounded by
+1.5 × L.
 
 ## Best Practices
 

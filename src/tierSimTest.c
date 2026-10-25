@@ -290,6 +290,7 @@ static size_t isScan(void *c, int64_t from, int64_t *k, int64_t *v,
 
 static const simOps simFamilies[] = {
     {.name = "multimap",
+     .shrinks = true,
      .coalesces = true,
      .growTo = 2000,
      .make = mmMake,
@@ -729,40 +730,43 @@ static int32_t simRunFamily(const simOps *ops, uint64_t seed) {
     ops->stats(r->c, &s);
     r->tier = s.tier;
 
+    /* Drains end at two rows: under any family's Small re-entry point */
     simGrow(r, ops->growTo);
     simChurn(r, 4000);
-    simDrain(r, SIM_DRAIN_SCATTERED, 8);
+    simDrain(r, SIM_DRAIN_SCATTERED, 2);
     simGrow(r, ops->growTo);
-    simDrain(r, SIM_DRAIN_FRONT, 8);
+    simDrain(r, SIM_DRAIN_FRONT, 2);
     simGrow(r, ops->growTo);
-    simDrain(r, SIM_DRAIN_BACK, 8);
+    simDrain(r, SIM_DRAIN_BACK, 2);
     simGrow(r, ops->growTo);
     simOscillate(r);
     simGrow(r, ops->growTo);
-    simBulk(r, 8);
+    simBulk(r, 2);
     simGrow(r, ops->growTo);
     simCheckAll(r);
 
     const uint64_t up = r->trans[1][2] && r->trans[2][3];
-    const uint64_t down = r->trans[3][2] + r->trans[2][1] + r->trans[3][1];
+    const uint64_t outOfFull = r->trans[3][2] + r->trans[3][1];
+    const uint64_t intoSmall = r->trans[2][1] + r->trans[3][1];
     if (!up) {
         SIM_ERR(r,
                 "growth never reached Full (S>M %" PRIu64 ", M>F %" PRIu64 ")",
                 r->trans[1][2], r->trans[2][3]);
     }
-    if (ops->shrinks && (!r->trans[3][2] || !r->trans[2][1])) {
-        SIM_ERR(r, "shrinks, but F>M %" PRIu64 " M>S %" PRIu64, r->trans[3][2],
-                r->trans[2][1]);
+    if (ops->shrinks && (!outOfFull || !intoSmall)) {
+        SIM_ERR(r, "shrinks, but F>M %" PRIu64 " F>S %" PRIu64 " M>S %" PRIu64,
+                r->trans[3][2], r->trans[3][1], r->trans[2][1]);
     }
-    if (!ops->shrinks && down) {
-        SIM_ERR(r, "does not shrink, yet moved down %" PRIu64 " times", down);
+    if (!ops->shrinks && (outOfFull || r->trans[2][1])) {
+        SIM_ERR(r, "does not shrink, yet moved down");
     }
 
     printf("    %-16s %6" PRIu64 " ops; up S>M %" PRIu64 " M>F %" PRIu64
-           "; down F>M %" PRIu64 " M>S %" PRIu64 "; max units %u; worst Full "
-           "density %.1fx\n",
+           "; down F>M %" PRIu64 " F>S %" PRIu64 " M>S %" PRIu64
+           "; max units %u; worst Full density %.1fx\n",
            ops->name, r->opsDone, r->trans[1][2], r->trans[2][3],
-           r->trans[3][2], r->trans[2][1], r->maxUnits, r->worstDensity);
+           r->trans[3][2], r->trans[3][1], r->trans[2][1], r->maxUnits,
+           r->worstDensity);
     ops->destroy(r->c);
     return r->err;
 }

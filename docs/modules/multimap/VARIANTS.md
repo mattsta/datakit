@@ -23,7 +23,11 @@ can be rewritten after an upgrade.
 "limit" is `flexOptimizationSizeLimit[level]` for the `flexCapSizeLimit` level
 stored in the tagged pointer (default `FLEX_CAP_LEVEL_2048` = 2048 bytes).
 
-There is no downgrade path. A container that reached Full stays Full.
+Deletes move a drained container back down: Full (at most three submaps)
+becomes Medium at 1.5 × limit or less (Small at half the limit), and Medium
+becomes Small at half the limit. Both points sit well below the growth
+points, so a container never flips between tiers at a boundary (see
+MULTIMAP.md, "Automatic Tier Thresholds").
 
 ## multimapSmall
 
