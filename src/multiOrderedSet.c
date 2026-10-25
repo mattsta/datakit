@@ -1768,6 +1768,87 @@ static int mosRemoveIfTier_(int64_t n, multiOrderedSetType tier) {
     return err;
 }
 
+/* The set-algebra oracles' three sets over members "m0".."m<n-1>": set i
+ * holds the members j not divisible by i + 2, scored j * (i + 1) + 0.25
+ * (all exact in a double, so every combination order agrees) */
+static void mosAlgebraSets_(uint32_t n, multiOrderedSet *in[3]) {
+    for (uint32_t i = 0; i < 3; i++) {
+        /* @own: caller; free=multiOrderedSetFree */
+        in[i] = multiOrderedSetNew();
+        for (uint32_t j = 0; j < n; j++) {
+            if (j % (i + 2) != 0) {
+                char key[16];
+                const int klen = snprintf(key, sizeof(key), "m%u", j);
+                const databox member = databoxNewBytes(key, klen);
+                const databox score =
+                    databoxNewReal((double)j * (i + 1) + 0.25);
+                multiOrderedSetAdd(&in[i], &score, &member);
+            }
+        }
+    }
+}
+
+/* The oracle of combining those sets weighted by 'weights' with 'how': a
+ * member of any set (union) or of all three (intersect) gets its first
+ * weighted score, then each later one combined.  Fills want/seen; returns
+ * the member count. */
+static uint32_t mosAlgebraOracle_(uint32_t n, const double weights[3],
+                                  mosAggregate how, bool intersect,
+                                  double *want, bool *seen) {
+    uint32_t members = 0;
+    for (uint32_t j = 0; j < n; j++) {
+        const bool inAll = j % 2 != 0 && j % 3 != 0 && j % 4 != 0;
+        for (uint32_t i = 0; i < 3; i++) {
+            if (j % (i + 2) == 0 || (intersect && !inAll)) {
+                continue;
+            }
+            const double w = ((double)j * (i + 1) + 0.25) * weights[i];
+            if (!seen[j]) {
+                seen[j] = true;
+                want[j] = w;
+                members++;
+            } else if (how == MOS_AGGREGATE_MIN) {
+                want[j] = want[j] < w ? want[j] : w;
+            } else if (how == MOS_AGGREGATE_MAX) {
+                want[j] = want[j] > w ? want[j] : w;
+            } else {
+                want[j] = want[j] + w;
+            }
+        }
+    }
+    return members;
+}
+
+/* 'got' holds exactly the oracle's members and scores */
+static int mosAlgebraCheck_(const multiOrderedSet *got, uint32_t n,
+                            const double *want, const bool *seen,
+                            uint32_t members, const char *what, int how) {
+    int err = 0;
+    if (multiOrderedSetCount(got) != members) {
+        ERR("%s size %u aggregate %d: %zu members, want %u", what, n, how,
+            multiOrderedSetCount(got), members);
+        return err;
+    }
+    for (uint32_t j = 0; j < n; j++) {
+        char key[16];
+        const int klen = snprintf(key, sizeof(key), "m%u", j);
+        const databox member = databoxNewBytes(key, klen);
+        databox score;
+        databoxWide scoreWide;
+        mosBoxAim(&score, &scoreWide);
+        const bool present = multiOrderedSetGetScore(got, &member, &score);
+        if (present != seen[j] ||
+            (present && mosDataboxToDouble(&score) != want[j])) {
+            ERR("%s size %u aggregate %d member %u: present %d score %g "
+                "(want %d, %g)",
+                what, n, how, j, present,
+                present ? mosDataboxToDouble(&score) : 0.0, seen[j], want[j]);
+            break;
+        }
+    }
+    return err;
+}
+
 int multiOrderedSetTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -2296,13 +2377,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         assert(mosDataboxToDouble(&gotScore) == 5.0); /* 2 + 3 */
     }
 
-    TEST("multiOrderedSet: weighted union in every tier matches an oracle, "
-         "per aggregate") {
-        /* Three sets over members 0..n-1: set i holds the members not
-         * divisible by i + 2, scored j * (i + 1) + 0.25, weighted 1, 0.5,
-         * 3.  The oracle combines in the same order the union does (the
-         * first appearance weighted, each later one aggregated), so every
-         * score must match exactly. */
+    TEST("multiOrderedSet: weighted union and intersection in every tier "
+         "match an oracle, per aggregate") {
+        /* The three oracle sets weighted 1, 0.5, 3, combined by union and
+         * by intersection with each aggregate; the union of each size
+         * lands in its tier */
         static const uint32_t sizes[] = {20, 300, 4000};
         static const multiOrderedSetType tiers[] = {
             MOS_TYPE_SMALL, MOS_TYPE_MEDIUM, MOS_TYPE_FULL};
@@ -2312,77 +2391,28 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
             const uint32_t n = sizes[s];
             multiOrderedSet *in[3] = {NULL, NULL, NULL};
-            for (uint32_t i = 0; i < 3; i++) {
-                /* @own: caller; free=multiOrderedSetFree */
-                in[i] = multiOrderedSetNew();
-                for (uint32_t j = 0; j < n; j++) {
-                    if (j % (i + 2) != 0) {
-                        char key[16];
-                        const int klen = snprintf(key, sizeof(key), "m%u", j);
-                        const databox member = databoxNewBytes(key, klen);
-                        const databox score =
-                            databoxNewReal((double)j * (i + 1) + 0.25);
-                        multiOrderedSetAdd(&in[i], &score, &member);
-                    }
-                }
-            }
-
+            mosAlgebraSets_(n, in);
+            const multiOrderedSet *sets[3] = {in[0], in[1], in[2]};
             for (size_t h = 0; h < COUNT_ARRAY(hows); h++) {
-                cleanerName(zfree, Doubles) double *want =
-                    zcalloc(n, sizeof(*want));
-                cleanerName(zfree, Bools) bool *seen =
-                    zcalloc(n, sizeof(*seen));
-                uint32_t members = 0;
-                for (uint32_t i = 0; i < 3; i++) {
-                    for (uint32_t j = 0; j < n; j++) {
-                        if (j % (i + 2) == 0) {
-                            continue;
-                        }
-                        const double w =
-                            ((double)j * (i + 1) + 0.25) * weights[i];
-                        if (!seen[j]) {
-                            seen[j] = true;
-                            want[j] = w;
-                            members++;
-                        } else if (hows[h] == MOS_AGGREGATE_SUM) {
-                            want[j] = want[j] + w;
-                        } else if (hows[h] == MOS_AGGREGATE_MIN) {
-                            want[j] = want[j] < w ? want[j] : w;
-                        } else {
-                            want[j] = want[j] > w ? want[j] : w;
-                        }
+                for (int intersect = 0; intersect <= 1; intersect++) {
+                    cleanerName(zfree, Doubles) double *want =
+                        zcalloc(n, sizeof(*want));
+                    cleanerName(zfree, Bools) bool *seen =
+                        zcalloc(n, sizeof(*seen));
+                    const uint32_t members = mosAlgebraOracle_(
+                        n, weights, hows[h], intersect, want, seen);
+                    cleaner(multiOrderedSetFree) multiOrderedSet *got =
+                        intersect
+                            ? multiOrderedSetIntersect(sets, weights, 3,
+                                                       hows[h])
+                            : multiOrderedSetUnion(sets, weights, 3, hows[h]);
+                    if (!intersect && mosType_(got) != tiers[s]) {
+                        ERR("size %u: union built tier %d, want %d", n,
+                            (int)mosType_(got), (int)tiers[s]);
                     }
-                }
-
-                const multiOrderedSet *sets[3] = {in[0], in[1], in[2]};
-                cleaner(multiOrderedSetFree) multiOrderedSet *u =
-                    multiOrderedSetUnion(sets, weights, 3, hows[h]);
-                if (multiOrderedSetCount(u) != members ||
-                    mosType_(u) != tiers[s]) {
-                    ERR("size %u aggregate %d: %zu members (want %u), tier "
-                        "%d (want %d)",
-                        n, (int)hows[h], multiOrderedSetCount(u), members,
-                        (int)mosType_(u), (int)tiers[s]);
-                    continue;
-                }
-                for (uint32_t j = 0; j < n; j++) {
-                    char key[16];
-                    const int klen = snprintf(key, sizeof(key), "m%u", j);
-                    const databox member = databoxNewBytes(key, klen);
-                    databox got;
-                    databoxWide gotWide;
-                    mosBoxAim(&got, &gotWide);
-                    const bool present =
-                        multiOrderedSetGetScore(u, &member, &got);
-                    if (present != seen[j] ||
-                        (present && mosDataboxToDouble(&got) != want[j])) {
-                        ERR("size %u aggregate %d member %u: present %d "
-                            "score %g (want %d, %g)",
-                            n, (int)hows[h], j, present,
-                            present ? mosDataboxToDouble(&got) : 0.0, seen[j],
-                            want[j]);
-                        break;
-                    }
+                    err += mosAlgebraCheck_(got, n, want, seen, members,
+                                            intersect ? "intersect" : "union",
+                                            (int)hows[h]);
                 }
             }
 
