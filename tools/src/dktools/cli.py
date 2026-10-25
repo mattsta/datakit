@@ -412,12 +412,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     tu.add_argument(
         "--mix",
+        action="append",
         default=None,
-        help="an extra workload mix 'custom' beside equal, read80 and write80: "
-        "comma-separated KEY=SHARE, KEY a class (read, write) or an operation "
-        "(e.g. read=90,write=10 or exists=70,insert=20,delete=10)",
+        help="an extra workload mix beside equal, read80 and write80 "
+        "(repeatable): [NAME:]KEY=SHARE,..., KEY a class (read, write) or an "
+        "operation (e.g. read=90,write=10 or lookups:exists=90,insert=10)",
+    )
+    tu.add_argument(
+        "--baseline",
+        type=int,
+        default=tune.DEFAULT_BASELINE,
+        help="the limit results are read against and kept unless a clear win "
+        f"beats it (default {tune.DEFAULT_BASELINE}, the compiled default)",
     )
     tu.add_argument("--runs", type=int, default=5, help="sweep runs (default 5)")
+    tu.add_argument(
+        "--reuse",
+        action="store_true",
+        help="report again on the runs an earlier tune NAME measured (another "
+        "--baseline, --mix or --families), without building or measuring",
+    )
     tu.add_argument(
         "--compiler",
         choices=toolchain.COMPILERS,
@@ -753,11 +767,13 @@ def _dispatch(args: argparse.Namespace) -> int:
             tune.TuneOptions(
                 name=args.name,
                 families=tune.parse_families(args.families),
-                mixes=tune.mixes_with(tune.parse_mix(args.mix)),
+                mixes=tune.parse_mixes(args.mix),
+                baseline=args.baseline,
                 runs=args.runs,
                 compiler=toolchain.from_args(args.compiler, args),
                 root=args.root,
                 jobs=args.jobs,
+                reuse=args.reuse,
             ),
         )
 

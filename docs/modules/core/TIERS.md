@@ -60,13 +60,16 @@ dkTierLimitResult r =
  * nothing.  Containers made earlier keep their limit. */
 ```
 
-`dktools tune NAME` measures every limit on the machine it runs on and,
-per workload mix (every operation equally often, 80% reads, 80% writes,
-or a `--mix` of your own), prints the call that applies the one it
-recommends: the densest limit whose mean time per operation for that mix
-is less than 15% above the fastest (tools/README.md). Mixes can disagree:
-on Apple M1 Max a read-heavy multimap is best at 1024, a write-heavy one
-at 2048.
+`dktools tune NAME` measures every limit on the machine it runs on, reads
+each against the default, and per workload mix (every operation equally
+often, 80% reads, 80% writes, or a `--mix` of your own) says `keep` unless
+another limit is a clear win: 15% faster for the mix in every run, or 5%
+fewer bytes while under 15% slower, and never with one operation 15% or
+more slower. A win prints the `dkTierSetDefaultLimit` call that applies it;
+a keep says how close the nearest limit came (tools/README.md). On Apple
+M1 Max every family keeps 2048: the best alternatives are 10-13% faster
+for multimap at 1024, within noise for multilist, and for multiOrderedSet
+4096 slows `add` by a third.
 
 ## Tier rules
 

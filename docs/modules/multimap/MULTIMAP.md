@@ -1018,9 +1018,10 @@ writes alike. Rows near the limit in size (a multiroar chunk is up to a 1 KB
 bitmap) need a limit well above one row, or every submap holds one row.
 
 `dktools tune NAME` measures the same trade on the machine it runs on, for
-multimap, multiOrderedSet and multilist, and recommends a limit per family
-and workload mix (see tools/README.md): on the machine above, a read-heavy
-mix (80% lookups) is best at 1024, an equal or write-heavy one at 2048.
+multimap, multiOrderedSet and multilist, against the default and per
+workload mix (see tools/README.md). On the machine above, 1024 runs every
+mix 10-13% faster than 2048 for 2% more bytes: close, but short of the 15%
+clear win tune asks before it suggests a change.
 
 ```c
 /* Many small rows, random access: shorter walks inside each submap */
@@ -1028,10 +1029,9 @@ multimap *index = multimapNewLimit(2, FLEX_CAP_LEVEL_1024);
 ```
 
 `multimapNew` and `multimapSetNew` take their limit from a process default,
-2048 until changed: the densest limit that is less than 15% slower than the
-fastest for an even mix of operations, as `dktools tune` chooses. Setting it
-once at startup (as `dktools tune` prints)
-moves every map made afterwards; maps already made keep their limit, and
+2048 until changed. Setting it once at startup (as `dktools tune` prints
+when it finds a clear win) moves every map made afterwards; maps already
+made keep their limit, and
 constructors taking a limit ignore the default:
 
 ```c
