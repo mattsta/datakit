@@ -345,6 +345,7 @@ typedef struct simRun {
     int32_t growPoint[4]; /* rows when growth first reached each tier */
     uint32_t maxUnits;
     double worstDensity; /* Full units per ideal unit count */
+    uint32_t worstFlap;  /* unit-count changes in one probe's 20 ops */
     int32_t err;
     /* scratch for walks */
     int64_t wk[SIM_CAP];
@@ -620,6 +621,40 @@ static void simGrow(simRun *r, int32_t rows) {
     }
 }
 
+/* Delete one key and put it back, ten times, for 32 keys.  A merge on the
+ * first delete and a split on its insert may happen once; a unit count
+ * that changes on most of the 20 operations is a merge every delete
+ * undoes with a split on the next insert (each moving a unit's bytes). */
+static void simFlapProbe(simRun *r) {
+    if (r->tier != 3 || r->n < 2) {
+        return;
+    }
+    for (int32_t p = 0; p < 32; p++) {
+        const int64_t k = r->key[(int32_t)(simNext(r) % (uint64_t)r->n)];
+        dkTierStats s;
+        r->ops->stats(r->c, &s);
+        uint32_t units = s.units;
+        uint32_t changes = 0;
+        for (int32_t cycle = 0; cycle < 10; cycle++) {
+            simDel(r, k);
+            r->ops->stats(r->c, &s);
+            changes += s.units != units;
+            units = s.units;
+            simPut(r, k);
+            r->ops->stats(r->c, &s);
+            changes += s.units != units;
+            units = s.units;
+        }
+        if (changes > r->worstFlap) {
+            r->worstFlap = changes;
+        }
+    }
+    if (r->ops->coalesces && r->worstFlap > 4) {
+        SIM_ERR(r, "units changed %u times in 20 delete/insert ops of one key",
+                r->worstFlap);
+    }
+}
+
 static void simChurn(simRun *r, int32_t ops) {
     for (int32_t op = 0; op < ops; op++) {
         const uint64_t roll = simNext(r) % 100;
@@ -732,7 +767,9 @@ static int32_t simRunFamily(const simOps *ops, uint64_t seed) {
 
     /* Drains end at two rows: under any family's Small re-entry point */
     simGrow(r, ops->growTo);
+    simFlapProbe(r); /* fresh splits: neighbours sit at the merge point */
     simChurn(r, 4000);
+    simFlapProbe(r);
     simDrain(r, SIM_DRAIN_SCATTERED, 2);
     simGrow(r, ops->growTo);
     simDrain(r, SIM_DRAIN_FRONT, 2);
@@ -763,10 +800,10 @@ static int32_t simRunFamily(const simOps *ops, uint64_t seed) {
 
     printf("    %-16s %6" PRIu64 " ops; up S>M %" PRIu64 " M>F %" PRIu64
            "; down F>M %" PRIu64 " F>S %" PRIu64 " M>S %" PRIu64
-           "; max units %u; worst Full density %.1fx\n",
+           "; max units %u; worst Full density %.1fx; worst flap %u/20\n",
            ops->name, r->opsDone, r->trans[1][2], r->trans[2][3],
            r->trans[3][2], r->trans[3][1], r->trans[2][1], r->maxUnits,
-           r->worstDensity);
+           r->worstDensity, r->worstFlap);
     ops->destroy(r->c);
     return r->err;
 }
