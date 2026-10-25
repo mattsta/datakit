@@ -3079,7 +3079,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("lenutf8 utf8 small") {
-        const char *foo = u8"😀";
+        const char foo[] = u8"😀";
         const size_t things = 1;
         const size_t len = strlen((const char *)foo);
         const size_t utf8len = StrLenUtf8(foo, len);
@@ -3144,7 +3144,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("lenutf8 utf8 bigger") {
-        const char *foo = u8"💛💙💜💔";
+        const char foo[] = u8"💛💙💜💔";
         const wchar_t wfoo[] = {0xF09F929B, 0xF09F929C, 0xF09F929D, 0xF09F929E,
                                 0x0};
         const size_t things = 4;
@@ -3165,7 +3165,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("lenutf8countbytes utf8 bigger") {
-        const char *foo = u8"💛💙💜💔";
+        const char foo[] = u8"💛💙💜💔";
         const size_t things = 4;
         const size_t len = strlen((const char *)foo);
         const size_t utf8len = StrLenUtf8CountBytes(foo, len, things);
@@ -3176,7 +3176,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("lenutf8countbytes utf8 bigger (overshot)") {
-        const char *foo = u8"💛💙💜💔";
+        const char foo[] = u8"💛💙💜💔";
         const size_t things = 4;
         const size_t len = strlen((const char *)foo);
         const size_t utf8len = StrLenUtf8CountBytes(foo, len, things * 2);

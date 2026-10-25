@@ -212,8 +212,9 @@ symbols without also building the runner.
 
 #### Language and float128 options
 
-- `UseC23` (default OFF) - compile as C23, which enables `_Float128`
-  where the toolchain provides it
+- Every build is C23 (`-std=gnu23`).
+- `UseFloat128C23` (default OFF) - use C23 `_Float128` for extended
+  precision where the toolchain provides it
 - `UseFloat128` (default OFF) - force-enable `__float128`; may require
   libquadmath
 - `ForceNoFloat128` (default OFF) - force-disable every float128 path,

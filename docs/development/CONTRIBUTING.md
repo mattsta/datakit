@@ -241,10 +241,9 @@ T_A(newModule, "nm,newmod"),
 
 ### C Language Standard
 
-- **Primary**: C11 (`-std=gnu11`)
-- **Opt-in**: C23 (`-std=gnu23`) when configured with `-DUseC23=ON`,
-  which unlocks `_Float128` where the toolchain has it
-- **Some files**: pinned to strict `-std=c11` for consistent
+- **Standard**: C23 (`-std=gnu23`) for every datakit file; the vendored
+  libraries in `deps/` keep their own standards
+- **Some files**: pinned to strict `-std=c23` for consistent
   floating-point behavior (`str.c`, `bigmath-libbf.c`)
 - **Extensions**: GNU extensions allowed (computed gotos, statement
   expressions, `__builtin_*`)

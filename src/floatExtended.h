@@ -12,7 +12,8 @@
  *   - We need at least 64 mantissa bits to represent all int64_t values exactly
  *
  * Solution hierarchy (compile-time detection):
- *   1. C23 _Float128 (IEEE 754 binary128, 113-bit mantissa)
+ *   1. C23 _Float128 (IEEE 754 binary128, 113-bit mantissa), when the build
+ *      opts in (cmake -DUseFloat128C23=ON)
  *   2. GCC/Clang __float128 (IEEE 754 binary128)
  *   3. Native long double if LDBL_MANT_DIG >= 64 (x86 extended precision)
  *   4. Fallback to double with integer-based comparison logic
@@ -51,8 +52,12 @@
 
 #ifndef DK_HAS_FLOAT128
 
-/* C23 _Float128 detection */
-#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+/* C23 _Float128, when the build opts in (UseFloat128C23 defines
+ * DK_USE_FLOAT128_C23): every build is C23, and a compiler offering
+ * _Float128 (gcc on aarch64) would otherwise change the numeric paths of
+ * every build that didn't ask for it */
+#if defined(DK_USE_FLOAT128_C23) && defined(__STDC_VERSION__) &&               \
+    (__STDC_VERSION__ >= 202311L)
 #if defined(__STDC_IEC_60559_BFP__) || defined(__FLT128_MANT_DIG__)
 #define DK_HAS_FLOAT128 1
 #define DK_FLOAT128_TYPE_C23 1

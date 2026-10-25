@@ -20,7 +20,7 @@ endif()
 add_subdirectory(memshard)
 
 option(Build32Bit "Build 32-bit Library" OFF)
-option(UseC23 "Use C23 standard (enables _Float128 if available)" OFF)
+option(UseFloat128C23 "Enable C23 _Float128 extended precision if available" OFF)
 option(UseFloat128 "Force enable __float128 support (requires libquadmath on some platforms)" OFF)
 option(ForceNoFloat128 "Force disable all float128 support (for testing fallback paths)" OFF)
 
@@ -216,7 +216,7 @@ endif()
 # Priority:
 #   1. ForceNoFloat128 - disables all extended precision (for testing)
 #   2. UseFloat128 - force enable __float128
-#   3. UseC23 - enable C23 with _Float128
+#   3. UseFloat128C23 - enable C23 _Float128
 #   4. Auto-detect __float128 support
 #   5. Check if long double has extended precision (x86)
 
@@ -260,9 +260,9 @@ else()
                 message(STATUS "Float128: Found libquadmath: ${QUADMATH_LIBRARY}")
             endif()
         endif()
-    elseif(UseC23 AND DK_HAS_FLOAT128_C23)
-        message(STATUS "Float128: Enabled via C23 _Float128 (UseC23=ON)")
-        add_definitions(-DDK_HAS_FLOAT128=1)
+    elseif(UseFloat128C23 AND DK_HAS_FLOAT128_C23)
+        message(STATUS "Float128: Enabled via C23 _Float128 (UseFloat128C23=ON)")
+        add_definitions(-DDK_USE_FLOAT128_C23=1)
     elseif(DK_HAS_FLOAT128_NATIVE AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
         # Auto-enable on x86 where it's well-supported
         message(STATUS "Float128: Auto-enabled via __float128 (x86)")
@@ -279,14 +279,10 @@ endif()
 # ============================================================================
 add_definitions(-D_GNU_SOURCE)  # For memmem and other GNU extensions
 
-# Set C standard based on UseC23 option
-if(UseC23)
-    set(DK_C_STANDARD "-std=gnu23")
-    message(STATUS "C Standard: C23 (gnu23)")
-else()
-    set(DK_C_STANDARD "-std=gnu11")
-    message(STATUS "C Standard: C11 (gnu11)")
-endif()
+# C23 with the GNU extensions datakit uses (statement expressions,
+# __attribute__, builtins); str.c and bigmath-libbf.c build as strict c23
+set(DK_C_STANDARD "-std=gnu23")
+message(STATUS "C Standard: C23 (gnu23)")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Winline -Wextra ${DK_C_STANDARD} -Wno-missing-field-initializers")
 # SSSE3 intrinsics like _mm_shuffle_epi8 are only available on x86_64
@@ -689,15 +685,16 @@ option(BuildTestBinary "Build test binary" On)
 
 if(BuildTestBinary)
     # Enable native CPU optimizations for performance-critical code
-    # Note: str.c requires -std=c11 to ensure consistent floating-point behavior
+    # Note: str.c builds as strict -std=c23 (no GNU mode) for consistent
+    # floating-point behavior
     # Use -march=native on x86, -mcpu=native on ARM
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i[3-6]86)")
         set(DK_NATIVE_FLAG "-march=native")
     else()
         set(DK_NATIVE_FLAG "-mcpu=native")
     endif()
-    set_source_files_properties(str.c PROPERTIES COMPILE_FLAGS "-std=c11 ${DK_NATIVE_FLAG}")
-    set_source_files_properties(bigmath-libbf.c PROPERTIES COMPILE_FLAGS "-std=c11 ${DK_NATIVE_FLAG}")
+    set_source_files_properties(str.c PROPERTIES COMPILE_FLAGS "-std=c23 ${DK_NATIVE_FLAG}")
+    set_source_files_properties(bigmath-libbf.c PROPERTIES COMPILE_FLAGS "-std=c23 ${DK_NATIVE_FLAG}")
 
     add_executable(${PROJECT_NAME}-test datakit-test.c
                    fenwick/fenwickI64Test.c
