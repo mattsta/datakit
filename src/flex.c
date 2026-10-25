@@ -407,8 +407,8 @@ typedef uint_fast8_t flexData;
     (size_t)(FLEX_ENTRY_META_SIZE(fed) + (fed)->len)
 
 DK_INLINE_ALWAYS
-    size_t flexDataSizeForFixedWidthEncoding(const flexEncoding encoding,
-                                             varintWidth *encodingSize);
+size_t flexDataSizeForFixedWidthEncoding(const flexEncoding encoding,
+                                         varintWidth *encodingSize);
 
 DK_INLINE_ALWAYS void abstractGetLength(const flexEntry *restrict fe,
                                         varintWidth *restrict lensize,
@@ -5196,10 +5196,11 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
  * when the row was inserted. */
 bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
     flex **const ff, const uint_fast32_t elementsPerEntry,
-    const databox **const box, flexEntry **const middleEntry) {
-    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+    const databox **const box, flexEntry **const middleEntry,
+    flexEntry **const foundEntry) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         ff, elementsPerEntry, box, middleEntry, true, false, NULL, false, NULL,
-        false, NULL, true, NULL);
+        false, NULL, true, NULL, foundEntry, NULL, NULL);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(

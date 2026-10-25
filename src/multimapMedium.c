@@ -245,12 +245,22 @@ bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
 }
 
 /* As multimapSmallInsertIfAbsent, in the map the key belongs to */
-bool multimapMediumInsertIfAbsent(multimapMedium *m,
-                                  const databox *elements[]) {
+bool multimapMediumInsertIfAbsent(multimapMedium *m, const databox *elements[],
+                                  multimapEntry *me) {
     const size_t mapIdx = multimapMediumBinarySearch(m, elements[0]);
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    flexEntry *found = NULL;
     if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
-            &m->map[mapIdx], m->elementsPerEntry, elements, &middle)) {
+            &m->map[mapIdx], m->elementsPerEntry, elements, &middle, &found)) {
+        if (me) {
+            if (m->mapIsSet) {
+                multimapMediumGetUnderlyingEntry(m, elements[0], me);
+            } else {
+                me->fe = found;
+                me->mapIdx = mapIdx;
+                me->map = &m->map[mapIdx];
+            }
+        }
         return false;
     }
 

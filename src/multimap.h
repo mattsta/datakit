@@ -69,6 +69,11 @@ bool multimapInsertReplacing(multimap **m, const databox *elements[],
  * inserted, false when the key was present (the map unchanged).  In a set
  * any row with the key counts as present. */
 bool multimapInsertIfAbsent(multimap **m, const databox *elements[]);
+/* multimapInsertIfAbsent that, when the key is present, fills 'me' with
+ * its row (as multimapGetUnderlyingEntry finds it: a set's first row with
+ * the key) for a change in place: find-or-insert in one search. */
+bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
+                                 multimapEntry *me);
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 
 /* multimapInsert for rows arriving in ascending key order: a row at or past

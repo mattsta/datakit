@@ -114,11 +114,22 @@ bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
 }
 
 /* Inserts the row only when no row has its key, in one search: true when
- * inserted, false when the key was present (the map unchanged). */
-bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[]) {
+ * inserted, false when the key was present (the map unchanged, and 'me',
+ * when non-NULL, its row; a set's first row with the key). */
+bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[],
+                                 multimapEntry *me) {
     flexEntry *middle = GET_MIDDLE(m);
+    flexEntry *found = NULL;
     if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
-            &m->map, m->elementsPerEntry, elements, &middle)) {
+            &m->map, m->elementsPerEntry, elements, &middle, &found)) {
+        if (me) {
+            if (m->mapIsSet) {
+                multimapSmallGetUnderlyingEntry(m, elements[0], me);
+            } else {
+                me->fe = found;
+                me->map = &m->map;
+            }
+        }
         return false;
     }
 

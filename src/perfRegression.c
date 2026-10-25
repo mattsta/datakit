@@ -618,6 +618,9 @@ defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(multimapAtomDense *, multimapAtomDenseFree);
 defcleaner(stringPool *, stringPoolFree);
+defcleaner(intset *, intsetFree);
+defcleaner(multimap *, multimapFree);
+defcleaner(multiroar *, multiroarFree);
 
 /* PERF_CONTAINER_N keys, each PERF_CONTAINER_KEY bytes plus a NUL */
 static char *perfContainerKeys(void) {
@@ -946,6 +949,28 @@ static uint32_t perfScatter(uint32_t i) {
     return (i * 7919u) % PERF_CONTAINER_N;
 }
 
+/* Whole-roar changes over 100000 chunks of one bit each ("op" = one
+ * chunk): an in-place OR with a roar holding the next bit of every chunk,
+ * then a range clear of every chunk */
+static void benchMultiroar(void) {
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+    cleaner(multiroarFree) multiroar *b = multiroarBitNew();
+    for (uint32_t i = 0; i < n; i++) {
+        multiroarBitSet(r, (uint64_t)i * 8192);
+        multiroarBitSet(b, (uint64_t)i * 8192 + 1);
+    }
+
+    double t0 = monoNowSec();
+    multiroarOr(r, b);
+    emitRow("multiroar", "orInPlace", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    multiroarBitClearRange(r, 0, (uint64_t)n * 8192);
+    emitRow("multiroar", "clearRangeWhole", 0, n, monoNowSec() - t0);
+    perfContainerSink = multiroarBitCount(r) + multiroarBitCount(b);
+}
+
 static void benchMultidictP(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -1004,10 +1029,6 @@ static void benchMultidictP(void) {
     persistCtxFree(ctx);
     perfContainerSink = sink;
 }
-
-defcleaner(intset *, intsetFree);
-defcleaner(multimap *, multimapFree);
-defcleaner(multiroar *, multiroarFree);
 
 static void perfFillOrderedSet(multiOrderedSet **mos, const char *keys) {
     for (uint32_t i = 0; i < PERF_CONTAINER_N; i++) {
@@ -1170,6 +1191,15 @@ static void benchPersistChecks(void) {
             if (multiroarBitGet(r, perfScatter(i) * 3ull)) {
                 sink += multiroarRemove(r, perfScatter(i) * 3ull);
             });
+
+        /* One bit per 8192-bit chunk: every set makes its chunk, every
+         * remove deletes it */
+        PERF_ROW(mod, "bitSetNewChunk", n,
+                 sink += multiroarBitSet(r, perfScatter(i) * 8192ull));
+        PERF_ROW(mod, "bitGetOwnChunk", n,
+                 sink += multiroarBitGet(r, perfScatter(i) * 8192ull));
+        PERF_ROW(mod, "bitRemoveOwnChunk", n,
+                 sink += multiroarRemove(r, perfScatter(i) * 8192ull));
         multiroarCloseP(rp);
     }
     persistCtxFree(bctx);
@@ -1628,6 +1658,10 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfNamed("persistChecks")) {
             benchPersistChecks();
+        }
+
+        if (perfWanted("multiroar")) {
+            benchMultiroar();
         }
 
         if (perfWanted("multiOrderedSet")) {

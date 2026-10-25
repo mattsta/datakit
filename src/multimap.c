@@ -531,9 +531,10 @@ bool multimapInsertReplacing(multimap **m, const databox *elements[],
     return replaced;
 }
 
-bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
+bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
+                                 multimapEntry *me) {
     bool inserted;
-    MULTIMAP_SETRESULT(inserted, *m, InsertIfAbsent, elements);
+    MULTIMAP_SETRESULT(inserted, *m, InsertIfAbsent, elements, me);
     if (inserted) {
         const uint32_t depth = COMPRESS_DEPTH(*m);
         const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
@@ -541,6 +542,10 @@ bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
     }
 
     return inserted;
+}
+
+bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
+    return multimapInsertIfAbsentEntry(m, elements, NULL);
 }
 
 void multimapInsertFullWidth(multimap **m, const databox *elements[]) {
@@ -3990,10 +3995,24 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
         const databox k = databoxNewUnsigned(key);
         const databox v = databoxNewUnsigned(value);
         const databox *row[2] = {&k, &v};
-        const bool inserted = multimapInsertIfAbsent(&m, row);
+        /* Every other offer asks for the present row's entry, which must
+         * be the stored row */
+        multimapEntry me = {0};
+        const bool inserted = i % 2 ? multimapInsertIfAbsentEntry(&m, row, &me)
+                                    : multimapInsertIfAbsent(&m, row);
         if (inserted != !seen[key]) {
             ERR("if-absent: key %" PRIu64 " offer returned %d, expected %d",
                 key, inserted, !seen[key]);
+        } else if (!inserted && i % 2) {
+            databox gotKey = {{0}};
+            databox gotVal = {{0}};
+            flexGetByType(me.fe, &gotKey);
+            flexGetByType(flexNext(*me.map, me.fe), &gotVal);
+            if (gotKey.data.u != key || gotVal.data.u != firstValue[key]) {
+                ERR("if-absent: key %" PRIu64 " entry names %" PRIu64
+                    " = %" PRIu64,
+                    key, (uint64_t)gotKey.data.u, (uint64_t)gotVal.data.u);
+            }
         }
 
         if (!seen[key]) {
@@ -4044,6 +4063,25 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
         multimapInsertIfAbsent(&set, second) || multimapCount(set) != 1) {
         ERR("if-absent: set holds %zu rows for one key offered twice",
             multimapCount(set));
+    }
+
+    /* A set's present key names its first row, whatever was offered */
+    const databox v0 = databoxNewUnsigned(0);
+    const databox *lower[2] = {&k, &v0};
+    multimapInsertFullWidth(&set, lower);
+    const databox v9 = databoxNewUnsigned(9);
+    const databox *offered[2] = {&k, &v9};
+    multimapEntry me = {0};
+    databox gotVal = {{0}};
+    if (multimapInsertIfAbsentEntry(&set, offered, &me)) {
+        ERRR("if-absent: a set's present key was inserted again");
+    } else {
+        flexGetByType(flexNext(*me.map, me.fe), &gotVal);
+        if (gotVal.data.u != 0) {
+            ERR("if-absent: a set's entry names value %" PRIu64
+                ", not the first row's 0",
+                (uint64_t)gotVal.data.u);
+        }
     }
 
     return err;

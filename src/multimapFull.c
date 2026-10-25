@@ -1719,34 +1719,45 @@ bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
 
 /* As multimapSmallInsertIfAbsent: the map the key belongs to is found
  * once, and serves both the presence check and the insert */
-bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[]) {
+bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[],
+                                multimapEntry *me) {
     const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
     flex **mapPtr = getMapPtr(m, mapIdx);
+    flexEntry *found = NULL;
 
     /* Room in the map (abstractInsert's direct-insert case): one search
      * finds the key or inserts the row, with abstractFlexInsert's upkeep */
     if (flexBytes(*mapPtr) <= m->maxSize || flexCount(*mapPtr) == 0) {
         flexEntry *middle = GET_MIDDLE(m, mapIdx, *mapPtr);
-        if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
-                mapPtr, m->elementsPerEntry, elements, &middle)) {
-            return false;
+        if (!flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
+                mapPtr, m->elementsPerEntry, elements, &middle, &found)) {
+            updateRangeBoxForIdx(m, mapIdx, *mapPtr);
+            SET_MIDDLE(m, mapIdx, middle, *mapPtr);
+            m->values++;
+            return true;
         }
-
-        updateRangeBoxForIdx(m, mapIdx, *mapPtr);
-        SET_MIDDLE(m, mapIdx, middle, *mapPtr);
-        m->values++;
-        return true;
+    } else {
+        /* A full map splits before the insert: look first, then insert */
+        found = flexFindByTypeSortedWithMiddle(*mapPtr, m->elementsPerEntry,
+                                               elements[0],
+                                               GET_MIDDLE(m, mapIdx, *mapPtr));
+        if (!found) {
+            multimapFullInsert_(m, elements, mapIdx, NULL);
+            return true;
+        }
     }
 
-    /* A full map splits before the insert: look first, then insert */
-    const flex *map = *mapPtr;
-    if (flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, elements[0],
-                                       GET_MIDDLE(m, mapIdx, map))) {
-        return false;
+    /* Present: the map is unchanged */
+    if (me) {
+        if (m->mapIsSet) {
+            multimapFullGetUnderlyingEntry(m, elements[0], me);
+        } else {
+            me->fe = found;
+            me->mapIdx = mapIdx;
+            me->map = mapPtr;
+        }
     }
-
-    multimapFullInsert_(m, elements, mapIdx, NULL);
-    return true;
+    return false;
 }
 
 bool multimapFullInsertAllowExternalizeKeys(multimapFull *m,

@@ -539,9 +539,19 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
      *       If sparse inverse immediate value, if position exists, delete.
      *         If no remaining values, convert to ALL_SET type. */
 
+    /* One search: a missing chunk goes in holding just this bit (a sparse
+     * position list of one), and a present chunk's row comes back to be
+     * changed in place */
     const databox key = databoxNewUnsigned(CHUNK(position));
+    uint8_t createSparse[8] = {0};
+    createSparse[0] = CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS;
+    createSparse[1] = 1; /* count of elements; actually a TaggedVarint */
+    varintPacked13Set(createSparse + 2, 0, OFFSET(position));
+    const databox fresh = {
+        .data.bytes.start = createSparse, .len = 5, .type = DATABOX_BYTES};
+    const databox *inserting[] = {&key, &fresh};
     multimapEntry me;
-    if (multimapGetUnderlyingEntry(r->map, &key, &me)) {
+    if (!multimapInsertIfAbsentEntry(&r->map, inserting, &me)) {
         databox value = {{0}};
         flexGetNextByType(*me.map, &me.fe, &value);
 
@@ -638,21 +648,6 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
         default:
             assert(NULL && "Invalid type byte in bitmap!");
         }
-    } else {
-        D("EEEEEEEEEEEEEEEEELSE AT CHUNK %" PRIu64 "!\n", CHUNK(position));
-        /* else, not found, so create a sparse direct set packed array */
-        uint8_t createSparse[8] = {0};
-        createSparse[0] = CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS;
-        createSparse[1] = 1; /* count of elements; actually a TaggedVarint */
-        varintPacked13Set(createSparse + 2, 0, OFFSET(position));
-
-        databox value = {{0}};
-        value.data.bytes.start = createSparse;
-        value.len = 5;
-        value.type = DATABOX_BYTES;
-
-        const databox *inserting[] = {&key, &value};
-        multimapInsert(&r->map, inserting);
     }
 
     return previouslySet;
@@ -737,6 +732,9 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
         return false;
     }
 
+    /* The row's key entry: a chunk this remove empties is deleted through
+     * it, without a second search */
+    flexEntry *const rowKey = me.fe;
     databox value = {{0}};
     flexGetNextByType(*me.map, &me.fe, &value);
 
@@ -764,19 +762,16 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
          * delete rewrites the count, moving the packed array when the
          * count's varint shrinks (241 -> 240). */
         const uint16_t currentElementCount = PACKED_COUNT_FROM_VALUE(&value);
+        if (currentElementCount == 1 && chunkTestsBit(&value, position)) {
+            /* Its only bit: the chunk goes, unrewritten */
+            me.fe = rowKey;
+            multimapDeleteEntry(&r->map, &me);
+            return true;
+        }
+
         const uint16_t newCount = deletePackedArrayMember(
             r, &value, &me, DIRECT_BIT_POSITION(position));
-        if (newCount == currentElementCount) {
-            /* Bit wasn't set */
-            return false;
-        }
-
-        if (newCount == 0) {
-            /* Chunk is now empty, delete it entirely */
-            multimapDelete(&r->map, &key);
-        }
-
-        return true;
+        return newCount != currentElementCount; /* false: bit wasn't set */
     }
     case CHUNK_TYPE_FULL_BITMAP: {
         const uint64_t byteOffset =
@@ -792,8 +787,10 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
             StrPopCntExact(bitmapStart, GET_CHUNK_BITMAP_LEN(&value));
 
         if (population == 0) {
-            /* Chunk is empty, delete it */
-            multimapDelete(&r->map, &key);
+            /* Chunk is empty (cleared in place, so its row has not moved):
+             * delete it */
+            me.fe = rowKey;
+            multimapDeleteEntry(&r->map, &me);
         } else if (population < MAX_ENTRIES_PER_DIRECT_LISTING / 2) {
             /* Convert back to sparse position list */
             convertBitmapToSparsePositionPackedArray(r, &key, &value, &me);
@@ -1799,7 +1796,9 @@ DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
         const bool whole = lo == 0 && hi == BITMAP_SIZE_IN_BITS;
 
         if (whole && op == MULTIROAR_RANGE_CLEAR_) {
-            multimapDelete(&r->map, &key);
+            /* The row just located goes (a clear reaches only present
+             * chunks) */
+            multimapDeleteEntry(&r->map, &me);
         } else if (whole && op == MULTIROAR_RANGE_SET_) {
             uint8_t allOnes[1] = {CHUNK_TYPE_ALL_1};
             const databox box = {
@@ -3174,16 +3173,15 @@ DK_STATIC void expandChunkToBitmap(const databox *value, uint8_t *bitmap) {
 DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
                                      uint8_t *bitmap, multimapEntry *me,
                                      bool chunkExists) {
-    (void)me; /* No longer used - we use delete+insert pattern */
+    (void)me; /* the chunk's row is written by key below */
     uint32_t popcount = StrPopCntExact(bitmap, BITMAP_SIZE_IN_BYTES);
 
-    /* Delete existing chunk first if it exists (simpler than replace) */
-    if (chunkExists) {
-        multimapDelete(&r->map, key);
-    }
-
+    /* A present chunk's row is replaced in place by the insert below (one
+     * search); only a chunk with no bits left is deleted */
     if (popcount == 0) {
-        /* All zeros - no chunk needed (already deleted above) */
+        if (chunkExists) {
+            multimapDelete(&r->map, key);
+        }
         return;
     } else if (popcount == BITMAP_SIZE_IN_BITS) {
         /* All ones */
@@ -4418,6 +4416,56 @@ int multiroarTest(int argc, char *argv[]) {
                         findLastSetBitInBitmap(bitmap, bytes), first, last);
                 }
             }
+        }
+    }
+
+    TEST("one bit per chunk: a set makes its chunk, a remove deletes it") {
+        /* 300 chunks, each set at an offset of its own; the even ones are
+         * removed and set again elsewhere in their chunk.  Every call's
+         * answer, the reads, the bit count and the chunk rows follow. */
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        enum { chunks = 300 };
+        for (uint64_t c = 0; c < chunks; c++) {
+            const uint64_t p =
+                c * BITMAP_SIZE_IN_BITS + (c * 37) % BITMAP_SIZE_IN_BITS;
+            if (multiroarBitSet(r, p) || !multiroarBitSet(r, p)) {
+                ERR("chunk %" PRIu64 ": set did not report new then set", c);
+            }
+        }
+        if (multiroarBitCount(r) != chunks || multimapCount(r->map) != chunks) {
+            ERR("%" PRIu64 " bits in %zu chunks after %d sets",
+                multiroarBitCount(r), multimapCount(r->map), chunks);
+        }
+        for (uint64_t c = 0; c < chunks; c += 2) {
+            const uint64_t p =
+                c * BITMAP_SIZE_IN_BITS + (c * 37) % BITMAP_SIZE_IN_BITS;
+            if (!multiroarRemove(r, p) || multiroarRemove(r, p)) {
+                ERR("chunk %" PRIu64 ": remove did not report set then clear",
+                    c);
+            }
+        }
+        if (multiroarBitCount(r) != chunks / 2 ||
+            multimapCount(r->map) != chunks / 2) {
+            ERR("%" PRIu64 " bits in %zu chunks after removing half",
+                multiroarBitCount(r), multimapCount(r->map));
+        }
+        for (uint64_t c = 0; c < chunks; c++) {
+            const uint64_t p =
+                c * BITMAP_SIZE_IN_BITS + (c * 37) % BITMAP_SIZE_IN_BITS;
+            if (multiroarBitGet(r, p) != (c % 2 == 1)) {
+                ERR("chunk %" PRIu64 ": read %d", c, multiroarBitGet(r, p));
+            }
+        }
+        for (uint64_t c = 0; c < chunks; c += 2) {
+            const uint64_t p =
+                c * BITMAP_SIZE_IN_BITS + (c * 91 + 5) % BITMAP_SIZE_IN_BITS;
+            if (multiroarBitSet(r, p) || !multiroarBitGet(r, p)) {
+                ERR("chunk %" PRIu64 ": a set after the delete misread", c);
+            }
+        }
+        if (multiroarBitCount(r) != chunks || multimapCount(r->map) != chunks) {
+            ERR("%" PRIu64 " bits in %zu chunks after setting half again",
+                multiroarBitCount(r), multimapCount(r->map));
         }
     }
 

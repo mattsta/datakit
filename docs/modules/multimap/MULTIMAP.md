@@ -275,6 +275,12 @@ bool multimapInsert(multimap **m, const databox *elements[]);
  * in one search; true when inserted */
 bool multimapInsertIfAbsent(multimap **m, const databox *elements[]);
 
+/* The same, filling 'me' with the present row when the key was there (a
+ * set's first row with the key), to change it in place: find-or-insert
+ * in one search */
+bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
+                                 multimapEntry *me);
+
 /* Sorted bag: all elements form the key, duplicates are allowed */
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 
