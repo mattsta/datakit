@@ -152,10 +152,61 @@ DK_STATIC void multiarrayMediumNodeDelete(multiarrayMedium *mar,
     }
 }
 
+/* Append node 'nodeIdx + 1' to node 'nodeIdx' and drop it, when both fit
+ * in half a node (the headroom keeps an insert from splitting what a
+ * delete just merged); true when merged */
+DK_STATIC bool multiarrayMediumMergeNext_(multiarrayMedium *mar,
+                                          uint32_t nodeIdx) {
+    if (nodeIdx + 1 >= mar->count) {
+        return false;
+    }
+    multiarrayMediumNode *a = getNode(nodeIdx);
+    multiarrayMediumNode *b = getNode(nodeIdx + 1);
+    if ((uint32_t)a->count + b->count > (uint32_t)mar->rowMax / 2) {
+        return false;
+    }
+
+    const size_t len = mar->len;
+    /* @own: container; free=multiarrayMediumFree */
+    a->data = zrealloc(a->data, len * (a->count + b->count));
+    memcpy(a->data + len * a->count, b->data, len * b->count);
+    a->count += b->count;
+    zfree(b->data);
+    multiarraySmallDirectDelete(mar->node, mar->count, nodeIdx + 1);
+    mar->count--;
+    return true;
+}
+
+/* After a delete left node 'nodeIdx' holding entries: merge it with its
+ * next neighbour, or else its previous one, when the pair fits in half a
+ * node, so scattered deletes don't leave many nearly empty nodes */
+DK_STATIC void multiarrayMediumCoalesce_(multiarrayMedium *mar,
+                                         uint32_t nodeIdx) {
+    if (nodeIdx >= mar->count) {
+        return;
+    }
+    if (!multiarrayMediumMergeNext_(mar, nodeIdx) && nodeIdx > 0) {
+        multiarrayMediumMergeNext_(mar, nodeIdx - 1);
+    }
+}
+
 void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
                             const void *s) {
     multiarrayMediumResult worker = multiarrayMediumGetForwardWorker(mar, idx);
     multiarrayMediumNode *found = worker.current;
+
+    /* An index on a boundary lands at the head of the next node; when that
+     * node is full and the one before has room, append there instead of
+     * opening a one-entry node */
+    if (worker.offset == 0 && found->count >= mar->rowMax &&
+        worker.nodeIdx > 0 &&
+        getNode(worker.nodeIdx - 1)->count < mar->rowMax) {
+        multiarrayMediumNode *prev = getNode(worker.nodeIdx - 1);
+        multiarrayMediumLargeInsertAtIdx(prev, 0, 0, prev->count * mar->len,
+                                         prev->count, s, mar->len);
+        prev->count++;
+        return;
+    }
 
     const uint16_t len = mar->len;
     const int32_t offset = worker.offset;
@@ -355,6 +406,14 @@ void multiarrayMediumDeleteRange(multiarrayMedium *mar, const uint32_t idx,
         count -= take;
         offset = 0;
     }
+
+    /* Merge around the cut once: the node now holding 'idx' (or the last) */
+    const size_t left = multiarrayMediumCount(mar);
+    if (left) {
+        const multiarrayMediumResult cut = multiarrayMediumGetForwardWorker(
+            mar, (int32_t)(idx < left ? idx : left - 1));
+        multiarrayMediumCoalesce_(mar, cut.nodeIdx);
+    }
 }
 
 /* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL
@@ -395,6 +454,7 @@ void multiarrayMediumDeleteTaking(multiarrayMedium *mar, const int32_t idx,
         multiarrayMediumLargeDeleteAtIdx(found, remaining, remainingLen,
                                          offsetLen, found->count, mar->len);
         found->count--;
+        multiarrayMediumCoalesce_(mar, worker.nodeIdx);
     }
 }
 

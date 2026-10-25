@@ -284,6 +284,40 @@ DK_STATIC void multiarrayLargeNodeInsert(multiarrayLarge *mar,
     }
 }
 
+/* Append the node after 'current' (whose neighbour before is 'prev') to
+ * 'current' and unlink it, when both fit in half a node (the headroom
+ * keeps an insert from splitting what a delete just merged) */
+DK_STATIC bool multiarrayLargeMergeNext_(multiarrayLarge *mar,
+                                         multiarrayLargeNode *prev,
+                                         multiarrayLargeNode *current) {
+    multiarrayLargeNode *next = getNext(prev, current);
+    if (!next ||
+        (uint32_t)current->count + next->count > (uint32_t)mar->rowMax / 2) {
+        return false;
+    }
+
+    const size_t len = mar->len;
+    /* @own: container; free=multiarrayLargeFree */
+    current->data =
+        zrealloc(current->data, len * (current->count + next->count));
+    memcpy(current->data + len * current->count, next->data, len * next->count);
+    current->count += next->count;
+    const multiarrayLargeResult gone = {
+        .prev = current, .current = next, .next = getNext(current, next)};
+    multiarrayLargeNodeDelete(mar, gone);
+    return true;
+}
+
+/* After a delete left 'current' holding entries: merge it with its next
+ * neighbour, or else its previous one, when the pair fits in half a node */
+DK_STATIC void multiarrayLargeCoalesce_(multiarrayLarge *mar,
+                                        multiarrayLargeNode *prev,
+                                        multiarrayLargeNode *current) {
+    if (!multiarrayLargeMergeNext_(mar, prev, current) && prev) {
+        multiarrayLargeMergeNext_(mar, getNext(current, prev), prev);
+    }
+}
+
 void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
                            const void *s) {
     const uint16_t len = mar->len;
@@ -291,6 +325,18 @@ void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
     multiarrayLargeResult worker =
         multiarrayLargeGetForwardWorker(mar->head, idx, len);
     multiarrayLargeNode *found = worker.current;
+
+    /* An index on a boundary lands at the head of the next node; when that
+     * node is full and the one before has room, append there instead of
+     * opening a one-entry node */
+    if (worker.offset == 0 && found->count >= rowMax && worker.prev &&
+        worker.prev->count < rowMax) {
+        multiarrayLargeNode *prev = worker.prev;
+        multiarrayMediumLargeInsertAtIdx(prev, 0, 0, prev->count * len,
+                                         prev->count, s, len);
+        prev->count++;
+        return;
+    }
 
     const int32_t offset = worker.offset;
     /* The walk stops in the tail node for any index past it, so an index
@@ -496,6 +542,14 @@ void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
         count -= take;
         offset = 0;
     }
+
+    /* Merge around the cut once: the node now holding 'idx' (or the last) */
+    const size_t left = multiarrayLargeCount(mar);
+    if (left) {
+        const multiarrayLargeResult cut = multiarrayLargeGetForwardWorker(
+            mar->head, (int32_t)(idx < left ? idx : left - 1), mar->len);
+        multiarrayLargeCoalesce_(mar, cut.prev, cut.current);
+    }
 }
 
 /* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL
@@ -537,6 +591,7 @@ void multiarrayLargeDeleteTaking(multiarrayLarge *mar, const int32_t idx,
         multiarrayMediumLargeDeleteAtIdx(found, remaining, remainingLen,
                                          offsetLen, found->count, mar->len);
         found->count--;
+        multiarrayLargeCoalesce_(mar, worker.prev, found);
     }
 }
 

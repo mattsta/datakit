@@ -347,12 +347,12 @@ does **not** cache traversal state between calls.
 `multiarrayMediumInsert()` picks one of four shapes based on the offset inside
 that node (all four are macros in `multiarrayMediumLarge.h`):
 
-| Offset in node       | Action                                                  |
-| -------------------- | ------------------------------------------------------- |
-| `0`                  | single-element node inserted **before** the current one |
-| `rowMax`             | single-element node inserted **after** the current one  |
-| `remaining < offset` | split; new node **after**, tail half copied into it     |
-| otherwise            | split; new node **before**, head half copied into it    |
+| Offset in node       | Action                                                                                       |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| `0`                  | appended to the node before when it has room, else a single-element node inserted **before** |
+| `rowMax`             | single-element node inserted **after** the current one                                       |
+| `remaining < offset` | split; new node **after**, tail half copied into it                                          |
+| otherwise            | split; new node **before**, head half copied into it                                         |
 
 Splitting always moves the _smaller_ half, so a split costs at most
 `rowMax / 2` elements of copying.
@@ -364,6 +364,8 @@ That O(K) node-array shuffle is the cost Large exists to remove.
 **Node deletion.** When a node's element count would drop to zero, the node and
 its data are freed and the node array shrinks — unless it is the last remaining
 node, which is kept and zeroed so the container always has somewhere to insert.
+A node a delete leaves holding elements merges with a neighbour when the pair
+fits in half a node (Large does the same).
 
 ### Characteristics
 

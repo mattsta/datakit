@@ -543,15 +543,20 @@ Both tiers share the split macros in `multiarrayMediumLarge.h`. When the target
 node is already at `rowMax`, insert picks one of four shapes based on the offset
 inside the node:
 
-| Offset in node    | Action                                              |
-| ----------------- | --------------------------------------------------- |
-| `0`               | new single-element node inserted **before** current |
-| `rowMax`          | new single-element node inserted **after** current  |
-| `remaining < off` | split, new node **after**, tail half moved into it  |
-| otherwise         | split, new node **before**, head half moved into it |
+| Offset in node    | Action                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `0`               | appended to the node **before** when it has room, else a new single-element node **before** |
+| `rowMax`          | new single-element node inserted **after** current                                          |
+| `remaining < off` | split, new node **after**, tail half moved into it                                          |
+| otherwise         | split, new node **before**, head half moved into it                                         |
 
 Delete removes an entire node when its `count` drops to zero, except that both
 tiers always keep at least one node alive (its contents are zeroed instead).
+A delete that leaves a node holding elements merges it with its next
+neighbour, or else its previous one, when the pair fits in half a node
+(`rowMax / 2`); a range delete merges once around where it cut. The
+half-node margin keeps an insert from splitting what a delete just merged,
+so scattered deletes leave nodes dense rather than many nearly empty ones.
 
 ## Performance Characteristics
 
