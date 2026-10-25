@@ -486,6 +486,66 @@ static void coalesceAround_(multiOrderedSetFull *m, uint32_t mapIdx) {
     }
 }
 
+/* Bytes a refill leaves unused below maxMapSize, for the flex header to
+ * grow as its byte count does */
+#define MOS_FULL_COMPACT_SLACK 8
+
+/* Fill every sub-map, left to right, to maxMapSize with the leading rows
+ * of the one after it; a sub-map whose rows all fit (or an empty one)
+ * joins its neighbour.  Rows keep their order, so the sub-maps stay
+ * sorted; only where each begins moves, and its range box follows. */
+void multiOrderedSetFullCompact(multiOrderedSetFull *m) {
+    uint32_t i = 0;
+    while (i + 1 < m->mapCount) {
+        flex *map = getSubMap(m, i);
+        flex *next = getSubMap(m, i + 1);
+        const size_t have = flexBytes(map);
+        if (have + flexBytes(next) <= m->maxMapSize || subMapCount(next) == 0) {
+            flexBulkAppendFlex(&map, next);
+            flexFree(next);
+            setSubMap(m, i, map);
+            updateMiddle(m, i);
+            rangeBoxRefresh(getRangeBox(m, i),
+                            flexCount(map) ? flexHead(map) : NULL);
+            dropSubMapSlot_(m, i + 1);
+            continue;
+        }
+
+        /* The most leading rows of 'next' that fit in the room left; it
+         * keeps at least one (all of them fitting merged above) */
+        const size_t room = m->maxMapSize > have + MOS_FULL_COMPACT_SLACK
+                                ? m->maxMapSize - have - MOS_FULL_COMPACT_SLACK
+                                : 0;
+        const size_t total = flexCount(next) / MOS_ELEMENTS_PER_ENTRY;
+        const uint8_t *head = (const uint8_t *)flexHead(next);
+        flexEntry *fe = flexHead(next);
+        size_t rows = 0;
+        while (rows + 1 < total) {
+            flexEntry *after = flexNext(next, flexNext(next, fe));
+            if ((size_t)((const uint8_t *)after - head) > room) {
+                break;
+            }
+            fe = after;
+            rows++;
+        }
+
+        if (rows) {
+            flex *moved = flexSplitRange(
+                &next, 0, (uint32_t)(rows * MOS_ELEMENTS_PER_ENTRY));
+            flexBulkAppendFlex(&map, moved);
+            flexFree(moved);
+            setSubMap(m, i, map);
+            setSubMap(m, i + 1, next);
+            updateMiddle(m, i);
+            updateMiddle(m, i + 1);
+            rangeBoxRefresh(getRangeBox(m, i), flexHead(map));
+            rangeBoxRefresh(getRangeBox(m, i + 1), flexHead(next));
+        }
+
+        i++;
+    }
+}
+
 /* After a bulk remove or pop (whose loop held live indices): reclaim
  * emptied sub-maps (backward, so each delete only shifts visited indices),
  * then merge every neighbouring pair that fits */

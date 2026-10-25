@@ -65,6 +65,16 @@ an insert) from merging a pair its insert would split again. A delete
 moves the sub-map's middle row by at most one row, so its cost does not
 grow with the sub-map's size.
 
+`multiOrderedSetCompact(&mos)` packs on request: each Full sub-map fills to
+the limit with the leading rows of the next (every one but the last ends
+within a row of it), then the set moves to the smallest tier that holds its
+bytes without growing (Small at L or less, Medium at 3L or less). Members,
+scores and order are unchanged; it costs O(bytes) and rewrites `*mos`. A
+3,000-member set at a 512-byte limit goes from 64 sub-maps to 50; after
+removing three in four members, from 34 to 12; a 75-member set the
+removals left in Full (4,288 bytes) becomes a 631-byte Medium (the
+multiOrderedSet test prints these figures).
+
 ## Operations and their cost (Full tier)
 
 | operation                                               | cost                                                                                                                          |

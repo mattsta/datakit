@@ -289,6 +289,14 @@ void multiOrderedSetFree(multiOrderedSet *mos);
  * Rewrites '*mos'. */
 void multiOrderedSetReset(multiOrderedSet **mos);
 
+/* Pack the rows into the densest layout they allow: each of Full's
+ * sub-maps fills to the limit with the leading rows of the next (every
+ * one but the last ends within a row of it), then the set moves to the
+ * smallest tier that holds its bytes without growing (Small at L or less,
+ * Medium at 3L or less).  Members, scores and order are unchanged; the
+ * next add may grow it again.  O(bytes); rewrites '*mos'. */
+void multiOrderedSetCompact(multiOrderedSet **mos);
+
 /* ====================================================================
  * Basic Statistics
  * ==================================================================== */

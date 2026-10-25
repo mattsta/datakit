@@ -200,21 +200,25 @@ DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
  * to Small at <= L/2; Medium -> Small at <= L/2.  O(1) unless it moves;
  * rows move once, bounded by 1.5L.  A pooled Full (rows hold pool ids)
  * stays Full. */
-static void mosShrinkIfNecessary(multiOrderedSet **m) {
+/* The move itself: a Full of at most 'fullMaps' sub-maps and 'fullBytes'
+ * bytes, or a Medium of at most 'smallBytes', becomes a Small; rows past
+ * 'smallBytes' then split into a Medium.  A shrink passes its hysteresis
+ * thresholds, multiOrderedSetCompact the growth points (3L, L). */
+DK_INLINE_ALWAYS void mosMoveDown_(multiOrderedSet **m, uint32_t fullMaps,
+                                   size_t fullBytes, size_t smallBytes) {
     const uint32_t limit = COMPRESS_LIMIT(*m);
     const uint32_t depth = COMPRESS_DEPTH(*m);
-    const size_t L = flexOptimizationSizeLimit[limit];
     flex *rows = NULL;
 
     switch (mosType_(*m)) {
     case MOS_TYPE_FULL: {
         multiOrderedSetFull *full = mosf(*m);
         dkTierStats s;
-        if (full->mapCount > 3) {
+        if (full->mapCount > fullMaps) {
             return;
         }
         multiOrderedSetFullStats(full, &s);
-        if (s.dataBytes > L + L / 2 ||
+        if (s.dataBytes > fullBytes ||
             !(rows = multiOrderedSetFullTakeRows(full))) {
             return;
         }
@@ -222,7 +226,7 @@ static void mosShrinkIfNecessary(multiOrderedSet **m) {
     }
     case MOS_TYPE_MEDIUM: {
         multiOrderedSetMedium *medium = mosm(*m);
-        if (multiOrderedSetMediumBytes(medium) > L / 2) {
+        if (multiOrderedSetMediumBytes(medium) > smallBytes) {
             return;
         }
         /* map[0] holds only scores below map[1]'s: appending keeps order */
@@ -246,15 +250,28 @@ static void mosShrinkIfNecessary(multiOrderedSet **m) {
             : FLEX_EMPTY_SIZE;
     *m = MOS_TAG_(small, MOS_TYPE_SMALL);
 
-    /* Rows above L/2 (from a Full) belong in Medium, split as an upgrade
-     * splits them */
-    if (flexBytes(rows) > L / 2 &&
+    /* Rows above 'smallBytes' (from a Full) belong in Medium, split as an
+     * upgrade splits them */
+    if (flexBytes(rows) > smallBytes &&
         multiOrderedSetSmallCount(small) >= MOS_MIN_ENTRIES_FOR_PROMOTION) {
         multiOrderedSetMedium *medium =
             multiOrderedSetMediumNewFromSmall(small, small->map, small->middle);
         *m = MOS_TAG_(medium, MOS_TYPE_MEDIUM);
     }
     *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
+}
+
+static void mosShrinkIfNecessary(multiOrderedSet **m) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    mosMoveDown_(m, 3, L + L / 2, L / 2);
+}
+
+void multiOrderedSetCompact(multiOrderedSet **mos) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*mos)];
+    if (mosType_(*mos) == MOS_TYPE_FULL) {
+        multiOrderedSetFullCompact(mosf(*mos));
+    }
+    mosMoveDown_(mos, UINT32_MAX, 3 * L, L);
 }
 
 /* A removal entry point: the tier's call, then a shrink when it removed
@@ -2412,6 +2429,100 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         }
 
         multiOrderedSetFree(mos);
+    }
+
+    TEST("multiOrderedSet: Compact keeps members and order, picks the "
+         "smallest tier, packs sub-maps") {
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNewLimit(FLEX_CAP_LEVEL_512);
+        const int64_t members = 3000;
+        for (int64_t i = 0; i < members; i++) {
+            databox score;
+            /* Scores out of member order, so the walk order is the scores' */
+            DATABOX_SET_DOUBLE(&score, (double)((i * 7919) % members));
+            const databox member = databoxNewSigned(i);
+            multiOrderedSetAdd(&mos, &score, &member);
+        }
+
+        cleanerName(zfree, Int64) int64_t *before =
+            zcalloc((size_t)members, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *after =
+            zcalloc((size_t)members, sizeof(int64_t));
+        const int64_t keepEvery[] = {1, 4, 40, 400, 3000};
+        for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery); p++) {
+            for (int64_t i = 0; i < members; i++) {
+                if (i % keepEvery[p]) {
+                    const databox member = databoxNewSigned(i);
+                    multiOrderedSetRemove(&mos, &member);
+                }
+            }
+
+            const size_t n = multiOrderedSetCount(mos);
+            dkTierStats was;
+            multiOrderedSetStats(mos, &was);
+            for (int32_t side = 0; side < 2; side++) {
+                int64_t *walk = side ? after : before;
+                mosIterator it;
+                multiOrderedSetIteratorInit(mos, &it, true);
+                databox member;
+                databox score;
+                size_t at = 0;
+                while (at < n &&
+                       multiOrderedSetIteratorNext(&it, &member, &score)) {
+                    walk[at++] = member.data.i64;
+                }
+                multiOrderedSetIteratorRelease(&it);
+                if (side == 0) {
+                    multiOrderedSetCompact(&mos);
+                }
+            }
+
+            dkTierStats s;
+            multiOrderedSetStats(mos, &s);
+            const uint64_t L = s.unitLimit;
+            bool tierOk;
+            switch (s.tier) {
+            case MOS_TYPE_SMALL:
+                tierOk =
+                    s.dataBytes <= L || s.count < MOS_MIN_ENTRIES_FOR_PROMOTION;
+                break;
+            case MOS_TYPE_MEDIUM:
+                tierOk = s.dataBytes > L;
+                break;
+            default:
+                /* Packed: every sub-map but the last within a row (under 16
+                 * bytes here) and the refill slack of the limit */
+                tierOk = s.dataBytes > 3 * L &&
+                         s.units <= s.dataBytes / (L - 16 - 8) + 1;
+                break;
+            }
+            printf("  keep 1 in %4" PRId64 ": tier %u, %4u sub-maps, %6" PRIu64
+                   " bytes -> tier %u, %4u, %6" PRIu64 "\n",
+                   keepEvery[p], was.tier, was.units, was.totalBytes, s.tier,
+                   s.units, s.totalBytes);
+            if (multiOrderedSetCount(mos) != n ||
+                memcmp(before, after, n * sizeof(int64_t)) != 0 || !tierOk ||
+                s.units > was.units) {
+                ERR("keep 1 in %" PRId64 ": compacted tier %u units %u (was "
+                    "%u), %" PRIu64 " data bytes, %zu members",
+                    keepEvery[p], s.tier, s.units, was.units, s.dataBytes,
+                    multiOrderedSetCount(mos));
+            }
+            multiOrderedSetVerify(mos);
+
+            /* Ranks and adds work on the compacted set */
+            const databox first = databoxNewSigned(before[0]);
+            databox score;
+            DATABOX_SET_DOUBLE(&score, -1.0);
+            const databox extra = databoxNewSigned(members + (int64_t)p);
+            multiOrderedSetAdd(&mos, &score, &extra);
+            if (multiOrderedSetGetRank(mos, &extra) != 0 ||
+                multiOrderedSetGetRank(mos, &first) != 1) {
+                ERR("keep 1 in %" PRId64 ": ranks after Compact are wrong",
+                    keepEvery[p]);
+            }
+            multiOrderedSetRemove(&mos, &extra);
+        }
     }
 
     TEST("multiOrderedSet: Reset from every tier gives an empty Small with "

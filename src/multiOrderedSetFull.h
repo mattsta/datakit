@@ -32,6 +32,9 @@ multiOrderedSetFullNewFromMedium(struct multiOrderedSetMedium *medium,
 multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m);
 void multiOrderedSetFullFree(multiOrderedSetFull *m);
 void multiOrderedSetFullReset(multiOrderedSetFull *m);
+/* Refill every sub-map to maxMapSize from the next (see
+ * multiOrderedSetCompact) */
+void multiOrderedSetFullCompact(multiOrderedSetFull *m);
 
 /* ====================================================================
  * Statistics
