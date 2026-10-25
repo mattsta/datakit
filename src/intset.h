@@ -11,14 +11,14 @@
  * - Medium tier: int16_t and int32_t values (separate sorted arrays)
  * - Full tier: int16_t, int32_t, and int64_t values (three sorted arrays)
  *
- * This avoids the old problem where adding one large value would
- * upgrade the entire array from int16 to int64 encoding.
+ * Each value is stored at the narrowest width that holds it, so one large
+ * value costs its own 8 bytes, not a wider encoding for every value.
  */
 
 /* Opaque pointer type - actual tier determined by pointer tagging */
 typedef struct intset intset;
 
-/* For backward compatibility */
+/* The byte width a value needs (intsetCommon.h picks it per value) */
 typedef enum intsetEnc {
     INTSET_ENC_INT16 = sizeof(int16_t),
     INTSET_ENC_INT32 = sizeof(int32_t),
