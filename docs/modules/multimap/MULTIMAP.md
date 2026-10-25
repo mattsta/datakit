@@ -948,12 +948,30 @@ same reason. Thresholds are checked after every `Insert`, `InsertFullWidth`,
 
 ### 1. Choose the size limit for your access pattern
 
-```c
-/* Small rows, frequent random updates: smaller submaps mean smaller memmoves */
-multimap *hotCache = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+A lookup inside a submap is a binary search over a flex, whose entries are
+variable-length, so each probe walks entry by entry: the walk grows with the
+submap, while the routing across submaps (one compare per halving) barely
+does. Measured at 100,000 rows of a 16-byte key and an integer
+(`dktools perfcompare NAME --base HEAD --modules multimapLimits`, Apple M1 Max,
+clang 22 perf, medians of 15+15 runs, ns per call):
 
-/* Bulk load, mostly read: larger submaps mean fewer indirections */
-multimap *bulkData = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
+| limit | lookup | insert | bytes |
+| ---: | ---: | ---: | ---: |
+| 256 | 527 | 681 | 2,265,663 |
+| 512 | 513 | 687 | 2,252,934 |
+| 1024 | 510 | 707 | 2,244,129 |
+| 2048 (default) | 606 | 738 | 2,239,704 |
+| 4096 | 753 | 977 | 2,237,182 |
+| 8192 | 1022 | 1464 | 2,236,256 |
+
+For small rows at scale, 512 or 1024 is ~16% faster to look up than the
+default for 0.2-0.6% more memory; larger limits are slower for reads and
+writes alike. Rows near the limit in size (a multiroar chunk is up to a 1 KB
+bitmap) need a limit well above one row, or every submap holds one row.
+
+```c
+/* Many small rows, random access: shorter walks inside each submap */
+multimap *index = multimapNewLimit(2, FLEX_CAP_LEVEL_1024);
 ```
 
 ### 2. Keep rows narrow

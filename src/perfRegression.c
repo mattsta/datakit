@@ -949,6 +949,53 @@ static uint32_t perfScatter(uint32_t i) {
     return (i * 7919u) % PERF_CONTAINER_N;
 }
 
+/* A multimap's speed against its density, by sub-map size limit: 100000
+ * (16-byte key, integer) rows inserted in a scattered order, then looked
+ * up; each insert row's bytes column is the filled map's total bytes.  A
+ * larger limit packs rows denser and walks longer inside each sub-map
+ * (a flex's entries are variable-length, so its binary search steps
+ * entry by entry); a smaller one routes across more sub-maps (only when
+ * asked for by name). */
+static void benchMultimapLimits(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    static const struct {
+        flexCapSizeLimit limit;
+        const char *insert;
+        const char *exists;
+    } limits[] = {
+        {FLEX_CAP_LEVEL_256, "insert256", "exists256"},
+        {FLEX_CAP_LEVEL_512, "insert512", "exists512"},
+        {FLEX_CAP_LEVEL_1024, "insert1024", "exists1024"},
+        {FLEX_CAP_LEVEL_2048, "insert2048", "exists2048"},
+        {FLEX_CAP_LEVEL_4096, "insert4096", "exists4096"},
+        {FLEX_CAP_LEVEL_8192, "insert8192", "exists8192"},
+    };
+    uint64_t sink = 0;
+    for (size_t l = 0; l < COUNT_ARRAY(limits); l++) {
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, limits[l].limit);
+        double t0 = monoNowSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            const databox v = databoxNewSigned(i);
+            const databox *row[2] = {&k, &v};
+            sink += multimapInsert(&m, row);
+        }
+        emitRow("multimapLimits", limits[l].insert, multimapBytes(m), n,
+                monoNowSec() - t0);
+
+        t0 = monoNowSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, (i * 104729u) % n);
+            sink += multimapExists(m, &k);
+        }
+        emitRow("multimapLimits", limits[l].exists, 0, n, monoNowSec() - t0);
+    }
+
+    perfContainerSink = sink;
+}
+
 /* Whole-roar changes over 100000 chunks of one bit each ("op" = one
  * chunk): an in-place OR with a roar holding the next bit of every chunk,
  * then a range clear of every chunk */
@@ -1689,6 +1736,10 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfNamed("persistChecks")) {
             benchPersistChecks();
+        }
+
+        if (perfNamed("multimapLimits")) {
+            benchMultimapLimits();
         }
 
         if (perfWanted("multiroar")) {
