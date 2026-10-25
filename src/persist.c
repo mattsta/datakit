@@ -10474,6 +10474,49 @@ int persistTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("an op the structure refuses at replay is skipped and counted, or "
+         "fails a strict recovery") {
+        /* A multimap WAL: an insert, an increment whose field offset is a
+         * string (its body decodes, but no increment reads it), another
+         * insert.  (An increment the map refuses for its value replays as
+         * that same refusal, which is the faithful replay.) */
+        for (int strict = 0; strict <= 1; strict++) {
+            persistConfig config = persistDefaultConfig();
+            config.strictRecovery = strict;
+            persist *p = persistCreate(&persistOpsMultimap, &config);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            persistAttachWAL(p, persistStoreMemory(0));
+            {
+                cleaner(multimapFree) multimap *empty = multimapNew(2);
+                persistSnapshot(p, empty);
+            }
+            const databox k1 = DATABOX_SIGNED(1);
+            const databox k2 = DATABOX_SIGNED(2);
+            const databox missing = DATABOX_SIGNED(9);
+            const databox five = DATABOX_SIGNED(5);
+            const databox offset = databoxNewBytesString("one");
+            const databox *row1[2] = {&k1, &five};
+            const databox *row2[2] = {&k2, &five};
+            const databox *incr[3] = {&k1, &offset, &five};
+            persistLogOp(p, PERSIST_OP_INSERT, row1, 2);
+            persistLogOp(p, PERSIST_OP_NUM_INCR, incr, 3);
+            persistLogOp(p, PERSIST_OP_INSERT, row2, 2);
+            persistSync(p);
+
+            cleaner(multimapFree) multimap *got = persistRecover(p);
+            persistStats stats;
+            persistGetStats(p, &stats);
+            if (strict ? got != NULL
+                       : !got || multimapCount(got) != 2 ||
+                             multimapExists(got, &missing) ||
+                             stats.entriesSkipped != 1) {
+                ERR("strict %d: recovery %s with %" PRIu64 " skipped", strict,
+                    got ? "made a map" : "refused", stats.entriesSkipped);
+            }
+            persistClose(p);
+        }
+    }
+
     TEST("encode-into bodies: the bytes persistOpEncodeBoxes allocates") {
         /* Rows of one to three boxes, short and 600-byte strings, and the
          * refusals (no boxes, a NULL box): the written body and its
