@@ -147,6 +147,10 @@ size_t multilistFullBytesActual(const multilistFull *ml) {
     return totalBytes;
 }
 
+mlNodeId multilistFullNodeCount(const multilistFull *ml) {
+    return ml->count;
+}
+
 void multilistFullStats(const multilistFull *ml, dkTierStats *out) {
     /* Nodes as stored (compressed ones at their compressed size), plus the
      * struct and the node array's pointers */
@@ -1721,10 +1725,10 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]) {
 /* pop from multilistFull head or tail.
  *
  * Return value of false means no elements available. */
-bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
-                      const bool fromTail) {
+multilistFullPopResult multilistFullPop(multilistFull *ml, mflexState *state,
+                                        databox *box, const bool fromTail) {
     if (ml->values == 0) {
-        return false;
+        return MULTILIST_FULL_POP_EMPTY;
     }
 
     mflex **node;
@@ -1757,10 +1761,11 @@ bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
             mflexCloseShrink(node, state, f);
         }
 
-        return true;
+        return ml->count <= 3 ? MULTILIST_FULL_POP_POPPED_FEW_NODES
+                              : MULTILIST_FULL_POP_POPPED;
     }
 
-    return false;
+    return MULTILIST_FULL_POP_EMPTY;
 }
 
 /* ====================================================================

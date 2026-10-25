@@ -315,9 +315,79 @@ full:
     return;
 }
 
+/* After a removal: move a drained Full or Medium down to the tier its
+ * values fit with room to grow, as multimap does.  L is the size limit's
+ * cutoff; tiers grow past L (Small) and 3L (Medium) and shrink well
+ * below: Full (three nodes at most) -> Medium at <= 1.5L, or straight to
+ * Small at <= L/2; Medium -> Small at <= L/2.  O(1) unless it moves (Full
+ * is measured only once down to three nodes); values move once, bounded
+ * by 1.5L (Full's nodes decompress through 'state'). */
+static void multilistShrinkIfNecessary(multilist **m, mflexState *state) {
+    const uint32_t depth = COMPRESS_DEPTH(*m);
+    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const size_t L = flexOptimizationSizeLimit[limit];
+    flex *values;
+
+    switch (_multilistType(*m)) {
+    case MULTILIST_TYPE_FULL: {
+        multilistFull *full = mlf(*m);
+        if (multilistFullNodeCount(full) > 3 ||
+            multilistFullBytes(full) > L + L / 2) {
+            return;
+        }
+        /* @own: container; free=flexFree */
+        values = multilistFullDump(full, state);
+        multilistFullFree(full);
+        break;
+    }
+    case MULTILIST_TYPE_MEDIUM: {
+        multilistMedium *medium = mlm(*m);
+        if (multilistMediumBytes(medium) > L / 2) {
+            return;
+        }
+        values = medium->fl[0];
+        flexBulkAppendFlex(&values, medium->fl[1]);
+        flexFree(medium->fl[1]);
+        zfree(medium);
+        break;
+    }
+    default:
+        return;
+    }
+
+    /* @own: caller; free=multilistFree */
+    multilistSmall *small = multilistSmallNewFromFlexConsume(values);
+    *m = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
+    *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_SMALL);
+
+    /* Values above L/2 (from a Full) belong in Medium, split as an upgrade
+     * splits them */
+    if (flexBytes(values) > L / 2) {
+        multilistMedium *medium =
+            multilistMediumNewFromFlexConsumeGrow(small, small->fl);
+        *m = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
+        *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_MEDIUM);
+    }
+}
+
+/* A removal entry point: the tier's call, then a shrink when it removed.
+ * 'fullHint' (over the call's result, removed_) says whether a Full may
+ * have drained far enough to measure */
+#define MULTILIST_DELETE_(m, state, fullHint, func, ...)                       \
+    do {                                                                       \
+        int removed_;                                                          \
+        _MULTILIST(removed_ =, *(m), func, state, __VA_ARGS__);                \
+        /* A long Full list (the common case) never enters the check */        \
+        if (removed_ && _multilistType(*(m)) != MULTILIST_TYPE_SMALL &&        \
+            (_multilistType(*(m)) != MULTILIST_TYPE_FULL || (fullHint))) {     \
+            multilistShrinkIfNecessary(m, state);                              \
+        }                                                                      \
+        return removed_ != 0;                                                  \
+    } while (0)
+
 bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
                        int64_t values) {
-    MULTILIST_RETURN(*m, DelRange, state, start, values);
+    MULTILIST_DELETE_(m, state, true, DelRange, start, values);
 }
 
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
@@ -433,7 +503,9 @@ full:
 
 bool multilistPop(multilist **m, mflexState *state, databox *got,
                   bool fromTail) {
-    MULTILIST_RETURN(*m, Pop, state, got, fromTail);
+    /* Full's pop says when it is down to three nodes */
+    MULTILIST_DELETE_(m, state, removed_ == MULTILIST_FULL_POP_POPPED_FEW_NODES,
+                      Pop, got, fromTail);
 }
 
 void multilistRotate(multilist *m, mflexState *state[2]) {
@@ -3580,11 +3652,16 @@ int multilistTest(int argc, char *argv[]) {
                 ERR("%s: after the edge replaces and deletes: %s", name, why);
             }
 
-            /* Empty the list, keeping its tier. */
-            databox got = {{0}};
-            while (multilistPopTail(&ml, s0, &got)) {
-                databoxFreeData(&got);
-                memset(&got, 0, sizeof(got));
+            /* Empty the list, keeping its tier: an iterator's deletes never
+             * change tier (pops and range deletes shrink a drained list) */
+            {
+                multilistIterator emptying = {0};
+                multilistIteratorInitForward(ml, s, &emptying);
+                multilistEntry gone;
+                while (multilistNext(&emptying, &gone)) {
+                    multilistDelEntry(&emptying, &gone);
+                }
+                multilistIteratorRelease(&emptying);
             }
 
             if (_multilistType(ml) != configs[c].wantType ||
@@ -3607,6 +3684,7 @@ int multilistTest(int argc, char *argv[]) {
                 }
             }
 
+            databox got = {{0}};
             if (multilistPopHead(&ml, s0, &got)) {
                 ERR("%s: the empty list popped something", name);
             }

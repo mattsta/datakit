@@ -995,6 +995,7 @@ static size_t maWalk(void *c, int64_t from, bool forward, int64_t *out,
 
 static const simSeqOps simSequences[] = {
     {.name = "multilist",
+     .shrinks = true,
      .coalesces = true,
      .growTo = 2000,
      .make = mlMake,

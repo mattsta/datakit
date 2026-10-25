@@ -36,6 +36,7 @@ size_t multilistFullBytes(const multilistFull *ml);
 /* Physical bytes (compressed nodes measured at stored size) */
 size_t multilistFullBytesActual(const multilistFull *ml);
 void multilistFullStats(const multilistFull *ml, dkTierStats *out);
+mlNodeId multilistFullNodeCount(const multilistFull *ml); /* O(1) */
 
 /* Settings */
 /* Set the compress depth (clamped to 32767) and put every existing node
@@ -180,10 +181,21 @@ bool multilistFullIndexNear(multilistFull *ml, mflexState *state,
 /* Move ends of list */
 void multilistFullRotate(multilistFull *ml, mflexState *state[2]);
 
+/* What multilistFullPop did.  Nonzero means it popped, so the result
+ * still reads as a bool. */
+typedef enum multilistFullPopResult {
+    MULTILIST_FULL_POP_EMPTY = 0,  /* the list was empty */
+    MULTILIST_FULL_POP_POPPED = 1, /* popped; four nodes or more remain */
+    /* popped, and the list is down to three nodes or fewer: the one-load
+     * hint that multilistPop may shrink it (a pop from a longer list skips
+     * the shrink check) */
+    MULTILIST_FULL_POP_POPPED_FEW_NODES = 2,
+} multilistFullPopResult;
+
 /* Remove and return head or tail of list as an owned value; 'box' must be
  * zeroed or DATABOX_BIG_INIT'd (see multilistPop in multilist.h) */
-bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
-                      bool fromTail);
+multilistFullPopResult multilistFullPop(multilistFull *ml, mflexState *state,
+                                        databox *box, bool fromTail);
 #define multilistFullPopTail(ml, s, box) multilistFullPop(ml, s, box, true)
 #define multilistFullPopHead(ml, s, box) multilistFullPop(ml, s, box, false)
 

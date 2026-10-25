@@ -851,7 +851,20 @@ Medium -> Full:   multilistMediumBytes(medium) > (limitBytes * 3)
 So with `FLEX_CAP_LEVEL_2048` a list is Small up to 2 KB of stored data, Medium
 up to 6 KB, and Full beyond that. With `FLEX_CAP_LEVEL_0` the limit is 0 bytes
 and the first write promotes immediately. The check runs after every push and
-insert; it never downgrades.
+insert.
+
+Pops and range deletes move a drained list back down, well below the growth
+points so it never flips at a boundary (`multilistShrinkIfNecessary()`):
+
+```c
+Full -> Medium:  at most 3 nodes and multilistFullBytes(full) <= limitBytes * 1.5
+                 (straight to Small at <= limitBytes / 2)
+Medium -> Small: multilistMediumBytes(medium) <= limitBytes / 2
+```
+
+A pop from a Full list of four nodes or more skips the check entirely (Full's
+pop reports when it is down to three), so queue pops cost what they did.
+Iterator deletes (`multilistDelEntry`) never change tier.
 
 ### vs Traditional Linked List
 
