@@ -173,6 +173,12 @@ void multiarrayReset(multiarray **m);
 /* A deep copy in the same tier and node layout (NULL for a native array
  * or NULL) */
 multiarray *multiarrayCopy(const multiarray *m);
+/* Pack the elements into full nodes of rowMax (the last holds the rest),
+ * in order, in the tier multiarrayNewFromArray would choose: Small at
+ * rowMax elements or fewer, Large at rowMax nodes or more, else Medium.
+ * O(elements); the old and new nodes coexist while it runs.  Rewrites
+ * '*m'; a native array or NULL is refused. */
+void multiarrayCompact(multiarray **m);
 
 void *multiarrayGet(multiarray *m, multiarrayIdx idx);
 void *multiarrayGetHead(multiarray *m);

@@ -705,6 +705,115 @@ multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
     return _MULTIARRAY_TAG(med, MULTIARRAY_TYPE_MEDIUM);
 }
 
+/* One node's elements, in order, as Compact reads them */
+typedef struct multiarrayRun_ {
+    const uint8_t *data;
+    uint32_t count;
+} multiarrayRun_;
+
+/* Copy the next 'want' elements of 'run' (from element 'at' of run 'r')
+ * to 'to', advancing the position */
+static void multiarrayRunsTake_(const multiarrayRun_ *run, size_t *r,
+                                uint32_t *at, size_t len, uint8_t *to,
+                                size_t want) {
+    while (want) {
+        const uint32_t left = run[*r].count - *at;
+        if (!left) {
+            (*r)++;
+            *at = 0;
+            continue;
+        }
+        const uint32_t take = want < left ? (uint32_t)want : left;
+        memcpy(to, run[*r].data + len * *at, len * take);
+        to += len * take;
+        *at += take;
+        want -= take;
+    }
+}
+
+void multiarrayCompact(multiarray **m) {
+    const multiarrayType type = _multiarrayType(*m);
+    if (type != MULTIARRAY_TYPE_MEDIUM && type != MULTIARRAY_TYPE_LARGE) {
+        if (type == MULTIARRAY_TYPE_NATIVE) {
+            MA_NATIVE_REFUSED_(*m);
+        }
+        return; /* a Small is one exact-fit array already */
+    }
+
+    /* The old nodes as runs, in order */
+    const uint16_t len = multiarrayElementLen(*m);
+    const uint16_t rowMax = multiarrayRowMax(*m);
+    size_t runs;
+    cleaner(zfree) void *runStorage = NULL;
+    multiarrayRun_ *run;
+    if (type == MULTIARRAY_TYPE_MEDIUM) {
+        const multiarrayMedium *med = marm(*m);
+        runs = med->count;
+        /* @own: caller; free=zfree */
+        runStorage = zcalloc(runs, sizeof(*run));
+        run = runStorage;
+        for (size_t i = 0; i < runs; i++) {
+            run[i] = (multiarrayRun_){med->node[i].data, med->node[i].count};
+        }
+    } else {
+        const multiarrayLarge *large = marl(*m);
+        runs = large->nodes;
+        /* @own: caller; free=zfree */
+        runStorage = zcalloc(runs, sizeof(*run));
+        run = runStorage;
+        const multiarrayLargeNode *prev = NULL;
+        size_t i = 0;
+        for (const multiarrayLargeNode *cur = large->head; cur; i++) {
+            run[i] = (multiarrayRun_){cur->data, (uint32_t)cur->count};
+            const multiarrayLargeNode *next = multiarrayLargeStep_(prev, cur);
+            prev = cur;
+            cur = next;
+        }
+    }
+
+    size_t count = 0;
+    for (size_t i = 0; i < runs; i++) {
+        count += run[i].count;
+    }
+
+    /* Full nodes of rowMax elements (the last holds the rest), in the tier
+     * multiarrayNewFromArray would choose for them */
+    size_t r = 0;
+    uint32_t at = 0;
+    multiarray *packed;
+    if (count <= rowMax) {
+        multiarraySmall *s = multiarraySmallNew(len, rowMax);
+        /* @own: container; free=multiarraySmallFree */
+        s->data = zrealloc(s->data, (size_t)len * (count ? count : 1));
+        multiarrayRunsTake_(run, &r, &at, len, s->data, count);
+        s->count = (uint16_t)count;
+        packed = _MULTIARRAY_TAG(s, MULTIARRAY_TYPE_SMALL);
+    } else {
+        const size_t nodes = (count + rowMax - 1) / rowMax;
+        /* @own: caller; free=multiarrayMediumFree */
+        multiarrayMedium *med = zcalloc(1, sizeof(*med));
+        /* @own: container; free=multiarrayMediumFree */
+        med->node = zcalloc(nodes, sizeof(*med->node));
+        med->count = (uint32_t)nodes;
+        med->len = len;
+        med->rowMax = rowMax;
+        for (size_t i = 0; i < nodes; i++) {
+            const size_t here = i + 1 < nodes ? rowMax : count - i * rowMax;
+            /* @own: container; free=multiarrayMediumFree */
+            med->node[i].data = zmalloc(here * len);
+            multiarrayRunsTake_(run, &r, &at, len, med->node[i].data, here);
+            med->node[i].count = (uint16_t)here;
+        }
+        packed = nodes >= rowMax
+                     ? _MULTIARRAY_TAG(multiarrayLargeFromMedium(med),
+                                       MULTIARRAY_TYPE_LARGE)
+                     : _MULTIARRAY_TAG(med, MULTIARRAY_TYPE_MEDIUM);
+    }
+
+    multiarrayFree(*m);
+    *m = packed;
+}
+
 #ifdef DATAKIT_TEST
 
 #include "ctest.h"
@@ -1122,6 +1231,65 @@ int multiarrayTest(int argc, char *argv[]) {
         err += multiarrayOracleSoak_(2, 7, 8, MULTIARRAY_TYPE_SMALL, 1);
         err += multiarrayOracleSoak_(12, 50, 8, MULTIARRAY_TYPE_MEDIUM, 2);
         err += multiarrayOracleSoak_(120, 400, 8, MULTIARRAY_TYPE_LARGE, 3);
+    }
+
+    TEST("Compact: same elements, full nodes, the tier their count needs") {
+        const uint16_t rowMax = 8;
+        cleaner(multiarrayFree) multiarray *m =
+            multiarrayNew(sizeof(int64_t), rowMax);
+        int64_t n = 0;
+        for (; n < 600; n++) {
+            multiarrayInsert(&m, (multiarrayIdx)n, &n);
+        }
+
+        cleaner(zfree) void *want = zcalloc((size_t)n, sizeof(int64_t));
+        cleaner(zfree) void *got = zcalloc((size_t)n, sizeof(int64_t));
+        const uint32_t keepEvery[] = {3, 5, 4, 30};
+        for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery); p++) {
+            /* Back to front, so each index is still the element's */
+            for (int64_t i = (int64_t)multiarrayCount(m) - 1; i >= 0; i--) {
+                if (i % keepEvery[p]) {
+                    multiarrayDelete(&m, (uint32_t)i);
+                }
+            }
+
+            const size_t count = multiarrayCount(m);
+            dkTierStats was;
+            multiarrayStats(m, &was);
+            multiarrayCopyTo(m, want);
+            multiarrayCompact(&m);
+            multiarrayCopyTo(m, got);
+            dkTierStats s;
+            multiarrayStats(m, &s);
+            const size_t nodes = (count + rowMax - 1) / rowMax;
+            const multiarrayType tier = count <= rowMax ? MULTIARRAY_TYPE_SMALL
+                                        : nodes >= rowMax
+                                            ? MULTIARRAY_TYPE_LARGE
+                                            : MULTIARRAY_TYPE_MEDIUM;
+            printf("  keep 1 in %2u: tier %u, %3u nodes, %5" PRIu64
+                   " bytes -> tier %u, %3u, %5" PRIu64 "\n",
+                   keepEvery[p], was.tier, was.units, was.totalBytes, s.tier,
+                   s.units, s.totalBytes);
+            if (multiarrayCount(m) != count ||
+                memcmp(want, got, count * sizeof(int64_t)) != 0 ||
+                _multiarrayType(m) != tier ||
+                (tier != MULTIARRAY_TYPE_SMALL && s.units != nodes) ||
+                s.totalBytes > was.totalBytes) {
+                ERR("keep 1 in %u: %zu elements compacted to tier %d (want "
+                    "%d), %u nodes (want %zu)",
+                    keepEvery[p], count, _multiarrayType(m), tier, s.units,
+                    nodes);
+            }
+
+            /* Still edits as before */
+            int64_t v = -1;
+            multiarrayInsert(&m, 0, &v);
+            multiarrayPop(&m, 0, &v);
+            if (v != -1 || multiarrayCount(m) != count) {
+                ERR("keep 1 in %u: an edit after Compact went wrong",
+                    keepEvery[p]);
+            }
+        }
     }
 
     TEST("Copy in every tier: same elements and tier, independent of the "

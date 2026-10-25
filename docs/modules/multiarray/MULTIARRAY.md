@@ -96,6 +96,13 @@ and Medium to Small at `rowMax / 2` elements or fewer (in at most two nodes).
 Each may rewrite `*m`. The Native macro API never demotes; an array it made
 stays on it.
 
+`multiarrayCompact(&m)` packs on request: the elements move, in order, into
+full nodes of `rowMax` (the last holds the rest) in the tier
+`multiarrayNewFromArray` would choose for their count. Scattered deletes
+leave nodes partly full; compacting 600 elements with two in three deleted
+takes a Large from 75 nodes to 25 (2,824 to 2,024 bytes; the multiarray
+test prints these figures).
+
 ## Data Structures
 
 ### multiarray type and tag enum
