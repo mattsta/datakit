@@ -68,6 +68,13 @@ bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key);
 
 void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
                                        const databox *key);
+/* The atom of 'key' in one search: true when it existed ('ref' its
+ * reference), false when this call created it with one reference under
+ * 'id' ('ref' the new reference).  'id' must not be bound to another
+ * value: a table that picks its own ids (multimapAtomDense) passes the
+ * one it will take when the atom is new. */
+bool multimapAtomFindOrCreateWithId(multimapAtom *ma, const databox *key,
+                                    uint64_t id, databox *ref);
 
 /* Resolve the reference 'ref' to its value in 'key'.  'key' is a
  * caller-provided output box: pass a DATABOX_BIG_INIT'd databoxBig to

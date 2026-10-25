@@ -145,6 +145,11 @@ static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
     return false;
 }
 
+bool multimapAtomFindOrCreateWithId(multimapAtom *ma, const databox *key,
+                                    uint64_t id, databox *ref) {
+    return atomFindOrCreateWithId_(ma, key, id, ref);
+}
+
 static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
                               databox *ref) {
     return atomFindOrCreateWithId_(ma, key, atomNextId_(ma), ref);

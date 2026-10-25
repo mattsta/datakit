@@ -30,6 +30,16 @@ const multimapAtom *multimapAtomDenseBase(const multimapAtomDense *d) {
     return d->atoms;
 }
 
+/* The lowest id not in use (the one denseTakeId_ takes) */
+static uint64_t densePeekId_(const multimapAtomDense *d) {
+    uint64_t id;
+    if (d->holes && multiroarMin(d->holes, &id)) {
+        return id;
+    }
+
+    return d->next;
+}
+
 /* The lowest id not in use, taken */
 static uint64_t denseTakeId_(multimapAtomDense *d) {
     uint64_t id;
@@ -83,22 +93,27 @@ void multimapAtomDenseInsertConvert(multimapAtomDense *d, databox *box) {
     *box = denseRef_(id);
 }
 
+/* One search finds the value's atom or creates it under the id this table
+ * would take next, which is then taken */
 static bool denseInsertIfNew_(multimapAtomDense *d, databox *key,
                               const bool retain) {
+    const uint64_t id = densePeekId_(d);
     databox ref = {{0}};
-    if (multimapAtomLookupReference(d->atoms, key, &ref)) {
+    const bool existed =
+        multimapAtomFindOrCreateWithId(d->atoms, key, id, &ref);
+    if (existed) {
         if (retain) {
             multimapAtomRetainByRef(d->atoms, &ref);
         }
-
-        *key = denseRef_(ref.data.u);
-        key->created = false;
-        return true;
+    } else {
+        const uint64_t taken = denseTakeId_(d);
+        assert(taken == id);
+        (void)taken;
     }
 
-    multimapAtomDenseInsertConvert(d, key);
-    key->created = true;
-    return false;
+    *key = denseRef_(ref.data.u);
+    key->created = !existed;
+    return existed;
 }
 
 bool multimapAtomDenseInsertIfNewConvert(multimapAtomDense *d, databox *key) {
@@ -111,14 +126,8 @@ bool multimapAtomDenseInsertIfNewConvertAndRetain(multimapAtomDense *d,
 }
 
 void multimapAtomDenseRetain(multimapAtomDense *d, const databox *key) {
-    databox ref = {{0}};
-    if (multimapAtomLookupReference(d->atoms, key, &ref)) {
-        multimapAtomRetainByRef(d->atoms, &ref);
-        return;
-    }
-
     databox copy = *key;
-    multimapAtomDenseInsertConvert(d, &copy);
+    denseInsertIfNew_(d, &copy, true);
 }
 
 void multimapAtomDenseRetainById(multimapAtomDense *d, const uint64_t id) {

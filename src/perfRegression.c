@@ -1400,6 +1400,18 @@ static void benchMultimapAtom(void) {
     emitRow("multimapAtom", "restore", 0, n, monoNowSec() - t0);
     sink += multimapAtomCount(restored);
 
+    /* Interning into a lowest-first table: new values, then present ones */
+    cleaner(multimapAtomDenseFree) multimapAtomDense *interned =
+        multimapAtomDenseNew();
+    PERF_ROW("multimapAtomDense", "internNew", n,
+             databox k = perfContainerKey(keys, i);
+             sink +=
+             multimapAtomDenseInsertIfNewConvertAndRetain(interned, &k));
+    PERF_ROW("multimapAtomDense", "internPresent", n,
+             databox k = perfContainerKey(keys, i);
+             sink +=
+             multimapAtomDenseInsertIfNewConvertAndRetain(interned, &k));
+
     /* The same values in a lowest-first table, with every fourth one
      * released so the restore rebuilds holes */
     cleaner(multimapAtomDenseFree) multimapAtomDense *dense =
