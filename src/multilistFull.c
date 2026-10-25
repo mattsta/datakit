@@ -945,6 +945,75 @@ DK_STATIC void multilistFullCoalesce_(multilistFull *ml, mflexState *state,
     }
 }
 
+/* Bytes a repacked node leaves unused below the node size, for the flex
+ * header to grow as its byte count does */
+#define MULTILIST_FULL_COMPACT_SLACK 8
+
+/* The most leading elements of 'fl' that fit in 'room' bytes; at least
+ * one */
+static uint32_t multilistFullLeadingFit_(const flex *fl, size_t room) {
+    const uint8_t *head = (const uint8_t *)flexHead(fl);
+    flexEntry *fe = flexHead(fl);
+    uint32_t n = 0;
+    const size_t count = flexCount(fl);
+    while (n + 1 < count) {
+        flexEntry *after = flexNext(fl, fe);
+        if ((size_t)((const uint8_t *)after - head) > room) {
+            break;
+        }
+        fe = after;
+        n++;
+    }
+    return n ? n : 1;
+}
+
+/* Repack every value into full nodes, in order: each node's values are
+ * copied (decompressed when needed) onto a carry flex, full nodes are cut
+ * off its front and appended to a new list, which applies the compression
+ * depth as it goes.  Memory beyond the two lists is about one node.  A
+ * list with no node size (fill outside the size table) is left as is. */
+void multilistFullCompact(multilistFull *ml, mflexState *state) {
+    if (ml->fill >= flexOptimizationSizeLimits || ml->count < 2) {
+        return;
+    }
+
+    const size_t nodeBytes = flexOptimizationSizeLimit[ml->fill];
+    const size_t room = nodeBytes > MULTILIST_FULL_COMPACT_SLACK
+                            ? nodeBytes - MULTILIST_FULL_COMPACT_SLACK
+                            : nodeBytes;
+    /* @own: caller; free=multilistFullFree */
+    multilistFull *out = multilistFullNew(ml->fill, ml->compress);
+    /* @own: caller; free=flexFree */
+    flex *carry = flexNew();
+    for (mlNodeId i = 0; i < ml->count; i++) {
+        /* Copied out before any append, which may use 'state' to compress */
+        flexBulkAppendFlex(&carry, mflexOpenReadOnly(getNode(i), state));
+        while (flexBytes(carry) > nodeBytes) {
+            flex *node = flexSplitRange(&carry, 0,
+                                        multilistFullLeadingFit_(carry, room));
+            multilistFullAppendFlexWithState(out, state, node);
+        }
+    }
+    multilistFullAppendFlexWithState(out, state, carry);
+
+    /* Uncompressed, the packed layout is never larger (fewer nodes and flex
+     * headers).  Compressed, a node can compress a little worse at its new
+     * boundaries than it did at its old ones (measured: 3,000 repetitive
+     * strings, 178 nodes to 177, compressed bytes up 2.9%), so the smaller
+     * layout is kept */
+    if (multilistFullBytesActual(out) + (size_t)out->count * sizeof(mflex *) >=
+        multilistFullBytesActual(ml) + (size_t)ml->count * sizeof(mflex *)) {
+        multilistFullFree(out);
+        return;
+    }
+
+    /* 'ml' takes the packed nodes; 'out' frees the old ones */
+    const multilistFull packed = *out;
+    *out = *ml;
+    *ml = packed;
+    multilistFullFree(out);
+}
+
 /* Attempt to merge flexes within two nodes on either side of 'center'.
  *
  * We attempt to merge:

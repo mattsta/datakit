@@ -202,6 +202,14 @@ void multilistFree(multilist *m);
 /* Remove every element, keeping the node size limit and compression
  * depth the list was created with */
 void multilistReset(multilist **ml);
+/* Pack the values into the densest layout they allow: Full's values are
+ * repacked, in order, into full nodes (every node but the last within one
+ * value of the limit; interior nodes compressed per the depth), then the
+ * list moves to the smallest tier that holds its bytes without growing
+ * (Small at L or less, Medium at 3L or less).  O(values); beyond the old
+ * and new nodes it needs about one node of scratch.  'state' opens and
+ * compresses nodes.  Rewrites '*ml'. */
+void multilistCompact(multilist **ml, mflexState *state);
 /* The node size limit and compression depth the list was created with */
 flexCapSizeLimit multilistLimit(const multilist *ml);
 uint32_t multilistDepth(const multilist *ml);

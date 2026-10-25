@@ -481,6 +481,22 @@ don't check: they only shrink an end node until it empties and goes.
 `DelEntry` doesn't merge either: the iterator keeps its position.
 
 ```c
+void multilistCompact(multilist **ml, mflexState *state);
+```
+
+`multilistCompact()` packs on request. Full's values are repacked, in order,
+into full nodes: interior nodes are compressed per the depth, and every node
+but the last ends within one value of the limit. The list then moves to the
+smallest tier that holds its bytes without growing (Small at L or less,
+Medium at 3L or less). It needs about one node of scratch beyond the old and
+new nodes. A compressed node can compress a little worse at new boundaries,
+so a repack that isn't smaller is discarded and the list kept as it was.
+Measured at a 512-byte limit, 3,000 values with three in four deleted:
+132 nodes become 45 (23,226 to 22,268 bytes), and with depth 2 the
+compressed list goes from 14,842 to 6,804 bytes. The multilist test prints
+these figures.
+
+```c
 /* Example: Delete range */
 mflexState *state = mflexStateCreate();
 

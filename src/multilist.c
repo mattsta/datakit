@@ -328,17 +328,22 @@ full:
  * Small at <= L/2; Medium -> Small at <= L/2.  O(1) unless it moves (Full
  * is measured only once down to three nodes); values move once, bounded
  * by 1.5L (Full's nodes decompress through 'state'). */
-static void multilistShrinkIfNecessary(multilist **m, mflexState *state) {
+/* The move itself: a Full of at most 'fullNodes' nodes and 'fullBytes'
+ * bytes, or a Medium of at most 'smallBytes', becomes a Small; values past
+ * 'smallBytes' then split into a Medium.  A shrink passes its hysteresis
+ * thresholds, multilistCompact the growth points (3L, L). */
+DK_INLINE_ALWAYS void multilistMoveDown_(multilist **m, mflexState *state,
+                                         mlNodeId fullNodes, size_t fullBytes,
+                                         size_t smallBytes) {
     const uint32_t depth = COMPRESS_DEPTH(*m);
     const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
-    const size_t L = flexOptimizationSizeLimit[limit];
     flex *values;
 
     switch (_multilistType(*m)) {
     case MULTILIST_TYPE_FULL: {
         multilistFull *full = mlf(*m);
-        if (multilistFullNodeCount(full) > 3 ||
-            multilistFullBytes(full) > L + L / 2) {
+        if (multilistFullNodeCount(full) > fullNodes ||
+            multilistFullBytes(full) > fullBytes) {
             return;
         }
         /* @own: container; free=flexFree */
@@ -348,7 +353,7 @@ static void multilistShrinkIfNecessary(multilist **m, mflexState *state) {
     }
     case MULTILIST_TYPE_MEDIUM: {
         multilistMedium *medium = mlm(*m);
-        if (multilistMediumBytes(medium) > L / 2) {
+        if (multilistMediumBytes(medium) > smallBytes) {
             return;
         }
         values = medium->fl[0];
@@ -366,14 +371,27 @@ static void multilistShrinkIfNecessary(multilist **m, mflexState *state) {
     *m = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
     *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_SMALL);
 
-    /* Values above L/2 (from a Full) belong in Medium, split as an upgrade
-     * splits them */
-    if (flexBytes(values) > L / 2) {
+    /* Values above 'smallBytes' (from a Full) belong in Medium, split as an
+     * upgrade splits them */
+    if (flexBytes(values) > smallBytes) {
         multilistMedium *medium =
             multilistMediumNewFromFlexConsumeGrow(small, small->fl);
         *m = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
         *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_MEDIUM);
     }
+}
+
+static void multilistShrinkIfNecessary(multilist **m, mflexState *state) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    multilistMoveDown_(m, state, 3, L + L / 2, L / 2);
+}
+
+void multilistCompact(multilist **ml, mflexState *state) {
+    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*ml)];
+    if (_multilistType(*ml) == MULTILIST_TYPE_FULL) {
+        multilistFullCompact(mlf(*ml), state);
+    }
+    multilistMoveDown_(ml, state, INT32_MAX, 3 * L, L);
 }
 
 /* A removal entry point: the tier's call, then a shrink when it removed.
@@ -2936,6 +2954,94 @@ int multilistTest(int argc, char *argv[]) {
                     " limit %u data %" PRIu64 " total %" PRIu64,
                     want, st.tier, st.units, st.count, st.unitLimit,
                     st.dataBytes, st.totalBytes);
+            }
+        }
+    }
+
+    TEST("Compact: values unchanged, smallest tier, full nodes (plain and "
+         "compressed)") {
+        for (uint32_t ends = 0; ends <= 2; ends += 2) {
+            cleaner(multilistFree) multilist *ml =
+                multilistNewLimit(FLEX_CAP_LEVEL_512, ends);
+            /* Repetitive strings, so interior nodes really compress */
+            const int64_t values = 3000;
+            for (int64_t i = 0; i < values; i++) {
+                char buf[48];
+                snprintf(buf, sizeof(buf), "compact-%06" PRId64 "-aaaaaaaaaaaa",
+                         i);
+                const databox box = databoxNewBytesString(buf);
+                multilistPushByTypeTail(&ml, s0, &box);
+            }
+
+            const int64_t keepEvery[] = {1, 4, 40, 400, 3000};
+            for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery);
+                 p++) {
+                /* Back to front, so each index is still the value's */
+                for (int64_t i = (int64_t)multilistCount(ml) - 1; i >= 0; i--) {
+                    if (i % keepEvery[p]) {
+                        multilistDelRange(&ml, s0, i, 1);
+                    }
+                }
+
+                dkTierStats was;
+                multilistStats(ml, &was);
+                /* @own: caller; free=flexFree */
+                flex *dumpBefore = multilistDump(ml, s0);
+                multilistCompact(&ml, s0);
+                /* @own: caller; free=flexFree */
+                flex *dumpAfter = multilistDump(ml, s0);
+                dkTierStats st;
+                multilistStats(ml, &st);
+                const uint64_t L = st.unitLimit;
+                const uint64_t bytes = multilistBytes(ml);
+                bool tierOk;
+                switch (st.tier) {
+                case MULTILIST_TYPE_SMALL:
+                    tierOk = bytes <= L;
+                    break;
+                case MULTILIST_TYPE_MEDIUM:
+                    tierOk = bytes > L;
+                    break;
+                default:
+                    /* Full nodes: each within a value (under 32 bytes
+                     * here) and the slack of the limit; with a depth, the
+                     * interior nodes compressed */
+                    tierOk = bytes > 3 * L &&
+                             st.units <= bytes / (L - 32 - 8) + 1 &&
+                             multilistDepth(ml) == ends &&
+                             (ends == 0 || st.dataBytes < bytes);
+                    break;
+                }
+                printf("  depth %u, keep 1 in %4" PRId64 ": tier %u, %4u "
+                       "nodes, %6" PRIu64 " bytes -> tier %u, %4u, %6" PRIu64
+                       "\n",
+                       ends, keepEvery[p], was.tier, was.units, was.totalBytes,
+                       st.tier, st.units, st.totalBytes);
+                if (flexBytes(dumpBefore) != flexBytes(dumpAfter) ||
+                    memcmp(dumpBefore, dumpAfter, flexBytes(dumpBefore)) != 0 ||
+                    !tierOk || st.units > was.units || st.count != was.count ||
+                    st.totalBytes > was.totalBytes) {
+                    ERR("depth %u keep 1 in %" PRId64 ": compacted tier %u "
+                        "units %u (was %u), %" PRIu64 " bytes",
+                        ends, keepEvery[p], st.tier, st.units, was.units,
+                        bytes);
+                }
+                flexFree(dumpBefore);
+                flexFree(dumpAfter);
+
+                /* Takes values at both ends afterwards */
+                const databox box = databoxNewSigned(-5);
+                multilistPushByTypeHead(&ml, s0, &box);
+                multilistPushByTypeTail(&ml, s0, &box);
+                multilistEntry got;
+                if (!multilistIndexGet(ml, s0, 0, &got) ||
+                    got.box.data.i64 != -5) {
+                    ERR("depth %u keep 1 in %" PRId64 ": a push after "
+                        "Compact is lost",
+                        ends, keepEvery[p]);
+                }
+                multilistDelRange(&ml, s0, 0, 1);
+                multilistDelRange(&ml, s0, (int64_t)multilistCount(ml) - 1, 1);
             }
         }
     }

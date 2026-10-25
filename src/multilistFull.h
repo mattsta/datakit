@@ -58,6 +58,8 @@ void multilistFullSetDepth(multilistFull *ml, uint32_t fill, uint32_t depth);
 
 /* Free */
 void multilistFullFree(multilistFull *ml);
+/* Repack every value into full nodes (see multilistCompact) */
+void multilistFullCompact(multilistFull *ml, mflexState *state);
 
 /* Insert */
 void multilistFullPushByTypeHead(multilistFull *ml, mflexState *state,
