@@ -1855,11 +1855,10 @@ bool memboundShutdown(membound *m) {
 
     /* Acquire lock to ensure no operations are in progress.
      * This also acts as a memory barrier to ensure all previous
-     * operations are visible. */
+     * operations are visible.  It is released before the mutex is
+     * destroyed: destroying a locked mutex is undefined behaviour. */
     if (m->mutexInitialized) {
         memboundEnter(m);
-        /* We now own the lock - no other operations can proceed.
-         * We don't release it since we're destroying the mutex. */
     }
 
     /* Destroy all extents */
@@ -1878,11 +1877,13 @@ bool memboundShutdown(membound *m) {
         memboundUNMAP(m->enterprise, sizeof(memboundEnterpriseExt));
     }
 
-    /* Destroy mutex - we still hold it but that's intentional.
-     * POSIX allows destroying a locked mutex if no thread is waiting on it.
-     * Since we hold the only reference, no other thread should be waiting. */
+    /* Unlocked, then destroyed: the shutdown contract says no other thread
+     * uses the pool now, so nothing can take the lock in between */
     if (m->mutexInitialized) {
-        pthread_mutex_destroy(&m->mutex);
+        memboundLeave(m);
+        const int destroyed = pthread_mutex_destroy(&m->mutex);
+        assert(destroyed == 0);
+        (void)destroyed;
     }
 
     memboundUNMAP(m, sizeof(membound));
