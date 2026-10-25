@@ -509,6 +509,65 @@ void multiarrayFree(multiarray *m) {
     MULTIARRAY_SINGLE_NORETURN(m, Free);
 }
 
+multiarray *multiarrayCopy(const multiarray *m) {
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL: {
+        const multiarraySmall *from = mars(m);
+        /* @own: caller; free=multiarrayFree */
+        multiarraySmall *to = zmemdup(from, sizeof(*from));
+        /* @own: container; free=multiarrayFree */
+        to->data = zmemdup(from->data, (size_t)from->len * from->count);
+        return _MULTIARRAY_TAG(to, MULTIARRAY_TYPE_SMALL);
+    }
+    case MULTIARRAY_TYPE_MEDIUM: {
+        const multiarrayMedium *from = marm(m);
+        /* @own: caller; free=multiarrayFree */
+        multiarrayMedium *to = zmemdup(from, sizeof(*from));
+        /* @own: container; free=multiarrayFree */
+        to->node = zmemdup(from->node, from->count * sizeof(*from->node));
+        for (uint32_t i = 0; i < from->count; i++) {
+            /* @own: container; free=multiarrayFree */
+            to->node[i].data = zmemdup(from->node[i].data,
+                                       (size_t)from->len * from->node[i].count);
+        }
+        return _MULTIARRAY_TAG(to, MULTIARRAY_TYPE_MEDIUM);
+    }
+    case MULTIARRAY_TYPE_LARGE: {
+        const multiarrayLarge *from = marl(m);
+        /* @own: caller; free=multiarrayFree */
+        multiarrayLarge *to = zmemdup(from, sizeof(*from));
+        to->head = NULL;
+        multiarrayLargeNode *made = NULL;
+        const multiarrayLargeNode *prev = NULL;
+        for (const multiarrayLargeNode *cur = from->head; cur;) {
+            /* @own: container; free=multiarrayFree */
+            multiarrayLargeNode *node = zcalloc(1, sizeof(*node));
+            /* @own: container; free=multiarrayFree */
+            node->data = zmemdup(cur->data, (size_t)from->len * cur->count);
+            node->count = cur->count;
+            /* XOR links: each new node points back at the one before, and
+             * that one gains this one as its next */
+            node->prevNext = (uintptr_t)made;
+            if (made) {
+                made->prevNext ^= (uintptr_t)node;
+            } else {
+                to->head = node;
+            }
+            made = node;
+
+            const multiarrayLargeNode *next = multiarrayLargeStep_(prev, cur);
+            prev = cur;
+            cur = next;
+        }
+        to->tail = made;
+        return _MULTIARRAY_TAG(to, MULTIARRAY_TYPE_LARGE);
+    }
+    default: /* native or NULL: refused */
+        MA_NATIVE_REFUSED_(m);
+        return NULL;
+    }
+}
+
 void multiarrayReset(multiarray **m) {
     switch (_multiarrayType(*m)) {
     case MULTIARRAY_TYPE_SMALL: {
@@ -1063,6 +1122,50 @@ int multiarrayTest(int argc, char *argv[]) {
         err += multiarrayOracleSoak_(2, 7, 8, MULTIARRAY_TYPE_SMALL, 1);
         err += multiarrayOracleSoak_(12, 50, 8, MULTIARRAY_TYPE_MEDIUM, 2);
         err += multiarrayOracleSoak_(120, 400, 8, MULTIARRAY_TYPE_LARGE, 3);
+    }
+
+    TEST("Copy in every tier: same elements and tier, independent of the "
+         "original") {
+        for (int32_t tier = MULTIARRAY_TYPE_SMALL;
+             tier <= MULTIARRAY_TYPE_LARGE; tier++) {
+            cleaner(multiarrayFree) multiarray *m =
+                multiarrayNew(sizeof(int64_t), 8);
+            int64_t next = 0;
+            do {
+                multiarrayInsert(&m, (multiarrayIdx)(next / 2), &next);
+                next++;
+            } while (_multiarrayType(m) != (multiarrayType)tier);
+
+            const size_t n = multiarrayCount(m);
+            cleaner(multiarrayFree) multiarray *copy = multiarrayCopy(m);
+            cleaner(zfree) void *want = zcalloc(n, sizeof(int64_t));
+            cleaner(zfree) void *got = zcalloc(n, sizeof(int64_t));
+            multiarrayCopyTo(m, want);
+            multiarrayCopyTo(copy, got);
+            dkTierStats a;
+            dkTierStats b;
+            multiarrayStats(m, &a);
+            multiarrayStats(copy, &b);
+            if (_multiarrayType(copy) != (multiarrayType)tier ||
+                multiarrayCount(copy) != n || a.units != b.units ||
+                memcmp(want, got, n * sizeof(int64_t)) != 0) {
+                ERR("tier %d: copy differs (tier %d, %zu elements)", tier,
+                    _multiarrayType(copy), multiarrayCount(copy));
+            }
+
+            /* Changing the copy leaves the original alone */
+            int64_t v = -9;
+            multiarrayReplace(copy, 0, &v);
+            multiarrayPop(&copy, (multiarrayIdx)(n - 1), &v);
+            multiarrayCopyTo(m, got);
+            if (multiarrayCount(m) != n ||
+                memcmp(want, got, n * sizeof(int64_t)) != 0) {
+                ERR("tier %d: changing the copy changed the original", tier);
+            }
+        }
+        if (multiarrayCopy(NULL)) {
+            ERRR("a copy of NULL is not NULL");
+        }
     }
 
     TEST("Reset from every tier gives an empty Small of the same shape") {

@@ -26,7 +26,7 @@ multilist *multilistNew(void);
 multilist *multilistNewLimit(flexCapSizeLimit limit, uint32_t depth);
 multilist *multilistNewFromFlex(flexCapSizeLimit limit, uint32_t depth,
                                 flex *fl);
-multilist *multilistDuplicate(const multilist *ml);
+multilist *multilistCopy(const multilist *ml);
 /* A multilist of every element of 'elements' in order (as multilistDump
  * writes them), built straight into its tier: a large dump is cut into
  * node-sized pieces in O(n), with no per-element push.  Takes 'elements';

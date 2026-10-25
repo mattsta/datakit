@@ -59,6 +59,7 @@ ALLOCATORS = ("zmalloc", "zcalloc", "zrealloc")
 #: and to seed `free=` annotations). Names are post-expansion C
 #: identifiers. Single source of truth — extend HERE only.
 CONSTRUCTORS = {
+    "zmemdup": "zfree",
     "flexNew": "flexFree",
     "flexDuplicate": "flexFree",
     "mflexNew": "mflexFree",
@@ -77,7 +78,7 @@ CONSTRUCTORS = {
     "multimapFullCopy": "multimapFullFree",
     "multilistNew": "multilistFree",
     "multilistNewLimit": "multilistFree",
-    "multilistDuplicate": "multilistFree",
+    "multilistCopy": "multilistFree",
     "multidictNew": "multidictFree",
     "multidictDefaultClassNew": "multidictDefaultClassFree",
     "multiarrayNew": "multiarrayFree",

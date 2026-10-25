@@ -183,7 +183,7 @@ multilist *multilistNewFromFlex(flexCapSizeLimit limit, uint32_t depth,
                                 flex *fl);
 
 /* Deep copy entire multilist */
-multilist *multilistDuplicate(const multilist *ml);
+multilist *multilistCopy(const multilist *ml);
 
 /* Free entire multilist */
 void multilistFree(multilist *m);

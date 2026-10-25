@@ -113,7 +113,7 @@ multilist *multilistNewFromFlex(const flexCapSizeLimit limit,
     return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
 }
 
-multilist *multilistDuplicate(const multilist *mlOrig) {
+multilist *multilistCopy(const multilist *mlOrig) {
     static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
 
     const multilistType type = _multilistType(mlOrig);
@@ -1944,7 +1944,7 @@ int multilistTest(int argc, char *argv[]) {
         TEST("duplicate empty list") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            cleaner(multilistFree) multilist *copy = multilistDuplicate(ml);
+            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
             (void)copy;
         }
 
@@ -1952,7 +1952,7 @@ int multilistTest(int argc, char *argv[]) {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistPushHead(ml, s0, genstr("hello", 3), 32);
-            cleaner(multilistFree) multilist *copy = multilistDuplicate(ml);
+            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
             (void)copy;
         }
 
@@ -1963,7 +1963,7 @@ int multilistTest(int argc, char *argv[]) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            cleaner(multilistFree) multilist *copy = multilistDuplicate(ml);
+            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
             (void)copy;
         }
 
@@ -4024,7 +4024,7 @@ int multilistTest(int argc, char *argv[]) {
                 /* duplicate + free (leak/aliasing exercise); contents
                  * must match the shadow element-for-element, not just
                  * by count */
-                cleaner(multilistFree) multilist *dup = multilistDuplicate(ml);
+                cleaner(multilistFree) multilist *dup = multilistCopy(ml);
                 if ((int32_t)multilistCount(dup) != shadowCount) {
                     ERR("op %d: duplicate count %zu != shadow %d", op,
                         multilistCount(dup), shadowCount);
@@ -4469,7 +4469,7 @@ int multilistTest(int argc, char *argv[]) {
 
             /* Duplicate. */
             {
-                cleaner(multilistFree) multilist *dup = multilistDuplicate(ml);
+                cleaner(multilistFree) multilist *dup = multilistCopy(ml);
                 err += mlwVerify(dup, s, want, n, name);
             }
 

@@ -170,6 +170,9 @@ void multiarrayFree(multiarray *m);
 /* Empty the array: an empty Small with the same element width and rowMax,
  * freeing a larger tier's nodes.  Rewrites '*m'. */
 void multiarrayReset(multiarray **m);
+/* A deep copy in the same tier and node layout (NULL for a native array
+ * or NULL) */
+multiarray *multiarrayCopy(const multiarray *m);
 
 void *multiarrayGet(multiarray *m, multiarrayIdx idx);
 void *multiarrayGetHead(multiarray *m);

@@ -36,6 +36,43 @@ void intsetFree(intset *is) {
     }
 }
 
+intset *intsetCopy(const intset *is) {
+    const void *ptr = INTSET_UNTAG(is);
+    switch (INTSET_TYPE(is)) {
+    case INTSET_TYPE_SMALL: {
+        const intsetSmall *from = ptr;
+        /* @own: caller; free=intsetFree */
+        intsetSmall *to = zmemdup(from, sizeof(*from) + (size_t)from->count16 *
+                                                            sizeof(int16_t));
+        return INTSET_TAG(to, INTSET_TYPE_SMALL);
+    }
+    case INTSET_TYPE_MEDIUM: {
+        const intsetMedium *from = ptr;
+        /* @own: caller; free=intsetFree */
+        intsetMedium *to = zmemdup(from, sizeof(*from));
+        /* @own: container; free=intsetFree */
+        to->values16 = zmemdup(from->values16, from->count16 * sizeof(int16_t));
+        /* @own: container; free=intsetFree */
+        to->values32 = zmemdup(from->values32, from->count32 * sizeof(int32_t));
+        return INTSET_TAG(to, INTSET_TYPE_MEDIUM);
+    }
+    case INTSET_TYPE_FULL: {
+        const intsetFull *from = ptr;
+        /* @own: caller; free=intsetFree */
+        intsetFull *to = zmemdup(from, sizeof(*from));
+        /* @own: container; free=intsetFree */
+        to->values16 = zmemdup(from->values16, from->count16 * sizeof(int16_t));
+        /* @own: container; free=intsetFree */
+        to->values32 = zmemdup(from->values32, from->count32 * sizeof(int32_t));
+        /* @own: container; free=intsetFree */
+        to->values64 = zmemdup(from->values64, from->count64 * sizeof(int64_t));
+        return INTSET_TAG(to, INTSET_TYPE_FULL);
+    }
+    }
+
+    return NULL;
+}
+
 void intsetReset(intset **is) {
     intsetFree(*is);
     /* @own: caller; free=intsetFree */

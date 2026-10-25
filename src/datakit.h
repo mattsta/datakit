@@ -342,6 +342,19 @@ char *strdup(const char *s) __attribute__((deprecated));
 #define zmalloc(sz) zcalloc(1, sz)
 #endif
 
+/* A zmalloc'd copy of the 'bytes' bytes at 'from' (released with zfree);
+ * NULL for a NULL 'from'.  A zero-length copy is still an allocation. */
+static inline void *zmemdup(const void *from, size_t bytes) {
+    if (!from) {
+        return NULL;
+    }
+
+    /* @own: caller; free=zfree */
+    void *to = zmalloc(bytes ? bytes : 1);
+    memcpy(to, from, bytes);
+    return to;
+}
+
 #ifndef COUNT_ARRAY
 #define COUNT_ARRAY(x) (sizeof(x) / sizeof(*(x)))
 #endif

@@ -213,6 +213,49 @@ int intsetTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Copy in every tier: same members and tier, independent of the "
+         "original") {
+        const int64_t reach[] = {7, 100000, INT64_MAX};
+        for (size_t t = 0; t < COUNT_ARRAY(reach); t++) {
+            cleaner(intsetFree) intset *is = intsetNew();
+            for (int64_t v = -40; v < 40; v += 3) {
+                intsetAdd(&is, v, NULL);
+            }
+            for (size_t i = 0; i <= t; i++) {
+                intsetAdd(&is, reach[i], NULL);
+            }
+            cleaner(intsetFree) intset *copy = intsetCopy(is);
+            dkTierStats a;
+            dkTierStats b;
+            intsetStats(is, &a);
+            intsetStats(copy, &b);
+            bool same = a.tier == b.tier && a.count == b.count &&
+                        a.totalBytes == b.totalBytes;
+            intsetIterator ia;
+            intsetIterator ib;
+            intsetIteratorInit(&ia, is);
+            intsetIteratorInit(&ib, copy);
+            int64_t va;
+            int64_t vb;
+            while (intsetIteratorNext(&ia, &va)) {
+                same &= intsetIteratorNext(&ib, &vb) && va == vb;
+            }
+            same &= !intsetIteratorNext(&ib, &vb);
+            if (!same) {
+                ERR("tier %zu: the copy differs", t + 1);
+            }
+
+            /* Changing the copy leaves the original alone */
+            const size_t before = intsetCount(is);
+            intsetAdd(&copy, -30000, NULL);
+            intsetRemove(&copy, reach[t], NULL);
+            if (intsetCount(is) != before || intsetFind(is, -30000) ||
+                !intsetFind(is, reach[t])) {
+                ERR("tier %zu: changing the copy changed the original", t + 1);
+            }
+        }
+    }
+
     TEST("Reset from every tier gives an empty Small that takes new members") {
         /* A 16-bit, then a 32-bit, then a 64-bit member reach each tier */
         const int64_t reach[] = {7, 100000, INT64_MAX};

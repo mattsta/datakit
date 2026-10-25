@@ -33,6 +33,8 @@ void intsetFree(intset *is);
 /* Empty the set: a new empty Small, freeing every tier's arrays.
  * Rewrites '*is'. */
 void intsetReset(intset **is);
+/* A deep copy in the same tier */
+intset *intsetCopy(const intset *is);
 
 /* Add value to intset
  * is: pointer to intset pointer (may be modified due to reallocation/upgrade)
