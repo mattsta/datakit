@@ -3845,7 +3845,7 @@ static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
     const uint32_t shape =
         elementsPerEntry | (multimapIsSet(m) ? MULTIMAP_PERSIST_SET : 0) |
         (multimapCompresses(m) ? MULTIMAP_PERSIST_COMPRESS : 0) |
-        ((uint32_t)multimapSizeLimit(m) << MULTIMAP_PERSIST_LIMIT_SHIFT);
+        ((uint32_t)multimapLimit(m) << MULTIMAP_PERSIST_LIMIT_SHIFT);
     size_t flexLen = flexBytes(f);
     *len = sizeof(uint32_t) + flexLen;
     /* @own: caller; free=zfree */

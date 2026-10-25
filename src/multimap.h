@@ -58,7 +58,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
 /* The configuration a multimap was made with, in every tier: its size
  * limit (when a tier grows, and the size of Full's inner maps) and whether
  * it compresses */
-flexCapSizeLimit multimapSizeLimit(const multimap *m);
+flexCapSizeLimit multimapLimit(const multimap *m);
 bool multimapCompresses(const multimap *m);
 
 bool multimapInsert(multimap **m, const databox *elements[]);

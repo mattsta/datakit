@@ -426,7 +426,7 @@ int multimapPTest(int argc, char *argv[]) {
             ctx = persistCtxOpen(basePath, NULL);
             m = multimapOpenP(ctx);
             const multimap *raw = m ? multimapGetP(m) : NULL;
-            if (!raw || multimapSizeLimit(raw) != FLEX_CAP_LEVEL_512 ||
+            if (!raw || multimapLimit(raw) != FLEX_CAP_LEVEL_512 ||
                 !multimapCompresses(raw) || multimapCountP(m) != 1500) {
                 ERR("reopen %d lost the configuration or rows", compacted);
             }

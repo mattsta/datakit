@@ -343,7 +343,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
     return MULTIMAP_TAG_(m, MULTIMAP_TYPE_FULL);
 }
 
-flexCapSizeLimit multimapSizeLimit(const multimap *m) {
+flexCapSizeLimit multimapLimit(const multimap *m) {
     return (flexCapSizeLimit)COMPRESS_LIMIT(m);
 }
 
@@ -8385,12 +8385,12 @@ int multimapTest(int argc, char *argv[]) {
             const uint32_t want = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_512];
             cleaner(multimapFree) multimap *b =
                 multimapNewFromDump(2, false, multimapCompresses(m),
-                                    multimapSizeLimit(m), multimapDump(m));
+                                    multimapLimit(m), multimapDump(m));
             bool ok = multimapType_(m) == MULTIMAP_TYPE_FULL && b &&
                       multimapType_(b) == MULTIMAP_TYPE_FULL &&
                       mmf(m)->maxSize == want && mmf(b)->maxSize == want &&
-                      multimapSizeLimit(m) == FLEX_CAP_LEVEL_512 &&
-                      multimapSizeLimit(b) == FLEX_CAP_LEVEL_512 &&
+                      multimapLimit(m) == FLEX_CAP_LEVEL_512 &&
+                      multimapLimit(b) == FLEX_CAP_LEVEL_512 &&
                       multimapCompresses(m) == (bool)compress &&
                       multimapCompresses(b) == (bool)compress &&
                       multimapCount(b) == 1500;
@@ -8403,8 +8403,7 @@ int multimapTest(int argc, char *argv[]) {
                     compress, (int)multimapType_(m),
                     b ? (int)multimapType_(b) : -1, (unsigned)mmf(m)->maxSize,
                     b ? (unsigned)mmf(b)->maxSize : 0, (unsigned)want,
-                    (int)multimapSizeLimit(m),
-                    b ? (int)multimapSizeLimit(b) : -1);
+                    (int)multimapLimit(m), b ? (int)multimapLimit(b) : -1);
             }
         }
     }
@@ -8426,7 +8425,7 @@ int multimapTest(int argc, char *argv[]) {
                 }
                 cleaner(multimapFree) multimap *b =
                     multimapNewFromDump(2, set, multimapCompresses(m),
-                                        multimapSizeLimit(m), multimapDump(m));
+                                        multimapLimit(m), multimapDump(m));
                 if (!b || multimapIsSet(b) != (bool)set) {
                     ERR("set %d tier %zu: no rebuild", set, t);
                     continue;

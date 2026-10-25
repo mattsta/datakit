@@ -336,6 +336,10 @@ size_t multiOrderedSetBytes(const multiOrderedSet *mos) {
     MOS_SINGLE_RETURN(mos, Bytes);
 }
 
+flexCapSizeLimit multiOrderedSetLimit(const multiOrderedSet *mos) {
+    return (flexCapSizeLimit)COMPRESS_LIMIT(mos);
+}
+
 void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out) {
     const uint32_t limit = flexOptimizationSizeLimit[COMPRESS_LIMIT(mos)];
     switch (mosType_(mos)) {
@@ -2399,7 +2403,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetFree(mos);
     }
 
-    TEST("multiOrderedSet: stats in every tier") {
+    TEST("multiOrderedSet: stats and limit in every tier") {
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
             multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
         const uint32_t limit = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_64];
@@ -2432,6 +2436,13 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                         s.unitLimit == limit && f->maxMapSize == limit &&
                         s.totalBytes > multiOrderedSetBytes(mos) &&
                         s.dataBytes < multiOrderedSetBytes(mos);
+            }
+            cleaner(multiOrderedSetFree) multiOrderedSet *copy =
+                multiOrderedSetCopy(mos);
+            if (multiOrderedSetLimit(mos) != FLEX_CAP_LEVEL_64 ||
+                multiOrderedSetLimit(copy) != FLEX_CAP_LEVEL_64) {
+                ERR("tier %d: limit %d, copy's %d", want,
+                    multiOrderedSetLimit(mos), multiOrderedSetLimit(copy));
             }
             if (s.tier != want || s.count != (uint64_t)next || !shape ||
                 s.totalBytes <= s.dataBytes) {
