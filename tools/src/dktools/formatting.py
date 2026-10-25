@@ -223,6 +223,13 @@ def _clang_check(root: Path, files: list[str], report: Report):
     return changed, problems
 
 
+#: prettier reads .gitignore as an ignore file by default, which would
+#: skip every internal (gitignored) note named explicitly; only the
+#: prettier-specific ignore file applies (absent in exported trees: then
+#: nothing is ignored).
+PRETTIER_IGNORE = ("--ignore-path", ".prettierignore")
+
+
 def _prettier() -> str:
     return gitutil.require_program("prettier")
 
@@ -231,7 +238,7 @@ def _prettier_write(root: Path, files: list[str], report: Report) -> list[str]:
     problems: list[str] = []
     for chunk in _chunks(files):
         try:
-            cmd = [_prettier(), "--write", "--log-level", "warn"]
+            cmd = [_prettier(), *PRETTIER_IGNORE, "--write", "--log-level", "warn"]
         except procs.ToolError as exc:
             report.log.append(str(exc))
             return list(files)
@@ -246,7 +253,7 @@ def _prettier_check(root: Path, files: list[str], report: Report):
     problems: list[str] = []
     for chunk in _chunks(files):
         try:
-            cmd = [_prettier(), "--list-different"]
+            cmd = [_prettier(), *PRETTIER_IGNORE, "--list-different"]
         except procs.ToolError as exc:
             report.log.append(str(exc))
             return [], list(files)

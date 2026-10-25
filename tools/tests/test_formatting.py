@@ -125,6 +125,23 @@ class CheckAndWrite(FormatRepo):
                 self.assertFalse(report.ok)
         self.assertEqual(self.text("tools/unfixable.py"), UNFIXABLE_PY)
 
+    def test_a_named_gitignored_file_is_formatted_prettierignore_still_holds(
+        self,
+    ) -> None:
+        # .gitignore says what git tracks, not what prettier formats: an
+        # internal note named explicitly is formatted; .prettierignore
+        # still excludes what it names
+        self.repo.write("ignored/note.md", BAD_MD)
+        self.repo.write(".prettierignore", "skipped/\n")
+        self.repo.write("skipped/away.md", BAD_MD)
+        paths = ["ignored/note.md", "skipped/away.md"]
+        report = formatting.check(self.root, paths)
+        self.assertEqual(report.changed, {"prettier": ["ignored/note.md"]})
+        report = formatting.write(self.root, paths)
+        self.assertEqual(report.changed, {"prettier": ["ignored/note.md"]})
+        self.assertEqual(self.text("ignored/note.md"), GOOD_MD)
+        self.assertEqual(self.text("skipped/away.md"), BAD_MD)
+
 
 class Command(FormatRepo):
     def dktools(self, *argv: str) -> tuple[int, str]:
