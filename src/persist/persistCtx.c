@@ -300,13 +300,11 @@ bool persistCtxMaybeCompact(persistCtx *ctx, void *structure,
         shouldCompact = true;
     }
 
-    /* Check byte threshold */
-    if (!shouldCompact && ctx->config.compactAfterBytes > 0) {
-        persistStats stats;
-        persistGetStats(ctx->p, &stats);
-        if (stats.walBytes >= ctx->config.compactAfterBytes) {
-            shouldCompact = true;
-        }
+    /* Check byte threshold: the live WAL, buffered bytes counted (a
+     * compaction empties it) */
+    if (!shouldCompact && ctx->config.compactAfterBytes > 0 &&
+        persistWALBytes(ctx->p) >= ctx->config.compactAfterBytes) {
+        shouldCompact = true;
     }
 
     if (shouldCompact) {
@@ -465,10 +463,10 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
         stats->lastSyncError = pstats.lastSyncError;
         stats->snapshotBytes = pstats.snapshotBytes;
         stats->walBytes = pstats.walBytes;
-        /* Compaction starts a fresh WAL, so the live WAL size IS the
-         * bytes accumulated since the last compaction (the byte-based
-         * compaction trigger uses the same measure) */
-        stats->bytesSinceCompact = pstats.walBytes;
+        /* Compaction starts a fresh WAL, so the live WAL (buffered
+         * bytes counted) is what accumulated since the last compaction:
+         * the byte-based compaction trigger uses the same measure */
+        stats->bytesSinceCompact = persistWALBytes(ctx->p);
     }
 }
 
@@ -509,7 +507,16 @@ void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r) {
 #include "../ctest.h"
 #include "../dkTestTmp.h"
 #include "flexP.h"
+#include "persistTestCommon.h"
 #include <unistd.h>
+
+/* Counts bad-entry notifications */
+static void persistCtxTestNotify(persist *p, const persistBadEntryReport *r,
+                                 void *ctx) {
+    (void)p;
+    (void)r;
+    (*(int *)ctx)++;
+}
 
 /* A store sync that fails as a full device would */
 static bool persistCtxTestFailSync(void *ctx) {
@@ -731,6 +738,129 @@ int persistCtxTest(int argc, char *argv[]) {
             }
             flexCloseP(again);
             persistCtxFree(ctx);
+        }
+    }
+
+    TEST("sync modes, byte-triggered compaction, a second claim, the "
+         "bad-entry notifier, missing arguments") {
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxModes", path, sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            /* NONE buffers each op; ALWAYS makes each durable */
+            static const struct {
+                persistCtxSyncMode mode;
+                persistLogResult want;
+            } modes[] = {{PERSIST_CTX_SYNC_NONE, PERSIST_LOG_BUFFERED},
+                         {PERSIST_CTX_SYNC_ALWAYS, PERSIST_LOG_DURABLE}};
+            const databox one = DATABOX_SIGNED(1);
+            for (size_t m = 0; m < COUNT_ARRAY(modes); m++) {
+                ptestCleanupFiles(path);
+                persistCtxConfig config = persistCtxDefaultConfig();
+                config.syncMode = modes[m].mode;
+                persistCtx *ctx = persistCtxNew(path, &config);
+                flexP *f = flexNewP(ctx);
+                const persistLogResult got = flexPushTailP(f, &one);
+                if (got != modes[m].want) {
+                    ERR("sync mode %d logged as %d, not %d", (int)modes[m].mode,
+                        (int)got, (int)modes[m].want);
+                }
+                flexCloseP(f);
+                persistCtxFree(ctx);
+            }
+
+            /* A byte threshold alone compacts each time the live WAL (its
+             * buffered bytes counted) passes it, and only then: 200 small
+             * entries past a 256-byte threshold compact a few dozen times,
+             * never on every op, buffered or not */
+            persistCtxStats stats;
+            persistCtx *ctx = NULL;
+            flexP *f = NULL;
+            for (int buffered = 0; buffered <= 1; buffered++) {
+                ptestCleanupFiles(path);
+                persistCtxConfig config = persistCtxDefaultConfig();
+                config.compactAfterOps = 0;
+                config.compactAfterBytes = 256;
+                config.walBufferSize = buffered ? 64 * 1024 : 0;
+                ctx = persistCtxNew(path, &config);
+                f = flexNewP(ctx);
+                for (int64_t i = 0; i < 200; i++) {
+                    const databox v = DATABOX_SIGNED(i);
+                    flexPushTailP(f, &v);
+                }
+                persistCtxGetStats(ctx, &stats);
+                if (stats.totalCompactions < 2 || stats.totalCompactions > 60 ||
+                    stats.bytesSinceCompact >= 256 || flexCountP(f) != 200) {
+                    ERR("buffered %d: a 256-byte threshold compacted %" PRIu64
+                        " times, %zu bytes since",
+                        buffered, stats.totalCompactions,
+                        stats.bytesSinceCompact);
+                }
+                if (!buffered) {
+                    flexCloseP(f);
+                    persistCtxFree(ctx);
+                }
+            }
+
+            /* A context its wrapper holds refuses a second claim, once */
+            const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+            dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+            bool claimed = true;
+            DK_DIAG_EXPECT_REPORTS("a held context", 1,
+                                   DK_DIAG_PERSIST_CTX_CLAIMED,
+                                   claimed = persistCtxClaim(ctx));
+            dkDiagSetPrintMode(priorPrint);
+            if (claimed) {
+                ERRR("a held context was claimed again");
+            }
+            flexCloseP(f);
+            persistCtxFree(ctx);
+
+            /* The notifier set on a context hears of a damaged entry its
+             * open heals (a WAL of three entries, its last one damaged) */
+            ptestCleanupFiles(path);
+            ctx = persistCtxNew(path, NULL);
+            f = flexNewP(ctx);
+            for (int64_t i = 0; i < 3; i++) {
+                const databox v = DATABOX_SIGNED(i);
+                flexPushTailP(f, &v);
+            }
+            flexCloseP(f);
+            persistCtxFree(ctx);
+            if (!ptestDamageLastWalEntry(path)) {
+                ERRR("could not damage the WAL");
+            }
+            int notified = 0;
+            ctx = persistCtxOpen(path, NULL);
+            persistCtxSetBadEntryNotify(ctx, persistCtxTestNotify, &notified);
+            f = flexOpenP(ctx);
+            persistBadEntryReport report;
+            if (!f || notified != 1 || !persistCtxLastBadEntry(ctx, &report)) {
+                ERR("a healed entry notified %d times", notified);
+            }
+            flexCloseP(f);
+            persistCtxFree(ctx);
+
+            /* Missing arguments: refused or empty answers */
+            const int64_t v = 1;
+            if (persistCtxNew(NULL, NULL) || persistCtxOpen(NULL, NULL) ||
+                persistCtxCanLog(NULL) ||
+                persistCtxLogOp(NULL, PERSIST_OP_INSERT, &v, 1) ||
+                persistCtxMaybeCompact(NULL, NULL, &persistOpsFlex) ||
+                persistCtxSync(NULL) || persistCtxSyncIfDue(NULL) ||
+                persistCtxCompact(NULL, NULL, &persistOpsFlex) ||
+                persistCtxRecover(NULL, &persistOpsFlex) ||
+                persistCtxInitForType(NULL, &persistOpsFlex) ||
+                persistCtxSaveSnapshot(NULL, NULL, &persistOpsFlex) ||
+                persistCtxClaim(NULL) ||
+                persistCtxLastBadEntry(NULL, &report)) {
+                ERRR("a call without its context was not refused");
+            }
+            persistCtxGetStats(NULL, &stats);
+            persistCtxSetBadEntryNotify(NULL, persistCtxTestNotify, &notified);
+            persistCtxRelease(NULL);
+            persistCtxFree(NULL);
+            ptestCleanupFiles(path);
         }
     }
 

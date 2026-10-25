@@ -216,9 +216,10 @@ typedef struct persistCtxStats {
                                once a later sync succeeds */
     uint64_t totalCompactions;
     size_t opsSinceCompact;
-    size_t bytesSinceCompact;
+    size_t bytesSinceCompact; /* the live WAL's entry bytes, buffered ones
+                                 counted: what compactAfterBytes measures */
     int64_t snapshotBytes;
-    int64_t walBytes;
+    int64_t walBytes; /* WAL bytes ever written to the store */
 } persistCtxStats;
 
 void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats);

@@ -1055,6 +1055,11 @@ bool persistSync(persist *p);
  * when 'p' is NULL. */
 void persistGetStats(const persist *p, persistStats *stats);
 
+/* The live WAL's entry bytes: what follows its header, buffered bytes
+ * included, so 0 right after a compaction (persistStats.walBytes is the
+ * total ever written instead).  0 for a NULL 'p' or one with no WAL. */
+uint64_t persistWALBytes(const persist *p);
+
 /* Zero every counter (walSequence, the WAL's next sequence, stays) */
 void persistResetStats(persist *p);
 

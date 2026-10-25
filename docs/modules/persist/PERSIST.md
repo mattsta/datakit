@@ -143,6 +143,9 @@ out-parameter; pass NULL when you do not need it:
     bound that window.
   - `PERSIST_CTX_SYNC_ALWAYS`: a sync after every operation.
 - `compactAfterOps`, `compactAfterBytes`: compact when either is exceeded
+  since the last compaction (`compactAfterBytes` measures the live WAL,
+  its buffered bytes counted: `persistWALBytes`, and
+  `persistCtxStats.bytesSinceCompact`)
   (0 disables that trigger).  `*CompactP` compacts now.
 - `walBufferSize`: the WAL write buffer.
 - `strictRecovery`: see below.

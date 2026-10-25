@@ -1059,6 +1059,18 @@ typedef struct persistWALHeader {
 _Static_assert(sizeof(persistWALHeader) == 56,
                "persistWALHeader has no padding");
 
+uint64_t persistWALBytes(const persist *p) {
+    if (!p || !p->walStore) {
+        return 0;
+    }
+
+    /* The store holds the header then the flushed entries; the buffer
+     * holds the entries after them */
+    const int64_t flushed =
+        p->walAppendOffset - (int64_t)sizeof(persistWALHeader);
+    return (flushed > 0 ? (uint64_t)flushed : 0) + p->walBufferUsed;
+}
+
 /* Write a fresh WAL header at offset 0. Caller owns seeking afterward. */
 static bool persistWALWriteHeader(persist *p) {
     persistStore *store = p->walStore;
