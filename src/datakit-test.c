@@ -30,6 +30,7 @@
 #include "dkFormat.h"
 #include "dkRandom.h"
 #include "dkTestTmp.h"
+#include "dkTierLimit.h"
 #include "dod.h"
 #include "fastmutex.h"
 #include "fenwick/fenwick2d.h"  /* 2D typed fenwick trees */
@@ -12729,6 +12730,9 @@ static const TestEntry testRegistry[] = {
 
     /* Diagnostics: misuse and conditions, recorded per thread */
     T_A(dkDiag, "diag"),
+
+    /* Default size limits the plain tiered constructors read */
+    T_A(dkTierLimit, "tierlimit"),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),

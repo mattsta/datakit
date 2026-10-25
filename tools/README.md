@@ -606,8 +606,12 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
 - Recommends the lowest-cost limit; limits within 2% of it tie on speed,
   and among ties the one holding the data in the fewest bytes wins (density
   first). Also prints the machine's cache sizes (sysfs on Linux, sysctl on
-  macOS). `result.txt` and `result.json` (per family: limit, ties, costs)
-  are kept in the work directory.
+  macOS). `result.txt` and `result.json` (per family: limit, ties, the
+  call that applies it, costs) are kept in the work directory.
+- Each recommendation names its call: multimap's and multiOrderedSet's
+  plain constructors read a process default set with
+  `dkTierSetDefaultLimit` (`src/dkTierLimit.h`); multilist's constructors
+  take the limit as an argument.
 
 ## perfcompare — a change's performance against a base revision
 

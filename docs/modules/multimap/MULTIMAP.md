@@ -999,6 +999,20 @@ multimap, multiOrderedSet and multilist, and recommends a limit per family
 multimap *index = multimapNewLimit(2, FLEX_CAP_LEVEL_1024);
 ```
 
+`multimapNew` and `multimapSetNew` take their limit from a process default,
+2048 until changed. Setting it once at startup (as `dktools tune` prints)
+moves every map made afterwards; maps already made keep their limit, and
+constructors taking a limit ignore the default:
+
+```c
+#include "dkTierLimit.h"
+
+/* DK_TIER_LIMIT_SET, or DK_TIER_LIMIT_OUT_OF_RANGE outside 64 B..64 KB */
+dkTierLimitResult r =
+    dkTierSetDefaultLimit(DK_TIER_MULTIMAP, FLEX_CAP_LEVEL_1024);
+flexCapSizeLimit now = dkTierDefaultLimit(DK_TIER_MULTIMAP);
+```
+
 ### 2. Keep rows narrow
 
 ```c

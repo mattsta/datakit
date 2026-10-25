@@ -43,6 +43,12 @@ from .gitutil import ToolError
 FAMILIES = ("multimap", "multiOrderedSet", "multilist")
 #: Limits within this fraction of the best cost are ties.
 TIE = 0.02
+#: The dkTierFamily whose process default each family's plain constructor
+#: reads (dkTierLimit.h); multilist has none, its constructors take a limit.
+DEFAULT_SETTERS = {
+    "multimap": "DK_TIER_MULTIMAP",
+    "multiOrderedSet": "DK_TIER_MULTIORDEREDSET",
+}
 
 _ROW = re.compile(r"^(?P<op>[A-Za-z]+?)(?P<limit>\d+)$")
 
@@ -192,6 +198,14 @@ def _human(n: int) -> str:
     return f"{n} B"
 
 
+def apply_text(family: str, limit: int) -> str:
+    """The C that makes ``limit`` the family's limit."""
+    level = f"FLEX_CAP_LEVEL_{limit}"
+    if family in DEFAULT_SETTERS:
+        return f"dkTierSetDefaultLimit({DEFAULT_SETTERS[family]}, {level});"
+    return f"pass {level} to {family}New"
+
+
 def render(found: dict[str, Sweep], caches: list[tuple[str, int]]) -> list[str]:
     lines = []
     if caches:
@@ -221,6 +235,7 @@ def render(found: dict[str, Sweep], caches: list[tuple[str, int]]) -> list[str]:
             )
         tie_text = f" (within {TIE:.0%}: {', '.join(map(str, ties))})" if ties else ""
         lines.append(f"  recommended limit {best}{tie_text}")
+        lines.append(f"  apply: {apply_text(family, best)}")
     return lines
 
 
@@ -231,6 +246,7 @@ def recommendations(found: dict[str, Sweep]) -> dict[str, dict]:
         out[family] = {
             "limit": best,
             "ties": ties,
+            "apply": apply_text(family, best),
             "cost": {str(k): round(v, 4) for k, v in sweep.costs().items()},
         }
     return out

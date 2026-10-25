@@ -316,7 +316,7 @@ multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
 }
 
 multimapFull *multimapFullSetNew(multimapElements elementsPerEntry,
-                                 uint16_t maxSize) {
+                                 uint32_t maxSize) {
     /* @own: caller; free=multimapFullFree */
     multimapFull *m = multimapFullNew(elementsPerEntry);
     m->mapIsSet = true;

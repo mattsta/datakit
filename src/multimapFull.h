@@ -9,7 +9,7 @@ typedef void(multimapFullMapDeleter)(const flex *map, void *data);
 
 multimapFull *multimapFullNew(multimapElements elementsPerEntry);
 multimapFull *multimapFullSetNew(multimapElements elementsPerEntry,
-                                 uint16_t maxSize);
+                                 uint32_t maxSize);
 multimapFull *multimapFullNewFromManyGrow(void *m, flex *map[],
                                           const multimapFullMiddle middle[],
                                           size_t count,

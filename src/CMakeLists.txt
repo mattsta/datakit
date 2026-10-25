@@ -534,6 +534,7 @@ add_library(${PROJECT_NAME} OBJECT
     portableRandom.c
     dkRandom.c
     dkDiag.c
+    dkTierLimit.c
     # quickcount.c
 
     # quickdictClassAtom.c

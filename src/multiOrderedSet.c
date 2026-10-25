@@ -276,7 +276,8 @@ static void mosShrinkIfNecessary(multiOrderedSet **m) {
 multiOrderedSet *multiOrderedSetNew(void) {
     multiOrderedSetSmall *created = multiOrderedSetSmallNew();
     multiOrderedSet *mos = MOS_TAG_(created, MOS_TYPE_SMALL);
-    mos = SET_COMPRESS_DEPTH_LIMIT(mos, 0, FLEX_CAP_LEVEL_2048);
+    mos = SET_COMPRESS_DEPTH_LIMIT(mos, 0,
+                                   dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET));
     return mos;
 }
 

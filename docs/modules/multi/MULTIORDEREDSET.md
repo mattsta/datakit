@@ -84,6 +84,12 @@ limit of rows: 2 KB by default). That is cheap through hundreds of
 thousands of members; a set far larger that is rank-heavy would want
 per-node row totals (not built), or a larger size limit.
 
+`multiOrderedSetNew` takes its limit from a process default, 2048 until
+`dkTierSetDefaultLimit(DK_TIER_MULTIORDEREDSET, limit)` (`dkTierLimit.h`)
+changes it for sets made afterwards; `multiOrderedSetNewLimit` and
+`multiOrderedSetNewCompress` take the limit directly. `dktools tune`
+measures the choice on the machine it runs on.
+
 Measured numbers per operation live in
 [PERFORMANCE_BASELINES.md](../../PERFORMANCE_BASELINES.md), and
 `dktools perfcompare NAME --base REV --modules multiOrderedSet` reproduces them

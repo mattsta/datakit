@@ -147,7 +147,8 @@ multimap *multimapNew(multimapElements elementsPerEntry) {
      *       (which is overkill anyway) */
     /* @own: caller; free=multimapFree */
     multimapSmall *created = multimapSmallNew(elementsPerEntry, false);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, false, FLEX_CAP_LEVEL_2048);
+    created = SET_COMPRESS_DEPTH_LIMIT(created, false,
+                                       dkTierDefaultLimit(DK_TIER_MULTIMAP));
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
 }
 
@@ -170,7 +171,8 @@ multimap *multimapNewCompress(multimapElements elementsPerEntry,
 multimap *multimapSetNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFree */
     multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, true);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, false, FLEX_CAP_LEVEL_2048);
+    created = SET_COMPRESS_DEPTH_LIMIT(created, false,
+                                       dkTierDefaultLimit(DK_TIER_MULTIMAP));
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
 }
 

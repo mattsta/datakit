@@ -83,7 +83,28 @@ class Sweeps(unittest.TestCase):
         self.assertIn("caches    L1d 128 KB", text)
         self.assertIn("<- recommended", text)
         self.assertIn("recommended limit 512", text)
-        self.assertEqual(tune.recommendations(found)["multimap"]["limit"], 512)
+        apply = "dkTierSetDefaultLimit(DK_TIER_MULTIMAP, FLEX_CAP_LEVEL_512);"
+        self.assertIn(f"apply: {apply}", text)
+        rec = tune.recommendations(found)["multimap"]
+        self.assertEqual((rec["limit"], rec["apply"]), (512, apply))
+
+    def test_apply_names_each_familys_setter(self) -> None:
+        self.assertEqual(
+            tune.apply_text("multiOrderedSet", 2048),
+            "dkTierSetDefaultLimit(DK_TIER_MULTIORDEREDSET, FLEX_CAP_LEVEL_2048);",
+        )
+        self.assertEqual(
+            tune.apply_text("multilist", 1024),
+            "pass FLEX_CAP_LEVEL_1024 to multilistNew",
+        )
+
+    def test_every_setter_names_a_c_family(self) -> None:
+        header = Path(__file__).resolve().parents[2] / "src" / "dkTierLimit.h"
+        text = header.read_text()
+        for family, setter in tune.DEFAULT_SETTERS.items():
+            with self.subTest(family=family):
+                self.assertIn(family, tune.FAMILIES)
+                self.assertIn(setter, text)
 
     def test_empty_sweep_refuses(self) -> None:
         with self.assertRaises(ToolError):

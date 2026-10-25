@@ -2,6 +2,7 @@
 
 #include "databox.h"
 #include "dkTier.h"
+#include "dkTierLimit.h"
 #include "flexCapacityManagement.h"
 
 /* ====================================================================

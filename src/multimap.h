@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dkTier.h"
+#include "dkTierLimit.h"
 #include "flexCapacityManagement.h"
 #include "multimapCommon.h"
 
