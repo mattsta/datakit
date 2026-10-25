@@ -608,10 +608,9 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   first, unless a denser limit is 15% or more slower. Also prints the machine's cache sizes (sysfs on Linux, sysctl on
   macOS). `result.txt` and `result.json` (per family: limit, ties, the
   call that applies it, costs) are kept in the work directory.
-- Each recommendation names its call: multimap's and multiOrderedSet's
-  plain constructors read a process default set with
-  `dkTierSetDefaultLimit` (`src/dkTierLimit.h`); multilist's constructors
-  take the limit as an argument.
+- Each recommendation names its call: each family's plain constructor
+  (`multimapNew`, `multiOrderedSetNew`, `multilistNew`) reads a process
+  default set with `dkTierSetDefaultLimit` (`src/dkTierLimit.h`).
 
 ## perfcompare — a change's performance against a base revision
 

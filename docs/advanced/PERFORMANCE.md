@@ -153,20 +153,20 @@ multimapBulkAppend(&m, batch);  // Single operation
 
 #### Compression Trade-offs
 
-The depth argument of `multilistNew(limit, depth)` is how many nodes at
+The depth argument of `multilistNewLimit(limit, depth)` is how many nodes at
 each end stay uncompressed; every node between them is LZ4 compressed, and
 depth 0 never compresses. Pushes and pops work at the ends, so a higher
 depth only saves work when access spills past the end nodes.
 
 ```c
 /* No compression: every node stays a plain flex */
-multilist *fast = multilistNew(FLEX_CAP_LEVEL_4096, 0);
+multilist *fast = multilistNewLimit(FLEX_CAP_LEVEL_4096, 0);
 
 /* Compress everything but the two nodes at each end */
-multilist *balanced = multilistNew(FLEX_CAP_LEVEL_4096, 2);
+multilist *balanced = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 
 /* Compress everything but the end nodes */
-multilist *compact = multilistNew(FLEX_CAP_LEVEL_4096, 1);
+multilist *compact = multilistNewLimit(FLEX_CAP_LEVEL_4096, 1);
 ```
 
 Measured by `compressionBench`: 1,000,000 pushes to the tail, then 1,000,000

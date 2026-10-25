@@ -720,7 +720,7 @@ static void benchMflexFootprint(const char *name, mflexBenchPattern pattern,
 static double benchListPushPop(const char *pattern, size_t count,
                                uint32_t depth) {
     cleanerName(multilistFree, List) multilist *ml =
-        multilistNew(FLEX_CAP_LEVEL_4096, depth);
+        multilistNewLimit(FLEX_CAP_LEVEL_4096, depth);
     cleanerName(mflexStateFree, MflexState) mflexState *state =
         mflexStateCreate();
     char line[101];

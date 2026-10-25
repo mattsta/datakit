@@ -33,7 +33,7 @@ The multilist family uses **pointer tagging** to transparently manage three unde
        └──[tag=3]──> multilistFull   (24 bytes + multiarray of mflex nodes)
 ```
 
-The configuration you pass to `multilistNew()` lives in the _pointer_, not in the
+The configuration you pass to `multilistNewLimit()` lives in the _pointer_, not in the
 Small/Medium structs: `ptrlibCompress.h` stores the compression depth and the
 size limit in the top 8-bit fields of the tagged pointer (see `ptrlib.h`,
 `PTRLIB_BITS_HIGH 16`). This is why every mutating call takes `multilist **`:
@@ -170,8 +170,13 @@ into a `databoxBig` without allocating.
 ### Basic Creation
 
 ```c
+/* Create new multilist with the process default size limit (2048 until
+ * dkTierSetDefaultLimit(DK_TIER_MULTILIST, ...) changes it), no
+ * compression */
+multilist *multilistNew(void);
+
 /* Create new multilist with size limit and compression depth */
-multilist *multilistNew(flexCapSizeLimit limit, uint32_t depth);
+multilist *multilistNewLimit(flexCapSizeLimit limit, uint32_t depth);
 
 /* Create from existing flex (consumes flex) */
 multilist *multilistNewFromFlex(flexCapSizeLimit limit, uint32_t depth,
@@ -186,11 +191,11 @@ void multilistFree(multilist *m);
 
 ```c
 /* Example: Basic creation */
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 /* Creates a Small variant with a 2 KB node limit and no compression */
 
 /* Example: With compression */
-multilist *compressed = multilistNew(FLEX_CAP_LEVEL_4096, 2);
+multilist *compressed = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 /* 4 KB nodes; once the list becomes Full, all but the first 2 and last 2
  * nodes are eligible for LZ4 compression */
 
@@ -200,7 +205,9 @@ multilist *fromFlex = multilistNewFromFlex(FLEX_CAP_LEVEL_2048, 0, existing);
 /* 'existing' now belongs to the multilist; do not free it yourself */
 ```
 
-`multilistNew()` and `multilistNewFromFlex()` both start as **Small**.
+`multilistNew()`, `multilistNewLimit()` and `multilistNewFromFlex()` all start
+as **Small**. `dktools tune` measures which default limit suits the machine
+(see tools/README.md).
 `multilistNewFromFlex()` does not upgrade eagerly even if `fl` is already larger
 than the limit - the upgrade check runs on the next write operation.
 
@@ -225,7 +232,7 @@ FLEX_CAP_LEVEL_32768   /* 32 KB */
 FLEX_CAP_LEVEL_65536   /* 64 KB */
 ```
 
-There is no implicit default: `multilistNew()` requires an explicit level.
+There is no implicit default: `multilistNewLimit()` requires an explicit level.
 
 **Compression Depth**: only meaningful for the Full variant. Depth N leaves the
 first N and last N nodes uncompressed (fast head/tail access) and compresses
@@ -294,7 +301,7 @@ void multilistPushByTypeTail(multilist **m, mflexState *state,
 
 ```c
 /* Example: Build a queue (push tail, pop head) */
-multilist *queue = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *queue = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 databox item1 = databoxNewBytesString("first");
@@ -309,7 +316,7 @@ multilistPushByTypeTail(&queue, state, &item3);
 /* List is now: first -> second -> third */
 
 /* Example: Build a stack (push head, pop head) */
-multilist *stack = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *stack = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 databox val1 = databoxNewSigned(10);
 multilistPushByTypeHead(&stack, state, &val1);
@@ -341,7 +348,7 @@ void multilistInsertByTypeAfter(multilist **m, mflexState *state[2],
 
 ```c
 /* Example: Insert in middle of list */
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
 
 databox a = databoxNewBytesString("a");
@@ -415,7 +422,7 @@ if (multilistPopTail(&ml, state, (databox *)&wide)) {
 #include <inttypes.h>
 
 /* Example: Queue pattern (FIFO) */
-multilist *queue = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *queue = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 databox item1 = databoxNewBytesString("first");
@@ -432,7 +439,7 @@ if (multilistPopHead(&queue, state, &result)) {
 }
 
 /* Example: Stack pattern (LIFO) */
-multilist *stack = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *stack = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 databox val1 = databoxNewSigned(10);
 multilistPushByTypeHead(&stack, state, &val1);
@@ -886,7 +893,7 @@ multilist baseline in `docs/PERFORMANCE_BASELINES.md` yet.
 
 ```c
 /* Push to tail, pop from head */
-multilist *queue = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *queue = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 databox item = databoxNewBytesString("task");
@@ -905,7 +912,7 @@ if (multilistPopHead(&queue, state, &result)) {
 #include <inttypes.h>
 
 /* Push to head, pop from head */
-multilist *stack = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *stack = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 databox item = databoxNewSigned(42);
@@ -921,7 +928,7 @@ if (multilistPopHead(&stack, state, &result)) {
 ### Pattern 3: Deque (Double-Ended Queue)
 
 ```c
-multilist *deque = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *deque = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 databox front = databoxNewBytesString("front");
@@ -943,7 +950,7 @@ if (multilistPopTail(&deque, state, &result)) {
 ### Pattern 4: Bounded Recent-History Buffer
 
 ```c
-multilist *buffer = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *buffer = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 const size_t maxSize = 100;
@@ -996,17 +1003,17 @@ skipped.
 
 ```c
 /* Small, frequent updates - smaller nodes mean cheaper memmoves */
-multilist *hotList = multilistNew(FLEX_CAP_LEVEL_512, 0);
+multilist *hotList = multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
 
 /* Large, bulk operations - larger nodes amortize more overhead */
-multilist *bulkList = multilistNew(FLEX_CAP_LEVEL_4096, 0);
+multilist *bulkList = multilistNewLimit(FLEX_CAP_LEVEL_4096, 0);
 ```
 
 ### 2. Use Compression for Large Lists
 
 ```c
 /* Compress interior nodes, keep the ends fast */
-multilist *bigList = multilistNew(FLEX_CAP_LEVEL_4096, 2);
+multilist *bigList = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 /* First 2 and last 2 nodes stay uncompressed once the list is Full */
 ```
 
@@ -1054,7 +1061,7 @@ be shared between threads:
 
 ```c
 pthread_rwlock_t lock = PTHREAD_RWLOCK_INITIALIZER;
-multilist *shared = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *shared = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 /* Reader (needs its own state) */
 pthread_rwlock_rdlock(&lock);

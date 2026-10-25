@@ -110,15 +110,15 @@ class Sweeps(unittest.TestCase):
         )
         self.assertEqual(
             tune.apply_text("multilist", 1024),
-            "pass FLEX_CAP_LEVEL_1024 to multilistNew",
+            "dkTierSetDefaultLimit(DK_TIER_MULTILIST, FLEX_CAP_LEVEL_1024);",
         )
 
-    def test_every_setter_names_a_c_family(self) -> None:
+    def test_every_family_has_a_setter_the_header_names(self) -> None:
         header = Path(__file__).resolve().parents[2] / "src" / "dkTierLimit.h"
         text = header.read_text()
+        self.assertEqual(sorted(tune.DEFAULT_SETTERS), sorted(tune.FAMILIES))
         for family, setter in tune.DEFAULT_SETTERS.items():
             with self.subTest(family=family):
-                self.assertIn(family, tune.FAMILIES)
                 self.assertIn(setter, text)
 
     def test_empty_sweep_refuses(self) -> None:

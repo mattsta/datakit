@@ -52,7 +52,7 @@ m = NULL;  /* multimapFree does NOT clear your pointer; do it yourself. */
 ```
 
 The same split applies to `flex` (`flexNew()` then `flexPushByType(&f,
-...)`), `multilist` (`multilistNew()` then `multilistPushByTypeTail(&ml,
+...)`), `multilist` (`multilistNewLimit()` then `multilistPushByTypeTail(&ml,
 ...)`), and `intset` (`intsetNew()` then `intsetAdd(&is, ...)`). Never
 pass a pointer you have not initialized to a mutator.
 
@@ -91,7 +91,7 @@ multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
 multimap *cold = multimapNewCompress(2, FLEX_CAP_LEVEL_8192);
 
 /* multilist: (node size limit, uncompressed-nodes-at-each-end depth). */
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 /* multiarray: (element size, elements per row). */
 typedef struct Record { uint64_t id; double value; } Record;

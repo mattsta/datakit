@@ -76,6 +76,7 @@ CONSTRUCTORS = {
     "multimapFullSetNew": "multimapFullFree",
     "multimapFullCopy": "multimapFullFree",
     "multilistNew": "multilistFree",
+    "multilistNewLimit": "multilistFree",
     "multilistDuplicate": "multilistFree",
     "multidictNew": "multidictFree",
     "multidictDefaultClassNew": "multidictDefaultClassFree",

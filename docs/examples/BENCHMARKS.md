@@ -468,7 +468,7 @@ this sweep exists to find on your hardware, for your key shape.
 enum { LIST_N = 100000 };
 
 static void benchMultilist(void) {
-    multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
     mflexState *s0 = mflexStateCreate();
     mflexState *s1 = mflexStateCreate();
@@ -510,7 +510,7 @@ Two knobs change the answer, so sweep them rather than guessing:
 
 - **Node size** (`FLEX_CAP_LEVEL_*`): larger nodes mean fewer nodes and
   better scan locality, but costlier mid-list insert.
-- **Uncompressed depth** (second `multilistNew` argument): `0` compresses
+- **Uncompressed depth** (second `multilistNewLimit` argument): `0` compresses
   everything eligible; `N` keeps the outermost `N` nodes at each end
   uncompressed so head/tail work never decompresses.
 

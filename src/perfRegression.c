@@ -1068,7 +1068,7 @@ static void benchMultilistLimits(void) {
     uint64_t sink = 0;
     for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
         const flexCapSizeLimit limit = perfSweepLimits[l];
-        cleaner(multilistFree) multilist *ml = multilistNew(limit, 0);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(limit, 0);
         PERF_LIMIT_ROW("multilistLimits", "pushTail", limit, perfListTotal(ml),
                        n,
                        const databox b = databoxNewSigned((int64_t)i * 1000003);
@@ -1555,7 +1555,8 @@ static void perfFillList(multilist **ml, mflexState *s) {
 static void benchMultilist(void) {
     const uint32_t n = PERF_CONTAINER_N;
     cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
-    cleaner(multilistFree) multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    cleaner(multilistFree) multilist *ml =
+        multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
     uint64_t sink = 0;
 
     PERF_ROW("multilist", "pushTail", n,

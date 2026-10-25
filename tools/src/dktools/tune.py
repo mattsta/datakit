@@ -47,10 +47,11 @@ FAMILIES = ("multimap", "multiOrderedSet", "multilist")
 #: more slower (a runtime default lets a caller trade back).
 TIE = 0.15
 #: The dkTierFamily whose process default each family's plain constructor
-#: reads (dkTierLimit.h); multilist has none, its constructors take a limit.
+#: reads (dkTierLimit.h)
 DEFAULT_SETTERS = {
     "multimap": "DK_TIER_MULTIMAP",
     "multiOrderedSet": "DK_TIER_MULTIORDEREDSET",
+    "multilist": "DK_TIER_MULTILIST",
 }
 
 _ROW = re.compile(r"^(?P<op>[A-Za-z]+?)(?P<limit>\d+)$")
@@ -203,10 +204,7 @@ def _human(n: int) -> str:
 
 def apply_text(family: str, limit: int) -> str:
     """The C that makes ``limit`` the family's limit."""
-    level = f"FLEX_CAP_LEVEL_{limit}"
-    if family in DEFAULT_SETTERS:
-        return f"dkTierSetDefaultLimit({DEFAULT_SETTERS[family]}, {level});"
-    return f"pass {level} to {family}New"
+    return f"dkTierSetDefaultLimit({DEFAULT_SETTERS[family]}, FLEX_CAP_LEVEL_{limit});"
 
 
 def render(found: dict[str, Sweep], caches: list[tuple[str, int]]) -> list[str]:

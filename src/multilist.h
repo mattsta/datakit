@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dkTier.h"
+#include "dkTierLimit.h"
 #include "flex.h"
 #include "flexCapacityManagement.h"
 #include "multilistCommon.h"
@@ -18,7 +19,11 @@
 /* opaque multilist type; there's no user accessible data here. */
 typedef struct multilist multilist;
 
-multilist *multilistNew(flexCapSizeLimit limit, uint32_t depth);
+/* multilistNew: the process default limit for multilists (dkTierLimit.h),
+ * no compression.  multilistNewLimit: an explicit limit, and 'depth' nodes
+ * kept uncompressed at each end (0: no compression). */
+multilist *multilistNew(void);
+multilist *multilistNewLimit(flexCapSizeLimit limit, uint32_t depth);
 multilist *multilistNewFromFlex(flexCapSizeLimit limit, uint32_t depth,
                                 flex *fl);
 multilist *multilistDuplicate(const multilist *ml);

@@ -5,7 +5,7 @@
 /* One limit per family.  A default publishes no other data, so plain
  * relaxed loads and stores carry it. */
 static _Atomic uint8_t dkTierDefaultLimit_[DK_TIER_FAMILY_COUNT] = {
-    DK_TIER_LIMIT_COMPILED, DK_TIER_LIMIT_COMPILED};
+    [0 ... DK_TIER_FAMILY_COUNT - 1] = DK_TIER_LIMIT_COMPILED};
 
 flexCapSizeLimit dkTierDefaultLimit(dkTierFamily family) {
     if ((uint32_t)family >= DK_TIER_FAMILY_COUNT) {
@@ -39,22 +39,39 @@ dkTierLimitResult dkTierSetDefaultLimit(dkTierFamily family,
 #include "ctest.h"
 
 #include "multiOrderedSet.h"
+#include "multilist.h"
 #include "multimap.h"
 
 defcleaner(multimap *, multimapFree);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
+defcleaner(multilist *, multilistFree);
 
 /* Make a container with the family's plain constructor and read the
  * limit it was given */
 static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
-    dkTierStats s;
-    if (family == DK_TIER_MULTIMAP) {
+    dkTierStats s = {0};
+    switch (family) {
+    case DK_TIER_MULTIMAP: {
         cleaner(multimapFree) multimap *m = multimapNew(2);
         multimapStats(m, &s);
-    } else {
+        break;
+    }
+    case DK_TIER_MULTIORDEREDSET: {
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
             multiOrderedSetNew();
         multiOrderedSetStats(mos, &s);
+        break;
+    }
+    case DK_TIER_MULTILIST: {
+        cleaner(multilistFree) multilist *ml = multilistNew();
+        multilistStats(ml, &s);
+        if (multilistDepth(ml) != 0) {
+            return 0;
+        }
+        break;
+    }
+    default:
+        break;
     }
 
     return s.unitLimit;

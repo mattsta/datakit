@@ -4,8 +4,9 @@
 
 /* The size limit a family's plain constructor gives each new container:
  * multimapNew and multimapSetNew read DK_TIER_MULTIMAP's,
- * multiOrderedSetNew reads DK_TIER_MULTIORDEREDSET's.  Constructors that
- * take a limit ignore these defaults.
+ * multiOrderedSetNew reads DK_TIER_MULTIORDEREDSET's, multilistNew reads
+ * DK_TIER_MULTILIST's.  Constructors that take a limit ignore these
+ * defaults.
  *
  * Every family starts at DK_TIER_LIMIT_COMPILED.  `dktools tune`
  * measures each family's speed and memory per limit on the machine it
@@ -19,6 +20,7 @@
 typedef enum dkTierFamily {
     DK_TIER_MULTIMAP = 0,
     DK_TIER_MULTIORDEREDSET = 1,
+    DK_TIER_MULTILIST = 2,
     DK_TIER_FAMILY_COUNT
 } dkTierFamily;
 

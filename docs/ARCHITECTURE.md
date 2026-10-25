@@ -879,7 +879,7 @@ multimapInsertWithSurrogateKey(&m, elements, &insertKey, atomContainer);
 /* flex has no reserve/capacity-hint API. Where it matters, set the
  * size limit at construction time on the container that wraps it. */
 multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 ```
 
 ### 2. Append Instead of Insert for Sorted Input

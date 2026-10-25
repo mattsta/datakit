@@ -4449,7 +4449,7 @@ static void multilistPersistFree(void *structure) {
 
 static void *multilistPersistNewEmpty(void) {
     /* @own: caller; free=multilistFree */
-    return multilistNew(FLEX_CAP_LEVEL_16384, 2);
+    return multilistNewLimit(FLEX_CAP_LEVEL_16384, 2);
 }
 
 const persistOps persistOpsMultilist = {
@@ -7287,7 +7287,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("multilist snapshot and restore") {
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
         mflexState *state = NULL;
 
         /* Add various elements */
@@ -7341,7 +7341,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("multilist WAL operations") {
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
         mflexState *state = NULL;
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
@@ -7396,7 +7396,7 @@ int persistTest(int argc, char *argv[]) {
             uint32_t ids[400];
             size_t n = 0;
             cleaner(multilistFree) multilist *ml =
-                multilistNew(configs[c].limit, configs[c].depth);
+                multilistNewLimit(configs[c].limit, configs[c].depth);
             cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
             for (uint32_t id = 0; id < configs[c].count; id++) {
                 databoxBig storage;
@@ -7484,7 +7484,7 @@ int persistTest(int argc, char *argv[]) {
         persistAttachWAL(p, persistStoreMemory(0));
 
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_128, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_128, 0);
         cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
         cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
         mflexState *s[2] = {s0, s1};
@@ -7801,7 +7801,7 @@ int persistTest(int argc, char *argv[]) {
          * 2 a string, 4 a unique 64-bit value.  The replay state stands in
          * for persistRecover's, which the Full tier needs. */
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_128, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_128, 0);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
         persistSetReplayState(state);
         uint32_t ids[60];
@@ -7893,7 +7893,8 @@ int persistTest(int argc, char *argv[]) {
         const flexCapSizeLimit limits[] = {
             FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
         for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
-            cleaner(multilistFree) multilist *ml = multilistNew(limits[t], 0);
+            cleaner(multilistFree) multilist *ml =
+                multilistNewLimit(limits[t], 0);
             cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
             persistSetReplayState(state);
             uint32_t ids[40];
@@ -8668,7 +8669,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("multilist: empty structure round-trip") {
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
         persistStore *store = persistStoreMemory(0);
@@ -8690,7 +8691,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("multilist: various element types") {
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         /* Integers */
@@ -8738,7 +8739,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("multilist: large multi-node structure") {
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_512, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         /* Add enough to create multiple nodes */
@@ -9008,7 +9009,7 @@ int persistTest(int argc, char *argv[]) {
             cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
             persistSetReplayState(state);
             cleaner(multilistFree) multilist *ml =
-                multilistNew(FLEX_CAP_LEVEL_2048, 0);
+                multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
             multilistPushByTypeTail(&ml, state, &s22);
             multilistPushByTypeTail(&ml, state, &i22);
 
@@ -9250,7 +9251,7 @@ int persistTest(int argc, char *argv[]) {
     TEST("FUZZ: multilist random push/pop") {
         uint32_t seed = 22222;
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_1024, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_1024, 0);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         for (int iter = 0; iter < 1000; iter++) {
@@ -9475,7 +9476,7 @@ int persistTest(int argc, char *argv[]) {
          * into a snapshot (all below its watermark) must NOT be
          * replayed again, and ops logged after it must be. */
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_512, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
@@ -9883,7 +9884,7 @@ int persistTest(int argc, char *argv[]) {
         }
 
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_512, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);

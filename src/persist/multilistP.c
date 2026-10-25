@@ -47,7 +47,7 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
 
     /* Create underlying multilist */
     /* @own: container; free=multilistFree */
-    ml->ml = multilistNew(limit, depth);
+    ml->ml = multilistNewLimit(limit, depth);
     if (!ml->ml) {
         mflexStateFree(ml->state);
         return NULL;

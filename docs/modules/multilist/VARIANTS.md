@@ -23,7 +23,7 @@ compression depth and the size limit (`ptrlib.h` / `ptrlibCompress.h`).
 | **Upgrades to** | Medium          | Full             | N/A (final)               |
 
 `limitBytes` is `flexOptimizationSizeLimit[limit]` for the `flexCapSizeLimit`
-you passed to `multilistNew()`. With `FLEX_CAP_LEVEL_2048` that is 2 KB, so
+you passed to `multilistNewLimit()`. With `FLEX_CAP_LEVEL_2048` that is 2 KB, so
 Small holds up to 2 KB and Medium up to 6 KB; with `FLEX_CAP_LEVEL_512` the same
 boundaries are 512 bytes and 1.5 KB.
 
@@ -373,7 +373,7 @@ The upgrade process is **transparent** to the caller - the only requirement is
 passing `multilist **` so the new tagged pointer can be written back:
 
 ```c
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 mflexState *state = mflexStateCreate();
 
 /* Starts as Small */
@@ -438,16 +438,16 @@ decompressed on demand when an operation needs to read or modify them.
 
 ```c
 /* No compression - fastest */
-multilist *none = multilistNew(FLEX_CAP_LEVEL_4096, 0);
+multilist *none = multilistNewLimit(FLEX_CAP_LEVEL_4096, 0);
 
 /* Compress everything except head and tail - most space saved */
-multilist *aggressive = multilistNew(FLEX_CAP_LEVEL_4096, 1);
+multilist *aggressive = multilistNewLimit(FLEX_CAP_LEVEL_4096, 1);
 
 /* Keep 2 nodes hot at each end */
-multilist *balanced = multilistNew(FLEX_CAP_LEVEL_4096, 2);
+multilist *balanced = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 
 /* Keep 10 nodes hot at each end - very little gets compressed */
-multilist *shallow = multilistNew(FLEX_CAP_LEVEL_4096, 10);
+multilist *shallow = multilistNewLimit(FLEX_CAP_LEVEL_4096, 10);
 ```
 
 **Guidelines:**
@@ -459,7 +459,7 @@ multilist *shallow = multilistNew(FLEX_CAP_LEVEL_4096, 10);
   `count <= depth * 2` nodes compresses nothing
 
 The depth is stored in an 8-bit field of the tagged pointer, so 0-255 is the
-usable range from `multilistNew()`.
+usable range from `multilistNewLimit()`.
 
 ## Choosing the Right Variant
 
@@ -470,7 +470,7 @@ You do not create Small, Medium, or Full directly. You always use the unified
 
 ```c
 /* Correct */
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 /* becomes Small -> Medium -> Full as it grows */
 ```
 
@@ -493,7 +493,7 @@ macros (`_MULTILIST_TAG`, `SET_COMPRESS_DEPTH_LIMIT`) are private to
 `multilist.c`. A directly-created variant can only be used through that
 variant's own API, and it will never auto-upgrade.
 
-Application code should use `multilistNew()`.
+Application code should use `multilistNewLimit()`.
 
 ## Variant-Specific Functions
 
@@ -593,7 +593,7 @@ depth.
 
 ```c
 /* GOOD */
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 multilistPushByTypeTail(&ml, state, &item);
 
 /* AVOID: cannot auto-upgrade, cannot be used as a multilist * */
@@ -606,20 +606,20 @@ multilistSmallPushByTypeTail(mls, &item);
 ```c
 /* Small lists, or lists with frequent mid-node inserts: smaller nodes
  * mean shorter memmoves */
-multilist *small = multilistNew(FLEX_CAP_LEVEL_512, 0);
+multilist *small = multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
 
 /* Large append-mostly lists: bigger nodes amortize more overhead */
-multilist *large = multilistNew(FLEX_CAP_LEVEL_8192, 2);
+multilist *large = multilistNewLimit(FLEX_CAP_LEVEL_8192, 2);
 ```
 
 ### 3. Use Compression Wisely
 
 ```c
 /* No compression for speed-critical code */
-multilist *fast = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *fast = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 /* Compression for memory-critical code with cold interiors */
-multilist *compact = multilistNew(FLEX_CAP_LEVEL_4096, 2);
+multilist *compact = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 ```
 
 Compression only ever applies once a list has become Full and has more than
@@ -628,7 +628,7 @@ Compression only ever applies once a list has become Full and has more than
 ### 4. Trust the Automatic Upgrades
 
 ```c
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 /* Add 1 element or 1 million - it adapts */
 for (uint32_t i = 0; i < 1000000; i++) {

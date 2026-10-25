@@ -109,7 +109,7 @@ multiFenwick *multiFenwickNew(void) {
      *   - more memory saved for longer flex compaction
      *   - slower speed because it requires more linear updates */
     /* @own: container; free=multilistFree */
-    mfw->tree = multilistNew(FLEX_CAP_LEVEL_8192, 0);
+    mfw->tree = multilistNewLimit(FLEX_CAP_LEVEL_8192, 0);
     if (!mfw->tree) {
         return NULL;
     }

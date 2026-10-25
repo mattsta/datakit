@@ -54,7 +54,7 @@ typedef struct taskQueue {
 } taskQueue;
 
 void taskQueueInit(taskQueue *q) {
-    q->ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    q->ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
     q->s[0] = mflexStateCreate();
     q->s[1] = mflexStateCreate();
 }
@@ -121,8 +121,8 @@ typedef struct editor {
 } editor;
 
 void editorInit(editor *e) {
-    e->undo = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    e->redo = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    e->undo = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
+    e->redo = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
     e->state = mflexStateCreate();
 }
 
@@ -348,7 +348,7 @@ void rotationStep(rotation *r) {
 }
 
 void rotationExample(void) {
-    rotation r = {.ml = multilistNew(FLEX_CAP_LEVEL_2048, 0),
+    rotation r = {.ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0),
                   .s = {mflexStateCreate(), mflexStateCreate()}};
 
     const char *tracks[] = {"Track A", "Track B", "Track C", "Track D"};
@@ -389,7 +389,7 @@ typedef struct logBuffer {
 
 void logBufferInit(logBuffer *lb) {
     /* 8 KB nodes; once Full, keep 5 nodes hot at each end. */
-    lb->ml = multilistNew(FLEX_CAP_LEVEL_8192, 5);
+    lb->ml = multilistNewLimit(FLEX_CAP_LEVEL_8192, 5);
     lb->s[0] = mflexStateCreate();
     lb->s[1] = mflexStateCreate();
     lb->totalLogs = 0;
@@ -548,7 +548,7 @@ typedef struct priorityQueue {
 
 void priorityQueueInit(priorityQueue *pq) {
     for (size_t i = 0; i < PRIORITY_COUNT; i++) {
-        pq->lane[i] = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+        pq->lane[i] = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
     }
 
     pq->state = mflexStateCreate();
@@ -664,7 +664,7 @@ often a node splits and how large each memmove is.
 #include <time.h>
 
 double measurePushPerformance(flexCapSizeLimit limit, size_t operations) {
-    multilist *ml = multilistNew(limit, 0);
+    multilist *ml = multilistNewLimit(limit, 0);
     mflexState *state = mflexStateCreate();
 
     const clock_t start = clock();
@@ -711,8 +711,8 @@ deliberately reports **logical** size and is identical either way.
 
 ```c
 void compressionExample(void) {
-    multilist *plain = multilistNew(FLEX_CAP_LEVEL_4096, 0);
-    multilist *packed = multilistNew(FLEX_CAP_LEVEL_4096, 2);
+    multilist *plain = multilistNewLimit(FLEX_CAP_LEVEL_4096, 0);
+    multilist *packed = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 
     mflexState *s1 = mflexStateCreate();
     mflexState *s2 = mflexStateCreate();

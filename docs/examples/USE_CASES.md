@@ -268,7 +268,7 @@ logAggregator *logAggregatorNew(void) {
 
     /* 8 KB nodes; keep the newest 5 nodes at each end uncompressed so
      * appends and tail reads never pay decompression. */
-    agg->lines = multilistNew(FLEX_CAP_LEVEL_8192, 5);
+    agg->lines = multilistNewLimit(FLEX_CAP_LEVEL_8192, 5);
     agg->names = multimapAtomNew();
     agg->index = multimapNew(3);
     agg->state = mflexStateCreate();

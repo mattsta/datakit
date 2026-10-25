@@ -143,14 +143,14 @@ Need key-value storage?
 Need ordered sequence?
 │
 ├─ Temporary/small (< 2KB)?
-│  └─ Let it start Small: multilistNew()
+│  └─ Let it start Small: multilistNewLimit()
 │
 ├─ Long-lived, memory-critical?
-│  └─ Enable compression: multilistNew(cap, 2)
+│  └─ Enable compression: multilistNewLimit(cap, 2)
 │     (compress all but 2 nodes from each end)
 │
 └─ Large dataset, read-heavy?
-   └─ More uncompressed nodes: multilistNew(cap, 10)
+   └─ More uncompressed nodes: multilistNewLimit(cap, 10)
       (faster access to edges)
 ```
 
@@ -200,16 +200,16 @@ multimap *index = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
 
 ```c
 /* Work queue (small, temporary) */
-multilist *queue = multilistNew(FLEX_CAP_LEVEL_512, 0);
+multilist *queue = multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
 // Small variant: 8 bytes overhead
 
 /* Message log (moderate, persistent) */
-multilist *log = multilistNew(FLEX_CAP_LEVEL_2048, 1);
+multilist *log = multilistNewLimit(FLEX_CAP_LEVEL_2048, 1);
 // Medium → Full with compression
 // compress=1: max compression for storage
 
 /* Event stream (large, read-heavy) */
-multilist *events = multilistNew(FLEX_CAP_LEVEL_4096, 5);
+multilist *events = multilistNewLimit(FLEX_CAP_LEVEL_4096, 5);
 // Full with compress=5
 // Fast access to recent events (5 nodes each end)
 ```
@@ -431,10 +431,10 @@ multimap *cache = multimapNewLimit(3, FLEX_CAP_LEVEL_4096);
 
 ```c
 /* Memory-critical: aggressive compression */
-multilist *archive = multilistNew(FLEX_CAP_LEVEL_4096, 1);
+multilist *archive = multilistNewLimit(FLEX_CAP_LEVEL_4096, 1);
 
 /* Performance-critical: minimal compression */
-multilist *recent = multilistNew(FLEX_CAP_LEVEL_4096, 10);
+multilist *recent = multilistNewLimit(FLEX_CAP_LEVEL_4096, 10);
 ```
 
 ### 4. Consider Access Patterns

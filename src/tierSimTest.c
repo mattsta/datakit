@@ -861,7 +861,7 @@ static void *mlMake(void) {
     /* @own: caller; free=mflexStateFree */
     mlState[1] = mflexStateCreate();
     /* @own: caller; free=multilistFree */
-    return multilistNew(FLEX_CAP_LEVEL_64, 0);
+    return multilistNewLimit(FLEX_CAP_LEVEL_64, 0);
 }
 
 static void mlDestroy(void *c) {

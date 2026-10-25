@@ -6432,11 +6432,11 @@ static int dkTestPersistMultilistTieredApplyTest(int argc, char *argv[]) {
         dkTestTieredCurrentObservation = &obs;
 
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
         if (!ml) {
-            printf(
-                "dkTestPersistMultilistTieredApply[%s]: multilistNew failed\n",
-                tierLabels[t]);
+            printf("dkTestPersistMultilistTieredApply[%s]: multilistNewLimit "
+                   "failed\n",
+                   tierLabels[t]);
             failures++;
             dkTestTieredCurrentObservation = NULL;
             continue;

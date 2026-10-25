@@ -28,7 +28,7 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
     cleaner(mflexStateFree) mflexState *second = mflexStateCreate();
     /* A small node size, so builds reach the Medium and Full tiers */
     /* @own: caller; free=multilistFree */
-    multilist *ml = multilistNew(FLEX_CAP_LEVEL_256, 0);
+    multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_256, 0);
     persistContractStart(b->log, ml);
 
     uint64_t rng = b->seed;

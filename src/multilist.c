@@ -90,7 +90,13 @@ typedef enum multilistType {
 /* ====================================================================
  * Manage
  * ==================================================================== */
-multilist *multilistNew(const flexCapSizeLimit limit, const uint32_t depth) {
+multilist *multilistNew(void) {
+    /* @own: caller; free=multilistFree */
+    return multilistNewLimit(dkTierDefaultLimit(DK_TIER_MULTILIST), 0);
+}
+
+multilist *multilistNewLimit(const flexCapSizeLimit limit,
+                             const uint32_t depth) {
     multilist *ml = (multilist *)multilistSmallCreate();
     ml = SET_COMPRESS_DEPTH_LIMIT(ml, depth, limit);
     return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
@@ -151,7 +157,7 @@ void multilistReset(multilist **ml) {
     const uint32_t depth = COMPRESS_DEPTH(*ml);
     multilistFree(*ml);
     /* @own: caller; free=multilistFree */
-    *ml = multilistNew(limit, depth);
+    *ml = multilistNewLimit(limit, depth);
 }
 
 size_t multilistCount(const multilist *m) {
@@ -1347,13 +1353,13 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("create list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             (void)ml;
         }
 
         TEST("add to tail of empty list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeTail(&ml, s0, &pushBox);
             /* 1 for head and 1 for tail beacuse 1 node = head = tail */
@@ -1361,7 +1367,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("add to head of empty list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeHead(&ml, s0, &pushBox);
             /* 1 for head and 1 for tail beacuse 1 node = head = tail */
@@ -1388,7 +1394,7 @@ int multilistTest(int argc, char *argv[]) {
             for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
                 const int total = configs[c].total;
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(configs[c].limit, depth[_i]);
+                    multilistNewLimit(configs[c].limit, depth[_i]);
                 for (int i = 0; i < total; i++) {
                     const databox pushBox = databoxNewSigned(i);
                     multilistPushByTypeTail(&ml, s0, &pushBox);
@@ -1437,7 +1443,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("iterator rewind: head and tail restarts mid-iteration") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 40; i++) {
                 const databox pushBox = databoxNewSigned(i);
                 multilistPushByTypeTail(&ml, s0, &pushBox);
@@ -1477,7 +1483,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("add to tail 5x at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 5; i++) {
                     databox pushBox = databoxNewBytesString(genstr("hello", i));
                     pushBox.len = 32;
@@ -1497,7 +1503,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("add to head 5x at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 5; i++) {
                     databox pushBox = databoxNewBytesString(genstr("hello", i));
                     pushBox.len = 32;
@@ -1517,7 +1523,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("add to tail 500x at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     databox pushBox = databoxNewBytesString(genstr("hello", i));
                     pushBox.len = 64;
@@ -1537,7 +1543,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("add to head 500x at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     multilistPushHead(ml, s0, genstr("hello", i), 32);
                 }
@@ -1553,14 +1559,14 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("rotate empty") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistRotate(ml, s);
         }
 
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
             TEST_DESC("rotate one val once at fill %zu", f) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 multilistPushHead(ml, s0, "hello", 6);
 
                 multilistRotate(ml, s);
@@ -1574,7 +1580,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("rotate 504 val 5000 times at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 multilistRepr(ml);
                 printf("============\n");
                 multilistPushHead(ml, s0, "900", 3);
@@ -1608,7 +1614,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("pop empty") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             databox box = {{0}};
             bool found = multilistPopHead(&ml, s0, &box);
             assert(!found);
@@ -1617,7 +1623,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("pop 1 string from 1") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             char *populate = genstr("hello", 331);
             multilistPushHead(ml, s0, populate, 32);
             uint8_t *data;
@@ -1638,7 +1644,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("pop head 1 number from 1") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             /* An integer pops as that integer; a numeral string pops as the
              * same string (multilist stores exactly what it is given). */
             const databox num = databoxNewSigned(55513);
@@ -1661,7 +1667,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("pop head 500 from 500") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -1687,7 +1693,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("pop head 5000 from 500") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -1719,7 +1725,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("iterate forward over 500 list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -1747,7 +1753,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("iterate reverse over 500 list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -1773,7 +1779,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("insert before with 0 elements") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistEntry entry;
             multilistIndexGet(ml, s0, 0, &entry);
             printf("WHAT? %p, %p, %d\n", entry.ml, entry.fe, entry.offset);
@@ -1782,7 +1788,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("insert after with 0 elements") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistEntry entry;
             multilistIndexGet(ml, s0, 0, &entry);
             multilistInsertAfter(&ml, s, &entry, "abc", 4);
@@ -1790,7 +1796,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("insert after 1 element") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistPushHead(ml, s0, "hello", 6);
             multilistEntry entry;
             multilistIndexGet(ml, s0, 0, &entry);
@@ -1799,7 +1805,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("insert before 1 element") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistPushHead(ml, s0, "hello", 6);
             multilistEntry entry;
             multilistIndexGet(ml, s0, 0, &entry);
@@ -1811,7 +1817,7 @@ int multilistTest(int argc, char *argv[]) {
                       "compress %d\n",
                       f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 multilistPushTail(ml, s0, "abc", 3);
                 multilistPushTail(ml, s0, "def", 3); /* unique node */
 
@@ -1893,7 +1899,7 @@ int multilistTest(int argc, char *argv[]) {
                 " %zu at compress %d",
                 f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     multilistPushTail(ml, s0, genstr("hello", i), 32);
                 }
@@ -1914,7 +1920,7 @@ int multilistTest(int argc, char *argv[]) {
                       "fill %zu at compress %d",
                       f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     multilistPushHead(ml, s0, genstr("hello", i), 32);
                 }
@@ -1937,14 +1943,14 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("duplicate empty list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             cleaner(multilistFree) multilist *copy = multilistDuplicate(ml);
             (void)copy;
         }
 
         TEST("duplicate list of 1 element") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistPushHead(ml, s0, genstr("hello", 3), 32);
             cleaner(multilistFree) multilist *copy = multilistDuplicate(ml);
             (void)copy;
@@ -1952,7 +1958,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("duplicate list of 500") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -1965,7 +1971,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("index 1,200 from 500 list at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
                 }
@@ -1988,7 +1994,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("index -1,-2 from 500 list at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
                 }
@@ -2012,7 +2018,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("index -100 from 500 list at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 500; i++) {
                     multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
                 }
@@ -2030,7 +2036,7 @@ int multilistTest(int argc, char *argv[]) {
                 "index too big +1 from 50 list at fill %zu at compress %d", f,
                 depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 for (int i = 0; i < 50; i++) {
                     multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
                 }
@@ -2047,13 +2053,13 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete range empty list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistDelRange(&ml, s0, 5, 20);
         }
 
         TEST("delete range of entire node in list of one node") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 32; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -2063,7 +2069,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete range of entire node with overflow valuess") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 32; i++) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
@@ -2073,7 +2079,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete middle 100 of 500 list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
@@ -2083,7 +2089,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete negative 1 from 500 list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
@@ -2093,7 +2099,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete negative 1 from 500 list with overflow valuess") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
@@ -2103,7 +2109,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete negative 100 from 500 list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {
                 multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
@@ -2113,7 +2119,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("delete -10 values 5 from 50 list") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 50; i++) {
                 multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
@@ -2123,7 +2129,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("numbers only list read") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int64_t v = 1111; v <= 4444; v += 1111) {
                 const databox num = databoxNewSigned(v);
                 multilistPushByTypeTail(&ml, s0, &num);
@@ -2181,7 +2187,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("numbers larger list read") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             int64_t nums[5000];
             for (int i = 0; i < 5000; i++) {
                 nums[i] = -5157318210846258176 + i;
@@ -2210,7 +2216,7 @@ int multilistTest(int argc, char *argv[]) {
 
         TEST("numbers larger list read B") {
             cleaner(multilistFree) multilist *ml =
-                multilistNew(defaultCompressSizeLimit, depth[_i]);
+                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistPushTail(ml, s0, "99", 2);
             multilistPushTail(ml, s0, "98", 2);
             multilistPushTail(ml, s0, "xxxxxxxxxxxxxxxxxxxx", 20);
@@ -2227,7 +2233,7 @@ int multilistTest(int argc, char *argv[]) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
             TEST_DESC("lrem test at fill %zu at compress %d", f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 char *words[] = {"abc", "foo", "bar",  "foobar", "foobared",
                                  "zap", "bar", "test", "foo"};
                 char *result[] = {"abc", "foo",  "foobar", "foobared",
@@ -2330,7 +2336,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("iterate reverse + delete at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 multilistPushTail(ml, s0, "abc", 3);
                 multilistPushTail(ml, s0, "def", 3);
                 multilistPushTail(ml, s0, "hij", 3);
@@ -2376,7 +2382,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("iterator at index test at fill %zu at compress %d", f,
                       depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 int64_t nums[5000];
                 for (int i = 0; i < 760; i++) {
                     nums[i] = -5157318210846258176 + i;
@@ -2405,7 +2411,7 @@ int multilistTest(int argc, char *argv[]) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
             TEST_DESC("ltrim test A at fill %zu at compress %d", f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 int64_t nums[5000];
                 for (int i = 0; i < 32; i++) {
                     nums[i] = -5157318210846258176 + i;
@@ -2441,7 +2447,7 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("ltrim test B at fill %zu at compress %d", f, depth[_i]) {
                 /* Force-disable compression because our 33 sequential
                  * integers don't compress and the check always fails. */
-                cleaner(multilistFree) multilist *ml = multilistNew(f, 0);
+                cleaner(multilistFree) multilist *ml = multilistNewLimit(f, 0);
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = i;
@@ -2497,7 +2503,7 @@ int multilistTest(int argc, char *argv[]) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
             TEST_DESC("ltrim test C at fill %zu at compress %d", f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = -5157318210846258176 + i;
@@ -2531,7 +2537,7 @@ int multilistTest(int argc, char *argv[]) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
             TEST_DESC("ltrim test D at fill %zu at compress %d", f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(f, depth[_i]);
+                    multilistNewLimit(f, depth[_i]);
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = -5157318210846258176 + i;
@@ -2607,7 +2613,7 @@ int multilistTest(int argc, char *argv[]) {
                           "at fill %zu at compress depth %zu",
                           n, f, _depth) {
                     cleaner(multilistFree) multilist *ml =
-                        multilistNew(f, _depth);
+                        multilistNewLimit(f, _depth);
                     for (int i = 0; i < n; i++) {
                         multilistPushTail(ml, s0, genstr("hello TAIL", i + 1),
                                           64);
@@ -2662,7 +2668,7 @@ int multilistTest(int argc, char *argv[]) {
     printf("\n=== MULTILIST FUZZ TESTING ===\n\n");
 
     TEST("FUZZ: push/pop operations with oracle verification") {
-        cleaner(multilistFree) multilist *ml = multilistNew(4, 2);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
         const size_t maxSize = 1000;
         cleanerName(zfree, I64) int64_t *oracle =
             zcalloc(maxSize, sizeof(int64_t));
@@ -2747,7 +2753,7 @@ int multilistTest(int argc, char *argv[]) {
     }
 
     TEST("FUZZ: index access verification") {
-        cleaner(multilistFree) multilist *ml = multilistNew(4, 2);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
         const size_t count = 500;
 
         /* Populate list */
@@ -2793,7 +2799,7 @@ int multilistTest(int argc, char *argv[]) {
     }
 
     TEST("FUZZ: iterator forward/backward consistency") {
-        cleaner(multilistFree) multilist *ml = multilistNew(4, 2);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
         const size_t count = 200;
 
         /* Populate list */
@@ -2847,7 +2853,7 @@ int multilistTest(int argc, char *argv[]) {
     }
 
     TEST("FUZZ: mixed types in list") {
-        cleaner(multilistFree) multilist *ml = multilistNew(4, 2);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
         const size_t count = 300;
 
         srand(77777);
@@ -2899,7 +2905,7 @@ int multilistTest(int argc, char *argv[]) {
 
     TEST("stats: tier, nodes, elements and bytes in every tier") {
         cleaner(multilistFree) multilist *ml =
-            multilistNew(FLEX_CAP_LEVEL_64, 0);
+            multilistNewLimit(FLEX_CAP_LEVEL_64, 0);
         const uint32_t limit = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_64];
         dkTierStats st;
         int64_t next = 0;
@@ -2937,7 +2943,7 @@ int multilistTest(int argc, char *argv[]) {
     TEST("FUZZ: tier transitions - small to medium to full") {
         /* Test that lists correctly transition between tiers */
         for (size_t fill = 1; fill <= 8; fill++) {
-            cleaner(multilistFree) multilist *ml = multilistNew(fill, 0);
+            cleaner(multilistFree) multilist *ml = multilistNewLimit(fill, 0);
 
             /* Keep pushing until we force tier transitions */
             const size_t targetCount = 1000;
@@ -2983,7 +2989,7 @@ int multilistTest(int argc, char *argv[]) {
          * is not yet implemented (multilistMedium.c lines 143, 156, 479).
          * Use limit=6 (2048 bytes) so Medium→Full is at 6144 bytes,
          * giving room to stay in Medium with ~100 small integers. */
-        cleaner(multilistFree) multilist *ml = multilistNew(6, 0);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
 
         /* Push enough to get into Medium tier but not Full tier */
         const size_t targetCount = 100;
@@ -3076,7 +3082,7 @@ int multilistTest(int argc, char *argv[]) {
          * After NewFromFlex, F0 has half the initial flex, F1 has other half,
          * then all new pushes go to F1 only.
          * Use limit=6 (2048 bytes) to stay in Medium tier. */
-        cleaner(multilistFree) multilist *ml = multilistNew(6, 0);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
 
         const size_t targetCount = 100;
         for (size_t i = 0; i < targetCount; i++) {
@@ -3135,7 +3141,7 @@ int multilistTest(int argc, char *argv[]) {
     TEST("MEDIUM: alternating head/tail maintains balance") {
         /* Alternating pushes should keep F0 and F1 roughly balanced.
          * Use limit=6 (2048 bytes) to stay in Medium tier. */
-        cleaner(multilistFree) multilist *ml = multilistNew(6, 0);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
 
         const size_t targetCount = 100;
         for (size_t i = 0; i < targetCount; i++) {
@@ -3174,7 +3180,7 @@ int multilistTest(int argc, char *argv[]) {
     TEST("MEDIUM: unbalanced delete operations") {
         /* Build a balanced list, then delete from one end only.
          * Use limit=6 (2048 bytes) to stay in Medium tier. */
-        cleaner(multilistFree) multilist *ml = multilistNew(6, 0);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
 
         const size_t buildCount = 80;
         for (size_t i = 0; i < buildCount; i++) {
@@ -3224,7 +3230,7 @@ int multilistTest(int argc, char *argv[]) {
     TEST("MEDIUM: negative index access with unbalanced structure") {
         /* Test negative indexing when F0/F1 are unbalanced.
          * Use limit=6 (2048 bytes) to stay in Medium tier. */
-        cleaner(multilistFree) multilist *ml = multilistNew(6, 0);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
 
         const size_t targetCount = 100;
         /* Push all to head - creates unbalanced F0 */
@@ -3264,7 +3270,7 @@ int multilistTest(int argc, char *argv[]) {
             const bool forward = pass < 2;
             const int every = pass % 2 == 0 ? 1 : 2; /* delete all, or half */
             cleaner(multilistFree) multilist *ml =
-                multilistNew(FLEX_CAP_LEVEL_512, 0);
+                multilistNewLimit(FLEX_CAP_LEVEL_512, 0);
             char buf[64];
             for (int i = 0; i < total; i++) {
                 snprintf(buf, sizeof(buf), "medium-del-%02d-padding", i);
@@ -3373,7 +3379,7 @@ int multilistTest(int argc, char *argv[]) {
                     (uint32_t)(at[from] < 0 ? n + at[from] : at[from]);
                 for (int pattern = 0; pattern < DO_PATTERNS; pattern++) {
                     cleaner(multilistFree) multilist *ml =
-                        multilistNew(configs[c].limit, configs[c].depth);
+                        multilistNewLimit(configs[c].limit, configs[c].depth);
                     char buf[MLR_LEN + 1];
                     for (uint32_t i = 0; i < n; i++) {
                         const databox box = mlrBox(i, buf);
@@ -3542,7 +3548,7 @@ int multilistTest(int argc, char *argv[]) {
             const char *name = configs[c].name;
             uint32_t n = configs[c].count;
             cleaner(multilistFree) multilist *ml =
-                multilistNew(configs[c].limit, configs[c].depth);
+                multilistNewLimit(configs[c].limit, configs[c].depth);
             char buf[MLR_LEN + 1];
             for (uint32_t i = 0; i < n; i++) {
                 const databox box = mlrBox(i, buf);
@@ -3805,7 +3811,7 @@ int multilistTest(int argc, char *argv[]) {
     }
 
     TEST("FUZZ: stress random operations") {
-        cleaner(multilistFree) multilist *ml = multilistNew(4, 2);
+        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
         size_t count = 0;
 
         srand(99999);
@@ -3869,7 +3875,7 @@ int multilistTest(int argc, char *argv[]) {
                     /* 2048-byte cap: ~110B payloads put n=20..60 right
                      * across the Small->Medium->Full transitions */
                     cleaner(multilistFree) multilist *ml =
-                        multilistNew(FLEX_CAP_LEVEL_2048, 2);
+                        multilistNewLimit(FLEX_CAP_LEVEL_2048, 2);
 
                     for (int32_t i = 0; i < n; i++) {
                         snprintf(payload, sizeof(payload),
@@ -3951,7 +3957,7 @@ int multilistTest(int argc, char *argv[]) {
         const uint32_t wantLimit = FLEX_CAP_LEVEL_2048;
         const uint32_t wantDepth = 2;
         cleaner(multilistFree) multilist *ml =
-            multilistNew(wantLimit, wantDepth);
+            multilistNewLimit(wantLimit, wantDepth);
 
         for (int32_t op = 0; op < 20000 && soakFailures == 0; op++) {
             const uint64_t roll = FUZZ_NEXT() % 100;
@@ -4136,7 +4142,7 @@ int multilistTest(int argc, char *argv[]) {
             for (int ro = 0; ro < 2; ro++) {
                 const uint32_t n = configs[c].count;
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(configs[c].limit, configs[c].depth);
+                    multilistNewLimit(configs[c].limit, configs[c].depth);
                 char buf[MLR_LEN + 1];
                 for (uint32_t i = 0; i < n; i++) {
                     const databox box = mlrBox(i, buf);
@@ -4224,7 +4230,7 @@ int multilistTest(int argc, char *argv[]) {
                 const uint32_t n = configs[c].count;
                 const bool full = configs[c].wantType == MULTILIST_TYPE_FULL;
                 cleaner(multilistFree) multilist *ml =
-                    multilistNew(configs[c].limit, configs[c].depth);
+                    multilistNewLimit(configs[c].limit, configs[c].depth);
                 char buf[MLR_LEN + 1];
                 for (uint32_t i = 0; i < n; i++) {
                     const databox box = mlrBox(i, buf);
@@ -4321,7 +4327,7 @@ int multilistTest(int argc, char *argv[]) {
             size_t n = 0;
             uint32_t nextId = 0;
             cleaner(multilistFree) multilist *ml =
-                multilistNew(configs[c].limit, configs[c].depth);
+                multilistNewLimit(configs[c].limit, configs[c].depth);
 
 /* The value for a step that wants a wide element: 'wide' itself, except
  * in normal data, which takes the next normal element instead. */
@@ -4691,7 +4697,7 @@ int multilistTest(int argc, char *argv[]) {
             mlwVal want[MLW_MAX];
             size_t n = 0;
             cleaner(multilistFree) multilist *ml =
-                multilistNew(configs[c].limit, configs[c].depth);
+                multilistNewLimit(configs[c].limit, configs[c].depth);
 
             {
                 /* An empty list dumps to an empty flex. */
@@ -4834,7 +4840,7 @@ int multilistTest(int argc, char *argv[]) {
             const uint32_t compressDepth = compressDepths[d];
             for (size_t z = 0; z < COUNT_ARRAY(dumpSizes); z++) {
                 cleaner(multilistFree) multilist *orig =
-                    multilistNew(FLEX_CAP_LEVEL_512, compressDepth);
+                    multilistNewLimit(FLEX_CAP_LEVEL_512, compressDepth);
                 for (int64_t i = 0; i < dumpSizes[z]; i++) {
                     const databox v = DATABOX_SIGNED(i * 7 - 3000);
                     multilistPushByTypeTail(&orig, scratch, &v);

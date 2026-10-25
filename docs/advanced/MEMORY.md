@@ -118,7 +118,7 @@ Overhead: 0.5%
 **Full**: 24 bytes + N mflex nodes
 
 **With compression** (Full variant only): the depth argument of
-`multilistNew(limit, depth)` is how many nodes at **each end** stay
+`multilistNewLimit(limit, depth)` is how many nodes at **each end** stay
 uncompressed for fast head/tail access; every node between them is LZ4
 compressed, and depth 0 never compresses. On a large list nearly every node
 is interior, so depths 1, 2 and 5 store almost exactly the same bytes.
@@ -308,7 +308,7 @@ Savings: 50% (16 MB)
 ```c
 /* Log entries with repeated text. Depth 1: only the head and tail nodes
  * stay uncompressed. */
-multilist *logs = multilistNew(FLEX_CAP_LEVEL_4096, 1);
+multilist *logs = multilistNewLimit(FLEX_CAP_LEVEL_4096, 1);
 mflexState *state = mflexStateCreate();
 
 for (int i = 0; i < 100000; i++) {
@@ -432,11 +432,11 @@ for (int i = 0; i < 1000; i++) {
 
 ```c
 /* Recent data: uncompressed for speed */
-multilist *recent = multilistNew(FLEX_CAP_LEVEL_4096, 10);
+multilist *recent = multilistNewLimit(FLEX_CAP_LEVEL_4096, 10);
 // compress=10: fast access to last 10 nodes each end
 
 /* Archive data: compressed for space */
-multilist *archive = multilistNew(FLEX_CAP_LEVEL_4096, 1);
+multilist *archive = multilistNewLimit(FLEX_CAP_LEVEL_4096, 1);
 // compress=1: aggressive compression
 
 /* Move old data to archive */

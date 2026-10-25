@@ -57,7 +57,7 @@ multiroar *r = multiroarBitNew();  // For set membership
 **multilist** (linked list of packed arrays):
 
 ```c
-multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 ```
 
 **flex** (compact variable-length array):

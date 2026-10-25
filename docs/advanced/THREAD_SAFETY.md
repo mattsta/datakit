@@ -407,7 +407,7 @@ typedef struct ThreadSafeQueue {
 
 ThreadSafeQueue *queueNew(size_t max_size) {
     ThreadSafeQueue *q = malloc(sizeof(*q));
-    q->queue = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    q->queue = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
     pthread_mutex_init(&q->lock, NULL);
     pthread_cond_init(&q->not_empty, NULL);
     pthread_cond_init(&q->not_full, NULL);
@@ -583,7 +583,7 @@ void *worker_function(void *arg) {
 
 /* Main coordinator */
 void parallel_process(WorkItem *items, int count, int num_threads) {
-    multilist *work_queue = multilistNew(FLEX_CAP_LEVEL_4096, 0);
+    multilist *work_queue = multilistNewLimit(FLEX_CAP_LEVEL_4096, 0);
     pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t work_available = PTHREAD_COND_INITIALIZER;
     bool shutdown = false;
