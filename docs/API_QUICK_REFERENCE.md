@@ -175,6 +175,18 @@ flexReset(&f);          // flex
 mflexReset(&mf);        // mflex
 ```
 
+### "I want the densest layout after many deletes"
+
+```c
+multimapCompact(&m);           // multimapCompactWithReference for references
+multiOrderedSetCompact(&mos);
+multilistCompact(&ml, state);
+multiarrayCompact(&ma);
+intsetCompact(&is);            // narrowest width tier its values allow
+```
+
+See [Tiered containers](modules/core/TIERS.md) for what each does.
+
 ---
 
 ## Insertion Operations
@@ -717,9 +729,12 @@ if (compressed) {
 
 ```c
 multimap *copy = multimapCopy(m);
+multiOrderedSet *copy = multiOrderedSetCopy(mos);
+multilist *copy = multilistCopy(ml);
+multiarray *copy = multiarrayCopy(ma);
+intset *copy = intsetCopy(is);
 flex *copy = flexDuplicate(f);
 mflex *copy = mflexDuplicate(mf);
-intset *copy = /* no copy function, recreate manually */;
 multiroar *copy = multiroarDuplicate(r);
 ```
 

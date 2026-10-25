@@ -3842,7 +3842,8 @@ int32_t multimapWidePersistSweep(void) {
             }
 
             if (multimapType_(multimapGetP(mp)) != plans[p].expect && n > 3) {
-                /* Deletes never shrink the tier, so the build reached it. */
+                /* A quarter of the rows deleted stays above every shrink
+                 * point, so the tier is still the one the build reached */
                 ERR("%s: built tier %d, expected %d", where,
                     (int)multimapType_(multimapGetP(mp)), (int)plans[p].expect);
             }
