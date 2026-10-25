@@ -202,10 +202,100 @@ void multiarrayInsert(multiarray **m, multiarrayIdx idx, void *what) {
     MULTIARRAY_NORETURN(*m, Insert, idx, what);
 }
 
+/* XOR-linked Large nodes: the node after 'node', walking from 'from' */
+#define multiarrayLargeStep_(from, node)                                       \
+    ((multiarrayLargeNode *)((uintptr_t)(from) ^ (uintptr_t)(node)->prevNext))
+
+/* Large -> Medium: the nodes move, in list order, into one node array; their
+ * element data is kept as it is */
+__attribute__((noinline)) static multiarrayMedium *
+multiarrayMediumFromLarge_(multiarrayLarge *large) {
+    const uint32_t nodes = large->nodes;
+    const uint16_t len = large->len;
+    const uint16_t rowMax = large->rowMax;
+    /* @own: container; free=multiarrayMediumFree */
+    multiarrayMediumNode *node = zcalloc(nodes, sizeof(*node));
+    uintptr_t prev = 0;
+    multiarrayLargeNode *cur = large->head;
+    for (uint32_t i = 0; cur; i++) {
+        assert(i < nodes);
+        node[i] = (multiarrayMediumNode){.data = cur->data,
+                                         .len = len,
+                                         .count = (uint16_t)cur->count,
+                                         .rowMax = rowMax};
+        multiarrayLargeNode *next = multiarrayLargeStep_(prev, cur);
+        prev = (uintptr_t)cur;
+        zfree(cur);
+        cur = next;
+    }
+
+    /* @own: caller; free=multiarrayMediumFree */
+    multiarrayMedium *med = zrealloc(large, sizeof(*med));
+    *med = (multiarrayMedium){
+        .node = node, .count = nodes, .len = len, .rowMax = rowMax};
+    return med;
+}
+
+/* Medium -> Small: the 'total' elements of at most two nodes, joined in the
+ * first node's buffer */
+__attribute__((noinline)) static multiarraySmall *
+multiarraySmallFromMedium_(multiarrayMedium *med, uint32_t total) {
+    const size_t len = med->len;
+    const uint16_t rowMax = med->rowMax;
+    uint32_t at = med->node[0].count;
+    /* @own: container; free=multiarraySmallFree */
+    uint8_t *data = zrealloc(med->node[0].data, len * (total ? total : 1));
+    for (uint32_t i = 1; i < med->count; i++) {
+        const multiarrayMediumNode *n = &med->node[i];
+        if (n->count) {
+            memcpy(data + len * at, n->data, len * n->count);
+            at += n->count;
+        }
+        zfree(n->data);
+    }
+    assert(at == total);
+    zfree(med->node);
+
+    /* @own: caller; free=multiarraySmallFree */
+    multiarraySmall *s = zrealloc(med, sizeof(*s));
+    *s = (multiarraySmall){.data = data,
+                           .len = (uint16_t)len,
+                           .count = (uint16_t)total,
+                           .rowMax = rowMax};
+    return s;
+}
+
+/* A drained array moves back down its tiers well below where it grew
+ * (Small -> Medium at rowMax elements, Medium -> Large at rowMax nodes), so
+ * it never flips at a boundary: Large holding rowMax/2 nodes or fewer
+ * becomes Medium, and Medium holding rowMax/2 elements or fewer in at most
+ * two nodes becomes Small.  Each tier's delete calls its own check, which
+ * reads a count the tier keeps: Small pays nothing, Medium and Large one
+ * compare when no tier changes. */
+DK_STATIC inline void multiarrayShrinkMedium_(multiarray **m,
+                                              multiarrayMedium *med) {
+    if (med->count > 2) {
+        return;
+    }
+    const uint32_t total =
+        med->node[0].count + (med->count == 2 ? med->node[1].count : 0);
+    if (total <= (uint32_t)med->rowMax / 2) {
+        *m = _MULTIARRAY_TAG(multiarraySmallFromMedium_(med, total),
+                             MULTIARRAY_TYPE_SMALL);
+    }
+}
+
+DK_STATIC inline void multiarrayShrinkLarge_(multiarray **m,
+                                             multiarrayLarge *large) {
+    if (large->nodes <= (uint32_t)large->rowMax / 2) {
+        multiarrayMedium *med = multiarrayMediumFromLarge_(large);
+        *m = _MULTIARRAY_TAG(med, MULTIARRAY_TYPE_MEDIUM);
+        multiarrayShrinkMedium_(m, med);
+    }
+}
+
 void multiarrayDelete(multiarray **m, const uint32_t index) {
-    /* TODO: auto-shrink behavior?  How to decide when to shrink
-     * from Large -> Medium -> Small? */
-    MULTIARRAY_NORETURN(*m, Delete, index);
+    multiarrayPop(m, index, NULL);
 }
 
 void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
@@ -215,9 +305,11 @@ void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
         break;
     case MULTIARRAY_TYPE_MEDIUM:
         multiarrayMediumDeleteTaking(marm(*m), (int32_t)idx, out);
+        multiarrayShrinkMedium_(m, marm(*m));
         break;
     case MULTIARRAY_TYPE_LARGE:
         multiarrayLargeDeleteTaking(marl(*m), (int32_t)idx, out);
+        multiarrayShrinkLarge_(m, marl(*m));
         break;
     default: /* native or NULL: refused, 'out' untouched */
         MA_NATIVE_REFUSED_(*m);
@@ -233,9 +325,11 @@ void multiarrayDeleteRange(multiarray **m, multiarrayIdx start,
         break;
     case MULTIARRAY_TYPE_MEDIUM:
         multiarrayMediumDeleteRange(marm(*m), start, count);
+        multiarrayShrinkMedium_(m, marm(*m));
         break;
     case MULTIARRAY_TYPE_LARGE:
         multiarrayLargeDeleteRange(marl(*m), start, count);
+        multiarrayShrinkLarge_(m, marl(*m));
         break;
     default: /* native or NULL: refused */
         MA_NATIVE_REFUSED_(*m);
@@ -264,10 +358,6 @@ void multiarrayRotate(multiarray **m) {
     multiarrayPop(m, (multiarrayIdx)(count - 1), tail);
     multiarrayInsert(m, 0, tail);
 }
-
-/* XOR-linked Large nodes: the node after 'node', walking from 'from' */
-#define multiarrayLargeStep_(from, node)                                       \
-    ((multiarrayLargeNode *)((uintptr_t)(from) ^ (uintptr_t)(node)->prevNext))
 
 void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
                             bool forward) {
@@ -685,8 +775,9 @@ static int multiarrayOracleSoak_(uint32_t lo, uint32_t hi, uint16_t rowMax,
         err += multiarrayOracleCheck_(m, oracle, n, r, what);
     }
 
-    /* Tiers never shrink, and fragmenting deletes can promote early: most
-     * operations must still have run in the intended tier */
+    /* The size stays above the tier's shrink point, and fragmenting deletes
+     * can promote early: most operations must still have run in the
+     * intended tier */
     if (inTier < ops / 2) {
         ERR("soak in [%" PRIu32 ", %" PRIu32 "] ran %" PRIu32 " of %" PRIu32
             " operations in tier %d",
@@ -777,11 +868,124 @@ static int multiarrayBoundsCheck_(uint32_t n, multiarrayType tier) {
     return err;
 }
 
+/* The tier rules once a change returns: Large only above rowMax/2 nodes,
+ * Medium only while too big for Small */
+static bool multiarrayTierSettled_(const multiarray *m) {
+    dkTierStats s;
+    multiarrayStats(m, &s);
+    const uint32_t half = multiarrayRowMax(m) / 2;
+    switch (s.tier) {
+    case MULTIARRAY_TYPE_LARGE:
+        return s.units > half;
+    case MULTIARRAY_TYPE_MEDIUM:
+        return s.units > 2 || s.count > half;
+    default:
+        return true;
+    }
+}
+
+/* How a drain deletes */
+typedef enum multiarrayDrainBy {
+    MULTIARRAY_DRAIN_POP_TAIL,
+    MULTIARRAY_DRAIN_DELETE_ANYWHERE,
+    MULTIARRAY_DRAIN_DELETE_RANGES,
+} multiarrayDrainBy;
+
+/* Fill a rowMax-8 array to Large, then delete everything by 'by', checking
+ * every step against an oracle and the tier rules.  Each time the tier
+ * drops, one append must not grow it back (the hysteresis), and popping
+ * that append restores the array.  The drain must pass through Medium and
+ * end Small. */
+static int multiarrayDrainCheck_(multiarrayDrainBy by, uint64_t seed) {
+    int err = 0;
+    const uint16_t rowMax = 8;
+    const uint32_t fill = 400;
+    cleaner(multiarrayFree) multiarray *m = multiarrayNew(sizeof(s16), rowMax);
+    cleanerName(zfree, S16) s16 *oracle = zcalloc(fill + 1, sizeof(*oracle));
+    for (uint32_t i = 0; i < fill; i++) {
+        oracle[i] = (s16){.a = i, .b = -(int64_t)i};
+        multiarrayInsert(&m, i, &oracle[i]);
+    }
+    if (_multiarrayType(m) != MULTIARRAY_TYPE_LARGE) {
+        ERR("drain %d: %" PRIu32 " elements built tier %d", by, fill,
+            _multiarrayType(m));
+        return err;
+    }
+
+    uint32_t n = fill;
+    bool sawMedium = false;
+    while (n && !err) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        const uint32_t r = (uint32_t)(seed >> 33);
+        const multiarrayType before = _multiarrayType(m);
+        uint32_t at = r % n;
+        uint32_t gone = 1;
+        if (by == MULTIARRAY_DRAIN_POP_TAIL) {
+            at = n - 1;
+            s16 got;
+            multiarrayPop(&m, at, &got);
+            if (got.a != oracle[at].a) {
+                ERR("drain %d: Pop(%" PRIu32 ") returned %" PRId64
+                    ", oracle %" PRId64,
+                    by, at, got.a, oracle[at].a);
+            }
+        } else if (by == MULTIARRAY_DRAIN_DELETE_ANYWHERE) {
+            multiarrayDelete(&m, at);
+        } else {
+            const uint32_t most = n - at < 2u * rowMax ? n - at : 2u * rowMax;
+            gone = 1 + (r >> 8) % most;
+            multiarrayDeleteRange(&m, at, gone);
+        }
+        memmove(&oracle[at], &oracle[at + gone],
+                (n - at - gone) * sizeof(*oracle));
+        n -= gone;
+
+        const multiarrayType after = _multiarrayType(m);
+        sawMedium |= after == MULTIARRAY_TYPE_MEDIUM;
+        if (!multiarrayTierSettled_(m)) {
+            dkTierStats s;
+            multiarrayStats(m, &s);
+            ERR("drain %d: %" PRIu32 " elements in %u nodes left tier %d", by,
+                n, s.units, after);
+        }
+
+        if (after < before) {
+            s16 extra = {.a = -1, .b = -1};
+            multiarrayInsert(&m, n, &extra);
+            if (_multiarrayType(m) != after) {
+                ERR("drain %d: one append after dropping to tier %d grew it "
+                    "to %d",
+                    by, after, _multiarrayType(m));
+            }
+            s16 back;
+            multiarrayPop(&m, n, &back);
+            if (back.a != -1) {
+                ERR("drain %d: the append popped back as %" PRId64, by, back.a);
+            }
+        }
+
+        err += multiarrayOracleCheck_(m, oracle, n, r, "a drain step");
+    }
+
+    if (!sawMedium || _multiarrayType(m) != MULTIARRAY_TYPE_SMALL) {
+        ERR("drain %d: saw Medium %d, ended in tier %d", by, sawMedium,
+            _multiarrayType(m));
+    }
+
+    return err;
+}
+
 int multiarrayTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("a drained array moves back down its tiers, never flapping") {
+        err += multiarrayDrainCheck_(MULTIARRAY_DRAIN_POP_TAIL, 11);
+        err += multiarrayDrainCheck_(MULTIARRAY_DRAIN_DELETE_ANYWHERE, 12);
+        err += multiarrayDrainCheck_(MULTIARRAY_DRAIN_DELETE_RANGES, 13);
+    }
 
     TEST("indexes and ranges outside the array are refused and reported, "
          "per tier") {

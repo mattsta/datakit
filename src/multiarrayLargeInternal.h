@@ -16,11 +16,16 @@ typedef struct multiarrayLargeNode {
  * 'tail' is a direct pointer to the tail of the doubly linked xor node list.
  * 'len' is the width of every data entry inside every node.
  * 'rowMax' is the maximum number of entires in each node before we create
- *          a new node. */
+ *          a new node.
+ * 'nodes' is the length of the list, so the tier knows when it is small
+ *         enough to move back to Medium without walking it. */
 struct multiarrayLarge {
     multiarrayLargeNode *head;
     multiarrayLargeNode *tail;
     uint16_t len;    /* width of individual node->data entires */
     uint16_t rowMax; /* maximum entries per node before creating new node */
-    /* 4 bytes padding */
+    uint32_t nodes;  /* nodes in the list (at least one) */
 };
+
+_Static_assert(sizeof(struct multiarrayLarge) == 24,
+               "multiarrayLarge is 24 bytes");

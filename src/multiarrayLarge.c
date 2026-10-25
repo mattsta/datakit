@@ -25,6 +25,7 @@ multiarrayLarge *multiarrayLargeNew(uint16_t len, uint16_t rowMax) {
     /* @own: container; free=multiarrayLargeFree */
     e->head = zcalloc(1, sizeof(*e->head));
     e->tail = e->head;
+    e->nodes = 1;
     return e;
 }
 
@@ -35,6 +36,7 @@ multiarrayLargeNodeInsertAfter(multiarrayLarge *mar,
 multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     const uint16_t len = medium->len;
     const uint16_t rowMax = medium->rowMax;
+    const uint32_t nodes = medium->count;
 
     multiarrayLarge tmp = {0};
     multiarrayLargeNode *head = NULL;
@@ -67,6 +69,7 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     e->tail = tmp.tail ? tmp.tail : head;
     e->len = len;
     e->rowMax = rowMax;
+    e->nodes = nodes;
 
     return e;
 }
@@ -138,6 +141,7 @@ void multiarrayLargeStats(const multiarrayLarge *mar, dkTierStats *out) {
         prev = loopCurrentE;
     }
 
+    assert(nodes == mar->nodes);
     const uint64_t data = count * mar->len;
     *out = (dkTierStats){.count = count,
                          .dataBytes = data,
@@ -212,7 +216,8 @@ DK_STATIC void multiarrayLargeNodeDelete(multiarrayLarge *mar,
         mar->tail = prev;
     }
 
-    assert(mar->head && mar->tail);
+    assert(mar->head && mar->tail && mar->nodes > 1);
+    mar->nodes--;
 
     /* Goodbye node */
     zfree(worker.current->data);
@@ -250,6 +255,7 @@ multiarrayLargeNodeInsertAfter(multiarrayLarge *mar,
     if (!next) {
         mar->tail = newNode;
     }
+    mar->nodes++;
 }
 
 DK_STATIC void multiarrayLargeNodeInsert(multiarrayLarge *mar,
@@ -282,6 +288,7 @@ DK_STATIC void multiarrayLargeNodeInsert(multiarrayLarge *mar,
     if (!prev) {
         mar->head = newNode;
     }
+    mar->nodes++;
 }
 
 /* Append the node after 'current' (whose neighbour before is 'prev') to

@@ -1008,6 +1008,7 @@ static const simSeqOps simSequences[] = {
      .stats = mlStats,
      .walk = mlWalk},
     {.name = "multiarray",
+     .shrinks = true,
      .coalesces = true,
      .growTo = 3000,
      .make = maMake,

@@ -673,13 +673,25 @@ front of it — plus, in Medium, a realloc and memmove of the node array.
 Appending writes into the tail node instead, and a full tail node splits off a
 single-element node with nothing to copy.
 
-### Nothing shrinks back
+### A drained array moves back down
 
-`multiarrayDelete()` reallocs node data downwards and frees emptied nodes, but
-there is no Large -> Medium or Medium -> Small demotion (there is an explicit
-`TODO` in `multiarray.c`). A container that spiked to ten million elements and
-drained back to ten keeps its Large representation and its 16-byte node per
-surviving chunk.
+`multiarrayDelete()`, `multiarrayPop()` and `multiarrayDeleteRange()` free
+emptied nodes, merge sparse neighbours, and move the array back down its
+tiers well below where it grew: Large at `rowMax / 2` nodes or fewer becomes
+Medium, and Medium holding `rowMax / 2` elements or fewer in at most two nodes
+becomes Small. A container that spiked to ten million elements and drained
+back to ten ends as one Small array. The gap between the growth and shrink
+points means one insert after a shrink never grows the array back.
+
+```c
+multiarray *m = multiarrayNew(sizeof(uint64_t), 64);
+/* ... grows to Large ... */
+multiarrayDeleteRange(&m, 0, multiarrayCount(m) - 10); /* may rewrite m */
+/* m is Small again */
+```
+
+The Native macro API keeps its own ladder (Native -> Medium -> Large) and
+never demotes; keep a native array on the macros.
 
 ## See Also
 

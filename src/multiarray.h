@@ -171,6 +171,14 @@ void multiarrayFree(multiarray *m);
 void *multiarrayGet(multiarray *m, multiarrayIdx idx);
 void *multiarrayGetHead(multiarray *m);
 void *multiarrayGetTail(multiarray *m);
+/* Inserts grow the tier (Small -> Medium at rowMax elements, Medium ->
+ * Large at rowMax nodes); Delete, Pop and DeleteRange move a drained array
+ * back down (Large -> Medium at rowMax/2 nodes or fewer, Medium -> Small at
+ * rowMax/2 elements or fewer in at most two nodes).  Any of them may
+ * rewrite '*m': keep the pointer they were given.  An array the Native
+ * macros made stays with the macros, even once they promoted it to Medium
+ * or Large: a container delete may turn it into a Small, which the macros
+ * don't handle. */
 void multiarrayInsert(multiarray **m, multiarrayIdx idx, void *what);
 void multiarrayDelete(multiarray **m, const uint32_t index);
 

@@ -14,8 +14,14 @@ Which promotions you get depends on which entry point you used:
 | `multiarrayNew()`       | Small     | Small -> Medium -> Large  |
 | `multiarrayNativeNew()` | Native    | Native -> Medium -> Large |
 
-Nothing ever demotes. `multiarrayDelete()` shrinks node data arrays and drops
-empty nodes, but a Large stays Large.
+The container API also moves down: after a delete, pop or range delete, a
+Large holding `rowMax / 2` nodes or fewer becomes Medium (its nodes move into
+one node array, element data kept in place), and a Medium holding
+`rowMax / 2` elements or fewer in at most two nodes becomes Small (one
+buffer). Large keeps its node count in its struct, so the check is one
+compare. The Native macro API never demotes, and an array it made must stay
+on it: a container delete could turn its Medium into a Small, which the
+macros don't handle.
 
 ## Summary Table
 

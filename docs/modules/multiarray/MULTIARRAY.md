@@ -89,9 +89,12 @@ stops in the end node, and the landing offset tells), so an in-range call
 costs what it did: the perfRegression `multiarray` rows show Small and Large
 Get unchanged and Medium Get within its run-to-run spread.
 
-There is no automatic _demotion_. `multiarrayDelete()` shrinks nodes but never
-converts Large back to Medium or Medium back to Small (there is an explicit
-`TODO` about this in `multiarray.c`).
+Deletes demote a drained array, well below the growth points so a tier never
+flips at a boundary: `multiarrayDelete()`, `multiarrayPop()` and
+`multiarrayDeleteRange()` move Large to Medium at `rowMax / 2` nodes or fewer
+and Medium to Small at `rowMax / 2` elements or fewer (in at most two nodes).
+Each may rewrite `*m`. The Native macro API never demotes; an array it made
+stays on it.
 
 ## Data Structures
 
