@@ -1213,24 +1213,37 @@ int multidictPTest(int argc, char *argv[]) {
         multidictAddP(d, &other, &newer, NULL);
         const int level = multidictGetLRULevel(multidictGetP(d), &key);
 
-        persistCtxTestRefusal refusal;
-        if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
-            ERRR("could not arm a refusing WAL");
-        }
-        const persistLogResult replaced = multidictReplaceP(d, &key, &newer);
-        const persistLogResult deleted = multidictDeleteP(d, &key);
-        persistCtxTestRefuseLogsEnd(ctx, &refusal);
+        const databox fresh = databoxNewBytesString("fresh");
+        multidictResult added = MULTIDICT_OK_REPLACED;
+        PTEST_EXPECT_REFUSED(
+            ctx, multidictReplaceP(d, &key, &newer), multidictDeleteP(d, &key),
+            multidictAddP(d, &key, &newer, &added),
+            multidictAddP(d, &fresh, &newer, &added), multidictEmptyP(d));
 
         databox got = {{0}};
-        if (replaced != PERSIST_LOG_REFUSED || deleted != PERSIST_LOG_REFUSED ||
-            !multidictFindP(d, &key, &got) ||
-            databoxCompare(&got, &kept) != 0 || multidictCountP(d) != 2) {
-            ERR("a refused replace (%d) or delete (%d) changed the dict",
-                replaced, deleted);
+        if (!multidictFindP(d, &key, &got) ||
+            databoxCompare(&got, &kept) != 0 || multidictCountP(d) != 2 ||
+            multidictExistsP(d, &fresh) || added != MULTIDICT_ERR) {
+            ERRR("a refused change changed the dict");
         }
         if (multidictGetLRULevel(multidictGetP(d), &key) < level) {
             ERRR("a refused change lost the key's LRU level");
         }
+
+        /* Missing arguments: refused or empty answers */
+        if (multidictAddP(NULL, &key, &newer, NULL) ||
+            multidictAddP(d, NULL, &newer, NULL) ||
+            multidictReplaceP(NULL, &key, &newer) ||
+            multidictDeleteP(NULL, &key) || multidictEmptyP(NULL) ||
+            multidictNewP(NULL) || multidictOpenP(NULL) ||
+            multidictGetP(NULL) || multidictCountP(NULL) ||
+            multidictBytesP(NULL) || multidictFindP(NULL, &key, &got) ||
+            multidictExistsP(NULL, &key) || multidictSyncP(NULL) ||
+            multidictCompactP(NULL)) {
+            ERRR("a call without its wrapper or key was not refused");
+        }
+        multidictGetStatsP(NULL, NULL);
+        multidictCloseP(NULL);
 
         /* Logging works again, and a reopen holds only what was logged */
         if (multidictReplaceP(d, &key, &newer) == PERSIST_LOG_REFUSED) {

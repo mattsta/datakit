@@ -1144,27 +1144,36 @@ static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
 
-    persistCtxTestRefusal refusal;
-    if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
-        ERRR("could not arm a refusing WAL");
-    }
     bool changed = true;
-    const persistLogResult bits[] = {
-        multiroarBitSetP(r, 6, &changed),
-        multiroarBitSetP(r, UINT64_C(1) << 40, &changed),
-        multiroarRemoveP(r, 5, &changed),
-        multiroarRemoveP(r, 70000, &changed),
-        multiroarRemoveP(r, 210000, &changed),
-    };
-    persistCtxTestRefuseLogsEnd(ctx, &refusal);
-    for (size_t i = 0; i < COUNT_ARRAY(bits); i++) {
-        if (bits[i] != PERSIST_LOG_REFUSED) {
-            ERR("bit change %zu not refused (%d)", i, bits[i]);
-        }
-    }
+    PTEST_EXPECT_REFUSED(ctx, multiroarBitSetP(r, 6, &changed),
+                         multiroarBitSetP(r, UINT64_C(1) << 40, &changed),
+                         multiroarRemoveP(r, 5, &changed),
+                         multiroarRemoveP(r, 70000, &changed),
+                         multiroarRemoveP(r, 210000, &changed),
+                         multiroarBitSetRangeP(r, 300000, 9000),
+                         multiroarBitClearRangeP(r, 200000, 20000));
     if (changed || !multiroarEquals(multiroarGetRawP(r), want)) {
         ERRR("a refused bit change changed the roar");
     }
+
+    /* Missing arguments, and value calls on a bit roar: refused or empty
+     * answers */
+    uint64_t pos = 0;
+    const databox one = databoxNewUnsigned(1);
+    if (multiroarBitSetP(NULL, 1, NULL) || multiroarRemoveP(NULL, 1, NULL) ||
+        multiroarBitSetRangeP(NULL, 0, 1) ||
+        multiroarBitSetRangeP(r, 0, 0) != PERSIST_LOG_UNCHANGED ||
+        multiroarValueSetP(r, 1, &one) || multiroarValueRemoveP(r, 1, NULL) ||
+        multiroarNewP(NULL) || multiroarOpenP(NULL) || multiroarGetRawP(NULL) ||
+        multiroarBitCountP(NULL) || multiroarMemoryUsageP(NULL) ||
+        !multiroarIsEmptyP(NULL) || multiroarBitGetP(NULL, 5) ||
+        multiroarMinP(NULL, &pos) || multiroarMaxP(NULL, &pos) ||
+        multiroarRankP(NULL, 5) || multiroarSelectP(NULL, 0, &pos) ||
+        multiroarSyncP(NULL) || multiroarCompactP(NULL)) {
+        ERRR("a call without its wrapper was not refused");
+    }
+    multiroarGetStatsP(NULL, NULL);
+    multiroarCloseP(NULL);
     if (multiroarBitSetP(r, 6, NULL) == PERSIST_LOG_REFUSED) {
         ERRR("the context did not log again after the refusal");
     }
@@ -1188,22 +1197,34 @@ static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
     cleaner(multiroarFree) multiroar *wantValues =
         multiroarDuplicate(multiroarGetRawP(r));
 
-    if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
-        ERRR("could not arm a refusing WAL");
+    const databox v50 = databoxNewUnsigned(50);
+    PTEST_EXPECT_REFUSED(ctx, multiroarValueRemoveP(r, 7, &changed),
+                         multiroarValueRemoveP(r, 9, &changed),
+                         multiroarValueSetP(r, 7, &v50),
+                         multiroarValueSetP(r, 11, &v50));
+    if (multiroarValueRemoveP(r, 500, &changed) != PERSIST_LOG_UNCHANGED ||
+        changed || !multiroarEquals(multiroarGetRawP(r), wantValues)) {
+        ERRR("refused value changes changed the roar");
     }
-    const persistLogResult values[] = {
-        multiroarValueRemoveP(r, 7, &changed),
-        multiroarValueRemoveP(r, 9, &changed),
-    };
-    const persistLogResult absent = multiroarValueRemoveP(r, 500, &changed);
-    persistCtxTestRefuseLogsEnd(ctx, &refusal);
-    if (values[0] != PERSIST_LOG_REFUSED || values[1] != PERSIST_LOG_REFUSED ||
-        absent != PERSIST_LOG_UNCHANGED || changed ||
-        !multiroarEquals(multiroarGetRawP(r), wantValues)) {
-        ERR("refused value removes (%d, %d; absent %d) changed the roar",
-            values[0], values[1], absent);
+
+    /* Bit calls on a value roar, and values it cannot store, are refused */
+    const databox wide = databoxNewUnsigned(256);
+    const databox negative = databoxNewSigned(-1);
+    const databox text = databoxNewBytesString("x");
+    if (multiroarBitSetP(r, 1, NULL) || multiroarBitSetRangeP(r, 0, 4) ||
+        multiroarValueSetP(r, 1, &wide) ||
+        multiroarValueSetP(r, 1, &negative) ||
+        multiroarValueSetP(r, 1, &text) || multiroarValueSetP(r, 1000, &v50) ||
+        multiroarValueSetP(r, 1, NULL) || multiroarValueSetP(NULL, 1, &v50) ||
+        multiroarValueRemoveP(NULL, 1, NULL) ||
+        multiroarValueNewP(NULL, 8, 1, 1) ||
+        multiroarValueGetP(NULL, 7, NULL) || multiroarValueCountP(NULL)) {
+        ERRR("a value call the roar cannot take was not refused");
     }
-    if (multiroarValueRemoveP(r, 7, NULL) == PERSIST_LOG_REFUSED) {
+
+    /* Logging works again, and a remove reports itself */
+    if (multiroarValueRemoveP(r, 7, &changed) == PERSIST_LOG_REFUSED ||
+        !changed) {
         ERRR("the context did not log again after the refusal");
     }
     multiroarValueRemoveGetRemoved(wantValues, 7, NULL);

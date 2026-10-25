@@ -1046,28 +1046,27 @@ int intsetPTest(int argc, char *argv[]) {
             intsetAddP(is, held[i], NULL);
         }
 
-        persistCtxTestRefusal refusal;
-        if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
-            ERRR("could not arm a refusing WAL");
-        }
         bool changed = true;
-        const persistLogResult results[] = {
-            intsetAddP(is, 8, &changed),
-            intsetAddP(is, INT64_MAX, &changed),
-            intsetRemoveP(is, 7, &changed),
-            intsetRemoveP(is, -3, &changed),
-        };
-        const persistLogResult present = intsetAddP(is, 300, &changed);
-        persistCtxTestRefuseLogsEnd(ctx, &refusal);
-        for (size_t i = 0; i < COUNT_ARRAY(results); i++) {
-            if (results[i] != PERSIST_LOG_REFUSED) {
-                ERR("change %zu not refused (%d)", i, results[i]);
-            }
-        }
-        if (present != PERSIST_LOG_UNCHANGED || changed ||
+        PTEST_EXPECT_REFUSED(ctx, intsetAddP(is, 8, &changed),
+                             intsetAddP(is, INT64_MAX, &changed),
+                             intsetRemoveP(is, 7, &changed),
+                             intsetRemoveP(is, -3, &changed));
+        if (intsetAddP(is, 300, &changed) != PERSIST_LOG_UNCHANGED || changed ||
             !intsetPHolds_(intsetGetRawP(is), held, COUNT_ARRAY(held))) {
             ERRR("a refused change changed the set");
         }
+
+        /* Missing arguments: refused or empty answers */
+        int64_t at = 0;
+        if (intsetAddP(NULL, 1, NULL) || intsetRemoveP(NULL, 1, NULL) ||
+            intsetNewP(NULL) || intsetOpenP(NULL) || intsetGetRawP(NULL) ||
+            intsetCountP(NULL) || intsetBytesP(NULL) || intsetFindP(NULL, 1) ||
+            intsetGetAtP(NULL, 0, &at) || intsetGetAtP(is, 0, NULL) ||
+            intsetSyncP(NULL) || intsetCompactP(NULL)) {
+            ERRR("a call without its wrapper was not refused");
+        }
+        intsetGetStatsP(NULL, NULL);
+        intsetCloseP(NULL);
 
         /* Logging works again, and a reopen holds only what was logged */
         if (intsetAddP(is, 40000, NULL) == PERSIST_LOG_REFUSED) {

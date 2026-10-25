@@ -1233,22 +1233,17 @@ int multimapPTest(int argc, char *argv[]) {
         multimapInsertP(m, row1, NULL);
         multimapInsertP(m, row2, NULL);
 
-        persistCtxTestRefusal refusal;
-        if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
-            ERRR("could not arm a refusing WAL");
-        }
         int64_t now1 = -1;
         int64_t now2 = -1;
-        const persistLogResult inserted = multimapInsertIfNotExistsP(m, row3);
-        const persistLogResult incr1 = multimapFieldIncrP(m, &k1, 1, 1, &now1);
-        const persistLogResult incr2 = multimapFieldIncrP(m, &k2, 1, 1, &now2);
-        const persistLogResult deleted = multimapDeleteFullWidthP(m, row2);
-        persistCtxTestRefuseLogsEnd(ctx, &refusal);
-
-        if (inserted != PERSIST_LOG_REFUSED || incr1 != PERSIST_LOG_REFUSED ||
-            incr2 != PERSIST_LOG_REFUSED || deleted != PERSIST_LOG_REFUSED) {
-            ERR("not refused: insert %d, increments %d %d, delete %d", inserted,
-                incr1, incr2, deleted);
+        bool replaced = true;
+        PTEST_EXPECT_REFUSED(ctx, multimapInsertIfNotExistsP(m, row3),
+                             multimapFieldIncrP(m, &k1, 1, 1, &now1),
+                             multimapFieldIncrP(m, &k2, 1, 1, &now2),
+                             multimapDeleteFullWidthP(m, row2),
+                             multimapInsertP(m, row3, &replaced),
+                             multimapDeleteP(m, &k1), multimapResetP(m));
+        if (replaced) {
+            ERRR("a refused insert reported a replace");
         }
         if (now1 != 1 || now2 != 9) {
             ERR("refused increments reported %" PRId64 " and %" PRId64
@@ -1267,7 +1262,30 @@ int multimapPTest(int argc, char *argv[]) {
             ERRR("a refused increment changed a field's value or type");
         }
 
-        /* Logging works again, and a reopen holds only what was logged */
+        /* Missing arguments: refused or empty answers */
+        multimapIterator iter;
+        if (multimapInsertP(NULL, row1, NULL) ||
+            multimapInsertIfNotExistsP(NULL, row1) ||
+            multimapDeleteP(NULL, &k1) ||
+            multimapDeleteFullWidthP(NULL, row1) || multimapResetP(NULL) ||
+            multimapFieldIncrP(NULL, &k1, 1, 1, NULL) ||
+            multimapNewP(NULL, 2) || multimapOpenP(NULL) ||
+            multimapGetP(NULL) || multimapCountP(NULL) ||
+            multimapBytesP(NULL) || multimapExistsP(NULL, &k1) ||
+            multimapLookupP(NULL, &k1, out) || multimapSyncP(NULL) ||
+            multimapCompactP(NULL)) {
+            ERRR("a call without its wrapper was not refused");
+        }
+        multimapIteratorInitP(NULL, &iter, true);
+        multimapGetStatsP(NULL, NULL);
+        multimapCloseP(NULL);
+
+        /* Logging works again (a replace reports itself), and a reopen
+         * holds only what was logged */
+        if (multimapInsertP(m, row1, &replaced) == PERSIST_LOG_REFUSED ||
+            !replaced) {
+            ERRR("a logged replace did not report itself");
+        }
         if (multimapFieldIncrP(m, &k1, 1, 1, &now1) == PERSIST_LOG_REFUSED ||
             now1 != 2) {
             ERRR("the context did not log again after the refusal");

@@ -930,25 +930,46 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
             const databox kept = databoxNewBytesString("m00005");
             const databox ghost = databoxNewBytesString("absent");
 
-            persistCtxTestRefusal refusal;
-            if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
-                ERRR("could not arm a refusing WAL");
-            }
-            const persistLogResult removed = multiOrderedSetRemoveP(mos, &kept);
-            const persistLogResult absent = multiOrderedSetRemoveP(mos, &ghost);
-            persistCtxTestRefuseLogsEnd(ctx, &refusal);
+            const databox high = databoxNewSigned(99);
+            bool updated = true;
+            PTEST_EXPECT_REFUSED(
+                ctx, multiOrderedSetRemoveP(mos, &kept),
+                multiOrderedSetAddP(mos, &high, &kept, &updated),
+                multiOrderedSetAddP(mos, &high, &ghost, &updated),
+                multiOrderedSetResetP(mos));
 
             databox score = {{0}};
-            if (removed != PERSIST_LOG_REFUSED ||
-                absent != PERSIST_LOG_UNCHANGED ||
+            if (multiOrderedSetRemoveP(mos, &ghost) != PERSIST_LOG_UNCHANGED ||
                 multiOrderedSetCountP(mos) != (size_t)sizes[s] ||
                 !multiOrderedSetGetScoreP(mos, &kept, &score) ||
-                score.data.i64 != 5) {
-                ERR("%d members: a refused remove (%d; absent %d) changed "
-                    "the set",
-                    sizes[s], removed, absent);
+                score.data.i64 != 5 || multiOrderedSetExistsP(mos, &ghost) ||
+                updated) {
+                ERR("%d members: a refused change changed the set", sizes[s]);
             }
-            if (multiOrderedSetRemoveP(mos, &kept) == PERSIST_LOG_REFUSED) {
+
+            /* Missing arguments: refused or empty answers */
+            if (multiOrderedSetAddP(NULL, &high, &kept, NULL) ||
+                multiOrderedSetAddP(mos, NULL, &kept, NULL) ||
+                multiOrderedSetRemoveP(NULL, &kept) ||
+                multiOrderedSetRemoveP(mos, NULL) ||
+                multiOrderedSetResetP(NULL) || multiOrderedSetNewP(NULL) ||
+                multiOrderedSetOpenP(NULL) || multiOrderedSetGetRawP(NULL) ||
+                multiOrderedSetCountP(NULL) || multiOrderedSetBytesP(NULL) ||
+                multiOrderedSetExistsP(NULL, &kept) ||
+                multiOrderedSetGetScoreP(NULL, &kept, &score) ||
+                multiOrderedSetSyncP(NULL) || multiOrderedSetCompactP(NULL)) {
+                ERRR("a call without its wrapper or member was not refused");
+            }
+            multiOrderedSetGetStatsP(NULL, NULL);
+            multiOrderedSetCloseP(NULL);
+
+            /* Logging works again (an update reports itself) */
+            const databox six = databoxNewSigned(6);
+            const databox next6 = databoxNewBytesString("m00006");
+            if (multiOrderedSetRemoveP(mos, &kept) == PERSIST_LOG_REFUSED ||
+                multiOrderedSetAddP(mos, &six, &next6, &updated) ==
+                    PERSIST_LOG_REFUSED ||
+                !updated) {
                 ERRR("the context did not log again after the refusal");
             }
             multiOrderedSetCloseP(mos);
