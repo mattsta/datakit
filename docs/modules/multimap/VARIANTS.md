@@ -584,11 +584,11 @@ IDs stay below `MULTIMAP_ATOM_ID_LIMIT` (2^63).
 How IDs are handed out and reused is chosen at creation. None adds a byte per
 atom:
 
-| Behaviour | Create with | Last Release | IDs reused | Extra memory |
-| --- | --- | --- | --- | --- |
-| Reusing | `multimapAtomNew()` | deletes the atom | where free to find: deleting the highest ID lowers the next ID to just past the largest live one, and an emptied table restarts at 0; interior holes wait | none |
-| Permanent (Erlang-style) | `multimapAtomNewPermanent()` | changes nothing: atoms live until Delete or Free | never, not even after a Delete | none |
-| Lowest first | `multimapAtomDenseNew()` (`multimapAtomDense.h`) | deletes the atom | every freed ID, lowest first | a `multiroar` of holes: ~2 B per isolated hole, none without holes |
+| Behaviour                | Create with                                      | Last Release                                     | IDs reused                                                                                                                                                | Extra memory                                                       |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Reusing                  | `multimapAtomNew()`                              | deletes the atom                                 | where free to find: deleting the highest ID lowers the next ID to just past the largest live one, and an emptied table restarts at 0; interior holes wait | none                                                               |
+| Permanent (Erlang-style) | `multimapAtomNewPermanent()`                     | changes nothing: atoms live until Delete or Free | never, not even after a Delete                                                                                                                            | none                                                               |
+| Lowest first             | `multimapAtomDenseNew()` (`multimapAtomDense.h`) | deletes the atom                                 | every freed ID, lowest first                                                                                                                              | a `multiroar` of holes: ~2 B per isolated hole, none without holes |
 
 The permanent behaviour is the counter's top bit, so it costs no bytes;
 `multimapAtomIsPermanent()` reports it. `multimapAtomDense` is a parallel
@@ -611,25 +611,25 @@ reuses the most recently freed ID first.
 
 `persistOpsMultimapAtom` (`atomPersist.h`, type id 140) keeps every ID
 exactly: a restored table resolves the same IDs and hands out the same IDs
-next.  The snapshot is the behaviour flag, the next ID and each atom's (ID,
+next. The snapshot is the behaviour flag, the next ID and each atom's (ID,
 value, count) in ID order; values are stored exactly, so `"22"` stays bytes.
 Restore rebuilds the reverse map from the values sorted once, instead of one
 search per atom (perf preset, 100k atoms: snapshot 66 ns, restore 641 ns per
-atom, against 2.2 µs per atom to intern them again).  WAL ops: `INSERT [id,
+atom, against 2.2 µs per atom to intern them again). WAL ops: `INSERT [id,
 value]` (a new atom with one reference), `NUM_INCR [id, +1 | -1]` (retain;
 release, the last one deleting), `DELETE [id]`.
 
 `persistOpsMultimapAtomDense` (type id 141) writes its base table's snapshot
 and the same WAL ops: the IDs in use determine the next ID and the free set,
-so the holes cost no bytes in the snapshot.  Replaying an `INSERT` takes
+so the holes cost no bytes in the snapshot. Replaying an `INSERT` takes
 exactly its ID out of the free set.
 
 `persistOpsStringPool` (type id 142) snapshots the ID behaviour, the next ID,
 each string's (ID, bytes, count) and every free ID below the next ID (the
 reusing stack in order, since it hands out the most recently freed ID first),
-so a snapshot's length bounds what restore allocates.  WAL ops: `INSERT [id,
+so a snapshot's length bounds what restore allocates. WAL ops: `INSERT [id,
 bytes]` (refused unless it is the ID the pool hands out next), `NUM_INCR [id,
-+1 | -1]`, `CLEAR` (Reset).  Perf preset, 100k strings: snapshot 40 ns,
++1 | -1]`, `CLEAR` (Reset). Perf preset, 100k strings: snapshot 40 ns,
 restore 270 ns per string.
 
 `persistOpsAtomPool` (type id 143) wraps its backend's snapshot (stringPool's,

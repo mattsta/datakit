@@ -16,7 +16,6 @@ from pathlib import Path
 
 from dktools import cli, vendorsync
 from dktools.gitutil import ToolError
-
 from repofixture import IsolatedGitEnv, TempRepo
 
 DEST = vendorsync.VENDORED["varint"]

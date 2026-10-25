@@ -99,7 +99,7 @@ def blob_id(data: bytes, object_format: str) -> str:
 def _worktree(path: Path) -> tuple[str, bytes] | None:
     """(mode, content) of a working-tree file, None when absent."""
     if path.is_symlink():
-        return "120000", os.readlink(path).encode("utf-8", "surrogateescape")
+        return "120000", str(path.readlink()).encode("utf-8", "surrogateescape")
     if path.is_file():
         mode = "100755" if os.access(path, os.X_OK) else "100644"
         return mode, path.read_bytes()
@@ -273,7 +273,7 @@ def apply(repo: Path, dest: str, p: Plan) -> None:
             target.unlink()
         data = p.blobs[entry.oid]
         if entry.mode == "120000":
-            os.symlink(data.decode("utf-8", "surrogateescape"), target)
+            target.symlink_to(data.decode("utf-8", "surrogateescape"))
             continue
         target.write_bytes(data)
         target.chmod(0o755 if entry.mode == "100755" else 0o644)

@@ -1,7 +1,7 @@
 # multiOrderedSet
 
 A sorted set of `(score, member)` pairs: members are unique, pairs iterate in
-ascending score, and a member's score and rank are found by the member.  It
+ascending score, and a member's score and rank are found by the member. It
 answers what a sorted map cannot cheaply: "what is X's score", "what rank is
 X", alongside score ranges, ranks and set algebra.
 
@@ -26,7 +26,7 @@ tier as it grows.
 
 Pairs sort by score, then by member, both with `databoxCompare`: numbers by
 value across integer and real types, and bytes in natural order (a digit run
-compares as a number, so `"m2"` sorts before `"m10"`).  Rank 0 is the lowest
+compares as a number, so `"m2"` sorts before `"m10"`). Rank 0 is the lowest
 score; negative ranks count from the end (`-1` is the highest).
 
 Scores and members may be any databox the set can store, 96/128-bit integers
@@ -37,11 +37,11 @@ a wide value lands when it is read.
 
 The set promotes itself as it grows (never back; `Reset` empties it):
 
-| tier | layout | member lookup | finding a score's place |
-| --- | --- | --- | --- |
-| Small | one flex of `[score, member, ...]` | scan | binary search |
-| Medium | two flexes split by score | scan of both | binary search |
-| Full | a multidict member -> score, plus sub-maps (flexes of about 4 KB) holding the rows in order | hash | binary search to the sub-map, then within it |
+| tier   | layout                                                                                      | member lookup | finding a score's place                      |
+| ------ | ------------------------------------------------------------------------------------------- | ------------- | -------------------------------------------- |
+| Small  | one flex of `[score, member, ...]`                                                          | scan          | binary search                                |
+| Medium | two flexes split by score                                                                   | scan of both  | binary search                                |
+| Full   | a multidict member -> score, plus sub-maps (flexes of about 4 KB) holding the rows in order | hash          | binary search to the sub-map, then within it |
 
 In Small and Medium a rank by member is a scan, as the member lookup is.
 
@@ -52,20 +52,20 @@ needs, so ties cost what distinct scores do.
 
 ## Operations and their cost (Full tier)
 
-| operation | cost |
-| --- | --- |
-| `Add` / `AddNX` / `AddXX` / `AddGetPrevious` / `IncrBy` | hash lookup + O(log sub-maps) routing + one sub-map insert |
-| `Remove` / `RemoveGetScore` / `RemoveIf` | hash lookup + routing + one sub-map delete (`RemoveIf` asks its `flexProceed` once the member is found; a no changes nothing) |
-| `Exists` / `GetScore` | hash lookup |
-| `GetRank` / `GetReverseRank` | hash lookup + routing + counts of the sub-maps toward the nearer end |
-| `GetByRank` / `IteratorInitAtRank` | counts of the sub-maps toward the nearer end, then within one sub-map |
-| `CountByScore` / `IteratorInitAtScore` | O(log sub-maps) seek to the range start, then the rows in range |
-| `RemoveRangeByScore` / `RemoveRangeByRank` / `PopMin` | seek, then one delete per sub-map touched |
-| `PopMax` | from the last sub-map, row by row (deleting from a tail moves nothing) |
-| iteration | O(1) per step |
+| operation                                               | cost                                                                                                                          |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `Add` / `AddNX` / `AddXX` / `AddGetPrevious` / `IncrBy` | hash lookup + O(log sub-maps) routing + one sub-map insert                                                                    |
+| `Remove` / `RemoveGetScore` / `RemoveIf`                | hash lookup + routing + one sub-map delete (`RemoveIf` asks its `flexProceed` once the member is found; a no changes nothing) |
+| `Exists` / `GetScore`                                   | hash lookup                                                                                                                   |
+| `GetRank` / `GetReverseRank`                            | hash lookup + routing + counts of the sub-maps toward the nearer end                                                          |
+| `GetByRank` / `IteratorInitAtRank`                      | counts of the sub-maps toward the nearer end, then within one sub-map                                                         |
+| `CountByScore` / `IteratorInitAtScore`                  | O(log sub-maps) seek to the range start, then the rows in range                                                               |
+| `RemoveRangeByScore` / `RemoveRangeByRank` / `PopMin`   | seek, then one delete per sub-map touched                                                                                     |
+| `PopMax`                                                | from the last sub-map, row by row (deleting from a tail moves nothing)                                                        |
+| iteration                                               | O(1) per step                                                                                                                 |
 
 Rank positioning is linear in the number of sub-maps (about one per 4 KB of
-rows).  That is cheap through hundreds of thousands of members; a set far
+rows). That is cheap through hundreds of thousands of members; a set far
 larger that is rank-heavy would want per-node row totals (not built).
 
 Measured numbers per operation live in
@@ -95,20 +95,20 @@ set removes nothing).
 
 ## Set operations
 
-`Union`, `Intersect` and `Difference` build a new set from `sets[]`.  Union and
+`Union`, `Intersect` and `Difference` build a new set from `sets[]`. Union and
 intersection weight each input's scores (`weights` NULL means 1.0) and combine
-a member's scores with `MOS_AGGREGATE_SUM`, `MIN` or `MAX`, as doubles.  Union
+a member's scores with `MOS_AGGREGATE_SUM`, `MIN` or `MAX`, as doubles. Union
 adds each member with one search of the result.
 
 ## Persistence
 
 `multiOrderedSetP` (`persist/multiOrderedSetP.h`) wraps a set in a
 `persistCtx`: `AddP`, `RemoveP` and `ResetP` log before they change the set,
-reads go straight to it, and `OpenP` recovers it.  See
+reads go straight to it, and `OpenP` recovers it. See
 [PERSIST.md](../persist/PERSIST.md).
 
 ## Choosing it
 
 Use multiOrderedSet when lookups go by member (a player's score, an item's
-rank) as well as by order.  When everything goes by score (the key), a
+rank) as well as by order. When everything goes by score (the key), a
 `multimap` keyed by score is smaller and inserts faster.

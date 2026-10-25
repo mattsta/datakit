@@ -756,7 +756,7 @@ user-visible truncation wants graphemes.
 Grapheme boundaries follow the UAX #29 rules decided by adjacent pairs:
 CR LF, controls, Hangul syllable sequences, combining marks, the zero width
 joiner and non-joiner, emoji skin-tone modifiers and tag characters stay
-attached.  Two rules need more than a pair and are approximated: an emoji
+attached. Two rules need more than a pair and are approximated: an emoji
 ZWJ sequence joins on ZWJ + pictograph without checking what precedes the
 ZWJ, and consecutive regional indicators always join, so two adjacent flags
 count as one cluster.

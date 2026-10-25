@@ -189,10 +189,10 @@ cmake --build build-dev --target datakit-quickcheck  # ctest --output-on-failure
 `dktools validate` builds a commit in a clean export, in every configured
 compiler and preset, and runs the whole suite. It has two tiers:
 
-| Tier            | Command                                   | Skips                                                                                 | Use for        |
-| --------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- | -------------- |
+| Tier            | Command                                   | Skips                                                                                                        | Use for        |
+| --------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------- |
 | quick (default) | `uv run --project tools dktools validate` | the slow set in every build (`--slow`), plus the debug/tsan slow set (`--debug-slow`); both empty by default | iterative work |
-| full            | `... validate --full`                     | nothing but the benchmarks and vendored suites                                        | milestones     |
+| full            | `... validate --full`                     | nothing but the benchmarks and vendored suites                                                               | milestones     |
 
 In every tier a preset also skips the tests it cannot judge (`--tsan-skip`:
 the wall-clock nonce-log test, which TSan's instrumentation breaks). The
@@ -413,7 +413,7 @@ totals for the library sources, the least-covered files, and the public API
 (every function declared in a `src/` header) split into called by the tests,
 never called, and not built in the test binary (platform- or
 configuration-only code such as the Linux `OSRegulate` calls and the x86 SIMD
-variants).  A new public function belongs in the "called" list: add a test
+variants). A new public function belongs in the "called" list: add a test
 that calls it.
 
 ### The persistence contract (persistContract)
@@ -438,7 +438,7 @@ configuration, and holds it to one frozen contract:
 
 It prints one table row per type (elements, snapshot bytes and ns per element,
 restore ns per element, WAL ops replayed, damaged snapshots refused and
-accepted).  A new descriptor adds a generator under `src/persist/contract/` and
+accepted). A new descriptor adds a generator under `src/persist/contract/` and
 an entry in the registry; a type that cannot meet the contract is fixed, never
 excused.
 

@@ -20,10 +20,9 @@ import time
 import unittest
 from pathlib import Path
 
+import prochelpers
 from dktools import procs
 from dktools.gitutil import ToolError
-
-import prochelpers
 from prochelpers import SLEEP_FOREVER, command, wait_gone
 
 HERE = Path(__file__).resolve().parent
@@ -98,7 +97,7 @@ class Run(Scratch):
     def test_run_to_file_timeout_keeps_output_and_kills_the_group(self) -> None:
         pidfile = self.tmp / "grandchild.pid"
         log = self.tmp / "log"
-        with open(log, "wb") as out:
+        with log.open("wb") as out:
             out.write(b"header\n")
             with self.assertRaises(procs.TimedOut):
                 procs.run_to_file(
@@ -127,7 +126,7 @@ class Run(Scratch):
         thread.start()
         try:
             with (
-                open(self.tmp / "log", "wb") as out,
+                (self.tmp / "log").open("wb") as out,
                 self.assertRaises(KeyboardInterrupt),
             ):
                 procs.run_to_file(
@@ -141,19 +140,20 @@ class Run(Scratch):
         self.assertEqual(wait_gone([int(self.wait_for_file(pidfile))]), [])
 
     def test_streaming_kills_on_an_exception(self) -> None:
-        with tempfile.TemporaryFile() as err:
-            with self.assertRaises(RuntimeError):
-                with procs.streaming(SLEEP_FOREVER, err) as proc:
-                    raise RuntimeError("consumer failed")
+        with (
+            tempfile.TemporaryFile() as err,
+            self.assertRaises(RuntimeError),
+            procs.streaming(SLEEP_FOREVER, err) as proc,
+        ):
+            raise RuntimeError("consumer failed")
         self.assertIsNotNone(proc.returncode)
         self.assertEqual(wait_gone([proc.pid]), [])
 
     def test_signals_deferred_redelivers(self) -> None:
-        with self.assertRaises(KeyboardInterrupt):
-            with procs.signals_deferred():
-                os.kill(os.getpid(), signal.SIGINT)
-                time.sleep(0.2)  # a handler would have run by now
-                finished = True
+        with self.assertRaises(KeyboardInterrupt), procs.signals_deferred():
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(0.2)  # a handler would have run by now
+            finished = True
         self.assertTrue(finished)
 
 
@@ -203,8 +203,7 @@ class ParallelMap(Scratch):
     def test_workers_exit_when_the_parent_is_killed(self) -> None:
         # The killed parent's resource tracker warns about the queue
         # semaphores it reclaims; keep that out of the test output.
-        stderr = open(self.tmp / "pool-parent.err", "wb")
-        self.addCleanup(stderr.close)
+        stderr = self.enterContext((self.tmp / "pool-parent.err").open("wb"))
         parent = subprocess.Popen(
             command("pool-parent", str(self.tmp)),
             cwd=HERE,

@@ -53,9 +53,32 @@ PRIVATE_HEADER = re.compile(
 #: Identifiers that look like a function name before '(' but are not:
 #: return types of function-pointer declarations and keywords.
 NOT_A_NAME = frozenset(
-    "void int char short long unsigned signed float double bool size_t "
-    "ssize_t const struct union enum return sizeof typedef static extern "
-    "inline volatile restrict".split()
+    [
+        "void",
+        "int",
+        "char",
+        "short",
+        "long",
+        "unsigned",
+        "signed",
+        "float",
+        "double",
+        "bool",
+        "size_t",
+        "ssize_t",
+        "const",
+        "struct",
+        "union",
+        "enum",
+        "return",
+        "sizeof",
+        "typedef",
+        "static",
+        "extern",
+        "inline",
+        "volatile",
+        "restrict",
+    ]
 )
 
 
@@ -105,7 +128,7 @@ class PublicApi:
 
 
 def _strip_comments_and_preprocessor(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
     text = re.sub(r"//[^\n]*", " ", text)
     out: list[str] = []
     continuing = False
@@ -151,7 +174,7 @@ def declared_functions(header_text: str, templates: bool = False) -> list[str]:
             # its parentheses close so it cannot swallow the next statement
             if ch == ")" and parens == 0:
                 so_far = "".join(current).strip()
-                if re.fullmatch(r"[A-Z_][A-Z0-9_]*\s*\(.*\)", so_far, re.S):
+                if re.fullmatch(r"[A-Z_][A-Z0-9_]*\s*\(.*\)", so_far, re.DOTALL):
                     statements.append(so_far)
                     current = []
     names: list[str] = []
@@ -175,9 +198,11 @@ def declared_functions(header_text: str, templates: bool = False) -> list[str]:
 
 _DK_NAME_RE = re.compile(
     r"^\s*#\s*define\s+([A-Z_][A-Z0-9_]*)\s+DK_NAME\(\s*(\w+)\s*,\s*(\w+)\s*\)",
-    re.M,
+    re.MULTILINE,
 )
-_DEFINE_WORD_RE = re.compile(r"^\s*#\s*define\s+(\w+)\s+([A-Za-z_]\w*)\s*$", re.M)
+_DEFINE_WORD_RE = re.compile(
+    r"^\s*#\s*define\s+(\w+)\s+([A-Za-z_]\w*)\s*$", re.MULTILINE
+)
 
 
 def template_functions(header_text: str) -> list[str]:
@@ -270,8 +295,7 @@ def parse_export_summary(
     files: list[FileCoverage] = []
     for item in data["files"]:
         path = item["filename"]
-        if path.startswith(root):
-            path = path[len(root) :]
+        path = path.removeprefix(root)
         s = item["summary"]
         files.append(
             FileCoverage(
@@ -383,7 +407,7 @@ def parse_lcov(text: str, source_root: Path) -> dict[str, LcovFile]:
     for raw in text.splitlines():
         tag, _, rest = raw.partition(":")
         if tag == "SF":
-            path = rest[len(root) :] if rest.startswith(root) else rest
+            path = rest.removeprefix(root)
             cur = files.setdefault(path, LcovFile())
         elif cur is None:
             continue

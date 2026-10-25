@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import os
 import sys
 import tempfile
 import time
@@ -86,7 +85,7 @@ class Run(unittest.TestCase):
     def fake(self, body: str) -> Path:
         script = self.dir / "fake-test"
         script.write_text(f"#!{sys.executable}\nimport sys, time\n{body}\n")
-        os.chmod(script, 0o755)
+        script.chmod(0o755)
         return script
 
     def run_tool(self, binary: Path, timeout: float = 30.0) -> tuple[int, str]:

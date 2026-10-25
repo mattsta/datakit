@@ -146,7 +146,10 @@ class Pairs(unittest.TestCase):
         """
         self.assertEqual(
             scan(src),
-            [("f", "intsetFind", "intsetAdd", "v"), ("g", "intsetFind", "intsetRemove", "v")],
+            [
+                ("f", "intsetFind", "intsetAdd", "v"),
+                ("g", "intsetFind", "intsetRemove", "v"),
+            ],
         )
 
 
@@ -169,7 +172,9 @@ class Command(unittest.TestCase):
                 code = cli.main(["--repo", str(repo), "fusionscan"])
             self.assertEqual(code, 0)
             self.assertIn("1 read-then-write pairs in 1 functions", err.getvalue())
-            self.assertIn("| src/a.c | `f` | 2: `intsetFind` | 2: `intsetAdd`", out.getvalue())
+            self.assertIn(
+                "| src/a.c | `f` | 2: `intsetFind` | 2: `intsetAdd`", out.getvalue()
+            )
 
 
 if __name__ == "__main__":

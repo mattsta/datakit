@@ -22,7 +22,6 @@ from unittest import mock
 from dktools import leakcheck, steps, toolchain, validate
 from dktools.gitutil import ToolError
 from dktools.steps import Step
-
 from repofixture import IsolatedGitEnv, TempRepo
 
 PASS = "100% tests passed out of 3\n"

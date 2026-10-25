@@ -68,7 +68,7 @@ def parse_tsv(path: Path) -> dict[tuple[str, str, int], PerfRow]:
     """Parse the PERF rows of a perfRegression TSV, keyed by row key."""
     rows: dict[tuple[str, str, int], PerfRow] = {}
     try:
-        with open(path, encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             for line_no, raw in enumerate(f, start=1):
                 line = raw.rstrip("\n")
                 if not line.startswith("PERF\t"):

@@ -78,7 +78,7 @@ def run_logged(
     if env is not None:
         full_env = dict(os.environ)
         full_env.update(env)
-    with open(log, "wb") as out:
+    with log.open("wb") as out:
         out.write(("$ " + " ".join(cmd) + "\n").encode())
         try:
             code = procs.run_to_file(cmd, out, cwd=cwd, env=full_env, timeout=timeout)
@@ -437,7 +437,9 @@ def targets_for_tests(
     for test, command in commands.items():
         targets = [
             artifacts[real]
-            for real in (os.path.realpath(arg) for arg in command if os.path.isabs(arg))
+            for real in (
+                os.path.realpath(arg) for arg in command if Path(arg).is_absolute()
+            )
             if real in artifacts
         ]
         if targets:

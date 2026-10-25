@@ -645,9 +645,8 @@ class Volatile(unittest.TestCase):
             repo.cleanup()
 
     def test_learning_needs_the_same_sources_and_a_cached_run(self) -> None:
-        from repofixture import IsolatedGitEnv, TempRepo
-
         from dktools.procs import ToolError
+        from repofixture import IsolatedGitEnv, TempRepo
 
         repo = TempRepo()
         try:

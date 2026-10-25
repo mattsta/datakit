@@ -73,18 +73,18 @@ directly to `multiarrayMediumNewWithData()` as node 0. The container ladder
 never uses Native: given a native multiarray, `multiarrayGet()` and the
 other container calls refuse with a defined answer (0 / NULL, no change,
 an iterator that yields nothing) and report a `DK_DIAG_MULTIARRAY_NATIVE`
-misuse diagnostic ([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)).  NULL is
+misuse diagnostic ([DIAGNOSTICS.md](../core/DIAGNOSTICS.md)). NULL is
 refused the same way without a report.
 
-Indexes are checked on every tier, in every build.  Insert takes an index up
+Indexes are checked on every tier, in every build. Insert takes an index up
 to the count (the append); Get, Replace, Delete, Pop and IteratorInitAt take
 an element that exists; DeleteRange takes a range inside the array (an empty
-range changes nothing).  Outside that, Get answers NULL, the iterator yields
+range changes nothing). Outside that, Get answers NULL, the iterator yields
 nothing, and a change is refused with the array (and Pop's `out`) unchanged;
-each reports `DK_DIAG_MULTIARRAY_INDEX`.  GetHead and GetTail answer NULL for
-an empty array.  The container's `multiarrayIdx` counts from the front on
+each reports `DK_DIAG_MULTIARRAY_INDEX`. GetHead and GetTail answer NULL for
+an empty array. The container's `multiarrayIdx` counts from the front on
 every tier (an index of 2^31 or more is just out of range, never "from the
-end").  The checks sit where each tier already finds the index (the node walk
+end"). The checks sit where each tier already finds the index (the node walk
 stops in the end node, and the landing offset tells), so an in-range call
 costs what it did: the perfRegression `multiarray` rows show Small and Large
 Get unchanged and Medium Get within its run-to-run spread.
@@ -222,8 +222,8 @@ Notes:
   occupy (so "insert after element `i`" is `multiarrayInsert(&m, i + 1, x)`).
 - To visit every element, use the iterator: each `multiarrayIteratorNext()` is
   O(1) amortized, while `multiarrayGet(m, i)` on a Medium or Large array walks
-  nodes from the front, so a `Get` loop is quadratic.  `Next` returns a pointer
-  to the element in place; the array must not change during the walk.  The
+  nodes from the front, so a `Get` loop is quadratic. `Next` returns a pointer
+  to the element in place; the array must not change during the walk. The
   iterator is a stack struct and needs no release.
 
 `multiarrayInsert()`, `multiarrayDelete()`, `multiarrayPop()`,
@@ -286,7 +286,7 @@ Contract details that are easy to get wrong:
 - The Get macros are statements, not expressions: they write into `result`.
 - `localCount` / `count` are **your** counters. Insert increments them; delete
   decrements them. The macros never read a count out of the container.
-- Indexes are yours to keep in range.  The bare Native stage is a C array and
+- Indexes are yours to keep in range. The bare Native stage is a C array and
   checks nothing; once promoted, Medium and Large refuse and report an index
   outside the array (Get answers NULL), but the macro still moves your
   counter, so a refused call leaves it one off.
@@ -345,11 +345,11 @@ void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx);
     ((mar)->count ? multiarraySmallGet(mar, (mar)->count - 1) : NULL)
 ```
 
-`multiarraySmallGet()` returns `uint8_t *`; cast it to your element type.  It
+`multiarraySmallGet()` returns `uint8_t *`; cast it to your element type. It
 is an unchecked address, as for a C array (the container's `multiarrayGet()`
-checks the index).  `multiarraySmallInsert()` accepts `idx <= mar->count`
+checks the index). `multiarraySmallInsert()` accepts `idx <= mar->count`
 (append position included); the deletes require `idx < mar->count` (a range:
-inside the array).  Anything else is refused and reported, as above.
+inside the array). Anything else is refused and reported, as above.
 
 ```c
 multiarraySmall *small = multiarraySmallNew(sizeof(int64_t), 512);
@@ -449,7 +449,7 @@ void multiarrayMediumFree(multiarrayMedium *e);
 
 `multiarrayMediumGet()` accepts a **negative** index meaning "from the tail":
 `-1` is the last element. `multiarrayMediumGetForward()` takes a `uint32_t` and
-has no reverse mode.  Either answers NULL for an index outside the array.
+has no reverse mode. Either answers NULL for an index outside the array.
 
 `multiarrayMediumFromSmall()` consumes the Small: it `zrealloc()`s the
 `multiarraySmall` allocation into the `multiarrayMedium` and reuses its data
@@ -557,14 +557,14 @@ tiers always keep at least one node alive (its contents are zeroed instead).
 
 `N` is the element count, `K` the node count (`K ~= N / rowMax`).
 
-| Operation    | Small             | Medium                         | Large                          |
-| ------------ | ----------------- | ------------------------------ | ------------------------------ |
-| `Get`        | O(1)              | O(K) node scan + O(1)          | O(K) list walk + O(1)          |
-| `GetForward` | n/a               | O(K) node scan + O(1)          | O(K) list walk + O(1)          |
-| `Insert`     | O(N) realloc+move | O(K + rowMax)                  | O(K + rowMax)                  |
-| `Delete`     | O(N) realloc+move | O(K + rowMax)                  | O(K + rowMax)                  |
-| `GetHead`    | O(1)              | O(1)                           | O(1)                           |
-| `GetTail`    | O(1)              | O(1)                           | O(1)                           |
+| Operation    | Small             | Medium                | Large                 |
+| ------------ | ----------------- | --------------------- | --------------------- |
+| `Get`        | O(1)              | O(K) node scan + O(1) | O(K) list walk + O(1) |
+| `GetForward` | n/a               | O(K) node scan + O(1) | O(K) list walk + O(1) |
+| `Insert`     | O(N) realloc+move | O(K + rowMax)         | O(K + rowMax)         |
+| `Delete`     | O(N) realloc+move | O(K + rowMax)         | O(K + rowMax)         |
+| `GetHead`    | O(1)              | O(1)                  | O(1)                  |
+| `GetTail`    | O(1)              | O(1)                  | O(1)                  |
 
 `GetForward` is **not** a stateful iterator. It does not memoize the previous
 traversal position; it is the forward-only entry point (no negative-index

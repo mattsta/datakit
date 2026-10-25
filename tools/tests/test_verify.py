@@ -22,10 +22,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from dktools import steps, cli, toolchain, verify
-from dktools.steps import Step
+from dktools import cli, steps, toolchain, verify
 from dktools.gitutil import ToolError
-
+from dktools.steps import Step
 from repofixture import IsolatedGitEnv, TempRepo
 
 CTEST_PASS = """\
@@ -721,9 +720,8 @@ class VerifyRun(unittest.TestCase):
             ({"staged": True}, "--staged: index matches HEAD, nothing to verify"),
             ({"all_changed": True}, "--all-changed: no tracked changes, nothing"),
         ):
-            with self.subTest(kw=kw):
-                with self.assertRaisesRegex(ToolError, f"^{why}"):
-                    self.run_verify(FakeRunner({}, self.PASSING), specs=[], **kw)
+            with self.subTest(kw=kw), self.assertRaisesRegex(ToolError, f"^{why}"):
+                self.run_verify(FakeRunner({}, self.PASSING), specs=[], **kw)
         # An unchanged PATH builds plain HEAD on purpose.
         code, out = self.run_verify(FakeRunner({}, self.PASSING), specs=["src/a.c"])
         self.assertEqual(code, 0, out)

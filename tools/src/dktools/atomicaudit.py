@@ -164,7 +164,7 @@ LOCAL_REASONS = ("timing", "signal")
 
 EDGE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*\Z")
 #: The whole comment is the tag: prose goes in a comment of its own.
-TAG_RE = re.compile(r"\A(?:/\*|//)\s*@sync:(?P<body>.*?)(?:\*/)?\s*\Z", re.S)
+TAG_RE = re.compile(r"\A(?:/\*|//)\s*@sync:(?P<body>.*?)(?:\*/)?\s*\Z", re.DOTALL)
 TAG_LOOSE_RE = re.compile(r"@sync\b")
 
 

@@ -628,7 +628,9 @@ def _dispatch(args: argparse.Namespace) -> int:
             return 0
         print(outputaudit.summary_line(result))
         for s in result.by_category("unrequested"):
-            print(f"  UNREQUESTED {s.path}:{s.line}: {s.call} to {s.target} in {s.context}")
+            print(
+                f"  UNREQUESTED {s.path}:{s.line}: {s.call} to {s.target} in {s.context}"
+            )
         return 0 if result.clean else 1
 
     if args.command == "fusionscan":

@@ -66,8 +66,8 @@ directly above the operation:
 claims (UNDER-ORDERED and OVER-ORDERED are both violations), that the
 order is valid for the operation, that every named edge has both a
 publishing and an observing side, and that a seq_cst edge is seq_cst
-everywhere.  `report` prints the edge map: who publishes and who
-observes each edge.  The grammar and rules are in
+everywhere. `report` prints the edge map: who publishes and who
+observes each edge. The grammar and rules are in
 `src/dktools/atomicaudit.py`.
 
 ```sh
@@ -78,14 +78,14 @@ uv run dktools atomicaudit report               # markdown edge map
 
 It is enforced as the ctest test `atomicOrdering` (registered beside
 `allocOwnership`), and `verify` and `validate` run it on the tree they
-build (the `atomic` line).  Clang builds add `-Watomic-implicit-seq-cst`,
+build (the `atomic` line). Clang builds add `-Watomic-implicit-seq-cst`,
 which catches the operator forms (`x++` on an `_Atomic`) a lexical audit
 cannot see.
 
 ## outputaudit — library writes to stdout/stderr
 
 datakit runs inside other applications, which own the process's standard
-streams.  `outputaudit` lists every call in `src/` that writes to stdout
+streams. `outputaudit` lists every call in `src/` that writes to stdout
 or stderr (`printf`, `fprintf(stderr, ...)`, `write(2, ...)`, ...),
 outside in-file test code, and sorts each: `unrequested` (printed without
 the caller asking), `debug` (only under a DEBUG/VERBOSE/NOISY/TRACE/DBG/
@@ -93,7 +93,7 @@ DUMP switch or `#ifndef NDEBUG`), `dead` (`#if 0`), `requested` (inside a
 Repr/Print/Dump/Say/Show function), `tool` (the operator tools dataspeed
 and memtest, whose output is their job) and `test` (test-only files).
 Writes to a stream the caller passed in are the caller's output and not
-listed.  Library code reports misuse and conditions through dkDiag
+listed. Library code reports misuse and conditions through dkDiag
 (`src/dkDiag.h`) instead of printing.
 
 ```sh
@@ -111,12 +111,12 @@ build (the `output` line).
 a container by a key (a call whose name after its family is Find, Exists,
 Lookup, Get, Contains, Has, Search or Peek) and then writes the same
 container by the same key (Insert, Add, Delete, Remove, Replace, Set,
-Incr, Update, Push, Append, Resize, Del, Put).  Families are the header
+Incr, Update, Push, Append, Resize, Del, Put). Families are the header
 names under `src/`, longest first, so `multiOrderedSetExists` is family
-`multiOrderedSet`; containers and keys compare by root identifier.  A read
+`multiOrderedSet`; containers and keys compare by root identifier. A read
 whose result a write takes (the write acts where the read landed) is not
-paired.  Test-only files, in-file test code, `#if 0` and macro bodies are
-skipped.  It is a review list, not a gate: some pairs are needed (the read
+paired. Test-only files, in-file test code, `#if 0` and macro bodies are
+skipped. It is a review list, not a gate: some pairs are needed (the read
 decides what the write cannot).
 
 ```sh
@@ -317,7 +317,7 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
 
 - Exports REV (default HEAD) like validate, builds the `coverage`
   preset (clang 22, Release, `-fprofile-instr-generate
-  -fcoverage-mapping`, no sanitizers), runs every test with its own
+-fcoverage-mapping`, no sanitizers), runs every test with its own
   profile file (the serial set alone, as validate does), and merges
   the profiles with `llvm-profdata`.
 - Reports, over the library sources (`deps/`, `*Test.c`, `*Bench.c`
@@ -330,7 +330,7 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   counters in the test binary: a declaration without a definition, or
   a platform's).
 - Lists the functions any `src/` header defines inline (`static inline`,
-  `DK_INLINE_ALWAYS`) that no compiled copy ran.  Such a function gets
+  `DK_INLINE_ALWAYS`) that no compiled copy ran. Such a function gets
   one copy per including file, so a header's own line numbers also count
   the unused copies of functions that do run; summed by name over the
   copies, this list holds only the ones that never ran anywhere.
@@ -338,16 +338,16 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   build, no tests), for changes to the report itself.
 - A module's in-file tests (`#ifdef DATAKIT_TEST` blocks) count in the
   llvm-cov totals, and their failure branches never run in a passing
-  suite.  The "Library code" totals and the per-file tables leave them
+  suite. The "Library code" totals and the per-file tables leave them
   out (per-line counts from `llvm-cov export -format=lcov`; a header's
   inline function counts as run if any copy ran).
 - The coverage ratchet: `tools/coverage-baseline.json` records each
-  file's uncovered library lines and branches.  A run fails (exit 1)
+  file's uncovered library lines and branches. A run fails (exit 1)
   when any file has more of either than its baseline, lists the files
   that improved and the new ones, and `--update-baseline` writes the
   run's figures to the working tree (commit it with the tests that
-  earned it).  A run that regressed is not written unless
-  `--accept-regressions` says the drop is intended.  When the baseline commit's run is still under
+  earned it). A run that regressed is not written unless
+  `--accept-regressions` says the drop is intended. When the baseline commit's run is still under
   `ROOT/coverage/`, a regression also lists each newly uncovered line
   and branch with its source (matched by source text, so line shifts
   from edits don't count); otherwise re-run coverage at that commit.
@@ -356,15 +356,15 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   then drift by one or wrap, which read as coverage changes.
 - Volatile points: coverage that depends on thread scheduling (a CAS
   that fails only under contention, a child process that exits first)
-  differs between runs of the same sources.  The baseline lists such
+  differs between runs of the same sources. The baseline lists such
   points (kind, source line and the line before it) and every count
-  leaves them out.  `--learn-volatile` finds them by diffing two runs of
+  leaves them out. `--learn-volatile` finds them by diffing two runs of
   the same sources: a second run at the same commit keeps the first as
   `ROOT/coverage/<hash>.prev` and diffs against it; otherwise it diffs
   against the baseline commit's cached run, if `src/` and the CMake files
-  match.  Every point that differs is added and the baseline rewritten.
+  match. Every point that differs is added and the baseline rewritten.
   It refuses a failed run, changed sources, or more than 100 differing
-  points (not noise).  A point that is lucky in the baseline run but
+  points (not noise). A point that is lucky in the baseline run but
   missed in both reruns shows as a regression: review it and record it
   with `--accept-regressions`; a later rerun that flips it learns it.
 - `--detail FILE` (repeatable, repo-relative) reads the earlier run for
@@ -501,14 +501,14 @@ uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
 ```
 
 - `current` is HEAD plus every changed tracked path (as `verify
-  --all-changed`); `base` is REV with the benchmark sources
+--all-changed`); `base` is REV with the benchmark sources
   (`--bench-path`, default `src/perfRegression.c` and `.h`) taken from
   the working tree, so a benchmark added for the change also times the
-  base.  Both build only `datakit-test`, with the perf preset (gcc15:
+  base. Both build only `datakit-test`, with the perf preset (gcc15:
   release), under `ROOT/perfcompare/NAME/{base,current}`.
 - `datakit-test test perfRegression` runs on the two builds alternately,
   `--runs` times each (default 5; the first side alternates by round),
-  limited to `--modules` through `DK_PERF_MODULES`.  Each run is kept as
+  limited to `--modules` through `DK_PERF_MODULES`. Each run is kept as
   `run-<side>-<round>.tsv`.
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only

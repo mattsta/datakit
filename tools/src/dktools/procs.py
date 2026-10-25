@@ -41,7 +41,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import IO, Any, TypeVar
 
@@ -159,26 +159,20 @@ def kill_group(proc: subprocess.Popen, grace: float = KILL_GRACE) -> None:
     other ends open forever.  Never raises for an already-dead group."""
     with signals_deferred():
         _signal_group(proc, signal.SIGTERM)
-        try:
+        with suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            pass
         _signal_group(proc, signal.SIGKILL)
         for stream in (proc.stdin, proc.stdout, proc.stderr):
             if stream is not None:
-                try:
+                with suppress(OSError):
                     stream.close()
-                except OSError:
-                    pass
         proc.wait()
 
 
 def _signal_group(proc: subprocess.Popen, sig: int) -> None:
-    try:
+    # Gone, or (macOS) only zombies are left in the group.
+    with suppress(ProcessLookupError, PermissionError):
         os.killpg(proc.pid, sig)
-    except (ProcessLookupError, PermissionError):
-        # Gone, or (macOS) only zombies are left in the group.
-        pass
 
 
 def _popen(
@@ -405,16 +399,12 @@ def _abandon_pool(pool: ProcessPoolExecutor) -> None:
         manager = getattr(pool, "_executor_manager_thread", None)
         pool.shutdown(wait=False, cancel_futures=True)
         for worker in workers:
-            try:
+            with suppress(OSError, ValueError):
                 worker.kill()
-            except (OSError, ValueError):
-                pass
         sentinels = []
         for worker in workers:
-            try:
+            with suppress(ValueError):
                 sentinels.append(worker.sentinel)
-            except ValueError:
-                pass
         deadline = time.monotonic() + POOL_JOIN_GRACE
         while sentinels and time.monotonic() < deadline:
             ready = multiprocessing.connection.wait(

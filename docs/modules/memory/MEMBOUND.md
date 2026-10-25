@@ -331,7 +331,7 @@ callback and call `memboundCompact`.
   Each refusal is also reported as a `DK_DIAG_MEMBOUND_INVALID_FREE`
   diagnostic naming the pointer and the reason
   ([diagnostics](../core/DIAGNOSTICS.md)): read it with `dkDiagLast`, or
-  install a hook to log it.  `memboundStats.safetyViolations` stays the
+  install a hook to log it. `memboundStats.safetyViolations` stays the
   cheap checkpoint count — a non-zero value is a bug in your code; assert it
   is zero at checkpoints in debug builds.
 - **Lifetime/peak/pressure/lock stats are STANDARD and ENTERPRISE only.** On

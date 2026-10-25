@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 ##
 ## Name:     findthreshold.py
 ## Purpose:  Find a good threshold for recursive multiplication.
@@ -21,9 +21,13 @@
 ## obtain a useful value for your workload.  Change the value of MP_MULT_THRESH
 ## in imath.h once you have a satisfactory result.
 ##
-import math, os, random, sys, time
+import os
+import sys
+import time
+from pathlib import Path
 
-def get_timing_stats(num_tests, precision, threshold, seed = None):
+
+def get_timing_stats(num_tests, precision, threshold, seed=None):
     """Obtain timing statistics for multiplication.
 
     num_tests      -- number of tests to run.
@@ -37,53 +41,57 @@ def get_timing_stats(num_tests, precision, threshold, seed = None):
     """
     if seed is None:
         seed = int(time.time())
-    
-    line = os.popen('./imtimer -mn -p %d -t %d -s %d %d' %
-                    (precision, threshold, seed, num_tests), 'r').readline()
-    
-    count, prec, bits, thresh, status = line.strip().split('\t')
+
+    line = os.popen(
+        f"./imtimer -mn -p {precision} -t {threshold} -s {seed} {num_tests}", "r"
+    ).readline()
+
+    count, prec, bits, thresh, status = line.strip().split("\t")
     kind, total, unit = status.split()
 
     return seed, int(bits), float(total)
 
+
 def check_binary(name):
-    if not os.path.exists(name):
-        os.system('make %s' % name)
-        if not os.path.exists(name):
-            raise ValueError("Unable to build %s" % name)
-    elif not os.path.isfile(name):
+    path = Path(name)
+    if not path.exists():
+        os.system(f"make {name}")
+        if not path.exists():
+            raise ValueError(f"Unable to build {name}")
+    elif not path.is_file():
         raise ValueError("Path exists with wrong type")
 
+
 def compute_stats():
-    check_binary('imtimer')
+    check_binary("imtimer")
     seed = int(time.time())
 
-    print >> sys.stderr, "Computing timer statistics (this may take a while)"
+    print("Computing timer statistics (this may take a while)", file=sys.stderr)
     stats = {}
     for prec in (32, 40, 64, 80, 128, 150, 256, 384, 512, 600, 768, 1024):
-        sys.stderr.write('%-4d ' % prec)
-        stats[prec] = (None, 1000000., 0.)
-    
-        for thresh in xrange(16, 65, 2):
+        sys.stderr.write(f"{prec:<4d} ")
+        stats[prec] = (None, 1000000.0, 0.0)
+
+        for thresh in range(16, 65, 2):
             s, b, t = get_timing_stats(1000, prec, thresh, seed)
             sp, bp, tp = get_timing_stats(1000, prec, prec + 1, seed)
-            
+
             if t < stats[prec][1]:
                 stats[prec] = (thresh, t, tp)
-                sys.stderr.write('+')
+                sys.stderr.write("+")
             else:
-                sys.stderr.write('.')
-        sys.stderr.write('\n')
+                sys.stderr.write(".")
+        sys.stderr.write("\n")
 
-    return list((p, h, t, tp) for p, (h, t, tp) in stats.iteritems())
+    return list((p, h, t, tp) for p, (h, t, tp) in stats.items())
+
 
 if __name__ == "__main__":
     stats = compute_stats()
-    stats.sort(key = lambda s: s[3]/s[2])
+    stats.sort(key=lambda s: s[3] / s[2])
     for prec, thresh, trec, tnorm in stats:
-        print "%d\t%d\t%.3f\t%.3f\t%.4f" % (prec, thresh, trec, tnorm,
-                                            tnorm / trec)
+        print(f"{prec}\t{thresh}\t{trec:.3f}\t{tnorm:.3f}\t{tnorm / trec:.4f}")
 
-    print
+    print()
 
 # Here there be dragons

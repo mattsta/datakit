@@ -201,9 +201,9 @@ has no 4-byte external form, so the next width up is `1 + 4`.
 
 flex has two ways to write a value, and the caller chooses:
 
-| Path         | Functions                                                                                                                                                                                           | `"42"` reads back as |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig`, `flexAppendMultiple`, `flexRowAppend`                                                            | the integer 42       |
+| Path         | Functions                                                                                                                                                                                                                                            | `"42"` reads back as |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig`, `flexAppendMultiple`, `flexRowAppend`                                                                                                             | the integer 42       |
 | Exact        | `flexPushBytesExact`, `flexPushByTypeExact`, `flexNewFromDatabox*Exact`, `flexPushDataboxBigExact`, `flexAppendMultipleExact`, `flexRowAppendExact`, `mflexPushByTypeExact`, and every positional and sorted insert (`flexInsertByType` and friends) | the bytes `"42"`     |
 
 Both paths store numbers in their smallest encoding of the **same** type
@@ -211,9 +211,9 @@ Both paths store numbers in their smallest encoding of the **same** type
 (minimal-storage) path also turns bytes into numbers, and stores a real box
 holding a whole number in [-2^63, 2^64) as that integer: `DATABOX_DOUBLE(5.0)`
 reads back as the unsigned 5 (-0.0, fractions, infinities and NaN stay reals).
-A numeral string keeps its spelling: `"22.0"` stays the real 22.0.  The exact
+A numeral string keeps its spelling: `"22.0"` stays the real 22.0. The exact
 path stores 5.0 as a real, and the typed pushes (`flexPushDouble`,
-`flexPushFloat`) store what they name.  Either way 5 and 5.0 are one value to
+`flexPushFloat`) store what they name. Either way 5 and 5.0 are one value to
 every comparison and key match (numeric identity is by value).
 
 ```c
@@ -2053,14 +2053,14 @@ Flex serves as the underlying storage for these higher-level structures:
 
 ### Nesting
 
-flex has no nested-container type.  Earlier tags for one (an entry holding
+flex has no nested-container type. Earlier tags for one (an entry holding
 a whole serialized flex, labelled map / list / set / tuple, plus a reserved
 compressed form) were removed: nothing built or read them, the labels
-enforced nothing, and validation never looked inside.  The design notes for
+enforced nothing, and validation never looked inside. The design notes for
 doing it properly, in place or by reference, are in the comment where the
 tags were (flex.c's encoding table).
 
-A flex can travel inside another as plain bytes, re-wrapped on read.  It is
+A flex can travel inside another as plain bytes, re-wrapped on read. It is
 then a frozen copy: to change it, read it out, edit, and replace the entry.
 
 ```c

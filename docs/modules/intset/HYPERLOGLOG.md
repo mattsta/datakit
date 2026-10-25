@@ -361,7 +361,7 @@ cached-cardinality field, so a "read" can dirty the object — relevant when
 deciding whether a read should trigger a persist or a cross-node write.
 `hyperloglogAdd` returns 1 when a register changed (and invalidates the
 cache), 0 for an element already represented (not an error), -1 for a
-corrupt sketch.  A restored snapshot recounts once rather than trusting the
+corrupt sketch. A restored snapshot recounts once rather than trusting the
 stored cache.
 
 ## Sparse vs Dense Modes

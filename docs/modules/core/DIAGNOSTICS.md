@@ -1,44 +1,44 @@
 # Diagnostics (dkDiag)
 
 datakit runs inside your application, and your application owns stdout and stderr, so no datakit data
-structure prints anything on its own.  When a call is refused because it was made wrongly, when a runtime
+structure prints anything on its own. When a call is refused because it was made wrongly, when a runtime
 condition is worth knowing about, or just before an abort for misuse that cannot be continued past, datakit
-records a **diagnostic** instead.  You read it when you want it; nothing else changes.
+records a **diagnostic** instead. You read it when you want it; nothing else changes.
 
 Header: `src/dkDiag.h`.
 
 ## What gets reported
 
-| severity | meaning | the call |
-| --- | --- | --- |
-| `DK_DIAG_MISUSE` | the API was called wrongly | refused as documented (false / NULL / 0), program goes on |
-| `DK_DIAG_CONDITION` | a runtime state worth knowing, not your mistake | returns normally |
-| `DK_DIAG_INTERNAL` | a datakit check failed (a self-test) | returns its failure count |
-| `DK_DIAG_FATAL` | misuse that cannot be continued past | `abort()` after the report |
+| severity            | meaning                                         | the call                                                  |
+| ------------------- | ----------------------------------------------- | --------------------------------------------------------- |
+| `DK_DIAG_MISUSE`    | the API was called wrongly                      | refused as documented (false / NULL / 0), program goes on |
+| `DK_DIAG_CONDITION` | a runtime state worth knowing, not your mistake | returns normally                                          |
+| `DK_DIAG_INTERNAL`  | a datakit check failed (a self-test)            | returns its failure count                                 |
+| `DK_DIAG_FATAL`     | misuse that cannot be continued past            | `abort()` after the report                                |
 
 Codes (one enum, append-only: a value is never reused, so you may log and match them):
 
-| code | severity | reported by |
-| --- | --- | --- |
-| `DK_DIAG_FLEX_BOX_UNENCODABLE` | FATAL | a flex store given a box type flex has no encoding for |
-| `DK_DIAG_DATABOX_WIDE_DEFERRED` | FATAL | a deferred wide box (type only, no payload) used as a value |
-| `DK_DIAG_OFFSETARRAY_BOUNDS` | FATAL | `offsetArrayGet` outside the array (OFFSETARRAY_DEBUG builds) |
-| `DK_DIAG_SELF_TEST_FAILED` | INTERNAL | a failed check of `flexFactorySelfTest` |
-| `DK_DIAG_PERSIST_ORPHAN_WAL` | CONDITION | `persistCtxExists` finding a WAL without its snapshot |
-| `DK_DIAG_PERSIST_CTX_WRONG_TYPE` | MISUSE | a persistCtx bound to one structure type used for another |
-| `DK_DIAG_PERSIST_CTX_CLAIMED` | MISUSE | a second wrapper on a persistCtx held by a live one |
-| `DK_DIAG_MULTIROAR_WRONG_MODE` | MISUSE | a bit operation on a value-mode roar, or a value operation on a bit roar |
-| `DK_DIAG_MULTIARRAY_NATIVE` | MISUSE | a container call on a native multiarray |
-| `DK_DIAG_DATABOX_UNCOMPARABLE` | FATAL | two numeric boxes with no order between them |
-| `DK_DIAG_OWNED_WRITER_VIOLATION` | MISUSE | an owned cell or sequence published by a writer its declaration does not allow (counted and published, never refused) |
-| `DK_DIAG_OWNED_SLOT_UNCLAIMED` | MISUSE | `ownedSlotPublish` with no live claim behind it |
-| `DK_DIAG_AEAD_MISUSE` | MISUSE | ChaCha20-Poly1305 or AES-GCM given a NULL key, nonce, tag or buffer for a nonzero length, or a ChaCha20-Poly1305 stream call out of order or on a finished context (stream Init returns nothing, so this is its only signal) |
-| `DK_DIAG_HMAC_KEYRING_ZERO_SALT` | MISUSE | `hmacKeyringInstall` given a NULL or all-zero salt (`hmacKeyringInstallUnsalted` is the unsalted entry point) |
-| `DK_DIAG_RANDOM_ZERO_BOUND` | MISUSE | `dkRandomBounded(0)`, a value from an empty interval (also counted by `dkRandomZeroBoundTotal`) |
-| `DK_DIAG_MEMBOUND_INVALID_FREE` | MISUSE | a membound free of a pointer the pool does not hold out: outside it, off the block grid, freed already, or inside a block (also counted in `memboundStats.safetyViolations`, except on MICRO) |
-| `DK_DIAG_MULTIARRAY_INDEX` | MISUSE | a multiarray index or range outside the array (Get answers NULL, a change is refused) on any tier |
-| `DK_DIAG_MULTIMAP_SET_REWRITE` | MISUSE | an in-place rewrite of a set map's row (`multimapReplaceEntry`, `multimapReplaceEntryWithReference`, `multimapResizeEntry`, a field increment): every element of a set row orders it, so the call is refused and the row stays; delete it and insert the new row |
-| `DK_DIAG_TIMER_REENTERED` | MISUSE | `timerWheelProcessTimerEvents` or `multiTimerProcessTimerEvents` called from one of its own callbacks (ignored; the running call processes the rest) |
+| code                             | severity  | reported by                                                                                                                                                                                                                                                      |
+| -------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DK_DIAG_FLEX_BOX_UNENCODABLE`   | FATAL     | a flex store given a box type flex has no encoding for                                                                                                                                                                                                           |
+| `DK_DIAG_DATABOX_WIDE_DEFERRED`  | FATAL     | a deferred wide box (type only, no payload) used as a value                                                                                                                                                                                                      |
+| `DK_DIAG_OFFSETARRAY_BOUNDS`     | FATAL     | `offsetArrayGet` outside the array (OFFSETARRAY_DEBUG builds)                                                                                                                                                                                                    |
+| `DK_DIAG_SELF_TEST_FAILED`       | INTERNAL  | a failed check of `flexFactorySelfTest`                                                                                                                                                                                                                          |
+| `DK_DIAG_PERSIST_ORPHAN_WAL`     | CONDITION | `persistCtxExists` finding a WAL without its snapshot                                                                                                                                                                                                            |
+| `DK_DIAG_PERSIST_CTX_WRONG_TYPE` | MISUSE    | a persistCtx bound to one structure type used for another                                                                                                                                                                                                        |
+| `DK_DIAG_PERSIST_CTX_CLAIMED`    | MISUSE    | a second wrapper on a persistCtx held by a live one                                                                                                                                                                                                              |
+| `DK_DIAG_MULTIROAR_WRONG_MODE`   | MISUSE    | a bit operation on a value-mode roar, or a value operation on a bit roar                                                                                                                                                                                         |
+| `DK_DIAG_MULTIARRAY_NATIVE`      | MISUSE    | a container call on a native multiarray                                                                                                                                                                                                                          |
+| `DK_DIAG_DATABOX_UNCOMPARABLE`   | FATAL     | two numeric boxes with no order between them                                                                                                                                                                                                                     |
+| `DK_DIAG_OWNED_WRITER_VIOLATION` | MISUSE    | an owned cell or sequence published by a writer its declaration does not allow (counted and published, never refused)                                                                                                                                            |
+| `DK_DIAG_OWNED_SLOT_UNCLAIMED`   | MISUSE    | `ownedSlotPublish` with no live claim behind it                                                                                                                                                                                                                  |
+| `DK_DIAG_AEAD_MISUSE`            | MISUSE    | ChaCha20-Poly1305 or AES-GCM given a NULL key, nonce, tag or buffer for a nonzero length, or a ChaCha20-Poly1305 stream call out of order or on a finished context (stream Init returns nothing, so this is its only signal)                                     |
+| `DK_DIAG_HMAC_KEYRING_ZERO_SALT` | MISUSE    | `hmacKeyringInstall` given a NULL or all-zero salt (`hmacKeyringInstallUnsalted` is the unsalted entry point)                                                                                                                                                    |
+| `DK_DIAG_RANDOM_ZERO_BOUND`      | MISUSE    | `dkRandomBounded(0)`, a value from an empty interval (also counted by `dkRandomZeroBoundTotal`)                                                                                                                                                                  |
+| `DK_DIAG_MEMBOUND_INVALID_FREE`  | MISUSE    | a membound free of a pointer the pool does not hold out: outside it, off the block grid, freed already, or inside a block (also counted in `memboundStats.safetyViolations`, except on MICRO)                                                                    |
+| `DK_DIAG_MULTIARRAY_INDEX`       | MISUSE    | a multiarray index or range outside the array (Get answers NULL, a change is refused) on any tier                                                                                                                                                                |
+| `DK_DIAG_MULTIMAP_SET_REWRITE`   | MISUSE    | an in-place rewrite of a set map's row (`multimapReplaceEntry`, `multimapReplaceEntryWithReference`, `multimapResizeEntry`, a field increment): every element of a set row orders it, so the call is refused and the row stays; delete it and insert the new row |
+| `DK_DIAG_TIMER_REENTERED`        | MISUSE    | `timerWheelProcessTimerEvents` or `multiTimerProcessTimerEvents` called from one of its own callbacks (ignored; the running call processes the rest)                                                                                                             |
 
 Not reported: NULL passed where NULL means "nothing" (`*Free(NULL)`, a NULL operand), data a structure
 refuses because of its content (a value too wide for a roar, a position past its dimensions, a tag that
@@ -86,37 +86,37 @@ dkDiagSetHook(&hook);   /* NULL removes it */
 ```
 
 The hook runs on the reporting thread, with a copy of the diagnostic, and for FATAL before the abort, so a
-fatal misuse reaches your logs.  The hook struct is yours and must outlive every report that might use it
-(static storage is simplest).  A hook may call `dkDiagLast`; a report made inside the hook is recorded and
-hooked as usual.  A report can come from inside a structure's lock (a membound pool's free path, for one),
+fatal misuse reaches your logs. The hook struct is yours and must outlive every report that might use it
+(static storage is simplest). A hook may call `dkDiagLast`; a report made inside the hook is recorded and
+hooked as usual. A report can come from inside a structure's lock (a membound pool's free path, for one),
 so the hook must not call back into the structure whose call is reporting: log, count, or hand off.
 
 ## Printing
 
 Whether a report also writes one line to stderr is the print mode:
 
-| mode | prints |
-| --- | --- |
+| mode                    | prints                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------- |
 | `DK_DIAG_PRINT_DEFAULT` | in DATAKIT_TEST builds only (so development builds show misuse as it happens) |
-| `DK_DIAG_PRINT_ALWAYS` | in every build (debugging a deployed program's use of datakit) |
-| `DK_DIAG_PRINT_NEVER` | never (a test that misuses on purpose; a quiet embedder) |
+| `DK_DIAG_PRINT_ALWAYS`  | in every build (debugging a deployed program's use of datakit)                |
+| `DK_DIAG_PRINT_NEVER`   | never (a test that misuses on purpose; a quiet embedder)                      |
 
 ```c
 dkDiagSetPrintMode(DK_DIAG_PRINT_ALWAYS);
 ```
 
 The line reads `datakit: misuse: MULTIROAR_WRONG_MODE in multiroarBitSet (multiroar.c:520): a bit operation
-was given a value-mode roar`.  Recording and the hook happen in every mode.
+was given a value-mode roar`. Recording and the hook happen in every mode.
 
 ## Cost
 
 Only refusal and failure branches report, through a single out-of-line call; no success path does any
-work for diagnostics.  The slot is static thread-local storage (no allocation, no cleanup at thread exit),
+work for diagnostics. The slot is static thread-local storage (no allocation, no cleanup at thread exit),
 the hook is one atomic pointer, and the print mode is read only while reporting.
 
 ## Relation to other error channels
 
-dkDiag is for conditions with no return value to carry them.  The typed per-object channels stay as they
+dkDiag is for conditions with no return value to carry them. The typed per-object channels stay as they
 are and are the first place to look for their own modules: `persistLastError` / `persistErr`,
 `persistLastBadEntry` and the bad-entry notify callback, `flexEnvelopeLastVerifyError`, the cluster result
 enums, and `persistCtxProbe` for what is on disk.
@@ -124,6 +124,6 @@ enums, and `persistCtxProbe` for what is on disk.
 ## Enforcement
 
 `dktools outputaudit check` (ctest `libraryOutput`, and a step of `verify` and `validate`) fails while any
-library code writes to stdout or stderr unasked.  The only library writer left is the dkDiag printer, which
+library code writes to stdout or stderr unasked. The only library writer left is the dkDiag printer, which
 runs when the print mode asks; repr/print functions, operator tools (dataspeed, memtest) and test code are
 the other permitted writers.

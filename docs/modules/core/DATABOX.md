@@ -478,12 +478,12 @@ databoxFreeData(&copy);
 
 All three give a copy independent of the source's storage, by type:
 
-| Source                                  | Copy                                                    |
-| --------------------------------------- | ------------------------------------------------------- |
-| `BYTES`, `BYTES_NEVER_FREE`             | owned `BYTES` on the heap, or `BYTES_EMBED` if ≤ 8 bytes |
-| `BYTES_EMBED`                           | itself (the bytes ride inside the box)                  |
-| `PTR_MDSC`                              | a new mdsc string                                       |
-| `BYTES_VOID`, `BYTES_OFFSET`            | not copied (no bytes of their own)                      |
+| Source                       | Copy                                                     |
+| ---------------------------- | -------------------------------------------------------- |
+| `BYTES`, `BYTES_NEVER_FREE`  | owned `BYTES` on the heap, or `BYTES_EMBED` if ≤ 8 bytes |
+| `BYTES_EMBED`                | itself (the bytes ride inside the box)                   |
+| `PTR_MDSC`                   | a new mdsc string                                        |
+| `BYTES_VOID`, `BYTES_OFFSET` | not copied (no bytes of their own)                       |
 
 Release any copy with `databoxFreeData`. A copy can come out cheaper than
 its source (a short string embeds). `databoxAllocateIfNeeded` returns
@@ -593,11 +593,11 @@ for (size_t i = 0; i < COUNT_ARRAY(cache.bytes); i++) {
 
 Return value of `databoxRetainBytesSelf`:
 
-| Result | Meaning                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------- |
-| `>= 0` | copied into `cache.bytes[slot]`; the box now points at **cache** memory                  |
+| Result | Meaning                                                                                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `>= 0` | copied into `cache.bytes[slot]`; the box now points at **cache** memory                                                                                                                  |
 | `-1`   | retained privately: re-embedded (`len <= 8`), or `zmalloc`'d (no populated slot fits, larger than the largest slot included); an mdsc string or flex aggregate copied under its own type |
-| `-2`   | nothing done: the box references no external bytes (non-byte types, embedded bytes, VOID, OFFSET) or already owns its mdsc string / aggregate |
+| `-2`   | nothing done: the box references no external bytes (non-byte types, embedded bytes, VOID, OFFSET) or already owns its mdsc string / aggregate                                            |
 
 Plain bytes (`BYTES`, `BYTES_NEVER_FREE`) come back as `BYTES`.
 
@@ -710,7 +710,7 @@ becomes that integer. They are an explicit, opt-in conversion: flex's
 auto-convert push path (`flexPushBytes`, `flexPushByType`, ...) uses them,
 while flex's exact path, every datakit container (multilist, multimap,
 multidict, multiOrderedSet, multilru, ...) and persistence never do.
-Containers store exactly the box they are given.  **For minimal storage in a
+Containers store exactly the box they are given. **For minimal storage in a
 container, pass each box through `databoxCanonical` before writing it:**
 
 ```c
@@ -752,7 +752,7 @@ The 64-bit forms are exactly what `StrScanScanReliable` accepts; the 128-bit
 forms are the integers beyond 64 bits that `StrScanScanReliableConvert128`
 accepts. `databoxCanonicalNumeral` reads only `DATABOX_BYTES` and
 `DATABOX_BYTES_EMBED`; `databoxCanonical` also turns a whole real box into
-its integer, and passes every other type through.  A numeral keeps its
+its integer, and passes every other type through. A numeral keeps its
 spelling: `"22.0"` is the real 22.0 (it prints back as `"22.0"`), not 22.
 
 Ownership and lifetime:

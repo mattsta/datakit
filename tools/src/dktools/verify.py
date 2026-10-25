@@ -69,9 +69,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import steps, gitutil, toolchain
-from .steps import Step
+from . import gitutil, steps, toolchain
 from .gitutil import ToolError
+from .steps import Step
 
 
 @dataclass

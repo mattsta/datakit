@@ -955,14 +955,14 @@ does. Measured at 100,000 rows of a 16-byte key and an integer
 (`dktools perfcompare NAME --base HEAD --modules multimapLimits`, Apple M1 Max,
 clang 22 perf, medians of 15+15 runs, ns per call):
 
-| limit | lookup | insert | bytes |
-| ---: | ---: | ---: | ---: |
-| 256 | 527 | 681 | 2,265,663 |
-| 512 | 513 | 687 | 2,252,934 |
-| 1024 | 510 | 707 | 2,244,129 |
-| 2048 (default) | 606 | 738 | 2,239,704 |
-| 4096 | 753 | 977 | 2,237,182 |
-| 8192 | 1022 | 1464 | 2,236,256 |
+|          limit | lookup | insert |     bytes |
+| -------------: | -----: | -----: | --------: |
+|            256 |    527 |    681 | 2,265,663 |
+|            512 |    513 |    687 | 2,252,934 |
+|           1024 |    510 |    707 | 2,244,129 |
+| 2048 (default) |    606 |    738 | 2,239,704 |
+|           4096 |    753 |    977 | 2,237,182 |
+|           8192 |   1022 |   1464 | 2,236,256 |
 
 For small rows at scale, 512 or 1024 is ~16% faster to look up than the
 default for 0.2-0.6% more memory; larger limits are slower for reads and

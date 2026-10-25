@@ -407,7 +407,7 @@ wiring a keyring into a long-lived subsystem. Quick reference:
    Every subsequent consume re-checks the generation; mismatch means
    "the key was rotated since you attached" — a cached raw-key pointer
    would be a use-after-free. The post-rotation recovery entry point
-   is `persistRebindKeyring`. Rebinding to a *different* key id leaves
+   is `persistRebindKeyring`. Rebinding to a _different_ key id leaves
    the snapshot and the open WAL naming the old id, so appends are
    refused (`PERSIST_ERR_KEY_ID_MISMATCH`) until `persistCompact`
    rewrites both under the new key: rotate as rebind, compact, continue.

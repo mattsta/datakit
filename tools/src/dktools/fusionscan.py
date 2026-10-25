@@ -204,9 +204,7 @@ def scan_text(path: str, src: str, known: list[str]) -> list[Pair]:
             for w in writes:
                 if w.line < r.line or len(w.args) < 2:
                     continue
-                if not (
-                    w.family.startswith(r.family) or r.family.startswith(w.family)
-                ):
+                if not (w.family.startswith(r.family) or r.family.startswith(w.family)):
                     continue
                 if root(w.args[0]) != container or key_of(w.args[1]) != key:
                     continue
@@ -249,7 +247,14 @@ def scan_text(path: str, src: str, known: list[str]) -> list[Pair]:
         if not verb:
             continue
         calls.append(
-            Call(tok.line, t, family, verb, _arguments(tokens, i + 1), _assigned_to(tokens, i))
+            Call(
+                tok.line,
+                t,
+                family,
+                verb,
+                _arguments(tokens, i + 1),
+                _assigned_to(tokens, i),
+            )
         )
     return pairs
 
@@ -285,7 +290,10 @@ def render_report(pairs: list[Pair]) -> str:
     ]
     if not pairs:
         return "\n".join(md + ["none", ""]) + "\n"
-    md += ["| file | function | read | write | container / key |", "| --- | --- | --- | --- | --- |"]
+    md += [
+        "| file | function | read | write | container / key |",
+        "| --- | --- | --- | --- | --- |",
+    ]
     for p in sorted(pairs, key=lambda x: (x.path, x.read.line)):
         md.append(
             f"| {p.path} | `{p.function}` | {p.read.line}: `{p.read.name}` | "

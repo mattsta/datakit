@@ -81,13 +81,13 @@ Sparse growth (random-order writes from empty): 42 ns per write at 100K,
 
 Every node is its children's fold, so the elements determine a tree, float
 sums included: a tree built from an array answers every query bit for bit
-as one built by `Update`.  `persistOpsSegment<T>` (`segment/segmentPersist.h`)
+as one built by `Update`. `persistOpsSegment<T>` (`segment/segmentPersist.h`)
 persist every type that way (see [PERSIST.md](../persist/PERSIST.md)):
 
 - Snapshot: the operation, then the elements; restore through
   `NewFromArray`.
 - WAL: `UPDATE [index, value]` replays `Update`, `UPDATE [left, right,
-  value]` replays `RangeUpdate`.
+value]` replays `RangeUpdate`.
 
 ## Testing
 

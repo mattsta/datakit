@@ -92,8 +92,8 @@ the codes order as the versions do (a long-lived kernel's patch level passes
 A constructor reads `uname()` before `main()` and parses its release string
 with `versionOSRuntimeParse`: the first three numeric parts, a missing part 0,
 each clamped to 0..65535, stopping at the first character that is not a digit
-or a dot (so `6.1.0-13-amd64` is 6.1.0 and `5.15` is 5.15.0).  If `uname()`
-fails the version stays 0.  `versionOSRuntimeParse` is public, so a release
+or a dot (so `6.1.0-13-amd64` is 6.1.0 and `5.15` is 5.15.0). If `uname()`
+fails the version stays 0. `versionOSRuntimeParse` is public, so a release
 string from elsewhere encodes the same way.
 
 **Key Points:**

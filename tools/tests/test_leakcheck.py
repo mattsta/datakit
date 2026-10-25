@@ -13,7 +13,6 @@ import unittest
 
 from dktools import cli, leakcheck
 from dktools.gitutil import ToolError
-
 from repofixture import IsolatedGitEnv, TempRepo
 
 

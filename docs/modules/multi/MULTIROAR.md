@@ -317,14 +317,14 @@ multiroarFree(restored);
 zfree(buf);
 ```
 
-Both modes serialize.  `multiroarSerialize` writes the `multiroarFormat`
+Both modes serialize. `multiroarSerialize` writes the `multiroarFormat`
 dkFormat prefix (format id, version, features), then the stream: a mode byte
 (a value roar's bit width, 0 for bit mode), then for value mode the cols,
 rows, value count and each value after the gap from the previous position,
-and for bit mode a varint chunk count and the encoded chunks.  The `Raw`
+and for bit mode a varint chunk count and the encoded chunks. The `Raw`
 forms (`multiroarSerializeRaw`, `multiroarDeserializeRaw`,
 `multiroarSerializedSizeRaw`) are the stream alone, for a container that
-records the stamp itself, as persist does.  Deserialize refuses malformed
+records the stamp itself, as persist does. Deserialize refuses malformed
 bytes, including trailing bytes and values that break the roar's width or
 dimensions.
 
@@ -359,7 +359,7 @@ Contracts:
 - `Set`/`SetGetPrevious` report ADDED or REPLACED, or REFUSED (nothing
   changes) on a bit-mode roar, outside the declared `rows * cols`, or for a
   value that cannot be stored (not an integer or boolean, negative, wider than
-  `bitWidth`, NULL).  `Get`/`RemoveGetRemoved` return whether the position
+  `bitWidth`, NULL). `Get`/`RemoveGetRemoved` return whether the position
   held a value, and false in those cases.
 - Each call is one search of the position map: `SetGetPrevious` reports the
   overwritten value from the replacing insert, and `RemoveGetRemoved` the
@@ -368,7 +368,7 @@ Contracts:
 ## Modes
 
 A bit-mode multiroar comes from `multiroarBitNew()`; a value-mode one from
-`multiroarValueNew()`.  Their rows share one keyspace, so every operation
+`multiroarValueNew()`. Their rows share one keyspace, so every operation
 belongs to one mode and refuses a roar of the other with a single check:
 
 - Bit calls on a value roar answer `false`, 0 or NULL, or change nothing:

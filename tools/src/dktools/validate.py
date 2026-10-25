@@ -45,9 +45,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import steps, gitutil, leakcheck, toolchain
-from .steps import CtestResult, SanitizerHit, Step, Warning_
+from . import gitutil, leakcheck, steps, toolchain
 from .gitutil import ToolError
+from .steps import CtestResult, SanitizerHit, Step, Warning_
 
 #: Timing-sensitive tests, run one at a time so the parallel set does
 #: not compete with them for CPUs.  dkTestNonceLogEvictionPerf times
@@ -444,16 +444,12 @@ def run(repo: Path, opts: ValidateOptions) -> int:
     leak_ok = True
     if leak_range is not None:
         hits, scanned = leakcheck.check(repo, "range", leak_range)
-        with open(work / "leakcheck.log", "w") as log:
+        with (work / "leakcheck.log").open("w") as log:
             leak_ok = leakcheck.report(hits, scanned, out=log) == 0
         leak = (leak_range, hits)
 
     passed = (
-        all(r.ok for r in results)
-        and alloc.ok
-        and atomic.ok
-        and output.ok
-        and leak_ok
+        all(r.ok for r in results) and alloc.ok and atomic.ok and output.ok and leak_ok
     )
     text = render(commit, subject, results, opts, alloc, atomic, output, leak, passed)
     summary = work / "summary.md"

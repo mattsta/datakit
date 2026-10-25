@@ -1311,7 +1311,7 @@ Which tree for which job, and measured speed and memory:
 
 ## Errors & Diagnostics
 
-datakit never prints.  A refused misuse, a runtime condition or a fatal misuse is recorded per thread
+datakit never prints. A refused misuse, a runtime condition or a fatal misuse is recorded per thread
 (details: [DIAGNOSTICS.md](modules/core/DIAGNOSTICS.md)).
 
 ### "A call returned false / NULL and I want to know why"

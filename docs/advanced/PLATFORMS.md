@@ -16,17 +16,17 @@ when it is vendored in.
 
 ### Operating Systems
 
-| Platform      | Status      | Notes                                             |
-| ------------- | ----------- | ------------------------------------------------- |
-| **Linux**     | Primary     | Fully supported, extensively tested               |
-| **macOS**     | Primary     | Darwin; also the main Apple Silicon test host     |
-| **FreeBSD**   | Supported   | `DK_OS_FREEBSD`; BSD random/proctitle paths       |
-| **OpenBSD**   | Supported   | `DK_OS_OPENBSD`; `getentropy()` path              |
-| **NetBSD**    | Supported   | `DK_OS_NETBSD`                                    |
-| **DragonFly** | Best effort | no `DK_OS_*` flag; generic POSIX paths only       |
-| **AIX**       | Best effort | `DK_OS_AIX` exists; not built or tested by CI     |
-| **Solaris**   | Unsupported | Removed entirely; do not add `__sun` branches     |
-| **Windows**   | Unsupported | Removed entirely; do not add MSVC/Win32 branches  |
+| Platform      | Status      | Notes                                            |
+| ------------- | ----------- | ------------------------------------------------ |
+| **Linux**     | Primary     | Fully supported, extensively tested              |
+| **macOS**     | Primary     | Darwin; also the main Apple Silicon test host    |
+| **FreeBSD**   | Supported   | `DK_OS_FREEBSD`; BSD random/proctitle paths      |
+| **OpenBSD**   | Supported   | `DK_OS_OPENBSD`; `getentropy()` path             |
+| **NetBSD**    | Supported   | `DK_OS_NETBSD`                                   |
+| **DragonFly** | Best effort | no `DK_OS_*` flag; generic POSIX paths only      |
+| **AIX**       | Best effort | `DK_OS_AIX` exists; not built or tested by CI    |
+| **Solaris**   | Unsupported | Removed entirely; do not add `__sun` branches    |
+| **Windows**   | Unsupported | Removed entirely; do not add MSVC/Win32 branches |
 
 ### CPU Architectures
 
@@ -48,9 +48,9 @@ Three mechanisms, each in one place:
 - **Target operating system** — `src/dkPlatform.h` sets exactly one of
   `DK_OS_LINUX`, `DK_OS_APPLE`, `DK_OS_FREEBSD`, `DK_OS_NETBSD`,
   `DK_OS_OPENBSD`, `DK_OS_AIX` to 1 and the rest to 0, from the compiler's
-  predefined macros (`__linux__`, `__APPLE__`, ...).  OS-specific code
+  predefined macros (`__linux__`, `__APPLE__`, ...). OS-specific code
   tests them with `#if` (the `/proc` readers in `OSRegulate.c` with
-  `DK_OS_LINUX`, `task_info()` with `DK_OS_APPLE`).  It also refuses a
+  `DK_OS_LINUX`, `task_info()` with `DK_OS_APPLE`). It also refuses a
   compiler other than clang or gcc and defines `DK_BITS`, the pointer width.
 - **System calls that vary by libc** — `src/CMakeLists.txt` compiles and
   runs small probes and passes the results as compile definitions:
@@ -412,7 +412,7 @@ gcc -fprofile-use -O3 program.c -o program
 
 `src/CMakeLists.txt` builds one source list for every platform: OS-specific
 code lives inside the shared files behind `DK_OS_*` (from
-`src/dkPlatform.h`), so no per-platform source files are added.  The build:
+`src/dkPlatform.h`), so no per-platform source files are added. The build:
 
 - sets the warning flags (`-Wall -Wextra -Winline`, and
   `-Wmissing-prototypes` on datakit's own objects) and the C standard;

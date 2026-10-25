@@ -130,14 +130,16 @@ class Sorting(unittest.TestCase):
         )
 
     def test_operator_tools(self) -> None:
-        src = "void report(void) { printf(\"MB/s\"); }\n"
+        src = 'void report(void) { printf("MB/s"); }\n'
         for path in ("src/dataspeed.c", "src/memtest.c"):
             with self.subTest(path=path):
                 self.assertEqual(scan(src, path), [("printf", "report", "tool")])
-        self.assertEqual(scan(src, "src/dataspeedy.c"), [("printf", "report", "unrequested")])
+        self.assertEqual(
+            scan(src, "src/dataspeedy.c"), [("printf", "report", "unrequested")]
+        )
 
     def test_test_only_files(self) -> None:
-        src = "void bench(void) { printf(\"t\"); }\n"
+        src = 'void bench(void) { printf("t"); }\n'
         for path in ("src/intsetTest.c", "src/memboundBench.c", "src/datakit-test.c"):
             with self.subTest(path=path):
                 self.assertEqual(scan(src, path), [("printf", "bench", "test")])
@@ -149,11 +151,13 @@ class Cli(unittest.TestCase):
             repo = Path(tmp)
             (repo / "src").mkdir()
             (repo / "src" / "datakit.h").write_text("")
-            (repo / "src" / "a.c").write_text("void aRepr(void) { printf(\"r\"); }\n")
+            (repo / "src" / "a.c").write_text('void aRepr(void) { printf("r"); }\n')
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 self.assertEqual(cli.main(["--repo", tmp, "outputaudit", "check"]), 0)
-            (repo / "src" / "b.c").write_text("int b(void) { puts(\"oops\"); return 0; }\n")
+            (repo / "src" / "b.c").write_text(
+                'int b(void) { puts("oops"); return 0; }\n'
+            )
             with contextlib.redirect_stdout(out):
                 self.assertEqual(cli.main(["--repo", tmp, "outputaudit", "check"]), 1)
             self.assertIn("UNREQUESTED src/b.c:1: puts to stdout in b", out.getvalue())

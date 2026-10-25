@@ -18,9 +18,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from dktools import allocaudit, cli
-
 import prochelpers
+from dktools import allocaudit, cli
 
 ANNOTATED = """\
 void *make(void) {

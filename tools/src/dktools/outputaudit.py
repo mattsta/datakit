@@ -171,9 +171,13 @@ def _conditionals(src: str) -> tuple[set[int], set[int]]:
             kind, cond = m.group(1), m.group(2).split("/*")[0].strip()
             if kind == "if" and cond == "0":
                 stack.append("dead")
-            elif kind == "ifndef" and cond == "NDEBUG":
-                stack.append("debug")
-            elif kind != "ifndef" and DEBUG_SWITCH_RE.search(cond) and "!" not in cond:
+            elif (
+                kind == "ifndef"
+                and cond == "NDEBUG"
+                or kind != "ifndef"
+                and DEBUG_SWITCH_RE.search(cond)
+                and "!" not in cond
+            ):
                 stack.append("debug")
             else:
                 stack.append("")
@@ -260,7 +264,9 @@ def scan_text(path: str, src: str) -> list[Site]:
             category = "requested"
         else:
             category = "unrequested"
-        sites.append(Site(path, tok.line, t, target, context or "(file scope)", category))
+        sites.append(
+            Site(path, tok.line, t, target, context or "(file scope)", category)
+        )
     return sites
 
 

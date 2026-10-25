@@ -336,11 +336,11 @@ int32_t multidictUpdateValue(multidict *d, const databox *keybox,
                              multidictValueUpdate *update, void *ctx);
 ```
 
-The key is found once and the value is rewritten where it was found.  The
+The key is found once and the value is rewritten where it was found. The
 callback may do work of its own before deciding (it must not change the same
 dict): the persisted wrapper `multidictReplaceP` logs the change from inside
 it and declines when the log is refused, so a replace logs and applies in one
-search with nothing to undo.  `AddXX` and `Replace` are this call with a
+search with nothing to undo. `AddXX` and `Replace` are this call with a
 callback that always takes the new value.
 
 ### Bulk Insert and Delete
@@ -1092,20 +1092,20 @@ Every per-key cost here is "hash + slot dispatch + whatever the slot class
 charges". With the default expand load factor of 200, slots hold roughly two
 entries on average, so `k` below is small but never guaranteed to be 1.
 
-| Operation        | Average       | Worst Case | Notes                                                  |
-| ---------------- | ------------- | ---------- | ------------------------------------------------------ |
-| Insert           | O(1) + O(k)   | O(n)       | Amortized; also removes any `ht[0]` twin during rehash |
-| Lookup           | O(1) + O(k)   | O(n)       | k depends on the slot implementation                   |
-| Delete           | O(1) + O(k)   | O(n)       | One slot search per table (GetAndDelete, PopRandom too) |
-| AddNX            | O(1) + O(k)   | O(n)       | Existence probe followed by an Add                     |
-| AddXX/Replace    | O(1) + O(k)   | O(n)       | One slot search: the value is rewritten in place        |
-| IncrBy/IncrByFloat | O(1) + O(k) | O(n)       | One slot search for an existing key (an Add if absent)  |
-| Iteration        | O(n)          | O(n)       | Iterates all slots and entries                         |
-| SCAN             | O(1) per call | O(n)       | Full scan is O(n)                                      |
-| Rehash Step      | O(1)          | O(k)       | k = entries in a single slot                           |
-| Copy/Merge       | O(n)          | O(n)       | Merge is one Add per source entry                      |
-| GetStats         | O(1)          | O(1)       | Counters are maintained incrementally                  |
-| GetDetailedStats | O(slots)      | O(slots)   | Walks every slot to build the histogram                |
+| Operation          | Average       | Worst Case | Notes                                                   |
+| ------------------ | ------------- | ---------- | ------------------------------------------------------- |
+| Insert             | O(1) + O(k)   | O(n)       | Amortized; also removes any `ht[0]` twin during rehash  |
+| Lookup             | O(1) + O(k)   | O(n)       | k depends on the slot implementation                    |
+| Delete             | O(1) + O(k)   | O(n)       | One slot search per table (GetAndDelete, PopRandom too) |
+| AddNX              | O(1) + O(k)   | O(n)       | Existence probe followed by an Add                      |
+| AddXX/Replace      | O(1) + O(k)   | O(n)       | One slot search: the value is rewritten in place        |
+| IncrBy/IncrByFloat | O(1) + O(k)   | O(n)       | One slot search for an existing key (an Add if absent)  |
+| Iteration          | O(n)          | O(n)       | Iterates all slots and entries                          |
+| SCAN               | O(1) per call | O(n)       | Full scan is O(n)                                       |
+| Rehash Step        | O(1)          | O(k)       | k = entries in a single slot                            |
+| Copy/Merge         | O(n)          | O(n)       | Merge is one Add per source entry                       |
+| GetStats           | O(1)          | O(1)       | Counters are maintained incrementally                   |
+| GetDetailedStats   | O(slots)      | O(slots)   | Walks every slot to build the histogram                 |
 
 ### Space Complexity
 

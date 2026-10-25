@@ -25,15 +25,15 @@ holds their shared contract); `multiFenwickFlat.h`, `multiFenwick.h`,
 
 ## Choosing one
 
-| You need                                                                                                         | Choose                                                                     | Why                                                                                                 |
-| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Counts or sums of one integer type, fastest                                                                      | `fenwickI64` (or `I32`/`I16` when every element and the sums you read fit) | 8 B (4/2 B) per element; updates 26-50 ns, queries 15-27 ns                                         |
-| The smallest memory for large counter tables                                                                     | `fenwickI16` / `fenwickI32`                                                | 2/4 B per element, and at 4M elements rank queries are 2-4x faster than I64 (cache)                 |
-| Doubles                                                                                                          | `fenwickDouble`                                                            | no kinds, no int128 bookkeeping                                                                     |
-| Values that mix integers and doubles, or span the whole `[INT64_MIN, UINT64_MAX]` range, with exact integer sums | `multiFenwickFlat`                                                         | level with `fenwickI64` to 100K int64 values (1.5x at 4M); about 2x slower, 9 B/elem with doubles   |
-| The most compact databox tree, speed secondary                                                                   | `multiFenwick`                                                             | about 3-4 B per element (flex cells), but 100-1000x slower                                          |
-| A grid of counts                                                                                                 | `fenwick2dI64` / `multiFenwick2d`                                          | O(log R log C) updates and rectangle sums                                                           |
-| Range min/max, or range assignment                                                                               | `segment<T>` ([SEGMENT.md](SEGMENT.md))                                    | Fenwick trees only sum                                                                              |
+| You need                                                                                                         | Choose                                                                     | Why                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Counts or sums of one integer type, fastest                                                                      | `fenwickI64` (or `I32`/`I16` when every element and the sums you read fit) | 8 B (4/2 B) per element; updates 26-50 ns, queries 15-27 ns                                       |
+| The smallest memory for large counter tables                                                                     | `fenwickI16` / `fenwickI32`                                                | 2/4 B per element, and at 4M elements rank queries are 2-4x faster than I64 (cache)               |
+| Doubles                                                                                                          | `fenwickDouble`                                                            | no kinds, no int128 bookkeeping                                                                   |
+| Values that mix integers and doubles, or span the whole `[INT64_MIN, UINT64_MAX]` range, with exact integer sums | `multiFenwickFlat`                                                         | level with `fenwickI64` to 100K int64 values (1.5x at 4M); about 2x slower, 9 B/elem with doubles |
+| The most compact databox tree, speed secondary                                                                   | `multiFenwick`                                                             | about 3-4 B per element (flex cells), but 100-1000x slower                                        |
+| A grid of counts                                                                                                 | `fenwick2dI64` / `multiFenwick2d`                                          | O(log R log C) updates and rectangle sums                                                         |
+| Range min/max, or range assignment                                                                               | `segment<T>` ([SEGMENT.md](SEGMENT.md))                                    | Fenwick trees only sum                                                                            |
 
 ## Architecture
 
@@ -99,18 +99,17 @@ changes nothing.
 
 ## Value contracts
 
-|               | Typed `fenwick<T>`, `fenwick2d<T>`                                                        | Databox trees                                                                                                       |
-| ------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Accepted      | the C type; float types refuse NaN/inf                                                    | SIGNED_64, UNSIGNED_64, finite FLOAT_32/DOUBLE_64; anything else is refused                                         |
+|               | Typed `fenwick<T>`, `fenwick2d<T>`                                                                                                | Databox trees                                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Accepted      | the C type; float types refuse NaN/inf                                                                                            | SIGNED_64, UNSIGNED_64, finite FLOAT_32/DOUBLE_64; anything else is refused                                         |
 | Elements      | integers: exact; Float/Double: a difference of rounded cells (see below); an Update whose element would leave the type is refused | each stored cell must fit `[INT64_MIN, UINT64_MAX]` (or be a finite double); a write pushing one outside is refused |
-| Sums          | exact when they fit the type; otherwise modulo 2^bits (cells add with wrapping, never UB) | exact (int128); a result outside 64 bits returns false (result VOID)                                                |
-| Results       | the C type                                                                                | typed by value: SIGNED_64 when negative, UNSIGNED_64 otherwise, DOUBLE_64 with any floating part                    |
-| Refused write | changes nothing; a NULL tree stays NULL                                                   | the same                                                                                                            |
+| Sums          | exact when they fit the type; otherwise modulo 2^bits (cells add with wrapping, never UB)                                         | exact (int128); a result outside 64 bits returns false (result VOID)                                                |
+| Results       | the C type                                                                                                                        | typed by value: SIGNED_64 when negative, UNSIGNED_64 otherwise, DOUBLE_64 with any floating part                    |
+| Refused write | changes nothing; a NULL tree stays NULL                                                                                           | the same                                                                                                            |
 
-Float and Double trees round.  Each cell is a sum computed in the tree's
+Float and Double trees round. Each cell is a sum computed in the tree's
 type and `Get` subtracts cells, so elements and sums are exact only while
-every partial sum is: after `Set(0, 1e16)` and `Set(1, 1.0)`, `Get(1)` reads
-0.  `Update` and `Set` start from `Get`, so they carry the same error.  For
+every partial sum is: after `Set(0, 1e16)` and `Set(1, 1.0)`, `Get(1)` reads 0. `Update` and `Set` start from `Get`, so they carry the same error. For
 exact sums over mixed values use `multiFenwickFlat`.
 
 Out of range: 1D `Query`/`Get` past the count return 0 (typed) or false
@@ -172,26 +171,26 @@ a 131072-cell capacity). The full tables, with every size, are in
 
 **All-integer counters** (+1 updates):
 
-| tree                    | N    | update | query | lowerBound | B/elem |
-| ----------------------- | ---- | -----: | ----: | ---------: | -----: |
-| fenwickI64 (typed)      | 100K |     31 |    19 |         47 |   10.5 |
-| multiFenwickFlat        | 100K |     37 |    19 |         76 |   10.5 |
-| multiFenwick            | 100K | 32,510 | 15,910 |    32,341 |    3.9 |
-| fenwickI64 (typed)      | 4M   |     50 |    27 |        327 |    8.4 |
-| multiFenwickFlat        | 4M   |     74 |    38 |        455 |    8.4 |
-| multiFenwick            | 4M   | 70,103 | 34,166 |    67,082 |    3.2 |
+| tree               | N    | update |  query | lowerBound | B/elem |
+| ------------------ | ---- | -----: | -----: | ---------: | -----: |
+| fenwickI64 (typed) | 100K |     31 |     19 |         47 |   10.5 |
+| multiFenwickFlat   | 100K |     37 |     19 |         76 |   10.5 |
+| multiFenwick       | 100K | 32,510 | 15,910 |     32,341 |    3.9 |
+| fenwickI64 (typed) | 4M   |     50 |     27 |        327 |    8.4 |
+| multiFenwickFlat   | 4M   |     74 |     38 |        455 |    8.4 |
+| multiFenwick       | 4M   | 70,103 | 34,166 |     67,082 |    3.2 |
 
 **Mixed values** (1% of values and updates are doubles; the typed tree that
 can hold them is `fenwickDouble`):
 
-| tree                    | N    | update | query | lowerBound | B/elem |
-| ----------------------- | ---- | -----: | ----: | ---------: | -----: |
-| fenwickDouble (typed)   | 100K |     30 |    19 |         53 |   10.5 |
-| multiFenwickFlat        | 100K |     73 |    33 |        258 |   11.8 |
-| multiFenwick            | 100K | 39,394 | 18,677 |    37,473 |    4.0 |
-| fenwickDouble (typed)   | 4M   |     61 |    22 |        300 |    8.4 |
-| multiFenwickFlat        | 4M   |    158 |    55 |        650 |    9.4 |
-| multiFenwick            | 4M   | 79,703 | 39,086 |    73,656 |    3.2 |
+| tree                  | N    | update |  query | lowerBound | B/elem |
+| --------------------- | ---- | -----: | -----: | ---------: | -----: |
+| fenwickDouble (typed) | 100K |     30 |     19 |         53 |   10.5 |
+| multiFenwickFlat      | 100K |     73 |     33 |        258 |   11.8 |
+| multiFenwick          | 100K | 39,394 | 18,677 |     37,473 |    4.0 |
+| fenwickDouble (typed) | 4M   |     61 |     22 |        300 |    8.4 |
+| multiFenwickFlat      | 4M   |    158 |     55 |        650 |    9.4 |
+| multiFenwick          | 4M   | 79,703 | 39,086 |     73,656 |    3.2 |
 
 `fenwickDouble` holds every integer as a double, so it is exact only up to
 2^53; `multiFenwickFlat` keeps integer cells exact.
@@ -273,13 +272,13 @@ fenwick2dU64Free(heat);
 
 `fenwick<T>NewFromArray(values, count)` builds a tree in O(n), and
 `fenwick<T>CopyTo(fw, out)` writes every element, exactly as `Get` returns
-it, in O(n).  The 2D trees have the same pair over a row-major grid:
+it, in O(n). The 2D trees have the same pair over a row-major grid:
 `fenwick2d<T>NewFromArray(values, rows, cols)` and
 `fenwick2d<T>CopyTo(t, out)`.
 
 `persistOpsFenwick<T>` and `persistOpsFenwick2d<T>`
 (`fenwick/fenwickPersist.h`) persist every typed tree (see
-[PERSIST.md](../persist/PERSIST.md)).  Snapshots are dense:
+[PERSIST.md](../persist/PERSIST.md)). Snapshots are dense:
 
 - Integer trees snapshot their elements and restore through
   `NewFromArray`; the elements determine the tree.
@@ -287,14 +286,14 @@ it, in O(n).  The 2D trees have the same pair over a row-major grid:
   restore them bit for bit: the cells are rounded sums, so the elements
   alone would rebuild a different tree.
 - WAL: `NUM_INCR [index, delta]` replays `Update`, `UPDATE [index, value]`
-  replays `Set`, `CLEAR` replays `Clear` (2D: `[row, col, value]`).  Log
+  replays `Set`, `CLEAR` replays `Clear` (2D: `[row, col, value]`). Log
   only the writes the tree accepted.
 
 The databox trees persist through `persistOpsMultiFenwick`,
 `persistOpsMultiFenwickFlat` and `persistOpsMultiFenwick2d` (declared in
-their headers).  Their snapshots keep the capacity, the count (or the 2D
+their headers). Their snapshots keep the capacity, the count (or the 2D
 capacities and extents) and every cell as stored: a cell that took a double
-holds rounding the elements do not record.  The WAL is the same as the typed
+holds rounding the elements do not record. The WAL is the same as the typed
 trees'.
 
 All twenty-three pass the persistence contract (`persistContract`).

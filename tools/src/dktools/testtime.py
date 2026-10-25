@@ -115,28 +115,28 @@ def run(
     stamped: list[tuple[float, str]] = []
     timed_out = threading.Event()
     start = time.monotonic()
-    with tempfile.TemporaryFile() as err:
-        with procs.streaming([str(binary), "test", test], err) as proc:
+    with (
+        tempfile.TemporaryFile() as err,
+        procs.streaming([str(binary), "test", test], err) as proc,
+    ):
 
-            def stop() -> None:
-                timed_out.set()
-                procs.kill_group(proc)
+        def stop() -> None:
+            timed_out.set()
+            procs.kill_group(proc)
 
-            watchdog = threading.Timer(timeout, stop)
-            watchdog.daemon = True
-            watchdog.start()
-            try:
-                assert proc.stdout is not None
-                for raw in proc.stdout:
-                    stamped.append(
-                        (time.monotonic(), raw.decode("utf-8", errors="replace"))
-                    )
-            finally:
-                watchdog.cancel()
+        watchdog = threading.Timer(timeout, stop)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                stamped.append(
+                    (time.monotonic(), raw.decode("utf-8", errors="replace"))
+                )
+        finally:
+            watchdog.cancel()
     end = time.monotonic()
-    found = sections(
-        stamped, end, (SECTION_PREFIX, *SUITE_PREFIXES, *extra_prefixes)
-    )
+    found = sections(stamped, end, (SECTION_PREFIX, *SUITE_PREFIXES, *extra_prefixes))
     print(render(found, end - start, top))
     if timed_out.is_set():
         print(f"testtime: {test} ran past {timeout:g}s; stopped", file=sys.stderr)

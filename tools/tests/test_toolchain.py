@@ -14,7 +14,6 @@ from pathlib import Path
 
 from dktools import gitutil, toolchain
 from dktools.gitutil import ToolError
-
 from repofixture import IsolatedGitEnv, TempRepo
 
 
@@ -126,7 +125,15 @@ class Presets(unittest.TestCase):
         perf = toolchain.build_config(self.clang, "perf")
         self.assertEqual(
             perf.configure_command(Path("tree"))[:7],
-            ["cmake", "-S", "tree", "-B", "tree/build-clang22-perf", "--preset", "perf"],
+            [
+                "cmake",
+                "-S",
+                "tree",
+                "-B",
+                "tree/build-clang22-perf",
+                "--preset",
+                "perf",
+            ],
         )
         with self.assertRaises(ToolError):
             toolchain.build_config(self.gcc, "perf")
