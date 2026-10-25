@@ -41,7 +41,6 @@ classification is heuristic and clearly labeled as such in reports.
 
 from __future__ import annotations
 
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -654,7 +653,7 @@ def run_audit(
     instead of running alone at the end.  When `timings` is given it
     receives (repo-relative path, seconds) for every file."""
     files = discover(repo)
-    workers = jobs or os.cpu_count() or 4
+    workers = procs.sizing(jobs).build
     order = sorted(range(len(files)), key=lambda i: -_size(files[i]))
     work = [(str(repo), str(files[i]), include_constructors) for i in order]
     answers = procs.parallel_map(

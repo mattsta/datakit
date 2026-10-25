@@ -105,6 +105,10 @@ class Presets(unittest.TestCase):
             ],
         )
         self.assertNotIn("--target", dev.build_command(src, 8, None))
+        # A load ceiling goes to make: no new job at or above that load
+        loaded = dev.build_command(src, 4, None, 8)
+        self.assertEqual(loaded[-3:], ["--", "-l", "8"])
+        self.assertNotIn("-l", dev.build_command(src, 4, None))
 
     def test_unsupported_pairs(self) -> None:
         with self.assertRaises(ToolError):

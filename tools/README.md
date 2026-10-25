@@ -171,6 +171,23 @@ allocaudit gate) goes through `src/dktools/procs.py`:
   it. The private index `verify` writes the tree through lives in a
   temporary directory that is always removed.
 
+### Machine share
+
+Every command that builds or tests (`verify`, `validate`, `coverage`,
+`perfcompare`, `tune`, the allocaudit pool) takes only part of the
+machine, so a run leaves it usable:
+
+- dktools runs `nice` 10, and every build, test and audit it starts
+  inherits that.
+- Compile jobs: `-j N`, else `DKTOOLS_JOBS`, else half the performance
+  cores (4 on an 8+2-core Apple M-series).
+- Tests at once: `DKTOOLS_TEST_JOBS`, else half the compile jobs; many
+  tests start threads of their own.
+- Load ceiling: make (`-l`) and ctest (`--test-load`) start no new job
+  while the load average is at or above the performance-core count.
+- Run one heavy command at a time: each one already sizes itself to
+  the machine.
+
 ## format — every formatter, one command
 
 ```sh

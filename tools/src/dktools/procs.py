@@ -42,6 +42,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, TypeVar
 
@@ -57,6 +58,91 @@ POOL_JOIN_GRACE = 10.0
 
 #: Exit code of a program dktools stopped on a timeout (as timeout(1)).
 TIMEOUT_CODE = 124
+
+#: How far below normal priority dktools runs (set once at startup, so
+#: every build, test and audit it starts inherits it and yields to
+#: interactive work on a shared machine)
+NICE = 10
+
+
+# -- sizing -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Sizing:
+    """How much of the machine one dktools command uses"""
+
+    #: compile jobs (make -j)
+    build: int
+    #: tests run at once (ctest -j); many tests start threads of their own
+    test: int
+    #: no new compile or test starts while the load average is at or
+    #: above this (make -l, ctest --test-load)
+    load: int
+
+
+def performance_cores() -> int:
+    """The cores work is sized by: macOS's performance cores, else the
+    CPUs this process may run on"""
+    if sys.platform == "darwin":
+        with suppress(OSError, ValueError, subprocess.SubprocessError):
+            done = subprocess.run(
+                ["sysctl", "-n", "hw.perflevel0.physicalcpu"],
+                capture_output=True,
+                timeout=5,
+                check=True,
+            )
+            return max(1, int(done.stdout))
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0)))
+    return os.cpu_count() or 4
+
+
+def _env_jobs(env: Mapping[str, str], name: str) -> int | None:
+    text = env.get(name)
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise ToolError(f"{name}={text!r} is not a number of jobs") from exc
+    if value < 1:
+        raise ToolError(f"{name} must be at least 1 (got {value})")
+    return value
+
+
+def sizing(
+    jobs: int | None = None,
+    env: Mapping[str, str] | None = None,
+    cores: int | None = None,
+) -> Sizing:
+    """The machine share for one command: `jobs` (-j) or DKTOOLS_JOBS
+    compile jobs, else half the performance cores; DKTOOLS_TEST_JOBS
+    tests at once, else half the compile jobs; and a load ceiling of
+    the performance cores.  Smaller than "every CPU" on purpose: the
+    machine is shared, tests start their own threads, and a run should
+    leave it usable."""
+    env = os.environ if env is None else env
+    cores = cores or performance_cores()
+    if jobs is not None and jobs < 1:
+        raise ToolError(f"-j must be at least 1 (got {jobs})")
+    build = jobs or _env_jobs(env, "DKTOOLS_JOBS") or max(1, cores // 2)
+    test = _env_jobs(env, "DKTOOLS_TEST_JOBS") or max(1, build // 2)
+    return Sizing(build=build, test=test, load=max(1, cores))
+
+
+_lowered = False
+
+
+def lower_priority() -> None:
+    """Run this process (and so every child it starts) NICE below
+    normal priority, once per process; a no-op where the OS refuses"""
+    global _lowered
+    if _lowered:
+        return
+    _lowered = True
+    with suppress(OSError):
+        os.nice(NICE)
 
 
 class ToolError(Exception):

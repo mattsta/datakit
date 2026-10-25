@@ -233,8 +233,11 @@ def ctest_command(
     jobs: int,
     include: str | None = None,
     exclude: Sequence[str] = (),
+    load: int | None = None,
 ) -> list[str]:
-    """ctest argv; `include` and each `exclude` regex match whole names.
+    """ctest argv; `include` and each `exclude` regex match whole names;
+    with `load`, ctest starts no new test while the load average is at
+    or above it.
 
     No matching test is an error, so a mistyped regex cannot pass."""
     cmd = [
@@ -248,6 +251,8 @@ def ctest_command(
         "--timeout",
         str(CTEST_TEST_TIMEOUT),
     ]
+    if load:
+        cmd += ["--test-load", str(load)]
     if include:
         cmd += ["-R", anchored(include)]
     excluded = [e for e in exclude if e]

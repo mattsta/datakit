@@ -649,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    procs.lower_priority()
 
     # Children run in their own process groups (procs), so a terminal
     # Ctrl-C reaches only dktools: KeyboardInterrupt and these handlers

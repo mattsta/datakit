@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 import statistics
 import sys
@@ -843,7 +842,7 @@ def run(repo: Path, opts: TuneOptions) -> int:
     config = toolchain.build_config(
         opts.compiler, perfcompare.perf_preset(opts.compiler)
     )
-    jobs = opts.jobs or os.cpu_count() or 4
+    size = procs.sizing(opts.jobs)
 
     head = gitutil.git_text(repo, "rev-parse", "HEAD")
     with tempfile.TemporaryDirectory(prefix="dktools-tune-") as tmp:
@@ -859,7 +858,7 @@ def run(repo: Path, opts: TuneOptions) -> int:
     side = perfcompare.Side("tune", tree, work / "src", config)
     gitutil.export_tree(repo, tree, side.src)
     config.check_presets_file(side.src)
-    step = perfcompare.build_side(side, work, jobs)
+    step = perfcompare.build_side(side, work, size)
     if not step.ok:
         sys.stdout.write(
             f"tune {name}: FAIL ({step.name} {step.describe_failure()}, see {step.log})\n"

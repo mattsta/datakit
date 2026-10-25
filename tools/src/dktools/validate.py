@@ -42,12 +42,11 @@ or hard leak hit; 1 on any failure; 2 on an input error.
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import buildstore, formatting, gitutil, leakcheck, steps, toolchain
+from . import buildstore, formatting, gitutil, leakcheck, procs, steps, toolchain
 from .gitutil import ToolError
 from .steps import CtestResult, SanitizerHit, Step, Warning_
 
@@ -152,7 +151,7 @@ def _run_config(
     src: Path,
     logs: Path,
     opts: ValidateOptions,
-    jobs: int,
+    size: procs.Sizing,
 ) -> ConfigResult:
     bindir = config.binary_dir(src)
     gitutil.fresh_dir(bindir)
@@ -169,7 +168,7 @@ def _run_config(
     if configure.ok:
         build = steps.run_logged(
             f"{tag} build",
-            config.build_command(src, jobs, None),
+            config.build_command(src, size.build, None, size.load),
             build.log,
             cwd=src,
             timeout=steps.BUILD_TIMEOUT,
@@ -182,7 +181,11 @@ def _run_config(
         ctest = steps.run_logged(
             f"{tag} ctest",
             steps.ctest_command(
-                bindir, jobs, None, exclude=[opts.serial, opts.skip, extra_skip]
+                bindir,
+                size.test,
+                None,
+                exclude=[opts.serial, opts.skip, extra_skip],
+                load=size.load,
             ),
             ctest.log,
             cwd=bindir,
@@ -397,7 +400,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         raise ToolError(f"-j must be at least 1 (got {opts.jobs})")
     if not opts.compilers:
         raise ToolError("validate needs at least one compiler")
-    jobs = opts.jobs or os.cpu_count() or 4
+    size = procs.sizing(opts.jobs)
     commit = gitutil.resolve_commit(repo, opts.rev)
     subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
     configs = toolchain.matrix(opts.compilers, opts.presets)
@@ -420,7 +423,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
     fmt = formatting.check(src, formatting.tree_files(repo, commit))
     formatting.write_log(fmt, work / "format.log")
 
-    results = [_run_config(c, src, work / c.label, opts, jobs) for c in configs]
+    results = [_run_config(c, src, work / c.label, opts, size) for c in configs]
 
     alloc = Step("allocaudit", work / "alloc.log")
     try:

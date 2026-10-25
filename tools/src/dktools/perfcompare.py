@@ -31,7 +31,6 @@ input error.
 
 from __future__ import annotations
 
-import os
 import re
 import statistics
 import sys
@@ -39,7 +38,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import buildstore, gitutil, perfdiff, steps, toolchain
+from . import buildstore, gitutil, perfdiff, procs, steps, toolchain
 from .gitutil import ToolError
 
 DEFAULT_BENCH_PATHS = ("src/perfRegression.c", "src/perfRegression.h")
@@ -145,7 +144,7 @@ class Side:
         return self.config.binary_dir(self.src) / "src" / "datakit-test"
 
 
-def build_side(side: Side, work: Path, jobs: int) -> steps.Step:
+def build_side(side: Side, work: Path, size: procs.Sizing) -> steps.Step:
     """Configure and build `side`'s datakit-test; the failing step or the
     build step."""
     configure = steps.run_logged(
@@ -159,7 +158,7 @@ def build_side(side: Side, work: Path, jobs: int) -> steps.Step:
         return configure
     return steps.run_logged(
         f"{side.label} build",
-        side.config.build_command(side.src, jobs, ["datakit-test"]),
+        side.config.build_command(side.src, size.build, ["datakit-test"], size.load),
         work / f"{side.label}-build.log",
         cwd=side.src,
         timeout=steps.BUILD_TIMEOUT,
@@ -178,7 +177,7 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
     modules = parse_modules(opts.modules)
     bench = [(gitutil.repo_path(p), None) for p in opts.bench_paths]
     config = toolchain.build_config(opts.compiler, perf_preset(opts.compiler))
-    jobs = opts.jobs or os.cpu_count() or 4
+    size = procs.sizing(opts.jobs)
 
     base_commit = gitutil.resolve_commit(repo, opts.base)
     with tempfile.TemporaryDirectory(prefix="dktools-perfcompare-") as tmp:
@@ -201,7 +200,7 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         sides.append(Side(label, tree, src, config))
 
     for side in sides:
-        step = build_side(side, work, jobs)
+        step = build_side(side, work, size)
         if not step.ok:
             sys.stdout.write(
                 f"perfcompare {name}: FAIL ({step.name} {step.describe_failure()}, "

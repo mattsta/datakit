@@ -224,5 +224,35 @@ class ParallelMap(Scratch):
                 parent.wait()
 
 
+class Sizing(unittest.TestCase):
+    def test_defaults_leave_most_of_the_machine(self) -> None:
+        # 8 performance cores: 4 compile jobs, 2 tests at once, no new
+        # work while the load average is 8 or more
+        self.assertEqual(procs.sizing(env={}, cores=8), procs.Sizing(4, 2, 8))
+        self.assertEqual(procs.sizing(env={}, cores=1), procs.Sizing(1, 1, 1))
+        self.assertEqual(procs.sizing(env={}, cores=3), procs.Sizing(1, 1, 3))
+
+    def test_jobs_and_environment_override(self) -> None:
+        self.assertEqual(procs.sizing(6, env={}, cores=8), procs.Sizing(6, 3, 8))
+        env = {"DKTOOLS_JOBS": "3", "DKTOOLS_TEST_JOBS": "1"}
+        self.assertEqual(procs.sizing(env=env, cores=8), procs.Sizing(3, 1, 8))
+        # -j wins over DKTOOLS_JOBS
+        self.assertEqual(procs.sizing(2, env=env, cores=8).build, 2)
+
+    def test_bad_sizes_refuse(self) -> None:
+        for env in (
+            {"DKTOOLS_JOBS": "x"},
+            {"DKTOOLS_JOBS": "0"},
+            {"DKTOOLS_TEST_JOBS": "-1"},
+        ):
+            with self.subTest(env=env), self.assertRaises(ToolError):
+                procs.sizing(env=env, cores=8)
+        with self.assertRaises(ToolError):
+            procs.sizing(0, env={}, cores=8)
+
+    def test_the_machine_reports_performance_cores(self) -> None:
+        self.assertGreaterEqual(procs.performance_cores(), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

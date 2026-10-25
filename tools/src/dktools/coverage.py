@@ -30,7 +30,6 @@ report is still written when the build succeeded), 2 on an input error.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import sys
@@ -662,7 +661,7 @@ def run(repo: Path, opts: CoverageOptions) -> int:
     llvm_cov = str(llvm / "llvm-cov")
     for program in (profdata, llvm_cov):
         gitutil.require_program(program)
-    jobs = opts.jobs or os.cpu_count() or 4
+    size = procs.sizing(opts.jobs)
 
     commit = gitutil.resolve_commit(repo, opts.rev)
     subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
@@ -690,7 +689,7 @@ def run(repo: Path, opts: CoverageOptions) -> int:
     if configure.ok:
         build = steps.run_logged(
             "coverage build",
-            config.build_command(src, jobs, None),
+            config.build_command(src, size.build, None, size.load),
             build.log,
             cwd=src,
             timeout=steps.BUILD_TIMEOUT,
@@ -702,7 +701,13 @@ def run(repo: Path, opts: CoverageOptions) -> int:
     env = {"LLVM_PROFILE_FILE": str(profiles / "%p.profraw")}
     ctest = steps.run_logged(
         "coverage ctest",
-        steps.ctest_command(bindir, jobs, None, exclude=[opts.serial, opts.skip]),
+        steps.ctest_command(
+            bindir,
+            size.test,
+            None,
+            exclude=[opts.serial, opts.skip],
+            load=size.load,
+        ),
         logs / "ctest.log",
         cwd=bindir,
         env=env,

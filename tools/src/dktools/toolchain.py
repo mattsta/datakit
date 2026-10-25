@@ -157,12 +157,20 @@ class BuildConfig:
         return cmd + self.compiler.cmake_defines()
 
     def build_command(
-        self, source: Path, jobs: int, targets: Sequence[str] | None
+        self,
+        source: Path,
+        jobs: int,
+        targets: Sequence[str] | None,
+        load: int | None = None,
     ) -> list[str]:
-        """``cmake --build`` argv; `targets` None builds all targets."""
+        """``cmake --build`` argv; `targets` None builds all targets; with
+        `load`, make starts no new job while the load average is at or
+        above it."""
         cmd = ["cmake", "--build", str(self.binary_dir(source)), "-j", str(jobs)]
         if targets:
             cmd += ["--target", *targets]
+        if load:
+            cmd += ["--", "-l", str(load)]
         return cmd
 
     def check_presets_file(self, source: Path) -> None:

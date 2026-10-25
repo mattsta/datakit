@@ -75,7 +75,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import buildstore, formatting, gitutil, steps, toolchain
+from . import buildstore, formatting, gitutil, procs, steps, toolchain
 from .gitutil import ToolError
 from .steps import Step
 
@@ -285,7 +285,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     source = check_source(opts)
     specs = parse_specs(opts.specs) if source == "paths" else []
     config = toolchain.build_config(opts.compiler, opts.preset)
-    jobs = opts.jobs or os.cpu_count() or 4
+    size = procs.sizing(opts.jobs)
 
     # Every input check that can refuse runs before ROOT/verify/NAME is
     # recreated, so a refused run leaves the previous result in place.
@@ -319,7 +319,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         plan = _plan_targets(bindir, work, opts)
         build = steps.run_logged(
             "build",
-            config.build_command(src, jobs, plan.targets),
+            config.build_command(src, size.build, plan.targets, size.load),
             build.log,
             cwd=src,
             timeout=steps.BUILD_TIMEOUT,
@@ -333,7 +333,13 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     if build.ok and opts.tests:
         ctest = steps.run_logged(
             "ctest",
-            steps.ctest_command(bindir, jobs, opts.tests, exclude=[opts.serial or ""]),
+            steps.ctest_command(
+                bindir,
+                size.test,
+                opts.tests,
+                exclude=[opts.serial or ""],
+                load=size.load,
+            ),
             ctest.log,
             cwd=bindir,
             timeout=steps.CTEST_TIMEOUT,

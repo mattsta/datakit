@@ -126,6 +126,13 @@ def show_only_json(commands: dict[str, list[str]]) -> str:
     return json.dumps({"kind": "ctestInfo", "tests": tests})
 
 
+def build_targets(build: list[str]) -> list[str]:
+    """The --target names of a cmake --build argv (up to the native
+    tool's own arguments after --)"""
+    rest = build[build.index("--target") + 1 :]
+    return rest[: rest.index("--")] if "--" in rest else rest
+
+
 class Scanners(unittest.TestCase):
     def setUp(self) -> None:
         self._dir = tempfile.TemporaryDirectory()
@@ -358,6 +365,9 @@ class Scanners(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-R") + 1], "^(a|b)$")
         self.assertEqual(cmd[cmd.index("-E") + 1], "^(c.*P)$")
         self.assertNotIn("-E", steps.ctest_command(Path("b"), 1, "x", exclude=[""]))
+        loaded = steps.ctest_command(Path("b"), 2, "x", load=8)
+        self.assertEqual(loaded[loaded.index("--test-load") + 1], "8")
+        self.assertNotIn("--test-load", cmd)
 
     def test_parse_specs(self) -> None:
         self.assertEqual(
@@ -487,9 +497,7 @@ class VerifyRun(unittest.TestCase):
         self.assertIn("--show-only=json-v1", listing)
         self.assertEqual(listing[listing.index("-R") + 1], "^(databox)$")
         build = runner.command("build")
-        self.assertEqual(
-            build[build.index("--target") + 1 :], list(toolchain.PRESET_TARGETS)
-        )
+        self.assertEqual(build_targets(build), list(toolchain.PRESET_TARGETS))
         configure = runner.calls[0][1]
         self.assertIn("--preset", configure)
         self.assertIn(f"-DCMAKE_C_COMPILER={sys.executable}", configure)
@@ -606,7 +614,7 @@ class VerifyRun(unittest.TestCase):
         self.assertEqual(listing[listing.index("-R") + 1], "^(databox|varint-.*|dd)$")
         build = runner.command("build")
         self.assertEqual(
-            build[build.index("--target") + 1 :],
+            build_targets(build),
             [*toolchain.PRESET_TARGETS, "varintPackedTest", "varintDDTest"],
         )
         self.assertIn(
@@ -631,7 +639,7 @@ class VerifyRun(unittest.TestCase):
         names = [name for name, _ in runner.calls]
         self.assertNotIn("ctest-list", names)
         build = runner.command("build")
-        self.assertEqual(build[build.index("--target") + 1 :], ["datakit-test"])
+        self.assertEqual(build_targets(build), ["datakit-test"])
         self.assertIn("  targets   datakit-test (--target)\n", out)
         self.assertIn(
             "  missing   1 test(s) did not run, executable not built: varint-packed\n",
