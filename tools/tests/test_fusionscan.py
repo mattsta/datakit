@@ -61,6 +61,19 @@ class Pairs(unittest.TestCase):
         """
         self.assertEqual(scan(src), [("f", "multimapExists", "multimapInsert", "row")])
 
+    def test_a_row_array_built_from_the_key_names_that_key(self) -> None:
+        src = """
+        void f(roar *r, uint64_t position, databox *value) {
+            const databox key = databoxNewUnsigned(position);
+            databox prev = {{0}};
+            databox *lookup[1] = {&prev};
+            const bool had = multimapLookup(r->map, &key, lookup);
+            const databox *elements[2] = {&key, value};
+            multimapInsert(&r->map, elements);
+        }
+        """
+        self.assertEqual(scan(src), [("f", "multimapLookup", "multimapInsert", "key")])
+
     def test_tier_families_match_their_base(self) -> None:
         src = """
         void f(multimapFull *m, const databox *e[]) {

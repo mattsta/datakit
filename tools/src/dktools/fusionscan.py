@@ -22,7 +22,9 @@ of the same container family:
 
 and the two calls name the same container (first argument) and the same
 key (second argument), compared by root identifier: ``&m->m`` and ``m`` are
-both ``m``, ``elements[0]`` and ``elements`` both ``elements``.  A read
+both ``m``, ``elements[0]`` and ``elements`` both ``elements``, and a row
+array built as ``elements[] = {&key, ...}`` in the function names
+``key``.  A read
 whose result (the variable it is assigned to) a write takes is where that
 write acts (already one search), and is not paired.
 
@@ -141,6 +143,27 @@ def _arguments(tokens: list[Token], open_idx: int) -> tuple[tuple[str, ...], ...
     return tuple(tuple(a) for a in args if a)
 
 
+def _row_alias(tokens: list[Token], i: int) -> tuple[str, str] | None:
+    """(name, key) for ``name[...] = {&key, ...}`` starting at token i: a
+    row array whose first element is the key it names."""
+    if not _IDENT.match(tokens[i].text) or i + 1 >= len(tokens):
+        return None
+    j = i + 1
+    if tokens[j].text != "[":
+        return None
+    while j < len(tokens) and tokens[j].text != "]":
+        j += 1
+    if j + 2 >= len(tokens) or tokens[j + 1].text != "=" or tokens[j + 2].text != "{":
+        return None
+    first: list[str] = []
+    for tok in tokens[j + 3 :]:
+        if tok.text in (",", "}"):
+            break
+        first.append(tok.text)
+    key = root(tuple(first))
+    return (tokens[i].text, key) if key else None
+
+
 def _assigned_to(tokens: list[Token], name_idx: int) -> str:
     """The variable in ``x = name(...)`` or ``T *x = name(...)``, else ""."""
     if name_idx >= 2 and tokens[name_idx - 1].text == "=":
@@ -161,6 +184,11 @@ def scan_text(path: str, src: str, known: list[str]) -> list[Pair]:
     function = ""
     candidate = ""
     calls: list[Call] = []
+    aliases: dict[str, str] = {}  # row array -> the key it begins with
+
+    def key_of(arg: tuple[str, ...]) -> str:
+        name = root(arg)
+        return aliases.get(name, name)
 
     def close_function() -> None:
         reads = [c for c in calls if c.verb in READ_VERBS]
@@ -168,7 +196,7 @@ def scan_text(path: str, src: str, known: list[str]) -> list[Pair]:
         for r in reads:
             if len(r.args) < 2:
                 continue
-            container, key = root(r.args[0]), root(r.args[1])
+            container, key = root(r.args[0]), key_of(r.args[1])
             if not container or not key:
                 continue
             if r.result and any(r.result in a for w in writes for a in w.args):
@@ -180,7 +208,7 @@ def scan_text(path: str, src: str, known: list[str]) -> list[Pair]:
                     w.family.startswith(r.family) or r.family.startswith(w.family)
                 ):
                     continue
-                if root(w.args[0]) != container or root(w.args[1]) != key:
+                if root(w.args[0]) != container or key_of(w.args[1]) != key:
                     continue
                 pairs.append(Pair(path, function, r, w, container, key))
                 break
@@ -193,8 +221,13 @@ def scan_text(path: str, src: str, known: list[str]) -> list[Pair]:
             if depth == 0:
                 function = candidate
                 calls = []
+                aliases.clear()
             depth += 1
             continue
+        if depth > 0 and tok.line not in skip:
+            alias = _row_alias(tokens, i)
+            if alias:
+                aliases[alias[0]] = alias[1]
         if t == "}":
             depth = max(depth - 1, 0)
             if depth == 0 and function:
