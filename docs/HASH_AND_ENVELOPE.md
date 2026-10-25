@@ -114,7 +114,7 @@ poly1305SetForceBackend(POLY1305_FORCE_AUTO);
 
 ### Throughput reference numbers
 
-Measured with `./build-perf/src/datakit-test test perfRegression` on an
+Measured with `./build/perf/src/datakit-test test perfRegression` on an
 Apple M1 Max (single thread, macOS 14.8, clang 22 `perf` preset), with the
 backend auto-selected (NEON for ChaCha20-Poly1305, ARMv8 Crypto for
 SHA-256):
@@ -139,7 +139,7 @@ The other backends have no measured figures here:
 Measure these with perfRegression on the hardware in question; on hosts
 with the SHA extensions, SHA-256 is preferred over BLAKE3.
 
-Use `./build-perf/src/datakit-test test perfRegression` +
+Use `./build/perf/src/datakit-test test perfRegression` +
 `cd tools && uv run dktools perfdiff BASELINE.tsv CURRENT.tsv` (against a
 locally kept, uncommitted baseline TSV) for the live numbers on your hardware
 — see `docs/HASH_PERFORMANCE.md` for the per-algorithm baseline

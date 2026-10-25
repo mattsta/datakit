@@ -13,10 +13,10 @@ To reproduce:
 
 ```sh
 cmake --preset perf && cmake --build --preset perf
-./build-perf/src/datakit-test test blake3Neon       # BLAKE3 + NEON paths
-./build-perf/src/datakit-test test sha256ArmCrypto  # SHA-256 portable vs HW
-./build-perf/src/datakit-test test hmac             # HMAC + prepared-key
-./build-perf/src/datakit-test test flexEnvelope     # full envelope matrix
+./build/perf/src/datakit-test test blake3Neon       # BLAKE3 + NEON paths
+./build/perf/src/datakit-test test sha256ArmCrypto  # SHA-256 portable vs HW
+./build/perf/src/datakit-test test hmac             # HMAC + prepared-key
+./build/perf/src/datakit-test test flexEnvelope     # full envelope matrix
 ```
 
 ## Headline numbers (Apple Silicon, perf preset, 1 MiB payload)
@@ -107,9 +107,9 @@ ASAN + UBSAN enabled):
 
 ```sh
 cmake --preset safe && cmake --build --preset safe
-./build-safe/src/datakit-test test flex
-./build-safe/src/datakit-test test blake3
-./build-safe/src/datakit-test test flexEnvelope
+./build/safe/src/datakit-test test flex
+./build/safe/src/datakit-test test blake3
+./build/safe/src/datakit-test test flexEnvelope
 # etc.
 ```
 

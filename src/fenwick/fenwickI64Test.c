@@ -797,7 +797,7 @@ int fenwickI64Test(int argc, char *argv[]) {
     }
 
     TEST("BENCH: Medium dataset (20K) - Full Tier Performance") {
-        const size_t N = 20000;          /* Forces Full tier */
+        const size_t N = 20000; /* Forces Full tier */
         /* Checksum-verified smoke size; timing lives in fenwickBench */
         const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;

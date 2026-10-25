@@ -32,7 +32,7 @@ overhead and invalidate every number you collect under them.
 
 ```bash
 cmake --preset perf
-cmake --build build-perf
+cmake --build build/perf
 ```
 
 Rules that make a capture comparable to an earlier one:
@@ -53,30 +53,30 @@ arguments it prints usage; `list` enumerates everything runnable.
 
 ```bash
 # Discover what exists
-./build-perf/src/datakit-test list
+./build/perf/src/datakit-test list
 
 # String buffer benchmarks
-./build-perf/src/datakit-test bench mdsbench
-./build-perf/src/datakit-test bench mdscbench
+./build/perf/src/datakit-test bench mdsbench
+./build/perf/src/datakit-test bench mdscbench
 
 # Whole-system throughput sweep (default 64 MB working set)
-./build-perf/src/datakit-test speed
-./build-perf/src/datakit-test speed 128
-./build-perf/src/datakit-test speed --json
-./build-perf/src/datakit-test speed --csv
+./build/perf/src/datakit-test speed
+./build/perf/src/datakit-test speed 128
+./build/perf/src/datakit-test speed --json
+./build/perf/src/datakit-test speed --csv
 
 # Row-level regression gate against a locally kept baseline TSV
-./build-perf/src/datakit-test test perfRegression
+./build/perf/src/datakit-test test perfRegression
 ```
 
 Two benchmarks build as standalone executables rather than test-binary
 subcommands:
 
 ```bash
-cmake --build build-perf --target intsetSearchBench memboundBench
-./build-perf/intsetSearchBench
-./build-perf/memboundBench
-MEMBOUND_BENCH_MEMSHARD=1 ./build-perf/memboundBench
+cmake --build build/perf --target intsetSearchBench memboundBench
+./build/perf/intsetSearchBench
+./build/perf/memboundBench
+MEMBOUND_BENCH_MEMSHARD=1 ./build/perf/memboundBench
 ```
 
 Run one named test rather than the whole suite: `datakit-test test ALL`

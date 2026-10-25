@@ -184,7 +184,7 @@ other hardware to differ. Reproduce them with:
 
 ```sh
 cmake --preset perf && cmake --build --preset perf
-./build-perf/src/datakit-test test compressionBench
+./build/perf/src/datakit-test test compressionBench
 ```
 
 **Guideline**: for large lists, depth 1 and depth 2 store the same bytes,

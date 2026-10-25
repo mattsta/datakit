@@ -24,7 +24,9 @@ why, and how to run it.
 
 After the matrix it scans the test logs for UBSan ("runtime error:"),
 ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors``,
-``atomicaudit check`` and ``outputaudit check`` on the exported tree, and runs the leakage gate
+``atomicaudit check`` and ``outputaudit check`` on the exported tree, checks
+that every file of the tree is formatted (``dktools.formatting``; it rewrites
+nothing: ``dktools format write`` does), and runs the leakage gate
 over the added lines of
 ``merge-base(BASE, REV)..REV`` (BASE default ``origin/main``; an empty
 ``--leak-base`` skips it).
@@ -45,7 +47,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gitutil, leakcheck, steps, toolchain
+from . import buildstore, formatting, gitutil, leakcheck, steps, toolchain
 from .gitutil import ToolError
 from .steps import CtestResult, SanitizerHit, Step, Warning_
 
@@ -250,6 +252,7 @@ def render(
     output: Step,
     leak: tuple[str, list[leakcheck.Hit]] | None,
     passed: bool,
+    fmt: tuple[formatting.Report, Path],
 ) -> str:
     """The markdown summary."""
     md = [
@@ -348,6 +351,10 @@ def render(
     md += ["", "## Library output", ""]
     md.append(f"{_step_cell(output)}: {steps.last_line(output.log)}")
 
+    md += ["", "## Formatting", ""]
+    md.append(formatting.gate_line(fmt[0]))
+    md += [f"- {line}" for line in fmt[0].lines("would change")]
+
     md += ["", "## Leakage gate", ""]
     if leak is None:
         md.append("skipped (empty --leak-base)")
@@ -373,6 +380,7 @@ def render(
     md.append(f"- {alloc.log}")
     md.append(f"- {atomic.log}")
     md.append(f"- {output.log}")
+    md.append(f"- {fmt[1]}")
     return "\n".join(md) + "\n"
 
 
@@ -401,12 +409,16 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         merge_base = gitutil.git_text(repo, "merge-base", base, commit)
         leak_range = f"{merge_base}..{commit}"
 
-    root = gitutil.scratch_root(opts.root).resolve()
-    work = gitutil.fresh_dir(root / "validate" / work_dir_name(commit, configs))
+    root = gitutil.scratch_root(opts.root, repo).resolve()
+    work = buildstore.fresh_build(
+        repo, root, "validate", work_dir_name(commit, configs), commit, "validate"
+    )
     src = work / "src"
     gitutil.export_tree(repo, commit, src)
     for config in configs:
         config.check_presets_file(src)
+    fmt = formatting.check(src, formatting.tree_files(repo, commit))
+    formatting.write_log(fmt, work / "format.log")
 
     results = [_run_config(c, src, work / c.label, opts, jobs) for c in configs]
 
@@ -449,9 +461,25 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         leak = (leak_range, hits)
 
     passed = (
-        all(r.ok for r in results) and alloc.ok and atomic.ok and output.ok and leak_ok
+        all(r.ok for r in results)
+        and alloc.ok
+        and atomic.ok
+        and output.ok
+        and leak_ok
+        and fmt.clean()
     )
-    text = render(commit, subject, results, opts, alloc, atomic, output, leak, passed)
+    text = render(
+        commit,
+        subject,
+        results,
+        opts,
+        alloc,
+        atomic,
+        output,
+        leak,
+        passed,
+        (fmt, work / "format.log"),
+    )
     summary = work / "summary.md"
     summary.write_text(text)
     sys.stdout.write(text)

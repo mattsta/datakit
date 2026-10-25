@@ -33,6 +33,12 @@ regex that matches no test is a failure.  ``allocaudit check --constructors``,
 ``atomicaudit check`` and ``outputaudit check`` run on the tree with the tree's
 own dktools.
 
+Formatting is part of the run (``dktools.formatting``): before the tree
+is written, the working-tree files it takes are formatted in place
+(every path with --all-changed, the named paths otherwise, nothing with
+--staged), and the ``format`` line checks every file of the tree built,
+so an unformatted file fails the run.
+
 Without ``--target`` the build covers the four preset targets plus
 every target the selected tests run: configure is asked for the CMake
 File API codemodel (each target's artifacts), ``ctest
@@ -47,7 +53,7 @@ that leaves it out) is reported on its own ``missing`` line with the
 targets to add, not as an ordinary failure.
 
 Prints a result block (tree hash, build, warning and linker-note
-counts, ctest, sanitizer, allocaudit, atomicaudit and outputaudit results, failing test names,
+counts, ctest, sanitizer, allocaudit, atomicaudit, outputaudit and format results, failing test names,
 log paths) and also writes it to ``ROOT/verify/NAME/result.txt``.
 Exits 0 only when every step passed with zero warning lines and no
 sanitizer report, 1 otherwise, and 2 on an input error.  The macOS
@@ -69,7 +75,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gitutil, steps, toolchain
+from . import buildstore, formatting, gitutil, steps, toolchain
 from .gitutil import ToolError
 from .steps import Step
 
@@ -138,6 +144,26 @@ def build_source_tree(
             "(name an unchanged PATH to build HEAD on purpose)"
         )
     return tree, changes
+
+
+def format_taken(
+    repo: Path, source: str, specs: list[tuple[str, Path | None]]
+) -> list[str]:
+    """Format in place the working-tree files the run takes (not under
+    --staged: the index is what it builds, and PATH=FILE content is not
+    a working-tree file), so the tree built is the formatted one; the
+    result lines of what was rewritten or refused."""
+    if source == "staged":
+        return []
+    if source == "paths":
+        taken = [path for path, file in specs if file is None]
+    else:
+        taken = gitutil.changed_paths(repo)
+    report = formatting.write(repo, [p for p in taken if (repo / p).is_file()])
+    lines = report.lines("rewrote")
+    for line in lines:
+        print(f"dktools: format: {line}", file=sys.stderr, flush=True)
+    return lines
 
 
 def _source_label(source: str, specs: list[tuple[str, Path | None]]) -> str:
@@ -265,15 +291,18 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     # recreated, so a refused run leaves the previous result in place.
     # The tree is written through a throwaway index outside it.
     head = gitutil.git_text(repo, "rev-parse", "--short", "HEAD")
+    formatted = format_taken(repo, source, specs)
     with tempfile.TemporaryDirectory(prefix="dktools-verify-") as tmp:
         tree, changes = build_source_tree(repo, Path(tmp) / "index", source, specs)
     config.compiler.check()
 
-    root = gitutil.scratch_root(opts.root).resolve()
-    work = gitutil.fresh_dir(root / "verify" / name)
+    root = gitutil.scratch_root(opts.root, repo).resolve()
+    work = buildstore.fresh_build(repo, root, "verify", name, head, "verify")
     src = work / "src"
     gitutil.export_tree(repo, tree, src)
     config.check_presets_file(src)
+    fmt = formatting.check(src, formatting.tree_files(repo, tree))
+    formatting.write_log(fmt, work / "format.log")
     bindir = config.binary_dir(src)
 
     steps.request_codemodel(bindir)
@@ -368,6 +397,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and alloc.ok
         and atomic.ok
         and output.ok
+        and fmt.clean()
     )
 
     counts = f"{warn} warning lines, {notes} linker notes"
@@ -391,6 +421,8 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"  alloc     {'ok' if alloc.ok else 'FAILED'} ({steps.last_line(alloc.log)})",
         f"  atomic    {'ok' if atomic.ok else 'FAILED'} ({steps.last_line(atomic.log)})",
         f"  output    {'ok' if output.ok else 'FAILED'} ({steps.last_line(output.log)})",
+        f"  format    {formatting.gate_line(fmt)}",
+        *(f"  formatted {line}" for line in formatted),
     ]
     if failed:
         lines.append(f"  failed    {' '.join(failed)}")
@@ -413,6 +445,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         alloc.log,
         atomic.log,
         output.log,
+        work / "format.log",
     ):
         if log.exists():
             lines.append(f"    {log}")

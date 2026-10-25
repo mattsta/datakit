@@ -23,7 +23,7 @@ cmake --preset dev
 cmake --build --preset dev
 ```
 
-That produces `build-dev/`. The other presets are `debug` (-O0 +
+That produces `build/dev/`. The other presets are `debug` (-O0 +
 symbols + sanitizers), `perf` (native + LTO, no sanitizers — use this
 for every benchmark), and `safe` (sanitizers, for CI).
 
@@ -51,7 +51,7 @@ cmake -DBuildTestBinary=OFF ..
 
 ### Build Outputs
 
-After building, `build-dev/src/` (or `build/src/`) holds:
+After building, `build/dev/src/` (or `build/src/`) holds:
 
 1. **Static library**: `datakit.a` - Link statically into your application
 2. **Shared library**: `libdatakit.so.0.3.0` (`.dylib` on macOS) - Dynamic linking
@@ -68,29 +68,29 @@ The test suite provides both validation and usage examples:
 
 ```sh
 # Discover what exists — the binary is the source of truth
-./build-dev/src/datakit-test list
+./build/dev/src/datakit-test list
 
 # Run one module's tests
-./build-dev/src/datakit-test test multimap
-./build-dev/src/datakit-test test multilist
-./build-dev/src/datakit-test test flex
-./build-dev/src/datakit-test test intset
-./build-dev/src/datakit-test test hyperloglog
+./build/dev/src/datakit-test test multimap
+./build/dev/src/datakit-test test multilist
+./build/dev/src/datakit-test test flex
+./build/dev/src/datakit-test test intset
+./build/dev/src/datakit-test test hyperloglog
 
 # Size-specific variants
-./build-dev/src/datakit-test test multimapFull
-./build-dev/src/datakit-test test multilistFull
-./build-dev/src/datakit-test test multiarrayLarge
+./build/dev/src/datakit-test test multimapFull
+./build/dev/src/datakit-test test multilistFull
+./build/dev/src/datakit-test test multiarrayLarge
 
 # Everything (long)
-./build-dev/src/datakit-test test ALL
+./build/dev/src/datakit-test test ALL
 ```
 
 Every registered test is also a CTest target, which is the faster way
 to run several:
 
 ```sh
-ctest --test-dir build-dev -j8 -R '^(flex|mflex|multimap)$'
+ctest --test-dir build/dev -j8 -R '^(flex|mflex|multimap)$'
 ```
 
 ### Available Tests
@@ -345,11 +345,11 @@ compiler at the source and build trees directly. The static library is
 DK=../datakit    # wherever you checked datakit out
 
 # Static
-cc -o myapp myapp.c -I"$DK/src" "$DK/build-dev/src/datakit.a" -lm -lpthread
+cc -o myapp myapp.c -I"$DK/src" "$DK/build/dev/src/datakit.a" -lm -lpthread
 
 # Versioned shared library
-cc -o myapp myapp.c -I"$DK/src" -L"$DK/build-dev/src" -ldatakit \
-   -Wl,-rpath,"$DK/build-dev/src"
+cc -o myapp myapp.c -I"$DK/src" -L"$DK/build/dev/src" -ldatakit \
+   -Wl,-rpath,"$DK/build/dev/src"
 ```
 
 On macOS, drop `-lm -lpthread`: both live in libSystem.

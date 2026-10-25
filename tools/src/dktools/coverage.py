@@ -37,7 +37,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gitutil, procs, steps, toolchain, validate
+from . import buildstore, gitutil, procs, steps, toolchain, validate
 from .gitutil import ToolError
 from .steps import Step
 
@@ -666,9 +666,11 @@ def run(repo: Path, opts: CoverageOptions) -> int:
 
     commit = gitutil.resolve_commit(repo, opts.rev)
     subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
-    root = gitutil.scratch_root(opts.root).resolve()
+    root = gitutil.scratch_root(opts.root, repo).resolve()
     keep_previous_run(root / "coverage" / commit[:10])
-    work = gitutil.fresh_dir(root / "coverage" / commit[:10])
+    work = buildstore.fresh_build(
+        repo, root, "coverage", commit[:10], commit, "coverage"
+    )
     src = work / "src"
     gitutil.export_tree(repo, commit, src)
     config = toolchain.build_config(compiler, "coverage")
@@ -1242,7 +1244,8 @@ def render_detail(
 
 def _earlier_run(repo: Path, opts: CoverageOptions) -> tuple[str, Path]:
     commit = gitutil.resolve_commit(repo, opts.rev)
-    work = gitutil.scratch_root(opts.root).resolve() / "coverage" / commit[:10]
+    work = gitutil.scratch_root(opts.root, repo).resolve() / "coverage" / commit[:10]
+    buildstore.touch(work)
     return commit, work
 
 
@@ -1315,7 +1318,8 @@ def rereport(repo: Path, opts: CoverageOptions) -> int:
     with no build and no tests (the report's own changes, cheaply)."""
     commit = gitutil.resolve_commit(repo, opts.rev)
     subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
-    work = gitutil.scratch_root(opts.root).resolve() / "coverage" / commit[:10]
+    work = gitutil.scratch_root(opts.root, repo).resolve() / "coverage" / commit[:10]
+    buildstore.touch(work)
     logs = work / "logs"
     for need in (work / "src", logs / "export.json", logs / "functions.txt"):
         if not need.exists():

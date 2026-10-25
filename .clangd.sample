@@ -8,7 +8,9 @@
 # below (generate it with CMake's CMAKE_EXPORT_COMPILE_COMMANDS=ON).
 
 CompileFlags:
-  CompilationDatabase: build
+  # The preset build whose compile_commands.json clangd reads
+  # (build/<preset>/, see docs/BUILD_PRESETS.md).
+  CompilationDatabase: build/dev
 
   # macOS: CMake's compile_commands.json does not embed -isysroot, so
   # clangd cannot find the SDK headers on its own. If your setup needs

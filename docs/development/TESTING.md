@@ -20,7 +20,7 @@ The test binary is one of the four targets every build preset builds:
 cmake --preset dev && cmake --build --preset dev
 ```
 
-That produces `build-dev/src/datakit-test`. Substitute `debug`, `perf`,
+That produces `build/dev/src/datakit-test`. Substitute `debug`, `perf`,
 or `safe` for a different configuration (see
 [BUILDING.md](BUILDING.md)). A plain `mkdir build && cd build && cmake
 .. && make -j8` also works and puts the binary at `build/src/datakit-test`.
@@ -56,103 +56,103 @@ The registry in `src/datakit-test.c` is the single source of truth. Ask
 the binary rather than trusting a hand-maintained list:
 
 ```sh
-./build-dev/src/datakit-test list
-./build-dev/src/datakit-test list --json
+./build/dev/src/datakit-test list
+./build/dev/src/datakit-test list --json
 ```
 
 ### Running Individual Tests
 
 ```sh
-./build-dev/src/datakit-test test <name>
+./build/dev/src/datakit-test test <name>
 ```
 
 Frequently used names, with aliases in comments:
 
 ```sh
 # Containers
-./build-dev/src/datakit-test test flex
-./build-dev/src/datakit-test test mflex
-./build-dev/src/datakit-test test multimap        # multimapFull, multimapMedium, multimapAtom (atom)
-./build-dev/src/datakit-test test multilist       # ml; also multilistFull
-./build-dev/src/datakit-test test multiarray      # multiarraySmall / Medium / Large
-./build-dev/src/datakit-test test multidict
-./build-dev/src/datakit-test test multiroar
-./build-dev/src/datakit-test test multilru        # lru, mlru
-./build-dev/src/datakit-test test multiOrderedSet # mos
-./build-dev/src/datakit-test test list
-./build-dev/src/datakit-test test ptrPrevNext     # ppn
+./build/dev/src/datakit-test test flex
+./build/dev/src/datakit-test test mflex
+./build/dev/src/datakit-test test multimap        # multimapFull, multimapMedium, multimapAtom (atom)
+./build/dev/src/datakit-test test multilist       # ml; also multilistFull
+./build/dev/src/datakit-test test multiarray      # multiarraySmall / Medium / Large
+./build/dev/src/datakit-test test multidict
+./build/dev/src/datakit-test test multiroar
+./build/dev/src/datakit-test test multilru        # lru, mlru
+./build/dev/src/datakit-test test multiOrderedSet # mos
+./build/dev/src/datakit-test test list
+./build/dev/src/datakit-test test ptrPrevNext     # ppn
 
 # Numeric / set types
-./build-dev/src/datakit-test test intset
-./build-dev/src/datakit-test test intsetU32
-./build-dev/src/datakit-test test hyperloglog     # hll
-./build-dev/src/datakit-test test linearBloom     # bloom
-./build-dev/src/datakit-test test float16         # f16
-./build-dev/src/datakit-test test fenwickI64      # fw, bit, fenwick
-./build-dev/src/datakit-test test segmentI64      # seg, segtree, segment
-./build-dev/src/datakit-test test multiFenwick    # mfw, mbit
-./build-dev/src/datakit-test test multiFenwickFlat # mfwf
-./build-dev/src/datakit-test test fenwick2d       # fw2d
-./build-dev/src/datakit-test test multiFenwick2d  # mfw2d
-./build-dev/src/datakit-test test fenwickTypes    # fwtypes: every typed fenwick
-./build-dev/src/datakit-test test segmentTypes    # segtypes: every typed segment
-./build-perf/src/datakit-test test fenwickBench   # fwbench: speed/size matrix
+./build/dev/src/datakit-test test intset
+./build/dev/src/datakit-test test intsetU32
+./build/dev/src/datakit-test test hyperloglog     # hll
+./build/dev/src/datakit-test test linearBloom     # bloom
+./build/dev/src/datakit-test test float16         # f16
+./build/dev/src/datakit-test test fenwickI64      # fw, bit, fenwick
+./build/dev/src/datakit-test test segmentI64      # seg, segtree, segment
+./build/dev/src/datakit-test test multiFenwick    # mfw, mbit
+./build/dev/src/datakit-test test multiFenwickFlat # mfwf
+./build/dev/src/datakit-test test fenwick2d       # fw2d
+./build/dev/src/datakit-test test multiFenwick2d  # mfw2d
+./build/dev/src/datakit-test test fenwickTypes    # fwtypes: every typed fenwick
+./build/dev/src/datakit-test test segmentTypes    # segtypes: every typed segment
+./build/perf/src/datakit-test test fenwickBench   # fwbench: speed/size matrix
 
 # Encoding / compression
-./build-dev/src/datakit-test test dod
-./build-dev/src/datakit-test test xof
-./build-dev/src/datakit-test test compressionBench # compress, cbench
+./build/dev/src/datakit-test test dod
+./build/dev/src/datakit-test test xof
+./build/dev/src/datakit-test test compressionBench # compress, cbench
 
 # Strings
-./build-dev/src/datakit-test test str
-./build-dev/src/datakit-test test strDoubleFormat
-./build-dev/src/datakit-test test mds
-./build-dev/src/datakit-test test mdsc
+./build/dev/src/datakit-test test str
+./build/dev/src/datakit-test test strDoubleFormat
+./build/dev/src/datakit-test test mds
+./build/dev/src/datakit-test test mdsc
 
 # Buffers, memory, utilities
-./build-dev/src/datakit-test test fibbuf
-./build-dev/src/datakit-test test jebuf
-./build-dev/src/datakit-test test ptrlib
-./build-dev/src/datakit-test test bigmath
-./build-dev/src/datakit-test test membound
-./build-dev/src/datakit-test test memtest
-./build-dev/src/datakit-test test databox         # also databoxLinear
-./build-dev/src/datakit-test test offsetArray
-./build-dev/src/datakit-test test util
-./build-dev/src/datakit-test test ulid
-./build-dev/src/datakit-test test bbits
+./build/dev/src/datakit-test test fibbuf
+./build/dev/src/datakit-test test jebuf
+./build/dev/src/datakit-test test ptrlib
+./build/dev/src/datakit-test test bigmath
+./build/dev/src/datakit-test test membound
+./build/dev/src/datakit-test test memtest
+./build/dev/src/datakit-test test databox         # also databoxLinear
+./build/dev/src/datakit-test test offsetArray
+./build/dev/src/datakit-test test util
+./build/dev/src/datakit-test test ulid
+./build/dev/src/datakit-test test bbits
 
 # Timers
-./build-dev/src/datakit-test test timerWheel      # tw
-./build-dev/src/datakit-test test multiTimer      # timer
-./build-dev/src/datakit-test test timeUtil        # time
+./build/dev/src/datakit-test test timerWheel      # tw
+./build/dev/src/datakit-test test multiTimer      # timer
+./build/dev/src/datakit-test test timeUtil        # time
 
 # Persistence
-./build-dev/src/datakit-test test persist
-./build-dev/src/datakit-test test persistCtx      # pctx
-./build-dev/src/datakit-test test multimapP       # mmP; also multilistP, multidictP, flexP,
+./build/dev/src/datakit-test test persist
+./build/dev/src/datakit-test test persistCtx      # pctx
+./build/dev/src/datakit-test test multimapP       # mmP; also multilistP, multidictP, flexP,
                                                   # intsetP, multiOrderedSetP, multiroarP, multilruP
-./build-dev/src/datakit-test test persistContract # every persistOps descriptor (see below)
+./build/dev/src/datakit-test test persistContract # every persistOps descriptor (see below)
 
 # Hashing, MAC, AEAD, envelope
-./build-dev/src/datakit-test test blake3          # b3; also blake3Neon, blake3SSE41, blake3AVX2
-./build-dev/src/datakit-test test sha256          # also sha256ArmCrypto, sha256ShaNi
-./build-dev/src/datakit-test test hmac
-./build-dev/src/datakit-test test hmacKeyring     # keyring
-./build-dev/src/datakit-test test chacha20poly1305 # c20, chacha, aead-prim
-./build-dev/src/datakit-test test aesGcm          # aes, aesgcm
-./build-dev/src/datakit-test test x25519          # ecdh
-./build-dev/src/datakit-test test rapidhash       # rh, rapid
-./build-dev/src/datakit-test test flexEnvelope    # fenv, env
-./build-dev/src/datakit-test test aeadNonceLog    # noncelog, nonce-log
+./build/dev/src/datakit-test test blake3          # b3; also blake3Neon, blake3SSE41, blake3AVX2
+./build/dev/src/datakit-test test sha256          # also sha256ArmCrypto, sha256ShaNi
+./build/dev/src/datakit-test test hmac
+./build/dev/src/datakit-test test hmacKeyring     # keyring
+./build/dev/src/datakit-test test chacha20poly1305 # c20, chacha, aead-prim
+./build/dev/src/datakit-test test aesGcm          # aes, aesgcm
+./build/dev/src/datakit-test test x25519          # ecdh
+./build/dev/src/datakit-test test rapidhash       # rh, rapid
+./build/dev/src/datakit-test test flexEnvelope    # fenv, env
+./build/dev/src/datakit-test test aeadNonceLog    # noncelog, nonce-log
 
 # Cluster
-./build-dev/src/datakit-test test clusterRing     # ring, cluster, chr
-./build-dev/src/datakit-test test clusterMailbox  # mailbox, mb
-./build-dev/src/datakit-test test clusterReplicator # replicator, rep
+./build/dev/src/datakit-test test clusterRing     # ring, cluster, chr
+./build/dev/src/datakit-test test clusterMailbox  # mailbox, mb
+./build/dev/src/datakit-test test clusterReplicator # replicator, rep
 
 # Regression gate
-./build-dev/src/datakit-test test perfRegression  # perf-baseline, perfbase
+./build/dev/src/datakit-test test perfRegression  # perf-baseline, perfbase
 ```
 
 Several dozen narrow, focused crypto and cluster checks are registered
@@ -162,7 +162,7 @@ alongside these (for example `envelopeZeroCopy`, `keyringPersistOps`,
 ### Running All Tests
 
 ```sh
-./build-dev/src/datakit-test test ALL
+./build/dev/src/datakit-test test ALL
 ```
 
 CMake auto-discovers one CTest target per registered test by parsing
@@ -171,17 +171,17 @@ run more than one:
 
 ```sh
 # Everything, 8 at a time
-ctest --test-dir build-dev -j8 --output-on-failure
+ctest --test-dir build/dev -j8 --output-on-failure
 
 # Just the tests you touched
-ctest --test-dir build-dev -j8 -R '^(flex|mflex|multimap)$'
+ctest --test-dir build/dev -j8 -R '^(flex|mflex|multimap)$'
 ```
 
 Two convenience targets wrap ctest:
 
 ```sh
-cmake --build build-dev --target datakit-check       # ctest -VV
-cmake --build build-dev --target datakit-quickcheck  # ctest --output-on-failure
+cmake --build build/dev --target datakit-check       # ctest -VV
+cmake --build build/dev --target datakit-quickcheck  # ctest --output-on-failure
 ```
 
 ### Validation tiers (dktools)
@@ -215,7 +215,7 @@ alone in about 10 s or less under dev, so the slow sets are empty.
 To see where a suite spends its time:
 
 ```sh
-uv run --project tools dktools testtime ./build-dev/src/datakit-test multimap
+uv run --project tools dktools testtime ./build/dev/src/datakit-test multimap
 ```
 
 It times each section (ctest.h's `test — NAME` headers and the `Test `,
@@ -458,7 +458,7 @@ Run tests under valgrind to detect memory leaks:
 
 ```bash
 valgrind --leak-check=full --show-leak-kinds=all \
-         ./build-debug/src/datakit-test test flex
+         ./build/debug/src/datakit-test test flex
 ```
 
 For all tests:
@@ -466,7 +466,7 @@ For all tests:
 ```bash
 for test in flex multimap multilist; do
     echo "Testing $test..."
-    valgrind --leak-check=full ./build-debug/src/datakit-test test $test 2>&1 | \
+    valgrind --leak-check=full ./build/debug/src/datakit-test test $test 2>&1 | \
         grep -E "definitely lost|indirectly lost|ERROR SUMMARY"
 done
 ```
@@ -486,9 +486,9 @@ SUCCESS (0.123456 sec total; 0.012345 sec deletion; 1,234,567 total bytes)
 `speed` is its own top-level command, not a test name:
 
 ```sh
-./build-perf/src/datakit-test speed            # defaults: 64 MB working set
-./build-perf/src/datakit-test speed 64 10      # 64 MB, 10 legacy iterations
-./build-perf/src/datakit-test speed --json     # machine-readable
+./build/perf/src/datakit-test speed            # defaults: 64 MB working set
+./build/perf/src/datakit-test speed 64 10      # 64 MB, 10 legacy iterations
+./build/perf/src/datakit-test speed --json     # machine-readable
 ```
 
 Data-structure benches print markdown tables of ns per operation and bytes
@@ -496,7 +496,7 @@ per element, for example the Fenwick/segment workload matrix
 ([FENWICK.md](../modules/fenwick/FENWICK.md#performance)):
 
 ```sh
-./build-perf/src/datakit-test test fenwickBench   # ~90 s
+./build/perf/src/datakit-test test fenwickBench   # ~90 s
 ```
 
 Always measure with the `perf` preset. Sanitizer builds invalidate every
@@ -508,8 +508,8 @@ instrumented loads and stores per byte (BLAKE3 at 16 KiB and up, membound)
 slowed the most. Reproduce it with:
 
 ```sh
-./build-dev/src/datakit-test test perfRegression > dev.tsv
-./build-perf/src/datakit-test test perfRegression > perf.tsv
+./build/dev/src/datakit-test test perfRegression > dev.tsv
+./build/perf/src/datakit-test test perfRegression > perf.tsv
 uv run --project tools dktools perfdiff perf.tsv dev.tsv --tolerance 0
 ```
 
@@ -521,14 +521,14 @@ Test what you changed, by name:
 
 ```sh
 cmake --build --preset dev
-./build-dev/src/datakit-test test <name>
-ctest --test-dir build-dev -j8 -R '^(<name>|<other>)$'
+./build/dev/src/datakit-test test <name>
+ctest --test-dir build/dev -j8 -R '^(<name>|<other>)$'
 ```
 
 The full suite is long; run it deliberately rather than as a reflex:
 
 ```sh
-ctest --test-dir build-dev -j8 --output-on-failure
+ctest --test-dir build/dev -j8 --output-on-failure
 ```
 
 ### Configuration Coverage
@@ -538,10 +538,10 @@ sanitizer builds and the optimized build find different bugs:
 
 ```sh
 cmake --preset safe && cmake --build --preset safe
-ctest --test-dir build-safe -j8 --output-on-failure
+ctest --test-dir build/safe -j8 --output-on-failure
 
 cmake --preset perf && cmake --build --preset perf
-ctest --test-dir build-perf -j8 --output-on-failure
+ctest --test-dir build/perf -j8 --output-on-failure
 ```
 
 ## Benchmarking
@@ -549,15 +549,15 @@ ctest --test-dir build-perf -j8 --output-on-failure
 Benchmarks live in a separate registry and use the `bench` verb:
 
 ```sh
-./build-perf/src/datakit-test bench mdsbench
-./build-perf/src/datakit-test bench mdscbench
+./build/perf/src/datakit-test bench mdsbench
+./build/perf/src/datakit-test bench mdscbench
 ```
 
 `allstr` is a pseudo-test that runs `mds`, `mdsbench`, `mdsc`, and
 `mdscbench` together:
 
 ```sh
-./build-perf/src/datakit-test test allstr
+./build/perf/src/datakit-test test allstr
 ```
 
 Some benchmarks are registered as ordinary tests instead, such as
@@ -598,10 +598,10 @@ If you get "Test not found!" error:
 
 If tests crash:
 
-1. Run under a debugger: `lldb -- ./build-debug/src/datakit-test test <name>`
-   (macOS) or `gdb --args ./build-debug/src/datakit-test test <name>` (Linux)
+1. Run under a debugger: `lldb -- ./build/debug/src/datakit-test test <name>`
+   (macOS) or `gdb --args ./build/debug/src/datakit-test test <name>` (Linux)
 2. Rebuild under the `debug` or `safe` preset and read the sanitizer report
-3. Run with valgrind: `valgrind ./build-debug/src/datakit-test test <name>`
+3. Run with valgrind: `valgrind ./build/debug/src/datakit-test test <name>`
 4. Check for uninitialized variables
 5. Verify all pointers before dereferencing
 6. Ensure proper cleanup of resources

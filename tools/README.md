@@ -171,6 +171,61 @@ allocaudit gate) goes through `src/dktools/procs.py`:
   it. The private index `verify` writes the tree through lives in a
   temporary directory that is always removed.
 
+## format — every formatter, one command
+
+```sh
+uv run --project tools dktools format write            # files changed from HEAD + untracked
+uv run --project tools dktools format check --all      # every file; rewrites nothing
+uv run --project tools dktools format write PATH...    # just these
+```
+
+| files      | formatter                                                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `.c`, `.h` | clang-format with the repository's `.clang-format`, from the clang 22 bin directory (`$DKTOOLS_LLVM_DIR`)                     |
+| `.md`      | prettier (reads `.prettierignore`)                                                                                            |
+| `.py`      | `uv tool run ruff check --select SIM,PTH,I,UP,FURB,PGH --extend-select F401 --ignore SIM102,SIM110 --fix`, then `ruff format` |
+
+- `deps/` is vendored and never touched. Without `PATH`s or `--all`,
+  the files are those changed from HEAD plus untracked ones git does
+  not ignore.
+- `write` rewrites in place and names every file it changed; `check`
+  changes nothing and names every file `write` would change. A lint
+  finding ruff cannot fix, or a formatter that fails on a file, is a
+  problem in both modes and fails the run (exit 1).
+- `verify` formats the working-tree files it takes before building,
+  and both `verify` and `validate` check every file of the tree they
+  build (the `format` line / `## Formatting` section). Never run the
+  formatters by hand: this command is the one place their flags live
+  (`src/dktools/formatting.py`).
+
+## builds — the build inventory and its garbage collection
+
+Every build lives under `build/`: CMake presets in `build/<preset>`,
+dktools work directories in `build/dktools/<kind>/<name>` (the layout
+table is in [BUILD_PRESETS.md](../docs/BUILD_PRESETS.md)).
+
+```sh
+uv run --project tools dktools builds list               # every build: kind, size, last use, state
+uv run --project tools dktools builds gc --dry-run       # what a collection would remove
+uv run --project tools dktools builds gc [--budget-gb N] [--max-age-days D] [--legacy] [--presets]
+```
+
+- Each dktools work directory holds a manifest (`.dkbuild.json`: kind,
+  name, revision, command, created, last used, size) and, while a run
+  uses it, a lock (`.dkbuild.lock`: the run's process id). A lock
+  whose process is gone is idle. `coverage --reuse` counts as a use.
+- `gc` removes idle dktools builds unused for `--max-age-days`
+  (`$DKTOOLS_BUILD_MAX_AGE_DAYS`, default 14), then the least recently
+  used until the rest fit `--budget-gb` (`$DKTOOLS_BUILD_BUDGET_GB`,
+  default 40). A build in use is never removed, and preset builds only
+  with `--presets`. `--legacy` also removes the builds made before this
+  layout: root `build-*` directories, an old single build's top-level
+  files in `build/`, and the old scratch root in the system temp
+  directory.
+- Every `verify`, `validate`, `coverage` and `perfcompare` run collects
+  first (budget and age only; never legacy or presets) and prints what
+  it removed.
+
 ## verify — build HEAD plus one change in isolation
 
 Builds and tests exactly HEAD plus the paths you name (or the index,
@@ -188,8 +243,14 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   at `PATH`. The tree is written through a private `GIT_INDEX_FILE`
   (the real index is never touched), exported with `git archive` into
   `ROOT/verify/NAME/src`, then configured and built there. `ROOT` is
-  `--root`, else `$DKTOOLS_SCRATCH`, else `dktools/` under the system
-  temp dir.
+  `--root`, else `$DKTOOLS_SCRATCH`, else `build/dktools` in the
+  repository (see `builds` above).
+- Before the tree is written, the working-tree files it takes are
+  formatted in place (`format write` on the named paths, or every
+  changed path with `--all-changed`; never with `--staged`, whose
+  index is what is built). A `formatted` line names each file
+  rewritten, and the `format` line checks every file of the built
+  tree: an unformatted file fails the run.
 - Instead of `PATH`s: `--staged` builds exactly the current index
   (HEAD plus what is staged, written from a copy of the index), so a
   64-file vendored re-land staged by `vendorsync --stage` needs no path
@@ -444,7 +505,7 @@ uv run --project tools dktools vendorsync varint --upstream DIR [--rev REV] \
 Runs one datakit test and times each section it prints:
 
 ```sh
-uv run --project tools dktools testtime ./build-dev/src/datakit-test multimap [--top N] [--timeout SECONDS] [--prefix P]
+uv run --project tools dktools testtime ./build/dev/src/datakit-test multimap [--top N] [--timeout SECONDS] [--prefix P]
 ```
 
 - Sections open at ctest.h's `test — NAME` headers and at the headers
@@ -484,7 +545,7 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
   not change the exit code.
 - The baseline is a local file, not committed; generate it from a
   perf build with
-  `./build-perf/src/datakit-test test perfRegression > perf.baseline.tsv`.
+  `./build/perf/src/datakit-test test perfRegression > perf.baseline.tsv`.
   Paths are relative to `tools/` when run as shown; from the repository
   root, where the TSVs are generated, use
   `uv run --project tools dktools perfdiff perf.baseline.tsv perf.current.tsv`.

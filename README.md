@@ -22,7 +22,7 @@ cmake --preset perf   && cmake --build --preset perf    # Release-O3 + native + 
 cmake --preset safe   && cmake --build --preset safe    # Release-O3 + sanitizers, for CI
 ```
 
-Each preset builds into `build-<preset>/`. Use `perf` for any
+Each preset builds into `build/<preset>/`. Use `perf` for any
 benchmark number. Sanitizers slow code down unevenly, by 1.0-7.7x across
 perfRegression's rows (`dev` vs `perf` on an Apple M1 Max, clang 22).
 Paths bound by memory bandwidth or hardware instructions barely change;
@@ -45,8 +45,8 @@ make -j8
 Every registered test is also a CTest target, so both of these work:
 
 ```sh
-ctest --test-dir build-dev -j8 --output-on-failure
-./build-dev/src/datakit-test test flex
+ctest --test-dir build/dev -j8 --output-on-failure
+./build/dev/src/datakit-test test flex
 ```
 
 `datakit-test` uses a verb grammar: no arguments prints usage, `list`
@@ -58,28 +58,28 @@ JSON, `test <name>` runs one test, `test ALL` runs the whole suite
 Frequently used names (aliases in parentheses):
 
 ```sh
-./build-dev/src/datakit-test test flex
-./build-dev/src/datakit-test test mflex
-./build-dev/src/datakit-test test multimap          # also multimapFull, multimapMedium, multimapAtom (atom)
-./build-dev/src/datakit-test test multilist         # (ml), also multilistFull
-./build-dev/src/datakit-test test multiarray        # also multiarraySmall/Medium/Large
-./build-dev/src/datakit-test test multidict
-./build-dev/src/datakit-test test multiroar         # roaring bitmaps
-./build-dev/src/datakit-test test multilru          # (lru, mlru)
-./build-dev/src/datakit-test test multiOrderedSet   # (mos)
-./build-dev/src/datakit-test test intset            # also intsetU32, plus intsetBig where __int128 exists
-./build-dev/src/datakit-test test hyperloglog       # (hll)
-./build-dev/src/datakit-test test str               # also strDoubleFormat, mds, mdsc
-./build-dev/src/datakit-test test databox           # also databoxLinear
-./build-dev/src/datakit-test test persist           # also persistCtx (pctx) + the *P codec tests
-./build-dev/src/datakit-test test ulid
-./build-dev/src/datakit-test test bigmath
-./build-dev/src/datakit-test test timerWheel        # (tw), also multiTimer (timer), timeUtil (time)
-./build-dev/src/datakit-test test fenwickI64        # (fw, bit, fenwick), also segmentI64 (seg), multiFenwick (mfw)
-./build-dev/src/datakit-test test blake3            # (b3), also sha256, hmac, aesGcm (aes)
-./build-dev/src/datakit-test test flexEnvelope      # (fenv, env)
-./build-dev/src/datakit-test test clusterRing       # (ring, cluster, chr), also clusterMailbox (mb)
-./build-dev/src/datakit-test test perfRegression    # (perf-baseline) regression gate
+./build/dev/src/datakit-test test flex
+./build/dev/src/datakit-test test mflex
+./build/dev/src/datakit-test test multimap          # also multimapFull, multimapMedium, multimapAtom (atom)
+./build/dev/src/datakit-test test multilist         # (ml), also multilistFull
+./build/dev/src/datakit-test test multiarray        # also multiarraySmall/Medium/Large
+./build/dev/src/datakit-test test multidict
+./build/dev/src/datakit-test test multiroar         # roaring bitmaps
+./build/dev/src/datakit-test test multilru          # (lru, mlru)
+./build/dev/src/datakit-test test multiOrderedSet   # (mos)
+./build/dev/src/datakit-test test intset            # also intsetU32, plus intsetBig where __int128 exists
+./build/dev/src/datakit-test test hyperloglog       # (hll)
+./build/dev/src/datakit-test test str               # also strDoubleFormat, mds, mdsc
+./build/dev/src/datakit-test test databox           # also databoxLinear
+./build/dev/src/datakit-test test persist           # also persistCtx (pctx) + the *P codec tests
+./build/dev/src/datakit-test test ulid
+./build/dev/src/datakit-test test bigmath
+./build/dev/src/datakit-test test timerWheel        # (tw), also multiTimer (timer), timeUtil (time)
+./build/dev/src/datakit-test test fenwickI64        # (fw, bit, fenwick), also segmentI64 (seg), multiFenwick (mfw)
+./build/dev/src/datakit-test test blake3            # (b3), also sha256, hmac, aesGcm (aes)
+./build/dev/src/datakit-test test flexEnvelope      # (fenv, env)
+./build/dev/src/datakit-test test clusterRing       # (ring, cluster, chr), also clusterMailbox (mb)
+./build/dev/src/datakit-test test perfRegression    # (perf-baseline) regression gate
 ```
 
 Run `datakit-test list` for the full set — the registry in

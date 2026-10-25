@@ -20,16 +20,14 @@ for you:
 
 ```sh
 cmake --preset debug && cmake --build --preset debug
-# binary at build-debug/src/datakit-test
+# binary at build/debug/src/datakit-test
 ```
 
 Equivalent by hand:
 
 ```sh
-mkdir build-debug
-cd build-debug
-cmake -DCMAKE_BUILD_TYPE=Debug -DEnableASAN=ON -DEnableUBSAN=ON ..
-make -j8
+cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug -DEnableASAN=ON -DEnableUBSAN=ON
+cmake --build build/debug -j 8
 ```
 
 Debug build characteristics:
@@ -292,16 +290,15 @@ ASAN is a build option, not a source edit, and the `dev`, `debug`, and
 
 ```sh
 cmake --preset debug && cmake --build --preset debug
-./build-debug/src/datakit-test test flex
+./build/debug/src/datakit-test test flex
 ```
 
 In a hand-configured build:
 
 ```sh
-cd build-debug
-cmake -DEnableASAN=ON ..
-make clean && make -j8
-./src/datakit-test test flex
+cmake -S . -B build/debug -DEnableASAN=ON
+cmake --build build/debug --clean-first -j 8
+./build/debug/src/datakit-test test flex
 ```
 
 3. **Valgrind (detailed in next section)**

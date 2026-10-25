@@ -35,7 +35,7 @@ The baseline is a local file, not part of the repository, and this
 command never modifies it.  Generate or refresh it with a perf build
 when an intentional performance change lands::
 
-    ./build-perf/src/datakit-test test perfRegression > perf.baseline.tsv
+    ./build/perf/src/datakit-test test perfRegression > perf.baseline.tsv
 """
 
 from __future__ import annotations

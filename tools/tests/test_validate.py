@@ -129,6 +129,7 @@ class ValidateRun(unittest.TestCase):
         code, out = self.run_validate(runner, slow=SLOW, debug_slow=DEBUG_SLOW)
         self.assertEqual(code, 0, out)
         self.assertIn(": PASS", out)
+        self.assertIn("## Formatting\n\nok (2 files)\n", out)
         names = [name for name, _ in runner.calls]
         for label in ("clang22-dev", "clang22-debug", "gcc15-release"):
             for step in ("configure", "build", "ctest", "ctest-serial"):
@@ -162,6 +163,16 @@ class ValidateRun(unittest.TestCase):
         # The export is the commit, not the working tree.
         self.repo.write("src/stray.c", "int stray;\n")
         self.assertTrue((summary.parent / "src" / "src" / "b.c").exists())
+
+    def test_an_unformatted_file_fails_and_is_named(self) -> None:
+        self.repo.write("src/c.c", "int  c;\n")  # LLVM style: one space
+        self.head = self.repo.commit("add c", "src/c.c")
+        code, out = self.run_validate(MatrixRunner())
+        self.assertEqual(code, 1, out)
+        self.assertIn(": FAIL", out)
+        self.assertIn("## Formatting\n\nFAILED (1 files;", out)
+        self.assertIn("- clang-format: would change 1: src/c.c\n", out)
+        self.assertEqual((self.repo.path / "src" / "c.c").read_text(), "int  c;\n")
 
     def test_tsan_skips_its_own_set_and_says_so(self) -> None:
         runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})

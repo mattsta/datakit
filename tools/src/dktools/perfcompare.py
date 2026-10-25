@@ -39,7 +39,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gitutil, perfdiff, steps, toolchain
+from . import buildstore, gitutil, perfdiff, steps, toolchain
 from .gitutil import ToolError
 
 DEFAULT_BENCH_PATHS = ("src/perfRegression.c", "src/perfRegression.h")
@@ -186,8 +186,10 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         base_tree = gitutil.build_tree(repo, index, bench, base=base_commit)
     config.compiler.check()
 
-    root = gitutil.scratch_root(opts.root).resolve()
-    work = gitutil.fresh_dir(root / "perfcompare" / name)
+    root = gitutil.scratch_root(opts.root, repo).resolve()
+    work = buildstore.fresh_build(
+        repo, root, "perfcompare", name, base_commit, "perfcompare"
+    )
     sides = []
     for label, tree in (("base", base_tree), ("current", current_tree)):
         src = work / label

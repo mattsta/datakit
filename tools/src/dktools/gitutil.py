@@ -32,16 +32,18 @@ GIT_TIMEOUT = 600.0
 ENV_SCRATCH = "DKTOOLS_SCRATCH"
 
 
-def scratch_root(flag: Path | None, env: Mapping[str, str] | None = None) -> Path:
-    """The work-dir root: --root, else $DKTOOLS_SCRATCH, else a
-    ``dktools`` directory under the system temp dir."""
+def scratch_root(
+    flag: Path | None, repo: Path, env: Mapping[str, str] | None = None
+) -> Path:
+    """The work-dir root: --root, else $DKTOOLS_SCRATCH, else the
+    repository's ``build/dktools`` (see buildstore)."""
     if flag is not None:
         return flag
     environ = os.environ if env is None else env
     value = environ.get(ENV_SCRATCH)
     if value:
         return Path(value)
-    return Path(tempfile.gettempdir()) / "dktools"
+    return repo / "build" / "dktools"
 
 
 def fresh_dir(path: Path) -> Path:

@@ -237,14 +237,18 @@ class GitTrees(unittest.TestCase):
         self.assertEqual(gitutil.check_name("ok-name"), "ok-name")
 
     def test_scratch_root(self) -> None:
+        repo = Path("repo")
         self.assertEqual(
-            gitutil.scratch_root(Path("flag"), {gitutil.ENV_SCRATCH: "env"}),
+            gitutil.scratch_root(Path("flag"), repo, {gitutil.ENV_SCRATCH: "env"}),
             Path("flag"),
         )
         self.assertEqual(
-            gitutil.scratch_root(None, {gitutil.ENV_SCRATCH: "env"}), Path("env")
+            gitutil.scratch_root(None, repo, {gitutil.ENV_SCRATCH: "env"}),
+            Path("env"),
         )
-        self.assertEqual(gitutil.scratch_root(None, {}).name, "dktools")
+        self.assertEqual(
+            gitutil.scratch_root(None, repo, {}), repo / "build" / "dktools"
+        )
 
 
 if __name__ == "__main__":

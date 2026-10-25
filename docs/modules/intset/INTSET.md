@@ -588,7 +588,7 @@ intsetFree(intersectSet);
 The binary search is branchless (the midpoint step compiles to a
 conditional move) and issues two prefetches per level.
 
-`./build-perf/intsetSearchBench` (10M random probes) compares it with a
+`./build/perf/intsetSearchBench` (10M random probes) compares it with a
 branchy search. Medians of 3 runs on an Apple M1 Max, clang 22 `perf`
 preset:
 

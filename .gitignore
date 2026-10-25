@@ -1,6 +1,7 @@
-build*
-# `build*` above is for build directories; don't let it swallow docs.
-!docs/BUILD_PRESETS.md
+# Build directories only (a trailing slash matches directories), so
+# source files whose names start with "build" stay visible.
+build/
+build-*/
 compile_commands.json
 
 # Internal working material (plans, designs, audits, session notes,

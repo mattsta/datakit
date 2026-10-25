@@ -714,6 +714,29 @@ class VerifyRun(unittest.TestCase):
             self.assertIn(f"  changed   {line}\n", out)
         self.assertNotIn("same.c", out)
 
+    def test_named_paths_are_formatted_in_place_first(self) -> None:
+        self.repo.write("src/a.c", "int  a2;\n")  # LLVM style: one space
+        self.repo.write("src/other.c", "int  other;\n")  # not named: untouched
+        code, out = self.run_verify(FakeRunner({}, self.PASSING))
+        self.assertEqual(code, 0, out)
+        self.assertEqual((self.repo.path / "src" / "a.c").read_text(), "int a2;\n")
+        self.assertEqual(self.exported("src/a.c").read_text(), "int a2;\n")
+        self.assertEqual(
+            (self.repo.path / "src" / "other.c").read_text(), "int  other;\n"
+        )
+        self.assertIn("  format    ok (1 files)\n", out)
+        self.assertIn("  formatted clang-format: rewrote 1: src/a.c\n", out)
+
+    def test_staged_is_checked_never_rewritten(self) -> None:
+        self.repo.write("src/a.c", "int  staged;\n")
+        self.repo.git("add", "--", "src/a.c")
+        code, out = self.run_verify(FakeRunner({}, self.PASSING), specs=[], staged=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn("verify t: FAIL", out)
+        self.assertIn("  format    FAILED (1 files; ", out)
+        self.assertNotIn("formatted", out)
+        self.assertEqual((self.repo.path / "src" / "a.c").read_text(), "int  staged;\n")
+
     def test_staged_and_all_changed_refuse_plain_head(self) -> None:
         self.repo.write("src/stray.c", "int stray;\n")  # untracked: not a change
         for kw, why in (

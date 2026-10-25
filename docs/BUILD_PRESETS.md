@@ -2,7 +2,7 @@
 
 `CMakePresets.json` defines five named configurations so that "performance vs
 safety vs debug" sessions are reproducible and discoverable. Each preset
-configures into its own `build-<name>/` directory so they coexist.
+configures into its own `build/<name>/` directory so they coexist.
 
 ## Available presets
 
@@ -30,11 +30,43 @@ cmake --preset perf
 cmake --build --preset perf
 
 # Run a specific test directly:
-./build-perf/src/datakit-test test blake3
+./build/perf/src/datakit-test test blake3
 
 # Or run via ctest (auto-discovers every registered test, 159 today):
 ctest --preset perf
 ```
+
+## Where builds live, and their garbage collection
+
+Every build lives under one directory, `build/` (gitignored):
+
+| Path                                          | Made by                    |
+| --------------------------------------------- | -------------------------- |
+| `build/<preset>/`                             | `cmake --preset <preset>`  |
+| `build/dktools/verify/<name>/`                | `dktools verify NAME`      |
+| `build/dktools/validate/<rev>-<configs>/`     | `dktools validate`         |
+| `build/dktools/coverage/<rev>/` (and `.prev`) | `dktools coverage`         |
+| `build/dktools/perfcompare/<name>/`           | `dktools perfcompare NAME` |
+
+A dktools work directory carries a manifest (`.dkbuild.json`: kind, name,
+revision, created, last used, size) and, while a run is using it, a lock
+(`.dkbuild.lock`, the run's process id; a lock whose process is gone is
+idle). Every dktools run that makes a work directory first removes idle
+dktools builds unused for 14 days, then the least recently used until the
+rest fit 40 GB (`DKTOOLS_BUILD_BUDGET_GB`, `DKTOOLS_BUILD_MAX_AGE_DAYS`). It
+never removes a build in use, and never a preset build.
+
+```sh
+uv run --project tools dktools builds list              # every build: size, last use, state
+uv run --project tools dktools builds gc --dry-run      # what a collection would remove
+uv run --project tools dktools builds gc --budget-gb 10 # collect to a smaller budget
+uv run --project tools dktools builds gc --legacy       # also the pre-build/ leftovers
+```
+
+`--legacy` removes builds made before this layout: `build-*` directories at
+the repository root, the top-level files of an old single `build/` tree, and
+the scratch root dktools used to keep in the system temp directory.
+`--presets` also removes idle preset builds.
 
 ## Adding a new preset
 

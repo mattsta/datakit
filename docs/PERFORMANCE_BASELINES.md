@@ -129,7 +129,7 @@ figures were measured with `dktools perfcompare` (alternating runs, medians).
 
 ```
 DK_PERF_MODULES=multidict,multiOrderedSet,multimapAtom \
-    ./build-perf/src/datakit-test test perfRegression
+    ./build/perf/src/datakit-test test perfRegression
 uv run --project tools dktools perfcompare NAME --base REV --modules multidict
 ```
 
@@ -242,7 +242,7 @@ B/cell.
 ### Reproduce
 
 ```
-./build-perf/src/datakit-test test fenwickBench
+./build/perf/src/datakit-test test fenwickBench
 ```
 
 ---
@@ -257,7 +257,7 @@ B/cell.
 
 ### timerWheel — hierarchical wheel after entry-cascade + occupancy-bitmap work
 
-`./build-perf/src/datakit-test test timerWheel` (cycles per op, TSC):
+`./build/perf/src/datakit-test test timerWheel` (cycles per op, TSC):
 
 | operation                 | cost        | note                                                                                                                                                        |
 | ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -279,7 +279,7 @@ B/cell.
 
 ### multiroar — bulk bit-set batching (same capture date)
 
-`./build-perf/src/datakit-test test multiroar`, PERF section, 100k
+`./build/perf/src/datakit-test test multiroar`, PERF section, 100k
 sorted positions:
 
 | operation           | cost        | note                          |
@@ -303,9 +303,9 @@ mechanism, read-only).
 ### Reproduce
 
 ```
-./build-perf/src/datakit-test test timerWheel
-./build-perf/src/datakit-test test multiTimer
-./build-perf/src/datakit-test test multiroar
+./build/perf/src/datakit-test test timerWheel
+./build/perf/src/datakit-test test multiTimer
+./build/perf/src/datakit-test test multiroar
 ```
 
 ---
@@ -320,7 +320,7 @@ mechanism, read-only).
 
 ### intset binary search — branchless+prefetch integrated
 
-`./build-perf/intsetSearchBench` (10M random probes, ns/lookup),
+`./build/perf/intsetSearchBench` (10M random probes, ns/lookup),
 measuring the exact macro now used by the five width-specialized Find
 functions (`INTSET_BRANCHLESS_LOWER_BOUND`):
 
@@ -334,7 +334,7 @@ functions (`INTSET_BRANCHLESS_LOWER_BOUND`):
 
 ### Allocators — membound vs memshard vs system
 
-`./build-perf/memboundBench` (ns per alloc+free pair; live=1000).
+`./build/perf/memboundBench` (ns per alloc+free pair; live=1000).
 memshard is the vendored allocator at `src/memshard/` (mimalloc
 v2.3.2 base + v2.4.x correctness line).
 
@@ -382,7 +382,7 @@ to 32× on tiny objects (256B minimum atom) and pre-commits its pool.
 
 ### Crypto/envelope regression rows (spot headline)
 
-`./build-perf/src/datakit-test test perfRegression`, MB/s at 1 MiB
+`./build/perf/src/datakit-test test perfRegression`, MB/s at 1 MiB
 payload: hmac_blake3 wrap ≈ 1388, verify ≈ 1424; ChaCha20-Poly1305
 seal/open ≈ 586. Full rows go to the local TSV for `dktools perfdiff`.
 
@@ -390,11 +390,11 @@ seal/open ≈ 586. Full rows go to the local TSV for `dktools perfdiff`.
 
 ```
 cmake --preset perf
-cmake --build build-perf --target intsetSearchBench memboundBench datakit-test
-./build-perf/intsetSearchBench
-./build-perf/memboundBench
-MEMBOUND_BENCH_MEMSHARD=1 ./build-perf/memboundBench
-./build-perf/src/datakit-test test perfRegression
+cmake --build build/perf --target intsetSearchBench memboundBench datakit-test
+./build/perf/intsetSearchBench
+./build/perf/memboundBench
+MEMBOUND_BENCH_MEMSHARD=1 ./build/perf/memboundBench
+./build/perf/src/datakit-test test perfRegression
 ```
 
 ---

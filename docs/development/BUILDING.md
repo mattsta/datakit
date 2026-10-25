@@ -21,8 +21,8 @@ For the impatient:
 cmake --preset dev && cmake --build --preset dev
 ```
 
-The test binary will be at `build-dev/src/datakit-test` and the
-libraries alongside it in `build-dev/src/`.
+The test binary will be at `build/dev/src/datakit-test` and the
+libraries alongside it in `build/dev/src/`.
 
 ## Prerequisites
 
@@ -78,14 +78,14 @@ No external packages need to be installed.
 `CMakePresets.json` defines the four supported configurations. Each
 build preset builds the same four targets — `datakit-test`,
 `datakit-static`, `datakit-shared`, and `datakit-library` — into
-`build-<preset>/`.
+`build/<preset>/`.
 
-| Preset  | Build type | Sanitizers  | Extra flags               | Use for                           |
-| ------- | ---------- | ----------- | ------------------------- | --------------------------------- |
-| `dev`   | Release    | ASAN, UBSAN | —                         | Default day-to-day development    |
-| `debug` | Debug      | ASAN, UBSAN | —                         | Stepping in a debugger            |
-| `perf`  | Release    | none        | `-O3 -mcpu=native -flto`  | Every benchmark and timing number |
-| `safe`  | Release    | ASAN, UBSAN | —                         | Strict CI correctness runs        |
+| Preset  | Build type | Sanitizers  | Extra flags              | Use for                           |
+| ------- | ---------- | ----------- | ------------------------ | --------------------------------- |
+| `dev`   | Release    | ASAN, UBSAN | —                        | Default day-to-day development    |
+| `debug` | Debug      | ASAN, UBSAN | —                        | Stepping in a debugger            |
+| `perf`  | Release    | none        | `-O3 -mcpu=native -flto` | Every benchmark and timing number |
+| `safe`  | Release    | ASAN, UBSAN | —                        | Strict CI correctness runs        |
 
 ```sh
 cmake --preset dev    && cmake --build --preset dev
@@ -102,7 +102,7 @@ and can change which variant looks fastest. The commands to reproduce this
 are in [TESTING.md](TESTING.md).
 
 All presets set `CMAKE_EXPORT_COMPILE_COMMANDS=ON`, so
-`build-<preset>/compile_commands.json` is available for clangd and
+`build/<preset>/compile_commands.json` is available for clangd and
 clang-tidy.
 
 ## Build Process
@@ -131,13 +131,12 @@ cmake --build . --target datakit-quickcheck
 Debug builds include symbols and disable optimizations:
 
 ```sh
-mkdir build-debug
-cd build-debug
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make -j8
+cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/debug -j 8
 ```
 
 Debug build characteristics:
+
 - Compiler flags: `-O0 -Wno-format`
 - Full debugging symbols
 - No inlining optimizations
@@ -155,6 +154,7 @@ make -j8
 ```
 
 Release build characteristics:
+
 - Compiler flags: `-O3`
 - Maximum optimization
 - Smaller binary size
@@ -302,6 +302,7 @@ build/src/datakit-test          # Executable test suite
 ```
 
 On macOS with debug builds:
+
 ```
 build/src/datakit-test.dSYM/    # Debug symbols
 ```
@@ -318,6 +319,7 @@ build/src/libdatakit.so.0.3.0   # datakit-library (versioned SHARED)
 ```
 
 Library versioning:
+
 - **VERSION**: 0.3.0 (full version)
 - **SOVERSION**: 0.3.0 (ABI version)
 
@@ -360,12 +362,14 @@ them, or by adding the repository to your own build with
 #### Thread Support
 
 Linux builds automatically link against:
+
 - `pthread` - POSIX threads
 - `m` - Math library
 
 #### Random Number Generation
 
 Linux builds detect and use:
+
 - `getrandom()` system call (Linux 3.17+)
 - `SYS_getrandom` syscall (fallback)
 - `getentropy()` (if available)
@@ -392,6 +396,7 @@ ls -la src/datakit-test.dSYM/
 #### Architecture
 
 macOS builds use:
+
 - `-undefined dynamic_lookup` for shared modules
 - No explicit pthread linking (built into libSystem)
 - No explicit math library (built into libSystem)
@@ -506,6 +511,7 @@ CMake Error: CMake 3.10 or higher is required
 A plain build needs 3.10; `--preset` needs 3.21.
 
 **Solution**: Upgrade CMake:
+
 ```bash
 # Download from cmake.org or use package manager
 pip install --upgrade cmake
@@ -518,6 +524,7 @@ CMake Error: CMAKE_C_COMPILER not found
 ```
 
 **Solution**: Install a C compiler:
+
 ```bash
 # Linux
 sudo apt-get install build-essential
@@ -533,6 +540,7 @@ xcode-select --install
 On some Linux systems, pthread linking might fail.
 
 **Solution**: Explicitly link pthread:
+
 ```bash
 cmake -DCMAKE_EXE_LINKER_FLAGS="-lpthread" ..
 ```
@@ -542,6 +550,7 @@ cmake -DCMAKE_EXE_LINKER_FLAGS="-lpthread" ..
 Math library not linked.
 
 **Solution**: Explicitly link math library:
+
 ```bash
 cmake -DCMAKE_EXE_LINKER_FLAGS="-lm" ..
 ```
@@ -551,6 +560,7 @@ cmake -DCMAKE_EXE_LINKER_FLAGS="-lm" ..
 Missing stdint.h include or C99 mode not enabled.
 
 **Solution**: Ensure compiler supports C99:
+
 ```bash
 cmake -DCMAKE_C_STANDARD=99 ..
 ```
@@ -568,6 +578,7 @@ To disable: Remove `-Winline` from CMakeLists.txt.
 32-bit libraries not installed.
 
 **Solution**: Install 32-bit development libraries:
+
 ```bash
 # Debian/Ubuntu
 sudo apt-get install gcc-multilib g++-multilib
@@ -583,6 +594,7 @@ sudo yum install glibc-devel.i686
 This is a known issue with some macOS SDK versions.
 
 **Solution**: Update Xcode Command Line Tools:
+
 ```bash
 sudo rm -rf /Library/Developer/CommandLineTools
 xcode-select --install
@@ -593,6 +605,7 @@ xcode-select --install
 #### Slow Compilation
 
 Use parallel builds:
+
 ```bash
 make -j$(nproc)  # Linux
 make -j$(sysctl -n hw.ncpu)  # macOS
@@ -601,11 +614,13 @@ make -j$(sysctl -n hw.ncpu)  # macOS
 #### Large Binary Size
 
 Use release build with size optimization:
+
 ```bash
 cmake -DCMAKE_BUILD_TYPE=MinSizeRel ..
 ```
 
 Or disable test binary:
+
 ```bash
 cmake -DBuildTestBinary=OFF ..
 ```
@@ -678,11 +693,13 @@ All code is built with `-fPIC` (Position Independent Code), allowing it to be us
 ### Compilation Database
 
 `compile_commands.json` is generated automatically, useful for:
+
 - Clang-based tools (clang-tidy, clangd)
 - IDEs and editors with C/C++ support
 - Static analysis tools
 
 Enable explicitly if needed:
+
 ```bash
 cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
 ```

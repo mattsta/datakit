@@ -118,7 +118,7 @@ x86-64 test host. The same comparison on AArch64 (NEON hardware conversion
 vs the portable functions) is in
 [PERFORMANCE.md](PERFORMANCE.md#float16-encoding). There the vectorized
 portable loops come within 1.2x of hardware, so measure on your target with
-`./build-perf/src/datakit-test test compressionBench` before relying on a
+`./build/perf/src/datakit-test test compressionBench` before relying on a
 speed-up.
 
 ### Random Number Generation

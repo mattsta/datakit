@@ -55,7 +55,7 @@ Use `--preset debug` when you need `-O0` and full symbols, and
 3. **Verify tests pass:**
 
 ```sh
-ctest --test-dir build-dev -j8 --output-on-failure
+ctest --test-dir build/dev -j8 --output-on-failure
 ```
 
 ### Branch Strategy
@@ -79,8 +79,8 @@ git checkout -b fix/issue-description
    ```
 3. **Run tests** for affected modules — by name, not the whole suite:
    ```sh
-   ./build-dev/src/datakit-test test <module>
-   ctest --test-dir build-dev -j8 -R '^(<module>|<other>)$'
+   ./build/dev/src/datakit-test test <module>
+   ctest --test-dir build/dev -j8 -R '^(<module>|<other>)$'
    ```
 4. **Check for warnings**:
    ```sh
@@ -90,7 +90,7 @@ git checkout -b fix/issue-description
    UBSAN, so leaks and UB surface in the test run itself. Reach for
    valgrind when you need its specific reports:
    ```sh
-   valgrind --leak-check=full ./build-debug/src/datakit-test test <module>
+   valgrind --leak-check=full ./build/debug/src/datakit-test test <module>
    ```
 6. **Commit changes** when tests pass
 
@@ -738,7 +738,7 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `style`
 
 ```sh
 cmake --preset dev && cmake --build --preset dev
-ctest --test-dir build-dev -j8 --output-on-failure
+ctest --test-dir build/dev -j8 --output-on-failure
 ```
 
 2. **Check for memory errors:**
@@ -748,7 +748,7 @@ sanitizer-free cross-check:
 
 ```sh
 for test in flex multimap multilist; do
-    valgrind --leak-check=full ./build-perf/src/datakit-test test $test
+    valgrind --leak-check=full ./build/perf/src/datakit-test test $test
 done
 ```
 
@@ -761,7 +761,7 @@ cmake --build --preset dev --clean-first 2>&1 | grep -i warning
 4. **Run static analysis:**
 
 ```sh
-cmake --build build-dev --target cppcheck
+cmake --build build/dev --target cppcheck
 ```
 
 5. **Test on multiple platforms** (if possible):

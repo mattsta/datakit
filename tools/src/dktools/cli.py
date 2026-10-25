@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from . import (
     allocaudit,
     atomicaudit,
+    buildstore,
     coverage,
+    formatting,
     fusionscan,
+    gitutil,
     leakcheck,
     outputaudit,
     perfcompare,
@@ -139,6 +143,81 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=None, help="report output path (default: stdout)"
     )
 
+    bs = sub.add_parser(
+        "builds",
+        help="the build inventory under build/ (presets, dktools work "
+        "directories, legacy leftovers) and its garbage collection",
+    )
+    bs.add_argument(
+        "action",
+        choices=("list", "gc"),
+        help="list: every build with its size, last use and state; gc: "
+        "remove idle dktools builds past the age limit, then the least "
+        "recently used until the rest fit the budget",
+    )
+    bs.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
+    )
+    bs.add_argument(
+        "--budget-gb",
+        type=float,
+        default=None,
+        help="gc: bytes the idle dktools builds may keep (env "
+        "DKTOOLS_BUILD_BUDGET_GB, default 40)",
+    )
+    bs.add_argument(
+        "--max-age-days",
+        type=float,
+        default=None,
+        help="gc: remove idle dktools builds unused this long (env "
+        "DKTOOLS_BUILD_MAX_AGE_DAYS, default 14)",
+    )
+    bs.add_argument(
+        "--legacy",
+        action="store_true",
+        help="gc: also remove the builds made before build/ held them all "
+        "(build-* at the root, an old single build's files in build/, the "
+        "temp-dir scratch root)",
+    )
+    bs.add_argument(
+        "--presets",
+        action="store_true",
+        help="gc: also remove the idle CMake preset builds in build/<preset>",
+    )
+    bs.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="gc: list what would go, remove nothing",
+    )
+
+    fm = sub.add_parser(
+        "format",
+        help="clang-format (C), prettier (Markdown) and ruff (Python) on "
+        "the changed files, every file, or the named ones",
+    )
+    fm.add_argument(
+        "action",
+        choices=("write", "check"),
+        help="write: rewrite in place; check: change nothing, fail when a "
+        "write would change a file",
+    )
+    fm.add_argument(
+        "paths",
+        nargs="*",
+        help="only these files (repo-relative; default: the files changed "
+        "from HEAD plus untracked ones)",
+    )
+    fm.add_argument(
+        "--all",
+        action="store_true",
+        dest="every",
+        help="every tracked and untracked (not ignored) file",
+    )
+
     tt = sub.add_parser(
         "testtime",
         help="time each section of one datakit test (exit 0 pass, 1 fail)",
@@ -228,7 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         type=Path,
         default=None,
-        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
     )
     vf.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(vf)
@@ -272,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         type=Path,
         default=None,
-        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
     )
     pc.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(pc)
@@ -378,7 +459,8 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         type=Path,
         default=None,
-        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
     )
     va.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(va)
@@ -406,7 +488,8 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         type=Path,
         default=None,
-        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
     )
     cv.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     cv.add_argument(
@@ -632,6 +715,40 @@ def _dispatch(args: argparse.Namespace) -> int:
                 f"  UNREQUESTED {s.path}:{s.line}: {s.call} to {s.target} in {s.context}"
             )
         return 0 if result.clean else 1
+
+    if args.command == "builds":
+        scratch = gitutil.scratch_root(args.root, args.repo).resolve()
+        found = buildstore.inventory(args.repo, scratch)
+        if args.action == "list":
+            buildstore.measure(found)
+            print(f"{'kind':<12} {'size':>9}  {'last used':<16} {'state':<7} path")
+            for b in sorted(found, key=lambda b: (b.kind, -b.last_used)):
+                used = time.strftime("%Y-%m-%d %H:%M", time.localtime(b.last_used))
+                state = "in use" if b.in_use else "idle"
+                print(
+                    f"{b.kind:<12} {buildstore.human(b.size):>9}  {used:<16} "
+                    f"{state:<7} {b.path}"
+                )
+            total = sum(b.size or 0 for b in found)
+            print(f"{len(found)} builds, {buildstore.human(total)}")
+            return 0
+        policy = buildstore.default_policy()
+        if args.budget_gb is not None:
+            policy.budget_bytes = int(args.budget_gb * (1 << 30))
+        if args.max_age_days is not None:
+            policy.max_age_seconds = args.max_age_days * 86400.0
+        policy.legacy = args.legacy
+        policy.presets = args.presets
+        removed = buildstore.collect(found, policy, dry_run=args.dry_run)
+        verb = "would remove" if args.dry_run else "removed"
+        for b in removed:
+            print(f"{verb} {b.kind:<12} {buildstore.human(b.size):>9}  {b.path}")
+        freed = sum(b.size or 0 for b in removed)
+        print(f"{verb} {len(removed)} builds, {buildstore.human(freed)}")
+        return 0
+
+    if args.command == "format":
+        return formatting.run(args.repo, args.action, args.paths, args.every)
 
     if args.command == "fusionscan":
         pairs = fusionscan.run_scan(args.repo, list(args.paths) or None)
