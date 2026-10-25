@@ -344,6 +344,12 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
  * entry goes in; it must not change the flex being inserted into. */
 typedef void(flexWhenAbsent)(void *ctx);
 
+/* Asked once a change is known to apply, before it is made (by the
+ * layers above flex: multimapFieldIncrByIf, multiOrderedSetRemoveIf): a
+ * false answer leaves the container unchanged.  It runs inside the
+ * container's operation and must not use that container. */
+typedef bool(flexProceed)(void *ctx);
+
 /* Insert-if-absent for a map of atom references inserting under a
  * surrogate key, in one search: true when the key (searched by value
  * through 'referenceContainer') was present, with '*foundEntry' its entry

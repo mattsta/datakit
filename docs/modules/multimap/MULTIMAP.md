@@ -741,11 +741,10 @@ multimapProcessUntil(m, &pred, true, printElement, &count);
 ```c
 bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
                          int64_t incrBy, int64_t *newValue);
-typedef bool(multimapProceed)(void *ctx);
+typedef bool(flexProceed)(void *ctx); /* flex.h */
 bool multimapFieldIncrByIf(multimap **m, const databox *key,
                            uint32_t fieldOffset, int64_t incrBy,
-                           int64_t *newValue, multimapProceed *proceed,
-                           void *ctx);
+                           int64_t *newValue, flexProceed *proceed, void *ctx);
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 ```

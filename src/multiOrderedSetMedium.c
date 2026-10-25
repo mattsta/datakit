@@ -375,17 +375,22 @@ bool multiOrderedSetMediumCombine(multiOrderedSetMedium *m,
  * Deletion
  * ==================================================================== */
 
-bool multiOrderedSetMediumRemove(multiOrderedSetMedium *m,
-                                 const databox *member) {
+bool multiOrderedSetMediumRemoveIf(multiOrderedSetMedium *m,
+                                   const databox *member, flexProceed *proceed,
+                                   void *ctx) {
     int existingMap;
     flexEntry *existing = findMemberAnyMap(m, member, &existingMap);
-
-    if (!existing) {
+    if (!existing || (proceed && !proceed(ctx))) {
         return false;
     }
 
     removeFromMap(m, existingMap, existing);
     return true;
+}
+
+bool multiOrderedSetMediumRemove(multiOrderedSetMedium *m,
+                                 const databox *member) {
+    return multiOrderedSetMediumRemoveIf(m, member, NULL, NULL);
 }
 
 bool multiOrderedSetMediumRemoveGetScore(multiOrderedSetMedium *m,

@@ -206,15 +206,21 @@ bool multiOrderedSetSmallCombine(multiOrderedSetSmall *m,
  * Deletion
  * ==================================================================== */
 
-bool multiOrderedSetSmallRemove(multiOrderedSetSmall *m,
-                                const databox *member) {
+bool multiOrderedSetSmallRemoveIf(multiOrderedSetSmall *m,
+                                  const databox *member, flexProceed *proceed,
+                                  void *ctx) {
     flexEntry *existing = mosFindMemberLinear(m->map, member);
-    if (!existing) {
+    if (!existing || (proceed && !proceed(ctx))) {
         return false;
     }
 
     mosRemoveEntry(m, existing);
     return true;
+}
+
+bool multiOrderedSetSmallRemove(multiOrderedSetSmall *m,
+                                const databox *member) {
+    return multiOrderedSetSmallRemoveIf(m, member, NULL, NULL);
 }
 
 bool multiOrderedSetSmallRemoveGetScore(multiOrderedSetSmall *m,

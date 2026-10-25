@@ -140,24 +140,43 @@ persistLogResult multiOrderedSetAddP(multiOrderedSetP *mos,
     return logged;
 }
 
+/* A removal's log, written when the set asks (the member was found); a
+ * refused log declines the removal.  'asked' tells a decline from an
+ * absent member. */
+typedef struct mospRemove_ {
+    persistCtx *ctx;
+    const databox *args[1];
+    persistLogResult logged;
+    bool asked;
+} mospRemove_;
+
+static bool mospLogRemove_(void *ctx) {
+    mospRemove_ *r = ctx;
+    r->asked = true;
+    r->logged = persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, r->args, 1);
+    return r->logged != PERSIST_LOG_REFUSED;
+}
+
 persistLogResult multiOrderedSetRemoveP(multiOrderedSetP *mos,
                                         const databox *member) {
     if (!mos || !mos->ctx || !member) {
         return PERSIST_LOG_REFUSED;
     }
-    if (!mos->mos || !multiOrderedSetExists(mos->mos, member)) {
+    if (!mos->mos) {
         return PERSIST_LOG_UNCHANGED;
     }
 
-    const databox *args[1] = {member};
-    const persistLogResult logged =
-        persistCtxLogOp(mos->ctx, PERSIST_OP_DELETE, args, 1);
-    if (logged == PERSIST_LOG_REFUSED) {
-        return logged;
+    /* Logged from inside the removal's one search, once the member is
+     * found; a refused log leaves the set as it was */
+    mospRemove_ r = {.ctx = mos->ctx,
+                     .args = {member},
+                     .logged = PERSIST_LOG_REFUSED,
+                     .asked = false};
+    if (!multiOrderedSetRemoveIf(&mos->mos, member, mospLogRemove_, &r)) {
+        return r.asked ? PERSIST_LOG_REFUSED : PERSIST_LOG_UNCHANGED;
     }
-    multiOrderedSetRemove(&mos->mos, member);
     persistCtxMaybeCompact(mos->ctx, mos->mos, &persistOpsMultiOrderedSet);
-    return logged;
+    return r.logged;
 }
 
 persistLogResult multiOrderedSetResetP(multiOrderedSetP *mos) {
@@ -878,9 +897,87 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+/* A refused log changes nothing: in a small set and in one large enough
+ * for its member index (the Full tier), a remove under a refusing WAL is
+ * REFUSED with the member kept, an absent member's is UNCHANGED, logging
+ * works again, and a reopen holds only the logged removal */
+static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_refusedLog", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiOrderedSetP a refused log changes nothing (remove)") {
+        static const int sizes[] = {20, 1200};
+        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
+            ptestCleanupFiles(basePath);
+            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
+            char buf[32];
+            for (int i = 0; i < sizes[s]; i++) {
+                snprintf(buf, sizeof(buf), "m%05d", i);
+                const databox score = databoxNewSigned(i);
+                const databox member = databoxNewBytesString(buf);
+                multiOrderedSetAddP(mos, &score, &member, NULL);
+            }
+            const databox kept = databoxNewBytesString("m00005");
+            const databox ghost = databoxNewBytesString("absent");
+
+            persistCtxTestRefusal refusal;
+            if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
+                ERRR("could not arm a refusing WAL");
+            }
+            const persistLogResult removed = multiOrderedSetRemoveP(mos, &kept);
+            const persistLogResult absent = multiOrderedSetRemoveP(mos, &ghost);
+            persistCtxTestRefuseLogsEnd(ctx, &refusal);
+
+            databox score = {{0}};
+            if (removed != PERSIST_LOG_REFUSED ||
+                absent != PERSIST_LOG_UNCHANGED ||
+                multiOrderedSetCountP(mos) != (size_t)sizes[s] ||
+                !multiOrderedSetGetScoreP(mos, &kept, &score) ||
+                score.data.i64 != 5) {
+                ERR("%d members: a refused remove (%d; absent %d) changed "
+                    "the set",
+                    sizes[s], removed, absent);
+            }
+            if (multiOrderedSetRemoveP(mos, &kept) == PERSIST_LOG_REFUSED) {
+                ERRR("the context did not log again after the refusal");
+            }
+            multiOrderedSetCloseP(mos);
+            persistCtxFree(ctx);
+
+            ctx = persistCtxOpen(basePath, NULL);
+            mos = multiOrderedSetOpenP(ctx);
+            const databox next = databoxNewBytesString("m00006");
+            if (!mos || multiOrderedSetCountP(mos) != (size_t)sizes[s] - 1 ||
+                multiOrderedSetExistsP(mos, &kept) ||
+                !multiOrderedSetGetScoreP(mos, &next, &score) ||
+                score.data.i64 != 6) {
+                ERR("%d members: a reopen did not hold exactly the logged "
+                    "removal",
+                    sizes[s]);
+            }
+            multiOrderedSetCloseP(mos);
+            persistCtxFree(ctx);
+        }
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 int multiOrderedSetPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiOrderedSetP_refusedLog(argc, argv);
     err += test_multiOrderedSetP_openRefusals(argc, argv);
     err += test_multiOrderedSetP_readers(argc, argv);
     err += test_multiOrderedSetP_basic(argc, argv);

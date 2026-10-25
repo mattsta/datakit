@@ -95,7 +95,7 @@ wherever the structure allows it, and a REFUSED result always leaves the
 structure as it was:
 
 - **Logged from inside the search** (a refused log declines the change):
-  `multidictReplaceP`, `multimapFieldIncrP`.
+  `multidictReplaceP`, `multimapFieldIncrP`, `multiOrderedSetRemoveP`.
 - **Located, logged, then changed where found**: `multimapDeleteP`,
   `multimapDeleteFullWidthP`.
 - **Applied by the search that decides, undone on a refused log** (the undo

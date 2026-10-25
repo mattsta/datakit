@@ -877,8 +877,7 @@ static bool multimapFieldCounter_(multimap *m, const databox *key,
 
 bool multimapFieldIncrByIf(multimap **m, const databox *key,
                            uint32_t fieldOffset, int64_t incrBy,
-                           int64_t *newValue, multimapProceed *proceed,
-                           void *ctx) {
+                           int64_t *newValue, flexProceed *proceed, void *ctx) {
     /* A set's values order its rows (they are part of each row's
      * identity), so none is a counter to rewrite in place */
     multimapEntry me;

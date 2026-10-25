@@ -226,12 +226,10 @@ bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
  * change the field: a false answer leaves the map unchanged.  True when
  * the field holds the sum (an increment by 0 asks nothing); '*newValue'
  * (may be NULL) is the sum, or else the field's current value (0 for a
- * missing key or a field that is not a counter). */
-typedef bool(multimapProceed)(void *ctx);
+ * missing key or a field that is not a counter).  flexProceed: flex.h. */
 bool multimapFieldIncrByIf(multimap **m, const databox *key,
                            uint32_t fieldOffset, int64_t incrBy,
-                           int64_t *newValue, multimapProceed *proceed,
-                           void *ctx);
+                           int64_t *newValue, flexProceed *proceed, void *ctx);
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 

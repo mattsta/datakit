@@ -48,6 +48,10 @@ bool multiOrderedSetMediumCombine(multiOrderedSetMedium *m,
  * ==================================================================== */
 bool multiOrderedSetMediumRemove(multiOrderedSetMedium *m,
                                  const databox *member);
+/* As multiOrderedSetRemoveIf (multiOrderedSet.h); 'proceed' may be NULL */
+bool multiOrderedSetMediumRemoveIf(multiOrderedSetMedium *m,
+                                   const databox *member, flexProceed *proceed,
+                                   void *ctx);
 bool multiOrderedSetMediumRemoveGetScore(multiOrderedSetMedium *m,
                                          const databox *member, databox *score);
 size_t multiOrderedSetMediumRemoveRangeByScore(multiOrderedSetMedium *m,

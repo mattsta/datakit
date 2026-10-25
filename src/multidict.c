@@ -315,10 +315,15 @@ typedef struct mdLRUCandidates {
 static void multidictLRUOnInsert(multidict *d, const databox *keybox);
 static void multidictLRUOnAccess(multidict *d, const databox *keybox);
 static void multidictLRUOnDelete(multidict *d, const databox *keybox);
+/* A removal's question for multidictGetAndDeleteIf (NULL: none) */
+typedef struct mdRemoveAsk_ {
+    multidictRemoveGate *gate;
+    void *ctx;
+} mdRemoveAsk_;
 static bool multidictRemoveFromTable_(multidict *d, int htidx,
                                       const databox *keybox, uint32_t hash,
                                       size_t keySize, databox *removedVal,
-                                      bool take);
+                                      bool take, const mdRemoveAsk_ *ask);
 DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
                                    multidictValueUpdate *update, void *ctx);
 static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
@@ -1221,7 +1226,7 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
         hash = multidictHashOfKey_(d, keybox);
         knownHash = &hash;
         removedFromOldTable = multidictRemoveFromTable_(
-            d, 0, keybox, hash, mdBoxSize_(keybox), NULL, false);
+            d, 0, keybox, hash, mdBoxSize_(keybox), NULL, false, NULL);
     }
 
     multidictOp op;
@@ -1416,14 +1421,32 @@ multidictResult multidictReplace(multidict *d, const databox *keybox,
 /* Remove 'keybox' from table 'htidx' in one slot search ('hash' is the
  * key's hash, 'keySize' its tracked size), keeping the table's counts.
  * 'removedVal' and 'take' are operationRemove's; the removed value is
- * measured either way. */
+ * measured either way.  With 'ask', the stored value is shown to its gate
+ * first (a second search of the same, just-read slot); a yes drops the
+ * key's LRU tracking, then the key goes. */
 static bool multidictRemoveFromTable_(multidict *d, int htidx,
                                       const databox *keybox, uint32_t hash,
                                       size_t keySize, databox *removedVal,
-                                      bool take) {
+                                      bool take, const mdRemoveAsk_ *ask) {
     multidictSlot **slotPtr = SLOT_BY_HASH_PTR_PTR(d, htidx, hash);
     if (!*slotPtr) {
         return false;
+    }
+
+    if (ask) {
+        databox current;
+        databoxWide currentWide;
+        mdBoxAim_(&current, &currentWide);
+        if (!d->shared->findValueByKey(d->shared, *slotPtr, keybox, &current)) {
+            return false;
+        }
+
+        mdBoxSettle_(&current);
+        if (!ask->gate(ask->ctx, &current)) {
+            return false;
+        }
+
+        multidictLRUOnDelete(d, keybox);
     }
 
     const size_t lenBefore = d->shared->sizeBytes(*slotPtr);
@@ -1447,7 +1470,8 @@ static bool multidictRemoveFromTable_(multidict *d, int htidx,
  * one slot search per table.  'removedVal' and 'take' as for
  * multidictRemoveFromTable_. */
 DK_STATIC bool multidictRemoveExact_(multidict *d, const databox *keybox,
-                                     databox *removedVal, bool take) {
+                                     databox *removedVal, bool take,
+                                     const mdRemoveAsk_ *ask) {
     if (unlikely(HTSIZE(d, 0) == 0)) {
         return false; /* d->ht[0].table is NULL */
     }
@@ -1459,15 +1483,18 @@ DK_STATIC bool multidictRemoveExact_(multidict *d, const databox *keybox,
 
     /* The LRU tracks exactly the keys present, so this is a no-op for an
      * absent key; it runs first, while 'keybox' may still borrow from the
-     * slot the removal rewrites */
-    multidictLRUOnDelete(d, keybox);
+     * slot the removal rewrites.  An asked removal drops it only once its
+     * gate says yes. */
+    if (!ask) {
+        multidictLRUOnDelete(d, keybox);
+    }
 
     /* While rehashing the key may be in either table: the newer first */
     const bool removed = (unlikely(d->rehashing) &&
                           multidictRemoveFromTable_(d, 1, keybox, hash, keySize,
-                                                    removedVal, take)) ||
+                                                    removedVal, take, ask)) ||
                          multidictRemoveFromTable_(d, 0, keybox, hash, keySize,
-                                                   removedVal, take);
+                                                   removedVal, take, ask);
     if (removed) {
         multidictShrinkIfNeeded_(d);
     }
@@ -1479,28 +1506,30 @@ DK_STATIC bool multidictRemoveExact_(multidict *d, const databox *keybox,
  * multidictAddMatched_ is */
 DK_STATIC __attribute__((noinline)) bool
 multidictRemoveMatched_(multidict *d, const databox *keybox,
-                        databox *removedVal, bool take) {
+                        databox *removedVal, bool take,
+                        const mdRemoveAsk_ *ask) {
     mdKeyCopy copy;
     const databox *key = mdKeyForUpdate_(d, keybox, &copy);
-    const bool removed = multidictRemoveExact_(d, key, removedVal, take);
+    const bool removed = multidictRemoveExact_(d, key, removedVal, take, ask);
     mdKeyCopyRelease_(&copy);
     return removed;
 }
 
 /* Remove 'keybox' in one search per table, matching it as the dict's type
- * does; 'removedVal' and 'take' as for multidictRemoveFromTable_ */
+ * does; 'removedVal', 'take' and 'ask' as for multidictRemoveFromTable_ */
 DK_STATIC bool multidictRemove_(multidict *d, const databox *keybox,
-                                databox *removedVal, bool take) {
+                                databox *removedVal, bool take,
+                                const mdRemoveAsk_ *ask) {
     if (unlikely(MD_MATCH_BY_COMPARE(d, keybox))) {
-        return multidictRemoveMatched_(d, keybox, removedVal, take);
+        return multidictRemoveMatched_(d, keybox, removedVal, take, ask);
     }
 
-    return multidictRemoveExact_(d, keybox, removedVal, take);
+    return multidictRemoveExact_(d, keybox, removedVal, take, ask);
 }
 
 /* Search and remove an element - optimized for common case (key exists) */
 bool multidictDelete(multidict *d, const databox *keybox) {
-    return multidictRemove_(d, keybox, NULL, false);
+    return multidictRemove_(d, keybox, NULL, false, NULL);
 }
 
 /* updateByType's callback wrapped to measure the value it replaces */
@@ -1579,8 +1608,25 @@ bool multidictGetAndDelete(multidict *d, const databox *keybox,
     /* One removal that takes the value: an owned copy (a 96/128-bit value
      * in a heap payload, since the box starts zeroed) */
     databox taken = {{0}};
-    if (!multidictRemove_(d, keybox, &taken, true)) {
+    if (!multidictRemove_(d, keybox, &taken, true, NULL)) {
         return false; /* Key doesn't exist */
+    }
+
+    *valbox = taken;
+    return true;
+}
+
+bool multidictGetAndDeleteIf(multidict *d, const databox *keybox,
+                             databox *valbox, multidictRemoveGate *gate,
+                             void *ctx) {
+    if (unlikely(!d || !keybox || !valbox || !gate)) {
+        return false;
+    }
+
+    const mdRemoveAsk_ ask = {.gate = gate, .ctx = ctx};
+    databox taken = {{0}};
+    if (!multidictRemove_(d, keybox, &taken, true, &ask)) {
+        return false; /* absent, or the gate said no */
     }
 
     *valbox = taken;
@@ -1613,7 +1659,7 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
      * entry is going). */
     databox ownedKey = databoxCopy(&key);
     databox taken = {{0}};
-    if (!multidictRemove_(d, &ownedKey, &taken, true)) {
+    if (!multidictRemove_(d, &ownedKey, &taken, true, NULL)) {
         databoxFreeData(&ownedKey);
         return false;
     }
@@ -2522,7 +2568,7 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
     /* Remove the key's handle from keyToPtr in one search, reading the
      * handle (a number, reported by value) as it goes */
     databox ptrBox = {{0}};
-    if (!multidictRemove_(d->lruKeyToPtr, keybox, &ptrBox, false)) {
+    if (!multidictRemove_(d->lruKeyToPtr, keybox, &ptrBox, false, NULL)) {
         return;
     }
 
@@ -4160,6 +4206,78 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
     }
     if (state.bad) {
         ERR("wide scan saw %d wrong or missing pairs", state.bad);
+    }
+
+    return err;
+}
+
+/* Counts the times multidictGetAndDeleteIf asked, keeping the value it
+ * was shown and answering 'answer' */
+typedef struct mdGateProbe_ {
+    bool answer;
+    uint32_t asked;
+    int64_t seen;
+} mdGateProbe_;
+
+static bool mdGateProbe(void *ctx, const databox *value) {
+    mdGateProbe_ *probe = ctx;
+    probe->asked++;
+    probe->seen = value->data.i64;
+    return probe->answer;
+}
+
+/* GetAndDeleteIf against the dict's own answers, in a settled table and
+ * while a rehash is moving keys: a declined key stays with its value and
+ * LRU level, an approved one is taken with its value, an absent one is
+ * never asked about */
+static int multidictTestDeleteIf_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 0);
+    multidictEnableLRU(d, 4);
+    enum { n = 2000 };
+    for (int64_t k = 0; k < n; k++) {
+        const databox key = databoxNewSigned(k);
+        const databox val = databoxNewSigned(k * 3);
+        multidictAdd(d, &key, &val);
+    }
+
+    size_t live = n;
+    for (int phase = 0; phase < 2; phase++) {
+        if (phase == 1 &&
+            (!multidictExpand(d, 16384) || !multidictIsRehashing(d))) {
+            ERRR("could not start a rehash");
+        }
+        for (int64_t k = phase; k < n; k += 4) {
+            const databox key = databoxNewSigned(k);
+            const int level = multidictGetLRULevel(d, &key);
+            mdGateProbe_ probe = {.answer = false};
+            databox got = {{0}};
+            if (multidictGetAndDeleteIf(d, &key, &got, mdGateProbe, &probe) ||
+                probe.asked != 1 || probe.seen != k * 3 ||
+                !multidictExistsNoTouch(d, &key) || multidictCount(d) != live ||
+                multidictGetLRULevel(d, &key) != level) {
+                ERR("phase %d key %" PRId64 ": a declined delete changed it",
+                    phase, k);
+                break;
+            }
+            probe.answer = true;
+            if (!multidictGetAndDeleteIf(d, &key, &got, mdGateProbe, &probe) ||
+                probe.asked != 2 || got.data.i64 != k * 3 ||
+                multidictExistsNoTouch(d, &key) ||
+                multidictCount(d) != --live) {
+                ERR("phase %d key %" PRId64 ": an approved delete misread",
+                    phase, k);
+                break;
+            }
+            if (multidictGetAndDeleteIf(d, &key, &got, mdGateProbe, &probe) ||
+                probe.asked != 2) {
+                ERR("phase %d key %" PRId64 ": an absent key was asked about",
+                    phase, k);
+                break;
+            }
+        }
     }
 
     return err;
@@ -10332,6 +10450,10 @@ int multidictTest(int argc, char *argv[]) {
         if (missing > 0) {
             ERR("%" PRIu64 " of 500 keys missing after Empty-reuse", missing);
         }
+    }
+
+    TEST("GetAndDeleteIf: one search, a declined delete keeps the entry") {
+        err += multidictTestDeleteIf_();
     }
 
     TEST("96/128-bit keys and values: normal / extended / mixed") {

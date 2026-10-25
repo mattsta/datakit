@@ -334,6 +334,11 @@ bool multiOrderedSetRemoveGetScore(multiOrderedSet **mos, const databox *member,
     MOS_RETURN(*mos, RemoveGetScore, member, score);
 }
 
+bool multiOrderedSetRemoveIf(multiOrderedSet **mos, const databox *member,
+                             flexProceed *proceed, void *ctx) {
+    MOS_RETURN(*mos, RemoveIf, member, proceed, ctx);
+}
+
 size_t multiOrderedSetRemoveRangeByScore(multiOrderedSet **mos,
                                          const mosRangeSpec *range) {
     MOS_RETURN(*mos, RemoveRangeByScore, range);
@@ -1701,6 +1706,68 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
     return err;
 }
 
+/* Counts the times multiOrderedSetRemoveIf asked, answering 'answer' */
+typedef struct mosProceedProbe_ {
+    bool answer;
+    uint32_t asked;
+} mosProceedProbe_;
+
+static bool mosProceedProbe(void *ctx) {
+    mosProceedProbe_ *probe = ctx;
+    probe->asked++;
+    return probe->answer;
+}
+
+/* RemoveIf on 'n' members (scores 0..n-1) built to 'tier': every third
+ * member is declined (count, score and rank stay), then approved (gone),
+ * then asked for again (absent: no question) */
+static int mosRemoveIfTier_(int64_t n, multiOrderedSetType tier) {
+    int err = 0;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    for (int64_t i = 0; i < n; i++) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "i%05" PRId64, i);
+        const databox member = databoxNewBytesString(buf);
+        const databox score = databoxNewSigned(i);
+        multiOrderedSetAdd(&mos, &score, &member);
+    }
+    if (mosType_(mos) != tier) {
+        ERR("%" PRId64 " members built tier %d", n, mosType_(mos));
+        return err;
+    }
+
+    size_t live = (size_t)n;
+    for (int64_t i = 0; i < n; i += 3) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "i%05" PRId64, i);
+        const databox member = databoxNewBytesString(buf);
+        const int64_t rank = multiOrderedSetGetRank(mos, &member);
+        mosProceedProbe_ probe = {.answer = false};
+        databox score = {{0}};
+        if (multiOrderedSetRemoveIf(&mos, &member, mosProceedProbe, &probe) ||
+            probe.asked != 1 || multiOrderedSetCount(mos) != live ||
+            !multiOrderedSetGetScore(mos, &member, &score) ||
+            score.data.i64 != i ||
+            multiOrderedSetGetRank(mos, &member) != rank) {
+            ERR("tier %d member %" PRId64 ": a declined remove changed it",
+                tier, i);
+            break;
+        }
+        probe.answer = true;
+        if (!multiOrderedSetRemoveIf(&mos, &member, mosProceedProbe, &probe) ||
+            probe.asked != 2 || multiOrderedSetExists(mos, &member) ||
+            multiOrderedSetCount(mos) != --live ||
+            multiOrderedSetRemoveIf(&mos, &member, mosProceedProbe, &probe) ||
+            probe.asked != 2) {
+            ERR("tier %d member %" PRId64 ": approved or absent misread", tier,
+                i);
+            break;
+        }
+    }
+
+    return err;
+}
+
 int multiOrderedSetTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1856,6 +1923,12 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             count++;
         }
         assert(count == 5);
+    }
+
+    TEST("multiOrderedSet: RemoveIf asks once found; a no keeps the member") {
+        err += mosRemoveIfTier_(60, MOS_TYPE_SMALL);
+        err += mosRemoveIfTier_(400, MOS_TYPE_MEDIUM);
+        err += mosRemoveIfTier_(1200, MOS_TYPE_FULL);
     }
 
     TEST("multiOrderedSet: IncrBy inserts, updates and refuses in every tier") {

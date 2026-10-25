@@ -443,6 +443,15 @@ void multidictEmpty(multidict *d);
 bool multidictGetAndDelete(multidict *d, const databox *keybox,
                            databox *valbox);
 
+/* The same, first showing the stored value to 'gate' within the same hash
+ * and table lookup: a false answer keeps the entry, its value and its LRU
+ * level.  'gate' runs inside the dict's operation and must not use the
+ * dict (a persisted wrapper writes its log there). */
+typedef bool(multidictRemoveGate)(void *ctx, const databox *value);
+bool multidictGetAndDeleteIf(multidict *d, const databox *keybox,
+                             databox *valbox, multidictRemoveGate *gate,
+                             void *ctx);
+
 /* Pop an arbitrary entry (useful for draining a work set) */
 bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox);
 
@@ -798,6 +807,16 @@ static bool onEvict(void *privdata, const databox *key, const databox *val) {
 
 multidictSetMaxMemory(d, 64ULL * 1024 * 1024);
 multidictSetEvictionCallback(d, onEvict, NULL);
+```
+
+The eviction callback runs between the dict's operations, never inside one:
+the victim's value is read, the callback answers, and only then is the entry
+deleted. So the callback may read the dict. This costs a second lookup per
+eviction when a callback is set, which keeps user code out of a half-done
+operation (unlike `multidictGetAndDeleteIf`'s gate, which is library code that
+leaves the dict alone).
+
+```c
 
 if (multidictIsOverLimit(d)) {
     printf("evicted %" PRIu32 " entries\n", multidictEvictToLimit(d));

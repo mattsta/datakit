@@ -55,7 +55,7 @@ needs, so ties cost what distinct scores do.
 | operation | cost |
 | --- | --- |
 | `Add` / `AddNX` / `AddXX` / `AddGetPrevious` / `IncrBy` | hash lookup + O(log sub-maps) routing + one sub-map insert |
-| `Remove` / `RemoveGetScore` | hash lookup + routing + one sub-map delete |
+| `Remove` / `RemoveGetScore` / `RemoveIf` | hash lookup + routing + one sub-map delete (`RemoveIf` asks its `flexProceed` once the member is found; a no changes nothing) |
 | `Exists` / `GetScore` | hash lookup |
 | `GetRank` / `GetReverseRank` | hash lookup + routing + counts of the sub-maps toward the nearer end |
 | `GetByRank` / `IteratorInitAtRank` | counts of the sub-maps toward the nearer end, then within one sub-map |

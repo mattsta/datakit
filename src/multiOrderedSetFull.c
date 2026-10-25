@@ -1028,11 +1028,28 @@ bool multiOrderedSetFullCombine(multiOrderedSetFull *m, const databox *operand,
  * Deletion
  * ==================================================================== */
 
+/* RemoveIf's question, asked by the member index once the member is found
+ * (its score, shown too, is not needed for the answer) */
+typedef struct mosFullAsk_ {
+    flexProceed *proceed;
+    void *ctx;
+} mosFullAsk_;
+
+static bool mosFullAskGate_(void *ctx, const databox *score) {
+    (void)score;
+    const mosFullAsk_ *ask = ctx;
+    return ask->proceed(ask->ctx);
+}
+
 /* Remove 'member' with one member-index search, which hands back the
- * score (owned) that locates its row */
+ * score (owned) that locates its row; with 'proceed', asked inside that
+ * search before anything changes */
 static bool removeMember(multiOrderedSetFull *m, const databox *member,
-                         databox *score) {
-    if (!multidictGetAndDelete(m->memberIndex, member, score)) {
+                         databox *score, flexProceed *proceed, void *ctx) {
+    mosFullAsk_ ask = {.proceed = proceed, .ctx = ctx};
+    if (!(proceed ? multidictGetAndDeleteIf(m->memberIndex, member, score,
+                                            mosFullAskGate_, &ask)
+                  : multidictGetAndDelete(m->memberIndex, member, score))) {
         return false;
     }
 
@@ -1040,9 +1057,10 @@ static bool removeMember(multiOrderedSetFull *m, const databox *member,
     return true;
 }
 
-bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
+bool multiOrderedSetFullRemoveIf(multiOrderedSetFull *m, const databox *member,
+                                 flexProceed *proceed, void *ctx) {
     databox score;
-    if (!removeMember(m, member, &score)) {
+    if (!removeMember(m, member, &score, proceed, ctx)) {
         return false;
     }
 
@@ -1050,10 +1068,14 @@ bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
     return true;
 }
 
+bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
+    return multiOrderedSetFullRemoveIf(m, member, NULL, NULL);
+}
+
 bool multiOrderedSetFullRemoveGetScore(multiOrderedSetFull *m,
                                        const databox *member, databox *score) {
     /* The removal's owned copy is the caller's */
-    return removeMember(m, member, score);
+    return removeMember(m, member, score, NULL, NULL);
 }
 
 size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,

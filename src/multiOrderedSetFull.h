@@ -61,6 +61,9 @@ bool multiOrderedSetFullCombine(multiOrderedSetFull *m, const databox *operand,
  * Deletion
  * ==================================================================== */
 bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member);
+/* As multiOrderedSetRemoveIf (multiOrderedSet.h); 'proceed' may be NULL */
+bool multiOrderedSetFullRemoveIf(multiOrderedSetFull *m, const databox *member,
+                                 flexProceed *proceed, void *ctx);
 bool multiOrderedSetFullRemoveGetScore(multiOrderedSetFull *m,
                                        const databox *member, databox *score);
 size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,

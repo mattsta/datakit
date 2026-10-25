@@ -345,6 +345,13 @@ bool multiOrderedSetRemove(multiOrderedSet **mos, const databox *member);
 bool multiOrderedSetRemoveGetScore(multiOrderedSet **mos, const databox *member,
                                    databox *score);
 
+/* multiOrderedSetRemove that, once the member is found, asks 'proceed'
+ * (flexProceed, flex.h) before anything changes: a false answer leaves
+ * the set as it was.  One search, as Remove.  True when removed; false
+ * when absent (nothing asked) or declined. */
+bool multiOrderedSetRemoveIf(multiOrderedSet **mos, const databox *member,
+                             flexProceed *proceed, void *ctx);
+
 /* Remove members by score range.
  * Returns count of members removed. */
 size_t multiOrderedSetRemoveRangeByScore(multiOrderedSet **mos,

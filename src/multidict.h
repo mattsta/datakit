@@ -124,7 +124,9 @@ typedef void(multidictIterProcess)(void *privdata, const databox *key,
  * level and rank unchanged (reading it for the callback is not an access).
  * The same multidictEvictToLimit call does not offer a vetoed LRU victim
  * again and moves on to the next-coldest entry; once 64 LRU entries have
- * been passed over, the rest of that call picks random victims. */
+ * been passed over, the rest of that call picks random victims.  It runs
+ * between the dict's operations (the victim's value is read, then the
+ * entry deleted once allowed), so it may read the dict. */
 typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
                                         const databox *val);
 
@@ -366,6 +368,15 @@ int32_t multidictUpdateValue(multidict *d, const databox *keybox,
 /* Atomic Get-and-Delete Operations */
 bool multidictGetAndDelete(multidict *d, const databox *keybox,
                            databox *valbox);
+/* multidictGetAndDelete that first shows the stored value (borrowed,
+ * valid during the call) to 'gate', in the same hash and table lookup: a
+ * false answer leaves the entry, its value and its LRU level as they
+ * were.  True when the entry was taken into 'valbox'.  'gate' runs inside
+ * the dict's operation, so it must not use the dict. */
+typedef bool(multidictRemoveGate)(void *ctx, const databox *value);
+bool multidictGetAndDeleteIf(multidict *d, const databox *keybox,
+                             databox *valbox, multidictRemoveGate *gate,
+                             void *ctx);
 bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox);
 
 /* Numeric Operations (the platform increment policy, DATABOX.md "Numeric

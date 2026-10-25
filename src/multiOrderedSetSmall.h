@@ -43,6 +43,10 @@ bool multiOrderedSetSmallCombine(multiOrderedSetSmall *m,
  * Deletion
  * ==================================================================== */
 bool multiOrderedSetSmallRemove(multiOrderedSetSmall *m, const databox *member);
+/* As multiOrderedSetRemoveIf (multiOrderedSet.h); 'proceed' may be NULL */
+bool multiOrderedSetSmallRemoveIf(multiOrderedSetSmall *m,
+                                  const databox *member, flexProceed *proceed,
+                                  void *ctx);
 bool multiOrderedSetSmallRemoveGetScore(multiOrderedSetSmall *m,
                                         const databox *member, databox *score);
 size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
