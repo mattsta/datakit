@@ -1944,18 +1944,36 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             printf("    (skipped on 32-bit: size_t cannot exceed bound)\n");
         } else {
             const size_t over = (size_t)(CHACHA20_POLY1305_MAX_PAYLOAD + 1u);
+            /* Real (small) buffers, so the NULL-buffer misuse check
+             * cannot be what refuses: the bound must, before either
+             * buffer is read, and with no misuse reported */
             uint8_t key[32] = {0};
             uint8_t nonce[12] = {0};
-            uint8_t tag[16];
-            if (chacha20poly1305Seal(key, nonce, NULL, 0u, NULL, over, NULL,
-                                     tag)) {
+            uint8_t tag[16] = {0};
+            uint8_t in_small[32] = {0};
+            uint8_t ct_sentinel[32];
+            memset(ct_sentinel, 0xAA, sizeof(ct_sentinel));
+            const uint64_t diagBefore = dkDiagCount();
+            if (chacha20poly1305Seal(key, nonce, NULL, 0u, in_small, over,
+                                     ct_sentinel, tag)) {
                 ERRR("Seal must refuse plaintext_len past 256 GiB bound");
+            }
+            for (uint32_t i = 0; i < 32u; i++) {
+                if (ct_sentinel[i] != 0xAAu) {
+                    ERR("Seal wrote ciphertext during bound rejection "
+                        "(offset %u)",
+                        i);
+                    break;
+                }
             }
             uint8_t pt_sentinel[32];
             memset(pt_sentinel, 0xAA, sizeof(pt_sentinel));
-            if (chacha20poly1305Open(key, nonce, NULL, 0u, NULL, over, tag,
+            if (chacha20poly1305Open(key, nonce, NULL, 0u, in_small, over, tag,
                                      pt_sentinel)) {
                 ERRR("Open must refuse ciphertext_len past 256 GiB bound");
+            }
+            if (dkDiagCount() != diagBefore) {
+                ERRR("a bound rejection was refused as misuse instead");
             }
             /* Open is documented to zero the plaintext buffer on
              * failure — verify the first 32 bytes were touched.  (The
@@ -2149,6 +2167,25 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                     "(=0x%02x)",
                     i, p[i]);
                 break;
+            }
+        }
+
+        /* (3) ct_total overflow poison: re-init, force ct_total to
+         * MAX_PAYLOAD so the next byte would pass it, then Update.  On
+         * 32-bit (SIZE_MAX < MAX_PAYLOAD) skip, as the Seal test does. */
+        chacha20poly1305OpenStreamInit(&ctx, key, nonce);
+        if ((uint64_t)SIZE_MAX > CHACHA20_POLY1305_MAX_PAYLOAD) {
+            ctx.ct_total = CHACHA20_POLY1305_MAX_PAYLOAD;
+            if (chacha20poly1305OpenStreamUpdate(&ctx, in_buf, 1u, out_buf)) {
+                ERRR("Open Update past MAX_PAYLOAD must return false");
+            }
+            for (size_t i = 0; i < sizeof(ctx); i++) {
+                if (p[i] != 0) {
+                    ERR("Open ct_total-overflow poison left nonzero byte at "
+                        "offset %zu (=0x%02x)",
+                        i, p[i]);
+                    break;
+                }
             }
         }
 

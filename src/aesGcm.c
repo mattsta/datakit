@@ -848,6 +848,53 @@ int aesGcmTest(int argc, char *argv[]) {
         dkSecureZero(&k, sizeof(k));
     }
 
+    TEST("aesGcm: a payload past AES_GCM_MAX_PAYLOAD is refused by every "
+         "backend, before any byte is read or written") {
+        /* Real (small) buffers and a length one past the bound, so the
+         * bound is what refuses (no misuse is reported), and the output
+         * buffers keep their sentinel.  A size_t that cannot exceed the
+         * bound (32-bit) has nothing to test. */
+        if ((uint64_t)SIZE_MAX > AES_GCM_MAX_PAYLOAD) {
+            aesGcmKey k;
+            const uint8_t key[16] = {9};
+            if (!aesGcmInit(&k, key, sizeof(key))) {
+                ERRR("a 16-byte key must initialise");
+            }
+            const size_t over = (size_t)(AES_GCM_MAX_PAYLOAD + 1u);
+            const uint8_t nonce[12] = {0};
+            uint8_t tag[16] = {0};
+            uint8_t in[16] = {0};
+            const aesGcmForceBackend saved = aesGcmGetForceBackend();
+            static const aesGcmForceBackend backends[] = {
+                AES_GCM_FORCE_SCALAR, AES_GCM_FORCE_AESNI,
+                AES_GCM_FORCE_ARMCRYPTO, AES_GCM_FORCE_AUTO};
+            for (size_t b = 0; b < COUNT_ARRAY(backends); b++) {
+                aesGcmSetForceBackend(backends[b]);
+                uint8_t out[16];
+                memset(out, 0xAA, sizeof(out));
+                const uint64_t diagBefore = dkDiagCount();
+                if (aesGcmSeal(&k, nonce, NULL, 0, in, over, out, tag) ||
+                    aesGcmOpen(&k, nonce, NULL, 0, in, over, tag, out)) {
+                    ERR("backend %d: a payload past the bound was taken",
+                        (int)backends[b]);
+                }
+                if (dkDiagCount() != diagBefore) {
+                    ERR("backend %d: the bound was refused as misuse",
+                        (int)backends[b]);
+                }
+                for (size_t i = 0; i < sizeof(out); i++) {
+                    if (out[i] != 0xAA) {
+                        ERR("backend %d: a refused call wrote byte %zu",
+                            (int)backends[b], i);
+                        break;
+                    }
+                }
+            }
+            aesGcmSetForceBackend(saved);
+            dkSecureZero(&k, sizeof(k));
+        }
+    }
+
     TEST("aesGcmKey: dkSecureZero scrubs round_keys + h "
          "(testAesGcmKeyWipeProof)") {
         /* The flexEnvelope AES-GCM cold path stores the expanded key
