@@ -392,6 +392,16 @@ bool multimapMediumGetUnderlyingEntryWithReference(
     return abstractGetUnderlyingEntry(m, key, me, true, referenceContainer);
 }
 
+bool multimapMediumGetUnderlyingEntryFullWidth(multimapMedium *m,
+                                               const databox *elements[],
+                                               multimapEntry *me) {
+    me->mapIdx = multimapMediumBinarySearchFullWidth(m, elements);
+    me->map = &m->map[me->mapIdx];
+    me->fe = flexFindByTypeSortedWithMiddleFullWidth(
+        *me->map, m->elementsPerEntry, elements, GET_MIDDLE(m, me->mapIdx));
+    return !!me->fe;
+}
+
 void multimapMediumResizeEntry(multimapMedium *m, multimapEntry *me,
                                size_t newLen) {
     assert(m->map[me->mapIdx] == *me->map);

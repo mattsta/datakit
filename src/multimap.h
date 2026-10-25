@@ -96,6 +96,10 @@ bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
 bool multimapGetUnderlyingEntryWithReference(
     multimap *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+/* The row equal to all of 'elements' (key and every value), as
+ * multimapExistsFullWidth finds it: true with 'me' naming that row */
+bool multimapGetUnderlyingEntryFullWidth(multimap *m, const databox *elements[],
+                                         multimapEntry *me);
 /* Delete the row 'me' names (filled by GetUnderlyingEntry*, with no change
  * to the map since), without searching for it again.  A map of atom
  * references passes its referenceContainer. */
@@ -204,6 +208,17 @@ bool multimapDeleteRandomValue(multimap **m, bool fromTail, databox **deleted);
  * refusal, so prefer multimapFieldIncrBy. */
 bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
                          int64_t incrBy, int64_t *newValue);
+/* multimapFieldIncrBy in the same one search that first asks 'proceed'
+ * (may be NULL: always proceed) once the increment is known to apply and
+ * change the field: a false answer leaves the map unchanged.  True when
+ * the field holds the sum (an increment by 0 asks nothing); '*newValue'
+ * (may be NULL) is the sum, or else the field's current value (0 for a
+ * missing key or a field that is not a counter). */
+typedef bool(multimapProceed)(void *ctx);
+bool multimapFieldIncrByIf(multimap **m, const databox *key,
+                           uint32_t fieldOffset, int64_t incrBy,
+                           int64_t *newValue, multimapProceed *proceed,
+                           void *ctx);
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 

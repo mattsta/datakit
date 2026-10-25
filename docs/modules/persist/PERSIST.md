@@ -90,6 +90,18 @@ REFUSED is 0, so `if (result)` reads "the operation happened (or was a
 no-op)".  The rule for the core layer is the same: **apply the change exactly
 when the result is not REFUSED**.
 
+A wrapper decides, logs and applies a change in the structure's one search
+wherever the structure allows it, and a REFUSED result always leaves the
+structure as it was:
+
+- **Logged from inside the search** (a refused log declines the change):
+  `multidictReplaceP`, `multimapFieldIncrP`.
+- **Located, logged, then changed where found**: `multimapDeleteP`,
+  `multimapDeleteFullWidthP`.
+- **Applied by the search that decides, undone on a refused log** (the undo
+  restores exactly what was there and costs nothing when the log succeeds):
+  `multimapInsertIfNotExistsP`.
+
 Durability is **best effort with notification**.  A failed flush or sync
 never undoes, blocks or aborts an operation: the result is NOT_DURABLE, the
 failure is counted, and the next sync tries again.  Watch the counters:

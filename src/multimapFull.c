@@ -1721,9 +1721,26 @@ bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
  * once, and serves both the presence check and the insert */
 bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[]) {
     const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
-    const flex *map = *getMapPtr(m, mapIdx);
-    if (flexCount(map) &&
-        flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, elements[0],
+    flex **mapPtr = getMapPtr(m, mapIdx);
+
+    /* Room in the map (abstractInsert's direct-insert case): one search
+     * finds the key or inserts the row, with abstractFlexInsert's upkeep */
+    if (flexBytes(*mapPtr) <= m->maxSize || flexCount(*mapPtr) == 0) {
+        flexEntry *middle = GET_MIDDLE(m, mapIdx, *mapPtr);
+        if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
+                mapPtr, m->elementsPerEntry, elements, &middle)) {
+            return false;
+        }
+
+        updateRangeBoxForIdx(m, mapIdx, *mapPtr);
+        SET_MIDDLE(m, mapIdx, middle, *mapPtr);
+        m->values++;
+        return true;
+    }
+
+    /* A full map splits before the insert: look first, then insert */
+    const flex *map = *mapPtr;
+    if (flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, elements[0],
                                        GET_MIDDLE(m, mapIdx, map))) {
         return false;
     }
@@ -1785,6 +1802,17 @@ bool multimapFullGetUnderlyingEntry(multimapFull *m, const databox *key,
     me->map = getMapPtr(m, me->mapIdx);
     me->fe = multimapFullFindKeyInMap_(
         m, *me->map, GET_MIDDLE(m, me->mapIdx, *me->map), key, false, NULL);
+    return !!me->fe;
+}
+
+bool multimapFullGetUnderlyingEntryFullWidth(multimapFull *m,
+                                             const databox *elements[],
+                                             multimapEntry *me) {
+    me->mapIdx = multimapFullBinarySearchFullWidth(m, elements);
+    me->map = getMapPtr(m, me->mapIdx);
+    me->fe = flexFindByTypeSortedWithMiddleFullWidth(
+        *me->map, m->elementsPerEntry, elements,
+        GET_MIDDLE(m, me->mapIdx, *me->map));
     return !!me->fe;
 }
 

@@ -607,6 +607,11 @@ bool multimapGetUnderlyingEntryWithReference(
                     referenceContainer);
 }
 
+bool multimapGetUnderlyingEntryFullWidth(multimap *m, const databox *elements[],
+                                         multimapEntry *me) {
+    MULTIMAP_RETURN(m, GetUnderlyingEntryFullWidth, elements, me);
+}
+
 static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
                                   flex **map) {
     const multimapType type = multimapType_(*m);
@@ -834,18 +839,27 @@ static bool multimapFieldCounter_(multimap *m, const databox *key,
     }
 }
 
-bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
-                         int64_t incrBy, int64_t *newValue) {
+bool multimapFieldIncrByIf(multimap **m, const databox *key,
+                           uint32_t fieldOffset, int64_t incrBy,
+                           int64_t *newValue, multimapProceed *proceed,
+                           void *ctx) {
     multimapEntry me;
     databox field;
-    int64_t current;
+    int64_t current = 0;
     if (!multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)) {
+        if (newValue) {
+            *newValue = 0;
+        }
         return false;
     }
 
     /* Increment policy: exact; refuse a result outside int64. */
     int64_t next;
-    if (__builtin_add_overflow(current, incrBy, &next)) {
+    if (__builtin_add_overflow(current, incrBy, &next) ||
+        (incrBy != 0 && proceed && !proceed(ctx))) {
+        if (newValue) {
+            *newValue = current;
+        }
         return false;
     }
 
@@ -870,21 +884,28 @@ bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
     return true;
 }
 
-int64_t multimapFieldIncr(multimap **m, const databox *key,
-                          uint32_t fieldOffset, int64_t incrBy) {
+bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
+                         int64_t incrBy, int64_t *newValue) {
     int64_t next;
-    if (multimapFieldIncrBy(m, key, fieldOffset, incrBy, &next)) {
-        return next;
+    if (!multimapFieldIncrByIf(m, key, fieldOffset, incrBy, &next, NULL,
+                               NULL)) {
+        return false;
     }
 
-    /* Refused or not a counter: report the current value, or 0 for a
-     * missing key or a field that is not an int64 counter. */
-    multimapEntry me;
-    databox field;
-    int64_t current;
-    return multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)
-               ? current
-               : 0;
+    if (newValue) {
+        *newValue = next;
+    }
+
+    return true;
+}
+
+int64_t multimapFieldIncr(multimap **m, const databox *key,
+                          uint32_t fieldOffset, int64_t incrBy) {
+    /* The sum, or on a refusal the current value (0 for a missing key or a
+     * field that is not an int64 counter) */
+    int64_t reported;
+    multimapFieldIncrByIf(m, key, fieldOffset, incrBy, &reported, NULL, NULL);
+    return reported;
 }
 
 #endif
@@ -3854,6 +3875,99 @@ static int32_t multimapTestNextSize_(int32_t i) {
     return i < 256 ? i + 1 : i + i / 16;
 }
 
+/* multimapGetUnderlyingEntryFullWidth then multimapDeleteEntry in a set,
+ * against multimapDeleteFullWidth in a twin, in every tier: every row
+ * found is the row named, a row with a value never inserted is not found,
+ * and both maps lose one row per step until both are empty */
+static int32_t multimapFullWidthEntrySweep_(void) {
+    int32_t err = 0;
+    /* 20, 120 and 6000 rows (five per key) at shrinking split sizes */
+    const int64_t keys[] = {4, 24, 1200};
+    const flexCapSizeLimit limits[] = {FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512,
+                                       FLEX_CAP_LEVEL_64};
+    const multimapType tiers[] = {MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM,
+                                  MULTIMAP_TYPE_FULL};
+    for (size_t t = 0; t < COUNT_ARRAY(keys); t++) {
+        cleaner(multimapFree) multimap *a =
+            multimapNewConfigure(2, true, false, limits[t]);
+        cleaner(multimapFree) multimap *b =
+            multimapNewConfigure(2, true, false, limits[t]);
+        for (int64_t k = 0; k < keys[t]; k++) {
+            for (int64_t v = 0; v < 5; v++) {
+                const databox key = databoxNewSigned(k);
+                const databox val = databoxNewSigned(v);
+                const databox *row[] = {&key, &val};
+                multimapInsert(&a, row);
+                multimapInsert(&b, row);
+            }
+        }
+        if (multimapType_(a) != tiers[t]) {
+            ERR("full-width entry: tier %zu built type %d", t,
+                (int)multimapType_(a));
+        }
+
+        /* Rows in a scattered order: 7 is coprime to every row count */
+        const int64_t rows = keys[t] * 5;
+        for (int64_t i = 0; i < rows; i++) {
+            const int64_t at = (i * 7) % rows;
+            const databox key = databoxNewSigned(at / 5);
+            const databox val = databoxNewSigned(at % 5);
+            const databox never = databoxNewSigned(5 + at % 5);
+            const databox *row[] = {&key, &val};
+            const databox *absent[] = {&key, &never};
+            multimapEntry me;
+            if (multimapGetUnderlyingEntryFullWidth(a, absent, &me)) {
+                ERR("full-width entry: tier %zu found a row never inserted", t);
+                break;
+            }
+            if (!multimapGetUnderlyingEntryFullWidth(a, row, &me)) {
+                ERR("full-width entry: tier %zu row %" PRId64 " not found", t,
+                    at);
+                break;
+            }
+            databox gotKey = {{0}};
+            databox gotVal = {{0}};
+            flexGetByType(me.fe, &gotKey);
+            flexGetByType(flexNext(*me.map, me.fe), &gotVal);
+            if (!databoxEqual(&gotKey, &key) || !databoxEqual(&gotVal, &val)) {
+                ERR("full-width entry: tier %zu row %" PRId64
+                    " located another row",
+                    t, at);
+                break;
+            }
+            multimapDeleteEntry(&a, &me);
+            if (!multimapDeleteFullWidth(&b, row) ||
+                multimapCount(a) != multimapCount(b)) {
+                ERR("full-width entry: tier %zu row %" PRId64
+                    ": counts %zu and %zu",
+                    t, at, multimapCount(a), multimapCount(b));
+                break;
+            }
+            if (i % 97 == 0) {
+                multimapVerify(a);
+            }
+        }
+        if (multimapCount(a) != 0) {
+            ERR("full-width entry: tier %zu kept %zu rows", t,
+                multimapCount(a));
+        }
+    }
+
+    return err;
+}
+
+/* Counts the times multimapFieldIncrByIf asked, answering 'answer' */
+typedef struct mmProceedProbe_ {
+    bool answer;
+    uint32_t asked;
+} mmProceedProbe_;
+
+static bool mmProceedProbe(void *ctx) {
+    mmProceedProbe_ *probe = ctx;
+    probe->asked++;
+    return probe->answer;
+}
+
 /* multimapInsertIfAbsent through Small, Medium and Full against an oracle
  * of the first value each key was offered: only a key's first offer
  * inserts, a later offer leaves the stored value, and the count is the
@@ -4271,6 +4385,10 @@ int multimapTest(int argc, char *argv[]) {
 
     TEST("insert-if-absent through every tier") {
         err += multimapInsertIfAbsentSweep_();
+    }
+
+    TEST("a full-width entry is the row named, every tier") {
+        err += multimapFullWidthEntrySweep_();
     }
 
     TEST("96/128-bit keys and values through every tier") {
@@ -7870,6 +7988,66 @@ int multimapTest(int argc, char *argv[]) {
             multimapFieldIncrBy(&m, &kMissing, 1, 1, NULL) ||
             multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
             ERRR("a non-counter field or missing key was not refused");
+        }
+    }
+
+    TEST("FieldIncrByIf: asked once a change will apply; declining changes "
+         "nothing") {
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        const databox kBool = databoxNewSigned(1);
+        const databox kU = databoxNewSigned(2);
+        const databox kMax = databoxNewSigned(3);
+        const databox kMissing = databoxNewSigned(4);
+        const databox vU = databoxNewUnsigned(9);
+        const databox vMax = databoxNewSigned(INT64_MAX);
+        const databox *rowBool[] = {&kBool, &DATABOX_BOX_TRUE};
+        const databox *rowU[] = {&kU, &vU};
+        const databox *rowMax[] = {&kMax, &vMax};
+        multimapInsert(&m, rowBool);
+        multimapInsert(&m, rowU);
+        multimapInsert(&m, rowMax);
+
+        /* Declined: the field keeps its value and type, and the current
+         * value is reported */
+        mmProceedProbe_ probe = {.answer = false, .asked = 0};
+        int64_t now = -1;
+        databox got = {{0}};
+        databox *out[] = {&got};
+        if (multimapFieldIncrByIf(&m, &kBool, 1, 1, &now, mmProceedProbe,
+                                  &probe) ||
+            probe.asked != 1 || now != 1 || !multimapLookup(m, &kBool, out) ||
+            got.type != DATABOX_TRUE) {
+            ERRR("a declined boolean increment changed the field");
+        }
+        if (multimapFieldIncrByIf(&m, &kU, 1, 5, &now, mmProceedProbe,
+                                  &probe) ||
+            probe.asked != 2 || now != 9 || !multimapLookup(m, &kU, out) ||
+            got.type != DATABOX_UNSIGNED_64 || got.data.u != 9) {
+            ERRR("a declined unsigned increment changed the field");
+        }
+
+        /* Not asked: an increment by 0 (true, current), an overflow
+         * (false, current), a missing key (false, 0) */
+        if (!multimapFieldIncrByIf(&m, &kU, 1, 0, &now, mmProceedProbe,
+                                   &probe) ||
+            now != 9 ||
+            multimapFieldIncrByIf(&m, &kMax, 1, 1, &now, mmProceedProbe,
+                                  &probe) ||
+            now != INT64_MAX ||
+            multimapFieldIncrByIf(&m, &kMissing, 1, 1, &now, mmProceedProbe,
+                                  &probe) ||
+            now != 0 || probe.asked != 2) {
+            ERRR("a no-change, overflow or missing key asked or misreported");
+        }
+
+        /* Allowed, and with no question at all */
+        probe.answer = true;
+        if (!multimapFieldIncrByIf(&m, &kU, 1, 5, &now, mmProceedProbe,
+                                   &probe) ||
+            now != 14 || probe.asked != 3 ||
+            !multimapFieldIncrByIf(&m, &kU, 1, 1, &now, NULL, NULL) ||
+            now != 15 || !multimapLookup(m, &kU, out) || got.data.i != 15) {
+            ERRR("an allowed increment did not apply");
         }
     }
 

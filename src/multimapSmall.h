@@ -58,6 +58,10 @@ bool multimapSmallGetUnderlyingEntry(multimapSmall *m, const databox *key,
 bool multimapSmallGetUnderlyingEntryWithReference(
     multimapSmall *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+/* As multimapGetUnderlyingEntryFullWidth (multimap.h) */
+bool multimapSmallGetUnderlyingEntryFullWidth(multimapSmall *m,
+                                              const databox *elements[],
+                                              multimapEntry *me);
 void multimapSmallDeleteEntryWithReference(
     multimapSmall *m, multimapEntry *me,
     const struct multimapAtom *referenceContainer);

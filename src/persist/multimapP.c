@@ -167,10 +167,21 @@ persistLogResult multimapInsertIfNotExistsP(multimapP *m,
     if (!multimapLoggableP(m)) {
         return PERSIST_LOG_REFUSED;
     }
-    if (multimapExists(m->m, elements[0])) {
+    /* Inserted by the one search that finds the key absent, then logged; a
+     * refused log deletes the row again, which leaves the map as it was
+     * (no row had the key) */
+    if (!multimapInsertIfAbsent(&m->m, elements)) {
         return PERSIST_LOG_UNCHANGED;
     }
-    return multimapInsertP(m, elements, NULL);
+
+    const persistLogResult logged = persistCtxLogOp(
+        m->ctx, PERSIST_OP_INSERT, elements, m->elementsPerEntry);
+    if (logged == PERSIST_LOG_REFUSED) {
+        multimapDelete(&m->m, elements[0]);
+        return logged;
+    }
+    persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
+    return logged;
 }
 
 persistLogResult multimapDeleteP(multimapP *m, const databox *key) {
@@ -201,7 +212,10 @@ persistLogResult multimapDeleteFullWidthP(multimapP *m,
     if (!multimapLoggableP(m)) {
         return PERSIST_LOG_REFUSED;
     }
-    if (!multimapExistsFullWidth(m->m, elements)) {
+    /* As multimapDeleteP: the row found here is deleted where it is once
+     * logged, one search */
+    multimapEntry me = {0};
+    if (!multimapGetUnderlyingEntryFullWidth(m->m, elements, &me)) {
         return PERSIST_LOG_UNCHANGED;
     }
 
@@ -211,7 +225,7 @@ persistLogResult multimapDeleteFullWidthP(multimapP *m,
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
-    multimapDeleteFullWidth(&m->m, elements);
+    multimapDeleteEntry(&m->m, &me);
     persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
     return logged;
 }
@@ -235,6 +249,21 @@ persistLogResult multimapResetP(multimapP *m) {
     return logged;
 }
 
+/* An increment's log, written when the map asks (the increment will
+ * apply); a refused log declines it */
+typedef struct mmpIncr_ {
+    persistCtx *ctx;
+    const databox *args[3];
+    persistLogResult logged;
+} mmpIncr_;
+
+static bool mmpLogIncr_(void *ctx) {
+    mmpIncr_ *incr = ctx;
+    incr->logged =
+        persistCtxLogOp(incr->ctx, PERSIST_OP_NUM_INCR, incr->args, 3);
+    return incr->logged != PERSIST_LOG_REFUSED;
+}
+
 persistLogResult multimapFieldIncrP(multimapP *m, const databox *key,
                                     uint32_t fieldOffset, int64_t incrBy,
                                     int64_t *newValue) {
@@ -245,37 +274,24 @@ persistLogResult multimapFieldIncrP(multimapP *m, const databox *key,
         return PERSIST_LOG_REFUSED;
     }
 
-    /* Decide the map's refusal first (an increment by 0 reads the value
-     * and whether the field is a counter), so a refused increment is never
-     * logged */
-    int64_t current = 0;
-    int64_t sum = 0;
-    if (!multimapFieldIncrBy(&m->m, key, fieldOffset, 0, &current) ||
-        __builtin_add_overflow(current, incrBy, &sum)) {
-        if (newValue) {
-            *newValue = current;
-        }
+    /* The map decides and applies in one search and asks only once the
+     * increment will change the field, so a refusal (the map's or the
+     * log's) is never logged and leaves the field as it was.  Logged as
+     * the increment, not the result. */
+    const databox offsetBox = DATABOX_UNSIGNED(fieldOffset);
+    const databox deltaBox = DATABOX_SIGNED(incrBy);
+    mmpIncr_ incr = {.ctx = m->ctx,
+                     .args = {key, &offsetBox, &deltaBox},
+                     .logged = PERSIST_LOG_REFUSED};
+    if (!multimapFieldIncrByIf(&m->m, key, fieldOffset, incrBy, newValue,
+                               mmpLogIncr_, &incr)) {
         return PERSIST_LOG_REFUSED;
-    }
-    if (newValue) {
-        *newValue = current;
     }
     if (incrBy == 0) {
         return PERSIST_LOG_UNCHANGED;
     }
-
-    /* Logged as the increment, not the result */
-    const databox offsetBox = DATABOX_UNSIGNED(fieldOffset);
-    const databox deltaBox = DATABOX_SIGNED(incrBy);
-    const databox *args[] = {key, &offsetBox, &deltaBox};
-    const persistLogResult logged =
-        persistCtxLogOp(m->ctx, PERSIST_OP_NUM_INCR, args, 3);
-    if (logged == PERSIST_LOG_REFUSED) {
-        return logged;
-    }
-    multimapFieldIncrBy(&m->m, key, fieldOffset, incrBy, newValue);
     persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
-    return logged;
+    return incr.logged;
 }
 
 /* ============================================================================
@@ -1183,6 +1199,91 @@ int multimapPTest(int argc, char *argv[]) {
             }
             multimapCloseP(m);
         }
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multimapP a refused log changes nothing (insert-if-absent, "
+         "increment, full-row delete)") {
+        /* key -> counter, the counters a boolean and an unsigned: a
+         * refused increment keeps the field's value and its type */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multimapP *m = multimapNewP(ctx, 2);
+        const databox k1 = DATABOX_SIGNED(1);
+        const databox k2 = DATABOX_SIGNED(2);
+        const databox k3 = DATABOX_SIGNED(3);
+        const databox yes = DATABOX_BOX_TRUE;
+        const databox nine = DATABOX_UNSIGNED(9);
+        const databox thirty = DATABOX_SIGNED(30);
+        const databox *row1[] = {&k1, &yes};
+        const databox *row2[] = {&k2, &nine};
+        const databox *row3[] = {&k3, &thirty};
+        multimapInsertP(m, row1, NULL);
+        multimapInsertP(m, row2, NULL);
+
+        persistCtxTestRefusal refusal;
+        if (!persistCtxTestRefuseLogsBegin(ctx, &refusal)) {
+            ERRR("could not arm a refusing WAL");
+        }
+        int64_t now1 = -1;
+        int64_t now2 = -1;
+        const persistLogResult inserted = multimapInsertIfNotExistsP(m, row3);
+        const persistLogResult incr1 = multimapFieldIncrP(m, &k1, 1, 1, &now1);
+        const persistLogResult incr2 = multimapFieldIncrP(m, &k2, 1, 1, &now2);
+        const persistLogResult deleted = multimapDeleteFullWidthP(m, row2);
+        persistCtxTestRefuseLogsEnd(ctx, &refusal);
+
+        if (inserted != PERSIST_LOG_REFUSED || incr1 != PERSIST_LOG_REFUSED ||
+            incr2 != PERSIST_LOG_REFUSED || deleted != PERSIST_LOG_REFUSED) {
+            ERR("not refused: insert %d, increments %d %d, delete %d", inserted,
+                incr1, incr2, deleted);
+        }
+        if (now1 != 1 || now2 != 9) {
+            ERR("refused increments reported %" PRId64 " and %" PRId64
+                ", not the current 1 and 9",
+                now1, now2);
+        }
+        databox got = {{0}};
+        databox *out[] = {&got};
+        if (multimapCountP(m) != 2 || multimapExistsP(m, &k3) ||
+            !multimapExistsFullWidth(multimapGetP(m), row2)) {
+            ERRR("a refused insert or delete changed the rows");
+        }
+        if (!multimapLookupP(m, &k1, out) || got.type != DATABOX_TRUE ||
+            !multimapLookupP(m, &k2, out) || got.type != DATABOX_UNSIGNED_64 ||
+            got.data.u != 9) {
+            ERRR("a refused increment changed a field's value or type");
+        }
+
+        /* Logging works again, and a reopen holds only what was logged */
+        if (multimapFieldIncrP(m, &k1, 1, 1, &now1) == PERSIST_LOG_REFUSED ||
+            now1 != 2) {
+            ERRR("the context did not log again after the refusal");
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+        ctx = persistCtxOpen(basePath, NULL);
+        m = multimapOpenP(ctx);
+        if (!m || multimapCountP(m) != 2 || multimapExistsP(m, &k3)) {
+            ERR("a reopen holds %zu rows, key 3 %s", multimapCountP(m),
+                m && multimapExistsP(m, &k3) ? "present" : "absent");
+        }
+        /* The boolean became the integer 2 (non-negative integers read
+         * back unsigned) */
+        if (m && (!multimapLookupP(m, &k1, out) ||
+                  got.type != DATABOX_UNSIGNED_64 || got.data.u != 2)) {
+            ERR("after a reopen key 1 holds type %d value %" PRIu64
+                ", not the integer 2",
+                (int)got.type, got.data.u64);
+        }
+        if (m && (!multimapLookupP(m, &k2, out) ||
+                  got.type != DATABOX_UNSIGNED_64 || got.data.u != 9)) {
+            ERR("after a reopen key 2 holds type %d value %" PRIu64
+                ", not the unsigned 9",
+                (int)got.type, got.data.u64);
+        }
+        multimapCloseP(m);
         persistCtxFree(ctx);
         ptestCleanupFiles(basePath);
     }

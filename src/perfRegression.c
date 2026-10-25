@@ -28,7 +28,11 @@
 #include "multidict.h"
 #include "multimapAtom.h"
 #include "multimapAtomDense.h"
+#include "persist/intsetP.h"
+#include "persist/multiOrderedSetP.h"
 #include "persist/multidictP.h"
+#include "persist/multimapP.h"
+#include "persist/multiroarP.h"
 #include "persist/persistCtx.h"
 #include "rapidhash.h"
 #include "sha256.h"
@@ -912,20 +916,41 @@ static void benchMultiOrderedSet(void) {
  * multidictReplaceP (check, log, apply; no sync, no compaction) beside a
  * plain multidictReplace and the multidictExistsNoTouch the wrapper runs
  * first, over the same present keys (only when asked for by name) */
-static void benchMultidictP(void) {
-    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
-    const uint32_t n = PERF_CONTAINER_N;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+/* A persist context under 'tmp' that never syncs or compacts, so a
+ * persisted row times the wrapper's check, its log write and the change */
+static persistCtx *perfPersistCtx(dkTestTmpDir *tmp, const char *name) {
     char base[PATH_MAX];
-    if (!dkTestTmpDirPath(&tmp, "perfMultidictP", base, sizeof(base))) {
-        return;
+    if (!dkTestTmpDirPath(tmp, name, base, sizeof(base))) {
+        return NULL;
     }
 
     persistCtxConfig config = persistCtxDefaultConfig();
     config.syncMode = PERSIST_CTX_SYNC_NONE;
     config.compactAfterOps = 0;
     config.compactAfterBytes = 0;
-    persistCtx *ctx = persistCtxNew(base, &config);
+    return persistCtxNew(base, &config);
+}
+
+/* One timed row of n calls: the body runs once for each i in [0, n) */
+#define PERF_ROW(module, row, n, ...)                                          \
+    do {                                                                       \
+        const double rowStart_ = monoNowSec();                                 \
+        for (uint32_t i = 0; i < (n); i++) {                                   \
+            __VA_ARGS__;                                                       \
+        }                                                                      \
+        emitRow(module, row, 0, (n), monoNowSec() - rowStart_);                \
+    } while (0)
+
+/* i in [0, PERF_CONTAINER_N) visited in a fixed scattered order */
+static uint32_t perfScatter(uint32_t i) {
+    return (i * 7919u) % PERF_CONTAINER_N;
+}
+
+static void benchMultidictP(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    persistCtx *ctx = perfPersistCtx(&tmp, "perfMultidictP");
     multidictP *dp = ctx ? multidictNewP(ctx) : NULL;
     if (!dp) {
         persistCtxFree(ctx);
@@ -977,6 +1002,206 @@ static void benchMultidictP(void) {
 
     multidictCloseP(dp);
     persistCtxFree(ctx);
+    perfContainerSink = sink;
+}
+
+defcleaner(intset *, intsetFree);
+defcleaner(multimap *, multimapFree);
+defcleaner(multiroar *, multiroarFree);
+
+static void perfFillOrderedSet(multiOrderedSet **mos, const char *keys) {
+    for (uint32_t i = 0; i < PERF_CONTAINER_N; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox s = databoxNewSigned(i);
+        multiOrderedSetAdd(mos, &s, &k);
+    }
+}
+
+/* What each persisted change's check costs, for the wrappers that check
+ * before they log: the wrapper's row, the plain change, and the check
+ * followed by the plain change, over the same values (the check's share
+ * is the last row minus the plain one).  Plain rows use containers of
+ * their own; a removal row empties its container and an untimed refill
+ * follows where a later row needs the values.  Intset values ascend on
+ * add and descend on remove, so no row times moving the array (only
+ * when asked for by name). */
+static void benchPersistChecks(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    const char *mod = "persistChecks";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    uint64_t sink = 0;
+    bool done = false;
+
+    persistCtx *ictx = perfPersistCtx(&tmp, "intsetP");
+    intsetP *isp = ictx ? intsetNewP(ictx) : NULL;
+    cleaner(intsetFree) intset *is = intsetNew();
+    if (isp) {
+        PERF_ROW(mod, "intsetAddP", n, sink += intsetAddP(isp, i, &done));
+        PERF_ROW(mod, "intsetRemoveP", n,
+                 sink += intsetRemoveP(isp, n - 1 - i, &done));
+        PERF_ROW(mod, "intsetAdd", n, intsetAdd(&is, i, &done); sink += done);
+        PERF_ROW(mod, "intsetRemove", n, intsetRemove(&is, n - 1 - i, &done);
+                 sink += done);
+        PERF_ROW(
+            mod, "intsetFindThenAdd", n, if (!intsetFind(is, i)) {
+                intsetAdd(&is, i, &done);
+                sink += done;
+            });
+        PERF_ROW(
+            mod, "intsetFindThenRemove", n, if (intsetFind(is, n - 1 - i)) {
+                intsetRemove(&is, n - 1 - i, &done);
+                sink += done;
+            });
+        intsetCloseP(isp);
+    }
+    persistCtxFree(ictx);
+
+    persistCtx *octx = perfPersistCtx(&tmp, "multiOrderedSetP");
+    multiOrderedSetP *mosp = octx ? multiOrderedSetNewP(octx) : NULL;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    if (mosp) {
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            const databox s = databoxNewSigned(i);
+            sink += multiOrderedSetAddP(mosp, &s, &k, &done);
+        }
+        perfFillOrderedSet(&mos, keys);
+        PERF_ROW(mod, "mosRemoveP", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 sink += multiOrderedSetRemoveP(mosp, &k));
+        PERF_ROW(mod, "mosRemove", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 sink += multiOrderedSetRemove(&mos, &k));
+        perfFillOrderedSet(&mos, keys);
+        PERF_ROW(
+            mod, "mosExistsThenRemove", n,
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            if (multiOrderedSetExists(mos, &k)) {
+                sink += multiOrderedSetRemove(&mos, &k);
+            });
+        multiOrderedSetCloseP(mosp);
+    }
+    persistCtxFree(octx);
+
+    /* Rows of (key, counter): each increment adds 1 to the counter, so
+     * a full-width delete names the counter's value by then */
+    persistCtx *mctx = perfPersistCtx(&tmp, "multimapP");
+    multimapP *mp = mctx ? multimapNewP(mctx, 2) : NULL;
+    cleaner(multimapFree) multimap *m = multimapNew(2);
+    if (mp) {
+        int64_t now = 0;
+        PERF_ROW(mod, "mapInsertIfNotExistsP", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox v = databoxNewSigned(perfScatter(i));
+                 const databox *row[2] = {&k, &v};
+                 sink += multimapInsertIfNotExistsP(mp, row));
+        PERF_ROW(mod, "mapFieldIncrP", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 sink += multimapFieldIncrP(mp, &k, 1, 1, &now));
+        PERF_ROW(mod, "mapDeleteFullWidthP", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox v = databoxNewSigned(perfScatter(i) + 1);
+                 const databox *row[2] = {&k, &v};
+                 sink += multimapDeleteFullWidthP(mp, row));
+
+        PERF_ROW(mod, "mapInsert", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox v = databoxNewSigned(perfScatter(i));
+                 const databox *row[2] = {&k, &v};
+                 sink += multimapInsert(&m, row));
+        PERF_ROW(mod, "mapFieldIncr", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 sink += multimapFieldIncrBy(&m, &k, 1, 1, &now));
+        PERF_ROW(
+            mod, "mapFieldReadThenIncr", n,
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            if (multimapFieldIncrBy(&m, &k, 1, 0, &now)) {
+                sink += multimapFieldIncrBy(&m, &k, 1, 1, &now);
+            });
+        PERF_ROW(mod, "mapDeleteFullWidth", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox v = databoxNewSigned(perfScatter(i) + 2);
+                 const databox *row[2] = {&k, &v};
+                 sink += multimapDeleteFullWidth(&m, row));
+        PERF_ROW(
+            mod, "mapExistsThenInsert", n,
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            const databox v = databoxNewSigned(perfScatter(i));
+            const databox *row[2] = {&k, &v};
+            if (!multimapExists(m, &k)) { sink += multimapInsert(&m, row); });
+        PERF_ROW(
+            mod, "mapExistsThenDeleteFullWidth", n,
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            const databox v = databoxNewSigned(perfScatter(i));
+            const databox *row[2] = {&k, &v};
+            if (multimapExistsFullWidth(m, row)) {
+                sink += multimapDeleteFullWidth(&m, row);
+            });
+        PERF_ROW(mod, "mapInsertIfAbsent", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox v = databoxNewSigned(perfScatter(i));
+                 const databox *row[2] = {&k, &v};
+                 sink += multimapInsertIfAbsent(&m, row));
+        multimapCloseP(mp);
+    }
+    persistCtxFree(mctx);
+
+    /* Bit positions three apart, so sets and clears reach many words */
+    persistCtx *bctx = perfPersistCtx(&tmp, "multiroarP");
+    multiroarP *rp = bctx ? multiroarNewP(bctx) : NULL;
+    cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+    if (rp) {
+        PERF_ROW(mod, "bitSetP", n,
+                 sink += multiroarBitSetP(rp, perfScatter(i) * 3ull, &done));
+        PERF_ROW(mod, "bitRemoveP", n,
+                 sink += multiroarRemoveP(rp, perfScatter(i) * 3ull, &done));
+        PERF_ROW(mod, "bitSet", n,
+                 sink += multiroarBitSet(r, perfScatter(i) * 3ull));
+        PERF_ROW(mod, "bitRemove", n,
+                 sink += multiroarRemove(r, perfScatter(i) * 3ull));
+        PERF_ROW(
+            mod, "bitGetThenSet", n,
+            if (!multiroarBitGet(r, perfScatter(i) * 3ull)) {
+                sink += multiroarBitSet(r, perfScatter(i) * 3ull);
+            });
+        PERF_ROW(
+            mod, "bitGetThenRemove", n,
+            if (multiroarBitGet(r, perfScatter(i) * 3ull)) {
+                sink += multiroarRemove(r, perfScatter(i) * 3ull);
+            });
+        multiroarCloseP(rp);
+    }
+    persistCtxFree(bctx);
+
+    /* Value mode: one 8-bit value per position, every position filled */
+    persistCtx *vctx = perfPersistCtx(&tmp, "multiroarValueP");
+    multiroarP *vp = vctx ? multiroarValueNewP(vctx, 8, n, 1) : NULL;
+    cleaner(multiroarFree) multiroar *vr = multiroarValueNew(8, n, 1);
+    if (vp && vr) {
+        for (uint32_t i = 0; i < n; i++) {
+            databox v = databoxNewUnsigned(i & 0xff);
+            sink += multiroarValueSetP(vp, i, &v);
+            multiroarValueSet(vr, i, &v);
+        }
+        PERF_ROW(mod, "valueRemoveP", n,
+                 sink += multiroarValueRemoveP(vp, perfScatter(i), &done));
+        PERF_ROW(mod, "valueRemove", n,
+                 sink +=
+                 multiroarValueRemoveGetRemoved(vr, perfScatter(i), NULL));
+        for (uint32_t i = 0; i < n; i++) {
+            databox v = databoxNewUnsigned(i & 0xff);
+            multiroarValueSet(vr, i, &v);
+        }
+        PERF_ROW(
+            mod, "valueGetThenRemove", n,
+            if (multiroarValueGet(vr, perfScatter(i), NULL)) {
+                sink +=
+                    multiroarValueRemoveGetRemoved(vr, perfScatter(i), NULL);
+            });
+    }
+    multiroarCloseP(vp);
+    persistCtxFree(vctx);
     perfContainerSink = sink;
 }
 
@@ -1386,6 +1611,10 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfNamed("multidictP")) {
             benchMultidictP();
+        }
+
+        if (perfNamed("persistChecks")) {
+            benchPersistChecks();
         }
 
         if (perfWanted("multiOrderedSet")) {

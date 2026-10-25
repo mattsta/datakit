@@ -95,6 +95,10 @@ bool multimapFullGetUnderlyingEntry(multimapFull *m, const databox *key,
 bool multimapFullGetUnderlyingEntryWithReference(
     multimapFull *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+/* As multimapGetUnderlyingEntryFullWidth (multimap.h) */
+bool multimapFullGetUnderlyingEntryFullWidth(multimapFull *m,
+                                             const databox *elements[],
+                                             multimapEntry *me);
 void multimapFullResizeEntry(multimapFull *m, multimapEntry *me, size_t newLen);
 void multimapFullReplaceEntry(multimapFull *m, multimapEntry *me,
                               const databox *box);

@@ -271,6 +271,10 @@ common multimap mistake.
 /* Insert or replace by key; returns true when an existing row matched */
 bool multimapInsert(multimap **m, const databox *elements[]);
 
+/* Insert only when no row has the key (in a set, any row with the key),
+ * in one search; true when inserted */
+bool multimapInsertIfAbsent(multimap **m, const databox *elements[]);
+
 /* Sorted bag: all elements form the key, duplicates are allowed */
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 
@@ -520,10 +524,19 @@ bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
 bool multimapGetUnderlyingEntryWithReference(
     multimap *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+/* The row equal to every element (as multimapExistsFullWidth finds it) */
+bool multimapGetUnderlyingEntryFullWidth(multimap *m, const databox *elements[],
+                                         multimapEntry *me);
 
 void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
 void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
+void multimapDeleteEntry(multimap **m, multimapEntry *me);
 ```
+
+A located row can be deleted with `multimapDeleteEntry()` without a second
+search, as long as the map has not changed since. The persisted wrappers
+(`multimapDeleteP`, `multimapDeleteFullWidthP`) locate, log, then delete
+this way.
 
 `me->fe` lands on the row's **key**. Walk it forward with `flexNext()` to reach
 a later column, then mutate through `multimapReplaceEntry()` /
@@ -714,24 +727,39 @@ multimapProcessUntil(m, &pred, true, printElement, &count);
 ### Field Increment
 
 ```c
+bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
+                         int64_t incrBy, int64_t *newValue);
+typedef bool(multimapProceed)(void *ctx);
+bool multimapFieldIncrByIf(multimap **m, const databox *key,
+                           uint32_t fieldOffset, int64_t incrBy,
+                           int64_t *newValue, multimapProceed *proceed,
+                           void *ctx);
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 ```
 
 Behavior, exactly as implemented:
 
-- Looks the key up, then walks `fieldOffset` columns forward from the key.
-  `fieldOffset` must be `>= 1`; offset 0 is the key itself.
-- **A missing key returns 0** and touches nothing (no crash, no insert).
-- `incrBy == 0` returns the current value unchanged.
-- The target must hold a value in `int64_t` range; `DATABOX_UNSIGNED_64` above
-  `INT64_MAX` is rejected by assertion.
+- One search: the key is looked up, then `fieldOffset` columns are walked
+  forward from it. `fieldOffset` must be `>= 1`; offset 0 is the key itself.
+- The field must hold an integer in `int64_t` range or a boolean. A missing
+  key, any other field (bytes, a `DATABOX_UNSIGNED_64` above `INT64_MAX`), or a
+  sum outside `int64_t` is **refused**: `multimapFieldIncrBy` returns false and
+  the map is unchanged. The sum is exact.
+- `incrBy == 0` returns the current value and writes nothing.
 - Booleans participate: `FALSE` acts as 0 and `TRUE` as 1. `FALSE + 1` becomes
-  `TRUE`, `TRUE - 1` becomes `FALSE`, and any other delta promotes the field to
-  a signed integer. `multimapAtom` relies on this to keep a one-reference
-  refcount down to a single byte.
-- Overflow is not checked.
-- Implemented as lookup + `multimapReplaceEntry()`, so it maintains the cached
+  `TRUE`, `TRUE - 1` becomes `FALSE`, and any other result makes the field an
+  integer. `multimapAtom` relies on this to keep a one-reference refcount down
+  to a single byte.
+- `multimapFieldIncrByIf` asks `proceed(ctx)` once the increment is known to
+  apply and change the field (never for `incrBy == 0` or a refusal). A false
+  answer leaves the map unchanged. On any false return `*newValue` is the
+  field's current value (0 for a missing key or a non-counter field). A
+  persisted map logs the increment from `proceed`, so a log that is refused
+  declines it and nothing has to be undone.
+- `multimapFieldIncr` returns the sum, or on a refusal the current value (0 for
+  a missing key or a non-counter field), so it cannot report a refusal.
+- The write goes through `multimapReplaceEntry()`, so it maintains the cached
   middle but does not re-split an oversized submap.
 
 ```c

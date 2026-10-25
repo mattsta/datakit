@@ -177,6 +177,15 @@ bool multimapSmallGetUnderlyingEntryWithReference(
     return !!me->fe;
 }
 
+bool multimapSmallGetUnderlyingEntryFullWidth(multimapSmall *m,
+                                              const databox *elements[],
+                                              multimapEntry *me) {
+    me->fe = flexFindByTypeSortedWithMiddleFullWidth(
+        m->map, m->elementsPerEntry, elements, GET_MIDDLE(m));
+    me->map = &m->map;
+    return !!me->fe;
+}
+
 /* Delete the row 'me' found (by GetUnderlyingEntry*), without a search.
  * A Small map keeps no range boxes, so 'referenceContainer' is unused. */
 void multimapSmallDeleteEntryWithReference(
