@@ -593,21 +593,36 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
 ## tune — size limits measured on this machine
 
 ```sh
-uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist] [--runs N]
+uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist] \
+    [--mix KEY=SHARE[,KEY=SHARE...]] [--runs N]
 ```
 
 - Builds HEAD plus the changed tracked paths with the perf preset under
   `ROOT/tune/NAME`, then runs perfRegression's size-limit sweeps
   (`<family>Limits`: every operation at every limit from 256 B to 8 KB,
   100,000 values, rows named `<op><limit>`) `--runs` times.
-- Prints, per family and limit, the median ns/op of each operation, the
-  filled container's total bytes, and a cost: the geometric mean of each
-  operation's ns over its best ns at any limit (1.00 = best at everything).
-- Limits costing less than 15% over the lowest cost tie on speed, and among
-  ties the one holding the data in the fewest bytes is recommended: density
-  first, unless a denser limit is 15% or more slower. Also prints the machine's cache sizes (sysfs on Linux, sysctl on
-  macOS). `result.txt` and `result.json` (per family: limit, ties, the
-  call that applies it, costs) are kept in the work directory.
+- Prints, per family and limit, the median ns/op of each operation (each
+  family's header says which are reads and which writes), the filled
+  container's total bytes, and one cost per workload mix:
+  - `equal`: every operation equally often;
+  - `read80` / `write80`: 80% reads and 20% writes, or the reverse, each
+    class's share split evenly over its operations;
+  - `custom`, from `--mix`: shares by class (`read=95,write=5`) or by
+    operation (`exists=70,insert=20,delete=10`); an operation's own share
+    wins over its class's.
+
+  A mix's cost at a limit is the mean ns per operation the mix runs there,
+  over the lowest such mean at any limit: 1.12 means the average operation
+  takes 12% longer than at that mix's fastest limit.
+
+- Per mix, limits costing less than 15% over the lowest tie on speed, and
+  among ties the one holding the data in the fewest bytes is recommended:
+  density first, unless a denser limit is 15% or more slower. Mixes can
+  disagree (on Apple M1 Max, multimap: `equal` and `write80` 2048,
+  `read80` 1024). Also prints the machine's cache sizes (sysfs on Linux,
+  sysctl on macOS). `result.txt` and `result.json` (per family, per mix:
+  shares, limit, ties, the call that applies it, costs) are kept in the
+  work directory.
 - Each recommendation names its call: each family's plain constructor
   (`multimapNew`, `multiOrderedSetNew`, `multilistNew`) reads a process
   default set with `dkTierSetDefaultLimit` (`src/dkTierLimit.h`).

@@ -3,8 +3,8 @@ this machine, and recommend a limit per family.
 
 Usage::
 
-    dktools tune NAME [--families F[,F...]] [--runs N] [--compiler C]
-        [--root DIR] [-j N]
+    dktools tune NAME [--families F[,F...]] [--mix K=N[,K=N...]] [--runs N]
+        [--compiler C] [--root DIR] [-j N]
 
 HEAD plus every changed tracked path (as ``verify --all-changed``) is
 built under ``ROOT/tune/NAME`` with the compiler's perf preset (gcc15:
@@ -15,11 +15,16 @@ operation at every limit from 256 bytes to 8 KB, rows named
 ``<op><limit>``).
 
 Per family the result shows, per limit: the median ns/op of every
-operation, the filled container's total bytes, and a cost.  The cost is
-the geometric mean over the operations of (ns at this limit / the best
-ns at any limit), so every operation counts equally and 1.00 means best
-at everything.  Limits costing less than ``TIE`` (15%) over the lowest
-cost tie on speed; the recommended one holds the data in the fewest
+operation, the filled container's total bytes, and one cost per workload
+mix.  A mix says how often each operation runs: ``equal`` (each as often),
+``read80`` (80% reads, 20% writes), ``write80`` (the reverse), plus
+``custom`` from ``--mix`` (shares by class, ``read=90,write=10``, or by
+operation, ``exists=70,insert=20,delete=10``; an operation's own share
+wins over its class's).  A mix's cost at a limit is the mean ns per
+operation the mix runs there, over the lowest such mean at any limit:
+1.12 means the average operation takes 12% longer than at the fastest
+limit for that mix.  Per mix, limits costing less than ``TIE`` (15%) over
+the lowest tie on speed; the recommended one holds the data in the fewest
 bytes, and the other ties are listed beside it.  The machine's cache sizes are
 printed too: a unit that fits a cache level stays hot, which is what the
 sweep measures.  The table is also written to ``result.txt`` and the
@@ -54,13 +59,93 @@ DEFAULT_SETTERS = {
     "multilist": "DK_TIER_MULTILIST",
 }
 
+#: Each family's sweep operations, as reads or writes
+OP_CLASS = {
+    "multimap": {"insert": "write", "exists": "read", "delete": "write"},
+    "multiOrderedSet": {
+        "add": "write",
+        "getScore": "read",
+        "getRank": "read",
+        "remove": "write",
+    },
+    "multilist": {
+        "pushTail": "write",
+        "index": "read",
+        "delete": "write",
+        "popHead": "write",
+    },
+}
+CLASSES = ("read", "write")
+
 _ROW = re.compile(r"^(?P<op>[A-Za-z]+?)(?P<limit>\d+)$")
+
+
+@dataclass(frozen=True)
+class Mix:
+    """How often each operation runs: relative shares by class (``read``,
+    ``write``) or by operation name.  No shares: every operation equally."""
+
+    name: str
+    shares: dict[str, float] = field(default_factory=dict)
+
+    def weights(self, family: str, ops: list[str]) -> dict[str, float]:
+        """Per operation of 'ops', its fraction of the mix (summing to 1),
+        or {} when the mix runs none of them.  A class's share is split
+        evenly over its operations that have no share of their own."""
+        if not self.shares:
+            return {op: 1 / len(ops) for op in ops} if ops else {}
+        classes = OP_CLASS.get(family, {})
+        raw = {op: self.shares[op] for op in ops if op in self.shares}
+        for cls in CLASSES:
+            members = [op for op in ops if classes.get(op) == cls and op not in raw]
+            for op in members:
+                raw[op] = self.shares.get(cls, 0.0) / len(members)
+        total = sum(raw.values())
+        return {op: w / total for op, w in raw.items() if w > 0} if total else {}
+
+
+MIXES = (
+    Mix("equal"),
+    Mix("read80", {"read": 80, "write": 20}),
+    Mix("write80", {"read": 20, "write": 80}),
+)
+
+
+def parse_mix(text: str | None) -> Mix | None:
+    """--mix: 'key=share,...' with keys a class or a sweep operation"""
+    if text is None:
+        return None
+    known = set(CLASSES) | {op for ops in OP_CLASS.values() for op in ops}
+    shares: dict[str, float] = {}
+    for part in [p for p in text.split(",") if p]:
+        key, sep, value = part.partition("=")
+        if not sep or key not in known:
+            raise ToolError(
+                f"--mix: {part!r} is not KEY=SHARE with KEY one of "
+                f"{', '.join(sorted(known))}"
+            )
+        try:
+            share = float(value)
+        except ValueError as exc:
+            raise ToolError(f"--mix: share {value!r} is not a number") from exc
+        if share < 0 or not math.isfinite(share):
+            raise ToolError(f"--mix: share {value!r} must be 0 or more")
+        shares[key] = share
+    if not any(shares.values()):
+        raise ToolError("--mix: give at least one share above 0")
+    return Mix("custom", shares)
+
+
+def mixes_with(custom: Mix | None) -> tuple[Mix, ...]:
+    """The built-in mixes, then 'custom' when given"""
+    return (*MIXES, custom) if custom else MIXES
 
 
 @dataclass
 class TuneOptions:
     name: str
     families: list[str] = field(default_factory=lambda: list(FAMILIES))
+    mixes: tuple[Mix, ...] = MIXES
     runs: int = 5
     compiler: toolchain.Compiler = field(
         default_factory=lambda: toolchain.resolve_compiler(toolchain.DEFAULT_COMPILER)
@@ -73,6 +158,7 @@ class TuneOptions:
 class Sweep:
     """One family's medians: ns[limit][op] and bytes[limit]."""
 
+    family: str = ""
     ns: dict[int, dict[str, float]] = field(default_factory=dict)
     bytes: dict[int, int] = field(default_factory=dict)
 
@@ -84,30 +170,36 @@ class Sweep:
                     seen.append(op)
         return seen
 
-    def costs(self) -> dict[int, float]:
-        """Per limit, the geometric mean of ns / best ns over the
-        operations every limit measured."""
-        ops = [op for op in self.ops() if all(op in per for per in self.ns.values())]
-        best = {op: min(per[op] for per in self.ns.values()) for op in ops}
-        out = {}
-        for limit, per in self.ns.items():
-            ratios = [per[op] / best[op] for op in ops if best[op] > 0]
-            out[limit] = (
-                math.exp(sum(math.log(r) for r in ratios) / len(ratios))
-                if ratios
-                else math.nan
-            )
-        return out
+    def common_ops(self) -> list[str]:
+        """The operations every limit measured"""
+        return [op for op in self.ops() if all(op in per for per in self.ns.values())]
 
-    def recommend(self) -> tuple[int, list[int]]:
-        """The recommended limit and the other limits that tie with it.
+    def costs(self, mix: Mix = MIXES[0]) -> dict[int, float]:
+        """Per limit, the mean ns per operation 'mix' runs there over the
+        lowest such mean at any limit ({} when the mix runs none of the
+        operations every limit measured)."""
+        weights = mix.weights(self.family, self.common_ops())
+        if not weights:
+            return {}
+        mean = {
+            limit: sum(w * per[op] for op, w in weights.items())
+            for limit, per in self.ns.items()
+        }
+        lowest = min(mean.values())
+        return {
+            limit: m / lowest if lowest > 0 else math.nan for limit, m in mean.items()
+        }
+
+    def recommend(self, mix: Mix = MIXES[0]) -> tuple[int, list[int]]:
+        """The recommended limit for 'mix' and the other limits that tie
+        with it.
 
         Limits within TIE of the lowest cost tie on speed; among those the
         one holding the data in the fewest bytes wins (density first), then
         the lower cost."""
-        costs = self.costs()
+        costs = self.costs(mix)
         if not costs:
-            raise ToolError("no limit rows to recommend from")
+            raise ToolError(f"no limit rows to recommend from for mix {mix.name}")
         lowest = min(costs.values())
         tied = [limit for limit in sorted(costs) if costs[limit] < lowest * (1 + TIE)]
         best = min(
@@ -127,7 +219,8 @@ def sweeps(medians: dict[perfcompare.Key, float]) -> dict[str, Sweep]:
         m = _ROW.match(name)
         if not m:
             continue
-        sweep = out.setdefault(module[: -len("Limits")], Sweep())
+        family = module[: -len("Limits")]
+        sweep = out.setdefault(family, Sweep(family=family))
         limit = int(m.group("limit"))
         sweep.ns.setdefault(limit, {})[m.group("op")] = ns
         if nbytes:
@@ -207,49 +300,95 @@ def apply_text(family: str, limit: int) -> str:
     return f"dkTierSetDefaultLimit({DEFAULT_SETTERS[family]}, FLEX_CAP_LEVEL_{limit});"
 
 
-def render(found: dict[str, Sweep], caches: list[tuple[str, int]]) -> list[str]:
+def _mix_text(mix: Mix) -> str:
+    if not mix.shares:
+        return "every operation equally often"
+    total = sum(mix.shares.values())
+    return ", ".join(
+        f"{key} {share / total:.0%}" for key, share in mix.shares.items() if share
+    )
+
+
+def render(
+    found: dict[str, Sweep],
+    caches: list[tuple[str, int]],
+    mixes: tuple[Mix, ...] = MIXES,
+) -> list[str]:
     lines = []
     if caches:
         lines.append(
             "caches    " + ", ".join(f"{label} {_human(n)}" for label, n in caches)
         )
+    lines.append(
+        "cost      per mix: mean ns per operation the mix runs at this limit, "
+        "over the lowest at any limit (1.00 = fastest for that mix)"
+    )
+    for mix in mixes:
+        lines.append(f"  {mix.name:<8} {_mix_text(mix)}")
     for family, sweep in found.items():
         ops = sweep.ops()
-        costs = sweep.costs()
-        best, ties = sweep.recommend()
+        classes = OP_CLASS.get(family, {})
+        costs = {mix.name: sweep.costs(mix) for mix in mixes}
         lines.append("")
-        lines.append(f"{family}: ns/op by size limit (cost 1.00 = best at every op)")
+        reads = [op for op in ops if classes.get(op) == "read"]
+        writes = [op for op in ops if classes.get(op) == "write"]
+        lines.append(
+            f"{family}: ns/op by size limit (reads: {', '.join(reads) or '-'}; "
+            f"writes: {', '.join(writes) or '-'})"
+        )
         lines.append(
             f"  {'limit':>6} "
             + " ".join(f"{op:>10}" for op in ops)
-            + f" {'bytes':>11} {'cost':>6}"
+            + f" {'bytes':>11} "
+            + " ".join(f"{mix.name:>8}" for mix in mixes)
         )
         for limit in sorted(sweep.ns):
             per = sweep.ns[limit]
             cells = " ".join(
                 f"{per[op]:>10.1f}" if op in per else f"{'-':>10}" for op in ops
             )
-            mark = "  <- recommended" if limit == best else ""
-            lines.append(
-                f"  {limit:>6} {cells} {sweep.bytes.get(limit, 0):>11} "
-                f"{costs[limit]:>6.2f}{mark}"
+            mix_cells = " ".join(
+                f"{costs[mix.name][limit]:>8.2f}"
+                if limit in costs[mix.name]
+                else f"{'-':>8}"
+                for mix in mixes
             )
-        tie_text = f" (within {TIE:.0%}: {', '.join(map(str, ties))})" if ties else ""
-        lines.append(f"  recommended limit {best}{tie_text}")
-        lines.append(f"  apply: {apply_text(family, best)}")
+            lines.append(
+                f"  {limit:>6} {cells} {sweep.bytes.get(limit, 0):>11} {mix_cells}"
+            )
+        for mix in mixes:
+            if not costs[mix.name]:
+                lines.append(f"  {mix.name:<8} runs none of these operations")
+                continue
+            best, ties = sweep.recommend(mix)
+            tie_text = f" (ties: {', '.join(map(str, ties))})" if ties else ""
+            lines.append(
+                f"  {mix.name:<8} recommends {best}{tie_text}; "
+                f"apply: {apply_text(family, best)}"
+            )
     return lines
 
 
-def recommendations(found: dict[str, Sweep]) -> dict[str, dict]:
-    out = {}
+def recommendations(
+    found: dict[str, Sweep], mixes: tuple[Mix, ...] = MIXES
+) -> dict[str, dict]:
+    """Per family, per mix: the limit, its ties, the call and every cost"""
+    out: dict[str, dict] = {}
     for family, sweep in found.items():
-        best, ties = sweep.recommend()
-        out[family] = {
-            "limit": best,
-            "ties": ties,
-            "apply": apply_text(family, best),
-            "cost": {str(k): round(v, 4) for k, v in sweep.costs().items()},
-        }
+        per_mix = {}
+        for mix in mixes:
+            costs = sweep.costs(mix)
+            if not costs:
+                continue
+            best, ties = sweep.recommend(mix)
+            per_mix[mix.name] = {
+                "shares": dict(mix.shares),
+                "limit": best,
+                "ties": ties,
+                "apply": apply_text(family, best),
+                "cost": {str(k): round(v, 4) for k, v in costs.items()},
+            }
+        out[family] = per_mix
     return out
 
 
@@ -329,10 +468,10 @@ def run(repo: Path, opts: TuneOptions) -> int:
         f"tune {name}: {config.label}, {opts.runs} runs, medians of ns/op, "
         f"tree HEAD + working tree ({tree[:10]})"
     ]
-    text = "\n".join(header + render(found, cache_sizes())) + "\n"
+    text = "\n".join(header + render(found, cache_sizes(), opts.mixes)) + "\n"
     (work / "result.txt").write_text(text)
     (work / "result.json").write_text(
-        json.dumps(recommendations(found), indent=2) + "\n"
+        json.dumps(recommendations(found, opts.mixes), indent=2) + "\n"
     )
     sys.stdout.write(text)
     return 0

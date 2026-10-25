@@ -410,6 +410,13 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=f"comma-separated families (default: {','.join(tune.FAMILIES)})",
     )
+    tu.add_argument(
+        "--mix",
+        default=None,
+        help="an extra workload mix 'custom' beside equal, read80 and write80: "
+        "comma-separated KEY=SHARE, KEY a class (read, write) or an operation "
+        "(e.g. read=90,write=10 or exists=70,insert=20,delete=10)",
+    )
     tu.add_argument("--runs", type=int, default=5, help="sweep runs (default 5)")
     tu.add_argument(
         "--compiler",
@@ -746,6 +753,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             tune.TuneOptions(
                 name=args.name,
                 families=tune.parse_families(args.families),
+                mixes=tune.mixes_with(tune.parse_mix(args.mix)),
                 runs=args.runs,
                 compiler=toolchain.from_args(args.compiler, args),
                 root=args.root,

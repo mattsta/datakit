@@ -60,9 +60,13 @@ dkTierLimitResult r =
  * nothing.  Containers made earlier keep their limit. */
 ```
 
-`dktools tune NAME` measures every limit on the machine it runs on and
-prints the call that applies the one it recommends: the densest limit that
-is less than 15% slower than the fastest (tools/README.md).
+`dktools tune NAME` measures every limit on the machine it runs on and,
+per workload mix (every operation equally often, 80% reads, 80% writes,
+or a `--mix` of your own), prints the call that applies the one it
+recommends: the densest limit whose mean time per operation for that mix
+is less than 15% above the fastest (tools/README.md). Mixes can disagree:
+on Apple M1 Max a read-heavy multimap is best at 1024, a write-heavy one
+at 2048.
 
 ## Tier rules
 
