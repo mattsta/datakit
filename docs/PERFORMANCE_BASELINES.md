@@ -28,6 +28,45 @@ the headline numbers and decisions; the TSV keeps every row.
 
 ---
 
+## 2026-10-24 — persisted changes and chunk writes in one search
+
+Apple M1 Max, macOS 14.8, clang 22, `perf` preset, single thread.  Each pair
+is a `dktools perfcompare` median (8-15 alternating runs per side) of the
+commit against its parent, ns per operation over 100k operations (100k
+keys, positions or chunks).  `persistChecks` contexts never sync or compact,
+so a persisted row is the wrapper's search, its log write and the change.
+
+| row | before -> after | commit, change |
+| --- | ---: | --- |
+| multidictP replaceP | 606 -> 542 | bbd2318: the log is written from inside the replace's search |
+| persistChecks mapFieldIncrP / mapDeleteFullWidthP / mapInsertIfNotExistsP | 1636 / 1831 / 1522 -> 1047 / 1092 / 947 | 5d0cab5: logged from the increment's search; located row deleted; insert undone on a refused log |
+| persistChecks mapInsertIfAbsent (plain) | 1066 -> 711 | 5d0cab5: Full inserts in the search that finds the key absent |
+| persistChecks valueSet / valueReplace / valueRemove (plain) | 1749 / 1633 / 1739 -> 944 / 860 / 931 | a9fcc60: value roar calls are one replacing insert or reporting delete |
+| persistChecks valueRemoveP / bitSetP / bitRemoveP | 2673 / 371 / 253 -> 1049 / 299 / 191 | a9fcc60: applied by the deciding call, undone on a refused log |
+| persistChecks intsetAddP / intsetRemoveP | 174.5 / 150.0 -> 150.1 / 137.9 | f271c65 |
+| intsetAddP / intsetRemoveP / bitRemoveP / multidictP replaceP | 153 / 142 / 197 / 536 -> 106 / 91 / 146 / 423 | 317cde2: an entry fitting the WAL buffer is wrapped in place (no payload or envelope allocation) |
+| multimapAtomDense internNew | 5200 -> 2110 | 27e59ea: find-or-create in one search under the next free id |
+| persistChecks bitSetNewChunk / bitRemoveOwnChunk | 1252 / 1168 -> 691 / 658 | d0c800d: a chunk made or emptied by its own bit, one search |
+| multiroar orInPlace / clearRangeWhole (per chunk) | 2190 / 989 -> 1340 / 533 | d0c800d: a chunk rewritten by one replacing insert; a cleared one deleted where located |
+| multiroar setRangeWholeNew / setRangeWholeFull (per chunk) | 1565 / 1104 -> 830 / 578 | 1544c59: a whole chunk's set needs no lookup |
+
+A set into a chunk that already exists measured +1.3% (bitSet) and +2.5%
+(bitGetThenSet) over 15+15 runs after d0c800d, inside the run-to-run spread.
+`dktools fusionscan` lists the read-then-write pairs that remain; each is
+kept for a reason (control-plane, a rare path, or a check whose undo would
+not be exact).
+
+### Reproduce
+
+```
+uv run --project tools dktools perfcompare NAME --base REV \
+    --modules persistChecks,multidictP,multiroar,multimapAtom
+```
+
+`persistChecks` and `multidictP` run only when named.
+
+---
+
 ## 2026-10-24 — multiOrderedSet data-flow edges; multiarray bounds
 
 Apple M1 Max, macOS 14.8, clang 22, `perf` preset, single thread.  Each pair
