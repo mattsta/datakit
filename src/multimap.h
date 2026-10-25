@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dkTier.h"
 #include "flexCapacityManagement.h"
 #include "multimapCommon.h"
 
@@ -36,6 +37,11 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
                                  const struct multimapAtom *referenceContainer);
 /* The tier currently holding the rows (Small, Medium or Full) */
 multimapType multimapGetType(const multimap *m);
+/* The tier, inner maps (1, 2, or Full's count), rows, and bytes: the rows'
+ * flex bytes, and those plus each tier's struct and Full's per-map arrays.
+ * 'unitLimit' is the size limit's byte cutoff, where Small and Full's inner
+ * maps split. */
+void multimapStats(const multimap *m, dkTierStats *out);
 /* A multimap holding `rows` (full-width rows, as multimapDump writes them),
  * configured as multimapNewConfigure configures one (`isSet`, `compress`,
  * `limit`): a dump larger than the Medium tier holds under `limit` is cut

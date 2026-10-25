@@ -199,6 +199,30 @@ multimapType multimapGetType(const multimap *m) {
     return multimapType_(m);
 }
 
+void multimapStats(const multimap *m, dkTierStats *out) {
+    *out = (dkTierStats){.count = multimapCount(m),
+                         .tier = (uint8_t)multimapType_(m),
+                         .unitLimit =
+                             flexOptimizationSizeLimit[COMPRESS_LIMIT(m)]};
+    switch (multimapType_(m)) {
+    case MULTIMAP_TYPE_SMALL:
+        out->units = 1;
+        out->dataBytes = multimapSmallBytes(mms(m));
+        out->totalBytes = out->dataBytes + sizeof(multimapSmall);
+        break;
+    case MULTIMAP_TYPE_MEDIUM:
+        out->units = 2;
+        out->dataBytes = multimapMediumBytes(mmm(m));
+        out->totalBytes = out->dataBytes + sizeof(multimapMedium);
+        break;
+    case MULTIMAP_TYPE_FULL:
+        out->units = mmf(m)->count;
+        out->dataBytes = multimapFullBytes(mmf(m));
+        out->totalBytes = multimapFullBytesFull(mmf(m));
+        break;
+    }
+}
+
 bool multimapIsSet(const multimap *m) {
     switch (multimapType_(m)) {
     case MULTIMAP_TYPE_SMALL:
@@ -5630,6 +5654,47 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
+    }
+
+    TEST("stats: tier, inner maps, rows and bytes in every tier") {
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        const uint32_t limit = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_64];
+        dkTierStats s;
+        int64_t next = 0;
+        for (int32_t want = MULTIMAP_TYPE_SMALL; want <= MULTIMAP_TYPE_FULL;
+             want++) {
+            while (multimapGetType(m) != (multimapType)want) {
+                const databox kb = databoxNewSigned(next);
+                const databox vb = databoxNewSigned(next * 7);
+                const databox *row[2] = {&kb, &vb};
+                multimapInsert(&m, row);
+                next++;
+            }
+            multimapStats(m, &s);
+            const size_t overhead =
+                want == MULTIMAP_TYPE_SMALL    ? sizeof(multimapSmall)
+                : want == MULTIMAP_TYPE_MEDIUM ? sizeof(multimapMedium)
+                                               : 0;
+            const uint32_t units = want == MULTIMAP_TYPE_SMALL ? 1
+                                   : want == MULTIMAP_TYPE_MEDIUM
+                                       ? 2
+                                       : mmf(m)->count;
+            if (s.tier != want || s.units != units ||
+                s.count != (uint64_t)next || s.unitLimit != limit ||
+                s.dataBytes != multimapBytes(m) ||
+                (overhead && s.totalBytes != s.dataBytes + overhead) ||
+                (!overhead && s.totalBytes != multimapFullBytesFull(mmf(m))) ||
+                s.totalBytes <= s.dataBytes) {
+                ERR("tier %d: stats tier %u units %u count %" PRIu64
+                    " limit %u data %" PRIu64 " total %" PRIu64,
+                    want, s.tier, s.units, s.count, s.unitLimit, s.dataBytes,
+                    s.totalBytes);
+            }
+        }
+        if (s.units < 2) {
+            ERR("Full right after growing holds %u inner maps", s.units);
+        }
     }
 
     TEST("upgrade path Small -> Medium -> Full") {
