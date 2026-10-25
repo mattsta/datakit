@@ -353,9 +353,21 @@ static void deleteRows_(multiOrderedSetFull *m, uint32_t mapIdx,
         }
     }
 
-    flexDeleteCount(&map, &entry, (uint32_t)(rows * MOS_ELEMENTS_PER_ENTRY));
-    setSubMap(m, mapIdx, map);
-    updateMiddle(m, mapIdx);
+    if (rows == 1 && subMapCount(map) > 1) {
+        /* One row: move the stored (exact) middle by at most a row in
+         * O(1), as multimapFull's deletes do, instead of walking half the
+         * sub-map to find it again */
+        flexEntry *middle = map + getMiddle(m, mapIdx);
+        flexDeleteSortedValueWithMiddle(&map, MOS_ELEMENTS_PER_ENTRY, entry,
+                                        &middle);
+        setSubMap(m, mapIdx, map);
+        setMiddle(m, mapIdx, (uint32_t)(middle - map));
+    } else {
+        flexDeleteCount(&map, &entry,
+                        (uint32_t)(rows * MOS_ELEMENTS_PER_ENTRY));
+        setSubMap(m, mapIdx, map);
+        updateMiddle(m, mapIdx);
+    }
     m->totalEntries -= rows;
 
     /* Update rangeBox - check if map has entries before reading head.
@@ -404,19 +416,9 @@ static size_t mosFullDropMembers_(multiOrderedSetFull *m, const flex *map,
  * with rangeBox==INT64_MAX is harmless, search returns 0 trivially).
  * WARNING: shifts all sub-map indices > mapIdx down by one and frees the
  * slot's flex — callers must NOT use a held mapIdx/flex* afterward. */
-static void reclaimEmptySubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
-    if (m->mapCount <= 1) {
-        return;
-    }
-    flex *map = getSubMap(m, mapIdx);
-    if (!map || subMapCount(map) != 0) {
-        return; /* only reclaim genuinely empty sub-maps */
-    }
-
-    /* multiarray stores the flex pointer by value and won't free it on delete
-     * (mirrors Free/Reset), so free it here first. */
-    flexFree(map);
-
+/* Drop sub-map slot 'mapIdx' from the three per-sub-map arrays (its flex
+ * is the caller's: freed or merged elsewhere) and release its range box */
+static void dropSubMapSlot_(multiOrderedSetFull *m, uint32_t mapIdx) {
     /* Separate scratch per array (the macro mutates its count lvalue). */
     uint32_t cScore = m->mapCount;
     multiarrayNativeDelete(m->scoreMap, flex *, cScore, mapIdx);
@@ -429,12 +431,72 @@ static void reclaimEmptySubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
     m->mapCount--;
 }
 
-/* Sweep all empty sub-maps (backward so each delete only shifts already-visited
- * higher indices). For bulk remove/pop loops that hold a live mapIdx and so
- * cannot reclaim inline — call this once after the loop. */
+static void reclaimEmptySubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
+    if (m->mapCount <= 1) {
+        return;
+    }
+    flex *map = getSubMap(m, mapIdx);
+    if (!map || subMapCount(map) != 0) {
+        return; /* only reclaim genuinely empty sub-maps */
+    }
+
+    /* multiarray stores the flex pointer by value and won't free it on delete
+     * (mirrors Free/Reset), so free it here first. */
+    flexFree(map);
+    dropSubMapSlot_(m, mapIdx);
+}
+
+/* Merge sub-map 'mapIdx + 1' into 'mapIdx' when both fit in three quarters
+ * of a sub-map: every row of a sub-map sorts before every row of the
+ * next, so appending keeps the order.  The quarter of headroom keeps a
+ * score update (a remove, then an insert) from merging a pair that its
+ * insert splits again: a split leaves halves summing past maxMapSize,
+ * which deletes must shrink by a quarter before they merge. */
+static bool mergeSubMapWithNext_(multiOrderedSetFull *m, uint32_t mapIdx) {
+    if (mapIdx + 1 >= m->mapCount) {
+        return false;
+    }
+    flex *map = getSubMap(m, mapIdx);
+    flex *next = getSubMap(m, mapIdx + 1);
+    const size_t fits = m->maxMapSize / 2;
+    if (!map || !next || flexBytes(map) + flexBytes(next) > fits) {
+        return false;
+    }
+
+    flexBulkAppendFlex(&map, next);
+    flexFree(next);
+    setSubMap(m, mapIdx, map);
+    updateMiddle(m, mapIdx);
+    rangeBoxRefresh(getRangeBox(m, mapIdx),
+                    flexCount(map) ? flexHead(map) : NULL);
+    dropSubMapSlot_(m, mapIdx + 1);
+    return true;
+}
+
+/* After a delete left sub-map 'mapIdx' holding rows: merge it with its next
+ * neighbour, or else its previous one, when the pair fits (as multimapFull
+ * does), so deletes scattered through a set don't leave it spread over
+ * many nearly empty sub-maps */
+static void coalesceAround_(multiOrderedSetFull *m, uint32_t mapIdx) {
+    if (mapIdx >= m->mapCount) {
+        return;
+    }
+    if (!mergeSubMapWithNext_(m, mapIdx) && mapIdx > 0) {
+        mergeSubMapWithNext_(m, mapIdx - 1);
+    }
+}
+
+/* After a bulk remove or pop (whose loop held live indices): reclaim
+ * emptied sub-maps (backward, so each delete only shifts visited indices),
+ * then merge every neighbouring pair that fits */
 static void reclaimAllEmptySubMaps(multiOrderedSetFull *m) {
     for (int32_t i = (int32_t)m->mapCount - 1; i >= 0 && m->mapCount > 1; i--) {
         reclaimEmptySubMap(m, (uint32_t)i);
+    }
+    for (uint32_t i = 0; i + 1 < m->mapCount;) {
+        if (!mergeSubMapWithNext_(m, i)) {
+            i++; /* merged: the grown map meets its new neighbour next */
+        }
     }
 }
 
@@ -912,6 +974,46 @@ size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m) {
     return bytes;
 }
 
+#ifdef DATAKIT_TEST
+/* The caches sorted finds trust blindly: every sub-map's stored middle is
+ * its exact middle row, every range box holds its sub-map's head score,
+ * rows ascend across sub-maps, only a lone sub-map is empty, and the
+ * total matches */
+void multiOrderedSetFullVerify(const multiOrderedSetFull *m) {
+    assert(m->mapCount >= 1);
+    uint64_t rows = 0;
+    databox prevLast = {{0}};
+    databoxWide prevLastWide;
+    bool havePrev = false;
+    for (uint32_t i = 0; i < m->mapCount; i++) {
+        flex *map = getSubMap(m, i);
+        assert(map);
+        const size_t n = subMapCount(map);
+        assert(n > 0 || m->mapCount == 1);
+        rows += n;
+
+        const flexEntry *mid = flexMiddle(map, MOS_ELEMENTS_PER_ENTRY);
+        assert(getMiddle(m, i) ==
+               (mid ? (uint32_t)(mid - map) : (uint32_t)FLEX_EMPTY_SIZE));
+        if (!n) {
+            continue;
+        }
+
+        databox head;
+        databoxWide headWide;
+        flexGetByTypeInto(flexHead(map), &head, &headWide);
+        assert(databoxCompare(getRangeBox(m, i), &head) == 0);
+        if (havePrev) {
+            assert(databoxCompare(&prevLast, &head) <= 0);
+        }
+        flexGetByTypeInto(flexIndex(map, -(int32_t)MOS_ELEMENTS_PER_ENTRY),
+                          &prevLast, &prevLastWide);
+        havePrev = true;
+    }
+    assert(rows == m->totalEntries);
+}
+#endif
+
 void multiOrderedSetFullStats(const multiOrderedSetFull *m, dkTierStats *out) {
     uint64_t data = 0;
     for (uint32_t i = 0; i < m->mapCount; i++) {
@@ -943,7 +1045,11 @@ static void removeMemberRow(multiOrderedSetFull *m, const databox *member,
     flexEntry *entry = findEntryForScore(m, member, old, &mapIdx);
     if (entry) {
         deleteRows_(m, mapIdx, entry, 1);
+        const uint32_t before = m->mapCount;
         reclaimEmptySubMap(m, mapIdx);
+        if (m->mapCount == before) {
+            coalesceAround_(m, mapIdx);
+        }
     }
 }
 

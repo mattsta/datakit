@@ -50,6 +50,14 @@ split at their middle row when they outgrow their size, whatever the scores:
 a run of members with one score (ties) spreads over as many sub-maps as it
 needs, so ties cost what distinct scores do.
 
+Deletes keep Full dense as it shrinks. An emptied sub-map is freed. A
+sub-map a delete leaves holding rows merges with a neighbour when the pair
+fits in half a sub-map. A bulk remove or pop merges every such pair once,
+when it finishes. The half-size margin keeps a score update (a remove, then
+an insert) from merging a pair its insert would split again. A delete
+moves the sub-map's middle row by at most one row, so its cost does not
+grow with the sub-map's size.
+
 ## Operations and their cost (Full tier)
 
 | operation                                               | cost                                                                                                                          |

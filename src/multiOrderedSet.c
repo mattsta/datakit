@@ -708,6 +708,42 @@ defcleanerName(size_t *, zfree, Sizes);
 #define TIME_FINISH(i, what)
 #endif
 
+/* A non-empty map's stored middle offset is its exact middle row */
+static void mosVerifyMiddle_(const flex *map, uint32_t middle) {
+    if (flexCount(map)) {
+        assert(middle ==
+               (uint32_t)(flexMiddle(map, MOS_ELEMENTS_PER_ENTRY) - map));
+    }
+}
+
+void multiOrderedSetVerify(const multiOrderedSet *mos) {
+    switch (mosType_(mos)) {
+    case MOS_TYPE_SMALL:
+        mosVerifyMiddle_(moss(mos)->map, moss(mos)->middle);
+        break;
+    case MOS_TYPE_MEDIUM: {
+        const multiOrderedSetMedium *md = mosm(mos);
+        mosVerifyMiddle_(md->map[0], md->middle[0]);
+        mosVerifyMiddle_(md->map[1], md->middle[1]);
+        if (flexCount(md->map[0]) && flexCount(md->map[1])) {
+            databox last;
+            databox head;
+            databoxWide lastWide;
+            databoxWide headWide;
+            flexGetByTypeInto(
+                flexIndex(md->map[0], -(int32_t)MOS_ELEMENTS_PER_ENTRY), &last,
+                &lastWide);
+            flexGetByTypeInto(flexHead(md->map[1]), &head, &headWide);
+            assert(databoxCompare(&last, &head) <= 0);
+        }
+        break;
+    }
+    case MOS_TYPE_FULL:
+        multiOrderedSetFullVerify(mosf(mos));
+        break;
+    }
+}
+
 void multiOrderedSetRepr(const multiOrderedSet *mos) {
     printf("multiOrderedSet (%p) type=%d count=%zu bytes=%zu\n", (void *)mos,
            mosType_(mos), multiOrderedSetCount(mos), multiOrderedSetBytes(mos));

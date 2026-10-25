@@ -210,6 +210,10 @@ static size_t mosScanBack(void *c, int64_t *k, int64_t *v, size_t max) {
     return mosWalk(&it, k, v, max);
 }
 
+static void mosVerify(void *c) {
+    multiOrderedSetVerify(c);
+}
+
 static size_t mosDelUpTo(void **c, int64_t bound) {
     const mosRangeSpec range = {.min = databoxNewSigned(INT64_MIN),
                                 .max = databoxNewSigned(bound)};
@@ -300,6 +304,7 @@ static const simOps simFamilies[] = {
      .verify = mmVerify},
     {.name = "multiOrderedSet",
      .valueIsKey = true,
+     .coalesces = true,
      .growTo = 2000,
      .make = mosMake,
      .destroy = mosDestroy,
@@ -309,7 +314,8 @@ static const simOps simFamilies[] = {
      .stats = mosStats,
      .scan = mosScan,
      .scanBack = mosScanBack,
-     .delUpTo = mosDelUpTo},
+     .delUpTo = mosDelUpTo,
+     .verify = mosVerify},
     {.name = "intset",
      .valueIsKey = true,
      .growTo = 4400,

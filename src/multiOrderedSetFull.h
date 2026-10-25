@@ -39,6 +39,9 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m);
 size_t multiOrderedSetFullCount(const multiOrderedSetFull *m);
 size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m);
 void multiOrderedSetFullStats(const multiOrderedSetFull *m, dkTierStats *out);
+#ifdef DATAKIT_TEST
+void multiOrderedSetFullVerify(const multiOrderedSetFull *m);
+#endif
 
 /* ====================================================================
  * Insertion / Update

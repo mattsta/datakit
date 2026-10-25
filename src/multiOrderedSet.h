@@ -513,5 +513,8 @@ bool multiOrderedSetLast(const multiOrderedSet *mos, databox *member,
 
 #ifdef DATAKIT_TEST
 void multiOrderedSetRepr(const multiOrderedSet *mos);
+/* Asserts every cache sorted finds trust: the stored middles (exact),
+ * Full's range boxes and sub-map order, and the row total */
+void multiOrderedSetVerify(const multiOrderedSet *mos);
 int multiOrderedSetTest(int argc, char *argv[]);
 #endif
