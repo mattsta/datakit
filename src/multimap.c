@@ -10,6 +10,7 @@
 #include "multimapFullInternal.h"
 
 #include "cleaner.h"
+#include "dkDiag.h"
 #include "timeUtil.h"
 
 defcleanerName(databox *, zfree, Databoxes);
@@ -605,6 +606,21 @@ bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
     MULTIMAP_RETURN(m, GetUnderlyingEntry, key, me);
 }
 
+/* An in-place rewrite of a set row (replace, resize, increment): every
+ * element of a set row is part of its order, so the rewrite is refused
+ * and reported as misuse (DK_DIAG_MULTIMAP_SET_REWRITE) */
+__attribute__((cold, noinline)) static bool mmSetRewrite_(const char *function,
+                                                          int line) {
+    dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIMAP_SET_REWRITE, function,
+                  __FILE__, line, "%s",
+                  "a set row cannot be rewritten in place: delete it and "
+                  "insert the new row");
+    return true;
+}
+
+#define MM_SET_REWRITE_REFUSED_(m)                                             \
+    (multimapIsSet(m) && mmSetRewrite_(__func__, __LINE__))
+
 bool multimapGetUnderlyingEntryWithReference(
     multimap *m, const databox *key, multimapEntry *me,
     const multimapAtom *referenceContainer) {
@@ -639,12 +655,21 @@ void multimapDeleteEntryWithReference(multimap **m, multimapEntry *me,
     MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, referenceContainer);
 }
 
-void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen) {
+bool multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen) {
+    if (MM_SET_REWRITE_REFUSED_(*m)) {
+        return false;
+    }
+
     MULTIMAP_NORETURN(*m, ResizeEntry, me, newLen);
     multimapRegularizeMap(m, me->mapIdx, me->map);
+    return true;
 }
 
-void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box) {
+bool multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box) {
+    if (MM_SET_REWRITE_REFUSED_(*m)) {
+        return false;
+    }
+
     MULTIMAP_NORETURN(*m, ReplaceEntry, me, box);
 
     /* NOTE: DO NOT regularize map here because if a map requires surrogate keys
@@ -656,11 +681,16 @@ void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box) {
 #if 0
     multimapRegularizeMap(m, me->mapIdx, me->map);
 #endif
+    return true;
 }
 
-void multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
+bool multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
                                        const databox *box,
                                        const multimapAtom *referenceContainer) {
+    if (MM_SET_REWRITE_REFUSED_(*m)) {
+        return false;
+    }
+
     MULTIMAP_NORETURN(*m, ReplaceEntry, me, box);
 
     const multimapType type = multimapType_(*m);
@@ -669,6 +699,7 @@ void multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
         multimapFullRegularizeMapWithReference(full, me->mapIdx, me->map,
                                                referenceContainer);
     }
+    return true;
 }
 
 static multimapElements multimapElementsPerEntry_(const multimap *m) {
@@ -812,9 +843,7 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
 static bool multimapFieldCounter_(multimap *m, const databox *key,
                                   uint32_t fieldOffset, multimapEntry *me,
                                   databox *field, int64_t *value) {
-    /* A set's values order its rows (they are part of each row's
-     * identity), so none is a counter to rewrite in place */
-    if (multimapIsSet(m) || !multimapGetUnderlyingEntry(m, key, me)) {
+    if (!multimapGetUnderlyingEntry(m, key, me)) {
         return false;
     }
 
@@ -850,10 +879,13 @@ bool multimapFieldIncrByIf(multimap **m, const databox *key,
                            uint32_t fieldOffset, int64_t incrBy,
                            int64_t *newValue, multimapProceed *proceed,
                            void *ctx) {
+    /* A set's values order its rows (they are part of each row's
+     * identity), so none is a counter to rewrite in place */
     multimapEntry me;
     databox field;
     int64_t current = 0;
-    if (!multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)) {
+    if (MM_SET_REWRITE_REFUSED_(*m) ||
+        !multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)) {
         if (newValue) {
             *newValue = 0;
         }
@@ -8031,24 +8063,57 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("FieldIncrBy refuses a set: its values order the rows") {
+    TEST("a set refuses every in-place rewrite: its values order the rows") {
         /* (1, 1) (1, 5) (2, 3): raising (1, 1) to 11 in place would sit it
-         * before (1, 5), and full-width searches would stop finding rows */
+         * before (1, 5), and full-width searches would stop finding rows.
+         * Each rewrite is refused and reported once; a map's value column
+         * still rewrites, with no report. */
         cleaner(multimapFree) multimap *set = multimapSetNew(2);
+        cleaner(multimapFree) multimap *map = multimapNew(2);
         static const int64_t rows[][2] = {{1, 1}, {1, 5}, {2, 3}};
         for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
             const databox k = databoxNewSigned(rows[i][0]);
             const databox v = databoxNewSigned(rows[i][1]);
             const databox *row[] = {&k, &v};
             multimapInsert(&set, row);
+            multimapInsert(&map, row);
         }
         const databox one = databoxNewSigned(1);
         const databox two = databoxNewSigned(2);
+        const databox eleven = databoxNewSigned(11);
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
         int64_t now = -1;
-        if (multimapFieldIncrBy(&set, &one, 1, 10, &now) ||
-            multimapFieldIncrBy(&set, &two, 1, 1, &now) || now != -1 ||
-            multimapFieldIncr(&set, &one, 1, 10) != 0) {
-            ERRR("an increment in a set was not refused");
+        bool wrote = false;
+        multimapEntry me;
+        multimapGetUnderlyingEntry(set, &one, &me);
+        me.fe = flexNext(*me.map, me.fe); /* the value column */
+#define MM_SET_REFUSES_(call)                                                  \
+    DK_DIAG_EXPECT_REPORTS("a set", 1, DK_DIAG_MULTIMAP_SET_REWRITE,           \
+                           wrote |= (call))
+        MM_SET_REFUSES_(multimapFieldIncrBy(&set, &one, 1, 10, &now));
+        MM_SET_REFUSES_(multimapFieldIncrBy(&set, &two, 1, 1, &now));
+        MM_SET_REFUSES_(multimapFieldIncr(&set, &one, 1, 10) != 0);
+        MM_SET_REFUSES_(multimapReplaceEntry(&set, &me, &eleven));
+        MM_SET_REFUSES_(
+            multimapReplaceEntryWithReference(&set, &me, &eleven, NULL));
+        MM_SET_REFUSES_(multimapResizeEntry(&set, &me, 40));
+#undef MM_SET_REFUSES_
+        multimapEntry mapMe;
+        multimapGetUnderlyingEntry(map, &one, &mapMe);
+        mapMe.fe = flexNext(*mapMe.map, mapMe.fe);
+        bool mapWrote = false;
+        DK_DIAG_EXPECT_REPORTS("a map", 0, DK_DIAG_NONE,
+                               mapWrote =
+                                   multimapReplaceEntry(&map, &mapMe, &eleven));
+        dkDiagSetPrintMode(priorPrint);
+        databox got = {{0}};
+        databox *out[] = {&got};
+        if (wrote || now != -1) {
+            ERRR("a set row was rewritten in place");
+        }
+        if (!mapWrote || !multimapLookup(map, &one, out) || got.data.i != 11) {
+            ERRR("a map's value column was not rewritten");
         }
         for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
             const databox k = databoxNewSigned(rows[i][0]);

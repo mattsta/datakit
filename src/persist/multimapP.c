@@ -365,6 +365,7 @@ void multimapGetStatsP(const multimapP *m, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+#include "../dkDiag.h"
 #include "persistTestCommon.h"
 
 /* Helper to verify multimap matches tracker */
@@ -1154,7 +1155,14 @@ int multimapPTest(int argc, char *argv[]) {
             multimapDeleteFullWidthP(m, gone) != PERSIST_LOG_UNCHANGED) {
             ERRR("Full-row delete found no row, or deleted it twice");
         }
-        if (multimapFieldIncrP(m, &one, 1, 1, NULL) != PERSIST_LOG_REFUSED) {
+        /* An increment in a set is refused as misuse, and logs nothing */
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+        persistLogResult incr = PERSIST_LOG_BUFFERED;
+        DK_DIAG_EXPECT_REPORTS("a set", 1, DK_DIAG_MULTIMAP_SET_REWRITE,
+                               incr = multimapFieldIncrP(m, &one, 1, 1, NULL));
+        dkDiagSetPrintMode(priorPrint);
+        if (incr != PERSIST_LOG_REFUSED) {
             ERRR("an increment in a set was not refused");
         }
         multimapCloseP(m);

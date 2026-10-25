@@ -534,8 +534,8 @@ bool multimapGetUnderlyingEntryWithReference(
 bool multimapGetUnderlyingEntryFullWidth(multimap *m, const databox *elements[],
                                          multimapEntry *me);
 
-void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
-void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
+bool multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
+bool multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
 void multimapDeleteEntry(multimap **m, multimapEntry *me);
 ```
 
@@ -547,6 +547,12 @@ this way.
 `me->fe` lands on the row's **key**. Walk it forward with `flexNext()` to reach
 a later column, then mutate through `multimapReplaceEntry()` /
 `multimapResizeEntry()`.
+
+The columns that order rows are never rewritten in place. In a map that is
+the key (element 0): keep the entry off it. In a set it is every element, so
+on a set both calls (and every field increment) refuse, return false with the
+row unchanged, and report `DK_DIAG_MULTIMAP_SET_REWRITE`. Change such a row by
+deleting it and inserting the new one.
 
 Always mutate through the multimap wrappers, never with a raw
 `flexReplaceByType()` on `*me.map`. The wrappers rescan the cached middle offset

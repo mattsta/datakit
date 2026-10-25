@@ -82,6 +82,9 @@ typedef enum dkDiagCode {
     /* a multiarray index (or range) outside its elements: a Get answers
      * NULL, a change is refused */
     DK_DIAG_MULTIARRAY_INDEX = 18,
+    /* an in-place rewrite (replace, resize, increment) of a set map's row:
+     * every element of a set row orders it, so the rewrite is refused */
+    DK_DIAG_MULTIMAP_SET_REWRITE = 19,
     DK_DIAG_CODE_COUNT_ /* one past the last code; not a code */
 } dkDiagCode;
 
@@ -161,4 +164,20 @@ dkDiagFatal_(dkDiagCode code, const char *function, const char *file, int line,
 
 #ifdef DATAKIT_TEST
 int dkDiagTest(int argc, char *argv[]);
+
+/* For tests (ctest.h's ERR and an 'err' in scope): 'call' records exactly
+ * 'want' diagnostics, the last of them 'wantCode'; 'subject' names what
+ * it ran on when it does not */
+#define DK_DIAG_EXPECT_REPORTS(subject, want, wantCode, call)                  \
+    do {                                                                       \
+        const uint64_t c0_ = dkDiagCount();                                    \
+        call;                                                                  \
+        const uint64_t got_ = dkDiagCount() - c0_;                             \
+        dkDiagnostic d_;                                                       \
+        if (got_ != (want) ||                                                  \
+            ((want) && (!dkDiagLast(&d_) || d_.code != (wantCode)))) {         \
+            ERR("%s on %s reported %" PRIu64 " times, want %" PRIu64, #call,   \
+                (subject), got_, (uint64_t)(want));                            \
+        }                                                                      \
+    } while (0)
 #endif

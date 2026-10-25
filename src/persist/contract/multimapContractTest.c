@@ -66,9 +66,10 @@ static void *pcMultimapBuild(const persistContractBuild *b) {
             pcMultimapRowAim(&rows[cur ^ 1], last);
             multimapDeleteFullWidth(&m, last);
             persistContractRecord(b->log, PERSIST_OP_DELETE, last, width);
-        } else if (roll == 3 && i > 0 && width > 1) {
+        } else if (roll == 3 && i > 0 && width > 1 && !set) {
             /* Add a small delta to a field of an earlier key: refused
-             * unless that field holds a counter */
+             * unless that field holds a counter (a set's values order its
+             * rows, so an increment there is misuse, never sent) */
             const size_t j = (size_t)(splitmix64(&rng) % i);
             pcMultimapKey(b->seed, j, &row->boxes[0], row->bufs[0],
                           sizeof(row->bufs[0]));

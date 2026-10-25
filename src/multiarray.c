@@ -509,21 +509,6 @@ typedef struct s16 {
 defcleanerName(s16 *, zfree, S16);
 defcleaner(multiarray *, multiarrayFree);
 
-/* 'call' records exactly 'want' diagnostics, the last of them 'wantCode';
- * 'subject' names what it ran on when it does not */
-#define MA_EXPECT_REPORTS_(subject, want, wantCode, call)                      \
-    do {                                                                       \
-        const uint64_t c0_ = dkDiagCount();                                    \
-        call;                                                                  \
-        const uint64_t got_ = dkDiagCount() - c0_;                             \
-        dkDiagnostic d_;                                                       \
-        if (got_ != (want) ||                                                  \
-            ((want) && (!dkDiagLast(&d_) || d_.code != (wantCode)))) {         \
-            ERR("%s on %s reported %" PRIu64 " times, want %" PRIu64, #call,   \
-                (subject), got_, (uint64_t)(want));                            \
-        }                                                                      \
-    } while (0)
-
 /* Every element read back through iterators (both directions, from both
  * ends and from 'at') and CopyTo matches 'oracle' */
 static int multiarrayOracleCheck_(const multiarray *m, const s16 *oracle,
@@ -701,7 +686,7 @@ static int multiarrayBoundsCheck_(uint32_t n, multiarrayType tier) {
     snprintf(subject, sizeof(subject), "%" PRIu32 " elements", n);
     uint64_t want = 1;
 #define MA_BOUNDS_(call)                                                       \
-    MA_EXPECT_REPORTS_(subject, want, DK_DIAG_MULTIARRAY_INDEX, call)
+    DK_DIAG_EXPECT_REPORTS(subject, want, DK_DIAG_MULTIARRAY_INDEX, call)
     s16 probe = {.a = 99};
     s16 out = {.a = 77};
     const void *got[3] = {NULL, NULL, NULL};
@@ -838,7 +823,7 @@ int multiarrayTest(int argc, char *argv[]) {
             const uint64_t want = i == 0 ? 1 : 0;
             const char *subject = i ? "NULL" : "a native multiarray";
 #define MA_REPORTS_(call)                                                      \
-    MA_EXPECT_REPORTS_(subject, want, DK_DIAG_MULTIARRAY_NATIVE, call)
+    DK_DIAG_EXPECT_REPORTS(subject, want, DK_DIAG_MULTIARRAY_NATIVE, call)
             multiarrayIter it;
             const void *first = NULL;
             const void *firstAt = NULL;
