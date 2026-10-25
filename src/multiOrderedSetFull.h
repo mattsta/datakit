@@ -38,6 +38,7 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m);
  * ==================================================================== */
 size_t multiOrderedSetFullCount(const multiOrderedSetFull *m);
 size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m);
+void multiOrderedSetFullStats(const multiOrderedSetFull *m, dkTierStats *out);
 
 /* ====================================================================
  * Insertion / Update

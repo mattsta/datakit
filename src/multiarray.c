@@ -101,6 +101,42 @@ size_t multiarrayBytes(const multiarray *m) {
     return 0;
 }
 
+void multiarrayStats(const multiarray *m, dkTierStats *out) {
+    *out = (dkTierStats){0}; /* native or NULL: no struct, no count */
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL: {
+        const multiarraySmall *s = mars(m);
+        const uint64_t data = (uint64_t)s->count * s->len;
+        *out = (dkTierStats){.count = s->count,
+                             .dataBytes = data,
+                             .totalBytes = data + sizeof(*s),
+                             .units = 1,
+                             .unitLimit = (uint32_t)s->rowMax * s->len,
+                             .tier = MULTIARRAY_TYPE_SMALL};
+        break;
+    }
+    case MULTIARRAY_TYPE_MEDIUM: {
+        const multiarrayMedium *md = marm(m);
+        const uint64_t count = multiarrayMediumCount(md);
+        const uint64_t data = count * md->len;
+        *out = (dkTierStats){.count = count,
+                             .dataBytes = data,
+                             .totalBytes = data + sizeof(*md) +
+                                           (uint64_t)md->count *
+                                               sizeof(multiarrayMediumNode),
+                             .units = md->count,
+                             .unitLimit = (uint32_t)md->rowMax * md->len,
+                             .tier = MULTIARRAY_TYPE_MEDIUM};
+        break;
+    }
+    case MULTIARRAY_TYPE_LARGE:
+        multiarrayLargeStats(marl(m), out);
+        break;
+    default:
+        break;
+    }
+}
+
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax) {
     multiarraySmall *mar = multiarraySmallNew(len, rowMax);
     return _MULTIARRAY_TAG(mar, MULTIARRAY_TYPE_SMALL);
@@ -799,6 +835,45 @@ int multiarrayTest(int argc, char *argv[]) {
         err += multiarrayOracleSoak_(2, 7, 8, MULTIARRAY_TYPE_SMALL, 1);
         err += multiarrayOracleSoak_(12, 50, 8, MULTIARRAY_TYPE_MEDIUM, 2);
         err += multiarrayOracleSoak_(120, 400, 8, MULTIARRAY_TYPE_LARGE, 3);
+    }
+
+    TEST("stats: tier, nodes, elements and bytes in every tier") {
+        cleaner(multiarrayFree) multiarray *m =
+            multiarrayNew(sizeof(int64_t), 8);
+        dkTierStats s;
+        int64_t next = 0;
+        for (int32_t want = MULTIARRAY_TYPE_SMALL;
+             want <= MULTIARRAY_TYPE_LARGE; want++) {
+            while (_multiarrayType(m) != (multiarrayType)want) {
+                multiarrayInsert(&m, (multiarrayIdx)next, &next);
+                next++;
+            }
+            multiarrayStats(m, &s);
+            bool shape;
+            if (want == MULTIARRAY_TYPE_SMALL) {
+                shape = s.units == 1 &&
+                        s.totalBytes == s.dataBytes + sizeof(multiarraySmall);
+            } else if (want == MULTIARRAY_TYPE_MEDIUM) {
+                shape =
+                    s.units == marm(m)->count &&
+                    s.totalBytes == s.dataBytes + sizeof(multiarrayMedium) +
+                                        s.units * sizeof(multiarrayMediumNode);
+            } else {
+                shape = s.units >= 2 && s.totalBytes > s.dataBytes;
+            }
+            if (s.tier != want || s.count != (uint64_t)next ||
+                s.dataBytes != multiarrayBytes(m) ||
+                s.unitLimit != 8 * sizeof(int64_t) || !shape) {
+                ERR("tier %d: stats tier %u units %u count %" PRIu64
+                    " limit %u data %" PRIu64 " total %" PRIu64,
+                    want, s.tier, s.units, s.count, s.unitLimit, s.dataBytes,
+                    s.totalBytes);
+            }
+        }
+        multiarrayStats(NULL, &s);
+        if (s.tier || s.count || s.units || s.totalBytes) {
+            ERR("NULL reports tier %u count %" PRIu64, s.tier, s.count);
+        }
     }
 
     TEST("the container API refuses a native multiarray and NULL") {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dkTier.h"
 #include "multiarrayMedium.h"
 #include <stdint.h>
 
@@ -31,6 +32,7 @@ void multiarrayLargeLocate(const multiarrayLarge *mar, const uint32_t idx,
 void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx);
 size_t multiarrayLargeCount(const multiarrayLarge *mar);
 size_t multiarrayLargeBytes(const multiarrayLarge *mar);
+void multiarrayLargeStats(const multiarrayLarge *mar, dkTierStats *out);
 void *multiarrayLargeGetForward(const multiarrayLarge *mar,
                                 const uint32_t index);
 void *multiarrayLargeGetHead(const multiarrayLarge *mar);

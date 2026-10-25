@@ -162,6 +162,37 @@ size_t multilistBytes(const multilist *m) {
     MULTILIST_SINGLE_RETURN(m, Bytes);
 }
 
+void multilistStats(const multilist *m, dkTierStats *out) {
+    const uint32_t limit = flexOptimizationSizeLimit[COMPRESS_LIMIT(m)];
+    switch (_multilistType(m)) {
+    case MULTILIST_TYPE_SMALL: {
+        const multilistSmall *s = mls(m);
+        const uint64_t data = multilistSmallBytes(s);
+        *out = (dkTierStats){.count = multilistSmallCount(s),
+                             .dataBytes = data,
+                             .totalBytes = data + sizeof(*s),
+                             .units = 1,
+                             .unitLimit = limit,
+                             .tier = MULTILIST_TYPE_SMALL};
+        break;
+    }
+    case MULTILIST_TYPE_MEDIUM: {
+        const multilistMedium *md = mlm(m);
+        const uint64_t data = multilistMediumBytes(md);
+        *out = (dkTierStats){.count = multilistMediumCount(md),
+                             .dataBytes = data,
+                             .totalBytes = data + sizeof(*md),
+                             .units = 2,
+                             .unitLimit = limit,
+                             .tier = MULTILIST_TYPE_MEDIUM};
+        break;
+    }
+    case MULTILIST_TYPE_FULL:
+        multilistFullStats(mlf(m), out);
+        break;
+    }
+}
+
 static void multilistUpgradeIfNecessary(multilist **m, mflexState *state,
                                         const uint_fast32_t depth,
                                         const uint_fast32_t limit) {
@@ -2792,6 +2823,43 @@ int multilistTest(int argc, char *argv[]) {
         }
 
         printf("  verified %zu mixed-type elements\n", count);
+    }
+
+    TEST("stats: tier, nodes, elements and bytes in every tier") {
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_64, 0);
+        const uint32_t limit = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_64];
+        dkTierStats st;
+        int64_t next = 0;
+        for (int32_t want = MULTILIST_TYPE_SMALL; want <= MULTILIST_TYPE_FULL;
+             want++) {
+            while (_multilistType(ml) != (multilistType)want) {
+                const databox box = databoxNewSigned(next * 1000003);
+                multilistPushByTypeTail(&ml, s0, &box);
+                next++;
+            }
+            multilistStats(ml, &st);
+            bool shape;
+            if (want == MULTILIST_TYPE_SMALL) {
+                shape = st.units == 1 && st.unitLimit == limit &&
+                        st.dataBytes == multilistBytes(ml) &&
+                        st.totalBytes == st.dataBytes + sizeof(multilistSmall);
+            } else if (want == MULTILIST_TYPE_MEDIUM) {
+                shape = st.units == 2 && st.unitLimit == limit &&
+                        st.dataBytes == multilistBytes(ml) &&
+                        st.totalBytes == st.dataBytes + sizeof(multilistMedium);
+            } else {
+                shape = st.units >= 2 && st.unitLimit == limit &&
+                        st.dataBytes == multilistFullBytesActual(mlf(ml)) &&
+                        st.totalBytes > st.dataBytes;
+            }
+            if (st.tier != want || st.count != (uint64_t)next || !shape) {
+                ERR("tier %d: stats tier %u units %u count %" PRIu64
+                    " limit %u data %" PRIu64 " total %" PRIu64,
+                    want, st.tier, st.units, st.count, st.unitLimit,
+                    st.dataBytes, st.totalBytes);
+            }
+        }
     }
 
     TEST("FUZZ: tier transitions - small to medium to full") {

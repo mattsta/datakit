@@ -147,6 +147,21 @@ size_t multilistFullBytesActual(const multilistFull *ml) {
     return totalBytes;
 }
 
+void multilistFullStats(const multilistFull *ml, dkTierStats *out) {
+    /* Nodes as stored (compressed ones at their compressed size), plus the
+     * struct and the node array's pointers */
+    const uint64_t data = multilistFullBytesActual(ml);
+    *out = (dkTierStats){.count = ml->values,
+                         .dataBytes = data,
+                         .totalBytes = data + sizeof(*ml) +
+                                       (uint64_t)ml->count * sizeof(mflex *),
+                         .units = ml->count,
+                         .unitLimit = ml->fill < flexOptimizationSizeLimits
+                                          ? flexOptimizationSizeLimit[ml->fill]
+                                          : 0,
+                         .tier = 3};
+}
+
 #define COMPRESS_MAX ((1 << 15) - 1)
 static uint16_t multilistFullClampDepth_(uint32_t compress) {
     if (compress > COMPRESS_MAX) {

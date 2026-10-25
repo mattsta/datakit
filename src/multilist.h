@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dkTier.h"
 #include "flex.h"
 #include "flexCapacityManagement.h"
 #include "multilistCommon.h"
@@ -36,6 +37,12 @@ void multilistSetOptions(multilist *ml, int fill, int depth);
 
 size_t multilistCount(const multilist *m);
 size_t multilistBytes(const multilist *m);
+/* The tier, nodes (1, 2, or Full's count), elements, and bytes: the
+ * nodes as stored (Full's compressed nodes at their compressed size), and
+ * those plus each tier's struct and Full's node array.  'unitLimit' is
+ * where Small grows (the size limit's cutoff) or Full's nodes split (0
+ * when Full has no size fill). */
+void multilistStats(const multilist *m, dkTierStats *out);
 
 /* Every element, in list order, as one new flex; release with flexFree.
  * The element encodings are copied byte for byte and never decoded, so

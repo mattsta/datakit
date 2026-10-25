@@ -182,6 +182,37 @@ int intsetTest(int argc, char *argv[]) {
         intsetRepr(is);
     }
 
+    TEST("stats: tier, width arrays, members and bytes in every tier") {
+        cleaner(intsetFree) intset *is = intsetNew();
+        const int64_t members[] = {7, -3, 100, 100000, -70000, INT64_MAX};
+        /* After each prefix: tier, then 16/32/64-bit member counts */
+        const uint8_t tier[] = {1, 1, 1, 2, 2, 3};
+        const uint64_t n16[] = {1, 2, 3, 3, 3, 3};
+        const uint64_t n32[] = {0, 0, 0, 1, 2, 2};
+        const uint64_t n64[] = {0, 0, 0, 0, 0, 1};
+        const uint32_t ceiling[] = {INTSET_SMALL_MAX_BYTES,
+                                    INTSET_MEDIUM_MAX_BYTES, 0};
+        for (size_t i = 0; i < COUNT_ARRAY(members); i++) {
+            intsetAdd(&is, members[i], NULL);
+            dkTierStats s;
+            intsetStats(is, &s);
+            const uint64_t data = n16[i] * 2 + n32[i] * 4 + n64[i] * 8;
+            if (s.tier != tier[i] || s.units != tier[i] || s.count != i + 1 ||
+                s.dataBytes != data || s.totalBytes != intsetBytes(is) ||
+                s.totalBytes <= data || s.unitLimit != ceiling[tier[i] - 1]) {
+                ERR("after %zu members: tier %u units %u count %" PRIu64
+                    " data %" PRIu64 " total %" PRIu64 " limit %u",
+                    i + 1, s.tier, s.units, s.count, s.dataBytes, s.totalBytes,
+                    s.unitLimit);
+            }
+        }
+        dkTierStats none;
+        intsetStats(NULL, &none);
+        if (none.tier || none.count || none.totalBytes) {
+            ERRR("NULL intset reports a tier, members or bytes");
+        }
+    }
+
     TEST("memory efficiency - tiered vs monolithic") {
         cleaner(intsetFree) intset *is = intsetNew();
 

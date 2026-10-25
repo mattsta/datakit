@@ -178,6 +178,12 @@ void multiarrayDelete(multiarray **m, const uint32_t index);
  * Container API only — the Native macro API tracks count externally. */
 size_t multiarrayCount(const multiarray *m);
 size_t multiarrayBytes(const multiarray *m);
+/* The tier, nodes (1 for Small; Medium's and Large's node counts),
+ * elements, and bytes: the element data, and that plus each tier's struct
+ * and node records.  'unitLimit' is a node's capacity in bytes (rowMax
+ * elements).  A native array or NULL reports all zeros (no struct holds
+ * its count). */
+void multiarrayStats(const multiarray *m, dkTierStats *out);
 
 /* The element width and the entries per node it was created with */
 uint16_t multiarrayElementLen(const multiarray *m);

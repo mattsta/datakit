@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dkTier.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -74,6 +76,13 @@ bool intsetMax(const intset *is, int64_t *value);
 
 /* Get total bytes used */
 size_t intsetBytes(intset *is);
+
+/* The tier, value-width arrays (1 Small, 2 Medium, 3 Full), members and
+ * bytes: the members' bytes at their widths, and intsetBytes (with the
+ * tier's struct).  'unitLimit' is the byte size where Small (64 KB) and
+ * Medium (8 MB) grow regardless of widths; 0 for Full.  NULL reports all
+ * zeros. */
+void intsetStats(intset *is, dkTierStats *out);
 
 #ifdef DATAKIT_TEST
 /* Print representation of intset */

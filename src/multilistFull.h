@@ -19,6 +19,7 @@
 
 #include "datakit.h"
 
+#include "dkTier.h"
 #include "mflex.h"
 #include "multiarray.h"
 #include "multilistCommon.h"
@@ -34,6 +35,7 @@ size_t multilistFullCount(const multilistFull *ml);
 size_t multilistFullBytes(const multilistFull *ml);
 /* Physical bytes (compressed nodes measured at stored size) */
 size_t multilistFullBytesActual(const multilistFull *ml);
+void multilistFullStats(const multilistFull *ml, dkTierStats *out);
 
 /* Settings */
 /* Set the compress depth (clamped to 32767) and put every existing node

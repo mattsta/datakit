@@ -1,6 +1,7 @@
 #pragma once
 
 #include "databox.h"
+#include "dkTier.h"
 #include "flexCapacityManagement.h"
 
 /* ====================================================================
@@ -293,6 +294,12 @@ size_t multiOrderedSetCount(const multiOrderedSet *mos);
 
 /* Total bytes used */
 size_t multiOrderedSetBytes(const multiOrderedSet *mos);
+
+/* The tier, sub-maps (1, 2, or Full's count), pairs, and bytes: the
+ * sub-maps' flex bytes, and those plus each tier's struct (Full: its
+ * member index, owned pool and per-sub-map arrays).  'unitLimit' is where
+ * Small grows (the size limit's cutoff) or Full's sub-maps split. */
+void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out);
 
 /* ====================================================================
  * Insertion / Update

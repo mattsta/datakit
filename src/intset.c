@@ -486,6 +486,39 @@ size_t intsetBytes(intset *is) {
     return 0;
 }
 
+void intsetStats(intset *is, dkTierStats *out) {
+    *out = (dkTierStats){0};
+    if (!is) {
+        return;
+    }
+
+    uint64_t n16 = 0, n32 = 0, n64 = 0;
+    const void *ptr = INTSET_UNTAG(is);
+    switch (INTSET_TYPE(is)) {
+    case INTSET_TYPE_SMALL:
+        n16 = ((const intsetSmall *)ptr)->count16;
+        out->unitLimit = INTSET_SMALL_MAX_BYTES;
+        break;
+    case INTSET_TYPE_MEDIUM:
+        n16 = ((const intsetMedium *)ptr)->count16;
+        n32 = ((const intsetMedium *)ptr)->count32;
+        out->unitLimit = INTSET_MEDIUM_MAX_BYTES;
+        break;
+    case INTSET_TYPE_FULL:
+        n16 = ((const intsetFull *)ptr)->count16;
+        n32 = ((const intsetFull *)ptr)->count32;
+        n64 = ((const intsetFull *)ptr)->count64;
+        break;
+    }
+
+    out->tier = (uint8_t)INTSET_TYPE(is);
+    out->units = out->tier; /* one sorted array per value width */
+    out->count = n16 + n32 + n64;
+    out->dataBytes =
+        n16 * sizeof(int16_t) + n32 * sizeof(int32_t) + n64 * sizeof(int64_t);
+    out->totalBytes = intsetBytes(is);
+}
+
 #ifdef DATAKIT_TEST
 /* Print representation of intset */
 void intsetRepr(const intset *is) {

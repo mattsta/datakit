@@ -254,6 +254,37 @@ size_t multiOrderedSetBytes(const multiOrderedSet *mos) {
     MOS_SINGLE_RETURN(mos, Bytes);
 }
 
+void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out) {
+    const uint32_t limit = flexOptimizationSizeLimit[COMPRESS_LIMIT(mos)];
+    switch (mosType_(mos)) {
+    case MOS_TYPE_SMALL: {
+        const multiOrderedSetSmall *s = moss(mos);
+        const uint64_t data = multiOrderedSetSmallBytes(s);
+        *out = (dkTierStats){.count = multiOrderedSetSmallCount(s),
+                             .dataBytes = data,
+                             .totalBytes = data + sizeof(*s),
+                             .units = 1,
+                             .unitLimit = limit,
+                             .tier = MOS_TYPE_SMALL};
+        break;
+    }
+    case MOS_TYPE_MEDIUM: {
+        const multiOrderedSetMedium *md = mosm(mos);
+        const uint64_t data = multiOrderedSetMediumBytes(md);
+        *out = (dkTierStats){.count = multiOrderedSetMediumCount(md),
+                             .dataBytes = data,
+                             .totalBytes = data + sizeof(*md),
+                             .units = 2,
+                             .unitLimit = limit,
+                             .tier = MOS_TYPE_MEDIUM};
+        break;
+    }
+    case MOS_TYPE_FULL:
+        multiOrderedSetFullStats(mosf(mos), out);
+        break;
+    }
+}
+
 /* ====================================================================
  * Insertion / Update
  * ==================================================================== */
@@ -2249,6 +2280,55 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         }
 
         multiOrderedSetFree(mos);
+    }
+
+    TEST("multiOrderedSet: stats in every tier") {
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
+        const uint32_t limit = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_64];
+        dkTierStats s;
+        int64_t next = 0;
+        for (int32_t want = MOS_TYPE_SMALL; want <= MOS_TYPE_FULL; want++) {
+            while (mosType_(mos) != (multiOrderedSetType)want) {
+                databox score;
+                DATABOX_SET_DOUBLE(&score, (double)next);
+                const databox member = databoxNewSigned(next);
+                multiOrderedSetAdd(&mos, &score, &member);
+                next++;
+            }
+            multiOrderedSetStats(mos, &s);
+            bool shape;
+            if (want == MOS_TYPE_SMALL) {
+                shape = s.units == 1 && s.unitLimit == limit &&
+                        s.totalBytes ==
+                            s.dataBytes + sizeof(multiOrderedSetSmall) &&
+                        s.dataBytes == multiOrderedSetBytes(mos);
+            } else if (want == MOS_TYPE_MEDIUM) {
+                shape = s.units == 2 && s.unitLimit == limit &&
+                        s.totalBytes ==
+                            s.dataBytes + sizeof(multiOrderedSetMedium) &&
+                        s.dataBytes == multiOrderedSetBytes(mos);
+            } else {
+                /* Full's sub-maps split at maxMapSize, not at the set's
+                 * size limit, so a set promoted at 3 x 64 bytes still holds
+                 * one sub-map here */
+                const multiOrderedSetFull *f = mosf(mos);
+                shape = s.units == f->mapCount && s.units >= 1 &&
+                        s.unitLimit == f->maxMapSize &&
+                        s.totalBytes > multiOrderedSetBytes(mos) &&
+                        s.dataBytes < multiOrderedSetBytes(mos);
+                printf("    Full after promotion: %u sub-map(s), %" PRIu64
+                       " data bytes, %" PRIu64 " total\n",
+                       s.units, s.dataBytes, s.totalBytes);
+            }
+            if (s.tier != want || s.count != (uint64_t)next || !shape ||
+                s.totalBytes <= s.dataBytes) {
+                ERR("tier %d: stats tier %u units %u count %" PRIu64
+                    " limit %u data %" PRIu64 " total %" PRIu64,
+                    want, s.tier, s.units, s.count, s.unitLimit, s.dataBytes,
+                    s.totalBytes);
+            }
+        }
     }
 
     TEST("multiOrderedSet: first and last") {

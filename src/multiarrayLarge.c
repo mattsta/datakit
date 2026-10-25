@@ -125,6 +125,30 @@ size_t multiarrayLargeBytes(const multiarrayLarge *mar) {
     return (size_t)mar->len * multiarrayLargeCount(mar);
 }
 
+void multiarrayLargeStats(const multiarrayLarge *mar, dkTierStats *out) {
+    uint64_t count = 0;
+    uint32_t nodes = 0;
+    const multiarrayLargeNode *prev = NULL;
+    const multiarrayLargeNode *e = mar->head;
+    while (e) {
+        count += e->count;
+        nodes++;
+        const multiarrayLargeNode *loopCurrentE = e;
+        e = getNext(prev, loopCurrentE);
+        prev = loopCurrentE;
+    }
+
+    const uint64_t data = count * mar->len;
+    *out = (dkTierStats){.count = count,
+                         .dataBytes = data,
+                         .totalBytes =
+                             data + sizeof(*mar) +
+                             (uint64_t)nodes * sizeof(multiarrayLargeNode),
+                         .units = nodes,
+                         .unitLimit = (uint32_t)mar->rowMax * mar->len,
+                         .tier = 3};
+}
+
 DK_STATIC inline multiarrayLargeResult
 multiarrayLargeGetForwardWorker(multiarrayLargeNode *e, int32_t idx,
                                 uint32_t len) {

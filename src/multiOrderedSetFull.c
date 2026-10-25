@@ -912,6 +912,26 @@ size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m) {
     return bytes;
 }
 
+void multiOrderedSetFullStats(const multiOrderedSetFull *m, dkTierStats *out) {
+    uint64_t data = 0;
+    for (uint32_t i = 0; i < m->mapCount; i++) {
+        const flex *map = getSubMap(m, i);
+        data += map ? flexBytes(map) : 0;
+    }
+
+    /* The struct, member index and owned pool (multiOrderedSetFullBytes),
+     * plus each sub-map's pointer, middle offset and range box */
+    *out = (dkTierStats){
+        .count = m->totalEntries,
+        .dataBytes = data,
+        .totalBytes = multiOrderedSetFullBytes(m) +
+                      (uint64_t)m->mapCount *
+                          (sizeof(flex *) + sizeof(uint32_t) + sizeof(databox)),
+        .units = m->mapCount,
+        .unitLimit = m->maxMapSize,
+        .tier = 3};
+}
+
 /* ====================================================================
  * Insertion / Update
  * ==================================================================== */
