@@ -313,6 +313,11 @@ typedef enum persistOp {
     PERSIST_OP_MAX = 255
 } persistOp;
 
+/* persistOps.encodeOpInto: an op's body written into caller memory (see
+ * that hook) */
+typedef bool(persistOpEncodeInto)(persistOp op, const void *args, size_t argc,
+                                  uint8_t *dst, size_t cap, size_t *len);
+
 /* For a store whose rows each hold one whole structure (an embedding
  * key-value layer folding a WAL per key): does this row's op carry a
  * COMPLETE serialized value rather than a delta?  The store's replay,
@@ -536,6 +541,15 @@ struct persistOps {
      * thread (an engine may bracket per-row or per-tail). */
     void *(*foldEnter)(void);
     void (*foldExit)(void *token);
+
+    /* ---- Optional Encode-Into Hook ----
+     * encodeOp writing into caller memory: '*len' is the body's length,
+     * and the body is written to 'dst' only when it fits 'cap'; false
+     * refuses the op as encodeOp's NULL does.  When set, persistLogOp
+     * encodes straight into the WAL entry it builds, with no body
+     * allocation.  A type that sets it makes its encodeOp from it with
+     * persistOpEncodeViaInto, so both write the same bytes. */
+    persistOpEncodeInto *encodeOpInto;
 };
 
 /* ============================================================================
@@ -980,6 +994,23 @@ uint8_t *persistOpNoBody(size_t *len);
  * element is NULL.  Sets *len to the body's length (0 when refused). */
 uint8_t *persistOpEncodeBoxes(const databox *const *boxes, size_t n,
                               size_t *len);
+
+/* For an encodeOpInto implementation: 'bytes' raw bytes of 'src' as the
+ * body (fixed-width operands), written when they fit 'cap'; false
+ * refuses a NULL 'src'. */
+bool persistOpCopyInto(const void *src, size_t bytes, uint8_t *dst, size_t cap,
+                       size_t *len);
+
+/* For an encodeOpInto implementation: persistOpEncodeBoxes's body
+ * written into 'dst' when it fits 'cap' ('*len' its length either way);
+ * false refuses, as persistOpEncodeBoxes's NULL does. */
+bool persistOpEncodeBoxesInto(const databox *const *boxes, size_t n,
+                              uint8_t *dst, size_t cap, size_t *len);
+
+/* An encodeOp made from an encodeOpInto, so a type writes its encoding
+ * once: the body is sized, allocated and written. */
+uint8_t *persistOpEncodeViaInto(persistOpEncodeInto *into, persistOp op,
+                                const void *args, size_t argc, size_t *len);
 
 /* Replay WAL entries, applying each to structure */
 bool persistReplayWAL(persist *p, void *structure);

@@ -1083,6 +1083,10 @@ static void benchPersistChecks(void) {
                 intsetRemove(&is, n - 1 - i, &done);
                 sink += done;
             });
+
+        /* The log write alone: an intset op's one int64 */
+        PERF_ROW(mod, "logInt64", n, const int64_t v = i;
+                 sink += persistCtxLogOp(ictx, PERSIST_OP_INSERT, &v, 1));
         intsetCloseP(isp);
     }
     persistCtxFree(ictx);
@@ -1173,6 +1177,24 @@ static void benchPersistChecks(void) {
                  const databox v = databoxNewSigned(perfScatter(i));
                  const databox *row[2] = {&k, &v};
                  sink += multimapInsertIfAbsent(&m, row));
+
+        /* The log write alone: a field increment's three boxes */
+        PERF_ROW(mod, "logBoxes3", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox offset = DATABOX_UNSIGNED(1);
+                 const databox delta = DATABOX_SIGNED(1);
+                 const databox *args[3] = {&k, &offset, &delta};
+                 sink += persistCtxLogOp(mctx, PERSIST_OP_NUM_INCR, args, 3));
+
+        /* What that log's body costs to encode: the three boxes as an
+         * exact flex, made and freed */
+        PERF_ROW(mod, "encodeBoxes3", n,
+                 const databox k = perfContainerKey(keys, perfScatter(i));
+                 const databox offset = DATABOX_UNSIGNED(1);
+                 const databox delta = DATABOX_SIGNED(1);
+                 const databox *args[3] = {&k, &offset, &delta};
+                 flex *f = flexNewFromDataboxPtrsExact(args, 3);
+                 sink += flexBytes(f); flexFree(f));
         multimapCloseP(mp);
     }
     persistCtxFree(mctx);

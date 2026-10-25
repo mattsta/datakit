@@ -310,6 +310,13 @@ non-zero `formatVersion`) and callbacks: `snapshot`/`restore`, `count`,
   `memcpy`.
 - `restore` is where untrusted bytes enter: any truncation or corruption
   must give NULL or a valid structure, never a crash.
+- `encodeOpInto` (optional) writes an op's body into memory the log gives
+  it: the log then builds each entry with no body allocation.  Write the
+  encoding once as `encodeOpInto` and make `encodeOp` from it with
+  `persistOpEncodeViaInto`; `persistOpEncodeBoxesInto` (boxes as an exact
+  flex) and `persistOpCopyInto` (fixed-width operands) are the bodies the
+  built-in types use.  The intset, multiroar, multimap, multidict and
+  multiOrderedSet descriptors set it.
 
 Every built-in descriptor passes `persistContract` (`src/persist/contract/`)
 at several sizes and seeds in every build configuration, and a new one

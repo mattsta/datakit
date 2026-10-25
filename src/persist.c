@@ -1305,9 +1305,107 @@ uint8_t *persistOpEncodeBoxes(const databox *const *boxes, size_t n,
     return (uint8_t *)f;
 }
 
+bool persistOpCopyInto(const void *src, size_t bytes, uint8_t *dst, size_t cap,
+                       size_t *len) {
+    *len = 0;
+    if (!src) {
+        return false;
+    }
+    *len = bytes;
+    if (bytes <= cap) {
+        memcpy(dst, src, bytes);
+    }
+    return true;
+}
+
+bool persistOpEncodeBoxesInto(const databox *const *boxes, size_t n,
+                              uint8_t *dst, size_t cap, size_t *len) {
+    *len = 0;
+    if (!boxes || n == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!boxes[i]) {
+            return false;
+        }
+    }
+    *len = flexEncodeDataboxPtrsExact(dst, cap, boxes, n);
+    return true;
+}
+
+uint8_t *persistOpEncodeViaInto(persistOpEncodeInto *into, persistOp op,
+                                const void *args, size_t argc, size_t *len) {
+    *len = 0;
+    size_t need = 0;
+    if (!into(op, args, argc, NULL, 0, &need)) {
+        return NULL;
+    }
+
+    /* @own: caller; free=zfree */
+    uint8_t *body = zmalloc(need ? need : 1);
+    if (!into(op, args, argc, body, need, len)) {
+        zfree(body);
+        *len = 0;
+        return NULL;
+    }
+    return body;
+}
+
+/* The entry's payload (the preamble, then the op's body) in 'stack' when
+ * it fits 'stackCap', else in '*heap' (the caller's to free); NULL when
+ * the type refuses the op.  A type with encodeOpInto writes its body in
+ * place behind the preamble. */
+DK_INLINE_ALWAYS uint8_t *persistPayload_(persist *p, persistOp op,
+                                          const void *args, size_t argc,
+                                          uint8_t *stack, size_t stackCap,
+                                          uint8_t **heap, size_t *payloadLen) {
+    const size_t pre = PERSIST_WAL_ENTRY_PREAMBLE_LEN;
+    uint8_t *payload = stack;
+    size_t bodyLen = 0;
+    if (p->ops->encodeOpInto) {
+        if (!p->ops->encodeOpInto(op, args, argc, stack + pre, stackCap - pre,
+                                  &bodyLen) ||
+            pre + bodyLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
+            return NULL;
+        }
+        if (bodyLen > stackCap - pre) {
+            /* @own: caller; free=zfree */
+            *heap = zmalloc(pre + bodyLen);
+            payload = *heap;
+            if (!p->ops->encodeOpInto(op, args, argc, payload + pre, bodyLen,
+                                      &bodyLen)) {
+                return NULL;
+            }
+        }
+    } else {
+        /* NULL refuses the op (an op without a body still returns a
+         * buffer) */
+        cleanerName(zfree, Bytes) uint8_t *body =
+            p->ops->encodeOp(op, args, argc, &bodyLen);
+        /* A payload past the largest entry is refused before the body is
+         * read (the envelope only grows it) */
+        if (!body || pre + bodyLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
+            return NULL;
+        }
+        if (pre + bodyLen > stackCap) {
+            /* @own: caller; free=zfree */
+            *heap = zmalloc(pre + bodyLen);
+            payload = *heap;
+        }
+        if (bodyLen > 0) {
+            memcpy(payload + pre, body, bodyLen);
+        }
+    }
+
+    memcpy(payload, &p->walSequence, sizeof(uint64_t));
+    payload[sizeof(uint64_t)] = (uint8_t)op;
+    *payloadLen = pre + bodyLen;
+    return payload;
+}
+
 persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
                               size_t argc) {
-    if (!p || !p->walStore || !p->ops->encodeOp) {
+    if (!p || !p->walStore || !(p->ops->encodeOp || p->ops->encodeOpInto)) {
         return PERSIST_LOG_REFUSED;
     }
 
@@ -1321,27 +1419,30 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         return PERSIST_LOG_REFUSED;
     }
 
-    /* NULL refuses the op (an op without a body still returns a buffer) */
-    size_t opDataLen = 0;
-    uint8_t *opData = p->ops->encodeOp(op, args, argc, &opDataLen);
-    if (!opData) {
-        return PERSIST_LOG_REFUSED;
-    }
-
-    const size_t payloadLen = PERSIST_WAL_ENTRY_PREAMBLE_LEN + opDataLen;
-    const size_t envelopeLen =
-        flexEnvelopeWrappedSize((uint64_t)payloadLen, algo, wrap.on_wire_flags);
-    if (envelopeLen == 0 || envelopeLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
-        zfree(opData);
-        return PERSIST_LOG_REFUSED;
-    }
-
     /* Braced so the scratch buffers - each up to a full WAL entry - are
      * released before the sync barrier below.  A small payload is built
-     * on the stack, and an entry that fits the WAL buffer's free space is
+     * on the stack (a type with encodeOpInto encodes its body straight
+     * into it), and an entry that fits the WAL buffer's free space is
      * wrapped straight into it, so the common entry allocates nothing
      * here and its envelope is written once. */
     {
+        uint8_t payloadStack[PERSIST_WAL_STACK_PAYLOAD];
+        cleanerName(zfree, Bytes) uint8_t *payloadHeap = NULL;
+        size_t payloadLen = 0;
+        const uint8_t *payload =
+            persistPayload_(p, op, args, argc, payloadStack,
+                            sizeof(payloadStack), &payloadHeap, &payloadLen);
+        if (!payload) {
+            return PERSIST_LOG_REFUSED;
+        }
+
+        const size_t envelopeLen = flexEnvelopeWrappedSize(
+            (uint64_t)payloadLen, algo, wrap.on_wire_flags);
+        if (envelopeLen == 0 ||
+            envelopeLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
+            return PERSIST_LOG_REFUSED;
+        }
+
         /* Where this entry starts in the WAL stream (the store's append
          * offset plus the bytes buffered ahead of it): a failed write
          * rolls back to it, so no partial entry is left for later
@@ -1360,26 +1461,11 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         uint8_t *envelope =
             inBuffer ? inBuffer + sizeof(envelopeLen32) : envelopeHeap;
 
-        {
-            uint8_t payloadStack[PERSIST_WAL_STACK_PAYLOAD];
-            cleanerName(zfree, Bytes) uint8_t *payloadHeap =
-                payloadLen > sizeof(payloadStack) ? zmalloc(payloadLen) : NULL;
-            uint8_t *payload = payloadHeap ? payloadHeap : payloadStack;
-            memcpy(payload, &p->walSequence, sizeof(uint64_t));
-            payload[sizeof(uint64_t)] = (uint8_t)op;
-            if (opData && opDataLen > 0) {
-                memcpy(payload + PERSIST_WAL_ENTRY_PREAMBLE_LEN, opData,
-                       opDataLen);
-            }
-            zfree(opData);
-
-            size_t envelopeWritten = 0;
-            if (!flexEnvelopeWrap(envelope, envelopeLen, payload,
-                                  (uint64_t)payloadLen, &wrap,
-                                  &envelopeWritten) ||
-                envelopeWritten != envelopeLen) {
-                return PERSIST_LOG_REFUSED;
-            }
+        size_t envelopeWritten = 0;
+        if (!flexEnvelopeWrap(envelope, envelopeLen, payload,
+                              (uint64_t)payloadLen, &wrap, &envelopeWritten) ||
+            envelopeWritten != envelopeLen) {
+            return PERSIST_LOG_REFUSED;
         }
 
         bool written;
@@ -3082,33 +3168,30 @@ static size_t intsetPersistEstimateSize(const void *structure) {
     return intsetBytes((intset *)structure);
 }
 
-static uint8_t *intsetPersistEncodeOp(persistOp op, const void *args,
-                                      size_t argc, size_t *len) {
+static bool intsetPersistEncodeOpInto(persistOp op, const void *args,
+                                      size_t argc, uint8_t *dst, size_t cap,
+                                      size_t *len) {
     (void)argc;
+    *len = 0;
 
     switch (op) {
     case PERSIST_OP_INSERT:
-    case PERSIST_OP_DELETE: {
+    case PERSIST_OP_DELETE:
         /* args is int64_t* */
-        const int64_t *value = args;
-        if (!value) {
-            *len = 0;
-            return NULL;
-        }
-        *len = sizeof(int64_t);
-        /* @own: caller; free=zfree */
-        uint8_t *buf = zmalloc(*len);
-        memcpy(buf, value, sizeof(int64_t));
-        return buf;
-    }
+        return persistOpCopyInto(args, sizeof(int64_t), dst, cap, len);
 
     case PERSIST_OP_CLEAR:
-        return persistOpNoBody(len);
+        return true; /* no body */
 
     default:
-        *len = 0;
-        return NULL;
+        return false;
     }
+}
+
+static uint8_t *intsetPersistEncodeOp(persistOp op, const void *args,
+                                      size_t argc, size_t *len) {
+    return persistOpEncodeViaInto(intsetPersistEncodeOpInto, op, args, argc,
+                                  len);
 }
 
 static bool intsetPersistApplyOp(void *structure, persistOp op,
@@ -3170,6 +3253,7 @@ const persistOps persistOpsIntset = {
     .count = intsetPersistCount,
     .estimateSize = intsetPersistEstimateSize,
     .encodeOp = intsetPersistEncodeOp,
+    .encodeOpInto = intsetPersistEncodeOpInto,
     .applyOp = intsetPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
@@ -3397,49 +3481,38 @@ static size_t multiroarPersistEstimateSize(const void *structure) {
  * position, SET_RANGE / CLEAR_RANGE / FLIP_RANGE a [start, extent] pair
  * (bit mode), CLEAR nothing.  Apply refuses an op the roar's mode does not
  * have. */
-static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
-                                         size_t argc, size_t *len) {
+static bool multiroarPersistEncodeOpInto(persistOp op, const void *args,
+                                         size_t argc, uint8_t *dst, size_t cap,
+                                         size_t *len) {
+    *len = 0;
     switch (op) {
     case PERSIST_OP_INSERT:
     case PERSIST_OP_DELETE: {
         /* args is uint64_t[argc]: the position, then (a value-mode
          * INSERT) the value */
-        if (!args) {
-            *len = 0;
-            return NULL;
-        }
         const size_t words = op == PERSIST_OP_INSERT && argc == 2 ? 2 : 1;
-        *len = words * sizeof(uint64_t);
-        /* @own: caller; free=zfree */
-        uint8_t *buf = zmalloc(*len);
-        memcpy(buf, args, *len);
-        return buf;
+        return persistOpCopyInto(args, words * sizeof(uint64_t), dst, cap, len);
     }
 
     case PERSIST_OP_SET_RANGE:
     case PERSIST_OP_CLEAR_RANGE:
-    case PERSIST_OP_FLIP_RANGE: {
+    case PERSIST_OP_FLIP_RANGE:
         /* args is uint64_t[2] ([start, extent]) — same fixed-width
          * raw framing as the single-position ops. */
-        const uint64_t *range = args;
-        if (!range) {
-            *len = 0;
-            return NULL;
-        }
-        *len = 2 * sizeof(uint64_t);
-        /* @own: caller; free=zfree */
-        uint8_t *buf = zmalloc(*len);
-        memcpy(buf, range, 2 * sizeof(uint64_t));
-        return buf;
-    }
+        return persistOpCopyInto(args, 2 * sizeof(uint64_t), dst, cap, len);
 
     case PERSIST_OP_CLEAR:
-        return persistOpNoBody(len);
+        return true; /* no body */
 
     default:
-        *len = 0;
-        return NULL;
+        return false;
     }
+}
+
+static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
+                                         size_t argc, size_t *len) {
+    return persistOpEncodeViaInto(multiroarPersistEncodeOpInto, op, args, argc,
+                                  len);
 }
 
 static bool multiroarPersistApplyOp(void *structure, persistOp op,
@@ -3534,6 +3607,7 @@ const persistOps persistOpsMultiroar = {
     .count = multiroarPersistCount,
     .estimateSize = multiroarPersistEstimateSize,
     .encodeOp = multiroarPersistEncodeOp,
+    .encodeOpInto = multiroarPersistEncodeOpInto,
     .applyOp = multiroarPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
@@ -3818,10 +3892,12 @@ static size_t multimapPersistEstimateSize(const void *structure) {
     return multimapBytes(structure);
 }
 
-static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
-                                        size_t argc, size_t *len) {
+static bool multimapPersistEncodeOpInto(persistOp op, const void *args,
+                                        size_t argc, uint8_t *dst, size_t cap,
+                                        size_t *len) {
     /* args is const databox** for multimap operations */
     const databox *const *boxes = args;
+    *len = 0;
 
     /* Every op's body is its boxes as a self-describing exact flex (flex
      * records each element's length, so a BYTES value need not be last):
@@ -3832,22 +3908,24 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
     switch (op) {
     case PERSIST_OP_INSERT:
     case PERSIST_OP_DELETE:
-        return persistOpEncodeBoxes(boxes, argc, len);
+        return persistOpEncodeBoxesInto(boxes, argc, dst, cap, len);
 
     case PERSIST_OP_NUM_INCR:
-        if (argc != 3) {
-            *len = 0;
-            return NULL;
-        }
-        return persistOpEncodeBoxes(boxes, argc, len);
+        return argc == 3 &&
+               persistOpEncodeBoxesInto(boxes, argc, dst, cap, len);
 
     case PERSIST_OP_CLEAR:
-        return persistOpNoBody(len);
+        return true; /* no body */
 
     default:
-        *len = 0;
-        return NULL;
+        return false;
     }
+}
+
+static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
+                                        size_t argc, size_t *len) {
+    return persistOpEncodeViaInto(multimapPersistEncodeOpInto, op, args, argc,
+                                  len);
 }
 
 /* An int64 operand of a WAL row: flex stores an integer by value, so a
@@ -3965,6 +4043,7 @@ const persistOps persistOpsMultimap = {
     .count = multimapPersistCount,
     .estimateSize = multimapPersistEstimateSize,
     .encodeOp = multimapPersistEncodeOp,
+    .encodeOpInto = multimapPersistEncodeOpInto,
     .applyOp = multimapPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
@@ -4588,30 +4667,34 @@ static size_t multidictPersistEstimateSize(const void *structure) {
 /* A multidict WAL record for an insert or replace is an exact flex of
  * [key, val]; for a delete, of [key]; so keys and values of every type
  * (byte strings of any length, 96/128-bit integers) replay intact. */
-static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
-                                         size_t argc, size_t *len) {
+static bool multidictPersistEncodeOpInto(persistOp op, const void *args,
+                                         size_t argc, uint8_t *dst, size_t cap,
+                                         size_t *len) {
     *len = 0;
     switch (op) {
     case PERSIST_OP_INSERT:
     case PERSIST_OP_REPLACE:
         /* args is const databox*[] with [key, val] */
-        if (argc < 2) {
-            return NULL;
-        }
-        return persistOpEncodeBoxes(args, 2, len);
+        return argc >= 2 && persistOpEncodeBoxesInto(args, 2, dst, cap, len);
 
     case PERSIST_OP_DELETE: {
         /* args is const databox* (key only) */
         const databox *key = args;
-        return persistOpEncodeBoxes(&key, 1, len);
+        return persistOpEncodeBoxesInto(&key, 1, dst, cap, len);
     }
 
     case PERSIST_OP_CLEAR:
-        return persistOpNoBody(len);
+        return true; /* no body */
 
     default:
-        return NULL;
+        return false;
     }
+}
+
+static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
+                                         size_t argc, size_t *len) {
+    return persistOpEncodeViaInto(multidictPersistEncodeOpInto, op, args, argc,
+                                  len);
 }
 
 static bool multidictPersistApplyOp(void *structure, persistOp op,
@@ -4681,6 +4764,7 @@ const persistOps persistOpsMultidict = {
     .count = multidictPersistCount,
     .estimateSize = multidictPersistEstimateSize,
     .encodeOp = multidictPersistEncodeOp,
+    .encodeOpInto = multidictPersistEncodeOpInto,
     .applyOp = multidictPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
@@ -5398,8 +5482,9 @@ static size_t multiOrderedSetPersistEstimateSize(const void *structure) {
     return mos ? multiOrderedSetBytes(mos) : 0;
 }
 
-static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
-                                               size_t argc, size_t *len) {
+static bool multiOrderedSetPersistEncodeOpInto(persistOp op, const void *args,
+                                               size_t argc, uint8_t *dst,
+                                               size_t cap, size_t *len) {
     /* args is array of databox pointers: INSERT [score, member], DELETE
      * [member]; the operand is those boxes as an exact flex, so 96/128-bit
      * scores and numeral-looking members replay unchanged */
@@ -5407,15 +5492,21 @@ static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
     *len = 0;
 
     if (op == PERSIST_OP_CLEAR) {
-        return persistOpNoBody(len);
+        return true; /* no body */
     }
     const size_t want = op == PERSIST_OP_INSERT   ? 2
                         : op == PERSIST_OP_DELETE ? 1
                                                   : 0;
     if (want == 0 || argc != want) {
-        return NULL; /* nothing else is replayed */
+        return false; /* nothing else is replayed */
     }
-    return persistOpEncodeBoxes(boxes, argc, len);
+    return persistOpEncodeBoxesInto(boxes, argc, dst, cap, len);
+}
+
+static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
+                                               size_t argc, size_t *len) {
+    return persistOpEncodeViaInto(multiOrderedSetPersistEncodeOpInto, op, args,
+                                  argc, len);
 }
 
 static bool multiOrderedSetPersistApplyOp(void *structure, persistOp op,
@@ -5486,6 +5577,7 @@ const persistOps persistOpsMultiOrderedSet = {
     .count = multiOrderedSetPersistCount,
     .estimateSize = multiOrderedSetPersistEstimateSize,
     .encodeOp = multiOrderedSetPersistEncodeOp,
+    .encodeOpInto = multiOrderedSetPersistEncodeOpInto,
     .applyOp = multiOrderedSetPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
@@ -5864,6 +5956,20 @@ static uint8_t *persistTestHugeEncode(persistOp op, const void *args,
     *len = PERSIST_WAL_ENTRY_MAX_BYTES;
     /* @own: caller; free=zfree */
     return zmalloc(1);
+}
+
+/* The same claim from an encode-into encoder, which writes nothing (no
+ * buffer it is given could hold the claimed body) */
+static bool persistTestHugeEncodeInto(persistOp op, const void *args,
+                                      size_t argc, uint8_t *dst, size_t cap,
+                                      size_t *len) {
+    (void)op;
+    (void)args;
+    (void)argc;
+    (void)dst;
+    (void)cap;
+    *len = PERSIST_WAL_ENTRY_MAX_BYTES;
+    return true;
 }
 
 static ssize_t persistTestBudgetWrite(void *ctx, const void *data, size_t len) {
@@ -10356,6 +10462,117 @@ int persistTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("encode-into bodies: the bytes persistOpEncodeBoxes allocates") {
+        /* Rows of one to three boxes, short and 600-byte strings, and the
+         * refusals (no boxes, a NULL box): the written body and its
+         * length are the allocated one's, and a short buffer is left as
+         * it was */
+        static char text[600];
+        memset(text, 'z', sizeof(text));
+        const databox shortKey = databoxNewBytesString("k");
+        const databox longVal = databoxNewBytes(text, sizeof(text));
+        const databox num = DATABOX_SIGNED(-77);
+        const databox *rows[][3] = {{&shortKey, NULL, NULL},
+                                    {&shortKey, &num, NULL},
+                                    {&longVal, &num, &shortKey},
+                                    {&shortKey, NULL, &num}};
+        const size_t widths[] = {1, 2, 3, 3};
+        for (size_t r = 0; r < COUNT_ARRAY(rows); r++) {
+            size_t allocLen = 0;
+            cleanerName(zfree, Bytes) uint8_t *alloc =
+                persistOpEncodeBoxes(rows[r], widths[r], &allocLen);
+            size_t need = 0;
+            const bool sized =
+                persistOpEncodeBoxesInto(rows[r], widths[r], NULL, 0, &need);
+            if (sized != (alloc != NULL) || need != allocLen) {
+                ERR("row %zu: refusal or length differs", r);
+                continue;
+            }
+            if (!alloc) {
+                continue;
+            }
+            uint8_t buf[700];
+            memset(buf, 0x5A, sizeof(buf));
+            size_t len = 0;
+            if (!persistOpEncodeBoxesInto(rows[r], widths[r], buf, need - 1,
+                                          &len) ||
+                len != need || buf[0] != 0x5A ||
+                !persistOpEncodeBoxesInto(rows[r], widths[r], buf, need,
+                                          &len) ||
+                memcmp(buf, alloc, need) != 0 || buf[need] != 0x5A) {
+                ERR("row %zu: the written body differs", r);
+            }
+        }
+        if (persistOpEncodeBoxesInto(NULL, 1, NULL, 0, &(size_t){0})) {
+            ERRR("no boxes were not refused");
+        }
+    }
+
+    TEST("an encode-into type's WAL recovers whatever the buffer size") {
+        /* A multidict logs short and 600-byte values (the long ones are
+         * encoded in a heap payload, the rest in place), replaced and
+         * deleted, through buffer sizes from unbuffered to past several
+         * entries; recovery holds exactly the final pairs */
+        static char text[600];
+        memset(text, 'w', sizeof(text));
+        for (size_t size = 0; size <= 2100; size += 300) {
+            persistConfig config = persistDefaultConfig();
+            config.walBufferSize = size;
+            persist *p = persistCreate(&persistOpsMultidict, &config);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            persistAttachWAL(p, persistStoreMemory(0));
+            {
+                /* @own: container; free=multidictDefaultClassFree */
+                multidictClass *qdc = multidictDefaultClassNew();
+                cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
+                    multidictNew(&multidictTypeExactKey, qdc, 0);
+                persistSnapshot(p, d);
+            }
+            for (int64_t k = 0; k < 30; k++) {
+                const databox key = DATABOX_SIGNED(k);
+                const databox val = k % 3 == 0
+                                        ? databoxNewBytes(text, sizeof(text))
+                                        : DATABOX_SIGNED(k * 10);
+                const databox *pair[2] = {&key, &val};
+                persistLogOp(p, PERSIST_OP_INSERT, pair, 2);
+            }
+            for (int64_t k = 0; k < 30; k += 5) {
+                const databox key = DATABOX_SIGNED(k);
+                const databox val = DATABOX_SIGNED(-k);
+                const databox *pair[2] = {&key, &val};
+                persistLogOp(p, PERSIST_OP_REPLACE, pair, 2);
+            }
+            const databox gone = DATABOX_SIGNED(7);
+            persistLogOp(p, PERSIST_OP_DELETE, &gone, 1);
+            persistSync(p);
+
+            cleanerName(testMultidictFreeWithClass, Dict) multidict *got =
+                persistRecover(p);
+            bool same = got && multidictCount(got) == 29;
+            for (int64_t k = 0; same && k < 30; k++) {
+                const databox key = DATABOX_SIGNED(k);
+                databox val = {{0}};
+                const bool found = multidictFind(got, &key, &val);
+                if (k == 7) {
+                    same = !found;
+                } else if (k % 5 == 0) {
+                    same = found && val.data.i64 == -k;
+                } else if (k % 3 == 0) {
+                    same =
+                        found && val.type == DATABOX_BYTES &&
+                        val.len == sizeof(text) &&
+                        memcmp(val.data.bytes.start, text, sizeof(text)) == 0;
+                } else {
+                    same = found && val.data.i64 == k * 10;
+                }
+            }
+            if (!same) {
+                ERR("buffer %zu: recovery differs from what was logged", size);
+            }
+            persistClose(p);
+        }
+    }
+
     TEST("fault store: a snapshot failing at any step leaves the last one") {
         /* Atomic publish: whichever step fails (begin, seek, header write,
          * envelope write, commit), the snapshot is refused and the one
@@ -10804,22 +11021,28 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("an entry over the WAL entry limit is refused, nothing written") {
-        persistOps huge = persistOpsIntset;
-        huge.encodeOp = persistTestHugeEncode;
-        cleaner(persistClose) persist *p = persistCreate(&huge, NULL);
-        persistStore *wal = persistStoreMemory(0);
-        persistAttachWAL(p, wal);
-        const int64_t v = 1;
-        if (persistLogOp(p, PERSIST_OP_INSERT, &v, 1) != PERSIST_LOG_REFUSED) {
-            ERRR("an entry over the limit was logged");
-        }
-        persistStats stats;
-        persistGetStats(p, &stats);
-        persistSync(p);
-        size_t walLen = 0;
-        (void)persistStoreMemoryBuffer(wal, &walLen);
-        if (stats.walEntries != 0 || walLen > sizeof(persistWALHeader)) {
-            ERR("%" PRIu64 " entries, %zu WAL bytes", stats.walEntries, walLen);
+        /* Through an allocating encoder and an encode-into one */
+        for (int into = 0; into <= 1; into++) {
+            persistOps huge = persistOpsIntset;
+            huge.encodeOp = persistTestHugeEncode;
+            huge.encodeOpInto = into ? persistTestHugeEncodeInto : NULL;
+            cleaner(persistClose) persist *p = persistCreate(&huge, NULL);
+            persistStore *wal = persistStoreMemory(0);
+            persistAttachWAL(p, wal);
+            const int64_t v = 1;
+            if (persistLogOp(p, PERSIST_OP_INSERT, &v, 1) !=
+                PERSIST_LOG_REFUSED) {
+                ERR("encoder %d: an entry over the limit was logged", into);
+            }
+            persistStats stats;
+            persistGetStats(p, &stats);
+            persistSync(p);
+            size_t walLen = 0;
+            (void)persistStoreMemoryBuffer(wal, &walLen);
+            if (stats.walEntries != 0 || walLen > sizeof(persistWALHeader)) {
+                ERR("encoder %d: %" PRIu64 " entries, %zu WAL bytes", into,
+                    stats.walEntries, walLen);
+            }
         }
     }
 
