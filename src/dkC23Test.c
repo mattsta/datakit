@@ -98,6 +98,26 @@ int dkC23Test(int, char *[]) {
         DKC23_SWEEP(unsigned long long, ULLONG_WIDTH);
     }
 
+    TEST("countof: the elements of an array, as a constant too") {
+        int ints[7] = {};
+        double grid[3][5] = {};
+        struct {
+            char c;
+            int64_t i;
+        } recs[4] = {};
+        static_assert(countof(ints) == 7);
+        static_assert(countof(grid) == 3 && countof(grid[0]) == 5);
+        static_assert(countof(recs) == 4);
+        static_assert(countof("abc") == 4); /* the terminator counts */
+        size_t seen = 0;
+        for (size_t i = 0; i < countof(ints); i++) {
+            seen += (size_t)ints[i] + 1;
+        }
+        if (seen != 7 || countof(grid[2]) != 5 || recs[3].i != 0) {
+            ERR("countof walked %zu of 7", seen);
+        }
+    }
+
     TEST("stdbit: uint64_t and size_t pick their width") {
         if (stdc_bit_ceil((uint64_t)5) != 8 || stdc_bit_floor((size_t)5) != 4 ||
             stdc_bit_width((uint64_t)UINT64_MAX) != 64) {

@@ -77,6 +77,23 @@ DK_STDBIT_(ull, unsigned long long, ULLONG_WIDTH)
 #define stdc_bit_ceil(x) DK_STDBIT_GENERIC_(stdc_bit_ceil, x)
 #endif
 
+/* countof(array): its number of elements (the next C standard's
+ * <stdcountof.h>, here until every compiler ships it). A pointer is
+ * refused at compile time, where sizeof(p) / sizeof(*p) would quietly
+ * count the pointer's bytes. */
+#if __has_include(<stdcountof.h>)
+#include <stdcountof.h>
+#else
+#define countof(a) (sizeof(a) / sizeof((a)[0]) + DK_COUNTOF_ARRAY_(a))
+#define DK_COUNTOF_ARRAY_(a)                                                   \
+    (0 * sizeof(struct {                                                       \
+         static_assert(                                                        \
+             !__builtin_types_compatible_p(typeof(a), typeof(&(a)[0])),        \
+             "countof needs an array, not a pointer");                         \
+         int dk_;                                                              \
+     }))
+#endif
+
 #ifdef DATAKIT_TEST
 int dkC23Test(int argc, char *argv[]);
 #endif
