@@ -1,6 +1,7 @@
 """``dktools retoken``: rename one C token wherever code uses it.
 
-Replaces every whole-identifier occurrence of OLD with NEW in the
+Replaces every whole-token occurrence (an identifier, or a number with
+its suffix) of OLD with NEW in the
 tracked C sources (``src/**/*.c`` and ``*.h``, the vendored
 ``src/memshard`` excluded) or in the files given.  Only code changes:
 an OLD inside a comment, a string or a character literal stays, while
@@ -23,7 +24,10 @@ from . import gitutil
 from .clex import code_mask
 from .gitutil import ToolError
 
-IDENT = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*")
+#: a token: an identifier, or a number with its suffix, digit separators
+#: and fraction (1000000ULL, 1'000'000, 1000000.0)
+IDENT = re.compile(rb"[0-9][A-Za-z0-9_']*(?:\.[0-9A-Za-z_']*)?|[A-Za-z_][A-Za-z0-9_]*")
+NAME = r"[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_']*(?:\.[0-9A-Za-z_']*)?"
 
 #: vendored trees whose sources stay as upstream wrote them
 VENDORED = ("src/memshard/",)
@@ -92,8 +96,8 @@ def run(
             raise ToolError("--text takes a non-empty OLD and no --comments")
     else:
         for token in (old, new):
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
-                raise ToolError(f"{token!r} is not a C identifier")
+            if not re.fullmatch(NAME, token):
+                raise ToolError(f"{token!r} is not a C identifier or number")
     targets = list(paths) or sources(repo)
     total = 0
     for path in targets:

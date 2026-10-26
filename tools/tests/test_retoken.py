@@ -69,6 +69,25 @@ class Renames(unittest.TestCase):
             b"#define Z(x) x = {}\nint c = {}, d = {};\n",
         )
 
+    def test_numbers_are_whole_tokens_with_their_suffix(self) -> None:
+        src = b"a = 1000000; b = 10000000; c = 1000000ULL; d = 1000000.0;\n"
+        out, count = retoken.retoken(src, b"1000000", b"1'000'000")
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            out, b"a = 1'000'000; b = 10000000; c = 1000000ULL; d = 1000000.0;\n"
+        )
+        out, count = retoken.retoken(src, b"1000000.0", b"1'000'000.0")
+        self.assertEqual(count, 1)
+        self.assertIn(b"d = 1'000'000.0;", out)
+
+    def test_a_digit_separator_is_code_and_a_prefixed_char_a_literal(self) -> None:
+        src = b"x = 1'000'000; y = L'a'; z = u8'b'; w = DONE;\n"
+        out, count = retoken.retoken(src, b"DONE", b"OVER")
+        self.assertEqual(count, 1)
+        self.assertIn(b"w = OVER;", out)
+        out, count = retoken.retoken(b"c = 'a'; DONE\n", b"a", b"b")
+        self.assertEqual(count, 0)
+
     def test_only_whole_tokens(self) -> None:
         src = "my_Static_assert(1); _Static_asserted(2);\n"
         self.assertEqual(rename(src), (src, 0))

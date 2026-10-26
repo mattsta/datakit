@@ -8,6 +8,18 @@ being fooled by a ``)`` in a string or a name in a comment.
 
 from __future__ import annotations
 
+_WORD = frozenset(b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_'.")
+
+
+def _in_number(src: bytes, i: int) -> bool:
+    """Whether the quote at 'i' is a digit separator: it follows a word
+    that starts with a digit (a literal's prefix, such as L or u8, starts
+    with a letter)."""
+    start = i
+    while start > 0 and src[start - 1] in _WORD:
+        start -= 1
+    return start < i and 0x30 <= src[start] <= 0x39
+
 
 def code_mask(
     src: bytes, directives_are_code: bool = False, comments_are_code: bool = False
@@ -44,6 +56,10 @@ def code_mask(
             if comments_are_code:
                 mask[i:stop] = b"\x01" * (stop - i)
             i = stop
+            continue
+        if c == b"'" and _in_number(src, i):
+            mask[i] = 1  # a digit separator (1'000'000)
+            i += 1
             continue
         if c in (b'"', b"'"):
             # a literal ends at its quote, or (unterminated, as an
