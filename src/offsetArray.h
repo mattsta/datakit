@@ -136,9 +136,8 @@
 #define offsetArrayGrowZero(arr, idx)                                          \
     do {                                                                       \
         const bool wasEmpty_ = offsetArrayEmpty(arr);                          \
-        const __typeof__((arr)->offset) oldLow_ =                              \
-            wasEmpty_ ? 0 : (arr)->offset;                                     \
-        const __typeof__((arr)->highest) oldHigh_ =                            \
+        const typeof((arr)->offset) oldLow_ = wasEmpty_ ? 0 : (arr)->offset;   \
+        const typeof((arr)->highest) oldHigh_ =                                \
             wasEmpty_ ? 0 : (arr)->highest;                                    \
         offsetArrayGrow(arr, idx);                                             \
         if (wasEmpty_) {                                                       \
@@ -188,9 +187,9 @@
 
 #define offsetArrayGetChecked_(arr, idx)                                       \
     (*({                                                                       \
-        __typeof__(arr) arrC_ = (arr);                                         \
+        typeof(arr) arrC_ = (arr);                                             \
         /* the type offsetArrayGet's (idx) - offset is computed in */          \
-        const __typeof__((idx) - (arr)->offset) idxC_ = (idx);                 \
+        const typeof((idx) - (arr)->offset) idxC_ = (idx);                     \
         offsetArrayBoundsCheck_(arrC_->obj != NULL, idxC_ >= arrC_->offset,    \
                                 idxC_ <= arrC_->highest, #arr, (int64_t)idxC_, \
                                 __FILE__, __LINE__);                           \

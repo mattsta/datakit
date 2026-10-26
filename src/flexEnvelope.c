@@ -174,29 +174,29 @@ static const flexEnvelopeAlgoDesc kAlgoDescs[] = {
 /* Compile-time guard: every registered digest fits in the verify-side
  * scratch buffers (FLEX_ENV_MAX_DIGEST_LEN). Add a new entry above and
  * forget about updating this assertion → the build trips. Hand-rolled
- * because C11 _Static_assert can't iterate a struct array. */
-_Static_assert(32 <= FLEX_ENV_MAX_DIGEST_LEN,
-               "BLAKE3_KEYED / HMAC_* digest exceeds verify scratch");
-_Static_assert(16 <= FLEX_ENV_MAX_DIGEST_LEN,
-               "XXH3_128 / AEAD tag exceeds verify scratch");
-_Static_assert(8 <= FLEX_ENV_MAX_DIGEST_LEN,
-               "XXH64 / XXH3_64 digest exceeds verify scratch");
+ * because static_assert can't iterate a struct array. */
+static_assert(32 <= FLEX_ENV_MAX_DIGEST_LEN,
+              "BLAKE3_KEYED / HMAC_* digest exceeds verify scratch");
+static_assert(16 <= FLEX_ENV_MAX_DIGEST_LEN,
+              "XXH3_128 / AEAD tag exceeds verify scratch");
+static_assert(8 <= FLEX_ENV_MAX_DIGEST_LEN,
+              "XXH64 / XXH3_64 digest exceeds verify scratch");
 
 /* Compile-time guard: streaming HMAC storage covers the worst-case
  * algorithm registered in the table. HMAC-BLAKE3 is the dominant
  * size (BLAKE3 ctx + 2*block); HMAC-SHA-256 is strictly smaller. If
  * a future HMAC backend needs more space, bump FLEX_ENV_STREAM_HMAC_
  * STORAGE in the header. */
-_Static_assert(2 * sizeof(blake3Hasher) + 2 * BLAKE3_BLOCK_LEN <=
-                   FLEX_ENV_STREAM_HMAC_STORAGE,
-               "FLEX_ENV_STREAM_HMAC_STORAGE undersized for HMAC-BLAKE3");
+static_assert(2 * sizeof(blake3Hasher) + 2 * BLAKE3_BLOCK_LEN <=
+                  FLEX_ENV_STREAM_HMAC_STORAGE,
+              "FLEX_ENV_STREAM_HMAC_STORAGE undersized for HMAC-BLAKE3");
 
 /* Compile-time guard: every registered AEAD nonce fits in the per-
  * algorithm wire slot. Currently only chacha20-poly1305 (12 B) is
  * registered. Any future AEAD addition must either fit under
  * FLEX_ENV_MAX_NONCE_LEN or bump the constant. */
-_Static_assert(12 <= FLEX_ENV_MAX_NONCE_LEN,
-               "ChaCha20-Poly1305 nonce exceeds wire slot");
+static_assert(12 <= FLEX_ENV_MAX_NONCE_LEN,
+              "ChaCha20-Poly1305 nonce exceeds wire slot");
 
 static const flexEnvelopeAlgoDesc *findAlgo(uint16_t algo) {
     const size_t n = sizeof(kAlgoDescs) / sizeof(kAlgoDescs[0]);
@@ -251,7 +251,7 @@ static size_t varintEncode(uint8_t *dst, uint64_t val) {
  * trust that width without checking that it lands within varintWidth's
  * declared range. An attacker can craft a prefix byte of 0xC0 (VAR
  * with width 0) — the underlying reader then hits its
- * __builtin_unreachable default and corrupts the program. We reject
+ * unreachable default and corrupts the program. We reject
  * any VAR encoding whose nibble-width is outside [1, 8] up front. */
 static size_t varintDecode(const uint8_t *ptr, size_t remaining,
                            uint64_t *out_val, size_t *out_width) {
@@ -526,7 +526,7 @@ bool flexEnvelopePeek(const uint8_t *buf, size_t buf_len,
      * purely a forward-compatibility slot in the caller-facing
      * decoded view.
      *
-     * Using release-build _Static_assert would not work here (runtime
+     * Using release-build static_assert would not work here (runtime
      * data); the explicit if/return mirrors the rest of the parse-side
      * fail-closed pattern. */
     if (out->_reserved[0] != 0u || out->_reserved[1] != 0u ||
@@ -864,12 +864,12 @@ bool flexEnvelopeFinalizeWrap(uint8_t *out, size_t out_cap, size_t header_len,
 
 /* Per-thread typed error state for the most recent verify call.
  *
- * Stored as `_Thread_local` — every thread that calls Verify gets
+ * Stored as `thread_local` — every thread that calls Verify gets
  * its own slot, no locking needed on the hot path. The verify wrapper
  * pattern below resets the slot to OK on entry; failure paths overwrite
  * with a more specific code via `setVerifyErr(...)` before returning
  * false; success paths leave the OK value intact. */
-static _Thread_local flexEnvelopeVerifyErr tlsVerifyErr = FLEX_ENV_VERIFY_OK;
+static thread_local flexEnvelopeVerifyErr tlsVerifyErr = FLEX_ENV_VERIFY_OK;
 
 static inline void setVerifyErr(flexEnvelopeVerifyErr code) {
     tlsVerifyErr = code;
@@ -1841,7 +1841,7 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
     case FLEX_ENV_ALGO_XXH3_128: {
         /* XXH3's state must be 64-byte aligned (its SIMD accumulators use
          * aligned stores).  The context type carries that alignment, so
-         * stack, static and _Alignas storage have it, but a plain
+         * stack, static and alignas storage have it, but a plain
          * malloc of the context need not: refuse rather than fault. */
         if (((uintptr_t)u_state & 63u) != 0) {
             return false;
@@ -4419,7 +4419,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
     }
 
     TEST("envelope: XXH3 streams only from 64-byte aligned state") {
-        /* An aligned context (stack, static, _Alignas) streams XXH3 (the
+        /* An aligned context (stack, static, alignas) streams XXH3 (the
          * stream differential checks the bytes); a state at an address
          * a plain malloc may give is refused before it is touched */
         flexEnvelopeWrapStream ctx;
@@ -4431,7 +4431,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         wp.algo = FLEX_ENV_ALGO_XXH3_128;
         const bool ok128 = flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header,
                                                       sizeof(header), &hw);
-        _Alignas(64) uint8_t raw[sizeof(XXH3_state_t) + 64];
+        alignas(64) uint8_t raw[sizeof(XXH3_state_t) + 64];
         hmacCtx hmac;
         uint8_t storage[8];
         const bool off16 =

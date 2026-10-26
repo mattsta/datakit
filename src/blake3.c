@@ -16,7 +16,7 @@
  *
  * Adding a new backend: add (1) compress function exposed in
  * hash/blake3Foo.h, (2) BLAKE3_BATCH_FOO_CHUNKS in this file
- * (matching the compressor lane count, _Static_assert-tied to the
+ * (matching the compressor lane count, static_assert-tied to the
  * backend header), (3) probe BLAKE3_FOO_AVAILABLE in hash/blake3Foo.h,
  * (4) dispatch table entry in simd_batch_ready, (5) a
  * BLAKE3_BACKEND_FOO enum value in blake3.h. */
@@ -450,7 +450,7 @@ static size_t chunk_bytes_consumed(const blake3Hasher *self) {
  * call, and is tied at compile time to the lane-count macro exported
  * by the backend header so the two cannot drift apart silently. If a
  * backend's compressor widens or narrows, bump the lane-count macro
- * in the header AND this constant together — the _Static_assert traps
+ * in the header AND this constant together — the static_assert traps
  * the mismatch at build time.
  *
  * Finalize correctly handles the case where SIMD consumes the entire
@@ -469,12 +469,12 @@ static size_t chunk_bytes_consumed(const blake3Hasher *self) {
 #define BLAKE3_BATCH_SSE41_CHUNKS 4
 #define BLAKE3_BATCH_AVX2_CHUNKS 8
 
-_Static_assert(BLAKE3_BATCH_NEON_CHUNKS == BLAKE3_NEON_COMPRESS4_LANES,
-               "BLAKE3 NEON batch constant must match compressor lane count");
-_Static_assert(BLAKE3_BATCH_SSE41_CHUNKS == BLAKE3_SSE41_COMPRESS4_LANES,
-               "BLAKE3 SSE4.1 batch constant must match compressor lane count");
-_Static_assert(BLAKE3_BATCH_AVX2_CHUNKS == BLAKE3_AVX2_COMPRESS8_LANES,
-               "BLAKE3 AVX2 batch constant must match compressor lane count");
+static_assert(BLAKE3_BATCH_NEON_CHUNKS == BLAKE3_NEON_COMPRESS4_LANES,
+              "BLAKE3 NEON batch constant must match compressor lane count");
+static_assert(BLAKE3_BATCH_SSE41_CHUNKS == BLAKE3_SSE41_COMPRESS4_LANES,
+              "BLAKE3 SSE4.1 batch constant must match compressor lane count");
+static_assert(BLAKE3_BATCH_AVX2_CHUNKS == BLAKE3_AVX2_COMPRESS8_LANES,
+              "BLAKE3 AVX2 batch constant must match compressor lane count");
 
 /* SIMD batch path: hash 4 full chunks in parallel via blake3NeonCompress4,
  * then push the 4 resulting chunk CVs onto the merkle stack.  Caller

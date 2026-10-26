@@ -782,25 +782,25 @@ bool chacha20poly1305Open(const uint8_t key[CHACHA20_POLY1305_KEY_LEN],
 /* ===== Streaming AEAD ================================================
  *
  * The streaming Seal/Open ctx exposes its limb state as the prefix of
- * a chacha20poly1305StreamCtx; locked by _Static_assert below so the
+ * a chacha20poly1305StreamCtx; locked by static_assert below so the
  * reinterpret-cast to (poly1305State *) is always valid. */
 
-_Static_assert(offsetof(chacha20poly1305StreamCtx, poly_h) ==
-                   offsetof(poly1305State, h),
-               "chacha20poly1305StreamCtx::poly_h must alias poly1305State::h");
-_Static_assert(offsetof(chacha20poly1305StreamCtx, poly_r) ==
-                   offsetof(poly1305State, r),
-               "chacha20poly1305StreamCtx::poly_r must alias poly1305State::r");
-_Static_assert(offsetof(chacha20poly1305StreamCtx, poly_s) ==
-                   offsetof(poly1305State, s),
-               "chacha20poly1305StreamCtx::poly_s must alias poly1305State::s");
-_Static_assert(
+static_assert(offsetof(chacha20poly1305StreamCtx, poly_h) ==
+                  offsetof(poly1305State, h),
+              "chacha20poly1305StreamCtx::poly_h must alias poly1305State::h");
+static_assert(offsetof(chacha20poly1305StreamCtx, poly_r) ==
+                  offsetof(poly1305State, r),
+              "chacha20poly1305StreamCtx::poly_r must alias poly1305State::r");
+static_assert(offsetof(chacha20poly1305StreamCtx, poly_s) ==
+                  offsetof(poly1305State, s),
+              "chacha20poly1305StreamCtx::poly_s must alias poly1305State::s");
+static_assert(
     offsetof(chacha20poly1305StreamCtx, poly_buf) ==
         offsetof(poly1305State, buf),
     "chacha20poly1305StreamCtx::poly_buf must alias poly1305State::buf");
-_Static_assert(offsetof(chacha20poly1305StreamCtx, poly_buf_len) ==
-                   offsetof(poly1305State, buf_len),
-               "chacha20poly1305StreamCtx::poly_buf_len must alias buf_len");
+static_assert(offsetof(chacha20poly1305StreamCtx, poly_buf_len) ==
+                  offsetof(poly1305State, buf_len),
+              "chacha20poly1305StreamCtx::poly_buf_len must alias buf_len");
 
 static inline poly1305State *streamPoly(chacha20poly1305StreamCtx *ctx) {
     return (poly1305State *)ctx;

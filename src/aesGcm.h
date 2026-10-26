@@ -44,14 +44,14 @@ typedef struct aesGcmKey {
      * aligned: every aesGcmKey the compiler places (an array element, a
      * struct member) is, and heap memory from any allocator honouring
      * max_align_t is. */
-    _Alignas(16) uint32_t round_keys[60];
+    alignas(16) uint32_t round_keys[60];
     uint8_t h[16];      /* GHASH subkey = AES_K(0^128) */
     uint8_t key_size;   /* 16 (AES-128) or 32 (AES-256) */
     uint8_t num_rounds; /* 10 or 14 */
     uint8_t _pad[6];
 } aesGcmKey;
-_Static_assert(_Alignof(aesGcmKey) >= 16 && sizeof(aesGcmKey) % 16 == 0,
-               "aesGcmKey must stay 16-byte aligned, element by element");
+static_assert(alignof(aesGcmKey) >= 16 && sizeof(aesGcmKey) % 16 == 0,
+              "aesGcmKey must stay 16-byte aligned, element by element");
 
 /* Initialise from raw key bytes.  Valid key lengths: 16 (AES-128) or
  * 32 (AES-256).  Returns false on any other length. */

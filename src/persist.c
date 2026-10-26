@@ -64,9 +64,9 @@ defcleaner(mflexState *, mflexStateFree);
  * unportable file on a big-endian host. Pin the assumption at compile
  * time so a BE port is forced to confront it explicitly. */
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
-_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
-               "persist.c on-disk format assumes little-endian; "
-               "big-endian hosts need explicit byte-swap helpers");
+static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+              "persist.c on-disk format assumes little-endian; "
+              "big-endian hosts need explicit byte-swap helpers");
 #endif
 
 /* ============================================================================
@@ -762,8 +762,8 @@ typedef struct persistSnapHeader {
     uint64_t digest; /* persistHeaderDigest over the bytes before it */
 } persistSnapHeader;
 
-_Static_assert(sizeof(persistSnapHeader) == 72,
-               "persistSnapHeader has no padding");
+static_assert(sizeof(persistSnapHeader) == 72,
+              "persistSnapHeader has no padding");
 
 /* Read a header of the type `known` points at (`knownSize` bytes, digest
  * last) whose stored length may be larger: the bytes past the known
@@ -1056,8 +1056,8 @@ typedef struct persistWALHeader {
     uint64_t digest;        /* persistHeaderDigest over the bytes before it */
 } persistWALHeader;
 
-_Static_assert(sizeof(persistWALHeader) == 56,
-               "persistWALHeader has no padding");
+static_assert(sizeof(persistWALHeader) == 56,
+              "persistWALHeader has no padding");
 
 uint64_t persistWALBytes(const persist *p) {
     if (!p || !p->walStore) {
@@ -1529,7 +1529,7 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
 
 /* Thread-local state for WAL replay to avoid repeated allocation/free.
  * Used by multilist operations during recovery. */
-static _Thread_local mflexState *replayMflexState = NULL;
+static thread_local mflexState *replayMflexState = NULL;
 
 mflexState *persistGetReplayState(void) {
     return replayMflexState;
@@ -3445,8 +3445,8 @@ const persistOps persistOpsIntsetBig = {
  */
 #include "multiroar.h"
 
-_Static_assert(MULTIROAR_FORMAT_ID == (uint32_t)PERSIST_TYPE_MULTIROAR,
-               "multiroar's format id is its persistType");
+static_assert(MULTIROAR_FORMAT_ID == (uint32_t)PERSIST_TYPE_MULTIROAR,
+              "multiroar's format id is its persistType");
 
 static uint8_t *multiroarPersistSnapshot(const void *structure, size_t *len) {
     const multiroar *r = structure;

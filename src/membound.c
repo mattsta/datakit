@@ -1934,11 +1934,11 @@ typedef struct memboundTLSCache {
     int deferredN;
 } memboundTLSCache;
 
-static _Thread_local memboundTLSCache
+static thread_local memboundTLSCache
     *memboundTLSp; /* heap cache; freed by dtor */
 /* Set while draining/flushing the cache so memboundFree returns blocks straight
  * to the pool instead of re-buffering them into this same cache (recursion). */
-static _Thread_local bool memboundTLSBypass;
+static thread_local bool memboundTLSBypass;
 static pthread_key_t memboundTLSKey;
 static pthread_once_t memboundTLSOnce = PTHREAD_ONCE_INIT;
 
@@ -1977,7 +1977,7 @@ static void memboundTLSDrain(memboundTLSCache *c) {
 }
 
 /* pthread_key destructor: runs at thread exit with the heap cache pointer. We
- * use that argument (NOT the _Thread_local, which can already be torn down on
+ * use that argument (NOT the thread_local, which can already be torn down on
  * some platforms) so the surplus is reliably returned, then free the cache. */
 static void memboundTLSAtExit(void *cache) {
     if (cache) {
@@ -1991,7 +1991,7 @@ static void memboundTLSKeyInit(void) {
 }
 
 /* Lazily create this thread's heap-allocated cache. Heap (not TLS) storage lets
- * the key destructor reach it at thread exit even after _Thread_local teardown.
+ * the key destructor reach it at thread exit even after thread_local teardown.
  */
 static memboundTLSCache *memboundTLSGet(void) {
     if (!memboundTLSp) {
@@ -3380,8 +3380,8 @@ typedef struct MemboundMicroLink {
     int16_t prev;
 } MemboundMicroLink;
 
-_Static_assert(sizeof(MemboundMicroLink) == 4,
-               "MemboundMicroLink must be 4 bytes");
+static_assert(sizeof(MemboundMicroLink) == 4,
+              "MemboundMicroLink must be 4 bytes");
 
 /* Get link pointer for MICRO tier */
 #define MEMBOUND_MICRO_LINK(m, idx)                                            \
@@ -5094,7 +5094,7 @@ int memboundTest(int argc, char *argv[]) {
          "alignment") {
         /* Lengths 0..80 at offsets 0..15: the range reads zero and the
          * guard bytes on both sides keep their pattern */
-        _Alignas(64) uint8_t buf[128];
+        alignas(64) uint8_t buf[128];
         bool exact = true;
         for (size_t off = 0; off < 16; off++) {
             for (size_t len = 0; len <= 80; len++) {

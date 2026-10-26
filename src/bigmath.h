@@ -5,7 +5,7 @@
  * The struct is an opaque caller-owned buffer (stack or embedded);
  * whichever backend is compiled in (bigmath-imath.c today,
  * bigmath-libbf.c as an alternative) stores its state in place and
- * must _Static_assert its state type fits math[]. Backend contract:
+ * must static_assert its state type fits math[]. Backend contract:
  *
  * - Every Init* variant makes the struct valid; pair each with a
  *   lifecycle end (Reset or Free) on every path.

@@ -42,9 +42,9 @@ typedef struct djState {
 
 #ifndef NDEBUG
 /* minus 8 because vBig union is size 8 here but size 16 without debug */
-_Static_assert(sizeof(djState) == 64 - 8, "Did you grow or shrink djState?");
+static_assert(sizeof(djState) == 64 - 8, "Did you grow or shrink djState?");
 #else
-_Static_assert(sizeof(djState) == 64, "Did you grow or shrink djState?");
+static_assert(sizeof(djState) == 64, "Did you grow or shrink djState?");
 #endif
 
 /* A state starts zeroed; djInit or djInitWithBuffer then gives it its

@@ -49,7 +49,7 @@ typedef uint32_t multiarrayIdx;
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 

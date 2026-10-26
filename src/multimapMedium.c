@@ -602,7 +602,7 @@ DK_INLINE_ALWAYS bool abstractDelete(
     if (fullWidth) {
         if (useReference) {
             assert(NULL && "Not implemented!");
-            __builtin_unreachable();
+            unreachable();
         }
         mapIdx = multimapMediumBinarySearchFullWidth(m, elements);
         foundP = flexFindByTypeSortedWithMiddleFullWidth(

@@ -19,8 +19,6 @@ struct multiOrderedSetSmall {
     uint32_t flags;  /* Reserved for future use (compression, etc.) */
 };
 
-#if DK_C11
-_Static_assert(sizeof(struct multiOrderedSetSmall) ==
-                   (sizeof(flex *) + sizeof(uint32_t) * 2),
-               "multiOrderedSetSmall struct size unexpected!");
-#endif
+static_assert(sizeof(struct multiOrderedSetSmall) ==
+                  (sizeof(flex *) + sizeof(uint32_t) * 2),
+              "multiOrderedSetSmall struct size unexpected!");

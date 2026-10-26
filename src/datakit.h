@@ -108,10 +108,8 @@
 #define __has_feature(x) 0
 #endif
 
-/* datakit is C11 (gnu11): _Static_assert is always available */
-#define DK_C11 1
 #define DK_SIZECHECK(thing, size)                                              \
-    _Static_assert(sizeof(thing) == (size), #thing " changed from " #size "?")
+    static_assert(sizeof(thing) == (size), #thing " changed from " #size "?")
 
 #define DK_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 #define DK_BYTESUSED(value)                                                    \

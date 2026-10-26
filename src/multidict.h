@@ -229,10 +229,8 @@ typedef struct multidictSlotIterator {
     uint32_t index;
     databoxWide wide[3]; /* key, val, extra */
 } multidictSlotIterator;
-#if DK_C11
-_Static_assert(sizeof(multidictSlotIterator) == 144,
-               "multidictSlotIterator carries three wide slots at its tail");
-#endif
+static_assert(sizeof(multidictSlotIterator) == 144,
+              "multidictSlotIterator carries three wide slots at its tail");
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call
  * multidictAdd, multidictFind, and other functions against the multidictionary
@@ -270,10 +268,8 @@ typedef struct multidictEntry {
     databox val;
     databox extra; /* sometimes we need a third field */
 } multidictEntry;
-#if DK_C11
-_Static_assert(sizeof(multidictEntry) == 48,
-               "multidictEntry is three databox fields");
-#endif
+static_assert(sizeof(multidictEntry) == 48,
+              "multidictEntry is three databox fields");
 
 typedef multidictIterProcess multidictScanFunction;
 

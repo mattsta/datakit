@@ -142,9 +142,7 @@ typedef union databoxUnion {
     uintptr_t uptr;
 } databoxUnion;
 
-#if DK_C11
-_Static_assert(sizeof(databoxUnion) == 8, "databox value too big!");
-#endif
+static_assert(sizeof(databoxUnion) == 8, "databox value too big!");
 
 /* Bit width of the databox length field and the largest length it can
  * hold.  Longer lengths would be truncated, so callers taking a length
@@ -168,9 +166,7 @@ typedef struct databox {
     databoxUnion data; /* 8 bytes */
     databoxInternals_;
 } databox;
-#if DK_C11
-_Static_assert(sizeof(databox) == 16, "databox struct too big!");
-#endif
+static_assert(sizeof(databox) == 16, "databox struct too big!");
 
 /* 'databoxBig' is 32 bytes total and 16-byte aligned.
  *
@@ -180,21 +176,19 @@ _Static_assert(sizeof(databox) == 16, "databox struct too big!");
  * alignment.  The leading 16 bytes are layout-compatible with 'databox',
  * so a databoxBig may be passed wherever a 'databox *' is expected. */
 typedef struct databoxBig {
-    databoxUnion data;                               /* 8 bytes */
-    databoxInternals_;                               /* 8 bytes */
-    _Alignas(16) uint8_t extra[sizeof(__uint128_t)]; /* 16 bytes */
+    databoxUnion data;                              /* 8 bytes */
+    databoxInternals_;                              /* 8 bytes */
+    alignas(16) uint8_t extra[sizeof(__uint128_t)]; /* 16 bytes */
 } databoxBig;
-#if DK_C11
-_Static_assert(sizeof(__int128_t) == sizeof(__uint128_t),
-               "Your 128 bit integers are weird?");
-_Static_assert(sizeof(databoxBig) == 32, "databoxBig struct too big!");
-_Static_assert(_Alignof(databoxBig) == 16,
-               "databoxBig must be 16-byte aligned for its 128-bit store");
-_Static_assert(offsetof(databoxBig, extra) % 16 == 0,
-               "databoxBig.extra must be 16-byte aligned");
-_Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
-               "databoxBig must begin with a complete databox");
-#endif
+static_assert(sizeof(__int128_t) == sizeof(__uint128_t),
+              "Your 128 bit integers are weird?");
+static_assert(sizeof(databoxBig) == 32, "databoxBig struct too big!");
+static_assert(alignof(databoxBig) == 16,
+              "databoxBig must be 16-byte aligned for its 128-bit store");
+static_assert(offsetof(databoxBig, extra) % 16 == 0,
+              "databoxBig.extra must be 16-byte aligned");
+static_assert(offsetof(databoxBig, extra) == sizeof(databox),
+              "databoxBig must begin with a complete databox");
 
 /* 96/128-bit values and the 'big' flag.
  *
@@ -235,13 +229,11 @@ _Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
  * on the stack or at the tail of an iterator costs nothing until a wide
  * value arrives. */
 typedef struct databoxWide {
-    _Alignas(16) uint8_t b[sizeof(__uint128_t)];
+    alignas(16) uint8_t b[sizeof(__uint128_t)];
 } databoxWide;
-#if DK_C11
-_Static_assert(sizeof(databoxWide) == 16, "databoxWide must be 16 bytes");
-_Static_assert(_Alignof(databoxWide) == 16,
-               "databoxWide must be 16-byte aligned for its 128-bit store");
-#endif
+static_assert(sizeof(databoxWide) == 16, "databoxWide must be 16 bytes");
+static_assert(alignof(databoxWide) == 16,
+              "databoxWide must be 16-byte aligned for its 128-bit store");
 
 /* A deferred wide box has a 96/128-bit type and no payload: data.ptr is
  * NULL.  A decode reports a wide value this way when its destination has

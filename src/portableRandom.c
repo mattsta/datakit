@@ -251,7 +251,7 @@ void portableRandom_add(portableRandomState *r, const uint8_t *key,
         for (size_t i = 1; i <= sizeof(val); i++) {                            \
             /* this weird typeof cast is because _byte() returns smaller than  \
              * __uint128_t we try to shift against sometimes. */               \
-            val |= (__typeof(val))portableRandom_byte(r)                       \
+            val |= (typeof(val))portableRandom_byte(r)                         \
                    << ((sizeof(val) * 8) - (8 * i));                           \
         }                                                                      \
     } while (0)

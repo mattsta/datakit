@@ -74,11 +74,10 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
          * input (truncated double math did exactly that). */                  \
         const uint64_t grown_ =                                                \
             (uint64_t)currentBufSize + ((uint64_t)currentBufSize / 5);         \
-        const __typeof__(currentBufSize) tierMax_ =                            \
-            (__typeof__(currentBufSize))~(__typeof__(currentBufSize))0;        \
-        return grown_ >= (uint64_t)tierMax_                                    \
-                   ? tierMax_                                                  \
-                   : (__typeof__(currentBufSize))grown_;                       \
+        const typeof(currentBufSize) tierMax_ =                                \
+            (typeof(currentBufSize))~(typeof(currentBufSize))0;                \
+        return grown_ >= (uint64_t)tierMax_ ? tierMax_                         \
+                                            : (typeof(currentBufSize))grown_;  \
     } while (0)
 
 static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {

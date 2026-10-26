@@ -165,7 +165,7 @@ size_t intersectIntOneSidedGalloping(const uint32_t *smallset,
         }
     }
 
-    __builtin_unreachable();
+    unreachable();
     return (out - initout); // NOTREACHED
 }
 

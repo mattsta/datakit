@@ -76,7 +76,7 @@ static inline double mosDataboxToDouble(const databox *box) {
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 #else
@@ -117,7 +117,7 @@ static inline double mosDataboxToDouble(const databox *box) {
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 #else

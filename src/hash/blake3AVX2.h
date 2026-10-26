@@ -15,7 +15,7 @@
 
 /* Number of independent chunks processed per blake3AVX2Compress8 call.
  * Tied at compile time to BLAKE3_BATCH_AVX2_CHUNKS in blake3.c via
- * _Static_assert — if a future implementation widens the AVX2 batch,
+ * static_assert — if a future implementation widens the AVX2 batch,
  * bump this constant AND the matching one in blake3.c together. */
 #define BLAKE3_AVX2_COMPRESS8_LANES 8
 

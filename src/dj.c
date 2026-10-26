@@ -116,8 +116,8 @@ DK_INLINE_ALWAYS bool boolIdxRead(djState *state, const size_t offset) {
  * Type of container we are inside
  * ==================================================================== */
 typedef enum djType { DJ_ARRAY, DJ_MAP } djType;
-_Static_assert(DJ_ARRAY == 0, "ARRAY must be 0!");
-_Static_assert(DJ_MAP == 1, "MAP must be 1!");
+static_assert(DJ_ARRAY == 0, "ARRAY must be 0!");
+static_assert(DJ_MAP == 1, "MAP must be 1!");
 
 /* ====================================================================
  * Helper macros
@@ -453,7 +453,7 @@ void djNULL(djState *state) {
  *       mds—so we'd have to check two places? (if splatWritten == 0, check tail
  *       of mds?) */
 #define SPLATLEN 128
-_Static_assert(
+static_assert(
     SPLATLEN >= 16,
     "We need to reserve a minimum of 16 bytes at a time for SIMD operating!");
 

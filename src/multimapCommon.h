@@ -68,10 +68,8 @@ typedef struct multimapIterator {
     uint32_t unused : 13;
 } multimapIterator;
 
-#if DK_C11
-_Static_assert(sizeof(multimapIterator) == 32,
-               "multimapIterator grew bigger than we expected?");
-#endif
+static_assert(sizeof(multimapIterator) == 32,
+              "multimapIterator grew bigger than we expected?");
 
 typedef struct multimapEntry {
     flex **map;

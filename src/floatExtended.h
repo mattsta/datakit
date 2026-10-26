@@ -151,9 +151,9 @@ typedef double dk_float_extended;
 
 /* Verify our detection is working correctly */
 #if DK_HAS_FLOAT_EXTENDED
-_Static_assert(sizeof(dk_float_extended) >= 10 ||
-                   (DK_HAS_FLOAT128 && sizeof(dk_float_extended) == 16),
-               "dk_float_extended should be at least 80-bit or 128-bit");
+static_assert(sizeof(dk_float_extended) >= 10 ||
+                  (DK_HAS_FLOAT128 && sizeof(dk_float_extended) == 16),
+              "dk_float_extended should be at least 80-bit or 128-bit");
 #endif
 
 /* ============================================================================

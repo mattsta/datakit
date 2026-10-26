@@ -110,7 +110,7 @@ typedef enum chacha20poly1305StreamPhase {
 /* Internal fields are exposed so callers can stack-allocate the ctx;
  * do NOT read or write them directly — use the API.  Layout matches
  * the poly1305 limb state prefix so the implementation can reinterpret
- * the ctx as a poly1305State pointer; a _Static_assert in
+ * the ctx as a poly1305State pointer; a static_assert in
  * chacha20poly1305.c locks the offsets. */
 typedef struct chacha20poly1305StreamCtx {
     uint64_t poly_h[5];

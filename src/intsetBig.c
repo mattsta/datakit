@@ -21,17 +21,17 @@ struct intsetBigSet {
  * their max size would be 16 GB each, which would be great for
  * searching but very bad for inserts and deletes. */
 #define DIVISOR_WIDTH 20
-_Static_assert(INTSET_BIG_INT128_MIN ==
-                   -((((__int128_t)1) << (63 + DIVISOR_WIDTH)) - 1),
-               "Didn't update INTSET_BIG_MIN?");
-_Static_assert(INTSET_BIG_UINT128_MAX ==
-                   ((((__uint128_t)1) << (64 + DIVISOR_WIDTH)) - 1),
-               "Didn't update INTSET_BIG_MAX?");
+static_assert(INTSET_BIG_INT128_MIN ==
+                  -((((__int128_t)1) << (63 + DIVISOR_WIDTH)) - 1),
+              "Didn't update INTSET_BIG_MIN?");
+static_assert(INTSET_BIG_UINT128_MAX ==
+                  ((((__uint128_t)1) << (64 + DIVISOR_WIDTH)) - 1),
+              "Didn't update INTSET_BIG_MAX?");
 
 static const uint64_t divisor = (1ULL << DIVISOR_WIDTH);
 static const int64_t ndivisor = (1LL << DIVISOR_WIDTH);
 
-_Static_assert(
+static_assert(
     DIVISOR_WIDTH <= 32,
     "maximum bucket width must be <= 32 because because we are using intsetU32 "
     "for underlying storage and intsetU32 can store range [0, UINT32_MAX]");
@@ -156,7 +156,7 @@ valueFromBucketOffset(const databoxBig *restrict const bucket,
 #endif
     default:
         assert(NULL && "Improper bucket provided?");
-        __builtin_unreachable();
+        unreachable();
     }
 }
 

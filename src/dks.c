@@ -2115,7 +2115,7 @@ DK_STATIC char *DKS_TYPENAME(dksType type) {
     }
 
     assert(NULL);
-    __builtin_unreachable();
+    unreachable();
 }
 
 DK_STATIC void DKS_RANDBYTES(uint8_t *buf, size_t len) {

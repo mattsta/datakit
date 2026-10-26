@@ -28,7 +28,7 @@ DK_STATIC dksType DKS_CONTAINERTYPE(const size_t len, const size_t free) {
     }
 
     assert(NULL);
-    __builtin_unreachable();
+    unreachable();
 }
 
 DKS_TYPE *DKS_NEWLEN(const void *init, const size_t initlen) {

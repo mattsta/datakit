@@ -59,7 +59,7 @@ typedef enum multilistType {
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 
@@ -80,7 +80,7 @@ typedef enum multilistType {
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 

@@ -66,8 +66,8 @@ const dkFormatSpec clusterMailboxProtocol = {
  * internal staging math. */
 #define CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN                                   \
     CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES
-_Static_assert(CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN >= (size_t)45,
-               "inner-header cap below the worst-case encoding above");
+static_assert(CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN >= (size_t)45,
+              "inner-header cap below the worst-case encoding above");
 
 /* Open-addressed entry; `last_applied` of 0 means the slot is unused
  * (callers must start at sequence 1, which the API documents). */
@@ -115,9 +115,9 @@ typedef struct clusterMailboxOrigin {
  * (rejection / error paths), with explicit padding putting the cold
  * group on its own cache line, so the success path never shares a
  * line with the rejection counters (~100 cycles per cross-line touch
- * under concurrent observation). The whole struct is `_Alignas(64)` so
+ * under concurrent observation). The whole struct is `alignas(64)` so
  * the hot block also starts on a cache-line boundary inside the parent
- * `clusterMailbox`. A `_Static_assert` below pins the cold offset.
+ * `clusterMailbox`. A `static_assert` below pins the cold offset.
  *
  * Hot/cold rationale: ingest_total + bytes_ingested + apply_ok fire on
  * every accepted frame; bytes_sealed + seal_total fire on every Seal.
@@ -127,10 +127,10 @@ typedef struct clusterMailboxOrigin {
  * future without crossing the line. All rejection / error counters
  * are touched only on failure paths, so cold. */
 typedef struct clusterMailboxCounters {
-    /* HOT — every successful Ingest/Seal touches these. _Alignas on
+    /* HOT — every successful Ingest/Seal touches these. alignas on
      * the first member forces the whole struct (and therefore the hot
      * block within any embedding struct) to a 64B boundary. */
-    _Alignas(64) _Atomic uint64_t ingest_total;
+    alignas(64) _Atomic uint64_t ingest_total;
     _Atomic uint64_t apply_ok;
     _Atomic uint64_t bytes_ingested;
     _Atomic uint64_t bytes_sealed;
@@ -138,11 +138,11 @@ typedef struct clusterMailboxCounters {
      * a fresh 64B line. 4 × 8B atomics = 32B used; pad another 32B to
      * reach the next 64B boundary. */
     uint8_t _pad_hot[32];
-    /* COLD — rejection / error / low-rate paths. _Alignas pins the
+    /* COLD — rejection / error / low-rate paths. alignas pins the
      * group to its own cache line independently of the _pad_hot math
      * above, so a future change to the hot count cannot silently
      * collapse the two groups back onto one line. */
-    _Alignas(64) _Atomic uint64_t apply_rejected;
+    alignas(64) _Atomic uint64_t apply_rejected;
     _Atomic uint64_t replay_rejected;
     _Atomic uint64_t algo_mismatch;
     _Atomic uint64_t verify_failed;
@@ -156,15 +156,15 @@ typedef struct clusterMailboxCounters {
 } clusterMailboxCounters;
 
 /* Alignment invariants (forward-looking SMP hardening). */
-_Static_assert(_Alignof(clusterMailboxCounters) >= 64,
-               "clusterMailboxCounters must be 64B-aligned so the hot "
-               "group starts on a cache line");
-_Static_assert(offsetof(clusterMailboxCounters, apply_rejected) % 64u == 0u,
-               "cold counters must start on their own cache line so "
-               "writer-side error paths do not bounce the hot line");
-_Static_assert(offsetof(clusterMailboxCounters, apply_rejected) == 64u,
-               "hot group must occupy exactly the first cache line "
-               "(4 × 8B atomics + 32B pad)");
+static_assert(alignof(clusterMailboxCounters) >= 64,
+              "clusterMailboxCounters must be 64B-aligned so the hot "
+              "group starts on a cache line");
+static_assert(offsetof(clusterMailboxCounters, apply_rejected) % 64u == 0u,
+              "cold counters must start on their own cache line so "
+              "writer-side error paths do not bounce the hot line");
+static_assert(offsetof(clusterMailboxCounters, apply_rejected) == 64u,
+              "hot group must occupy exactly the first cache line "
+              "(4 × 8B atomics + 32B pad)");
 
 struct clusterMailbox {
     hmacKeyring *ring;
@@ -202,13 +202,13 @@ struct clusterMailbox {
 };
 
 /* the hot counters live at the start of `counters` and the whole
- * `clusterMailboxCounters` carries _Alignas(64), so the compiler is
+ * `clusterMailboxCounters` carries alignas(64), so the compiler is
  * required to insert padding before the field if needed. Pin the
  * invariant so a future reordering of `clusterMailbox` that drops the
  * hot-line alignment trips at compile time instead of silently bouncing
  * the line under multi-threaded ingest. */
-_Static_assert(offsetof(struct clusterMailbox, counters) % 64u == 0u,
-               "clusterMailbox::counters must start on a 64B cache line");
+static_assert(offsetof(struct clusterMailbox, counters) % 64u == 0u,
+              "clusterMailbox::counters must start on a 64B cache line");
 
 static void cmBumpCounter(_Atomic uint64_t *c, uint64_t delta) {
     /* @sync: relaxed counter */
@@ -4428,9 +4428,9 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
  * counters on every error path. The struct is reordered + padded so the
  * 4 hot counters (ingest_total, apply_ok, bytes_ingested, bytes_sealed)
  * sit on cache line 1 and the 10 cold rejection counters sit on cache
- * line 2. The _Static_assert at the struct definition is the primary
+ * line 2. The static_assert at the struct definition is the primary
  * proof; this runtime test is a belt-and-braces check that the
- * compiler honoured _Alignas through the embedding `clusterMailbox`
+ * compiler honoured alignas through the embedding `clusterMailbox`
  * allocation pipeline (zmalloc). If zmalloc ever stopped returning
  * 64B-aligned pointers for an aligned struct, this test would catch
  * it. */
@@ -4457,7 +4457,7 @@ int dkTestMailboxStatsAlignmentTest(int argc, char *argv[]) {
 
         /* Hot block starts at offset 0 of `counters`; both the struct
          * and its containing parent are 64B-aligned by virtue of the
-         * _Alignas on the first counter. */
+         * alignas on the first counter. */
         const uintptr_t hot = (uintptr_t)&mb->counters.ingest_total;
         if ((hot % 64u) != 0u) {
             ERR("cacheLineLayout: hot counters not on cache line: addr=%p, "

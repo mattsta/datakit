@@ -86,8 +86,8 @@ typedef struct hyperloglogHeader {
     uint8_t registers[];           /* Data bytes. */
 } __attribute__((packed)) hyperloglogHeader;
 
-_Static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t),
-               "Header got too big?");
+static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t),
+              "Header got too big?");
 
 /* Big ugly compile-time endian check macro so we can properly
  * complain to the user if we are on an untested platform. */

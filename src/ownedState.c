@@ -36,12 +36,12 @@ typedef enum ownedTotal_ {
 #define OWNED_STRIPE_ALIGN 128
 
 typedef struct ownedStripe_ {
-    _Alignas(OWNED_STRIPE_ALIGN) _Atomic uint64_t c[OWNED_T_COUNT_];
+    alignas(OWNED_STRIPE_ALIGN) _Atomic uint64_t c[OWNED_T_COUNT_];
 } ownedStripe_;
 
 static ownedStripe_ g_owned_stripes[OWNED_STRIPES];
 static _Atomic uint32_t g_owned_stripe_next = 0;
-static _Thread_local ownedStripe_ *g_owned_stripe_mine = NULL;
+static thread_local ownedStripe_ *g_owned_stripe_mine = NULL;
 
 static ownedStripe_ *ownedStripeMine_(void) {
     ownedStripe_ *s = g_owned_stripe_mine;

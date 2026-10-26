@@ -27,5 +27,5 @@ struct multiarrayLarge {
     uint32_t nodes;  /* nodes in the list (at least one) */
 };
 
-_Static_assert(sizeof(struct multiarrayLarge) == 24,
-               "multiarrayLarge is 24 bytes");
+static_assert(sizeof(struct multiarrayLarge) == 24,
+              "multiarrayLarge is 24 bytes");

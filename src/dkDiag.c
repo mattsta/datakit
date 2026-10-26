@@ -10,8 +10,8 @@
 /* The calling thread's last diagnostic and its count.  Static TLS: no
  * allocation, so reporting works on allocation-failure paths too, and
  * nothing to clean up at thread exit. */
-static _Thread_local dkDiagnostic dkDiagSlot_;
-static _Thread_local uint64_t dkDiagSeq_;
+static thread_local dkDiagnostic dkDiagSlot_;
+static thread_local uint64_t dkDiagSeq_;
 
 /* The process hook (a caller-owned {fn, ctx}: one pointer publishes both)
  * and the print mode */

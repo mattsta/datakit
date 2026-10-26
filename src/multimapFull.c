@@ -624,7 +624,7 @@ static multimapFull *multimapFullNewFromManyGrow_(
             }
         } else {
             assert(NULL && "Grew to full map with no contents?");
-            __builtin_unreachable();
+            unreachable();
         }
     }
 
@@ -2740,7 +2740,7 @@ static void multimapFullConforms(const multimapFull *m) {
         if (i > 0 && flexCount(getMap(m, i)) == 0) {
             multimapFullRepr(m);
             assert(NULL && "Interior empty map? How'd we do that?");
-            __builtin_unreachable();
+            unreachable();
         }
     }
 }
@@ -2774,7 +2774,7 @@ void multimapFullRepr(const multimapFull *m) {
 #if 0
         if (i > 0 && flexCount(getMap(m, i)) == 0) {
             assert(NULL && "Interior empty map? How'd we do that?");
-            __builtin_unreachable();
+            unreachable();
         }
 
 #endif
@@ -2883,7 +2883,7 @@ void multimapFullVerify(const multimapFull *m) {
                        (int)lowest.len, lowest.data.bytes.start, lowestMapIdx,
                        (int)next.len, next.data.bytes.start, i, j);
                 assert(NULL);
-                __builtin_unreachable();
+                unreachable();
             }
 
             lowest = next;
@@ -3402,7 +3402,7 @@ int multimapFullTest(int argc, char *argv[]) {
                 if (!found) {
                     ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
                     assert(NULL);
-                    __builtin_unreachable();
+                    unreachable();
                 }
             }
 
@@ -3507,7 +3507,7 @@ int multimapFullTest(int argc, char *argv[]) {
                 if (!found) {
                     ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
                     assert(NULL);
-                    __builtin_unreachable();
+                    unreachable();
                 }
             }
 

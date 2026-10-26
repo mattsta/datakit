@@ -206,7 +206,7 @@ New:
 
     goto Dispatch;
 
-    __builtin_unreachable();
+    unreachable();
 }
 
 double xofGet(const xof *const x, const size_t offset) {

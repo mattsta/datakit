@@ -23,7 +23,7 @@ extern "C" {
 
 /* Number of independent chunks processed per blake3NeonCompress4 call.
  * Tied at compile time to BLAKE3_BATCH_NEON_CHUNKS in blake3.c via
- * _Static_assert — if a future implementation widens the NEON batch,
+ * static_assert — if a future implementation widens the NEON batch,
  * bump this constant AND the matching one in blake3.c together. */
 #define BLAKE3_NEON_COMPRESS4_LANES 4
 

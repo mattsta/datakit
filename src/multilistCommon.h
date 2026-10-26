@@ -96,11 +96,11 @@ typedef struct multilistEntry {
     flex *f; /* Full only */
 } multilistEntry;
 
-_Static_assert(sizeof(multilistEntry) == 48, "multilistEntry must be 48 bytes");
-_Static_assert(sizeof(multilistIterator) == 80,
-               "multilistIterator must be 80 bytes");
-_Static_assert(offsetof(multilistIterator, wide) % 16 == 0,
-               "the iterator's wide slot must be 16-byte aligned");
+static_assert(sizeof(multilistEntry) == 48, "multilistEntry must be 48 bytes");
+static_assert(sizeof(multilistIterator) == 80,
+              "multilistIterator must be 80 bytes");
+static_assert(offsetof(multilistIterator, wide) % 16 == 0,
+              "the iterator's wide slot must be 16-byte aligned");
 
 typedef mflexState multilistState;
 

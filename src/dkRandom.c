@@ -40,7 +40,7 @@ static void dkRandomForkHandlerRegister(void) {
 }
 
 /* Per-thread generator and output block, in one struct so a draw
- * resolves one TLS address (on Darwin each _Thread_local variable is
+ * resolves one TLS address (on Darwin each thread_local variable is
  * its own thunk call).  The fields a draw reads come first.  blockUsed
  * starts full so a thread's first draw refills. */
 typedef struct dkRandomThread {
@@ -51,8 +51,8 @@ typedef struct dkRandomThread {
     portableRandomState prs;
 } dkRandomThread;
 
-static _Thread_local dkRandomThread dkRandomTls = {.blockUsed =
-                                                       DK_RANDOM_BLOCK_WORDS};
+static thread_local dkRandomThread dkRandomTls = {.blockUsed =
+                                                      DK_RANDOM_BLOCK_WORDS};
 
 /* Out of line so the draw path stays a load, a compare and a return. */
 __attribute__((noinline)) static void

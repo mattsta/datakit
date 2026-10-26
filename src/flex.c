@@ -865,7 +865,7 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncoding(
         /* Writers never emit an encoding outside the table, and the
          * validators reject one. */
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 
 #undef FLEX_FIXED_WIDTH_RETURN_
@@ -1015,7 +1015,7 @@ DK_FN_CONST uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
     }
 
     assert(NULL);
-    __builtin_unreachable();
+    unreachable();
 }
 
 DK_STATIC DK_FN_CONST uint64_t
@@ -1053,7 +1053,7 @@ flexEncodingReferenceUnsignedDecode(flexEncoding encoding, uint64_t value) {
     }
 
     assert(NULL);
-    __builtin_unreachable();
+    unreachable();
 }
 
 DK_STATIC DK_FN_CONST flexEncoding
@@ -1091,7 +1091,7 @@ flexEncodingReferenceUnsigned(uint64_t encodedValue) {
     }
 
     assert(NULL);
-    __builtin_unreachable();
+    unreachable();
 }
 
 /* increase the negative number by one because we don't store
@@ -1348,7 +1348,7 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
         return 0;
     default:
         assert(NULL); /* unsupported encoding */
-        __builtin_unreachable();
+        unreachable();
     }
 }
 
@@ -1395,7 +1395,7 @@ flexWideTarget_(databox *r, databoxWide *slot, const flexWideStore_ store) {
         if (!r->big) {
             /* @own: caller; free=databoxFreeData */
             __uint128_t *payload = zmalloc(sizeof(*payload));
-            assert(((uintptr_t)payload % _Alignof(__uint128_t)) == 0);
+            assert(((uintptr_t)payload % alignof(__uint128_t)) == 0);
             r->data.u128 = payload;
             r->big = true;
             r->allocated = true;
@@ -1405,7 +1405,7 @@ flexWideTarget_(databox *r, databoxWide *slot, const flexWideStore_ store) {
         return r->data.ptr;
     }
 
-    __builtin_unreachable();
+    unreachable();
 }
 
 /* Read value pointed to by 'entry', store result in databox 'r'.  Narrow
@@ -5440,7 +5440,7 @@ int flexCompareEntries(const flex *const f,
         }
     }
 
-    __builtin_unreachable();
+    unreachable();
 }
 
 flexEntry *flexFindByTypeSorted(const flex *const f,
@@ -6417,7 +6417,7 @@ void flexRepr(const flex *f) {
                 printf("NULL");
                 break;
             default:
-                __builtin_unreachable();
+                unreachable();
             }
 
             printf("}}");
@@ -8336,7 +8336,7 @@ static int32_t flexTestWideSorted(void) {
                 break;
             }
 
-            const __typeof__(rows[0]) t = rows[b];
+            const typeof(rows[0]) t = rows[b];
             rows[b] = rows[b - 1];
             rows[b - 1] = t;
         }

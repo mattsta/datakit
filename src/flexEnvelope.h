@@ -608,7 +608,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
  *
  * Every checksum and keyed algorithm streams.  XXH3_64 and XXH3_128 need
  * the context at its type's 64-byte alignment, which stack, static and
- * _Alignas storage have; Init refuses them for a context at a lesser
+ * alignas storage have; Init refuses them for a context at a lesser
  * address (a plain malloc of the context may give one).
  *
  * Both contexts internally union the per-algorithm running-hash state

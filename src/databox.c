@@ -237,7 +237,7 @@ static void databoxOwnWidePayload_(databox *dst, const databox *src) {
 
     /* @own: container; free=databoxFreeData */
     __uint128_t *payload = zmalloc(sizeof(*payload));
-    assert(((uintptr_t)payload % _Alignof(__uint128_t)) == 0);
+    assert(((uintptr_t)payload % alignof(__uint128_t)) == 0);
     memcpy(payload, src->data.ptr, sizeof(*payload));
     dst->data.u128 = payload;
     dst->allocated = true;
@@ -604,7 +604,7 @@ DK_INLINE_ALWAYS int databoxCompareInteger(const databox *a, const databox *b) {
          * as signed: */
         _gtlteqReturn(a->data.i, b->data.i);
     default:
-        __builtin_unreachable();
+        unreachable();
     }
 #else
     if (!aSigned && !bSigned) {
@@ -1124,8 +1124,8 @@ defcleaner(flex *, flexFree);
 defcleaner(mdsc *, mdscfree);
 
 const char *databoxReprStr(const databox *const box) {
-    _Thread_local static char buf[256];
-    _Thread_local static char bufBig[COUNT_ARRAY(buf)];
+    thread_local static char buf[256];
+    thread_local static char bufBig[COUNT_ARRAY(buf)];
     static const size_t bufLen = COUNT_ARRAY(buf);
 
     switch (box->type) {
@@ -2848,14 +2848,14 @@ int databoxTest(int argc, char *argv[]) {
         /* The 8-byte member ahead of the box puts it at 8 mod 16 whenever
          * databoxBig itself is only 8-aligned. */
         struct {
-            _Alignas(16) uint64_t pad;
+            alignas(16) uint64_t pad;
             databoxBig b;
         } padded;
         databoxBig arr[3];
         cleanerName(zfree, Big) databoxBig *heap = zcalloc(3, sizeof(*heap));
         databoxBig *const where[] = {&padded.b, &arr[0],  &arr[1], &arr[2],
                                      &heap[0],  &heap[1], &heap[2]};
-        if (_Alignof(databoxBig) != 16 || sizeof(databoxBig) != 32 ||
+        if (alignof(databoxBig) != 16 || sizeof(databoxBig) != 32 ||
             offsetof(databoxBig, extra) != 16) {
             ERRR("databoxBig layout is not 32 bytes with a 16-aligned extra");
         }
@@ -3552,7 +3552,7 @@ int databoxTest(int argc, char *argv[]) {
             uint8_t pad;
             databoxWide slot;
         } skewed;
-        if (sizeof(databoxWide) != 16 || _Alignof(databoxWide) != 16 ||
+        if (sizeof(databoxWide) != 16 || alignof(databoxWide) != 16 ||
             ((uintptr_t)&skewed.slot % 16) != 0) {
             ERRR("databoxWide is not 16 bytes at 16-byte alignment");
         }

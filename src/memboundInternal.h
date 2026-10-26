@@ -178,8 +178,8 @@
  * here: an extent it read through m->primary could be swapped out and
  * destroyed by another thread meanwhile. */
 #define MEMBOUND_MIN_ATOM_SHIFT 8
-_Static_assert((1 << MEMBOUND_MIN_ATOM_SHIFT) == MEMBOUND_MIN_ATOM,
-               "MEMBOUND_MIN_ATOM_SHIFT must be log2(MEMBOUND_MIN_ATOM)");
+static_assert((1 << MEMBOUND_MIN_ATOM_SHIFT) == MEMBOUND_MIN_ATOM,
+              "MEMBOUND_MIN_ATOM_SHIFT must be log2(MEMBOUND_MIN_ATOM)");
 
 /* MICRO tier constants:
  * - Reduced freelist for ultra-compact metadata
@@ -282,8 +282,8 @@ typedef struct memboundExtent {
 #define MEMBOUND_EXTENT_FLAG_DRAINING 0x04  /* Being drained for shrink */
 
 /* Verify extent stays compact. */
-_Static_assert(sizeof(memboundExtent) <= 512,
-               "memboundExtent should fit in 8 cache lines");
+static_assert(sizeof(memboundExtent) <= 512,
+              "memboundExtent should fit in 8 cache lines");
 
 /* ====================================================================
  * Extent Lookup Index
@@ -407,8 +407,8 @@ typedef struct memboundMicro {
 } memboundMicro;
 
 /* Verify MICRO struct is compact (fits in 1 cache line) */
-_Static_assert(sizeof(memboundMicro) <= 64,
-               "memboundMicro should be <= 64 bytes (1 cache line)");
+static_assert(sizeof(memboundMicro) <= 64,
+              "memboundMicro should be <= 64 bytes (1 cache line)");
 
 /* ====================================================================
  * COMPACT Tier Structure (~192 bytes)
@@ -454,8 +454,8 @@ typedef struct memboundCompactPool {
 } memboundCompactPool;
 
 /* Verify COMPACT struct size is reasonable */
-_Static_assert(sizeof(memboundCompactPool) <= 256,
-               "memboundCompactPool should be <= 256 bytes");
+static_assert(sizeof(memboundCompactPool) <= 256,
+              "memboundCompactPool should be <= 256 bytes");
 
 /* ====================================================================
  * ENTERPRISE Tier Extensions
@@ -729,9 +729,9 @@ typedef struct MemboundLink {
     int64_t prev; /* Index of previous free chunk */
 } MemboundLink;
 
-_Static_assert(sizeof(MemboundLink) == 16, "MemboundLink must be 16 bytes");
-_Static_assert(sizeof(MemboundLink) <= MEMBOUND_MIN_ATOM,
-               "a free atom must hold its MemboundLink");
+static_assert(sizeof(MemboundLink) == 16, "MemboundLink must be 16 bytes");
+static_assert(sizeof(MemboundLink) <= MEMBOUND_MIN_ATOM,
+              "a free atom must hold its MemboundLink");
 
 /* Masks used for aCtrl[] elements (STANDARD and MICRO; COMPACT uses the same
  * scheme with its own masks).  One byte per atom:

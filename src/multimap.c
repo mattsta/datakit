@@ -77,7 +77,7 @@ defcleaner(multimapSmall *, multimapSmallFree);
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 #else
@@ -118,7 +118,7 @@ defcleaner(multimapSmall *, multimapSmallFree);
             break;                                                             \
         default:                                                               \
             assert(NULL);                                                      \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
     } while (0)
 #else
@@ -235,7 +235,7 @@ bool multimapIsSet(const multimap *m) {
         return mmf(m)->mapIsSet;
     default:
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 }
 
@@ -845,7 +845,7 @@ static multimapElements multimapElementsPerEntry_(const multimap *m) {
         return mmf(m)->elementsPerEntry;
     default:
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 }
 
@@ -1087,7 +1087,7 @@ void multimapReset(multimap **m) {
         break;
     default:
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 
     const bool isSet = multimapIsSet(*m);
@@ -1170,7 +1170,7 @@ bool multimapProcessPredicate(const multimapPredicate *p,
         break;
     default:
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 
     return false;
@@ -1323,7 +1323,7 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
                                     walker, userData, elements, row, slots);
     default:
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 }
 
@@ -1606,7 +1606,7 @@ static size_t multimapReport_(const multimap *m, const bool print) {
         break;
     default:
         assert(NULL);
-        __builtin_unreachable();
+        unreachable();
     }
 
     size_t externalMetadataBytes =

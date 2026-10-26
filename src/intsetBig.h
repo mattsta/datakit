@@ -33,7 +33,7 @@
             break;                                                             \
         default:                                                               \
             assert(NULL && "Invalid type for numeric compare?");               \
-            __builtin_unreachable();                                           \
+            unreachable();                                                     \
         }                                                                      \
                                                                                \
         ok_range;                                                              \

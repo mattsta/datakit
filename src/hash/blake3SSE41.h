@@ -24,7 +24,7 @@ extern "C" {
 
 /* Number of independent chunks processed per blake3SSE41Compress4 call.
  * Tied at compile time to BLAKE3_BATCH_SSE41_CHUNKS in blake3.c via
- * _Static_assert — if a future implementation widens the SSE4.1 batch,
+ * static_assert — if a future implementation widens the SSE4.1 batch,
  * bump this constant AND the matching one in blake3.c together. */
 #define BLAKE3_SSE41_COMPRESS4_LANES 4
 

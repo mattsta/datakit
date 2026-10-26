@@ -106,7 +106,7 @@ static void benchSink_(const void *value, size_t len) {
 
 #define BENCH_SINK(v)                                                          \
     do {                                                                       \
-        const __typeof__(v) sinkValue_ = (v);                                  \
+        const typeof(v) sinkValue_ = (v);                                      \
         benchSink_(&sinkValue_, sizeof(sinkValue_));                           \
     } while (0)
 

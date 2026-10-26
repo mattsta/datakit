@@ -23,8 +23,8 @@ defcleanerName(char *, zfree, Chars);
 /* bigmath's opaque byte buffer IS the mpz_t in place; any growth of
  * the imath struct past the public buffer silently corrupts every
  * caller's stack, so the fit is enforced at compile time. */
-_Static_assert(sizeof(mpz_t) <= sizeof(((bigmath *)0)->math),
-               "bigmath.math[] too small for imath mpz_t");
+static_assert(sizeof(mpz_t) <= sizeof(((bigmath *)0)->math),
+              "bigmath.math[] too small for imath mpz_t");
 
 void bigmathInit(bigmath *b) {
     mp_int_init(MPZ(b));

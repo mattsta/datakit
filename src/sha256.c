@@ -191,7 +191,7 @@ void sha256Update(sha256Ctx *ctx, const void *data, size_t len) {
      * keeps at most SHA256_BLOCK_LEN - 1 leftover bytes.  Stating that here
      * bounds the partial-block copies for the compiler; it emits no code. */
     if (ctx->buf_len >= SHA256_BLOCK_LEN) {
-        __builtin_unreachable();
+        unreachable();
     }
 
     ctx->bit_count += (uint64_t)len * 8;

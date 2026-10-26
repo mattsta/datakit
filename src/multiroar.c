@@ -1326,8 +1326,8 @@ bool multiroarIntersects(const multiroar *a, const multiroar *b) {
 
     databox keyValue[2];
 
-    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
@@ -1373,8 +1373,8 @@ bool multiroarIsSubset(const multiroar *a, const multiroar *b) {
 
     databox keyValue[2];
 
-    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
@@ -1443,8 +1443,8 @@ bool multiroarEquals(const multiroar *a, const multiroar *b) {
 
     /* Iterate through chunks of a and verify b has identical chunks */
 
-    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
@@ -1880,12 +1880,12 @@ multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
         databox *bValues[] = {&bValue};
 
         /* Expand a's chunk to bitmap */
-        _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+        alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
         expandChunkToBitmap(aValue, bitmapA);
 
         if (multimapLookup(b->map, &bKey, bValues)) {
             /* Both have this chunk - perform AND NOT (64 bits at a time) */
-            _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+            alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
             expandChunkToBitmap(&bValue, bitmapB);
 
             /* A &= ~B */
@@ -2157,7 +2157,7 @@ void multiroarBitSetMany(multiroar *r, const uint64_t *positions,
             continue;
         }
 
-        _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+        alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
         if (exists) {
             expandChunkToBitmap(&value, bitmap);
         } else {
@@ -2269,8 +2269,8 @@ static uint64_t multiroarIntersectionCount_(const multiroar *a,
         b = t;
     }
 
-    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
     uint64_t count = 0;
     multimapIterator iter;
     multimapIteratorInit(a->map, &iter, true);
@@ -3277,8 +3277,8 @@ void multiroarOr(multiroar *r, multiroar *b) {
         return;
     }
 
-    _Alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     /* First, collect all keys from b */
     uint64_t numChunks = multimapCount(b->map);
@@ -3344,8 +3344,8 @@ void multiroarAnd(multiroar *r, multiroar *b) {
 
     /* For AND, chunks only in r (not in b) become zeros.
      * We need to collect keys to delete after iteration. */
-    _Alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     /* Collect chunk keys from r that need processing */
     uint64_t numChunks = multimapCount(r->map);
@@ -3402,7 +3402,7 @@ void multiroarAnd(multiroar *r, multiroar *b) {
 /* XOR: r = r XOR b */
 typedef struct multiroarChunkBitmap {
     uint64_t key;
-    _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
 } ChunkBitmap;
 defcleanerName(ChunkBitmap *, zfree, ChunkBitmap);
 
@@ -3411,8 +3411,8 @@ void multiroarXor(multiroar *r, multiroar *b) {
         return;
     }
 
-    _Alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
-    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     /* First, collect all keys from b */
     uint64_t numChunks = multimapCount(b->map);
@@ -3464,7 +3464,7 @@ void multiroarNot(multiroar *r) {
         return;
     }
 
-    _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Collect chunk keys first to avoid iterator invalidation */
     uint64_t numChunks = multimapCount(r->map);
@@ -3650,7 +3650,7 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
 
     cleanerName(zfree, Bytes) uint8_t *bitmaps =
         zmalloc(n * BITMAP_SIZE_IN_BYTES);
-    _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
     for (uint64_t i = 0; i < allKeyCount; i++) {
@@ -3721,7 +3721,7 @@ void multiroarOrN(uint64_t n, multiroar **roars) {
 
     cleanerName(zfree, Bytes) uint8_t *bitmaps =
         zmalloc(n * BITMAP_SIZE_IN_BYTES);
-    _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
     for (uint64_t i = 0; i < allKeyCount; i++) {
@@ -3784,7 +3784,7 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
 
     cleanerName(zfree, Bytes) uint8_t *bitmaps =
         zmalloc(n * BITMAP_SIZE_IN_BYTES);
-    _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
+    alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
     for (uint64_t i = 0; i < allKeyCount; i++) {

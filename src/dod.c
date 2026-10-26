@@ -47,8 +47,8 @@ typedef enum dodHeader {
 /* ====================================================================
  * Writer stream header
  * ==================================================================== */
-_Static_assert(DOD_WRITER_HEADER_MAX_BITS == 2 + 64 + 64,
-               "header size bound out of date");
+static_assert(DOD_WRITER_HEADER_MAX_BITS == 2 + 64 + 64,
+              "header size bound out of date");
 
 /* Write the header for first values t0, t1 at bit 0 of 'd'; returns its
  * length in bits (where the first delta-of-delta entry starts). */
@@ -223,7 +223,7 @@ typedef enum __attribute__((packed)) dodType {
     DOD_TYPE_VAR_64_NEGATIVE = 0xff /* 111111111 */
 } dodType;
 
-_Static_assert(sizeof(dodType) == 1, "dodType not packed?");
+static_assert(sizeof(dodType) == 1, "dodType not packed?");
 
 /* Details about:
  *  - metadata bit length
@@ -237,7 +237,7 @@ typedef struct dodFormat {
     const uint8_t unused;
 } dodFormat;
 
-_Static_assert(sizeof(dodFormat) == 4, "dodFormat unnecessarily big?");
+static_assert(sizeof(dodFormat) == 4, "dodFormat unnecessarily big?");
 
 /* Array of formats for iterating during hierarchical write offsetting. */
 static const dodFormat dodBitCategory[] = {
@@ -505,7 +505,7 @@ Variable64Negative:
     CONSUME_UPDATE_CONSUME_NEGATIVE(MAX_V56, 8, 64);
     goto Dispatch;
 
-    __builtin_unreachable();
+    unreachable();
 }
 
 #ifdef DATAKIT_TEST

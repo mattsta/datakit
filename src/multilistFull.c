@@ -2112,7 +2112,7 @@ static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
      * so the string is always exactly MLF_SPLIT_LEN bytes. */
     static const char tmpl[] =
         "split-000000-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-    _Static_assert(sizeof(tmpl) == MLF_SPLIT_LEN + 1, "template length");
+    static_assert(sizeof(tmpl) == MLF_SPLIT_LEN + 1, "template length");
     memcpy(buf, tmpl, sizeof(tmpl));
     for (size_t d = 11; d >= 6; d--) {
         buf[d] = (char)('0' + id % 10);
