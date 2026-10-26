@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from . import (
     validate,
     vendorsync,
     verify,
+    wrapcalls,
 )
 from .gitutil import ToolError
 
@@ -257,6 +259,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         dest="every",
         help="every tracked and untracked (not ignored) file",
+    )
+
+    wc = sub.add_parser(
+        "wrapcalls",
+        help="wrap each call a build log says drops a [[nodiscard]] TYPE "
+        "in MACRO(...) (exit 0 all wrapped, 1 some skipped)",
+    )
+    wc.add_argument("log", type=Path, help="build log with clang's warnings")
+    wc.add_argument("--type", required=True, dest="type_name", help="the type")
+    wc.add_argument("--macro", required=True, help="the wrapping macro")
+    wc.add_argument("--dry-run", action="store_true", help="report, change no file")
+    wc.add_argument(
+        "--path",
+        action="append",
+        default=[],
+        dest="paths",
+        help="only sites in this repo-relative file (repeatable)",
     )
 
     tt = sub.add_parser(
@@ -884,6 +903,18 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "format":
         return formatting.run(args.repo, args.action, args.paths, args.every)
+
+    if args.command == "wrapcalls":
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.macro):
+            raise ToolError(f"--macro must be a C identifier (got {args.macro!r})")
+        return wrapcalls.run(
+            args.repo,
+            args.log,
+            args.type_name,
+            args.macro,
+            args.dry_run,
+            tuple(args.paths),
+        )
 
     if args.command == "fusionscan":
         pairs = fusionscan.run_scan(args.repo, list(args.paths) or None)

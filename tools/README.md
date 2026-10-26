@@ -578,6 +578,29 @@ uv run --project tools dktools testtime ./build/dev/src/datakit-test multimap [-
 - Exits 0 when the test passes, 1 when it fails or is stopped, 2 on an
   input error (such as a missing binary).
 
+## wrapcalls — wrap the calls that drop a `[[nodiscard]]` result
+
+After marking a type `[[nodiscard]]`, a build lists every call that
+drops one. This wraps each reported call in a macro the test or file
+defines (`call(...);` becomes `MACRO(call(...));`):
+
+```sh
+uv run --project tools dktools wrapcalls build/dktools/verify/NAME/build.log --type clusterResult --macro CR_OK [--path src/clusterRing.c] [--dry-run]
+```
+
+- Reads clang's "ignoring return value of type 'T' declared with
+  'nodiscard'" warnings; a path inside a verify or validate scratch
+  tree maps back to the repository.
+- Wraps a site only when the call is a whole statement: only
+  whitespace before it on its line, the previous code character one
+  of `; { } ) :`, and `;` after its closing parenthesis. Comments,
+  literals and preprocessor lines are skipped while matching
+  parentheses. Every other site is listed as skipped, for a hand edit.
+- The log's line numbers must match the files: wrap before adding
+  lines (such as the macro's definition) to a file it names.
+- `--path` (repeatable) limits it to the named files.
+- Exits 0 when every site was wrapped, 1 when any was skipped.
+
 ## perfdiff — perf regression comparison
 
 Compares two `perfRegression` TSV outputs row by row, keyed on
