@@ -716,6 +716,13 @@ def main(argv: list[str] | None = None) -> int:
         help="milestone tier: also run the slow tests (--slow, --debug-slow) "
         "that the default quick tier skips",
     )
+    va.add_argument(
+        "--no-library-only",
+        dest="library_only",
+        action="store_false",
+        help="skip the library-only builds (DatakitTestMode=OFF, no test "
+        "binary; built once per compiler by default and judged on warnings)",
+    )
     slow_default = validate.DEFAULT_SLOW or "none"
     debug_slow_default = validate.DEFAULT_DEBUG_SLOW or "none"
     va.add_argument(
@@ -889,6 +896,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 slow=args.slow,
                 debug_slow=args.debug_slow,
                 full=args.full,
+                library_only=args.library_only,
                 leak_base=args.leak_base,
                 root=args.root,
                 jobs=args.jobs,

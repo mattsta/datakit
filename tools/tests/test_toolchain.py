@@ -142,6 +142,25 @@ class Presets(unittest.TestCase):
         )
         with self.assertRaises(ToolError):
             toolchain.matrix([self.clang], ["nosuch"])
+        self.assertTrue(all(c.runs_tests for c in configs))
+
+    def test_matrix_library_only_adds_one_untested_build_per_compiler(self) -> None:
+        configs = toolchain.matrix([self.clang, self.gcc], ["dev"], library_only=True)
+        off = "DatakitTestMode=OFF-BuildTestBinary=OFF"
+        self.assertEqual(
+            [c.label for c in configs],
+            [
+                "clang22-dev",
+                "gcc15-release",
+                f"clang22-dev-{off}",
+                f"gcc15-release-{off}",
+            ],
+        )
+        self.assertEqual([c.runs_tests for c in configs], [True, True, False, False])
+        self.assertEqual(
+            configs[2].configure_command(Path("tree"))[-2:],
+            ["-DDatakitTestMode=OFF", "-DBuildTestBinary=OFF"],
+        )
 
     def test_perf_preset_is_clang22_only(self) -> None:
         perf = toolchain.build_config(self.clang, "perf")

@@ -147,6 +147,12 @@ class BuildConfig:
         base = f"{self.compiler.name}-{self.preset}"
         return "-".join([base, *self.defines]) if self.defines else base
 
+    @property
+    def runs_tests(self) -> bool:
+        """False for a build without the test binary (BuildTestBinary=OFF):
+        it builds and is judged on its warnings, with no ctest."""
+        return "BuildTestBinary=OFF" not in self.defines
+
     def binary_dir(self, source: Path) -> Path:
         return source / f"build-{self.label}"
 
@@ -198,6 +204,10 @@ class BuildConfig:
 #: a cmake cache entry a caller may add: NAME=VALUE, both plain words
 DEFINE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.+-]+")
 
+#: The library-only build: no DATAKIT_TEST code and no test binary, as a
+#: consumer that turns test mode off compiles datakit.
+LIBRARY_ONLY_DEFINES = ("DatakitTestMode=OFF", "BuildTestBinary=OFF")
+
 
 def build_config(
     compiler: Compiler, preset: str | None, defines: tuple[str, ...] = ()
@@ -217,12 +227,15 @@ def build_config(
     return BuildConfig(compiler, chosen, tuple(defines))
 
 
-def matrix(compilers: Sequence[Compiler], presets: Sequence[str]) -> list[BuildConfig]:
+def matrix(
+    compilers: Sequence[Compiler], presets: Sequence[str], library_only: bool = False
+) -> list[BuildConfig]:
     """Every (compiler, preset) a validate run builds.
 
     Each compiler builds the requested presets it supports; a compiler
     that supports none of them (gcc15 builds only ``release``) builds
-    its default."""
+    its default.  With `library_only`, each compiler also builds its
+    default preset with LIBRARY_ONLY_DEFINES (after its tested configs)."""
     for preset in presets:
         if preset not in PRESETS:
             raise ToolError(f"unknown preset {preset!r} (known: {', '.join(PRESETS)})")
@@ -231,6 +244,11 @@ def matrix(compilers: Sequence[Compiler], presets: Sequence[str]) -> list[BuildC
         allowed = COMPILER_PRESETS[compiler.name]
         chosen = [p for p in presets if p in allowed] or [allowed[0]]
         configs.extend(BuildConfig(compiler, p) for p in chosen)
+    if library_only:
+        configs.extend(
+            BuildConfig(c, COMPILER_PRESETS[c.name][0], LIBRARY_ONLY_DEFINES)
+            for c in compilers
+        )
     return configs
 
 

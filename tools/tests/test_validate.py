@@ -28,6 +28,8 @@ PASS = "100% tests passed out of 3\n"
 # Slow sets named by the tests, so the tiers are checked whatever the
 # defaults hold (they can be empty)
 SLOW = "slowEverywhere|slowToo"
+#: the label suffix of a library-only build
+LIBRARY_ONLY = "-".join(toolchain.LIBRARY_ONLY_DEFINES)
 DEBUG_SLOW = "slowUnderSanitizers"
 
 
@@ -105,7 +107,10 @@ class ValidateRun(unittest.TestCase):
 
     def default_dir(self) -> str:
         """The default matrix's work directory for HEAD"""
-        return f"{self.head[:10]}-clang22-dev+clang22-debug+gcc15-release"
+        return (
+            f"{self.head[:10]}-clang22-dev+clang22-debug+gcc15-release"
+            f"+clang22-dev-{LIBRARY_ONLY}+gcc15-release-{LIBRARY_ONLY}"
+        )
 
     def run_validate(self, runner: MatrixRunner, **kw) -> tuple[int, str]:
         opts = validate.ValidateOptions(
@@ -134,6 +139,17 @@ class ValidateRun(unittest.TestCase):
         for label in ("clang22-dev", "clang22-debug", "gcc15-release"):
             for step in ("configure", "build", "ctest", "ctest-serial"):
                 self.assertIn(f"{label} {step}", names)
+        # Each compiler's library-only build configures and builds with
+        # test mode off, and runs no tests.
+        for label in (f"clang22-dev-{LIBRARY_ONLY}", f"gcc15-release-{LIBRARY_ONLY}"):
+            self.assertIn(f"{label} build", names)
+            self.assertNotIn(f"{label} ctest", names)
+            self.assertNotIn(f"{label} ctest-serial", names)
+            configure = runner.command(f"{label} configure")
+            self.assertEqual(
+                configure[-2:], ["-DDatakitTestMode=OFF", "-DBuildTestBinary=OFF"]
+            )
+            self.assertIn(f"| {label} |", out)
         self.assertEqual(names[-3:], ["allocaudit", "atomicaudit", "outputaudit"])
 
         # All targets: no --target.
@@ -274,9 +290,8 @@ class ValidateRun(unittest.TestCase):
         self.assertEqual(code, 0, out)
         base = self.root / "validate"
         self.assertTrue((base / self.default_dir() / "summary.md").exists())
-        self.assertTrue(
-            (base / f"{self.head[:10]}-clang22-tsan" / "summary.md").exists()
-        )
+        tsan_dir = f"{self.head[:10]}-clang22-tsan+clang22-dev-{LIBRARY_ONLY}"
+        self.assertTrue((base / tsan_dir / "summary.md").exists())
 
     def test_warnings_are_split_by_area(self) -> None:
         tree = (self.root / "validate" / self.default_dir() / "src").resolve()

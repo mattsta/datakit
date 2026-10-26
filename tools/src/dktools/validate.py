@@ -10,6 +10,10 @@ REV (default HEAD) is exported with ``git archive`` into
 ``ROOT/validate/<short hash>-<configs>/src`` (``<configs>`` joins the
 matrix's labels, so matrices on one revision keep separate logs);
 uncommitted work never takes part.
+The matrix also holds each compiler's library-only build (its default
+preset with ``DatakitTestMode=OFF BuildTestBinary=OFF``, what a
+consumer without test mode compiles): it must configure and build with
+no warning, and runs no tests (``--no-library-only`` leaves it out).
 For each (compiler, preset) of the matrix (see
 ``toolchain.matrix``: gcc15 builds ``release``) it runs a clean
 configure, an all-targets build, then ctest twice: every test outside
@@ -92,6 +96,8 @@ class ValidateOptions:
     slow: str = DEFAULT_SLOW
     debug_slow: str = DEFAULT_DEBUG_SLOW
     full: bool = False
+    #: also build each compiler's library-only config (test mode off)
+    library_only: bool = True
     leak_base: str = DEFAULT_LEAK_BASE
     root: Path | None = None
     jobs: int | None = None
@@ -115,11 +121,11 @@ class ConfigResult:
 
     @property
     def ok(self) -> bool:
+        tested = self.ctest.ok and self.serial.ok if self.config.runs_tests else True
         return (
             self.configure.ok
             and self.build.ok
-            and self.ctest.ok
-            and self.serial.ok
+            and tested
             and self.warning_lines == 0
             and not self.sanitizer
         )
@@ -177,7 +183,7 @@ def _run_config(
     ctest = Step("ctest", logs / "ctest.log")
     serial = Step("ctest-serial", logs / "ctest-serial.log")
     outputs: list[Path] = []
-    if build.ok:
+    if build.ok and config.runs_tests:
         ctest = steps.run_logged(
             f"{tag} ctest",
             steps.ctest_command(
@@ -403,7 +409,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
     size = procs.sizing(opts.jobs)
     commit = gitutil.resolve_commit(repo, opts.rev)
     subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
-    configs = toolchain.matrix(opts.compilers, opts.presets)
+    configs = toolchain.matrix(opts.compilers, opts.presets, opts.library_only)
     for config in configs:
         config.compiler.check()
     leak_range = None
