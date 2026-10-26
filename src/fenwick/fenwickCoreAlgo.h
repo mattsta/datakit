@@ -43,11 +43,11 @@ static inline FENWICK_VALUE_TYPE FENWICK_ALGO_(AlgoSub_)(FENWICK_VALUE_TYPE a,
 }
 
 /* True for a value a tree may hold: any integer; a finite float */
-static inline bool FENWICK_ALGO_(AlgoValid_)(FENWICK_VALUE_TYPE v) {
+static inline bool
+FENWICK_ALGO_(AlgoValid_)([[maybe_unused]] FENWICK_VALUE_TYPE v) {
 #if FENWICK_IS_FLOATING
     return isfinite(v);
 #else
-    (void)v;
     return true;
 #endif
 }

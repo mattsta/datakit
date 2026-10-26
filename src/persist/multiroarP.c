@@ -387,10 +387,7 @@ void multiroarGetStatsP(const multiroarP *r, persistCtxStats *stats) {
 #include "intsetP.h"
 #include "persistTestCommon.h"
 
-static int test_multiroarP_basic(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_basic(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -516,10 +513,7 @@ static int test_multiroarP_basic(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_recovery(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_recovery(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -572,10 +566,7 @@ static int test_multiroarP_recovery(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_compaction(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_compaction(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -631,10 +622,7 @@ static int test_multiroarP_compaction(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_fuzzing(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_fuzzing(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -695,10 +683,7 @@ static int test_multiroarP_fuzzing(int argc, char *argv[]) {
 
 defcleaner(multiroar *, multiroarFree);
 
-static int test_multiroarP_ranges(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_ranges(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -770,10 +755,7 @@ static int test_multiroarP_ranges(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_values(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_values(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -862,10 +844,7 @@ static int test_multiroarP_values(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_lifecycleRefusals(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_lifecycleRefusals(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -946,10 +925,7 @@ static int test_multiroarP_lifecycleRefusals(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_damagedWal(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_damagedWal(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1008,10 +984,7 @@ static int test_multiroarP_damagedWal(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_valueKindsAndModes(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1126,10 +1099,7 @@ static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
  * logged change.  The bits cover a sparse chunk, a dense range, a chunk
  * holding one bit (removed whole by a remove) and a chunk not yet there
  * (made by a set). */
-static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiroarP_refusedLogs(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char bitPath[PATH_MAX];

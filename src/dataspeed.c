@@ -413,9 +413,8 @@ DK_FN_UNUSED static void dataspeedCacheFromSysctl_(dataspeedCacheInfo *cache,
 }
 
 #if defined(__linux__)
-static bool dataspeedSysfsReadFile_(void *ctx, int32_t index, const char *attr,
+static bool dataspeedSysfsReadFile_(void *, int32_t index, const char *attr,
                                     char *buf, size_t len) {
-    (void)ctx;
     char path[128];
     snprintf(path, sizeof(path),
              "/sys/devices/system/cpu/cpu0/cache/index%" PRId32 "/%s", index,
@@ -427,9 +426,7 @@ static bool dataspeedSysfsReadFile_(void *ctx, int32_t index, const char *attr,
 #if defined(__APPLE__)
 /* hw.* integer sysctls are int64_t, but accept a 32-bit one too: reading
  * an int64_t sysctl into a smaller buffer fails outright */
-static bool dataspeedSysctlReadInt_(void *ctx, const char *name,
-                                    int64_t *value) {
-    (void)ctx;
+static bool dataspeedSysctlReadInt_(void *, const char *name, int64_t *value) {
     union {
         int64_t i64;
         int32_t i32;
@@ -539,13 +536,12 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
         info->cpu_freq_mhz = (double)freq / 1e6;
     } else {
         /* Fallback: estimate via actual computation throughput */
-        volatile uint64_t dummy = 0;
+        [[maybe_unused]] volatile uint64_t dummy = 0;
         uint64_t start_ns = dataspeed_time_ns();
         for (int i = 0; i < 100'000'000; i++) {
             dummy += i;
         }
         uint64_t elapsed_ns = dataspeed_time_ns() - start_ns;
-        (void)dummy;
         /* Rough estimate: ~1 add per cycle */
         info->cpu_freq_mhz = 100'000'000.0 / elapsed_ns * 1000.0;
     }
@@ -560,7 +556,6 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     while (dataspeed_time_ns() < target_ns) {
         dummy++;
     }
-    (void)dummy;
 
     uint64_t end_tsc = dataspeed_rdtsc();
     uint64_t end_ns = dataspeed_time_ns();
@@ -617,8 +612,7 @@ static void bandwidth_read_opt(const uint64_t *data, size_t count) {
 }
 
 DATASPEED_NOINLINE
-static void bandwidth_write_opt(uint64_t *data, size_t count, uint64_t val) {
-    (void)val;
+static void bandwidth_write_opt(uint64_t *data, size_t count, uint64_t) {
     memset(data, 0xAB, count * sizeof(uint64_t));
 }
 
@@ -638,10 +632,9 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
     const size_t count = size_bytes / sizeof(uint64_t);
     uint64_t *data = NULL;
     uint64_t *data2 = NULL; /* For copy */
-    int alignRc = zmemalign((void **)&data, 64, size_bytes);
+    [[maybe_unused]] int alignRc = zmemalign((void **)&data, 64, size_bytes);
     alignRc |= zmemalign((void **)&data2, 64, size_bytes);
     assert(alignRc == 0 && data && data2);
-    (void)alignRc;
 
     /* Initialize to avoid lazy allocation */
     memset(data, 0xAB, size_bytes);
@@ -698,12 +691,10 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
 }
 
 /* Wrapper functions for benchmark_bandwidth */
-static void bw_read(uint64_t *d, size_t c, uint64_t *d2) {
-    (void)d2;
+static void bw_read(uint64_t *d, size_t c, uint64_t *) {
     bandwidth_read_opt(d, c);
 }
-static void bw_write(uint64_t *d, size_t c, uint64_t *d2) {
-    (void)d2;
+static void bw_write(uint64_t *d, size_t c, uint64_t *) {
     bandwidth_write_opt(d, c, 0xDEADBEEF);
 }
 static void bw_copy(uint64_t *d, size_t c, uint64_t *d2) {
@@ -737,9 +728,8 @@ void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb) {
 static void **create_pointer_chain(size_t size_bytes) {
     size_t count = size_bytes / sizeof(void *);
     void **chain = NULL;
-    int alignRc = zmemalign((void **)&chain, 64, size_bytes);
+    [[maybe_unused]] int alignRc = zmemalign((void **)&chain, 64, size_bytes);
     assert(alignRc == 0 && chain);
-    (void)alignRc;
 
     /* Create indices and shuffle (Fisher-Yates) */
     cleanerName(zfree, Sizes) size_t *indices = zmalloc(count * sizeof(size_t));
@@ -1392,7 +1382,7 @@ dataspeedConfig dataspeedDefaultConfig(void) {
 
 void dataspeedRunWithConfig(dataspeedReport *report,
                             const dataspeedConfig *config) {
-    (void)config; /* TODO: Use config to customize benchmarks */
+    /* TODO: Use config to customize benchmarks */
     dataspeedRunAll(report, config->verbose);
 }
 
@@ -1403,8 +1393,7 @@ void dataspeedRunWithConfig(dataspeedReport *report,
 
 static sig_atomic_t stopProcessing = false;
 
-static void doStop(int signal) {
-    (void)signal;
+static void doStop(int) {
     stopProcessing = true;
 }
 
@@ -1459,9 +1448,7 @@ DATASPEED_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
-int dataspeedTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dataspeedTest(int, char *[]) {
     int err = 0;
 
     TEST("System info detection") {
@@ -1582,9 +1569,7 @@ static int dataspeedCheckCache_(const char *what, const dataspeedCacheInfo *got,
     return err;
 }
 
-int dataspeedParseTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dataspeedParseTest(int, char *[]) {
     int err = 0;
 
     TEST("sysfs number parsers") {
@@ -1614,8 +1599,6 @@ int dataspeedParseTest(int argc, char *argv[]) {
         assert(
             !dataspeedParseSysfsUInt_("99999999999999999999", UINT64_MAX, &v) &&
             v == 7);
-        (void)bytes;
-        (void)v;
     }
 
     TEST("sysfs: L1 data size comes from the Data entry, not the last L1") {

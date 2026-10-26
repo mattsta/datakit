@@ -920,10 +920,7 @@ static bool atomTestIsCleanRef(const databox *box, const uint64_t id) {
     return box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
            box->data.u == id && !box->big && !box->allocated;
 }
-int multimapAtomTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multimapAtomTest(int, char *[]) {
     int err = 0;
 
     uint32_t seed = time(NULL);
@@ -1392,6 +1389,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                     if (key.data.i == 25) {
                         printf("%sDELETED!\n", deleted ? "" : "NOT ");
                         printf("===========================\n");
+                    }
 #endif
                 }
             }

@@ -108,7 +108,7 @@ static ssize_t portableRandomUrandom(void *const dst, const size_t len) {
 ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
     /* "1" means GRND_NONBLOCK. If no entropy and WOULDBLOCK, -1 is returned
      * with EAGAIN. */
-    const uint32_t DK_GRND_NONBLOCK = 1;
+    [[maybe_unused]] const uint32_t DK_GRND_NONBLOCK = 1;
 
 #if DK_HAVE_GETRANDOM
     return getrandom(dst, requestedLen, DK_GRND_NONBLOCK);
@@ -116,14 +116,12 @@ ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
     /* Linux 3.17 SYS_getrandom, not available in Glibc prior to 2.25. */
     return syscall(SYS_getrandom, dst, requestedLen, DK_GRND_NONBLOCK);
 #elif DK_HAVE_GETENTROPY || DK_HAVE_GETENTROPY_SYS_RANDOM
-    (void)DK_GRND_NONBLOCK;
     /* getentropy() returns 0 for a complete fill; normalise to the
      * bytes-written contract. */
     return getentropy(dst, requestedLen) == 0 ? (ssize_t)requestedLen : -1;
 #else
     /* No OS call was detected at build time (detection runs test
      * programs, so a cross build detects none), so read the device. */
-    (void)DK_GRND_NONBLOCK;
     return portableRandomUrandom(dst, requestedLen);
 #endif
 }
@@ -205,8 +203,7 @@ void portableRandom_stir(portableRandomState *r, pid_t pid) {
 
     /* Drop the first 3072 bytes. */
     for (size_t i = 0; i < 3072; i++) {
-        const uint8_t dropped = portableRandom_byte(r);
-        (void)dropped;
+        (void)portableRandom_byte(r);
     }
 
     /* Re-key from the OS after DK_PR_REFUEL_BYTES bytes. */
@@ -433,9 +430,7 @@ static void portableRandomTestFreeze(const portableRandomState *r,
     frozen->remainingBytesBeforeRefuel = INT64_MAX / 2;
 }
 
-int portableRandomTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int portableRandomTest(int, char *[]) {
     int err = 0;
 
     TEST("the refuel budget is charged one word width per word") {

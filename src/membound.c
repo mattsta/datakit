@@ -1881,9 +1881,8 @@ bool memboundShutdown(membound *m) {
      * uses the pool now, so nothing can take the lock in between */
     if (m->mutexInitialized) {
         memboundLeave(m);
-        const int destroyed = pthread_mutex_destroy(&m->mutex);
+        [[maybe_unused]] const int destroyed = pthread_mutex_destroy(&m->mutex);
         assert(destroyed == 0);
-        (void)destroyed;
     }
 
     memboundUNMAP(m, sizeof(membound));
@@ -4268,9 +4267,7 @@ memboundTier memboundGetTier(const membound *m) {
 static memboundPressure testLastPressure = MEMBOUND_PRESSURE_LOW;
 static int testPressureCallCount = 0;
 
-static void testPressureCb(membound *mb, memboundPressure level, void *data) {
-    (void)mb;
-    (void)data;
+static void testPressureCb(membound *, memboundPressure level, void *) {
     testLastPressure = level;
     testPressureCallCount++;
 }
@@ -4282,9 +4279,7 @@ static void *testRelocWatchOld = NULL;
 static void *testRelocWatchNew = NULL;
 static size_t testRelocMinSize = 0;
 
-static void testRelocCb(void *oldPtr, void *newPtr, size_t size,
-                        void *userData) {
-    (void)userData;
+static void testRelocCb(void *oldPtr, void *newPtr, size_t size, void *) {
     testRelocCount++;
     /* Contract checks: distinct addresses, block at least the requested size.
      */
@@ -4625,8 +4620,7 @@ static void *mtQueryWorker(void *arg) {
         memboundStats stats;
         memboundGetStats(ctx->m, &stats);
 
-        float frag = memboundGetFragmentation(ctx->m);
-        (void)frag; /* May be NaN if no allocations */
+        (void)memboundGetFragmentation(ctx->m); /* NaN with no allocations */
 
         size_t count = memboundExtentCount(ctx->m);
         if (count == 0) {
@@ -4638,13 +4632,9 @@ static void *mtQueryWorker(void *arg) {
             ctx->errors++;
         }
 
-        size_t used = memboundBytesUsed(ctx->m);
-        size_t avail = memboundBytesAvailable(ctx->m);
-        (void)used;
-        (void)avail;
-
-        bool canGrow = memboundCanGrow(ctx->m);
-        (void)canGrow;
+        (void)memboundBytesUsed(ctx->m);
+        (void)memboundBytesAvailable(ctx->m);
+        (void)memboundCanGrow(ctx->m);
     }
 
     return NULL;
@@ -4655,11 +4645,7 @@ static volatile int mtPressureCallbackExecuting = 0;
 static membound *mtPressureTestPool = NULL;
 static volatile int mtPressureCallbackCount = 0;
 
-static void mtPressureCallback(membound *mb, memboundPressure level,
-                               void *userData) {
-    (void)userData;
-    (void)level;
-
+static void mtPressureCallback(membound *mb, memboundPressure, void *) {
     /* Guard against recursive invocation (alloc/free in callback triggers
      * callback) */
     if (mtPressureCallbackExecuting) {
@@ -4671,8 +4657,7 @@ static void mtPressureCallback(membound *mb, memboundPressure level,
 
     /* Try to call a membound function from within the callback.
      * If the lock is held, this would deadlock. */
-    size_t count = memboundCurrentAllocationCount(mb);
-    (void)count;
+    (void)memboundCurrentAllocationCount(mb);
 
     /* Try another query */
     memboundStats stats;
@@ -4755,9 +4740,7 @@ typedef struct pressureSeen {
     memboundPressure last;
 } pressureSeen;
 
-static void pressureSeenCb(membound *m, memboundPressure level,
-                           void *userData) {
-    (void)m;
+static void pressureSeenCb(membound *, memboundPressure level, void *userData) {
     pressureSeen *s = userData;
     s->calls++;
     s->last = level;
@@ -4848,9 +4831,7 @@ static int memboundTestMapFailRun(int kind, bool *fired) {
     return err;
 }
 
-int memboundTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int memboundTest(int, char *[]) {
     int err = 0;
 
     TEST("every mmap failure is a clean refusal, in every tier") {
@@ -5390,7 +5371,7 @@ int memboundTest(int argc, char *argv[]) {
         void *p2 = memboundAlloc(m, 256);
         assert(p1 && p2);
 
-        size_t usedBefore = memboundBytesUsed(m);
+        const size_t usedBefore = memboundBytesUsed(m);
 
         /* Free both - should coalesce */
         memboundFree(m, p1);
@@ -5402,9 +5383,9 @@ int memboundTest(int argc, char *argv[]) {
 
         /* Should be able to use the coalesced space */
         size_t usedAfter = memboundBytesUsed(m);
-        /* Larger allocation but single block */
+        /* Larger allocation but single block, in the space the two used */
         assert(usedAfter >= 512);
-        (void)usedBefore;
+        assert(usedAfter <= usedBefore);
 
         memboundFree(m, p3);
         memboundShutdown(m);
@@ -7314,10 +7295,8 @@ int memboundTest(int argc, char *argv[]) {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
         assert(m != NULL);
 
-        void *p1 = memboundAlloc(m, 256);
-        void *p2 = memboundAlloc(m, 512);
-        (void)p1;
-        (void)p2;
+        [[maybe_unused]] void *p1 = memboundAlloc(m, 256);
+        [[maybe_unused]] void *p2 = memboundAlloc(m, 512);
 
         /* Force growth */
         while (memboundExtentCount(m) < 2) {

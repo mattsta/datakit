@@ -232,12 +232,11 @@ multiroar *multiroarValueNew(const uint8_t bitWidth, const uint64_t rows,
 
     /* SplitFull encode to match the SplitFull length/offset math above
      * and in the _metaOffsetTo* readers. */
-    varintWidth used;
+    [[maybe_unused]] varintWidth used;
     varintSplitFullPut_(_metaOffsetToColValue(r), used, cols);
     assert(used == colWidth);
     varintSplitFullPut_(_metaOffsetToRowValue(r), used, rows);
     assert(used == rowWidth);
-    (void)used;
 
     return r;
 }
@@ -338,11 +337,9 @@ DK_STATIC uint16_t insertPositionalNumber(multiroar *r, const databox *key,
 }
 
 DK_STATIC void
-_convertPositionPackedArrayToBitmap(multiroar *r, const databox *key,
+_convertPositionPackedArrayToBitmap(multiroar *r, const databox *,
                                     const databox *value, multimapEntry *me,
                                     const bool convertToSetPositions) {
-    (void)key;
-
     const uint8_t *packedArrayStart = GET_CHUNK_PACKED_START(value);
     const uint16_t currentElementCount = PACKED_COUNT_FROM_VALUE(value);
 
@@ -942,9 +939,8 @@ void multiroarValueDimensions(const multiroar *r, uint64_t *rows,
     if (r && r->meta[0] != 0) {
         varintWidth colLen;
         varintSplitFullGet_(_metaOffsetToColValue(r), colLen, c);
-        varintWidth rowLen;
+        [[maybe_unused]] varintWidth rowLen;
         varintSplitFullGet_(r->meta + 1 + colLen, rowLen, rw);
-        (void)rowLen;
     }
     if (rows) {
         *rows = rw;
@@ -3187,9 +3183,9 @@ DK_STATIC void expandChunkToBitmap(const databox *value, uint8_t *bitmap) {
 
 /* Helper: Compress bitmap back to optimal representation */
 DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
-                                     uint8_t *bitmap, multimapEntry *me,
+                                     uint8_t *bitmap, multimapEntry *,
                                      bool chunkExists) {
-    (void)me; /* the chunk's row is written by key below */
+    /* the chunk's row is written by key below */
     uint32_t popcount = StrPopCntExact(bitmap, BITMAP_SIZE_IN_BYTES);
 
     /* A present chunk's row is replaced in place by the insert below (one
@@ -4129,10 +4125,7 @@ static int mrTestReportedOnce_(uint64_t c0, const char *what,
     return err;
 }
 
-int multiroarTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multiroarTest(int, char *[]) {
     int err = 0;
 
     TEST("each mode refuses the other's operations and changes nothing") {
@@ -7123,7 +7116,6 @@ int multiroarTest(int argc, char *argv[]) {
                 multiroarNewOrN(n, roars);
             cleaner(multiroarFree) multiroar *xorResult =
                 multiroarNewXorN(n, roars);
-            (void)xorResult;
 
             /* Basic sanity: AND count <= OR count */
             uint64_t andCount = multiroarBitCount(andResult);
@@ -7793,7 +7785,6 @@ int multiroarTest(int argc, char *argv[]) {
         for (int i = 0; i < iterations; i++) {
             cleaner(multiroarFree) multiroar *result =
                 multiroarNewAndN(n, roars);
-            (void)result;
         }
         clock_gettime(CLOCK_MONOTONIC, &end);
         double nwayNs =

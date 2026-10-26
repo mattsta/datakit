@@ -583,7 +583,6 @@ iterFull:
 void multiOrderedSetIteratorRelease(mosIterator *iter) {
     /* Currently no resources to release, but keep for API consistency */
     iter->valid = 0;
-    (void)iter;
 }
 
 /* ====================================================================
@@ -2030,9 +2029,6 @@ static int mosAlgebraCheck_(const multiOrderedSet *got, uint32_t n,
 }
 
 int multiOrderedSetTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
     int err = 0;
 
     TEST("multiOrderedSet: create and free") {

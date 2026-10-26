@@ -351,13 +351,12 @@ bool OSRegulateWritePidToFile(const char *path) {
     _exit(0);
 }
 
-bool OSRegulateRequestSignalChildWhenParentExits(int sig) {
+bool OSRegulateRequestSignalChildWhenParentExits([[maybe_unused]] int sig) {
 #if DK_OS_LINUX
     /* We don't version check this because it has been available since
      * Linux 2.1.57 (1997-09-25) */
     return prctl(PR_SET_PDEATHSIG, sig) == 0;
 #else
-    (void)sig;
     return false;
 #endif
 }
@@ -415,7 +414,6 @@ int OSRegulateProcessExitWatchFd(pid_t pid) {
     /* No kqueue and no pidfd: this platform offers no process-exit
      * event source, so callers must fall back to their own polling.
      * errno is set so a caller never reads a stale value as the arm's. */
-    (void)pid;
     errno = ENOSYS;
     return -1;
 #endif
@@ -840,7 +838,8 @@ DK_FN_UNUSED static bool osrBacklogFits_(const char *contents, int requested) {
     return somaxconn == 0 || requested <= 0 || somaxconn >= (uint64_t)requested;
 }
 
-bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
+bool OSRegulateTcpBacklogMeetsLimit(
+    [[maybe_unused]] int tcpBacklogListenLength) {
 #if DK_OS_LINUX /* /proc/sys/net/core/somaxconn */
     FILE *fp = fopen("/proc/sys/net/core/somaxconn", "r");
     if (!fp) {
@@ -852,7 +851,6 @@ bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
     fclose(fp);
     return osrBacklogFits_(readOk ? buf : NULL, tcpBacklogListenLength);
 #else
-    (void)tcpBacklogListenLength;
     return true;
 #endif
 }
@@ -1075,7 +1073,8 @@ bool OSRegulateLinuxMemorySettingsAreOkay(void) {
  *
  * Example: zmalloc_get_smap_bytes_by_field("Rss:",-1);
  */
-size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
+size_t OSRegulateLinuxSmapBytesByFieldForPid([[maybe_unused]] const char *field,
+                                             [[maybe_unused]] int64_t pid) {
 #if DK_OS_LINUX /* /proc/<pid>/smaps */
     char line[1024] = {};
     size_t bytes = 0;
@@ -1117,8 +1116,6 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
     fclose(fp);
     return bytes;
 #else
-    (void)field;
-    (void)pid;
     return 0;
 #endif
 }
@@ -1370,9 +1367,7 @@ bool OSRegulateNetworkIsAllIPv6(const struct sockaddr_in6 *const sa6) {
 
 /* Deterministic checks of the kernel-file parsers on synthetic input;
  * nothing here reads /proc or needs privileges */
-int OSRegulateTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int OSRegulateTest(int, char *[]) {
     int err = 0;
 
     TEST("network classes of crafted addresses; the system readers") {

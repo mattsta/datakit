@@ -2344,20 +2344,17 @@ void flexInsertDouble(flex **const ff, flexEntry *const fe, double dvalue) {
 
 /* The push macro's insert shape for the payload-less types; public
  * inserts of TRUE/FALSE/NULL go through flexInsertByType */
-static void flexInsertTrue(flex **const ff, flexEntry *const fe, void *none) {
-    DK_NOTUSED(none);
+static void flexInsertTrue(flex **const ff, flexEntry *const fe, void *) {
     flexEncoding encoding = FLEX_TRUE;
     flexInsert_(ff, fe, encoding, NULL, 0);
 }
 
-static void flexInsertFalse(flex **const ff, flexEntry *const fe, void *none) {
-    DK_NOTUSED(none);
+static void flexInsertFalse(flex **const ff, flexEntry *const fe, void *) {
     flexEncoding encoding = FLEX_FALSE;
     flexInsert_(ff, fe, encoding, NULL, 0);
 }
 
-static void flexInsertNull(flex **const ff, flexEntry *const fe, void *none) {
-    DK_NOTUSED(none);
+static void flexInsertNull(flex **const ff, flexEntry *const fe, void *) {
     flexEncoding encoding = FLEX_NULL;
     flexInsert_(ff, fe, encoding, NULL, 0);
 }
@@ -4366,8 +4363,7 @@ DK_STATIC bool flexEntryInteger_(const flexEntryData *entry, bool *neg,
 /* Integer finds match by mathematical value: -1 never matches a stored
  * UINT64_MAX, and 5 matches 5 however it is encoded. */
 DK_STATIC bool flexEntryCompareSigned__(const flexEntryData *entry,
-                                        const uint8_t *src, const size_t len) {
-    DK_NOTUSED(len);
+                                        const uint8_t *src, const size_t) {
     int64_t want;
     memcpy(&want, src, sizeof(want));
     bool neg;
@@ -4383,9 +4379,7 @@ DK_STATIC bool flexEntryCompareSigned__(const flexEntryData *entry,
 }
 
 DK_STATIC bool flexEntryCompareUnsigned__(const flexEntryData *entry,
-                                          const uint8_t *src,
-                                          const size_t len) {
-    DK_NOTUSED(len);
+                                          const uint8_t *src, const size_t) {
     uint64_t want;
     memcpy(&want, src, sizeof(want));
     bool neg;
@@ -5586,8 +5580,7 @@ flexEntry *flexFindStringReverse(const flex *const f, flexEntry *const fe,
  * (identity order, so a NaN probe finds a NaN entry); TRUE, FALSE and NULL
  * match only their own type.  Strings never match here. */
 DK_STATIC bool flexEntryCompareBox__(const flexEntryData *entry,
-                                     const uint8_t *src, const size_t len) {
-    DK_NOTUSED(len);
+                                     const uint8_t *src, const size_t) {
     const databox *const probe = (const databox *)src;
     if (FLEX_IS_STR(entry->encoding) || entry->encoding == FLEX_BYTES_EMPTY) {
         return false;
@@ -5680,8 +5673,7 @@ typedef struct flexFindProbe_ {
 } flexFindProbe_;
 
 DK_STATIC bool flexEntryCompareProbe__(const flexEntryData *entry,
-                                       const uint8_t *src, const size_t len) {
-    DK_NOTUSED(len);
+                                       const uint8_t *src, const size_t) {
     const flexFindProbe_ *const probe = (const flexFindProbe_ *)src;
 
     /* A string entry matches exactly the same bytes.  The empty string has
@@ -6260,7 +6252,6 @@ static bool cflexDecompressEntriesIntoBuffer(const cflex *c, void *buffer,
     const int decompressedStatus = LZ4_decompress_safe(
         compressedDataStart, (char *)buffer, totalCompressedBytes, bufferLen);
 #else
-    (void)bufferLen;
     const size_t totalBytes = flexTotalBytes_(c);
     const size_t sizeWithoutHeader = totalBytes - headerWidth;
     const int decompressedStatus = LZ4_decompress_fast(
@@ -9177,13 +9168,11 @@ static int32_t flexTestReplaceSign(void) {
 #define FLEX_TEST_DEFERRED_PATHS 4
 #define FLEX_TEST_ABORT_STATUS 86
 #define FLEX_TEST_BARE_ABORT_STATUS 87
-[[noreturn]] static void flexTestAbortHandler_(int sig) {
-    (void)sig;
+[[noreturn]] static void flexTestAbortHandler_(int) {
     _exit(FLEX_TEST_BARE_ABORT_STATUS);
 }
 
-static void flexTestFatalHook_(const dkDiagnostic *d, void *ctx) {
-    (void)ctx;
+static void flexTestFatalHook_(const dkDiagnostic *d, void *) {
     if (d->severity == DK_DIAG_FATAL) {
         _exit(FLEX_TEST_ABORT_STATUS);
     }
@@ -9314,8 +9303,6 @@ int32_t flexTest(int32_t argc, char **argv) {
      * by either freeing it and NULLing it or leaving a live flex here. */
     cleaner(flexFree) flex *f = NULL;
     flexEntry *fe = NULL;
-    (void)f;
-    (void)fe;
     int err = 0;
 
     TEST("decoding never writes through or yields an untrusted pointer") {
@@ -14211,14 +14198,12 @@ int32_t flexTest(int32_t argc, char **argv) {
             uint64_t out = UINT64_MAX;
             assert(!varintExternalTryGet(buf, (varintWidth)badWidths[i], &out));
             assert(out == UINT64_MAX);
-            (void)out;
         }
 
         /* Sanity: width 1 (in-range) still works.  buf[0] is 0x01. */
         assert(varintExternalGet(buf, VARINT_WIDTH_8B) == 0x01u);
         uint64_t one = 0;
         assert(varintExternalTryGet(buf, VARINT_WIDTH_8B, &one) && one == 1);
-        (void)one;
     }
 
     /* ================================================================
