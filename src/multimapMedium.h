@@ -5,12 +5,12 @@
 /* Opaque data type; no user visible data here */
 typedef struct multimapMedium multimapMedium;
 
-multimapMedium *multimapMediumNew(multimapElements elementsPerEntry);
-multimapMedium *multimapMediumNewFromOneGrow(void *m, flex *one,
-                                             uint32_t middle,
-                                             multimapElements elementsPerEntry,
-                                             bool mapIsSet);
-multimapMedium *multimapMediumCopy(const multimapMedium *m);
+[[nodiscard]] multimapMedium *
+multimapMediumNew(multimapElements elementsPerEntry);
+[[nodiscard]] multimapMedium *
+multimapMediumNewFromOneGrow(void *m, flex *one, uint32_t middle,
+                             multimapElements elementsPerEntry, bool mapIsSet);
+[[nodiscard]] multimapMedium *multimapMediumCopy(const multimapMedium *m);
 size_t multimapMediumCount(const multimapMedium *m);
 size_t multimapMediumBytes(const multimapMedium *m);
 flex *multimapMediumDump(const multimapMedium *m);

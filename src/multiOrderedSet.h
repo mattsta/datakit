@@ -270,16 +270,17 @@ typedef struct mosIterator {
  * ==================================================================== */
 
 /* Create a new empty multiOrderedSet */
-multiOrderedSet *multiOrderedSetNew(void);
+[[nodiscard]] multiOrderedSet *multiOrderedSetNew(void);
 
 /* Create with specific size limit for tier promotion */
-multiOrderedSet *multiOrderedSetNewLimit(flexCapSizeLimit limit);
+[[nodiscard]] multiOrderedSet *multiOrderedSetNewLimit(flexCapSizeLimit limit);
 
 /* Create with compression enabled for deeper tiers */
-multiOrderedSet *multiOrderedSetNewCompress(flexCapSizeLimit limit);
+[[nodiscard]] multiOrderedSet *
+multiOrderedSetNewCompress(flexCapSizeLimit limit);
 
 /* Duplicate an existing multiOrderedSet */
-multiOrderedSet *multiOrderedSetCopy(const multiOrderedSet *mos);
+[[nodiscard]] multiOrderedSet *multiOrderedSetCopy(const multiOrderedSet *mos);
 
 /* Free a multiOrderedSet */
 void multiOrderedSetFree(multiOrderedSet *mos);
@@ -483,20 +484,20 @@ typedef enum mosAggregate {
 /* Create union of sets. Caller must free result.
  * weights can be NULL for all 1.0 weights (double array).
  * numSets must be >= 1. */
-multiOrderedSet *multiOrderedSetUnion(const multiOrderedSet *sets[],
-                                      const double *weights, size_t numSets,
-                                      mosAggregate aggregate);
+[[nodiscard]] multiOrderedSet *
+multiOrderedSetUnion(const multiOrderedSet *sets[], const double *weights,
+                     size_t numSets, mosAggregate aggregate);
 
 /* Create intersection of sets. Caller must free result.
  * weights can be NULL for all 1.0 weights.
  * numSets must be >= 2. */
-multiOrderedSet *multiOrderedSetIntersect(const multiOrderedSet *sets[],
-                                          const double *weights, size_t numSets,
-                                          mosAggregate aggregate);
+[[nodiscard]] multiOrderedSet *
+multiOrderedSetIntersect(const multiOrderedSet *sets[], const double *weights,
+                         size_t numSets, mosAggregate aggregate);
 
 /* Create difference (first - rest). Caller must free result. */
-multiOrderedSet *multiOrderedSetDifference(const multiOrderedSet *sets[],
-                                           size_t numSets);
+[[nodiscard]] multiOrderedSet *
+multiOrderedSetDifference(const multiOrderedSet *sets[], size_t numSets);
 
 /* ====================================================================
  * Random Access

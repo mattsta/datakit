@@ -75,7 +75,7 @@ typedef struct list {
 #define listGetMatchMethod(l) ((l)->match)
 
 /* Prototypes */
-list *listCreate(void);
+[[nodiscard]] list *listCreate(void);
 void listRelease(list *l);
 list *listAddNodeHead(list *l, void *value);
 list *listAddNodeTail(list *l, void *value);
@@ -86,7 +86,7 @@ void listDelNode(list *l, listNode *node);
 listIter *listGetIterator(list *list, bool headToTail);
 listNode *listNext(listIter *iter);
 void listReleaseIterator(listIter *iter);
-list *listDup(list *orig);
+[[nodiscard]] list *listDup(list *orig);
 listNode *listSearchKey(list *l, void *key);
 listNode *listIndex(list *l, int64_t index);
 void listRewind(list *l, listIter *li);

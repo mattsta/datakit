@@ -165,14 +165,14 @@ typedef uint32_t multiarrayIdx;
  * unchanged; each reports DK_DIAG_MULTIARRAY_INDEX (dkDiag.h).  GetHead
  * and GetTail answer NULL for an empty array.  The checks sit where each
  * tier already finds the index, so in-range calls cost what they did. */
-multiarray *multiarrayNew(uint16_t len, uint16_t rowMax);
+[[nodiscard]] multiarray *multiarrayNew(uint16_t len, uint16_t rowMax);
 void multiarrayFree(multiarray *m);
 /* Empty the array: an empty Small with the same element width and rowMax,
  * freeing a larger tier's nodes.  Rewrites '*m'. */
 void multiarrayReset(multiarray **m);
 /* A deep copy in the same tier and node layout (NULL for a native array
  * or NULL) */
-multiarray *multiarrayCopy(const multiarray *m);
+[[nodiscard]] multiarray *multiarrayCopy(const multiarray *m);
 /* Pack the elements into full nodes of rowMax (the last holds the rest),
  * in order, in the tier multiarrayNewFromArray would choose: Small at
  * rowMax elements or fewer, Large at rowMax nodes or more, else Medium.
@@ -216,8 +216,9 @@ void multiarrayCopyTo(const multiarray *m, void *out);
 /* A multiarray of 'count' elements of 'len' bytes copied from 'elements',
  * built straight into the tier and nodes inserts would reach (full nodes
  * of 'rowMax'), in O(count).  rowMax and len must be at least 1. */
-multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
-                                   const void *elements, size_t count);
+[[nodiscard]] multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
+                                                 const void *elements,
+                                                 size_t count);
 
 /* Overwrite element 'idx' with the multiarrayElementLen bytes at 'what' */
 void multiarrayReplace(multiarray *m, multiarrayIdx idx, const void *what);

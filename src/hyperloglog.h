@@ -6,10 +6,10 @@
 
 typedef struct hyperloglogHeader hyperloglog;
 
-hyperloglog *hyperloglogNew(void);
-hyperloglog *hyperloglogNewSparse(void);
-hyperloglog *hyperloglogNewDense(void);
-hyperloglog *hyperloglogCopy(const hyperloglog *src);
+[[nodiscard]] hyperloglog *hyperloglogNew(void);
+[[nodiscard]] hyperloglog *hyperloglogNewSparse(void);
+[[nodiscard]] hyperloglog *hyperloglogNewDense(void);
+[[nodiscard]] hyperloglog *hyperloglogCopy(const hyperloglog *src);
 void hyperloglogFree(hyperloglog *h);
 bool hyperloglogDetect(hyperloglog *h);
 
@@ -35,7 +35,8 @@ uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
 
 /* A new sketch holding the union of 'n' sketches (dense if any input is);
  * NULL if any is corrupt.  n == 0 gives an empty sketch. */
-hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n);
+[[nodiscard]] hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls,
+                                               size_t n);
 
 /* Register-wise max-fold of sketch 'hdr' into the RAW scratch 'target'
  * (one byte per register; see hyperloglogNewFromRaw); false if 'hdr' is
@@ -44,7 +45,8 @@ bool hyperloglogMerge(hyperloglog *target, const hyperloglog *hdr);
 /* Materialize a RAW-encoded scratch (register-per-byte, as built by
  * hyperloglogMerge accumulation) into a freshly allocated storable HLL
  * (sparse, or dense when 'dense' is set). */
-hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense);
+[[nodiscard]] hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw,
+                                                 bool dense);
 /* Register-wise max-fold of 'src' (SPARSE or DENSE, never RAW) into
  * '*dst', reallocating *dst as needed (sparse growth / promotion).
  * Idempotent and commutative; invalidates *dst's cached cardinality. */

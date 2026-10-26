@@ -50,7 +50,7 @@ typedef bool multiTimerCallback(multiTimer *t, multiTimerId id,
                                 void *clientData);
 
 /* Init / Cleanup */
-multiTimer *multiTimerNew(void);
+[[nodiscard]] multiTimer *multiTimerNew(void);
 void multiTimerFree(multiTimer *t);
 bool multiTimerInit(multiTimer *t);
 void multiTimerDeinit(multiTimer *t);

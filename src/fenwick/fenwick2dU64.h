@@ -10,7 +10,7 @@
 
 typedef struct fenwick2dU64 fenwick2dU64;
 
-fenwick2dU64 *fenwick2dU64New(void);
+[[nodiscard]] fenwick2dU64 *fenwick2dU64New(void);
 void fenwick2dU64Free(fenwick2dU64 *t);
 bool fenwick2dU64Update(fenwick2dU64 **t, size_t row, size_t col,
                         uint64_t delta);
@@ -25,7 +25,7 @@ size_t fenwick2dU64Bytes(const fenwick2dU64 *t);
 void fenwick2dU64Clear(fenwick2dU64 *t);
 /* A rows x cols tree of row-major elements in O(cells) (either extent 0
  * or NULL: an empty tree; NULL past the cell limit) */
-fenwick2dU64 *fenwick2dU64NewFromArray(const uint64_t *values, size_t rows,
-                                       size_t cols);
+[[nodiscard]] fenwick2dU64 *fenwick2dU64NewFromArray(const uint64_t *values,
+                                                     size_t rows, size_t cols);
 /* Every element, as Get returns it, row-major into out[Rows * Cols] */
 void fenwick2dU64CopyTo(const fenwick2dU64 *t, uint64_t *out);

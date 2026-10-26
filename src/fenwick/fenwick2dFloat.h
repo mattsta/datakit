@@ -10,7 +10,7 @@
 
 typedef struct fenwick2dFloat fenwick2dFloat;
 
-fenwick2dFloat *fenwick2dFloatNew(void);
+[[nodiscard]] fenwick2dFloat *fenwick2dFloatNew(void);
 void fenwick2dFloatFree(fenwick2dFloat *t);
 bool fenwick2dFloatUpdate(fenwick2dFloat **t, size_t row, size_t col,
                           float delta);
@@ -26,7 +26,7 @@ void fenwick2dFloatClear(fenwick2dFloat *t);
 /* A rows x cols tree of row-major elements in O(cells) (either extent 0
  * or NULL: an empty tree; NULL past the cell limit or for a value that is
  * not finite) */
-fenwick2dFloat *fenwick2dFloatNewFromArray(const float *values, size_t rows,
-                                           size_t cols);
+[[nodiscard]] fenwick2dFloat *
+fenwick2dFloatNewFromArray(const float *values, size_t rows, size_t cols);
 /* Every element, as Get returns it, row-major into out[Rows * Cols] */
 void fenwick2dFloatCopyTo(const fenwick2dFloat *t, float *out);

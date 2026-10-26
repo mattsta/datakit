@@ -10,7 +10,7 @@
 
 typedef struct fenwick2dDouble fenwick2dDouble;
 
-fenwick2dDouble *fenwick2dDoubleNew(void);
+[[nodiscard]] fenwick2dDouble *fenwick2dDoubleNew(void);
 void fenwick2dDoubleFree(fenwick2dDouble *t);
 bool fenwick2dDoubleUpdate(fenwick2dDouble **t, size_t row, size_t col,
                            double delta);
@@ -27,7 +27,7 @@ void fenwick2dDoubleClear(fenwick2dDouble *t);
 /* A rows x cols tree of row-major elements in O(cells) (either extent 0
  * or NULL: an empty tree; NULL past the cell limit or for a value that is
  * not finite) */
-fenwick2dDouble *fenwick2dDoubleNewFromArray(const double *values, size_t rows,
-                                             size_t cols);
+[[nodiscard]] fenwick2dDouble *
+fenwick2dDoubleNewFromArray(const double *values, size_t rows, size_t cols);
 /* Every element, as Get returns it, row-major into out[Rows * Cols] */
 void fenwick2dDoubleCopyTo(const fenwick2dDouble *t, double *out);

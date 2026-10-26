@@ -5,9 +5,9 @@
 /* Opaque data type; no user visible data here */
 typedef struct multimapSmall multimapSmall;
 
-multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,
-                                bool mapIsSet);
-multimapSmall *multimapSmallCopy(const multimapSmall *m);
+[[nodiscard]] multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,
+                                              bool mapIsSet);
+[[nodiscard]] multimapSmall *multimapSmallCopy(const multimapSmall *m);
 size_t multimapSmallCount(const multimapSmall *m);
 size_t multimapSmallBytes(const multimapSmall *m);
 flex *multimapSmallDump(const multimapSmall *m);

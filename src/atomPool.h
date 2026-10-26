@@ -109,14 +109,14 @@ typedef struct atomPool atomPool;
  * ==================================================================== */
 
 /* Create a new atom pool with specified backend */
-atomPool *atomPoolNew(atomPoolType type);
+[[nodiscard]] atomPool *atomPoolNew(atomPoolType type);
 
 /* Create with a backend and an id behaviour; NULL for an unknown one */
-atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids);
+[[nodiscard]] atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids);
 atomPoolIds atomPoolGetIds(const atomPool *pool);
 
 /* Create with default backend (ATOM_POOL_HASH for speed) */
-atomPool *atomPoolNewDefault(void);
+[[nodiscard]] atomPool *atomPoolNewDefault(void);
 
 /* Free the pool and all interned strings */
 void atomPoolFree(atomPool *pool);

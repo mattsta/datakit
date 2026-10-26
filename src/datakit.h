@@ -345,7 +345,7 @@ char *strdup(const char *s) __attribute__((deprecated));
 
 /* A zmalloc'd copy of the 'bytes' bytes at 'from' (released with zfree);
  * NULL for a NULL 'from'.  A zero-length copy is still an allocation. */
-static inline void *zmemdup(const void *from, size_t bytes) {
+[[nodiscard]] static inline void *zmemdup(const void *from, size_t bytes) {
     if (!from) {
         return NULL;
     }

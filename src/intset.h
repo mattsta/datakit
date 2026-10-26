@@ -26,7 +26,7 @@ typedef enum intsetEnc {
 } intsetEnc;
 
 /* Create new intset */
-intset *intsetNew(void);
+[[nodiscard]] intset *intsetNew(void);
 
 /* Free intset */
 void intsetFree(intset *is);
@@ -34,7 +34,7 @@ void intsetFree(intset *is);
  * Rewrites '*is'. */
 void intsetReset(intset **is);
 /* A deep copy in the same tier */
-intset *intsetCopy(const intset *is);
+[[nodiscard]] intset *intsetCopy(const intset *is);
 /* Move to the narrowest tier the values allow: a Full holding no 64-bit
  * values becomes a Medium (its arrays move, nothing is copied), and a
  * Medium holding no 32-bit values becomes a Small, within the counts and

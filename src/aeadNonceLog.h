@@ -50,7 +50,7 @@ typedef struct aeadNonceLog aeadNonceLog;
  * rounded up to the next power of two; minimum effective capacity is
  * 64. Returns NULL on allocation failure or when min_capacity exceeds
  * AEAD_NONCE_LOG_MAX_CAP. */
-aeadNonceLog *aeadNonceLogCreate(size_t min_capacity);
+[[nodiscard]] aeadNonceLog *aeadNonceLogCreate(size_t min_capacity);
 
 /* Tear down the tracker. Safe to call with NULL. Memory is wiped on
  * free so a leaked log does not leak observed nonces. */
@@ -101,7 +101,8 @@ size_t aeadNonceLogToBytes(const aeadNonceLog *log, uint8_t *out,
  * unsigned integer in range (a 96/128-bit entry is refused), a capacity
  * that is not a power of two in [64, AEAD_NONCE_LOG_MAX_CAP], more
  * tuples than 7/8 of the capacity, or a repeated tuple. */
-aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len);
+[[nodiscard]] aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf,
+                                                  size_t len);
 
 /* persistOps descriptor for use by the persist framework
  * (PERSIST_TYPE_AEAD_NONCE_LOG = 93). */

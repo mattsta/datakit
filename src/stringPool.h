@@ -84,9 +84,9 @@ typedef enum stringPoolIds {
  * Creation / Destruction
  * ==================================================================== */
 
-stringPool *stringPoolNew(void); /* STRING_POOL_IDS_REUSE */
+[[nodiscard]] stringPool *stringPoolNew(void); /* STRING_POOL_IDS_REUSE */
 /* NULL for an unknown 'ids' or on allocation failure */
-stringPool *stringPoolNewWithIds(stringPoolIds ids);
+[[nodiscard]] stringPool *stringPoolNewWithIds(stringPoolIds ids);
 stringPoolIds stringPoolIdsOf(const stringPool *pool);
 void stringPoolFree(stringPool *pool);
 void stringPoolReset(stringPool *pool);

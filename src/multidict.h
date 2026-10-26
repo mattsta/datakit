@@ -328,12 +328,13 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
  * OS), so colliding keys cannot be worked out ahead of time.  datakit's own
  * dicts use the random seed; a persisted multidict records its seed, so a
  * restore lays its keys out as they were. */
-multidict *multidictNew(multidictType *type, multidictClass *qdc, int32_t seed);
+[[nodiscard]] multidict *multidictNew(multidictType *type, multidictClass *qdc,
+                                      int32_t seed);
 int32_t multidictRandomSeed(void);
 multidictClass *multidictGetClass(multidict *d);
 /* The type 'd' was created with (how its keys hash and match) */
 multidictType *multidictGetType(const multidict *d);
-multidictClass *multidictDefaultClassNew(void);
+[[nodiscard]] multidictClass *multidictDefaultClassNew(void);
 void multidictDefaultClassFree(multidictClass *qdc);
 bool multidictExpand(multidict *d, uint64_t size);
 multidictResult multidictAdd(multidict *d, const databox *keybox,
@@ -399,7 +400,7 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
                                      double increment, double *result);
 
 /* Dict Operations */
-multidict *multidictCopy(const multidict *src);
+[[nodiscard]] multidict *multidictCopy(const multidict *src);
 typedef enum {
     MULTIDICT_MERGE_REPLACE, /* Replace dst value with src on collision */
     MULTIDICT_MERGE_KEEP     /* Keep dst value on collision */

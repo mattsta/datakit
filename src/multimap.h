@@ -10,15 +10,16 @@
 /* opaque multimap type; there's no user accessible data here. */
 typedef struct multimap multimap;
 
-multimap *multimapNew(multimapElements elementsPerEntry);
-multimap *multimapNewLimit(multimapElements elementsPerEntry,
-                           const flexCapSizeLimit limit);
-multimap *multimapNewCompress(multimapElements elementsPerEntry,
-                              const flexCapSizeLimit limit);
-multimap *multimapNewConfigure(multimapElements elementsPerEntry, bool isSet,
-                               bool compress, flexCapSizeLimit sizeLimit);
-multimap *multimapSetNew(multimapElements elementsPerEntry);
-multimap *multimapCopy(const multimap *m);
+[[nodiscard]] multimap *multimapNew(multimapElements elementsPerEntry);
+[[nodiscard]] multimap *multimapNewLimit(multimapElements elementsPerEntry,
+                                         const flexCapSizeLimit limit);
+[[nodiscard]] multimap *multimapNewCompress(multimapElements elementsPerEntry,
+                                            const flexCapSizeLimit limit);
+[[nodiscard]] multimap *multimapNewConfigure(multimapElements elementsPerEntry,
+                                             bool isSet, bool compress,
+                                             flexCapSizeLimit sizeLimit);
+[[nodiscard]] multimap *multimapSetNew(multimapElements elementsPerEntry);
+[[nodiscard]] multimap *multimapCopy(const multimap *m);
 size_t multimapCount(const multimap *m);
 size_t multimapBytes(const multimap *m);
 flex *multimapDump(const multimap *m);

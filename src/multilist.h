@@ -22,11 +22,12 @@ typedef struct multilist multilist;
 /* multilistNew: the process default limit for multilists (dkTierLimit.h),
  * no compression.  multilistNewLimit: an explicit limit, and 'depth' nodes
  * kept uncompressed at each end (0: no compression). */
-multilist *multilistNew(void);
-multilist *multilistNewLimit(flexCapSizeLimit limit, uint32_t depth);
-multilist *multilistNewFromFlex(flexCapSizeLimit limit, uint32_t depth,
-                                flex *fl);
-multilist *multilistCopy(const multilist *ml);
+[[nodiscard]] multilist *multilistNew(void);
+[[nodiscard]] multilist *multilistNewLimit(flexCapSizeLimit limit,
+                                           uint32_t depth);
+[[nodiscard]] multilist *multilistNewFromFlex(flexCapSizeLimit limit,
+                                              uint32_t depth, flex *fl);
+[[nodiscard]] multilist *multilistCopy(const multilist *ml);
 /* A multilist of every element of 'elements' in order (as multilistDump
  * writes them), built straight into its tier: a large dump is cut into
  * node-sized pieces in O(n), with no per-element push.  Takes 'elements';

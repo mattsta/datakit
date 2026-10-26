@@ -6,11 +6,12 @@
 
 typedef struct multiroar multiroar;
 
-multiroar *multiroarBitNew(void);
-multiroar *multiroarValueNew(uint8_t bitWidth, uint64_t rows, uint64_t cols);
+[[nodiscard]] multiroar *multiroarBitNew(void);
+[[nodiscard]] multiroar *multiroarValueNew(uint8_t bitWidth, uint64_t rows,
+                                           uint64_t cols);
 void multiroarFree(multiroar *r);
 
-multiroar *multiroarDuplicate(const multiroar *r);
+[[nodiscard]] multiroar *multiroarDuplicate(const multiroar *r);
 
 /* Modes.  A roar is bit-mode (multiroarBitNew: a set of positions) or
  * value-mode (multiroarValueNew: position -> unsigned value of a fixed
@@ -97,7 +98,8 @@ void multiroarBitClearRange(multiroar *r, uint64_t start, uint64_t extent);
 /* Flip range [start, start+extent) */
 /* A - B (bits in A but not in B) */
 void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent);
-multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b);
+[[nodiscard]] multiroar *multiroarNewAndNot(const multiroar *a,
+                                            const multiroar *b);
 /* r = r - b (in-place) */
 void multiroarAndNot(multiroar *r, multiroar *b);
 
@@ -108,10 +110,12 @@ void multiroarOr(multiroar *r, multiroar *b);
 void multiroarNot(multiroar *r);
 
 /* Binary set operations - return new multiroar */
-multiroar *multiroarNewXor(const multiroar *r, const multiroar *b);
-multiroar *multiroarNewAnd(const multiroar *r, const multiroar *b);
-multiroar *multiroarNewOr(const multiroar *r, const multiroar *b);
-multiroar *multiroarNewNot(const multiroar *r);
+[[nodiscard]] multiroar *multiroarNewXor(const multiroar *r,
+                                         const multiroar *b);
+[[nodiscard]] multiroar *multiroarNewAnd(const multiroar *r,
+                                         const multiroar *b);
+[[nodiscard]] multiroar *multiroarNewOr(const multiroar *r, const multiroar *b);
+[[nodiscard]] multiroar *multiroarNewNot(const multiroar *r);
 
 /* N-way set operations (N >= 2) - modify first roar in array in place */
 void multiroarAndN(uint64_t n, multiroar **roars);
@@ -119,9 +123,9 @@ void multiroarOrN(uint64_t n, multiroar **roars);
 void multiroarXorN(uint64_t n, multiroar **roars);
 
 /* N-way set operations - return new multiroar */
-multiroar *multiroarNewAndN(uint64_t n, multiroar **roars);
-multiroar *multiroarNewOrN(uint64_t n, multiroar **roars);
-multiroar *multiroarNewXorN(uint64_t n, multiroar **roars);
+[[nodiscard]] multiroar *multiroarNewAndN(uint64_t n, multiroar **roars);
+[[nodiscard]] multiroar *multiroarNewOrN(uint64_t n, multiroar **roars);
+[[nodiscard]] multiroar *multiroarNewXorN(uint64_t n, multiroar **roars);
 
 /* Iterator for efficient traversal */
 typedef struct multiroarIterator {
@@ -151,7 +155,8 @@ uint64_t multiroarToArray(const multiroar *r, uint64_t *positions,
 /* A new bit-mode roar of 'count' positions (any order, repeats allowed);
  * count 0 gives an empty roar, positions may then be NULL.  NULL only for
  * NULL positions with a nonzero count. */
-multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count);
+[[nodiscard]] multiroar *multiroarFromArray(const uint64_t *positions,
+                                            uint64_t count);
 
 /* Similarity and distance metrics.  Two empty sets have Jaccard and Dice
  * 1 (identical); the overlap coefficient is 0 when either set is empty
@@ -182,10 +187,12 @@ uint64_t multiroarMemoryUsage(const multiroar *r);
 extern const dkFormatSpec multiroarFormat;
 
 uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize);
-multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize);
+[[nodiscard]] multiroar *multiroarDeserialize(const void *buf,
+                                              uint64_t bufSize);
 uint64_t multiroarSerializedSize(const multiroar *r);
 uint64_t multiroarSerializeRaw(const multiroar *r, void *buf, uint64_t bufSize);
-multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize);
+[[nodiscard]] multiroar *multiroarDeserializeRaw(const void *buf,
+                                                 uint64_t bufSize);
 uint64_t multiroarSerializedSizeRaw(const multiroar *r);
 
 #ifdef DATAKIT_TEST

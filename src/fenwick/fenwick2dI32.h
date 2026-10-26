@@ -10,7 +10,7 @@
 
 typedef struct fenwick2dI32 fenwick2dI32;
 
-fenwick2dI32 *fenwick2dI32New(void);
+[[nodiscard]] fenwick2dI32 *fenwick2dI32New(void);
 void fenwick2dI32Free(fenwick2dI32 *t);
 bool fenwick2dI32Update(fenwick2dI32 **t, size_t row, size_t col,
                         int32_t delta);
@@ -25,7 +25,7 @@ size_t fenwick2dI32Bytes(const fenwick2dI32 *t);
 void fenwick2dI32Clear(fenwick2dI32 *t);
 /* A rows x cols tree of row-major elements in O(cells) (either extent 0
  * or NULL: an empty tree; NULL past the cell limit) */
-fenwick2dI32 *fenwick2dI32NewFromArray(const int32_t *values, size_t rows,
-                                       size_t cols);
+[[nodiscard]] fenwick2dI32 *fenwick2dI32NewFromArray(const int32_t *values,
+                                                     size_t rows, size_t cols);
 /* Every element, as Get returns it, row-major into out[Rows * Cols] */
 void fenwick2dI32CopyTo(const fenwick2dI32 *t, int32_t *out);

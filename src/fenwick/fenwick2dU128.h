@@ -13,7 +13,7 @@
 
 typedef struct fenwick2dU128 fenwick2dU128;
 
-fenwick2dU128 *fenwick2dU128New(void);
+[[nodiscard]] fenwick2dU128 *fenwick2dU128New(void);
 void fenwick2dU128Free(fenwick2dU128 *t);
 bool fenwick2dU128Update(fenwick2dU128 **t, size_t row, size_t col,
                          __uint128_t delta);
@@ -29,8 +29,8 @@ size_t fenwick2dU128Bytes(const fenwick2dU128 *t);
 void fenwick2dU128Clear(fenwick2dU128 *t);
 /* A rows x cols tree of row-major elements in O(cells) (either extent 0
  * or NULL: an empty tree; NULL past the cell limit) */
-fenwick2dU128 *fenwick2dU128NewFromArray(const __uint128_t *values, size_t rows,
-                                         size_t cols);
+[[nodiscard]] fenwick2dU128 *
+fenwick2dU128NewFromArray(const __uint128_t *values, size_t rows, size_t cols);
 /* Every element, as Get returns it, row-major into out[Rows * Cols] */
 void fenwick2dU128CopyTo(const fenwick2dU128 *t, __uint128_t *out);
 

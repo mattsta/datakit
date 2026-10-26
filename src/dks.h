@@ -162,15 +162,15 @@ typedef char mdsc;
 #define DKS_RANDBYTES DK_NAME(DKS_TYPE, randbytes)
 
 /* Exported functions */
-DKS_TYPE *DKS_NEWLEN(const void *init, size_t initlen);
-DKS_TYPE *DKS_NEW(const char *init);
-DKS_TYPE *DKS_NEWFROMFILE(const char *filename);
+[[nodiscard]] DKS_TYPE *DKS_NEWLEN(const void *init, size_t initlen);
+[[nodiscard]] DKS_TYPE *DKS_NEW(const char *init);
+[[nodiscard]] DKS_TYPE *DKS_NEWFROMFILE(const char *filename);
 uint64_t DKS_XXH64(const DKS_TYPE *s, const uint64_t seed);
 uint64_t DKS_XXH3_64(const DKS_TYPE *s, const uint64_t seed);
 __uint128_t DKS_XXH3_128(const DKS_TYPE *s, const uint64_t seed);
-DKS_TYPE *DKS_EMPTY(void);
-DKS_TYPE *DKS_EMPTYLEN(size_t len);
-DKS_TYPE *DKS_DUP(const DKS_TYPE *s);
+[[nodiscard]] DKS_TYPE *DKS_EMPTY(void);
+[[nodiscard]] DKS_TYPE *DKS_EMPTYLEN(size_t len);
+[[nodiscard]] DKS_TYPE *DKS_DUP(const DKS_TYPE *s);
 void DKS_FREE(DKS_TYPE *s);
 /* Wipe all DKS_ALLOCSIZE(s) bytes (header, contents, free space and the
  * terminator), and the allocator's slack past them when the allocator

@@ -27,9 +27,9 @@ typedef struct intsetU32 {
     uint32_t *contents;
 } intsetU32;
 
-intsetU32 *intsetU32New(void);
-intsetU32 *intsetU32NewLen(const uint32_t len);
-intsetU32 *intsetU32Copy(const intsetU32 *is);
+[[nodiscard]] intsetU32 *intsetU32New(void);
+[[nodiscard]] intsetU32 *intsetU32NewLen(const uint32_t len);
+[[nodiscard]] intsetU32 *intsetU32Copy(const intsetU32 *is);
 uint32_t *intsetU32Array(intsetU32 *is);
 void intsetU32Resize(intsetU32 *is, uint32_t len);
 void intsetU32ShrinkToSize(intsetU32 *is);

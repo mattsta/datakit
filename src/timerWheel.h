@@ -241,7 +241,7 @@ typedef bool timerWheelCallback(timerWheel *tw, timerWheelId id,
  * Create a new timer wheel instance.
  * Returns NULL on allocation failure.
  */
-timerWheel *timerWheelNew(void);
+[[nodiscard]] timerWheel *timerWheelNew(void);
 
 /**
  * Free a timer wheel and all associated resources.

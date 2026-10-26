@@ -364,10 +364,10 @@ const clusterNode *clusterReadSetGetCandidate(const clusterReadSet *rs,
  * an unknown level, or a quorum that is not valid (see
  * clusterRingAddKeySpace); a zero defaultQuorum.replicaCount takes
  * CLUSTER_QUORUM_BALANCED. */
-clusterRing *clusterRingNew(const clusterRingConfig *config);
+[[nodiscard]] clusterRing *clusterRingNew(const clusterRingConfig *config);
 
 /* Create ring with defaults */
-clusterRing *clusterRingNewDefault(void);
+[[nodiscard]] clusterRing *clusterRingNewDefault(void);
 
 /* Free ring and all resources */
 void clusterRingFree(clusterRing *ring);
@@ -559,7 +559,7 @@ typedef struct clusterRebalanceInfo {
 
 /* A copy of the ring's topology, configuration and keyspaces (as a
  * snapshot round trip would give); NULL on allocation failure */
-clusterRing *clusterRingCopy(const clusterRing *ring);
+[[nodiscard]] clusterRing *clusterRingCopy(const clusterRing *ring);
 
 /* Plan the moves from `from`'s placement to `ring`'s, replacing any plan.
  * For every range and every node `ring` places it on that `from` did not,
@@ -754,7 +754,8 @@ size_t clusterRingSerialize(const clusterRing *ring, void *buf, size_t bufLen);
 size_t clusterRingSerializeSize(const clusterRing *ring);
 
 /* Deserialize ring from buffer */
-clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen);
+[[nodiscard]] clusterRing *clusterRingDeserialize(const void *buf,
+                                                  size_t bufLen);
 
 /* Get current ring version (monotonically increasing on each modification). */
 uint64_t clusterRingGetVersion(const clusterRing *ring);

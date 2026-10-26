@@ -21,9 +21,9 @@ typedef uint8_t flexEntry;
 
 typedef uint8_t cflex;
 
-flex *flexNew(void);
+[[nodiscard]] flex *flexNew(void);
 void flexReset(flex **ff);
-flex *flexDuplicate(const flex *f);
+[[nodiscard]] flex *flexDuplicate(const flex *f);
 void flexFree(flex *f);
 
 /* Validators for untrusted input.

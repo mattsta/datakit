@@ -9,17 +9,17 @@ typedef struct mflex mflex;
 typedef struct mflexState mflexState;
 
 /* State Management */
-mflexState *mflexStateNew(size_t initialBufferSize);
-mflexState *mflexStateCreate(void);
+[[nodiscard]] mflexState *mflexStateNew(size_t initialBufferSize);
+[[nodiscard]] mflexState *mflexStateCreate(void);
 void mflexStatePreferredLenUpdate(mflexState *state, size_t len);
 size_t mflexStatePreferredLen(mflexState *state);
 void mflexStateReset(mflexState *state);
 void mflexStateFree(mflexState *state);
 
 /* mflex creation */
-mflex *mflexNew(void);
+[[nodiscard]] mflex *mflexNew(void);
 mflex *mflexNewNoCompress(void);
-mflex *mflexDuplicate(const mflex *m);
+[[nodiscard]] mflex *mflexDuplicate(const mflex *m);
 mflex *mflexConvertFromFlex(flex *f, mflexState *state);
 mflex *mflexConvertFromFlexNoCompress(flex *f);
 

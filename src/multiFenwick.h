@@ -154,7 +154,7 @@ typedef struct multiFenwick multiFenwick;
  * ==================================================================== */
 
 /* Create new empty multiFenwick tree */
-multiFenwick *multiFenwickNew(void);
+[[nodiscard]] multiFenwick *multiFenwickNew(void);
 
 /* Create multiFenwick tree from databox array: element i is values[i]
  * Time: O(n)
@@ -164,7 +164,8 @@ multiFenwick *multiFenwickNew(void);
  * MULTIFENWICK_INDEX_MAX, when any element is not an accepted value
  * (VOID included: write a zero for a zero), or when a stored block sum
  * would be out of range (see VALUES above), or on allocation failure. */
-multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count);
+[[nodiscard]] multiFenwick *multiFenwickNewFromArray(const databox *values,
+                                                     size_t count);
 
 /* Free multiFenwick tree */
 void multiFenwickFree(multiFenwick *mfw);

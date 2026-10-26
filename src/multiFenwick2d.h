@@ -44,7 +44,7 @@
 
 typedef struct multiFenwick2d multiFenwick2d;
 
-multiFenwick2d *multiFenwick2dNew(void);
+[[nodiscard]] multiFenwick2d *multiFenwick2dNew(void);
 void multiFenwick2dFree(multiFenwick2d *t);
 
 bool multiFenwick2dUpdate(multiFenwick2d **t, size_t row, size_t col,

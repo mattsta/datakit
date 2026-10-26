@@ -7,9 +7,9 @@
 typedef struct multimapFull multimapFull;
 typedef void(multimapFullMapDeleter)(const flex *map, void *data);
 
-multimapFull *multimapFullNew(multimapElements elementsPerEntry);
-multimapFull *multimapFullSetNew(multimapElements elementsPerEntry,
-                                 uint32_t maxSize);
+[[nodiscard]] multimapFull *multimapFullNew(multimapElements elementsPerEntry);
+[[nodiscard]] multimapFull *
+multimapFullSetNew(multimapElements elementsPerEntry, uint32_t maxSize);
 multimapFull *multimapFullNewFromManyGrow(void *m, flex *map[],
                                           const multimapFullMiddle middle[],
                                           size_t count,
@@ -31,7 +31,7 @@ multimapFull *multimapFullNewFromOneGrow(void *m, flex *one,
                                          multimapFullMiddle mid,
                                          multimapElements elementsPerEntry,
                                          bool mapIsSet);
-multimapFull *multimapFullCopy(const multimapFull *m);
+[[nodiscard]] multimapFull *multimapFullCopy(const multimapFull *m);
 size_t multimapFullCount(const multimapFull *m);
 size_t multimapFullBytes(const multimapFull *m);
 size_t multimapFullNodeCount(const multimapFull *m);
