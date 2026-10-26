@@ -175,12 +175,55 @@ typedef struct clusterQuorum {
 } clusterQuorum;
 
 /* Pre-defined quorum profiles */
-extern const clusterQuorum CLUSTER_QUORUM_STRONG;   /* W=ALL, R=1 */
-extern const clusterQuorum CLUSTER_QUORUM_EVENTUAL; /* W=1, R=1 */
-extern const clusterQuorum CLUSTER_QUORUM_BALANCED; /* W=QUORUM, R=QUORUM */
-extern const clusterQuorum
-    CLUSTER_QUORUM_READ_HEAVY; /* W=ALL, R=1, read-repair */
-extern const clusterQuorum CLUSTER_QUORUM_WRITE_HEAVY; /* W=1, R=ALL */
+/* W=ALL, R=1 */
+static constexpr clusterQuorum CLUSTER_QUORUM_STRONG = {
+    .replicaCount = 3,
+    .writeQuorum = 3,
+    .writeSync = 3,
+    .readQuorum = 1,
+    .readRepairEnabled = false,
+    .consistency = CLUSTER_CONSISTENCY_ALL,
+};
+
+/* W=1, R=1 */
+static constexpr clusterQuorum CLUSTER_QUORUM_EVENTUAL = {
+    .replicaCount = 3,
+    .writeQuorum = 1,
+    .writeSync = 1,
+    .readQuorum = 1,
+    .readRepairEnabled = false,
+    .consistency = CLUSTER_CONSISTENCY_ONE,
+};
+
+/* W=QUORUM, R=QUORUM */
+static constexpr clusterQuorum CLUSTER_QUORUM_BALANCED = {
+    .replicaCount = 3,
+    .writeQuorum = 2,
+    .writeSync = 2,
+    .readQuorum = 2,
+    .readRepairEnabled = true,
+    .consistency = CLUSTER_CONSISTENCY_QUORUM,
+};
+
+/* W=ALL, R=1, read-repair */
+static constexpr clusterQuorum CLUSTER_QUORUM_READ_HEAVY = {
+    .replicaCount = 3,
+    .writeQuorum = 3,
+    .writeSync = 3,
+    .readQuorum = 1,
+    .readRepairEnabled = true,
+    .consistency = CLUSTER_CONSISTENCY_ALL,
+};
+
+/* W=1, R=ALL */
+static constexpr clusterQuorum CLUSTER_QUORUM_WRITE_HEAVY = {
+    .replicaCount = 3,
+    .writeQuorum = 1,
+    .writeSync = 1,
+    .readQuorum = 3,
+    .readRepairEnabled = false,
+    .consistency = CLUSTER_CONSISTENCY_ONE,
+};
 
 /* ====================================================================
  * Placement Strategies
@@ -255,9 +298,23 @@ typedef struct clusterAffinityRule {
 } clusterAffinityRule;
 
 /* Common affinity presets */
-extern const clusterAffinityRule CLUSTER_AFFINITY_RACK_SPREAD;
-extern const clusterAffinityRule CLUSTER_AFFINITY_AZ_SPREAD;
-extern const clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD;
+static constexpr clusterAffinityRule CLUSTER_AFFINITY_RACK_SPREAD = {
+    .spreadLevel = CLUSTER_LEVEL_RACK,
+    .minSpread = 2,
+    .required = true,
+};
+
+static constexpr clusterAffinityRule CLUSTER_AFFINITY_AZ_SPREAD = {
+    .spreadLevel = CLUSTER_LEVEL_AVAILABILITY_ZONE,
+    .minSpread = 2,
+    .required = true,
+};
+
+static constexpr clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD = {
+    .spreadLevel = CLUSTER_LEVEL_REGION,
+    .minSpread = 2,
+    .required = false,
+};
 
 /* ====================================================================
  * Ring Configuration

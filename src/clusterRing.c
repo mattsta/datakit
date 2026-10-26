@@ -61,75 +61,37 @@ static void clusterRingRebuildMaglev(clusterRing *ring);
     } while (0)
 
 /* ====================================================================
- * Pre-defined Quorum Profiles
+ * Preset Contracts
  * ==================================================================== */
 
-const clusterQuorum CLUSTER_QUORUM_STRONG = {
-    .replicaCount = 3,
-    .writeQuorum = 3, /* ALL */
-    .writeSync = 3,
-    .readQuorum = 1,
-    .readRepairEnabled = false,
-    .consistency = CLUSTER_CONSISTENCY_ALL,
-};
+/* A preset never asks more acks or responses than it keeps replicas */
+#define CLUSTER_QUORUM_FITS_(q)                                                \
+    static_assert((q).writeQuorum <= (q).replicaCount &&                       \
+                      (q).readQuorum <= (q).replicaCount,                      \
+                  #q " asks more replicas than it keeps")
 
-const clusterQuorum CLUSTER_QUORUM_EVENTUAL = {
-    .replicaCount = 3,
-    .writeQuorum = 1,
-    .writeSync = 1,
-    .readQuorum = 1,
-    .readRepairEnabled = false,
-    .consistency = CLUSTER_CONSISTENCY_ONE,
-};
+/* Read and write sets overlap, so a read sees the latest acked write */
+#define CLUSTER_QUORUM_OVERLAPS_(q)                                            \
+    static_assert((q).writeQuorum + (q).readQuorum > (q).replicaCount,         \
+                  #q " reads can miss the latest write")
 
-const clusterQuorum CLUSTER_QUORUM_BALANCED = {
-    .replicaCount = 3,
-    .writeQuorum = 2, /* QUORUM */
-    .writeSync = 2,
-    .readQuorum = 2,
-    .readRepairEnabled = true,
-    .consistency = CLUSTER_CONSISTENCY_QUORUM,
-};
+CLUSTER_QUORUM_FITS_(CLUSTER_QUORUM_STRONG);
+CLUSTER_QUORUM_FITS_(CLUSTER_QUORUM_EVENTUAL);
+CLUSTER_QUORUM_FITS_(CLUSTER_QUORUM_BALANCED);
+CLUSTER_QUORUM_FITS_(CLUSTER_QUORUM_READ_HEAVY);
+CLUSTER_QUORUM_FITS_(CLUSTER_QUORUM_WRITE_HEAVY);
+CLUSTER_QUORUM_OVERLAPS_(CLUSTER_QUORUM_STRONG);
+CLUSTER_QUORUM_OVERLAPS_(CLUSTER_QUORUM_BALANCED);
+CLUSTER_QUORUM_OVERLAPS_(CLUSTER_QUORUM_READ_HEAVY);
+CLUSTER_QUORUM_OVERLAPS_(CLUSTER_QUORUM_WRITE_HEAVY);
 
-const clusterQuorum CLUSTER_QUORUM_READ_HEAVY = {
-    .replicaCount = 3,
-    .writeQuorum = 3, /* ALL */
-    .writeSync = 3,
-    .readQuorum = 1,
-    .readRepairEnabled = true,
-    .consistency = CLUSTER_CONSISTENCY_ALL,
-};
+/* A spread rule asks for at least two distinct placements */
+#define CLUSTER_AFFINITY_SPREADS_(r)                                           \
+    static_assert((r).minSpread >= 2, #r " spreads over fewer than two")
 
-const clusterQuorum CLUSTER_QUORUM_WRITE_HEAVY = {
-    .replicaCount = 3,
-    .writeQuorum = 1,
-    .writeSync = 1,
-    .readQuorum = 3, /* ALL */
-    .readRepairEnabled = false,
-    .consistency = CLUSTER_CONSISTENCY_ONE,
-};
-
-/* ====================================================================
- * Pre-defined Affinity Rules
- * ==================================================================== */
-
-const clusterAffinityRule CLUSTER_AFFINITY_RACK_SPREAD = {
-    .spreadLevel = CLUSTER_LEVEL_RACK,
-    .minSpread = 2,
-    .required = true,
-};
-
-const clusterAffinityRule CLUSTER_AFFINITY_AZ_SPREAD = {
-    .spreadLevel = CLUSTER_LEVEL_AVAILABILITY_ZONE,
-    .minSpread = 2,
-    .required = true,
-};
-
-const clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD = {
-    .spreadLevel = CLUSTER_LEVEL_REGION,
-    .minSpread = 2,
-    .required = false,
-};
+CLUSTER_AFFINITY_SPREADS_(CLUSTER_AFFINITY_RACK_SPREAD);
+CLUSTER_AFFINITY_SPREADS_(CLUSTER_AFFINITY_AZ_SPREAD);
+CLUSTER_AFFINITY_SPREADS_(CLUSTER_AFFINITY_REGION_SPREAD);
 
 /* ====================================================================
  * Constants
