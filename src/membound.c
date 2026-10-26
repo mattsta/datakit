@@ -3371,7 +3371,7 @@ static inline int memboundMicroLog(int value) {
     if (value <= 1) {
         return 0;
     }
-    return 32 - __builtin_clz((unsigned)(value - 1));
+    return (int)stdc_bit_width((unsigned int)(value - 1));
 }
 
 /* MICRO tier MemboundLink - 4 bytes (uses 16-bit indices) */
@@ -3731,8 +3731,7 @@ static inline int memboundCompactLog(int value) {
     if (value <= 1) {
         return 0;
     }
-    /* Hardware CLZ; value > 1 here, so the operand is never 0 */
-    return 32 - __builtin_clz((unsigned int)value - 1);
+    return (int)stdc_bit_width((unsigned int)value - 1);
 }
 
 /* COMPACT tier Link node - 8 bytes (uses 32-bit indices) */

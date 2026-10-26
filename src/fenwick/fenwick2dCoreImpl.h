@@ -77,12 +77,7 @@ struct F2D_STRUCT {
 
 /* Smallest power of two, at least 'current' (and at least 1), above idx */
 static inline uint64_t F2D_FN(CapFor_)(uint64_t current, uint64_t idx) {
-    uint64_t cap = current == 0 ? 1 : current;
-    while (cap <= idx) {
-        cap <<= 1;
-    }
-
-    return cap;
+    return stdc_bit_ceil(current > idx + 1 ? current : idx + 1);
 }
 
 static inline uint64_t F2D_FN(Index_)(const struct F2D_STRUCT *t, uint64_t i,
@@ -103,7 +98,7 @@ static inline uint64_t F2D_FN(Source_)(uint64_t k, uint64_t cap) {
         return k;
     }
 
-    return cap > 0 && (k & (k - 1)) == 0 ? cap : 0;
+    return cap > 0 && stdc_has_single_bit(k) ? cap : 0;
 }
 
 /* Cell (i, j) of the tree as it will be once grown past its capacity */

@@ -58,12 +58,7 @@ static inline SEGMENT_VALUE_TYPE SEGMENT_ALGO_(Combine_)(SEGMENT_VALUE_TYPE a,
  * least 'current' (and at least 1), above idx */
 static inline uint64_t SEGMENT_ALGO_(LeavesFor_)(uint64_t current,
                                                  uint64_t idx) {
-    uint64_t leaves = current == 0 ? 1 : current;
-    while (leaves <= idx) {
-        leaves <<= 1;
-    }
-
-    return leaves;
+    return stdc_bit_ceil(current > idx + 1 ? current : idx + 1);
 }
 
 /* Recompute every internal node from the leaves, O(leaves) */

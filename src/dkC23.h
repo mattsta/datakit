@@ -8,6 +8,21 @@
 #include <limits.h>
 #include <stdint.h>
 
+/* <stdint.h> width macros (C23 7.22.2), where the library lacks them */
+#ifndef UINT64_WIDTH
+#define INT8_WIDTH 8
+#define UINT8_WIDTH 8
+#define INT16_WIDTH 16
+#define UINT16_WIDTH 16
+#define INT32_WIDTH 32
+#define UINT32_WIDTH 32
+#define INT64_WIDTH 64
+#define UINT64_WIDTH 64
+#endif
+#ifndef SIZE_WIDTH
+#define SIZE_WIDTH ULONG_WIDTH /* size_t is unsigned long on every target */
+#endif
+
 #if __has_include(<stdbit.h>)
 #include <stdbit.h>
 #else

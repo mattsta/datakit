@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dkC23.h" /* UINT64_WIDTH */
 #include <limits.h>
 #include <stdint.h>
 
@@ -40,7 +41,7 @@
  * over a draw's bits — an every-bit oracle, a mask — never spells the
  * literal, and so the width moves in one place if the source ever
  * widens. */
-#define DK_RANDOM_WORD_BITS (sizeof(uint64_t) * CHAR_BIT)
+#define DK_RANDOM_WORD_BITS UINT64_WIDTH
 
 /* A uniform 64-bit value from this thread's generator. */
 uint64_t dkRandom64(void);

@@ -199,10 +199,7 @@ void *SEGMENT_D_FN_(NewFromArray)(segmentOp op,
         return SEGMENT_D_FN_(New)(op);
     }
 
-    uint64_t leaves = 1;
-    while (leaves < count) {
-        leaves <<= 1;
-    }
+    const uint64_t leaves = stdc_bit_ceil((uint64_t)count);
 
     /* The tier Update would keep it in (see Update) */
     if (2 * leaves * sizeof(SEGMENT_VALUE_TYPE) + sizeof(SEGMENT_D_SMALL_) <=

@@ -910,7 +910,6 @@ DK_STATIC uint_fast8_t flexWriteEncodingReversedForward(
     return 1;
 }
 
-#define divCeil(a, b) (((a) + (b) - 1) / (b))
 DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsigned(uint64_t value) {
     /* Determine the smallest encoding for 'value' */
 
@@ -924,7 +923,7 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsigned(uint64_t value) {
         encoding += FLEX_INTEGER_ENCODING_STEP;
     }
 #else
-    /* 'if' is necessary because __builtin_clzll is not defined for 0 */
+    /* A value of 0 still takes the one-byte encoding (DK_BYTESUSED says 0) */
     if (value) {
         /* We want the leading number of bytes set to zero, so:
          *   - 64 bits - number of leading zero bits in 'value'
@@ -945,8 +944,7 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsignedBig(__uint128_t value) {
 
     const uint64_t topUse = value >> 64;
     if (topUse) {
-        size_t usedBytes =
-            divCeil(((sizeof(topUse) * 8) - __builtin_clzll(topUse)), 8);
+        size_t usedBytes = DK_BYTESUSED(topUse);
 
         if (usedBytes) {
             /* Account for the lower half of the int128_t used storage too */

@@ -255,7 +255,7 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
         multiFenwickNum base = {};
         if (i <= oldCapacity) {
             base = multiFenwickFlatCellGet_(cur, i - 1);
-        } else if (oldCapacity > 0 && (i & (i - 1)) == 0) {
+        } else if (oldCapacity > 0 && stdc_has_single_bit(i)) {
             base = total;
         }
 
@@ -409,16 +409,13 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
         return SIZE_MAX;
     }
 
-    uint64_t bit = 1;
-    while (bit <= mfw->count) {
-        bit <<= 1;
-    }
-
+    /* The largest step that fits; each later step halves it */
+    const uint64_t top = stdc_bit_floor((uint64_t)mfw->count);
     const multiFenwickCells *c = &mfw->cells;
     uint64_t pos = 0;
     if (multiFenwickCellsAllInt(c) && !want.isFloat) {
         __int128_t sum = 0;
-        for (bit >>= 1; bit > 0; bit >>= 1) {
+        for (uint64_t bit = top; bit > 0; bit >>= 1) {
             const uint64_t next = pos + bit;
             if (next <= mfw->count) {
                 const __int128_t withNext =
@@ -431,7 +428,7 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
         }
     } else {
         multiFenwickNum sum = {};
-        for (bit >>= 1; bit > 0; bit >>= 1) {
+        for (uint64_t bit = top; bit > 0; bit >>= 1) {
             const uint64_t next = pos + bit;
             if (next <= mfw->count) {
                 const multiFenwickNum withNext =

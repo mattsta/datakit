@@ -1134,7 +1134,7 @@ DK_STATIC uint64_t findLastSetBitInBitmap(const uint8_t *bitmap,
     for (uint64_t i = bytes; i > words * 8; i--) {
         if (bitmap[i - 1] != 0) {
             return (i - 1) * 8 +
-                   (uint64_t)(31 - __builtin_clz((uint32_t)bitmap[i - 1]));
+                   (uint64_t)(stdc_bit_width((unsigned int)bitmap[i - 1]) - 1);
         }
     }
     for (uint64_t i = words; i > 0; i--) {
@@ -1143,7 +1143,7 @@ DK_STATIC uint64_t findLastSetBitInBitmap(const uint8_t *bitmap,
         uint64_t word;
         memcpy(&word, bitmap + ((i - 1) * 8), sizeof(word));
         if (word != 0) {
-            return (i - 1) * 64 + (uint64_t)(63 - __builtin_clzll(word));
+            return (i - 1) * 64 + (uint64_t)(stdc_bit_width(word) - 1);
         }
     }
     return UINT64_MAX;

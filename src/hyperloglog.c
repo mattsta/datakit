@@ -260,7 +260,7 @@ static constexpr uint64_t serverSparseMaxBytes = 4096;
 #define HLL_DENSE_SIZE (HLL_HDR_SIZE + ((HLL_REGISTERS * HLL_BITS + 7) / 8))
 #define HLL_MAX_SIZE HLL_HDR_SIZE + HLL_REGISTERS
 #define HLL_MAX_ENCODING 1
-#define HLL_ZERO_BOUND ((sizeof(uint64_t) * 8) - HLL_P)
+#define HLL_ZERO_BOUND (UINT64_WIDTH - HLL_P)
 
 typedef uint8_t hllStatic[HLL_MAX_SIZE];
 

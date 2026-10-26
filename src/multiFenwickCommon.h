@@ -32,12 +32,7 @@ static inline uint64_t multiFenwickPrev(uint64_t idx) {
  * index 'idx') */
 static inline uint64_t multiFenwickCapacityFor_(uint64_t current,
                                                 uint64_t idx) {
-    uint64_t capacity = current == 0 ? 1 : current;
-    while (capacity < idx + 1) {
-        capacity <<= 1;
-    }
-
-    return capacity;
+    return stdc_bit_ceil(current > idx + 1 ? current : idx + 1);
 }
 
 /* ====================================================================
@@ -373,7 +368,7 @@ static inline bool databoxAdd(const databox *a, const databox *b,
         return true;
     }
 
-use_double:;
+use_double:
     /* Convert both to double for floating point arithmetic */
     double va_d, vb_d;
     if (!databoxToDouble(a, &va_d) || !databoxToDouble(b, &vb_d)) {
@@ -433,7 +428,7 @@ static inline bool databoxSubtract(const databox *a, const databox *b,
         return true;
     }
 
-use_double_sub:;
+use_double_sub:
     /* Convert both to double for floating point arithmetic */
     double va_d2, vb_d2;
     if (!databoxToDouble(a, &va_d2) || !databoxToDouble(b, &vb_d2)) {

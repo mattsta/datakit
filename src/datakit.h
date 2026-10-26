@@ -113,8 +113,8 @@
     static_assert(sizeof(thing) == (size), #thing " changed from " #size "?")
 
 #define DK_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
-#define DK_BYTESUSED(value)                                                    \
-    (value ? DK_DIV_CEIL(((sizeof(value) * 8) - __builtin_clzll(value)), 8) : 0)
+/* Bytes that hold 'value' (0 for 0), for any unsigned width up to 64 */
+#define DK_BYTESUSED(value) DK_DIV_CEIL(stdc_bit_width((uint64_t)(value)), 8u)
 
 /* ====================================================================
  * Feature exposers

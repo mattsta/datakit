@@ -24,6 +24,8 @@
 #include "hmacKeyring.h"
 #include "membound.h"
 #include "mflex.h"
+#include "multiFenwick.h"
+#include "multiFenwickFlat.h"
 #include "multiOrderedSet.h"
 #include "multiarray.h"
 #include "multidict.h"
@@ -1152,6 +1154,33 @@ static void benchNumeric(void) {
     perfContainerSink = sink;
 }
 
+defcleanerName(databox *, zfree, Boxes);
+defcleaner(multiFenwick *, multiFenwickFree);
+defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
+
+/* fenwick: the search both Fenwick trees answer from their prefix sums
+ * (a tree of ones, so the target t lands at index t - 1) */
+static void benchFenwick(void) {
+    const uint32_t n = PERF_CONTAINER_N;
+    cleanerName(zfree, Boxes) databox *values = zcalloc(n, sizeof(databox));
+    for (uint32_t i = 0; i < n; i++) {
+        values[i] = DATABOX_SIGNED(1);
+    }
+
+    cleaner(multiFenwickFree) multiFenwick *tree =
+        multiFenwickNewFromArray(values, n);
+    cleaner(multiFenwickFlatFree) multiFenwickFlat *flat =
+        multiFenwickFlatNewFromArray(values, n);
+    uint64_t sink = 0;
+    PERF_ROW("fenwick", "lowerBound", n,
+             const databox t = DATABOX_SIGNED((int64_t)perfScatter(i) + 1);
+             sink += multiFenwickLowerBound(tree, &t));
+    PERF_ROW("fenwick", "flatLowerBound", n,
+             const databox t = DATABOX_SIGNED((int64_t)perfScatter(i) + 1);
+             sink += multiFenwickFlatLowerBound(flat, &t));
+    perfContainerSink = sink;
+}
+
 static void benchMultidictP(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -1919,6 +1948,10 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfWanted("numeric")) {
             benchNumeric();
+        }
+
+        if (perfWanted("fenwick")) {
+            benchFenwick();
         }
 
         if (perfWanted("multiOrderedSet")) {

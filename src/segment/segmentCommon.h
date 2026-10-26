@@ -9,6 +9,7 @@
  * at 1.
  */
 
+#include "../dkC23.h" /* stdc_bit_ceil */
 #include <stdint.h>
 
 /* Operation type for range queries */
@@ -20,12 +21,7 @@ typedef enum segmentOp {
 
 /* Tree slots for n leaves (n >= 1): twice the next power of two */
 static inline uint64_t segmentTreeSize(uint64_t n) {
-    /* Round up to next power of 2, then multiply by 2 for tree structure */
-    uint64_t size = 1;
-    while (size < n) {
-        size <<= 1;
-    }
-    return size << 1;
+    return stdc_bit_ceil(n) << 1;
 }
 
 /* Helper: get parent index */

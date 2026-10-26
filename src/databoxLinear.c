@@ -60,8 +60,8 @@ databoxLinearEncodingUnsigned(uint64_t value) {
 
     databoxLinearType encoding = DL_UINT_8B;
 
-    /* The "BYTESUSED" macro doesn't work for value '0', so anything
-     * less than one byte, just use the default value. */
+    /* Anything that fits one byte (0 included, which DK_BYTESUSED counts
+     * as 0 bytes) takes the default encoding */
     if (value <= UINT8_MAX) {
         return encoding;
     }

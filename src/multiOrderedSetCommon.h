@@ -472,10 +472,7 @@ static inline size_t mosRandomMembersFill(const void *set, mosRankPick *pick,
     /* Rejection sampling against an open-addressing set of rank + 1
      * (0 = empty slot), at most half full.  At most a quarter of the ranks
      * are taken, so each draw is new with probability >= 3/4. */
-    size_t slots = 16;
-    while (slots < want * 2) {
-        slots <<= 1;
-    }
+    const size_t slots = want * 2 > 16 ? stdc_bit_ceil(want * 2) : 16;
 
     const size_t mask = slots - 1;
     cleanerName(zfree, MosRankSet) uint64_t *seen =

@@ -760,8 +760,7 @@ static inline int memboundLog64(size_t value) {
         return 0;
     }
 
-    /* Use 64-bit count leading zeros */
-    return 64 - __builtin_clzll((uint64_t)(value - 1));
+    return (int)stdc_bit_width((uint64_t)(value - 1));
 }
 
 /* Fast ceiling log2 using platform intrinsics - for block indices */
@@ -770,7 +769,7 @@ static inline int memboundLog(int64_t iValue) {
         return 0;
     }
 
-    return 64 - __builtin_clzll((uint64_t)(iValue - 1));
+    return (int)stdc_bit_width((uint64_t)(iValue - 1));
 }
 
 /* Next power of 2 >= x */

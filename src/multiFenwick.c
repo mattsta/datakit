@@ -290,7 +290,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
             if (!multiFenwickCellGet_(cur, i - 1, &base)) {
                 return false;
             }
-        } else if (oldCapacity > 0 && (i & (i - 1)) == 0) {
+        } else if (oldCapacity > 0 && stdc_has_single_bit(i)) {
             base = total;
         }
 
@@ -459,14 +459,10 @@ size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
         return SIZE_MAX;
     }
 
-    uint64_t bit = 1;
-    while (bit <= mfw->count) {
-        bit <<= 1;
-    }
-
     uint64_t pos = 0;
     multiFenwickNum sum = {};
-    for (bit >>= 1; bit > 0; bit >>= 1) {
+    for (uint64_t bit = stdc_bit_floor((uint64_t)mfw->count); bit > 0;
+         bit >>= 1) {
         const uint64_t next = pos + bit;
         if (next > mfw->count) {
             continue;
