@@ -70,14 +70,22 @@ extern const unsigned char StrUpperToLower[];
 #define StrTolower(x) tolower((unsigned char)(x))
 #define StrIsquote(x) ((x) == '"' || (x) == '\'' || (x) == '[' || (x) == '`')
 #else
-#define StrToupper(x) ((x) & ~(StrCtypeMap[(unsigned char)(x)] & 0x20))
-#define StrIsspace(x) (StrCtypeMap[(unsigned char)(x)] & 0x01)
-#define StrIsalnum(x) (StrCtypeMap[(unsigned char)(x)] & 0x06)
-#define StrIsalpha(x) (StrCtypeMap[(unsigned char)(x)] & 0x02)
-#define StrIsdigit(x) (StrCtypeMap[(unsigned char)(x)] & 0x04)
-#define StrIsxdigit(x) (StrCtypeMap[(unsigned char)(x)] & 0x08)
+/* StrCtypeMap's flag bits (strSqliteStr.c documents the table) */
+static constexpr uint8_t STR_CTYPE_SPACE = 0b0000'0001;
+static constexpr uint8_t STR_CTYPE_ALPHA = 0b0000'0010;
+static constexpr uint8_t STR_CTYPE_DIGIT = 0b0000'0100;
+static constexpr uint8_t STR_CTYPE_XDIGIT = 0b0000'1000;
+static constexpr uint8_t STR_CTYPE_LOWER = 0b0010'0000; /* == 'a' - 'A' */
+static constexpr uint8_t STR_CTYPE_QUOTE = 0b1000'0000;
+#define StrCtype_(x, flags) (StrCtypeMap[(unsigned char)(x)] & (flags))
+#define StrToupper(x) ((x) & ~StrCtype_(x, STR_CTYPE_LOWER))
+#define StrIsspace(x) StrCtype_(x, STR_CTYPE_SPACE)
+#define StrIsalnum(x) StrCtype_(x, STR_CTYPE_ALPHA | STR_CTYPE_DIGIT)
+#define StrIsalpha(x) StrCtype_(x, STR_CTYPE_ALPHA)
+#define StrIsdigit(x) StrCtype_(x, STR_CTYPE_DIGIT)
+#define StrIsxdigit(x) StrCtype_(x, STR_CTYPE_XDIGIT)
 #define StrTolower(x) (StrUpperToLower[(unsigned char)(x)])
-#define StrIsquote(x) (StrCtypeMap[(unsigned char)(x)] & 0x80)
+#define StrIsquote(x) StrCtype_(x, STR_CTYPE_QUOTE)
 #endif
 
 #define StrIsIdChar(C)                                                         \
