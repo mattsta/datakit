@@ -548,43 +548,19 @@ bool aesGcmArmCryptoAvailable(void) {
 /* Stubs return false; reaching them means the caller ignored the
  * Available() probe.  Defensive: don't claim success on platforms
  * where we can't actually run. */
-bool aesGcmArmCryptoInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
-    (void)out;
-    (void)key;
-    (void)key_len;
+bool aesGcmArmCryptoInit(aesGcmKey *, const uint8_t *, size_t) {
     return false;
 }
 
-bool aesGcmArmCryptoSeal(const aesGcmKey *k,
-                         const uint8_t nonce[AES_GCM_NONCE_LEN],
-                         const uint8_t *aad, size_t aad_len,
-                         const uint8_t *plaintext, size_t plaintext_len,
-                         uint8_t *ciphertext, uint8_t tag[AES_GCM_TAG_LEN]) {
-    (void)k;
-    (void)nonce;
-    (void)aad;
-    (void)aad_len;
-    (void)plaintext;
-    (void)plaintext_len;
-    (void)ciphertext;
-    (void)tag;
+bool aesGcmArmCryptoSeal(const aesGcmKey *, const uint8_t[AES_GCM_NONCE_LEN],
+                         const uint8_t *, size_t, const uint8_t *, size_t,
+                         uint8_t *, uint8_t[AES_GCM_TAG_LEN]) {
     return false;
 }
 
-bool aesGcmArmCryptoOpen(const aesGcmKey *k,
-                         const uint8_t nonce[AES_GCM_NONCE_LEN],
-                         const uint8_t *aad, size_t aad_len,
-                         const uint8_t *ciphertext, size_t ciphertext_len,
-                         const uint8_t tag[AES_GCM_TAG_LEN],
-                         uint8_t *plaintext) {
-    (void)k;
-    (void)nonce;
-    (void)aad;
-    (void)aad_len;
-    (void)ciphertext;
-    (void)ciphertext_len;
-    (void)tag;
-    (void)plaintext;
+bool aesGcmArmCryptoOpen(const aesGcmKey *, const uint8_t[AES_GCM_NONCE_LEN],
+                         const uint8_t *, size_t, const uint8_t *, size_t,
+                         const uint8_t[AES_GCM_TAG_LEN], uint8_t *) {
     return false;
 }
 

@@ -220,14 +220,10 @@ static bool testMatches(const TestEntry *t, const char *name) {
 #define T_END {NULL, NULL, NULL, false, NULL}
 
 /* Wrapper for void(void) benchmark functions */
-static int mdsBenchWrapper(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int mdsBenchWrapper(int, char *[]) {
     return mdsBenchMain();
 }
-static int mdscBenchWrapper(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int mdscBenchWrapper(int, char *[]) {
     return mdscBenchMain();
 }
 
@@ -242,10 +238,7 @@ static int mdscBenchWrapper(int argc, char *argv[]) {
  * That property rests on the volatile-store + asm("memory") pattern
  * in `ctmem.h` and is verified by inspection / disassembly in CI.
  * ==================================================================== */
-static int dkTestSecureZeroTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestSecureZeroTest(int, char *[]) {
     static constexpr size_t sizes[] = {1, 7, 16, 32, 64, 256, 4096, 65536};
     int failures = 0;
 
@@ -312,10 +305,7 @@ static int dkTestSecureZeroTest(int argc, char *argv[]) {
  * silently.  This test pins the every-byte-contributes property at a
  * structural level the compiler cannot elide.
  * ==================================================================== */
-static int testCtMemEqStructuralTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int testCtMemEqStructuralTest(int, char *[]) {
     static constexpr size_t kLens[] = {1u, 15u, 16u, 17u, 32u, 64u};
     const size_t kNumLens = sizeof(kLens) / sizeof(kLens[0]);
     int failures = 0;
@@ -461,10 +451,7 @@ static int testCtMemEqStructuralTest(int argc, char *argv[]) {
  * its lifetime is controlled by the parent closing that pipe rather
  * than by any timing.
  * ==================================================================== */
-static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestProcessExitWaitTest(int, char *[]) {
     int failures = 0;
 #define PEXPECT(cond, msg)                                                     \
     do {                                                                       \
@@ -708,10 +695,7 @@ static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
  * unsignalled, alive but silent), each decided by what the pipe
  * carries (a byte, end-of-file, nothing) rather than by timing.
  * ==================================================================== */
-static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestDaemonizeReadyTest(int, char *[]) {
     int failures = 0;
 #define REXPECT(cond, msg)                                                     \
     do {                                                                       \
@@ -1014,9 +998,7 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
 /* perf.h's pieces: grouped formatting, sample statistics against known
  * values, the clocks (monotonic, and covering a sleep), and a printer
  * that leaves the process locale alone. */
-static int dkTestPerfHeaderTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestPerfHeaderTest(int, char *[]) {
     int failures = 0;
 #define PHEXPECT(cond, msg)                                                    \
     do {                                                                       \
@@ -1133,15 +1115,11 @@ static int dkTestPerfHeaderTest(int argc, char *argv[]) {
  * into one wake, a wake raised inside a signal handler is delivered,
  * and Signal preserves errno. */
 static int dkTestWakeFdHandlerWr = -1;
-static void dkTestWakeFdSignalHandler(int sig) {
-    (void)sig;
+static void dkTestWakeFdSignalHandler(int) {
     OSRegulateWakeSignal(dkTestWakeFdHandlerWr);
 }
 
-static int dkTestWakeFdTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestWakeFdTest(int, char *[]) {
     int failures = 0;
 #define WEXPECT(cond, msg)                                                     \
     do {                                                                       \
@@ -1405,10 +1383,7 @@ static void *dkTestGateFreeExiterMain(void *arg) {
 
 defcleanerName(inflightGate *, zfree, InflightGate);
 
-static int dkTestInflightGateTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestInflightGateTest(int, char *[]) {
     int failures = 0;
 #define GEXPECT(cond, msg)                                                     \
     do {                                                                       \
@@ -1672,11 +1647,8 @@ static void dkOwnedDescribe_(const void *cargo, const char **outLabel,
     *outId = cargo ? ((const dkOwnedCargo *)cargo)->id : 0;
 }
 
-static void dkOwnedNoteHold_(void *ctx, const char *arenaName,
-                             const char *label, uint64_t id, uint64_t ageUs,
-                             uint32_t depth) {
-    (void)ctx;
-    (void)arenaName;
+static void dkOwnedNoteHold_(void *, const char *, const char *label,
+                             uint64_t id, uint64_t ageUs, uint32_t depth) {
     snprintf(g_dkOwnedHoldLabel, sizeof(g_dkOwnedHoldLabel), "%s",
              label ? label : "");
     g_dkOwnedHoldId = id;
@@ -1685,15 +1657,11 @@ static void dkOwnedNoteHold_(void *ctx, const char *arenaName,
     g_dkOwnedHoldCalls++;
 }
 
-static bool dkOwnedWriterOk_(const void *owner) {
-    (void)owner;
+static bool dkOwnedWriterOk_(const void *) {
     return g_dkOwnedWriterOk;
 }
 
-static void dkOwnedNoteViolation_(const ownedCellDecl *decl,
-                                  const void *owner) {
-    (void)decl;
-    (void)owner;
+static void dkOwnedNoteViolation_(const ownedCellDecl *, const void *) {
     g_dkOwnedViolationNotes++;
 }
 
@@ -1753,11 +1721,8 @@ static void dkSlotRelease_(void *cargo) {
     g_dkSlotReleasedCargo = cargo;
 }
 
-static void dkSlotNote_(void *ctx, const ownedSlotDecl *decl,
-                        ownedSlotEvent event, ownedSlotState displaced,
-                        uint64_t reading) {
-    (void)ctx;
-    (void)event;
+static void dkSlotNote_(void *, const ownedSlotDecl *decl, ownedSlotEvent,
+                        ownedSlotState displaced, uint64_t reading) {
     g_dkSlotNotes++;
     g_dkSlotNoteName = decl ? decl->name : NULL;
     g_dkSlotNoteDisplaced = (int)displaced;
@@ -1793,13 +1758,10 @@ static ownedStateRow dkSeqRowB_;
 static _Atomic uint64_t g_dkSeqViolationNotes = 0;
 static bool g_dkSeqWriterOk = true;
 
-static bool dkSeqWriterOk_(const void *owner) {
-    (void)owner;
+static bool dkSeqWriterOk_(const void *) {
     return g_dkSeqWriterOk;
 }
-static void dkSeqNoteViolation_(const ownedSeqDecl *decl, const void *owner) {
-    (void)decl;
-    (void)owner;
+static void dkSeqNoteViolation_(const ownedSeqDecl *, const void *) {
     /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&g_dkSeqViolationNotes, 1, memory_order_relaxed);
 }
@@ -2043,15 +2005,8 @@ static void *dkSeqHoldWriterB_(void *arg) {
  * zero value selects the default rule. */
 #define DK_OWNED_RO_HORIZON_US ((uint64_t)1000)
 static uint32_t g_dkRoHoldCalls = 0;
-static void dkOwnedRoNoteHold_(void *ctx, const char *arenaName,
-                               const char *label, uint64_t id, uint64_t ageUs,
-                               uint32_t depth) {
-    (void)ctx;
-    (void)arenaName;
-    (void)label;
-    (void)id;
-    (void)ageUs;
-    (void)depth;
+static void dkOwnedRoNoteHold_(void *, const char *, const char *, uint64_t,
+                               uint64_t, uint32_t) {
     g_dkRoHoldCalls++;
 }
 static const ownedArenaDecl dkOwnedRoArenaDecl_ = {
@@ -2465,10 +2420,7 @@ static int dkTestOwnedArenaSoak(void) {
     return err;
 }
 
-static int dkTestOwnedStateTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestOwnedStateTest(int, char *[]) {
     int failures = 0;
 #define OEXPECT(cond, msg)                                                     \
     do {                                                                       \
@@ -3897,9 +3849,7 @@ static uint64_t dkGateRun_(dkGateFlavour flavour, uint32_t readers,
     return p99;
 }
 
-static int dkTestOwnedSeqGateTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestOwnedSeqGateTest(int, char *[]) {
     int failures = 0;
 
     /* Fill both rings once so every window is full before measuring. */
@@ -4051,20 +4001,16 @@ typedef struct dkSharrowShared {
 
 static uint32_t g_dkSharrowReleases;
 
-static void sharrowReleaserDkU32(dkSharrowU32 *s) {
-    (void)s;
+static void sharrowReleaserDkU32(dkSharrowU32 *) {
     g_dkSharrowReleases++;
 }
-static void sharrowReleaserDkI64(dkSharrowI64 *s) {
-    (void)s;
+static void sharrowReleaserDkI64(dkSharrowI64 *) {
     g_dkSharrowReleases++;
 }
-static void sharrowReleaserDkU64(dkSharrowU64 *s) {
-    (void)s;
+static void sharrowReleaserDkU64(dkSharrowU64 *) {
     g_dkSharrowReleases++;
 }
-static void sharrowReleaserDkPtr(dkSharrowPtr *s) {
-    (void)s;
+static void sharrowReleaserDkPtr(dkSharrowPtr *) {
     g_dkSharrowReleases++;
 }
 static void sharrowReleaserDkShared(dkSharrowShared *s) {
@@ -4088,9 +4034,7 @@ static void *dkSharrowOwnerMain_(void *arg) {
     return NULL;
 }
 
-static int dkTestSharrowTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestSharrowTest(int, char *[]) {
     int failures = 0;
 #define SHEXPECT(cond, msg)                                                    \
     do {                                                                       \
@@ -4215,10 +4159,7 @@ static int reportNonZeroCtxWipe(const char *label,
     return 1;
 }
 
-static int dkTestChaChaStreamCtxWipeTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestChaChaStreamCtxWipeTest(int, char *[]) {
     int failures = 0;
 
     const size_t ctxSize = sizeof(chacha20poly1305StreamCtx);
@@ -4380,9 +4321,7 @@ done:
  * (3) Final-twice returns false on second call (Seal+Open) — pinned
  *     per the streamFinalise wipe-to-zero contract.
  * ==================================================================== */
-static int dkTestStreamMidTamperTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestStreamMidTamperTest(int, char *[]) {
     int failures = 0;
 
     uint8_t key[CHACHA20_POLY1305_KEY_LEN];
@@ -4479,9 +4418,7 @@ done:
     return 1;
 }
 
-static int dkTestStreamUpdateAfterFinalTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestStreamUpdateAfterFinalTest(int, char *[]) {
     int failures = 0;
 
     uint8_t key[CHACHA20_POLY1305_KEY_LEN];
@@ -4555,9 +4492,7 @@ done:
     return 1;
 }
 
-static int dkTestStreamFinalTwiceTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestStreamFinalTwiceTest(int, char *[]) {
     int failures = 0;
 
     uint8_t key[CHACHA20_POLY1305_KEY_LEN];
@@ -4651,9 +4586,7 @@ typedef struct a3Vector {
     const char *tag_hex;
 } a3Vector;
 
-static int dkTestAesNiTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestAesNiTest(int, char *[]) {
     int failures = 0;
 
     static const a3Vector vectors[] = {
@@ -4873,9 +4806,7 @@ static int dkTestAesNiTest(int argc, char *argv[]) {
 
 /* ARMv8 AES + PMULL backend parity vs portable scalar.
  * Reuses a3HexDec / a3Vector from dkTestAesNi above. */
-static int dkTestAesArmCryptoTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestAesArmCryptoTest(int, char *[]) {
     int failures = 0;
 
     static const a3Vector vectors[] = {
@@ -4965,9 +4896,7 @@ static int dkTestAesArmCryptoTest(int argc, char *argv[]) {
 }
 
 /* X25519 canonical small-order list pre-reject. */
-static int dkTestX25519SmallOrderRejectTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestX25519SmallOrderRejectTest(int, char *[]) {
     int failures = 0;
 
     static constexpr uint8_t blacklist[12][32] = {
@@ -5107,9 +5036,7 @@ static int a6OneSeal(chacha20ForceBackend backend, const uint8_t *key,
     return ok ? 0 : 1;
 }
 
-static int dkTestChaChaSimdParityTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestChaChaSimdParityTest(int, char *[]) {
     int failures = 0;
 
     const bool neonOk = chacha20NeonAvailable();
@@ -5343,9 +5270,7 @@ a6_cleanup:
 
 /* Poly1305 SIMD parity — backend-pinned RFC 8439 vectors + 1000
  * random AEAD round-trips assert SIMD bit-identical to scalar. */
-static int dkTestPoly1305SimdParityTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestPoly1305SimdParityTest(int, char *[]) {
     int failures = 0;
 
     const bool pNeonOk = poly1305NeonAvailable();
@@ -5495,9 +5420,7 @@ a7_cleanup:
 
 /* Misc crypto tests bundle (X25519 iter KAT, BLAKE3 derive-key
  * variable input, SHA-256 backend parity). */
-static int dkTestX25519Iter1000KATTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestX25519Iter1000KATTest(int, char *[]) {
     int failures = 0;
     static constexpr uint8_t expect_iter1[32] = {
         0x42, 0x2c, 0x8e, 0x7a, 0x62, 0x27, 0xd7, 0xbc, 0xa1, 0x35, 0x0b,
@@ -5555,9 +5478,7 @@ static void a12HexDec(const char *hex, uint8_t *out, size_t n) {
     }
 }
 
-static int dkTestBlake3DeriveKeyVarInputTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestBlake3DeriveKeyVarInputTest(int, char *[]) {
     int failures = 0;
     const char *context = BLAKE3_TEST_DERIVE_CONTEXT;
     const size_t ctx_len = strlen(context);
@@ -5632,9 +5553,7 @@ static uint64_t a12Sha256SplitMix(uint64_t *st) {
     return s ^ (s >> 31);
 }
 
-static int dkTestSha256AllBackendParityTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestSha256AllBackendParityTest(int, char *[]) {
     int failures = 0;
     const bool armOk = sha256ArmCryptoAvailable();
     const bool shaniOk = sha256ShaNiAvailable();
@@ -5706,9 +5625,7 @@ static void a5HexDec(const char *hex, uint8_t *out, size_t out_len) {
     }
 }
 
-static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
     int failures = 0;
 
     const aesGcmForceBackend prev_force = aesGcmGetForceBackend();
@@ -5961,9 +5878,7 @@ static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
 }
 
 /* BLAKE3 derive-key context-length test variations. */
-static int dkTestBlake3DeriveKeyContextsTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestBlake3DeriveKeyContextsTest(int, char *[]) {
     int failures = 0;
 
     static constexpr size_t ctx_lens[] = {0, 1, 32, 128, 1024};
@@ -6035,10 +5950,7 @@ static int dkTestBlake3DeriveKeyContextsTest(int argc, char *argv[]) {
  * unmapped codes MUST return "unknown" (default branch reachable).
  * Pins the 4 new entries 90/91/92/93.
  * ==================================================================== */
-static int dkTestPersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestPersistTypeNameAllRegisteredTest(int, char *[]) {
     struct {
         persistType code;
         const char *label;
@@ -6128,10 +6040,7 @@ static int dkTestPersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
  * count, size, restore non-NULL, and that the prepared HMAC produces
  * an identical tag in the restored ring for the same id+algo.
  * ==================================================================== */
-static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int argc,
-                                                          char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
     int failures = 0;
 
     const uint8_t key_a[32] = {
@@ -6284,9 +6193,7 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int argc,
  * small 4-node ring, snapshots via descriptor, restores via descriptor,
  * asserts structural equality (node count, descriptor count agrees).
  * ==================================================================== */
-static int dkTestRingPersistOpsDescriptorRoundTripTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestRingPersistOpsDescriptorRoundTripTest(int, char *[]) {
     int failures = 0;
 
     clusterRingConfig config = {
@@ -6403,10 +6310,7 @@ static bool dkTestTieredApplyOpWrapper(void *structure, persistOp op,
     return persistOpsMultilist.applyOp(structure, op, data, len);
 }
 
-static int dkTestPersistMultilistTieredApplyTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
     const persistType tiers[] = {
         PERSIST_TYPE_MULTILIST,
         PERSIST_TYPE_MULTILIST_SMALL,
@@ -6527,16 +6431,11 @@ static int dkTestPersistMultilistTieredApplyTest(int argc, char *argv[]) {
 }
 
 /* persistOpsClusterMailbox descriptor round-trip. */
-static bool dkE1MailboxAcceptApply(const clusterFrame *frame, void *ctx) {
-    (void)frame;
-    (void)ctx;
+static bool dkE1MailboxAcceptApply(const clusterFrame *, void *) {
     return true;
 }
 
-static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int argc,
-                                                          char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
     int failures = 0;
 
     const uint8_t key[32] = {
@@ -6704,9 +6603,7 @@ done_src:
  * around the AVX2-8 / NEON-4 thresholds. Skips the AVX2 assertion when
  * AVX2 is not present on the host (e.g. ARM dev machines).
  * ==================================================================== */
-static int dkTestBlake3Avx2DispatchTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestBlake3Avx2DispatchTest(int, char *[]) {
     int failures = 0;
 
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
@@ -6829,9 +6726,7 @@ static int dkTestBlake3Avx2DispatchTest(int argc, char *argv[]) {
  * to issue a zero-salt nonce from a slot that wasn't installed as
  * unsalted. Closes the cross-process nonce-collision footgun.
  * ==================================================================== */
-static int dkTestKeyringRequireSaltTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestKeyringRequireSaltTest(int, char *[]) {
     int failures = 0;
 
     /* Case 1: salted install + nonce contains salt suffix */
@@ -6967,9 +6862,7 @@ static int dkTestKeyringRequireSaltTest(int argc, char *argv[]) {
  * PERSIST_ERR_KEY_GENERATION_MISMATCH. persistRebindKeyring is the
  * official rotation recovery entry point.
  * ==================================================================== */
-static int dkTestKeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestKeyringPersistRetireAfterAttachTest(int, char *[]) {
     int failures = 0;
 
     /* Declared here, ahead of the first goto, so the scope-exit cleaner
@@ -7146,9 +7039,7 @@ cleanup:
  * rejects with FLEX_ENV_VERIFY_FAILED_KEY_REVOKED while K2+K3 pass;
  * snapshot+restore preserves the floor.
  * ==================================================================== */
-static int dkTestRevokedKeyFloorTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestRevokedKeyFloorTest(int, char *[]) {
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
@@ -7300,9 +7191,7 @@ static int dkTestRevokedKeyFloorTest(int argc, char *argv[]) {
  * 6 scenarios: ring-only, key-only, both, unknown id, revoked floor,
  * no KEYID_PRESENT.
  * ==================================================================== */
-static int dkTestEnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEnvelopeOpenKeyringResolveTest(int, char *[]) {
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
@@ -7494,9 +7383,7 @@ cleanup:
 
 /* Ambiguous-key fail-safe: wire key_id + caller-supplied keyring must
  * not silently override caller intent. */
-static int dkTestWireKeyIdAmbiguityRejectTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
@@ -7642,9 +7529,7 @@ cleanup_c5:
 /* Empty input given as (NULL, 0): hashes, strings and sketches treat it as
  * the empty input, with no sanitizer report (memcpy and friends must not
  * be handed NULL even for 0 bytes) */
-static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEmptyNullInputTest(int, char *[]) {
     int err = 0;
 
     TEST("(NULL, 0) is the empty input everywhere bytes are taken") {
@@ -7691,9 +7576,7 @@ static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int dkTestPersistKeyIdHeaderTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestPersistKeyIdHeaderTest(int, char *[]) {
     int failures = 0;
 
     /* Declared here, ahead of the first goto, so the scope-exit cleaner
@@ -7836,9 +7719,7 @@ cleanup_writer:
  * between AVX2 and scalar; per-host dispatcher selection assertion;
  * direct-call differential test of blake3SSE41Compress4 vs portable.
  * ==================================================================== */
-static int dkTestBlake3Sse41BatchTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestBlake3Sse41BatchTest(int, char *[]) {
     int failures = 0;
 
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
@@ -8043,9 +7924,7 @@ static void d1NonceFromValue(uint64_t lo, uint32_t hi, uint8_t out[12]) {
     memcpy(out + 8, &hi, 4);
 }
 
-static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
     int failures = 0;
     /* Declared here (before any goto to `done`) so the scope-exit cleaner
      * attribute below never bypasses an initializer across a jump. */
@@ -8252,9 +8131,7 @@ done:
  * envelope rejected. Opt-out (nonceLog=NULL) preserves legacy behavior for both
  * sides.
  * ==================================================================== */
-static int dkTestEnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEnvelopeNonceLogIntegrationTest(int, char *[]) {
     int failures = 0;
 
     const uint32_t kKeyId = 7777u;
@@ -8459,9 +8336,7 @@ cleanup:
  *   - Disabling the consumer log on a third Open succeeds (opt-out
  *     plumbing works).
  * ==================================================================== */
-static int testNonceLogAllAeadAlgosTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testNonceLogAllAeadAlgosTest(int, char *[]) {
     int failures = 0;
 
     typedef struct {
@@ -8683,9 +8558,7 @@ static int testNonceLogAllAeadAlgosTest(int argc, char *argv[]) {
  * (key, nonce_with_one_byte_flipped); after Update absorbs the
  * ciphertext, Final's tag check must return false.
  * ==================================================================== */
-static int testChachaStreamOpenNonceFlipTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testChachaStreamOpenNonceFlipTest(int, char *[]) {
     int failures = 0;
 
     const uint8_t key[CHACHA20_POLY1305_KEY_LEN] = {
@@ -8857,9 +8730,7 @@ static void dkTestPushMailboxProtocol(flex **f) {
     flexPushUnsigned(f, 0u, FLEX_ENDPOINT_TAIL);
 }
 
-static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
     int failures = 0;
 
     const uint32_t ORIGIN = 0x4242u;
@@ -9249,10 +9120,7 @@ fuzz_cleanup:
  * byte tamper cannot induce the flex walker to overread the announce
  * buffer regardless of which byte they flip.
  * ==================================================================== */
-static int testMailboxRotateAnnounceStructAwareFuzzTest(int argc,
-                                                        char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testMailboxRotateAnnounceStructAwareFuzzTest(int, char *[]) {
     int failures = 0;
 
     const hmacKeyId kAnnouncedId = 0x12345678u;
@@ -9571,9 +9439,7 @@ static uint8_t *mailboxBuildSnapshotFor(snapshotFn snap_fn, size_t *out_len,
  * through clusterMailboxRestore.  flexValidateBufferDeep gates the
  * walk; every flip must either succeed or be rejected, never crash.
  * ==================================================================== */
-static int testMailboxRestoreStructAwareFuzzTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testMailboxRestoreStructAwareFuzzTest(int, char *[]) {
     const uint8_t key[32] = {
         0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0,
         0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -9609,10 +9475,7 @@ static int testMailboxRestoreStructAwareFuzzTest(int argc, char *argv[]) {
  * the persist framework's adapter shim so the fuzz coverage is filed
  * against that distinct production caller.
  * ==================================================================== */
-static int testMailboxPersistOpsRestoreStructAwareFuzzTest(int argc,
-                                                           char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testMailboxPersistOpsRestoreStructAwareFuzzTest(int, char *[]) {
     const uint8_t key[32] = {
         0x11, 0x21, 0x31, 0x41, 0x51, 0x61, 0x71, 0x81, 0x91, 0xa1, 0xb1,
         0xc1, 0xd1, 0xe1, 0xf1, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -9651,10 +9514,7 @@ static int testMailboxPersistOpsRestoreStructAwareFuzzTest(int argc,
  * clusterMailboxRestoreWrapped, assert no crash + either success or
  * rejection.
  * ==================================================================== */
-static int testMailboxRestoreWrappedStructAwareFuzzTest(int argc,
-                                                        char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int testMailboxRestoreWrappedStructAwareFuzzTest(int, char *[]) {
     int failures = 0;
     const uint8_t key[32] = {
         0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72, 0x82, 0x92, 0xa2, 0xb2,
@@ -9827,9 +9687,7 @@ static void dkTestNonceLogMkNonce(uint64_t v, uint8_t out[12]) {
     }
 }
 
-static int dkTestNonceLogEvictionPerfTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestNonceLogEvictionPerfTest(int, char *[]) {
     int failures = 0;
 
     /* Part A: probe-BEFORE-evict correctness */
@@ -9962,10 +9820,9 @@ typedef struct dkTestReplicatorRetryCtx {
     uint64_t accepted_seqs[16];
 } dkTestReplicatorRetryCtx;
 
-static bool dkTestReplicatorRetryApply(uint32_t origin_id, uint64_t sequence,
+static bool dkTestReplicatorRetryApply(uint32_t, uint64_t sequence,
                                        const persistOps *ops, void *structure,
                                        void *ctx) {
-    (void)origin_id;
     dkTestReplicatorRetryCtx *t = (dkTestReplicatorRetryCtx *)ctx;
     if (t->reject_seq != 0 && sequence == t->reject_seq) {
         t->reject_count++;
@@ -9981,9 +9838,7 @@ static bool dkTestReplicatorRetryApply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
-static int dkTestReplicatorRetryDropTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestReplicatorRetryDropTest(int, char *[]) {
     int failures = 0;
 
     static const persistOps *type_table[256];
@@ -10187,9 +10042,7 @@ static bool dkTestMailboxReplApply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
-static int dkTestMailboxReplicatorNonceLogWiredTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestMailboxReplicatorNonceLogWiredTest(int, char *[]) {
     int failures = 0;
     const uint8_t key[32] = {
         0xD8, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
@@ -10394,9 +10247,7 @@ done_d8:
  * config; assert structural equivalence after the snapshot+restore
  * cycle (id, name, address, location, weight, capacity, state).
  * ==================================================================== */
-static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
     int failures = 0;
 
     clusterRingConfig config = {
@@ -10695,9 +10546,7 @@ static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
     return f;
 }
 
-static int dkTestClusterRingMaliciousStateTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestClusterRingMaliciousStateTest(int, char *[]) {
     int failures = 0;
 
     /* The unmodified snapshot restores, so the refusal below is the
@@ -10739,9 +10588,7 @@ static int dkTestClusterRingMaliciousStateTest(int argc, char *argv[]) {
 /* ====================================================================
  * clusterRing wire input with two nodes sharing the same id must be REJECTED.
  * ==================================================================== */
-static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestClusterRingDuplicateIdTest(int, char *[]) {
     int failures = 0;
 
     /* Nodes 41 and 42 restore; renaming the second node's id to 41 must
@@ -10779,9 +10626,7 @@ static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
 /* ====================================================================
  * clusterRing truncated wire buffer must NOT crash and must return NULL.
  * ==================================================================== */
-static int dkTestClusterRingTruncatedBufferTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestClusterRingTruncatedBufferTest(int, char *[]) {
     int failures = 0;
 
     clusterRingConfig config = {
@@ -10852,9 +10697,7 @@ static int dkTestClusterRingTruncatedBufferTest(int argc, char *argv[]) {
  * Verifies install pre-runs aesGcmInit for AES-128/AES-256 lengths and
  * stashes the schedule alongside the slot for the hot Open path.
  * ==================================================================== */
-static int dkTestAeadKeyScheduleCacheTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
     int failures = 0;
     /* Declared here (before any goto to `cleanup`) so the scope-exit
      * cleaner attribute below never bypasses an initializer across a
@@ -11058,9 +10901,7 @@ cleanup:
 /* ====================================================================
  * clusterMailbox inner-header + rotate-announce flex tests.
  * ==================================================================== */
-int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
     int err = 0;
 
     const uint32_t ORIGIN = 0x12345678u;
@@ -11284,9 +11125,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestMailboxRotateAnnounceFlexTest(int, char *[]) {
     int err = 0;
 
     const hmacKeyId KID = 0x12345678u;
@@ -11427,9 +11266,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
 /* ====================================================================
  * Assert flexEnvelopeHeader::_reserved is zero on parse.
  * ==================================================================== */
-static int dkTestEnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEnvelopeReservedZeroAssertTest(int, char *[]) {
     int failures = 0;
 
     static constexpr uint8_t payload[32] = {
@@ -11551,9 +11388,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
 /* ====================================================================
  * flexEnvelopeWrapParams::_pad must be zero.
  * ==================================================================== */
-static int dkTestEnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEnvelopeWrapPadPolicyTest(int, char *[]) {
     int failures = 0;
 
     static constexpr uint8_t payload[16] = {
@@ -11700,11 +11535,8 @@ typedef struct dkTestClusterE2EApplyCtx {
     uint64_t apply_invocations;
 } dkTestClusterE2EApplyCtx;
 
-static bool dkTestClusterE2EApply(uint32_t origin_id, uint64_t sequence,
-                                  const persistOps *ops, void *structure,
-                                  void *ctx) {
-    (void)origin_id;
-    (void)sequence;
+static bool dkTestClusterE2EApply(uint32_t, uint64_t, const persistOps *ops,
+                                  void *structure, void *ctx) {
     dkTestClusterE2EApplyCtx *t = (dkTestClusterE2EApplyCtx *)ctx;
     t->apply_invocations++;
     if (ops != NULL && ops->free != NULL && structure != NULL) {
@@ -11734,9 +11566,7 @@ freeE2ESavedArray_cleanup(dkTestClusterE2ESaved **arr) {
     }
 }
 
-static int dkTestClusterE2EReplayProtectionTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
     int failures = 0;
     /* Declared here (before any goto to `cleanup_after_phase1`) so the
      * scope-exit cleaner attribute below never bypasses an initializer
@@ -12106,9 +11936,7 @@ cleanup_after_phase1:
  * Structure-aware envelope fuzz per algorithm.
  * Every single-bit mutation across the wire MUST be rejected.
  * ==================================================================== */
-static int dkTestEnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     int failures = 0;
 
     uint32_t rng = 0x1234ABCDu;
@@ -12468,9 +12296,7 @@ out:
     return failures;
 }
 
-static int dkTestEnvelopeZeroCopyTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int dkTestEnvelopeZeroCopyTest(int, char *[]) {
     int failures = 0;
 
     static constexpr uint8_t payload[96] = {

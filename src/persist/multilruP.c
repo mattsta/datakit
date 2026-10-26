@@ -448,10 +448,7 @@ static multilruPtr mlruTestInsert(multilruP *mlru, uint64_t weight) {
 }
 defcleanerName(uint8_t *, zfree, SnapBytes);
 
-static int test_multilruP_basic(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_basic(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -558,10 +555,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_weighted(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_weighted(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -647,10 +641,7 @@ static int test_multilruP_weighted(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_compaction(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_compaction(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -708,10 +699,7 @@ static int test_multilruP_compaction(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_empty_recovery(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_empty_recovery(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -765,10 +753,7 @@ static int test_multilruP_empty_recovery(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_large_dataset(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_large_dataset(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -866,10 +851,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_handle_gaps(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_handle_gaps(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -942,10 +924,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_mixed_operations(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_mixed_operations(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1054,10 +1033,7 @@ static int test_multilruP_mixed_operations(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_weight_extremes(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_weight_extremes(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1142,10 +1118,7 @@ static int test_multilruP_weight_extremes(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_auto_evict(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_auto_evict(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1218,11 +1191,7 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_auto_evict_crash_before_compact(int argc,
-                                                          char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_auto_evict_crash_before_compact(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1291,10 +1260,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int argc,
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_level_promotion(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_level_promotion(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1362,10 +1328,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_demotions_replay(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_demotions_replay(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1466,10 +1429,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_weight_limit(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_weight_limit(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1547,10 +1507,7 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_recency_order(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_recency_order(int, char *[]) {
     int err = 0;
 
     TEST("a restored LRU demotes and evicts in the live one's order")
@@ -1612,9 +1569,7 @@ static int test_multilruP_recency_order(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multilruP_damagedWal(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+static int test_multilruP_damagedWal(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -1676,10 +1631,7 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
 /* Under a refusing WAL every change is refused and the LRU is as it was
  * (count, weights, each entry's level, the limits); calls missing their
  * wrapper are refused or answer empty */
-static int test_multilruP_refusals(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multilruP_refusals(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

@@ -657,10 +657,7 @@ static uint64_t microTestB(uint32_t start) {
 
 #include "strDoubleFormat.h"
 #include <wchar.h>
-DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     int err = 0;
 
     TEST("StrTenPow / StrTenPowBig exact powers") {

@@ -1646,10 +1646,7 @@ defcleaner(hllBenchSet, hllBenchSetFree);
 /* Register-access cycles; the approximation test adds 10000x as many
  * elements (10M), still crossing every sparse/dense checkpoint */
 #define HLL_TEST_CYCLES 1000
-int hyperloglogTest(int argc, char *argv[]) {
-    DK_NOTUSED(argc);
-    DK_NOTUSED(argv);
-
+int hyperloglogTest(int, char *[]) {
     uint32_t sseed = time(NULL) ^ getpid();
     uint32_t shash = HYPERHASH(&sseed, sizeof(sseed), 0xadc83b19ULL);
     srand(shash);

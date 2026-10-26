@@ -4346,10 +4346,7 @@ static int32_t multimapDeleteEntrySweep_(void) {
     return err;
 }
 
-int multimapTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multimapTest(int, char *[]) {
     int err = 0;
 
     TEST("LookupWithReference finds rows keyed by atom references, every "

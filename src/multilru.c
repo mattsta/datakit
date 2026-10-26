@@ -2173,8 +2173,7 @@ static size_t zipfian(uint64_t *seed, size_t n, double skew) {
 static size_t testEvictedPtrs[100];
 static size_t testEvictCount;
 
-static void testEvictionCallback(size_t ptr, void *userData) {
-    (void)userData;
+static void testEvictionCallback(size_t ptr, void *) {
     if (testEvictCount < 100) {
         testEvictedPtrs[testEvictCount++] = ptr;
     }
@@ -2275,10 +2274,7 @@ static int multilruTestEntryLayouts(void) {
     return bad;
 }
 
-int multilruTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multilruTest(int, char *[]) {
     int err = 0;
 
     TEST("every entry width round-trips its fields through migration") {

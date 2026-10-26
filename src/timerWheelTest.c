@@ -97,9 +97,8 @@ static bool testCancelSelfRepeating(timerWheel *tw, timerWheelId id,
     return true;
 }
 
-static bool testCountingCallback(timerWheel *tw, timerWheelId id,
+static bool testCountingCallback(timerWheel *, timerWheelId id,
                                  void *clientData) {
-    (void)tw;
     testCallbackState *state = clientData;
     state->callCount++;
     state->lastId = id;
@@ -107,18 +106,16 @@ static bool testCountingCallback(timerWheel *tw, timerWheelId id,
 }
 
 /* Callback that tries to re-enter timer processing */
-static bool testReentrantProcessCallback(timerWheel *tw, timerWheelId id,
+static bool testReentrantProcessCallback(timerWheel *tw, timerWheelId,
                                          void *clientData) {
-    (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
     timerWheelProcessTimerEvents(tw); /* ignored, and reported */
     return false;
 }
 
-static bool testNestedTimerCallback(timerWheel *tw, timerWheelId id,
+static bool testNestedTimerCallback(timerWheel *tw, timerWheelId,
                                     void *clientData) {
-    (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
 
@@ -145,9 +142,8 @@ static bool testSelfUnregisterNoRepeatCallback(timerWheel *tw, timerWheelId id,
     return false;
 }
 
-static bool testStopAllCallback(timerWheel *tw, timerWheelId id,
+static bool testStopAllCallback(timerWheel *tw, timerWheelId,
                                 void *clientData) {
-    (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
     timerWheelStopAll(tw);
@@ -160,9 +156,8 @@ typedef struct testFarNearState {
     testCallbackState nearTimer;
 } testFarNearState;
 
-static bool testRegisterFarThenNearCallback(timerWheel *tw, timerWheelId id,
+static bool testRegisterFarThenNearCallback(timerWheel *tw, timerWheelId,
                                             void *clientData) {
-    (void)id;
     testFarNearState *s = clientData;
     s->self.callCount++;
     timerWheelRegister(tw, 10'000'000, 0, testCountingCallback, &s->farTimer);
@@ -170,9 +165,8 @@ static bool testRegisterFarThenNearCallback(timerWheel *tw, timerWheelId id,
     return false;
 }
 
-static bool testRegisterFarCallback(timerWheel *tw, timerWheelId id,
+static bool testRegisterFarCallback(timerWheel *tw, timerWheelId,
                                     void *clientData) {
-    (void)id;
     timerWheelRegister(tw, 10'000'000, 0, testCountingCallback, clientData);
     return false;
 }
@@ -196,9 +190,8 @@ typedef struct testLaggingClockState {
     uint64_t registeredAtUs;
 } testLaggingClockState;
 
-static bool testLagThenRegisterCallback(timerWheel *tw, timerWheelId id,
+static bool testLagThenRegisterCallback(timerWheel *tw, timerWheelId,
                                         void *clientData) {
-    (void)id;
     testLaggingClockState *s = clientData;
     s->self.callCount++;
     timerWheelAdvanceTime(tw, s->lagUs);
@@ -216,9 +209,8 @@ typedef struct testCancelOtherState {
     timerWheelId victim;
 } testCancelOtherState;
 
-static bool testCancelOtherCallback(timerWheel *tw, timerWheelId id,
+static bool testCancelOtherCallback(timerWheel *tw, timerWheelId,
                                     void *clientData) {
-    (void)id;
     testCancelOtherState *s = clientData;
     s->self.callCount++;
     if (s->self.callCount == 1) {
@@ -229,11 +221,7 @@ static bool testCancelOtherCallback(timerWheel *tw, timerWheelId id,
 
 /* Fires and repeats for the differential test; the answer, not the
  * callback, is what is checked. */
-static bool testOracleCallback(timerWheel *tw, timerWheelId id,
-                               void *clientData) {
-    (void)tw;
-    (void)id;
-    (void)clientData;
+static bool testOracleCallback(timerWheel *, timerWheelId, void *) {
     return true;
 }
 
@@ -248,19 +236,15 @@ static uint64_t testOracleRand(uint64_t *state) {
 }
 
 /* Equivalent callbacks for multiTimer comparison */
-static bool mtCountingCallback(multiTimer *t, multiTimerId id,
+static bool mtCountingCallback(multiTimer *, multiTimerId id,
                                void *clientData) {
-    (void)t;
     testCallbackState *state = clientData;
     state->callCount++;
     state->lastId = id;
     return state->shouldReschedule;
 }
 
-int timerWheelTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int timerWheelTest(int, char *[]) {
     int32_t err = 0;
 
     /* ================================================================

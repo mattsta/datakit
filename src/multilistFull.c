@@ -1912,7 +1912,7 @@ CTEST_INCLUDE_GEN(str)
     printf("\b\b]\n");
 }
 
-static void mlInfo(multilistFull *ml) {
+static void mlInfo([[maybe_unused]] multilistFull *ml) {
 #if ML_TEST_VERBOSE
     printf("Container length (nodes): %" PRId32 "\n", ml->count);
     printf("Container values (elements): %" PRId64 "\n", ml->values);
@@ -1925,8 +1925,6 @@ static void mlInfo(multilistFull *ml) {
     }
 
     printf("\n");
-#else
-    (void)ml;
 #endif
 }
 
@@ -1976,9 +1974,10 @@ static int multilistFullCompare(flexEntry *p1, const void *val, int vcount) {
     } while (0)
 
 /* Verify list metadata matches physical list contents. */
-static int mlVerify_(multilistFull *ml, mflexState *state[2], mlNodeId count,
-                     uint32_t values, uint32_t headValues,
-                     uint32_t tailValues) {
+static int mlVerify_(multilistFull *ml, mflexState *state[2],
+                     [[maybe_unused]] mlNodeId count, uint32_t values,
+                     [[maybe_unused]] uint32_t headValues,
+                     [[maybe_unused]] uint32_t tailValues) {
     int err = 0;
 
 #if 0
@@ -1997,9 +1996,6 @@ static int mlVerify_(multilistFull *ml, mflexState *state[2], mlNodeId count,
 
     /* Node and per-end counts are not checked: accounting is by size, so
      * the node count and the head and tail entry counts follow the bytes */
-    (void)count;
-    (void)headValues;
-    (void)tailValues;
 
     int loopr = itrprintr(ml, state, false);
     if (loopr != (int)ml->values) {
@@ -2261,10 +2257,7 @@ static const char *mlfSplitCheck(multilistFull *ml, mflexState *state[2],
     return NULL;
 }
 
-int multilistFullTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multilistFullTest(int, char *[]) {
     uint32_t err = 0;
 
     const int depth[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};

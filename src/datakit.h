@@ -140,9 +140,6 @@
 #define D(...)
 #endif
 
-/* Unused arguments generate annoying warnings... */
-#define DK_NOTUSED(x) ((void)(x))
-
 #ifndef DK_STATIC
 #define DK_STATIC static
 #endif

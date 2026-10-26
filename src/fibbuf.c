@@ -164,10 +164,7 @@ static uint64_t fibbufNextBuffer64(const uint64_t currentBufSize) {
 #define TIME_FINISH(i, what)
 #endif
 
-int fibbufTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int fibbufTest(int, char *[]) {
     int err = 0;
 
     TEST("the next allocation size: past the current, at the next buffer") {

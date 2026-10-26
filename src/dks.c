@@ -2173,10 +2173,7 @@ static void freezeroCheckingFree(void *ptr) {
     freezeroRealFree(ptr);
 }
 
-#define UNUSED(x) (void)(x)
 int DKS_TEST(int argc, char *argv[]) {
-    UNUSED(argv);
-
     bool bigTests = true;
     bool hardStop = true;
 

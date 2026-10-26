@@ -54,10 +54,8 @@ typedef struct flexEnvelopeAlgoDesc {
 
 /* === Hash adapters ================================================== */
 
-static void hashXXH64(const uint8_t *data, size_t data_len, const uint8_t *key,
-                      size_t key_len, uint8_t *out) {
-    (void)key;
-    (void)key_len;
+static void hashXXH64(const uint8_t *data, size_t data_len, const uint8_t *,
+                      size_t, uint8_t *out) {
     const uint64_t h = XXH64(data, data_len, 0);
     /* Write little-endian for cross-platform stability. */
     for (uint32_t i = 0; i < 8u; i++) {
@@ -65,20 +63,16 @@ static void hashXXH64(const uint8_t *data, size_t data_len, const uint8_t *key,
     }
 }
 
-static void hashXXH3_64(const uint8_t *data, size_t data_len,
-                        const uint8_t *key, size_t key_len, uint8_t *out) {
-    (void)key;
-    (void)key_len;
+static void hashXXH3_64(const uint8_t *data, size_t data_len, const uint8_t *,
+                        size_t, uint8_t *out) {
     const uint64_t h = XXH3_64bits(data, data_len);
     for (uint32_t i = 0; i < 8u; i++) {
         out[i] = (uint8_t)(h >> (i * 8u));
     }
 }
 
-static void hashXXH3_128(const uint8_t *data, size_t data_len,
-                         const uint8_t *key, size_t key_len, uint8_t *out) {
-    (void)key;
-    (void)key_len;
+static void hashXXH3_128(const uint8_t *data, size_t data_len, const uint8_t *,
+                         size_t, uint8_t *out) {
     const XXH128_hash_t h = XXH3_128bits(data, data_len);
     for (uint32_t i = 0; i < 8u; i++) {
         out[i] = (uint8_t)(h.low64 >> (i * 8u));
@@ -90,10 +84,8 @@ static void hashXXH3_128(const uint8_t *data, size_t data_len,
  * caller seed (envelope wrap doesn't expose one).  Output is the eight
  * little-endian bytes of the 64-bit hash, same wire convention as the
  * other 64-bit checksum entries. */
-static void hashRapidhash(const uint8_t *data, size_t data_len,
-                          const uint8_t *key, size_t key_len, uint8_t *out) {
-    (void)key;
-    (void)key_len;
+static void hashRapidhash(const uint8_t *data, size_t data_len, const uint8_t *,
+                          size_t, uint8_t *out) {
     const uint64_t h = rapidhash(data, data_len);
     for (uint32_t i = 0; i < 8u; i++) {
         out[i] = (uint8_t)(h >> (i * 8u));
@@ -1333,7 +1325,7 @@ static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
 static bool sealRunCipher(uint8_t *out, size_t aad_len,
                           const uint8_t *plaintext, uint64_t plaintext_len,
                           const flexEnvelopeSealParams *params,
-                          const flexEnvelopeAlgoDesc *d, bool fromRing) {
+                          const flexEnvelopeAlgoDesc *, bool fromRing) {
     uint8_t *ciphertext_out = out + aad_len;
     uint8_t *tag_out = ciphertext_out + plaintext_len;
     /* Both callers (sealEmitHeader for one-shot Seal, sealFinalize) have
@@ -1369,7 +1361,6 @@ static bool sealRunCipher(uint8_t *out, size_t aad_len,
     } else {
         return false; /* unreachable; descriptor table guards this */
     }
-    (void)d;
     return true;
 }
 
@@ -2576,9 +2567,7 @@ static void envBreakWrap(flexEnvelopeWrapParams *p, envBadWrap bad,
     }
 }
 
-int flexEnvelopeTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int flexEnvelopeTest(int, char *[]) {
     int err = 0;
 
     TEST("envelope: every algorithm streams as it wraps, in any chunking") {
@@ -5842,9 +5831,7 @@ static void *envRetireRaceRotator(void *vctx) {
     return NULL;
 }
 
-int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestFlexEnvelopeKeyringRetireRaceTest(int, char *[]) {
     int err = 0;
 
     /* AES-256-length key chosen on purpose so the slot caches an

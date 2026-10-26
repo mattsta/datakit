@@ -1397,9 +1397,7 @@ int32_t multidictUpdateValue(multidict *d, const databox *keybox,
 }
 
 /* AddXX's rewrite: the new value, whatever was stored */
-static bool mdReplaceUpdate_(void *ctx, const databox *current,
-                             databox *replacement) {
-    (void)current;
+static bool mdReplaceUpdate_(void *ctx, const databox *, databox *replacement) {
     *replacement = *(const databox *)ctx;
     return true;
 }
@@ -3242,12 +3240,10 @@ DK_STATIC uint32_t multidictStringHashFunction_(multidict *d, const void *key,
 
 /* Exact key equality: same length and same bytes.  Keys are binary, so an
  * embedded NUL is an ordinary byte. */
-DK_STATIC int32_t multidictStringKeyCompare_(void *privdata, const void *key1,
+DK_STATIC int32_t multidictStringKeyCompare_(void *, const void *key1,
                                              const uint32_t k1len,
                                              const void *key2,
                                              const uint32_t k2len) {
-    DK_NOTUSED(privdata);
-
     return k1len == k2len && (k1len == 0 || memcmp(key1, key2, k1len) == 0);
 }
 
@@ -3256,13 +3252,10 @@ DK_STATIC int32_t multidictStringKeyCompare_(void *privdata, const void *key1,
  * above 0x7F included, must match exactly, whatever the C locale is.
  * multidictGenCaseHashFunction folds the same set, so keys equal here
  * hash equal. */
-DK_STATIC int32_t multidictStringCaseKeyCompare_(void *privdata,
-                                                 const void *key1,
+DK_STATIC int32_t multidictStringCaseKeyCompare_(void *, const void *key1,
                                                  const uint32_t k1len,
                                                  const void *key2,
                                                  const uint32_t k2len) {
-    DK_NOTUSED(privdata);
-
     return k1len == k2len &&
            StrUtf8EqualCaseInsensitiveAscii(key1, k1len, key2, k2len);
 }
@@ -3314,10 +3307,9 @@ void multidictOpRepr(const multidictOp *op) {
 #define MM_SLOT(slot) ((multimap *)(slot))
 #define MM_SLOT_REF(slot) ((multimap **)(slot))
 
-DK_STATIC int64_t mmSlotInsert(multidictClass *qdc, multidictSlot **slot,
+DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,
                                const databox *keybox, const databox *valbox,
                                databox *replaced) {
-    (void)qdc;
     if (*slot == NULL) {
         return -1;
     }
@@ -3329,11 +3321,9 @@ DK_STATIC int64_t mmSlotInsert(multidictClass *qdc, multidictSlot **slot,
     return wasReplaced ? 0 : 1; /* 1 = new insert, 0 = replaced */
 }
 
-DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *qdc,
-                                       multidictSlot **slot,
+DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *, multidictSlot **slot,
                                        const databox *keybox,
                                        const databox *valbox) {
-    (void)qdc;
     if (*slot == NULL) {
         return -1;
     }
@@ -3342,10 +3332,8 @@ DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *qdc,
     return multimapInsertIfAbsent(MM_SLOT_REF(slot), elements) ? 1 : 0;
 }
 
-DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
-                                  const databox *keybox) {
-    (void)qdc;
-    (void)keybox;
+DK_STATIC void *mmSlotGetOrCreate(multidictClass *, multidictSlot **slot,
+                                  const databox *) {
     if (*slot == NULL) {
         /* @own: container; free=mmSlotFree */
         *slot = multimapNew(2); /* key + value */
@@ -3353,10 +3341,9 @@ DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
     return *slot;
 }
 
-DK_STATIC bool mmSlotRemove(multidictClass *qdc, multidictSlot **slot,
+DK_STATIC bool mmSlotRemove(multidictClass *, multidictSlot **slot,
                             const databox *keybox, databox *removedVal,
                             bool take) {
-    (void)qdc;
     if (*slot == NULL) {
         return false;
     }
@@ -3366,9 +3353,8 @@ DK_STATIC bool mmSlotRemove(multidictClass *qdc, multidictSlot **slot,
                : multimapDeleteReporting(MM_SLOT_REF(slot), keybox, removedVal);
 }
 
-DK_STATIC bool mmSlotFindValue(multidictClass *qdc, multidictSlot *slot,
+DK_STATIC bool mmSlotFindValue(multidictClass *, multidictSlot *slot,
                                const databox *keybox, databox *valbox) {
-    (void)qdc;
     if (slot == NULL) {
         return false;
     }
@@ -3384,8 +3370,7 @@ DK_STATIC void *mmSlotCreate(void) {
     return multimapNew(2); /* key + value */
 }
 
-DK_STATIC uint32_t mmSlotFree(multidictClass *qdc, multidictSlot *slot) {
-    (void)qdc;
+DK_STATIC uint32_t mmSlotFree(multidictClass *, multidictSlot *slot) {
     if (slot) {
         const uint32_t count = multimapCount(MM_SLOT(slot));
         multimapFree(MM_SLOT(slot));
@@ -3449,9 +3434,8 @@ DK_STATIC uint32_t mmSlotCount(multidictSlot *slot) {
     return slot ? multimapCount(MM_SLOT(slot)) : 0;
 }
 
-DK_STATIC bool mmSlotFindKeyByPos(multidictClass *qdc, multidictSlot *slot,
+DK_STATIC bool mmSlotFindKeyByPos(multidictClass *, multidictSlot *slot,
                                   uint32_t pos, databox *keybox) {
-    (void)qdc;
     if (slot == NULL) {
         return false;
     }
@@ -3478,9 +3462,8 @@ DK_STATIC bool mmSlotFindKeyByPos(multidictClass *qdc, multidictSlot *slot,
     return false;
 }
 
-DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
+DK_STATIC void mmSlotIterateAll(multidictClass *, multidictSlot *slot,
                                 multidictIterProcess process, void *privdata) {
-    (void)qdc;
     if (slot == NULL || process == NULL) {
         return;
     }
@@ -3503,10 +3486,9 @@ DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
     }
 }
 
-DK_STATIC int32_t mmSlotUpdate(multidictClass *qdc, multidictSlot **slot,
+DK_STATIC int32_t mmSlotUpdate(multidictClass *, multidictSlot **slot,
                                const databox *keybox,
                                multidictValueUpdate *update, void *ctx) {
-    (void)qdc;
     multimapEntry me;
     if (*slot == NULL ||
         !multimapGetUnderlyingEntry(MM_SLOT(*slot), keybox, &me)) {
@@ -3530,13 +3512,11 @@ DK_STATIC int32_t mmSlotUpdate(multidictClass *qdc, multidictSlot **slot,
     return 1;
 }
 
-DK_STATIC void mmSlotClassFree(multidictClass *qdc) {
-    (void)qdc;
+DK_STATIC void mmSlotClassFree(multidictClass *) {
     /* Nothing to free for this simple class */
 }
 
-DK_STATIC uint32_t mmSlotFreeClass(multidictClass *qdc) {
-    (void)qdc;
+DK_STATIC uint32_t mmSlotFreeClass(multidictClass *) {
     return 0;
 }
 
@@ -3637,30 +3617,22 @@ static void testRandSeed(uint32_t seed) {
 }
 
 /* Scan callback for counting */
-static void scanCountCallback(void *privdata, const databox *key,
-                              const databox *val) {
-    (void)key;
-    (void)val;
+static void scanCountCallback(void *privdata, const databox *,
+                              const databox *) {
     int *count = (int *)privdata;
     (*count)++;
 }
 
 /* Test eviction callbacks (defined at file scope for portability) */
 static int testEvictionCallbackCount_ = 0;
-static bool testEvictionCb_(void *privdata, const databox *key,
-                            const databox *val) {
-    (void)key;
-    (void)val;
+static bool testEvictionCb_(void *privdata, const databox *, const databox *) {
     int *counter = (int *)privdata;
     (*counter)++;
     return true; /* Allow eviction */
 }
 
 static int testVetoCount_ = 0;
-static bool vetoEvictionCb_(void *privdata, const databox *key,
-                            const databox *val) {
-    (void)key;
-    (void)val;
+static bool vetoEvictionCb_(void *privdata, const databox *, const databox *) {
     int *counter = (int *)privdata;
     if (*counter < 5) {
         (*counter)++;
@@ -3674,9 +3646,7 @@ static bool vetoEvictionCb_(void *privdata, const databox *key,
  * "evict-rehash-val-NNNNNN" */
 static int testEvictRehashSeen_ = 0;
 static int testEvictRehashBad_ = 0;
-static bool evictRehashCb_(void *privdata, const databox *key,
-                           const databox *val) {
-    (void)privdata;
+static bool evictRehashCb_(void *, const databox *key, const databox *val) {
     testEvictRehashSeen_++;
     static constexpr char keyPrefix[] = "evict-rehash-key-";
     static constexpr char valPrefix[] = "evict-rehash-val-";
@@ -3729,8 +3699,7 @@ static int32_t testLruVetoes_ = 0;
 static int32_t testLruVetoBad_ = 0;
 static int32_t testLruEvicted_ = 0;
 static int32_t testLruEvictOrder_[TEST_LRU_VETO_MAX];
-static bool lruVetoCb_(void *privdata, const databox *key, const databox *val) {
-    (void)privdata;
+static bool lruVetoCb_(void *, const databox *key, const databox *val) {
     const int32_t idx = testKeyIndex_(key, "lruveto-");
     if (idx < 0 || !DATABOX_IS_INTEGER(val) || val->data.i != idx) {
         testLruVetoBad_++;
@@ -3808,10 +3777,7 @@ static bool lruOrderCb_(void *privdata, const databox *key,
 }
 
 /* Every key hashes alike: all keys share one slot and one LRU hash */
-static uint32_t testConstHash_(multidict *d, const void *key, uint32_t len) {
-    (void)d;
-    (void)key;
-    (void)len;
+static uint32_t testConstHash_(multidict *, const void *, uint32_t) {
     return 0x5eedU;
 }
 
@@ -4120,9 +4086,7 @@ static int mdWideEvictBad_ = 0;
 static const mdWidePair *mdWideEvictPairs_ = NULL;
 static size_t mdWideEvictCount_ = 0;
 
-static bool mdWideEvictCb_(void *privdata, const databox *key,
-                           const databox *val) {
-    (void)privdata;
+static bool mdWideEvictCb_(void *, const databox *key, const databox *val) {
     const size_t at = mdWideFind_(mdWideEvictPairs_, mdWideEvictCount_, key);
     if (at == SIZE_MAX || !mdWideMatches_(val, &mdWideEvictPairs_[at].val)) {
         mdWideEvictBad_++;
@@ -4854,8 +4818,7 @@ static bool testKeyIsOneOf_(const databox *key, const char *const *names,
 }
 
 static bool testRecordEvictionCb_(void *privdata, const databox *key,
-                                  const databox *val) {
-    (void)val;
+                                  const databox *) {
     int32_t *bad = privdata;
     static const char *const stored[] = {"Alpha", "BETA", "gamma"};
     if (!testKeyIsOneOf_(key, stored, 3)) {
@@ -4865,8 +4828,7 @@ static bool testRecordEvictionCb_(void *privdata, const databox *key,
 }
 
 static void testSpellingScanCb_(void *privdata, const databox *key,
-                                const databox *val) {
-    (void)val;
+                                const databox *) {
     int32_t *bad = privdata;
     static const char *const stored[] = {"Alpha", "BETA", "gamma"};
     if (!testKeyIsOneOf_(key, stored, 3)) {
@@ -5209,10 +5171,8 @@ static uint32_t testTrimHash_(multidict *d, const void *key, uint32_t len) {
     return multidictGenHashFunction(d, key, (int32_t)testTrimmedLen_(key, len));
 }
 
-static int32_t testTrimCompare_(void *privdata, const void *key1,
-                                const uint32_t k1len, const void *key2,
-                                const uint32_t k2len) {
-    (void)privdata;
+static int32_t testTrimCompare_(void *, const void *key1, const uint32_t k1len,
+                                const void *key2, const uint32_t k2len) {
     const uint32_t a = testTrimmedLen_(key1, k1len);
     const uint32_t b = testTrimmedLen_(key2, k2len);
     return a == b && (a == 0 || memcmp(key1, key2, a) == 0);
@@ -5666,11 +5626,7 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
 }
 
 /* Scan callback that does nothing: scans must not promote */
-static void testIgnoreScanCb_(void *privdata, const databox *key,
-                              const databox *val) {
-    (void)privdata;
-    (void)key;
-    (void)val;
+static void testIgnoreScanCb_(void *, const databox *, const databox *) {
 }
 
 /* The LRU level of one key after each kind of operation: reads that
@@ -6396,10 +6352,7 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     return err;
 }
 
-int multidictTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multidictTest(int, char *[]) {
     int err = 0;
 
     /* The dict most sections below share, on multimap slots */
