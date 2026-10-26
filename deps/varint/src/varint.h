@@ -7,10 +7,10 @@
 #include <string.h>
 __BEGIN_DECLS
 
-#ifndef __clang__
-#define varint_fallthrough __attribute__((fallthrough))
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define varint_fallthrough [[fallthrough]]
 #else
-#define varint_fallthrough (void)0
+#define varint_fallthrough __attribute__((fallthrough))
 #endif
 
 /* ====================================================================

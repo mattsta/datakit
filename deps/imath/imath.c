@@ -1976,7 +1976,8 @@ mp_result mp_int_read_cstring(mp_int z, mp_size radix, const char *str,
         ++str;
         break;
     case '+':
-        ++str; /* fallthrough */
+        ++str;
+        __attribute__((fallthrough));
     default:
         MP_SIGN_SET(z, MP_ZPOS);
         break;

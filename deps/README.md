@@ -42,6 +42,9 @@ These changes are datakit's own and are not upstream. Carry them forward when re
   - `mp_rat_to_decimal` counts leading zeros in an `mp_size`, the type of `prec`.
   - `tests/imathEdgeTest.c` is datakit's own ctest, `imath-edge`. The `imath-edge-test` target in `deps/imath/CMakeLists.txt` builds it from `imath.c`, `imrat.c` and `gmp_compat.c`, with ASan/UBSan when `EnableASAN`/`EnableUBSAN` are set. It runs canary-bounded checks of every string writer at every limit, plus `get_str` case and bounds, `set_str` and export/import round trips.
   - `pi.c` parses its digit count and radix with checked `strtoimax`. It sizes its output buffer with `mp_int_string_len()` and checks the allocation and the conversion.
+  - `mp_int_read_cstring`'s `'+'` sign case marks its fallthrough with `__attribute__((fallthrough))` for datakit's `-Wimplicit-fallthrough`.
+- varint
+  - `varint_fallthrough` expands to `[[fallthrough]]` under C23 and to `__attribute__((fallthrough))` before it, on clang as well as GCC, so the switch fallthroughs in the encoding macros pass `-Wimplicit-fallthrough`.
 - xxHash
   - `deps/xxHash/CMakeLists.txt` is datakit's own build file; upstream has no root CMake build. It builds the C library without the C++-only `-Wno-extra-semi`.
   - Per the upgrade to 0.8.3, `xxhash.h` and `xxh_x86dispatch.{c,h}` are clang-formatted, and every other vendored file is byte-identical to upstream.
