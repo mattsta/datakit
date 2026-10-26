@@ -260,7 +260,6 @@ static constexpr uint64_t serverSparseMaxBytes = 4096;
 #define HLL_DENSE_SIZE (HLL_HDR_SIZE + ((HLL_REGISTERS * HLL_BITS + 7) / 8))
 #define HLL_MAX_SIZE HLL_HDR_SIZE + HLL_REGISTERS
 static constexpr int HLL_MAX_ENCODING = 1;
-#define HLL_ZERO_BOUND (UINT64_WIDTH - HLL_P)
 
 typedef uint8_t hllStatic[HLL_MAX_SIZE];
 
@@ -495,13 +494,7 @@ DK_STATIC int_fast32_t hyperloglogPatLen(const void *data_, size_t len,
     hash >>= HLL_P;            /* Remove bits used to address the register. */
     hash |= (1ULL << HLL_Q);   /* Verify count will be <= Q + 1 */
 
-    /* ctzll can't handle 0 as an input, so we need to special-case
-     * the unlikely scenario */
-    if (unlikely(hash == 0)) {
-        return HLL_ZERO_BOUND; /* Handle special case. */
-    }
-
-    return __builtin_ctzll(hash) + 1; /* Use builtin if possible. */
+    return (int_fast32_t)stdc_trailing_zeros(hash) + 1;
 }
 
 /* ================== Dense representation implementation  ================== */

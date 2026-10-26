@@ -66,7 +66,7 @@ void xofAppend(xof *restrict const x, size_t *restrict const bitsUsed,
     memcpy(&o, &prevVal, sizeof(prevVal));
     memcpy(&v, &newVal, sizeof(newVal));
 
-    /* __builtin_clzll/ctzll take a 64-bit unsigned argument. */
+    /* The bits that differ, as one 64-bit word for the zero counts */
     const uint64_t compared = o ^ v;
     if (compared == 0) {
         /* use single zero bit, no change in data. */
@@ -90,8 +90,8 @@ void xofAppend(xof *restrict const x, size_t *restrict const bitsUsed,
      * so, we know we have *only* leading zeros above data bits. */
 
     /* int because of builtin APIs */
-    const int newLeadingZeroes = __builtin_clzll(compared);
-    const int newTrailingZeroes = __builtin_ctzll(compared);
+    const int newLeadingZeroes = stdc_leading_zeros(compared);
+    const int newTrailingZeroes = stdc_trailing_zeros(compared);
 
     const int32_t lengthOfOldBits =
         64 - *prevLeadingZeroes - *prevTrailingZeroes;

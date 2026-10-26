@@ -1518,7 +1518,7 @@ size_t highlyscalable_intersect_SIMD(const uint32_t *A, const size_t s_a,
         //[ copy out common elements
         const __m128i p = _mm_shuffle_epi8(v_a, shuffle_mask[mask]);
         _mm_storeu_si128((__m128i *)out, p);
-        out += __builtin_popcount(mask);
+        out += stdc_count_ones((unsigned int)mask);
         // a number of elements is a weight of the mask ]
     }
 
@@ -1582,7 +1582,7 @@ size_t lemire_highlyscalable_intersect_SIMD(const uint32_t *A, const size_t s_a,
             _mm_storeu_si128((__m128i *)out, p);
 
             // a number of elements is a weight of the mask
-            out += __builtin_popcount(mask);
+            out += stdc_count_ones((unsigned int)mask);
 
             const uint32_t a_max = A[i_a + 3];
             if (a_max <= B[i_b + 3]) {

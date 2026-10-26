@@ -73,7 +73,7 @@ size_t StrLenUtf8(const void *_ss, size_t len) {
 
             /* popcount of mask = non-continuation bytes, so:
              * continuation bytes = 16 - popcount(mask) */
-            continuationBytes += 16 - __builtin_popcount(mask);
+            continuationBytes += 16 - stdc_count_ones(mask);
 
             s += 16;
             len -= 16;

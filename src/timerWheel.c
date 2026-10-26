@@ -346,14 +346,14 @@ static uint32_t wheel0OccupiedDistance(const timerWheel *tw, uint32_t from) {
 
     uint64_t w = tw->wheel0Occupied[word] >> bit;
     if (w) {
-        return (uint32_t)__builtin_ctzll(w);
+        return (uint32_t)stdc_trailing_zeros(w);
     }
 
     uint32_t dist = 64 - bit;
     for (uint32_t k = 1; k < WHEEL0_SIZE / 64; k++) {
         w = tw->wheel0Occupied[(word + k) & ((WHEEL0_SIZE / 64) - 1)];
         if (w) {
-            return dist + (uint32_t)__builtin_ctzll(w);
+            return dist + (uint32_t)stdc_trailing_zeros(w);
         }
         dist += 64;
     }
@@ -361,7 +361,7 @@ static uint32_t wheel0OccupiedDistance(const timerWheel *tw, uint32_t from) {
     /* Wrap back into the low bits of the starting word */
     w = bit ? (tw->wheel0Occupied[word] & ((1ULL << bit) - 1)) : 0;
     if (w) {
-        return dist + (uint32_t)__builtin_ctzll(w);
+        return dist + (uint32_t)stdc_trailing_zeros(w);
     }
 
     return WHEEL0_SIZE;

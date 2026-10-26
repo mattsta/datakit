@@ -93,6 +93,8 @@ int dkC23Test(int, char *[]) {
 
     TEST("stdbit: every function at every width against bit-by-bit "
          "answers") {
+        DKC23_SWEEP(unsigned char, UCHAR_WIDTH);
+        DKC23_SWEEP(unsigned short, USHRT_WIDTH);
         DKC23_SWEEP(unsigned int, UINT_WIDTH);
         DKC23_SWEEP(unsigned long, ULONG_WIDTH);
         DKC23_SWEEP(unsigned long long, ULLONG_WIDTH);

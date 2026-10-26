@@ -28,7 +28,7 @@
             uint64_t myword = IS_INVERSE data[i];                              \
             while (myword != 0) {                                              \
                 const uint64_t unsetAfterCheck = myword & -myword;             \
-                const int r = __builtin_ctzll(myword);                         \
+                const int r = stdc_trailing_zeros(myword);                     \
                 position[idx++] = i * 64 + r;                                  \
                 myword ^= unsetAfterCheck;                                     \
             }                                                                  \

@@ -309,7 +309,7 @@ static uint32_t clusterLatencyBucket(uint64_t ns) {
     if (ns < CLUSTER_LATENCY_SUB) {
         return (uint32_t)ns;
     }
-    const uint32_t msb = 63u - (uint32_t)__builtin_clzll(ns);
+    const uint32_t msb = stdc_bit_width(ns) - 1u;
     const uint32_t shift = msb - CLUSTER_LATENCY_SUB_BITS;
     return (msb - CLUSTER_LATENCY_SUB_BITS + 1u) * CLUSTER_LATENCY_SUB +
            (uint32_t)((ns >> shift) & (CLUSTER_LATENCY_SUB - 1u));
@@ -5754,9 +5754,9 @@ static int testFuzzSerializationRoundtrip(void) {
             clusterPlacementFree(&pn);
             clusterPlacementFree(&pm);
         }
-        if (differ || __builtin_popcount(nodesSeen) < 2) {
+        if (differ || stdc_count_ones(nodesSeen) < 2) {
             ERR("%zu of 64 keys placed differently by holder; %d nodes used",
-                differ, __builtin_popcount(nodesSeen));
+                differ, stdc_count_ones(nodesSeen));
         }
         const databox bulk[3] = {
             databoxNewBytes("left", 4),
@@ -7630,12 +7630,12 @@ int clusterRingTest(int, char *[]) {
                         UINT64_C(1)
                         << clusterPlacementGetReplica(&p, r)->location.rackId;
                 }
-                if (n != 3 || __builtin_popcountll(rackSeen) != 3 ||
-                    !p.spreadMet || p.primary->id != q.primary->id) {
+                if (n != 3 || stdc_count_ones(rackSeen) != 3 || !p.spreadMet ||
+                    p.primary->id != q.primary->id) {
                     ERR("strategy %d key %u: %zu replicas over %d racks, "
                         "primary %" PRIu64 " vs %" PRIu64,
-                        (int)s, k, n, __builtin_popcountll(rackSeen),
-                        p.primary->id, q.primary->id);
+                        (int)s, k, n, stdc_count_ones(rackSeen), p.primary->id,
+                        q.primary->id);
                     k = 200;
                 }
                 clusterPlacementFree(&p);

@@ -218,7 +218,7 @@ bool StrUtf8Valid(const void *_str, size_t len) {
             len -= 16;
         } else {
             /* Found non-ASCII byte(s) - find first non-ASCII position */
-            uint32_t firstNonAscii = __builtin_ctz(mask);
+            uint32_t firstNonAscii = stdc_trailing_zeros(mask);
 
             /* Skip past any leading ASCII bytes */
             s += firstNonAscii;

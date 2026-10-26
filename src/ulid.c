@@ -2452,8 +2452,9 @@ static int ulidTestZOrderCompare(uint64_t a1, uint64_t a2, uint64_t b1,
         return 0;
     }
 
+    /* stdc_leading_zeros(0) is 64, so d1 == 0 needs no case of its own */
     const bool ts2Decides =
-        d2 != 0 && (d1 == 0 || __builtin_clzll(d2) <= __builtin_clzll(d1));
+        d2 != 0 && stdc_leading_zeros(d2) <= stdc_leading_zeros(d1);
     if (ts2Decides) {
         return a2 < b2 ? -1 : 1;
     }

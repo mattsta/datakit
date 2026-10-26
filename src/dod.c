@@ -17,8 +17,9 @@
 #if 0
 #define DOD_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 #define DOD_BYTESUSED(value)                                                   \
-    (value ? DOD_DIV_CEIL(((sizeof(value) * 8) - __builtin_clzll(value)), 8)   \
-           : 0)
+    (value                                                                     \
+         ? DOD_DIV_CEIL(((sizeof(value) * 8) - stdc_leading_zeros(value)), 8)  \
+         : 0)
 #endif
 
 /* Writer streams (dodWrite) start with a header holding the first two

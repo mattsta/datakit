@@ -140,10 +140,10 @@ uint64_t StrPopCntAligned(const void *data_, size_t len) {
     /* Process remaining 32-byte chunks */
     while (len >= multiStepSize) {
         const uint64_t *v = (const uint64_t *)data;
-        result += __builtin_popcountll(v[0]);
-        result += __builtin_popcountll(v[1]);
-        result += __builtin_popcountll(v[2]);
-        result += __builtin_popcountll(v[3]);
+        result += stdc_count_ones(v[0]);
+        result += stdc_count_ones(v[1]);
+        result += stdc_count_ones(v[2]);
+        result += stdc_count_ones(v[3]);
         data += multiStepSize;
         len -= multiStepSize;
     }
@@ -194,10 +194,10 @@ uint64_t StrPopCntAligned(const void *data_, size_t len) {
                 : "r"(r0), "r"(r1), "r"(r2), "r"(r3));
 #else
         /* Trust these work correctly... */
-        c0 += __builtin_popcountll(v[0]);
-        c1 += __builtin_popcountll(v[1]);
-        c2 += __builtin_popcountll(v[2]);
-        c3 += __builtin_popcountll(v[3]);
+        c0 += stdc_count_ones(v[0]);
+        c1 += stdc_count_ones(v[1]);
+        c2 += stdc_count_ones(v[2]);
+        c3 += stdc_count_ones(v[3]);
 #endif
         v += 4;
         len -= multiStepSize;
@@ -286,10 +286,10 @@ uint64_t StrPopCntExact(const void *data_, size_t len) {
      * Since len must be divisible by 32, we have at most one 32-byte chunk. */
     if (len >= multiStepSize) {
         const uint64_t *v = (const uint64_t *)data;
-        result += __builtin_popcountll(v[0]);
-        result += __builtin_popcountll(v[1]);
-        result += __builtin_popcountll(v[2]);
-        result += __builtin_popcountll(v[3]);
+        result += stdc_count_ones(v[0]);
+        result += stdc_count_ones(v[1]);
+        result += stdc_count_ones(v[2]);
+        result += stdc_count_ones(v[3]);
     }
 
     return result;
@@ -345,10 +345,10 @@ uint64_t StrPopCntExact(const void *data_, size_t len) {
     uint64_t result = 0;
     uint64_t *v = (uint64_t *)data;
     while (len) {
-        result += __builtin_popcount(v[0]);
-        result += __builtin_popcount(v[1]);
-        result += __builtin_popcount(v[2]);
-        result += __builtin_popcount(v[3]);
+        result += stdc_count_ones(v[0]);
+        result += stdc_count_ones(v[1]);
+        result += stdc_count_ones(v[2]);
+        result += stdc_count_ones(v[3]);
         v += 4;
         len -= multiStepSize;
     }

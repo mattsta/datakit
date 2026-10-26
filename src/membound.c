@@ -326,7 +326,7 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
         int mask = _mm256_movemask_epi8(inRange);
         if (mask) {
             /* Find first matching lane */
-            int bytePos = __builtin_ctz(mask);
+            int bytePos = (int)stdc_trailing_zeros((unsigned int)mask);
             int lane = bytePos / 8;
             return ranges[i + lane].extent;
         }
@@ -787,7 +787,7 @@ void *memboundExtentAlloc(memboundExtent *extent, size_t nBytes) {
         if (availableMask == 0) {
             return nullptr;
         }
-        iBin = iLogsize + __builtin_ctzll(availableMask);
+        iBin = iLogsize + stdc_trailing_zeros(availableMask);
     }
 
     int64_t i = extent->aiFreelist[iBin];
@@ -3553,7 +3553,7 @@ void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
     if (availableMask == 0) {
         return nullptr;
     }
-    iBin = iLogsize + __builtin_ctz(availableMask);
+    iBin = iLogsize + stdc_trailing_zeros(availableMask);
     if (iBin > MEMBOUND_MICRO_LOGMAX) {
         return nullptr;
     }
@@ -3958,7 +3958,7 @@ void *memboundCompactPoolAlloc(memboundCompactPool *m, size_t nBytes) {
         goto done; /* No space */
     }
 
-    int iBin = iLogsize + __builtin_ctz(mask);
+    int iBin = iLogsize + stdc_trailing_zeros(mask);
     if (iBin > MEMBOUND_COMPACT_LOGMAX) {
         goto done;
     }

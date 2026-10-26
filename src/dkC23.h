@@ -57,6 +57,8 @@
         return w < (unsigned int)(width) ? (T)((T)1 << w) : (T)0;              \
     }
 
+DK_STDBIT_(uc, unsigned char, UCHAR_WIDTH)
+DK_STDBIT_(us, unsigned short, USHRT_WIDTH)
 DK_STDBIT_(ui, unsigned int, UINT_WIDTH)
 DK_STDBIT_(ul, unsigned long, ULONG_WIDTH)
 DK_STDBIT_(ull, unsigned long long, ULLONG_WIDTH)
@@ -64,6 +66,8 @@ DK_STDBIT_(ull, unsigned long long, ULLONG_WIDTH)
 
 #define DK_STDBIT_GENERIC_(fn, x)                                              \
     _Generic((x),                                                              \
+        unsigned char: fn##_uc,                                                \
+        unsigned short: fn##_us,                                               \
         unsigned int: fn##_ui,                                                 \
         unsigned long: fn##_ul,                                                \
         unsigned long long: fn##_ull)(x)

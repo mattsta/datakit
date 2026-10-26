@@ -417,7 +417,7 @@ DK_STATIC uint16_t _bitmapToPositions(const void *bitmap, uint8_t positions[],
             /* Work on this 8 byte quantity until we've
              * eaten all the set bits. */
             const uint64_t unsetAfterCheck = myword & -myword;
-            const int r = __builtin_ctzll(myword);
+            const int r = stdc_trailing_zeros(myword);
             /* Note: we use 'Set' instead of 'InsertSorted' because
              *       the set positions are emitted in already sorted
              *       order (from low to high). */
@@ -1111,12 +1111,12 @@ DK_STATIC uint64_t findFirstSetBitInBitmap(const uint8_t *bitmap,
         uint64_t word;
         memcpy(&word, bitmap + (i * 8), sizeof(word));
         if (word != 0) {
-            return i * 64 + (uint64_t)__builtin_ctzll(word);
+            return i * 64 + (uint64_t)stdc_trailing_zeros(word);
         }
     }
     for (uint64_t i = words * 8; i < bytes; i++) { /* tail bytes (if any) */
         if (bitmap[i] != 0) {
-            return i * 8 + (uint64_t)__builtin_ctz(bitmap[i]);
+            return i * 8 + (uint64_t)stdc_trailing_zeros(bitmap[i]);
         }
     }
     return UINT64_MAX;
@@ -1501,17 +1501,17 @@ DK_STATIC uint64_t countBitsInBitmapRange(const uint8_t *bitmap,
          * alignment guarantee; a direct word deref is UB. */
         uint64_t word;
         memcpy(&word, bitmap + (i * 8), sizeof(word));
-        count += (uint64_t)__builtin_popcountll(word);
+        count += (uint64_t)stdc_count_ones(word);
     }
     for (uint64_t i = fullWords * 8; i < fullBytes; i++) {
-        count += (uint64_t)__builtin_popcount(bitmap[i]);
+        count += (uint64_t)stdc_count_ones(bitmap[i]);
     }
 
     /* Count remaining bits in partial byte */
     uint64_t remainingBits = endPos % 8;
     if (remainingBits > 0) {
         uint8_t mask = (1 << remainingBits) - 1;
-        count += __builtin_popcount(bitmap[fullBytes] & mask);
+        count += stdc_count_ones((uint8_t)(bitmap[fullBytes] & mask));
     }
 
     return count;
@@ -1647,7 +1647,7 @@ bool multiroarSelect(const multiroar *r, uint64_t k, uint64_t *position) {
 
                 for (uint64_t i = 0; i < bitsLen; i++) {
                     uint8_t byte = bitmap[i];
-                    uint8_t bitCount = __builtin_popcount(byte);
+                    uint8_t bitCount = stdc_count_ones(byte);
 
                     if (foundCount + bitCount >= targetInChunk) {
                         /* The target bit is in this byte */
@@ -2004,7 +2004,7 @@ bool multiroarIteratorNext(multiroarIterator *iter, uint64_t *position) {
                     w &= ~(uint64_t)0 << (pos & 63); /* ignore bits < cursor */
                     if (w != 0) {
                         const uint64_t found =
-                            wordIdx * 64 + (uint64_t)__builtin_ctzll(w);
+                            wordIdx * 64 + (uint64_t)stdc_trailing_zeros(w);
                         *position = chunkBase + found;
                         iter->positionInChunk = found + 1;
                         iter->indexInChunk++;
@@ -4588,11 +4588,11 @@ int multiroarTest(int, char *[]) {
         uint64_t nOr = 0;
         uint64_t nXor = 0;
         for (uint64_t w = 0; w < MR_FORM_WORDS; w++) {
-            na += (uint64_t)__builtin_popcountll(o[0][w]);
-            nb += (uint64_t)__builtin_popcountll(o[1][w]);
-            nAnd += (uint64_t)__builtin_popcountll(o[0][w] & o[1][w]);
-            nOr += (uint64_t)__builtin_popcountll(o[0][w] | o[1][w]);
-            nXor += (uint64_t)__builtin_popcountll(o[0][w] ^ o[1][w]);
+            na += (uint64_t)stdc_count_ones(o[0][w]);
+            nb += (uint64_t)stdc_count_ones(o[1][w]);
+            nAnd += (uint64_t)stdc_count_ones(o[0][w] & o[1][w]);
+            nOr += (uint64_t)stdc_count_ones(o[0][w] | o[1][w]);
+            nXor += (uint64_t)stdc_count_ones(o[0][w] ^ o[1][w]);
         }
         cleaner(multiroarFree) multiroar *ab = multiroarNewAnd(a, b);
         if (multiroarIntersects(a, b) != (nAnd > 0) ||
@@ -5757,7 +5757,7 @@ int multiroarTest(int, char *[]) {
 
             uint64_t oracleCount = 0;
             for (size_t w = 0; w < FUZZ_ORACLE_WORDS; w++) {
-                oracleCount += (uint64_t)__builtin_popcountll(oracle[w]);
+                oracleCount += (uint64_t)stdc_count_ones(oracle[w]);
             }
             if (multiroarBitCount(r) != oracleCount) {
                 ERR("op %d (kind %" PRIu64 " [%" PRIu64 ", +%" PRIu64

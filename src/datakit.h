@@ -117,13 +117,6 @@
 #define DK_BYTESUSED(value) DK_DIV_CEIL(stdc_bit_width((uint64_t)(value)), 8u)
 
 /* ====================================================================
- * Feature exposers
- * ==================================================================== */
-/* clang and gcc both provide __builtin_ctz / __builtin_clz */
-#define DK_HAS_CTZ 1
-#define DK_HAS_CLZ 1
-
-/* ====================================================================
  * Testing helpers
  * ==================================================================== */
 /* If not verbose testing, remove all debug printing. */

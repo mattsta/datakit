@@ -1338,7 +1338,7 @@ DK_STATIC void updateLowest(multilru *mlru) {
     }
 
     /* Find lowest set bit = lowest populated level */
-    size_t level = __builtin_ctzll(mlru->levelMask);
+    size_t level = stdc_trailing_zeros(mlru->levelMask);
     if (level < mlru->maxLevels) {
         mlru->lowest = mlru->levels[level].tail;
     }

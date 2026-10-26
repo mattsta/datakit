@@ -73,12 +73,8 @@ DK_INLINE_ALWAYS void StrScanDouble(uint64_t x, databox *box, int32_t ex2,
                                     int32_t neg) {
     /* Avoid double rounding for denormals. */
     if (unlikely(ex2 <= -1075 && x != 0)) {
-/* NYI: all of this generates way too much code on 32 bit CPUs. */
-#if DK_HAS_CLZ
-        int32_t b = (int32_t)(__builtin_clzll(x) ^ 63);
-#else
-#error "We don't have a fallback non-intrinsic clz here."
-#endif
+        /* NYI: all of this generates way too much code on 32 bit CPUs. */
+        const int32_t b = (int32_t)stdc_bit_width(x) - 1; /* x != 0 */
         if ((int32_t)b + ex2 <= -1023 && (int32_t)b + ex2 >= -1075) {
             uint64_t rb = (uint64_t)1 << (-1075 - ex2);
             if ((x & rb) && ((x & (rb + rb + rb - 1)))) {

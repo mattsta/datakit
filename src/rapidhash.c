@@ -945,7 +945,7 @@ void rapidhashMakeSecret(uint64_t seed, uint64_t secret[RAPIDHASH_SECRET_LEN]) {
                 continue;
             }
             for (size_t j = 0; j < i; j++) {
-                if (__builtin_popcountll(secret[j] ^ secret[i]) != 32) {
+                if (stdc_count_ones(secret[j] ^ secret[i]) != 32) {
                     ok = 0;
                     break;
                 }

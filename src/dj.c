@@ -643,11 +643,11 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
         size_t okayLen;
         if (low != 0) {
             /* Escape char in first 8 bytes */
-            uint32_t lz = __builtin_clzll(low);
+            uint32_t lz = stdc_leading_zeros(low);
             okayLen = lz >> 3; /* Convert bit position to byte position */
         } else {
             /* Escape char in second 8 bytes */
-            uint32_t lz = __builtin_clzll(high);
+            uint32_t lz = stdc_leading_zeros(high);
             okayLen = 8 + (lz >> 3);
         }
 

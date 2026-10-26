@@ -121,7 +121,7 @@ const uint8_t *StrUtf8Advance(const void *str, size_t len, size_t n) {
             }
         } else {
             /* Found non-ASCII - process byte by byte */
-            uint32_t firstNonAscii = __builtin_ctz(mask);
+            uint32_t firstNonAscii = stdc_trailing_zeros(mask);
 
             /* Skip ASCII bytes before the non-ASCII */
             if (firstNonAscii > 0) {
