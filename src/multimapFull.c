@@ -2865,7 +2865,6 @@ void multimapFullVerify(const multimapFull *m) {
                 const uint8_t *payload = rangeBox->data.ptr;
                 assert(rangeBox->big && rangeBox->allocated && payload);
                 assert(payload < zl || payload >= zl + flexBytes(zl));
-                (void)payload;
             } else {
                 assert(!rangeBox->big);
             }
@@ -3186,8 +3185,8 @@ int multimapFullTest(int, char *[]) {
     }
 
     TEST("create") {
-        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
-        (void)m;
+        [[maybe_unused]] cleaner(multimapFullFree) multimapFull *m =
+            multimapFullNew(2);
     }
 
     TEST("binary-search-vs-iteration agreement on mixed-length numeric keys") {
@@ -3311,8 +3310,8 @@ int multimapFullTest(int, char *[]) {
 
     TEST("speeds at different sizes") {
         int32_t maxMax = 1 << 16;
-        uint64_t secs[20] = {};
-        size_t size[20] = {};
+        [[maybe_unused]] uint64_t secs[20] = {};
+        [[maybe_unused]] size_t size[20] = {};
         int i = 0;
         for (int32_t maxSize = 1; maxSize < maxMax; maxSize *= 2) {
             cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
@@ -3335,8 +3334,6 @@ int multimapFullTest(int, char *[]) {
                 assert(multimapFullCount(m) == (uint32_t)pairs);
                 secs[i] = lps.global.us.duration;
                 size[i] = multimapFullReportSizeOnly(m);
-                (void)secs;
-                (void)size;
                 i++;
             }
 
@@ -3876,8 +3873,6 @@ int multimapFullTest(int, char *[]) {
                 const int kn = snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu",
                                         i / 16, i % 16);
                 const int vn = snprintf(valbuf, sizeof(valbuf), "v_%zu", i);
-                (void)kn;
-                (void)vn;
 
                 const databox keybox =
                     databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);

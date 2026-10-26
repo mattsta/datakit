@@ -193,10 +193,9 @@ static uint8_t *multiFenwick2dPersistSnapshot_(const void *structure,
         const uint64_t n = cells - at < BATCH ? cells - at : BATCH;
         for (uint64_t i = 0; i < n; i++) {
             /* A stored cell always boxes */
-            const bool ok = multiFenwickNumBox_(
+            [[maybe_unused]] const bool ok = multiFenwickNumBox_(
                 multiFenwickCellsGet(&t->store, at + i), &boxes[i]);
             assert(ok);
-            (void)ok;
             ptrs[i] = &boxes[i];
         }
 

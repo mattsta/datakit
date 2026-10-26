@@ -2405,18 +2405,15 @@ int multilruTest(int, char *[]) {
 
         multilruPtr p1 = multilruInsert(mlru);
         assert(p1 != 0);
-        (void)p1;
         assert(multilruCount(mlru) == 1);
 
         multilruPtr p2 = multilruInsert(mlru);
         assert(p2 != 0);
-        (void)p2;
         assert(multilruCount(mlru) == 2);
 
         multilruPtr removed;
         bool ok = multilruRemoveMinimum(mlru, &removed);
         assert(ok);
-        (void)ok;
         assert(multilruCount(mlru) == 1);
 
         printf("basic insert and remove: PASSED\n");
@@ -5062,8 +5059,7 @@ int multilruTest(int, char *[]) {
             size_t remaining = current > limit ? current - limit : 0;
 
             multilruPtr evicted[10];
-            size_t n = multilruEvictN(mlru, evicted, 10);
-            (void)n;
+            (void)multilruEvictN(mlru, evicted, 10);
 
             /* Progress should decrease */
             size_t newRemaining =

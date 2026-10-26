@@ -1370,9 +1370,8 @@ int multilistTest(int, char *[]) {
         int64_t start = timeUtilMs();
 
         TEST("create list") {
-            cleaner(multilistFree) multilist *ml =
+            [[maybe_unused]] cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            (void)ml;
         }
 
         TEST("add to tail of empty list") {
@@ -1636,7 +1635,6 @@ int multilistTest(int, char *[]) {
             databox box = {};
             bool found = multilistPopHead(&ml, s0, &box);
             assert(!found);
-            (void)found;
         }
 
         TEST("pop 1 string from 1") {
@@ -1698,7 +1696,6 @@ int multilistTest(int, char *[]) {
                 data = box.data.bytes.start;
                 bytes = box.len;
                 assert(found);
-                (void)found;
                 assert(data != NULL);
                 assert(bytes == 32);
                 if (strcmp(genstr("hello", 499 - i), (char *)data)) {
@@ -1736,7 +1733,6 @@ int multilistTest(int, char *[]) {
                 } else {
                     assert(!found);
                 }
-                (void)found;
                 databoxFreeData(&box);
             }
         }
@@ -1907,7 +1903,6 @@ int multilistTest(int, char *[]) {
                     ERR("Value 5 didn't match, instead got: %.*s",
                         (int32_t)entry.box.len, entry.box.data.bytes.start);
                 }
-                (void)got;
             }
         }
 
@@ -1962,16 +1957,16 @@ int multilistTest(int, char *[]) {
         TEST("duplicate empty list") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
-            (void)copy;
+            [[maybe_unused]] cleaner(multilistFree) multilist *copy =
+                multilistCopy(ml);
         }
 
         TEST("duplicate list of 1 element") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistPushHead(ml, s0, genstr("hello", 3), 32);
-            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
-            (void)copy;
+            [[maybe_unused]] cleaner(multilistFree) multilist *copy =
+                multilistCopy(ml);
         }
 
         TEST("duplicate list of 500") {
@@ -1981,8 +1976,8 @@ int multilistTest(int, char *[]) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
-            (void)copy;
+            [[maybe_unused]] cleaner(multilistFree) multilist *copy =
+                multilistCopy(ml);
         }
 
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
@@ -2595,9 +2590,8 @@ int multilistTest(int, char *[]) {
                                   FLEX_ENDPOINT_TAIL);
                 }
 
-                cleaner(multilistFree) multilist *ml =
+                [[maybe_unused]] cleaner(multilistFree) multilist *ml =
                     multilistNewFromFlex(f, depth[_i], fl);
-                (void)ml;
 
                 if (f == 1) {
                 } else if (f == 32) {

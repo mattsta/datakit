@@ -2481,7 +2481,6 @@ int multilistFullTest(int, char *[]) {
             databox box = {};
             bool found = multilistFullPopHead(ml, s0, &box);
             assert(!found);
-            (void)found;
             mlVerify(ml, 1, 0, 0, 0);
             multilistFullFree(ml);
         }
@@ -2557,7 +2556,6 @@ int multilistFullTest(int, char *[]) {
                 data = box.data.bytes.start;
                 bytes = box.len;
                 assert(found);
-                (void)found;
                 assert(data != NULL);
                 assert(bytes == 32);
                 if (strcmp(genstr("hello", 499 - i), (char *)data)) {
@@ -2598,7 +2596,6 @@ int multilistFullTest(int, char *[]) {
                 } else {
                     assert(!found);
                 }
-                (void)found;
                 databoxFreeData(&box);
             }
             mlVerify(ml, 1, 0, 0, 0);

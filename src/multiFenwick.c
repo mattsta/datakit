@@ -187,10 +187,10 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
         databox cell = DATABOX_UNSIGNED(0);
         if (i < count) {
             multiFenwickNum n;
-            const bool ok = multiFenwickNumFrom_(&values[i], &n) &&
-                            multiFenwickNumBox_(n, &cell);
+            [[maybe_unused]] const bool ok =
+                multiFenwickNumFrom_(&values[i], &n) &&
+                multiFenwickNumBox_(n, &cell);
             assert(ok); /* one checked element always boxes */
-            (void)ok;
         }
 
         multilistPushByTypeTail(&mfw->tree, mfw->state, &cell);
@@ -219,10 +219,9 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
             return NULL;
         }
 
-        const bool replaced = multilistReplaceByTypeAtIndex(
+        [[maybe_unused]] const bool replaced = multilistReplaceByTypeAtIndex(
             &mfw->tree, mfw->state, (mlNodeId)(parent - 1), &box);
         assert(replaced);
-        (void)replaced;
     }
 
     multiFenwick *out = mfw;
@@ -265,10 +264,9 @@ static void multiFenwickGrow_(multiFenwick *mfw, uint64_t newCapacity,
 
     for (uint64_t j = oldCapacity * 2; oldCapacity > 0 && j <= newCapacity;
          j <<= 1) {
-        const bool replaced = multilistReplaceByTypeAtIndex(
+        [[maybe_unused]] const bool replaced = multilistReplaceByTypeAtIndex(
             &mfw->tree, mfw->state, (mlNodeId)(j - 1), total);
         assert(replaced);
-        (void)replaced;
     }
 
     mfw->capacity = newCapacity;
@@ -300,9 +298,9 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
             return false;
         }
 
-        const bool boxed = multiFenwickNumBox_(total, &totalBox);
+        [[maybe_unused]] const bool boxed =
+            multiFenwickNumBox_(total, &totalBox);
         assert(boxed); /* a stored cell always boxes */
-        (void)boxed;
     }
 
     /* A chain has at most one cell per bit of the capacity */
@@ -343,10 +341,9 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
 
     steps = 0;
     for (uint64_t i = idx + 1; i <= tree->capacity; i = multiFenwickParent(i)) {
-        const bool replaced = multilistReplaceByTypeAtIndex(
+        [[maybe_unused]] const bool replaced = multilistReplaceByTypeAtIndex(
             &tree->tree, tree->state, (mlNodeId)(i - 1), &planned[steps++]);
         assert(replaced);
-        (void)replaced;
     }
 
     if (idx + 1 > tree->count) {
@@ -516,10 +513,9 @@ void multiFenwickClear(multiFenwick *mfw) {
 
     const databox zero = DATABOX_UNSIGNED(0);
     for (uint64_t i = 0; i < mfw->capacity; i++) {
-        const bool replaced = multilistReplaceByTypeAtIndex(
+        [[maybe_unused]] const bool replaced = multilistReplaceByTypeAtIndex(
             &mfw->tree, mfw->state, (mlNodeId)i, &zero);
         assert(replaced);
-        (void)replaced;
     }
 }
 

@@ -131,10 +131,9 @@ multiFenwickFlat *multiFenwickFlatNewFromArray(const databox *values,
     for (uint64_t i = 0; i < count; i++) {
         multiFenwickNum n;
         multiFenwickCell cell;
-        const bool ok = multiFenwickNumFrom_(&values[i], &n) &&
-                        multiFenwickCellEncode(n, &cell);
+        [[maybe_unused]] const bool ok = multiFenwickNumFrom_(&values[i], &n) &&
+                                         multiFenwickCellEncode(n, &cell);
         assert(ok); /* one checked element always encodes */
-        (void)ok;
         multiFenwickCellsPut(&mfw->cells, capacity, i, cell);
     }
 
@@ -480,10 +479,9 @@ static uint8_t *multiFenwickFlatPersistSnapshot_(const void *structure,
             mfw->capacity - at < BATCH ? mfw->capacity - at : BATCH;
         for (uint64_t i = 0; i < n; i++) {
             /* A stored cell always boxes */
-            const bool ok = multiFenwickNumBox_(
+            [[maybe_unused]] const bool ok = multiFenwickNumBox_(
                 multiFenwickCellsGet(&mfw->cells, at + i), &boxes[i]);
             assert(ok);
-            (void)ok;
             ptrs[i] = &boxes[i];
         }
 
