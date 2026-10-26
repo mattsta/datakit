@@ -324,6 +324,11 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
 - The result's `tree` line says what was taken, and a `changed` line
   follows for every path that differs from HEAD (`A`, `M`, `D` or `T`
   and the path), in every mode.
+- With `--target` and no `--tests` / `--serial` the run is build-only
+  (every other gate still runs). That is how the library is checked the
+  way consumers compile it, with asserts off:
+  `--preset perf --define DatakitTestMode=OFF --target datakit-static`
+  (`DatakitTestMode` keeps `-UNDEBUG` otherwise).
 - `--tests` runs in parallel (`-j N`, default the CPU count);
   `--serial` runs one test at a time (the timing-sensitive tests, as in
   `validate`'s default serial set) and is excluded from the parallel
@@ -645,6 +650,47 @@ uv run --project tools dktools dropinclude stdbool.h [--dry-run] [FILE ...]
   excluded), or from the files given. Quoted includes and commented-out
   lines stay.
 - Prints each file's count. Exits 0, or 2 for a bad header name or a
+  missing file.
+
+## unusednames — retire `(void)name;` silencers for the C23 forms
+
+```sh
+uv run --project tools dktools unusednames [--dry-run] [FILE ...]
+```
+
+- In the tracked `src/**/*.c` and `*.h` (vendored `src/memshard`
+  excluded), or the files given, each `(void)name;`, `DK_NOTUSED(name);`
+  or `UNUSED(name);` goes and the name gets the C23 form:
+  - a parameter the body never uses loses its name in the definition
+    (the declaration keeps it), or stays named as `[[maybe_unused]]`
+    when the comment directly above the definition names it (quoted,
+    or identifier-shaped such as `bufferLen`; a plain word such as
+    "key" in prose is not the parameter);
+  - a parameter or local used only where a build may drop the code
+    (`assert(...)` arguments, an `#if` branch), or a local only stored
+    to, is declared `[[maybe_unused]]`;
+  - a name read in code every build compiles keeps its declaration (the
+    silencer was redundant).
+- Assertions count as code a build may drop, except in test code
+  (inside `#ifdef DATAKIT_TEST`, or a `*Test.c` / `datakit-test.c`
+  file), where `ctest.h` refuses `NDEBUG` so they always compile.
+- A read is certain unless the innermost call around it is a
+  function-like macro the sources define (other than `assert`), which
+  may store into it; a function only reads its arguments. One certain
+  read in code every build compiles makes the silencer redundant.
+- Stores (`x = ...`, `x += ...`, `x++`) are not reads; names after `.`
+  or `->` are members. Code under every `#if` branch is part of the
+  body (an `#if 0` branch is not code); an `#else` the silencer leaves
+  empty goes with it.
+- Leaves a silencer and lists it with the reason when a preprocessor
+  line in the body names it, when the name has no parameter or local
+  declaration the tool reads (a function pointer, a global), when a
+  local is never used after its declaration (often a discarded call,
+  `(void)g();`, which a person chooses), when the local is declared
+  together with other names, when the silencer is not
+  a statement of its own, or when it is outside a definition the tool
+  reads. Macro bodies are never touched.
+- Prints each file's count and every silencer left. Exits 0, or 2 for a
   missing file.
 
 ## perfdiff — perf regression comparison

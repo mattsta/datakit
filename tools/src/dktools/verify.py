@@ -25,6 +25,11 @@ configured and built there with the chosen compiler and preset (see
 ``dktools.toolchain``).  The result lists every path that differs
 from HEAD, one ``changed`` line each.
 
+With ``--target`` and neither ``--tests`` nor ``--serial`` the run is
+build-only (every other gate still runs): a library build the tests
+cannot use, such as ``--define DatakitTestMode=OFF`` on a release-type
+preset, which compiles the library with ``NDEBUG`` as consumers do.
+
 ``--tests`` names the ctest tests run in parallel (``-j N``);
 ``--serial`` names tests run one at a time, such as the
 timing-sensitive tests in ``validate.DEFAULT_SERIAL``, and those are
@@ -279,8 +284,11 @@ def _missing_lines(
 def run(repo: Path, opts: VerifyOptions) -> int:
     """Run the verification; return the exit code (ToolError: input)."""
     name = gitutil.check_name(opts.name)
-    if not opts.tests and not opts.serial:
-        raise ToolError("verify needs --tests and/or --serial")
+    if not opts.tests and not opts.serial and not opts.targets:
+        raise ToolError(
+            "verify needs --tests, --serial or --target (named targets with no "
+            "tests is a build-only run)"
+        )
     if opts.jobs is not None and opts.jobs < 1:
         raise ToolError(f"-j must be at least 1 (got {opts.jobs})")
     source = check_source(opts)

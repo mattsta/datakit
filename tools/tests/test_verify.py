@@ -779,6 +779,16 @@ class VerifyRun(unittest.TestCase):
                 now = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
                 self.assertEqual(now, kept)
 
+    def test_named_targets_without_tests_build_only(self) -> None:
+        self.repo.write("src/a.c", "int changed;\n")
+        with self.assertRaisesRegex(ToolError, "--tests, --serial or --target"):
+            self.run_verify(FakeRunner({}, self.PASSING), tests=None)
+        runner = FakeRunner({}, self.PASSING)
+        code, out = self.run_verify(runner, tests=None, targets=["datakit-static"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("  ctest     -\n", out)
+        self.assertNotIn("ctest", [call[0] for call in runner.calls])
+
     def test_source_flags_conflict(self) -> None:
         for kw in (
             {"staged": True},

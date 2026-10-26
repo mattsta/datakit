@@ -28,6 +28,7 @@ from . import (
     testtime,
     toolchain,
     tune,
+    unusednames,
     validate,
     vendorsync,
     verify,
@@ -272,6 +273,15 @@ def main(argv: list[str] | None = None) -> int:
     di.add_argument("header", help="the header, such as stdbool.h")
     di.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     di.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    up = sub.add_parser(
+        "unusednames",
+        help="retire (void)name; silencers: unname unused parameters, "
+        "[[maybe_unused]] names an NDEBUG or #if build may not read (C23), "
+        "across the tracked sources or the given files",
+    )
+    up.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    up.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     rt = sub.add_parser(
         "retoken",
@@ -976,6 +986,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "dropinclude":
         return dropinclude.run(args.repo, args.header, tuple(args.paths), args.dry_run)
+
+    if args.command == "unusednames":
+        return unusednames.run(args.repo, tuple(args.paths), args.dry_run)
 
     if args.command == "retoken":
         return retoken.run(
