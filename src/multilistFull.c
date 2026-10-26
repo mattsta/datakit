@@ -2502,7 +2502,10 @@ int multilistFullTest(int argc, char *argv[]) {
             uint32_t bytes;
             mlInfo(ml);
             databox box = {{0}};
-            multilistFullPopHead(ml, s0, &box);
+            if (multilistFullPopHead(ml, s0, &box) ==
+                MULTILIST_FULL_POP_EMPTY) {
+                ERRR("pop of a filled list found it empty");
+            }
             bytes = box.len;
             data = box.data.bytes.start;
             assert(data != NULL);
@@ -2527,15 +2530,17 @@ int multilistFullTest(int argc, char *argv[]) {
             multilistFullPushHead(ml, s0, "55513", 5);
             mlInfo(ml);
             databox box = {{0}};
-            multilistFullPopHead(ml, s0, &box);
-            if (!DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
+            if (multilistFullPopHead(ml, s0, &box) ==
+                    MULTILIST_FULL_POP_EMPTY ||
+                !DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
                 memcmp(databoxBytes(&box), "55513", 5) != 0) {
                 ERRR("numeral string did not pop as the same string");
             }
             databoxFreeData(&box);
             box = (databox){{0}};
-            multilistFullPopHead(ml, s0, &box);
-            if (!DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
+            if (multilistFullPopHead(ml, s0, &box) ==
+                    MULTILIST_FULL_POP_EMPTY ||
+                !DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
                 ERRR("integer did not pop as 55513");
             }
             mlVerify(ml, 1, 0, 0, 0);

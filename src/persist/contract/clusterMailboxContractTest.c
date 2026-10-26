@@ -70,7 +70,15 @@ static void *pcMailboxBuild(const persistContractBuild *b) {
         if (clusterMailboxSeal(mb, (uint32_t)(o + 1), seq, 0, payload,
                                sizeof(payload), PC_MAILBOX_KEY_ID, frame,
                                sizeof(frame), &len)) {
-            clusterMailboxIngest(mb, frame, len, PC_MAILBOX_KEY_ID);
+            /* Refused as a replay or for a full origin table, else
+             * applied as the payload asks */
+            const clusterMailboxIngestResult rc =
+                clusterMailboxIngest(mb, frame, len, PC_MAILBOX_KEY_ID);
+            assert(rc == CLUSTER_MAILBOX_ERR_REPLAY ||
+                   rc == CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL ||
+                   rc == (payload[0] ? CLUSTER_MAILBOX_OK
+                                     : CLUSTER_MAILBOX_ERR_APPLY_REJECTED));
+            (void)rc;
         }
     }
     return mb;

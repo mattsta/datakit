@@ -40,7 +40,10 @@ static void *pcMultiroarBuildValues(const persistContractBuild *b) {
         if (splitmix64(&rng) % 4) {
             const uint64_t words[2] = {position, splitmix64(&rng) & top};
             const databox value = databoxNewUnsigned(words[1]);
-            multiroarValueSet(r, position, (databox *)&value);
+            const multiroarValueSetResult set =
+                multiroarValueSet(r, position, (databox *)&value);
+            assert(set != MULTIROAR_VALUE_REFUSED); /* in bounds, fits */
+            (void)set;
             persistContractRecord(b->log, PERSIST_OP_INSERT, words, 2);
         } else {
             multiroarValueRemoveGetRemoved(r, position, NULL);

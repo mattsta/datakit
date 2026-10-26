@@ -10055,9 +10055,10 @@ static int dkTestReplicatorRetryDropTest(int argc, char *argv[]) {
             size_t written = 0;
             clusterReplicatorSeal(rep, &persistOpsFlex, src, 1u, seq, KID, wire,
                                   cap, &written);
+            /* The reject and drop counters below are the check */
             int attempts = (seq == 5) ? 3 : 1;
             for (int a = 0; a < attempts; a++) {
-                clusterReplicatorIngest(rep, wire, written, KID);
+                (void)clusterReplicatorIngest(rep, wire, written, KID);
             }
         }
 
@@ -10123,8 +10124,9 @@ skip_case2:
         size_t written = 0;
         clusterReplicatorSeal(rep, &persistOpsFlex, src, 1u, 1u, KID, wire, cap,
                               &written);
+        /* The drop counter and watermark below are the check */
         for (int a = 0; a < 50; a++) {
-            clusterReplicatorIngest(rep, wire, written, KID);
+            (void)clusterReplicatorIngest(rep, wire, written, KID);
         }
         if (clusterReplicatorDroppedCount(rep) != 0) {
             printf("dkTestReplicatorRetryDrop: legacy dropped_count expected "

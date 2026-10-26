@@ -550,9 +550,13 @@ int clusterReplicatorTest(int argc, char *argv[]) {
             clusterMailboxSeal(mb, 9u, 1u + c, (uint8_t)PERSIST_TYPE_FLEX,
                                payload, len, KID, wire, sizeof(wire), &written);
             const size_t before = app_ctx.count;
-            clusterReplicatorIngest(rep, wire, written, KID);
+            const clusterMailboxIngestResult rc =
+                clusterReplicatorIngest(rep, wire, written, KID);
             refused += !cases[c].restored;
-            if ((app_ctx.count > before) != cases[c].restored ||
+            if (rc != (cases[c].restored
+                           ? CLUSTER_MAILBOX_OK
+                           : CLUSTER_MAILBOX_ERR_APPLY_REJECTED) ||
+                (app_ctx.count > before) != cases[c].restored ||
                 clusterReplicatorFormatRefusedCount(rep) != refused) {
                 ERR("case %zu: restored %d, refused %" PRIu64, c,
                     (int)(app_ctx.count > before),

@@ -24,7 +24,7 @@ typedef enum dkTierFamily {
     DK_TIER_FAMILY_COUNT
 } dkTierFamily;
 
-typedef enum dkTierLimitResult {
+typedef enum [[nodiscard]] dkTierLimitResult {
     DK_TIER_LIMIT_SET = 0,      /* the family's default is now the limit */
     DK_TIER_LIMIT_BAD_FAMILY,   /* not a dkTierFamily; nothing changed */
     DK_TIER_LIMIT_OUT_OF_RANGE, /* not FLEX_CAP_LEVEL_64..FLEX_CAP_LEVEL_65536;

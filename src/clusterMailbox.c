@@ -2168,7 +2168,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             size_t w = 0;
             clusterMailboxSeal(mb, origin, origin + 3u, 0u, payload,
                                sizeof(payload), K1, b, sz, &w);
-            clusterMailboxIngest(mb, b, w, K1);
+            if (clusterMailboxIngest(mb, b, w, K1) != CLUSTER_MAILBOX_OK) {
+                ERR("setup ingest from origin %u failed", origin);
+            }
         }
         const size_t snap_sz = clusterMailboxSnapshotSize(mb);
         cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(snap_sz);
@@ -2898,7 +2900,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 3u, 1u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &written);
         /* First ingest accepts (apply_count becomes 1). */
-        clusterMailboxIngest(mb, buf, written, K1);
+        if (clusterMailboxIngest(mb, buf, written, K1) != CLUSTER_MAILBOX_OK) {
+            ERRR("First ingest failed");
+        }
 
         /* Build seq=2. With threshold=1 and apply_count now 1, the
          * next apply will be rejected. */
@@ -3194,7 +3198,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             size_t w = 0;
             clusterMailboxSeal(mb, 5u, s, 0u, payload, sizeof(payload), K1, b,
                                sz, &w);
-            clusterMailboxIngest(mb, b, w, K1);
+            if (clusterMailboxIngest(mb, b, w, K1) != CLUSTER_MAILBOX_OK) {
+                ERR("setup ingest of seq %" PRIu64 " failed", s);
+            }
         }
 
         /* Build a "stale" snapshot showing origin 5 at seq=3 via flex. */
@@ -3235,7 +3241,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             size_t w = 0;
             clusterMailboxSeal(mb_a, sends[i].origin, sends[i].seq, 0u, payload,
                                sizeof(payload), K1, b, sz, &w);
-            clusterMailboxIngest(mb_a, b, w, K1);
+            if (clusterMailboxIngest(mb_a, b, w, K1) != CLUSTER_MAILBOX_OK) {
+                ERR("setup ingest from origin %u failed", sends[i].origin);
+            }
         }
 
         /* Wrap the snapshot under HMAC_BLAKE3 (different key class
@@ -3365,7 +3373,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             size_t w = 0;
             clusterMailboxSeal(mb, 77u, s, 0u, payload, sizeof(payload), K1, b,
                                sz, &w);
-            clusterMailboxIngest(mb, b, w, K1);
+            if (clusterMailboxIngest(mb, b, w, K1) != CLUSTER_MAILBOX_OK) {
+                ERR("setup ingest of seq %" PRIu64 " failed", s);
+            }
         }
 
         flexEnvelopeWrapParams wp = {

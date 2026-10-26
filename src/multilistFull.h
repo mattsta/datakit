@@ -185,7 +185,7 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]);
 
 /* What multilistFullPop did.  Nonzero means it popped, so the result
  * still reads as a bool. */
-typedef enum multilistFullPopResult {
+typedef enum [[nodiscard]] multilistFullPopResult {
     MULTILIST_FULL_POP_EMPTY = 0,  /* the list was empty */
     MULTILIST_FULL_POP_POPPED = 1, /* popped; four nodes or more remain */
     /* popped, and the list is down to three nodes or fewer: the one-load

@@ -2768,8 +2768,11 @@ static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
         }
         p += n;
 
+        /* Positions ascend, so each value lands on an empty position */
         databox box = databoxNewUnsigned(value);
-        multiroarValueSet(r, position, &box);
+        if (multiroarValueSet(r, position, &box) != MULTIROAR_VALUE_ADDED) {
+            return NULL;
+        }
     }
     if (p != end) {
         return NULL;
@@ -4317,8 +4320,8 @@ int multiroarTest(int argc, char *argv[]) {
         /* Both roars are as they were; value roars compare by content */
         cleaner(multiroarFree) multiroar *other = multiroarValueNew(8, 10, 10);
         databox eight = databoxNewUnsigned(8);
-        multiroarValueSet(other, 3, &eight);
-        if (!multiroarEquals(V, Vcopy) || !multiroarEquals(B, Bcopy) ||
+        if (multiroarValueSet(other, 3, &eight) != MULTIROAR_VALUE_ADDED ||
+            !multiroarEquals(V, Vcopy) || !multiroarEquals(B, Bcopy) ||
             multiroarEquals(V, other) || multiroarValueCount(V) != 1 ||
             multiroarBitCount(B) != 2) {
             ERRR("a refused call changed a roar, or equality is off");
@@ -4380,11 +4383,11 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *v = multiroarValueNew(4, 0, 0);
         databox yes = DATABOX_BOX_TRUE;
         databox no = DATABOX_BOX_FALSE;
-        multiroarValueSet(v, 3, &yes);
-        multiroarValueSet(v, 4, &no);
         databox got3 = {{0}};
         databox got4 = {{0}};
-        if (!multiroarValueGet(v, 3, &got3) || got3.data.u != 1 ||
+        if (multiroarValueSet(v, 3, &yes) != MULTIROAR_VALUE_ADDED ||
+            multiroarValueSet(v, 4, &no) != MULTIROAR_VALUE_ADDED ||
+            !multiroarValueGet(v, 3, &got3) || got3.data.u != 1 ||
             !multiroarValueGet(v, 4, &got4) || got4.data.u != 0 ||
             got4.type != DATABOX_UNSIGNED_64) {
             ERRR("true/false did not store as 1/0");
@@ -9828,7 +9831,10 @@ int multiroarTest(int argc, char *argv[]) {
                     n < 2 ? (n ? limit - 1 : 0) : splitmix64(&rng) % limit;
                 values[n] = n % 3 == 0 ? top : splitmix64(&rng) & top;
                 databox v = databoxNewUnsigned(values[n]);
-                multiroarValueSet(r, positions[n], &v);
+                if (multiroarValueSet(r, positions[n], &v) ==
+                    MULTIROAR_VALUE_REFUSED) {
+                    ERR("value set refused at %" PRIu64, positions[n]);
+                }
             }
 
             const uint64_t size = multiroarSerializedSize(r);

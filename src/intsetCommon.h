@@ -46,7 +46,7 @@ static inline bool intsetValueFitsInt32(int64_t v) {
 }
 
 /* Binary search helper status codes */
-typedef enum intsetSearchResult {
+typedef enum [[nodiscard]] intsetSearchResult {
     INTSET_FOUND = 0,     /* Value found at returned position */
     INTSET_NOT_FOUND = 1, /* Value not found, position is insert point */
 } intsetSearchResult;

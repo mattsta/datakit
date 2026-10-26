@@ -3550,8 +3550,8 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
             return false;
         }
         databox value = databoxNewUnsigned(words[1]);
-        multiroarValueSet(*r, words[0], &value);
-        return true;
+        return multiroarValueSet(*r, words[0], &value) !=
+               MULTIROAR_VALUE_REFUSED;
     }
 
     case PERSIST_OP_DELETE: {

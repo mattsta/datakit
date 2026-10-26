@@ -33,7 +33,7 @@ bool multiroarRemove(multiroar *r, uint64_t position);
  * unsigned databoxes.  A set is refused, changing nothing, on a bit roar,
  * outside the declared rows * cols, or for a value that cannot be stored;
  * Get and Remove answer false in the same cases. */
-typedef enum multiroarValueSetResult {
+typedef enum [[nodiscard]] multiroarValueSetResult {
     MULTIROAR_VALUE_REFUSED = 0, /* nothing stored */
     MULTIROAR_VALUE_ADDED,       /* the position held no value */
     MULTIROAR_VALUE_REPLACED,    /* the position's value was replaced */

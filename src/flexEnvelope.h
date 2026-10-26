@@ -174,7 +174,7 @@ typedef enum flexEnvelopeVerifyOpt {
  * The error is stored in thread-local storage and is sticky until the
  * next successful or failed verify on the same thread. Inspecting it
  * after a successful verify returns FLEX_ENV_VERIFY_OK. */
-typedef enum flexEnvelopeVerifyErr {
+typedef enum [[nodiscard]] flexEnvelopeVerifyErr {
     FLEX_ENV_VERIFY_OK = 0,
     /* Generic failure — framing/parse/digest/etc — no further
      * disambiguation available. Most failure paths land here today. */

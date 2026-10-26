@@ -1384,7 +1384,7 @@ static void benchPersistChecks(void) {
         for (uint32_t i = 0; i < n; i++) {
             databox v = databoxNewUnsigned(i & 0xff);
             sink += multiroarValueSetP(vp, i, &v);
-            multiroarValueSet(vr, i, &v);
+            sink += multiroarValueSet(vr, i, &v);
         }
         PERF_ROW(mod, "valueRemoveP", n,
                  sink += multiroarValueRemoveP(vp, perfScatter(i), &done));

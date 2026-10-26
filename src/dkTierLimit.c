@@ -77,6 +77,15 @@ static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
     return s.unitLimit;
 }
 
+/* Set a default the test needs; a refusal fails the test */
+#define TIER_SET(family, limit)                                                \
+    do {                                                                       \
+        if (dkTierSetDefaultLimit(family, limit) != DK_TIER_LIMIT_SET) {       \
+            ERR("setting family %d to limit %d was refused", (int)(family),    \
+                (int)(limit));                                                 \
+        }                                                                      \
+    } while (0)
+
 int dkTierLimitTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -117,13 +126,13 @@ int dkTierLimitTest(int argc, char *argv[]) {
                 }
             }
 
-            dkTierSetDefaultLimit(family, DK_TIER_LIMIT_COMPILED);
+            TIER_SET(family, DK_TIER_LIMIT_COMPILED);
         }
     }
 
     TEST("a refused default changes nothing") {
         const flexCapSizeLimit set = FLEX_CAP_LEVEL_1024;
-        dkTierSetDefaultLimit(DK_TIER_MULTIMAP, set);
+        TIER_SET(DK_TIER_MULTIMAP, set);
         const struct {
             uint32_t family;
             uint32_t level;
@@ -156,13 +165,13 @@ int dkTierLimitTest(int argc, char *argv[]) {
                 dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET));
         }
 
-        dkTierSetDefaultLimit(DK_TIER_MULTIMAP, DK_TIER_LIMIT_COMPILED);
+        TIER_SET(DK_TIER_MULTIMAP, DK_TIER_LIMIT_COMPILED);
     }
 
     TEST("an existing container keeps the limit it was made with") {
         cleaner(multimapFree) multimap *m = multimapNew(2);
         cleaner(multimapFree) multimap *set = multimapSetNew(2);
-        dkTierSetDefaultLimit(DK_TIER_MULTIMAP, FLEX_CAP_LEVEL_256);
+        TIER_SET(DK_TIER_MULTIMAP, FLEX_CAP_LEVEL_256);
         cleaner(multimapFree) multimap *after = multimapSetNew(2);
         dkTierStats s;
         multimapStats(m, &s);
@@ -180,7 +189,7 @@ int dkTierLimitTest(int argc, char *argv[]) {
             ERR("set made after the change has limit %u", s.unitLimit);
         }
 
-        dkTierSetDefaultLimit(DK_TIER_MULTIMAP, DK_TIER_LIMIT_COMPILED);
+        TIER_SET(DK_TIER_MULTIMAP, DK_TIER_LIMIT_COMPILED);
     }
 
     TEST_FINAL_RESULT;

@@ -8,7 +8,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-typedef enum OSRegulateDaemonizeStatus {
+typedef enum [[nodiscard]] OSRegulateDaemonizeStatus {
     OS_REGULATE_DAEMONIZE_PARENT,
     OS_REGULATE_DAEMONIZE_CHILD,
     OS_REGULATE_DAEMONIZE_ERROR

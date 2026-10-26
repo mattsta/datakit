@@ -8,6 +8,7 @@
 #include "../datakit.h"
 #include "../persist.h"
 
+#include <assert.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -256,8 +257,12 @@ persistLogResult multiroarValueSetP(multiroarP *r, uint64_t position,
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
+    /* Checked above: a value roar, in bounds, a value within the width */
     databox stored = databoxNewUnsigned(v);
-    multiroarValueSet(r->r, position, &stored);
+    const multiroarValueSetResult set =
+        multiroarValueSet(r->r, position, &stored);
+    assert(set != MULTIROAR_VALUE_REFUSED);
+    (void)set;
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
     return logged;
 }
@@ -280,7 +285,11 @@ persistLogResult multiroarValueRemoveP(multiroarP *r, uint64_t position,
     const persistLogResult logged =
         persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &position, 1);
     if (logged == PERSIST_LOG_REFUSED) {
-        multiroarValueSet(r->r, position, &was);
+        /* The position just held `was`, so it takes it back */
+        const multiroarValueSetResult restored =
+            multiroarValueSet(r->r, position, &was);
+        assert(restored == MULTIROAR_VALUE_ADDED);
+        (void)restored;
         return logged;
     }
     if (removed) {

@@ -53,7 +53,7 @@ typedef struct dkFormatStamp {
     uint64_t features;
 } dkFormatStamp;
 
-typedef enum dkFormatResult {
+typedef enum [[nodiscard]] dkFormatResult {
     DK_FORMAT_OK = 0,
     DK_FORMAT_MALFORMED,       /* no readable stamp */
     DK_FORMAT_WRONG_ID,        /* stamped as a different format */

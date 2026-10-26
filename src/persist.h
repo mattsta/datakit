@@ -785,7 +785,7 @@ bool persistRebindKeyring(persist *p, struct hmacKeyring *ring,
  * fails. Not all failure paths set a code yet (legacy code paths
  * return plain false); the codes below are the ones consulted by the
  * keyring-lifetime tests. */
-typedef enum persistErr {
+typedef enum [[nodiscard]] persistErr {
     PERSIST_ERR_NONE = 0,
     PERSIST_ERR_KEY_GENERATION_MISMATCH = 1, /* attached keyring slot was
                                                  rotated since attach */

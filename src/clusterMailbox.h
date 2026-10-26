@@ -284,7 +284,7 @@ bool clusterMailboxSeal(clusterMailbox *mb, uint32_t origin_id,
  * rejections (replay, gap, bad-frame) and crypto-level failures
  * (tag mismatch, key missing). Callers typically log all non-OK
  * outcomes for security monitoring. */
-typedef enum clusterMailboxIngestResult {
+typedef enum [[nodiscard]] clusterMailboxIngestResult {
     CLUSTER_MAILBOX_OK = 0,
     CLUSTER_MAILBOX_ERR_PARAM = 1,             /* NULL pointer or bad arg */
     CLUSTER_MAILBOX_ERR_KEY_MISSING = 2,       /* key_id not in keyring */

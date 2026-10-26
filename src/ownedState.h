@@ -483,7 +483,7 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl);
  * undefined behaviour, but the stale-writer check and the reader's
  * verdicts no longer hold. */
 
-typedef enum ownedSeqReadResult {
+typedef enum [[nodiscard]] ownedSeqReadResult {
     OWNED_SEQ_VALID = 0,   /* dst holds all of publication `want` */
     OWNED_SEQ_TORN,        /* the version is being written or holds an
                             * older publication; a retry may succeed
