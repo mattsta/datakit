@@ -56,7 +56,7 @@ static inline double mosDataboxToDouble(const databox *box) {
     __label__ mosSmall;                                                        \
     __label__ mosMedium;                                                       \
     __label__ mosFull;                                                         \
-    static const void **jumper[4] = {NULL, &&mosSmall, &&mosMedium,            \
+    static const void **jumper[4] = {nullptr, &&mosSmall, &&mosMedium,         \
                                      &&mosFull};                               \
     goto *jumper[mosType_(m)]
 #endif
@@ -75,7 +75,7 @@ static inline double mosDataboxToDouble(const databox *box) {
             ret multiOrderedSetFull##func(mosf(m), __VA_ARGS__);               \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
@@ -116,7 +116,7 @@ static inline double mosDataboxToDouble(const databox *box) {
             ret multiOrderedSetFull##func(mosf(m));                            \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
@@ -208,7 +208,7 @@ DK_INLINE_ALWAYS void mosMoveDown_(multiOrderedSet **m, uint32_t fullMaps,
                                    size_t fullBytes, size_t smallBytes) {
     const uint32_t limit = COMPRESS_LIMIT(*m);
     const uint32_t depth = COMPRESS_DEPTH(*m);
-    flex *rows = NULL;
+    flex *rows = nullptr;
 
     switch (mosType_(*m)) {
     case MOS_TYPE_FULL: {
@@ -567,7 +567,8 @@ bool multiOrderedSetIteratorInitAtRank(const multiOrderedSet *mos,
 bool multiOrderedSetIteratorNext(mosIterator *iter, databox *member,
                                  databox *score) {
     /* Direct dispatch based on stored type in iterator */
-    static const void *jumper[] = {NULL, &&iterSmall, &&iterMedium, &&iterFull};
+    static const void *jumper[] = {nullptr, &&iterSmall, &&iterMedium,
+                                   &&iterFull};
     goto *jumper[iter->type];
 
 iterSmall:
@@ -2034,7 +2035,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     TEST("multiOrderedSet: create and free") {
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
             multiOrderedSetNew();
-        assert(mos != NULL);
+        assert(mos != nullptr);
         assert(multiOrderedSetCount(mos) == 0);
     }
 
@@ -2759,7 +2760,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         const multiOrderedSet *sets[] = {set1, set2};
         cleaner(multiOrderedSetFree) multiOrderedSet *result =
-            multiOrderedSetUnion(sets, NULL, 2, MOS_AGGREGATE_SUM);
+            multiOrderedSetUnion(sets, nullptr, 2, MOS_AGGREGATE_SUM);
 
         assert(multiOrderedSetCount(result) == 3); /* a, b, c */
 
@@ -2782,7 +2783,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             MOS_AGGREGATE_SUM, MOS_AGGREGATE_MIN, MOS_AGGREGATE_MAX};
         for (size_t s = 0; s < countof(sizes); s++) {
             const uint32_t n = sizes[s];
-            multiOrderedSet *in[3] = {NULL, NULL, NULL};
+            multiOrderedSet *in[3] = {nullptr, nullptr, nullptr};
             mosAlgebraSets_(n, in);
             const multiOrderedSet *sets[3] = {in[0], in[1], in[2]};
             for (size_t h = 0; h < countof(hows); h++) {
@@ -2843,7 +2844,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         const multiOrderedSet *sets[] = {set1, set2};
         cleaner(multiOrderedSetFree) multiOrderedSet *result =
-            multiOrderedSetIntersect(sets, NULL, 2, MOS_AGGREGATE_SUM);
+            multiOrderedSetIntersect(sets, nullptr, 2, MOS_AGGREGATE_SUM);
 
         assert(multiOrderedSetCount(result) == 2); /* b, c */
 
@@ -3842,7 +3843,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 multiOrderedSetNew();
 
             /* Pre-allocate key buffers to avoid timing snprintf */
-            cleanerName(zfree, KeyBuf32) mosKeyBuf32 *keys = NULL;
+            cleanerName(zfree, KeyBuf32) mosKeyBuf32 *keys = nullptr;
             if (count > 0) {
                 keys = zcalloc(count, 32);
                 for (size_t i = 0; i < count; i++) {
@@ -4465,10 +4466,10 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             const multiOrderedSet *sets[2] = {a, b};
             mosTestPoisonStack_();
             cleaner(multiOrderedSetFree) multiOrderedSet *u =
-                multiOrderedSetUnion(sets, NULL, 2, MOS_AGGREGATE_MAX);
+                multiOrderedSetUnion(sets, nullptr, 2, MOS_AGGREGATE_MAX);
             mosTestPoisonStack_();
             cleaner(multiOrderedSetFree) multiOrderedSet *x =
-                multiOrderedSetIntersect(sets, NULL, 2, MOS_AGGREGATE_MIN);
+                multiOrderedSetIntersect(sets, nullptr, 2, MOS_AGGREGATE_MIN);
             mosTestPoisonStack_();
             cleaner(multiOrderedSetFree) multiOrderedSet *d =
                 multiOrderedSetDifference(sets, 2);

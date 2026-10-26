@@ -556,7 +556,7 @@ size_t ownedSeqStorageBytes(const ownedSeqDecl *decl);
      .cursor = 0,                                                              \
      .versions = (storagePtr),                                                 \
      .decl = (declPtr),                                                        \
-     .owner = NULL}
+     .owner = nullptr}
 void ownedSeqInit(ownedSeq *s, const ownedSeqDecl *decl, void *owner,
                   void *storage);
 /* Clears the instance; frees nothing. Call only after every reader and

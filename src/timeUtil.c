@@ -13,7 +13,7 @@ uint64_t timeUtilUs(void) {
     struct timeval tv;
     uint64_t ust;
 
-    gettimeofday(&tv, NULL);
+    gettimeofday(&tv, nullptr);
     ust = ((uint64_t)tv.tv_sec) * 1'000'000;
     ust += tv.tv_usec;
     return ust;
@@ -26,7 +26,7 @@ uint64_t timeUtilMs(void) {
 uint64_t timeUtilS(void) {
     struct timeval tv;
 
-    gettimeofday(&tv, NULL);
+    gettimeofday(&tv, nullptr);
     return tv.tv_sec;
 }
 

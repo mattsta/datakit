@@ -45,7 +45,7 @@ int main(void) {
     assert(mi_usable_size(c) >= 200 * sizeof(uint64_t));
 
     /* zmemalign -> mi_posix_memalign */
-    void *a = NULL;
+    void *a = nullptr;
     assert(zmemalign(&a, 64, 1000) == 0);
     assert(a && ((uintptr_t)a % 64) == 0);
     assert(mi_usable_size(a) >= 1000);

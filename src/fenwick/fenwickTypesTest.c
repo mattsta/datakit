@@ -71,7 +71,7 @@ static constexpr int FWT_OPS = 2500;
         cleaner(zfree) void *elemMem = zcalloc(FWT_ELEMS, sizeof(VT));         \
         VT *elem = elemMem;                                                    \
         size_t count = 0;                                                      \
-        void *fw = NULL;                                                       \
+        void *fw = nullptr;                                                    \
         for (size_t op = 0; op < FWT_OPS && !err; op++) {                      \
             const size_t idx = fwtIndex_(&seed);                               \
             const uint64_t pick = fwtRand_(&seed) % 10;                        \
@@ -175,7 +175,7 @@ static constexpr int FWT_OPS = 2500;
         int err = 0;                                                           \
         constexpr int N = 200;                                                 \
         VT elem[N];                                                            \
-        void *fw = NULL;                                                       \
+        void *fw = nullptr;                                                    \
         for (size_t i = 0; i < N; i++) {                                       \
             elem[i] = (VT)(fwtRand_(&seed) % 4);                               \
             fenwick##T##Update(&fw, i, elem[i]);                               \
@@ -232,7 +232,7 @@ FWT_LOWER_BOUND(U128, __uint128_t)
         cleaner(zfree) void *elemMem = zcalloc(FWT_ELEMS, sizeof(VT));         \
         VT *elem = elemMem;                                                    \
         size_t count = 0;                                                      \
-        void *fw = NULL;                                                       \
+        void *fw = nullptr;                                                    \
         for (size_t op = 0; op < FWT_OPS && !err; op++) {                      \
             const size_t idx = fwtIndex_(&seed) % 300;                         \
             const VT v = (VT)((int64_t)(fwtRand_(&seed) % 129) - 64);          \
@@ -324,7 +324,7 @@ FWT_LOWER_BOUND(Double, double)
             cleaner(zfree) void *bufB = zcalloc(n + 1, sizeof(VT));            \
             VT *values = bufA;                                                 \
             VT *copied = bufB;                                                 \
-            void *bySet = NULL;                                                \
+            void *bySet = nullptr;                                             \
             for (size_t i = 0; i < n; i++) {                                   \
                 const uint64_t r = fwtRand_(&seed);                            \
                 /* floats: |sum| <= 400000, well inside float's 2^24 */        \
@@ -332,7 +332,7 @@ FWT_LOWER_BOUND(Double, double)
                 (void)fenwick##T##Set(&bySet, i, values[i]);                   \
             }                                                                  \
                                                                                \
-            void *fw = fenwick##T##NewFromArray(n ? values : NULL, n);         \
+            void *fw = fenwick##T##NewFromArray(n ? values : nullptr, n);      \
             fenwick##T##CopyTo(fw, copied);                                    \
             if (!fw || fenwick##T##Count(fw) != n ||                           \
                 memcmp(copied, values, n * sizeof(VT)) != 0) {                 \
@@ -386,8 +386,8 @@ int fenwickTypesTest(int, char *[]) {
         err += fwtBulk##T(11);                                                 \
     }                                                                          \
     TEST("Repr: fenwick" #T " nil, Small and Full") {                          \
-        fenwick##T##Repr(NULL);                                                \
-        void *fw = NULL;                                                       \
+        fenwick##T##Repr(nullptr);                                             \
+        void *fw = nullptr;                                                    \
         fenwick##T##Update(&fw, 3, 1);                                         \
         fenwick##T##Repr(fw);                                                  \
         fenwick##T##Update(&fw, 1 << 17, 1);                                   \

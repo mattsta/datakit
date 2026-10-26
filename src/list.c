@@ -46,15 +46,15 @@ list *listCreate(void) {
     struct list *l;
 
     /* @own: caller; free=listRelease */
-    if ((l = zmalloc(sizeof(*l))) == NULL) {
-        return NULL;
+    if ((l = zmalloc(sizeof(*l))) == nullptr) {
+        return nullptr;
     }
 
-    l->head = l->tail = NULL;
+    l->head = l->tail = nullptr;
     l->len = 0;
-    l->dup = NULL;
-    l->free = NULL;
-    l->match = NULL;
+    l->dup = nullptr;
+    l->free = nullptr;
+    l->match = nullptr;
     return l;
 }
 
@@ -90,16 +90,16 @@ list *listAddNodeHead(list *l, void *value) {
     listNode *node;
 
     /* @own: container; free=zfree */
-    if ((node = zmalloc(sizeof(*node))) == NULL) {
-        return NULL;
+    if ((node = zmalloc(sizeof(*node))) == nullptr) {
+        return nullptr;
     }
 
     node->value = value;
     if (l->len == 0) {
         l->head = l->tail = node;
-        node->prev = node->next = NULL;
+        node->prev = node->next = nullptr;
     } else {
-        node->prev = NULL;
+        node->prev = nullptr;
         node->next = l->head;
         l->head->prev = node;
         l->head = node;
@@ -119,17 +119,17 @@ list *listAddNodeTail(list *l, void *value) {
     listNode *node;
 
     /* @own: container; free=zfree */
-    if ((node = zmalloc(sizeof(*node))) == NULL) {
-        return NULL;
+    if ((node = zmalloc(sizeof(*node))) == nullptr) {
+        return nullptr;
     }
 
     node->value = value;
     if (l->len == 0) {
         l->head = l->tail = node;
-        node->prev = node->next = NULL;
+        node->prev = node->next = nullptr;
     } else {
         node->prev = l->tail;
-        node->next = NULL;
+        node->next = nullptr;
         l->tail->next = node;
         l->tail = node;
     }
@@ -142,8 +142,8 @@ list *listInsertNode(list *l, listNode *oldNode, void *value, bool after) {
     listNode *node;
 
     /* @own: container; free=zfree */
-    if ((node = zmalloc(sizeof(*node))) == NULL) {
-        return NULL;
+    if ((node = zmalloc(sizeof(*node))) == nullptr) {
+        return nullptr;
     }
 
     node->value = value;
@@ -160,11 +160,11 @@ list *listInsertNode(list *l, listNode *oldNode, void *value, bool after) {
             l->head = node;
         }
     }
-    if (node->prev != NULL) {
+    if (node->prev != nullptr) {
         node->prev->next = node;
     }
 
-    if (node->next != NULL) {
+    if (node->next != nullptr) {
         node->next->prev = node;
     }
 
@@ -205,8 +205,8 @@ listIter *listGetIterator(list *l, bool headToTail) {
     listIter *iter;
 
     /* @own: caller; free=listReleaseIterator */
-    if ((iter = zmalloc(sizeof(*iter))) == NULL) {
-        return NULL;
+    if ((iter = zmalloc(sizeof(*iter))) == nullptr) {
+        return nullptr;
     }
 
     if (headToTail) {
@@ -253,7 +253,7 @@ void listRewindTail(list *l, listIter *li) {
 listNode *listNext(listIter *iter) {
     listNode *current = iter->next;
 
-    if (current != NULL) {
+    if (current != nullptr) {
         if (iter->headToTail) {
             iter->next = current->next;
         } else {
@@ -276,36 +276,36 @@ list *listDup(list *orig) {
     listNode *node;
 
     cleaner(listRelease) list *copy = listCreate();
-    if (copy == NULL) {
-        return NULL;
+    if (copy == nullptr) {
+        return nullptr;
     }
 
     copy->dup = orig->dup;
     copy->free = orig->free;
     copy->match = orig->match;
     iter = listGetIterator(orig, true);
-    while ((node = listNext(iter)) != NULL) {
+    while ((node = listNext(iter)) != nullptr) {
         void *value;
 
         if (copy->dup) {
             value = copy->dup(node->value);
-            if (value == NULL) {
+            if (value == nullptr) {
                 listReleaseIterator(iter);
-                return NULL;
+                return nullptr;
             }
         } else {
             value = node->value;
         }
 
-        if (listAddNodeTail(copy, value) == NULL) {
+        if (listAddNodeTail(copy, value) == nullptr) {
             listReleaseIterator(iter);
-            return NULL;
+            return nullptr;
         }
     }
     listReleaseIterator(iter);
 
     list *out = copy;
-    copy = NULL;
+    copy = nullptr;
     return out;
 }
 
@@ -323,7 +323,7 @@ listNode *listSearchKey(list *l, void *key) {
     listNode *node;
 
     iter = listGetIterator(l, true);
-    while ((node = listNext(iter)) != NULL) {
+    while ((node = listNext(iter)) != nullptr) {
         if (l->match) {
             if (l->match(node->value, key)) {
                 listReleaseIterator(iter);
@@ -338,7 +338,7 @@ listNode *listSearchKey(list *l, void *key) {
     }
 
     listReleaseIterator(iter);
-    return NULL;
+    return nullptr;
 }
 
 /* Return the element at the specified zero-based index
@@ -374,10 +374,10 @@ void listRotate(list *l) {
 
     /* Detach current tail */
     l->tail = tail->prev;
-    l->tail->next = NULL;
+    l->tail->next = nullptr;
     /* Move it as head */
     l->head->prev = tail;
-    tail->prev = NULL;
+    tail->prev = nullptr;
     tail->next = l->head;
     l->head = tail;
 }
@@ -391,7 +391,7 @@ int listTest(int, char *[]) {
     /* Test listCreate and listRelease */
     TEST("listCreate and listRelease") {
         cleaner(listRelease) list *l = listCreate();
-        if (l == NULL) {
+        if (l == nullptr) {
             ERR("listCreate returned NULL%s", "");
         }
 
@@ -399,11 +399,11 @@ int listTest(int, char *[]) {
             ERR("New list should have length 0, got %zu", listLength(l));
         }
 
-        if (listFirst(l) != NULL) {
+        if (listFirst(l) != nullptr) {
             ERR("New list head should be NULL%s", "");
         }
 
-        if (listLast(l) != NULL) {
+        if (listLast(l) != nullptr) {
             ERR("New list tail should be NULL%s", "");
         }
     }
@@ -415,7 +415,7 @@ int listTest(int, char *[]) {
 
         for (int32_t i = 0; i < 5; i++) {
             list *result = listAddNodeHead(l, &values[i]);
-            if (result == NULL) {
+            if (result == nullptr) {
                 ERR("listAddNodeHead returned NULL for value %d", i);
             }
         }
@@ -443,7 +443,7 @@ int listTest(int, char *[]) {
 
         for (int32_t i = 0; i < 5; i++) {
             list *result = listAddNodeTail(l, &values[i]);
-            if (result == NULL) {
+            if (result == nullptr) {
                 ERR("listAddNodeTail returned NULL for value %d", i);
             }
         }
@@ -512,13 +512,13 @@ int listTest(int, char *[]) {
         }
 
         listIter *iter = listGetIterator(l, true);
-        if (iter == NULL) {
+        if (iter == nullptr) {
             ERR("listGetIterator returned NULL%s", "");
         }
 
         listNode *node;
         int32_t expected = 1;
-        while ((node = listNext(iter)) != NULL) {
+        while ((node = listNext(iter)) != nullptr) {
             int32_t val = *(int32_t *)listNodeValue(node);
             if (val != expected) {
                 ERR("Iterator expected %d, got %d", expected, val);
@@ -544,13 +544,13 @@ int listTest(int, char *[]) {
         }
 
         listIter *iter = listGetIterator(l, false);
-        if (iter == NULL) {
+        if (iter == nullptr) {
             ERR("listGetIterator returned NULL%s", "");
         }
 
         listNode *node;
         int32_t expected = 5;
-        while ((node = listNext(iter)) != NULL) {
+        while ((node = listNext(iter)) != nullptr) {
             int32_t val = *(int32_t *)listNodeValue(node);
             if (val != expected) {
                 ERR("Iterator expected %d, got %d", expected, val);
@@ -602,7 +602,7 @@ int listTest(int, char *[]) {
         }
 
         list *copy = listDup(orig);
-        if (copy == NULL) {
+        if (copy == nullptr) {
             ERR("listDup returned NULL%s", "");
         }
 
@@ -616,9 +616,9 @@ int listTest(int, char *[]) {
         listIter *copyIter = listGetIterator(copy, true);
         listNode *origNode, *copyNode;
 
-        while ((origNode = listNext(origIter)) != NULL) {
+        while ((origNode = listNext(origIter)) != nullptr) {
             copyNode = listNext(copyIter);
-            if (copyNode == NULL) {
+            if (copyNode == nullptr) {
                 ERR("Copy has fewer nodes than original%s", "");
                 break;
             }
@@ -646,7 +646,7 @@ int listTest(int, char *[]) {
 
         /* Search for existing value (by pointer) */
         listNode *found = listSearchKey(l, &values[2]);
-        if (found == NULL) {
+        if (found == nullptr) {
             ERR("listSearchKey didn't find existing key%s", "");
         } else if (*(int32_t *)listNodeValue(found) != 300) {
             ERR("listSearchKey found wrong value: %d",
@@ -656,7 +656,7 @@ int listTest(int, char *[]) {
         /* Search for non-existing pointer */
         int32_t notInList = 300; /* Same value but different pointer */
         found = listSearchKey(l, &notInList);
-        if (found != NULL) {
+        if (found != nullptr) {
             ERR("listSearchKey should not find different pointer%s", "");
         }
     }
@@ -672,44 +672,44 @@ int listTest(int, char *[]) {
 
         /* Positive indices */
         listNode *node = listIndex(l, 0);
-        if (node == NULL || *(int32_t *)listNodeValue(node) != 10) {
+        if (node == nullptr || *(int32_t *)listNodeValue(node) != 10) {
             ERR("listIndex(0) should return 10%s", "");
         }
 
         node = listIndex(l, 2);
-        if (node == NULL || *(int32_t *)listNodeValue(node) != 30) {
+        if (node == nullptr || *(int32_t *)listNodeValue(node) != 30) {
             ERR("listIndex(2) should return 30%s", "");
         }
 
         node = listIndex(l, 4);
-        if (node == NULL || *(int32_t *)listNodeValue(node) != 50) {
+        if (node == nullptr || *(int32_t *)listNodeValue(node) != 50) {
             ERR("listIndex(4) should return 50%s", "");
         }
 
         /* Negative indices */
         node = listIndex(l, -1);
-        if (node == NULL || *(int32_t *)listNodeValue(node) != 50) {
+        if (node == nullptr || *(int32_t *)listNodeValue(node) != 50) {
             ERR("listIndex(-1) should return 50%s", "");
         }
 
         node = listIndex(l, -3);
-        if (node == NULL || *(int32_t *)listNodeValue(node) != 30) {
+        if (node == nullptr || *(int32_t *)listNodeValue(node) != 30) {
             ERR("listIndex(-3) should return 30%s", "");
         }
 
         node = listIndex(l, -5);
-        if (node == NULL || *(int32_t *)listNodeValue(node) != 10) {
+        if (node == nullptr || *(int32_t *)listNodeValue(node) != 10) {
             ERR("listIndex(-5) should return 10%s", "");
         }
 
         /* Out of bounds */
         node = listIndex(l, 5);
-        if (node != NULL) {
+        if (node != nullptr) {
             ERR("listIndex(5) should return NULL for 5-element list%s", "");
         }
 
         node = listIndex(l, -6);
-        if (node != NULL) {
+        if (node != nullptr) {
             ERR("listIndex(-6) should return NULL for 5-element list%s", "");
         }
     }
@@ -742,7 +742,7 @@ int listTest(int, char *[]) {
         listIter *iter = listGetIterator(l, true);
         listNode *node;
         int32_t idx = 0;
-        while ((node = listNext(iter)) != NULL) {
+        while ((node = listNext(iter)) != nullptr) {
             if (*(int32_t *)listNodeValue(node) != expected[idx]) {
                 ERR("After rotate, index %d expected %d, got %d", idx,
                     expected[idx], *(int32_t *)listNodeValue(node));
@@ -789,7 +789,7 @@ int listTest(int, char *[]) {
         listIter *iter = listGetIterator(l, true);
         listNode *node;
         int32_t count = 0;
-        while ((node = listNext(iter)) != NULL) {
+        while ((node = listNext(iter)) != nullptr) {
             if (count % 2 == 1) {
                 listDelNode(l, node);
             }
@@ -805,7 +805,7 @@ int listTest(int, char *[]) {
         int32_t expectedVals[] = {1, 3, 5};
         iter = listGetIterator(l, true);
         int32_t idx = 0;
-        while ((node = listNext(iter)) != NULL) {
+        while ((node = listNext(iter)) != nullptr) {
             if (*(int32_t *)listNodeValue(node) != expectedVals[idx]) {
                 ERR("Expected value %d at index %d, got %d", expectedVals[idx],
                     idx, *(int32_t *)listNodeValue(node));

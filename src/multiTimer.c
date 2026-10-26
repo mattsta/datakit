@@ -87,11 +87,11 @@ multiTimer *multiTimerNew(void) {
     cleaner(multiTimerFree) multiTimer *t = zcalloc(1, sizeof(*t));
 
     if (!multiTimerInit(t)) {
-        return NULL;
+        return nullptr;
     }
 
     multiTimer *out = t;
-    t = NULL;
+    t = nullptr;
     return out;
 }
 
@@ -411,8 +411,8 @@ static void reconcileStops(multiTimer *t) {
 
     const size_t stopCount = multimapCount(t->stopEvents);
 
-    cleanerName(zfree, U64) uint64_t *stopIds = NULL;
-    cleanerName(zfree, Bools) bool *stopSeen = NULL;
+    cleanerName(zfree, U64) uint64_t *stopIds = nullptr;
+    cleanerName(zfree, Bools) bool *stopSeen = nullptr;
     if (stopCount) {
         stopIds = zmalloc(stopCount * sizeof(*stopIds));
         stopSeen = zcalloc(stopCount, sizeof(*stopSeen));

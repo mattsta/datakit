@@ -169,16 +169,16 @@ int linearBloomTest(int, char *[]) {
 
         const char *strings[] = {"hello",       "world",       "bloom",
                                  "filter",      "test",        "datakit",
-                                 "performance", "correctness", NULL};
+                                 "performance", "correctness", nullptr};
 
         /* Add all strings */
-        for (size_t i = 0; strings[i] != NULL; i++) {
+        for (size_t i = 0; strings[i] != nullptr; i++) {
             hashFromString(strings[i], strlen(strings[i]), hash);
             linearBloomHashSet(bloom, hash);
         }
 
         /* Verify all strings found */
-        for (size_t i = 0; strings[i] != NULL; i++) {
+        for (size_t i = 0; strings[i] != nullptr; i++) {
             hashFromString(strings[i], strlen(strings[i]), hash);
             if (!linearBloomHashCheck(bloom, hash)) {
                 ERR("String '%s' not found in bloom filter", strings[i]);
@@ -186,8 +186,8 @@ int linearBloomTest(int, char *[]) {
         }
 
         /* Verify strings NOT added are (usually) not found */
-        const char *notAdded[] = {"foo", "bar", "baz", NULL};
-        for (size_t i = 0; notAdded[i] != NULL; i++) {
+        const char *notAdded[] = {"foo", "bar", "baz", nullptr};
+        for (size_t i = 0; notAdded[i] != nullptr; i++) {
             hashFromString(notAdded[i], strlen(notAdded[i]), hash);
             /* Note: these may be found due to false positives, which is OK */
         }
@@ -626,11 +626,11 @@ int linearBloomTest(int, char *[]) {
     }
 
     TEST("linearBloom: free NULL safety") {
-        linearBloomFree(NULL); /* Should not crash */
+        linearBloomFree(nullptr); /* Should not crash */
     }
 
     TEST("linearBloomCount: free NULL safety") {
-        linearBloomCountFree(NULL); /* Should not crash */
+        linearBloomCountFree(nullptr); /* Should not crash */
     }
 
     TEST("linearBloom: memory layout validation") {

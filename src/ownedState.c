@@ -41,7 +41,7 @@ typedef struct ownedStripe_ {
 
 static ownedStripe_ g_owned_stripes[OWNED_STRIPES];
 static _Atomic uint32_t g_owned_stripe_next = 0;
-static thread_local ownedStripe_ *g_owned_stripe_mine = NULL;
+static thread_local ownedStripe_ *g_owned_stripe_mine = nullptr;
 
 static ownedStripe_ *ownedStripeMine_(void) {
     ownedStripe_ *s = g_owned_stripe_mine;
@@ -109,7 +109,7 @@ void ownedArenaInit(ownedArena *arena, const ownedArenaDecl *decl) {
     if (!arena) {
         return;
     }
-    arena->rows = NULL;
+    arena->rows = nullptr;
     arena->count = 0;
     arena->cap = 0;
     arena->decl = decl;
@@ -128,7 +128,7 @@ void ownedArenaInit(ownedArena *arena, const ownedArenaDecl *decl) {
     }
     /* A calloc zero-fill is NOT a portable pthread_mutex_t init, and an
      * owner embedded by value reaches no static initialiser. */
-    pthread_mutex_init(&arena->lock, NULL);
+    pthread_mutex_init(&arena->lock, nullptr);
     arena->initialized = true;
 }
 
@@ -146,7 +146,7 @@ void ownedArenaDestruct(ownedArena *arena) {
         ownedTotalSub_(OWNED_T_ARENA_LIVE_ROWS);
     }
     zfree(arena->rows);
-    arena->rows = NULL;
+    arena->rows = nullptr;
     arena->count = 0;
     arena->cap = 0;
     pthread_mutex_destroy(&arena->lock);
@@ -387,7 +387,7 @@ void ownedCellInit(ownedCell *c, const ownedCellDecl *decl, void *owner,
         atomic_store_explicit(&c->v.word, 0, memory_order_relaxed);
     } else {
         /* @sync: relaxed init */
-        atomic_store_explicit(&c->v.indirect, NULL, memory_order_relaxed);
+        atomic_store_explicit(&c->v.indirect, nullptr, memory_order_relaxed);
     }
 }
 
@@ -419,7 +419,7 @@ void ownedCellPublish(ownedCell *c, void *fresh) {
 
 const void *ownedCellRead(const ownedCell *c) {
     if (!c || !c->decl || c->decl->form != OWNED_CELL_INDIRECT) {
-        return NULL;
+        return nullptr;
     }
     /* @sync: acquire cell.value */
     return atomic_load_explicit(&((ownedCell *)c)->v.indirect,
@@ -457,7 +457,7 @@ void ownedCellDestruct(ownedCell *c) {
      * destructed during teardown, and no reader remains. */
     /* @sync: relaxed init */
     void *const cur =
-        atomic_exchange_explicit(&c->v.indirect, NULL, memory_order_relaxed);
+        atomic_exchange_explicit(&c->v.indirect, nullptr, memory_order_relaxed);
     if (cur && c->decl->release) {
         c->decl->release(cur);
     }
@@ -469,7 +469,7 @@ void ownedCellDestruct(ownedCell *c) {
 
 /* Registry of enrolled rows: a Treiber list pushed at the head and never
  * popped, so enumeration needs no lock and enrolment never blocks. */
-static _Atomic(ownedStateRow *) g_owned_rows_head = NULL;
+static _Atomic(ownedStateRow *) g_owned_rows_head = nullptr;
 static _Atomic size_t g_owned_rows_count = 0;
 
 void ownedStateRowEnrol(ownedStateRow *row, const char *name,
@@ -961,9 +961,9 @@ void ownedSeqDestruct(ownedSeq *s) {
     if (!s) {
         return;
     }
-    s->decl = NULL;
-    s->versions = NULL;
-    s->owner = NULL;
+    s->decl = nullptr;
+    s->versions = nullptr;
+    s->owner = nullptr;
 }
 
 void ownedSeqPutWord(ownedSeqVersionRef *v, size_t wordIndex, uint64_t w) {

@@ -58,7 +58,7 @@ typedef enum multilistType {
             ret multilistFull##func(mlf(m), __VA_ARGS__);                      \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
@@ -79,7 +79,7 @@ typedef enum multilistType {
             ret multilistFull##func(mlf(m));                                   \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
@@ -114,7 +114,7 @@ multilist *multilistNewFromFlex(const flexCapSizeLimit limit,
 }
 
 multilist *multilistCopy(const multilist *mlOrig) {
-    static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
+    static const size_t **dupers[4] = {nullptr, &&sm, &&md, &&full};
 
     const multilistType type = _multilistType(mlOrig);
     goto *dupers[type];
@@ -261,7 +261,7 @@ multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
 
     /* @own: caller; free=multilistFree */
     multilistFull *full = multilistFullNewFromFlexConsumeGrow(
-        NULL, state, chunk, chunks, depth, limit);
+        nullptr, state, chunk, chunks, depth, limit);
     multilist *ml = SET_COMPRESS_DEPTH_LIMIT(full, depth, limit);
     return _MULTILIST_TAG(ml, MULTILIST_TYPE_FULL);
 }
@@ -305,7 +305,7 @@ void multilistInsertByTypeBefore(multilist **ml, mflexState *state[2],
  * Remove
  * ==================================================================== */
 void multilistDelEntry(multilistIterator *iter, multilistEntry *entry) {
-    static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
+    static const size_t **dupers[4] = {nullptr, &&sm, &&md, &&full};
 
     goto *dupers[iter->type];
 
@@ -512,7 +512,7 @@ void multilistRewindTail(multilist *ml, multilistIterator *iter) {
 }
 
 bool multilistNext(multilistIterator *iter, multilistEntry *entry) {
-    static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
+    static const size_t **dupers[4] = {nullptr, &&sm, &&md, &&full};
 
     goto *dupers[iter->type];
 
@@ -815,7 +815,8 @@ static const char *mlwCheckRead(const databox *box, const mlwVal *want,
             return "string bytes differ";
         }
 
-        return how == MLW_READ_OWNED && box->big ? "string has big set" : NULL;
+        return how == MLW_READ_OWNED && box->big ? "string has big set"
+                                                 : nullptr;
     }
 
     if (mlwIsWide(want)) {
@@ -826,7 +827,7 @@ static const char *mlwCheckRead(const databox *box, const mlwVal *want,
 
         if (how == MLW_READ_DEFERRED) {
             return databoxIsWideDeferred(box) && !box->big && !box->allocated
-                       ? NULL
+                       ? nullptr
                        : "single read of a wide value is not deferred";
         }
 
@@ -844,7 +845,7 @@ static const char *mlwCheckRead(const databox *box, const mlwVal *want,
 
         __uint128_t got;
         memcpy(&got, box->data.ptr, sizeof(got));
-        return got == want->bits ? NULL : "wide value differs";
+        return got == want->bits ? nullptr : "wide value differs";
     }
 
     if (how == MLW_READ_OWNED && box->big) {
@@ -853,13 +854,13 @@ static const char *mlwCheckRead(const databox *box, const mlwVal *want,
 
     if (box->type == DATABOX_SIGNED_64) {
         return (__uint128_t)(__int128_t)box->data.i == want->bits
-                   ? NULL
+                   ? nullptr
                    : "signed 64-bit value differs";
     }
 
     if (box->type == DATABOX_UNSIGNED_64) {
         return !want->negative && (__uint128_t)box->data.u == want->bits
-                   ? NULL
+                   ? nullptr
                    : "unsigned 64-bit value differs";
     }
 
@@ -974,7 +975,7 @@ static uint32_t mlwVerify(multilist *ml, mflexState *s[2], const mlwVal *want,
             }
 
             const char *why =
-                mlwCheckRead(&entry.box, &want[i], NULL, MLW_READ_DEFERRED);
+                mlwCheckRead(&entry.box, &want[i], nullptr, MLW_READ_DEFERRED);
             if (why) {
                 ERR("%s: Index(%" PRId64 "): %s", what, at[k], why);
             }
@@ -1040,7 +1041,7 @@ static void mlrTierRewind(multilist *ml, multilistIterator *iter, bool tail) {
         }
         break;
     default:
-        assert(NULL);
+        assert(false);
     }
 }
 
@@ -1057,7 +1058,7 @@ static void mlrTierRelease(multilist *ml, multilistIterator *iter) {
         multilistFullIteratorRelease(iter);
         break;
     default:
-        assert(NULL);
+        assert(false);
     }
 }
 
@@ -1076,7 +1077,7 @@ static const char *mlrListIs(multilist *ml, mflexState *s[2],
         multilistEntry entry;
         multilistIteratorInitReadOnly(ml, s, &iter, forward);
         uint32_t seen = 0;
-        const char *why = NULL;
+        const char *why = nullptr;
         while (!why && multilistNext(&iter, &entry)) {
             if (seen >= n ||
                 !mlrIs(&entry.box, want[forward ? seen : n - 1 - seen])) {
@@ -1096,7 +1097,7 @@ static const char *mlrListIs(multilist *ml, mflexState *s[2],
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 /* Whether flex 'f' holds exactly the ids 'want', in order. */
@@ -1112,7 +1113,7 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
         }
 
         databox box = {};
-        flexGetByTypeInto(fe, &box, NULL);
+        flexGetByTypeInto(fe, &box, nullptr);
         if (!mlrIs(&box, want[i])) {
             return false;
         }
@@ -1351,7 +1352,7 @@ static const char *mlrWalk(multilistIterator *iter, uint32_t n, bool forward,
         return "walked past the end";
     }
 
-    return NULL;
+    return nullptr;
 }
 
 int multilistTest(int, char *[]) {
@@ -1443,7 +1444,7 @@ int multilistTest(int, char *[]) {
                                 "got %" PRId64 " expected %" PRId64 "!",
                                 (int)_multilistType(ml), anchors[ai], t,
                                 (int64_t)got.box.data.i, expect);
-                            assert(NULL);
+                            assert(false);
                         }
                     }
 
@@ -1647,7 +1648,7 @@ int multilistTest(int, char *[]) {
             multilistPopHead(&ml, s0, &box);
             bytes = box.len;
             data = box.data.bytes.start;
-            assert(data != NULL);
+            assert(data != nullptr);
             assert(bytes == 32);
             if (strcmp(populate, (char *)data)) {
                 ERR("Pop'd value (%.*s) didn't equal original value (%s)",
@@ -1695,7 +1696,7 @@ int multilistTest(int, char *[]) {
                 data = box.data.bytes.start;
                 bytes = box.len;
                 assert(found);
-                assert(data != NULL);
+                assert(data != nullptr);
                 assert(bytes == 32);
                 if (strcmp(genstr("hello", 499 - i), (char *)data)) {
                     ERR("Pop'd value (%.*s) didn't equal original value (%s)",
@@ -1727,7 +1728,7 @@ int multilistTest(int, char *[]) {
                         ERR("Pop'd value (%.*s) didn't equal original value "
                             "(%s)",
                             bytes, data, genstr("hello", 499 - i));
-                        assert(NULL);
+                        assert(false);
                     }
                 } else {
                     assert(!found);
@@ -1872,7 +1873,7 @@ int multilistTest(int, char *[]) {
                 if (strncmp(entry.box.data.bytes.cstart, "def", 3)) {
                     ERR("Value 1 didn't match, instead got: %.*s",
                         (int32_t)entry.box.len, entry.box.data.bytes.start);
-                    assert(NULL);
+                    assert(false);
                 }
 
                 got = multilistIndexGet(ml, s0, 2, &entry);
@@ -3496,13 +3497,13 @@ int multilistTest(int, char *[]) {
                     for (uint32_t i = 0; multilistNext(&iter, &entry); i++) {
                         const flex *fl = mloFlex(ml, &entry);
                         firstIn[i] = entry.fe == flexHead(fl);
-                        lastIn[i] = flexNext(fl, entry.fe) == NULL;
+                        lastIn[i] = flexNext(fl, entry.fe) == nullptr;
                         nodeOf[i] = entry.nodeIdx;
                         gone[i] = false;
                     }
                     multilistIteratorRelease(&iter);
 
-                    const char *why = NULL;
+                    const char *why = nullptr;
                     if (from < 2) {
                         multilistIteratorInit(ml, s, &iter, forward, false);
                     } else if (!multilistIteratorInitAtIdx(
@@ -3836,13 +3837,13 @@ int multilistTest(int, char *[]) {
          * NewFromFlexConsumeGrow from a Small; and Full's SetOptions,
          * SetDepth, AppendValuesFlex, AppendValuesFromFlex, NewFromFlex
          * and multilistFulllCreateFlex. */
-        const char *why = NULL;
+        const char *why = nullptr;
         MLA_EXERCISE(Small, why);
         if (why) {
             ERR("Small: %s", why);
         }
 
-        why = NULL;
+        why = nullptr;
         MLA_EXERCISE(Medium, why);
         if (why) {
             ERR("Medium: %s", why);
@@ -4531,7 +4532,7 @@ int multilistTest(int, char *[]) {
                     const char *why =
                         multilistIndexNearGet(ml, s0, t, &anchor,
                                               (mlOffsetId)anchorAt[a], &got)
-                            ? mlwCheckRead(&got.box, &want[idx], NULL,
+                            ? mlwCheckRead(&got.box, &want[idx], nullptr,
                                            MLW_READ_DEFERRED)
                             : "not found";
                     if (why) {
@@ -4556,7 +4557,7 @@ int multilistTest(int, char *[]) {
                 }
 
                 const char *why = mlwCheckRead(&anchor.box, &want[anchorAt[a]],
-                                               NULL, MLW_READ_DEFERRED);
+                                               nullptr, MLW_READ_DEFERRED);
                 if (why) {
                     ERR("%s: anchor %zu after IndexNear: %s", name, anchorAt[a],
                         why);
@@ -4688,7 +4689,7 @@ int multilistTest(int, char *[]) {
                 cleaner(multilistFree) multilist *fromFlex =
                     multilistNewFromFlex(configs[c].limit, configs[c].depth,
                                          fl);
-                fl = NULL; /* the list owns it now */
+                fl = nullptr; /* the list owns it now */
                 err += mlwVerify(fromFlex, s, copy, copyN, name);
 
                 const mlwVal head = MLW_PICK(mlwBoundary(8));
@@ -4720,9 +4721,9 @@ int multilistTest(int, char *[]) {
                     break;
                 }
 
-                const char *why =
-                    mlwCheckRead((const databox *)&dst, &expect,
-                                 inlineDst ? dst.extra : NULL, MLW_READ_OWNED);
+                const char *why = mlwCheckRead((const databox *)&dst, &expect,
+                                               inlineDst ? dst.extra : nullptr,
+                                               MLW_READ_OWNED);
                 if (!why && !inlineDst && mlwIsWide(&expect) &&
                     !dst.allocated) {
                     why = "wide pop into a plain box is not heap-owned";

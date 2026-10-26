@@ -125,7 +125,7 @@ multiFenwick *multiFenwickNew(void) {
      * on every partial-construction exit below. */
     cleaner(multiFenwickFree) multiFenwick *mfw = zcalloc(1, sizeof(*mfw));
     if (!mfw) {
-        return NULL;
+        return nullptr;
     }
 
     /* Create multilist with reasonable limits */
@@ -135,7 +135,7 @@ multiFenwick *multiFenwickNew(void) {
     /* @own: container; free=multilistFree */
     mfw->tree = multilistNewLimit(FLEX_CAP_LEVEL_8192, 0);
     if (!mfw->tree) {
-        return NULL;
+        return nullptr;
     }
 
     mfw->count = 0;
@@ -145,11 +145,11 @@ multiFenwick *multiFenwickNew(void) {
     /* @own: container; free=mflexStateFree */
     mfw->state = zcalloc(1, sizeof(mflexState));
     if (!mfw->state) {
-        return NULL;
+        return nullptr;
     }
 
     multiFenwick *out = mfw;
-    mfw = NULL;
+    mfw = nullptr;
     return out;
 }
 
@@ -167,19 +167,19 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
     }
 
     if (!values || count - 1 > MULTIFENWICK_INDEX_MAX) {
-        return NULL;
+        return nullptr;
     }
 
     for (size_t i = 0; i < count; i++) {
         multiFenwickNum n;
         if (!multiFenwickNumFrom_(&values[i], &n)) {
-            return NULL;
+            return nullptr;
         }
     }
 
     cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
     if (!mfw) {
-        return NULL;
+        return nullptr;
     }
 
     const uint64_t capacity = multiFenwickCapacityFor_(0, count - 1);
@@ -207,16 +207,16 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
 
         multiFenwickNum child;
         multiFenwickNum sum;
-        if (!multiFenwickCellGet_(mfw, j - 1, NULL, &child) ||
-            !multiFenwickCellGet_(mfw, parent - 1, NULL, &sum)) {
-            return NULL;
+        if (!multiFenwickCellGet_(mfw, j - 1, nullptr, &child) ||
+            !multiFenwickCellGet_(mfw, parent - 1, nullptr, &sum)) {
+            return nullptr;
         }
 
         /* A block of elements whose sum has no 64-bit value refuses the
          * whole array (the cleaner frees the partial tree). */
         databox box;
         if (!multiFenwickNumBox_(multiFenwickNumAdd_(sum, child), &box)) {
-            return NULL;
+            return nullptr;
         }
 
         [[maybe_unused]] const bool replaced = multilistReplaceByTypeAtIndex(
@@ -225,7 +225,7 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
     }
 
     multiFenwick *out = mfw;
-    mfw = NULL;
+    mfw = nullptr;
     return out;
 }
 
@@ -294,7 +294,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     multiFenwickNum total = {};
     databox totalBox = DATABOX_UNSIGNED(0);
     if (newCapacity > oldCapacity && oldCapacity > 0) {
-        if (!multiFenwickCellGet_(cur, oldCapacity - 1, NULL, &total)) {
+        if (!multiFenwickCellGet_(cur, oldCapacity - 1, nullptr, &total)) {
             return false;
         }
 
@@ -309,7 +309,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     for (uint64_t i = idx + 1; i <= newCapacity; i = multiFenwickParent(i)) {
         multiFenwickNum base = {};
         if (i <= oldCapacity) {
-            if (!multiFenwickCellGet_(cur, i - 1, NULL, &base)) {
+            if (!multiFenwickCellGet_(cur, i - 1, nullptr, &base)) {
                 return false;
             }
         } else if (oldCapacity > 0 && stdc_has_single_bit(i)) {
@@ -583,7 +583,7 @@ static bool multiFenwickPersistUnsigned_(const flex *f, flexEntry **fe,
 
 static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -596,12 +596,12 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
         count > capacity || (capacity & (capacity - 1)) ||
         (count == 0) != (capacity == 0) ||
         capacity > MULTIFENWICK_INDEX_MAX + 1) {
-        return NULL;
+        return nullptr;
     }
 
     cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
     if (!mfw) {
-        return NULL;
+        return nullptr;
     }
 
     /* Every cell must be a value a cell can hold, stored as the tree
@@ -620,7 +620,7 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
             multiFenwickNum num;
             if (!multiFenwickNumFrom_((const databox *)&box, &num) ||
                 !multiFenwickNumBox_(num, &boxes[i])) {
-                return NULL;
+                return nullptr;
             }
 
             ptrs[i] = &boxes[i];
@@ -634,12 +634,12 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
     multilistFree(mfw->tree);
     /* @own: container; free=multilistFree */
     mfw->tree = multilistNewFromDump(FLEX_CAP_LEVEL_8192, 0, mfw->state, cells);
-    cells = NULL; /* taken by the multilist */
+    cells = nullptr; /* taken by the multilist */
     mfw->capacity = capacity;
     mfw->count = count;
 
     multiFenwick *out = mfw;
-    mfw = NULL;
+    mfw = nullptr;
     return out;
 }
 
@@ -650,7 +650,7 @@ static uint8_t *multiFenwickPersistEncodeOp_(persistOp op, const void *args,
         return persistOpNoBody(len);
     }
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2) {
-        return NULL; /* nothing else is replayed */
+        return nullptr; /* nothing else is replayed */
     }
     return persistOpEncodeBoxes(args, argc, len);
 }

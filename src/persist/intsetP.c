@@ -20,7 +20,7 @@ defcleanerName(intsetP *, zfree, IntsetP);
 
 intsetP *intsetNewP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, IntsetP) intsetP *is = zcalloc(1, sizeof(*is));
@@ -30,41 +30,41 @@ intsetP *intsetNewP(persistCtx *ctx) {
     /* @own: container; free=intsetFree */
     is->is = intsetNew();
     if (!is->is) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for intset type */
     if (!persistCtxInitForType(ctx, &persistOpsIntset)) {
         intsetFree(is->is);
-        return NULL;
+        return nullptr;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, is->is, &persistOpsIntset)) {
         intsetFree(is->is);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     intsetP *out = is;
-    is = NULL;
+    is = nullptr;
     return out;
 }
 
 intsetP *intsetOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for intset type */
     if (!persistCtxInitForType(ctx, &persistOpsIntset)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
     intset *recovered = persistCtxRecover(ctx, &persistOpsIntset);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=intsetCloseP */
@@ -96,7 +96,7 @@ void intsetCloseP(intsetP *is) {
 }
 
 intset *intsetGetRawP(intsetP *is) {
-    return is ? is->is : NULL;
+    return is ? is->is : nullptr;
 }
 
 /* ============================================================================
@@ -285,7 +285,7 @@ int intsetPTest(int, char *[]) {
 
     TEST("intsetP create empty and close") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to create persistCtx");
         }
@@ -305,7 +305,7 @@ int intsetPTest(int, char *[]) {
 
     TEST("intsetP edge case integers") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
         ptestIntTracker tracker;
         ptestTrackerInit(&tracker);
@@ -341,12 +341,12 @@ int intsetPTest(int, char *[]) {
 
         /* Phase 1: Create and populate */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
 
             for (size_t i = 0; i < PTEST_INT_EDGE_COUNT; i++) {
                 int64_t val = PTEST_INT_EDGE_CASES[i];
-                PTEST_LOGGED(intsetAddP(is, val, NULL));
+                PTEST_LOGGED(intsetAddP(is, val, nullptr));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -356,7 +356,7 @@ int intsetPTest(int, char *[]) {
 
         /* Phase 2: Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
@@ -376,7 +376,7 @@ int intsetPTest(int, char *[]) {
 
     TEST("intsetP varied integers with ranges") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
         ptestIntTracker tracker;
         ptestTrackerInit(&tracker);
@@ -384,7 +384,7 @@ int intsetPTest(int, char *[]) {
         /* Add integers from all ranges */
         for (int i = 0; i < 256; i++) {
             int64_t val = ptestIntByRange(i);
-            PTEST_LOGGED(intsetAddP(is, val, NULL));
+            PTEST_LOGGED(intsetAddP(is, val, nullptr));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -404,12 +404,12 @@ int intsetPTest(int, char *[]) {
 
         /* Create with varied values */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
 
             for (int i = 0; i < 256; i++) {
                 int64_t val = ptestIntByRange(i);
-                PTEST_LOGGED(intsetAddP(is, val, NULL));
+                PTEST_LOGGED(intsetAddP(is, val, nullptr));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -419,7 +419,7 @@ int intsetPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
@@ -439,13 +439,13 @@ int intsetPTest(int, char *[]) {
 
     TEST("intsetP duplicate handling") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
 
         /* Add same values multiple times */
         for (int round = 0; round < 3; round++) {
             for (int i = 0; i < 10; i++) {
-                PTEST_LOGGED(intsetAddP(is, i * 100, NULL));
+                PTEST_LOGGED(intsetAddP(is, i * 100, nullptr));
             }
         }
 
@@ -459,7 +459,7 @@ int intsetPTest(int, char *[]) {
 
     TEST("intsetP remove operations") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
         ptestIntTracker tracker;
         ptestTrackerInit(&tracker);
@@ -467,7 +467,7 @@ int intsetPTest(int, char *[]) {
         /* Add values */
         for (int i = 0; i < 50; i++) {
             int64_t val = i * 100;
-            PTEST_LOGGED(intsetAddP(is, val, NULL));
+            PTEST_LOGGED(intsetAddP(is, val, nullptr));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -516,20 +516,20 @@ int intsetPTest(int, char *[]) {
 
         /* Add then remove, then close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
 
             /* Add 100 values */
             for (int i = 0; i < 100; i++) {
                 int64_t val = (int64_t)i * 1000 - 50000;
-                PTEST_LOGGED(intsetAddP(is, val, NULL));
+                PTEST_LOGGED(intsetAddP(is, val, nullptr));
                 ptestTrackerAdd(&tracker, val);
             }
 
             /* Remove 30 values */
             for (int i = 10; i < 40; i++) {
                 int64_t val = (int64_t)i * 1000 - 50000;
-                PTEST_LOGGED(intsetRemoveP(is, val, NULL));
+                PTEST_LOGGED(intsetRemoveP(is, val, nullptr));
                 ptestTrackerRemove(&tracker, val);
             }
 
@@ -539,7 +539,7 @@ int intsetPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
@@ -569,10 +569,10 @@ int intsetPTest(int, char *[]) {
             intsetP *is;
 
             if (cycle == 0) {
-                ctx = persistCtxNew(basePath, NULL);
+                ctx = persistCtxNew(basePath, nullptr);
                 is = intsetNewP(ctx);
             } else {
-                ctx = persistCtxOpen(basePath, NULL);
+                ctx = persistCtxOpen(basePath, nullptr);
                 is = intsetOpenP(ctx);
                 if (!is) {
                     ERR("Failed to recover at cycle %d", cycle);
@@ -588,7 +588,7 @@ int intsetPTest(int, char *[]) {
             /* Add new values this cycle */
             for (int i = 0; i < 20; i++) {
                 int64_t val = cycle * 1000 + i;
-                PTEST_LOGGED(intsetAddP(is, val, NULL));
+                PTEST_LOGGED(intsetAddP(is, val, nullptr));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -596,7 +596,7 @@ int intsetPTest(int, char *[]) {
             if (cycle > 0) {
                 for (int i = 0; i < 5; i++) {
                     int64_t val = (cycle - 1) * 1000 + i * 2;
-                    PTEST_LOGGED(intsetRemoveP(is, val, NULL));
+                    PTEST_LOGGED(intsetRemoveP(is, val, nullptr));
                     ptestTrackerRemove(&tracker, val);
                 }
             }
@@ -607,7 +607,7 @@ int intsetPTest(int, char *[]) {
 
         /* Final verification */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
@@ -638,13 +638,13 @@ int intsetPTest(int, char *[]) {
 
             /* Add values in pattern order */
             {
-                persistCtx *ctx = persistCtxNew(basePath, NULL);
+                persistCtx *ctx = persistCtxNew(basePath, nullptr);
                 intsetP *is = intsetNewP(ctx);
 
                 for (int i = 0; i < 100; i++) {
                     int val = ptestGetSeqValue(patterns[p], i, 100);
                     int64_t v = (int64_t)val * 7; /* Scale for variety */
-                    PTEST_LOGGED(intsetAddP(is, v, NULL));
+                    PTEST_LOGGED(intsetAddP(is, v, nullptr));
                     ptestTrackerAdd(&tracker, v);
                 }
 
@@ -654,7 +654,7 @@ int intsetPTest(int, char *[]) {
 
             /* Recover and verify */
             {
-                persistCtx *ctx = persistCtxOpen(basePath, NULL);
+                persistCtx *ctx = persistCtxOpen(basePath, nullptr);
                 intsetP *is = intsetOpenP(ctx);
 
                 if (!is) {
@@ -679,7 +679,7 @@ int intsetPTest(int, char *[]) {
         ptestIntTracker tracker;
         ptestTrackerInit(&tracker);
 
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
 
         /* Perform mixed operations */
@@ -689,11 +689,11 @@ int intsetPTest(int, char *[]) {
 
             switch (op) {
             case PTEST_OP_INSERT:
-                PTEST_LOGGED(intsetAddP(is, val, NULL));
+                PTEST_LOGGED(intsetAddP(is, val, nullptr));
                 ptestTrackerAdd(&tracker, val);
                 break;
             case PTEST_OP_DELETE:
-                PTEST_LOGGED(intsetRemoveP(is, val, NULL));
+                PTEST_LOGGED(intsetRemoveP(is, val, nullptr));
                 ptestTrackerRemove(&tracker, val);
                 break;
             case PTEST_OP_LOOKUP: {
@@ -725,12 +725,12 @@ int intsetPTest(int, char *[]) {
 
         /* Add many values */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
 
             for (int i = 0; i < 1000; i++) {
                 int64_t val = ptestGenerateInt(i, i);
-                PTEST_LOGGED(intsetAddP(is, val, NULL));
+                PTEST_LOGGED(intsetAddP(is, val, nullptr));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -740,7 +740,7 @@ int intsetPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
@@ -763,7 +763,7 @@ int intsetPTest(int, char *[]) {
 
         /* Create empty, close, reopen */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
             intsetCloseP(is);
             persistCtxFree(ctx);
@@ -771,7 +771,7 @@ int intsetPTest(int, char *[]) {
 
         /* Recover empty */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
@@ -792,15 +792,15 @@ int intsetPTest(int, char *[]) {
         int64_t testVal = 42;
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
-            PTEST_LOGGED(intsetAddP(is, testVal, NULL));
+            PTEST_LOGGED(intsetAddP(is, testVal, nullptr));
             intsetCloseP(is);
             persistCtxFree(ctx);
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             PTEST_VERIFY_COUNT(is, 1, intsetCountP);
@@ -818,13 +818,13 @@ int intsetPTest(int, char *[]) {
         ptestIntTracker tracker;
         ptestTrackerInit(&tracker);
 
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
 
         /* Add 100 values */
         for (int i = 0; i < 100; i++) {
             int64_t val = i * 10;
-            PTEST_LOGGED(intsetAddP(is, val, NULL));
+            PTEST_LOGGED(intsetAddP(is, val, nullptr));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -835,7 +835,7 @@ int intsetPTest(int, char *[]) {
         /* Remove all values */
         for (int i = 0; i < 100; i++) {
             int64_t val = i * 10;
-            PTEST_LOGGED(intsetRemoveP(is, val, NULL));
+            PTEST_LOGGED(intsetRemoveP(is, val, nullptr));
             ptestTrackerRemove(&tracker, val);
         }
 
@@ -851,14 +851,14 @@ int intsetPTest(int, char *[]) {
 
         /* Add then remove all */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             intsetP *is = intsetNewP(ctx);
 
             for (int i = 0; i < 10; i++) {
-                PTEST_LOGGED(intsetAddP(is, i, NULL));
+                PTEST_LOGGED(intsetAddP(is, i, nullptr));
             }
             for (int i = 0; i < 10; i++) {
-                PTEST_LOGGED(intsetRemoveP(is, i, NULL));
+                PTEST_LOGGED(intsetRemoveP(is, i, nullptr));
             }
 
             intsetCloseP(is);
@@ -867,7 +867,7 @@ int intsetPTest(int, char *[]) {
 
         /* Recover empty */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             intsetP *is = intsetOpenP(ctx);
 
             PTEST_VERIFY_COUNT(is, 0, intsetCountP);
@@ -884,13 +884,13 @@ int intsetPTest(int, char *[]) {
         ptestIntTracker tracker;
         ptestTrackerInit(&tracker);
 
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
 
         /* Add many values to trigger compaction */
         for (int i = 0; i < 500; i++) {
             int64_t val = ptestIntByRange(i);
-            PTEST_LOGGED(intsetAddP(is, val, NULL));
+            PTEST_LOGGED(intsetAddP(is, val, nullptr));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -917,15 +917,15 @@ int intsetPTest(int, char *[]) {
 
     TEST("intsetP statistics tracking") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
 
         /* Perform known number of operations */
         for (int i = 0; i < 25; i++) {
-            PTEST_LOGGED(intsetAddP(is, i, NULL));
+            PTEST_LOGGED(intsetAddP(is, i, nullptr));
         }
         for (int i = 0; i < 5; i++) {
-            PTEST_LOGGED(intsetRemoveP(is, i, NULL));
+            PTEST_LOGGED(intsetRemoveP(is, i, nullptr));
         }
 
         persistCtxStats stats;
@@ -948,13 +948,13 @@ int intsetPTest(int, char *[]) {
                                              40000,     9000000000,  INT64_MAX};
         const size_t n = countof(values);
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
         for (size_t i = 0; i < n; i++) {
-            PTEST_LOGGED(intsetAddP(is, values[i], NULL));
+            PTEST_LOGGED(intsetAddP(is, values[i], nullptr));
         }
-        PTEST_LOGGED(intsetAddP(is, 123, NULL));
-        PTEST_LOGGED(intsetRemoveP(is, 123, NULL));
+        PTEST_LOGGED(intsetAddP(is, 123, nullptr));
+        PTEST_LOGGED(intsetRemoveP(is, 123, nullptr));
         if (!intsetSyncP(is) || intsetBytesP(is) == 0 ||
             intsetCount(intsetGetRawP(is)) != n) {
             ERR("Sync, bytes or raw count wrong");
@@ -962,7 +962,7 @@ int intsetPTest(int, char *[]) {
         intsetCloseP(is);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         is = intsetOpenP(ctx);
         if (!is) {
             ERR("Recovery failed");
@@ -993,10 +993,10 @@ int intsetPTest(int, char *[]) {
          * quarantine); an add of 40 is then logged with no compaction, and
          * a reopen holds {10, 20, 40} */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
         for (int64_t v = 10; v <= 30; v += 10) {
-            PTEST_LOGGED(intsetAddP(is, v, NULL));
+            PTEST_LOGGED(intsetAddP(is, v, nullptr));
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
@@ -1004,7 +1004,7 @@ int intsetPTest(int, char *[]) {
             ERR("could not damage the WAL");
         }
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         is = intsetOpenP(ctx);
         if (!is || intsetCountP(is) != 2 || intsetFindP(is, 30)) {
             ERR("lenient recovery kept %" PRIu64 " values, want 10, 20",
@@ -1021,7 +1021,7 @@ int intsetPTest(int, char *[]) {
         intsetCloseP(is);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         is = intsetOpenP(ctx);
         if (!is || intsetCountP(is) != 3 || !intsetFindP(is, 10) ||
             !intsetFindP(is, 20) || !intsetFindP(is, 40)) {
@@ -1037,10 +1037,10 @@ int intsetPTest(int, char *[]) {
          * the set */
         static constexpr int64_t held[] = {-3, 7, 300};
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         intsetP *is = intsetNewP(ctx);
         for (size_t i = 0; i < countof(held); i++) {
-            PTEST_LOGGED(intsetAddP(is, held[i], NULL));
+            PTEST_LOGGED(intsetAddP(is, held[i], nullptr));
         }
 
         bool changed = true;
@@ -1055,23 +1055,25 @@ int intsetPTest(int, char *[]) {
 
         /* Missing arguments: refused or empty answers */
         int64_t at = 0;
-        if (intsetAddP(NULL, 1, NULL) || intsetRemoveP(NULL, 1, NULL) ||
-            intsetNewP(NULL) || intsetOpenP(NULL) || intsetGetRawP(NULL) ||
-            intsetCountP(NULL) || intsetBytesP(NULL) || intsetFindP(NULL, 1) ||
-            intsetGetAtP(NULL, 0, &at) || intsetGetAtP(is, 0, NULL) ||
-            intsetSyncP(NULL) || intsetCompactP(NULL)) {
+        if (intsetAddP(nullptr, 1, nullptr) ||
+            intsetRemoveP(nullptr, 1, nullptr) || intsetNewP(nullptr) ||
+            intsetOpenP(nullptr) || intsetGetRawP(nullptr) ||
+            intsetCountP(nullptr) || intsetBytesP(nullptr) ||
+            intsetFindP(nullptr, 1) || intsetGetAtP(nullptr, 0, &at) ||
+            intsetGetAtP(is, 0, nullptr) || intsetSyncP(nullptr) ||
+            intsetCompactP(nullptr)) {
             ERR("a call without its wrapper was not refused");
         }
-        intsetGetStatsP(NULL, NULL);
-        intsetCloseP(NULL);
+        intsetGetStatsP(nullptr, nullptr);
+        intsetCloseP(nullptr);
 
         /* Logging works again, and a reopen holds only what was logged */
-        if (intsetAddP(is, 40000, NULL) == PERSIST_LOG_REFUSED) {
+        if (intsetAddP(is, 40000, nullptr) == PERSIST_LOG_REFUSED) {
             ERR("the context did not log again after the refusal");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         is = intsetOpenP(ctx);
         static constexpr int64_t logged[] = {-3, 7, 300, 40000};
         if (!is || !intsetPHolds_(intsetGetRawP(is), logged, countof(logged))) {

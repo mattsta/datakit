@@ -63,7 +63,7 @@ static void *pcMosBuild(const persistContractBuild *b) {
 
         if (b->size >= 100 && i == b->size / 3) {
             multiOrderedSetReset(&mos);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
 

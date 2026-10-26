@@ -114,7 +114,7 @@ static void *batchRun(void *arg) {
     }
     free(ptrs);
     j->ops = ops;
-    return NULL;
+    return nullptr;
 }
 
 /* Number of trials per data point; we report the MIN (best-case throughput —
@@ -146,11 +146,11 @@ static double benchMTOnce(const Alloc *al, size_t blk, size_t live,
     }
     uint64_t t0 = nowns();
     for (int i = 0; i < threads; i++) {
-        pthread_create(&th[i], NULL, batchRun, &jobs[i]);
+        pthread_create(&th[i], nullptr, batchRun, &jobs[i]);
     }
     uint64_t total = 0;
     for (int i = 0; i < threads; i++) {
-        pthread_join(th[i], NULL);
+        pthread_join(th[i], nullptr);
         total += jobs[i].ops;
     }
     uint64_t t1 = nowns();
@@ -264,7 +264,7 @@ int main(void) {
     /* Set MEMBOUND_BENCH_MEMSHARD=1 to point the global zmalloc backend at
      * memshard for this run (affects the `zmalloc` row below). Run the bench
      * twice — default vs that env — and compare the `zmalloc` rows. */
-    const bool useMemshard = getenv("MEMBOUND_BENCH_MEMSHARD") != NULL;
+    const bool useMemshard = getenv("MEMBOUND_BENCH_MEMSHARD") != nullptr;
     if (useMemshard) {
         datakitUseMemshard();
     }
@@ -281,9 +281,9 @@ int main(void) {
                             .threadCache = true};
     membound *tcPool = memboundCreateWithConfig(&tcCfg);
 
-    Alloc sys = {"system", sysA, sysF, NULL, sysU};
-    Alloc mi = {"memshard", miA, miF, NULL, miU};
-    Alloc zm = {"zmalloc", zmA, zmF, NULL, NULL};
+    Alloc sys = {"system", sysA, sysF, nullptr, sysU};
+    Alloc mi = {"memshard", miA, miF, nullptr, miU};
+    Alloc zm = {"zmalloc", zmA, zmF, nullptr, nullptr};
     Alloc mbs = {"membound-STD", mbA, mbF, stdPool, mbU};
     Alloc mbe = {"membound-ENT", mbA, mbF, entPool, mbU};
     Alloc mbtc = {"membound-TC", mbA, mbF, tcPool, mbU};

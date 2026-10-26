@@ -48,7 +48,7 @@ typedef uint32_t multiarrayIdx;
             multiarrayLargeFree(marl(mar));                                    \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)

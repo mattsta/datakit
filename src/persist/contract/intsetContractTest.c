@@ -46,7 +46,7 @@ static void *pcIntsetBuild(const persistContractBuild *b) {
             intsetFree(is);
             /* @own: caller; free=intsetFree */
             is = intsetNew();
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
     return is;

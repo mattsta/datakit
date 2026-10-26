@@ -74,7 +74,7 @@ intsetU32 *intsetU32Copy(const intsetU32 *is) {
 void intsetU32Resize(intsetU32 *is, const uint32_t len) {
     if (len == 0) {
         zfree(is->contents);
-        is->contents = NULL;
+        is->contents = nullptr;
         is->capacity = 0;
         return;
     }
@@ -226,7 +226,7 @@ bool intsetU32Remove(intsetU32 *is, uint32_t value) {
 
 /* Determine whether a value belongs to this set */
 bool intsetU32Exists(const intsetU32 *const is, const uint32_t value) {
-    return intsetU32Search(is, value, NULL);
+    return intsetU32Search(is, value, nullptr);
 }
 
 bool intsetU32Equal(const intsetU32 *const a, const intsetU32 *const b) {
@@ -327,7 +327,7 @@ static void ok(void) {
 
 static int64_t usec(void) {
     struct timeval tv;
-    gettimeofday(&tv, NULL);
+    gettimeofday(&tv, nullptr);
     return (((int64_t)tv.tv_sec) * 1'000'000) + tv.tv_usec;
 }
 
@@ -358,7 +358,7 @@ static intsetU32 *createSet(int bits, int size) {
 }
 
 int intsetU32Test(int, char **) {
-    srandom(time(NULL));
+    srandom(time(nullptr));
 
     printf("Random picks are members; RandomDelete drains every member: ");
     {
@@ -486,7 +486,7 @@ int intsetU32Test(int, char **) {
 
         start = usec();
         for (i = 0; i < num; i++) {
-            intsetU32Search(is, random() % ((1 << bits) - 1), NULL);
+            intsetU32Search(is, random() % ((1 << bits) - 1), nullptr);
         }
         printf("%" PRId32 " lookups, %" PRId32 " element set, %" PRId64
                "usec\n",
@@ -536,7 +536,7 @@ int intsetU32Test(int, char **) {
             intsetU32Remove(is, v);
         }
         intsetU32Assert(intsetU32Count(is) == 0 && is->capacity == 0 &&
-                        intsetU32Array(is) == NULL);
+                        intsetU32Array(is) == nullptr);
         ok();
     }
 

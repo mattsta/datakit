@@ -147,7 +147,7 @@ double xofGetCached(const xof *restrict const x,
                     uint_fast32_t *restrict const currentLeadingZeroes,
                     uint_fast32_t *restrict const currentLengthOfBits,
                     size_t offset) {
-    static const void *lookups[4] = {NULL, NULL, &&Same, &&New};
+    static const void *lookups[4] = {nullptr, nullptr, &&Same, &&New};
     uint_fast32_t consumedValues = 0;
     uint64_t unique = 0;
 
@@ -526,7 +526,7 @@ int xofTest(int, char *[]) {
                 double expected = val;
                 if (got != expected) {
                     ERR("Expected %f but got %f instead!\n", expected, got);
-                    assert(NULL);
+                    assert(false);
                 }
                 PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
             }
@@ -575,7 +575,7 @@ int xofTest(int, char *[]) {
                 double expected = mmax;
                 if (got != expected) {
                     ERR("Expected %f but got %f instead!\n", expected, got);
-                    assert(NULL);
+                    assert(false);
                 }
                 PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
             }

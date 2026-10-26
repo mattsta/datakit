@@ -204,7 +204,7 @@ static void *dkDiagTestThread_(void *arg) {
     dkDiagnostic d;
     out[0] = dkDiagCount();
     out[1] = dkDiagLast(&d) && d.code == DK_DIAG_PERSIST_CTX_CLAIMED;
-    return NULL;
+    return nullptr;
 }
 
 /* Everything written to stderr while 'mode' is in effect and one MISUSE
@@ -284,11 +284,11 @@ int dkDiagTest(int, char *[]) {
         const uint64_t count = dkDiagCount();
         dkDiagClear();
         dkDiagnostic d;
-        if (dkDiagLast(&d) || dkDiagLast(NULL) || dkDiagCount() != count) {
+        if (dkDiagLast(&d) || dkDiagLast(nullptr) || dkDiagCount() != count) {
             ERR("clear left a diagnostic or moved the count");
         }
         DK_DIAG(DK_DIAG_MULTIARRAY_NATIVE, "y");
-        if (!dkDiagLast(NULL) || dkDiagCount() != count + 1) {
+        if (!dkDiagLast(nullptr) || dkDiagCount() != count + 1) {
             ERR("a report after clear was not recorded");
         }
     }
@@ -323,7 +323,7 @@ int dkDiagTest(int, char *[]) {
         const bool nestedOk = seen.calls == 3 && seen.copyStable &&
                               d.code == DK_DIAG_MULTIARRAY_NATIVE;
 
-        dkDiagSetHook(NULL);
+        dkDiagSetHook(nullptr);
         DK_DIAG(DK_DIAG_PERSIST_CTX_WRONG_TYPE, "unhooked");
         if (!sawOne || !nestedOk || seen.calls != 3) {
             ERR("hook calls %d, first ok %d, nested ok %d", seen.calls, sawOne,
@@ -336,10 +336,10 @@ int dkDiagTest(int, char *[]) {
         const uint64_t mine = dkDiagCount();
         uint64_t theirs[2] = {};
         pthread_t t;
-        if (pthread_create(&t, NULL, dkDiagTestThread_, theirs) != 0) {
+        if (pthread_create(&t, nullptr, dkDiagTestThread_, theirs) != 0) {
             ERR("pthread_create failed");
         } else {
-            pthread_join(t, NULL);
+            pthread_join(t, nullptr);
             dkDiagnostic d;
             dkDiagLast(&d);
             if (theirs[0] != 1 || theirs[1] != 1 || dkDiagCount() != mine ||

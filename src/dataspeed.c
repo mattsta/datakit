@@ -176,7 +176,7 @@ DK_FN_UNUSED static bool dataspeedParseCacheSize_(const char *s,
     }
 
     errno = 0;
-    char *end = NULL;
+    char *end = nullptr;
     const uint64_t count = strtoull(s, &end, 10);
     if (errno != 0 || end == s) {
         return false;
@@ -215,7 +215,7 @@ DK_FN_UNUSED static bool dataspeedParseSysfsUInt_(const char *s, uint64_t max,
     }
 
     errno = 0;
-    char *end = NULL;
+    char *end = nullptr;
     const uint64_t parsed = strtoull(s, &end, 10);
     if (errno != 0 || end == s) {
         return false;
@@ -241,7 +241,7 @@ DK_FN_UNUSED static bool dataspeedReadLine_(const char *path, char *buf,
         return false;
     }
 
-    const bool ok = fgets(buf, (int)len, fp) != NULL;
+    const bool ok = fgets(buf, (int)len, fp) != nullptr;
     fclose(fp);
     return ok;
 }
@@ -412,7 +412,7 @@ static bool dataspeedSysctlReadInt_(void *, const char *name, int64_t *value) {
         int32_t i32;
     } got = {};
     size_t len = sizeof(got);
-    if (sysctlbyname(name, &got, &len, NULL, 0) != 0) {
+    if (sysctlbyname(name, &got, &len, nullptr, 0) != 0) {
         return false;
     }
 
@@ -439,21 +439,21 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
 #if defined(__APPLE__)
     /* CPU model */
     size_t len = sizeof(info->cpu_model);
-    sysctlbyname("machdep.cpu.brand_string", info->cpu_model, &len, NULL, 0);
+    sysctlbyname("machdep.cpu.brand_string", info->cpu_model, &len, nullptr, 0);
 
     /* CPU count */
     int cpu_count = 0;
     len = sizeof(cpu_count);
-    sysctlbyname("hw.ncpu", &cpu_count, &len, NULL, 0);
+    sysctlbyname("hw.ncpu", &cpu_count, &len, nullptr, 0);
     info->cpu_count = cpu_count > 0 ? cpu_count : 1;
 
     /* Cache sizes and line size */
-    dataspeedCacheFromSysctl_(&info->cache, dataspeedSysctlReadInt_, NULL);
+    dataspeedCacheFromSysctl_(&info->cache, dataspeedSysctlReadInt_, nullptr);
 
     /* Total memory */
     int64_t memsize = 0;
     len = sizeof(memsize);
-    sysctlbyname("hw.memsize", &memsize, &len, NULL, 0);
+    sysctlbyname("hw.memsize", &memsize, &len, nullptr, 0);
     info->total_memory = memsize;
 
 #elifdef __linux__
@@ -487,7 +487,7 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     info->cpu_count = onlineCpus > 0 ? (size_t)onlineCpus : 1;
 
     /* Cache sizes and line size from sysfs */
-    dataspeedCacheFromSysfs_(&info->cache, dataspeedSysfsReadFile_, NULL);
+    dataspeedCacheFromSysfs_(&info->cache, dataspeedSysfsReadFile_, nullptr);
 
     /* Total memory */
     info->total_memory =
@@ -509,10 +509,10 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     /* On Apple Silicon, try to get the actual CPU frequency from sysctl */
     uint64_t freq = 0;
     size_t freq_len = sizeof(freq);
-    if (sysctlbyname("hw.cpufrequency", &freq, &freq_len, NULL, 0) == 0) {
+    if (sysctlbyname("hw.cpufrequency", &freq, &freq_len, nullptr, 0) == 0) {
         info->cpu_freq_mhz = (double)freq / 1e6;
-    } else if (sysctlbyname("hw.cpufrequency_max", &freq, &freq_len, NULL, 0) ==
-               0) {
+    } else if (sysctlbyname("hw.cpufrequency_max", &freq, &freq_len, nullptr,
+                            0) == 0) {
         info->cpu_freq_mhz = (double)freq / 1e6;
     } else {
         /* Fallback: estimate via actual computation throughput */
@@ -610,8 +610,8 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
                                 dataspeedBandwidthResult *result,
                                 bool verbose) {
     const size_t count = size_bytes / sizeof(uint64_t);
-    uint64_t *data = NULL;
-    uint64_t *data2 = NULL; /* For copy */
+    uint64_t *data = nullptr;
+    uint64_t *data2 = nullptr; /* For copy */
     [[maybe_unused]] int alignRc = zmemalign((void **)&data, 64, size_bytes);
     alignRc |= zmemalign((void **)&data2, 64, size_bytes);
     assert(alignRc == 0 && data && data2);
@@ -707,7 +707,7 @@ void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb) {
 /* Create a shuffled pointer chain for true latency measurement */
 static void **create_pointer_chain(size_t size_bytes) {
     size_t count = size_bytes / sizeof(void *);
-    void **chain = NULL;
+    void **chain = nullptr;
     [[maybe_unused]] int alignRc = zmemalign((void **)&chain, 64, size_bytes);
     assert(alignRc == 0 && chain);
 
@@ -715,7 +715,7 @@ static void **create_pointer_chain(size_t size_bytes) {
     cleanerName(zfree, Sizes) size_t *indices = zmalloc(count * sizeof(size_t));
     if (!indices) {
         zfree(chain);
-        return NULL; /* Memory allocation failed */
+        return nullptr; /* Memory allocation failed */
     }
     for (size_t i = 0; i < count; i++) {
         indices[i] = i;
@@ -1056,7 +1056,7 @@ void dataspeedRunAll(dataspeedReport *report, bool verbose) {
     memset(report, 0, sizeof(*report));
 
     uint64_t start = dataspeed_time_ns();
-    report->timestamp = (uint64_t)time(NULL);
+    report->timestamp = (uint64_t)time(nullptr);
 
     /* System info */
     dataspeedGetSystemInfo(&report->system);

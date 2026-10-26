@@ -103,7 +103,7 @@ static double pcFenwickReal(uint64_t *rng) {
                                                                                \
             if (b->size >= 100 && i == b->size / 3) {                          \
                 fenwick##T##Clear(fw);                                         \
-                persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);      \
+                persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);   \
             }                                                                  \
         }                                                                      \
                                                                                \
@@ -170,7 +170,7 @@ static double pcFenwickReal(uint64_t *rng) {
                                                                                \
             if (b->size >= 100 && i == b->size / 3) {                          \
                 fenwick2d##T##Clear(t);                                        \
-                persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);      \
+                persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);   \
             }                                                                  \
         }                                                                      \
                                                                                \

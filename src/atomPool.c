@@ -210,7 +210,7 @@ static const atomPoolVTable treeVTable = {
     .refcount = treeRefcount,
     .count = treeCount,
     .bytes = treeBytes,
-    .reset = NULL,
+    .reset = nullptr,
     .free = treeFree,
 };
 
@@ -273,7 +273,7 @@ static const atomPoolVTable denseVTable = {
     .refcount = denseRefcount,
     .count = denseCount,
     .bytes = denseBytes,
-    .reset = NULL,
+    .reset = nullptr,
     .free = denseFree,
 };
 
@@ -302,7 +302,7 @@ static void *atomPoolImplNew(atomPoolType type, atomPoolIds ids) {
             return multimapAtomNew();
         }
     default:
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -310,14 +310,14 @@ atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids) {
     if ((type != ATOM_POOL_HASH && type != ATOM_POOL_TREE) ||
         (ids != ATOM_POOL_IDS_REUSE && ids != ATOM_POOL_IDS_PERMANENT &&
          ids != ATOM_POOL_IDS_LOWEST)) {
-        return NULL;
+        return nullptr;
     }
 
     /* atomPoolFree is safe on a partially-constructed pool (it only
      * tears down impl when both impl and vtable are set). */
     cleaner(atomPoolFree) atomPool *pool = zcalloc(1, sizeof(*pool));
     if (!pool) {
-        return NULL;
+        return nullptr;
     }
 
     pool->type = type;
@@ -330,11 +330,11 @@ atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids) {
     }
 
     if (!pool->impl) {
-        return NULL;
+        return nullptr;
     }
 
     atomPool *out = pool;
-    pool = NULL;
+    pool = nullptr;
     return out;
 }
 
@@ -475,7 +475,7 @@ static uint8_t *atomPoolPersistSnapshot_(const void *structure, size_t *len) {
         atomPoolBackendOps_(pool->type, pool->ids)
             ->snapshot(pool->impl, &innerLen);
     if (!inner) {
-        return NULL;
+        return nullptr;
     }
 
     const databox type = DATABOX_UNSIGNED(pool->type);
@@ -491,7 +491,7 @@ static uint8_t *atomPoolPersistSnapshot_(const void *structure, size_t *len) {
 static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len) ||
         flexCount((const flex *)data) != 3) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -507,7 +507,7 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
     if (type.type != DATABOX_UNSIGNED_64 || ids.type != DATABOX_UNSIGNED_64 ||
         type.data.u64 > ATOM_POOL_TREE || ids.data.u64 > ATOM_POOL_IDS_LOWEST ||
         !DATABOX_IS_BYTES(&backend)) {
-        return NULL;
+        return nullptr;
     }
 
     const atomPoolType t = (atomPoolType)type.data.u64;
@@ -515,7 +515,7 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
     const persistOps *ops = atomPoolBackendOps_(t, i);
     void *impl = ops->restore(databoxBytes(&backend), backend.len);
     if (!impl) {
-        return NULL;
+        return nullptr;
     }
 
     /* The backend's own id behaviour must be the one the pool names */
@@ -531,7 +531,7 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
                multimapAtomIsPermanent(impl) == (i == ATOM_POOL_IDS_PERMANENT));
     if (!fits) {
         ops->free(impl);
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=atomPoolFree */
@@ -555,7 +555,7 @@ static uint8_t *atomPoolPersistEncodeOp_(persistOp op, const void *args,
         return persistOpNoBody(len);
     }
     if ((op != PERSIST_OP_INSERT && op != PERSIST_OP_NUM_INCR) || argc != 2) {
-        return NULL;
+        return nullptr;
     }
     return persistOpEncodeBoxes(args, argc, len);
 }

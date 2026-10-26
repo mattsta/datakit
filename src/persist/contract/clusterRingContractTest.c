@@ -78,7 +78,7 @@ static void *pcRingBuild(const persistContractBuild *b) {
             const clusterNodeConfig nc = {
                 .id = id,
                 .name = name,
-                .address = (roll & 1) ? address : NULL,
+                .address = (roll & 1) ? address : nullptr,
                 .location = {.nodeId = id,
                              .rackId = (uint32_t)splitmix64(&rng),
                              .dcId = (uint32_t)(splitmix64(&rng) % 4),
@@ -116,7 +116,7 @@ static void *pcRingBuild(const persistContractBuild *b) {
                 .strategy = (clusterStrategyType)(splitmix64(&rng) %
                                                   CLUSTER_STRATEGY_CUSTOM),
             };
-            PC_RING_MAY_REFUSE(clusterRingAddKeySpace(ring, &kc, NULL));
+            PC_RING_MAY_REFUSE(clusterRingAddKeySpace(ring, &kc, nullptr));
         } else {
             snprintf(name, sizeof(name), "ks-%" PRIu64, id % 32);
             PC_RING_MAY_REFUSE(clusterRingRemoveKeySpace(ring, name));
@@ -135,7 +135,7 @@ static void *pcRingBuild(const persistContractBuild *b) {
         PC_RING_MAY_REFUSE(clusterRingAddNode(ring, &nc));
         const clusterKeySpaceConfig kc = {.name = text,
                                           .quorum = CLUSTER_QUORUM_BALANCED};
-        PC_RING_MAY_REFUSE(clusterRingAddKeySpace(ring, &kc, NULL));
+        PC_RING_MAY_REFUSE(clusterRingAddKeySpace(ring, &kc, nullptr));
     }
     return ring;
 }

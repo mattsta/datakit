@@ -134,7 +134,7 @@ int multiTimerTest(int, char *[]) {
     }
 
     TEST("multiTimer: free NULL safety") {
-        multiTimerFree(NULL); /* Should not crash */
+        multiTimerFree(nullptr); /* Should not crash */
     }
 
     /* ================================================================

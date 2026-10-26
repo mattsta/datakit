@@ -87,7 +87,7 @@ DK_FN_UNUSED static bool memtestParseU64_(const char *s, int base, uint64_t max,
     }
 
     errno = 0;
-    char *end = NULL;
+    char *end = nullptr;
     const uint64_t parsed = strtoull(s, &end, base);
     if (errno != 0 || *end != '\0' || parsed > max) {
         return false;
@@ -294,7 +294,7 @@ static int memtest_addressing_ctx(uint64_t *mem, size_t bytes,
 }
 
 int memtestAddressing(uint64_t *mem, size_t bytes) {
-    return memtest_addressing_ctx(mem, bytes, NULL);
+    return memtest_addressing_ctx(mem, bytes, nullptr);
 }
 
 /* Random fill: page-strided access pattern with xorshift64* */
@@ -332,7 +332,7 @@ static void memtest_fill_random_ctx(uint64_t *mem, size_t bytes,
 }
 
 void memtestFillRandom(uint64_t *mem, size_t bytes) {
-    memtest_fill_random_ctx(mem, bytes, NULL);
+    memtest_fill_random_ctx(mem, bytes, nullptr);
 }
 
 /* Pattern fill: alternating v1/v2 pattern */
@@ -376,7 +376,7 @@ static void memtest_fill_pattern_ctx(uint64_t *mem, size_t bytes, uint64_t v1,
 }
 
 void memtestFillPattern(uint64_t *mem, size_t bytes, uint64_t v1, uint64_t v2) {
-    memtest_fill_pattern_ctx(mem, bytes, v1, v2, 'P', NULL);
+    memtest_fill_pattern_ctx(mem, bytes, v1, v2, 'P', nullptr);
 }
 
 /* Compare: verify first half equals second half */
@@ -411,7 +411,7 @@ static int memtest_compare_ctx(uint64_t *mem, size_t bytes,
 }
 
 int memtestCompare(uint64_t *mem, size_t bytes) {
-    return memtest_compare_ctx(mem, bytes, NULL);
+    return memtest_compare_ctx(mem, bytes, nullptr);
 }
 
 /* ============================================================================
@@ -520,36 +520,36 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
         memcpy(backup, p, len);
 
         for (int pass = 0; pass < passes; pass++) {
-            errors += memtest_addressing_ctx(p, len, NULL);
-            memtest_fill_random_ctx(p, len, NULL);
+            errors += memtest_addressing_ctx(p, len, nullptr);
+            memtest_fill_random_ctx(p, len, nullptr);
 
             /* Cache-defeating accesses */
             if (bytes >= MEMTEST_DECACHE_SIZE) {
-                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, NULL);
-                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, NULL);
+                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, nullptr);
+                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, nullptr);
             }
 
             for (int i = 0; i < 4; i++) {
-                errors += memtest_compare_ctx(p, len, NULL);
+                errors += memtest_compare_ctx(p, len, nullptr);
             }
 
-            memtest_fill_pattern_ctx(p, len, 0, (uint64_t)-1, 'S', NULL);
+            memtest_fill_pattern_ctx(p, len, 0, (uint64_t)-1, 'S', nullptr);
             if (bytes >= MEMTEST_DECACHE_SIZE) {
-                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, NULL);
-                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, NULL);
+                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, nullptr);
+                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, nullptr);
             }
             for (int i = 0; i < 4; i++) {
-                errors += memtest_compare_ctx(p, len, NULL);
+                errors += memtest_compare_ctx(p, len, nullptr);
             }
 
             memtest_fill_pattern_ctx(p, len, ULONG_ONEZERO, ULONG_ZEROONE, 'C',
-                                     NULL);
+                                     nullptr);
             if (bytes >= MEMTEST_DECACHE_SIZE) {
-                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, NULL);
-                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, NULL);
+                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, nullptr);
+                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, nullptr);
             }
             for (int i = 0; i < 4; i++) {
-                errors += memtest_compare_ctx(p, len, NULL);
+                errors += memtest_compare_ctx(p, len, nullptr);
             }
         }
 
@@ -584,18 +584,18 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
 
 size_t memtest(void *mem, size_t bytes, int passes, bool preserving) {
     if (preserving) {
-        return memtest_preserving(mem, bytes, passes, NULL, NULL);
+        return memtest_preserving(mem, bytes, passes, nullptr, nullptr);
     } else {
-        return memtest_destructive(mem, bytes, passes, NULL, NULL);
+        return memtest_destructive(mem, bytes, passes, nullptr, nullptr);
     }
 }
 
 void memtestWithResult(void *mem, size_t bytes, int passes, bool preserving,
                        memtestResult *result) {
     if (preserving) {
-        memtest_preserving(mem, bytes, passes, NULL, result);
+        memtest_preserving(mem, bytes, passes, nullptr, result);
     } else {
-        memtest_destructive(mem, bytes, passes, NULL, result);
+        memtest_destructive(mem, bytes, passes, nullptr, result);
     }
 }
 
@@ -628,7 +628,7 @@ size_t memtestAllocAndTest(size_t megabytes, int passes,
         return (size_t)-1; /* Allocation failure */
     }
 
-    size_t errors = memtest_destructive(mem, bytes, passes, NULL, result);
+    size_t errors = memtest_destructive(mem, bytes, passes, nullptr, result);
     free(mem);
     return errors;
 }
@@ -725,7 +725,7 @@ size_t memtestProcessMemory(int passes) {
     size_t errors = 0;
     for (int i = 0; i < regions; i++) {
         errors += memtest_preserving((void *)start_vect[i], size_vect[i],
-                                     passes, NULL, NULL);
+                                     passes, nullptr, nullptr);
     }
 
     return errors;
@@ -775,8 +775,8 @@ size_t memtestProcessMemory(int passes) {
 
         size_t size = end_addr - start_addr;
         if (size >= 8192) {
-            errors += memtest_preserving((void *)start_addr, size, passes, NULL,
-                                         NULL);
+            errors += memtest_preserving((void *)start_addr, size, passes,
+                                         nullptr, nullptr);
         }
     }
 
@@ -1096,10 +1096,11 @@ static int memtest_run_unit_tests(void) {
 
     TEST("command line rejects malformed sizes and passes") {
         static const char *bad[][2] = {
-            {"abc", NULL}, {"12x", NULL},     {"-1", NULL},
-            {"0", NULL},   {"1048577", NULL}, {"99999999999999999999", NULL},
-            {"1", "0"},    {"1", "1001"},     {"1", "2x"},
-            {"1", "-3"},
+            {"abc", nullptr},     {"12x", nullptr},
+            {"-1", nullptr},      {"0", nullptr},
+            {"1048577", nullptr}, {"99999999999999999999", nullptr},
+            {"1", "0"},           {"1", "1001"},
+            {"1", "2x"},          {"1", "-3"},
         };
         for (size_t i = 0; i < countof(bad); i++) {
             char *argv[3] = {"memtest", (char *)bad[i][0], (char *)bad[i][1]};

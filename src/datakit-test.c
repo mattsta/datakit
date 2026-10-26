@@ -213,11 +213,11 @@ static bool testMatches(const TestEntry *t, const char *name) {
 }
 
 /* Macro helpers for concise test registration */
-#define T(n) {#n, NULL, n##Test, false, NULL}
-#define T_A(n, a) {#n, a, n##Test, false, NULL}
-#define T_ADJ(n) {#n, NULL, n##Test, true, NULL}
-#define T_A_ADJ(n, a) {#n, a, n##Test, true, NULL}
-#define T_END {NULL, NULL, NULL, false, NULL}
+#define T(n) {#n, nullptr, n##Test, false, nullptr}
+#define T_A(n, a) {#n, a, n##Test, false, nullptr}
+#define T_ADJ(n) {#n, nullptr, n##Test, true, nullptr}
+#define T_A_ADJ(n, a) {#n, a, n##Test, true, nullptr}
+#define T_END {nullptr, nullptr, nullptr, false, nullptr}
 
 /* Wrapper for void(void) benchmark functions */
 static int mdsBenchWrapper(int, char *[]) {
@@ -245,7 +245,7 @@ static int dkTestSecureZeroTest(int, char *[]) {
     for (size_t i = 0; i < countof(sizes); i++) {
         size_t n = sizes[i];
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(n);
-        if (buf == NULL) {
+        if (buf == nullptr) {
             printf("dkTestSecureZero: alloc failed at n=%zu\n", n);
             return 1;
         }
@@ -272,8 +272,8 @@ static int dkTestSecureZeroTest(int, char *[]) {
     }
 
     /* Guard paths: must be no-ops, not crash. */
-    dkSecureZero(NULL, 0);
-    dkSecureZero(NULL, 16);
+    dkSecureZero(nullptr, 0);
+    dkSecureZero(nullptr, 16);
     uint8_t guard[8];
     memset(guard, 0xCD, sizeof(guard));
     dkSecureZero(guard, 0);
@@ -315,7 +315,7 @@ static int testCtMemEqStructuralTest(int, char *[]) {
         const size_t n = kLens[li];
         cleanerName(zfree, Bytes) uint8_t *a = (uint8_t *)zmalloc(n);
         cleanerName(zfree, Bytes) uint8_t *b = (uint8_t *)zmalloc(n);
-        if (a == NULL || b == NULL) {
+        if (a == nullptr || b == nullptr) {
             printf("testCtMemEqStructural: alloc failed at n=%zu\n", n);
             return 1;
         }
@@ -554,7 +554,7 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
 
                 /* A second reap of a gone child reports gone (ECHILD)
                  * instead of blocking. */
-                PEXPECT(OSRegulateProcessReapNow(child, NULL),
+                PEXPECT(OSRegulateProcessReapNow(child, nullptr),
                         "already-reaped child reports gone");
             }
         }
@@ -635,7 +635,7 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
         if (waiter == 0) {
             const pid_t target = fork();
             if (target == 0) {
-                (void)poll(NULL, 0, 300);
+                (void)poll(nullptr, 0, 300);
                 _exit(kTargetExitCode);
             }
 
@@ -845,7 +845,7 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
                 }
 
                 const OSRegulateDaemonizeStatus st =
-                    OSRegulateDaemonizeUntilReady(kGenerousMs, NULL);
+                    OSRegulateDaemonizeUntilReady(kGenerousMs, nullptr);
                 if (st == OS_REGULATE_DAEMONIZE_CHILD) {
                     if (signals) {
                         OSRegulateDaemonizeSignalReady();
@@ -1054,7 +1054,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
              "the ns clock covers a 2 ms sleep");
     PHEXPECT(c1 > c0, "the counter advances");
 
-    const char *before = setlocale(LC_ALL, NULL);
+    const char *before = setlocale(LC_ALL, nullptr);
     char saved[64];
     snprintf(saved, sizeof(saved), "%s", before ? before : "");
     [[maybe_unused]] volatile uint64_t sink = 0;
@@ -1091,7 +1091,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     PERF_TIMERS_SETUP;
     for (int i = 0; i < kReads; i++) {
         struct timeval tv;
-        gettimeofday(&tv, NULL);
+        gettimeofday(&tv, nullptr);
         acc += (uint64_t)tv.tv_usec;
     }
     PERF_TIMERS_FINISH;
@@ -1102,7 +1102,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
            nowNs, counterNs, gtodNs);
     PHEXPECT(nowNs < 1000 && counterNs < 1000, "a clock read is cheap");
 
-    const char *after = setlocale(LC_ALL, NULL);
+    const char *after = setlocale(LC_ALL, nullptr);
     PHEXPECT(after && strcmp(saved, after) == 0,
              "printing leaves the process locale alone");
 #undef PHEXPECT
@@ -1166,7 +1166,7 @@ static int dkTestWakeFdTest(int, char *[]) {
     WEXPECT(raise(SIGUSR1) == 0, "raise SIGUSR1");
     WEXPECT(OSRegulateWakeAwaitMs(rd, kGenerousMs),
             "wake raised inside a signal handler is delivered");
-    (void)sigaction(SIGUSR1, &old, NULL);
+    (void)sigaction(SIGUSR1, &old, nullptr);
     dkTestWakeFdHandlerWr = -1;
 
     errno = EBUSY;
@@ -1320,7 +1320,7 @@ static void *dkTestGateHolderMain(void *arg) {
     dkTestGateSet(c, &c->holding);
     (void)dkTestGateAwait(c, &c->release, DK_TEST_GATE_GENEROUS_MS);
     pthread_mutex_unlock(&c->gate->mu);
-    return NULL;
+    return nullptr;
 }
 
 static void *dkTestGateExiterMain(void *arg) {
@@ -1328,7 +1328,7 @@ static void *dkTestGateExiterMain(void *arg) {
     inflightGateEnter(c->gate);
     inflightGateExit(c->gate);
     dkTestGateSet(c, &c->exitDone);
-    return NULL;
+    return nullptr;
 }
 
 static void *dkTestGateArmedExiterMain(void *arg) {
@@ -1337,7 +1337,7 @@ static void *dkTestGateArmedExiterMain(void *arg) {
      * the window between its count read and its wait. */
     (void)dkTestGateAwait(c, &c->armed, DK_TEST_GATE_GENEROUS_MS);
     inflightGateExit(c->gate);
-    return NULL;
+    return nullptr;
 }
 
 static void *dkTestGateWaiterMain(void *arg) {
@@ -1345,7 +1345,7 @@ static void *dkTestGateWaiterMain(void *arg) {
     dkTestGateSet(c, &c->armed);
     c->verdict = inflightGateAwaitZeroMs(c->gate, DK_TEST_GATE_GENEROUS_MS);
     dkTestGateSet(c, &c->waitDone);
-    return NULL;
+    return nullptr;
 }
 
 /* Drain-then-free rounds. Each round allocates a gate, enters it, has
@@ -1371,7 +1371,7 @@ static void *dkTestGateFreeExiterMain(void *arg) {
                                              memory_order_acquire)) == seen) {
             /* @sync: relaxed hint */
             if (atomic_load_explicit(&c->quit, memory_order_relaxed)) {
-                return NULL;
+                return nullptr;
             }
         }
         seen = round;
@@ -1416,7 +1416,7 @@ static int dkTestInflightGateTest(int, char *[]) {
     dkTestGateCtl ctl;
     memset(&ctl, 0, sizeof(ctl));
     ctl.gate = &gate;
-    pthread_mutex_init(&ctl.mu, NULL);
+    pthread_mutex_init(&ctl.mu, nullptr);
     monotonicCondInit(&ctl.cv);
 
     /* --- Property 1: an exit-to-zero with no waiter never broadcasts.
@@ -1427,17 +1427,19 @@ static int dkTestInflightGateTest(int, char *[]) {
     {
         pthread_t holder;
         pthread_t exiter;
-        GEXPECT(pthread_create(&holder, NULL, dkTestGateHolderMain, &ctl) == 0,
+        GEXPECT(pthread_create(&holder, nullptr, dkTestGateHolderMain, &ctl) ==
+                    0,
                 "holder thread started");
         GEXPECT(dkTestGateAwait(&ctl, &ctl.holding, DK_TEST_GATE_GENEROUS_MS),
                 "holder took the gate mutex");
-        GEXPECT(pthread_create(&exiter, NULL, dkTestGateExiterMain, &ctl) == 0,
+        GEXPECT(pthread_create(&exiter, nullptr, dkTestGateExiterMain, &ctl) ==
+                    0,
                 "exiter thread started");
         GEXPECT(dkTestGateAwait(&ctl, &ctl.exitDone, DK_TEST_GATE_GENEROUS_MS),
                 "exit-to-zero with no waiter completed under a held mutex");
         dkTestGateSet(&ctl, &ctl.release);
-        pthread_join(exiter, NULL);
-        pthread_join(holder, NULL);
+        pthread_join(exiter, nullptr);
+        pthread_join(holder, nullptr);
         GEXPECT(inflightGateDepth(&gate) == 0, "no-waiter exit left it idle");
     }
 
@@ -1450,12 +1452,13 @@ static int dkTestInflightGateTest(int, char *[]) {
         pthread_mutex_unlock(&ctl.mu);
 
         pthread_t waiter;
-        GEXPECT(pthread_create(&waiter, NULL, dkTestGateWaiterMain, &ctl) == 0,
+        GEXPECT(pthread_create(&waiter, nullptr, dkTestGateWaiterMain, &ctl) ==
+                    0,
                 "waiter thread started");
         GEXPECT(dkTestGateAwait(&ctl, &ctl.armed, DK_TEST_GATE_GENEROUS_MS),
                 "waiter registered");
         inflightGateExit(&gate);
-        pthread_join(waiter, NULL);
+        pthread_join(waiter, nullptr);
         GEXPECT(ctl.verdict == INFLIGHT_GATE_IDLE,
                 "the last exit woke the waiter");
     }
@@ -1480,7 +1483,8 @@ static int dkTestInflightGateTest(int, char *[]) {
         pthread_mutex_unlock(&ctl.mu);
 
         pthread_t waiter;
-        GEXPECT(pthread_create(&waiter, NULL, dkTestGateWaiterMain, &ctl) == 0,
+        GEXPECT(pthread_create(&waiter, nullptr, dkTestGateWaiterMain, &ctl) ==
+                    0,
                 "wake-all waiter started");
         /* Registration happens under the gate mutex and the park releases
          * it, so once the count is visible the broadcast below (which
@@ -1499,7 +1503,7 @@ static int dkTestInflightGateTest(int, char *[]) {
         GEXPECT(!dkTestGateAwait(&ctl, &ctl.waitDone, DK_TEST_GATE_SHORT_MS),
                 "a wake while busy does not release the waiter");
         inflightGateExit(&gate);
-        pthread_join(waiter, NULL);
+        pthread_join(waiter, nullptr);
         GEXPECT(ctl.waitDone && ctl.verdict == INFLIGHT_GATE_IDLE,
                 "and the last exit after the wakes releases it");
     }
@@ -1512,7 +1516,7 @@ static int dkTestInflightGateTest(int, char *[]) {
         pthread_mutex_unlock(&ctl.mu);
 
         pthread_t racer;
-        if (pthread_create(&racer, NULL, dkTestGateArmedExiterMain, &ctl) !=
+        if (pthread_create(&racer, nullptr, dkTestGateArmedExiterMain, &ctl) !=
             0) {
             GEXPECT(false, "race exiter thread started");
             inflightGateExit(&gate);
@@ -1522,7 +1526,7 @@ static int dkTestInflightGateTest(int, char *[]) {
         dkTestGateSet(&ctl, &ctl.armed);
         const inflightGateVerdict v =
             inflightGateAwaitZeroMs(&gate, DK_TEST_GATE_GENEROUS_MS);
-        pthread_join(racer, NULL);
+        pthread_join(racer, nullptr);
         if (v != INFLIGHT_GATE_IDLE) {
             GEXPECT(false, "an exit inside the waiter's window was lost");
             break;
@@ -1536,8 +1540,8 @@ static int dkTestInflightGateTest(int, char *[]) {
         dkTestGateFreeCtl fc;
         memset(&fc, 0, sizeof(fc));
         pthread_t exiter;
-        GEXPECT(pthread_create(&exiter, NULL, dkTestGateFreeExiterMain, &fc) ==
-                    0,
+        GEXPECT(pthread_create(&exiter, nullptr, dkTestGateFreeExiterMain,
+                               &fc) == 0,
                 "drain-then-free exiter started");
         const uint64_t startMs = timeUtilMonotonicMs();
         uint32_t rounds = 0;
@@ -1564,7 +1568,7 @@ static int dkTestInflightGateTest(int, char *[]) {
         }
         /* @sync: relaxed hint */
         atomic_store_explicit(&fc.quit, true, memory_order_relaxed);
-        pthread_join(exiter, NULL);
+        pthread_join(exiter, nullptr);
         GEXPECT(lost == 0, "every drain-then-free round read IDLE");
         GEXPECT(rounds > 0, "drain-then-free ran at least one round");
     }
@@ -1673,7 +1677,7 @@ static const ownedArenaDecl dkOwnedArenaDecl_ = {
     .holdMultiple = DK_OWNED_HOLD_MULTIPLE,
     .nowUs = dkOwnedNowUs_,
     .noteHold = dkOwnedNoteHold_,
-    .noteCtx = NULL,
+    .noteCtx = nullptr,
 };
 
 static const ownedCellDecl dkOwnedCellDecl_ = {
@@ -1692,7 +1696,7 @@ static const ownedCellDecl dkOwnedDeclineDecl_ = {
     .name = "datakit.selftest.cell.declines",
     .form = OWNED_CELL_INDIRECT,
     .discipline = OWNED_WRITER_SERIALIZED,
-    .writer_ok = NULL,
+    .writer_ok = nullptr,
     .note_violation = dkOwnedNoteViolation_,
     .release = dkOwnedRelease_,
     .describe = dkOwnedDescribe_,
@@ -1723,7 +1727,7 @@ static void dkSlotRelease_(void *cargo) {
 static void dkSlotNote_(void *, const ownedSlotDecl *decl, ownedSlotEvent,
                         ownedSlotState displaced, uint64_t reading) {
     g_dkSlotNotes++;
-    g_dkSlotNoteName = decl ? decl->name : NULL;
+    g_dkSlotNoteName = decl ? decl->name : nullptr;
     g_dkSlotNoteDisplaced = (int)displaced;
     g_dkSlotNoteReading = reading;
 }
@@ -1733,21 +1737,21 @@ static ownedStateRow g_dkSlotRowB;
 static const ownedSlotDecl dkSlotDeclA_ = {
     .name = "datakit.selftest.slot.a",
     .note = dkSlotNote_,
-    .noteCtx = NULL,
+    .noteCtx = nullptr,
     .row = &g_dkSlotRowA,
 };
 static const ownedSlotDecl dkSlotDeclB_ = {
     .name = "datakit.selftest.slot.b",
     .note = dkSlotNote_,
-    .noteCtx = NULL,
+    .noteCtx = nullptr,
     .row = &g_dkSlotRowB,
 };
 /* NULL note: counts only. */
 static ownedStateRow g_dkSlotRowQuiet;
 static const ownedSlotDecl dkSlotDeclQuiet_ = {
     .name = "datakit.selftest.slot.quiet",
-    .note = NULL,
-    .noteCtx = NULL,
+    .note = nullptr,
+    .noteCtx = nullptr,
     .row = &g_dkSlotRowQuiet,
 };
 
@@ -1772,9 +1776,9 @@ static const ownedSeqDecl dkSeqDeclOdd_ = {
     .versions = 2,
     .version_bytes = 20,
     .discipline = OWNED_WRITER_CLAIM,
-    .writer_ok = NULL,
-    .note_violation = NULL,
-    .row = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
+    .row = nullptr,
 };
 /* N = 4, CLAIM, NULL predicate. */
 static const ownedSeqDecl dkSeqDeclA_ = {
@@ -1782,8 +1786,8 @@ static const ownedSeqDecl dkSeqDeclA_ = {
     .versions = 4,
     .version_bytes = DK_SEQ_BYTES,
     .discipline = OWNED_WRITER_CLAIM,
-    .writer_ok = NULL,
-    .note_violation = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
     .row = &dkSeqRowA_,
 };
 /* N = 1: the classic seqlock, used by the nested and overlap cases. */
@@ -1792,8 +1796,8 @@ static const ownedSeqDecl dkSeqDeclOne_ = {
     .versions = 1,
     .version_bytes = DK_SEQ_BYTES,
     .discipline = OWNED_WRITER_CLAIM,
-    .writer_ok = NULL,
-    .note_violation = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
     .row = &dkSeqRowB_,
 };
 /* A checked writer sharing row A, so both declarations count on it. */
@@ -1813,9 +1817,9 @@ static const ownedSeqDecl dkSeqDeclWide_ = {
     .versions = 1024,
     .version_bytes = DK_SEQ_BYTES,
     .discipline = OWNED_WRITER_CLAIM,
-    .writer_ok = NULL,
-    .note_violation = NULL,
-    .row = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
+    .row = nullptr,
 };
 
 /* A payload whose every byte names its writer, so a mixed copy is
@@ -1897,7 +1901,7 @@ static void *dkSeqWriterMain_(void *arg) {
     for (uint32_t i = 0; i < w->count; i++) {
         (void)ownedSeqPublish(w->seq, payload, sizeof(payload));
     }
-    return NULL;
+    return nullptr;
 }
 /* Reader thread: every VALID read must be one writer's bytes. */
 typedef struct dkSeqReaderCtx {
@@ -1951,7 +1955,7 @@ static void *dkSeqReaderMain_(void *arg) {
             }
         }
     } while (!stopped);
-    return NULL;
+    return nullptr;
 }
 
 /* Deterministic schedule: writer A enters the one version (N == 1) and,
@@ -1983,7 +1987,7 @@ static void *dkSeqHoldWriterA_(void *arg) {
     dkSeqHoldCtx *h = arg;
     dkSeqHoldFill f = {.aInside = &h->aInside, .bDone = &h->bDone};
     (void)ownedSeqPublishWith(h->seq, DK_SEQ_BYTES, dkSeqHoldFillFn_, &f);
-    return NULL;
+    return nullptr;
 }
 static void *dkSeqHoldWriterB_(void *arg) {
     dkSeqHoldCtx *h = arg;
@@ -1996,7 +2000,7 @@ static void *dkSeqHoldWriterB_(void *arg) {
     (void)ownedSeqPublish(h->seq, payload, sizeof(payload));
     /* @sync: release test.seqHold.bDone */
     atomic_store_explicit(&h->bDone, true, memory_order_release);
-    return NULL;
+    return nullptr;
 }
 
 /* READERS_ONLY release rule.  The default-rule block above uses a
@@ -2014,7 +2018,7 @@ static const ownedArenaDecl dkOwnedRoArenaDecl_ = {
     .holdMultiple = 0,
     .nowUs = dkOwnedNowUs_,
     .noteHold = dkOwnedRoNoteHold_,
-    .noteCtx = NULL,
+    .noteCtx = nullptr,
     .release = OWNED_RELEASE_READERS_ONLY,
     .reportHorizonUs = DK_OWNED_RO_HORIZON_US,
 };
@@ -2157,7 +2161,7 @@ static void *dkOwnedStallReaderMain_(void *arg) {
     /* Under ASan a premature release is a use-after-free right here */
     s->intactAfterStall = o->magic == DK_OWNED_SOAK_MAGIC;
     ownedArenaExit(s->arena);
-    return NULL;
+    return nullptr;
 }
 
 static uint64_t dkOwnedSoakNowUs_(void) {
@@ -2188,10 +2192,10 @@ static const ownedCellDecl dkOwnedSoakCellDecl_ = {
     .name = "datakit.selftest.cell.soak",
     .form = OWNED_CELL_INDIRECT,
     .discipline = OWNED_WRITER_CLASS,
-    .writer_ok = NULL,
-    .note_violation = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
     .release = dkOwnedSoakRelease_,
-    .describe = NULL,
+    .describe = nullptr,
     .oom = OWNED_OOM_LEAK,
 };
 
@@ -2200,10 +2204,10 @@ static const ownedCellDecl dkOwnedRaceCellDecl_ = {
     .name = "datakit.selftest.cell.race",
     .form = OWNED_CELL_INDIRECT,
     .discipline = OWNED_WRITER_INSTANCE,
-    .writer_ok = NULL,
-    .note_violation = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
     .release = dkOwnedSoakRelease_,
-    .describe = NULL,
+    .describe = nullptr,
     .oom = OWNED_OOM_FREE,
 };
 
@@ -2235,7 +2239,7 @@ static void *dkOwnedSoakReaderMain_(void *arg) {
         }
         ownedArenaExit(r->arena);
     }
-    return NULL;
+    return nullptr;
 }
 
 static void *dkOwnedRaceWriterMain_(void *arg) {
@@ -2243,7 +2247,7 @@ static void *dkOwnedRaceWriterMain_(void *arg) {
     for (uint32_t i = 0; i < DK_OWNED_CELL_RACE_PUBLISHES; i++) {
         ownedCellPublish(c, dkOwnedSoakObjNew_(i));
     }
-    return NULL;
+    return nullptr;
 }
 
 static int dkTestOwnedArenaSoak(void) {
@@ -2268,7 +2272,7 @@ static int dkTestOwnedArenaSoak(void) {
         ownedArena arena;
         ownedArenaInit(&arena, &dkOwnedSoakArenaDecls_[rule]);
         ownedCell cell;
-        ownedCellInit(&cell, &dkOwnedSoakCellDecl_, NULL, &arena);
+        ownedCellInit(&cell, &dkOwnedSoakCellDecl_, nullptr, &arena);
         _Atomic bool stop = false;
         _Atomic uint32_t readersReading = 0;
         dkOwnedSoakReader readers[DK_OWNED_SOAK_READERS];
@@ -2279,7 +2283,7 @@ static int dkTestOwnedArenaSoak(void) {
                                              .cell = &cell,
                                              .stop = &stop,
                                              .readersReading = &readersReading};
-            if (pthread_create(&th[i], NULL, dkOwnedSoakReaderMain_,
+            if (pthread_create(&th[i], nullptr, dkOwnedSoakReaderMain_,
                                &readers[i]) != 0) {
                 break;
             }
@@ -2311,7 +2315,7 @@ static int dkTestOwnedArenaSoak(void) {
         uint64_t reads = 0;
         uint64_t bad = 0;
         for (int i = 0; i < started; i++) {
-            pthread_join(th[i], NULL);
+            pthread_join(th[i], nullptr);
             reads += readers[i].reads;
             bad += readers[i].bad;
         }
@@ -2341,7 +2345,8 @@ static int dkTestOwnedArenaSoak(void) {
                                   memory_order_relaxed);
             pthread_t st;
             const bool stallStarted =
-                pthread_create(&st, NULL, dkOwnedStallReaderMain_, &stall) == 0;
+                pthread_create(&st, nullptr, dkOwnedStallReaderMain_, &stall) ==
+                0;
             SOAKEXPECT(stallStarted, "stalled reader started");
             /* @sync: acquire test.ownedStall.held */
             while (stallStarted &&
@@ -2368,7 +2373,7 @@ static int dkTestOwnedArenaSoak(void) {
             /* @sync: release test.ownedStall.resume */
             atomic_store_explicit(&stall.resume, true, memory_order_release);
             if (stallStarted) {
-                pthread_join(st, NULL);
+                pthread_join(st, nullptr);
             }
             usleep(1000);
             ownedArenaDrain(&arena);
@@ -2395,19 +2400,19 @@ static int dkTestOwnedArenaSoak(void) {
      * release reads the displaced object's fields. */
     {
         ownedCell cell;
-        ownedCellInit(&cell, &dkOwnedRaceCellDecl_, NULL, NULL);
+        ownedCellInit(&cell, &dkOwnedRaceCellDecl_, nullptr, nullptr);
         pthread_t th[2];
         int started = 0;
         for (int i = 0; i < 2; i++) {
-            if (pthread_create(&th[i], NULL, dkOwnedRaceWriterMain_, &cell) !=
-                0) {
+            if (pthread_create(&th[i], nullptr, dkOwnedRaceWriterMain_,
+                               &cell) != 0) {
                 break;
             }
             started++;
         }
         SOAKEXPECT(started == 2, "racing writers started");
         for (int i = 0; i < started; i++) {
-            pthread_join(th[i], NULL);
+            pthread_join(th[i], nullptr);
         }
         ownedCellDestruct(&cell);
     }
@@ -2458,11 +2463,11 @@ static int dkTestOwnedStateTest(int, char *[]) {
         const uint64_t releasesBefore = g_dkOwnedReleases;
         ownedArenaRetire(&never, &freed, dkOwnedRelease_, dkOwnedDescribe_,
                          OWNED_OOM_FREE);
-        ownedArenaRetire(NULL, &freedNull, dkOwnedRelease_, dkOwnedDescribe_,
+        ownedArenaRetire(nullptr, &freedNull, dkOwnedRelease_, dkOwnedDescribe_,
                          OWNED_OOM_FREE);
         ownedArenaRetire(&never, &kept, dkOwnedRelease_, dkOwnedDescribe_,
                          OWNED_OOM_LEAK);
-        ownedArenaRetire(&never, NULL, dkOwnedRelease_, dkOwnedDescribe_,
+        ownedArenaRetire(&never, nullptr, dkOwnedRelease_, dkOwnedDescribe_,
                          OWNED_OOM_FREE);
         OEXPECT(freed.released && freedNull.released && !kept.released &&
                     g_dkOwnedReleases == releasesBefore + 2 &&
@@ -2563,7 +2568,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
             .holdMultiple = UINT64_MAX / DK_OWNED_GRACE_US + 1,
             .nowUs = dkOwnedNowUs_,
             .noteHold = dkOwnedNoteHold_,
-            .noteCtx = NULL,
+            .noteCtx = nullptr,
         };
         ownedArena far;
         ownedArenaInit(&far, &farDecl);
@@ -2584,8 +2589,9 @@ static int dkTestOwnedStateTest(int, char *[]) {
 
     /* --- 5 and 6: the cell. --- */
     ownedCell cell;
-    ownedCellInit(&cell, &dkOwnedCellDecl_, NULL, &g_dkOwnedArena);
-    OEXPECT(ownedCellRead(&cell) == NULL, "an unpublished cell reads absent");
+    ownedCellInit(&cell, &dkOwnedCellDecl_, nullptr, &g_dkOwnedArena);
+    OEXPECT(ownedCellRead(&cell) == nullptr,
+            "an unpublished cell reads absent");
 
     dkOwnedCargo v1 = {.id = 41, .released = false};
     dkOwnedCargo v2 = {.id = 42, .released = false};
@@ -2619,7 +2625,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
     g_dkOwnedWriterOk = true;
 
     ownedCell declining;
-    ownedCellInit(&declining, &dkOwnedDeclineDecl_, NULL, &g_dkOwnedArena);
+    ownedCellInit(&declining, &dkOwnedDeclineDecl_, nullptr, &g_dkOwnedArena);
     dkOwnedCargo v4 = {.id = 44, .released = false};
     g_dkOwnedWriterOk = false; /* would fail, if anything asked */
     const uint64_t decliningDiag = dkDiagCount();
@@ -2632,12 +2638,12 @@ static int dkTestOwnedStateTest(int, char *[]) {
     g_dkOwnedWriterOk = true;
 
     ownedCell word;
-    ownedCellInit(&word, &dkOwnedInlineDecl_, NULL, NULL);
+    ownedCellInit(&word, &dkOwnedInlineDecl_, nullptr, nullptr);
     OEXPECT(ownedCellLoad(&word) == 0, "an inline cell starts absent");
     ownedCellStore(&word, UINT64_C(0x5eed));
     OEXPECT(ownedCellLoad(&word) == UINT64_C(0x5eed),
             "the inline publication reads back");
-    OEXPECT(ownedCellRead(&word) == NULL,
+    OEXPECT(ownedCellRead(&word) == nullptr,
             "an inline cell has no indirect value to hand out");
 
     ownedCellDestruct(&cell);
@@ -2800,7 +2806,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
                         OWNED_SLOT_CLAIMED &&
                     ownedSlotRetireMetClaimedTotal(&dkSlotDeclB_) == 1 &&
                     ownedSlotRetireMetClaimedTotal(&dkSlotDeclA_) == 1 &&
-                    ownedStateRowAt(0) != NULL,
+                    ownedStateRowAt(0) != nullptr,
                 "slot: each declaration reads its own count");
         (void)ownedSlotPublish(&sd, false, dkSlotRelease_, &cargo);
 
@@ -2854,7 +2860,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
 
         /* Publish without a claim is a misuse: it returns false and
          * leaves the state and the cargo alone. */
-        ownedSlot sm = OWNED_SLOT_INIT(NULL);
+        ownedSlot sm = OWNED_SLOT_INIT(nullptr);
         g_dkSlotReleases = 0;
         const uint64_t unclaimedDiag = dkDiagCount();
         OEXPECT(!ownedSlotPublish(&sm, true, dkSlotRelease_, &cargo) &&
@@ -2880,7 +2886,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
          * whose claim was refused after a retire of ARMED (the retire
          * already released), and a claimant repeating its Publish after
          * releasing once. */
-        ownedSlot sr = OWNED_SLOT_INIT(NULL);
+        ownedSlot sr = OWNED_SLOT_INIT(nullptr);
         g_dkSlotReleases = 0;
         OEXPECT(ownedSlotClaim(&sr, &prior) &&
                     ownedSlotPublish(&sr, true, dkSlotRelease_, &cargo) &&
@@ -2892,7 +2898,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
                     g_dkSlotReleases == 1 &&
                     ownedSlotLoad(&sr) == OWNED_SLOT_RETIRED,
                 "slot: a refused claimant's Publish releases nothing");
-        ownedSlot sp = OWNED_SLOT_INIT(NULL);
+        ownedSlot sp = OWNED_SLOT_INIT(nullptr);
         g_dkSlotReleases = 0;
         OEXPECT(ownedSlotClaim(&sp, &prior) &&
                     ownedSlotRetire(&sp, dkSlotRelease_, &cargo) ==
@@ -2925,7 +2931,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
         {
             ownedSeq so;
             static _Atomic uint64_t storageOdd[OWNED_SEQ_STORAGE_WORDS(2, 20)];
-            ownedSeqInit(&so, &dkSeqDeclOdd_, NULL, storageOdd);
+            ownedSeqInit(&so, &dkSeqDeclOdd_, nullptr, storageOdd);
             uint8_t src[20];
             uint8_t dst[20];
             for (size_t len = 0; len <= 20; len++) {
@@ -2961,10 +2967,10 @@ static int dkTestOwnedStateTest(int, char *[]) {
         ownedSeq sa;
         cleanerName(zfree, Bytes) uint8_t *storageA =
             (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclA_));
-        OEXPECT(storageA != NULL && ownedSeqStorageBytes(&dkSeqDeclA_) ==
-                                        4u * (16u + DK_SEQ_BYTES),
+        OEXPECT(storageA != nullptr && ownedSeqStorageBytes(&dkSeqDeclA_) ==
+                                           4u * (16u + DK_SEQ_BYTES),
                 "seq: the stride is 16 + roundup8(version_bytes)");
-        ownedSeqInit(&sa, &dkSeqDeclA_, NULL, storageA);
+        ownedSeqInit(&sa, &dkSeqDeclA_, nullptr, storageA);
         const uint64_t pubBase = ownedSeqPublishedTotal();
         const uint64_t tornBase = ownedSeqTornReadsTotal();
         const uint64_t overBase = ownedSeqOverwrittenReadsTotal();
@@ -3028,8 +3034,8 @@ static int dkTestOwnedStateTest(int, char *[]) {
                 .versions = 4,
                 .version_bytes = sizeof(uint64_t),
                 .discipline = OWNED_WRITER_CLAIM,
-                .writer_ok = NULL,
-                .note_violation = NULL,
+                .writer_ok = nullptr,
+                .note_violation = nullptr,
                 .row = &wordRow,
             };
             static _Atomic uint64_t
@@ -3087,7 +3093,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
         {
             const uint64_t assignedBefore = ownedSeqAssigned(&sa);
             const uint64_t pubBefore = ownedSeqPublishedTotal();
-            OEXPECT(!ownedSeqPublish(&sa, NULL, DK_SEQ_BYTES) &&
+            OEXPECT(!ownedSeqPublish(&sa, nullptr, DK_SEQ_BYTES) &&
                         ownedSeqAssigned(&sa) == assignedBefore &&
                         ownedSeqPublishedTotal() == pubBefore,
                     "seq: publish(NULL, len > 0) is refused, no number "
@@ -3095,7 +3101,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
             /* The same holds for PublishWith without a fill: the version
              * would otherwise read VALID with an older publication's
              * bytes. */
-            OEXPECT(!ownedSeqPublishWith(&sa, 16, NULL, NULL) &&
+            OEXPECT(!ownedSeqPublishWith(&sa, 16, nullptr, nullptr) &&
                         ownedSeqAssigned(&sa) == assignedBefore &&
                         ownedSeqPublishedTotal() == pubBefore &&
                         ownedSeqReadAt(&sa, assignedBefore + 1, out,
@@ -3152,7 +3158,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
         ownedSeq sc;
         cleanerName(zfree, Bytes) uint8_t *storageC =
             (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclChecked_));
-        ownedSeqInit(&sc, &dkSeqDeclChecked_, NULL, storageC);
+        ownedSeqInit(&sc, &dkSeqDeclChecked_, nullptr, storageC);
         const uint64_t violBase = ownedCellWriterViolationTotal();
         const uint64_t rowAPublishedBefore =
             ownedSeqColumnTotal(&dkSeqDeclA_, OWNED_SEQ_C_PUBLISHED);
@@ -3228,14 +3234,14 @@ static int dkTestOwnedStateTest(int, char *[]) {
                 .versions = 4,
                 .version_bytes = DK_SEQ_BYTES,
                 .discipline = OWNED_WRITER_CLAIM,
-                .writer_ok = NULL,
-                .note_violation = NULL,
+                .writer_ok = nullptr,
+                .note_violation = nullptr,
                 .row = &lateRow,
             };
             ownedSeq sl;
             cleanerName(zfree, Bytes) uint8_t *storageL =
                 (uint8_t *)zmalloc(ownedSeqStorageBytes(&lateDecl));
-            ownedSeqInit(&sl, &lateDecl, NULL, storageL);
+            ownedSeqInit(&sl, &lateDecl, nullptr, storageL);
             for (uint8_t i = 1; i <= 5; i++) {
                 dkSeqPayload_(payload, (uint8_t)(0x50 + i));
                 (void)ownedSeqPublish(&sl, payload, sizeof(payload));
@@ -3272,7 +3278,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
             ownedSeq so;
             cleanerName(zfree, Bytes) uint8_t *storageO =
                 (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclOne_));
-            ownedSeqInit(&so, &dkSeqDeclOne_, NULL, storageO);
+            ownedSeqInit(&so, &dkSeqDeclOne_, nullptr, storageO);
             const uint64_t abandonNow = ownedSeqPublishAbandonedTotal();
             dkSeqNestedFill nested = {.seq = &so, .innerNumber = 0};
             const uint64_t outerNumber = ownedSeqAssigned(&so) + 1;
@@ -3319,7 +3325,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
             ownedSeq sw;
             cleanerName(zfree, Bytes) uint8_t *storageW =
                 (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclWide_));
-            ownedSeqInit(&sw, &dkSeqDeclWide_, NULL, storageW);
+            ownedSeqInit(&sw, &dkSeqDeclWide_, nullptr, storageW);
             const uint64_t pubNow = ownedSeqPublishedTotal();
             const uint64_t abandonNow = ownedSeqPublishAbandonedTotal();
             pthread_t th[kWriters];
@@ -3328,12 +3334,12 @@ static int dkTestOwnedStateTest(int, char *[]) {
                 ctx[i] = (dkSeqWriterCtx){.seq = &sw,
                                           .tag = (uint8_t)(0x10 * (i + 1)),
                                           .count = kPerWriter};
-                OEXPECT(pthread_create(&th[i], NULL, dkSeqWriterMain_,
+                OEXPECT(pthread_create(&th[i], nullptr, dkSeqWriterMain_,
                                        &ctx[i]) == 0,
                         "seq mpsc: writer started");
             }
             for (int i = 0; i < kWriters; i++) {
-                pthread_join(th[i], NULL);
+                pthread_join(th[i], nullptr);
             }
             OEXPECT(ownedSeqAssigned(&sw) == kWriters * kPerWriter &&
                         ownedSeqCursor(&sw) == kWriters * kPerWriter &&
@@ -3362,27 +3368,27 @@ static int dkTestOwnedStateTest(int, char *[]) {
             ownedSeq sh;
             cleanerName(zfree, Bytes) uint8_t *storageH =
                 (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclOne_));
-            ownedSeqInit(&sh, &dkSeqDeclOne_, NULL, storageH);
+            ownedSeqInit(&sh, &dkSeqDeclOne_, nullptr, storageH);
             const uint64_t abandonBefore = ownedSeqPublishAbandonedTotal();
             dkSeqHoldCtx hold = {.seq = &sh};
             pthread_t ta;
             pthread_t tb;
             const bool startedA =
-                pthread_create(&ta, NULL, dkSeqHoldWriterA_, &hold) == 0;
+                pthread_create(&ta, nullptr, dkSeqHoldWriterA_, &hold) == 0;
             /* B waits for A to be inside: start it only when A runs */
             const bool startedB =
                 startedA &&
-                pthread_create(&tb, NULL, dkSeqHoldWriterB_, &hold) == 0;
+                pthread_create(&tb, nullptr, dkSeqHoldWriterB_, &hold) == 0;
             if (startedA && !startedB) {
                 /* @sync: release test.seqHold.bDone */
                 atomic_store_explicit(&hold.bDone, true, memory_order_release);
             }
             OEXPECT(startedA && startedB, "seq hold: writers started");
             if (startedB) {
-                pthread_join(tb, NULL);
+                pthread_join(tb, nullptr);
             }
             if (startedA) {
-                pthread_join(ta, NULL);
+                pthread_join(ta, nullptr);
             }
             uint8_t want[DK_SEQ_BYTES];
             dkSeqPayload_(want, 0xA0);
@@ -3417,17 +3423,17 @@ static int dkTestOwnedStateTest(int, char *[]) {
                 ownedSeq sv;
                 cleanerName(zfree, Bytes) uint8_t *storageV =
                     (uint8_t *)zmalloc(ownedSeqStorageBytes(decls[d]));
-                ownedSeqInit(&sv, decls[d], NULL, storageV);
+                ownedSeqInit(&sv, decls[d], nullptr, storageV);
                 const uint64_t pubBefore = ownedSeqPublishedTotal();
                 const uint64_t abandonBefore = ownedSeqPublishAbandonedTotal();
                 _Atomic bool stop = false;
                 _Atomic bool go = false;
                 dkSeqReaderCtx reader = {.seq = &sv,
                                          .stop = &stop,
-                                         .go = schedule == 1 ? &go : NULL};
+                                         .go = schedule == 1 ? &go : nullptr};
                 pthread_t rt;
-                OEXPECT(pthread_create(&rt, NULL, dkSeqReaderMain_, &reader) ==
-                            0,
+                OEXPECT(pthread_create(&rt, nullptr, dkSeqReaderMain_,
+                                       &reader) == 0,
                         "seq overlap: reader started");
                 pthread_t th[kWriters];
                 dkSeqWriterCtx ctx[kWriters];
@@ -3435,21 +3441,21 @@ static int dkTestOwnedStateTest(int, char *[]) {
                     ctx[i] = (dkSeqWriterCtx){.seq = &sv,
                                               .tag = (uint8_t)(0x10 * (i + 1)),
                                               .count = kPerWriter};
-                    OEXPECT(pthread_create(&th[i], NULL, dkSeqWriterMain_,
+                    OEXPECT(pthread_create(&th[i], nullptr, dkSeqWriterMain_,
                                            &ctx[i]) == 0,
                             "seq overlap: writer started");
                     if (schedule == 2) {
-                        pthread_join(th[i], NULL);
+                        pthread_join(th[i], nullptr);
                     }
                 }
                 for (int i = 0; schedule != 2 && i < kWriters; i++) {
-                    pthread_join(th[i], NULL);
+                    pthread_join(th[i], nullptr);
                 }
                 /* @sync: release test.seqOverlap.stop */
                 atomic_store_explicit(&stop, true, memory_order_release);
                 /* @sync: release test.seqOverlap.go */
                 atomic_store_explicit(&go, true, memory_order_release);
-                pthread_join(rt, NULL);
+                pthread_join(rt, nullptr);
                 const uint64_t published = ownedSeqPublishedTotal() - pubBefore;
                 const uint64_t abandoned =
                     ownedSeqPublishAbandonedTotal() - abandonBefore;
@@ -3633,9 +3639,9 @@ static const ownedSeqDecl g_dkGateSeqDecl_ = {
     .versions = DK_GATE_N,
     .version_bytes = sizeof(uint64_t),
     .discipline = OWNED_WRITER_CLAIM,
-    .writer_ok = NULL,
-    .note_violation = NULL,
-    .row = NULL,
+    .writer_ok = nullptr,
+    .note_violation = nullptr,
+    .row = nullptr,
 };
 static _Atomic uint64_t
     g_dkGateSeqStorage_[OWNED_SEQ_STORAGE_WORDS(DK_GATE_N, sizeof(uint64_t))];
@@ -3750,7 +3756,7 @@ static void *dkGateWriterMain_(void *arg) {
         }
         w->appends++;
     }
-    return NULL;
+    return nullptr;
 }
 
 typedef struct dkGateReaderCtx {
@@ -3782,7 +3788,7 @@ static void *dkGateReaderMain_(void *arg) {
             r->unprovable++;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static int dkGateCmpU64_(const void *a, const void *b) {
@@ -3807,7 +3813,7 @@ static uint64_t dkGateRun_(dkGateFlavour flavour, uint32_t readers,
     dkGateWriterCtx w = {.stop = &stop,
                          .converted = flavour != DK_GATE_REFERENCE};
     pthread_t wt;
-    if (pthread_create(&wt, NULL, dkGateWriterMain_, &w) != 0) {
+    if (pthread_create(&wt, nullptr, dkGateWriterMain_, &w) != 0) {
         return UINT64_MAX;
     }
     cleanerName(zfree, GateReaderCtx) dkGateReaderCtx *ctx =
@@ -3815,17 +3821,17 @@ static uint64_t dkGateRun_(dkGateFlavour flavour, uint32_t readers,
     cleanerName(zfree, Threads) pthread_t *th = zcalloc(readers, sizeof(*th));
     for (uint32_t i = 0; i < readers; i++) {
         ctx[i].flavour = flavour;
-        if (pthread_create(&th[i], NULL, dkGateReaderMain_, &ctx[i]) != 0) {
+        if (pthread_create(&th[i], nullptr, dkGateReaderMain_, &ctx[i]) != 0) {
             readers = i;
             break;
         }
     }
     for (uint32_t i = 0; i < readers; i++) {
-        pthread_join(th[i], NULL);
+        pthread_join(th[i], nullptr);
     }
     /* @sync: relaxed hint */
     atomic_store_explicit(&stop, true, memory_order_relaxed);
-    pthread_join(wt, NULL);
+    pthread_join(wt, nullptr);
     const size_t total = (size_t)readers * DK_GATE_WALKS;
     cleanerName(zfree, U64s) uint64_t *all =
         zcalloc(total ? total : 1, sizeof(*all));
@@ -4030,7 +4036,7 @@ static void *dkSharrowOwnerMain_(void *arg) {
     dkSharrowOwner *o = arg;
     o->shared->marks[o->index] = 1;
     sharrowRelease(DkShared, o->shared);
-    return NULL;
+    return nullptr;
 }
 
 static int dkTestSharrowTest(int, char *[]) {
@@ -4079,7 +4085,7 @@ static int dkTestSharrowTest(int, char *[]) {
     g_dkSharrowReleases = 0;
     _Atomic uint64_t outside = 1;
     dkSharrowPtr p = {.checkedOut = &outside};
-    dkSharrowPtr q = {.checkedOut = NULL};
+    dkSharrowPtr q = {.checkedOut = nullptr};
     sharrowRelease(DkPtr, &p);
     SHEXPECT(g_dkSharrowReleases == 0 && outside == 0,
              "a pointer member decrements its pointee");
@@ -4110,15 +4116,15 @@ static int dkTestSharrowTest(int, char *[]) {
         int started = 0;
         for (int i = 0; i < DK_SHARROW_OWNERS; i++) {
             owners[i] = (dkSharrowOwner){.shared = &shared, .index = i};
-            if (pthread_create(&th[i], NULL, dkSharrowOwnerMain_, &owners[i]) !=
-                0) {
+            if (pthread_create(&th[i], nullptr, dkSharrowOwnerMain_,
+                               &owners[i]) != 0) {
                 break;
             }
             started++;
         }
         SHEXPECT(started == DK_SHARROW_OWNERS, "owner threads started");
         for (int i = 0; i < started; i++) {
-            pthread_join(th[i], NULL);
+            pthread_join(th[i], nullptr);
         }
         SHEXPECT(shared.releases == 1 && shared.marksSeen == DK_SHARROW_OWNERS,
                  "one final release, and it saw every owner's write");
@@ -4165,7 +4171,7 @@ static int dkTestChaChaStreamCtxWipeTest(int, char *[]) {
     cleanerName(zfree, ChaChaStreamCtx) chacha20poly1305StreamCtx *ctx =
         (chacha20poly1305StreamCtx *)zmalloc(ctxSize);
     cleanerName(zfree, Bytes) uint8_t *zeroRef = (uint8_t *)zmalloc(ctxSize);
-    if (ctx == NULL || zeroRef == NULL) {
+    if (ctx == nullptr || zeroRef == nullptr) {
         printf("dkTestChaChaStreamCtxWipe: alloc failed\n");
         return 1;
     }
@@ -4183,7 +4189,7 @@ static int dkTestChaChaStreamCtxWipeTest(int, char *[]) {
     cleanerName(zfree, Bytes) uint8_t *plain = (uint8_t *)zmalloc(plainLen);
     cleanerName(zfree, Bytes) uint8_t *cipher = (uint8_t *)zmalloc(plainLen);
     cleanerName(zfree, Bytes) uint8_t *recovered = (uint8_t *)zmalloc(plainLen);
-    if (plain == NULL || cipher == NULL || recovered == NULL) {
+    if (plain == nullptr || cipher == nullptr || recovered == nullptr) {
         printf("dkTestChaChaStreamCtxWipe: plaintext alloc failed\n");
         return 1;
     }
@@ -4286,7 +4292,7 @@ static int dkTestChaChaStreamCtxWipeTest(int, char *[]) {
     /* Case 4: NULL-tag guard wipes ctx */
     memset(ctx, 0xCD, ctxSize);
     chacha20poly1305SealStreamInit(ctx, key, nonce);
-    if (chacha20poly1305SealStreamFinal(ctx, NULL)) {
+    if (chacha20poly1305SealStreamFinal(ctx, nullptr)) {
         printf("dkTestChaChaStreamCtxWipe: SealFinal(NULL) should reject\n");
         failures++;
     }
@@ -4296,7 +4302,7 @@ static int dkTestChaChaStreamCtxWipeTest(int, char *[]) {
 
     memset(ctx, 0xCD, ctxSize);
     chacha20poly1305OpenStreamInit(ctx, key, nonce);
-    if (chacha20poly1305OpenStreamFinal(ctx, NULL)) {
+    if (chacha20poly1305OpenStreamFinal(ctx, nullptr)) {
         printf("dkTestChaChaStreamCtxWipe: OpenFinal(NULL) should reject\n");
         failures++;
     }
@@ -4590,16 +4596,16 @@ static int dkTestAesNiTest(int, char *[]) {
 
     static const a3Vector vectors[] = {
         {"NIST V1 (AES-128 empty PT, empty AAD)", 16,
-         "00000000000000000000000000000000", "000000000000000000000000", NULL,
-         0, NULL, 0, NULL, "58e2fccefa7e3061367f1d57a4e7455a"},
+         "00000000000000000000000000000000", "000000000000000000000000",
+         nullptr, 0, nullptr, 0, nullptr, "58e2fccefa7e3061367f1d57a4e7455a"},
         {"NIST V2 (AES-128 16B zero PT)", 16,
-         "00000000000000000000000000000000", "000000000000000000000000", NULL,
-         0, "00000000000000000000000000000000", 16,
+         "00000000000000000000000000000000", "000000000000000000000000",
+         nullptr, 0, "00000000000000000000000000000000", 16,
          "0388dace60b6a392f328c2b971b2fe78",
          "ab6e47d42cec13bdf53a67b21257bddf"},
         {"NIST V3 (AES-128 real key, 64B PT)", 16,
-         "feffe9928665731c6d6a8f9467308308", "cafebabefacedbaddecaf888", NULL,
-         0,
+         "feffe9928665731c6d6a8f9467308308", "cafebabefacedbaddecaf888",
+         nullptr, 0,
          "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
          "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255",
          64,
@@ -4617,7 +4623,7 @@ static int dkTestAesNiTest(int, char *[]) {
          "5bc94fbc3221a5db94fae95ae7121a47"},
         {"NIST V13 (AES-256 zero key, empty PT)", 32,
          "0000000000000000000000000000000000000000000000000000000000000000",
-         "000000000000000000000000", NULL, 0, NULL, 0, NULL,
+         "000000000000000000000000", nullptr, 0, nullptr, 0, nullptr,
          "530f8afbc74536b9a963b4f1c4cb738b"},
     };
     const size_t n_vectors = countof(vectors);
@@ -4644,11 +4650,11 @@ static int dkTestAesNiTest(int, char *[]) {
             failures++;
         }
         uint8_t nonce[12] = {}, pt[16] = {}, ct[16] = {}, tag[16] = {};
-        if (aesGcmNiSeal(&nk, nonce, NULL, 0, pt, 16, ct, tag)) {
+        if (aesGcmNiSeal(&nk, nonce, nullptr, 0, pt, 16, ct, tag)) {
             printf("dkTestAesNi: ARM stub aesGcmNiSeal must return false\n");
             failures++;
         }
-        if (aesGcmNiOpen(&nk, nonce, NULL, 0, ct, 16, tag, pt)) {
+        if (aesGcmNiOpen(&nk, nonce, nullptr, 0, ct, 16, tag, pt)) {
             printf("dkTestAesNi: ARM stub aesGcmNiOpen must return false\n");
             failures++;
         }
@@ -4664,14 +4670,14 @@ static int dkTestAesNiTest(int, char *[]) {
         a3HexDec(v->nonce_hex, nonce, 12);
 
         uint8_t aad_buf[64];
-        const uint8_t *aad = NULL;
-        if (v->aad_hex != NULL && v->aad_len > 0) {
+        const uint8_t *aad = nullptr;
+        if (v->aad_hex != nullptr && v->aad_len > 0) {
             a3HexDec(v->aad_hex, aad_buf, v->aad_len);
             aad = aad_buf;
         }
         uint8_t pt_buf[128];
-        const uint8_t *pt = NULL;
-        if (v->pt_hex != NULL && v->pt_len > 0) {
+        const uint8_t *pt = nullptr;
+        if (v->pt_hex != nullptr && v->pt_len > 0) {
             a3HexDec(v->pt_hex, pt_buf, v->pt_len);
             pt = pt_buf;
         }
@@ -4681,14 +4687,14 @@ static int dkTestAesNiTest(int, char *[]) {
         aesGcmKey sk;
         aesGcmInit(&sk, key, v->key_len);
         aesGcmSeal(&sk, nonce, aad, v->aad_len, pt, v->pt_len,
-                   v->pt_len > 0 ? scalar_ct : NULL, scalar_tag);
+                   v->pt_len > 0 ? scalar_ct : nullptr, scalar_tag);
 
         uint8_t ni_ct[128] = {}, ni_tag[16] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_AESNI);
         aesGcmKey nk;
         aesGcmInit(&nk, key, v->key_len);
         aesGcmSeal(&nk, nonce, aad, v->aad_len, pt, v->pt_len,
-                   v->pt_len > 0 ? ni_ct : NULL, ni_tag);
+                   v->pt_len > 0 ? ni_ct : nullptr, ni_tag);
 
         if (v->pt_len > 0 && memcmp(scalar_ct, ni_ct, v->pt_len) != 0) {
             printf("dkTestAesNi: CT mismatch on %s\n", v->name);
@@ -4705,7 +4711,7 @@ static int dkTestAesNiTest(int, char *[]) {
             printf("dkTestAesNi: NI tag != NIST on %s\n", v->name);
             failures++;
         }
-        if (v->ct_hex != NULL && v->pt_len > 0) {
+        if (v->ct_hex != nullptr && v->pt_len > 0) {
             uint8_t exp_ct[128];
             a3HexDec(v->ct_hex, exp_ct, v->pt_len);
             if (memcmp(ni_ct, exp_ct, v->pt_len) != 0) {
@@ -4718,16 +4724,16 @@ static int dkTestAesNiTest(int, char *[]) {
         aesGcmSetForceBackend(AES_GCM_FORCE_SCALAR);
         aesGcmInit(&sk, key, v->key_len);
         if (!aesGcmOpen(&sk, nonce, aad, v->aad_len,
-                        v->pt_len > 0 ? scalar_ct : NULL, v->pt_len, scalar_tag,
-                        v->pt_len > 0 ? rec_scalar : NULL)) {
+                        v->pt_len > 0 ? scalar_ct : nullptr, v->pt_len,
+                        scalar_tag, v->pt_len > 0 ? rec_scalar : nullptr)) {
             printf("dkTestAesNi: scalar Open failed on %s\n", v->name);
             failures++;
         }
         aesGcmSetForceBackend(AES_GCM_FORCE_AESNI);
         aesGcmInit(&nk, key, v->key_len);
         if (!aesGcmOpen(&nk, nonce, aad, v->aad_len,
-                        v->pt_len > 0 ? ni_ct : NULL, v->pt_len, ni_tag,
-                        v->pt_len > 0 ? rec_ni : NULL)) {
+                        v->pt_len > 0 ? ni_ct : nullptr, v->pt_len, ni_tag,
+                        v->pt_len > 0 ? rec_ni : nullptr)) {
             printf("dkTestAesNi: NI Open failed on %s\n", v->name);
             failures++;
         }
@@ -4735,7 +4741,8 @@ static int dkTestAesNiTest(int, char *[]) {
             printf("dkTestAesNi: recovered-PT mismatch on %s\n", v->name);
             failures++;
         }
-        if (v->pt_len > 0 && pt != NULL && memcmp(rec_ni, pt, v->pt_len) != 0) {
+        if (v->pt_len > 0 && pt != nullptr &&
+            memcmp(rec_ni, pt, v->pt_len) != 0) {
             printf("dkTestAesNi: NI Open recovered != original on %s\n",
                    v->name);
             failures++;
@@ -4763,11 +4770,11 @@ static int dkTestAesNiTest(int, char *[]) {
         for (size_t s = 0; s < n_sweep; s++) {
             const size_t n = sweep_sizes[s];
             cleanerName(zfree, Bytes) uint8_t *pt =
-                (n > 0) ? (uint8_t *)zmalloc(n) : NULL;
+                (n > 0) ? (uint8_t *)zmalloc(n) : nullptr;
             cleanerName(zfree, Bytes) uint8_t *scalar_ct =
-                (n > 0) ? (uint8_t *)zmalloc(n) : NULL;
+                (n > 0) ? (uint8_t *)zmalloc(n) : nullptr;
             cleanerName(zfree, Bytes) uint8_t *ni_ct =
-                (n > 0) ? (uint8_t *)zmalloc(n) : NULL;
+                (n > 0) ? (uint8_t *)zmalloc(n) : nullptr;
             uint8_t scalar_tag[16], ni_tag[16];
             for (size_t i = 0; i < n; i++) {
                 pt[i] = (uint8_t)((i * 13u) ^ s);
@@ -4776,13 +4783,13 @@ static int dkTestAesNiTest(int, char *[]) {
             aesGcmSetForceBackend(AES_GCM_FORCE_SCALAR);
             aesGcmKey sk;
             aesGcmInit(&sk, key, kl);
-            aesGcmSeal(&sk, nonce, aad, 24, pt, n, n > 0 ? scalar_ct : NULL,
+            aesGcmSeal(&sk, nonce, aad, 24, pt, n, n > 0 ? scalar_ct : nullptr,
                        scalar_tag);
 
             aesGcmSetForceBackend(AES_GCM_FORCE_AESNI);
             aesGcmKey nk;
             aesGcmInit(&nk, key, kl);
-            aesGcmSeal(&nk, nonce, aad, 24, pt, n, n > 0 ? ni_ct : NULL,
+            aesGcmSeal(&nk, nonce, aad, 24, pt, n, n > 0 ? ni_ct : nullptr,
                        ni_tag);
 
             if (n > 0 && memcmp(scalar_ct, ni_ct, n) != 0) {
@@ -4810,15 +4817,15 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
 
     static const a3Vector vectors[] = {
         {"NIST V1", 16, "00000000000000000000000000000000",
-         "000000000000000000000000", NULL, 0, NULL, 0, NULL,
+         "000000000000000000000000", nullptr, 0, nullptr, 0, nullptr,
          "58e2fccefa7e3061367f1d57a4e7455a"},
         {"NIST V2", 16, "00000000000000000000000000000000",
-         "000000000000000000000000", NULL, 0,
+         "000000000000000000000000", nullptr, 0,
          "00000000000000000000000000000000", 16,
          "0388dace60b6a392f328c2b971b2fe78",
          "ab6e47d42cec13bdf53a67b21257bddf"},
         {"NIST V3", 16, "feffe9928665731c6d6a8f9467308308",
-         "cafebabefacedbaddecaf888", NULL, 0,
+         "cafebabefacedbaddecaf888", nullptr, 0,
          "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
          "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255",
          64,
@@ -4827,7 +4834,7 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
          "4d5c2af327cd64a62cf35abd2ba6fab4"},
         {"NIST V13", 32,
          "0000000000000000000000000000000000000000000000000000000000000000",
-         "000000000000000000000000", NULL, 0, NULL, 0, NULL,
+         "000000000000000000000000", nullptr, 0, nullptr, 0, nullptr,
          "530f8afbc74536b9a963b4f1c4cb738b"},
     };
     const size_t n_vectors = countof(vectors);
@@ -4846,14 +4853,14 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
         a3HexDec(v->nonce_hex, nonce, 12);
 
         uint8_t aad_buf[64];
-        const uint8_t *aad = NULL;
-        if (v->aad_hex != NULL && v->aad_len > 0) {
+        const uint8_t *aad = nullptr;
+        if (v->aad_hex != nullptr && v->aad_len > 0) {
             a3HexDec(v->aad_hex, aad_buf, v->aad_len);
             aad = aad_buf;
         }
         uint8_t pt_buf[128];
-        const uint8_t *pt = NULL;
-        if (v->pt_hex != NULL && v->pt_len > 0) {
+        const uint8_t *pt = nullptr;
+        if (v->pt_hex != nullptr && v->pt_len > 0) {
             a3HexDec(v->pt_hex, pt_buf, v->pt_len);
             pt = pt_buf;
         }
@@ -4863,14 +4870,14 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
         aesGcmKey sk;
         aesGcmInit(&sk, key, v->key_len);
         aesGcmSeal(&sk, nonce, aad, v->aad_len, pt, v->pt_len,
-                   v->pt_len > 0 ? scalar_ct : NULL, scalar_tag);
+                   v->pt_len > 0 ? scalar_ct : nullptr, scalar_tag);
 
         uint8_t arm_ct[128] = {}, arm_tag[16] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_ARMCRYPTO);
         aesGcmKey ak;
         aesGcmInit(&ak, key, v->key_len);
         aesGcmSeal(&ak, nonce, aad, v->aad_len, pt, v->pt_len,
-                   v->pt_len > 0 ? arm_ct : NULL, arm_tag);
+                   v->pt_len > 0 ? arm_ct : nullptr, arm_tag);
 
         if (v->pt_len > 0 && memcmp(scalar_ct, arm_ct, v->pt_len) != 0) {
             printf("dkTestAesArmCrypto: CT mismatch on %s\n", v->name);
@@ -5114,7 +5121,8 @@ static int dkTestChaChaSimdParityTest(int, char *[]) {
             (uint8_t *)zmalloc(bufCap);
         cleanerName(zfree, Bytes) uint8_t *ct_simd = (uint8_t *)zmalloc(bufCap);
         cleanerName(zfree, Bytes) uint8_t *rec = (uint8_t *)zmalloc(bufCap);
-        if (pt == NULL || ct_scalar == NULL || ct_simd == NULL || rec == NULL) {
+        if (pt == nullptr || ct_scalar == nullptr || ct_simd == nullptr ||
+            rec == nullptr) {
             failures++;
             goto a6_cleanup;
         }
@@ -5219,7 +5227,8 @@ static int dkTestChaChaSimdParityTest(int, char *[]) {
 
         chacha20SetForceBackend(CHACHA20_FORCE_SCALAR);
         uint8_t one_tag[16];
-        chacha20poly1305Seal(key, nonce, NULL, 0, plain, pl, one_ct, one_tag);
+        chacha20poly1305Seal(key, nonce, nullptr, 0, plain, pl, one_ct,
+                             one_tag);
 
         chacha20SetForceBackend(CHACHA20_FORCE_AUTO);
         chacha20poly1305StreamCtx ctx;
@@ -5306,7 +5315,8 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
     cleanerName(zfree, Bytes) uint8_t *ct_scalar = (uint8_t *)zmalloc(bufCap);
     cleanerName(zfree, Bytes) uint8_t *ct_simd = (uint8_t *)zmalloc(bufCap);
     cleanerName(zfree, Bytes) uint8_t *rec = (uint8_t *)zmalloc(bufCap);
-    if (pt == NULL || ct_scalar == NULL || ct_simd == NULL || rec == NULL) {
+    if (pt == nullptr || ct_scalar == nullptr || ct_simd == nullptr ||
+        rec == nullptr) {
         failures++;
         goto a7_cleanup;
     }
@@ -5353,7 +5363,8 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
         uint8_t tag_scalar[16], tag_simd[16];
         poly1305SetForceBackend(POLY1305_FORCE_SCALAR);
         if (!chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, pt_len,
-                                  pt_len > 0 ? ct_scalar : NULL, tag_scalar)) {
+                                  pt_len > 0 ? ct_scalar : nullptr,
+                                  tag_scalar)) {
             failures++;
             continue;
         }
@@ -5361,7 +5372,8 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
         if (pNeonOk) {
             poly1305SetForceBackend(POLY1305_FORCE_NEON);
             if (!chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, pt_len,
-                                      pt_len > 0 ? ct_simd : NULL, tag_simd)) {
+                                      pt_len > 0 ? ct_simd : nullptr,
+                                      tag_simd)) {
                 failures++;
                 continue;
             }
@@ -5379,8 +5391,8 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
             }
             poly1305SetForceBackend(POLY1305_FORCE_NEON);
             if (!chacha20poly1305Open(key, nonce, aad, sizeof(aad),
-                                      pt_len > 0 ? ct_simd : NULL, pt_len,
-                                      tag_simd, pt_len > 0 ? rec : NULL)) {
+                                      pt_len > 0 ? ct_simd : nullptr, pt_len,
+                                      tag_simd, pt_len > 0 ? rec : nullptr)) {
                 failures++;
             }
             if (pt_len > 0 && memcmp(rec, pt, pt_len) != 0) {
@@ -5390,7 +5402,8 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
         if (pAvx2Ok) {
             poly1305SetForceBackend(POLY1305_FORCE_AVX2);
             if (!chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, pt_len,
-                                      pt_len > 0 ? ct_simd : NULL, tag_simd)) {
+                                      pt_len > 0 ? ct_simd : nullptr,
+                                      tag_simd)) {
                 failures++;
                 continue;
             }
@@ -5633,13 +5646,13 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
     static const a5Vector vectors[] = {
         {"V14", 32,
          "0000000000000000000000000000000000000000000000000000000000000000",
-         "000000000000000000000000", NULL, 0,
+         "000000000000000000000000", nullptr, 0,
          "00000000000000000000000000000000", 16,
          "cea7403d4d606b6e074ec5d3baf39d18",
          "d0d1c8a799996bf0265b98b5d48ab919"},
         {"V15", 32,
          "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308",
-         "cafebabefacedbaddecaf888", NULL, 0,
+         "cafebabefacedbaddecaf888", nullptr, 0,
          "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
          "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255",
          64,
@@ -5665,14 +5678,14 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         a5HexDec(v->key_hex, key, v->key_len);
         a5HexDec(v->nonce_hex, nonce, 12);
         uint8_t aad_buf[64];
-        const uint8_t *aad = NULL;
-        if (v->aad_hex != NULL && v->aad_len > 0) {
+        const uint8_t *aad = nullptr;
+        if (v->aad_hex != nullptr && v->aad_len > 0) {
             a5HexDec(v->aad_hex, aad_buf, v->aad_len);
             aad = aad_buf;
         }
         uint8_t pt_buf[128];
-        const uint8_t *pt = NULL;
-        if (v->pt_hex != NULL && v->pt_len > 0) {
+        const uint8_t *pt = nullptr;
+        if (v->pt_hex != nullptr && v->pt_len > 0) {
             a5HexDec(v->pt_hex, pt_buf, v->pt_len);
             pt = pt_buf;
         }
@@ -5683,7 +5696,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         }
         uint8_t ct[128] = {}, tag[16] = {};
         if (!aesGcmSeal(&k, nonce, aad, v->aad_len, pt, v->pt_len,
-                        v->pt_len > 0 ? ct : NULL, tag)) {
+                        v->pt_len > 0 ? ct : nullptr, tag)) {
             printf("dkTestAesGcmExtendedVectors V[%zu]: Seal failed\n", i);
             failures++;
             continue;
@@ -5695,7 +5708,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
                    i, v->name);
             failures++;
         }
-        if (v->ct_hex != NULL && v->pt_len > 0) {
+        if (v->ct_hex != nullptr && v->pt_len > 0) {
             uint8_t exp_ct[128];
             a5HexDec(v->ct_hex, exp_ct, v->pt_len);
             if (memcmp(ct, exp_ct, v->pt_len) != 0) {
@@ -5706,13 +5719,14 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
             }
         }
         uint8_t rec[128] = {};
-        if (!aesGcmOpen(&k, nonce, aad, v->aad_len, v->pt_len > 0 ? ct : NULL,
-                        v->pt_len, tag, v->pt_len > 0 ? rec : NULL)) {
+        if (!aesGcmOpen(&k, nonce, aad, v->aad_len,
+                        v->pt_len > 0 ? ct : nullptr, v->pt_len, tag,
+                        v->pt_len > 0 ? rec : nullptr)) {
             printf("dkTestAesGcmExtendedVectors V[%zu]: Open failed\n", i);
             failures++;
             continue;
         }
-        if (v->pt_len > 0 && pt != NULL && memcmp(rec, pt, v->pt_len) != 0) {
+        if (v->pt_len > 0 && pt != nullptr && memcmp(rec, pt, v->pt_len) != 0) {
             failures++;
         }
     }
@@ -5748,26 +5762,26 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
             }
             for (size_t ai = 0; ai < n_aads; ai++) {
                 const size_t al = aad_lens[ai];
-                const uint8_t *aad = (al > 0) ? aad_buf : NULL;
+                const uint8_t *aad = (al > 0) ? aad_buf : nullptr;
                 for (size_t si = 0; si < n_sizes; si++) {
                     const size_t n = sweep_sizes[si];
                     cleanerName(zfree, Bytes) uint8_t *pt =
-                        (n > 0) ? zmalloc(n) : NULL;
+                        (n > 0) ? zmalloc(n) : nullptr;
                     cleanerName(zfree, Bytes) uint8_t *ct =
-                        (n > 0) ? zmalloc(n) : NULL;
+                        (n > 0) ? zmalloc(n) : nullptr;
                     cleanerName(zfree, Bytes) uint8_t *rec =
-                        (n > 0) ? zmalloc(n) : NULL;
+                        (n > 0) ? zmalloc(n) : nullptr;
                     for (size_t i = 0; i < n; i++) {
                         pt[i] = (uint8_t)((i * 13u) ^ si ^ ai ^ kl);
                     }
                     uint8_t tag[16];
                     if (!aesGcmSeal(&k, nonce, aad, al, pt, n,
-                                    n > 0 ? ct : NULL, tag)) {
+                                    n > 0 ? ct : nullptr, tag)) {
                         failures++;
                         continue;
                     }
-                    if (!aesGcmOpen(&k, nonce, aad, al, n > 0 ? ct : NULL, n,
-                                    tag, n > 0 ? rec : NULL)) {
+                    if (!aesGcmOpen(&k, nonce, aad, al, n > 0 ? ct : nullptr, n,
+                                    tag, n > 0 ? rec : nullptr)) {
                         failures++;
                     }
                     if (n > 0 && memcmp(pt, rec, n) != 0) {
@@ -5803,7 +5817,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
         uint8_t ct[32], tag[16];
-        aesGcmSeal(&k, nonce, NULL, 0, pt, 32, ct, tag);
+        aesGcmSeal(&k, nonce, nullptr, 0, pt, 32, ct, tag);
 
         uint8_t key2[16];
         memcpy(key2, key, 16);
@@ -5812,7 +5826,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         aesGcmInit(&k2, key2, 16);
         uint8_t rec[32];
         memset(rec, 0x77, sizeof(rec));
-        if (aesGcmOpen(&k2, nonce, NULL, 0, ct, 32, tag, rec)) {
+        if (aesGcmOpen(&k2, nonce, nullptr, 0, ct, 32, tag, rec)) {
             failures++;
         }
         for (size_t i = 0; i < 32; i++) {
@@ -5826,7 +5840,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         memcpy(n2, nonce, 12);
         n2[5] ^= 0x40;
         memset(rec, 0x77, sizeof(rec));
-        if (aesGcmOpen(&k, n2, NULL, 0, ct, 32, tag, rec)) {
+        if (aesGcmOpen(&k, n2, nullptr, 0, ct, 32, tag, rec)) {
             failures++;
         }
 
@@ -5834,7 +5848,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         memcpy(bad_tag, tag, 16);
         bad_tag[3] ^= 0x10;
         memset(rec, 0x77, sizeof(rec));
-        if (aesGcmOpen(&k, nonce, NULL, 0, ct, 32, bad_tag, rec)) {
+        if (aesGcmOpen(&k, nonce, nullptr, 0, ct, 32, bad_tag, rec)) {
             failures++;
         }
         for (size_t i = 0; i < 32; i++) {
@@ -5852,15 +5866,16 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         uint8_t tag[16] = {};
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
-        if (aesGcmSeal(&k, nonce, NULL, 0, NULL,
-                       (size_t)AES_GCM_MAX_PAYLOAD + 1, NULL, tag)) {
+        if (aesGcmSeal(&k, nonce, nullptr, 0, nullptr,
+                       (size_t)AES_GCM_MAX_PAYLOAD + 1, nullptr, tag)) {
             failures++;
         }
-        if (aesGcmOpen(&k, nonce, NULL, 0, NULL,
-                       (size_t)AES_GCM_MAX_PAYLOAD + 1, tag, NULL)) {
+        if (aesGcmOpen(&k, nonce, nullptr, 0, nullptr,
+                       (size_t)AES_GCM_MAX_PAYLOAD + 1, tag, nullptr)) {
             failures++;
         }
-        if (aesGcmSeal(&k, nonce, NULL, 0, NULL, (size_t)-1, NULL, tag)) {
+        if (aesGcmSeal(&k, nonce, nullptr, 0, nullptr, (size_t)-1, nullptr,
+                       tag)) {
             failures++;
         }
     }
@@ -5985,7 +6000,7 @@ static int dkTestPersistTypeNameAllRegisteredTest(int, char *[]) {
 
     for (size_t i = 0; i < n; i++) {
         const char *got = persistTypeName(known[i].code);
-        if (got == NULL) {
+        if (got == nullptr) {
             printf(
                 "dkTestPersistTypeNameAllRegistered: code=%u returned NULL\n",
                 (unsigned)known[i].code);
@@ -6060,7 +6075,7 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
     const hmacKeyId ID_B = 202u;
 
     hmacKeyring *src = hmacKeyringCreate();
-    if (src == NULL) {
+    if (src == nullptr) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: source create "
                "failed\n");
         return 1;
@@ -6087,10 +6102,10 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
                (unsigned)persistOpsHmacKeyring.type);
         failures++;
     }
-    if (persistOpsHmacKeyring.snapshot == NULL ||
-        persistOpsHmacKeyring.restore == NULL ||
-        persistOpsHmacKeyring.count == NULL ||
-        persistOpsHmacKeyring.free == NULL) {
+    if (persistOpsHmacKeyring.snapshot == nullptr ||
+        persistOpsHmacKeyring.restore == nullptr ||
+        persistOpsHmacKeyring.count == nullptr ||
+        persistOpsHmacKeyring.free == nullptr) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: descriptor "
                "missing required ops\n");
         hmacKeyringFree(src);
@@ -6107,13 +6122,13 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
 
     size_t snap_len = 0;
     uint8_t *snap = persistOpsHmacKeyring.snapshot(src, &snap_len);
-    if (snap == NULL || snap_len == 0) {
+    if (snap == nullptr || snap_len == 0) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: snapshot "
                "returned empty\n");
         hmacKeyringFree(src);
         return 1;
     }
-    if (persistOpsHmacKeyring.estimateSize != NULL &&
+    if (persistOpsHmacKeyring.estimateSize != nullptr &&
         persistOpsHmacKeyring.estimateSize(src) != snap_len) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: estimateSize "
                "disagrees with snapshot length\n");
@@ -6125,7 +6140,7 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
     uint8_t mac_src_b[64] = {};
     const hmacKey *src_a = hmacKeyringLookup(src, ID_A);
     const hmacKey *src_b = hmacKeyringLookup(src, ID_B);
-    if (src_a == NULL || src_b == NULL) {
+    if (src_a == nullptr || src_b == nullptr) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: source lookup "
                "failed\n");
         zfree(snap);
@@ -6137,7 +6152,7 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
 
     hmacKeyring *dst =
         (hmacKeyring *)persistOpsHmacKeyring.restore(snap, snap_len);
-    if (dst == NULL) {
+    if (dst == nullptr) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: descriptor "
                "restore returned NULL\n");
         zfree(snap);
@@ -6154,7 +6169,7 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
 
     const hmacKey *dst_a = hmacKeyringLookup(dst, ID_A);
     const hmacKey *dst_b = hmacKeyringLookup(dst, ID_B);
-    if (dst_a == NULL || dst_b == NULL) {
+    if (dst_a == nullptr || dst_b == nullptr) {
         printf("dkTestKeyringPersistOpsDescriptorRoundTrip: restored lookup "
                "failed\n");
         failures++;
@@ -6200,7 +6215,7 @@ static int dkTestRingPersistOpsDescriptorRoundTripTest(int, char *[]) {
         .strategyType = CLUSTER_STRATEGY_KETAMA,
     };
     cleaner(clusterRingFree) clusterRing *src = clusterRingNew(&config);
-    if (src == NULL) {
+    if (src == nullptr) {
         printf("dkTestRingPersistOpsDescriptorRoundTrip: ring create failed\n");
         return 1;
     }
@@ -6225,10 +6240,10 @@ static int dkTestRingPersistOpsDescriptorRoundTripTest(int, char *[]) {
                (unsigned)persistOpsClusterRing.type);
         failures++;
     }
-    if (persistOpsClusterRing.snapshot == NULL ||
-        persistOpsClusterRing.restore == NULL ||
-        persistOpsClusterRing.count == NULL ||
-        persistOpsClusterRing.free == NULL) {
+    if (persistOpsClusterRing.snapshot == nullptr ||
+        persistOpsClusterRing.restore == nullptr ||
+        persistOpsClusterRing.count == nullptr ||
+        persistOpsClusterRing.free == nullptr) {
         printf("dkTestRingPersistOpsDescriptorRoundTrip: descriptor missing "
                "required ops\n");
         return 1;
@@ -6243,12 +6258,12 @@ static int dkTestRingPersistOpsDescriptorRoundTripTest(int, char *[]) {
 
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterRing.snapshot(src, &snap_len);
-    if (snap == NULL || snap_len == 0) {
+    if (snap == nullptr || snap_len == 0) {
         printf("dkTestRingPersistOpsDescriptorRoundTrip: snapshot returned "
                "empty\n");
         return 1;
     }
-    if (persistOpsClusterRing.estimateSize != NULL &&
+    if (persistOpsClusterRing.estimateSize != nullptr &&
         persistOpsClusterRing.estimateSize(src) != snap_len) {
         printf("dkTestRingPersistOpsDescriptorRoundTrip: estimateSize "
                "disagrees with snapshot length\n");
@@ -6257,7 +6272,7 @@ static int dkTestRingPersistOpsDescriptorRoundTripTest(int, char *[]) {
 
     clusterRing *dst =
         (clusterRing *)persistOpsClusterRing.restore(snap, snap_len);
-    if (dst == NULL) {
+    if (dst == nullptr) {
         printf("dkTestRingPersistOpsDescriptorRoundTrip: restore returned "
                "NULL\n");
         zfree(snap);
@@ -6296,13 +6311,13 @@ typedef struct {
     bool applyInvoked;
 } dkTestTieredApplyObservation;
 
-static dkTestTieredApplyObservation *dkTestTieredCurrentObservation = NULL;
+static dkTestTieredApplyObservation *dkTestTieredCurrentObservation = nullptr;
 
 static bool dkTestTieredApplyOpWrapper(void *structure, persistOp op,
                                        const uint8_t *data, size_t len) {
     if (dkTestTieredCurrentObservation) {
         dkTestTieredCurrentObservation->applyInvoked = true;
-        if (persistGetReplayState() != NULL) {
+        if (persistGetReplayState() != nullptr) {
             dkTestTieredCurrentObservation->sawReplayState = true;
         }
     }
@@ -6344,19 +6359,19 @@ static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
                    "failed\n",
                    tierLabels[t]);
             failures++;
-            dkTestTieredCurrentObservation = NULL;
+            dkTestTieredCurrentObservation = nullptr;
             continue;
         }
         databox seed = DATABOX_SIGNED(1);
-        multilistPushByTypeTail(&ml, NULL, &seed);
+        multilistPushByTypeTail(&ml, nullptr, &seed);
 
-        persist *p = persistCreate(&tierOps, NULL);
+        persist *p = persistCreate(&tierOps, nullptr);
         if (!p) {
             printf(
                 "dkTestPersistMultilistTieredApply[%s]: persistCreate failed\n",
                 tierLabels[t]);
             failures++;
-            dkTestTieredCurrentObservation = NULL;
+            dkTestTieredCurrentObservation = nullptr;
             continue;
         }
 
@@ -6371,7 +6386,7 @@ static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
                    tierLabels[t]);
             persistClose(p);
             failures++;
-            dkTestTieredCurrentObservation = NULL;
+            dkTestTieredCurrentObservation = nullptr;
             continue;
         }
 
@@ -6382,7 +6397,7 @@ static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
                 tierLabels[t]);
             persistClose(p);
             failures++;
-            dkTestTieredCurrentObservation = NULL;
+            dkTestTieredCurrentObservation = nullptr;
             continue;
         }
         persistSync(p);
@@ -6394,7 +6409,7 @@ static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
                    tierLabels[t]);
             persistClose(p);
             failures++;
-            dkTestTieredCurrentObservation = NULL;
+            dkTestTieredCurrentObservation = nullptr;
             continue;
         }
 
@@ -6418,7 +6433,7 @@ static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
 
         multilistFree(recovered);
         persistClose(p);
-        dkTestTieredCurrentObservation = NULL;
+        dkTestTieredCurrentObservation = nullptr;
     }
 
     if (failures == 0) {
@@ -6446,7 +6461,7 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
     const hmacKeyId KID = 7u;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         return 1;
     }
     if (!hmacKeyringInstall(ring, KID, &hmacAlgoSHA256, key, sizeof(key),
@@ -6456,8 +6471,8 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
     }
 
     clusterMailbox *src = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256,
-                                               dkE1MailboxAcceptApply, NULL);
-    if (src == NULL) {
+                                               dkE1MailboxAcceptApply, nullptr);
+    if (src == nullptr) {
         hmacKeyringFree(ring);
         return 1;
     }
@@ -6498,10 +6513,10 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
         PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS) {
         failures++;
     }
-    if (persistOpsClusterMailbox.snapshot == NULL ||
-        persistOpsClusterMailbox.restore == NULL ||
-        persistOpsClusterMailbox.count == NULL ||
-        persistOpsClusterMailbox.free == NULL) {
+    if (persistOpsClusterMailbox.snapshot == nullptr ||
+        persistOpsClusterMailbox.restore == nullptr ||
+        persistOpsClusterMailbox.count == nullptr ||
+        persistOpsClusterMailbox.free == nullptr) {
         failures++;
         goto done_src;
     }
@@ -6511,18 +6526,18 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
 
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterMailbox.snapshot(src, &snap_len);
-    if (snap == NULL || snap_len == 0) {
+    if (snap == nullptr || snap_len == 0) {
         failures++;
         goto done_src;
     }
-    if (persistOpsClusterMailbox.estimateSize != NULL &&
+    if (persistOpsClusterMailbox.estimateSize != nullptr &&
         persistOpsClusterMailbox.estimateSize(src) != snap_len) {
         failures++;
     }
 
     clusterMailbox *dst =
         (clusterMailbox *)persistOpsClusterMailbox.restore(snap, snap_len);
-    if (dst == NULL) {
+    if (dst == nullptr) {
         printf("dkTestMailboxPersistOpsDescriptorRoundTrip: restore NULL\n");
         failures++;
         zfree(snap);
@@ -6538,7 +6553,7 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
         }
     }
     if (!clusterMailboxAttachKeyring(dst, ring, FLEX_ENV_ALGO_HMAC_SHA256,
-                                     dkE1MailboxAcceptApply, NULL)) {
+                                     dkE1MailboxAcceptApply, nullptr)) {
         failures++;
     } else {
         size_t written = 0;
@@ -6559,20 +6574,20 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
             }
         }
     }
-    if (persistOpsClusterMailbox.restore(NULL, 0) != NULL) {
+    if (persistOpsClusterMailbox.restore(nullptr, 0) != nullptr) {
         failures++;
     }
     uint8_t junk[16] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    if (persistOpsClusterMailbox.restore(junk, sizeof(junk)) != NULL) {
+    if (persistOpsClusterMailbox.restore(junk, sizeof(junk)) != nullptr) {
         failures++;
     }
-    if (persistOpsClusterMailbox.newEmpty == NULL) {
+    if (persistOpsClusterMailbox.newEmpty == nullptr) {
         failures++;
     } else {
         clusterMailbox *empty =
             (clusterMailbox *)persistOpsClusterMailbox.newEmpty();
-        if (empty == NULL) {
+        if (empty == nullptr) {
             failures++;
         } else {
             if (persistOpsClusterMailbox.count(empty) != 0u) {
@@ -6627,7 +6642,7 @@ static int dkTestBlake3Avx2DispatchTest(int, char *[]) {
      * (eight 4-chunk NEON batches), so the SIMD path is fully exercised. */
     const size_t N = 32u * 1024u;
     cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(N);
-    if (buf == NULL) {
+    if (buf == nullptr) {
         printf("dkTestBlake3Avx2Dispatch: zmalloc(%zu) failed\n", N);
         return 1;
     }
@@ -6731,7 +6746,7 @@ static int dkTestKeyringRequireSaltTest(int, char *[]) {
     /* Case 1: salted install + nonce contains salt suffix */
     {
         hmacKeyring *ring = hmacKeyringCreate();
-        if (ring == NULL) {
+        if (ring == nullptr) {
             printf("dkTestKeyringRequireSalt: create failed\n");
             return 1;
         }
@@ -6815,7 +6830,7 @@ static int dkTestKeyringRequireSaltTest(int, char *[]) {
             failures++;
         }
         if (hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
-                               NULL)) {
+                               nullptr)) {
             printf("dkTestKeyringRequireSalt: salted Install must REFUSE "
                    "NULL salt\n");
             failures++;
@@ -6866,10 +6881,10 @@ static int dkTestKeyringPersistRetireAfterAttachTest(int, char *[]) {
 
     /* Declared here, ahead of the first goto, so the scope-exit cleaner
      * covers every jump to the cleanup labels below. */
-    cleaner(flexFree) flex *payload = NULL;
+    cleaner(flexFree) flex *payload = nullptr;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         printf("dkTestKeyringPersistRetireAfterAttach: create failed\n");
         return 1;
     }
@@ -7042,7 +7057,7 @@ static int dkTestRevokedKeyFloorTest(int, char *[]) {
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         printf("dkTestRevokedKeyFloor: create failed\n");
         return 1;
     }
@@ -7070,7 +7085,7 @@ static int dkTestRevokedKeyFloorTest(int, char *[]) {
     }
 
     const uint8_t payload[24] = "c3-revoked-payload";
-    cleaner(freeBytesArray3) uint8_t *envs[3] = {NULL, NULL, NULL};
+    cleaner(freeBytesArray3) uint8_t *envs[3] = {nullptr, nullptr, nullptr};
     size_t env_lens[3] = {0, 0, 0};
     const hmacKeyId ids[3] = {K1, K2, K3};
     const uint8_t *keys[3] = {key1, key2, key3};
@@ -7093,7 +7108,7 @@ static int dkTestRevokedKeyFloorTest(int, char *[]) {
     }
 
     flexEnvelopeVerifyParams vp = {.keyring = ring};
-    const uint8_t *out = NULL;
+    const uint8_t *out = nullptr;
     uint64_t out_len = 0;
     for (size_t i = 0; i < 3; i++) {
         if (!flexEnvelopeVerify(envs[i], env_lens[i], &vp, &out, &out_len)) {
@@ -7193,7 +7208,7 @@ static int dkTestEnvelopeOpenKeyringResolveTest(int, char *[]) {
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         return 1;
     }
 
@@ -7385,7 +7400,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         return 1;
     }
 
@@ -7433,7 +7448,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
 
     /* S1: prepared_key + keyring + NO flag → AMBIGUOUS_KEY */
     {
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {.prepared_key = &prep, .keyring = ring};
         if (flexEnvelopeVerify(env, env_len, &vp, &out_p, &out_pl)) {
@@ -7449,7 +7464,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     }
     /* S2: prepared_key + keyring + FLAG → succeed */
     {
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {
             .prepared_key = &prep,
@@ -7464,7 +7479,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     }
     /* S3: prepared_key only → succeed */
     {
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {.prepared_key = &prep};
         if (!flexEnvelopeVerify(env, env_len, &vp, &out_p, &out_pl)) {
@@ -7473,7 +7488,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     }
     /* S4: keyring only → succeed (auto-resolve) */
     {
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {.keyring = ring};
         if (!flexEnvelopeVerify(env, env_len, &vp, &out_p, &out_pl)) {
@@ -7482,7 +7497,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     }
     /* S5: raw key + keyring + NO flag → AMBIGUOUS_KEY */
     {
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {
             .key = key1,
@@ -7498,7 +7513,7 @@ static int dkTestWireKeyIdAmbiguityRejectTest(int, char *[]) {
     }
     /* S6: raw key + keyring + FLAG → succeed */
     {
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {
             .key = key1,
@@ -7532,7 +7547,7 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
 
     TEST("(NULL, 0) is the empty input everywhere bytes are taken") {
         static constexpr uint8_t none[1] = {};
-        if (rapidhash(NULL, 0) != rapidhash(none, 0)) {
+        if (rapidhash(nullptr, 0) != rapidhash(none, 0)) {
             ERR("rapidhash of (NULL, 0) differs from the empty input");
         }
 
@@ -7540,7 +7555,7 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
         uint8_t viaEmpty[SHA256_DIGEST_LEN];
         sha256Ctx sctx;
         sha256Init(&sctx);
-        sha256Update(&sctx, NULL, 0);
+        sha256Update(&sctx, nullptr, 0);
         sha256Final(&sctx, viaNull);
         sha256Hash(none, 0, viaEmpty);
         if (memcmp(viaNull, viaEmpty, sizeof(viaNull)) != 0) {
@@ -7551,7 +7566,7 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
         uint8_t b3Empty[32];
         blake3Hasher bh;
         blake3HasherInit(&bh);
-        blake3HasherUpdate(&bh, NULL, 0);
+        blake3HasherUpdate(&bh, nullptr, 0);
         blake3HasherFinalize(&bh, b3Null, sizeof(b3Null));
         blake3HasherInit(&bh);
         blake3HasherFinalize(&bh, b3Empty, sizeof(b3Empty));
@@ -7559,14 +7574,14 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
             ERR("blake3 of (NULL, 0) differs from the empty input");
         }
 
-        cleaner(mdsfree) mds *s = mdsnewlen(NULL, 0);
-        s = mdscatlen(s, NULL, 0);
+        cleaner(mdsfree) mds *s = mdsnewlen(nullptr, 0);
+        s = mdscatlen(s, nullptr, 0);
         if (mdslen(s) != 0) {
             ERR("an mds built from (NULL, 0) is not empty");
         }
 
         cleaner(hyperloglogFree) hyperloglog *h = hyperloglogNew();
-        if (hyperloglogAdd(&h, NULL, 0) < 0) {
+        if (hyperloglogAdd(&h, nullptr, 0) < 0) {
             ERR("hyperloglogAdd refused (NULL, 0)");
         }
     }
@@ -7579,10 +7594,10 @@ static int dkTestPersistKeyIdHeaderTest(int, char *[]) {
 
     /* Declared here, ahead of the first goto, so the scope-exit cleaner
      * covers every jump to the cleanup labels below. */
-    cleaner(flexFree) flex *payload = NULL;
+    cleaner(flexFree) flex *payload = nullptr;
 
     hmacKeyring *ringW = hmacKeyringCreate();
-    if (ringW == NULL) {
+    if (ringW == nullptr) {
         return 1;
     }
     const uint8_t key1[32] = {
@@ -7620,13 +7635,13 @@ static int dkTestPersistKeyIdHeaderTest(int, char *[]) {
 
     size_t snapLen = 0;
     const uint8_t *snapBuf = persistStoreMemoryBuffer(snapStore, &snapLen);
-    if (snapBuf == NULL || snapLen == 0) {
+    if (snapBuf == nullptr || snapLen == 0) {
         failures++;
         goto cleanup_payload;
     }
 
     hmacKeyring *ringR = hmacKeyringCreate();
-    if (ringR == NULL) {
+    if (ringR == nullptr) {
         failures++;
         goto cleanup_payload;
     }
@@ -7743,7 +7758,7 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
 
     const size_t N = 32u * 1024u;
     cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(N);
-    if (buf == NULL) {
+    if (buf == nullptr) {
         printf("dkTestBlake3Sse41Batch: zmalloc(%zu) failed\n", N);
         return 1;
     }
@@ -7926,11 +7941,11 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
     int failures = 0;
     /* Declared here (before any goto to `done`) so the scope-exit cleaner
      * attribute below never bypasses an initializer across a jump. */
-    cleanerName(zfree, Bytes) uint8_t *snap = NULL;
-    cleanerName(zfree, Bytes) uint8_t *padded = NULL;
-    cleaner(aeadNonceLogFree) aeadNonceLog *src = NULL;
-    cleaner(aeadNonceLogFree) aeadNonceLog *empty_src = NULL;
-    cleaner(aeadNonceLogFree) aeadNonceLog *dst = NULL;
+    cleanerName(zfree, Bytes) uint8_t *snap = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *padded = nullptr;
+    cleaner(aeadNonceLogFree) aeadNonceLog *src = nullptr;
+    cleaner(aeadNonceLogFree) aeadNonceLog *empty_src = nullptr;
+    cleaner(aeadNonceLogFree) aeadNonceLog *dst = nullptr;
 
     const size_t kCap = 4096u;
     const uint32_t kKeys[] = {7u, 13u, 29u, 31u};
@@ -7940,7 +7955,7 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
     size_t need = 0;
 
     src = aeadNonceLogCreate(kCap);
-    if (src == NULL) {
+    if (src == nullptr) {
         printf("dkTestNonceLogPersistRoundTrip: src create failed\n");
         return 1;
     }
@@ -7974,14 +7989,14 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
         goto done;
     }
 
-    need = aeadNonceLogToBytes(src, NULL, 0);
+    need = aeadNonceLogToBytes(src, nullptr, 0);
     if (need == 0) {
         printf("dkTestNonceLogPersistRoundTrip: sizing call returned 0\n");
         failures++;
         goto done;
     }
     snap = zmalloc(need);
-    if (snap == NULL) {
+    if (snap == nullptr) {
         failures++;
         goto done;
     }
@@ -7996,7 +8011,7 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
     }
 
     dst = aeadNonceLogFromBytes(snap, need);
-    if (dst == NULL || aeadNonceLogCapacity(dst) != kCap ||
+    if (dst == nullptr || aeadNonceLogCapacity(dst) != kCap ||
         aeadNonceLogSize(dst) != kTotal) {
         printf("dkTestNonceLogPersistRoundTrip: fromBytes restore failed\n");
         failures++;
@@ -8031,14 +8046,14 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
 
     size_t snap2_len = 0;
     uint8_t *snap2 = persistOpsAeadNonceLog.snapshot(src, &snap2_len);
-    if (snap2 == NULL || snap2_len == 0) {
+    if (snap2 == nullptr || snap2_len == 0) {
         printf("dkTestNonceLogPersistRoundTrip: desc snapshot NULL\n");
         failures++;
         goto done;
     }
     aeadNonceLog *dst2 =
         (aeadNonceLog *)persistOpsAeadNonceLog.restore(snap2, snap2_len);
-    if (dst2 == NULL) {
+    if (dst2 == nullptr) {
         printf("dkTestNonceLogPersistRoundTrip: desc restore NULL\n");
         zfree(snap2);
         failures++;
@@ -8069,39 +8084,39 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
 
     if (snap2_len >= 1u) {
         void *bad = persistOpsAeadNonceLog.restore(snap2, snap2_len - 1u);
-        if (bad != NULL) {
+        if (bad != nullptr) {
             printf("dkTestNonceLogPersistRoundTrip: truncated accepted\n");
             persistOpsAeadNonceLog.free(bad);
             failures++;
         }
     }
     padded = zmalloc(snap2_len + 1u);
-    if (padded != NULL) {
+    if (padded != nullptr) {
         memcpy(padded, snap2, snap2_len);
         padded[snap2_len] = 0xAA;
         void *bad = persistOpsAeadNonceLog.restore(padded, snap2_len + 1u);
-        if (bad != NULL) {
+        if (bad != nullptr) {
             printf("dkTestNonceLogPersistRoundTrip: padded accepted\n");
             persistOpsAeadNonceLog.free(bad);
             failures++;
         }
     }
     uint8_t junk[16] = {};
-    if (persistOpsAeadNonceLog.restore(junk, sizeof(junk)) != NULL) {
+    if (persistOpsAeadNonceLog.restore(junk, sizeof(junk)) != nullptr) {
         printf("dkTestNonceLogPersistRoundTrip: junk accepted\n");
         failures++;
     }
 
     empty_src = aeadNonceLogCreate(0);
-    if (empty_src != NULL) {
-        const size_t enseed = aeadNonceLogToBytes(empty_src, NULL, 0);
+    if (empty_src != nullptr) {
+        const size_t enseed = aeadNonceLogToBytes(empty_src, nullptr, 0);
         if (enseed > 0u) {
             cleanerName(zfree, Bytes) uint8_t *ebuf = zmalloc(enseed);
-            if (ebuf != NULL) {
+            if (ebuf != nullptr) {
                 if (aeadNonceLogToBytes(empty_src, ebuf, enseed) == enseed) {
                     cleaner(aeadNonceLogFree) aeadNonceLog *e2 =
                         aeadNonceLogFromBytes(ebuf, enseed);
-                    if (e2 == NULL || aeadNonceLogSize(e2) != 0u) {
+                    if (e2 == nullptr || aeadNonceLogSize(e2) != 0u) {
                         printf("dkTestNonceLogPersistRoundTrip: empty "
                                "round-trip failed\n");
                         failures++;
@@ -8157,16 +8172,16 @@ static int dkTestEnvelopeNonceLogIntegrationTest(int, char *[]) {
 
     cleaner(aeadNonceLogFree) aeadNonceLog *producerLog =
         aeadNonceLogCreate(1024u);
-    if (producerLog == NULL) {
+    if (producerLog == nullptr) {
         printf("dkTestEnvelopeNonceLogIntegration: producer log create "
                "failed\n");
         return 1;
     }
-    cleanerName(zfree, Bytes) uint8_t *env1 = NULL;
-    cleanerName(zfree, Bytes) uint8_t *env_replay = NULL;
-    cleanerName(zfree, Bytes) uint8_t *env2 = NULL;
-    cleanerName(zfree, Bytes) uint8_t *pt_buf = NULL;
-    cleaner(aeadNonceLogFree) aeadNonceLog *consumerLog = NULL;
+    cleanerName(zfree, Bytes) uint8_t *env1 = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *env_replay = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *env2 = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *pt_buf = nullptr;
+    cleaner(aeadNonceLogFree) aeadNonceLog *consumerLog = nullptr;
 
     env1 = zmalloc(cap);
     size_t env1_written = 0;
@@ -8215,7 +8230,7 @@ static int dkTestEnvelopeNonceLogIntegrationTest(int, char *[]) {
     }
 
     flexEnvelopeSealParams sp_optout = sp1;
-    sp_optout.nonceLog = NULL;
+    sp_optout.nonceLog = nullptr;
     size_t optout_written = 0;
     if (!flexEnvelopeSeal(env_replay, cap, plaintext, plaintext_len, &sp_optout,
                           &optout_written)) {
@@ -8244,7 +8259,7 @@ static int dkTestEnvelopeNonceLogIntegrationTest(int, char *[]) {
     }
 
     consumerLog = aeadNonceLogCreate(1024u);
-    if (consumerLog == NULL) {
+    if (consumerLog == nullptr) {
         printf("dkTestEnvelopeNonceLogIntegration: consumer log create "
                "failed\n");
         failures++;
@@ -8299,7 +8314,7 @@ static int dkTestEnvelopeNonceLogIntegrationTest(int, char *[]) {
     }
 
     flexEnvelopeVerifyParams vp_no_log = {
-        .key = key, .key_len = sizeof(key), .nonceLog = NULL};
+        .key = key, .key_len = sizeof(key), .nonceLog = nullptr};
     if (!flexEnvelopeOpen(env2, env2_written, &vp_no_log, pt_buf, plaintext_len,
                           &pt_written)) {
         printf("dkTestEnvelopeNonceLogIntegration: Scenario5 Open (no "
@@ -8374,7 +8389,7 @@ static int testNonceLogAllAeadAlgosTest(int, char *[]) {
             aeadNonceLogCreate(1024u);
         cleaner(aeadNonceLogFree) aeadNonceLog *consumerLog =
             aeadNonceLogCreate(1024u);
-        if (producerLog == NULL || consumerLog == NULL) {
+        if (producerLog == nullptr || consumerLog == nullptr) {
             printf("testNonceLogAllAeadAlgos[%s]: log create failed\n",
                    cs->name);
             failures++;
@@ -8392,8 +8407,8 @@ static int testNonceLogAllAeadAlgosTest(int, char *[]) {
         cleanerName(zfree, Bytes) uint8_t *env_replay = zmalloc(cap);
         cleanerName(zfree, Bytes) uint8_t *env2 = zmalloc(cap);
         cleanerName(zfree, Bytes) uint8_t *pt_buf = zmalloc(kPlaintextLen);
-        if (env1 == NULL || env_replay == NULL || env2 == NULL ||
-            pt_buf == NULL) {
+        if (env1 == nullptr || env_replay == nullptr || env2 == nullptr ||
+            pt_buf == nullptr) {
             printf("testNonceLogAllAeadAlgos[%s]: alloc failed\n", cs->name);
             failures++;
             continue;
@@ -8520,7 +8535,7 @@ static int testNonceLogAllAeadAlgosTest(int, char *[]) {
         flexEnvelopeVerifyParams vp_no_log = {
             .key = kKey32,
             .key_len = cs->key_len,
-            .nonceLog = NULL,
+            .nonceLog = nullptr,
         };
         if (!flexEnvelopeOpen(env2, env2_written, &vp_no_log, pt_buf,
                               kPlaintextLen, &pt_written)) {
@@ -8576,7 +8591,7 @@ static int testChachaStreamOpenNonceFlipTest(int, char *[]) {
         (uint8_t *)zmalloc(kPayloadLen);
     cleanerName(zfree, Bytes) uint8_t *recovered =
         (uint8_t *)zmalloc(kPayloadLen);
-    if (plaintext == NULL || ciphertext == NULL || recovered == NULL) {
+    if (plaintext == nullptr || ciphertext == nullptr || recovered == nullptr) {
         printf("testChachaStreamOpenNonceFlip: alloc failed\n");
         return 1;
     }
@@ -8744,7 +8759,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
     const size_t payload_len = sizeof(payload);
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         printf("testMailboxInnerFlexStructAwareFuzz: keyringCreate failed\n");
         return 1;
     }
@@ -8769,9 +8784,9 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
 #define FUZZ_REWIND_MAILBOX()                                                  \
     do {                                                                       \
         clusterMailboxFree(cons);                                              \
-        cons =                                                                 \
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL); \
-        if (cons == NULL) {                                                    \
+        cons = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr,  \
+                                    nullptr);                                  \
+        if (cons == nullptr) {                                                 \
             printf("testMailboxInnerFlexStructAwareFuzz: re-create mailbox "   \
                    "failed\n");                                                \
             failures++;                                                        \
@@ -8780,8 +8795,8 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
     } while (0)
 
     clusterMailbox *cons =
-        clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-    if (cons == NULL) {
+        clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+    if (cons == nullptr) {
         printf("testMailboxInnerFlexStructAwareFuzz: mailboxCreate failed\n");
         hmacKeyringFree(ring);
         return 1;
@@ -8830,7 +8845,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
             (uint8_t *)zmalloc(_env_cap);                                      \
         cleanerName(zfree, Bytes) uint8_t *_inner =                            \
             (uint8_t *)zmalloc(_inner_total);                                  \
-        if (_env == NULL || _inner == NULL) {                                  \
+        if (_env == nullptr || _inner == nullptr) {                            \
             printf("testMailboxInnerFlexStructAwareFuzz[%s]: alloc "           \
                    "failed\n",                                                 \
                    (label));                                                   \
@@ -9239,15 +9254,15 @@ static int mailboxRestoreSweepHelper(const char *label, const uint8_t *snap,
 
     /* Pre-sanity: the canonical snapshot itself must restore cleanly. */
     {
-        clusterMailbox *mb = NULL;
-        hmacKeyring *ring = NULL;
+        clusterMailbox *mb = nullptr;
+        hmacKeyring *ring = nullptr;
         rebuild(&mb, &ring, key);
-        if (mb == NULL || ring == NULL) {
+        if (mb == nullptr || ring == nullptr) {
             printf("%s: rebuild failed (canonical sanity)\n", label);
-            if (mb != NULL) {
+            if (mb != nullptr) {
                 clusterMailboxFree(mb);
             }
-            if (ring != NULL) {
+            if (ring != nullptr) {
                 hmacKeyringFree(ring);
             }
             return 1;
@@ -9270,16 +9285,16 @@ static int mailboxRestoreSweepHelper(const char *label, const uint8_t *snap,
             memcpy(mutated, snap, snap_len);
             mutated[bpos] ^= (uint8_t)(1u << bit);
 
-            clusterMailbox *mb = NULL;
-            hmacKeyring *ring = NULL;
+            clusterMailbox *mb = nullptr;
+            hmacKeyring *ring = nullptr;
             rebuild(&mb, &ring, key);
-            if (mb == NULL || ring == NULL) {
+            if (mb == nullptr || ring == nullptr) {
                 printf("%s[bpos=%zu bit=%u]: rebuild failed\n", label, bpos,
                        bit);
-                if (mb != NULL) {
+                if (mb != nullptr) {
                     clusterMailboxFree(mb);
                 }
-                if (ring != NULL) {
+                if (ring != nullptr) {
                     hmacKeyringFree(ring);
                 }
                 failures++;
@@ -9324,23 +9339,23 @@ static void mailboxRestoreRebuild(clusterMailbox **out_mb,
                                   const uint8_t key[32]) {
     const hmacKeyId kKeyId = 100u;
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
-        *out_mb = NULL;
-        *out_ring = NULL;
+    if (ring == nullptr) {
+        *out_mb = nullptr;
+        *out_ring = nullptr;
         return;
     }
     if (!hmacKeyringInstallUnsalted(ring, kKeyId, &hmacAlgoSHA256, key, 32u)) {
         hmacKeyringFree(ring);
-        *out_mb = NULL;
-        *out_ring = NULL;
+        *out_mb = nullptr;
+        *out_ring = nullptr;
         return;
     }
     clusterMailbox *mb =
-        clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-    if (mb == NULL) {
+        clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+    if (mb == nullptr) {
         hmacKeyringFree(ring);
-        *out_mb = NULL;
-        *out_ring = NULL;
+        *out_mb = nullptr;
+        *out_ring = nullptr;
         return;
     }
     *out_mb = mb;
@@ -9359,18 +9374,18 @@ static uint8_t *mailboxSnapshotDirect(const clusterMailbox *mb,
     const size_t need = clusterMailboxSnapshotSize(mb);
     if (need == 0u) {
         *out_len = 0u;
-        return NULL;
+        return nullptr;
     }
     /* @own: caller; free=zfree */
     cleanerName(zfree, Bytes) uint8_t *out = (uint8_t *)zmalloc(need);
     size_t written = 0u;
     if (!clusterMailboxSnapshot(mb, out, need, &written) || written != need) {
         *out_len = 0u;
-        return NULL;
+        return nullptr;
     }
     *out_len = need;
     uint8_t *result = out;
-    out = NULL;
+    out = nullptr;
     return result;
 }
 
@@ -9386,18 +9401,18 @@ static uint8_t *mailboxBuildSnapshotFor(snapshotFn snap_fn, size_t *out_len,
                                         const uint8_t key[32]) {
     const hmacKeyId kKeyId = 100u;
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
-        return NULL;
+    if (ring == nullptr) {
+        return nullptr;
     }
     if (!hmacKeyringInstallUnsalted(ring, kKeyId, &hmacAlgoSHA256, key, 32u)) {
         hmacKeyringFree(ring);
-        return NULL;
+        return nullptr;
     }
     clusterMailbox *mb_a =
-        clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-    if (mb_a == NULL) {
+        clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+    if (mb_a == nullptr) {
         hmacKeyringFree(ring);
-        return NULL;
+        return nullptr;
     }
 
     const uint8_t payload[] = "snap";
@@ -9414,12 +9429,12 @@ static uint8_t *mailboxBuildSnapshotFor(snapshotFn snap_fn, size_t *out_len,
                                 sealed_sz, &w)) {
             clusterMailboxFree(mb_a);
             hmacKeyringFree(ring);
-            return NULL;
+            return nullptr;
         }
         if (clusterMailboxIngest(mb_a, buf, w, kKeyId) != CLUSTER_MAILBOX_OK) {
             clusterMailboxFree(mb_a);
             hmacKeyringFree(ring);
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -9446,7 +9461,7 @@ static int testMailboxRestoreStructAwareFuzzTest(int, char *[]) {
     size_t snap_len = 0u;
     uint8_t *snap =
         mailboxBuildSnapshotFor(mailboxSnapshotDirect, &snap_len, key);
-    if (snap == NULL || snap_len == 0u) {
+    if (snap == nullptr || snap_len == 0u) {
         printf("testMailboxRestoreStructAwareFuzz: build snapshot failed\n");
         zfree(snap);
         return 1;
@@ -9482,7 +9497,7 @@ static int testMailboxPersistOpsRestoreStructAwareFuzzTest(int, char *[]) {
     size_t snap_len = 0u;
     uint8_t *snap =
         mailboxBuildSnapshotFor(mailboxSnapshotPersistOps, &snap_len, key);
-    if (snap == NULL || snap_len == 0u) {
+    if (snap == nullptr || snap_len == 0u) {
         printf("testMailboxPersistOpsRestoreStructAwareFuzz: build "
                "snapshot failed\n");
         zfree(snap);
@@ -9524,7 +9539,7 @@ static int testMailboxRestoreWrappedStructAwareFuzzTest(int, char *[]) {
     size_t raw_len = 0u;
     cleanerName(zfree, Bytes) uint8_t *raw =
         mailboxBuildSnapshotFor(mailboxSnapshotDirect, &raw_len, key);
-    if (raw == NULL || raw_len == 0u) {
+    if (raw == nullptr || raw_len == 0u) {
         printf("testMailboxRestoreWrappedStructAwareFuzz: build snapshot "
                "failed\n");
         return 1;
@@ -9569,16 +9584,16 @@ static int testMailboxRestoreWrappedStructAwareFuzzTest(int, char *[]) {
                    "Wrap failed\n");
             return 1;
         }
-        hmacKeyring *ring = NULL;
-        clusterMailbox *mb = NULL;
+        hmacKeyring *ring = nullptr;
+        clusterMailbox *mb = nullptr;
         mailboxRestoreRebuild(&mb, &ring, key);
-        if (mb == NULL || ring == NULL) {
+        if (mb == nullptr || ring == nullptr) {
             printf("testMailboxRestoreWrappedStructAwareFuzz: rebuild "
                    "failed (canonical)\n");
-            if (mb != NULL) {
+            if (mb != nullptr) {
                 clusterMailboxFree(mb);
             }
-            if (ring != NULL) {
+            if (ring != nullptr) {
                 hmacKeyringFree(ring);
             }
             return 1;
@@ -9622,14 +9637,14 @@ static int testMailboxRestoreWrappedStructAwareFuzzTest(int, char *[]) {
                 continue;
             }
 
-            hmacKeyring *ring = NULL;
-            clusterMailbox *mb = NULL;
+            hmacKeyring *ring = nullptr;
+            clusterMailbox *mb = nullptr;
             mailboxRestoreRebuild(&mb, &ring, key);
-            if (mb == NULL || ring == NULL) {
-                if (mb != NULL) {
+            if (mb == nullptr || ring == nullptr) {
+                if (mb != nullptr) {
                     clusterMailboxFree(mb);
                 }
-                if (ring != NULL) {
+                if (ring != nullptr) {
                     hmacKeyringFree(ring);
                 }
                 failures++;
@@ -9694,7 +9709,7 @@ static int dkTestNonceLogEvictionPerfTest(int, char *[]) {
         const uint32_t kKeyId = 17u;
         const size_t kThreshold = kCap - (kCap / 8u);
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(kCap);
-        if (log == NULL || aeadNonceLogCapacity(log) != kCap) {
+        if (log == nullptr || aeadNonceLogCapacity(log) != kCap) {
             printf("dkTestNonceLogEvictionPerf: A setup failed\n");
             return 1;
         }
@@ -9756,7 +9771,7 @@ static int dkTestNonceLogEvictionPerfTest(int, char *[]) {
         const uint64_t kEvictions = 20000u;
         const double kMaxPerInsertNs = 5000.0;
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(kCap);
-        if (log == NULL || aeadNonceLogCapacity(log) != kCap) {
+        if (log == nullptr || aeadNonceLogCapacity(log) != kCap) {
             printf("dkTestNonceLogEvictionPerf: B setup failed\n");
             return 1;
         }
@@ -9830,7 +9845,7 @@ static bool dkTestReplicatorRetryApply(uint32_t, uint64_t sequence,
         t->accepted_seqs[t->accept_count] = sequence;
     }
     t->accept_count++;
-    if (ops->free != NULL) {
+    if (ops->free != nullptr) {
         ops->free(structure);
     }
     return true;
@@ -9847,7 +9862,7 @@ static int dkTestReplicatorRetryDropTest(int, char *[]) {
     {
         static persistOps bad_ops;
         memcpy(&bad_ops, &persistOpsFlex, sizeof(bad_ops));
-        bad_ops.free = NULL;
+        bad_ops.free = nullptr;
         static const persistOps *bad_table[256];
         memset((void *)bad_table, 0, sizeof(bad_table));
         bad_table[PERSIST_TYPE_FLEX] = &bad_ops;
@@ -9859,7 +9874,7 @@ static int dkTestReplicatorRetryDropTest(int, char *[]) {
         clusterReplicator *bad = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             bad_table, 256u, dkTestReplicatorRetryApply, &ctx_a);
-        if (bad != NULL) {
+        if (bad != nullptr) {
             printf("dkTestReplicatorRetryDrop: Create accepted NULL-free "
                    "typetable\n");
             failures++;
@@ -9869,7 +9884,7 @@ static int dkTestReplicatorRetryDropTest(int, char *[]) {
         clusterReplicator *badEx = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             bad_table, 256u, dkTestReplicatorRetryApply, &ctx_a, &cfg);
-        if (badEx != NULL) {
+        if (badEx != nullptr) {
             printf("dkTestReplicatorRetryDrop: CreateEx accepted NULL-free "
                    "typetable\n");
             failures++;
@@ -9890,7 +9905,7 @@ static int dkTestReplicatorRetryDropTest(int, char *[]) {
         clusterReplicator *rep = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, dkTestReplicatorRetryApply, &ctx_b, &cfg);
-        if (rep == NULL) {
+        if (rep == nullptr) {
             printf("dkTestReplicatorRetryDrop: CreateEx failed\n");
             failures++;
             hmacKeyringFree(ring);
@@ -9962,7 +9977,7 @@ skip_case2:
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, dkTestReplicatorRetryApply, &ctx_c);
-        if (rep == NULL) {
+        if (rep == nullptr) {
             printf("dkTestReplicatorRetryDrop: legacy Create failed\n");
             failures++;
             hmacKeyringFree(ring);
@@ -10056,15 +10071,15 @@ static int dkTestMailboxReplicatorNonceLogWiredTest(int, char *[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        if (mb == NULL) {
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+        if (mb == nullptr) {
             printf("dkTestMailboxRepl s1 Create NULL\n");
             failures++;
             hmacKeyringFree(ring);
             goto s2;
         }
-        if (clusterMailboxNonceLog(mb) == NULL) {
+        if (clusterMailboxNonceLog(mb) == nullptr) {
             printf("dkTestMailboxRepl s1 nonceLog NULL\n");
             failures++;
         } else if (aeadNonceLogCapacity(clusterMailboxNonceLog(mb)) <
@@ -10105,12 +10120,12 @@ s2:
             .disable_nonce_log = true,
         };
         clusterMailbox *mb = clusterMailboxCreateOpts(&opts);
-        if (mb == NULL) {
+        if (mb == nullptr) {
             failures++;
             hmacKeyringFree(ring);
             goto s3;
         }
-        if (clusterMailboxNonceLog(mb) != NULL) {
+        if (clusterMailboxNonceLog(mb) != nullptr) {
             printf("dkTestMailboxRepl s2 nonceLog should be NULL\n");
             failures++;
         }
@@ -10133,7 +10148,7 @@ s3:
                                    sizeof(key));
         cleaner(aeadNonceLogFree) aeadNonceLog *borrowed =
             aeadNonceLogCreate(256u);
-        if (borrowed == NULL) {
+        if (borrowed == nullptr) {
             failures++;
             hmacKeyringFree(ring);
             goto s4;
@@ -10144,7 +10159,7 @@ s3:
             .nonce_log = borrowed,
         };
         clusterMailbox *mb = clusterMailboxCreateOpts(&opts);
-        if (mb == NULL || clusterMailboxNonceLog(mb) != borrowed) {
+        if (mb == nullptr || clusterMailboxNonceLog(mb) != borrowed) {
             printf("dkTestMailboxRepl s3 borrowed-log failed\n");
             failures++;
         }
@@ -10164,12 +10179,12 @@ s4:
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table4, 256u, dkTestMailboxReplApply, &app_ctx);
-        if (rep == NULL) {
+        if (rep == nullptr) {
             failures++;
             hmacKeyringFree(ring);
             goto s5;
         }
-        if (clusterMailboxNonceLog(clusterReplicatorMailbox(rep)) == NULL) {
+        if (clusterMailboxNonceLog(clusterReplicatorMailbox(rep)) == nullptr) {
             printf("dkTestMailboxRepl s4 replicator nonceLog NULL\n");
             failures++;
         }
@@ -10196,7 +10211,7 @@ s4:
         for (size_t i = 0; i < app_ctx.count; i++) {
             if (app_ctx.restored[i]) {
                 flexFree(app_ctx.restored[i]);
-                app_ctx.restored[i] = NULL;
+                app_ctx.restored[i] = nullptr;
             }
         }
         clusterReplicatorFree(rep);
@@ -10219,12 +10234,12 @@ s5:
         clusterReplicator *rep = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table5, 256u, dkTestMailboxReplApply, &app_ctx, &cfg);
-        if (rep == NULL) {
+        if (rep == nullptr) {
             failures++;
             hmacKeyringFree(ring);
             goto done_d8;
         }
-        if (clusterMailboxNonceLog(clusterReplicatorMailbox(rep)) != NULL) {
+        if (clusterMailboxNonceLog(clusterReplicatorMailbox(rep)) != nullptr) {
             printf("dkTestMailboxRepl s5 disabled nonceLog should be NULL\n");
             failures++;
         }
@@ -10260,7 +10275,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
     config.vnodes.replicaPointSpread = true;
 
     cleaner(clusterRingFree) clusterRing *src = clusterRingNew(&config);
-    if (src == NULL) {
+    if (src == nullptr) {
         printf("dkTestClusterRingFlexSerialize: ring create failed\n");
         return 1;
     }
@@ -10381,7 +10396,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
 
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterRing.snapshot(src, &snap_len);
-    if (snap == NULL || snap_len == 0) {
+    if (snap == nullptr || snap_len == 0) {
         printf("dkTestClusterRingFlexSerialize: snapshot empty\n");
         return 1;
     }
@@ -10401,13 +10416,13 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
 
     clusterRing *dst =
         (clusterRing *)persistOpsClusterRing.restore(snap, snap_len);
-    if (dst == NULL) {
+    if (dst == nullptr) {
         printf("dkTestClusterRingFlexSerialize: restore returned NULL\n");
         zfree(snap);
         return 1;
     }
 
-    if (persistOpsClusterRing.validate == NULL ||
+    if (persistOpsClusterRing.validate == nullptr ||
         !persistOpsClusterRing.validate(dst)) {
         printf("dkTestClusterRingFlexSerialize: validate hook rejected "
                "restored ring\n");
@@ -10423,7 +10438,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
 
     for (size_t i = 0; i < kN; i++) {
         const clusterNode *n = clusterRingGetNode(dst, src_nodes[i].id);
-        if (n == NULL) {
+        if (n == nullptr) {
             printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
                    " missing in restored ring\n",
                    src_nodes[i].id);
@@ -10449,7 +10464,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
             failures++;
         }
         const clusterLocation *loc = clusterNodeGetLocation(n);
-        if (loc == NULL || loc->nodeId != src_nodes[i].loc.nodeId ||
+        if (loc == nullptr || loc->nodeId != src_nodes[i].loc.nodeId ||
             loc->rackId != src_nodes[i].loc.rackId ||
             loc->cageId != src_nodes[i].loc.cageId ||
             loc->dcId != src_nodes[i].loc.dcId ||
@@ -10463,14 +10478,14 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
             failures++;
         }
         const char *got_name = clusterNodeGetName(n);
-        if (got_name == NULL || strcmp(got_name, src_nodes[i].name) != 0) {
+        if (got_name == nullptr || strcmp(got_name, src_nodes[i].name) != 0) {
             printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
                    " name mismatch\n",
                    src_nodes[i].id);
             failures++;
         }
         const char *got_addr = clusterNodeGetAddress(n);
-        if (got_addr == NULL || strcmp(got_addr, src_nodes[i].addr) != 0) {
+        if (got_addr == nullptr || strcmp(got_addr, src_nodes[i].addr) != 0) {
             printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
                    " address mismatch\n",
                    src_nodes[i].id);
@@ -10480,7 +10495,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
 
     size_t snap2_len = 0;
     uint8_t *snap2 = persistOpsClusterRing.snapshot(dst, &snap2_len);
-    if (snap2 == NULL || snap2_len != snap_len ||
+    if (snap2 == nullptr || snap2_len != snap_len ||
         memcmp(snap, snap2, snap_len) != 0) {
         printf("dkTestClusterRingFlexSerialize: re-snapshot is not "
                "byte-equivalent\n");
@@ -10513,7 +10528,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
 /* Whether 'len' bytes of 'buf' deserialize to a ring (the ring is freed) */
 static bool dkTestClusterRingAccepts(const void *buf, size_t len) {
     cleaner(clusterRingFree) clusterRing *r = clusterRingDeserialize(buf, len);
-    return r != NULL;
+    return r != nullptr;
 }
 
 static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
@@ -10567,7 +10582,7 @@ static int dkTestClusterRingMaliciousStateTest(int, char *[]) {
 
     clusterRing *r2 = (clusterRing *)persistOpsClusterRing.restore(
         (const uint8_t *)f, buflen);
-    if (r2 != NULL) {
+    if (r2 != nullptr) {
         printf("dkTestClusterRingMaliciousState: persistOps.restore accepted "
                "state=0xDEADBEEF\n");
         persistOpsClusterRing.free(r2);
@@ -10602,10 +10617,10 @@ static int dkTestClusterRingDuplicateIdTest(int, char *[]) {
     const size_t buflen = flexBytes(f);
     cleaner(clusterRingFree) clusterRing *r =
         clusterRingDeserialize((const void *)f, buflen);
-    if (r != NULL) {
+    if (r != nullptr) {
         printf("dkTestClusterRingDuplicateId: deserialize accepted duplicate "
                "ids\n");
-        if (persistOpsClusterRing.validate != NULL &&
+        if (persistOpsClusterRing.validate != nullptr &&
             persistOpsClusterRing.validate(r)) {
             printf("dkTestClusterRingDuplicateId: validate hook also "
                    "accepted dup-id ring\n");
@@ -10631,7 +10646,7 @@ static int dkTestClusterRingTruncatedBufferTest(int, char *[]) {
         .strategyType = CLUSTER_STRATEGY_JUMP,
     };
     cleaner(clusterRingFree) clusterRing *src = clusterRingNew(&config);
-    if (src == NULL) {
+    if (src == nullptr) {
         printf("dkTestClusterRingTruncatedBuffer: ring create failed\n");
         return 1;
     }
@@ -10650,7 +10665,7 @@ static int dkTestClusterRingTruncatedBufferTest(int, char *[]) {
 
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterRing.snapshot(src, &snap_len);
-    if (snap == NULL || snap_len < 16) {
+    if (snap == nullptr || snap_len < 16) {
         printf("dkTestClusterRingTruncatedBuffer: snapshot too small\n");
         return 1;
     }
@@ -10699,12 +10714,12 @@ static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
     /* Declared here (before any goto to `cleanup`) so the scope-exit
      * cleaner attribute below never bypasses an initializer across a
      * jump. */
-    cleanerName(zfree, Bytes) uint8_t *plaintext = NULL;
-    cleanerName(zfree, Bytes) uint8_t *envelope = NULL;
-    cleanerName(zfree, Bytes) uint8_t *recovered = NULL;
+    cleanerName(zfree, Bytes) uint8_t *plaintext = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *envelope = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *recovered = nullptr;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         printf("dkTestAeadKeyScheduleCache: ring create failed\n");
         return 1;
     }
@@ -10760,7 +10775,7 @@ static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
     }
 
     const aesGcmKey *cached1 = hmacKeyringGetAesGcmKey(ring, K1);
-    if (cached1 == NULL) {
+    if (cached1 == nullptr) {
         printf("dkTestAeadKeyScheduleCache: K1 (AES-128) MUST be cached\n");
         failures++;
     } else if (cached1->key_size != AES128_KEY_LEN ||
@@ -10772,7 +10787,7 @@ static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
     }
 
     const aesGcmKey *cached2 = hmacKeyringGetAesGcmKey(ring, K2);
-    if (cached2 == NULL) {
+    if (cached2 == nullptr) {
         printf("dkTestAeadKeyScheduleCache: K2 (AES-256) MUST be cached\n");
         failures++;
     } else if (cached2->key_size != AES256_KEY_LEN ||
@@ -10783,26 +10798,26 @@ static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
         failures++;
     }
 
-    if (hmacKeyringGetAesGcmKey(ring, K3) != NULL) {
+    if (hmacKeyringGetAesGcmKey(ring, K3) != nullptr) {
         printf("dkTestAeadKeyScheduleCache: K3 (20-byte SHA-1) MUST be "
                "uncached\n");
         failures++;
     }
-    if (hmacKeyringGetAesGcmKey(ring, HMAC_KEY_ID_INVALID) != NULL) {
+    if (hmacKeyringGetAesGcmKey(ring, HMAC_KEY_ID_INVALID) != nullptr) {
         printf("dkTestAeadKeyScheduleCache: HMAC_KEY_ID_INVALID MUST yield "
                "NULL\n");
         failures++;
     }
-    if (hmacKeyringGetAesGcmKey(ring, 0xDEADBEEFu) != NULL) {
+    if (hmacKeyringGetAesGcmKey(ring, 0xDEADBEEFu) != nullptr) {
         printf("dkTestAeadKeyScheduleCache: unregistered id MUST yield NULL\n");
         failures++;
     }
-    if (hmacKeyringGetAesGcmKey(NULL, K1) != NULL) {
+    if (hmacKeyringGetAesGcmKey(nullptr, K1) != nullptr) {
         printf("dkTestAeadKeyScheduleCache: NULL ring MUST yield NULL\n");
         failures++;
     }
 
-    if (cached1 != NULL) {
+    if (cached1 != nullptr) {
         for (int i = 0; i < 100; i++) {
             const aesGcmKey *probe = hmacKeyringGetAesGcmKey(ring, K1);
             if (probe != cached1) {
@@ -10818,7 +10833,7 @@ static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
     if (!hmacKeyringRetire(ring, K1)) {
         printf("dkTestAeadKeyScheduleCache: K1 retire failed\n");
         failures++;
-    } else if (hmacKeyringGetAesGcmKey(ring, K1) != NULL) {
+    } else if (hmacKeyringGetAesGcmKey(ring, K1) != nullptr) {
         printf("dkTestAeadKeyScheduleCache: post-retire K1 MUST yield NULL\n");
         failures++;
     }
@@ -10829,7 +10844,7 @@ static int dkTestAeadKeyScheduleCacheTest(int, char *[]) {
         failures++;
         goto cleanup;
     }
-    if (hmacKeyringGetAesGcmKey(ring, K4) == NULL) {
+    if (hmacKeyringGetAesGcmKey(ring, K4) == nullptr) {
         printf("dkTestAeadKeyScheduleCache: K4 cache MUST hit before E2E\n");
         failures++;
     }
@@ -10989,10 +11004,10 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
             hmacKeyringFree(ring);
             TEST_FINAL_RESULT;
         }
-        clusterMailbox *prod =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        clusterMailbox *cons =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *prod = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+        clusterMailbox *cons = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
         const uint8_t payload[] = "innerHdr-e2e-tamper";
         const size_t cap = clusterMailboxSealedSize(prod, sizeof(payload));
         cleanerName(zfree, Bytes) uint8_t *sealed = zmalloc(cap);
@@ -11186,10 +11201,10 @@ int dkTestMailboxRotateAnnounceFlexTest(int, char *[]) {
             hmacKeyringFree(ring);
             TEST_FINAL_RESULT;
         }
-        clusterMailbox *prod =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        clusterMailbox *cons =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *prod = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+        clusterMailbox *cons = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
         uint8_t inner[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         const size_t inner_len = clusterMailboxBuildRotateAnnounce(inner, KID);
         if (inner_len == 0u) {
@@ -11279,7 +11294,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int, char *[]) {
         return 1;
     }
     cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(wrapped);
-    if (buf == NULL) {
+    if (buf == nullptr) {
         return 1;
     }
 
@@ -11309,7 +11324,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int, char *[]) {
     }
     {
         flexEnvelopeVerifyParams vp = {.opts = FLEX_ENV_VERIFY_DEFAULT};
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         if (!flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
             printf("dkTestEnvelopeReservedZeroAssert: untampered Verify "
@@ -11321,7 +11336,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int, char *[]) {
         const uint8_t saved = buf[4];
         buf[4] = 0x04;
         flexEnvelopeVerifyParams vp = {.opts = FLEX_ENV_VERIFY_DEFAULT};
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         if (flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
             printf("dkTestEnvelopeReservedZeroAssert: Verify accepted "
@@ -11340,7 +11355,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int, char *[]) {
         const uint8_t saved = buf[4];
         buf[4] = 0x80;
         flexEnvelopeVerifyParams vp = {.opts = FLEX_ENV_VERIFY_DEFAULT};
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         if (flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
             printf("dkTestEnvelopeReservedZeroAssert: Verify accepted "
@@ -11351,7 +11366,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int, char *[]) {
     }
     {
         flexEnvelopeVerifyParams vp = {.opts = FLEX_ENV_VERIFY_DEFAULT};
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         if (!flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
             printf("dkTestEnvelopeReservedZeroAssert: restored Verify "
@@ -11462,7 +11477,7 @@ static int dkTestEnvelopeWrapPadPolicyTest(int, char *[]) {
             failures++;
         }
         flexEnvelopeVerifyParams vp = {.opts = FLEX_ENV_VERIFY_DEFAULT};
-        const uint8_t *out_p = NULL;
+        const uint8_t *out_p = nullptr;
         uint64_t out_pl = 0;
         if (!flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
             printf("dkTestEnvelopeWrapPadPolicy: round-trip verify failed\n");
@@ -11536,7 +11551,7 @@ static bool dkTestClusterE2EApply(uint32_t, uint64_t, const persistOps *ops,
                                   void *structure, void *ctx) {
     dkTestClusterE2EApplyCtx *t = (dkTestClusterE2EApplyCtx *)ctx;
     t->apply_invocations++;
-    if (ops != NULL && ops->free != NULL && structure != NULL) {
+    if (ops != nullptr && ops->free != nullptr && structure != nullptr) {
         ops->free(structure);
     }
     return true;
@@ -11568,10 +11583,10 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
     /* Declared here (before any goto to `cleanup_after_phase1`) so the
      * scope-exit cleaner attribute below never bypasses an initializer
      * across a jump. */
-    cleaner(freeE2ESavedArray) dkTestClusterE2ESaved *saved = NULL;
+    cleaner(freeE2ESavedArray) dkTestClusterE2ESaved *saved = nullptr;
 
     hmacKeyring *ring = hmacKeyringCreate();
-    if (ring == NULL) {
+    if (ring == nullptr) {
         printf("dkTestClusterE2EReplayProtection: keyring create failed\n");
         return 1;
     }
@@ -11610,8 +11625,8 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
         aeadNonceLogCreate(4096u);
     /* Declared here, ahead of the first goto, so the scope-exit cleaner
      * covers every jump to cleanup_after_phase1 below. */
-    cleaner(flexFree) flex *rep_src = NULL;
-    if (nonceLog == NULL) {
+    cleaner(flexFree) flex *rep_src = nullptr;
+    if (nonceLog == nullptr) {
         printf("dkTestClusterE2EReplayProtection: nonceLog create failed\n");
         hmacKeyringFree(ring);
         return 1;
@@ -11626,15 +11641,15 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
     const clusterMailboxCreateOptions mb_opts = {
         .ring = ring,
         .envelope_algo = FLEX_ENV_ALGO_HMAC_SHA256,
-        .on_apply = NULL,
-        .apply_ctx = NULL,
+        .on_apply = nullptr,
+        .apply_ctx = nullptr,
         .flags = CLUSTER_MAILBOX_FLAG_NONE,
         .disable_nonce_log = false,
         .nonce_log = nonceLog,
         .nonce_log_capacity = 0u,
     };
     clusterMailbox *mb = clusterMailboxCreateOpts(&mb_opts);
-    if (mb == NULL) {
+    if (mb == nullptr) {
         printf("dkTestClusterE2EReplayProtection: mailbox createOpts failed\n");
         hmacKeyringFree(ring);
         return 1;
@@ -11653,7 +11668,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
     clusterReplicator *rep = clusterReplicatorCreateEx(
         ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE, type_table,
         256u, dkTestClusterE2EApply, &app_ctx, &rep_cfg);
-    if (rep == NULL) {
+    if (rep == nullptr) {
         printf(
             "dkTestClusterE2EReplayProtection: replicator CreateEx failed\n");
         clusterMailboxFree(mb);
@@ -11671,7 +11686,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
 
     saved = (dkTestClusterE2ESaved *)zcalloc(D4_VALID_INGESTS,
                                              sizeof(dkTestClusterE2ESaved));
-    if (saved == NULL) {
+    if (saved == nullptr) {
         printf("dkTestClusterE2EReplayProtection: saved alloc failed\n");
         failures++;
         goto cleanup_after_phase1;
@@ -11689,7 +11704,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
 
         cleanerName(zfree, Bytes) uint8_t *wire =
             (uint8_t *)zmalloc(sealed_cap);
-        if (wire == NULL) {
+        if (wire == nullptr) {
             failures++;
             break;
         }
@@ -11715,7 +11730,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
          * freeE2ESavedArray_cleanup); disarm the local so the scope-exit
          * cleaner above skips it. */
         saved[i].wire = wire;
-        wire = NULL;
+        wire = nullptr;
         saved[i].len = written;
         saved[i].sequence = seq;
         saved[i].key_id = kid;
@@ -11768,7 +11783,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
             continue;
         }
         cleanerName(zfree, Bytes) uint8_t *forged = (uint8_t *)zmalloc(s->len);
-        if (forged == NULL) {
+        if (forged == nullptr) {
             failures++;
             continue;
         }
@@ -11793,7 +11808,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
         alt_payload[0] = (uint8_t)(0xAA + (i & 0x0Fu));
         cleanerName(zfree, Bytes) uint8_t *fresh =
             (uint8_t *)zmalloc(sealed_cap);
-        if (fresh == NULL) {
+        if (fresh == nullptr) {
             failures++;
             continue;
         }
@@ -11988,7 +12003,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     const size_t kMaxPayload = 4096;
     cleanerName(zfree, Bytes) uint8_t *plaintext =
         (uint8_t *)zmalloc(kMaxPayload);
-    if (plaintext == NULL) {
+    if (plaintext == nullptr) {
         printf("dkTestEnvelopeStructAwareFuzz: zmalloc plaintext failed\n");
         return 1;
     }
@@ -12000,7 +12015,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     cleanerName(zfree, Bytes) uint8_t *wire = (uint8_t *)zmalloc(kMaxWireLen);
     cleanerName(zfree, Bytes) uint8_t *plaintext_out =
         (uint8_t *)zmalloc(kMaxPayload);
-    if (wire == NULL || plaintext_out == NULL) {
+    if (wire == nullptr || plaintext_out == nullptr) {
         printf("dkTestEnvelopeStructAwareFuzz: zmalloc wire/out failed\n");
         return 1;
     }
@@ -12075,7 +12090,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
 
             {
                 flexEnvelopeVerifyParams vp = {
-                    .key = is_keyed ? kKey32 : NULL,
+                    .key = is_keyed ? kKey32 : nullptr,
                     .key_len = is_keyed ? key_len : 0,
                 };
                 bool ok;
@@ -12091,7 +12106,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
                         failures++;
                     }
                 } else {
-                    const uint8_t *out_p = NULL;
+                    const uint8_t *out_p = nullptr;
                     uint64_t out_pl = 0;
                     ok =
                         flexEnvelopeVerify(wire, written, &vp, &out_p, &out_pl);
@@ -12144,7 +12159,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
                     wire[off] = (uint8_t)(saved ^ (uint8_t)(1u << bit));
                     total_mut[ai]++;
                     flexEnvelopeVerifyParams vp = {
-                        .key = is_keyed ? kKey32 : NULL,
+                        .key = is_keyed ? kKey32 : nullptr,
                         .key_len = is_keyed ? key_len : 0,
                     };
                     bool accepted;
@@ -12154,7 +12169,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
                             flexEnvelopeOpen(wire, written, &vp, plaintext_out,
                                              kMaxPayload, &out_len);
                     } else {
-                        const uint8_t *out_p = NULL;
+                        const uint8_t *out_p = nullptr;
                         uint64_t out_pl = 0;
                         accepted = flexEnvelopeVerify(wire, written, &vp,
                                                       &out_p, &out_pl);
@@ -12234,7 +12249,7 @@ dkTestEnvelopeCompareWrapVsReserve(flexEnvelopeAlgo algo, const uint8_t *key,
         failures++;
         goto out;
     }
-    uint8_t *region = NULL;
+    uint8_t *region = nullptr;
     size_t header_len = 0;
     if (!flexEnvelopeReserveWrap(buf_new, wrapped, (uint64_t)payload_len, &wp,
                                  &region, &header_len)) {
@@ -12273,7 +12288,7 @@ dkTestEnvelopeCompareWrapVsReserve(flexEnvelopeAlgo algo, const uint8_t *key,
         .key_len = key_len,
         .opts = FLEX_ENV_VERIFY_DEFAULT,
     };
-    const uint8_t *out_p = NULL;
+    const uint8_t *out_p = nullptr;
     uint64_t out_pl = 0;
     if (!flexEnvelopeVerify(buf_new, written_new, &vp, &out_p, &out_pl)) {
         printf("dkTestEnvelopeZeroCopy[%s]: Verify of new-API frame failed\n",
@@ -12312,9 +12327,9 @@ static int dkTestEnvelopeZeroCopyTest(int, char *[]) {
     };
 
     failures += dkTestEnvelopeCompareWrapVsReserve(
-        FLEX_ENV_ALGO_XXH64, NULL, 0, payload, sizeof(payload), "xxh64");
-    failures += dkTestEnvelopeCompareWrapVsReserve(FLEX_ENV_ALGO_XXH64, NULL, 0,
-                                                   NULL, 0, "xxh64-empty");
+        FLEX_ENV_ALGO_XXH64, nullptr, 0, payload, sizeof(payload), "xxh64");
+    failures += dkTestEnvelopeCompareWrapVsReserve(
+        FLEX_ENV_ALGO_XXH64, nullptr, 0, nullptr, 0, "xxh64-empty");
     failures += dkTestEnvelopeCompareWrapVsReserve(
         FLEX_ENV_ALGO_HMAC_SHA256, hmac_key, sizeof(hmac_key), payload,
         sizeof(payload), "hmac_sha256");
@@ -12354,7 +12369,7 @@ static int dkTestEnvelopeZeroCopyTest(int, char *[]) {
                 printf("dkTestEnvelopeZeroCopy[aead]: OLD Seal failed\n");
                 failures++;
             } else {
-                uint8_t *region = NULL;
+                uint8_t *region = nullptr;
                 size_t hn = 0;
                 if (!flexEnvelopeReserveSeal(buf_new, wrapped,
                                              (uint64_t)sizeof(payload), &sp,
@@ -12411,7 +12426,7 @@ static int dkTestEnvelopeZeroCopyTest(int, char *[]) {
         };
         uint8_t tiny[4];
         memset(tiny, 0xCC, sizeof(tiny));
-        uint8_t *region = NULL;
+        uint8_t *region = nullptr;
         size_t hn = 0;
         if (flexEnvelopeReserveWrap(tiny, sizeof(tiny),
                                     (uint64_t)sizeof(payload), &wp, &region,
@@ -12426,7 +12441,7 @@ static int dkTestEnvelopeZeroCopyTest(int, char *[]) {
         uint8_t buf[64];
         memset(buf, 0xDD, sizeof(buf));
         size_t written = 0;
-        if (flexEnvelopeFinalizeWrap(buf, sizeof(buf), 8, (uint64_t)4, NULL,
+        if (flexEnvelopeFinalizeWrap(buf, sizeof(buf), 8, (uint64_t)4, nullptr,
                                      &written)) {
             printf("dkTestEnvelopeZeroCopy[neg-null]: FinalizeWrap accepted "
                    "NULL params\n");
@@ -12443,7 +12458,7 @@ static int dkTestEnvelopeZeroCopyTest(int, char *[]) {
             (uint64_t)sizeof(payload), FLEX_ENV_ALGO_XXH64, FLEX_ENV_FLAG_NONE);
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(wrapped);
         if (buf) {
-            uint8_t *region = NULL;
+            uint8_t *region = nullptr;
             size_t hn = 0;
             if (flexEnvelopeReserveWrap(buf, wrapped, (uint64_t)sizeof(payload),
                                         &wp, &region, &hn)) {
@@ -12630,8 +12645,8 @@ static const TestEntry testRegistry[] = {
 
 /* Benchmarks (separate from tests) */
 static const TestEntry benchRegistry[] = {
-    {"mdsbench", NULL, mdsBenchWrapper, false, NULL},
-    {"mdscbench", NULL, mdscBenchWrapper, false, NULL},
+    {"mdsbench", nullptr, mdsBenchWrapper, false, nullptr},
+    {"mdscbench", nullptr, mdscBenchWrapper, false, nullptr},
     T_END};
 
 /* Pseudo-tests (special multi-test runners) */
@@ -12641,7 +12656,7 @@ typedef struct {
 } MultiTest;
 
 static const MultiTest multiTests[] = {
-    {"allstr", "mds,mdsbench,mdsc,mdscbench"}, {NULL, NULL}};
+    {"allstr", "mds,mdsbench,mdsc,mdscbench"}, {nullptr, nullptr}};
 
 /* ====================================================================
  * Test Runner Implementation
@@ -12711,7 +12726,7 @@ static void listTests(bool json) {
         printf("\n  ],\n  \"count\": %d\n}\n", countTests());
     } else {
         printf("Available tests (%d):\n", countTests());
-        const char *lastCategory = NULL;
+        const char *lastCategory = nullptr;
         for (int i = 0; testRegistry[i].name; i++) {
             const TestEntry *t = &testRegistry[i];
             const char *cat = t->category ? t->category : "default";
@@ -12751,7 +12766,7 @@ static const TestEntry *findTest(const char *name) {
             return &testRegistry[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static const TestEntry *findBench(const char *name) {
@@ -12760,7 +12775,7 @@ static const TestEntry *findBench(const char *name) {
             return &benchRegistry[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static int runMultiTest(const MultiTest *mt, int argc, char *argv[]) {
@@ -12814,7 +12829,7 @@ int main(int argc, char *argv[]) {
      * section headers included, whether printed by ctest.h or by the
      * suite itself) arrives when printed: ctest logs interleave with
      * stderr in order, and dktools testtime times sections exactly. */
-    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
 
     if (argc < 2) {
         printUsage(argv[0]);

@@ -300,7 +300,7 @@ void OSRegulateDaemonizeSignalReady(void) {
 }
 
 void OSRegulateDaemonizeThenExitNoWait(void) {
-    if (!OSRegulateDaemonize(NULL)) {
+    if (!OSRegulateDaemonize(nullptr)) {
         /* parent process exits cleanly */
         OSRegulateExitClean();
     }
@@ -388,14 +388,14 @@ int OSRegulateProcessExitWatchFd(pid_t pid) {
 
     struct kevent ev;
     EV_SET(&ev, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0,
-           NULL);
+           nullptr);
 
     /* Register the filter (changelist of 1, no eventlist read yet).
      * ESRCH here means the process is already gone, so no event will
      * ever arrive: report "no event source" rather than a fd that never
      * becomes readable.  The scope-exit close preserves errno, because
      * the caller reads ESRCH as an exit report. */
-    if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+    if (kevent(kq, &ev, 1, nullptr, 0, nullptr) < 0) {
         return -1;
     }
 
@@ -468,7 +468,7 @@ static bool osRegulateReapPollUntil(pid_t pid, const uint64_t startMs,
 
         const uint64_t remainingMs = budgetMs - elapsedMs;
         const uint64_t sleepMs = stepMs < remainingMs ? stepMs : remainingMs;
-        (void)poll(NULL, 0, (int)sleepMs);
+        (void)poll(nullptr, 0, (int)sleepMs);
 
         stepMs = stepMs * 2 < maxStepMs ? stepMs * 2 : maxStepMs;
     }
@@ -731,7 +731,7 @@ DK_FN_UNUSED static bool osrParseKernelU64_(const char *s, uint64_t max,
     }
 
     errno = 0;
-    char *end = NULL;
+    char *end = nullptr;
     const uint64_t parsed = strtoull(s, &end, 10);
     if (errno != 0 || end == s) {
         return false;
@@ -812,7 +812,7 @@ int OSRegulateTFOMode(void) {
             char buf[64] = {};
             uint64_t mode = 0;
             /* An unparsable value reads as TFO off */
-            if (fgets(buf, sizeof(buf), fp) != NULL &&
+            if (fgets(buf, sizeof(buf), fp) != nullptr &&
                 osrParseKernelU64_(buf, INT_MAX, &mode)) {
                 tfo = (int)mode;
             }
@@ -843,13 +843,13 @@ bool OSRegulateTcpBacklogMeetsLimit(
 #if DK_OS_LINUX /* /proc/sys/net/core/somaxconn */
     FILE *fp = fopen("/proc/sys/net/core/somaxconn", "r");
     if (!fp) {
-        return osrBacklogFits_(NULL, tcpBacklogListenLength);
+        return osrBacklogFits_(nullptr, tcpBacklogListenLength);
     }
 
     char buf[64] = {};
-    const bool readOk = fgets(buf, sizeof(buf), fp) != NULL;
+    const bool readOk = fgets(buf, sizeof(buf), fp) != nullptr;
     fclose(fp);
-    return osrBacklogFits_(readOk ? buf : NULL, tcpBacklogListenLength);
+    return osrBacklogFits_(readOk ? buf : nullptr, tcpBacklogListenLength);
 #else
     return true;
 #endif
@@ -1015,7 +1015,7 @@ bool OSRegulateLinuxOvercommitEnabled(void) {
         return false;
     }
 
-    if (fgets(buf, 64, fp) == NULL) {
+    if (fgets(buf, 64, fp) == nullptr) {
         fclose(fp);
         return false;
     }
@@ -1039,7 +1039,7 @@ bool OSRegulateLinuxTransparentHugePagesEnabled(void) {
         return false;
     }
 
-    if (fgets(buf, sizeof(buf), fp) == NULL) {
+    if (fgets(buf, sizeof(buf), fp) == nullptr) {
         fclose(fp);
         return false;
     }
@@ -1051,7 +1051,7 @@ bool OSRegulateLinuxTransparentHugePagesEnabled(void) {
      * else, '[never]' isn't found meaning THP is enabled,
      * so return true if NOT found (meaning enabled) and
      *    return false if FOUND (meaning disabled) */
-    return strstr(buf, "[never]") == NULL;
+    return strstr(buf, "[never]") == nullptr;
 }
 
 bool OSRegulateLinuxMemorySettingsAreOkay(void) {
@@ -1093,7 +1093,7 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid([[maybe_unused]] const char *field,
         return 0;
     }
 
-    while (fgets(line, sizeof(line), fp) != NULL) {
+    while (fgets(line, sizeof(line), fp) != nullptr) {
         if (strncmp(line, field, flen) == 0) {
             /* "<field>   <n> kB": search past the field name, which may
              * hold a 'k' itself (as "Locked:" does) */
@@ -1220,7 +1220,7 @@ size_t OSRegulateTotalMemoryGet(void) {
 #endif
     int64_t size = 0; /* 64-bit */
     size_t len = sizeof(size);
-    if (sysctl(mib, 2, &size, &len, NULL, 0) == 0) {
+    if (sysctl(mib, 2, &size, &len, nullptr, 0) == 0) {
         return (size_t)size;
     }
     return 0; /* Failed? */
@@ -1240,7 +1240,7 @@ size_t OSRegulateTotalMemoryGet(void) {
 #endif
     uint32_t size = 0; /* 32-bit */
     size_t len = sizeof(size);
-    if (sysctl(mib, 2, &size, &len, NULL, 0) == 0) {
+    if (sysctl(mib, 2, &size, &len, nullptr, 0) == 0) {
         return (size_t)size;
     }
 
@@ -1420,7 +1420,7 @@ int OSRegulateTest(int, char *[]) {
         float childSys = 0;
         float childUser = 0;
         size_t fdLimit = 0;
-        char *status = NULL;
+        char *status = nullptr;
         if (OSRegulateCPUCountGet() < 1 || OSRegulateTotalMemoryGet() == 0 ||
             !OSRegulateResourceUsageGet(&selfRSS, &childRSS, &sysCPU, &userCPU,
                                         &childSys, &childUser) ||
@@ -1499,7 +1499,7 @@ int OSRegulateTest(int, char *[]) {
             int requested;
             bool fits;
         } cases[] = {
-            {NULL, 128, false},
+            {nullptr, 128, false},
             {"", 128, false},
             {"\n", 128, false},
             {"junk\n", 128, false},

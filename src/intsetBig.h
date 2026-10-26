@@ -32,7 +32,7 @@
             ok_range = INTSET_BIG_RANGECHECK_INT128(*(box)->data.i128);        \
             break;                                                             \
         default:                                                               \
-            assert(NULL && "Invalid type for numeric compare?");               \
+            assert(false && "Invalid type for numeric compare?");              \
             unreachable();                                                     \
         }                                                                      \
                                                                                \

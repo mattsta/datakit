@@ -541,30 +541,30 @@ int fenwickI64Test(int, char *[]) {
 
     TEST("advanced: NULL parameter handling") {
         /* Operations on NULL should be safe */
-        fenwickI64Free(NULL); /* Should not crash */
+        fenwickI64Free(nullptr); /* Should not crash */
 
-        if (fenwickI64Query(NULL, 0) != 0) {
+        if (fenwickI64Query(nullptr, 0) != 0) {
             ERR("Query on NULL should return 0");
         }
 
-        if (fenwickI64Get(NULL, 0) != 0) {
+        if (fenwickI64Get(nullptr, 0) != 0) {
             ERR("Get on NULL should return 0");
         }
 
-        if (fenwickI64Count(NULL) != 0) {
+        if (fenwickI64Count(nullptr) != 0) {
             ERR("Count on NULL should return 0");
         }
 
-        if (fenwickI64Bytes(NULL) != 0) {
+        if (fenwickI64Bytes(nullptr) != 0) {
             ERR("Bytes on NULL should return 0");
         }
 
-        void *fw = NULL;
+        void *fw = nullptr;
         bool success = fenwickI64Update(&fw, 0, 10);
         if (!success) {
             ERR("Update should create tree if NULL");
         }
-        if (fw == NULL) {
+        if (fw == nullptr) {
             ERR("Tree should be created");
         }
 

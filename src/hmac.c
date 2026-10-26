@@ -132,7 +132,7 @@ void hmacFinal(hmacCtx *ctx, uint8_t *out) {
      * zero so a re-init would seed K' XOR 0x36 / 0x5C from an all-zero
      * key — silent wrong output rather than fail-closed). Re-initialise
      * via hmacInit / hmacInitFromPrepared before reuse. */
-    if (ctx->scratch != NULL && ctx->algo != NULL) {
+    if (ctx->scratch != nullptr && ctx->algo != nullptr) {
         dkSecureZero(ctx->scratch, ctx->algo->block_size * 2u);
     }
 }
@@ -144,8 +144,8 @@ void hmacCompute(const hmacHashAlgo *algo, const uint8_t *key, size_t key_len,
      * and most future hashes; only exotic large-state hashes hit zmalloc. */
     uint8_t stack_storage[1024];
     size_t need = hmacCtxSize(algo);
-    void *storage = NULL;
-    cleanerName(zfree, Bytes) uint8_t *heap = NULL;
+    void *storage = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *heap = nullptr;
 
     if (need <= sizeof(stack_storage)) {
         storage = stack_storage;
@@ -218,8 +218,8 @@ void hmacComputeWithKey(const hmacKey *prep, const void *data, size_t data_len,
     /* Stack-only fast path covers SHA-256 and any hash whose ctx fits
      * in 1 KiB.  Larger ctxs (exotic hashes) hit the heap. */
     uint8_t stack_storage[2048];
-    void *storage = NULL;
-    cleanerName(zfree, Bytes) uint8_t *heap = NULL;
+    void *storage = nullptr;
+    cleanerName(zfree, Bytes) uint8_t *heap = nullptr;
     if (algo->ctx_size * 2 <= sizeof(stack_storage)) {
         storage = stack_storage;
     } else {
@@ -262,7 +262,7 @@ static hmacSha256Multi4Fn hmacBatch4PickMulti4(void) {
     if (sha256ShaNiAvailable()) {
         return sha256ShaNiCompressBlocksMulti4;
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Drive the inner-hash bulk-compress for four HMAC-SHA-256 lanes via
@@ -380,15 +380,16 @@ void hmacComputeBatch4(const hmacKey *const prep[4], const void *const data[4],
      * assumption.  Production callers should structure their work to
      * hit the fast path; the fallback exists so the API can be called
      * unconditionally (e.g. by a generic envelope-verify-batch). */
-    if (prep == NULL || data == NULL || len == NULL || out == NULL) {
+    if (prep == nullptr || data == nullptr || len == nullptr ||
+        out == nullptr) {
         return;
     }
-    if (prep[0] == NULL || prep[1] == NULL || prep[2] == NULL ||
-        prep[3] == NULL) {
+    if (prep[0] == nullptr || prep[1] == nullptr || prep[2] == nullptr ||
+        prep[3] == nullptr) {
         return;
     }
     const hmacHashAlgo *algo = prep[0]->algo;
-    if (algo == NULL || algo != prep[1]->algo || algo != prep[2]->algo ||
+    if (algo == nullptr || algo != prep[1]->algo || algo != prep[2]->algo ||
         algo != prep[3]->algo) {
         for (uint32_t i = 0; i < 4u; i++) {
             hmacComputeWithKey(prep[i], data[i], len[i], out[i]);
@@ -397,7 +398,7 @@ void hmacComputeBatch4(const hmacKey *const prep[4], const void *const data[4],
     }
     if (algo == &hmacAlgoSHA256) {
         hmacSha256Multi4Fn multi4 = hmacBatch4PickMulti4();
-        if (multi4 != NULL) {
+        if (multi4 != nullptr) {
             hmacBatch4Sha256(prep, data, len, out, multi4);
             return;
         }
@@ -412,7 +413,7 @@ void hmacComputeBatch4(const hmacKey *const prep[4], const void *const data[4],
 void hmacInitFromPrepared(hmacCtx *ctx, const hmacKey *prep, void *storage,
                           size_t storage_size) {
     const hmacHashAlgo *algo = prep->algo;
-    if (algo == NULL || storage_size < hmacCtxSize(algo) ||
+    if (algo == nullptr || storage_size < hmacCtxSize(algo) ||
         algo->block_size > HMAC_MAX_BLOCK) {
         memset(ctx, 0, sizeof(*ctx));
         return;
@@ -815,7 +816,7 @@ int hmacTest(int, char *[]) {
         for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
             cleanerName(zfree, Bytes) uint8_t *msg =
-                (n > 0) ? zmalloc(n) : NULL;
+                (n > 0) ? zmalloc(n) : nullptr;
             for (size_t i = 0; i < n; i++) {
                 msg[i] = (uint8_t)((i * 1103515245u + 12345u) >> 8);
             }
@@ -993,7 +994,8 @@ int hmacTest(int, char *[]) {
     TEST("hmacComputeBatch4: perf bench (4 lanes, 1KiB each)") {
         const uint8_t key[32] = {0xBB};
         const size_t ps = hmacPreparedSize(&hmacAlgoSHA256);
-        cleaner(freeLaneStorage4) uint8_t *st[4] = {NULL, NULL, NULL, NULL};
+        cleaner(freeLaneStorage4)
+            uint8_t *st[4] = {nullptr, nullptr, nullptr, nullptr};
         hmacKey p[4];
         const hmacKey *preps[4];
         for (uint32_t i = 0; i < 4u; i++) {

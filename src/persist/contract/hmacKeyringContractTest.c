@@ -72,7 +72,7 @@ static void *pcKeyringBuild(const persistContractBuild *b) {
         uint8_t nonce[12];
         hmacKeyringNextAeadNonce(ring, id, nonce); /* absent ids refuse */
     }
-    hmacKeyringSetAeadReservation(ring, 0, NULL, NULL);
+    hmacKeyringSetAeadReservation(ring, 0, nullptr, nullptr);
     return ring;
 }
 

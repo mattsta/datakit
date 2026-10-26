@@ -842,7 +842,7 @@ void dodAppend(dod *const d, const dodVal t0, const dodVal t1,
  * Create new cannonical dod
  * ==================================================================== */
 void dodInit(dodWriter *const w) {
-    w->d = NULL;
+    w->d = nullptr;
     w->t[0] = 0;
     w->t[1] = 0;
     w->count = 0;
@@ -1090,7 +1090,7 @@ static int testBits(const uint8_t typeBits, const uint8_t dataBits,
             if (bitsUsed != bitStorage) {
                 ERR("Expected %d bit used, but used %zu bits!", bitStorage,
                     bitsUsed);
-                assert(NULL);
+                assert(false);
             }
 
             for (size_t i = 2; i <= loopers; i++) {
@@ -1102,7 +1102,7 @@ static int testBits(const uint8_t typeBits, const uint8_t dataBits,
                 if (bitsUsed != (i * bitStorage)) {
                     ERR("[%zu] Expected %zu bits used, but used %zu bits!", i,
                         i * bitStorage, bitsUsed);
-                    assert(NULL);
+                    assert(false);
                 }
             }
 
@@ -1270,7 +1270,7 @@ static void dodModelAppend(uint64_t *buf, size_t *pos, const dodVal t0,
         base += span;
     }
 
-    assert(NULL && "magnitude outside every category");
+    assert(false && "magnitude outside every category");
 }
 
 /* Encode 'values' with dodAppend() and with the reference model, require
@@ -1590,7 +1590,7 @@ int dodTest(int, char *[]) {
                 ERR("[%" PRIu64 "] expected %" PRIu64 " but got %" PRIu64
                     " instead!",
                     i, values[i], got);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -1871,7 +1871,7 @@ int dodTest(int, char *[]) {
         memset(&w, 0xA5, sizeof(w));
         dodInit(&w);
 
-        if (w.d != NULL || w.t[0] != 0 || w.t[1] != 0 || w.count != 0 ||
+        if (w.d != nullptr || w.t[0] != 0 || w.t[1] != 0 || w.count != 0 ||
             w.usedBits != 0 || w.totalBytes != 0) {
             ERR("dodInit left a field unset: d=%p t={%" PRId64 ", %" PRId64
                 "} count=%zu usedBits=%zu totalBytes=%zu",

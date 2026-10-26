@@ -111,7 +111,7 @@ SEGMENT_SMALL_FN_(SmallUpdate)(SEGMENT_SMALL_T_ *seg,
             *success = false;
         }
 
-        return NULL;
+        return nullptr;
     }
 
     uint64_t leaves = SEGMENT_SMALL_LEAVES_(seg);

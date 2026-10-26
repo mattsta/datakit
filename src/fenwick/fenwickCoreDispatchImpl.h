@@ -105,7 +105,7 @@ static bool FENWICK_D_FN_(Write_)(void **fw, size_t idx, FENWICK_VALUE_TYPE v,
 
     if (!success && created) {
         FENWICK_D_FN_(Free)(*fw);
-        *fw = NULL;
+        *fw = nullptr;
     }
 
     return success;
@@ -253,19 +253,19 @@ void *FENWICK_D_FN_(NewFromArray)(const FENWICK_VALUE_TYPE *values,
     if (FENWICK_D_FN_(FitsSmall_)(capacity)) {
         FENWICK_D_SMALL_ *small =
             FENWICK_D_FN_(SmallNewFromArray)(values, (uint32_t)count);
-        return small ? FENWICK_D_TAG_(small, FENWICK_D_TAG_SMALL_) : NULL;
+        return small ? FENWICK_D_TAG_(small, FENWICK_D_TAG_SMALL_) : nullptr;
     }
 
     FENWICK_D_FULL_ *full =
         FENWICK_D_FN_(FullNewFromArray)(values, (uint64_t)count);
-    return full ? FENWICK_D_TAG_(full, FENWICK_D_TAG_FULL_) : NULL;
+    return full ? FENWICK_D_TAG_(full, FENWICK_D_TAG_FULL_) : nullptr;
 }
 
 /* The cells, the count and the capacity of 'fw' (all zero for NULL) */
 static void FENWICK_D_FN_(Cells_)(const void *fw,
                                   const FENWICK_VALUE_TYPE **tree,
                                   uint64_t *count, uint64_t *capacity) {
-    *tree = NULL;
+    *tree = nullptr;
     *count = 0;
     *capacity = 0;
     if (!fw) {
@@ -351,7 +351,7 @@ static uint8_t *FENWICK_D_FN_(PersistSnapshot_)(const void *structure,
 
 static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -360,7 +360,7 @@ static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
     databoxBig box;
 #if FENWICK_IS_FLOATING
     if (n < 2) {
-        return NULL;
+        return nullptr;
     }
 
     flexGetByTypeBig(fe, &box);
@@ -372,7 +372,7 @@ static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
     if (!capOk || box.type != DATABOX_UNSIGNED_64 || n - 2 != capacity ||
         count > capacity || (capacity & (capacity - 1)) ||
         (capacity == 0) != (count == 0)) {
-        return NULL;
+        return nullptr;
     }
 
     if (capacity == 0) {
@@ -405,7 +405,7 @@ static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
         flexGetByTypeBig(fe, &box);
         if (!FENWICK_D_FN_(PersistUnbox_)(&box, &cells[i])) {
             FENWICK_D_FN_(Free)(fw);
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -416,7 +416,7 @@ static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
     for (size_t i = 0; i < n; i++) {
         flexGetByTypeBig(fe, &box);
         if (!FENWICK_D_FN_(PersistUnbox_)(&box, &values[i])) {
-            return NULL;
+            return nullptr;
         }
 
         fe = flexNext(f, fe);
@@ -433,7 +433,7 @@ static uint8_t *FENWICK_D_FN_(PersistEncodeOp_)(persistOp op, const void *args,
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2 ||
         !boxes) {
         /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+        return nullptr;
     }
 
     flex *f = flexNewFromDataboxPtrsExact(boxes, argc);

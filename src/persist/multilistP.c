@@ -32,7 +32,7 @@ DK_FN_UNUSED static void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
 multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
                           uint32_t depth) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultilistP) multilistP *ml = zcalloc(1, sizeof(*ml));
@@ -42,7 +42,7 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
     /* @own: container; free=mflexStateFree */
     ml->state = mflexStateCreate();
     if (!ml->state) {
-        return NULL;
+        return nullptr;
     }
 
     /* Create underlying multilist */
@@ -50,43 +50,43 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
     ml->ml = multilistNewLimit(limit, depth);
     if (!ml->ml) {
         mflexStateFree(ml->state);
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multilist type */
     if (!persistCtxInitForType(ctx, &persistOpsMultilist)) {
         multilistFree(ml->ml);
         mflexStateFree(ml->state);
-        return NULL;
+        return nullptr;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, ml->ml, &persistOpsMultilist)) {
         multilistFree(ml->ml);
         mflexStateFree(ml->state);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     multilistP *out = ml;
-    ml = NULL;
+    ml = nullptr;
     return out;
 }
 
 multilistP *multilistOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multilist type */
     if (!persistCtxInitForType(ctx, &persistOpsMultilist)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
     multilist *recovered = persistCtxRecover(ctx, &persistOpsMultilist);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultilistP) multilistP *ml = zcalloc(1, sizeof(*ml));
@@ -98,12 +98,12 @@ multilistP *multilistOpenP(persistCtx *ctx) {
     ml->state = mflexStateCreate();
     if (!ml->state) {
         multilistFree(ml->ml);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     multilistP *out = ml;
-    ml = NULL;
+    ml = nullptr;
     return out;
 }
 
@@ -132,7 +132,7 @@ void multilistCloseP(multilistP *ml) {
 }
 
 multilist *multilistGetP(multilistP *ml) {
-    return ml ? ml->ml : NULL;
+    return ml ? ml->ml : nullptr;
 }
 
 /* ============================================================================
@@ -194,7 +194,7 @@ static persistLogResult multilistPopP(multilistP *ml, databox *got, bool tail) {
     }
 
     const persistLogResult logged = persistCtxLogOp(
-        ml->ctx, tail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD, NULL, 0);
+        ml->ctx, tail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD, nullptr, 0);
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
@@ -267,7 +267,7 @@ persistLogResult multilistResetP(multilistP *ml) {
     }
 
     const persistLogResult logged =
-        persistCtxLogOp(ml->ctx, PERSIST_OP_CLEAR, NULL, 0);
+        persistCtxLogOp(ml->ctx, PERSIST_OP_CLEAR, nullptr, 0);
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
@@ -485,7 +485,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP create empty and close") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to create persistCtx");
         }
@@ -512,7 +512,7 @@ int multilistPTest(int, char *[]) {
         ptestCleanupFiles(basePath);
 
         /* Session 1: Create, add 100 elements, compact, add 50 more */
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to create persistCtx");
         }
@@ -551,7 +551,7 @@ int multilistPTest(int, char *[]) {
         persistCtxFree(ctx);
 
         /* Session 2: Recover and verify count is exactly 150 (not 250) */
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to open persistCtx");
         }
@@ -606,7 +606,7 @@ int multilistPTest(int, char *[]) {
     TEST("multilistP refusals change nothing: a refused log, missing "
          "arguments") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         const databox ten = DATABOX_SIGNED(10);
         const databox twenty = DATABOX_SIGNED(20);
@@ -634,23 +634,25 @@ int multilistPTest(int, char *[]) {
         persistCtxStats stats;
         multilistGetStatsP(ml, &stats);
         const uint64_t ops = stats.totalOps;
-        if (multilistPushTailP(NULL, &ten) || multilistPushHeadP(ml, NULL) ||
-            multilistPopHeadP(NULL, &popped) ||
-            multilistDelRangeP(NULL, 0, 1) ||
-            multilistReplaceAtIndexP(NULL, 0, &ten) ||
-            multilistReplaceAtIndexP(ml, 0, NULL) || multilistResetP(NULL) ||
-            multilistNewP(NULL, FLEX_CAP_LEVEL_2048, 0) ||
-            multilistOpenP(NULL) || multilistGetP(NULL) ||
-            multilistCountP(NULL) || multilistBytesP(NULL) ||
-            multilistIndexGetP(NULL, state, 0, &head) || multilistSyncP(NULL) ||
-            multilistCompactP(NULL)) {
+        if (multilistPushTailP(nullptr, &ten) ||
+            multilistPushHeadP(ml, nullptr) ||
+            multilistPopHeadP(nullptr, &popped) ||
+            multilistDelRangeP(nullptr, 0, 1) ||
+            multilistReplaceAtIndexP(nullptr, 0, &ten) ||
+            multilistReplaceAtIndexP(ml, 0, nullptr) ||
+            multilistResetP(nullptr) ||
+            multilistNewP(nullptr, FLEX_CAP_LEVEL_2048, 0) ||
+            multilistOpenP(nullptr) || multilistGetP(nullptr) ||
+            multilistCountP(nullptr) || multilistBytesP(nullptr) ||
+            multilistIndexGetP(nullptr, state, 0, &head) ||
+            multilistSyncP(nullptr) || multilistCompactP(nullptr)) {
             ERR("a call without its wrapper or value was not refused");
         }
         multilistIterator iter;
         mflexState *states[2] = {state, state};
-        multilistIteratorInitP(NULL, states, &iter, true, true);
-        multilistGetStatsP(NULL, NULL);
-        multilistCloseP(NULL);
+        multilistIteratorInitP(nullptr, states, &iter, true, true);
+        multilistGetStatsP(nullptr, nullptr);
+        multilistCloseP(nullptr);
         PTEST_LOGGED(multilistResetP(ml));
         if (multilistPopTailP(ml, &popped) != PERSIST_LOG_UNCHANGED) {
             ERR("an empty list's pop was logged");
@@ -666,7 +668,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP push tail with all data types") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -689,7 +691,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP push head with all data types") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -716,7 +718,7 @@ int multilistPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
 
             for (int type = 0; type < PTEST_TYPE_COUNT; type++) {
@@ -733,7 +735,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
@@ -753,7 +755,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP pop operations") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -801,7 +803,7 @@ int multilistPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
 
             for (int i = 0; i < 20; i++) {
@@ -831,7 +833,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
@@ -851,7 +853,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP mixed push/pop") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -893,7 +895,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP reset and continue") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -931,7 +933,7 @@ int multilistPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
 
             for (int i = 0; i < 10; i++) {
@@ -952,7 +954,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
@@ -980,10 +982,10 @@ int multilistPTest(int, char *[]) {
             multilistP *ml;
 
             if (cycle == 0) {
-                ctx = persistCtxNew(basePath, NULL);
+                ctx = persistCtxNew(basePath, nullptr);
                 ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
             } else {
-                ctx = persistCtxOpen(basePath, NULL);
+                ctx = persistCtxOpen(basePath, nullptr);
                 ml = multilistOpenP(ctx);
                 if (!ml) {
                     ERR("Failed to recover at cycle %d", cycle);
@@ -1006,7 +1008,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
@@ -1032,7 +1034,7 @@ int multilistPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
 
             for (int i = 0; i < 200; i++) {
@@ -1047,7 +1049,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
@@ -1069,14 +1071,14 @@ int multilistPTest(int, char *[]) {
         ptestCleanupFiles(basePath);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
             multilistCloseP(ml);
             persistCtxFree(ctx);
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
@@ -1099,7 +1101,7 @@ int multilistPTest(int, char *[]) {
         databox testBox = DATABOX_SIGNED(42);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
             PTEST_LOGGED(multilistPushTailP(ml, &testBox));
             multilistCloseP(ml);
@@ -1107,7 +1109,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
 
             if (multilistCountP(ml) != 1) {
@@ -1142,7 +1144,7 @@ int multilistPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
         const mlOffsetId n = 12;
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
             const databox rep = DATABOX_SIGNED(-77);
 
@@ -1220,7 +1222,7 @@ int multilistPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multilistP *ml = multilistOpenP(ctx);
             if (!ml) {
                 ERR("Recovery failed");
@@ -1240,7 +1242,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP statistics tracking") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
 
         for (int i = 0; i < 20; i++) {
@@ -1280,7 +1282,8 @@ int multilistPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         persistCtx *ctx = persistCtxNew(basePath, &cfg);
-        multilistP *ml = ctx ? multilistNewP(ctx, FLEX_CAP_LEVEL_128, 0) : NULL;
+        multilistP *ml =
+            ctx ? multilistNewP(ctx, FLEX_CAP_LEVEL_128, 0) : nullptr;
         if (!ml) {
             ERR("Failed to create multilistP");
         }
@@ -1342,7 +1345,7 @@ int multilistPTest(int, char *[]) {
 
         /* Reopen: snapshot of the empty list plus WAL replay. */
         ctx = persistCtxOpen(basePath, &cfg);
-        ml = ctx ? multilistOpenP(ctx) : NULL;
+        ml = ctx ? multilistOpenP(ctx) : nullptr;
         if (!ml) {
             ERR("WAL replay of the wide list failed");
         } else {
@@ -1371,7 +1374,7 @@ int multilistPTest(int, char *[]) {
 
         /* Reopen: the compacted snapshot plus the newer WAL rows. */
         ctx = persistCtxOpen(basePath, &cfg);
-        ml = ctx ? multilistOpenP(ctx) : NULL;
+        ml = ctx ? multilistOpenP(ctx) : nullptr;
         if (!ml) {
             ERR("snapshot + WAL recovery of the wide list failed");
         } else {
@@ -1426,7 +1429,7 @@ int multilistPTest(int, char *[]) {
                 persistCtx *ctx = persistCtxNew(basePath, &cfg);
                 multilistP *ml =
                     ctx ? multilistNewP(ctx, tiers[t].limit, tiers[t].depth)
-                        : NULL;
+                        : nullptr;
                 if (!ml) {
                     ERR("%s %s: failed to create multilistP", dataName[d],
                         tiers[t].name);
@@ -1502,7 +1505,7 @@ int multilistPTest(int, char *[]) {
 
                 /* Reopen: the empty snapshot plus WAL replay. */
                 ctx = persistCtxOpen(basePath, &cfg);
-                ml = ctx ? multilistOpenP(ctx) : NULL;
+                ml = ctx ? multilistOpenP(ctx) : nullptr;
                 if (!ml) {
                     ERR("%s %s: WAL replay failed", dataName[d], tiers[t].name);
                     persistCtxFree(ctx);
@@ -1534,7 +1537,7 @@ int multilistPTest(int, char *[]) {
 
                 /* Reopen: the compacted snapshot plus the newer WAL rows. */
                 ctx = persistCtxOpen(basePath, &cfg);
-                ml = ctx ? multilistOpenP(ctx) : NULL;
+                ml = ctx ? multilistOpenP(ctx) : nullptr;
                 if (!ml) {
                     ERR("%s %s: snapshot + WAL recovery failed", dataName[d],
                         tiers[t].name);
@@ -1557,7 +1560,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP readers: GetP, IndexP and SyncP") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         for (int64_t i = 0; i < 10; i++) {
             const databox v = DATABOX_SIGNED(i * 11);
@@ -1583,7 +1586,7 @@ int multilistPTest(int, char *[]) {
 
     TEST("multilistP keeps its node size and compression across reopen") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_512, 2);
         for (int64_t i = 0; i < 300; i++) {
             const databox v = DATABOX_SIGNED(i);
@@ -1593,7 +1596,7 @@ int multilistPTest(int, char *[]) {
         multilistCloseP(ml);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         ml = multilistOpenP(ctx);
         if (!ml || multilistLimit(multilistGetP(ml)) != FLEX_CAP_LEVEL_512 ||
             multilistDepth(multilistGetP(ml)) != 2 ||
@@ -1611,7 +1614,7 @@ int multilistPTest(int, char *[]) {
          * to the quarantine); a push of 4 is then logged with no
          * compaction, and a reopen holds [1, 2, 4] */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         for (int64_t v = 1; v <= 3; v++) {
             const databox box = databoxNewSigned(v);
@@ -1624,7 +1627,7 @@ int multilistPTest(int, char *[]) {
         }
 
         const databox four = databoxNewSigned(4);
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         ml = multilistOpenP(ctx);
         if (!ml || multilistCountP(ml) != 2) {
             ERR("lenient recovery kept %zu values, want 1, 2",
@@ -1639,7 +1642,7 @@ int multilistPTest(int, char *[]) {
         multilistCloseP(ml);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         ml = multilistOpenP(ctx);
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
         const int64_t want[3] = {1, 2, 4};

@@ -32,11 +32,11 @@ defcleaner(void *, zfree);
                   line,
                   "a container call was given a native multiarray (use the "
                   "multiarrayNative* macros)");
-    return NULL;
+    return nullptr;
 }
 #define MA_NATIVE_REFUSED_(m)                                                  \
     do {                                                                       \
-        if ((m) != NULL) {                                                     \
+        if ((m) != nullptr) {                                                  \
             (void)maNativeRefused_(__func__, __LINE__);                        \
         }                                                                      \
     } while (0)
@@ -156,19 +156,19 @@ void *multiarrayGet(multiarray *m, multiarrayIdx idx) {
     case MULTIARRAY_TYPE_LARGE:
         return multiarrayLargeGetForward(marl(m), idx);
     default: /* native or NULL: refused (a tail call, as above) */
-        return m ? maNativeRefused_(__func__, __LINE__) : NULL;
+        return m ? maNativeRefused_(__func__, __LINE__) : nullptr;
     }
 }
 
 /* First / last element; NULL when empty (each tier's own rule) */
 void *multiarrayGetHead(multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, GetHead);
-    return NULL;
+    return nullptr;
 }
 
 void *multiarrayGetTail(multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, GetTail);
-    return NULL;
+    return nullptr;
 }
 
 DK_STATIC inline void _multiarrayUpgrade(multiarray **m) {
@@ -295,7 +295,7 @@ DK_STATIC inline void multiarrayShrinkLarge_(multiarray **m,
 }
 
 void multiarrayDelete(multiarray **m, const uint32_t index) {
-    multiarrayPop(m, index, NULL);
+    multiarrayPop(m, index, nullptr);
 }
 
 void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
@@ -353,7 +353,8 @@ void multiarrayRotate(multiarray **m) {
     /* The tail element, held while it moves to the front */
     const uint16_t len = multiarrayElementLen(*m);
     uint8_t onStack[64];
-    cleaner(zfree) void *onHeap = len > sizeof(onStack) ? zmalloc(len) : NULL;
+    cleaner(zfree) void *onHeap =
+        len > sizeof(onStack) ? zmalloc(len) : nullptr;
     void *tail = onHeap ? onHeap : onStack;
     multiarrayPop(m, (multiarrayIdx)(count - 1), tail);
     multiarrayInsert(m, 0, tail);
@@ -444,7 +445,7 @@ void *multiarrayIteratorNext(multiarrayIter *iter) {
     case MULTIARRAY_TYPE_SMALL: {
         const multiarraySmall *s = iter->tier;
         if (iter->offset < 0 || iter->offset >= (int32_t)s->count) {
-            return NULL;
+            return nullptr;
         }
 
         void *at = s->data + (size_t)s->len * (uint32_t)iter->offset;
@@ -465,13 +466,13 @@ void *multiarrayIteratorNext(multiarrayIter *iter) {
             /* This node is done (or empty): the next one in the walk */
             if (iter->forward) {
                 if (iter->nodeIdx + 1 >= med->count) {
-                    return NULL;
+                    return nullptr;
                 }
                 iter->nodeIdx++;
                 iter->offset = 0;
             } else {
                 if (iter->nodeIdx == 0) {
-                    return NULL;
+                    return nullptr;
                 }
                 iter->nodeIdx--;
                 iter->offset = (int32_t)med->node[iter->nodeIdx].count - 1;
@@ -498,10 +499,10 @@ void *multiarrayIteratorNext(multiarrayIter *iter) {
             }
         }
 
-        return NULL;
+        return nullptr;
     }
     default: /* native or NULL */
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -536,9 +537,9 @@ multiarray *multiarrayCopy(const multiarray *m) {
         const multiarrayLarge *from = marl(m);
         /* @own: caller; free=multiarrayFree */
         multiarrayLarge *to = zmemdup(from, sizeof(*from));
-        to->head = NULL;
-        multiarrayLargeNode *made = NULL;
-        const multiarrayLargeNode *prev = NULL;
+        to->head = nullptr;
+        multiarrayLargeNode *made = nullptr;
+        const multiarrayLargeNode *prev = nullptr;
         for (const multiarrayLargeNode *cur = from->head; cur;) {
             /* @own: container; free=multiarrayFree */
             multiarrayLargeNode *node = zcalloc(1, sizeof(*node));
@@ -564,7 +565,7 @@ multiarray *multiarrayCopy(const multiarray *m) {
     }
     default: /* native or NULL: refused */
         MA_NATIVE_REFUSED_(m);
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -643,7 +644,7 @@ void multiarrayCopyTo(const multiarray *m, void *out) {
     }
     case MULTIARRAY_TYPE_LARGE: {
         const multiarrayLarge *large = marl(m);
-        multiarrayLargeNode *prev = NULL;
+        multiarrayLargeNode *prev = nullptr;
         multiarrayLargeNode *cur = large->head;
         while (cur) {
             const size_t bytes = (size_t)cur->count * large->len;
@@ -744,7 +745,7 @@ void multiarrayCompact(multiarray **m) {
     const uint16_t len = multiarrayElementLen(*m);
     const uint16_t rowMax = multiarrayRowMax(*m);
     size_t runs;
-    cleaner(zfree) void *runStorage = NULL;
+    cleaner(zfree) void *runStorage = nullptr;
     multiarrayRun_ *run;
     if (type == MULTIARRAY_TYPE_MEDIUM) {
         const multiarrayMedium *med = marm(*m);
@@ -761,7 +762,7 @@ void multiarrayCompact(multiarray **m) {
         /* @own: caller; free=zfree */
         runStorage = zcalloc(runs, sizeof(*run));
         run = runStorage;
-        const multiarrayLargeNode *prev = NULL;
+        const multiarrayLargeNode *prev = nullptr;
         size_t i = 0;
         for (const multiarrayLargeNode *cur = large->head; cur; i++) {
             run[i] = (multiarrayRun_){cur->data, (uint32_t)cur->count};
@@ -1008,7 +1009,7 @@ static int multiarrayBoundsCheck_(uint32_t n, multiarrayType tier) {
     DK_DIAG_EXPECT_REPORTS(subject, want, DK_DIAG_MULTIARRAY_INDEX, call)
     s16 probe = {.a = 99};
     s16 out = {.a = 77};
-    const void *got[3] = {NULL, NULL, NULL};
+    const void *got[3] = {nullptr, nullptr, nullptr};
     multiarrayIter it;
     MA_BOUNDS_(got[0] = multiarrayGet(m, n));
     MA_BOUNDS_(got[1] = multiarrayGet(m, UINT32_MAX)); /* not "from the end" */
@@ -1032,9 +1033,9 @@ static int multiarrayBoundsCheck_(uint32_t n, multiarrayType tier) {
 
     /* Just inside: nothing reported */
     want = 0;
-    const void *head = NULL;
-    const void *tail = NULL;
-    const void *last = NULL;
+    const void *head = nullptr;
+    const void *tail = nullptr;
+    const void *last = nullptr;
     MA_BOUNDS_(head = multiarrayGetHead(m));
     MA_BOUNDS_(tail = multiarrayGetTail(m));
     MA_BOUNDS_(multiarrayDeleteRange(&m, n, 0)); /* empty: no change */
@@ -1328,7 +1329,7 @@ int multiarrayTest(int, char *[]) {
                 ERR("tier %d: changing the copy changed the original", tier);
             }
         }
-        cleaner(multiarrayFree) multiarray *ofNull = multiarrayCopy(NULL);
+        cleaner(multiarrayFree) multiarray *ofNull = multiarrayCopy(nullptr);
         if (ofNull) {
             ERR("a copy of NULL is not NULL");
         }
@@ -1395,7 +1396,7 @@ int multiarrayTest(int, char *[]) {
                     s.totalBytes);
             }
         }
-        multiarrayStats(NULL, &s);
+        multiarrayStats(nullptr, &s);
         if (s.tier || s.count || s.units || s.totalBytes) {
             ERR("NULL reports tier %u count %" PRIu64, s.tier, s.count);
         }
@@ -1410,7 +1411,7 @@ int multiarrayTest(int, char *[]) {
         int count = 0;
         s16 one = {.a = 11};
         multiarrayNativeInsert(nat, s16, 64, count, 0, &one);
-        multiarray *const subjects[2] = {nat, NULL};
+        multiarray *const subjects[2] = {nat, nullptr};
         const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
         dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
         for (size_t i = 0; i < 2; i++) {
@@ -1425,11 +1426,11 @@ int multiarrayTest(int, char *[]) {
 #define MA_REPORTS_(call)                                                      \
     DK_DIAG_EXPECT_REPORTS(subject, want, DK_DIAG_MULTIARRAY_NATIVE, call)
             multiarrayIter it;
-            const void *first = NULL;
-            const void *firstAt = NULL;
+            const void *first = nullptr;
+            const void *firstAt = nullptr;
             size_t counted = 0;
             size_t bytes = 0;
-            const void *got[3] = {NULL, NULL, NULL};
+            const void *got[3] = {nullptr, nullptr, nullptr};
             uint16_t lens[2] = {0, 0};
             MA_REPORTS_(multiarrayIteratorInit(m, &it, true));
             first = multiarrayIteratorNext(&it);
@@ -1456,10 +1457,10 @@ int multiarrayTest(int, char *[]) {
                 ERR("the container API acted on %s",
                     i ? "NULL" : "a native multiarray");
             }
-            multiarrayFree(NULL);
+            multiarrayFree(nullptr);
         }
         dkDiagSetPrintMode(priorPrint);
-        s16 *held = NULL;
+        s16 *held = nullptr;
         multiarrayNativeGet(nat, s16, held, 0);
         if (!held || held->a != 11) {
             ERR("the native element changed");
@@ -1495,7 +1496,7 @@ int multiarrayTest(int, char *[]) {
         }
 
         for (int idx = 0; idx < globalMax; idx++) {
-            s16 *got = NULL;
+            s16 *got = nullptr;
             multiarrayNativeGet(s, s16, got, idx);
             assert(got->a == idx);
             assert(got->b == idx);
@@ -1515,7 +1516,7 @@ int multiarrayTest(int, char *[]) {
         }
 
         for (int idx = 0; idx < globalMax; idx++) {
-            s16 *got = NULL;
+            s16 *got = nullptr;
             multiarrayNativeGet(s, s16, got, idx);
             assert(got->a == globalMax - 1 - idx);
             assert(got->b == globalMax - 1 - idx);
@@ -1538,7 +1539,7 @@ int multiarrayTest(int, char *[]) {
         }
 
         for (int idx = 0; idx < globalMax; idx++) {
-            s16 *got = NULL;
+            s16 *got = nullptr;
             multiarrayNativeGet(s, s16, got, idx + 1);
             assert(got->a == idx);
             assert(got->b == idx);
@@ -1575,7 +1576,7 @@ int multiarrayTest(int, char *[]) {
         }
 
         for (int idx = 0; idx < globalMax; idx++) {
-            s16 *got = NULL;
+            s16 *got = nullptr;
             multiarrayNativeGet(s, s16, got, idx + 1);
             assert(got->a == idx);
             assert(got->b == idx);
@@ -1802,7 +1803,7 @@ int multiarrayTest(int, char *[]) {
                 sawLarge = true;
                 break;
             default:
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -1892,7 +1893,7 @@ int multiarrayTest(int, char *[]) {
         /* Verify we can read all elements */
         for (int i = 0; i < count; i++) {
             s16 *got = (s16 *)multiarrayGet(mar, i);
-            if (got == NULL) {
+            if (got == nullptr) {
                 ERR("Alternating insert: NULL at idx %d", i);
             }
         }
@@ -1928,7 +1929,7 @@ int multiarrayTest(int, char *[]) {
         /* Verify all elements */
         int mismatches = 0;
         for (int j = 0; j < oracleCount; j++) {
-            s16 *got = NULL;
+            s16 *got = nullptr;
             multiarrayNativeGet(s, s16, got, j);
             if (got->a != oracle[j].a || got->b != oracle[j].b) {
                 if (mismatches < 5) {
@@ -1964,7 +1965,7 @@ int multiarrayTest(int, char *[]) {
             if (i % 10000 == 0 && currentCount > 0) {
                 int checkIdx = rand() % currentCount;
                 s16 *got = (s16 *)multiarrayGet(mar, checkIdx);
-                if (got == NULL) {
+                if (got == nullptr) {
                     ERR("100K stress: NULL at round %d, idx %d", i, checkIdx);
                 }
             }
@@ -1975,7 +1976,7 @@ int multiarrayTest(int, char *[]) {
         for (int i = 0; i < 1000; i++) {
             int idx = rand() % currentCount;
             s16 *got = (s16 *)multiarrayGet(mar, idx);
-            if (got != NULL) {
+            if (got != nullptr) {
                 verified++;
             } else {
                 ERR("100K stress final: NULL at idx %d", idx);

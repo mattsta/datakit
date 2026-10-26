@@ -868,7 +868,7 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncoding(
     default:
         /* Writers never emit an encoding outside the table, and the
          * validators reject one. */
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 
@@ -1016,7 +1016,7 @@ DK_STATIC uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
         return value - REFERENCE_MAX_56;
     }
 
-    assert(NULL);
+    assert(false);
     unreachable();
 }
 
@@ -1054,7 +1054,7 @@ flexEncodingReferenceUnsignedDecode(flexEncoding encoding, uint64_t value) {
         return value + REFERENCE_MAX_56;
     }
 
-    assert(NULL);
+    assert(false);
     unreachable();
 }
 
@@ -1092,7 +1092,7 @@ flexEncodingReferenceUnsigned(uint64_t encodedValue) {
         return FLEX_CONTAINER_REFERENCE_EXTERNAL_64;
     }
 
-    assert(NULL);
+    assert(false);
     unreachable();
 }
 
@@ -1349,7 +1349,7 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
         /* immediate encoding, no value */
         return 0;
     default:
-        assert(NULL); /* unsupported encoding */
+        assert(false); /* unsupported encoding */
         unreachable();
     }
 }
@@ -1380,15 +1380,15 @@ flexWideTarget_(databox *r, databoxWide *slot, const flexWideStore_ store) {
     switch (store) {
     case FLEX_WIDE_STORE_SLOT_:
         r->data.ptr = slot;
-        r->big = slot != NULL;
+        r->big = slot != nullptr;
         r->allocated = false;
         return slot;
     case FLEX_WIDE_STORE_IN_BAND_:
         if (!r->big) {
             /* A plain databox has no 128-bit store: report the type only,
              * and never write through whatever its pointer holds. */
-            r->data.ptr = NULL;
-            return NULL;
+            r->data.ptr = nullptr;
+            return nullptr;
         }
 
         assert(r->data.ptr);
@@ -1554,7 +1554,7 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
         r->type = DATABOX_NULL;
         break;
     default:
-        assert(NULL && "Invalid type detected for this use case!");
+        assert(false && "Invalid type detected for this use case!");
     }
 }
 
@@ -1563,7 +1563,7 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
 DK_STATIC int64_t flexLoadSigned(const flexEntryData *entry) {
     assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
-    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
+    flexLoadFixedLength_(entry, &box, nullptr, FLEX_WIDE_STORE_SLOT_);
     return box.data.i64;
 }
 
@@ -1572,7 +1572,7 @@ DK_STATIC int64_t flexLoadSigned(const flexEntryData *entry) {
 DK_STATIC __int128_t flexLoadIntegerExact_(const flexEntryData *entry) {
     assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
-    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
+    flexLoadFixedLength_(entry, &box, nullptr, FLEX_WIDE_STORE_SLOT_);
     return box.type == DATABOX_UNSIGNED_64 ? (__int128_t)box.data.u64
                                            : (__int128_t)box.data.i64;
 }
@@ -1591,7 +1591,7 @@ DK_STATIC __int128_t flexLoadSignedBig(const flexEntryData *entry) {
 DK_STATIC uint64_t flexLoadUnsigned(const flexEntryData *entry) {
     assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
-    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
+    flexLoadFixedLength_(entry, &box, nullptr, FLEX_WIDE_STORE_SLOT_);
     return box.data.u64;
 }
 
@@ -1605,13 +1605,13 @@ DK_STATIC __uint128_t flexLoadUnsignedBig(const flexEntryData *entry) {
 
 DK_STATIC float flexLoadFloat(const flexEntryData *entry) {
     databox box;
-    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
+    flexLoadFixedLength_(entry, &box, nullptr, FLEX_WIDE_STORE_SLOT_);
     return box.data.f32;
 }
 
 DK_STATIC double flexLoadDouble(const flexEntryData *entry) {
     databox box;
-    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
+    flexLoadFixedLength_(entry, &box, nullptr, FLEX_WIDE_STORE_SLOT_);
     return box.data.d64;
 }
 #endif
@@ -1765,7 +1765,7 @@ void flexBulkPushBytesMembers(flex **const ff,
 
     flex *chunkStack[FLEX_BULK_PUSH_CHUNK_STACK_SLOTS];
     flex **merge = chunkStack;
-    cleanerName(zfree, FlexPtrs) flex **mergeHeap = NULL;
+    cleanerName(zfree, FlexPtrs) flex **mergeHeap = nullptr;
     if (mergeCap > (countof(chunkStack))) {
         mergeHeap = zcalloc(mergeCap, sizeof(*merge));
         merge = mergeHeap;
@@ -1816,9 +1816,9 @@ typedef struct flexHeaderInfo {
     int_fast8_t headerDiff;
 } flexHeaderInfo;
 
-#define flexDelete__(z, fe, n, d) flexDelete___(z, fe, n, d, NULL, NULL)
+#define flexDelete__(z, fe, n, d) flexDelete___(z, fe, n, d, nullptr, nullptr)
 #define flexDelete__GetDeleted(z, fe, n, d, dd)                                \
-    flexDelete___(z, fe, n, d, NULL, dd)
+    flexDelete___(z, fe, n, d, nullptr, dd)
 
 DK_STATIC void flexDelete___(flex **const ff, flexEntry *fe, int_fast32_t count,
                              const bool drain, flexHeaderInfo *headerInfo,
@@ -1879,7 +1879,7 @@ abstractInsertSizeFromInsertContents(flexInsertContents *contents) {
     insertSize +=
         FLEX_IS_STR(contents->encoding)
             ? contents->len
-            : flexDataSizeForFixedWidthEncoding(contents->encoding, NULL);
+            : flexDataSizeForFixedWidthEncoding(contents->encoding, nullptr);
 
     const uint_fast8_t encodingSize =
         flexEncodingLength(contents->encoding, contents->len);
@@ -1913,10 +1913,10 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
 }
 
 #define flexInsert_(ff, fe, encoding, data, len)                               \
-    flexInsert____(ff, fe, encoding, data, len, false, NULL)
+    flexInsert____(ff, fe, encoding, data, len, false, nullptr)
 
 #define flexInsertReplace_(ff, fe, encoding, data, len)                        \
-    flexInsert____(ff, fe, encoding, (void *)(data), len, true, NULL)
+    flexInsert____(ff, fe, encoding, (void *)(data), len, true, nullptr)
 
 /* ====================================================================
  * INSERT COMMONALITY
@@ -1980,7 +1980,7 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
     bool *commonFlexSelfAfterFe_ = commonFlexSelfBoolStack_;                   \
     bool *commonFlexSelfAlias_ =                                               \
         commonFlexSelfBoolStack_ + COMMON_INSERT_MAX_CONTENTS_;                \
-    cleaner(zfree) void *commonFlexSelfHeap_ = NULL;                           \
+    cleaner(zfree) void *commonFlexSelfHeap_ = nullptr;                        \
     if (contentsCount > COMMON_INSERT_MAX_CONTENTS_) {                         \
         commonFlexSelfHeap_ =                                                  \
             zcalloc(contentsCount, sizeof(int64_t) + 2 * sizeof(bool));        \
@@ -2292,7 +2292,7 @@ flexResizeEntry____(flex **const ff, flexEntry *const fe, size_t newLenForEntry,
 
 void flexResizeEntry(flex **const ff, flexEntry *const fe,
                      size_t newLenForEntry) {
-    flexResizeEntry____(ff, fe, newLenForEntry, NULL);
+    flexResizeEntry____(ff, fe, newLenForEntry, nullptr);
 }
 
 DK_INLINE_ALWAYS void flexInsert____(flex **const ff, flexEntry *const fe,
@@ -2353,17 +2353,17 @@ void flexInsertDouble(flex **const ff, flexEntry *const fe, double dvalue) {
  * inserts of TRUE/FALSE/NULL go through flexInsertByType */
 static void flexInsertTrue(flex **const ff, flexEntry *const fe, void *) {
     flexEncoding encoding = FLEX_TRUE;
-    flexInsert_(ff, fe, encoding, NULL, 0);
+    flexInsert_(ff, fe, encoding, nullptr, 0);
 }
 
 static void flexInsertFalse(flex **const ff, flexEntry *const fe, void *) {
     flexEncoding encoding = FLEX_FALSE;
-    flexInsert_(ff, fe, encoding, NULL, 0);
+    flexInsert_(ff, fe, encoding, nullptr, 0);
 }
 
 static void flexInsertNull(flex **const ff, flexEntry *const fe, void *) {
     flexEncoding encoding = FLEX_NULL;
-    flexInsert_(ff, fe, encoding, NULL, 0);
+    flexInsert_(ff, fe, encoding, nullptr, 0);
 }
 
 /* Stores a numeral as its canonical number (databoxCanonical: a 64-bit
@@ -2405,7 +2405,7 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
                                  const databox *box) {
     /* Special case: if databox is NULL, insert NULL encoding. */
     if (!box) {
-        flexInsert_(ff, fe, FLEX_NULL, NULL, 0);
+        flexInsert_(ff, fe, FLEX_NULL, nullptr, 0);
         return;
     }
 
@@ -2489,13 +2489,13 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
         break;
     }
     case DATABOX_TRUE:
-        flexInsert_(ff, fe, FLEX_TRUE, NULL, 0);
+        flexInsert_(ff, fe, FLEX_TRUE, nullptr, 0);
         break;
     case DATABOX_FALSE:
-        flexInsert_(ff, fe, FLEX_FALSE, NULL, 0);
+        flexInsert_(ff, fe, FLEX_FALSE, nullptr, 0);
         break;
     case DATABOX_NULL:
-        flexInsert_(ff, fe, FLEX_NULL, NULL, 0);
+        flexInsert_(ff, fe, FLEX_NULL, nullptr, 0);
         break;
     default:
         flexBoxTypeUnsupported_(box, "flexInsertByType");
@@ -2781,7 +2781,7 @@ void flexReplaceByType(flex **const ff, flexEntry *const fe,
     insertContentsFromBox(&copyBox, &content, CONVERSION_OVERRIDE_NONE, 0,
                           &scratch);
     flexInsertContents *contents[1] = {&content};
-    flexInsertReplace_____(ff, fe, contents, 1, 0, NULL);
+    flexInsertReplace_____(ff, fe, contents, 1, 0, nullptr);
 }
 
 void flexReplaceBytes(flex **const ff, flexEntry *const fe, const void *s,
@@ -2964,7 +2964,7 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
         return true;
     }
 
-    assert(NULL && "Attempted to increment something weird?");
+    assert(false && "Attempted to increment something weird?");
     return false;
 }
 
@@ -3083,13 +3083,14 @@ flex *flexSplit(flex **const ff, const uint_fast32_t elementsPerEntry) {
  * input flex argument equal to newly reallocated flex return value. */
 flex *flexMerge(flex **first, flex **second) {
     /* If any params are null, we can't merge, so NULL. */
-    if (first == NULL || *first == NULL || second == NULL || *second == NULL) {
-        return NULL;
+    if (first == nullptr || *first == nullptr || second == nullptr ||
+        *second == nullptr) {
+        return nullptr;
     }
 
     /* Can't merge same list into itself. */
     if (*first == *second) {
-        return NULL;
+        return nullptr;
     }
 
     const size_t firstBytes = flexTotalBytes_(*first);
@@ -3166,11 +3167,11 @@ flex *flexMerge(flex **first, flex **second) {
     /* Now free and NULL out what we didn't realloc */
     if (appendToTarget) {
         zfree(*second);
-        *second = NULL;
+        *second = nullptr;
         *first = target;
     } else {
         zfree(*first);
-        *first = NULL;
+        *first = nullptr;
         *second = target;
     }
 
@@ -3232,7 +3233,7 @@ void flexPushBytes(flex **const ff, const void *data, size_t len,
 void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     /* Special case: if databox is NULL, insert NULL encoding. */
     if (!box) {
-        flexPush_(flexInsertNull, NULL);
+        flexPush_(flexInsertNull, nullptr);
         return;
     }
 
@@ -3281,13 +3282,13 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
         break;
     }
     case DATABOX_TRUE:
-        flexPush_(flexInsertTrue, NULL);
+        flexPush_(flexInsertTrue, nullptr);
         break;
     case DATABOX_FALSE:
-        flexPush_(flexInsertFalse, NULL);
+        flexPush_(flexInsertFalse, nullptr);
         break;
     case DATABOX_NULL:
-        flexPush_(flexInsertNull, NULL);
+        flexPush_(flexInsertNull, nullptr);
         break;
     default:
         flexBoxTypeUnsupported_(box, "flexPushByType");
@@ -3300,7 +3301,7 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
 void flexPushByTypeExact(flex **const ff, const databox *box,
                          flexEndpoint where) {
     if (!box) {
-        flexPush_(flexInsertNull, NULL);
+        flexPush_(flexInsertNull, nullptr);
         return;
     }
 
@@ -3354,11 +3355,11 @@ static flex *flexNewFromBoxes_(const databox *boxes, const databox *const *ptrs,
 }
 
 flex *flexNewFromDataboxes(const databox *boxes, size_t n) {
-    return flexNewFromBoxes_(boxes, NULL, n, false);
+    return flexNewFromBoxes_(boxes, nullptr, n, false);
 }
 
 flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n) {
-    return flexNewFromBoxes_(NULL, boxes, n, false);
+    return flexNewFromBoxes_(nullptr, boxes, n, false);
 }
 
 flex *flexNewFromDataboxExact(const databox *box) {
@@ -3369,11 +3370,11 @@ flex *flexNewFromDataboxExact(const databox *box) {
 }
 
 flex *flexNewFromDataboxesExact(const databox *boxes, size_t n) {
-    return flexNewFromBoxes_(boxes, NULL, n, true);
+    return flexNewFromBoxes_(boxes, nullptr, n, true);
 }
 
 flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n) {
-    return flexNewFromBoxes_(NULL, boxes, n, true);
+    return flexNewFromBoxes_(nullptr, boxes, n, true);
 }
 
 size_t flexEncodeDataboxPtrsExact(void *dst, size_t cap,
@@ -3604,7 +3605,7 @@ int flexFactorySelfTest(void) {
     {
         databox in = databoxNewBytes("hello", 5);
         flex *f = flexNewFromDatabox(&in);
-        FFT(f != NULL);
+        FFT(f != nullptr);
         databox out = {};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         FFT(DATABOX_IS_BYTES(&out) && databoxLen(&out) == 5 &&
@@ -3653,7 +3654,7 @@ int flexFactorySelfTest(void) {
 
     /* empty factory yields a valid zero-element flex. */
     {
-        flex *f = flexNewFromDataboxes(NULL, 0);
+        flex *f = flexNewFromDataboxes(nullptr, 0);
         FFT(f && flexCount(f) == 0);
         flexFree(f);
     }
@@ -3810,7 +3811,7 @@ flexEntry *flexIndexDirect(const flex *f, int32_t index) {
         }
     }
 
-    return (fe == end || index > 0) ? NULL : fe;
+    return (fe == end || index > 0) ? nullptr : fe;
 }
 
 /* Pre-process index request.
@@ -3852,7 +3853,7 @@ flexEntry *flexIndexFromAnchor(const flex *f, int32_t index,
     /* Normalize to a forward element index (negative is 1-based) */
     const int_fast32_t fwdIdx = index < 0 ? count + index : index;
     if (fwdIdx < 0 || fwdIdx >= count) {
-        return NULL;
+        return nullptr;
     }
 
     if (anchorFE && anchorElemIdx >= 0 && anchorElemIdx < count) {
@@ -3912,7 +3913,7 @@ DK_FN_PURE flexEntry *flexHead(const flex *f) {
 
 DK_FN_PURE flexEntry *flexHeadIfAny(const flex *f) {
     flexEntry *const head = FLEX_ENTRY_HEAD(f);
-    return head == GET_END(f) ? NULL : head;
+    return head == GET_END(f) ? nullptr : head;
 }
 
 flexEntry *flexMiddle(const flex *f, const uint_fast32_t elementsPerEntry) {
@@ -3930,14 +3931,14 @@ flexEntry *flexNext(const flex *const f, flexEntry *fe) {
 
     /* If we're at end, don't get Next() */
     if (fe == end) {
-        return NULL;
+        return nullptr;
     }
 
     fe += flexRawEntryLength(fe);
 
     /* If we got Next and Next is 'end', don't get Next() */
     if (fe == end) {
-        return NULL;
+        return nullptr;
     }
 
     return fe;
@@ -3945,7 +3946,7 @@ flexEntry *flexNext(const flex *const f, flexEntry *fe) {
 
 flexEntry *flexPrev(const flex *const f, flexEntry *fe) {
     if (IS_HEAD(fe, f)) {
-        return NULL;
+        return nullptr;
     }
 
     return flexGetPreviousEntry(fe);
@@ -3994,7 +3995,7 @@ static void flexResolveReferenceInto_(databox *const box,
         }
 
         box->data.ptr = slot;
-        box->big = slot != NULL;
+        box->big = slot != nullptr;
         box->allocated = false;
     } else {
         box->data = resolved.data;
@@ -4017,13 +4018,13 @@ void flexGetByTypeIntoWithReference(const flexEntry *const fe, databox *box,
 }
 
 void flexGetByType(const flexEntry *const fe, databox *box) {
-    flexDecode_(fe, box, NULL, FLEX_WIDE_STORE_IN_BAND_);
+    flexDecode_(fe, box, nullptr, FLEX_WIDE_STORE_IN_BAND_);
 }
 
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const multimapAtom *referenceContainer) {
     if (FLEX_IS_REF_EXTERNAL(
-            flexDecode_(fe, box, NULL, FLEX_WIDE_STORE_IN_BAND_))) {
+            flexDecode_(fe, box, nullptr, FLEX_WIDE_STORE_IN_BAND_))) {
         /* TODO: make copying version here if atom map is compressed? */
         multimapAtomLookupConvert(referenceContainer, box);
     }
@@ -4046,7 +4047,7 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
          * set, with its owner unchanged, and otherwise to a heap block the
          * box owns, so the result never depends on storage outside the
          * box.  flexWideTarget_ sets up both. */
-        flexLoadFixedLength_(&entry, box, NULL, FLEX_WIDE_STORE_OWNED_);
+        flexLoadFixedLength_(&entry, box, nullptr, FLEX_WIDE_STORE_OWNED_);
         if (box->type == DATABOX_SIGNED_128 ||
             box->type == DATABOX_UNSIGNED_128) {
             return;
@@ -4094,7 +4095,7 @@ bool flexGetNextByTypeBig(flex *const f, flexEntry **const fe,
  * comes back deferred and nothing is written for it. */
 bool flexGetSigned(flexEntry *fe, int64_t *value) {
     databox box;
-    flexGetByTypeInto(fe, &box, NULL);
+    flexGetByTypeInto(fe, &box, nullptr);
 
     /* Only a 64-bit integer can fit: a wide one does not fit 64 bits, and
      * bytes, reals, booleans and the rest are no integer at all */
@@ -4114,7 +4115,7 @@ bool flexGetSigned(flexEntry *fe, int64_t *value) {
 
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
     databox box;
-    flexGetByTypeInto(fe, &box, NULL);
+    flexGetByTypeInto(fe, &box, nullptr);
 
     /* Only a 64-bit integer can fit (as in flexGetSigned) */
     if (box.type != DATABOX_SIGNED_64 && box.type != DATABOX_UNSIGNED_64) {
@@ -4144,7 +4145,7 @@ DK_INLINE_ALWAYS void flexDeleteKeepCursor_(flex **const ff, flexEntry **fe,
 
     const size_t offset = *fe - *ff;
     flexHeaderInfo headerInfo = {};
-    flexDelete___(ff, *fe, count, drain, &headerInfo, NULL);
+    flexDelete___(ff, *fe, count, drain, &headerInfo, nullptr);
     *fe = *ff + offset + headerInfo.headerDiff;
 }
 
@@ -4196,7 +4197,7 @@ void flexDeleteSortedValueWithMiddle(flex **const ff,
 
     flexHeaderInfo headerInfo = {};
     const size_t offsetMiddle = *middleEntry - *ff;
-    flexDelete___(ff, fe, elementsPerEntry, false, &headerInfo, NULL);
+    flexDelete___(ff, fe, elementsPerEntry, false, &headerInfo, nullptr);
     *middleEntry = *ff + offsetMiddle + headerInfo.headerDiff;
 
     if (deletingBeforeMiddle) {
@@ -4350,7 +4351,7 @@ DK_STATIC bool flexEntryInteger_(const flexEntryData *entry, bool *neg,
     }
 
     databox box = {};
-    flexGetByTypeInto(entry->fe, &box, NULL);
+    flexGetByTypeInto(entry->fe, &box, nullptr);
     if (box.type == DATABOX_SIGNED_64) {
         *neg = box.data.i64 < 0;
         *mag = *neg ? (uint64_t)0 - (uint64_t)box.data.i64
@@ -4592,7 +4593,7 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
           bool (*findCompare)(const flexEntryData *entry, const uint8_t *src,
                               const size_t len)) {
     if (!fe) {
-        return NULL;
+        return nullptr;
     }
 
     const flexEntry *end = GET_END(f);
@@ -4600,11 +4601,11 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
     /* Empty flex (or a tail/end sentinel handed in): nothing to walk,
      * and decoding the phantom entry at `end` would over-read. */
     if (fe == end) {
-        return NULL;
+        return nullptr;
     }
 
     int32_t skipCount = 0;
-    flexEntry *head = NULL;
+    flexEntry *head = nullptr;
     if (!forward) {
         head = FLEX_ENTRY_HEAD(f);
     }
@@ -4644,7 +4645,7 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 #define moveByOffsets_(mid, elementsPerEntry, fe_, prevOffsetIndexPhysical)    \
@@ -4685,7 +4686,7 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
     const bool useLowestMatch) {
     /* useLowestMatch: on a match keep searching lower, so among rows that
      * match 'compareElementDepth' elements the first one is returned */
-    flexEntry *lowest = NULL;
+    flexEntry *lowest = nullptr;
     const uint_fast32_t count = flexCount_(f);
     const uint_fast32_t countValues = count / elementsPerEntry;
     size_t min = 0;
@@ -4818,7 +4819,7 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedDirect_(
     const flexEntry *startMiddle, const uint_fast32_t compareElementDepth) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, false, NULL, false);
+        compareElementDepth, false, nullptr, false);
 }
 
 DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReference_(
@@ -4836,9 +4837,9 @@ flexEntry *flexFindByTypeSortedWithMiddleLowest(
     const databox *compareAgainst, const flexEntry *middleFE) {
     bool found = false;
     flexEntry *fe = abstractFindPositionByTypeSortedDirect(
-        f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, false, NULL,
-        true);
-    return found ? fe : NULL;
+        f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, false,
+        nullptr, true);
+    return found ? fe : nullptr;
 }
 
 flexEntry *flexFindByTypeSortedWithMiddleLowestWithReference(
@@ -4849,7 +4850,7 @@ flexEntry *flexFindByTypeSortedWithMiddleLowestWithReference(
     flexEntry *fe = abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, true,
         referenceContainer, true);
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 /* Allow duplicate keys while inserting into map. */
@@ -4953,7 +4954,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     const uint_fast32_t maxSubElementsToCompare =
         compareUsingKeyElementOnly ? 1 : elementsPerEntry;
 
-    flexEntry *fe = NULL;
+    flexEntry *fe = nullptr;
     if (useReference) {
         fe = flexFindPositionByTypeSortedWithReference_(
             *ff, elementsPerEntry, box, &found, mid, maxSubElementsToCompare,
@@ -5015,7 +5016,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
      * at the wrong offset, overlapping the tail of content[], which
      * silently corrupted insert descriptors whenever a wide entry
      * carried 128-bit elements. Block frees itself at scope exit. */
-    cleaner(zfree) void *sortedInsertScratch_ = NULL;
+    cleaner(zfree) void *sortedInsertScratch_ = nullptr;
     if (elementsPerEntry > SORTED_INSERT_STACK_ELEMENTS_) {
         const size_t bigBufferLen = elementsPerEntry * sizeof(*bigBuffer);
         const size_t copyLen = elementsPerEntry * sizeof(*copyBox);
@@ -5207,7 +5208,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
         useReference, referenceContainer, useSurrogateKeyForInsert,
         surrogateKey, newKeysBecomeShared, keyAsAllocation, keepFound,
-        replacedOut, NULL, NULL, NULL);
+        replacedOut, nullptr, nullptr, nullptr);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
@@ -5216,7 +5217,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     const bool compareUsingKeyElementOnly) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, NULL, false, NULL);
+        false, nullptr, false, nullptr, false, nullptr, false, nullptr);
 }
 
 /* As above, also reporting replaced values (see flex.h). */
@@ -5226,7 +5227,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
     const bool compareUsingKeyElementOnly, databox *const replacedOut) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, NULL, false, replacedOut);
+        false, nullptr, false, nullptr, false, nullptr, false, replacedOut);
 }
 
 /* TRUE SET insert: full-width compare AND dedupe — a found
@@ -5238,8 +5239,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
     flex **const ff, const uint_fast32_t elementsPerEntry,
     const databox **const box, flexEntry **const middleEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
-        ff, elementsPerEntry, box, middleEntry, false, false, NULL, false, NULL,
-        false, NULL, true, NULL);
+        ff, elementsPerEntry, box, middleEntry, false, false, nullptr, false,
+        nullptr, false, nullptr, true, nullptr);
 }
 
 /* Insert-if-absent: key-only compare, and a found key leaves the flex as
@@ -5250,8 +5251,8 @@ bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
     const databox **const box, flexEntry **const middleEntry,
     flexEntry **const foundEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
-        ff, elementsPerEntry, box, middleEntry, true, false, NULL, false, NULL,
-        false, NULL, true, NULL, foundEntry, NULL, NULL);
+        ff, elementsPerEntry, box, middleEntry, true, false, nullptr, false,
+        nullptr, false, nullptr, true, nullptr, foundEntry, nullptr, nullptr);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -5260,7 +5261,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
     const bool compareUsingKeyElementOnly, void **recoveredPointer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, true, recoveredPointer, false, NULL);
+        false, nullptr, false, nullptr, true, recoveredPointer, false, nullptr);
 }
 
 /* As above, also reporting replaced values (see flex.h). */
@@ -5271,7 +5272,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersRep
     databox *const replacedOut) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, true, recoveredPointer, false, replacedOut);
+        false, nullptr, false, nullptr, true, recoveredPointer, false,
+        replacedOut);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
@@ -5281,7 +5283,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, false, NULL, false, NULL, false, NULL);
+        true, referenceContainer, false, nullptr, false, nullptr, false,
+        nullptr);
 }
 
 /* TRUE SET insert with atom references — the reference-container
@@ -5292,7 +5295,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, false, true, referenceContainer,
-        false, NULL, false, NULL, true, NULL);
+        false, nullptr, false, nullptr, true, nullptr);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
@@ -5302,7 +5305,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, true, boxInsertKey, false, NULL, false, NULL);
+        true, referenceContainer, true, boxInsertKey, false, nullptr, false,
+        nullptr);
 }
 
 /* Insert-if-absent for a map of atom references inserting under a
@@ -5319,8 +5323,8 @@ bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
     void *const whenAbsentCtx) {
     return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         ff, elementsPerEntry, box, middleEntry, true, true, referenceContainer,
-        true, boxInsertKey, false, NULL, true, NULL, foundEntry, whenAbsent,
-        whenAbsentCtx);
+        true, boxInsertKey, false, nullptr, true, nullptr, foundEntry,
+        whenAbsent, whenAbsentCtx);
 }
 
 void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
@@ -5343,7 +5347,7 @@ void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
     flexInsertContents **contents = contentsStack;
     __int128_t *bigBuffer = bigBufferStack;
 
-    cleaner(zfree) void *appendScratch_ = NULL;
+    cleaner(zfree) void *appendScratch_ = nullptr;
     if (elementsPerEntry > APPEND_STACK_ELEMENTS_) {
         const size_t bigBufferLen = elementsPerEntry * sizeof(*bigBuffer);
         const size_t copyLen = elementsPerEntry * sizeof(*copyBox);
@@ -5368,7 +5372,8 @@ void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
         contents[i] = &content[i];
     }
 
-    flexInsert_____(ff, FLEX_ENTRY_END(*ff), contents, elementsPerEntry, NULL);
+    flexInsert_____(ff, FLEX_ENTRY_END(*ff), contents, elementsPerEntry,
+                    nullptr);
 }
 
 void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
@@ -5383,7 +5388,7 @@ void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
     const databox *chunk[APPEND_AUTO_CHUNK_];
     uint_fast32_t n = 0;
     for (uint_fast32_t i = 0; i < elementsPerEntry; i++) {
-        chunk[n] = box[i] ? databoxCanonical(box[i], &scratch[n]) : NULL;
+        chunk[n] = box[i] ? databoxCanonical(box[i], &scratch[n]) : nullptr;
         if (++n == APPEND_AUTO_CHUNK_) {
             flexAppendMultipleExact(ff, n, chunk);
             n = 0;
@@ -5450,7 +5455,7 @@ flexEntry *flexFindByTypeSorted(const flex *const f,
         f, elementsPerEntry, &compareAgainst, &found,
         flexMiddle(f, elementsPerEntry), 1);
 
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 flexEntry *flexFindByTypeSortedFullWidth(const flex *const f,
@@ -5461,7 +5466,7 @@ flexEntry *flexFindByTypeSortedFullWidth(const flex *const f,
         f, elementsPerEntry, compareAgainst, &found,
         flexMiddle(f, elementsPerEntry), elementsPerEntry);
 
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 flexEntry *flexGetByTypeSortedWithMiddle(const flex *const f,
@@ -5491,7 +5496,7 @@ flexEntry *flexFindByTypeSortedWithMiddle(const flex *const f,
     flexEntry *fe = flexFindPositionByTypeSortedDirect_(
         f, elementsPerEntry, &compareAgainst, &found, middleFE, 1);
 
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
@@ -5516,7 +5521,7 @@ flexEntry *flexFindByTypeSortedWithMiddleWithReference(
         printf("Got FLEX entry: %p\n", fe);
 #endif
 
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 flexEntry *flexFindByTypeSortedWithMiddleFullWidth(
@@ -5527,7 +5532,7 @@ flexEntry *flexFindByTypeSortedWithMiddleFullWidth(
         flexFindPositionByTypeSortedDirect_(f, elementsPerEntry, compareAgainst,
                                             &found, middleFE, elementsPerEntry);
 
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 flexEntry *flexFindByTypeSortedWithMiddleFullWidthWithReference(
@@ -5539,7 +5544,7 @@ flexEntry *flexFindByTypeSortedWithMiddleFullWidthWithReference(
         f, elementsPerEntry, compareAgainst, &found, middleFE, elementsPerEntry,
         referenceContainer);
 
-    return found ? fe : NULL;
+    return found ? fe : nullptr;
 }
 
 #define flexFind__(...)                                                        \
@@ -5619,17 +5624,17 @@ DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
     case DATABOX_BYTES_NEVER_FREE:
         flexFind__(forward, databoxBytes(box), databoxLen(box),
                    flexEntryCompareString__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static
+        return nullptr; /* flexFind__ macro returns, but this satisfies static
                         analyzers */
     case DATABOX_SIGNED_64:
         flexFind__(forward, (uint8_t *)&box->data.i64, sizeof(box->data.i64),
                    flexEntryCompareSigned__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static
+        return nullptr; /* flexFind__ macro returns, but this satisfies static
                         analyzers */
     case DATABOX_UNSIGNED_64:
         flexFind__(forward, (uint8_t *)&box->data.u64, sizeof(box->data.u64),
                    flexEntryCompareUnsigned__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static
+        return nullptr; /* flexFind__ macro returns, but this satisfies static
                         analyzers */
     case DATABOX_FLOAT_32:
     case DATABOX_DOUBLE_64:
@@ -5641,17 +5646,17 @@ DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
         if ((box->type == DATABOX_SIGNED_128 ||
              box->type == DATABOX_UNSIGNED_128) &&
             databoxIsWideDeferred(box)) {
-            return NULL; /* a wide probe with no payload has no value */
+            return nullptr; /* a wide probe with no payload has no value */
         }
 
         flexFind__(forward, (const uint8_t *)box, sizeof(*box),
                    flexEntryCompareBox__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static
+        return nullptr; /* flexFind__ macro returns, but this satisfies static
                         analyzers */
     default:
         /* No find semantics for this type (containers, pointers): no
          * match, never the flex itself. */
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -5717,7 +5722,7 @@ flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip) {
     const flexFindProbe_ probe = {
         .bytes = vstr,
         .len = vlen,
-        .number = canonical == &bytes ? NULL : canonical,
+        .number = canonical == &bytes ? nullptr : canonical,
     };
 
     return flexFind_(f, flexHead(f), skip, true, (const uint8_t *)&probe,
@@ -5873,7 +5878,8 @@ bool flexPeekTotalBytes(const uint8_t *buf, size_t buflen, size_t *out_total) {
      * primitive so they can advance past the prefix to a trailing
      * opaque region (e.g. clusterMailbox's inner-header + payload
      * framing). */
-    if (buf == NULL || out_total == NULL || buflen < FLEX_EMPTY_HEADER_SIZE) {
+    if (buf == nullptr || out_total == nullptr ||
+        buflen < FLEX_EMPTY_HEADER_SIZE) {
         return false;
     }
     /* Same checked decode as flexValidateBuffer. */
@@ -6321,12 +6327,12 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 /* Old flexGet() is used for testing and we haven't converted all tests to
  * flexGetByType() yet. */
 static bool flexGet(flexEntry *fe, uint8_t **str, uint32_t *len, int64_t *val) {
-    if (fe == NULL) {
+    if (fe == nullptr) {
         return false;
     }
 
     if (str) {
-        *str = NULL;
+        *str = nullptr;
     }
 
     flexEntryData entry;
@@ -6668,7 +6674,7 @@ DK_STATIC size_t randbytes(uint8_t *buf, size_t minlen, size_t maxlen) {
     ssize_t got = read(randfd, buf, attempt);
     if (got < 0) {
         perror("read error");
-        assert(NULL);
+        assert(false);
     }
 
     close(randfd);
@@ -6708,7 +6714,7 @@ static int32_t randstring(uint8_t *target, uint32_t min, uint32_t max) {
         maxval = 52;
         break;
     default:
-        assert(NULL);
+        assert(false);
     }
 
     while (i < len) {
@@ -7003,7 +7009,7 @@ static int32_t flexTestWideDecoders(void) {
 
         databox deferred;
         memset(&deferred, 0xFF, sizeof(deferred));
-        flexGetByTypeInto(fe, &deferred, NULL);
+        flexGetByTypeInto(fe, &deferred, nullptr);
         if (wide) {
             ok = ok && databoxIsWideDeferred(&deferred) &&
                  deferred.type == flexTestWideType(vals[i]) && !deferred.big &&
@@ -7086,7 +7092,7 @@ static int32_t flexTestWideDecoders(void) {
                             *got.data.u128 == wideStore;
 
         memset(&got, 0xFF, sizeof(got));
-        flexGetByTypeIntoWithReference(wideFE, &got, NULL, wideAtoms);
+        flexGetByTypeIntoWithReference(wideFE, &got, nullptr, wideAtoms);
         const bool deferredOk = databoxIsWideDeferred(&got) &&
                                 got.type == DATABOX_UNSIGNED_128 && !got.big;
 
@@ -7470,7 +7476,7 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
 
     /* Every trailer is the writer's, so reverse traversal must mirror the
      * forward walk exactly. */
-    fe = count ? flexTail(f) : NULL;
+    fe = count ? flexTail(f) : nullptr;
     for (size_t i = count; i-- > 0;) {
         if (fe != seen[i]) {
             FLEX_SWEEP_DECODE_FAIL_("reverse walk diverged");
@@ -7762,7 +7768,7 @@ static int32_t flexTestVoidEntries(void) {
             const databox after = DATABOX_WITH_BYTES((uint8_t *)"after", 5);
             const databox *row1[2] = {&k1, &reserve};
             const databox *row2[2] = {&k2, &after};
-            flexEntry *mid = NULL;
+            flexEntry *mid = nullptr;
             flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&f, 2, row1,
                                                                &mid, true);
             flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&f, 2, row2,
@@ -7843,20 +7849,20 @@ static int32_t flexTestUntrustedGetters(void) {
     const uint8_t *t = (const uint8_t *)two;
     const uint8_t *wd = (const uint8_t *)wide;
     const uint8_t *w2 = (const uint8_t *)wideTwo;
-    UG_REFUSE(flexGetSingleDatabox(NULL, 3, &a));
-    UG_REFUSE(flexGetSingleDatabox(o, flexBytes(one), NULL));
+    UG_REFUSE(flexGetSingleDatabox(nullptr, 3, &a));
+    UG_REFUSE(flexGetSingleDatabox(o, flexBytes(one), nullptr));
     UG_REFUSE(flexGetSingleDatabox(junk, sizeof(junk), &a));
     UG_REFUSE(flexGetSingleDatabox(t, flexBytes(two), &a));
     UG_REFUSE(flexGetSingleDatabox(wd, flexBytes(wide), &a));
-    UG_REFUSE(flexGetTwoDataboxes(NULL, 3, &a, &b));
-    UG_REFUSE(flexGetTwoDataboxes(t, flexBytes(two), &a, NULL));
+    UG_REFUSE(flexGetTwoDataboxes(nullptr, 3, &a, &b));
+    UG_REFUSE(flexGetTwoDataboxes(t, flexBytes(two), &a, nullptr));
     UG_REFUSE(flexGetTwoDataboxes(junk, sizeof(junk), &a, &b));
     UG_REFUSE(flexGetTwoDataboxes(o, flexBytes(one), &a, &b));
     UG_REFUSE(flexGetTwoDataboxes(w2, flexBytes(wideTwo), &a, &b));
-    UG_REFUSE(flexGetSingleDataboxBig(NULL, 3, &ba));
+    UG_REFUSE(flexGetSingleDataboxBig(nullptr, 3, &ba));
     UG_REFUSE(flexGetSingleDataboxBig(junk, sizeof(junk), &ba));
     UG_REFUSE(flexGetSingleDataboxBig(t, flexBytes(two), &ba));
-    UG_REFUSE(flexGetTwoDataboxesBig(NULL, 3, &ba, &bb));
+    UG_REFUSE(flexGetTwoDataboxesBig(nullptr, 3, &ba, &bb));
     UG_REFUSE(flexGetTwoDataboxesBig(junk, sizeof(junk), &ba, &bb));
     UG_REFUSE(flexGetTwoDataboxesBig(o, flexBytes(one), &ba, &bb));
 #undef UG_REFUSE
@@ -7886,7 +7892,7 @@ static int32_t flexTestDeleteUpTo(void) {
             for (int64_t v = 0; v < N; v++) {
                 flexPushSigned(&f, v, FLEX_ENDPOINT_TAIL);
             }
-            flexEntry *fe = start < 0 ? NULL : flexIndex(f, start);
+            flexEntry *fe = start < 0 ? nullptr : flexIndex(f, start);
             int32_t firstKept = 0;
             if (start >= 0) {
                 const int32_t last =
@@ -8008,7 +8014,7 @@ static int32_t flexTestReferenceSet(void) {
     } probes[] = {
         {"apple", "apple"}, {"pear", "pear"},    {"date", "date"},
         {"aaa", "apple"},   {"coconut", "date"}, {"lime", "pear"},
-        {"zzz", NULL},
+        {"zzz", nullptr},
     };
     for (size_t i = 0; i < countof(probes); i++) {
         const databox key = databoxNewBytesString(probes[i].probe);
@@ -8171,9 +8177,9 @@ static int32_t flexTestMergeMatrix(void) {
 
     /* Refusals: NULLs and a flex merged with itself */
     cleaner(flexFree) flex *self = flexNew();
-    flex *none = NULL;
+    flex *none = nullptr;
     flex *alias = self;
-    if (flexMerge(NULL, &self) || flexMerge(&self, &none) ||
+    if (flexMerge(nullptr, &self) || flexMerge(&self, &none) ||
         flexMerge(&self, &alias)) {
         ERR("merge accepted NULL or itself");
     }
@@ -8310,7 +8316,7 @@ static int32_t flexTestWideSorted(void) {
     }
 
     cleaner(flexFree) flex *m = flexNew();
-    flexEntry *mid = NULL;
+    flexEntry *mid = nullptr;
     for (size_t r = 0; r < ROWS; r++) {
         const size_t at = (r * 13) % ROWS;
         const databox key = databoxNewSigned(rows[at].key);
@@ -8450,8 +8456,8 @@ static int32_t flexTestNeg64Wide(void) {
             ERR("magnitude %zu matched a 64-bit value", i);
         }
 
-        if (flexIncrbySigned(&f, fe, 1, NULL) ||
-            flexIncrbyUnsigned(&f, fe, 1, NULL)) {
+        if (flexIncrbySigned(&f, fe, 1, nullptr) ||
+            flexIncrbyUnsigned(&f, fe, 1, nullptr)) {
             ERR("magnitude %zu took a 64-bit increment", i);
         }
 
@@ -9050,7 +9056,7 @@ static int32_t flexTestReplaceSign(void) {
             flexPushSigned(&f, over[i].start, FLEX_ENDPOINT_TAIL);
             flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
             if (flexIncrbySigned(&f, flexNext(f, flexHead(f)), over[i].by,
-                                 NULL) ||
+                                 nullptr) ||
                 !flexTestReplaceReadsBack(f, flexTestWideS(over[i].start))) {
                 ERR("%" PRId64 " + %" PRId64 " was not refused", over[i].start,
                     over[i].by);
@@ -9065,7 +9071,7 @@ static int32_t flexTestReplaceSign(void) {
         uint64_t got = 0;
         if (!flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 0, &got) ||
             got != 5 ||
-            flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), -6, NULL) ||
+            flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), -6, nullptr) ||
             !flexTestReplaceReadsBack(f, flexTestWideU(5))) {
             ERR("unsigned increment by zero or below zero");
         }
@@ -9152,7 +9158,7 @@ static int32_t flexTestReplaceSign(void) {
         flexPushByType(&f, &t, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
         int64_t v = 0;
-        if (flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 1, NULL) ||
+        if (flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 1, nullptr) ||
             !flexIncrbySigned(&f, flexNext(f, flexHead(f)), -3, &v) ||
             v != -2 || !flexTestReplaceReadsBack(f, flexTestWideS(-2))) {
             ERR("boolean increment");
@@ -9298,7 +9304,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         srand(atoi(argv[3]));
         printf("Running test with random seed of: %d\n", atoi(argv[3]));
     } else if (argc == 5) {
-        int s = time(NULL);
+        int s = time(nullptr);
         printf("Running test with random seed of: %d\n", s);
         srand(s);
     }
@@ -9306,8 +9312,8 @@ int32_t flexTest(int32_t argc, char **argv) {
     /* One scratch flex reused across every section below: the cleaner
      * covers whatever the last section left live, so each section ends
      * by either freeing it and NULLing it or leaving a live flex here. */
-    cleaner(flexFree) flex *f = NULL;
-    flexEntry *fe = NULL;
+    cleaner(flexFree) flex *f = nullptr;
+    flexEntry *fe = nullptr;
     int err = 0;
 
     TEST("decoding never writes through or yields an untrusted pointer") {
@@ -9672,11 +9678,11 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
                 &direct, 2, row, &midDirect, false);
             flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
-                &byRef, 2, row, &midRef, false, NULL);
+                &byRef, 2, row, &midRef, false, nullptr);
             flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(&setDirect, 2,
                                                                   row, &midSet);
             flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
-                &setByRef, 2, row, &midSetRef, NULL);
+                &setByRef, 2, row, &midSetRef, nullptr);
         }
         FLEX_API_CHECK_(flexEqual(direct, byRef) &&
                             flexEqual(setDirect, setByRef) &&
@@ -9700,10 +9706,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             hitRow && hitKey.data.i == 3 && hitVal.data.i == 31 &&
                 !flexFindByTypeSortedFullWidth(setDirect, 2, miss) &&
                 flexFindByTypeSortedWithMiddleFullWidthWithReference(
-                    setDirect, 2, hit, midSet, NULL) == hitRow,
+                    setDirect, 2, hit, midSet, nullptr) == hitRow,
             "the full-width sorted finds");
         FLEX_API_CHECK_(flexFindByTypeSortedWithMiddleLowestWithReference(
-                            setDirect, 2, &three, midSet, NULL) ==
+                            setDirect, 2, &three, midSet, nullptr) ==
                             flexFindByTypeSortedWithMiddleLowest(
                                 setDirect, 2, &three, midSet),
                         "the lowest-row find with no container");
@@ -9993,7 +9999,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             const flexEntry *const found = flexFind(
                 ff, finds[i].s, (uint32_t)strlen(finds[i].s), finds[i].skip);
             const flexEntry *const want =
-                finds[i].want < 0 ? NULL : flexIndex(ff, finds[i].want);
+                finds[i].want < 0 ? nullptr : flexIndex(ff, finds[i].want);
             if (found != want) {
                 ERR("flexFind('%s', skip %" PRIu32 ") found the wrong entry",
                     finds[i].s, finds[i].skip);
@@ -10001,7 +10007,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         cleaner(flexFree) flex *empty = flexNew();
-        if (flexFind(empty, "x", 1, 0) != NULL) {
+        if (flexFind(empty, "x", 1, 0) != nullptr) {
             ERR("flexFind on an empty flex found an entry");
         }
     }
@@ -10158,7 +10164,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t types = countof(boxes) + 1;
         const databox *row[(countof(boxes) + 1) * ROW_REPEAT_];
         for (size_t i = 0; i < types * ROW_REPEAT_; i++) {
-            row[i] = i % types < countof(boxes) ? &boxes[i % types] : NULL;
+            row[i] = i % types < countof(boxes) ? &boxes[i % types] : nullptr;
         }
 
         size_t converted = 0;
@@ -10251,7 +10257,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("replacing sorted inserts report the overwritten value") {
         cleaner(flexFree) flex *m = flexNew();
-        flexEntry *mid = NULL;
+        flexEntry *mid = nullptr;
         const databox key = databoxNewSigned(1);
         databox replaced[1];
 
@@ -10284,7 +10290,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             if (steps[i].replacedType == DATABOX_SIGNED_128 ||
                 steps[i].replacedType == DATABOX_UNSIGNED_128) {
                 /* Type only: a databox has no room for the payload. */
-                ok = ok && !replaced[0].big && replaced[0].data.ptr == NULL;
+                ok = ok && !replaced[0].big && replaced[0].data.ptr == nullptr;
             } else if (steps[i].replacedType == DATABOX_UNSIGNED_64) {
                 ok = ok && replaced[0].data.u == 42;
             }
@@ -10302,7 +10308,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("replacing inserts accept replacedOut aliasing the new values") {
         /* The exchange idiom: new values in, old values out, same boxes. */
         cleaner(flexFree) flex *m = flexNew();
-        flexEntry *mid = NULL;
+        flexEntry *mid = nullptr;
         const databox key = databoxNewUnsigned(1);
         databox vals[2] = {databoxNewUnsigned(100), databoxNewUnsigned(101)};
         const databox *row[3] = {&key, &vals[0], &vals[1]};
@@ -10411,8 +10417,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             ERR("empty flexes should be equal");
         }
 
-        if (flexEqual(a, NULL) || flexEqual(NULL, a) ||
-            !flexEqual(NULL, NULL)) {
+        if (flexEqual(a, nullptr) || flexEqual(nullptr, a) ||
+            !flexEqual(nullptr, nullptr)) {
             ERR("NULL handling wrong");
         }
 
@@ -10608,7 +10614,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("get the element at index 4 (out of range)") {
         f = createList();
         fe = flexIndexDirect(f, 4);
-        if (fe == NULL) {
+        if (fe == nullptr) {
             printf("No entry\n");
         } else {
             ERR("out of range index returned offset %" PRIdPTR,
@@ -10660,7 +10666,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("get the element at index -5 (reverse out of range)") {
         f = createList();
         fe = flexIndexDirect(f, -5);
-        if (fe == NULL) {
+        if (fe == nullptr) {
             printf("No entry\n");
         } else {
             ERR("reverse out of range index returned offset %" PRIdPTR,
@@ -10856,7 +10862,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("strings longer than 255 bytes") {
         char v1[257] = {};
         char v2[257] = {};
-        entry = NULL;
+        entry = nullptr;
         elen = 0;
         memset(v1, 'x', 256);
         memset(v2, 'y', 256);
@@ -10962,10 +10968,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* No bytes may come with no pointer: each push stores an empty
          * string (without passing NULL to memcpy, which UBSan reports) */
         cleaner(flexFree) flex *e = flexNew();
-        flexPushBytes(&e, NULL, 0, FLEX_ENDPOINT_TAIL);
-        flexPushBytesExact(&e, NULL, 0, FLEX_ENDPOINT_HEAD);
+        flexPushBytes(&e, nullptr, 0, FLEX_ENDPOINT_TAIL);
+        flexPushBytesExact(&e, nullptr, 0, FLEX_ENDPOINT_HEAD);
         const databox nothing = {
-            .type = DATABOX_BYTES, .data.bytes.start = NULL, .len = 0};
+            .type = DATABOX_BYTES, .data.bytes.start = nullptr, .len = 0};
         flexPushByType(&e, &nothing, FLEX_ENDPOINT_TAIL);
         flexInsertByType(&e, flexIndex(e, 1), &nothing);
         if (flexCount(e) != 4) {
@@ -11088,7 +11094,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const databox valboxB = databoxNewBytesString("BBBBBB");
         const databox valboxC = databoxNewBytesString("CCCCCCCC");
 
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
 
         const databox *groupA[2] = {&samekeybox, &valboxA};
         const bool newA = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
@@ -11118,7 +11124,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const databox valboxB = databoxNewBytesString("BBBBBB");
         const databox valboxC = databoxNewBytesString("CCCCCCCC");
 
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
 
         const databox *groupA[2] = {&samekeybox, &valboxA};
         const bool newA = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
@@ -11203,7 +11209,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("sorted insert and delete with multiple entries (numeric)") {
         f = flexNew();
-        flexEntry *mid = NULL;
+        flexEntry *mid = nullptr;
 
         for (int i = 0; i < 64; i++) {
             /* Test extreme values (near values) */
@@ -11306,7 +11312,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* reset for clean tests below */
         flexFree(f);
         f = flexNew();
-        mid = NULL;
+        mid = nullptr;
 
         for (int i = 0; i < 64; i++) {
             const databox keybox = databoxNewSigned(i);
@@ -11398,7 +11404,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          *   - REVERSE delete (700 to -200) */
         for (int forward = 0; forward < 2; forward++) {
             f = flexNew();
-            flexEntry *mid = NULL;
+            flexEntry *mid = nullptr;
             for (int i = 0; i < 64; i++) {
                 char *k = genkey("key", i);
                 char *v =
@@ -11638,7 +11644,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                     fs[0] = createFlexWithGrowthHint(grow * sizeof(int) * 2);
                     fs[1] = createFlexWithGrowthHint(grow * sizeof(int) * 2);
                     for (int withMiddle = 0; withMiddle < 2; withMiddle++) {
-                        flexEntry *insertMiddle = NULL;
+                        flexEntry *insertMiddle = nullptr;
                         tstart = timeUtilUs();
                         for (size_t i = 0; i < totalVals; i++) {
                             databox valbox = databoxNewSigned(vals[i]);
@@ -11836,7 +11842,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox rpcCmd = mku(800);
 
         databox entry_ = {
-            .data.bytes.start = NULL, .len = 0, .type = DATABOX_BYTES};
+            .data.bytes.start = nullptr, .len = 0, .type = DATABOX_BYTES};
 
         const databox *fields[] = {
             &clusterId,    &nodeId,       &runId,     &term,   &previousIndex,
@@ -12042,7 +12048,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(!memcmp(orig, f, flexTotalBytes_(f)));
 
         flexFree(f);
-        f = NULL;
+        f = nullptr;
     }
 
     TEST("rotating a 4 element list 300 times") {
@@ -12143,7 +12149,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Every value, walking each way */
         int64_t walked = 0;
         for (fe = flexHead(f); fe; fe = flexNext(f, fe)) {
-            assert(flexGet(fe, NULL, NULL, &value));
+            assert(flexGet(fe, nullptr, nullptr, &value));
             assert(walked == value);
             walked++;
         }
@@ -12151,7 +12157,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(walked == loops);
         for (fe = flexTail(f); fe; fe = flexPrev(f, fe)) {
             walked--;
-            assert(flexGet(fe, NULL, NULL, &value));
+            assert(flexGet(fe, nullptr, nullptr, &value));
             assert(walked == value);
         }
 
@@ -12169,12 +12175,12 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             fe = flexIndex(f, i);
             /* Validate head to tail */
-            assert(flexGet(fe, NULL, NULL, &value));
+            assert(flexGet(fe, nullptr, nullptr, &value));
             assert(i == value);
 
             /* Validate tail to head */
             fe = flexIndex(f, -i - 1);
-            assert(flexGet(fe, NULL, NULL, &value));
+            assert(flexGet(fe, nullptr, nullptr, &value));
             assert((loops - 1) - i == value);
         }
 
@@ -12443,7 +12449,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         flexFree(f);
-        f = NULL;
+        f = nullptr;
         printf("  (%d pushes, %d deletes)\n", pushed, deleted);
     }
 #endif
@@ -12645,7 +12651,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                                 float16Decode(i < 1700 ? i + 1700 : i));
                             break;
                         default:
-                            assert(NULL);
+                            assert(false);
                         }
                     }
 
@@ -12660,7 +12666,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                         /* @own: container; free=mdscfree */
                         listAddNodeTail(ref, mdscnewlen(buf, buflen));
                     } else {
-                        assert(NULL);
+                        assert(false);
                     }
                 }
 
@@ -12675,7 +12681,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                         i, elements, flexCount(f), listLength(ref));
                     flexRepr(f);
                     flexFree(f);
-                    f = NULL;
+                    f = nullptr;
                     continue;
                 }
 
@@ -12685,7 +12691,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                     assert(fe < (f + flexTotalBytes_(f)));
 
-                    uint8_t *str = NULL;
+                    uint8_t *str = nullptr;
                     ssize_t len = -1;
                     databox got = {};
                     databoxWide slot;
@@ -12746,7 +12752,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 assert(flexCount(f) == 0);
 
                 flexFree(f);
-                f = NULL;
+                f = nullptr;
             }
 
             uint64_t tend = timeUtilUs();
@@ -13003,7 +13009,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("fuzz: sorted insert and binary search - integers") {
         f = flexNew();
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
         const size_t count = 1000;
 
         /* Insert unique sequential values, track in oracle */
@@ -13055,7 +13061,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("fuzz: sorted insert and binary search - strings") {
         f = flexNew();
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
         const size_t count = 500;
 
         /* Insert unique strings */
@@ -13354,7 +13360,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("fuzz: search for nonexistent keys in a sorted flex") {
         f = flexNew();
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
 
         /* Insert even numbers only */
         for (int i = 0; i < 100; i += 2) {
@@ -13387,7 +13393,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("fuzz: stress sorted operations - 5K inserts/finds/deletes") {
         f = flexNew();
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
 
         /*
          * IMPORTANT: flexInsertByTypeSortedWithMiddle ALLOWS duplicates!
@@ -13729,7 +13735,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * boundaries to ensure the comparison and middle-tracking
          * logic handles variable-width encodings correctly. */
         f = flexNew();
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
 
         /* Insert strings that sort around encoding boundaries */
         char key63[64], key64[65], key65[66];
@@ -13766,9 +13772,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexEntry *found65 =
             flexFindByTypeSortedWithMiddle(f, 2, &box65, middle);
 
-        assert(found63 != NULL);
-        assert(found64 != NULL);
-        assert(found65 != NULL);
+        assert(found63 != nullptr);
+        assert(found64 != nullptr);
+        assert(found65 != nullptr);
 
         databox gotVal = {};
         flexEntry *valEntry = flexNext(f, found63);
@@ -13792,12 +13798,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         found64 = flexFindByTypeSortedWithMiddle(f, 2, &box64, middle);
         found65 = flexFindByTypeSortedWithMiddle(f, 2, &box65, middle);
 
-        assert(found63 != NULL);
-        assert(found64 == NULL); /* Should be deleted */
-        assert(found65 != NULL);
+        assert(found63 != nullptr);
+        assert(found64 == nullptr); /* Should be deleted */
+        assert(found65 != nullptr);
 
         flexFree(f);
-        f = NULL;
+        f = nullptr;
     }
 
     /* ================================================================
@@ -13817,8 +13823,8 @@ int32_t flexTest(int32_t argc, char **argv) {
      * ================================================================ */
 
     TEST("flexValidateBuffer rejects NULL / undersize input") {
-        assert(flexValidateBuffer(NULL, 0) == false);
-        assert(flexValidateBuffer(NULL, 1024) == false);
+        assert(flexValidateBuffer(nullptr, 0) == false);
+        assert(flexValidateBuffer(nullptr, 1024) == false);
         const uint8_t empty[1] = {};
         assert(flexValidateBuffer(empty, 0) == false);
         assert(flexValidateBuffer(empty, 1) == false);
@@ -13902,8 +13908,8 @@ int32_t flexTest(int32_t argc, char **argv) {
          "rejects") {
         /* The deep validator must inherit every rejection the cheap
          * validator already enforces. */
-        assert(flexValidateBufferDeep(NULL, 0) == false);
-        assert(flexValidateBufferDeep(NULL, 1024) == false);
+        assert(flexValidateBufferDeep(nullptr, 0) == false);
+        assert(flexValidateBufferDeep(nullptr, 1024) == false);
         const uint8_t empty[1] = {};
         assert(flexValidateBufferDeep(empty, 1) == false);
         /* total-bytes-claim != buflen */
@@ -14161,7 +14167,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
             cleaner(flexFree) flex *made = flexNewFromDataboxPtrsExact(ptrs, n);
             const size_t want = flexBytes(made);
-            const size_t need = flexEncodeDataboxPtrsExact(NULL, 0, ptrs, n);
+            const size_t need = flexEncodeDataboxPtrsExact(nullptr, 0, ptrs, n);
             if (need != want) {
                 ERR("row %d: %zu bytes needed, the flex has %zu", row, need,
                     want);

@@ -139,7 +139,7 @@ bool StrUtf8ValidScalar(const void *_str, size_t len) {
 
 /* Null-terminated string validation (scalar) */
 bool StrUtf8ValidCStrScalar(const char *str) {
-    if (str == NULL) {
+    if (str == nullptr) {
         return false;
     }
 
@@ -249,7 +249,7 @@ bool StrUtf8Valid(const void *_str, size_t len) {
 
 /* Null-terminated string validation with SSE2 */
 bool StrUtf8ValidCStr(const char *str) {
-    if (str == NULL) {
+    if (str == nullptr) {
         return false;
     }
 

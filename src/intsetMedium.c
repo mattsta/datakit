@@ -9,8 +9,8 @@ intsetMedium *intsetMediumNew(void) {
     intsetMedium *m = zcalloc(1, sizeof(intsetMedium));
     m->count16 = 0;
     m->count32 = 0;
-    m->values16 = NULL;
-    m->values32 = NULL;
+    m->values16 = nullptr;
+    m->values32 = nullptr;
     return m;
 }
 
@@ -250,7 +250,7 @@ intsetMedium *intsetMediumRemove(intsetMedium *m, int64_t value,
         if (removed) {
             *removed = false;
         }
-        return NULL;
+        return nullptr;
     }
 
     if (intsetValueFitsInt16(value)) {
@@ -270,7 +270,7 @@ intsetMedium *intsetMediumRemove(intsetMedium *m, int64_t value,
         if (m->count16 == 1) {
             /* Last element */
             zfree(m->values16);
-            m->values16 = NULL;
+            m->values16 = nullptr;
             m->count16 = 0;
         } else {
             /* Shift the tail down in place; capacity is retained so
@@ -297,7 +297,7 @@ intsetMedium *intsetMediumRemove(intsetMedium *m, int64_t value,
         if (m->count32 == 1) {
             /* Last element */
             zfree(m->values32);
-            m->values32 = NULL;
+            m->values32 = nullptr;
             m->count32 = 0;
         } else {
             /* Shift the tail down in place; capacity is retained so

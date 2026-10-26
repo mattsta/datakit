@@ -56,7 +56,7 @@ FENWICK_IMPL_SCOPE FENWICK_FULL_T_ *FENWICK_FULL_FN_(FullNew)(void) {
     fw->count = 0;
     fw->capacity = 0;
     fw->maxCapacity = (FENWICK_INDEX_TYPE_FULL)-1;
-    fw->tree = NULL;
+    fw->tree = nullptr;
     return fw;
 }
 
@@ -71,7 +71,7 @@ FENWICK_FULL_FN_(FullNewFromArray)(const FENWICK_VALUE_TYPE *values,
 
     for (FENWICK_INDEX_TYPE_FULL i = 0; i < count; i++) {
         if (!FENWICK_FULL_FN_(AlgoValid_)(values[i])) {
-            return NULL;
+            return nullptr;
         }
     }
 

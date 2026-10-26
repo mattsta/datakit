@@ -2534,9 +2534,9 @@ int ulidTest(int, char *[]) {
                     }
                 }
             }
-            if (k->dec(NULL, &got) || k->dec(good, NULL) ||
-                k->enc(NULL, text, sizeof(text)) ||
-                k->enc(&want, NULL, sizeof(text)) ||
+            if (k->dec(nullptr, &got) || k->dec(good, nullptr) ||
+                k->enc(nullptr, text, sizeof(text)) ||
+                k->enc(&want, nullptr, sizeof(text)) ||
                 k->enc(&want, text, ULID_ENCODED_LENGTH)) {
                 ERR("%s: took a NULL or a short buffer", k->name);
             }
@@ -2548,18 +2548,19 @@ int ulidTest(int, char *[]) {
         char t64[ULID64_ENCODED_LENGTH + 1];
         char t32[ULID32_ENCODED_LENGTH + 1];
         if (ulid64Decode("0000000000!00", &id64) ||
-            ulid32Decode("000!000", &id32) || ulid64Decode(NULL, &id64) ||
-            ulid32Decode(NULL, &id32) ||
+            ulid32Decode("000!000", &id32) || ulid64Decode(nullptr, &id64) ||
+            ulid32Decode(nullptr, &id32) ||
             ulid64Encode(&id64, t64, ULID64_ENCODED_LENGTH) ||
             ulid32Encode(&id32, t32, ULID32_ENCODED_LENGTH) ||
-            ulid64Encode(NULL, t64, sizeof(t64)) ||
-            ulid32Encode(NULL, t32, sizeof(t32)) || ulidGetTimestampNs(NULL) ||
-            ulidGetRandom(NULL) || ulid64GetCounter(NULL) ||
-            ulid64GetSnowflakeMachineId(NULL) ||
-            ulid64GetSnowflakeSequence(NULL) || ulid64GetNsDelta(NULL) ||
-            ulidGetFirstTimestampNs(NULL) || ulidGetSecondTimestampNs(NULL) ||
-            ulidGetFirstTimestampNsInterleaved(NULL) ||
-            ulidGetSecondTimestampNsInterleaved(NULL)) {
+            ulid64Encode(nullptr, t64, sizeof(t64)) ||
+            ulid32Encode(nullptr, t32, sizeof(t32)) ||
+            ulidGetTimestampNs(nullptr) || ulidGetRandom(nullptr) ||
+            ulid64GetCounter(nullptr) || ulid64GetSnowflakeMachineId(nullptr) ||
+            ulid64GetSnowflakeSequence(nullptr) || ulid64GetNsDelta(nullptr) ||
+            ulidGetFirstTimestampNs(nullptr) ||
+            ulidGetSecondTimestampNs(nullptr) ||
+            ulidGetFirstTimestampNsInterleaved(nullptr) ||
+            ulidGetSecondTimestampNsInterleaved(nullptr)) {
             ERR("a 64/32-bit codec or an accessor took bad input");
         }
 
@@ -2665,12 +2666,16 @@ int ulidTest(int, char *[]) {
         ulid_t b128 = {};
         b128.data[0] = 1;
         if (ulid32Compare(&a32, &b32) >= 0 || ulid32Compare(&b32, &a32) <= 0 ||
-            ulid32Compare(NULL, &a32) >= 0 || ulid32Compare(&a32, NULL) <= 0 ||
-            ulid32Compare(NULL, NULL) != 0 || ulid64Compare(&a64, &b64) >= 0 ||
-            ulid64Compare(&b64, &a64) <= 0 || ulid64Compare(NULL, &a64) >= 0 ||
-            ulid64Compare(&a64, NULL) <= 0 || ulidCompare(&a128, &b128) >= 0 ||
-            ulidCompare(NULL, &a128) >= 0 || ulidCompare(&a128, NULL) <= 0 ||
-            ulidCompare(NULL, NULL) != 0) {
+            ulid32Compare(nullptr, &a32) >= 0 ||
+            ulid32Compare(&a32, nullptr) <= 0 ||
+            ulid32Compare(nullptr, nullptr) != 0 ||
+            ulid64Compare(&a64, &b64) >= 0 || ulid64Compare(&b64, &a64) <= 0 ||
+            ulid64Compare(nullptr, &a64) >= 0 ||
+            ulid64Compare(&a64, nullptr) <= 0 ||
+            ulidCompare(&a128, &b128) >= 0 ||
+            ulidCompare(nullptr, &a128) >= 0 ||
+            ulidCompare(&a128, nullptr) <= 0 ||
+            ulidCompare(nullptr, nullptr) != 0) {
             ERR("compares");
         }
 
@@ -2687,7 +2692,7 @@ int ulidTest(int, char *[]) {
         cfg = (ulidVariantConfig){.type = ULID_VARIANT_COUNT};
         if (!snowOk || snowBad || !epochOk || epochBad ||
             ulidVariantConfigValidate(&cfg) ||
-            ulidVariantConfigValidate(NULL)) {
+            ulidVariantConfigValidate(nullptr)) {
             ERR("config validation");
         }
         if (ulid64GetMaxTimestamp(ULID_VARIANT_DUALNS) != UINT64_MAX ||
@@ -3427,12 +3432,12 @@ int ulidTest(int, char *[]) {
         }
 
         /* No generator: nothing generated, nothing encoded */
-        if (ulidGenerateAndEncode(NULL, encoded, sizeof(encoded)) != 0) {
+        if (ulidGenerateAndEncode(nullptr, encoded, sizeof(encoded)) != 0) {
             ERR("GenerateAndEncode without a generator should return 0");
         }
 
         char encoded64[ULID64_ENCODED_LENGTH + 1];
-        if (ulid64GenerateAndEncode(NULL, encoded64, sizeof(encoded64),
+        if (ulid64GenerateAndEncode(nullptr, encoded64, sizeof(encoded64),
                                     ULID_VARIANT_NS) != 0) {
             ERR("ulid64GenerateAndEncode without a generator should return 0");
         }

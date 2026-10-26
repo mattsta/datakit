@@ -84,7 +84,7 @@
  * --------------------------------------------------------------------------*/
 
 /* Check if array is empty (never been grown) */
-#define offsetArrayEmpty(arr) ((arr)->obj == NULL)
+#define offsetArrayEmpty(arr) ((arr)->obj == nullptr)
 
 /* Get count of addressable elements (0 if empty) */
 #define offsetArrayCount(arr)                                                  \
@@ -166,7 +166,7 @@
 #define offsetArrayFree(arr)                                                   \
     do {                                                                       \
         zfree((arr)->obj);                                                     \
-        (arr)->obj = NULL;                                                     \
+        (arr)->obj = nullptr;                                                  \
         (arr)->offset = 0;                                                     \
         (arr)->highest = 0;                                                    \
     } while (0)
@@ -189,7 +189,7 @@
         auto arrC_ = (arr);                                                    \
         /* the type offsetArrayGet's (idx) - offset is computed in */          \
         const typeof((idx) - (arr)->offset) idxC_ = (idx);                     \
-        offsetArrayBoundsCheck_(arrC_->obj != NULL, idxC_ >= arrC_->offset,    \
+        offsetArrayBoundsCheck_(arrC_->obj != nullptr, idxC_ >= arrC_->offset, \
                                 idxC_ <= arrC_->highest, #arr, (int64_t)idxC_, \
                                 __FILE__, __LINE__);                           \
         &arrC_->obj[offsetArrayAdjusted_(arrC_, idxC_)];                       \

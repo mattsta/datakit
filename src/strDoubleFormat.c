@@ -971,7 +971,7 @@ int strDoubleFormatTest(int, char *[]) {
             if (!len) {
                 ERR("Rejected minimum-size buffer for worst case %zu", i);
             } else {
-                const double back = strtod((const char *)exact, NULL);
+                const double back = strtod((const char *)exact, nullptr);
                 if (memcmp(&back, &v, sizeof(back)) != 0) {
                     ERR("Worst-case %zu did not roundtrip: %.*s", i, (int)len,
                         exact);
@@ -1195,7 +1195,7 @@ int strDoubleFormatTest(int, char *[]) {
         }
     }
 
-    int rs = time(NULL);
+    int rs = time(nullptr);
     printf("random seed: %d\n", rs);
     srand(rs);
 
@@ -1226,7 +1226,7 @@ int strDoubleFormatTest(int, char *[]) {
             /* Shortest-roundtrip contract: parsing the printed form
              * must recover the exact bits */
             if (len && isfinite(thisRandAttempt)) {
-                const double back = strtod((const char *)buf, NULL);
+                const double back = strtod((const char *)buf, nullptr);
                 if (memcmp(&back, &thisRandAttempt, sizeof(back)) != 0) {
                     ERR("Roundtrip failed: %.*s (bits %016" PRIx64 ")",
                         (int)len, buf, randBig);
@@ -1266,7 +1266,7 @@ int strDoubleFormatTest(int, char *[]) {
             /* Shortest-roundtrip contract: parsing the printed form
              * must recover the exact bits */
             if (len && isfinite(thisRandAttempt)) {
-                const double back = strtod((const char *)buf, NULL);
+                const double back = strtod((const char *)buf, nullptr);
                 if (memcmp(&back, &thisRandAttempt, sizeof(back)) != 0) {
                     ERR("Roundtrip failed: %.*s (value %.17g)", (int)len, buf,
                         thisRandAttempt);
@@ -1308,7 +1308,7 @@ int strDoubleFormatTest(int, char *[]) {
 
             /* Every corpus value must satisfy the roundtrip contract */
             if (len) {
-                const double back = strtod((const char *)buf, NULL);
+                const double back = strtod((const char *)buf, nullptr);
                 if (memcmp(&back, &v, sizeof(back)) != 0) {
                     int32_t vexp;
                     const uint64_t vfrac = fractionAndExponent(v, &vexp);

@@ -222,7 +222,7 @@ static inline flex **getSlot(timerWheel *tw, int32_t level, uint32_t idx) {
     case 3:
         return &tw->wheel3[idx];
     default:
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -293,7 +293,7 @@ static flexEntry *readTimerEntry(const flex *f, flexEntry *fe,
 
 /* Insert a timer entry into a slot's flex */
 static void insertTimerIntoSlot(flex **slot, const timerWheelEntry *e) {
-    if (*slot == NULL) {
+    if (*slot == nullptr) {
         /* @own: caller; free=flexFree */
         *slot = flexNew();
     }
@@ -438,7 +438,7 @@ bool timerWheelInit(timerWheel *tw) {
     tw->cancelledTimers = intsetNew();
     if (!tw->cancelledTimers) {
         multimapFree(tw->overflow);
-        tw->overflow = NULL;
+        tw->overflow = nullptr;
         return false;
     }
 
@@ -447,9 +447,9 @@ bool timerWheelInit(timerWheel *tw) {
     tw->pendingTimers = flexNew();
     if (!tw->pendingTimers) {
         multimapFree(tw->overflow);
-        tw->overflow = NULL;
+        tw->overflow = nullptr;
         intsetFree(tw->cancelledTimers);
-        tw->cancelledTimers = NULL;
+        tw->cancelledTimers = nullptr;
         return false;
     }
 
@@ -461,25 +461,25 @@ static void freeAllWheelSlots(timerWheel *tw) {
     for (uint32_t i = 0; i < WHEEL0_SIZE; i++) {
         if (tw->wheel0[i]) {
             flexFree(tw->wheel0[i]);
-            tw->wheel0[i] = NULL;
+            tw->wheel0[i] = nullptr;
         }
     }
     for (uint32_t i = 0; i < WHEEL1_SIZE; i++) {
         if (tw->wheel1[i]) {
             flexFree(tw->wheel1[i]);
-            tw->wheel1[i] = NULL;
+            tw->wheel1[i] = nullptr;
         }
     }
     for (uint32_t i = 0; i < WHEEL2_SIZE; i++) {
         if (tw->wheel2[i]) {
             flexFree(tw->wheel2[i]);
-            tw->wheel2[i] = NULL;
+            tw->wheel2[i] = nullptr;
         }
     }
     for (uint32_t i = 0; i < WHEEL3_SIZE; i++) {
         if (tw->wheel3[i]) {
             flexFree(tw->wheel3[i]);
-            tw->wheel3[i] = NULL;
+            tw->wheel3[i] = nullptr;
         }
     }
 }
@@ -504,15 +504,15 @@ timerWheel *timerWheelNew(void) {
      * safe on every exit below. */
     cleaner(timerWheelFree) timerWheel *tw = zcalloc(1, sizeof(*tw));
     if (!tw) {
-        return NULL;
+        return nullptr;
     }
 
     if (!timerWheelInit(tw)) {
-        return NULL;
+        return nullptr;
     }
 
     timerWheel *out = tw;
-    tw = NULL;
+    tw = nullptr;
     return out;
 }
 
@@ -805,7 +805,7 @@ static void dropCancellation(timerWheel *tw, timerWheelId id) {
 /* Process all timers in a slot's flex */
 static void processSlot(timerWheel *tw, flex **slot,
                         timerWheelAdjustedUs currentTime) {
-    if (*slot == NULL || flexCount(*slot) == 0) {
+    if (*slot == nullptr || flexCount(*slot) == 0) {
         return;
     }
 
@@ -815,7 +815,7 @@ static void processSlot(timerWheel *tw, flex **slot,
      * the flex being walked would invalidate the iteration pointers —
      * then freeing "the slot" at the end would drop the new entry. */
     const flex *f = *slot;
-    *slot = NULL;
+    *slot = nullptr;
 
     /* Process all timer entries in this slot */
     for (flexEntry *fe = flexHeadIfAny(f); fe;) {
@@ -879,7 +879,7 @@ static void cascadeWheel(timerWheel *tw, int32_t level) {
 
     flex **slot = getSlot(tw, level, tw->slotIndex[level]);
 
-    if (*slot == NULL || flexCount(*slot) == 0) {
+    if (*slot == nullptr || flexCount(*slot) == 0) {
         return;
     }
 
@@ -888,7 +888,7 @@ static void cascadeWheel(timerWheel *tw, int32_t level) {
     /* Detach before iterating so re-inserts can never alias the flex
      * being walked (see processSlot) */
     const flex *f = *slot;
-    *slot = NULL;
+    *slot = nullptr;
 
     const timerWheelAdjustedUs currentTime = tw->currentTimeUs;
 
@@ -1124,7 +1124,7 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
     while (tw->currentTimeUs < now) {
         const uint32_t slot0Idx = tw->slotIndex[0];
 
-        if (tw->wheel0[slot0Idx] == NULL) {
+        if (tw->wheel0[slot0Idx] == nullptr) {
             /* Empty slot: hop straight to the next occupied slot, the
              * wrap boundary (cascade point), or `now` - whichever is
              * nearest - instead of ticking through the empty span. */

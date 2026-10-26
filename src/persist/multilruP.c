@@ -69,7 +69,7 @@ static persistLogResult multilruPEvictStep(multilruP *mlru,
 static persistLogResult multilruPEnforceLimits(multilruP *mlru,
                                                persistLogResult result) {
     while (multilruNeedsEviction(mlru->mlru)) {
-        const persistLogResult step = multilruPEvictStep(mlru, NULL);
+        const persistLogResult step = multilruPEvictStep(mlru, nullptr);
         if (step == PERSIST_LOG_REFUSED || step == PERSIST_LOG_UNCHANGED) {
             break;
         }
@@ -119,7 +119,7 @@ static persistLogResult multilruPInsert_(multilruP *mlru, uint64_t weight,
  * (configuration included) is saved */
 static multilruP *multilruPNew_(persistCtx *ctx, const multilruConfig *config) {
     if (!ctx || !config) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultilruP) multilruP *mlru = zcalloc(1, sizeof(*mlru));
@@ -127,19 +127,19 @@ static multilruP *multilruPNew_(persistCtx *ctx, const multilruConfig *config) {
     /* @own: container; free=multilruFree */
     mlru->mlru = multilruNewWithConfig(config);
     if (!mlru->mlru) {
-        return NULL;
+        return nullptr;
     }
     multilruSetAutoEvict(mlru->mlru, false);
 
     if (!persistCtxInitForType(ctx, &persistOpsMultiLRU) ||
         !persistCtxSaveSnapshot(ctx, mlru->mlru, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     multilruP *out = mlru;
-    mlru = NULL;
+    mlru = nullptr;
     return out;
 }
 
@@ -171,19 +171,19 @@ multilruP *multilruNewWithConfigP(persistCtx *ctx,
 
 multilruP *multilruOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multilru type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiLRU)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL; every wrapper saves a starting
      * snapshot, so nothing recoverable means nothing to open */
     multilru *recovered = persistCtxRecover(ctx, &persistOpsMultiLRU);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
     multilruSetAutoEvict(recovered, false);
 
@@ -215,7 +215,7 @@ void multilruCloseP(multilruP *mlru) {
 }
 
 multilru *multilruGetRawP(multilruP *mlru) {
-    return mlru ? mlru->mlru : NULL;
+    return mlru ? mlru->mlru : nullptr;
 }
 
 /* ============================================================================
@@ -463,7 +463,7 @@ static int test_multilruP_basic(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Create new persistent multilru */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 100);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -493,7 +493,7 @@ static int test_multilruP_basic(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -532,7 +532,7 @@ static int test_multilruP_basic(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -570,7 +570,7 @@ static int test_multilruP_weighted(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Create multilru with weights enabled */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruConfig config = {
         .maxLevels = 7,
         .startCapacity = 0,
@@ -617,7 +617,7 @@ static int test_multilruP_weighted(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen weighted multilruP");
@@ -714,7 +714,7 @@ static int test_multilruP_empty_recovery(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Create and immediately close empty cache */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewP(ctx);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -724,7 +724,7 @@ static int test_multilruP_empty_recovery(int, char *[]) {
     persistCtxFree(ctx);
 
     /* Reopen empty cache */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen empty multilruP");
@@ -767,7 +767,7 @@ static int test_multilruP_large_dataset(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 5000);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -814,7 +814,7 @@ static int test_multilruP_large_dataset(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -865,7 +865,7 @@ static int test_multilruP_handle_gaps(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewP(ctx);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -894,7 +894,7 @@ static int test_multilruP_handle_gaps(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1006,7 +1006,7 @@ static int test_multilruP_mixed_operations(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1047,7 +1047,7 @@ static int test_multilruP_weight_extremes(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruConfig config = {
         .maxLevels = 7,
         .enableWeights = true,
@@ -1089,7 +1089,7 @@ static int test_multilruP_weight_extremes(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1132,7 +1132,7 @@ static int test_multilruP_auto_evict(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 5, 10);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -1171,7 +1171,7 @@ static int test_multilruP_auto_evict(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1205,7 +1205,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 5, 10);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -1237,7 +1237,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1274,7 +1274,7 @@ static int test_multilruP_level_promotion(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 0);
     if (!mlru) {
         ERR("Failed to create multilruP");
@@ -1301,7 +1301,7 @@ static int test_multilruP_level_promotion(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1345,7 +1345,7 @@ static int test_multilruP_demotions_replay(int, char *[]) {
      * must hold the same entries at the same levels and hand out the
      * same next handle, and a limit change must survive */
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 4, 8);
     multilruPtr live[64] = {};
     size_t liveCount = 0;
@@ -1400,7 +1400,7 @@ static int test_multilruP_demotions_replay(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
         ERR("Failed to reopen multilruP");
@@ -1442,7 +1442,7 @@ static int test_multilruP_weight_limit(int, char *[]) {
     TEST("multilruP evicts at once when a weight update passes the limit")
 
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     const multilruConfig config = {.maxLevels = 4,
                                    .maxWeight = 100,
                                    .policy = MLRU_POLICY_SIZE,
@@ -1494,7 +1494,7 @@ static int test_multilruP_weight_limit(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru || multilruCountP(mlru) != count ||
         multilruTotalWeightP(mlru) != weight) {
@@ -1540,10 +1540,10 @@ static int test_multilruP_recency_order(int, char *[]) {
         cleanerName(zfree, SnapBytes) uint8_t *snap =
             persistOpsMultiLRU.snapshot(live, &len);
         cleaner(multilruFree) multilru *back =
-            snap ? persistOpsMultiLRU.restore(snap, len) : NULL;
+            snap ? persistOpsMultiLRU.restore(snap, len) : nullptr;
         size_t againLen = 0;
         cleanerName(zfree, SnapBytes) uint8_t *again =
-            back ? persistOpsMultiLRU.snapshot(back, &againLen) : NULL;
+            back ? persistOpsMultiLRU.snapshot(back, &againLen) : nullptr;
         if (!back || againLen != len || memcmp(snap, again, len) != 0) {
             ERR("levels %zu: restore did not reproduce the snapshot", levels);
         }
@@ -1586,7 +1586,7 @@ static int test_multilruP_damagedWal(int, char *[]) {
      * entry moves to the quarantine); an insert and a promote are then
      * logged with no compaction, and a reopen holds three entries */
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 100);
     const multilruPtr h1 = mlruTestInsert(mlru, 0);
     mlruTestInsert(mlru, 0);
@@ -1597,7 +1597,7 @@ static int test_multilruP_damagedWal(int, char *[]) {
         ERR("could not damage the WAL");
     }
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru || multilruCountP(mlru) != 2) {
         ERR("lenient recovery kept %zu entries, want 2",
@@ -1615,7 +1615,7 @@ static int test_multilruP_damagedWal(int, char *[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     mlru = multilruOpenP(ctx);
     if (!mlru || multilruCountP(mlru) != 3) {
         ERR("reopen holds %zu entries, want 3",
@@ -1645,7 +1645,7 @@ static int test_multilruP_refusals(int, char *[]) {
          "arguments")
 
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     const multilruConfig config = {.maxLevels = 4, .enableWeights = true};
     multilruP *mlru = multilruNewWithConfigP(ctx, &config);
     multilruPtr a = 0;
@@ -1685,19 +1685,20 @@ static int test_multilruP_refusals(int, char *[]) {
     }
 
     /* Missing arguments: refused or empty answers */
-    if (multilruInsertP(NULL, &fresh) || multilruIncreaseP(NULL, a) ||
-        multilruUpdateWeightP(NULL, a, 1) ||
-        multilruRemoveMinimumP(NULL, &out) || multilruDeleteP(NULL, a) ||
-        multilruSetMaxCountP(NULL, 1) || multilruSetMaxWeightP(NULL, 1) ||
-        multilruNewP(NULL) || multilruOpenP(NULL) || multilruGetRawP(NULL) ||
-        multilruCountP(NULL) || multilruBytesP(NULL) ||
-        multilruTotalWeightP(NULL) || multilruIsPopulatedP(NULL, a) ||
-        multilruSyncP(NULL) || multilruCompactP(NULL) ||
-        multilruGetMaxCountP(NULL) || multilruGetMaxWeightP(NULL)) {
+    if (multilruInsertP(nullptr, &fresh) || multilruIncreaseP(nullptr, a) ||
+        multilruUpdateWeightP(nullptr, a, 1) ||
+        multilruRemoveMinimumP(nullptr, &out) || multilruDeleteP(nullptr, a) ||
+        multilruSetMaxCountP(nullptr, 1) || multilruSetMaxWeightP(nullptr, 1) ||
+        multilruNewP(nullptr) || multilruOpenP(nullptr) ||
+        multilruGetRawP(nullptr) || multilruCountP(nullptr) ||
+        multilruBytesP(nullptr) || multilruTotalWeightP(nullptr) ||
+        multilruIsPopulatedP(nullptr, a) || multilruSyncP(nullptr) ||
+        multilruCompactP(nullptr) || multilruGetMaxCountP(nullptr) ||
+        multilruGetMaxWeightP(nullptr)) {
         ERR("a call without its wrapper was not refused");
     }
-    multilruGetStatsP(NULL, NULL);
-    multilruCloseP(NULL);
+    multilruGetStatsP(nullptr, nullptr);
+    multilruCloseP(nullptr);
 
     multilruCloseP(mlru);
     persistCtxFree(ctx);

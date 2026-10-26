@@ -72,7 +72,7 @@ bool multimapSmallInsertWithSurrogateKeyIfAbsent(
     const struct multimapAtom *referenceContainer, databox *foundKey,
     flexWhenAbsent *whenAbsent, void *whenAbsentCtx) {
     flexEntry *middle = GET_MIDDLE(m);
-    flexEntry *found = NULL;
+    flexEntry *found = nullptr;
     if (flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
             &m->map, m->elementsPerEntry, elements, insertKey, &middle,
             referenceContainer, &found, whenAbsent, whenAbsentCtx)) {
@@ -85,7 +85,7 @@ bool multimapSmallInsertWithSurrogateKeyIfAbsent(
 }
 
 bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
-    return multimapSmallInsertReplacing(m, elements, NULL);
+    return multimapSmallInsertReplacing(m, elements, nullptr);
 }
 
 /* 'replacedOut' (NULL, or 'elementsPerEntry - 1' slots) reports the value
@@ -119,7 +119,7 @@ bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
 bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[],
                                  multimapEntry *me) {
     flexEntry *middle = GET_MIDDLE(m);
-    flexEntry *found = NULL;
+    flexEntry *found = nullptr;
     if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
             &m->map, m->elementsPerEntry, elements, &middle, &found)) {
         if (me) {
@@ -175,7 +175,7 @@ multimapSmallFindKey_(multimapSmall *m, const databox *key,
 
 bool multimapSmallGetUnderlyingEntry(multimapSmall *m, const databox *key,
                                      multimapEntry *me) {
-    me->fe = multimapSmallFindKey_(m, key, false, NULL);
+    me->fe = multimapSmallFindKey_(m, key, false, nullptr);
     me->map = &m->map;
     return !!me->fe;
 }
@@ -281,7 +281,7 @@ DK_INLINE_ALWAYS bool abstractLookup(multimapSmall *m, const databox *key,
 
 bool multimapSmallLookup(multimapSmall *m, const databox *key,
                          databox *elements[]) {
-    return abstractLookup(m, key, elements, false, NULL);
+    return abstractLookup(m, key, elements, false, nullptr);
 }
 
 bool multimapSmallLookupWithReference(multimapSmall *m, const databox *key,
@@ -298,7 +298,7 @@ bool multimapSmallRandomValue(multimapSmall *m, const bool fromTail,
     }
 
     /* Step 2: pick victim element */
-    flexEntry *foundP = NULL;
+    flexEntry *foundP = nullptr;
     if (fromTail) {
         foundP = flexTailWithElements(m->map, m->elementsPerEntry);
     } else {
@@ -352,7 +352,7 @@ bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
      * copy the data using multimapRemovedCopy_. This avoids use-after-free
      * since flexGetByType returns pointers to internal flex data which
      * become invalid after multimapSmallDeleteEntry. */
-    if (!multimapSmallRandomValue(m, deleteFromTail, NULL, &me)) {
+    if (!multimapSmallRandomValue(m, deleteFromTail, nullptr, &me)) {
         return false;
     }
 
@@ -397,7 +397,7 @@ abstractDelete(multimapSmall *m, const databox **elements, const bool fullWidth,
         if (foundReference) {
             /* The row is being deleted, so a 96/128-bit key is reported
              * type-only (see multimapDeleteWithFound). */
-            flexGetByTypeInto(foundP, foundReference, NULL);
+            flexGetByTypeInto(foundP, foundReference, nullptr);
         }
 
         multimapRemovedOutFill_(m->map, foundP, m->elementsPerEntry, removedOut,
@@ -412,25 +412,27 @@ abstractDelete(multimapSmall *m, const databox **elements, const bool fullWidth,
 
 bool multimapSmallDelete(multimapSmall *m, const databox *key) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, false, NULL, NULL, NULL, false);
+    return abstractDelete(m, elements, false, false, nullptr, nullptr, nullptr,
+                          false);
 }
 
 bool multimapSmallDeleteReporting(multimapSmall *m, const databox *key,
                                   databox *removedOut) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, false, NULL, NULL, removedOut,
-                          false);
+    return abstractDelete(m, elements, false, false, nullptr, nullptr,
+                          removedOut, false);
 }
 
 bool multimapSmallDeleteTaking(multimapSmall *m, const databox *key,
                                databox *takenOut) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, false, NULL, NULL, takenOut,
+    return abstractDelete(m, elements, false, false, nullptr, nullptr, takenOut,
                           true);
 }
 
 bool multimapSmallDeleteFullWidth(multimapSmall *m, const databox *elements[]) {
-    return abstractDelete(m, elements, true, false, NULL, NULL, NULL, false);
+    return abstractDelete(m, elements, true, false, nullptr, nullptr, nullptr,
+                          false);
 }
 
 bool multimapSmallDeleteWithReference(multimapSmall *m, const databox *key,
@@ -438,14 +440,14 @@ bool multimapSmallDeleteWithReference(multimapSmall *m, const databox *key,
                                       databox *foundReference) {
     const databox *elements[1] = {key};
     return abstractDelete(m, elements, false, true, referenceContainer,
-                          foundReference, NULL, false);
+                          foundReference, nullptr, false);
 }
 
 bool multimapSmallDeleteWithFound(multimapSmall *m, const databox *key,
                                   databox *foundReference) {
     const databox *elements[1] = {key};
-    return abstractDelete(m, elements, false, true, NULL, foundReference, NULL,
-                          false);
+    return abstractDelete(m, elements, false, true, nullptr, foundReference,
+                          nullptr, false);
 }
 
 /* Row entry at position 'keyIndex' (0-based forward; negative =
@@ -456,7 +458,7 @@ DK_STATIC flexEntry *multimapSmallRowByPosition_(multimapSmall *m,
     const int64_t rows = flexCount(m->map) / m->elementsPerEntry;
     const int64_t row = keyIndex < 0 ? rows + keyIndex : keyIndex;
     if (row < 0 || row >= rows) {
-        return NULL;
+        return nullptr;
     }
 
     return flexIndexWithMiddle(m->map, m->elementsPerEntry,
@@ -491,7 +493,7 @@ bool multimapSmallDeleteByPosition(multimapSmall *m, int64_t keyIndex) {
 
 int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
                                uint32_t fieldOffset, int64_t incrBy) {
-    flexEntry *current = multimapSmallFindKey_(m, key, false, NULL);
+    flexEntry *current = multimapSmallFindKey_(m, key, false, nullptr);
     if (!current) {
         /* No such key: return 0 rather than walking flexNext from NULL.
          * Matches the multimap-level FieldIncr miss contract. */
@@ -518,7 +520,7 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
     /* (unlikely) else, return current value; a 96/128-bit value can't be
      * read as int64_t, so it reports 0 (only its type is decoded) */
     databox curVal;
-    flexGetByTypeInto(current, &curVal, NULL);
+    flexGetByTypeInto(current, &curVal, nullptr);
     return databoxIsWideDeferred(&curVal) ? 0 : curVal.data.i;
 }
 
@@ -587,7 +589,7 @@ bool multimapSmallIteratorInitAt(multimapSmall *m, multimapIterator *iter,
 
     /* If we iterated past all elements, we can't iterate any more... */
     if (startAt == m->map + flexBytes(m->map)) {
-        startAt = NULL;
+        startAt = nullptr;
     }
 
     multimapSmallIteratorInitAt_(m, iter, forward, startAt);
@@ -599,7 +601,7 @@ bool multimapSmallIteratorInit(multimapSmall *m, multimapIterator *iter,
     flex *const map = m->map;
     flexEntry *startAt = likely(flexCount(map))
                              ? (likely(forward) ? flexHead(map) : flexTail(map))
-                             : NULL;
+                             : nullptr;
     return multimapSmallIteratorInitAt_(m, iter, forward, startAt);
 }
 
@@ -636,14 +638,14 @@ DK_INLINE_ALWAYS bool multimapSmallIteratorNext_(multimapIterator *iter,
 }
 
 bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]) {
-    return multimapSmallIteratorNext_(iter, elements, NULL);
+    return multimapSmallIteratorNext_(iter, elements, nullptr);
 }
 
 bool multimapSmallIteratorNextWithSlots(multimapIterator *iter,
                                         databox *elements[],
                                         databoxWide *slots) {
     if (!slots) {
-        return multimapSmallIteratorNext_(iter, elements, NULL);
+        return multimapSmallIteratorNext_(iter, elements, nullptr);
     }
 
     return multimapSmallIteratorNext_(iter, elements, slots);
@@ -694,7 +696,7 @@ bool multimapSmallDeleteByPredicate(multimapSmall *m,
         return true;
     default:
         /* We don't support the other predicate types yet */
-        assert(NULL && "Not Implemented!");
+        assert(false && "Not Implemented!");
         return false;
     }
 

@@ -35,7 +35,7 @@ static void inflightGateEnsureReady(inflightGate *g) {
     pthread_mutex_lock(&inflightGateInitLock);
     /* @sync: relaxed owner */
     if (!atomic_load_explicit(&g->ready, memory_order_relaxed)) {
-        pthread_mutex_init(&g->mu, NULL);
+        pthread_mutex_init(&g->mu, nullptr);
         monotonicCondInit(&g->cv);
         /* @sync: release gate.ready */
         atomic_store_explicit(&g->ready, true, memory_order_release);

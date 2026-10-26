@@ -227,7 +227,7 @@ SEGMENT_D_FN_(Leaves_)(const void *seg, uint64_t *count, segmentOp *op) {
     const SEGMENT_D_FULL_ *full = SEGMENT_D_UNTAG_(seg);
     *count = full->count;
     *op = full->operation;
-    return full->tree ? &full->tree[full->capacity / 2] : NULL;
+    return full->tree ? &full->tree[full->capacity / 2] : nullptr;
 }
 
 void SEGMENT_D_FN_(CopyTo)(const void *seg, SEGMENT_VALUE_TYPE *out) {
@@ -266,13 +266,13 @@ static uint8_t *SEGMENT_D_FN_(PersistSnapshot_)(const void *structure,
 
 static void *SEGMENT_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
     const size_t n = flexCount(f);
     if (n < 1) {
-        return NULL;
+        return nullptr;
     }
 
     flexEntry *fe = flexHead(f);
@@ -282,7 +282,7 @@ static void *SEGMENT_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
     /* SUM, MIN or MAX (MAX is the last operation) */
     if (box.type != DATABOX_UNSIGNED_64 ||
         box.data.u64 > (uint64_t)SEGMENT_OP_MAX) {
-        return NULL;
+        return nullptr;
     }
 
     const segmentOp op = (segmentOp)box.data.u64;
@@ -293,7 +293,7 @@ static void *SEGMENT_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
         flexGetByTypeBig(fe, &box);
         fe = flexNext(f, fe);
         if (!SEGMENT_D_FN_(PersistUnbox_)(&box, &values[i])) {
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -305,7 +305,7 @@ static uint8_t *SEGMENT_D_FN_(PersistEncodeOp_)(persistOp op, const void *args,
     const databox *const *boxes = args;
     *len = 0;
     if (op != PERSIST_OP_UPDATE || (argc != 2 && argc != 3) || !boxes) {
-        return NULL;
+        return nullptr;
     }
 
     flex *f = flexNewFromDataboxPtrsExact(boxes, argc);

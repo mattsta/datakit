@@ -45,7 +45,7 @@ int pthread_cond_timedwait_relative_np(pthread_cond_t *cond,
 /* Initialize a condition variable for monotonic bounded waits. */
 static inline void monotonicCondInit(pthread_cond_t *cv) {
 #if defined(__APPLE__)
-    pthread_cond_init(cv, NULL);
+    pthread_cond_init(cv, nullptr);
 #else
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);

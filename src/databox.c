@@ -229,7 +229,7 @@ static bool databoxIsWide_(const databox *box) {
  * alignment.  'dst' and 'src' may be the same box. */
 static void databoxOwnWidePayload_(databox *dst, const databox *src) {
     if (!src->data.ptr) {
-        dst->data.ptr = NULL;
+        dst->data.ptr = nullptr;
         dst->allocated = false;
         dst->big = false;
         return;
@@ -348,7 +348,7 @@ void databoxFreeData(databox *box) {
             /* Owned bytes */
             if (box->type == DATABOX_BYTES) {
                 zfree(box->data.ptr);
-                box->data.ptr = NULL;
+                box->data.ptr = nullptr;
                 box->allocated = false;
                 box->type = DATABOX_VOID;
             } else if (databoxIsWide_(box)) {
@@ -360,7 +360,7 @@ void databoxFreeData(databox *box) {
                  * memory, as a one-entry rangeBox array and its 16-byte
                  * payload can, so it would leak that payload. */
                 zfree(box->data.ptr);
-                box->data.ptr = NULL;
+                box->data.ptr = nullptr;
                 box->allocated = false;
                 box->big = false;
                 box->type = DATABOX_VOID;
@@ -368,7 +368,7 @@ void databoxFreeData(databox *box) {
 #if DATABOX_ENABLE_PTR_MDSC
                 if (box->type == DATABOX_PTR_MDSC) {
                     mdscfree(box->data.ptr);
-                    box->data.ptr = NULL;
+                    box->data.ptr = nullptr;
                     box->allocated = false;
                     box->type = DATABOX_VOID;
                 }
@@ -1098,7 +1098,7 @@ bool databoxCanonicalNumeral(const databox *in, databoxBig *out) {
      * 'out' only for those, so a narrow result here (one the 64-bit scanner
      * just rejected) leaves 'out' untouched and the string stays bytes. */
     databox small;
-    databoxBig *use = NULL;
+    databoxBig *use = nullptr;
     if (!StrScanScanReliableConvert128(p, len, &small, out, &use) ||
         use != out) {
         return false;
@@ -1411,7 +1411,7 @@ static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
         if (len >= 20 && len <= 40) {
             databox small = {};
             databoxBig big = {};
-            databoxBig *use = NULL;
+            databoxBig *use = nullptr;
             const bool wideOk =
                 StrScanScanReliableConvert128(s, len, &small, &big, &use);
             const databox *const scanned =
@@ -1716,7 +1716,7 @@ static const void *dbFreeRecorded_;
 static size_t dbFreeCalls_;
 static void dbFreeRecord_(void *ptr) {
     dbFreeRecorded_ = ptr;
-    dbFreeCalls_ += ptr != NULL;
+    dbFreeCalls_ += ptr != nullptr;
 }
 
 int databoxTest(int, char *[]) {
@@ -3306,7 +3306,7 @@ int databoxTest(int, char *[]) {
         static const char *const want[] = {
             "some bytes to read", "some bytes to read", "tiny", "mdsc bytes"};
         for (size_t i = 0; i < countof(withBytes); i++) {
-            uint8_t *buf = NULL;
+            uint8_t *buf = nullptr;
             size_t len = 0;
             size_t size = 0;
             if (!databoxGetBytes(&withBytes[i], &buf, &len) ||
@@ -3321,7 +3321,7 @@ int databoxTest(int, char *[]) {
                           {.type = DATABOX_NULL},
                           {.type = DATABOX_SIGNED_128}};
         for (size_t i = 0; i < countof(none); i++) {
-            uint8_t *buf = NULL;
+            uint8_t *buf = nullptr;
             size_t len = 0;
             if (databoxGetBytes(&none[i], &buf, &len)) {
                 ERR("type %d gave bytes", (int)none[i].type);
@@ -3573,7 +3573,7 @@ int databoxTest(int, char *[]) {
             memset(&deferred, 0xFF, sizeof(deferred));
             deferred.type = wideTypes[i];
             deferred.big = false;
-            deferred.data.ptr = NULL;
+            deferred.data.ptr = nullptr;
             if (!databoxIsWideDeferred(&deferred)) {
                 ERR("type %d with a NULL payload is not deferred",
                     (int)wideTypes[i]);
@@ -3610,7 +3610,7 @@ int databoxTest(int, char *[]) {
             databox deferred;
             memset(&deferred, 0xFF, sizeof(deferred));
             deferred.type = cases[i].type;
-            deferred.data.ptr = NULL;
+            deferred.data.ptr = nullptr;
             const char *got = databoxReprStr(&deferred);
             if (strcmp(got, cases[i].deferred) != 0) {
                 ERR("deferred type %d printed as %s", (int)cases[i].type, got);
@@ -3912,7 +3912,7 @@ int databoxTest(int, char *[]) {
         DB_ORDER_ADD_BITS64(UINT64_C(0xFFFFFFFFFFFFFFFF)); /* all-ones NaN */
 
         static constexpr char pointee[2] = "p";
-        DB_ORDER_ADD(databoxNewPtr(NULL));
+        DB_ORDER_ADD(databoxNewPtr(nullptr));
         DB_ORDER_ADD(databoxNewPtr((void *)(uintptr_t)5));
         DB_ORDER_ADD(databoxNewPtr((void *)pointee));
         databox reference = {};
@@ -4336,7 +4336,7 @@ int databoxTest(int, char *[]) {
         databox *heap = zcalloc(1, sizeof(*heap));
         databoxCopyBytes(heap, longText, strlen(longText));
         databoxFree(heap);
-        databoxFree(NULL);
+        databoxFree(nullptr);
     }
 
     TEST("databoxCanonicalNumeral: real-shaped strings follow the scanner") {
@@ -4431,7 +4431,7 @@ int databoxTest(int, char *[]) {
         pair[0].allocated = true;
         pair[0].data.ptr = &pair[1];
 
-        dbFreeRecorded_ = NULL;
+        dbFreeRecorded_ = nullptr;
         dbFreeCalls_ = 0;
         datakitConfigSet(&recording);
         databoxFreeData(&pair[0]);

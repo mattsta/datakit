@@ -68,7 +68,7 @@ void bigmathReprFile(bigmath *b, FILE *fp) {
     assert(need >= 2);
 
     char stackBuf[1024];
-    cleanerName(zfree, Chars) char *heapBuf = NULL;
+    cleanerName(zfree, Chars) char *heapBuf = nullptr;
     char *buf = stackBuf;
     if ((size_t)need > sizeof(stackBuf)) {
         heapBuf = zmalloc((size_t)need);

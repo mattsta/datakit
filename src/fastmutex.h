@@ -75,12 +75,12 @@ static inline void fastMutexInit(fastMutex *m) {
 
 static inline int fastMutexCondInit(fastCond *c, void *) {
     int ret;
-    ret = pthread_mutex_init(&c->m, NULL);
+    ret = pthread_mutex_init(&c->m, nullptr);
     if (ret) {
         return ret;
     }
 
-    c->w = NULL;
+    c->w = nullptr;
 
     return 0;
 }

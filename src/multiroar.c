@@ -206,7 +206,7 @@ multiroar *multiroarValueNew(const uint8_t bitWidth, const uint64_t rows,
      * values don't exist and anything wider than 64 can't round-trip
      * through the databox integer we accept. */
     if (bitWidth == 0 || bitWidth > 64) {
-        return NULL;
+        return nullptr;
     }
 
     varintWidth rowWidth;
@@ -643,7 +643,7 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
             break;
         }
         default:
-            assert(NULL && "Invalid type byte in bitmap!");
+            assert(false && "Invalid type byte in bitmap!");
         }
     }
 
@@ -688,7 +688,7 @@ static bool chunkTestsBit(const databox *value, uint64_t position) {
     }
     default:
         D("Type byte is: %d (WHY?)\n", GET_CHUNK_TYPE(value));
-        assert(NULL && "Invalid type byte in bitmap!");
+        assert(false && "Invalid type byte in bitmap!");
     }
 
     return false;
@@ -818,7 +818,7 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
         return true;
     }
     default:
-        assert(NULL && "Invalid type byte in bitmap!");
+        assert(false && "Invalid type byte in bitmap!");
         return false;
     }
 }
@@ -828,7 +828,7 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
  * ==================================================================== */
 multiroar *multiroarDuplicate(const multiroar *r) {
     if (!r) {
-        return NULL;
+        return nullptr;
     }
 
     /* meta length: 1 mode/bitWidth byte, plus (value mode only) the col
@@ -925,7 +925,7 @@ multiroarValueSetResult multiroarValueSetGetPrevious(multiroar *r,
 
 multiroarValueSetResult multiroarValueSet(multiroar *r, uint64_t position,
                                           databox *value) {
-    return multiroarValueSetGetPrevious(r, position, value, NULL);
+    return multiroarValueSetGetPrevious(r, position, value, nullptr);
 }
 
 uint8_t multiroarValueWidth(const multiroar *r) {
@@ -1823,7 +1823,7 @@ DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
                 memset(bitmap, 0, sizeof(bitmap));
             }
             bitmapRangeApply_(bitmap, lo, hi, op);
-            compressBitmapToChunk(r, &key, bitmap, NULL, exists);
+            compressBitmapToChunk(r, &key, bitmap, nullptr, exists);
         }
 
         if (chunk == last) {
@@ -1845,7 +1845,7 @@ void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent) {
 /* Set difference: A AND NOT B (bits in A but not in B) - returns new */
 multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
     if (!a || MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
-        return NULL;
+        return nullptr;
     }
 
     if (!b || !b->map) {
@@ -1856,7 +1856,7 @@ multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
     /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarBitNew();
     if (!result) {
-        return NULL;
+        return nullptr;
     }
 
     /* Iterate through chunks in a */
@@ -2166,7 +2166,7 @@ void multiroarBitSetMany(multiroar *r, const uint64_t *positions,
             bitmap[byteOffset] |= (1 << BIT_OFFSET(positions[i]));
         }
 
-        compressBitmapToChunk(r, &key, bitmap, NULL, exists);
+        compressBitmapToChunk(r, &key, bitmap, nullptr, exists);
     }
 }
 
@@ -2230,7 +2230,7 @@ multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count) {
     /* No positions is an empty roar (what multiroarToArray gives for
      * one); only a count without positions is refused */
     if (!positions && count > 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multiroarFree */
@@ -2712,7 +2712,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
     size_t prefix = 0;
     if (!buf || dkFormatPrefixRead(&multiroarFormat, buf, (size_t)bufSize,
                                    &stamp, &prefix) != DK_FORMAT_OK) {
-        return NULL;
+        return nullptr;
     }
     /* @own: caller; free=multiroarFree */
     return multiroarDeserializeRaw((const uint8_t *)buf + prefix,
@@ -2725,7 +2725,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
 static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
                                       const uint8_t *end) {
     if (width > 64) {
-        return NULL;
+        return nullptr;
     }
 
     uint64_t cols;
@@ -2733,17 +2733,17 @@ static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
     uint64_t count;
     uint64_t n = readVarint(p, (uint64_t)(end - p), &cols);
     if (n == 0) {
-        return NULL;
+        return nullptr;
     }
     p += n;
     n = readVarint(p, (uint64_t)(end - p), &rows);
     if (n == 0) {
-        return NULL;
+        return nullptr;
     }
     p += n;
     n = readVarint(p, (uint64_t)(end - p), &count);
     if (n == 0) {
-        return NULL;
+        return nullptr;
     }
     p += n;
 
@@ -2755,28 +2755,28 @@ static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
         n = readVarint(p, (uint64_t)(end - p), &gap);
         if (n == 0 || (i > 0 && gap == 0) ||
             ckd_add(&position, position, gap)) {
-            return NULL;
+            return nullptr;
         }
         p += n;
         n = readVarint(p, (uint64_t)(end - p), &value);
         if (n == 0 || (width < 64 && value >> width) ||
             !multiroarValueInBounds(r, position)) {
-            return NULL;
+            return nullptr;
         }
         p += n;
 
         /* Positions ascend, so each value lands on an empty position */
         databox box = databoxNewUnsigned(value);
         if (multiroarValueSet(r, position, &box) != MULTIROAR_VALUE_ADDED) {
-            return NULL;
+            return nullptr;
         }
     }
     if (p != end) {
-        return NULL;
+        return nullptr;
     }
 
     multiroar *out = r;
-    r = NULL;
+    r = nullptr;
     return out;
 }
 
@@ -2785,7 +2785,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end);
 /* Deserialize the stream: the mode byte, then a value or chunk body */
 multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize) {
     if (!buf || bufSize == 0) {
-        return NULL;
+        return nullptr;
     }
 
     const uint8_t *p = (const uint8_t *)buf;
@@ -2801,7 +2801,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
     uint64_t chunkCount;
     uint64_t bytesRead = readVarint(p, (uint64_t)(end - p), &chunkCount);
     if (bytesRead == 0) {
-        return NULL;
+        return nullptr;
     }
     p += bytesRead;
 
@@ -2809,7 +2809,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
      * releases it without per-site cleanup calls. */
     cleaner(multiroarFree) multiroar *r = multiroarBitNew();
     if (!r) {
-        return NULL;
+        return nullptr;
     }
 
     /* Deserialize each chunk.  multimapInsert COPIES the chunk bytes
@@ -2825,14 +2825,14 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
         uint64_t chunkId;
         bytesRead = readVarint(p, (uint64_t)(end - p), &chunkId);
         if (bytesRead == 0 || (i > 0 && chunkId <= prevChunkId)) {
-            return NULL;
+            return nullptr;
         }
         prevChunkId = chunkId;
         p += bytesRead;
 
         /* Read chunk type */
         if (p >= end) {
-            return NULL;
+            return nullptr;
         }
         uint8_t chunkKind = *p++;
 
@@ -2846,7 +2846,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
             /* Create single-byte ALL_1 chunk */
             cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(1, 1);
             if (!chunk) {
-                return NULL;
+                return nullptr;
             }
             chunk[0] = CHUNK_TYPE_ALL_1;
 
@@ -2869,7 +2869,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
             bytesRead = readVarint(p, (uint64_t)(end - p), &count);
             if (bytesRead == 0 || count == 0 ||
                 count > MAX_ENTRIES_PER_DIRECT_LISTING) {
-                return NULL;
+                return nullptr;
             }
             p += bytesRead;
 
@@ -2887,7 +2887,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 
             cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(chunkSize, 1);
             if (!chunk) {
-                return NULL;
+                return nullptr;
             }
             chunk[0] = chunkKind;
             memcpy(chunk + 1, tempCount, countBytes); /* TaggedVarint count */
@@ -2899,7 +2899,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
                 bytesRead = readVarint(p, (uint64_t)(end - p), &pos);
                 if (bytesRead == 0 || pos >= BITMAP_SIZE_IN_BITS ||
                     (j > 0 && pos <= prevPos)) {
-                    return NULL;
+                    return nullptr;
                 }
                 prevPos = pos;
                 p += bytesRead;
@@ -2922,13 +2922,13 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
         case CHUNK_TYPE_FULL_BITMAP: {
             /* Read bitmap data */
             if (p + 1024 > end) {
-                return NULL;
+                return nullptr;
             }
 
             /* Create chunk: 1 type + 1024 bitmap */
             cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(1025, 1);
             if (!chunk) {
-                return NULL;
+                return nullptr;
             }
             chunk[0] = CHUNK_TYPE_FULL_BITMAP;
             memcpy(chunk + 1, p, 1024);
@@ -2948,18 +2948,18 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 
         default:
             /* Unknown chunk type */
-            return NULL;
+            return nullptr;
         }
     }
 
     /* Every byte belongs to the stream */
     if (p != end) {
-        return NULL;
+        return nullptr;
     }
 
     /* Success: hand ownership to the caller (disarm the cleaner) */
     multiroar *out = r;
-    r = NULL;
+    r = nullptr;
     return out;
 }
 
@@ -3508,7 +3508,7 @@ void multiroarNot(multiroar *r) {
  * gives no result (a copy of a value roar is not a set result) */
 multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
     if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
-        return NULL;
+        return nullptr;
     }
     /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
@@ -3518,7 +3518,7 @@ multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
 
 multiroar *multiroarNewOr(const multiroar *a, const multiroar *b) {
     if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
-        return NULL;
+        return nullptr;
     }
     /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
@@ -3528,7 +3528,7 @@ multiroar *multiroarNewOr(const multiroar *a, const multiroar *b) {
 
 multiroar *multiroarNewXor(const multiroar *a, const multiroar *b) {
     if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
-        return NULL;
+        return nullptr;
     }
     /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
@@ -3538,7 +3538,7 @@ multiroar *multiroarNewXor(const multiroar *a, const multiroar *b) {
 
 multiroar *multiroarNewNot(const multiroar *r) {
     if (MR_BIT_OP_REFUSED_(r)) {
-        return NULL;
+        return nullptr;
     }
     /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(r);
@@ -3572,7 +3572,7 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
                                         uint64_t *outCount) {
     if (n == 0 || !roars) {
         *outCount = 0;
-        return NULL;
+        return nullptr;
     }
 
     /* Estimate total number of chunks across all inputs */
@@ -3585,7 +3585,7 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
 
     if (totalChunks == 0) {
         *outCount = 0;
-        return NULL;
+        return nullptr;
     }
 
     /* Collect every chunk key (with duplicates across the N inputs) into a
@@ -3820,7 +3820,7 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
 /* N-way operations returning new multiroar */
 multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
     if (roars && mrAnyValueMode_(n, roars)) {
-        return NULL;
+        return nullptr;
     }
     if (n == 0 || !roars || !roars[0]) {
         /* @own: caller; free=multiroarFree */
@@ -3847,7 +3847,7 @@ multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
 
 multiroar *multiroarNewOrN(uint64_t n, multiroar **roars) {
     if (roars && mrAnyValueMode_(n, roars)) {
-        return NULL;
+        return nullptr;
     }
     if (n == 0 || !roars || !roars[0]) {
         /* @own: caller; free=multiroarFree */
@@ -3874,7 +3874,7 @@ multiroar *multiroarNewOrN(uint64_t n, multiroar **roars) {
 
 multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
     if (roars && mrAnyValueMode_(n, roars)) {
-        return NULL;
+        return nullptr;
     }
     if (n == 0 || !roars || !roars[0]) {
         /* @own: caller; free=multiroarFree */
@@ -4094,8 +4094,8 @@ static int mrCheckForms(const multiroar *r, const uint64_t *o,
     const uint64_t size = multiroarSerializedSize(r);
     const uint64_t rawSize = multiroarSerializedSizeRaw(r);
     cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size + rawSize);
-    cleaner(multiroarFree) multiroar *back = NULL;
-    cleaner(multiroarFree) multiroar *backRaw = NULL;
+    cleaner(multiroarFree) multiroar *back = nullptr;
+    cleaner(multiroarFree) multiroar *backRaw = nullptr;
     if (multiroarSerialize(r, buf, size) == size) {
         back = multiroarDeserialize(buf, size);
     }
@@ -4292,7 +4292,7 @@ int multiroarTest(int, char *[]) {
                 MULTIROAR_VALUE_REFUSED ||
             multiroarValueSet(V, 4, (databox *)&text) !=
                 MULTIROAR_VALUE_REFUSED ||
-            multiroarValueSet(V, 4, NULL) != MULTIROAR_VALUE_REFUSED ||
+            multiroarValueSet(V, 4, nullptr) != MULTIROAR_VALUE_REFUSED ||
             multiroarValueSet(V, 100, &seven) != MULTIROAR_VALUE_REFUSED ||
             multiroarValueGet(V, 100, &out) ||
             multiroarValueRemoveGetRemoved(V, 100, &out)) {
@@ -4329,34 +4329,35 @@ int multiroarTest(int, char *[]) {
         multiroarBitSet(a, 5);
         multiroarBitSet(a, 9000);
 
-        if (!multiroarIsEmpty(NULL) || multiroarIntersects(a, NULL) ||
-            !multiroarIsSubset(NULL, a) || multiroarIsSubset(a, NULL) ||
-            !multiroarIsSubset(e, NULL) || !multiroarEquals(NULL, NULL) ||
-            multiroarEquals(a, NULL)) {
+        if (!multiroarIsEmpty(nullptr) || multiroarIntersects(a, nullptr) ||
+            !multiroarIsSubset(nullptr, a) || multiroarIsSubset(a, nullptr) ||
+            !multiroarIsSubset(e, nullptr) ||
+            !multiroarEquals(nullptr, nullptr) || multiroarEquals(a, nullptr)) {
             ERR("a comparison did not treat NULL as the empty set");
         }
 
         /* a AND {} = {}; a OR / XOR / AND NOT {} = a */
-        cleaner(multiroarFree) multiroar *andNull = multiroarNewAnd(a, NULL);
-        cleaner(multiroarFree) multiroar *orNull = multiroarNewOr(a, NULL);
-        cleaner(multiroarFree) multiroar *xorNull = multiroarNewXor(a, NULL);
-        cleaner(multiroarFree) multiroar *notNull = multiroarNewAndNot(a, NULL);
+        cleaner(multiroarFree) multiroar *andNull = multiroarNewAnd(a, nullptr);
+        cleaner(multiroarFree) multiroar *orNull = multiroarNewOr(a, nullptr);
+        cleaner(multiroarFree) multiroar *xorNull = multiroarNewXor(a, nullptr);
+        cleaner(multiroarFree) multiroar *notNull =
+            multiroarNewAndNot(a, nullptr);
         if (!andNull || !multiroarIsEmpty(andNull) ||
             !multiroarEquals(orNull, a) || !multiroarEquals(xorNull, a) ||
             !multiroarEquals(notNull, a)) {
             ERR("a set operation with NULL did not use the empty set");
         }
         cleaner(multiroarFree) multiroar *inPlace = multiroarDuplicate(a);
-        multiroarAnd(inPlace, NULL);
+        multiroarAnd(inPlace, nullptr);
         if (!multiroarIsEmpty(inPlace)) {
             ERR("in-place AND with NULL kept bits");
         }
 
         /* A NULL first set has nothing to copy: no result */
-        cleaner(multiroarFree) multiroar *n1 = multiroarNewAnd(NULL, a);
-        cleaner(multiroarFree) multiroar *n2 = multiroarNewOr(NULL, a);
-        cleaner(multiroarFree) multiroar *n3 = multiroarNewXor(NULL, a);
-        cleaner(multiroarFree) multiroar *n4 = multiroarNewAndNot(NULL, a);
+        cleaner(multiroarFree) multiroar *n1 = multiroarNewAnd(nullptr, a);
+        cleaner(multiroarFree) multiroar *n2 = multiroarNewOr(nullptr, a);
+        cleaner(multiroarFree) multiroar *n3 = multiroarNewXor(nullptr, a);
+        cleaner(multiroarFree) multiroar *n4 = multiroarNewAndNot(nullptr, a);
         if (n1 || n2 || n3 || n4) {
             ERR("a NULL first set gave a result");
         }
@@ -4366,9 +4367,11 @@ int multiroarTest(int, char *[]) {
         if (multiroarJaccard(e, e) != 1.0 || multiroarDice(e, e) != 1.0 ||
             multiroarOverlap(e, e) != 0.0 || multiroarOverlap(e, a) != 0.0 ||
             multiroarHammingDistance(e, a) != 3 ||
-            multiroarJaccard(e, a) != 0.0 || multiroarJaccard(a, NULL) != 0.0 ||
-            multiroarDice(NULL, a) != 0.0 || multiroarOverlap(a, NULL) != 0.0 ||
-            multiroarHammingDistance(NULL, a) != 0) {
+            multiroarJaccard(e, a) != 0.0 ||
+            multiroarJaccard(a, nullptr) != 0.0 ||
+            multiroarDice(nullptr, a) != 0.0 ||
+            multiroarOverlap(a, nullptr) != 0.0 ||
+            multiroarHammingDistance(nullptr, a) != 0) {
             ERR("an empty-set or NULL metric is off");
         }
 
@@ -4668,9 +4671,9 @@ int multiroarTest(int, char *[]) {
             }
         }
         cleaner(multiroarFree) multiroar *fromNothing =
-            multiroarFromArray(NULL, 0);
+            multiroarFromArray(nullptr, 0);
         cleaner(multiroarFree) multiroar *countOnly =
-            multiroarFromArray(NULL, 3);
+            multiroarFromArray(nullptr, 3);
         if (!fromNothing || !multiroarIsEmpty(fromNothing) || countOnly) {
             ERR("an empty position list is not an empty roar, or a count "
                 "without positions was accepted");
@@ -4701,9 +4704,9 @@ int multiroarTest(int, char *[]) {
         /* Invalid widths refuse construction (rejection returns NULL, so
          * nothing is ever owned here). */
         /* @own: caller; free=multiroarFree */
-        assert(multiroarValueNew(0, 4, 4) == NULL);
+        assert(multiroarValueNew(0, 4, 4) == nullptr);
         /* @own: caller; free=multiroarFree */
-        assert(multiroarValueNew(65, 4, 4) == NULL);
+        assert(multiroarValueNew(65, 4, 4) == nullptr);
 
         cleaner(multiroarFree) multiroar *v = multiroarValueNew(16, 100, 100);
         assert(v);
@@ -4741,7 +4744,7 @@ int multiroarTest(int, char *[]) {
         databox removed = {};
         assert(multiroarValueRemoveGetRemoved(v, 7, &removed));
         assert(removed.data.u == 65535);
-        assert(!multiroarValueGet(v, 7, NULL));
+        assert(!multiroarValueGet(v, 7, nullptr));
         assert(!multiroarValueRemoveGetRemoved(v, 7, &removed));
 
         /* Duplicate preserves value-mode meta (bitWidth + bounds): value
@@ -4753,7 +4756,7 @@ int multiroarTest(int, char *[]) {
         assert(multiroarValueSet(dupe, 55, &val3) == MULTIROAR_VALUE_ADDED);
         assert(multiroarValueGet(dupe, 55, &got) && got.data.u == 77);
         /* ...and the original is unaffected by writes to the copy */
-        assert(!multiroarValueGet(v, 55, NULL));
+        assert(!multiroarValueGet(v, 55, nullptr));
 
         /* Unbounded (rows/cols 0) accepts any position */
         cleaner(multiroarFree) multiroar *u = multiroarValueNew(64, 0, 0);
@@ -6307,7 +6310,7 @@ int multiroarTest(int, char *[]) {
         multiroarBitSet(r, 10000);
 
         cleaner(multiroarFree) multiroar *dup = multiroarDuplicate(r);
-        if (dup == NULL) {
+        if (dup == nullptr) {
             ERR("dup should not be NULL");
         }
         if (dup == r) {
@@ -6472,7 +6475,7 @@ int multiroarTest(int, char *[]) {
         multiroarBitSet(b, 200);
 
         cleaner(multiroarFree) multiroar *result = multiroarNewOr(a, b);
-        if (result == NULL) {
+        if (result == nullptr) {
             ERR("NewOr result should not be NULL");
         }
         if (result == a) {
@@ -9777,8 +9780,8 @@ int multiroarTest(int, char *[]) {
             memcpy(stamped + prefix, buf + (size - raw), raw);
             cleaner(multiroarFree) multiroar *got =
                 multiroarDeserialize(stamped, prefix + raw);
-            if ((got != NULL) != (s == 3)) {
-                ERR("stamp %zu: restored %d", s, got != NULL);
+            if ((got != nullptr) != (s == 3)) {
+                ERR("stamp %zu: restored %d", s, got != nullptr);
             }
         }
     }
@@ -9881,8 +9884,8 @@ int multiroarTest(int, char *[]) {
         for (size_t s = 0; s < countof(streams); s++) {
             cleaner(multiroarFree) multiroar *r =
                 multiroarDeserializeRaw(streams[s].bytes, streams[s].len);
-            if ((r != NULL) != streams[s].valid) {
-                ERR("stream %zu: restored %d", s, r != NULL);
+            if ((r != nullptr) != streams[s].valid) {
+                ERR("stream %zu: restored %d", s, r != nullptr);
             }
         }
     }
@@ -10137,7 +10140,7 @@ int multiroarTest(int, char *[]) {
 
         cleaner(multiroarFree) multiroar *r =
             multiroarDeserialize(buf, sizeof(buf));
-        if (r != NULL) {
+        if (r != nullptr) {
             ERR("Should fail with invalid magic");
         }
     }
@@ -10147,7 +10150,7 @@ int multiroarTest(int, char *[]) {
 
         cleaner(multiroarFree) multiroar *r =
             multiroarDeserialize(buf, sizeof(buf));
-        if (r != NULL) {
+        if (r != nullptr) {
             ERR("Should fail with invalid version");
         }
     }
@@ -10880,10 +10883,10 @@ int multiroarTest(int, char *[]) {
             uint64_t count;
             uint64_t (*gen)(uint64_t i);
         } patterns[] = {
-            {"sorted dense", 20000, NULL},
-            {"sorted sparse", 5000, NULL},
-            {"random order", 8000, NULL},
-            {"short runs", 300, NULL},
+            {"sorted dense", 20000, nullptr},
+            {"sorted sparse", 5000, nullptr},
+            {"random order", 8000, nullptr},
+            {"short runs", 300, nullptr},
         };
 
         for (size_t p = 0; p < countof(patterns); p++) {

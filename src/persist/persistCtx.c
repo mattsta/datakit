@@ -22,7 +22,7 @@ defcleanerName(char *, zfree, Chars);
 
 static uint64_t getTimeMicroseconds(void) {
     struct timeval tv;
-    gettimeofday(&tv, NULL);
+    gettimeofday(&tv, nullptr);
     return (uint64_t)tv.tv_sec * 1'000'000 + (uint64_t)tv.tv_usec;
 }
 
@@ -79,7 +79,7 @@ static char *zstrdupInternal(const char *s) {
 persistCtx *persistCtxNew(const char *basePath,
                           const persistCtxConfig *config) {
     if (!basePath) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=persistCtxFree */
@@ -198,7 +198,7 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
             zfree(walStore);
         }
         persistClose(ctx->p);
-        ctx->p = NULL;
+        ctx->p = nullptr;
         return false;
     }
 
@@ -236,7 +236,7 @@ void persistCtxRelease(persistCtx *ctx) {
 }
 
 bool persistCtxLastBadEntry(const persistCtx *ctx, persistBadEntryReport *out) {
-    return persistLastBadEntry(ctx ? ctx->p : NULL, out);
+    return persistLastBadEntry(ctx ? ctx->p : nullptr, out);
 }
 
 void persistCtxSetBadEntryNotify(persistCtx *ctx, persistBadEntryNotify *fn,
@@ -377,12 +377,12 @@ bool persistCtxCompact(persistCtx *ctx, void *structure,
 
 void *persistCtxRecover(persistCtx *ctx, const persistOps *ops) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persist context if needed */
     if (!persistCtxInitForType(ctx, ops)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
@@ -542,7 +542,7 @@ int persistCtxTest(int, char *[]) {
         if (!dkTestTmpDirPath(&tmp, "persistCtxTest", path, sizeof(path))) {
             ERR("could not create a scratch directory: %s", strerror(errno));
         } else {
-            persistCtx *ctx = persistCtxNew(path, NULL);
+            persistCtx *ctx = persistCtxNew(path, nullptr);
             if (!ctx) {
                 ERR("Failed to create persistCtx");
             } else {
@@ -624,7 +624,7 @@ int persistCtxTest(int, char *[]) {
                 orphan != PERSIST_CTX_ORPHAN_WAL || !probeQuiet || exists ||
                 !reported || present != PERSIST_CTX_PRESENT || !presentExists ||
                 dkDiagCount() != afterSnap ||
-                persistCtxProbe(NULL) != PERSIST_CTX_ABSENT) {
+                persistCtxProbe(nullptr) != PERSIST_CTX_ABSENT) {
                 ERR("probe %d/%d/%d, exists %d/%d, reported %d", absent, orphan,
                     present, exists, presentExists, reported);
             }
@@ -657,7 +657,7 @@ int persistCtxTest(int, char *[]) {
                     strerror(errno));
                 break;
             }
-            persistCtx *ctx = persistCtxNew(path, NULL);
+            persistCtx *ctx = persistCtxNew(path, nullptr);
             const uint64_t beforeBind = dkDiagCount();
             if (!persistCtxInitForType(ctx, types[bound]) ||
                 !persistCtxInitForType(ctx, types[bound]) ||
@@ -672,7 +672,7 @@ int persistCtxTest(int, char *[]) {
                     continue;
                 }
                 accepted += persistCtxInitForType(ctx, types[other]);
-                accepted += persistCtxRecover(ctx, types[other]) != NULL;
+                accepted += persistCtxRecover(ctx, types[other]) != nullptr;
                 accepted +=
                     persistCtxSaveSnapshot(ctx, &untouched, types[other]);
                 accepted += persistCtxCompact(ctx, &untouched, types[other]);
@@ -702,7 +702,7 @@ int persistCtxTest(int, char *[]) {
         if (!dkTestTmpDirPath(&tmp, "persistCtxClaim", path, sizeof(path))) {
             ERR("could not create a scratch directory: %s", strerror(errno));
         } else {
-            persistCtx *ctx = persistCtxNew(path, NULL);
+            persistCtx *ctx = persistCtxNew(path, nullptr);
             flexP *first = flexNewP(ctx);
             const databox one = DATABOX_SIGNED(1);
             PTEST_LOGGED(flexPushTailP(first, &one));
@@ -769,8 +769,8 @@ int persistCtxTest(int, char *[]) {
              * entries past a 256-byte threshold compact a few dozen times,
              * never on every op, buffered or not */
             persistCtxStats stats;
-            persistCtx *ctx = NULL;
-            flexP *f = NULL;
+            persistCtx *ctx = nullptr;
+            flexP *f = nullptr;
             for (int buffered = 0; buffered <= 1; buffered++) {
                 ptestCleanupFiles(path);
                 persistCtxConfig config = persistCtxDefaultConfig();
@@ -814,7 +814,7 @@ int persistCtxTest(int, char *[]) {
             /* The notifier set on a context hears of a damaged entry its
              * open heals (a WAL of three entries, its last one damaged) */
             ptestCleanupFiles(path);
-            ctx = persistCtxNew(path, NULL);
+            ctx = persistCtxNew(path, nullptr);
             f = flexNewP(ctx);
             for (int64_t i = 0; i < 3; i++) {
                 const databox v = DATABOX_SIGNED(i);
@@ -826,7 +826,7 @@ int persistCtxTest(int, char *[]) {
                 ERR("could not damage the WAL");
             }
             int notified = 0;
-            ctx = persistCtxOpen(path, NULL);
+            ctx = persistCtxOpen(path, nullptr);
             persistCtxSetBadEntryNotify(ctx, persistCtxTestNotify, &notified);
             f = flexOpenP(ctx);
             persistBadEntryReport report;
@@ -838,23 +838,24 @@ int persistCtxTest(int, char *[]) {
 
             /* Missing arguments: refused or empty answers */
             const int64_t v = 1;
-            if (persistCtxNew(NULL, NULL) || persistCtxOpen(NULL, NULL) ||
-                persistCtxCanLog(NULL) ||
-                persistCtxLogOp(NULL, PERSIST_OP_INSERT, &v, 1) ||
-                persistCtxMaybeCompact(NULL, NULL, &persistOpsFlex) ||
-                persistCtxSync(NULL) || persistCtxSyncIfDue(NULL) ||
-                persistCtxCompact(NULL, NULL, &persistOpsFlex) ||
-                persistCtxRecover(NULL, &persistOpsFlex) ||
-                persistCtxInitForType(NULL, &persistOpsFlex) ||
-                persistCtxSaveSnapshot(NULL, NULL, &persistOpsFlex) ||
-                persistCtxClaim(NULL) ||
-                persistCtxLastBadEntry(NULL, &report)) {
+            if (persistCtxNew(nullptr, nullptr) ||
+                persistCtxOpen(nullptr, nullptr) || persistCtxCanLog(nullptr) ||
+                persistCtxLogOp(nullptr, PERSIST_OP_INSERT, &v, 1) ||
+                persistCtxMaybeCompact(nullptr, nullptr, &persistOpsFlex) ||
+                persistCtxSync(nullptr) || persistCtxSyncIfDue(nullptr) ||
+                persistCtxCompact(nullptr, nullptr, &persistOpsFlex) ||
+                persistCtxRecover(nullptr, &persistOpsFlex) ||
+                persistCtxInitForType(nullptr, &persistOpsFlex) ||
+                persistCtxSaveSnapshot(nullptr, nullptr, &persistOpsFlex) ||
+                persistCtxClaim(nullptr) ||
+                persistCtxLastBadEntry(nullptr, &report)) {
                 ERR("a call without its context was not refused");
             }
-            persistCtxGetStats(NULL, &stats);
-            persistCtxSetBadEntryNotify(NULL, persistCtxTestNotify, &notified);
-            persistCtxRelease(NULL);
-            persistCtxFree(NULL);
+            persistCtxGetStats(nullptr, &stats);
+            persistCtxSetBadEntryNotify(nullptr, persistCtxTestNotify,
+                                        &notified);
+            persistCtxRelease(nullptr);
+            persistCtxFree(nullptr);
             ptestCleanupFiles(path);
         }
     }
@@ -866,7 +867,7 @@ int persistCtxTest(int, char *[]) {
             ERR("could not create a scratch directory: %s", strerror(errno));
         } else {
             /* @own: caller; free=persistCtxFree */
-            persistCtx *ctx = persistCtxNew(path, NULL);
+            persistCtx *ctx = persistCtxNew(path, nullptr);
             /* @own: caller; free=flexCloseP */
             flexP *f = flexNewP(ctx);
             const databox one = DATABOX_SIGNED(1);
@@ -887,7 +888,7 @@ int persistCtxTest(int, char *[]) {
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
                 ERR("synced a SYNC_NONE context");
             }
-            if (persistCtxSyncIfDue(NULL)) {
+            if (persistCtxSyncIfDue(nullptr)) {
                 ERR("accepted a NULL context");
             }
 

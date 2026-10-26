@@ -57,7 +57,7 @@ static constexpr int MULTIMAP_STACK_THRESHOLD = 8;
     __label__ mapSmall;                                                        \
     __label__ mapMedium;                                                       \
     __label__ mapFull;                                                         \
-    static const void **jumper[4] = {NULL, &&mapSmall, &&mapMedium,            \
+    static const void **jumper[4] = {nullptr, &&mapSmall, &&mapMedium,         \
                                      &&mapFull};                               \
     goto *jumper[multimapType_(m)]
 #endif
@@ -76,7 +76,7 @@ static constexpr int MULTIMAP_STACK_THRESHOLD = 8;
             ret multimapFull##func(mmf(m), __VA_ARGS__);                       \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
@@ -117,7 +117,7 @@ static constexpr int MULTIMAP_STACK_THRESHOLD = 8;
             ret multimapFull##func(mmf(m));                                    \
             break;                                                             \
         default:                                                               \
-            assert(NULL);                                                      \
+            assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
@@ -234,7 +234,7 @@ bool multimapIsSet(const multimap *m) {
     case MULTIMAP_TYPE_FULL:
         return mmf(m)->mapIsSet;
     default:
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 }
@@ -287,7 +287,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
                               flex *rows) {
     if (!multimapDumpAscends_(rows, elementsPerEntry, isSet)) {
         flexFree(rows);
-        return NULL;
+        return nullptr;
     }
 
     /* Up to what Medium holds under 'limit': insert the rows */
@@ -335,7 +335,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
     map[0] = rows;
 
     /* @own: caller; free=multimapFree */
-    multimapFull *full = multimapFullNewFromManyGrow(NULL, map, middle, maps,
+    multimapFull *full = multimapFullNewFromManyGrow(nullptr, map, middle, maps,
                                                      elementsPerEntry, isSet);
     /* Inner maps split at the multimap's own limit, as inserts grow them */
     full->maxSize = (uint32_t)splitSize;
@@ -393,7 +393,7 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
     if (!multimapDumpAscendsWithReference_(rows, elementsPerEntry,
                                            referenceContainer)) {
         flexFree(rows);
-        return NULL;
+        return nullptr;
     }
 
     const size_t bytes = flexBytes(rows);
@@ -435,7 +435,8 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
 
     /* @own: caller; free=multimapFree */
     multimapFull *full = multimapFullNewFromManyGrowWithReference(
-        NULL, map, middle, maps, elementsPerEntry, false, referenceContainer);
+        nullptr, map, middle, maps, elementsPerEntry, false,
+        referenceContainer);
     full->maxSize = (uint32_t)splitSize;
     multimap *m = SET_COMPRESS_DEPTH_LIMIT(full, 0, limit);
     return MULTIMAP_TAG_(m, MULTIMAP_TYPE_FULL);
@@ -505,7 +506,7 @@ DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
 
 static void multimapUpgradeIfNecessary(multimap **m, const uint_fast32_t depth,
                                        const flexCapSizeLimit limit) {
-    multimapUpgradeIfNecessary_(m, depth, limit, false, NULL);
+    multimapUpgradeIfNecessary_(m, depth, limit, false, nullptr);
 }
 
 /* After a delete: move a drained Full or Medium down to the tier its rows
@@ -527,7 +528,7 @@ DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
                                         size_t fullBytes, size_t smallBytes) {
     const uint32_t depth = COMPRESS_DEPTH(*m);
     const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
-    flex *rows = NULL;
+    flex *rows = nullptr;
     multimapElements elementsPerEntry;
     bool isSet;
 
@@ -643,7 +644,7 @@ multimap *multimapCopy(const multimap *m) {
 }
 
 bool multimapInsert(multimap **m, const databox *elements[]) {
-    return multimapInsertReplacing(m, elements, NULL);
+    return multimapInsertReplacing(m, elements, nullptr);
 }
 
 /* As multimapInsert, and on a replace also reports the overwritten value
@@ -679,7 +680,7 @@ bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
 }
 
 bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
-    return multimapInsertIfAbsentEntry(m, elements, NULL);
+    return multimapInsertIfAbsentEntry(m, elements, nullptr);
 }
 
 void multimapInsertFullWidth(multimap **m, const databox *elements[]) {
@@ -780,7 +781,7 @@ static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
 }
 
 void multimapDeleteEntry(multimap **m, multimapEntry *me) {
-    MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, NULL);
+    MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, nullptr);
     multimapShrinkIfNecessary_(m);
 }
 
@@ -846,7 +847,7 @@ static multimapElements multimapElementsPerEntry_(const multimap *m) {
     case MULTIMAP_TYPE_FULL:
         return mmf(m)->elementsPerEntry;
     default:
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 }
@@ -1052,8 +1053,8 @@ bool multimapFieldIncrByIf(multimap **m, const databox *key,
 bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
                          int64_t incrBy, int64_t *newValue) {
     int64_t next;
-    if (!multimapFieldIncrByIf(m, key, fieldOffset, incrBy, &next, NULL,
-                               NULL)) {
+    if (!multimapFieldIncrByIf(m, key, fieldOffset, incrBy, &next, nullptr,
+                               nullptr)) {
         return false;
     }
 
@@ -1069,7 +1070,8 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
     /* The sum, or on a refusal the current value (0 for a missing key or a
      * field that is not an int64 counter) */
     int64_t reported;
-    multimapFieldIncrByIf(m, key, fieldOffset, incrBy, &reported, NULL, NULL);
+    multimapFieldIncrByIf(m, key, fieldOffset, incrBy, &reported, nullptr,
+                          nullptr);
     return reported;
 }
 
@@ -1088,7 +1090,7 @@ void multimapReset(multimap **m) {
         elementsPerEntry = mmf(*m)->elementsPerEntry;
         break;
     default:
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 
@@ -1171,7 +1173,7 @@ bool multimapProcessPredicate(const multimapPredicate *p,
         }
         break;
     default:
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 
@@ -1193,7 +1195,7 @@ void multimapIteratorInit(const multimap *m, multimapIterator *iter,
 }
 
 bool multimapIteratorNext(multimapIterator *iter, databox **elements) {
-    const void **jumper[4] = {NULL, &&iterSmall, &&iterMedium, &&iterFull};
+    const void **jumper[4] = {nullptr, &&iterSmall, &&iterMedium, &&iterFull};
     goto *jumper[iter->type];
 
 iterSmall:
@@ -1208,7 +1210,7 @@ iterFull:
 
 bool multimapIteratorNextWithSlots(multimapIterator *iter, databox **elements,
                                    databoxWide *slots) {
-    const void **jumper[4] = {NULL, &&iterSmall, &&iterMedium, &&iterFull};
+    const void **jumper[4] = {nullptr, &&iterSmall, &&iterMedium, &&iterFull};
     goto *jumper[iter->type];
 
 iterSmall:
@@ -1295,9 +1297,9 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
     databox **elements = elementsStack;
     databoxWide *slots = slotsStack;
 
-    cleanerName(zfree, Databoxes) databox *heapRow = NULL;
-    cleanerName(zfree, DataboxPtrs) databox **heapElementPtrs = NULL;
-    cleanerName(zfree, DataboxWides) databoxWide *heapSlots = NULL;
+    cleanerName(zfree, Databoxes) databox *heapRow = nullptr;
+    cleanerName(zfree, DataboxPtrs) databox **heapElementPtrs = nullptr;
+    cleanerName(zfree, DataboxWides) databoxWide *heapSlots = nullptr;
     if (useHeapElements) {
         /* The iterator populates through elements[0..N-1], so the heap
          * path needs an array of N boxes, an array of N pointers into
@@ -1324,7 +1326,7 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
         return multimapProcessRows_(&iter, multimapFullIteratorNextWithSlots, p,
                                     walker, userData, elements, row, slots);
     default:
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 }
@@ -1344,12 +1346,12 @@ void multimapIntersectKeys(multimap **restrict dst,
     databoxWide waStack[MULTIMAP_STACK_THRESHOLD];
     databoxWide wbStack[MULTIMAP_STACK_THRESHOLD];
 
-    cleanerName(zfree, Databoxes) databox *eaHeap_ = NULL;
-    cleanerName(zfree, Databoxes) databox *ebHeap_ = NULL;
-    cleanerName(zfree, DataboxPtrs) databox **eaHeap = NULL;
-    cleanerName(zfree, DataboxPtrs) databox **ebHeap = NULL;
-    cleanerName(zfree, DataboxWides) databoxWide *waHeap = NULL;
-    cleanerName(zfree, DataboxWides) databoxWide *wbHeap = NULL;
+    cleanerName(zfree, Databoxes) databox *eaHeap_ = nullptr;
+    cleanerName(zfree, Databoxes) databox *ebHeap_ = nullptr;
+    cleanerName(zfree, DataboxPtrs) databox **eaHeap = nullptr;
+    cleanerName(zfree, DataboxPtrs) databox **ebHeap = nullptr;
+    cleanerName(zfree, DataboxWides) databoxWide *waHeap = nullptr;
+    cleanerName(zfree, DataboxWides) databoxWide *wbHeap = nullptr;
 
     databox *ea_, *eb_;
     databox **ea, **eb;
@@ -1492,9 +1494,9 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
     databox bsrcStack_[MULTIMAP_STACK_THRESHOLD];
     databox *bsrcStack[MULTIMAP_STACK_THRESHOLD];
     databoxWide wsrcStack[MULTIMAP_STACK_THRESHOLD];
-    cleanerName(zfree, Databoxes) databox *bsrcHeap_ = NULL;
-    cleanerName(zfree, DataboxPtrs) databox **bsrcHeap = NULL;
-    cleanerName(zfree, DataboxWides) databoxWide *wsrcHeap = NULL;
+    cleanerName(zfree, Databoxes) databox *bsrcHeap_ = nullptr;
+    cleanerName(zfree, DataboxPtrs) databox **bsrcHeap = nullptr;
+    cleanerName(zfree, DataboxWides) databoxWide *wsrcHeap = nullptr;
 
     databox *bsrc_;
     databox **bsrc;
@@ -1607,7 +1609,7 @@ static size_t multimapReport_(const multimap *m, const bool print) {
         type = "L";
         break;
     default:
-        assert(NULL);
+        assert(false);
         unreachable();
     }
 
@@ -1708,7 +1710,7 @@ typedef bool (*rpInsertFn)(void *m, const databox *elements[],
                            databox *replacedOut);
 
 static bool rpFlex(void *m, const databox *elements[], databox *out) {
-    flexEntry *middle = NULL;
+    flexEntry *middle = nullptr;
     return flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
         (flex **)m, RP_WIDTH, elements, &middle, true, out);
 }
@@ -1790,7 +1792,7 @@ static int32_t rpWide(const char *where, rpInsertFn fn, void *m,
             where, key);
     }
 
-    if (out[0].type != expectType || out[0].data.u128 != NULL) {
+    if (out[0].type != expectType || out[0].data.u128 != nullptr) {
         ERR("%s: key %" PRIu64 " replaced wide value reported type %d "
             "payload %p, expected type %d payload NULL",
             where, key, (int)out[0].type, (void *)out[0].data.u128,
@@ -1821,14 +1823,14 @@ int32_t multimapInsertReplacingSweep(void) {
 
     TEST("replacing insert: flex layer with a key that becomes a pointer") {
         cleanerName(flexFree, Sweep) flex *f = flexNew();
-        flexEntry *middle = NULL;
+        flexEntry *middle = nullptr;
         static constexpr char longKey[] = "a-key-long-enough-to-externalize";
         const databox k = databoxNewBytesString(longKey);
         const databox c0 = databoxNewUnsigned(7);
         const databox tag0 = databoxNewPtr(RP_PTR_TAG(7));
         const databox *e0[RP_WIDTH] = {&k, &c0, &tag0};
         databox out[RP_VALUES];
-        void *keyAlloc = NULL;
+        void *keyAlloc = nullptr;
         bool replaced =
             flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
                 &f, RP_WIDTH, e0, &middle, true, &keyAlloc, out);
@@ -1840,7 +1842,7 @@ int32_t multimapInsertReplacingSweep(void) {
         const databox c1 = databoxNewUnsigned(8);
         const databox tag1 = databoxNewPtr(RP_PTR_TAG(8));
         const databox *e1[RP_WIDTH] = {&k, &c1, &tag1};
-        void *keyAllocReplace = NULL;
+        void *keyAllocReplace = nullptr;
         replaced =
             flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
                 &f, RP_WIDTH, e1, &middle, true, &keyAllocReplace, out);
@@ -1883,7 +1885,7 @@ int32_t multimapInsertReplacingSweep(void) {
         const databox tag0 = databoxNewPtr(RP_PTR_TAG(11));
         const databox *e0[RP_WIDTH] = {&k, &c0, &tag0};
         databox out[RP_VALUES];
-        void *keyAlloc = NULL;
+        void *keyAlloc = nullptr;
         bool replaced = multimapFullInsertAllowExternalizeKeysReplacing(
             m, e0, &keyAlloc, out);
         err += rpJudge("full-mdsc insert", 0, replaced, out, false, 0, 0);
@@ -1894,7 +1896,7 @@ int32_t multimapInsertReplacingSweep(void) {
         const databox c1 = databoxNewUnsigned(12);
         const databox tag1 = databoxNewPtr(RP_PTR_TAG(12));
         const databox *e1[RP_WIDTH] = {&k, &c1, &tag1};
-        void *keyAllocReplace = NULL;
+        void *keyAllocReplace = nullptr;
         replaced = multimapFullInsertAllowExternalizeKeysReplacing(
             m, e1, &keyAllocReplace, out);
         err += rpJudge("full-mdsc replace", 0, replaced, out, true, 11, 11);
@@ -1994,7 +1996,7 @@ int32_t multimapInsertReplacingSweep(void) {
                 const databox kShort = databoxNewUnsigned(i);
                 const databox v = databoxNewBytes(val, sizeof(val));
                 const databox *e[2] = {(i & 1) ? &kLong : &kShort, &v};
-                void *alloc = NULL;
+                void *alloc = nullptr;
                 databox out[1] = {databoxNewUnsigned(UINT64_MAX)};
                 const bool found =
                     multimapFullInsertAllowExternalizeKeysReplacing(
@@ -2030,7 +2032,7 @@ int32_t multimapInsertReplacingSweep(void) {
         const databox k0 = databoxNewUnsigned(0);
         const databox other = databoxNewUnsigned(1);
         const databox *e0[2] = {&k0, &other};
-        void *alloc0 = NULL;
+        void *alloc0 = nullptr;
         if (multimapFullInsertAllowExternalizeKeys(m, e0, &alloc0)) {
             ERR("set-externalize: a new (key, value) pair reported found");
         }
@@ -2359,7 +2361,7 @@ static const mwRow *mwNextPresent(const mwRow *rows, const size_t n,
         (*idx)++;
     }
 
-    return *idx < n ? &rows[(*idx)++] : NULL;
+    return *idx < n ? &rows[(*idx)++] : nullptr;
 }
 
 static const mwRow *mwPrevPresent(const mwRow *rows, size_t *idx) {
@@ -2367,7 +2369,7 @@ static const mwRow *mwPrevPresent(const mwRow *rows, size_t *idx) {
         (*idx)--;
     }
 
-    return *idx > 0 ? &rows[--(*idx)] : NULL;
+    return *idx > 0 ? &rows[--(*idx)] : nullptr;
 }
 
 /* ProcessUntil walker: each row must be the next expected one, and the
@@ -2553,7 +2555,7 @@ static int32_t mwCheckSlotIteration(const char *where, multimap *m,
             }
 
             if (!multimapIteratorNextWithSlots(&iter, e,
-                                               useSlots ? slots : NULL)) {
+                                               useSlots ? slots : nullptr)) {
                 break;
             }
 
@@ -3108,7 +3110,7 @@ static bool mxTrackDel(const void *p) {
     /* Backward-shift: pull later entries of the probe run into the hole */
     size_t j = i;
     for (;;) {
-        mxTrack[i].p = NULL;
+        mxTrack[i].p = nullptr;
         size_t home;
         do {
             j = (j + 1) & (mxTrackSlots - 1);
@@ -3131,14 +3133,14 @@ static bool mxTrackDel(const void *p) {
 
 static void *mxCalloc(size_t count, size_t sz) {
     void *p = mxSavedAlloc.localCalloc(count, sz);
-    mxLive += p != NULL;
+    mxLive += p != nullptr;
     mxTrackAdd(p, count * sz);
     return p;
 }
 
 static void *mxMalloc(size_t sz) {
     void *p = mxSavedAlloc.localMalloc(sz);
-    mxLive += p != NULL;
+    mxLive += p != nullptr;
     mxTrackAdd(p, sz);
     return p;
 }
@@ -3168,7 +3170,7 @@ static void *mxReallocSlate(void *ptr, size_t sz) {
 }
 
 static void mxFree(void *ptr) {
-    mxLive -= ptr != NULL;
+    mxLive -= ptr != nullptr;
     (void)mxTrackDel(ptr);
     mxSavedAlloc.localFree(ptr);
 }
@@ -3189,7 +3191,7 @@ static void mxCountBegin(void) {
     mxTrackStacks =
         getenv("DK_TEST_ALLOC_STACKS")
             ? mxSavedAlloc.localCalloc(mxTrackSlots, sizeof(*mxTrackStacks))
-            : NULL;
+            : nullptr;
     mxTrackLive = 0;
     mxTrackFull = false;
 
@@ -3229,8 +3231,8 @@ static int64_t mxCountEnd(void) {
 
     mxSavedAlloc.localFree(mxTrack);
     mxSavedAlloc.localFree(mxTrackStacks);
-    mxTrack = NULL;
-    mxTrackStacks = NULL;
+    mxTrack = nullptr;
+    mxTrackStacks = nullptr;
     return mxLive;
 }
 
@@ -3385,7 +3387,7 @@ static mwRow *mxFind(mwRow *rows, const size_t n, const mwInt *key) {
         const size_t mid = (lo + hi) / 2;
         const int c = mwCmp(&rows[mid].key, key);
         if (c == 0) {
-            return rows[mid].present ? &rows[mid] : NULL;
+            return rows[mid].present ? &rows[mid] : nullptr;
         }
 
         if (c < 0) {
@@ -3395,7 +3397,7 @@ static mwRow *mxFind(mwRow *rows, const size_t n, const mwInt *key) {
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 /* A documented type-only report: the type of 'want' with no payload. */
@@ -3519,7 +3521,8 @@ static int32_t mxRemovingReads(const char *where, multimap **m, mwRow *rows,
         }
 
         mwInt gotKey;
-        mwRow *r = mxFromBox(e[0], &gotKey) ? mxFind(rows, n, &gotKey) : NULL;
+        mwRow *r =
+            mxFromBox(e[0], &gotKey) ? mxFind(rows, n, &gotKey) : nullptr;
         if (!r || !mwHolds(e[0], &r->key) || !mwHolds(e[1], &r->val)) {
             ERR("%s: DeleteRandomValue %zu removed an unexpected row", where,
                 k);
@@ -3809,10 +3812,10 @@ int32_t multimapWidePersistSweep(void) {
             unlink(snap);
             unlink(wal);
 
-            persistCtx *ctx = persistCtxNew(base, NULL);
+            persistCtx *ctx = persistCtxNew(base, nullptr);
             multimapP *mp = ctx ? multimapNewConfigureP(ctx, 2, false, false,
                                                         plans[p].limit)
-                                : NULL;
+                                : nullptr;
             if (!mp) {
                 ERR("%s: could not create the persistent map", where);
                 if (ctx) {
@@ -3826,7 +3829,7 @@ int32_t multimapWidePersistSweep(void) {
                 const databox key = mwBox(&r->key);
                 const databox val = mwBox(&r->val);
                 const databox *e[2] = {&key, &val};
-                if (multimapInsertP(mp, e, NULL) == PERSIST_LOG_REFUSED) {
+                if (multimapInsertP(mp, e, nullptr) == PERSIST_LOG_REFUSED) {
                     ERR("%s: insert refused", where);
                 }
                 r->present = true;
@@ -3856,8 +3859,8 @@ int32_t multimapWidePersistSweep(void) {
             multimapCloseP(mp);
             persistCtxFree(ctx);
 
-            ctx = persistCtxOpen(base, NULL);
-            mp = ctx ? multimapOpenP(ctx) : NULL;
+            ctx = persistCtxOpen(base, nullptr);
+            mp = ctx ? multimapOpenP(ctx) : nullptr;
             if (!mp) {
                 ERR("%s: recovery failed", where);
             } else {
@@ -5086,7 +5089,7 @@ int multimapTest(int, char *[]) {
                     sawFull = true;
                     break;
                 default:
-                    assert(NULL);
+                    assert(false);
                 }
 
                 for (int i = 0; i < inserted; i++) {
@@ -5264,7 +5267,7 @@ int multimapTest(int, char *[]) {
                     if (!found) {
                         ERR("Didn't find [%s, %s] at iteration (%d, %d)!", key,
                             val, i, j);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 TIME_FINISH(i, "exists (sequential)");
@@ -5289,7 +5292,7 @@ int multimapTest(int, char *[]) {
                         ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
                         multimapReport(m);
                         multimapVerify(m);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 TIME_FINISH(i, "delete");
@@ -5353,7 +5356,7 @@ int multimapTest(int, char *[]) {
                     bool found = multimapExists(m, &keybox);
                     if (!found) {
                         ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 TIME_FINISH(i, "exists (sequential)");
@@ -5373,7 +5376,7 @@ int multimapTest(int, char *[]) {
 
                     if (!found) {
                         ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
-                        assert(NULL);
+                        assert(false);
                     }
 
                     if (!databoxEqual(&valbox, &value)) {
@@ -5399,7 +5402,7 @@ int multimapTest(int, char *[]) {
 
                     if (!found) {
                         ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
-                        assert(NULL);
+                        assert(false);
                     }
                     if (!databoxEqual(&valbox, &value)) {
                         ERR("Didn't find value!  Expected %s but got %s!",
@@ -5425,7 +5428,7 @@ int multimapTest(int, char *[]) {
                         ERR("Didn't find %s at iteration (%d, %d)!", key, i, j);
                         multimapReport(m);
                         multimapVerify(m);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 TIME_FINISH(i, "delete");
@@ -6300,7 +6303,7 @@ int multimapTest(int, char *[]) {
                         ERR("FUZZ FAIL: Sequential key %d not found after "
                             "inserting key %d (limit=%d, type=%d)!",
                             j, i, capLimit, multimapType_(m));
-                        assert(NULL);
+                        assert(false);
                     }
                 }
             }
@@ -6313,7 +6316,7 @@ int multimapTest(int, char *[]) {
                 bool found = multimapLookup(m, &key, vals);
                 if (!found || gotVal.data.i != i * 100) {
                     ERR("FUZZ FAIL: Sequential lookup failed for key %d!", i);
-                    assert(NULL);
+                    assert(false);
                 }
             }
 
@@ -6338,7 +6341,7 @@ int multimapTest(int, char *[]) {
             /* Verify this key and a sample of others */
             if (!multimapExists(m, &key)) {
                 ERR("FUZZ FAIL: Reverse key %d not found immediately!", i);
-                assert(NULL);
+                assert(false);
             }
 
             /* Check first 10 keys inserted (highest values) */
@@ -6347,7 +6350,7 @@ int multimapTest(int, char *[]) {
                 if (!multimapExists(m, &checkKey)) {
                     ERR("FUZZ FAIL: Reverse key %d lost after inserting %d!", j,
                         i);
-                    assert(NULL);
+                    assert(false);
                 }
             }
         }
@@ -6357,7 +6360,7 @@ int multimapTest(int, char *[]) {
             databox key = databoxNewSigned(i);
             if (!multimapExists(m, &key)) {
                 ERR("FUZZ FAIL: Reverse final check failed for key %d!", i);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6417,7 +6420,7 @@ int multimapTest(int, char *[]) {
                             " (idx %zu) not found "
                             "after %d inserts!",
                             oracle[j], j, i);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
             }
@@ -6467,7 +6470,7 @@ int multimapTest(int, char *[]) {
                         " not found after cluster "
                         "%d!",
                         allKeys[j], c);
-                    assert(NULL);
+                    assert(false);
                 }
             }
         }
@@ -6524,7 +6527,7 @@ int multimapTest(int, char *[]) {
                 if (!deleted) {
                     ERR("FUZZ FAIL: Delete of oracle key %" PRId64 " failed!",
                         keyVal);
-                    assert(NULL);
+                    assert(false);
                 }
 
                 /* Remove from oracle */
@@ -6541,7 +6544,7 @@ int multimapTest(int, char *[]) {
                         ERR("FUZZ FAIL: Oracle key %" PRId64
                             " missing at round %d!",
                             oracle[j], round);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 assert(multimapCount(m) == oracleCount);
@@ -6596,7 +6599,7 @@ int multimapTest(int, char *[]) {
             if (!multimapExists(m, &key)) {
                 ERR("FUZZ FAIL: Boundary key %" PRId64 " not found!",
                     boundaryKeys[i]);
-                assert(NULL);
+                assert(false);
             }
 
             databox gotVal = {};
@@ -6605,7 +6608,7 @@ int multimapTest(int, char *[]) {
             if (!found || gotVal.data.i != (int64_t)i) {
                 ERR("FUZZ FAIL: Boundary lookup wrong for %" PRId64 "!",
                     boundaryKeys[i]);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6626,7 +6629,7 @@ int multimapTest(int, char *[]) {
                 ERR("FUZZ FAIL: Boundary key %" PRId64
                     " lost after interleave!",
                     boundaryKeys[i]);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6666,7 +6669,7 @@ int multimapTest(int, char *[]) {
             if (!multimapExists(m, &key)) {
                 ERR("FUZZ FAIL: Mixed-type int key %d not found!",
                     i * 7 - 1000);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6677,7 +6680,7 @@ int multimapTest(int, char *[]) {
             databox key = databoxNewBytesString(buf);
             if (!multimapExists(m, &key)) {
                 ERR("FUZZ FAIL: Mixed-type string key %s not found!", buf);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6686,7 +6689,7 @@ int multimapTest(int, char *[]) {
         databox noKey2 = databoxNewBytesString("nonexistent_key");
         if (multimapExists(m, &noKey1) || multimapExists(m, &noKey2)) {
             ERR("FUZZ FAIL: Non-existent key found! %s", "");
-            assert(NULL);
+            assert(false);
         }
 
         printf("    type=%d count=%zu ints=%d strings=%d: OK\n",
@@ -6728,7 +6731,7 @@ int multimapTest(int, char *[]) {
                         ERR("FUZZ FAIL: Key %" PRId64 " lost during %d->%d "
                             "transition!",
                             oracle[j], lastType, curType);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 lastType = curType;
@@ -6741,7 +6744,7 @@ int multimapTest(int, char *[]) {
             if (!multimapExists(m, &checkKey)) {
                 ERR("FUZZ FAIL: Final check - key %" PRId64 " missing!",
                     oracle[j]);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6774,7 +6777,7 @@ int multimapTest(int, char *[]) {
                 if (!multimapExistsFullWidth(m, elements)) {
                     ERR("FUZZ FAIL: FullWidth key=%d val=%d not found!",
                         k * 1000, k * 10000 + v);
-                    assert(NULL);
+                    assert(false);
                 }
             }
         }
@@ -6784,7 +6787,7 @@ int multimapTest(int, char *[]) {
         if (multimapCount(m) != expected) {
             ERR("FUZZ FAIL: FullWidth count %zu != expected %zu!",
                 multimapCount(m), expected);
-            assert(NULL);
+            assert(false);
         }
 
         printf("    type=%d count=%zu keys=%d vals_per=%d: OK\n",
@@ -6832,7 +6835,7 @@ int multimapTest(int, char *[]) {
             databox key = databoxNewBytesString(oracle[j]);
             if (!multimapExists(m, &key)) {
                 ERR("FUZZ FAIL: String key '%s' not found!", oracle[j]);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -6875,7 +6878,7 @@ int multimapTest(int, char *[]) {
                     ERR("FUZZ FAIL: Iterator out of order! %" PRIdMAX
                         " < %" PRIdMAX,
                         iterKey.data.i, prevKey);
-                    assert(NULL);
+                    assert(false);
                 }
                 prevKey = iterKey.data.i;
 
@@ -6884,14 +6887,14 @@ int multimapTest(int, char *[]) {
                     ERR("FUZZ FAIL: Iterator key %" PRIdMAX
                         " not found via lookup!",
                         iterKey.data.i);
-                    assert(NULL);
+                    assert(false);
                 }
                 count++;
             }
 
             if (count != 3000) {
                 ERR("FUZZ FAIL: Iterator count %d != 3000!", count);
-                assert(NULL);
+                assert(false);
             }
 
             printf("    type=FULL count=%d verified_order=OK: OK\n", count);
@@ -6939,7 +6942,7 @@ int multimapTest(int, char *[]) {
                     ERR("FUZZ FAIL: Lookup mismatch for key %zu! found=%d "
                         "should=%d",
                         keyIdx, found, shouldExist);
-                    assert(NULL);
+                    assert(false);
                 }
                 lookupOps++;
             } else {
@@ -6949,7 +6952,7 @@ int multimapTest(int, char *[]) {
                     if (!deleted) {
                         ERR("FUZZ FAIL: Delete of existing key %zu failed!",
                             keyIdx);
-                        assert(NULL);
+                        assert(false);
                     }
                     BIT_CLR(exists, keyIdx);
                     existCount--;
@@ -6962,7 +6965,7 @@ int multimapTest(int, char *[]) {
                 if (multimapCount(m) != existCount) {
                     ERR("FUZZ FAIL: Count mismatch! map=%zu oracle=%zu",
                         multimapCount(m), existCount);
-                    assert(NULL);
+                    assert(false);
                 }
             }
         }
@@ -6999,7 +7002,7 @@ int multimapTest(int, char *[]) {
         if (multimapType_(m) != MULTIMAP_TYPE_SMALL) {
             ERR("FUZZ FAIL: Expected Small map, got type %d!",
                 multimapType_(m));
-            assert(NULL);
+            assert(false);
         }
 
         /* Verify all entries findable */
@@ -7040,7 +7043,7 @@ int multimapTest(int, char *[]) {
                     if (!multimapExists(m, &checkKey)) {
                         ERR("FUZZ FAIL: Key %" PRId64 " lost in Medium!",
                             oracle[j]);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
                 printf("    Reached Medium at count=%zu: verified\n",
@@ -7061,7 +7064,7 @@ int multimapTest(int, char *[]) {
                     ERR("FUZZ FAIL: Final Medium check - key %" PRId64
                         " missing!",
                         oracle[j]);
-                    assert(NULL);
+                    assert(false);
                 }
             }
         }
@@ -7098,7 +7101,7 @@ int multimapTest(int, char *[]) {
                 ERR("FUZZ FAIL: Full random access - key %" PRId64
                     " not found!",
                     oracle[idx]);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -7141,7 +7144,7 @@ int multimapTest(int, char *[]) {
                         ERR("FUZZ FAIL: Transition boundary - key %" PRId64
                             " lost!",
                             oracle[j]);
-                        assert(NULL);
+                        assert(false);
                     }
                 }
 
@@ -7188,7 +7191,7 @@ int multimapTest(int, char *[]) {
                 if (multimapExists(m, &key)) {
                     ERR("FUZZ FAIL: Non-existent key %d found! type=%d", i,
                         multimapType_(m));
-                    assert(NULL);
+                    assert(false);
                 }
             }
 
@@ -7198,7 +7201,7 @@ int multimapTest(int, char *[]) {
                 if (!multimapExists(m, &key)) {
                     ERR("FUZZ FAIL: Existing key %d not found! type=%d", i,
                         multimapType_(m));
-                    assert(NULL);
+                    assert(false);
                 }
             }
 
@@ -8387,8 +8390,8 @@ int multimapTest(int, char *[]) {
             !multimapFieldIncrBy(&m, &kBool, 1, -2, &got) || got != 0) {
             ERR("boolean counter arithmetic is wrong");
         }
-        if (multimapFieldIncrBy(&m, &kStr, 1, 1, NULL) ||
-            multimapFieldIncrBy(&m, &kMissing, 1, 1, NULL) ||
+        if (multimapFieldIncrBy(&m, &kStr, 1, 1, nullptr) ||
+            multimapFieldIncrBy(&m, &kMissing, 1, 1, nullptr) ||
             multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
             ERR("a non-counter field or missing key was not refused");
         }
@@ -8427,7 +8430,7 @@ int multimapTest(int, char *[]) {
         MM_SET_REFUSES_(multimapFieldIncr(&set, &one, 1, 10) != 0);
         MM_SET_REFUSES_(multimapReplaceEntry(&set, &me, &eleven));
         MM_SET_REFUSES_(
-            multimapReplaceEntryWithReference(&set, &me, &eleven, NULL));
+            multimapReplaceEntryWithReference(&set, &me, &eleven, nullptr));
         MM_SET_REFUSES_(multimapResizeEntry(&set, &me, 40));
 #undef MM_SET_REFUSES_
         multimapEntry mapMe;
@@ -8511,7 +8514,7 @@ int multimapTest(int, char *[]) {
         if (!multimapFieldIncrByIf(&m, &kU, 1, 5, &now, mmProceedProbe,
                                    &probe) ||
             now != 14 || probe.asked != 3 ||
-            !multimapFieldIncrByIf(&m, &kU, 1, 1, &now, NULL, NULL) ||
+            !multimapFieldIncrByIf(&m, &kU, 1, 1, &now, nullptr, nullptr) ||
             now != 15 || !multimapLookup(m, &kU, out) || got.data.i != 15) {
             ERR("an allowed increment did not apply");
         }

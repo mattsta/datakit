@@ -190,7 +190,7 @@ void portableRandom_stir(portableRandomState *r, pid_t pid) {
     }
 
     if (n != DK_PR_KEYSIZE) {
-        (void)gettimeofday(&tv, NULL);
+        (void)gettimeofday(&tv, nullptr);
 
         /* XOR with stack garbage. */
 
@@ -707,7 +707,7 @@ int portableRandomTest(int, char *[]) {
             ERR("portableRandom_add with an empty key changed the state");
         } else {
             /* A caller with no key may well pass NULL. */
-            portableRandom_add(&r, NULL, 0);
+            portableRandom_add(&r, nullptr, 0);
 
             if (r.i != i || r.j != j || memcmp(s, r.s, sizeof(s)) != 0) {
                 ERR("portableRandom_add(NULL, 0) changed the state");

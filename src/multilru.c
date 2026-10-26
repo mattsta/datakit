@@ -1204,7 +1204,7 @@ do_grow:
             // cppcheck-suppress intToPointerCast - checking for disabled
             // sentinel value
             if (mlru->weights == (uint64_t *)1) {
-                mlru->weights = NULL;
+                mlru->weights = nullptr;
             }
             zfree(mlru->weights);
             /* @own: container; free=multilruFree */
@@ -2059,7 +2059,7 @@ size_t multilruCapacity(const multilru *mlru) {
 }
 
 bool multilruHasWeights(const multilru *mlru) {
-    return mlru && mlru->weights != NULL;
+    return mlru && mlru->weights != nullptr;
 }
 
 /* ====================================================================
@@ -2432,7 +2432,7 @@ int multilruTest(int, char *[]) {
 
     TEST("create empty") {
         cleaner(multilruFree) multilru *mlru = multilruNew();
-        assert(mlru != NULL);
+        assert(mlru != nullptr);
         assert(multilruCount(mlru) == 0);
         assert(mlru->entryWidth == MLRU_WIDTH_5);
         multilruRepr(mlru);
@@ -3183,7 +3183,7 @@ int multilruTest(int, char *[]) {
         /* Test multilruNew */
         {
             cleaner(multilruFree) multilru *m1 = multilruNew();
-            assert(m1 != NULL);
+            assert(m1 != nullptr);
             assert(multilruMaxLevels(m1) == 7);
             assert(multilruCount(m1) == 0);
         }
@@ -3191,7 +3191,7 @@ int multilruTest(int, char *[]) {
         /* Test multilruNewWithLevels */
         {
             cleaner(multilruFree) multilru *m2 = multilruNewWithLevels(4);
-            assert(m2 != NULL);
+            assert(m2 != nullptr);
             assert(multilruMaxLevels(m2) == 4);
         }
 
@@ -3199,7 +3199,7 @@ int multilruTest(int, char *[]) {
         {
             cleaner(multilruFree) multilru *m3 =
                 multilruNewWithLevelsCapacity(10, 5000);
-            assert(m3 != NULL);
+            assert(m3 != nullptr);
             assert(multilruMaxLevels(m3) == 10);
             assert(multilruCapacity(m3) >= 5000);
         }
@@ -3216,7 +3216,7 @@ int multilruTest(int, char *[]) {
                 .enableWeights = true,
             };
             cleaner(multilruFree) multilru *m4 = multilruNewWithConfig(&config);
-            assert(m4 != NULL);
+            assert(m4 != nullptr);
             assert(multilruMaxLevels(m4) == 8);
         }
 
@@ -4709,7 +4709,7 @@ int multilruTest(int, char *[]) {
         testEvictCount = 0;
         memset(testEvictedPtrs, 0, sizeof(testEvictedPtrs));
 
-        multilruSetEvictCallback(mlru, testEvictionCallback, NULL);
+        multilruSetEvictCallback(mlru, testEvictionCallback, nullptr);
 
         /* Verify auto-evict is enabled by default */
         assert(multilruGetAutoEvict(mlru) == true);
@@ -4732,7 +4732,7 @@ int multilruTest(int, char *[]) {
         }
 
         /* Disable callback */
-        multilruSetEvictCallback(mlru, NULL, NULL);
+        multilruSetEvictCallback(mlru, nullptr, nullptr);
 
         /* More insertions should not call callback */
         size_t prevCount = testEvictCount;
@@ -5326,7 +5326,7 @@ int multilruTest(int, char *[]) {
         cleaner(multilruFree) multilru *plain = multilruNew();
         const multilruPtr p = multilruInsert(plain);
         multilruUpdateWeight(plain, p, 99);
-        if (multilruEvictToSize(plain, 0, NULL, 4) != 0 ||
+        if (multilruEvictToSize(plain, 0, nullptr, 4) != 0 ||
             multilruGetWeight(plain, p) != 0 ||
             multilruTotalWeight(plain) != 0) {
             ERR("an unweighted LRU took a weight");

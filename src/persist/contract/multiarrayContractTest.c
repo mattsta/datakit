@@ -60,7 +60,7 @@ static void *pcMultiarrayBuild(const persistContractBuild *b) {
             multiarrayFree(m);
             /* @own: caller; free=multiarrayFree */
             m = multiarrayNew(PC_MA_WIDTH, PC_MA_ROWMAX);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
     return m;

@@ -187,7 +187,7 @@ void multilistMediumInsertByTypeAfter(multilistMedium *ml,
                                       const databox *box) {
     flex **const fl = &ml->fl[entry->nodeIdx];
     flexEntry *next = flexNext(*fl, entry->fe);
-    if (next == NULL) {
+    if (next == nullptr) {
         flexPushByTypeExact(fl, box, FLEX_ENDPOINT_TAIL);
     } else {
         flexInsertByType(fl, next, box);
@@ -233,7 +233,7 @@ void multilistMediumDelEntry(multilistIterator *iter, multilistEntry *entry) {
         iter->nodeIdx = 0;
         iter->f = F0;
         iter->offset = 0;
-        iter->fe = iter->forward ? flexHead(F0) : NULL;
+        iter->fe = iter->forward ? flexHead(F0) : nullptr;
     }
 }
 
@@ -524,13 +524,13 @@ bool multilistMediumIndexNear(multilistMedium *ml, mlOffsetId index,
     }
 
     /* A single read has no wide storage: a wide value is deferred */
-    flexGetByTypeInto(entry->fe, &entry->box, NULL);
+    flexGetByTypeInto(entry->fe, &entry->box, nullptr);
     return true;
 }
 
 bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
                           multilistEntry *entry) {
-    return multilistMediumIndexNear(ml, index, NULL, 0, entry);
+    return multilistMediumIndexNear(ml, index, nullptr, 0, entry);
 }
 
 /* ====================================================================

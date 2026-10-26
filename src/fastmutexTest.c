@@ -25,7 +25,7 @@ static void *fmWorker(void *arg) {
         (*a->counter)++;
         fastMutexUnlock(a->m);
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Block in fast_mutex_lock until the holder lets go */
@@ -40,7 +40,7 @@ static void *fmBlockedLocker(void *arg) {
     /* @sync: relaxed owner */
     atomic_store_explicit(&b->acquired, true, memory_order_relaxed);
     fastMutexUnlock(b->m);
-    return NULL;
+    return nullptr;
 }
 
 /* Wait on a condition until 'ready' */
@@ -65,7 +65,7 @@ static void *fmCondWaiterThread(void *arg) {
     }
     w->sawReady = w->ready && fastMutexIsLocked(w->m);
     fastMutexUnlock(w->m);
-    return NULL;
+    return nullptr;
 }
 
 /* Poll (1 ms steps, up to 10 s) until 'done' reports true */
@@ -105,7 +105,7 @@ static void *fmTimedWaiterThread(void *arg) {
     fast_mutex_lock(w->m);
     w->ret = fastMutexCondTimedWait(w->c, w->m, &w->deadline);
     fastMutexUnlock(w->m);
-    return NULL;
+    return nullptr;
 }
 
 /* Take and drop m: once a waiter has been seen `entered`, this returns
@@ -118,7 +118,7 @@ static void fmSettle(fastMutex *m) {
 static bool fmCondHasWaiter(void *arg) {
     fastCond *c = arg;
     pthread_mutex_lock(&c->m);
-    const bool queued = c->w != NULL;
+    const bool queued = c->w != nullptr;
     pthread_mutex_unlock(&c->m);
     return queued;
 }
@@ -135,7 +135,7 @@ int fastmutexTest(int, char *[]) {
         fmBlocked b = {.m = &m};
         fast_mutex_lock(&m);
         pthread_t th;
-        pthread_create(&th, NULL, fmBlockedLocker, &b);
+        pthread_create(&th, nullptr, fmBlockedLocker, &b);
         if (!fmPollUntil(fmHasWaiter, &m)) {
             ERR("the blocked locker never queued");
         }
@@ -143,7 +143,7 @@ int fastmutexTest(int, char *[]) {
         const bool earlyAcquire =
             atomic_load_explicit(&b.acquired, memory_order_relaxed);
         fastMutexUnlock(&m);
-        pthread_join(th, NULL);
+        pthread_join(th, nullptr);
         /* @sync: relaxed init */
         if (earlyAcquire ||
             !atomic_load_explicit(&b.acquired, memory_order_relaxed) ||
@@ -156,10 +156,10 @@ int fastmutexTest(int, char *[]) {
         fastMutex m;
         fastCond c;
         fastMutexInit(&m);
-        fastMutexCondInit(&c, NULL);
+        fastMutexCondInit(&c, nullptr);
         fmCondWaiter w = {.m = &m, .c = &c};
         pthread_t th;
-        pthread_create(&th, NULL, fmCondWaiterThread, &w);
+        pthread_create(&th, nullptr, fmCondWaiterThread, &w);
         if (!fmPollUntil(fmCondHasWaiter, &c)) {
             ERR("the condition waiter never queued");
         }
@@ -167,7 +167,7 @@ int fastmutexTest(int, char *[]) {
         w.ready = true;
         fastMutexCondSignal(&c);
         fastMutexUnlock(&m);
-        pthread_join(th, NULL);
+        pthread_join(th, nullptr);
         if (!w.sawReady) {
             ERR("the waiter did not wake holding the mutex with ready set");
         }
@@ -194,7 +194,7 @@ int fastmutexTest(int, char *[]) {
         fastMutex m;
         fastCond c;
         fastMutexInit(&m);
-        fastMutexCondInit(&c, NULL);
+        fastMutexCondInit(&c, nullptr);
         bool behind = false;
         for (int attempt = 0; attempt < 3 && !behind; attempt++) {
             fmTimedWaiter a = {.m = &m, .c = &c};
@@ -209,11 +209,11 @@ int fastmutexTest(int, char *[]) {
             pthread_t ta;
             pthread_t tb;
             pthread_t tc;
-            pthread_create(&ta, NULL, fmTimedWaiterThread, &a);
+            pthread_create(&ta, nullptr, fmTimedWaiterThread, &a);
             if (!fmPollUntil(fmCondHasWaiter, &c)) {
                 ERR("the timed waiter never queued");
             }
-            pthread_create(&tb, NULL, fmCondWaiterThread, &b);
+            pthread_create(&tb, nullptr, fmCondWaiterThread, &b);
             if (!fmPollUntil(fmCondEntered, &b)) {
                 ERR("the second waiter never started waiting");
             }
@@ -225,8 +225,8 @@ int fastmutexTest(int, char *[]) {
             behind = now.tv_sec < a.deadline.tv_sec ||
                      (now.tv_sec == a.deadline.tv_sec &&
                       now.tv_nsec < a.deadline.tv_nsec);
-            pthread_join(ta, NULL);
-            pthread_create(&tc, NULL, fmCondWaiterThread, &cw);
+            pthread_join(ta, nullptr);
+            pthread_create(&tc, nullptr, fmCondWaiterThread, &cw);
             if (!fmPollUntil(fmCondEntered, &cw)) {
                 ERR("the third waiter never started waiting");
             }
@@ -237,8 +237,8 @@ int fastmutexTest(int, char *[]) {
             fastMutexCondSignal(&c);
             fastMutexCondSignal(&c);
             fastMutexUnlock(&m);
-            pthread_join(tb, NULL);
-            pthread_join(tc, NULL);
+            pthread_join(tb, nullptr);
+            pthread_join(tc, nullptr);
             if (a.ret != ETIMEDOUT || !b.sawReady || !cw.sawReady ||
                 fmCondHasWaiter(&c)) {
                 ERR("timed %d, woke B %d, woke C %d, queue left %d", a.ret,
@@ -288,10 +288,10 @@ int fastmutexTest(int, char *[]) {
         fmWorkerArg arg = {&m, &counter};
         pthread_t th[FM_THREADS];
         for (int i = 0; i < FM_THREADS; i++) {
-            assert(pthread_create(&th[i], NULL, fmWorker, &arg) == 0);
+            assert(pthread_create(&th[i], nullptr, fmWorker, &arg) == 0);
         }
         for (int i = 0; i < FM_THREADS; i++) {
-            pthread_join(th[i], NULL);
+            pthread_join(th[i], nullptr);
         }
         assert(counter == (uint64_t)FM_THREADS * (uint64_t)FM_ITERS);
         assert(!fastMutexIsLocked(&m));

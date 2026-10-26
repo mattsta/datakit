@@ -118,8 +118,8 @@ static int mfwfCompareAll_(const multiFenwickFlat *flat,
 static int mfwfDifferential_(uint64_t seed, size_t ops, size_t maxIdx,
                              bool integersOnly) {
     int err = 0;
-    multiFenwickFlat *flat = NULL;
-    multiFenwick *orig = NULL;
+    multiFenwickFlat *flat = nullptr;
+    multiFenwick *orig = nullptr;
 
     for (size_t step = 0; step < ops; step++) {
         const uint64_t op = mfwfRand_(&seed) % 10;
@@ -174,7 +174,7 @@ static int mfwfDifferential_(uint64_t seed, size_t ops, size_t maxIdx,
         }
 
         if (okA != okB || posA != posB || !mfwfSameBox_(&a, &b) ||
-            (flat == NULL) != (orig == NULL) ||
+            (flat == nullptr) != (orig == nullptr) ||
             multiFenwickFlatCount(flat) != multiFenwickCount(orig)) {
             ERR("step %zu op %" PRIu64 " idx %zu: flat ok=%d pos=%zu, "
                 "multiFenwick ok=%d pos=%zu",
@@ -260,17 +260,17 @@ int multiFenwickFlatTest(int, char *[]) {
     TEST("NULL and empty trees") {
         databox r = DATABOX_SIGNED(7);
         const databox one = DATABOX_SIGNED(1);
-        if (multiFenwickFlatCount(NULL) != 0 ||
-            multiFenwickFlatBytes(NULL) != 0 ||
-            multiFenwickFlatQuery(NULL, 0, &r) || r.type != DATABOX_VOID ||
-            multiFenwickFlatGet(NULL, 0, NULL) ||
-            multiFenwickFlatLowerBound(NULL, &one) != SIZE_MAX) {
+        if (multiFenwickFlatCount(nullptr) != 0 ||
+            multiFenwickFlatBytes(nullptr) != 0 ||
+            multiFenwickFlatQuery(nullptr, 0, &r) || r.type != DATABOX_VOID ||
+            multiFenwickFlatGet(nullptr, 0, nullptr) ||
+            multiFenwickFlatLowerBound(nullptr, &one) != SIZE_MAX) {
             ERR("NULL tree is not an empty tree");
         }
 
-        multiFenwickFlatClear(NULL);
-        multiFenwickFlatFree(NULL);
-        if (multiFenwickFlatUpdate(NULL, 0, &one)) {
+        multiFenwickFlatClear(nullptr);
+        multiFenwickFlatFree(nullptr);
+        if (multiFenwickFlatUpdate(nullptr, 0, &one)) {
             ERR("Update accepted a NULL tree pointer");
         }
 
@@ -286,13 +286,13 @@ int multiFenwickFlatTest(int, char *[]) {
 
         multiFenwickFlatClear(mfw); /* no cells: nothing to clear */
         cleaner(multiFenwickFlatFree) multiFenwickFlat *fromNone =
-            multiFenwickFlatNewFromArray(NULL, 0);
+            multiFenwickFlatNewFromArray(nullptr, 0);
         if (!fromNone || multiFenwickFlatCount(fromNone) != 0) {
             ERR("NewFromArray(NULL, 0) is not a new empty tree");
         }
 
         cleaner(multiFenwickFlatFree) multiFenwickFlat *refused =
-            multiFenwickFlatNewFromArray(NULL, 3);
+            multiFenwickFlatNewFromArray(nullptr, 3);
         if (refused) {
             ERR("NewFromArray accepted NULL values with a count");
         }
@@ -361,14 +361,14 @@ int multiFenwickFlatTest(int, char *[]) {
     }
 
     TEST("transactional: a refused write changes nothing") {
-        cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = NULL;
+        cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = nullptr;
         const databox big = DATABOX_UNSIGNED(UINT64_MAX);
         const databox nan = DATABOX_DOUBLE(NAN);
         const databox bytes = databoxNewBytesString("nope");
         if (multiFenwickFlatUpdate(&mfw, 0, &nan) ||
             multiFenwickFlatUpdate(&mfw, 0, &bytes) ||
             multiFenwickFlatSet(&mfw, MULTIFENWICK_FLAT_INDEX_MAX + 1, &big) ||
-            mfw != NULL) {
+            mfw != nullptr) {
             ERR("a refused write created a tree");
         }
 
@@ -416,7 +416,7 @@ int multiFenwickFlatTest(int, char *[]) {
     TEST("independent oracle: exact integer sums against an int128 array") {
         constexpr int N = 300;
         __int128_t oracle[N] = {};
-        cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = NULL;
+        cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = nullptr;
         uint64_t seed = 77;
         size_t count = 0;
         for (size_t step = 0; step < 4000; step++) {
@@ -493,7 +493,7 @@ int multiFenwickFlatTest(int, char *[]) {
                     multiFenwickFlatNewFromArray(vals, n);
                 cleaner(multiFenwickFree) multiFenwick *orig =
                     multiFenwickNewFromArray(vals, n);
-                if ((flat == NULL) != (orig == NULL)) {
+                if ((flat == nullptr) != (orig == nullptr)) {
                     ERR("n=%zu round %zu: one tree refused the array", n,
                         round);
                 } else if (flat) {
@@ -556,7 +556,7 @@ int multiFenwickFlatTest(int, char *[]) {
     }
 
     TEST("Repr: nil, empty and holding values") {
-        multiFenwickFlatRepr(NULL);
+        multiFenwickFlatRepr(nullptr);
         multiFenwickFlat *mfw = multiFenwickFlatNew();
         multiFenwickFlatRepr(mfw);
         const databox one = DATABOX_SIGNED(1);

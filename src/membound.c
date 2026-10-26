@@ -131,13 +131,13 @@ static int64_t memboundTestMapped(void) {
 static void *memboundMAP(const size_t len) {
 #ifdef DATAKIT_TEST
     if (memboundTestMapFailIn >= 0 && memboundTestMapFailIn-- == 0) {
-        return NULL;
+        return nullptr;
     }
 #endif
-    void *z = mmap(NULL, len, PROT_READ | PROT_WRITE,
+    void *z = mmap(nullptr, len, PROT_READ | PROT_WRITE,
                    MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     if (z == MAP_FAILED) {
-        return NULL;
+        return nullptr;
     }
 #ifdef DATAKIT_TEST
     /* @sync: relaxed counter */
@@ -216,7 +216,7 @@ void memboundZeroFast(void *dst, size_t bytes) {
 
 void memboundIndexInit(memboundExtentIndex *index) {
     memset(index->inlineRanges, 0, sizeof(index->inlineRanges));
-    index->ranges = NULL;
+    index->ranges = nullptr;
     index->count = 0;
     index->capacity = 0;
     index->lookupCount = 0;
@@ -226,7 +226,7 @@ void memboundIndexInit(memboundExtentIndex *index) {
 void memboundIndexFree(memboundExtentIndex *index) {
     if (index->ranges) {
         zfree(index->ranges);
-        index->ranges = NULL;
+        index->ranges = nullptr;
     }
     index->count = 0;
     index->capacity = 0;
@@ -237,7 +237,7 @@ static memboundExtent *
 memboundIndexBinarySearch(const memboundExtentRange *ranges, size_t count,
                           uintptr_t addr) {
     if (count == 0) {
-        return NULL;
+        return nullptr;
     }
 
     size_t lo = 0;
@@ -253,7 +253,7 @@ memboundIndexBinarySearch(const memboundExtentRange *ranges, size_t count,
             return ranges[mid].extent;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 #if defined(MEMBOUND_USE_AVX2) || defined(MEMBOUND_USE_SSE2)
@@ -408,7 +408,7 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
     }
 #endif
 
-    return NULL;
+    return nullptr;
 }
 #else
 memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
@@ -424,7 +424,7 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
 memboundExtent *memboundIndexLookup(const memboundExtentIndex *index,
                                     const void *ptr) {
     if (!index || !ptr || index->count == 0) {
-        return NULL;
+        return nullptr;
     }
 
     const memboundExtentRange *ranges =
@@ -439,7 +439,7 @@ memboundExtent *memboundIndexLookup(const memboundExtentIndex *index,
                 return ranges[i].extent;
             }
         }
-        return NULL;
+        return nullptr;
     }
 
     /* Use SIMD for larger extent counts */
@@ -561,7 +561,7 @@ bool memboundIndexRemove(memboundExtentIndex *index, memboundExtent *extent) {
             memcpy(index->inlineRanges, index->ranges,
                    index->count * sizeof(memboundExtentRange));
             zfree(index->ranges);
-            index->ranges = NULL;
+            index->ranges = nullptr;
             index->capacity = 0;
         }
     } else {
@@ -663,8 +663,8 @@ bool memboundExtentInit(memboundExtent *extent, void *space, size_t len) {
     extent->totalExcess = 0;
 
     /* Initialize linkage */
-    extent->next = NULL;
-    extent->prev = NULL;
+    extent->next = nullptr;
+    extent->prev = nullptr;
     extent->sortedIndex = 0;
 
     /* Initialize free lists.  space is a fresh mapping, so every control
@@ -713,13 +713,13 @@ static void memboundExtentBuildFreelists(memboundExtent *extent) {
 
 memboundExtent *memboundExtentCreate(size_t size) {
     if (size == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Allocate extent structure */
     memboundExtent *extent = memboundMAP(sizeof(memboundExtent));
     if (!extent) {
-        return NULL;
+        return nullptr;
     }
     memset(extent, 0, sizeof(*extent));
 
@@ -731,13 +731,13 @@ memboundExtent *memboundExtentCreate(size_t size) {
     void *space = memboundMAP(size);
     if (!space) {
         memboundUNMAP(extent, sizeof(memboundExtent));
-        return NULL;
+        return nullptr;
     }
 
     if (!memboundExtentInit(extent, space, size)) {
         memboundUNMAP(space, size);
         memboundUNMAP(extent, sizeof(memboundExtent));
-        return NULL;
+        return nullptr;
     }
 
     return extent;
@@ -760,12 +760,12 @@ void memboundExtentDestroy(memboundExtent *extent) {
 
 void *memboundExtentAlloc(memboundExtent *extent, size_t nBytes) {
     if (!extent || nBytes == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Limit allocation to extent capacity (reasonable upper bound) */
     if (nBytes > memboundExtentPoolSize(extent)) {
-        return NULL;
+        return nullptr;
     }
 
     int iBin, iLogsize;
@@ -785,7 +785,7 @@ void *memboundExtentAlloc(memboundExtent *extent, size_t nBytes) {
     {
         const uint64_t availableMask = extent->freelistBitmap >> iLogsize;
         if (availableMask == 0) {
-            return NULL;
+            return nullptr;
         }
         iBin = iLogsize + __builtin_ctzll(availableMask);
     }
@@ -1052,8 +1052,8 @@ void memboundNotifyPressure(membound *m, memboundPressure level) {
         return;
     }
 
-    memboundPressureCallback cb = NULL;
-    void *userData = NULL;
+    memboundPressureCallback cb = nullptr;
+    void *userData = nullptr;
 
     memboundEnter(m);
     bool shouldNotify = memboundShouldNotifyPressure(m, level, &cb, &userData);
@@ -1078,7 +1078,7 @@ void memboundStrategyInit(memboundStrategyConfig *config) {
     config->fragmentationThreshold = 0.3f; /* Switch to best-fit at 30% frag */
     config->adaptiveSwitchCount = 0;
     for (int i = 0; i < MEMBOUND_CLASS_COUNT; i++) {
-        config->classExtents[i] = NULL;
+        config->classExtents[i] = nullptr;
     }
 }
 
@@ -1135,7 +1135,7 @@ float memboundFragmentationRatio(const membound *m) {
 
 /* Best-fit: find fullest extent with sufficient space */
 memboundExtent *memboundSelectBestFit(membound *m, size_t nBytes) {
-    memboundExtent *best = NULL;
+    memboundExtent *best = nullptr;
     float bestOccupancy = -1.0f;
 
     for (memboundExtent *e = m->extents; e; e = e->next) {
@@ -1164,7 +1164,7 @@ memboundExtent *memboundSelectBestFit(membound *m, size_t nBytes) {
 
 /* Worst-fit: find emptiest extent with sufficient space */
 memboundExtent *memboundSelectWorstFit(membound *m, size_t nBytes) {
-    memboundExtent *best = NULL;
+    memboundExtent *best = nullptr;
     float bestOccupancy = 2.0f; /* Start above max */
 
     for (memboundExtent *e = m->extents; e; e = e->next) {
@@ -1213,7 +1213,7 @@ memboundExtent *memboundSelectSizeClass(membound *m, size_t nBytes) {
         }
     }
 
-    return NULL; /* No suitable extent found */
+    return nullptr; /* No suitable extent found */
 }
 
 /* Adaptive: choose strategy based on current fragmentation */
@@ -1236,7 +1236,7 @@ memboundExtentStrategy memboundAdaptiveGetStrategy(const membound *m) {
 /* Main extent selector - dispatches to strategy-specific function */
 memboundExtent *memboundSelectExtent(membound *m, size_t nBytes) {
     if (!m) {
-        return NULL;
+        return nullptr;
     }
 
     memboundExtentStrategy effectiveStrategy = m->strategy.strategy;
@@ -1246,7 +1246,7 @@ memboundExtent *memboundSelectExtent(membound *m, size_t nBytes) {
         effectiveStrategy = memboundAdaptiveGetStrategy(m);
     }
 
-    memboundExtent *selected = NULL;
+    memboundExtent *selected = nullptr;
 
     switch (effectiveStrategy) {
     case MEMBOUND_STRATEGY_BEST_FIT:
@@ -1417,13 +1417,13 @@ static void memboundRemoveExtent(membound *m, memboundExtent *extent) {
     /* Clear size-class assignment if applicable */
     if (extent->sizeClass >= 0 && extent->sizeClass < MEMBOUND_CLASS_COUNT) {
         if (m->strategy.classExtents[extent->sizeClass] == extent) {
-            m->strategy.classExtents[extent->sizeClass] = NULL;
+            m->strategy.classExtents[extent->sizeClass] = nullptr;
         }
     }
 
     /* Clear from ENTERPRISE cache if applicable */
     if (m->enterprise && m->enterprise->lastAllocExtent == extent) {
-        m->enterprise->lastAllocExtent = NULL;
+        m->enterprise->lastAllocExtent = nullptr;
     }
 
     /* Update aggregate stats */
@@ -1481,11 +1481,11 @@ static bool memboundAddExtentToPool(membound *m, memboundExtent *extent) {
 /* Core allocation for dynamic mode. Runs entirely under the pool's global lock
  * (the caller holds it); there is no per-extent locking. */
 static void *memboundAllocDynamic(membound *m, size_t nBytes) {
-    void *p = NULL;
-    memboundExtent *selectedExtent = NULL;
+    void *p = nullptr;
+    memboundExtent *selectedExtent = nullptr;
     size_t allocSize = 0;
     const bool useCache =
-        m->tier == MEMBOUND_TIER_ENTERPRISE && m->enterprise != NULL;
+        m->tier == MEMBOUND_TIER_ENTERPRISE && m->enterprise != nullptr;
 
     /* ENTERPRISE tier: Try cached extent first for O(1) repeated allocations.
      * This avoids the strategy selection overhead when the same extent
@@ -1538,7 +1538,7 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     size_t growSize = memboundCalculateGrowthSize(m, nBytes);
     if (!memboundCanGrowBy(m, growSize)) {
         /* Pressure callback will be invoked by caller after releasing lock */
-        return NULL;
+        return nullptr;
     }
 
     /* 4. Create new extent - RELEASE LOCK during mmap syscall for better
@@ -1576,20 +1576,20 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
         /* Still need to grow - add our extent if we got one */
         if (!newExtent) {
             /* mmap failed */
-            return NULL;
+            return nullptr;
         }
 
         /* Re-check growth limits (may have changed while lock was released) */
         if (!memboundCanGrowBy(m, growSize)) {
             /* Another thread hit the limit - destroy our extent */
             memboundExtentDestroy(newExtent);
-            return NULL;
+            return nullptr;
         }
 
         /* Add extent to the pool */
         if (!memboundAddExtentToPool(m, newExtent)) {
             memboundExtentDestroy(newExtent);
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -1597,7 +1597,7 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     if (m->strategy.strategy == MEMBOUND_STRATEGY_SIZE_CLASS) {
         memboundSizeClass sc = memboundGetSizeClassWithThresholds(
             nBytes, m->strategy.sizeClassSmall, m->strategy.sizeClassMedium);
-        if (m->strategy.classExtents[sc] == NULL) {
+        if (m->strategy.classExtents[sc] == nullptr) {
             m->primary->sizeClass = (int8_t)sc;
             m->primary->flags |= MEMBOUND_EXTENT_FLAG_DEDICATED;
             m->strategy.classExtents[sc] = m->primary;
@@ -1608,7 +1608,7 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     p = memboundExtentAlloc(m->primary, nBytes);
     if (!p) {
         /* This shouldn't happen with a fresh extent */
-        return NULL;
+        return nullptr;
     }
     selectedExtent = m->primary;
 
@@ -1655,12 +1655,12 @@ membound *memboundCreate(size_t size) {
 
 membound *memboundCreateFixed(size_t size) {
     if (size == 0) {
-        return NULL;
+        return nullptr;
     }
 
     membound *m = memboundMAP(sizeof(membound));
     if (!m) {
-        return NULL;
+        return nullptr;
     }
     memset(m, 0, sizeof(*m));
 
@@ -1673,7 +1673,7 @@ membound *memboundCreateFixed(size_t size) {
     /* Create initial extent */
     if (!memboundAddExtent(m, size)) {
         memboundUNMAP(m, sizeof(membound));
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize mutex (process-shared for fork safety) */
@@ -1696,14 +1696,14 @@ membound *memboundCreateDynamic(size_t initialSize, size_t maxSize,
                                  growthSize > 0 ? growthSize : initialSize,
                              .growthFactor = 0, /* Use fixed growth */
                              .maxExtentCount = 0,
-                             .pressureCallback = NULL,
-                             .pressureUserData = NULL};
+                             .pressureCallback = nullptr,
+                             .pressureUserData = nullptr};
     return memboundCreateWithConfig(&config);
 }
 
 membound *memboundCreateWithConfig(const memboundConfig *config) {
     if (!config || config->initialSize == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Dispatch to tier-specific creation.
@@ -1731,7 +1731,7 @@ membound *memboundCreateWithConfig(const memboundConfig *config) {
 
     membound *m = memboundMAP(sizeof(membound));
     if (!m) {
-        return NULL;
+        return nullptr;
     }
     memset(m, 0, sizeof(*m));
 
@@ -1789,7 +1789,7 @@ membound *memboundCreateWithConfig(const memboundConfig *config) {
     /* Create initial extent */
     if (!memboundAddExtent(m, config->initialSize)) {
         memboundUNMAP(m, sizeof(membound));
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize mutex */
@@ -1965,7 +1965,7 @@ static void memboundTLSDrain(memboundTLSCache *c) {
     memboundTLSBypass = true;
     for (int cls = 0; cls < MEMBOUND_TLS_CLASSES; cls++) {
         void *p = c->head[cls];
-        c->head[cls] = NULL;
+        c->head[cls] = nullptr;
         while (p) {
             void *next = *(void **)p;
             memboundFree(m, p);
@@ -1973,7 +1973,7 @@ static void memboundTLSDrain(memboundTLSCache *c) {
         }
     }
     memboundTLSBypass = false;
-    c->owner = NULL;
+    c->owner = nullptr;
 }
 
 /* pthread_key destructor: runs at thread exit with the heap cache pointer. We
@@ -2010,10 +2010,10 @@ static memboundTLSCache *memboundTLSGet(void) {
 static void memboundTLSDetach(const membound *m) {
     if (memboundTLSp && memboundTLSp->owner == m) {
         for (int i = 0; i < MEMBOUND_TLS_CLASSES; i++) {
-            memboundTLSp->head[i] = NULL;
+            memboundTLSp->head[i] = nullptr;
         }
         memboundTLSp->deferredN = 0;
-        memboundTLSp->owner = NULL;
+        memboundTLSp->owner = nullptr;
     }
 }
 
@@ -2035,7 +2035,7 @@ static bool memboundTLSBind(membound *m, memboundTLSCache *c) {
     if (c->owner == m) {
         /* reset bumped the epoch: cached + deferred blocks are gone -> drop */
         for (int i = 0; i < MEMBOUND_TLS_CLASSES; i++) {
-            c->head[i] = NULL;
+            c->head[i] = nullptr;
         }
         c->deferredN = 0;
     } else if (c->owner) {
@@ -2068,11 +2068,11 @@ static int memboundCacheClass(size_t nBytes) {
 static void *memboundThreadCacheAlloc(membound *m, size_t nBytes) {
     const int cls = memboundCacheClass(nBytes);
     if (cls < 0) {
-        return NULL;
+        return nullptr;
     }
     memboundTLSCache *c = memboundTLSGet();
     if (!c) {
-        return NULL;
+        return nullptr;
     }
 
     memboundTLSBind(m, c);
@@ -2099,7 +2099,7 @@ static void *memboundThreadCacheAlloc(membound *m, size_t nBytes) {
     }
     memboundLeave(m);
     if (n == 0) {
-        return NULL;
+        return nullptr;
     }
     for (int i = 1; i < n; i++) {
         *(void **)batch[i] = c->head[cls];
@@ -2147,7 +2147,7 @@ void memboundFlushThreadCache(membound *m) {
 
 void *memboundAlloc(membound *m, size_t nBytes) {
     if (!m || nBytes == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Dispatch based on tier - MICRO and COMPACT have different structs */
@@ -2161,7 +2161,7 @@ void *memboundAlloc(membound *m, size_t nBytes) {
 
     /* STANDARD and ENTERPRISE tiers use full membound struct */
     if (nBytes > 0x40000000) {
-        return NULL;
+        return nullptr;
     }
 
     /* ENTERPRISE opt-in: try the lock-free thread-local cache first. */
@@ -2183,8 +2183,8 @@ void *memboundAlloc(membound *m, size_t nBytes) {
 
     /* Capture callback info while holding lock */
     memboundPressure pressure = memboundCalculatePressure(m);
-    memboundPressureCallback cb = NULL;
-    void *userData = NULL;
+    memboundPressureCallback cb = nullptr;
+    void *userData = nullptr;
     bool shouldNotify =
         memboundShouldNotifyPressure(m, pressure, &cb, &userData);
 
@@ -2200,12 +2200,12 @@ void *memboundAlloc(membound *m, size_t nBytes) {
 
 void *memboundCalloc(membound *m, size_t count, size_t size) {
     if (!m || count == 0 || size == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Overflow check */
     if (count > SIZE_MAX / size) {
-        return NULL;
+        return nullptr;
     }
 
     const size_t totalBytes = count * size;
@@ -2232,11 +2232,11 @@ void *memboundRealloc(membound *m, void *pPrior, size_t nBytes) {
 
     if (nBytes == 0) {
         memboundFree(m, pPrior);
-        return NULL;
+        return nullptr;
     }
 
     if (!m || nBytes > 0x40000000) {
-        return NULL;
+        return nullptr;
     }
 
     /* MICRO/COMPACT are separate structs with no m->index; dispatch before
@@ -2274,7 +2274,7 @@ void *memboundRealloc(membound *m, void *pPrior, size_t nBytes) {
     memboundExtent *owner = memboundIndexLookup(&m->index, pPrior);
     if (!owner) {
         memboundLeave(m);
-        return NULL;
+        return nullptr;
     }
 
     size_t oldSize = memboundExtentSize(owner, pPrior);
@@ -2371,19 +2371,19 @@ size_t memboundGoodSize(const membound *m, size_t size) {
 
 void *memboundExpand(membound *m, void *ptr, size_t newSize) {
     if (!m || !ptr) {
-        return NULL;
+        return nullptr;
     }
     /* In-place only: succeed iff the current block already satisfies newSize.
      */
-    return (newSize <= memboundUsableSize(m, ptr)) ? ptr : NULL;
+    return (newSize <= memboundUsableSize(m, ptr)) ? ptr : nullptr;
 }
 
 void *memboundRecalloc(membound *m, void *ptr, size_t count, size_t size) {
     if (!m) {
-        return NULL;
+        return nullptr;
     }
     if (count != 0 && size != 0 && count > SIZE_MAX / size) {
-        return NULL; /* overflow */
+        return nullptr; /* overflow */
     }
     const size_t total = count * size; /* 0 if either is 0 */
     const size_t oldUsable = ptr ? memboundUsableSize(m, ptr) : 0;
@@ -2398,7 +2398,7 @@ void *memboundRecalloc(membound *m, void *ptr, size_t count, size_t size) {
 void *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment) {
     if (!m || nBytes == 0 || alignment == 0 ||
         (alignment & (alignment - 1)) != 0) {
-        return NULL; /* alignment must be a non-zero power of two */
+        return nullptr; /* alignment must be a non-zero power of two */
     }
     /* Buddy blocks are naturally aligned to their (power-of-two) size relative
      * to the page-aligned pool base, so allocating at least `alignment` bytes
@@ -2413,7 +2413,7 @@ void *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment) {
     if (p) {
         memboundFree(m, p);
     }
-    return NULL;
+    return nullptr;
 }
 
 /* The global-lock free body: lookup, validate, release, account, and
@@ -2483,8 +2483,8 @@ void memboundFree(membound *m, void *pPrior) {
 
     /* Capture callback info while holding lock */
     memboundPressure pressure = memboundCalculatePressure(m);
-    memboundPressureCallback cb = NULL;
-    void *userData = NULL;
+    memboundPressureCallback cb = nullptr;
+    void *userData = nullptr;
     bool shouldNotify =
         memboundShouldNotifyPressure(m, pressure, &cb, &userData);
 
@@ -2580,8 +2580,8 @@ bool memboundIncreaseSize(membound *m, size_t size) {
         memboundExtentDestroy(oldExtent);
 
         /* Add new extent */
-        m->extents = NULL;
-        m->primary = NULL;
+        m->extents = nullptr;
+        m->primary = nullptr;
         m->extentCount = 0;
         m->totalCapacity = 0;
 
@@ -2703,9 +2703,9 @@ defcleaner(void *, zfree);
  * the lock. Prefers fuller extents to maximize consolidation. */
 static void *memboundRelocAlloc(membound *m, const memboundExtent *src,
                                 size_t size) {
-    void *best = NULL;
+    void *best = nullptr;
     float bestOcc = -1.0f;
-    memboundExtent *bestExtent = NULL;
+    memboundExtent *bestExtent = nullptr;
 
     /* First pass: pick the fullest extent that has room, so we pack into
      * already-busy extents rather than spreading across many. */
@@ -2745,7 +2745,7 @@ static void *memboundRelocAlloc(membound *m, const memboundExtent *src,
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 /* Relocate every live allocation out of extent E into other extents. Returns
@@ -2860,7 +2860,7 @@ size_t memboundCompact(membound *m) {
 
     memboundEnter(m);
     const bool canRelocate =
-        m->mode == MEMBOUND_MODE_DYNAMIC && m->relocationCallback != NULL;
+        m->mode == MEMBOUND_MODE_DYNAMIC && m->relocationCallback != nullptr;
     if (!canRelocate) {
         /* No relocation callback: fall back to releasing empty extents.
          * memboundShrink() takes the lock itself, so release first. */
@@ -2895,7 +2895,7 @@ memboundExtentStrategy memboundSetStrategy(membound *m,
             e->flags &= ~MEMBOUND_EXTENT_FLAG_DEDICATED;
         }
         for (int i = 0; i < MEMBOUND_CLASS_COUNT; i++) {
-            m->strategy.classExtents[i] = NULL;
+            m->strategy.classExtents[i] = nullptr;
         }
     }
 
@@ -3113,7 +3113,7 @@ bool memboundOwns(const membound *m, const void *p) {
         return memboundCompactPoolOwns((const memboundCompactPool *)m, p);
     }
     memboundEnter((membound *)m);
-    bool result = memboundIndexLookup(&m->index, p) != NULL;
+    bool result = memboundIndexLookup(&m->index, p) != nullptr;
     memboundLeave((membound *)m);
     return result;
 }
@@ -3134,7 +3134,7 @@ bool memboundGetExtentInfo(const membound *m, size_t index,
     /* O(1) access using the extent index array
      * The ranges array is sorted by address for ownership lookup,
      * but provides O(1) access by array index */
-    memboundExtent *e = NULL;
+    memboundExtent *e = nullptr;
     const memboundExtentIndex *idx = &m->index;
 
     if (index < MEMBOUND_EXTENT_INLINE_MAX &&
@@ -3451,7 +3451,7 @@ static void memboundMicroBuildFreelists(memboundMicro *m) {
 memboundMicro *memboundMicroCreate(size_t size) {
     /* Enforce MICRO tier limits */
     if (size == 0 || size > MEMBOUND_MICRO_MAX_POOL) {
-        return NULL;
+        return nullptr;
     }
 
     /* Allocate combined structure + pool + control array */
@@ -3469,7 +3469,7 @@ memboundMicro *memboundMicroCreate(size_t size) {
     /* Calculate number of blocks and control array size */
     uint16_t nBlock = size / (szAtom + sizeof(uint8_t));
     if (nBlock == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Calculate pool data size */
@@ -3482,7 +3482,7 @@ memboundMicro *memboundMicroCreate(size_t size) {
     /* Allocate everything in one mmap */
     void *mem = memboundMAP(totalSize);
     if (!mem) {
-        return NULL;
+        return nullptr;
     }
     memset(mem, 0, totalSize);
 
@@ -3523,13 +3523,13 @@ void memboundMicroReset(memboundMicro *m) {
 
 void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
     if (!m || nBytes == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Limit allocation to pool capacity */
     size_t maxAlloc = (size_t)m->nBlock * (size_t)m->szAtom;
     if (nBytes > maxAlloc) {
-        return NULL;
+        return nullptr;
     }
 
     int iBin, iLogsize;
@@ -3543,7 +3543,7 @@ void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
         iLogsize =
             memboundMicroLog((int)((nBytes + m->szAtom - 1) >> m->atomShift));
         if (iLogsize > MEMBOUND_MICRO_LOGMAX) {
-            return NULL; /* Too large for MICRO tier */
+            return nullptr; /* Too large for MICRO tier */
         }
         iFullSz = (size_t)m->szAtom << iLogsize;
     }
@@ -3551,11 +3551,11 @@ void *memboundMicroAlloc(memboundMicro *m, size_t nBytes) {
     /* Find available block using bitmap */
     const uint16_t availableMask = m->freelistBitmap >> iLogsize;
     if (availableMask == 0) {
-        return NULL;
+        return nullptr;
     }
     iBin = iLogsize + __builtin_ctz(availableMask);
     if (iBin > MEMBOUND_MICRO_LOGMAX) {
-        return NULL;
+        return nullptr;
     }
 
     int16_t i = m->aiFreelist[iBin];
@@ -3790,7 +3790,7 @@ static void memboundCompactLink(memboundCompactPool *m, int32_t i,
 /* Create COMPACT tier pool (internal) */
 memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
     if (size == 0) {
-        return NULL;
+        return nullptr;
     }
 
     /* Round up to power of 2 */
@@ -3830,7 +3830,7 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
     /* Allocate all-in-one */
     cleaner(zfree) void *mem = zmalloc(totalSize);
     if (!mem) {
-        return NULL;
+        return nullptr;
     }
 
     memset(mem, 0, totalSize);
@@ -3851,8 +3851,8 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
 
     /* Initialize mutex if thread-safe */
     if (threadSafe) {
-        if (pthread_mutex_init(&m->mutex, NULL) != 0) {
-            return NULL;
+        if (pthread_mutex_init(&m->mutex, nullptr) != 0) {
+            return nullptr;
         }
         m->mutexInitialized = true;
     }
@@ -3873,7 +3873,7 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
         }
     }
 
-    mem = NULL; /* disarm: m aliases the allocation and the caller owns it */
+    mem = nullptr; /* disarm: m aliases the allocation and the caller owns it */
     return m;
 }
 
@@ -3932,14 +3932,14 @@ void memboundCompactPoolReset(memboundCompactPool *m) {
 /* Allocate from COMPACT tier */
 void *memboundCompactPoolAlloc(memboundCompactPool *m, size_t nBytes) {
     if (!m || nBytes == 0) {
-        return NULL;
+        return nullptr;
     }
 
     if (m->threadSafe && m->mutexInitialized) {
         pthread_mutex_lock(&m->mutex);
     }
 
-    void *result = NULL;
+    void *result = nullptr;
     int iLogsize;
 
     if (nBytes <= (size_t)m->szAtom) {
@@ -4276,8 +4276,8 @@ static void testPressureCb(membound *, memboundPressure level, void *) {
 /* Relocation-callback test state: tracks one watched block's new address and
  * counts moves, validating the callback contract on every invocation. */
 static int testRelocCount = 0;
-static void *testRelocWatchOld = NULL;
-static void *testRelocWatchNew = NULL;
+static void *testRelocWatchOld = nullptr;
+static void *testRelocWatchNew = nullptr;
 static size_t testRelocMinSize = 0;
 
 static void testRelocCb(void *oldPtr, void *newPtr, size_t size, void *) {
@@ -4301,7 +4301,7 @@ static const void *memboundTestExtentOf(const membound *m, const void *p) {
             return base;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Randomized compaction: the live blocks an application holds, each with
@@ -4405,7 +4405,7 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
         r ^= r << 17;
         const unsigned kind = (unsigned)(r % 10);
         const size_t which = live.n ? (size_t)(r >> 8) % live.n : 0;
-        void *target = NULL;
+        void *target = nullptr;
 
         if (kind < 5 || live.n == 0) {
             if (live.n < 64) {
@@ -4440,7 +4440,7 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
             target = freed[(size_t)(r >> 24) % (nFreed < 32 ? nFreed : 32)];
             for (size_t i = 0; i < live.n && target; i++) {
                 if (live.blocks[i].ptr == target) {
-                    target = NULL;
+                    target = nullptr;
                 }
             }
         } else if (kind == 8) {
@@ -4558,7 +4558,7 @@ static void *mtAllocFreeWorker(void *arg) {
         memboundFree(ctx->m, ptrs[i]);
     }
 
-    return NULL;
+    return nullptr;
 }
 
 static void *mtReallocWorker(void *arg) {
@@ -4570,7 +4570,7 @@ static void *mtReallocWorker(void *arg) {
         /* spin */
     }
 
-    void *p = NULL;
+    void *p = nullptr;
 
     for (int i = 0; i < ctx->iterations; i++) {
         /* Alternate between grow and shrink */
@@ -4597,7 +4597,7 @@ static void *mtReallocWorker(void *arg) {
         /* Occasionally free and start fresh */
         if (i % 100 == 99) {
             memboundFree(ctx->m, p);
-            p = NULL;
+            p = nullptr;
         }
     }
 
@@ -4605,7 +4605,7 @@ static void *mtReallocWorker(void *arg) {
         memboundFree(ctx->m, p);
     }
 
-    return NULL;
+    return nullptr;
 }
 
 static void *mtQueryWorker(void *arg) {
@@ -4638,12 +4638,12 @@ static void *mtQueryWorker(void *arg) {
         (void)memboundCanGrow(ctx->m);
     }
 
-    return NULL;
+    return nullptr;
 }
 
 /* Pressure callback reentrancy test - verify callback executes outside lock */
 static volatile int mtPressureCallbackExecuting = 0;
-static membound *mtPressureTestPool = NULL;
+static membound *mtPressureTestPool = nullptr;
 static volatile int mtPressureCallbackCount = 0;
 
 static void mtPressureCallback(membound *mb, memboundPressure, void *) {
@@ -4686,7 +4686,7 @@ static void *tcExitWorker(void *arg) {
     for (int i = 0; i < 100; i++) {
         memboundFree(m, p[i]);
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Hammer a thread-cache pool from several threads so the free-side batched
@@ -4710,7 +4710,7 @@ static void *tcStressWorker(void *arg) {
             memboundFree(m, p[i]);
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Blocks past the largest cache class take the locked path; each needs an
@@ -4732,7 +4732,7 @@ static void *tcExtentChurnWorker(void *arg) {
         }
         memboundFlushThreadCache(m);
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Pressure callback for the tests: counts calls and keeps the last level */
@@ -4765,7 +4765,7 @@ static void *statsRaceChurn(void *arg) {
             memboundFree(c->m, p[i]);
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Polls every stat accessor while the churn threads run. */
@@ -4783,7 +4783,7 @@ static void *statsRaceReader(void *arg) {
         (void)memboundCanGrow(c->m);
         c->readerRounds++;
     }
-    return NULL;
+    return nullptr;
 }
 
 /* One pool of kind `kind` (dynamic, enterprise, fixed, micro, compact)
@@ -4812,7 +4812,7 @@ static int memboundTestMapFailRun(int kind, bool *fired) {
         (void)memboundGrowBy(m, 1 << 16);
         (void)memboundIncreaseSize(m, 1 << 18);
         void *more = memboundAlloc(m, 6000);
-        live += more != NULL;
+        live += more != nullptr;
         if (more) {
             memset(more, 0xcd, 6000);
         }
@@ -4856,12 +4856,12 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: Basic alloc and free") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetMode(m) == MEMBOUND_MODE_FIXED);
         assert(memboundExtentCount(m) == 1);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(memboundCurrentAllocationCount(m) == 1);
         assert(memboundOwns(m, p));
 
@@ -4875,11 +4875,11 @@ int memboundTest(int, char *[]) {
         const int createMax = 1 << 20;
         const int iterations = (createMax / 8192) * 2;
         membound *m = memboundCreate(createMax);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         for (int i = 0; i < iterations; i++) {
             void *got = memboundAlloc(m, 8192);
-            assert(got != NULL);
+            assert(got != nullptr);
             memboundFree(m, got);
         }
 
@@ -4890,7 +4890,7 @@ int memboundTest(int, char *[]) {
     TEST("Fixed: Pool exhaustion") {
         const size_t poolSize = 1 << 16;
         membound *m = memboundCreate(poolSize);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *ptrs[100];
         int count = 0;
@@ -4904,7 +4904,7 @@ int memboundTest(int, char *[]) {
         assert(count > 0);
         assert(count < 100);
 
-        assert(memboundAlloc(m, 4096) == NULL);
+        assert(memboundAlloc(m, 4096) == nullptr);
 
         for (int i = 0; i < count; i++) {
             memboundFree(m, ptrs[i]);
@@ -4916,15 +4916,15 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: calloc zero-initialization") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p1 = memboundAlloc(m, 1024);
-        assert(p1 != NULL);
+        assert(p1 != nullptr);
         memset(p1, 0xFF, 1024);
         memboundFree(m, p1);
 
         uint8_t *p2 = memboundCalloc(m, 128, 8);
-        assert(p2 != NULL);
+        assert(p2 != nullptr);
         for (int i = 0; i < 1024; i++) {
             assert(p2[i] == 0);
         }
@@ -4935,25 +4935,25 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: calloc overflow protection") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
-        assert(memboundCalloc(m, SIZE_MAX, 2) == NULL);
-        assert(memboundCalloc(m, 0, 100) == NULL);
-        assert(memboundCalloc(m, 100, 0) == NULL);
+        assert(memboundCalloc(m, SIZE_MAX, 2) == nullptr);
+        assert(memboundCalloc(m, 0, 100) == nullptr);
+        assert(memboundCalloc(m, 100, 0) == nullptr);
 
         memboundShutdown(m);
     }
 
     TEST("Fixed: realloc grow") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         char *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         strcpy(p, "hello");
 
         p = memboundRealloc(m, p, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(strcmp(p, "hello") == 0);
 
         memboundFree(m, p);
@@ -4962,10 +4962,10 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: realloc shrink (no-op)") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         char *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         char *original = p;
         strcpy(p, "test data");
 
@@ -4979,10 +4979,10 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: realloc NULL acts like alloc") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
-        void *p = memboundRealloc(m, NULL, 256);
-        assert(p != NULL);
+        void *p = memboundRealloc(m, nullptr, 256);
+        assert(p != nullptr);
         assert(memboundCurrentAllocationCount(m) == 1);
 
         memboundFree(m, p);
@@ -4991,14 +4991,14 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: realloc zero size acts like free") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(memboundCurrentAllocationCount(m) == 1);
 
         void *result = memboundRealloc(m, p, 0);
-        assert(result == NULL);
+        assert(result == nullptr);
         assert(memboundCurrentAllocationCount(m) == 0);
 
         memboundShutdown(m);
@@ -5006,11 +5006,11 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: reset bulk free") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         for (int i = 0; i < 10; i++) {
             void *p = memboundAlloc(m, 1024);
-            assert(p != NULL);
+            assert(p != nullptr);
         }
         assert(memboundCurrentAllocationCount(m) == 10);
 
@@ -5019,7 +5019,7 @@ int memboundTest(int, char *[]) {
         assert(memboundBytesUsed(m) == 0);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5027,7 +5027,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: increaseSize when empty") {
         membound *m = memboundCreate(1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         size_t oldCapacity = memboundCapacity(m);
 
@@ -5036,7 +5036,7 @@ int memboundTest(int, char *[]) {
         assert(memboundCapacity(m) > oldCapacity);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5044,10 +5044,10 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: increaseSize fails with allocations") {
         membound *m = memboundCreate(1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
 
         bool grew = memboundIncreaseSize(m, 1 << 18);
         assert(!grew);
@@ -5095,10 +5095,10 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: shutdownSafe with allocations") {
         membound *m = memboundCreate(1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
 
         bool shut = memboundShutdownSafe(m);
         assert(!shut);
@@ -5111,14 +5111,14 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: bytesUsed and bytesAvailable") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         size_t capacity = memboundCapacity(m);
         assert(memboundBytesUsed(m) == 0);
         assert(memboundBytesAvailable(m) == capacity);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(memboundBytesUsed(m) > 0);
         assert(memboundBytesAvailable(m) < capacity);
 
@@ -5130,40 +5130,40 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: ownership check") {
         membound *m = memboundCreate(1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(memboundOwns(m, p));
 
         int stackVar = 42;
         assert(!memboundOwns(m, &stackVar));
-        assert(!memboundOwns(m, NULL));
+        assert(!memboundOwns(m, nullptr));
 
         memboundFree(m, p);
         memboundShutdown(m);
     }
 
     TEST("Fixed: NULL safety") {
-        assert(memboundAlloc(NULL, 100) == NULL);
-        memboundFree(NULL, (void *)0x1234);
-        memboundFree((membound *)0x1234, NULL);
-        assert(memboundRealloc(NULL, NULL, 100) == NULL);
-        memboundReset(NULL);
-        assert(memboundIncreaseSize(NULL, 1000) == false);
-        assert(memboundShutdown(NULL) == false);
-        assert(memboundShutdownSafe(NULL) == false);
-        assert(memboundCurrentAllocationCount(NULL) == 0);
-        assert(memboundBytesUsed(NULL) == 0);
-        assert(memboundBytesAvailable(NULL) == 0);
-        assert(memboundCapacity(NULL) == 0);
-        assert(memboundOwns(NULL, (void *)0x1234) == false);
-        assert(memboundCalloc(NULL, 10, 10) == NULL);
+        assert(memboundAlloc(nullptr, 100) == nullptr);
+        memboundFree(nullptr, (void *)0x1234);
+        memboundFree((membound *)0x1234, nullptr);
+        assert(memboundRealloc(nullptr, nullptr, 100) == nullptr);
+        memboundReset(nullptr);
+        assert(memboundIncreaseSize(nullptr, 1000) == false);
+        assert(memboundShutdown(nullptr) == false);
+        assert(memboundShutdownSafe(nullptr) == false);
+        assert(memboundCurrentAllocationCount(nullptr) == 0);
+        assert(memboundBytesUsed(nullptr) == 0);
+        assert(memboundBytesAvailable(nullptr) == 0);
+        assert(memboundCapacity(nullptr) == 0);
+        assert(memboundOwns(nullptr, (void *)0x1234) == false);
+        assert(memboundCalloc(nullptr, 10, 10) == nullptr);
     }
 
     TEST("Fixed: various allocation sizes") {
         membound *m = memboundCreate(1 << 22);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         size_t sizes[] = {1,   7,    64,   100,   255,   256,   257,
                           500, 1000, 4096, 10000, 65536, 100000};
@@ -5171,7 +5171,7 @@ int memboundTest(int, char *[]) {
 
         for (size_t i = 0; i < countof(sizes); i++) {
             ptrs[i] = memboundAlloc(m, sizes[i]);
-            assert(ptrs[i] != NULL);
+            assert(ptrs[i] != nullptr);
             memset(ptrs[i], (int)i, sizes[i]);
         }
 
@@ -5185,7 +5185,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: fragmentation and coalescing") {
         membound *m = memboundCreate(1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p1 = memboundAlloc(m, 256);
         void *p2 = memboundAlloc(m, 256);
@@ -5200,7 +5200,7 @@ int memboundTest(int, char *[]) {
 
         assert(memboundCurrentAllocationCount(m) == 0);
         void *big = memboundAlloc(m, 4096);
-        assert(big != NULL);
+        assert(big != nullptr);
         memboundFree(m, big);
 
         memboundShutdown(m);
@@ -5208,13 +5208,13 @@ int memboundTest(int, char *[]) {
 
     TEST("Fixed: stress test - rapid alloc/free cycles") {
         membound *m = memboundCreate(1 << 22);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         const int iterations = 100000;
         for (int i = 0; i < iterations; i++) {
             size_t size = 64 + (i % 1024);
             void *p = memboundAlloc(m, size);
-            assert(p != NULL);
+            assert(p != nullptr);
             *(volatile char *)p = (char)i;
             memboundFree(m, p);
         }
@@ -5229,13 +5229,13 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Basic alloc and free") {
         membound *m = memboundCreateMicro(8192);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetMode(m) == MEMBOUND_MODE_FIXED);
         assert(memboundGetTier(m) == MEMBOUND_TIER_MICRO);
         assert(memboundExtentCount(m) == 1);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(memboundCurrentAllocationCount(m) == 1);
         assert(memboundOwns(m, p));
 
@@ -5247,14 +5247,14 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Multiple allocations") {
         membound *m = memboundCreateMicro(16384);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p1 = memboundAlloc(m, 256);
         void *p2 = memboundAlloc(m, 512);
         void *p3 = memboundAlloc(m, 1024);
-        assert(p1 != NULL);
-        assert(p2 != NULL);
-        assert(p3 != NULL);
+        assert(p1 != nullptr);
+        assert(p2 != nullptr);
+        assert(p3 != nullptr);
         assert(memboundCurrentAllocationCount(m) == 3);
 
         /* Verify all are distinct pointers */
@@ -5280,7 +5280,7 @@ int memboundTest(int, char *[]) {
     TEST("MICRO: Pool exhaustion") {
         /* Small pool to force exhaustion */
         membound *m = memboundCreateMicro(4096);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *ptrs[32];
         int count = 0;
@@ -5295,7 +5295,7 @@ int memboundTest(int, char *[]) {
         assert(count < 32);
 
         /* Pool is exhausted */
-        assert(memboundAlloc(m, 256) == NULL);
+        assert(memboundAlloc(m, 256) == nullptr);
 
         /* Free all and verify we can allocate again */
         for (int i = 0; i < count; i++) {
@@ -5304,7 +5304,7 @@ int memboundTest(int, char *[]) {
         assert(memboundCurrentAllocationCount(m) == 0);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5312,11 +5312,11 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Reset functionality") {
         membound *m = memboundCreateMicro(8192);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         for (int i = 0; i < 5; i++) {
             void *p = memboundAlloc(m, 256);
-            assert(p != NULL);
+            assert(p != nullptr);
         }
         assert(memboundCurrentAllocationCount(m) == 5);
 
@@ -5326,7 +5326,7 @@ int memboundTest(int, char *[]) {
 
         /* Can allocate again after reset */
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5334,7 +5334,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Stats and capacity queries") {
         membound *m = memboundCreateMicro(16384);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         size_t cap = memboundCapacity(m);
         assert(cap > 0 && cap <= 16384);
@@ -5365,7 +5365,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Buddy coalescing") {
         membound *m = memboundCreateMicro(8192);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate two adjacent blocks */
         void *p1 = memboundAlloc(m, 256);
@@ -5380,7 +5380,7 @@ int memboundTest(int, char *[]) {
 
         /* Now allocate larger block that fits in coalesced space */
         void *p3 = memboundAlloc(m, 512);
-        assert(p3 != NULL);
+        assert(p3 != nullptr);
 
         /* Should be able to use the coalesced space */
         size_t usedAfter = memboundBytesUsed(m);
@@ -5394,7 +5394,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Various allocation sizes") {
         membound *m = memboundCreateMicro(MEMBOUND_MICRO_MAX_POOL);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Test power-of-2 sizes */
         size_t sizes[] = {64, 128, 256, 512, 1024, 2048, 4096};
@@ -5420,20 +5420,20 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Minimum and maximum allocations") {
         membound *m = memboundCreateMicro(32768);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Minimum allocation */
         void *pMin = memboundAlloc(m, 1);
-        assert(pMin != NULL);
+        assert(pMin != nullptr);
         *(char *)pMin = 'x';
 
         /* Large allocation (but within MICRO limits) */
         void *pLarge = memboundAlloc(m, 8192);
-        assert(pLarge != NULL);
+        assert(pLarge != nullptr);
 
         /* Too large for remaining pool should fail */
         void *pHuge = memboundAlloc(m, 32768);
-        assert(pHuge == NULL); /* Won't fit */
+        assert(pHuge == nullptr); /* Won't fit */
 
         memboundFree(m, pMin);
         memboundFree(m, pLarge);
@@ -5442,16 +5442,16 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: NULL safety") {
         /* These should not crash */
-        memboundFree((membound *)NULL, (void *)0x1234);
+        memboundFree((membound *)nullptr, (void *)0x1234);
 
         membound *m = memboundCreateMicro(8192);
-        assert(m != NULL);
+        assert(m != nullptr);
 
-        memboundFree(m, NULL); /* Should be no-op */
-        assert(memboundOwns(m, NULL) == false);
+        memboundFree(m, nullptr); /* Should be no-op */
+        assert(memboundOwns(m, nullptr) == false);
 
         void *p = memboundAlloc(m, 0);
-        assert(p == NULL); /* Zero-size allocation */
+        assert(p == nullptr); /* Zero-size allocation */
 
         memboundShutdown(m);
     }
@@ -5459,21 +5459,21 @@ int memboundTest(int, char *[]) {
     TEST("MICRO: Creation limits") {
         /* NULL for zero size */
         membound *m0 = memboundCreateMicro(0);
-        assert(m0 == NULL);
+        assert(m0 == nullptr);
 
         /* NULL for size exceeding MICRO max */
         membound *mBig = memboundCreateMicro(MEMBOUND_MICRO_MAX_POOL + 1);
-        assert(mBig == NULL);
+        assert(mBig == nullptr);
 
         /* Valid creation at max size */
         membound *mMax = memboundCreateMicro(MEMBOUND_MICRO_MAX_POOL);
-        assert(mMax != NULL);
+        assert(mMax != nullptr);
         assert(memboundGetTier(mMax) == MEMBOUND_TIER_MICRO);
         memboundShutdown(mMax);
 
         /* Valid creation at small size */
         membound *mSmall = memboundCreateMicro(1024);
-        assert(mSmall != NULL);
+        assert(mSmall != nullptr);
         memboundShutdown(mSmall);
     }
 
@@ -5650,7 +5650,7 @@ int memboundTest(int, char *[]) {
 
         /* NULL is not misuse: nothing is reported */
         const uint64_t diagNull = dkDiagCount();
-        memboundFree(m, NULL);
+        memboundFree(m, nullptr);
         if (dkDiagCount() != diagNull) {
             ERR("freeing NULL must not report");
         }
@@ -5666,7 +5666,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MICRO: Repeated alloc/free stress") {
         membound *m = memboundCreateMicro(16384);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         for (int i = 0; i < 1000; i++) {
             size_t size = 64 + (i % 512);
@@ -5688,11 +5688,11 @@ int memboundTest(int, char *[]) {
         config.initialSize = 8192;
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_MICRO);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5705,7 +5705,7 @@ int memboundTest(int, char *[]) {
         config.initialSize = MEMBOUND_MICRO_MAX_POOL + 4096;
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         /* Should have fallen back to STANDARD tier */
         assert(memboundGetTier(m) == MEMBOUND_TIER_STANDARD);
 
@@ -5718,13 +5718,13 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Basic alloc and free") {
         membound *m = memboundCreateCompact(1 << 20, false);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetMode(m) == MEMBOUND_MODE_FIXED);
         assert(memboundGetTier(m) == MEMBOUND_TIER_COMPACT);
         assert(memboundExtentCount(m) == 1);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(memboundCurrentAllocationCount(m) == 1);
         assert(memboundOwns(m, p));
 
@@ -5736,7 +5736,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Thread-safe mode") {
         membound *m = memboundCreateCompact(1 << 20, true);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_COMPACT);
 
         memboundStats stats;
@@ -5744,7 +5744,7 @@ int memboundTest(int, char *[]) {
         assert(stats.threadSafe == true);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5752,7 +5752,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Multiple allocations") {
         membound *m = memboundCreateCompact(1 << 20, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p1 = memboundAlloc(m, 256);
         void *p2 = memboundAlloc(m, 512);
@@ -5777,7 +5777,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Pool exhaustion") {
         membound *m = memboundCreateCompact(1 << 16, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *ptrs[64];
         int count = 0;
@@ -5792,7 +5792,7 @@ int memboundTest(int, char *[]) {
         assert(count < 64);
 
         /* Pool is exhausted */
-        assert(memboundAlloc(m, 2048) == NULL);
+        assert(memboundAlloc(m, 2048) == nullptr);
 
         for (int i = 0; i < count; i++) {
             memboundFree(m, ptrs[i]);
@@ -5804,11 +5804,11 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Reset functionality") {
         membound *m = memboundCreateCompact(1 << 20, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         for (int i = 0; i < 10; i++) {
             void *p = memboundAlloc(m, 1024);
-            assert(p != NULL);
+            assert(p != nullptr);
         }
         assert(memboundCurrentAllocationCount(m) == 10);
 
@@ -5817,7 +5817,7 @@ int memboundTest(int, char *[]) {
         assert(memboundBytesUsed(m) == 0);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5825,7 +5825,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Stats and capacity queries") {
         membound *m = memboundCreateCompact(1 << 20, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         size_t cap = memboundCapacity(m);
         assert(cap > 0);
@@ -5856,7 +5856,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Large allocations") {
         membound *m = memboundCreateCompact(1 << 22, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate various sizes */
         void *p1 = memboundAlloc(m, 65536);  /* 64KB */
@@ -5885,7 +5885,7 @@ int memboundTest(int, char *[]) {
         config.threadSafe = true;
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_COMPACT);
 
         memboundStats stats;
@@ -5893,7 +5893,7 @@ int memboundTest(int, char *[]) {
         assert(stats.threadSafe == true);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -5901,7 +5901,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Repeated alloc/free stress") {
         membound *m = memboundCreateCompact(1 << 20, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         for (int i = 0; i < 10000; i++) {
             size_t size = 64 + (i % 8192);
@@ -5918,7 +5918,7 @@ int memboundTest(int, char *[]) {
 
     TEST("COMPACT: Buddy coalescing") {
         membound *m = memboundCreateCompact(1 << 20, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate adjacent blocks */
         void *p1 = memboundAlloc(m, 256);
@@ -5935,7 +5935,7 @@ int memboundTest(int, char *[]) {
 
         /* Now allocate a larger block using coalesced space */
         void *pLarge = memboundAlloc(m, 1024);
-        assert(pLarge != NULL);
+        assert(pLarge != nullptr);
 
         memboundFree(m, pLarge);
         memboundShutdown(m);
@@ -5956,36 +5956,36 @@ int memboundTest(int, char *[]) {
         };
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_ENTERPRISE);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
 
     TEST("ENTERPRISE: Creation via helper function") {
         membound *m = memboundCreateEnterprise(1 << 20, 0);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_ENTERPRISE);
 
         /* Basic allocation */
         void *p = memboundAlloc(m, 4096);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
 
     TEST("ENTERPRISE: Dynamic growth") {
         membound *m = memboundCreateEnterprise(1 << 16, 0); /* 64 KB initial */
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate more than initial extent to trigger growth */
         void *ptrs[10];
         for (int i = 0; i < 10; i++) {
             ptrs[i] = memboundAlloc(m, 8192);
-            assert(ptrs[i] != NULL);
+            assert(ptrs[i] != nullptr);
         }
 
         /* Verify stats reflect growth */
@@ -6039,18 +6039,18 @@ int memboundTest(int, char *[]) {
 
     TEST("ENTERPRISE: Pool operations") {
         membound *m = memboundCreateEnterprise(1 << 20, 0);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Test calloc */
         int *arr = memboundCalloc(m, 100, sizeof(int));
-        assert(arr != NULL);
+        assert(arr != nullptr);
         for (int i = 0; i < 100; i++) {
             assert(arr[i] == 0);
         }
 
         /* Test realloc */
         arr = memboundRealloc(m, arr, 200 * sizeof(int));
-        assert(arr != NULL);
+        assert(arr != nullptr);
 
         /* Ownership check */
         assert(memboundOwns(m, arr) == true);
@@ -6064,7 +6064,7 @@ int memboundTest(int, char *[]) {
 
     TEST("ENTERPRISE: Reset pool") {
         membound *m = memboundCreateEnterprise(1 << 20, 0);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p1 = memboundAlloc(m, 1024);
         void *p2 = memboundAlloc(m, 2048);
@@ -6082,7 +6082,7 @@ int memboundTest(int, char *[]) {
 
         /* Pool should still be usable */
         void *p3 = memboundAlloc(m, 4096);
-        assert(p3 != NULL);
+        assert(p3 != nullptr);
 
         memboundFree(m, p3);
         memboundShutdown(m);
@@ -6102,7 +6102,7 @@ int memboundTest(int, char *[]) {
         };
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate from different size classes */
         void *small = memboundAlloc(m, 512);    /* Small */
@@ -6120,19 +6120,19 @@ int memboundTest(int, char *[]) {
     TEST("ENTERPRISE: Max size limit") {
         membound *m = memboundCreateEnterprise(
             1 << 16, 1 << 17); /* 64KB init, 128KB max */
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* First allocation should succeed */
         void *p1 = memboundAlloc(m, 32768);
-        assert(p1 != NULL);
+        assert(p1 != nullptr);
 
         /* Second allocation should also succeed (still within max) */
         void *p2 = memboundAlloc(m, 32768);
-        assert(p2 != NULL);
+        assert(p2 != nullptr);
 
         /* Large allocation that would exceed limit should fail */
         void *p3 = memboundAlloc(m, 65536);
-        assert(p3 == NULL); /* Exceeds 128KB limit */
+        assert(p3 == nullptr); /* Exceeds 128KB limit */
 
         memboundFree(m, p1);
         memboundFree(m, p2);
@@ -6151,11 +6151,11 @@ int memboundTest(int, char *[]) {
         assert(config.threadSafe == false);
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_MICRO);
 
         void *p = memboundAlloc(m, 128);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -6168,11 +6168,11 @@ int memboundTest(int, char *[]) {
         assert(config.threadSafe == true);
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_COMPACT);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -6182,11 +6182,11 @@ int memboundTest(int, char *[]) {
         assert(config.threadSafe == false);
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_COMPACT);
 
         void *p = memboundAlloc(m, 512);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -6199,11 +6199,11 @@ int memboundTest(int, char *[]) {
         assert(config.threadSafe == true);
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_STANDARD);
 
         void *p = memboundAlloc(m, 4096);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -6216,7 +6216,7 @@ int memboundTest(int, char *[]) {
         assert(config.strategy == MEMBOUND_STRATEGY_SIZE_CLASS);
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_ENTERPRISE);
 
         /* Test allocations from different size classes */
@@ -6239,11 +6239,11 @@ int memboundTest(int, char *[]) {
         assert(config.threadSafe == false);
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_COMPACT);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -6254,7 +6254,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: create initial extent") {
         membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetMode(m) == MEMBOUND_MODE_DYNAMIC);
         assert(memboundExtentCount(m) == 1);
         assert(memboundCanGrow(m) == true);
@@ -6263,7 +6263,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: grows on exhaustion") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *ptrs[50];
         int count = 0;
@@ -6297,7 +6297,7 @@ int memboundTest(int, char *[]) {
          * past the cap grows by an extent sized to hold it (the next power
          * of two), so the allocation succeeds */
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
         const size_t big = (size_t)(1 << 14) * 4 + 12345;
         uint8_t *p = memboundAlloc(m, big);
         if (!p || !memboundOwns(m, p)) {
@@ -6325,7 +6325,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: respects max size") {
         membound *m = memboundCreateDynamic(1 << 14, 1 << 15, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *ptrs[100];
         int count = 0;
@@ -6340,7 +6340,7 @@ int memboundTest(int, char *[]) {
         }
 
         /* Should have hit limit */
-        assert(memboundAlloc(m, 4096) == NULL);
+        assert(memboundAlloc(m, 4096) == nullptr);
         assert(memboundCapacity(m) <= (1 << 15));
 
         for (int i = 0; i < count; i++) {
@@ -6351,7 +6351,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: canGrow returns correct value") {
         membound *m = memboundCreateDynamic(1 << 14, 1 << 16, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundCanGrow(m) == true);
 
         /* Fill up to limit */
@@ -6365,7 +6365,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: shrink releases empty extents") {
         membound *m = memboundCreateDynamic(1 << 12, 0, 1 << 12);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Force multiple extents */
         void *ptrs[100];
@@ -6400,7 +6400,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: ownership across extents") {
         membound *m = memboundCreateDynamic(1 << 12, 0, 1 << 12);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate across multiple extents */
         void *ptrs[50];
@@ -6430,7 +6430,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: getExtentInfo") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Force second extent */
         void *ptrs[50];
@@ -6467,10 +6467,10 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: getStats") {
         membound *m = memboundCreateDynamic(1 << 16, 1 << 20, 1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
 
         memboundStats stats;
         memboundGetStats(m, &stats);
@@ -6492,8 +6492,8 @@ int memboundTest(int, char *[]) {
 
         /* Small pool to easily trigger pressure */
         membound *m = memboundCreateDynamic(1 << 12, 1 << 13, 1 << 12);
-        assert(m != NULL);
-        memboundSetPressureCallback(m, testPressureCb, NULL);
+        assert(m != nullptr);
+        memboundSetPressureCallback(m, testPressureCb, nullptr);
 
         /* Fill up to trigger pressure */
         void *ptrs[100];
@@ -6523,11 +6523,11 @@ int memboundTest(int, char *[]) {
                                  .growthSize = 0,
                                  .growthFactor = 1.5,
                                  .maxExtentCount = 10,
-                                 .pressureCallback = NULL,
-                                 .pressureUserData = NULL};
+                                 .pressureCallback = nullptr,
+                                 .pressureUserData = nullptr};
 
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetMode(m) == MEMBOUND_MODE_DYNAMIC);
 
         /* Force growth */
@@ -6551,7 +6551,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: manual growBy") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         size_t initialExtents = memboundExtentCount(m);
         size_t initialCapacity = memboundCapacity(m);
@@ -6566,7 +6566,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Dynamic: fixed mode cannot grow") {
         membound *m = memboundCreateFixed(1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetMode(m) == MEMBOUND_MODE_FIXED);
         assert(memboundCanGrow(m) == false);
 
@@ -6582,7 +6582,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Index: binary search correctness") {
         membound *m = memboundCreateDynamic(1 << 12, 0, 1 << 12);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Create many extents to test binary search */
         for (int i = 0; i < 10; i++) {
@@ -6618,7 +6618,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: best-fit consolidates allocations") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Set best-fit strategy */
         memboundSetStrategy(m, MEMBOUND_STRATEGY_BEST_FIT);
@@ -6653,7 +6653,7 @@ int memboundTest(int, char *[]) {
 
         /* New allocation should go to fuller extent (best-fit) */
         void *newAlloc = memboundAlloc(m, 256);
-        assert(newAlloc != NULL);
+        assert(newAlloc != nullptr);
         memboundFree(m, newAlloc);
 
         /* Cleanup */
@@ -6665,7 +6665,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: worst-fit spreads allocations") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Force multiple extents */
         while (memboundExtentCount(m) < 3) {
@@ -6681,7 +6681,7 @@ int memboundTest(int, char *[]) {
         void *ptrs[10];
         for (int i = 0; i < 10; i++) {
             ptrs[i] = memboundAlloc(m, 1024);
-            assert(ptrs[i] != NULL);
+            assert(ptrs[i] != nullptr);
         }
 
         /* Cleanup */
@@ -6693,7 +6693,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: size-class segregation") {
         membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Force multiple extents for size-class */
         while (memboundExtentCount(m) < 3) {
@@ -6775,7 +6775,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: adaptive switches on fragmentation") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         memboundSetStrategy(m, MEMBOUND_STRATEGY_ADAPTIVE);
         assert(memboundGetStrategy(m) == MEMBOUND_STRATEGY_ADAPTIVE);
@@ -6803,7 +6803,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: min occupancy threshold") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Force multiple extents */
         while (memboundExtentCount(m) < 2) {
@@ -6815,7 +6815,7 @@ int memboundTest(int, char *[]) {
 
         /* Allocations should still work */
         void *p = memboundAlloc(m, 1024);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundShutdown(m);
@@ -6829,7 +6829,7 @@ int memboundTest(int, char *[]) {
             .shrinkThreshold = 0.05f /* Shrink extents < 5% full */
         };
         membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Force multiple extents */
         void *ptrs[100];
@@ -6861,14 +6861,14 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: shrink threshold set at run time; max size reported") {
         membound *m = memboundCreateDynamic(1 << 14, 1 << 18, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
         if (memboundMaxSize(m) != (1 << 18)) {
             ERR("dynamic max size %zu, want %d", memboundMaxSize(m), 1 << 18);
         }
 
         membound *fixed = memboundCreateFixed(1 << 14);
-        assert(fixed != NULL);
-        if (memboundMaxSize(fixed) != 0 || memboundMaxSize(NULL) != 0) {
+        assert(fixed != nullptr);
+        if (memboundMaxSize(fixed) != 0 || memboundMaxSize(nullptr) != 0) {
             ERR("a fixed pool or NULL reports a max size");
         }
         memboundShutdown(fixed);
@@ -6882,7 +6882,7 @@ int memboundTest(int, char *[]) {
         int count = 0;
         while (memboundExtentCount(m) < 3 && count < 100) {
             ptrs[count] = memboundAlloc(m, 4096);
-            assert(ptrs[count] != NULL);
+            assert(ptrs[count] != nullptr);
             count++;
         }
         for (int round = 0; round < 3; round++) {
@@ -6894,7 +6894,7 @@ int memboundTest(int, char *[]) {
             if (round > 0) {
                 for (int i = 0; i < count; i++) {
                     ptrs[i] = memboundAlloc(m, 4096);
-                    assert(ptrs[i] != NULL);
+                    assert(ptrs[i] != nullptr);
                 }
             }
             const size_t full = memboundExtentCount(m);
@@ -6915,7 +6915,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: fragmentation ratio calculation") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Single extent - no fragmentation */
         float frag = memboundGetFragmentation(m);
@@ -6945,7 +6945,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: switch strategy at runtime") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Default is FIRST_FIT */
         assert(memboundGetStrategy(m) == MEMBOUND_STRATEGY_FIRST_FIT);
@@ -6974,18 +6974,18 @@ int memboundTest(int, char *[]) {
 
     TEST("Strategy: getStrategy guards for non-dynamic and null pools") {
         /* NULL pool is safe and returns the default. */
-        assert(memboundGetStrategy(NULL) == MEMBOUND_STRATEGY_FIRST_FIT);
+        assert(memboundGetStrategy(nullptr) == MEMBOUND_STRATEGY_FIRST_FIT);
 
         /* Fixed-mode pools have no selection strategy; always FIRST_FIT. */
         membound *fixed = memboundCreateFixed(1 << 16);
-        assert(fixed != NULL);
+        assert(fixed != nullptr);
         assert(memboundGetStrategy(fixed) == MEMBOUND_STRATEGY_FIRST_FIT);
         memboundShutdown(fixed);
 
         /* MICRO tier is fixed mode - the tier guard must short-circuit before
          * reading m->mode, which would alias a different struct layout. */
         membound *micro = memboundCreateMicro(4096);
-        assert(micro != NULL);
+        assert(micro != nullptr);
         assert(memboundGetStrategy(micro) == MEMBOUND_STRATEGY_FIRST_FIT);
         memboundShutdown(micro);
     }
@@ -6994,11 +6994,11 @@ int memboundTest(int, char *[]) {
         /* A pool smaller than one atom plus its control byte must fail init
          * rather than silently produce a zero-capacity extent. */
         memboundExtent *tiny = memboundExtentCreate(64);
-        assert(tiny == NULL);
+        assert(tiny == nullptr);
 
         /* A pool large enough for at least one atom still succeeds. */
         memboundExtent *ok = memboundExtentCreate(1 << 16);
-        assert(ok != NULL);
+        assert(ok != nullptr);
         assert(ok->nBlock > 0);
         memboundExtentDestroy(ok);
     }
@@ -7010,7 +7010,7 @@ int memboundTest(int, char *[]) {
          * allocation must be correctly attributed, and a stack address to
          * none. */
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *ptrs[64];
         int count = 0;
@@ -7039,7 +7039,7 @@ int memboundTest(int, char *[]) {
     TEST("Compact: without callback only releases empty extents") {
         /* 64KB extents, fixed growth so a fresh extent is created on spill. */
         membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *arr[64];
         int k = 0;
@@ -7075,7 +7075,7 @@ int memboundTest(int, char *[]) {
          * block must relocate into extent 2's free space so extent 1 can be
          * released. */
         membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *arr[64];
         int k = 0;
@@ -7093,7 +7093,7 @@ int memboundTest(int, char *[]) {
          */
         for (int i = 1; i < k - 1; i++) {
             memboundFree(m, arr[i]);
-            arr[i] = NULL;
+            arr[i] = nullptr;
         }
 
         /* Stamp known patterns so we can prove data survives the move. */
@@ -7102,9 +7102,9 @@ int memboundTest(int, char *[]) {
 
         testRelocCount = 0;
         testRelocWatchOld = arr[0];
-        testRelocWatchNew = NULL;
+        testRelocWatchNew = nullptr;
         testRelocMinSize = 4096;
-        memboundSetRelocationCallback(m, testRelocCb, NULL);
+        memboundSetRelocationCallback(m, testRelocCb, nullptr);
 
         size_t before = memboundExtentCount(m);
         size_t liveBefore = memboundCurrentAllocationCount(m);
@@ -7123,7 +7123,7 @@ int memboundTest(int, char *[]) {
         assert(memboundCurrentAllocationCount(m) == liveBefore);
 
         void *moved = testRelocWatchNew;
-        assert(moved != NULL);
+        assert(moved != nullptr);
         assert(moved != arr[0]);
         assert(memboundOwns(m, moved));
 
@@ -7140,7 +7140,7 @@ int memboundTest(int, char *[]) {
 
         /* Pool remains fully usable after compaction. */
         void *q = memboundAlloc(m, 4096);
-        assert(q != NULL);
+        assert(q != nullptr);
         memboundFree(m, q);
 
         memboundFree(m, moved);
@@ -7232,11 +7232,11 @@ int memboundTest(int, char *[]) {
     TEST("Large: allocation up to extent capacity") {
         /* Create 1MB extent */
         membound *m = memboundCreateDynamic(1 << 20, 0, 1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate half of extent capacity */
         void *p = memboundAlloc(m, 1 << 19); /* 512KB */
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         /* Allocate near full capacity */
@@ -7252,15 +7252,15 @@ int memboundTest(int, char *[]) {
     TEST("Large: multi-megabyte allocations") {
         /* Create 16MB extent */
         membound *m = memboundCreateDynamic(1 << 24, 0, 1 << 24);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* 4MB allocation */
         void *p1 = memboundAlloc(m, 1 << 22);
-        assert(p1 != NULL);
+        assert(p1 != nullptr);
 
         /* Another 4MB */
         void *p2 = memboundAlloc(m, 1 << 22);
-        assert(p2 != NULL);
+        assert(p2 != nullptr);
 
         /* Verify they're different */
         assert(p1 != p2);
@@ -7274,12 +7274,12 @@ int memboundTest(int, char *[]) {
         /* Start small, allow growth with extent size matching allocation need
          */
         membound *m = memboundCreateDynamic(1 << 16, 1 << 26, 1 << 20);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Allocate something that fits in growth extent (1MB) but not initial
          * (64KB) */
         void *p = memboundAlloc(m, 1 << 17); /* 128KB > 64KB initial */
-        if (p != NULL) {
+        if (p != nullptr) {
             /* Allocation succeeded - extent grew */
             assert(memboundExtentCount(m) >= 2);
             memboundFree(m, p);
@@ -7294,7 +7294,7 @@ int memboundTest(int, char *[]) {
 #ifndef NDEBUG
     TEST("Debug dump (visual check)") {
         membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         [[maybe_unused]] void *p1 = memboundAlloc(m, 256);
         [[maybe_unused]] void *p2 = memboundAlloc(m, 512);
@@ -7308,7 +7308,7 @@ int memboundTest(int, char *[]) {
         }
 
         printf("\n--- Memory dump with allocations ---\n");
-        memboundDump(m, NULL);
+        memboundDump(m, nullptr);
 
         memboundReset(m);
         memboundShutdown(m);
@@ -7321,7 +7321,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MT: Concurrent alloc/free stress test") {
         membound *m = memboundCreateDynamic(1 << 20, 0, 1 << 18);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         pthread_t threads[MT_NUM_THREADS];
         mtTestContext contexts[MT_NUM_THREADS];
@@ -7334,7 +7334,7 @@ int memboundTest(int, char *[]) {
             contexts[i].iterations = MT_ITERATIONS_PER_THREAD;
             contexts[i].startFlag = &startFlag;
             contexts[i].errors = 0;
-            int rc = pthread_create(&threads[i], NULL, mtAllocFreeWorker,
+            int rc = pthread_create(&threads[i], nullptr, mtAllocFreeWorker,
                                     &contexts[i]);
             assert(rc == 0);
         }
@@ -7346,7 +7346,7 @@ int memboundTest(int, char *[]) {
         /* Wait for completion */
         int totalErrors = 0;
         for (int i = 0; i < MT_NUM_THREADS; i++) {
-            pthread_join(threads[i], NULL);
+            pthread_join(threads[i], nullptr);
             totalErrors += contexts[i].errors;
         }
 
@@ -7360,7 +7360,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MT: Concurrent realloc stress test") {
         membound *m = memboundCreateDynamic(1 << 20, 0, 1 << 18);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         pthread_t threads[MT_NUM_THREADS];
         mtTestContext contexts[MT_NUM_THREADS];
@@ -7373,7 +7373,7 @@ int memboundTest(int, char *[]) {
                                      10; /* Fewer iterations for realloc */
             contexts[i].startFlag = &startFlag;
             contexts[i].errors = 0;
-            int rc = pthread_create(&threads[i], NULL, mtReallocWorker,
+            int rc = pthread_create(&threads[i], nullptr, mtReallocWorker,
                                     &contexts[i]);
             assert(rc == 0);
         }
@@ -7382,7 +7382,7 @@ int memboundTest(int, char *[]) {
         atomic_store_explicit(&startFlag, 1, memory_order_relaxed);
 
         for (int i = 0; i < MT_NUM_THREADS; i++) {
-            pthread_join(threads[i], NULL);
+            pthread_join(threads[i], nullptr);
         }
 
         assert(memboundCurrentAllocationCount(m) == 0);
@@ -7391,7 +7391,7 @@ int memboundTest(int, char *[]) {
 
     TEST("MT: Concurrent query while mutating") {
         membound *m = memboundCreateDynamic(1 << 20, 0, 1 << 18);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         pthread_t threads[MT_NUM_THREADS];
         mtTestContext contexts[MT_NUM_THREADS];
@@ -7407,7 +7407,7 @@ int memboundTest(int, char *[]) {
 
             void *(*fn)(void *) =
                 (i % 2 == 0) ? mtAllocFreeWorker : mtQueryWorker;
-            int rc = pthread_create(&threads[i], NULL, fn, &contexts[i]);
+            int rc = pthread_create(&threads[i], nullptr, fn, &contexts[i]);
             assert(rc == 0);
         }
 
@@ -7416,7 +7416,7 @@ int memboundTest(int, char *[]) {
 
         int totalErrors = 0;
         for (int i = 0; i < MT_NUM_THREADS; i++) {
-            pthread_join(threads[i], NULL);
+            pthread_join(threads[i], nullptr);
             totalErrors += contexts[i].errors;
         }
 
@@ -7428,13 +7428,13 @@ int memboundTest(int, char *[]) {
         /* Create a small pool that will hit pressure thresholds quickly */
         membound *m =
             memboundCreateDynamic(1 << 14, 0, 0); /* 16KB, no growth */
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Reset global test state */
         mtPressureCallbackExecuting = 0;
         mtPressureCallbackCount = 0;
         mtPressureTestPool = m;
-        memboundSetPressureCallback(m, mtPressureCallback, NULL);
+        memboundSetPressureCallback(m, mtPressureCallback, nullptr);
 
         /* Allocate until we hit high pressure */
         void *ptrs[64];
@@ -7460,14 +7460,14 @@ int memboundTest(int, char *[]) {
         }
 
         memboundShutdown(m);
-        mtPressureTestPool = NULL;
+        mtPressureTestPool = nullptr;
     }
 
     TEST("MT: Lock contention profiling") {
         /* Create a pool for concurrent access */
         membound *m =
             memboundCreateDynamic(1 << 16, 0, 1 << 16); /* 64KB, grows */
-        assert(m != NULL);
+        assert(m != nullptr);
 
         /* Reset state and run concurrent workers */
         _Atomic int startFlag = 0;
@@ -7480,7 +7480,8 @@ int memboundTest(int, char *[]) {
             contexts[i].iterations = MT_ITERATIONS_PER_THREAD;
             contexts[i].startFlag = &startFlag;
             contexts[i].errors = 0;
-            pthread_create(&threads[i], NULL, mtAllocFreeWorker, &contexts[i]);
+            pthread_create(&threads[i], nullptr, mtAllocFreeWorker,
+                           &contexts[i]);
         }
 
         /* Start all threads simultaneously */
@@ -7489,7 +7490,7 @@ int memboundTest(int, char *[]) {
 
         /* Wait for completion */
         for (int i = 0; i < MT_NUM_THREADS; i++) {
-            pthread_join(threads[i], NULL);
+            pthread_join(threads[i], nullptr);
         }
 
         /* Get contention stats */
@@ -7517,12 +7518,12 @@ int memboundTest(int, char *[]) {
          * MT mechanism and is exercised separately). This verifies the tier is
          * thread-safe and the extent-selection cache hint is race-free. */
         membound *m = memboundCreateEnterprise(1 << 16, 0); /* 64KB init */
-        assert(m != NULL);
+        assert(m != nullptr);
         assert(memboundGetTier(m) == MEMBOUND_TIER_ENTERPRISE);
 
         /* Force creation of multiple extents by allocating */
         void *bigAlloc = memboundAlloc(m, 32768);
-        assert(bigAlloc != NULL);
+        assert(bigAlloc != nullptr);
         memboundFree(m, bigAlloc);
 
         _Atomic int startFlag = 0;
@@ -7535,7 +7536,8 @@ int memboundTest(int, char *[]) {
             contexts[i].iterations = MT_ITERATIONS_PER_THREAD;
             contexts[i].startFlag = &startFlag;
             contexts[i].errors = 0;
-            pthread_create(&threads[i], NULL, mtAllocFreeWorker, &contexts[i]);
+            pthread_create(&threads[i], nullptr, mtAllocFreeWorker,
+                           &contexts[i]);
         }
 
         /* Start all threads simultaneously */
@@ -7545,7 +7547,7 @@ int memboundTest(int, char *[]) {
         /* Wait for completion */
         int totalErrors = 0;
         for (int i = 0; i < MT_NUM_THREADS; i++) {
-            pthread_join(threads[i], NULL);
+            pthread_join(threads[i], nullptr);
             totalErrors += contexts[i].errors;
         }
 
@@ -7562,18 +7564,18 @@ int memboundTest(int, char *[]) {
     TEST("ENTERPRISE: Extent selection caching") {
         /* Create ENTERPRISE pool with multiple extents */
         membound *m = memboundCreateEnterprise(1 << 14, 0); /* 16KB init */
-        assert(m != NULL);
-        assert(m->enterprise != NULL);
+        assert(m != nullptr);
+        assert(m->enterprise != nullptr);
 
         /* Force creation of second extent */
         void *largeAlloc = memboundAlloc(m, 8192);
-        assert(largeAlloc != NULL);
+        assert(largeAlloc != nullptr);
 
         /* More allocations should go to the cached extent */
         void *allocs[10];
         for (int i = 0; i < 10; i++) {
             allocs[i] = memboundAlloc(m, 128);
-            assert(allocs[i] != NULL);
+            assert(allocs[i] != nullptr);
         }
 
         /* Check that cache was used */
@@ -7592,7 +7594,7 @@ int memboundTest(int, char *[]) {
 
         /* More allocations after free should work */
         void *postFree = memboundAlloc(m, 256);
-        assert(postFree != NULL);
+        assert(postFree != nullptr);
         memboundFree(m, postFree);
 
         memboundShutdown(m);
@@ -7601,10 +7603,10 @@ int memboundTest(int, char *[]) {
     TEST("Safety: Invalid operations are handled gracefully") {
         /* Create a STANDARD tier pool */
         membound *m = memboundCreate(8192);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         void *p = memboundAlloc(m, 256);
-        assert(p != NULL);
+        assert(p != nullptr);
 
         memboundStats stats;
         memboundGetStats(m, &stats);
@@ -7620,7 +7622,7 @@ int memboundTest(int, char *[]) {
         assert(stats.safetyViolations == 1);
 
         /* NULL free - should be silently ignored (not a violation) */
-        memboundFree(m, NULL);
+        memboundFree(m, nullptr);
 
         memboundGetStats(m, &stats);
         assert(stats.safetyViolations == 1); /* Unchanged */
@@ -7634,7 +7636,7 @@ int memboundTest(int, char *[]) {
 
         /* Verify pool is still usable after invalid operations */
         void *p2 = memboundAlloc(m, 128);
-        assert(p2 != NULL);
+        assert(p2 != nullptr);
         memboundFree(m, p2);
 
         memboundShutdown(m);
@@ -7642,7 +7644,7 @@ int memboundTest(int, char *[]) {
 
     TEST("Safety: Stats report violations count") {
         membound *m = memboundCreate(4096);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         memboundStats stats;
         memboundGetStats(m, &stats);
@@ -7652,7 +7654,7 @@ int memboundTest(int, char *[]) {
 
         /* Valid operations don't increment violations */
         void *p = memboundAlloc(m, 100);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         memboundGetStats(m, &stats);
@@ -7721,14 +7723,14 @@ int memboundTest(int, char *[]) {
 
     TEST("Safety: COMPACT tier tracks violations") {
         membound *m = memboundCreateCompact(4096, false);
-        assert(m != NULL);
+        assert(m != nullptr);
 
         memboundStats stats;
         memboundGetStats(m, &stats);
         assert(stats.safetyViolations == 0);
 
         void *p = memboundAlloc(m, 100);
-        assert(p != NULL);
+        assert(p != nullptr);
         memboundFree(m, p);
 
         /* Double free should increment violation, and is reported */
@@ -7795,7 +7797,7 @@ int memboundTest(int, char *[]) {
         size_t u = memboundUsableSize(m, p);
         assert(u >= 300);             /* >= request */
         assert(u == 512 || u >= 512); /* 300 rounds up (>=256 atom -> 512) */
-        assert(memboundUsableSize(m, NULL) == 0);
+        assert(memboundUsableSize(m, nullptr) == 0);
         int onStack = 0;
         assert(memboundUsableSize(m, &onStack) ==
                0); /* unowned -> 0, no crash */
@@ -7831,9 +7833,9 @@ int memboundTest(int, char *[]) {
         void *p = memboundAlloc(m, 100); /* rounds up to >=256 */
         assert(p);
         size_t u = memboundUsableSize(m, p);
-        assert(memboundExpand(m, p, u) == p);        /* fits current block */
-        assert(memboundExpand(m, p, u + 1) == NULL); /* would need a move */
-        assert(memboundExpand(m, NULL, 8) == NULL);
+        assert(memboundExpand(m, p, u) == p);           /* fits current block */
+        assert(memboundExpand(m, p, u + 1) == nullptr); /* would need a move */
+        assert(memboundExpand(m, nullptr, 8) == nullptr);
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -7852,7 +7854,8 @@ int memboundTest(int, char *[]) {
         for (int i = 64; i < 4096; i++) {
             assert(p[i] == 0); /* grown tail zeroed */
         }
-        assert(memboundRecalloc(m, NULL, (size_t)-1, 2) == NULL); /* overflow */
+        assert(memboundRecalloc(m, nullptr, (size_t)-1, 2) ==
+               nullptr); /* overflow */
         memboundFree(m, p);
         memboundShutdown(m);
     }
@@ -7867,9 +7870,10 @@ int memboundTest(int, char *[]) {
             assert(memboundUsableSize(m, p) >= 1234);
             memboundFree(m, p); /* plain free works */
         }
-        assert(memboundAllocAligned(m, 100, 3) == NULL); /* not power of two */
-        assert(memboundAllocAligned(m, 100, 0) == NULL);
-        assert(memboundAllocAligned(m, 0, 16) == NULL);
+        assert(memboundAllocAligned(m, 100, 3) ==
+               nullptr); /* not power of two */
+        assert(memboundAllocAligned(m, 100, 0) == nullptr);
+        assert(memboundAllocAligned(m, 0, 16) == nullptr);
         /* alloc/free cycle leaves the pool empty (no leak from over-alloc) */
         assert(memboundCurrentAllocationCount(m) == 0);
         memboundShutdown(m);
@@ -7912,8 +7916,8 @@ int memboundTest(int, char *[]) {
         membound *m = memboundCreateWithConfig(&cfg);
         assert(m);
         pthread_t th;
-        assert(pthread_create(&th, NULL, tcExitWorker, m) == 0);
-        pthread_join(th, NULL);
+        assert(pthread_create(&th, nullptr, tcExitWorker, m) == 0);
+        pthread_join(th, nullptr);
         /* the worker's thread-exit destructor drained its cache back to the
          * pool */
         assert(memboundCurrentAllocationCount(m) == 0);
@@ -7995,10 +7999,10 @@ int memboundTest(int, char *[]) {
         constexpr int NTH = 4;
         pthread_t th[NTH];
         for (int i = 0; i < NTH; i++) {
-            assert(pthread_create(&th[i], NULL, tcStressWorker, m) == 0);
+            assert(pthread_create(&th[i], nullptr, tcStressWorker, m) == 0);
         }
         for (int i = 0; i < NTH; i++) {
-            pthread_join(th[i], NULL);
+            pthread_join(th[i], nullptr);
         }
         /* every worker drained its cache at exit */
         assert(memboundCurrentAllocationCount(m) == 0);
@@ -8079,7 +8083,7 @@ int memboundTest(int, char *[]) {
         }
         for (size_t i = 0; i < N; i += 2) {
             memboundFree(m, p[i]); /* an emptied extent is released */
-            p[i] = NULL;
+            p[i] = nullptr;
         }
         for (size_t i = 0; i < N; i++) {
             if (!p[i]) {
@@ -8221,17 +8225,17 @@ int memboundTest(int, char *[]) {
             assert(c.m);
             pthread_t churn[2];
             pthread_t reader;
-            assert(pthread_create(&reader, NULL, statsRaceReader, &c) == 0);
+            assert(pthread_create(&reader, nullptr, statsRaceReader, &c) == 0);
             for (int i = 0; i < 2; i++) {
-                assert(pthread_create(&churn[i], NULL, statsRaceChurn, &c) ==
+                assert(pthread_create(&churn[i], nullptr, statsRaceChurn, &c) ==
                        0);
             }
             for (int i = 0; i < 2; i++) {
-                pthread_join(churn[i], NULL);
+                pthread_join(churn[i], nullptr);
             }
             /* @sync: relaxed hint */
             atomic_store_explicit(&c.stop, true, memory_order_relaxed);
-            pthread_join(reader, NULL);
+            pthread_join(reader, nullptr);
             if (c.readerRounds == 0 ||
                 memboundCurrentAllocationCount(c.m) != 0) {
                 ERR("pool %zu: reader rounds %" PRIu64 ", live %zu", k,
@@ -8260,13 +8264,13 @@ int memboundTest(int, char *[]) {
         pthread_t cache[NCACHE];
         pthread_t churn;
         for (int i = 0; i < NCACHE; i++) {
-            assert(pthread_create(&cache[i], NULL, tcStressWorker, m) == 0);
+            assert(pthread_create(&cache[i], nullptr, tcStressWorker, m) == 0);
         }
-        assert(pthread_create(&churn, NULL, tcExtentChurnWorker, m) == 0);
+        assert(pthread_create(&churn, nullptr, tcExtentChurnWorker, m) == 0);
         for (int i = 0; i < NCACHE; i++) {
-            pthread_join(cache[i], NULL);
+            pthread_join(cache[i], nullptr);
         }
-        pthread_join(churn, NULL);
+        pthread_join(churn, nullptr);
         assert(memboundCurrentAllocationCount(m) == 0);
         if (memboundGoodSize(m, 1) != MEMBOUND_MIN_ATOM ||
             memboundGoodSize(m, MEMBOUND_MIN_ATOM + 1) !=

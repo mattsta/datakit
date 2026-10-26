@@ -220,7 +220,7 @@ DK_INLINE_ALWAYS void mdBoxDeliver_(databox *dst, const databox *src) {
     } else if (dst->big) {
         memcpy(dst->data.u128, src->data.u128, sizeof(*src->data.u128));
     } else {
-        dst->data.ptr = NULL;
+        dst->data.ptr = nullptr;
     }
 }
 
@@ -392,7 +392,7 @@ typedef struct mdKeyCopy {
  * mdKeyCopyRelease_ either way. */
 DK_STATIC const databox *mdKeyForUpdate_(multidict *d, const databox *keybox,
                                          mdKeyCopy *copy) {
-    copy->heap = NULL;
+    copy->heap = nullptr;
     if (HTSIZE(d, 0) == 0) {
         return keybox; /* emptied: no table yet */
     }
@@ -748,7 +748,7 @@ DK_STATIC bool multidictExpandIfNeeded_(multidict *d) {
                   metrics.maxSlotBytes, metrics.byteLoadFactor);
 
         bool shouldExpand = false;
-        [[maybe_unused]] const char *expandReason = NULL;
+        [[maybe_unused]] const char *expandReason = nullptr;
 
         /* Primary trigger: Average slot size exceeds target */
         if (metrics.avgSlotBytes > d->targetSlotBytes) {
@@ -911,7 +911,7 @@ int32_t multidictRandomSeed(void) {
 multidict *multidictNew(multidictType *type, multidictClass *qdc,
                         int32_t seed) {
     if (!type || !qdc) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multidictFree */
@@ -922,7 +922,7 @@ multidict *multidictNew(multidictType *type, multidictClass *qdc,
 
     d->type = type;
     d->shared = qdc;
-    d->keysByCompare = type->keyCompare != NULL &&
+    d->keysByCompare = type->keyCompare != nullptr &&
                        type->keyCompare != multidictStringKeyCompare_;
     d->rehashidx = MULTIDICT_REHASHIDX_INVALID;
     d->rehashing = false;
@@ -1045,7 +1045,7 @@ bool multidictExpand(multidict *d, uint64_t newSlots) {
     }
 
     /* If first Expand of this multidictionary, initialize HT 0 */
-    if (d->ht[0].table == NULL) {
+    if (d->ht[0].table == nullptr) {
         d->ht[0] = n; /* copy n to ht[0] */
         DBG_PRINT("multidictExpand EXIT: first expand, initialized ht[0] with "
                   "size %u, return false\n",
@@ -1092,7 +1092,7 @@ bool multidictRehash(multidict *d, int32_t n) {
          * them as efficiently as possible instead of needing to call
          * this function over and over again just to do nothing. */
         multidictSlot *current;
-        while ((current = SLOT(d, 0, d->rehashidx)) == NULL) {
+        while ((current = SLOT(d, 0, d->rehashidx)) == nullptr) {
             d->rehashidx++;
             emptyVisits--;
 
@@ -1147,7 +1147,8 @@ bool multidictRehash(multidict *d, int32_t n) {
 
                 /* The insert copies anything the row borrows from
                  * 'current', which stays untouched until it is freed */
-                shared->insertByType(shared, target, &row.key, &row.val, NULL);
+                shared->insertByType(shared, target, &row.key, &row.val,
+                                     nullptr);
                 HTBYTES(d, 1) += shared->sizeBytes(*target) - targetBefore;
             }
         }
@@ -1157,14 +1158,14 @@ bool multidictRehash(multidict *d, int32_t n) {
             shared->freeSlot(shared, current);
         }
 
-        current = NULL;
+        current = nullptr;
 
         /* Update totalBytes for both HTs after processing this slot */
         HT_UPDATE_TOTAL(HT(d, 0));
         HT_UPDATE_TOTAL(HT(d, 1));
 
         /* Set slot to NULL for easier debugging/tracking/introspection. */
-        SLOT(d, 0, d->rehashidx) = NULL;
+        SLOT(d, 0, d->rehashidx) = nullptr;
 
         /* Increment rehash index for next iteration. */
         d->rehashidx++;
@@ -1220,14 +1221,14 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
      * multidictNewestSlotForKey looks only in ht[1]. */
     bool removedFromOldTable = false;
     uint32_t hash = 0;
-    const uint32_t *knownHash = NULL;
+    const uint32_t *knownHash = nullptr;
     if (multidictIsRehashing(d)) {
         /* Remove the key from ht[0] in one search; the hash serves the
          * slot lookup below */
         hash = multidictHashOfKey_(d, keybox);
         knownHash = &hash;
         removedFromOldTable = multidictRemoveFromTable_(
-            d, 0, keybox, hash, mdBoxSize_(keybox), NULL, false, NULL);
+            d, 0, keybox, hash, mdBoxSize_(keybox), nullptr, false, nullptr);
     }
 
     multidictOp op;
@@ -1344,7 +1345,7 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
     /* While rehashing the key may still be in ht[0]; the hash found for
      * that check serves the slot lookup below */
     uint32_t hash = 0;
-    const uint32_t *knownHash = NULL;
+    const uint32_t *knownHash = nullptr;
     if (multidictIsRehashing(d)) {
         hash = multidictHashOfKey_(d, keybox);
         knownHash = &hash;
@@ -1534,7 +1535,7 @@ DK_STATIC bool multidictRemove_(multidict *d, const databox *keybox,
 
 /* Search and remove an element - optimized for common case (key exists) */
 bool multidictDelete(multidict *d, const databox *keybox) {
-    return multidictRemove_(d, keybox, NULL, false, NULL);
+    return multidictRemove_(d, keybox, nullptr, false, nullptr);
 }
 
 /* updateByType's callback wrapped to measure the value it replaces */
@@ -1568,7 +1569,7 @@ DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
         return -1;
     }
 
-    mdKeyCopy copy = {.heap = NULL};
+    mdKeyCopy copy = {.heap = nullptr};
     const databox *key = MD_MATCH_BY_COMPARE(d, keybox)
                              ? mdKeyForUpdate_(d, keybox, &copy)
                              : keybox;
@@ -1613,7 +1614,7 @@ bool multidictGetAndDelete(multidict *d, const databox *keybox,
     /* One removal that takes the value: an owned copy (a 96/128-bit value
      * in a heap payload, since the box starts zeroed) */
     databox taken = {};
-    if (!multidictRemove_(d, keybox, &taken, true, NULL)) {
+    if (!multidictRemove_(d, keybox, &taken, true, nullptr)) {
         return false; /* Key doesn't exist */
     }
 
@@ -1664,7 +1665,7 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
      * entry is going). */
     databox ownedKey = databoxCopy(&key);
     databox taken = {};
-    if (!multidictRemove_(d, &ownedKey, &taken, true, NULL)) {
+    if (!multidictRemove_(d, &ownedKey, &taken, true, nullptr)) {
         databoxFreeData(&ownedKey);
         return false;
     }
@@ -1986,7 +1987,7 @@ DK_STATIC void multidictGetDetailedStatsHt_(multidict *d, multidictHT *ht,
     }
 
     for (uint64_t i = 0; i < ht->size; i++) {
-        if (ht->table[i] == NULL) {
+        if (ht->table[i] == nullptr) {
             stats->chainDistribution[0]++;
             continue;
         }
@@ -2432,7 +2433,7 @@ bool multidictEnableLRU(multidict *d, size_t levels) {
     /* @own: container; free=multidictDisableLRU */
     d->lruKeyToPtr = multidictNew(d->type, d->shared, d->seed);
 
-    d->lruPtrToKey = NULL;
+    d->lruPtrToKey = nullptr;
     d->lruPtrToKeySize = 0;
     d->lruEnabled = true;
     d->evictPolicy = MULTIDICT_EVICT_LRU;
@@ -2449,19 +2450,19 @@ void multidictDisableLRU(multidict *d) {
     /* Free multilru */
     if (d->lru) {
         multilruFree(d->lru);
-        d->lru = NULL;
+        d->lru = nullptr;
     }
 
     /* Free keyToPtr dict */
     if (d->lruKeyToPtr) {
         multidictFree(d->lruKeyToPtr);
-        d->lruKeyToPtr = NULL;
+        d->lruKeyToPtr = nullptr;
     }
 
     /* Free ptrToKey array (just hashes, no key data to free) */
     if (d->lruPtrToKey) {
         zfree(d->lruPtrToKey);
-        d->lruPtrToKey = NULL;
+        d->lruPtrToKey = nullptr;
         d->lruPtrToKeySize = 0;
     }
 
@@ -2577,7 +2578,7 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
     /* Remove the key's handle from keyToPtr in one search, reading the
      * handle (a number, reported by value) as it goes */
     databox ptrBox = {};
-    if (!multidictRemove_(d->lruKeyToPtr, keybox, &ptrBox, false, NULL)) {
+    if (!multidictRemove_(d->lruKeyToPtr, keybox, &ptrBox, false, nullptr)) {
         return;
     }
 
@@ -2705,14 +2706,14 @@ static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
 /* Deep copy entire dictionary */
 multidict *multidictCopy(const multidict *src) {
     if (unlikely(!src)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Create new dict with same type and class */
     /* @own: caller; free=multidictFree */
     multidict *dst = multidictNew(src->type, src->shared, src->seed);
     if (!dst) {
-        return NULL;
+        return nullptr;
     }
 
     /* Copy settings */
@@ -2741,7 +2742,7 @@ multidict *multidictCopy(const multidict *src) {
 
     if (!copied) {
         multidictFree(dst); /* the class refused an entry */
-        return NULL;
+        return nullptr;
     }
     return dst;
 }
@@ -2787,7 +2788,7 @@ bool multidictIteratorInit(multidict *d, multidictIterator *iter) {
     iter->index = -1;
     iter->safe = false;
     iter->current =
-        NULL; /* Initialize to NULL so first call to Next starts fresh */
+        nullptr; /* Initialize to NULL so first call to Next starts fresh */
     return true;
 }
 
@@ -2829,7 +2830,7 @@ bool multidictIteratorNext(multidictIterator *iter, multidictEntry *e) {
             /* Initialize iterator for this slot; if getIter returns false
              * (e.g., empty slot or empty multimap), skip to next slot */
             if (!shared->getIter(&iter->iter, iter->current)) {
-                iter->current = NULL;
+                iter->current = nullptr;
                 continue; /* Loop to try next slot */
             }
             /* EMIT FIRST ITERATION OF THIS SLOT */
@@ -2843,7 +2844,7 @@ bool multidictIteratorNext(multidictIterator *iter, multidictEntry *e) {
 
         /* Loop again so the top level picks up the next HT or
          * terminates this iteration by returning NULL. */
-        iter->current = NULL;
+        iter->current = nullptr;
     }
 }
 
@@ -2976,7 +2977,7 @@ uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count) {
             }
 
             multidictSlot *slot = SLOT(d, t, idx);
-            if (slot == NULL) {
+            if (slot == nullptr) {
                 emptylen++;
                 if (emptylen >= 5 && emptylen > count) {
                     idx = random() & maxmask;
@@ -3311,7 +3312,7 @@ void multidictOpRepr(const multidictOp *op) {
 DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,
                                const databox *keybox, const databox *valbox,
                                databox *replaced) {
-    if (*slot == NULL) {
+    if (*slot == nullptr) {
         return -1;
     }
 
@@ -3325,7 +3326,7 @@ DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,
 DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *, multidictSlot **slot,
                                        const databox *keybox,
                                        const databox *valbox) {
-    if (*slot == NULL) {
+    if (*slot == nullptr) {
         return -1;
     }
 
@@ -3335,7 +3336,7 @@ DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *, multidictSlot **slot,
 
 DK_STATIC void *mmSlotGetOrCreate(multidictClass *, multidictSlot **slot,
                                   const databox *) {
-    if (*slot == NULL) {
+    if (*slot == nullptr) {
         /* @own: container; free=mmSlotFree */
         *slot = multimapNew(2); /* key + value */
     }
@@ -3345,7 +3346,7 @@ DK_STATIC void *mmSlotGetOrCreate(multidictClass *, multidictSlot **slot,
 DK_STATIC bool mmSlotRemove(multidictClass *, multidictSlot **slot,
                             const databox *keybox, databox *removedVal,
                             bool take) {
-    if (*slot == NULL) {
+    if (*slot == nullptr) {
         return false;
     }
 
@@ -3356,7 +3357,7 @@ DK_STATIC bool mmSlotRemove(multidictClass *, multidictSlot **slot,
 
 DK_STATIC bool mmSlotFindValue(multidictClass *, multidictSlot *slot,
                                const databox *keybox, databox *valbox) {
-    if (slot == NULL) {
+    if (slot == nullptr) {
         return false;
     }
 
@@ -3390,7 +3391,7 @@ typedef struct {
 } mmSlotIterState;
 
 DK_STATIC bool mmSlotGetIter(multidictSlotIterator *iter, multidictSlot *slot) {
-    if (slot == NULL) {
+    if (slot == nullptr) {
         return false;
     }
 
@@ -3437,7 +3438,7 @@ DK_STATIC uint32_t mmSlotCount(multidictSlot *slot) {
 
 DK_STATIC bool mmSlotFindKeyByPos(multidictClass *, multidictSlot *slot,
                                   uint32_t pos, databox *keybox) {
-    if (slot == NULL) {
+    if (slot == nullptr) {
         return false;
     }
 
@@ -3465,7 +3466,7 @@ DK_STATIC bool mmSlotFindKeyByPos(multidictClass *, multidictSlot *slot,
 
 DK_STATIC void mmSlotIterateAll(multidictClass *, multidictSlot *slot,
                                 multidictIterProcess process, void *privdata) {
-    if (slot == NULL || process == NULL) {
+    if (slot == nullptr || process == nullptr) {
         return;
     }
 
@@ -3491,7 +3492,7 @@ DK_STATIC int32_t mmSlotUpdate(multidictClass *, multidictSlot **slot,
                                const databox *keybox,
                                multidictValueUpdate *update, void *ctx) {
     multimapEntry me;
-    if (*slot == NULL ||
+    if (*slot == nullptr ||
         !multimapGetUnderlyingEntry(MM_SLOT(*slot), keybox, &me)) {
         return -1;
     }
@@ -3526,7 +3527,7 @@ DK_STATIC uint32_t mmSlotFreeClass(multidictClass *) {
 DK_STATIC multidictClass *multidictMmClassNew(void) {
     /* @own: caller; free=multidictMmClassFree */
     multidictClass *qdc = zcalloc(1, sizeof(*qdc));
-    qdc->privdata = NULL;
+    qdc->privdata = nullptr;
     qdc->insertByType = mmSlotInsert;
     qdc->operationSlotGetOrCreate = mmSlotGetOrCreate;
     qdc->operationRemove = mmSlotRemove;
@@ -4084,7 +4085,7 @@ static void mdWideScanCb_(void *privdata, const databox *key,
 
 static int mdWideEvictSeen_ = 0;
 static int mdWideEvictBad_ = 0;
-static const mdWidePair *mdWideEvictPairs_ = NULL;
+static const mdWidePair *mdWideEvictPairs_ = nullptr;
 static size_t mdWideEvictCount_ = 0;
 
 static bool mdWideEvictCb_(void *, const databox *key, const databox *val) {
@@ -4373,7 +4374,7 @@ static int multidictTestWide_(mdWideMode mode) {
         cleanerName(zfree, SeenBytes) uint8_t *snap =
             persistOpsMultidict.snapshot(d, &snapLen);
         multidict *restored =
-            snap ? persistOpsMultidict.restore(snap, snapLen) : NULL;
+            snap ? persistOpsMultidict.restore(snap, snapLen) : nullptr;
         if (!restored) {
             ERR("persist snapshot round trip failed");
         } else {
@@ -4477,7 +4478,7 @@ static int multidictTestWide_(mdWideMode mode) {
         mdWideEvictCount_ = n;
         mdWideEvictSeen_ = 0;
         mdWideEvictBad_ = 0;
-        multidictSetEvictionCallback(e, mdWideEvictCb_, NULL);
+        multidictSetEvictionCallback(e, mdWideEvictCb_, nullptr);
         multidictSetMaxMemory(e, (multidictKeyBytes(e) + multidictValBytes(e)) /
                                      2);
         mdTestPoisonStack_();
@@ -4521,10 +4522,10 @@ static int multidictTestSlotIteratorWide_(void) {
     memset(&val, 0, sizeof(val));
     DATABOX_BIG_UNSIGNED_128(&key, k1);
     DATABOX_BIG_SIGNED_128(&val, v1);
-    qdc->insertByType(qdc, &slot, (databox *)&key, (databox *)&val, NULL);
+    qdc->insertByType(qdc, &slot, (databox *)&key, (databox *)&val, nullptr);
     DATABOX_BIG_UNSIGNED_128(&key, k2);
     DATABOX_BIG_SIGNED_128(&val, v2);
-    qdc->insertByType(qdc, &slot, (databox *)&key, (databox *)&val, NULL);
+    qdc->insertByType(qdc, &slot, (databox *)&key, (databox *)&val, nullptr);
 
     multidictSlotIterator iter;
     multidictEntry first;
@@ -4596,9 +4597,9 @@ static int multidictTestKeyCompare_(void) {
     };
 
     for (size_t i = 0; i < countof(cases); i++) {
-        const bool e = exact(NULL, cases[i].a, cases[i].alen, cases[i].b,
+        const bool e = exact(nullptr, cases[i].a, cases[i].alen, cases[i].b,
                              cases[i].blen) != 0;
-        const bool f = fold(NULL, cases[i].a, cases[i].alen, cases[i].b,
+        const bool f = fold(nullptr, cases[i].a, cases[i].alen, cases[i].b,
                             cases[i].blen) != 0;
         if (e != cases[i].exactEq || f != cases[i].foldEq) {
             ERR("key compare case %zu: exact %d fold %d", i, e, f);
@@ -4615,7 +4616,7 @@ static int multidictTestKeyCompare_(void) {
             const uint8_t ab = (uint8_t)a;
             const uint8_t bb = (uint8_t)b;
             const bool want = testFoldAscii_(ab) == testFoldAscii_(bb);
-            const bool got = fold(NULL, &ab, 1, &bb, 1) != 0;
+            const bool got = fold(nullptr, &ab, 1, &bb, 1) != 0;
             if (got != want) {
                 ERR("case compare of 0x%02x and 0x%02x is %d", a, b, got);
             }
@@ -4645,7 +4646,7 @@ static int multidictTestKeyCompare_(void) {
             }
         }
 
-        if (!fold(NULL, a, len, b, len) ||
+        if (!fold(nullptr, a, len, b, len) ||
             multidictGenCaseHashFunction(d, a, (int32_t)len) !=
                 multidictGenCaseHashFunction(d, b, (int32_t)len)) {
             ERR("case flip round %d does not match", round);
@@ -4672,7 +4673,7 @@ static int multidictTestKeyCompare_(void) {
         const uint32_t h = multidictGenCaseHashFunction(d, raw, (int32_t)len);
         if (h != multidictGenHashFunction(d, folded, (int32_t)len) ||
             h != multidictGenCaseHashFunction(d, flipped, (int32_t)len) ||
-            !fold(NULL, raw, len, flipped, len)) {
+            !fold(nullptr, raw, len, flipped, len)) {
             ERR("case hash of a %" PRIu32 "-byte key is not the seeded hash "
                 "of its folded bytes",
                 len);
@@ -4756,7 +4757,7 @@ static int multidictTestKeyCompare_(void) {
     }
 
     /* A locale that folds Latin-1 does not change the case compare */
-    const char *prior = setlocale(LC_CTYPE, NULL);
+    const char *prior = setlocale(LC_CTYPE, nullptr);
     char saved[64] = {};
     if (prior) {
         snprintf(saved, sizeof(saved), "%s", prior);
@@ -4766,8 +4767,8 @@ static int multidictTestKeyCompare_(void) {
                                    "de_DE.ISO8859-1"};
     for (size_t i = 0; i < countof(latin1); i++) {
         if (setlocale(LC_CTYPE, latin1[i])) {
-            if (fold(NULL, "\xc4", 1, "\xe4", 1) ||
-                !fold(NULL, "A\xc4", 2, "a\xc4", 2)) {
+            if (fold(nullptr, "\xc4", 1, "\xe4", 1) ||
+                !fold(nullptr, "A\xc4", 2, "a\xc4", 2)) {
                 ERR("case compare follows locale %s", latin1[i]);
             }
             break;
@@ -4868,7 +4869,7 @@ static int multidictTestCaseOps_(void) {
     /* Exists, by box and by string, and FindByString */
     databox bytesVal = databoxNewBytesString("payload");
     MULTIDICT_TEST_OK(multidictAdd(d, &key, &bytesVal)); /* replaces "Key" */
-    uint8_t *found = NULL;
+    uint8_t *found = nullptr;
     if (!multidictExists(d, &kEY) || !multidictExistsByString(d, "KEY") ||
         multidictExistsByString(d, "KEYS") ||
         !multidictFindByString(d, "kEy", &found) || !found ||
@@ -5008,7 +5009,7 @@ static int multidictTestCaseOps_(void) {
         ERR("case eviction");
     }
     multidictSetMaxMemory(d, 0);
-    multidictSetEvictionCallback(d, NULL, NULL);
+    multidictSetEvictionCallback(d, nullptr, nullptr);
 
     /* Pop random hands back the stored spelling */
     MULTIDICT_TEST_OK(multidictAdd(d, &firsts[1], &one));
@@ -5183,7 +5184,7 @@ static multidictType testTrimType_ = {testTrimHash_, testTrimCompare_};
 
 /* A type with no compare matches exact bytes */
 static multidictType testNullCompareType_ = {multidictStringHashFunction_,
-                                             NULL};
+                                             nullptr};
 
 static int multidictTestCustomCompare_(void) {
     int err = 0;
@@ -5293,9 +5294,10 @@ static int multidictTestPersistKeys_(void) {
     }
 
     /* Built-in types restore by themselves, or as the same type */
-    if (!testRestoreIs_(exactSnap, exactLen, NULL, &multidictTypeExactKey, 2) ||
-        !testRestoreIs_(ciSnap, ciLen, NULL, &multidictTypeCaseKey, 2) ||
-        !testRestoreIs_(ciEmptySnap, ciEmptyLen, NULL, &multidictTypeCaseKey,
+    if (!testRestoreIs_(exactSnap, exactLen, nullptr, &multidictTypeExactKey,
+                        2) ||
+        !testRestoreIs_(ciSnap, ciLen, nullptr, &multidictTypeCaseKey, 2) ||
+        !testRestoreIs_(ciEmptySnap, ciEmptyLen, nullptr, &multidictTypeCaseKey,
                         0) ||
         !testRestoreIs_(exactSnap, exactLen, &multidictTypeExactKey,
                         &multidictTypeExactKey, 2) ||
@@ -5310,7 +5312,7 @@ static int multidictTestPersistKeys_(void) {
         multidictPersistRestoreAs(customSnap, customLen, &testTrimType_);
     const databox padded = databoxNewBytesString("Foo  ");
     databox v = {};
-    if (persistOpsMultidict.restore(customSnap, customLen) != NULL || !r ||
+    if (persistOpsMultidict.restore(customSnap, customLen) != nullptr || !r ||
         multidictGetType(r) != &testTrimType_ || multidictCount(r) != 2 ||
         !multidictFind(r, &padded, &v)) {
         ERR("custom key type restore");
@@ -5328,7 +5330,7 @@ static int multidictTestPersistKeys_(void) {
                                   &multidictTypeCaseKey) ||
         multidictPersistRestoreAs(customSnap, customLen,
                                   &multidictTypeExactKey) ||
-        multidictPersistRestoreAs(ciSnap, ciLen, NULL)) {
+        multidictPersistRestoreAs(ciSnap, ciLen, nullptr)) {
         ERR("a key type mismatch was not refused");
     }
 
@@ -5356,7 +5358,7 @@ static int multidictTestPersistKeys_(void) {
             flexPushByType(&bad, heads[h], FLEX_ENDPOINT_TAIL);
             flexPushByType(&bad, &foo, FLEX_ENDPOINT_TAIL);
             flexPushByType(&bad, &one, FLEX_ENDPOINT_TAIL);
-            if (persistOpsMultidict.restore(bad, flexBytes(bad)) != NULL) {
+            if (persistOpsMultidict.restore(bad, flexBytes(bad)) != nullptr) {
                 ERR("key record %zu was not refused", h);
             }
         }
@@ -5697,7 +5699,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     /* A miss names no existing key: it promotes nothing */
     const databox absent = databoxNewBytesString("absent-key");
     if (multidictExists(d, &absent) ||
-        multidictIncrByFloat(d, &absent, NAN, NULL) != MULTIDICT_ERR) {
+        multidictIncrByFloat(d, &absent, NAN, nullptr) != MULTIDICT_ERR) {
         ERR("an absent key was found or incremented by NaN");
     }
     TEST_RANK_STEP("a miss", 0);
@@ -5710,7 +5712,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     multidictIteratorRelease(&iter);
     uint64_t cursor = 0;
     do {
-        cursor = multidictScan(d, cursor, testIgnoreScanCb_, NULL);
+        cursor = multidictScan(d, cursor, testIgnoreScanCb_, nullptr);
     } while (cursor != 0);
     for (int32_t i = 0; i < 8; i++) {
         databox rk = {};
@@ -5726,7 +5728,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     }
     TEST_RANK_STEP("find", 1);
 
-    uint8_t *bytes = NULL;
+    uint8_t *bytes = nullptr;
     if (!multidictFindByString(d, fold ? "rANK" : "rank", &bytes)) {
         ERR("find by string missed the ranked key");
     }
@@ -5870,10 +5872,10 @@ static int multidictTestCountersUnderUpdates_(void) {
         /* An increment of a string value is refused; the counters are
          * the check */
         case 2:
-            (void)multidictIncrBy(d, &key, i - 2000, NULL);
+            (void)multidictIncrBy(d, &key, i - 2000, nullptr);
             break;
         case 3:
-            (void)multidictIncrByFloat(d, &key, 0.5, NULL);
+            (void)multidictIncrByFloat(d, &key, 0.5, nullptr);
             break;
         case 4:
             multidictDelete(d, &key);
@@ -6280,7 +6282,7 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
         size_t len = 0;
         cleanerName(zfree, SeenBytes) uint8_t *snap =
             persistOpsMultidict.snapshot(d, &len);
-        multidict *r = snap ? persistOpsMultidict.restore(snap, len) : NULL;
+        multidict *r = snap ? persistOpsMultidict.restore(snap, len) : nullptr;
         bool same = r &&
                     multidictGetHashFunctionSeed(r) ==
                         multidictGetHashFunctionSeed(d) &&
@@ -6374,7 +6376,7 @@ int multidictTest(int, char *[]) {
      * SECTION 1: Basic API Tests
      * ================================================================ */
     TEST("1.1 create with the exact key type") {
-        assert(d != NULL);
+        assert(d != nullptr);
         assert(multidictSize(d) == 0);
     }
 
@@ -6442,9 +6444,9 @@ int multidictTest(int, char *[]) {
 
         /* A present byte-string value: its bytes, borrowed from the dict */
         static constexpr char strkey[] = "strkey";
-        uint8_t *foundVal = NULL;
+        uint8_t *foundVal = nullptr;
         bool found = multidictFindByString(d, strkey, &foundVal);
-        assert(found == true && foundVal != NULL);
+        assert(found == true && foundVal != nullptr);
         assert(memcmp(foundVal, "strval", 6) == 0);
 
         /* An absent key, and a value that is not a byte string, report
@@ -8095,7 +8097,7 @@ int multidictTest(int, char *[]) {
             multidictMmClassNew();
         cleaner(multidictFree) multidict *dCase =
             multidictNew(&multidictTypeCaseKey, qdcCase, 54321);
-        assert(dCase != NULL);
+        assert(dCase != nullptr);
 
         databox key1 = databoxNewBytesString("hello");
         databox val1 = databoxNewBytesString("world");
@@ -8203,7 +8205,7 @@ int multidictTest(int, char *[]) {
         MULTIDICT_TEST_OK(multidictAdd(dRepr, &key, &val));
         multidictRepr(dRepr);
         multidictOp op;
-        multidictFindSlotForKeyNewest(dRepr, &op, &key, NULL);
+        multidictFindSlotForKeyNewest(dRepr, &op, &key, nullptr);
         multidictOpRepr(&op);
     }
 
@@ -8551,8 +8553,8 @@ int multidictTest(int, char *[]) {
 
     TEST("13.5 bulk operation edge cases") {
         /* NULL/empty checks */
-        assert(multidictAddMultiple(d, NULL, NULL, 5) == 0);
-        assert(multidictDeleteMultiple(d, NULL, 5) == 0);
+        assert(multidictAddMultiple(d, nullptr, nullptr, 5) == 0);
+        assert(multidictDeleteMultiple(d, nullptr, 5) == 0);
 
         databox keys[1], vals[1];
         keys[0] = databoxNewBytesString("edgekey");
@@ -8689,7 +8691,7 @@ int multidictTest(int, char *[]) {
         assert(testEvictionCallbackCount_ == (int)evicted);
 
         /* Clear callback */
-        multidictSetEvictionCallback(d, NULL, NULL);
+        multidictSetEvictionCallback(d, nullptr, nullptr);
     }
 
     TEST("14.5 an eviction callback veto") {
@@ -8716,7 +8718,7 @@ int multidictTest(int, char *[]) {
         /* The veto count should be at least 5 (we vetoed first 5 attempts) */
         assert(testVetoCount_ >= 5);
 
-        multidictSetEvictionCallback(d, NULL, NULL);
+        multidictSetEvictionCallback(d, nullptr, nullptr);
     }
 
     TEST("14.6 no eviction when unlimited") {
@@ -8757,7 +8759,7 @@ int multidictTest(int, char *[]) {
 
             testEvictRehashSeen_ = 0;
             testEvictRehashBad_ = 0;
-            multidictSetEvictionCallback(e, evictRehashCb_, NULL);
+            multidictSetEvictionCallback(e, evictRehashCb_, nullptr);
             multidictSetMaxMemory(
                 e, (multidictKeyBytes(e) + multidictValBytes(e)) / 4);
             const uint32_t evicted = multidictEvictToLimit(e);
@@ -9673,7 +9675,7 @@ int multidictTest(int, char *[]) {
         testLruVetoes_ = 0;
         testLruVetoBad_ = 0;
         testLruEvicted_ = 0;
-        multidictSetEvictionCallback(vd, lruVetoCb_, NULL);
+        multidictSetEvictionCallback(vd, lruVetoCb_, nullptr);
 
         /* Round 1: evict 60 with keys 0, 10, ..., 90 vetoed.  The victims
          * are the 60 coldest keys that are not vetoed, coldest first, and
@@ -9926,7 +9928,7 @@ int multidictTest(int, char *[]) {
         testLruVetoes_ = 0;
         testLruVetoBad_ = 0;
         testLruEvicted_ = 0;
-        multidictSetEvictionCallback(wd, lruVetoCb_, NULL);
+        multidictSetEvictionCallback(wd, lruVetoCb_, nullptr);
 
         /* Evicting four takes keys 1..4 coldest first and passes over the
          * vetoed key 0 once */
@@ -10392,7 +10394,7 @@ int multidictTest(int, char *[]) {
         constexpr int N = 4000;
         cleaner(multidictFree) multidict *r =
             multidictNew(&multidictTypeExactKey, qdc, 0xABCDEF);
-        assert(r != NULL);
+        assert(r != nullptr);
 
         char kb[32];
         for (int i = 0; i < N; i++) {

@@ -21,7 +21,7 @@ static size_t datakitUsableSize_(const void *ptr) {
 }
 #define DATAKIT_USABLE_SIZE datakitUsableSize_
 #else
-#define DATAKIT_USABLE_SIZE NULL
+#define DATAKIT_USABLE_SIZE nullptr
 #endif
 
 /***** Global datakit configuration *****/

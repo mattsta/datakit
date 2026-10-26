@@ -111,7 +111,7 @@ int intsetTest(int, char *[]) {
 
         /* Add int16 values */
         for (int64_t i = 0; i < 100; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         /* Verify still small */
@@ -147,8 +147,8 @@ int intsetTest(int, char *[]) {
         bool success;
 
         /* Force to medium */
-        intsetAdd(&is, 100, NULL);
-        intsetAdd(&is, 100000, NULL);
+        intsetAdd(&is, 100, nullptr);
+        intsetAdd(&is, 100000, nullptr);
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
             ERR("Should be MEDIUM tier");
         }
@@ -190,7 +190,7 @@ int intsetTest(int, char *[]) {
         const uint32_t ceiling[] = {INTSET_SMALL_MAX_BYTES,
                                     INTSET_MEDIUM_MAX_BYTES, 0};
         for (size_t i = 0; i < countof(members); i++) {
-            intsetAdd(&is, members[i], NULL);
+            intsetAdd(&is, members[i], nullptr);
             dkTierStats s;
             intsetStats(is, &s);
             const uint64_t data = n16[i] * 2 + n32[i] * 4 + n64[i] * 8;
@@ -204,7 +204,7 @@ int intsetTest(int, char *[]) {
             }
         }
         dkTierStats none;
-        intsetStats(NULL, &none);
+        intsetStats(nullptr, &none);
         if (none.tier || none.count || none.totalBytes) {
             ERR("NULL intset reports a tier, members or bytes");
         }
@@ -216,10 +216,10 @@ int intsetTest(int, char *[]) {
         for (size_t t = 0; t < countof(reach); t++) {
             cleaner(intsetFree) intset *is = intsetNew();
             for (int64_t v = -40; v < 40; v += 3) {
-                intsetAdd(&is, v, NULL);
+                intsetAdd(&is, v, nullptr);
             }
             for (size_t i = 0; i <= t; i++) {
-                intsetAdd(&is, reach[i], NULL);
+                intsetAdd(&is, reach[i], nullptr);
             }
             cleaner(intsetFree) intset *copy = intsetCopy(is);
             dkTierStats a;
@@ -244,8 +244,8 @@ int intsetTest(int, char *[]) {
 
             /* Changing the copy leaves the original alone */
             const size_t before = intsetCount(is);
-            intsetAdd(&copy, -30000, NULL);
-            intsetRemove(&copy, reach[t], NULL);
+            intsetAdd(&copy, -30000, nullptr);
+            intsetRemove(&copy, reach[t], nullptr);
             if (intsetCount(is) != before || intsetFind(is, -30000) ||
                 !intsetFind(is, reach[t])) {
                 ERR("tier %zu: changing the copy changed the original", t + 1);
@@ -256,15 +256,15 @@ int intsetTest(int, char *[]) {
     TEST("Compact moves to the narrowest tier the values allow") {
         cleaner(intsetFree) intset *is = intsetNew();
         for (int64_t v = -300; v < 300; v += 7) {
-            intsetAdd(&is, v, NULL);
+            intsetAdd(&is, v, nullptr);
         }
         const int64_t wide[] = {100000, -70000, INT64_MAX, INT64_MIN + 1};
         for (size_t i = 0; i < countof(wide); i++) {
-            intsetAdd(&is, wide[i], NULL);
+            intsetAdd(&is, wide[i], nullptr);
         }
 
         /* A 64-bit value left: Full stays Full */
-        intsetRemove(&is, INT64_MAX, NULL);
+        intsetRemove(&is, INT64_MAX, nullptr);
         dkTierStats s;
         intsetCompact(&is);
         intsetStats(is, &s);
@@ -278,7 +278,7 @@ int intsetTest(int, char *[]) {
         const int64_t drop[] = {INT64_MIN + 1, 100000, -70000};
         const uint8_t want[] = {2, 2, 1};
         for (size_t i = 0; i < countof(drop); i++) {
-            intsetRemove(&is, drop[i], NULL);
+            intsetRemove(&is, drop[i], nullptr);
             dkTierStats was;
             intsetStats(is, &was);
             cleaner(intsetFree) intset *before = intsetCopy(is);
@@ -306,7 +306,7 @@ int intsetTest(int, char *[]) {
         }
 
         /* A wide value grows it back as usual */
-        intsetAdd(&is, INT64_MAX, NULL);
+        intsetAdd(&is, INT64_MAX, nullptr);
         intsetStats(is, &s);
         if (s.tier != 3 || !intsetFind(is, INT64_MAX) || !intsetFind(is, -6)) {
             ERR("a 64-bit add after Compact did not grow the set back");
@@ -319,7 +319,7 @@ int intsetTest(int, char *[]) {
         for (size_t t = 0; t < countof(reach); t++) {
             cleaner(intsetFree) intset *is = intsetNew();
             for (size_t i = 0; i <= t; i++) {
-                intsetAdd(&is, reach[i], NULL);
+                intsetAdd(&is, reach[i], nullptr);
             }
             intsetReset(&is);
             dkTierStats s;
@@ -328,7 +328,7 @@ int intsetTest(int, char *[]) {
                 ERR("tier %zu: reset to tier %u with %zu members", t + 1,
                     s.tier, intsetCount(is));
             }
-            intsetAdd(&is, -2, NULL);
+            intsetAdd(&is, -2, nullptr);
             if (intsetCount(is) != 1 || !intsetFind(is, -2)) {
                 ERR("tier %zu: a member after Reset is missing", t + 1);
             }
@@ -340,7 +340,7 @@ int intsetTest(int, char *[]) {
 
         /* Add 1000 int16 values */
         for (int64_t i = 0; i < 1000; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         size_t bytesBeforeLarge = intsetBytes(is);
@@ -348,7 +348,7 @@ int intsetTest(int, char *[]) {
                bytesBeforeLarge);
 
         /* Add large value */
-        intsetAdd(&is, INT64_MAX - 1000, NULL);
+        intsetAdd(&is, INT64_MAX - 1000, nullptr);
         size_t bytesAfterLarge = intsetBytes(is);
         printf("  After large value: %zu bytes for 1001 elements\n",
                bytesAfterLarge);
@@ -380,7 +380,7 @@ int intsetTest(int, char *[]) {
         bool success;
 
         for (int64_t i = 0; i < 10; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         intsetRemove(&is, 5, &success);
@@ -416,13 +416,13 @@ int intsetTest(int, char *[]) {
 
         /* Add 10,000 values across all three width categories */
         for (int64_t i = 0; i < 3000; i++) {
-            intsetAdd(&is, i, NULL); /* int16 */
+            intsetAdd(&is, i, nullptr); /* int16 */
         }
         for (int64_t i = 40000; i < 42000; i++) {
-            intsetAdd(&is, i, NULL); /* int32 */
+            intsetAdd(&is, i, nullptr); /* int32 */
         }
         for (int64_t i = INT64_MAX - 1000; i < INT64_MAX; i++) {
-            intsetAdd(&is, i, NULL); /* int64 */
+            intsetAdd(&is, i, nullptr); /* int64 */
         }
 
         size_t totalCount = intsetCount(is);
@@ -580,7 +580,7 @@ int intsetTest(int, char *[]) {
 
         /* Add mix of negative and positive values */
         for (int64_t i = -100; i <= 100; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         if (intsetCount(is) != 201) {
@@ -607,7 +607,7 @@ int intsetTest(int, char *[]) {
 
         /* Add 1000 values in ascending order */
         for (int64_t i = 0; i < 1000; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         if (intsetCount(is) != 1000) {
@@ -640,7 +640,7 @@ int intsetTest(int, char *[]) {
 
         /* Add 1000 values in descending order (worst case for insertion) */
         for (int64_t i = 999; i >= 0; i--) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         if (intsetCount(is) != 1000) {
@@ -691,25 +691,25 @@ int intsetTest(int, char *[]) {
 
         /* Fill small tier to near capacity */
         for (int64_t i = 0; i < 100; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
         if (INTSET_TYPE(is) != INTSET_TYPE_SMALL) {
             ERR("Should still be SMALL");
         }
 
         /* Add one int32 to force upgrade */
-        intsetAdd(&is, 100000, NULL);
+        intsetAdd(&is, 100000, nullptr);
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
             ERR("Should upgrade to MEDIUM");
         }
 
         /* Fill medium tier with int32 values */
         for (int64_t i = 100001; i < 100100; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         /* Add one int64 to force upgrade */
-        intsetAdd(&is, INT64_MAX, NULL);
+        intsetAdd(&is, INT64_MAX, nullptr);
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
             ERR("Should upgrade to FULL");
         }
@@ -726,7 +726,7 @@ int intsetTest(int, char *[]) {
 
         /* Always insert at beginning (forces maximum shifts) */
         for (int64_t i = 1000; i > 0; i--) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         if (intsetCount(is) != 1000) {
@@ -771,7 +771,7 @@ int intsetTest(int, char *[]) {
 
         /* Add values up to just before int16 can't represent */
         for (int64_t i = 0; i < 1000; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         /* Should still be small */
@@ -782,7 +782,7 @@ int intsetTest(int, char *[]) {
         size_t bytesBeforeUpgrade = intsetBytes(is);
 
         /* Add first int32 value */
-        intsetAdd(&is, INT16_MAX + 1, NULL);
+        intsetAdd(&is, INT16_MAX + 1, nullptr);
 
         /* Should now be medium */
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
@@ -808,10 +808,10 @@ int intsetTest(int, char *[]) {
 
         /* Add mixed int16/int32 values */
         for (int64_t i = 0; i < 100; i++) {
-            intsetAdd(&is, i, NULL); /* int16 */
+            intsetAdd(&is, i, nullptr); /* int16 */
         }
         for (int64_t i = 40000; i < 40100; i++) {
-            intsetAdd(&is, i, NULL); /* int32 */
+            intsetAdd(&is, i, nullptr); /* int32 */
         }
 
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
@@ -819,7 +819,7 @@ int intsetTest(int, char *[]) {
         }
 
         /* Add first int64 value */
-        intsetAdd(&is, INT32_MAX + 1LL, NULL);
+        intsetAdd(&is, INT32_MAX + 1LL, nullptr);
 
         /* Should now be full */
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
@@ -865,7 +865,7 @@ int intsetTest(int, char *[]) {
 
         /* Insert all values */
         for (int i = 0; i < NUM_VALUES; i++) {
-            intsetAdd(&is, oracle[i], NULL);
+            intsetAdd(&is, oracle[i], nullptr);
         }
 
         printf("  Inserted %d random values, final count: %zu\n", NUM_VALUES,
@@ -954,7 +954,7 @@ int intsetTest(int, char *[]) {
         /* Random from empty is undefined but shouldn't crash */
 
         /* Single element */
-        intsetAdd(&is, 42, NULL);
+        intsetAdd(&is, 42, nullptr);
         r = intsetRandom(is);
         if (r != 42) {
             ERR("Random from single-element set should return that element");
@@ -962,7 +962,7 @@ int intsetTest(int, char *[]) {
 
         /* Multiple elements */
         for (int64_t i = 0; i < 100; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         /* Get 100 random values and verify they're all in range */
@@ -999,7 +999,7 @@ int intsetTest(int, char *[]) {
 
         /* Add 10 elements */
         for (int64_t i = 0; i < 10; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         /* Valid positions */
@@ -1024,25 +1024,25 @@ int intsetTest(int, char *[]) {
         bool success;
 
         /* Add with NULL success pointer */
-        intsetAdd(&is, 42, NULL);
+        intsetAdd(&is, 42, nullptr);
         if (!intsetFind(is, 42)) {
             ERR("Should add even with NULL success");
         }
 
         /* Remove with NULL success pointer */
-        intsetRemove(&is, 42, NULL);
+        intsetRemove(&is, 42, nullptr);
         if (intsetFind(is, 42)) {
             ERR("Should remove even with NULL success");
         }
 
         /* Get with NULL value pointer */
-        intsetAdd(&is, 100, NULL);
-        if (!intsetGet(is, 0, NULL)) {
+        intsetAdd(&is, 100, nullptr);
+        if (!intsetGet(is, 0, nullptr)) {
             ERR("Should succeed with NULL value ptr");
         }
 
         /* Operations on NULL intset */
-        cleaner(intsetFree) intset *null_is = NULL;
+        cleaner(intsetFree) intset *null_is = nullptr;
         if (intsetCount(null_is) != 0) {
             ERR("NULL intset should have count 0");
         }
@@ -1064,7 +1064,7 @@ int intsetTest(int, char *[]) {
 
         /* Add 1000 values */
         for (int64_t i = 0; i < 1000; i++) {
-            intsetAdd(&is, i, NULL);
+            intsetAdd(&is, i, nullptr);
         }
 
         /* Remove every other value */
@@ -1107,17 +1107,17 @@ int intsetTest(int, char *[]) {
         cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add int16 values: 10, 30, 50, 70, 90 */
-        intsetAdd(&is, 10, NULL);
-        intsetAdd(&is, 30, NULL);
-        intsetAdd(&is, 50, NULL);
-        intsetAdd(&is, 70, NULL);
-        intsetAdd(&is, 90, NULL);
+        intsetAdd(&is, 10, nullptr);
+        intsetAdd(&is, 30, nullptr);
+        intsetAdd(&is, 50, nullptr);
+        intsetAdd(&is, 70, nullptr);
+        intsetAdd(&is, 90, nullptr);
 
         /* Add int32 values that interleave: 20000, 40000, 60000, 80000 */
-        intsetAdd(&is, 20000, NULL);
-        intsetAdd(&is, 40000, NULL);
-        intsetAdd(&is, 60000, NULL);
-        intsetAdd(&is, 80000, NULL);
+        intsetAdd(&is, 20000, nullptr);
+        intsetAdd(&is, 40000, nullptr);
+        intsetAdd(&is, 60000, nullptr);
+        intsetAdd(&is, 80000, nullptr);
 
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
             ERR("Should be MEDIUM tier");
@@ -1163,7 +1163,7 @@ int intsetTest(int, char *[]) {
         size_t count = countof(values);
 
         for (size_t i = 0; i < count; i++) {
-            intsetAdd(&is, values[i], NULL);
+            intsetAdd(&is, values[i], nullptr);
         }
 
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
@@ -1204,19 +1204,19 @@ int intsetTest(int, char *[]) {
 
         /* Add values across all three width categories */
         /* int16 values */
-        intsetAdd(&is, 100, NULL);
-        intsetAdd(&is, 200, NULL);
-        intsetAdd(&is, 300, NULL);
+        intsetAdd(&is, 100, nullptr);
+        intsetAdd(&is, 200, nullptr);
+        intsetAdd(&is, 300, nullptr);
 
         /* int32 values */
-        intsetAdd(&is, 100000, NULL);
-        intsetAdd(&is, 200000, NULL);
-        intsetAdd(&is, 300000, NULL);
+        intsetAdd(&is, 100000, nullptr);
+        intsetAdd(&is, 200000, nullptr);
+        intsetAdd(&is, 300000, nullptr);
 
         /* int64 values - trigger upgrade to FULL */
-        intsetAdd(&is, INT32_MAX + 1000LL, NULL);
-        intsetAdd(&is, INT32_MAX + 2000LL, NULL);
-        intsetAdd(&is, INT32_MAX + 3000LL, NULL);
+        intsetAdd(&is, INT32_MAX + 1000LL, nullptr);
+        intsetAdd(&is, INT32_MAX + 2000LL, nullptr);
+        intsetAdd(&is, INT32_MAX + 3000LL, nullptr);
 
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
             ERR("Should be FULL tier");
@@ -1265,19 +1265,19 @@ int intsetTest(int, char *[]) {
 
         /* Create interleaved pattern by using negative numbers too */
         /* int16: -1000, -100, 0, 100, 1000 */
-        intsetAdd(&is, -1000, NULL);
-        intsetAdd(&is, -100, NULL);
-        intsetAdd(&is, 0, NULL);
-        intsetAdd(&is, 100, NULL);
-        intsetAdd(&is, 1000, NULL);
+        intsetAdd(&is, -1000, nullptr);
+        intsetAdd(&is, -100, nullptr);
+        intsetAdd(&is, 0, nullptr);
+        intsetAdd(&is, 100, nullptr);
+        intsetAdd(&is, 1000, nullptr);
 
         /* int32: -50000, 50000 */
-        intsetAdd(&is, -50000, NULL);
-        intsetAdd(&is, 50000, NULL);
+        intsetAdd(&is, -50000, nullptr);
+        intsetAdd(&is, 50000, nullptr);
 
         /* int64: values outside int32 range */
-        intsetAdd(&is, INT32_MIN - 1LL, NULL);
-        intsetAdd(&is, INT32_MAX + 1LL, NULL);
+        intsetAdd(&is, INT32_MIN - 1LL, nullptr);
+        intsetAdd(&is, INT32_MAX + 1LL, nullptr);
 
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
             ERR("Should be FULL tier");
@@ -1353,7 +1353,7 @@ int intsetTest(int, char *[]) {
                 val = rand();
             }
             oracle[i] = val;
-            intsetAdd(&is, val, NULL);
+            intsetAdd(&is, val, nullptr);
         }
 
         size_t count = intsetCount(is);

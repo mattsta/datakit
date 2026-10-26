@@ -40,7 +40,7 @@ static inline bool readMember(const multiOrderedSetFull *m,
                               databoxWide *slot) {
     if (m->pool) {
         databox idBox;
-        flexGetByTypeInto(memberEntry, &idBox, NULL);
+        flexGetByTypeInto(memberEntry, &idBox, nullptr);
         if (idBox.type == DATABOX_UNSIGNED_64) {
             if (slot) {
                 mosBoxAim(member, slot);
@@ -78,7 +78,7 @@ static size_t subMapCount(const flex *map) {
 static flex *getSubMap(const multiOrderedSetFull *m, uint32_t idx) {
     flex **ptr;
     multiarrayNativeGet(m->scoreMap, flex *, ptr, idx);
-    return ptr ? *ptr : NULL;
+    return ptr ? *ptr : nullptr;
 }
 
 /* Set a sub-map by index - we need to get the pointer to modify it */
@@ -125,7 +125,7 @@ static inline databox *getRangeBox(const multiOrderedSetFull *m, uint32_t idx) {
 static void rangeBoxRefresh(databox *rb, const flexEntry *head) {
     databoxWide *payload = (rb->allocated && mosBoxIsWide(rb))
                                ? (databoxWide *)rb->data.ptr
-                               : NULL;
+                               : nullptr;
     if (head) {
         flexGetByTypeInto(head, rb, payload);
     } else {
@@ -376,7 +376,8 @@ static void deleteRows_(multiOrderedSetFull *m, uint32_t mapIdx,
      * empty map holds the INT64_MAX sentinel. */
     databox *rangeScore = getRangeBox(m, mapIdx);
     if (rangeScore) {
-        rangeBoxRefresh(rangeScore, flexCount(map) > 0 ? flexHead(map) : NULL);
+        rangeBoxRefresh(rangeScore,
+                        flexCount(map) > 0 ? flexHead(map) : nullptr);
     }
 }
 
@@ -468,7 +469,7 @@ static bool mergeSubMapWithNext_(multiOrderedSetFull *m, uint32_t mapIdx) {
     setSubMap(m, mapIdx, map);
     updateMiddle(m, mapIdx);
     rangeBoxRefresh(getRangeBox(m, mapIdx),
-                    flexCount(map) ? flexHead(map) : NULL);
+                    flexCount(map) ? flexHead(map) : nullptr);
     dropSubMapSlot_(m, mapIdx + 1);
     return true;
 }
@@ -506,7 +507,7 @@ void multiOrderedSetFullCompact(multiOrderedSetFull *m) {
             setSubMap(m, i, map);
             updateMiddle(m, i);
             rangeBoxRefresh(getRangeBox(m, i),
-                            flexCount(map) ? flexHead(map) : NULL);
+                            flexCount(map) ? flexHead(map) : nullptr);
             dropSubMapSlot_(m, i + 1);
             continue;
         }
@@ -581,7 +582,7 @@ static flexEntry *findEntryForScore(const multiOrderedSetFull *m,
     if (m->pool) {
         const uint64_t id = atomPoolGetId(m->pool, member);
         if (id == 0) {
-            return NULL; /* Member not in pool */
+            return nullptr; /* Member not in pool */
         }
         memberToMatch = databoxNewUnsigned(id);
     } else {
@@ -591,7 +592,7 @@ static flexEntry *findEntryForScore(const multiOrderedSetFull *m,
     *mapIdx = findSubMap_(m, score, &memberToMatch);
     flex *map = getSubMap(m, *mapIdx);
     if (!map || flexCount(map) == 0) {
-        return NULL;
+        return nullptr;
     }
 
     const databox *row[MOS_ELEMENTS_PER_ENTRY] = {score, &memberToMatch};
@@ -606,7 +607,7 @@ static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
     databox score;
     databoxWide scoreWide;
     if (!findScore(m, member, &score, &scoreWide)) {
-        return NULL;
+        return nullptr;
     }
 
     return findEntryForScore(m, member, &score, mapIdx);
@@ -655,9 +656,9 @@ static uint32_t mosFullLocateRank_(const multiOrderedSetFull *m, uint64_t rank,
  * maxMapSize bytes, so the walk there is short. */
 static flexEntry *mosFullSeekScore_(const multiOrderedSetFull *m,
                                     const databox *score, uint32_t *mapIdx) {
-    for (uint32_t i = findSubMap_(m, score, NULL); i < m->mapCount; i++) {
+    for (uint32_t i = findSubMap_(m, score, nullptr); i < m->mapCount; i++) {
         flex *map = getSubMap(m, i);
-        flexEntry *entry = map ? flexHeadIfAny(map) : NULL;
+        flexEntry *entry = map ? flexHeadIfAny(map) : nullptr;
         while (entry) {
             databox current;
             databoxWide currentWide;
@@ -668,12 +669,12 @@ static flexEntry *mosFullSeekScore_(const multiOrderedSetFull *m,
             }
 
             flexEntry *memberEntry = flexNext(map, entry);
-            entry = memberEntry ? flexNext(map, memberEntry) : NULL;
+            entry = memberEntry ? flexNext(map, memberEntry) : nullptr;
         }
     }
 
     *mapIdx = m->mapCount;
-    return NULL;
+    return nullptr;
 }
 
 /* ====================================================================
@@ -699,14 +700,14 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
     /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
     databox initialRange = {};
-    rangeBoxRefresh(&initialRange, NULL);
+    rangeBoxRefresh(&initialRange, nullptr);
     mosFullInsertSlot_(m, 0, 0, initialMap, FLEX_EMPTY_SIZE, initialRange);
 
     m->mapCount = 1;
     m->totalEntries = 0;
     m->maxMapSize = MOS_FULL_DEFAULT_MAX_MAP_SIZE;
     m->flags = 0;
-    m->pool = NULL;
+    m->pool = nullptr;
 
     return m;
 }
@@ -805,7 +806,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
          * payload (or borrowed bytes) with the original */
         databox rangeCopy = {};
         rangeBoxRefresh(&rangeCopy,
-                        flexCount(mapCopy) > 0 ? flexHead(mapCopy) : NULL);
+                        flexCount(mapCopy) > 0 ? flexHead(mapCopy) : nullptr);
 
         mosFullInsertSlot_(copy, i, i, mapCopy, mid, rangeCopy);
     }
@@ -890,7 +891,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
             }
         }
     } else {
-        copy->pool = NULL;
+        copy->pool = nullptr;
         copy->flags = m->flags;
     }
 
@@ -955,7 +956,7 @@ void multiOrderedSetFullFree(multiOrderedSetFull *m) {
  * which only Full resolves). */
 flex *multiOrderedSetFullTakeRows(multiOrderedSetFull *m) {
     if (m->pool) {
-        return NULL;
+        return nullptr;
     }
 
     flex *rows = getSubMap(m, 0);
@@ -1028,7 +1029,7 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
     /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
     databox initialRange = {};
-    rangeBoxRefresh(&initialRange, NULL);
+    rangeBoxRefresh(&initialRange, nullptr);
     mosFullInsertSlot_(m, 0, 0, initialMap, FLEX_EMPTY_SIZE, initialRange);
 
     m->mapCount = 1;
@@ -1282,13 +1283,13 @@ bool multiOrderedSetFullRemoveIf(multiOrderedSetFull *m, const databox *member,
 }
 
 bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
-    return multiOrderedSetFullRemoveIf(m, member, NULL, NULL);
+    return multiOrderedSetFullRemoveIf(m, member, nullptr, nullptr);
 }
 
 bool multiOrderedSetFullRemoveGetScore(multiOrderedSetFull *m,
                                        const databox *member, databox *score) {
     /* The removal's owned copy is the caller's */
-    return removeMember(m, member, score, NULL, NULL);
+    return removeMember(m, member, score, nullptr, nullptr);
 }
 
 size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
@@ -1299,7 +1300,7 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
     uint32_t mapIdx;
     flexEntry *entry = mosFullSeekScore_(m, &range->min, &mapIdx);
     bool pastMax = false;
-    for (; mapIdx < m->mapCount && !pastMax; mapIdx++, entry = NULL) {
+    for (; mapIdx < m->mapCount && !pastMax; mapIdx++, entry = nullptr) {
         flex *map = getSubMap(m, mapIdx);
         if (!map) {
             continue;
@@ -1312,7 +1313,7 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
         /* Rows are in score order, so this sub-map's rows in the range are
          * one span: after any rows equal to an exclusive minimum, up to the
          * first past the maximum */
-        flexEntry *spanStart = NULL;
+        flexEntry *spanStart = nullptr;
         size_t spanRows = 0;
         while (entry) {
             flexEntry *memberEntry = flexNext(map, entry);
@@ -1338,7 +1339,7 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
         }
 
         const size_t taken =
-            mosFullDropMembers_(m, map, spanStart, spanRows, NULL, NULL);
+            mosFullDropMembers_(m, map, spanStart, spanRows, nullptr, nullptr);
         deleteRows_(m, mapIdx, spanStart, taken);
         removed += taken;
         pastMax = pastMax || taken < spanRows; /* a damaged pool stops it */
@@ -1374,9 +1375,9 @@ size_t multiOrderedSetFullRemoveRangeByRank(multiOrderedSetFull *m,
         const size_t rows = (size_t)(inMap < left ? inMap : left);
         flexEntry *spanStart =
             rows ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY))
-                 : NULL;
+                 : nullptr;
         const size_t taken =
-            mosFullDropMembers_(m, map, spanStart, rows, NULL, NULL);
+            mosFullDropMembers_(m, map, spanStart, rows, nullptr, nullptr);
         deleteRows_(m, mapIdx, spanStart, taken);
         removed += taken;
         left -= rows;
@@ -1406,7 +1407,7 @@ size_t multiOrderedSetFullPopMin(multiOrderedSetFull *m, size_t count,
          * (self-contained) before it goes */
         const size_t inMap = subMapCount(map);
         const size_t rows = inMap < count - popped ? inMap : count - popped;
-        flexEntry *head = rows ? flexHead(map) : NULL;
+        flexEntry *head = rows ? flexHead(map) : nullptr;
         const size_t taken = mosFullDropMembers_(
             m, map, head, rows, members + popped, scores + popped);
         deleteRows_(m, mapIdx, head, taken);
@@ -1537,10 +1538,11 @@ bool multiOrderedSetFullGetByRank(const multiOrderedSetFull *m, int64_t rank,
 
     uint64_t local;
     const uint32_t mapIdx = mosFullLocateRank_(m, (uint64_t)rank, &local);
-    flex *map = mapIdx < m->mapCount ? getSubMap(m, mapIdx) : NULL;
+    flex *map = mapIdx < m->mapCount ? getSubMap(m, mapIdx) : nullptr;
     flexEntry *entry =
-        map ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY)) : NULL;
-    flexEntry *memberEntry = entry ? flexNext(map, entry) : NULL;
+        map ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY))
+            : nullptr;
+    flexEntry *memberEntry = entry ? flexNext(map, entry) : nullptr;
     if (!memberEntry) {
         return false;
     }
@@ -1548,7 +1550,7 @@ bool multiOrderedSetFullGetByRank(const multiOrderedSetFull *m, int64_t rank,
     flexGetByType(entry, score);
 
     /* In pool mode, convert pool ID back to member string */
-    return readMember(m, memberEntry, member, NULL);
+    return readMember(m, memberEntry, member, nullptr);
 }
 
 /* ====================================================================
@@ -1562,7 +1564,7 @@ size_t multiOrderedSetFullCountByScore(const multiOrderedSetFull *m,
     /* From the first row at or above the minimum to past the maximum */
     uint32_t mapIdx;
     flexEntry *entry = mosFullSeekScore_(m, &range->min, &mapIdx);
-    for (; mapIdx < m->mapCount; mapIdx++, entry = NULL) {
+    for (; mapIdx < m->mapCount; mapIdx++, entry = nullptr) {
         flex *map = getSubMap(m, mapIdx);
         if (!map) {
             continue;
@@ -1606,7 +1608,7 @@ void multiOrderedSetFullIteratorInit(const multiOrderedSetFull *m,
     iter->mos = (void *)m;
     iter->type = MOS_TYPE_FULL;
     iter->forward = forward;
-    iter->current = NULL; /* stays NULL when every sub-map is empty */
+    iter->current = nullptr; /* stays NULL when every sub-map is empty */
 
     if (forward) {
         iter->mapIndex = 0;
@@ -1631,7 +1633,7 @@ void multiOrderedSetFullIteratorInit(const multiOrderedSetFull *m,
         }
     }
 
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
 }
 
 bool multiOrderedSetFullIteratorInitAtScore(const multiOrderedSetFull *m,
@@ -1645,7 +1647,7 @@ bool multiOrderedSetFullIteratorInitAtScore(const multiOrderedSetFull *m,
     uint32_t mapIdx;
     iter->current = mosFullSeekScore_(m, score, &mapIdx);
     iter->mapIndex = mapIdx;
-    iter->valid = iter->current != NULL;
+    iter->valid = iter->current != nullptr;
     return iter->valid;
 }
 
@@ -1660,11 +1662,12 @@ bool multiOrderedSetFullIteratorInitAtRank(const multiOrderedSetFull *m,
     uint64_t local = 0;
     const uint32_t mapIdx =
         rank < 0 ? m->mapCount : mosFullLocateRank_(m, (uint64_t)rank, &local);
-    flex *map = mapIdx < m->mapCount ? getSubMap(m, mapIdx) : NULL;
+    flex *map = mapIdx < m->mapCount ? getSubMap(m, mapIdx) : nullptr;
     iter->mapIndex = mapIdx;
     iter->current =
-        map ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY)) : NULL;
-    iter->valid = iter->current != NULL;
+        map ? flexIndex(map, (int32_t)(local * MOS_ELEMENTS_PER_ENTRY))
+            : nullptr;
+    iter->valid = iter->current != nullptr;
     return iter->valid;
 }
 
@@ -1687,7 +1690,7 @@ bool multiOrderedSetFullIteratorNext(mosIterator *iter, databox *member,
     flexGetByType(entry, score);
 
     /* In pool mode, convert pool ID back to member string */
-    if (!readMember(m, memberEntry, member, NULL)) {
+    if (!readMember(m, memberEntry, member, nullptr)) {
         iter->valid = false;
         return false;
     }
@@ -1715,7 +1718,7 @@ bool multiOrderedSetFullIteratorNext(mosIterator *iter, databox *member,
             iter->current = flexPrev(map, prevMember);
         } else {
             /* Move to previous map */
-            iter->current = NULL;
+            iter->current = nullptr;
             while (iter->mapIndex > 0) {
                 iter->mapIndex--;
                 map = getSubMap(m, iter->mapIndex);
@@ -1729,7 +1732,7 @@ bool multiOrderedSetFullIteratorNext(mosIterator *iter, databox *member,
         }
     }
 
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
     return true;
 }
 
@@ -1752,7 +1755,7 @@ bool multiOrderedSetFullFirst(const multiOrderedSetFull *m, databox *member,
                 flexGetByType(entry, score);
 
                 /* In pool mode, convert pool ID back to member string */
-                return readMember(m, memberEntry, member, NULL);
+                return readMember(m, memberEntry, member, nullptr);
             }
         }
     }
@@ -1776,7 +1779,7 @@ bool multiOrderedSetFullLast(const multiOrderedSetFull *m, databox *member,
                     flexGetByType(entry, score);
 
                     /* In pool mode, convert pool ID back to member string */
-                    return readMember(m, memberEntry, member, NULL);
+                    return readMember(m, memberEntry, member, nullptr);
                 }
             }
         }
@@ -1994,7 +1997,7 @@ static int mosCopyCheck_(const multiOrderedSetFull *m, const bool *present,
         mosIterator it;
         databox im;
         databox is;
-        const char *wrong = NULL;
+        const char *wrong = nullptr;
         if (!multiOrderedSetFullGetByRank(m, r, &member, &score) ||
             !mosCopyIs_(&member, &score, order[r])) {
             wrong = "GetByRank";

@@ -58,7 +58,7 @@ static void *pcIntsetBigBuild(const persistContractBuild *b) {
             intsetBigFree(isb);
             /* @own: caller; free=intsetBigFree */
             isb = intsetBigNew();
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
     return isb;

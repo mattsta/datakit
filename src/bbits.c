@@ -27,8 +27,8 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
                        const dodVal newVal) {
     /* Always use last elements of arrays */
     /* {k,v}w = {k,v}write */
-    dodWriter *kw = NULL;
-    dodWriter *vw = NULL;
+    dodWriter *kw = nullptr;
+    dodWriter *vw = nullptr;
 
     /* If first time, or current bitmaps are too big, create new holders */
     bool needNewBitmap = !dd->count;
@@ -267,8 +267,8 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
                        const double newVal) {
     /* Always use last elements of arrays */
     /* {k,v}w = {k,v}write */
-    dodWriter *kw = NULL;
-    xofWriter *vw = NULL;
+    dodWriter *kw = nullptr;
+    xofWriter *vw = nullptr;
 
     /* If first time, or current bitmaps are too big, create new holders */
     bool needNewBitmap = !dx->count;
@@ -512,8 +512,8 @@ int bbitsTest(int, char *[]) {
 
         /* Read back and verify all values */
         ssize_t count = -1;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
         double mean, variance, stddev;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
@@ -571,11 +571,11 @@ int bbitsTest(int, char *[]) {
 
         /* Read back and verify all values */
         ssize_t count = -1;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
-                                                NULL, NULL, NULL);
+                                                nullptr, nullptr, nullptr);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount failed%s", "");
         }
@@ -626,8 +626,8 @@ int bbitsTest(int, char *[]) {
 
         /* Read back and verify all values */
         ssize_t count = -1;
-        uint64_t *keys = NULL;
-        double *vals = NULL;
+        uint64_t *keys = nullptr;
+        double *vals = nullptr;
         double mean, variance, stddev;
 
         bool result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &vals,
@@ -686,11 +686,11 @@ int bbitsTest(int, char *[]) {
 
         /* Read back and verify all values */
         ssize_t count = -1;
-        uint64_t *keys = NULL;
-        double *vals = NULL;
+        uint64_t *keys = nullptr;
+        double *vals = nullptr;
 
         bool result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &vals,
-                                                NULL, NULL, NULL);
+                                                nullptr, nullptr, nullptr);
         if (!result) {
             ERR("bbitsDodXofGetOffsetCount failed%s", "");
         }
@@ -724,21 +724,21 @@ int bbitsTest(int, char *[]) {
     TEST("empty structure handling") {
         bbitsDodDod dd = {};
         ssize_t count = -1;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
-                                                NULL, NULL, NULL);
+                                                nullptr, nullptr, nullptr);
         if (result) {
             ERR("bbitsDodDodGetOffsetCount should return false for empty%s",
                 "");
         }
 
         bbitsDodXof dx = {};
-        double *dvals = NULL;
+        double *dvals = nullptr;
 
-        result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals, NULL,
-                                           NULL, NULL);
+        result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals,
+                                           nullptr, nullptr, nullptr);
         if (result) {
             ERR("bbitsDodXofGetOffsetCount should return false for empty%s",
                 "");
@@ -757,11 +757,11 @@ int bbitsTest(int, char *[]) {
 
         /* Read with offset */
         ssize_t count = 10;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 20, &count, &keys, &vals,
-                                                NULL, NULL, NULL);
+                                                nullptr, nullptr, nullptr);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount with offset failed%s", "");
         }
@@ -810,11 +810,11 @@ int bbitsTest(int, char *[]) {
 
         /* Read last 10 elements using negative offset */
         ssize_t count = 10;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, -10, &count, &keys, &vals,
-                                                NULL, NULL, NULL);
+                                                nullptr, nullptr, nullptr);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount with negative offset failed%s", "");
         }
@@ -855,8 +855,8 @@ int bbitsTest(int, char *[]) {
         bbitsDodDodAppend(&dd, 5, 50);
 
         ssize_t count = -1;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
         double mean, variance, stddev;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
@@ -905,11 +905,11 @@ int bbitsTest(int, char *[]) {
                                    (ssize_t)numElements + 7};
         for (size_t p = 0; p < countof(pastEnd); p++) {
             ssize_t count = 1;
-            uint64_t *keys = NULL;
-            uint64_t *vals = NULL;
-            double *dvals = NULL;
+            uint64_t *keys = nullptr;
+            uint64_t *vals = nullptr;
+            double *dvals = nullptr;
             if (bbitsDodDodGetOffsetCount(&dd, pastEnd[p], &count, &keys, &vals,
-                                          NULL, NULL, NULL)) {
+                                          nullptr, nullptr, nullptr)) {
                 ERR("DodDod offset %zd should be refused", pastEnd[p]);
                 zfree(keys);
                 zfree(vals);
@@ -917,7 +917,7 @@ int bbitsTest(int, char *[]) {
 
             count = 1;
             if (bbitsDodXofGetOffsetCount(&dx, pastEnd[p], &count, &keys,
-                                          &dvals, NULL, NULL, NULL)) {
+                                          &dvals, nullptr, nullptr, nullptr)) {
                 ERR("DodXof offset %zd should be refused", pastEnd[p]);
                 zfree(keys);
                 zfree(dvals);
@@ -939,8 +939,8 @@ int bbitsTest(int, char *[]) {
             const size_t want = (size_t)cases[c][2];
 
             ssize_t count = cases[c][1];
-            uint64_t *keys = NULL;
-            uint64_t *vals = NULL;
+            uint64_t *keys = nullptr;
+            uint64_t *vals = nullptr;
             double mean = 0, variance = 0, stddev = 0;
             if (!bbitsDodDodGetOffsetCount(&dd, cases[c][0], &count, &keys,
                                            &vals, &mean, &variance, &stddev)) {
@@ -971,9 +971,9 @@ int bbitsTest(int, char *[]) {
             zfree(vals);
 
             count = cases[c][1];
-            double *dvals = NULL;
+            double *dvals = nullptr;
             if (!bbitsDodXofGetOffsetCount(&dx, cases[c][0], &count, &keys,
-                                           &dvals, NULL, NULL, NULL)) {
+                                           &dvals, nullptr, nullptr, nullptr)) {
                 ERR("DodXof case %zu refused", c);
                 continue;
             }
@@ -1038,9 +1038,9 @@ int bbitsTest(int, char *[]) {
                 const double wantVar = sq / (double)n;
 
                 ssize_t count = windows[w][1];
-                uint64_t *keys = NULL;
-                uint64_t *vals = NULL;
-                double *dvals = NULL;
+                uint64_t *keys = nullptr;
+                uint64_t *vals = nullptr;
+                double *dvals = nullptr;
                 double mean = -1, variance = -1, stddev = -1;
                 const bool ok =
                     kind == 0
@@ -1072,9 +1072,9 @@ int bbitsTest(int, char *[]) {
 
         /* A zero count reads nothing and allocates nothing */
         ssize_t count = 0;
-        uint64_t *keys = NULL;
-        uint64_t *vals = NULL;
-        double *dvals = NULL;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
+        double *dvals = nullptr;
         double mean = -1, variance = -1, stddev = -1;
         if (bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals, &mean,
                                       &variance, &stddev) ||

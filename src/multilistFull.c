@@ -169,7 +169,7 @@ void multilistFullStats(const multilistFull *ml, dkTierStats *out) {
 #define COMPRESS_MAX ((1 << 15) - 1)
 static uint16_t multilistFullClampDepth_(uint32_t compress) {
     if (compress > COMPRESS_MAX) {
-        assert(NULL);
+        assert(false);
         compress = COMPRESS_MAX;
     }
 
@@ -250,7 +250,7 @@ void multilistFullSetCompressDepth(multilistFull *ml, uint32_t compress) {
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
         multilistFullApplyDepthRule_(ml, state);
     } else {
-        multilistFullApplyDepthRule_(ml, NULL);
+        multilistFullApplyDepthRule_(ml, nullptr);
     }
 }
 
@@ -470,7 +470,7 @@ DK_STATIC mlNodeId multilistFullInsertNodeBefore__(multilistFull *ml,
 
 DK_STATIC mlNodeId multilistFullInsertNodeAfter__Empty(multilistFull *ml,
                                                        mlNodeId nodeIdx) {
-    mflex *m = NULL;
+    mflex *m = nullptr;
     reallocIncrCountAfter(ml, nodeIdx, m);
     /* we don't recompress here because the new node is empty
      * and the data field will get replaced after we return */
@@ -479,7 +479,7 @@ DK_STATIC mlNodeId multilistFullInsertNodeAfter__Empty(multilistFull *ml,
 
 DK_STATIC mlNodeId multilistFullInsertNodeBefore__Empty(multilistFull *ml,
                                                         mlNodeId nodeIdx) {
-    mflex *m = NULL;
+    mflex *m = nullptr;
     reallocIncrCountBefore(ml, nodeIdx, m);
     /* we don't recompress here because the new node is empty
      * and the data field will get replaced after we return */
@@ -771,8 +771,8 @@ DK_STATIC bool multilistFullDelIndex(multilistFull *ml, mflexState *state,
         reallocDecrCount(ml, nodeIdx);
         multilistFullCompressRenew__(ml, state);
 
-        *ff = NULL;
-        *fe = NULL;
+        *ff = nullptr;
+        *fe = nullptr;
 
         /* return 'true' to signal the entire node is now deleted */
         return true;
@@ -1171,7 +1171,7 @@ DK_STATIC void multilistFullInsert_(multilistFull *ml, mflexState *state[2],
         if (after) {
             D("Not full, inserting after current position.");
             flexEntry *next = flexNext(f, entry->fe);
-            if (next == NULL) {
+            if (next == nullptr) {
                 flexPushByTypeExact(&f, box, FLEX_ENDPOINT_TAIL);
             } else {
                 flexInsertByType(&f, next, box);
@@ -1354,8 +1354,8 @@ void multilistFullIteratorRelease(multilistIterator *iter) {
     if (!iter->readOnly && iter->f) {
         mflexCloseGrow(getNodeMlPtr(iter->ml, iter->nodeIdx), iter->state[0],
                        iter->f);
-        iter->f = NULL;
-        iter->fe = NULL;
+        iter->f = nullptr;
+        iter->fe = nullptr;
     }
 }
 
@@ -1420,7 +1420,7 @@ bool multilistFullNext(multilistIterator *iter, multilistEntry *entry) {
      * then get next entry again .*/
     if (!iter->readOnly && iter->f) {
         mflexCloseShrink(getNodePtr(nodeIdx), iter->state[0], iter->f);
-        iter->f = NULL;
+        iter->f = nullptr;
     }
 
     if (iter->forward) {
@@ -1573,7 +1573,7 @@ DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
                 }
 
                 /* No wide storage here: a wide value is deferred */
-                flexGetByTypeInto(entry->fe, &entry->box, NULL);
+                flexGetByTypeInto(entry->fe, &entry->box, nullptr);
             }
 
             return true;
@@ -1680,7 +1680,7 @@ DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
         }
 
         /* A single read has no wide storage: a wide value is deferred */
-        flexGetByTypeInto(entry->fe, &entry->box, NULL);
+        flexGetByTypeInto(entry->fe, &entry->box, nullptr);
         return true;
     }
 
@@ -1696,7 +1696,7 @@ DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
  * Returns false if element out of range ('entry' not usable). */
 bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
                         multilistEntry *entry, const bool openNode) {
-    return multilistFullIndexEngine_(ml, state, index, NULL, 0, entry,
+    return multilistFullIndexEngine_(ml, state, index, nullptr, 0, entry,
                                      openNode);
 }
 
@@ -1940,7 +1940,7 @@ static int itrprintr_(multilistFull *ml, mflexState *state[2], bool print,
     uint32_t i = 0;
     while (multilistFullNext(&iter, &entry)) {
         if (i > ml->values) {
-            assert(NULL);
+            assert(false);
         }
 
         if (print) {
@@ -2087,7 +2087,7 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
 
     if (want->type != DATABOX_SIGNED_128 &&
         want->type != DATABOX_UNSIGNED_128) {
-        return mlfWideSame(&entry.box, want, NULL);
+        return mlfWideSame(&entry.box, want, nullptr);
     }
 
     if (entry.box.type != want->type || !databoxIsWideDeferred(&entry.box)) {
@@ -2142,7 +2142,7 @@ static bool mlfNodeIsAutoCompress(const mflex *node) {
 static const char *mlfDepthRuleCheck(const multilistFull *ml,
                                      mlNodeId *badNode) {
     if (!multilistFullAllowsCompression(ml)) {
-        return NULL;
+        return nullptr;
     }
 
     const mlNodeId tail = mlTailIdx(ml);
@@ -2167,7 +2167,7 @@ static const char *mlfDepthRuleCheck(const multilistFull *ml,
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 /* The strict form of the depth rule, for a list whose nodes were all
@@ -2194,7 +2194,7 @@ static const char *mlfDepthRuleExact(const multilistFull *ml,
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 static bool mlfSplitIs(const databox *box, uint32_t id) {
@@ -2254,7 +2254,7 @@ static const char *mlfSplitCheck(multilistFull *ml, mflexState *state[2],
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 int multilistFullTest(int, char *[]) {
@@ -2500,7 +2500,7 @@ int multilistFullTest(int, char *[]) {
             }
             bytes = box.len;
             data = box.data.bytes.start;
-            assert(data != NULL);
+            assert(data != nullptr);
             assert(bytes == 32);
             if (strcmp(populate, (char *)data)) {
                 ERR("Pop'd value (%.*s) didn't equal original value (%s)",
@@ -2556,7 +2556,7 @@ int multilistFullTest(int, char *[]) {
                 data = box.data.bytes.start;
                 bytes = box.len;
                 assert(found);
-                assert(data != NULL);
+                assert(data != nullptr);
                 assert(bytes == 32);
                 if (strcmp(genstr("hello", 499 - i), (char *)data)) {
                     ERR("Pop'd value (%.*s) didn't equal original value (%s)",
@@ -2591,7 +2591,7 @@ int multilistFullTest(int, char *[]) {
                         ERR("Pop'd value (%.*s) didn't equal original value "
                             "(%s)",
                             bytes, data, genstr("hello", 499 - i));
-                        assert(NULL);
+                        assert(false);
                     }
                 } else {
                     assert(!found);
@@ -2747,7 +2747,7 @@ int multilistFullTest(int, char *[]) {
                 if (strncmp(entry.box.data.bytes.cstart, "def", 3)) {
                     ERR("Value 1 didn't match, instead got: %.*s",
                         (int32_t)entry.box.len, entry.box.data.bytes.start);
-                    assert(NULL);
+                    assert(false);
                 }
 
                 multilistFullIndexGet(ml, s0, 2, &entry);
@@ -3585,7 +3585,7 @@ int multilistFullTest(int, char *[]) {
                                     "nodes: %u; size: %zu)",
                                     at, _depth, lowRaw, highRaw, ml->count,
                                     mflexBytesActual(node));
-                                assert(NULL);
+                                assert(false);
                             }
                         } else {
                             if (!mflexIsCompressed(node)) {
@@ -3594,7 +3594,7 @@ int multilistFullTest(int, char *[]) {
                                     "nodes: %u; size: %zu)",
                                     at, _depth, lowRaw, highRaw, ml->count,
                                     mflexBytesActual(node));
-                                assert(NULL);
+                                assert(false);
                             }
                         }
                     }
@@ -3877,7 +3877,7 @@ int multilistFullTest(int, char *[]) {
                     }
 
                     const mlNodeId countBefore = ml->count;
-                    const char *why = NULL;
+                    const char *why = nullptr;
                     switch (kind) {
                     case 0: { /* insert before / after a random element */
                         const uint32_t g = (uint32_t)(MV_RAND() % n);
@@ -4325,10 +4325,10 @@ int multilistFullTest(int, char *[]) {
                     }
 
                     multilistFull *ml = multilistFullNewFromFlexConsumeGrow(
-                        NULL, s0, fl, in, d, FLEX_CAP_LEVEL_512);
+                        nullptr, s0, fl, in, d, FLEX_CAP_LEVEL_512);
                     mlNodeId bad = -1;
                     const char *why =
-                        ml->count != wantNodes ? "wrong node count" : NULL;
+                        ml->count != wantNodes ? "wrong node count" : nullptr;
                     if (!why && ml->compress != d) {
                         why = "the depth was not recorded";
                     }
@@ -4456,7 +4456,7 @@ int multilistFullTest(int, char *[]) {
 
                 if (!multilistFullPopHead(ml, s0, (databox *)&got) ||
                     !mlfWideSame((databox *)&got, &want[at],
-                                 r % 2 ? got.extra : NULL)) {
+                                 r % 2 ? got.extra : nullptr)) {
                     ERR("depth %u: pop %d of element %d differs", d, r, at);
                 }
                 databoxFreeData((databox *)&got);
@@ -4464,7 +4464,7 @@ int multilistFullTest(int, char *[]) {
 
             databox head = {};
             if (!multilistFullPopHead(ml, s0, &head) ||
-                !mlfWideSame(&head, &want[0], NULL) || !head.allocated) {
+                !mlfWideSame(&head, &want[0], nullptr) || !head.allocated) {
                 ERR("depth %u: pop of the original head differs", d);
             }
             databoxFreeData(&head);

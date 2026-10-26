@@ -87,7 +87,7 @@ static flexEntry *findMemberAnyMap(const multiOrderedSetMedium *m,
         }
     }
     *mapIdx = -1;
-    return NULL;
+    return nullptr;
 }
 
 /* Insert (score, member) into appropriate map */
@@ -199,7 +199,7 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
          * later member of a shared score in map[0], out of member order
          * with the ones in map[1]) */
         flexEntry *entry = flexHead(map);
-        flexEntry *prevScoreEntry = NULL;
+        flexEntry *prevScoreEntry = nullptr;
         bool upper = false;
         size_t idx = 0;
         while (entry) {
@@ -390,7 +390,7 @@ bool multiOrderedSetMediumRemoveIf(multiOrderedSetMedium *m,
 
 bool multiOrderedSetMediumRemove(multiOrderedSetMedium *m,
                                  const databox *member) {
-    return multiOrderedSetMediumRemoveIf(m, member, NULL, NULL);
+    return multiOrderedSetMediumRemoveIf(m, member, nullptr, nullptr);
 }
 
 bool multiOrderedSetMediumRemoveGetScore(multiOrderedSetMedium *m,
@@ -434,10 +434,10 @@ size_t multiOrderedSetMediumRemoveRangeByScore(multiOrderedSetMedium *m,
                 const size_t offset =
                     (size_t)(entry - flexHead(m->map[mapIdx]));
                 const bool hasNext =
-                    flexNext(m->map[mapIdx], memberEntry) != NULL;
+                    flexNext(m->map[mapIdx], memberEntry) != nullptr;
                 removeFromMap(m, mapIdx, entry);
                 removed++;
-                entry = hasNext ? flexHead(m->map[mapIdx]) + offset : NULL;
+                entry = hasNext ? flexHead(m->map[mapIdx]) + offset : nullptr;
             } else {
                 int cmp = databoxCompare(&score, &range->max);
                 if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
@@ -593,7 +593,7 @@ size_t multiOrderedSetMediumPopMax(multiOrderedSetMedium *m, size_t count,
 bool multiOrderedSetMediumExists(const multiOrderedSetMedium *m,
                                  const databox *member) {
     int mapIdx;
-    return findMemberAnyMap(m, member, &mapIdx) != NULL;
+    return findMemberAnyMap(m, member, &mapIdx) != nullptr;
 }
 
 bool multiOrderedSetMediumGetScore(const multiOrderedSetMedium *m,
@@ -739,12 +739,12 @@ void multiOrderedSetMediumIteratorInit(const multiOrderedSetMedium *m,
                 iter->current =
                     flexIndex(m->map[0], count0 - MOS_ELEMENTS_PER_ENTRY);
             } else {
-                iter->current = NULL;
+                iter->current = nullptr;
             }
         }
     }
 
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
 }
 
 bool multiOrderedSetMediumIteratorInitAtScore(const multiOrderedSetMedium *m,
@@ -781,7 +781,7 @@ bool multiOrderedSetMediumIteratorInitAtScore(const multiOrderedSetMedium *m,
         }
     }
 
-    iter->current = NULL;
+    iter->current = nullptr;
     iter->valid = false;
     return false;
 }
@@ -796,7 +796,7 @@ bool multiOrderedSetMediumIteratorInitAtRank(const multiOrderedSetMedium *m,
     size_t count = multiOrderedSetMediumCount(m);
     rank = mosNormalizeRank(rank, count);
     if (rank < 0) {
-        iter->current = NULL;
+        iter->current = nullptr;
         iter->valid = false;
         return false;
     }
@@ -816,7 +816,7 @@ bool multiOrderedSetMediumIteratorInitAtRank(const multiOrderedSetMedium *m,
     size_t offset = localRank * MOS_ELEMENTS_PER_ENTRY;
     iter->mapIndex = mapIdx;
     iter->current = flexIndex(m->map[mapIdx], offset);
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
     return iter->valid;
 }
 
@@ -861,14 +861,14 @@ bool multiOrderedSetMediumIteratorNext(mosIterator *iter, databox *member,
                 iter->current =
                     flexIndex(m->map[0], count0 - MOS_ELEMENTS_PER_ENTRY);
             } else {
-                iter->current = NULL;
+                iter->current = nullptr;
             }
         } else {
-            iter->current = NULL;
+            iter->current = nullptr;
         }
     }
 
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
     return true;
 }
 

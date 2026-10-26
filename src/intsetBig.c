@@ -154,7 +154,7 @@ valueFromBucketOffset(const databoxBig *restrict const bucket,
         break;
 #endif
     default:
-        assert(NULL && "Improper bucket provided?");
+        assert(false && "Improper bucket provided?");
         unreachable();
     }
 }
@@ -308,7 +308,7 @@ DK_INLINE_ALWAYS bool bucketKeyFromInput(const databoxBig *val,
         }
     } else {
 #if !USE_128_BIT_BUCKETS
-        assert(NULL);
+        assert(false);
 #endif
         /* Lookup bucket in isb */
         /* Initialize 'lookup' with the common case */
@@ -349,7 +349,7 @@ bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
     databoxBig lookup;
     databox found;
     uint32_t offset;
-    intsetU32 *orig = NULL;
+    intsetU32 *orig = nullptr;
     bool added;
     bool isNegative;
 
@@ -448,7 +448,7 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
      * write; the bucket map is built once from the finished rows. */
     /* @own: container; free=flexFree */
     flex *rows = flexNew();
-    uint32_t *scratch = NULL;
+    uint32_t *scratch = nullptr;
     uint32_t scratchCap = 0;
     uint32_t inBucket = 0;
     databoxBig curKey = {};
@@ -514,7 +514,7 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
 refuse:
     zfree(scratch);
     intsetBigFreeRows_(rows);
-    return NULL;
+    return nullptr;
 }
 
 bool intsetBigRemove(intsetBig *isb, const databoxBig *val) {
@@ -527,7 +527,7 @@ bool intsetBigRemove(intsetBig *isb, const databoxBig *val) {
     databoxBig lookup;
     databox found;
     uint32_t offset;
-    intsetU32 *orig = NULL;
+    intsetU32 *orig = nullptr;
     bool removed = false;
     bool isNegative;
 
@@ -590,7 +590,7 @@ void intsetBigIteratorInit(const intsetBig *const isb,
         isbIter->elements.position = SSIZE_MAX;
 
         /* Fails multimap iteration, resulting in zero values iterated. */
-        isbIter->iter.entry = NULL;
+        isbIter->iter.entry = nullptr;
     }
 }
 
@@ -1230,7 +1230,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
                 assert(written == strlen(large));
                 if (memcmp(large, buf, written)) {
                     ERR("Expected %s but got %.*s!", large, (int)written, buf);
-                    assert(NULL);
+                    assert(false);
                 }
 #endif
             }

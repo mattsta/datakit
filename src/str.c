@@ -423,7 +423,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
         v = 12345;
         if (StrBufToInt64(refused[i], strlen(refused[i]), &v) || v != 12345) {
             printf("StrBufToInt64 accepted '%s'\n", refused[i]);
-            assert(NULL);
+            assert(false);
         }
     }
 }
@@ -498,20 +498,20 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
         v = 12345;
         if (StrBufToUInt64(above[i], strlen(above[i]), &v) || v != 12345) {
             printf("StrBufToUInt64 accepted %s\n", above[i]);
-            assert(NULL);
+            assert(false);
         }
 
         uint64_t n = 0;
         if (StrBufToUInt64FastCheckNumeric(above[i], strlen(above[i]), &n)) {
             printf("StrBufToUInt64FastCheckNumeric accepted %s\n", above[i]);
-            assert(NULL);
+            assert(false);
         }
 
         n = 0;
         if (StrBufToUInt64FastCheckOverflow(above[i], strlen(above[i]), &n) ||
             n != UINT64_MAX) {
             printf("StrBufToUInt64FastCheckOverflow accepted %s\n", above[i]);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -538,7 +538,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
             !StrBufToUInt64FastCheckOverflow(edge[i].s, len, &c) ||
             c != edge[i].want) {
             printf("StrBufToUInt64 family misparsed %s\n", edge[i].s);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -551,7 +551,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
         if (StrBufToUInt64(malformed[i], strlen(malformed[i]), &v) ||
             v != 12345) {
             printf("StrBufToUInt64 accepted '%s'\n", malformed[i]);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -1236,7 +1236,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             /* strtod reads the same prefix StrAtoF converts, correctly
              * rounded: StrAtoF must give the same double, subnormals,
              * overflow to infinity and dropped digits included */
-            const double want = strtod(s, NULL);
+            const double want = strtod(s, nullptr);
             const bool close = memcmp(&got, &want, sizeof(got)) == 0;
             if (ok != cases[i].ok || !close || signbit(got) != signbit(want)) {
                 ERR("StrAtoF(%s) = %d, %.17g; want %d, %.17g", s, ok, got,
@@ -1263,7 +1263,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                    (int)(splitmix64(&rng) % 680) - 340);
             double got = 0;
             const bool ok = StrAtoF(s, &got, (int32_t)at, STR_UTF8, false);
-            const double want = strtod(s, NULL);
+            const double want = strtod(s, nullptr);
             if (!ok || memcmp(&got, &want, sizeof(got)) != 0) {
                 ERR("StrAtoF(%s) = %d, %.17g; strtod %.17g", s, ok, got, want);
                 break;
@@ -1305,7 +1305,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             databox box = {};
             const StrScanFmt fmt = StrScanScan((const uint8_t *)edges[i], &box,
                                                STRSCAN_OPT_TONUM, false, false);
-            const double want = strtod(edges[i], NULL);
+            const double want = strtod(edges[i], nullptr);
             if (fmt != STRSCAN_NUM ||
                 memcmp(&box.data.d64, &want, sizeof(want)) != 0) {
                 ERR("StrScanScan(%s) = %d, %.17g; strtod %.17g", edges[i], fmt,
@@ -1342,7 +1342,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             databox box = {};
             const StrScanFmt fmt = StrScanScan((const uint8_t *)s, &box,
                                                STRSCAN_OPT_TONUM, false, false);
-            const double want = strtod(s, NULL);
+            const double want = strtod(s, nullptr);
             if (fmt != STRSCAN_NUM ||
                 memcmp(&box.data.d64, &want, sizeof(want)) != 0) {
                 ERR("StrScanScan(%s) = %d, %.17g; strtod %.17g", s, fmt,
@@ -1554,14 +1554,14 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 ERR("StrGetInt32(%s) = %d, %" PRId32, i32[i].s, ok, got);
             }
         }
-        if (StrAtoi(NULL) != 0 || StrAtoi("-17") != -17) {
+        if (StrAtoi(nullptr) != 0 || StrAtoi("-17") != -17) {
             ERR("StrAtoi");
         }
 
         static constexpr char digits[] = "0123456789abcdefABCDEF";
         for (size_t i = 0; digits[i]; i++) {
             const char one[2] = {digits[i], 0};
-            if (StrHexToInt(digits[i]) != strtol(one, NULL, 16)) {
+            if (StrHexToInt(digits[i]) != strtol(one, nullptr, 16)) {
                 ERR("StrHexToInt(%c)", digits[i]);
             }
         }
@@ -1597,10 +1597,11 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 ERR("StrDequote(%s) = %s, want %s", dq[i].in, buf, dq[i].out);
             }
         }
-        StrDequote(NULL);
+        StrDequote(nullptr);
 
-        if (StrNICmp(NULL, NULL, 3) != 0 || StrNICmp(NULL, "a", 3) >= 0 ||
-            StrNICmp("a", NULL, 3) <= 0 || StrNICmp("abcX", "ABCY", 3) != 0 ||
+        if (StrNICmp(nullptr, nullptr, 3) != 0 ||
+            StrNICmp(nullptr, "a", 3) >= 0 || StrNICmp("a", nullptr, 3) <= 0 ||
+            StrNICmp("abcX", "ABCY", 3) != 0 ||
             StrNICmp("abcX", "ABCY", 4) >= 0 || StrICmp("ABC", "abd") >= 0 ||
             StrICmp("abc", "ABC") != 0 || StrICmp("abc", "ab") <= 0) {
             ERR("StrICmp / StrNICmp");
@@ -1894,7 +1895,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         if (result.type != DATABOX_SIGNED_64) {
             databoxReprSay("Expected SIGNED, but got", &result);
-            assert(NULL && "Fix me!");
+            assert(false && "Fix me!");
         }
 
         if (result.data.i != 0) {
@@ -1909,7 +1910,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         if (result.type != DATABOX_SIGNED_64) {
             databoxReprSay("Expected SIGNED, but got", &result);
-            assert(NULL && "Fix me!");
+            assert(false && "Fix me!");
         }
 
         if (result.data.i != 1) {
@@ -1924,7 +1925,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         if (result.type != DATABOX_SIGNED_64) {
             databoxReprSay("Expected SIGNED, but got", &result);
-            assert(NULL && "Fix me!");
+            assert(false && "Fix me!");
         }
 
         if (result.data.i != -1) {
@@ -1949,7 +1950,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
             if (result.type != DATABOX_SIGNED_64) {
                 databoxReprSay("Expected SIGNED, but got", &result);
-                assert(NULL && "Fix me!");
+                assert(false && "Fix me!");
             }
 
             if (result.data.u != i) {
@@ -1966,7 +1967,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         if (result.type != DATABOX_FLOAT_32) {
             databoxReprSay("Expected FLOAT32, but got", &result);
-            assert(NULL && "Fix me!");
+            assert(false && "Fix me!");
         }
 
         if (result.data.f32 != (float)299.5) {
@@ -1981,7 +1982,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         if (result.type != DATABOX_FLOAT_32) {
             databoxReprSay("Expected FLOAT32, but got", &result);
-            assert(NULL && "Fix me!");
+            assert(false && "Fix me!");
         }
 
         /* We do an extra string conversion test here because
@@ -2032,13 +2033,13 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable(min, strlen(min), &resultMin);
         if (!worked) {
             databoxReprSay("Expected success, but got", &resultMin);
-            assert(NULL);
+            assert(false);
         }
 
         worked = StrScanScanReliable(max, strlen(max), &resultMax);
         if (!worked) {
             databoxReprSay("Expected success, but got", &resultMax);
-            assert(NULL);
+            assert(false);
         }
     }
 #endif
@@ -2048,7 +2049,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("21542136560502.848", 18, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
 
         if (result.data.d64 != 21542136560502.847656) {
@@ -2061,7 +2062,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("0.4", 3, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
 
         char restoredBuf[64] = {};
@@ -2079,7 +2080,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("0.456789", 8, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
 
         if (result.data.d64 != 0.456789) {
@@ -2096,7 +2097,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* With extended precision, conversion round-trips reliably */
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
 
         if (result.data.d64 != expectedConverted) {
@@ -2130,7 +2131,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                           34, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2139,7 +2140,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("03", 2, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2148,7 +2149,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("0009543769205953", 16, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2157,7 +2158,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable(".0009543769205953", 17, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2166,7 +2167,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("24032321013100332443", 20, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2175,7 +2176,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("240323210131003243.3", 20, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2184,7 +2185,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("-", 1, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2193,7 +2194,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable(".", 1, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2202,7 +2203,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("9223372036854775808", 19, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
         /* A positive above INT64_MAX reads as UNSIGNED_64. */
         assert(result.type == DATABOX_UNSIGNED_64);
@@ -2271,7 +2272,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("18446744073709551615", 20, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
 
         assert(result.data.u == UINT64_MAX);
@@ -2282,7 +2283,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("-18446744073709551615", 21, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2291,7 +2292,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("18446744073709551616", 20, &result);
         if (worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2313,7 +2314,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             bool worked = StrScanScanReliable(useBad, strlen(useBad), &result);
             if (worked) {
                 databoxReprSay("Expected failure, but got", &result);
-                assert(NULL);
+                assert(false);
             }
         }
     }
@@ -2325,7 +2326,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("33100300424244333022", 20, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
-            assert(NULL);
+            assert(false);
         }
     }
 
@@ -2334,12 +2335,12 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         bool worked = StrScanScanReliable("2411321300310020112", 19, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
-            assert(NULL);
+            assert(false);
         }
 
         if (result.type != DATABOX_SIGNED_64) {
             databoxReprSay("Expected SIGNED, but got", &result);
-            assert(NULL && "Fix me!");
+            assert(false && "Fix me!");
         }
 
         if (result.data.i != 2411321300310020112LL) {
@@ -2427,7 +2428,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             loopBooster = 1e6;
             break;
         default:
-            assert(NULL && "Need case!");
+            assert(false && "Need case!");
         }
 
 #if 0
@@ -2615,7 +2616,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 /* Timed with the checks a correct strtoull caller makes:
                  * errno reset, then errno and end pointer tested */
                 const char *digits = "18446744073709551615";
-                char *end = NULL;
+                char *end = nullptr;
                 errno = 0;
                 const uint64_t intval = strtoull(digits, &end, 10);
                 const bool parsed = errno == 0 && end == digits + 20;
@@ -2848,8 +2849,8 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             databox smallB;
             databoxBig bigA;
             databoxBig bigB;
-            databoxBig *useA = NULL;
-            databoxBig *useB = NULL;
+            databoxBig *useA = nullptr;
+            databoxBig *useB = nullptr;
             const size_t len = strlen(numbers[i]);
             const bool a = StrScanScanReliableConvert128(numbers[i], len,
                                                          &smallA, &bigA, &useA);
@@ -3786,7 +3787,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     }
 
     TEST("StrUtf8ValidCStr: Null-terminated validation") {
-        assert(StrUtf8ValidCStr(NULL) == false);
+        assert(StrUtf8ValidCStr(nullptr) == false);
         assert(StrUtf8ValidCStr("") == true);
         assert(StrUtf8ValidCStr("Hello") == true);
 
@@ -4228,7 +4229,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         assert(cp == 0xFFFFFFFF);
 
         /* Peek with NULL returns error */
-        cp = StrUtf8Peek(ascii, asciiLen, NULL);
+        cp = StrUtf8Peek(ascii, asciiLen, nullptr);
         assert(cp == 0xFFFFFFFF);
     }
 
@@ -4476,7 +4477,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         assert(buf[6] == '\0');
 
         /* Query mode (bufLen = 0) */
-        written = StrUtf8SubstringCopy(mixed, mixedLen, 6, 8, NULL, 0);
+        written = StrUtf8SubstringCopy(mixed, mixedLen, 6, 8, nullptr, 0);
         assert(written == 6);
 
         /* Buffer too small - should truncate at valid boundary */
@@ -5384,7 +5385,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             databoxBig big;
             memset(&small, 0xA5, sizeof(small));
             memset(&big, 0xA5, sizeof(big));
-            databoxBig *use = NULL;
+            databoxBig *use = nullptr;
             const size_t len = strlen(cases[i].s);
             if (!StrScanScanReliableConvert128(cases[i].s, len, &small, &big,
                                                &use)) {
@@ -5473,7 +5474,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
             databox small = {};
             databoxBig big = {};
-            databoxBig *use = NULL;
+            databoxBig *use = nullptr;
             const bool got = StrScanScanReliableConvert128(inputs[i], len,
                                                            &small, &big, &use);
             if (got != want) {

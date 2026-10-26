@@ -80,7 +80,7 @@ static int mf2tDiff_(uint64_t seed, bool mixed) {
     cleaner(zfree) void *igridMem =
         zcalloc((size_t)MF2T_DIM * MF2T_DIM, sizeof(__int128_t));
     __int128_t *igrid = igridMem;
-    cleaner(multiFenwick2dFree) multiFenwick2d *t = NULL;
+    cleaner(multiFenwick2dFree) multiFenwick2d *t = nullptr;
     size_t rows = 0;
     size_t cols = 0;
     for (size_t op = 0; op < 1500 && !err; op++) {
@@ -174,8 +174,8 @@ int multiFenwick2dTest(int, char *[]) {
 
     TEST("one column agrees with multiFenwickFlat") {
         uint64_t seed = 77;
-        cleaner(multiFenwick2dFree) multiFenwick2d *t = NULL;
-        cleaner(multiFenwickFlatFree) multiFenwickFlat *f = NULL;
+        cleaner(multiFenwick2dFree) multiFenwick2d *t = nullptr;
+        cleaner(multiFenwickFlatFree) multiFenwickFlat *f = nullptr;
         for (size_t op = 0; op < 2000 && !err; op++) {
             const size_t r = (size_t)(mf2tRand_(&seed) % 500);
             const databox v =
@@ -200,7 +200,7 @@ int multiFenwick2dTest(int, char *[]) {
     }
 
     TEST("refusals change nothing; a NULL tree stays NULL") {
-        cleaner(multiFenwick2dFree) multiFenwick2d *t = NULL;
+        cleaner(multiFenwick2dFree) multiFenwick2d *t = nullptr;
         const databox big = DATABOX_UNSIGNED(UINT64_MAX);
         const databox one = DATABOX_UNSIGNED(1);
         const databox nan = DATABOX_DOUBLE(NAN);
@@ -209,7 +209,7 @@ int multiFenwick2dTest(int, char *[]) {
             multiFenwick2dUpdate(&t, 0, 0, &bytes) ||
             multiFenwick2dUpdate(&t, (size_t)1 << 32, 0, &one) ||
             multiFenwick2dUpdate(&t, (size_t)1 << 20, (size_t)1 << 20, &one) ||
-            t != NULL) {
+            t != nullptr) {
             ERR("a refused write was accepted or left a tree");
         }
 
@@ -273,7 +273,7 @@ int multiFenwick2dTest(int, char *[]) {
 
         /* One element: Set across the whole 64-bit range, a difference
          * that needs more than 64 bits, is exact */
-        cleaner(multiFenwick2dFree) multiFenwick2d *one = NULL;
+        cleaner(multiFenwick2dFree) multiFenwick2d *one = nullptr;
         if (!multiFenwick2dSet(&one, 0, 0, &big) ||
             !multiFenwick2dSet(&one, 0, 0, &min) ||
             !multiFenwick2dGet(one, 0, 0, &r) || !mf2tIsInt_(&r, m) ||
@@ -286,7 +286,7 @@ int multiFenwick2dTest(int, char *[]) {
          * order that keeps every cell in range.  Every cell then fits and
          * the total (2U + 2M = U - 1) fits, but the prefix through (2, 2)
          * is 2U, and the rectangle [2, 3] x [2, 3] is U + 2M = -1. */
-        cleaner(multiFenwick2dFree) multiFenwick2d *t = NULL;
+        cleaner(multiFenwick2dFree) multiFenwick2d *t = nullptr;
         if (!multiFenwick2dUpdate(&t, 0, 0, &big) ||
             !multiFenwick2dUpdate(&t, 3, 3, &min) ||
             !multiFenwick2dUpdate(&t, 3, 2, &min) ||

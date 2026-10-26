@@ -238,7 +238,7 @@ static void ghashAbsorb(uint8_t acc[16], const uint8_t h[16],
 
 static bool aesGcmPortableInit(aesGcmKey *out, const uint8_t *key,
                                size_t key_len) {
-    if (out == NULL || key == NULL ||
+    if (out == nullptr || key == nullptr ||
         (key_len != AES128_KEY_LEN && key_len != AES256_KEY_LEN)) {
         return false;
     }
@@ -281,16 +281,16 @@ static bool aesGcmPortableSeal(const aesGcmKey *k, const uint8_t nonce[12],
                                const uint8_t *aad, size_t aad_len,
                                const uint8_t *plaintext, size_t plaintext_len,
                                uint8_t *ciphertext, uint8_t tag[16]) {
-    if (k == NULL || nonce == NULL || tag == NULL) {
+    if (k == nullptr || nonce == nullptr || tag == nullptr) {
         return false;
     }
     if (plaintext_len > AES_GCM_MAX_PAYLOAD) {
         return false;
     }
-    if (plaintext_len > 0 && (plaintext == NULL || ciphertext == NULL)) {
+    if (plaintext_len > 0 && (plaintext == nullptr || ciphertext == nullptr)) {
         return false;
     }
-    if (aad_len > 0 && aad == NULL) {
+    if (aad_len > 0 && aad == nullptr) {
         return false;
     }
 
@@ -333,16 +333,16 @@ static bool aesGcmPortableOpen(const aesGcmKey *k, const uint8_t nonce[12],
                                const uint8_t *aad, size_t aad_len,
                                const uint8_t *ciphertext, size_t ciphertext_len,
                                const uint8_t tag[16], uint8_t *plaintext) {
-    if (k == NULL || nonce == NULL || tag == NULL) {
+    if (k == nullptr || nonce == nullptr || tag == nullptr) {
         return false;
     }
     if (ciphertext_len > AES_GCM_MAX_PAYLOAD) {
         return false;
     }
-    if (ciphertext_len > 0 && (ciphertext == NULL || plaintext == NULL)) {
+    if (ciphertext_len > 0 && (ciphertext == nullptr || plaintext == nullptr)) {
         return false;
     }
-    if (aad_len > 0 && aad == NULL) {
+    if (aad_len > 0 && aad == nullptr) {
         return false;
     }
 
@@ -377,7 +377,7 @@ static bool aesGcmPortableOpen(const aesGcmKey *k, const uint8_t nonce[12],
         /* Tag mismatch: scrub any speculatively-decrypted plaintext so a
          * caller who ignores the false return cannot leak it.  Must be
          * DCE-resistant since the caller may free `plaintext` immediately. */
-        if (plaintext != NULL && ciphertext_len > 0) {
+        if (plaintext != nullptr && ciphertext_len > 0) {
             dkSecureZero(plaintext, ciphertext_len);
         }
         return false;
@@ -542,7 +542,7 @@ int aesGcmTest(int, char *[]) {
         if (!aesGcmInit(&k, key, 16)) {
             ERR("init");
         }
-        aesGcmSeal(&k, nonce, NULL, 0, NULL, 0, NULL, tag);
+        aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 0, nullptr, tag);
         uint8_t exp_tag[16];
         hexDec("58e2fccefa7e3061367f1d57a4e7455a", exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
@@ -558,7 +558,7 @@ int aesGcmTest(int, char *[]) {
         uint8_t ct[16], tag[16];
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
-        aesGcmSeal(&k, nonce, NULL, 0, pt, 16, ct, tag);
+        aesGcmSeal(&k, nonce, nullptr, 0, pt, 16, ct, tag);
         uint8_t exp_ct[16], exp_tag[16];
         hexDec("0388dace60b6a392f328c2b971b2fe78", exp_ct, 16);
         hexDec("ab6e47d42cec13bdf53a67b21257bddf", exp_tag, 16);
@@ -587,7 +587,7 @@ int aesGcmTest(int, char *[]) {
         uint8_t ct[64], tag[16];
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
-        aesGcmSeal(&k, nonce, NULL, 0, pt, 64, ct, tag);
+        aesGcmSeal(&k, nonce, nullptr, 0, pt, 64, ct, tag);
         if (memcmp(ct, exp_ct, 64) != 0) {
             ERR("CT mismatch");
         }
@@ -596,7 +596,7 @@ int aesGcmTest(int, char *[]) {
         }
         /* Round-trip Open. */
         uint8_t recovered[64];
-        if (!aesGcmOpen(&k, nonce, NULL, 0, ct, 64, tag, recovered)) {
+        if (!aesGcmOpen(&k, nonce, nullptr, 0, ct, 64, tag, recovered)) {
             ERR("Open failed");
         }
         if (memcmp(recovered, pt, 64) != 0) {
@@ -647,7 +647,7 @@ int aesGcmTest(int, char *[]) {
         if (!aesGcmInit(&k, key, 32)) {
             ERR("init");
         }
-        aesGcmSeal(&k, nonce, NULL, 0, NULL, 0, NULL, tag);
+        aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 0, nullptr, tag);
         uint8_t exp_tag[16];
         hexDec("530f8afbc74536b9a963b4f1c4cb738b", exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
@@ -673,10 +673,12 @@ int aesGcmTest(int, char *[]) {
         const size_t sizes[] = {0, 1, 15, 16, 17, 63, 64, 65, 4096};
         for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
-            cleanerName(zfree, Bytes) uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
-            cleanerName(zfree, Bytes) uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *pt =
+                (n > 0) ? zmalloc(n) : nullptr;
+            cleanerName(zfree, Bytes) uint8_t *ct =
+                (n > 0) ? zmalloc(n) : nullptr;
             cleanerName(zfree, Bytes) uint8_t *rec =
-                (n > 0) ? zmalloc(n) : NULL;
+                (n > 0) ? zmalloc(n) : nullptr;
             for (size_t i = 0; i < n; i++) {
                 pt[i] = (uint8_t)(i * 13u);
             }
@@ -736,8 +738,8 @@ int aesGcmTest(int, char *[]) {
                     for (int b = 0; b < 2; b++) {
                         aesGcmSetForceBackend(backends[b]);
                         if (!aesGcmInit(&k[b], key, kl) ||
-                            !aesGcmSeal(&k[b], nonce, an ? aad : NULL, an,
-                                        n ? pt : NULL, n, ct[b], tag[b])) {
+                            !aesGcmSeal(&k[b], nonce, an ? aad : nullptr, an,
+                                        n ? pt : nullptr, n, ct[b], tag[b])) {
                             ERR("key %zu len %zu aad %zu: seal failed", kl, n,
                                 an);
                         }
@@ -750,9 +752,9 @@ int aesGcmTest(int, char *[]) {
                     for (int b = 0; b < 2; b++) {
                         aesGcmSetForceBackend(backends[b]);
                         uint8_t out[200];
-                        if (!aesGcmOpen(&k[b], nonce, an ? aad : NULL, an,
-                                        n ? ct[!b] : NULL, n, tag[!b],
-                                        n ? out : NULL) ||
+                        if (!aesGcmOpen(&k[b], nonce, an ? aad : nullptr, an,
+                                        n ? ct[!b] : nullptr, n, tag[!b],
+                                        n ? out : nullptr) ||
                             memcmp(out, pt, n) != 0) {
                             ERR("key %zu len %zu aad %zu: backend %d cannot "
                                 "open the other's output",
@@ -777,8 +779,9 @@ int aesGcmTest(int, char *[]) {
                             a2[an - 1] ^= 0x01;
                         }
                         memset(out, 0xAB, sizeof(out));
-                        if (aesGcmOpen(&k[0], nonce, an ? a2 : NULL, an,
-                                       n ? c2 : NULL, n, t2, n ? out : NULL)) {
+                        if (aesGcmOpen(&k[0], nonce, an ? a2 : nullptr, an,
+                                       n ? c2 : nullptr, n, t2,
+                                       n ? out : nullptr)) {
                             ERR("key %zu len %zu aad %zu: forgery %d "
                                 "accepted",
                                 kl, n, an, what);
@@ -821,10 +824,10 @@ int aesGcmTest(int, char *[]) {
         uint8_t tag[16] = {};
         uint8_t buf[16] = {};
         const uint64_t diagBefore = dkDiagCount();
-        if (aesGcmSeal(&k, nonce, NULL, 0, NULL, 16, buf, tag) ||
-            aesGcmSeal(&k, nonce, NULL, 4, buf, 16, buf, tag) ||
-            aesGcmOpen(&k, nonce, NULL, 0, buf, 16, tag, NULL) ||
-            aesGcmOpen(NULL, nonce, NULL, 0, buf, 16, tag, buf)) {
+        if (aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 16, buf, tag) ||
+            aesGcmSeal(&k, nonce, nullptr, 4, buf, 16, buf, tag) ||
+            aesGcmOpen(&k, nonce, nullptr, 0, buf, 16, tag, nullptr) ||
+            aesGcmOpen(nullptr, nonce, nullptr, 0, buf, 16, tag, buf)) {
             ERR("a NULL buffer for a nonzero length must refuse");
         }
         dkDiagnostic d;
@@ -835,7 +838,7 @@ int aesGcmTest(int, char *[]) {
         }
         /* A tag that does not verify is data, not misuse */
         const uint64_t diagData = dkDiagCount();
-        if (aesGcmOpen(&k, nonce, NULL, 0, buf, 16, tag, buf)) {
+        if (aesGcmOpen(&k, nonce, nullptr, 0, buf, 16, tag, buf)) {
             ERR("an all-zero tag must not verify");
         }
         if (dkDiagCount() != diagData) {
@@ -869,8 +872,8 @@ int aesGcmTest(int, char *[]) {
                 uint8_t out[16];
                 memset(out, 0xAA, sizeof(out));
                 const uint64_t diagBefore = dkDiagCount();
-                if (aesGcmSeal(&k, nonce, NULL, 0, in, over, out, tag) ||
-                    aesGcmOpen(&k, nonce, NULL, 0, in, over, tag, out)) {
+                if (aesGcmSeal(&k, nonce, nullptr, 0, in, over, out, tag) ||
+                    aesGcmOpen(&k, nonce, nullptr, 0, in, over, tag, out)) {
                     ERR("backend %d: a payload past the bound was taken",
                         (int)backends[b]);
                 }

@@ -280,7 +280,7 @@ DK_INLINE_ALWAYS flexEntry *
 mosFindMemberLinearRow(const flex *f, const databox *member, size_t *rowOut) {
     size_t row = 0;
     const bool wantBytes = DATABOX_IS_BYTES(member);
-    const void *want = wantBytes ? databoxCBytes(member) : NULL;
+    const void *want = wantBytes ? databoxCBytes(member) : nullptr;
     const size_t wantLen = wantBytes ? databoxLen(member) : 0;
     flexEntry *entry = flexHead(f);
     while (entry) {
@@ -311,12 +311,12 @@ mosFindMemberLinearRow(const flex *f, const databox *member, size_t *rowOut) {
         entry = flexNext(f, memberEntry);
         row++;
     }
-    return NULL;
+    return nullptr;
 }
 
 DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
                                                 const databox *member) {
-    return mosFindMemberLinearRow(f, member, NULL);
+    return mosFindMemberLinearRow(f, member, nullptr);
 }
 
 /* Whether row (aScore, aMember) sorts before row (bScore, bMember): rows

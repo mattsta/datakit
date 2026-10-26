@@ -137,7 +137,7 @@ static bool F2D_PUB_(WriteOrCreate_)(F2D_T_ **t, size_t row, size_t col,
     if (!F2D_PUB_(Write_)(*t, row, col, delta)) {
         if (created) {
             F2D_PUB_(Free)(*t);
-            *t = NULL;
+            *t = nullptr;
         }
 
         return false;
@@ -257,7 +257,7 @@ static F2D_T_ *F2D_PUB_(NewExtents_)(uint64_t rows, uint64_t cols) {
     uint64_t colCap;
     if (!F2D_PUB_(CapsFor_)(t, rows - 1, cols - 1, &rowCap, &colCap)) {
         F2D_PUB_(Free)(t);
-        return NULL;
+        return nullptr;
     }
 
     /* @own: container; free=zfree */
@@ -278,14 +278,14 @@ F2D_T_ *F2D_PUB_(NewFromArray)(const F2D_VALUE_T *values, size_t rows,
 #if F2D_IS_FLOATING
     for (size_t i = 0; i < rows * cols; i++) {
         if (!isfinite(values[i])) {
-            return NULL;
+            return nullptr;
         }
     }
 #endif
 
     F2D_T_ *t = F2D_PUB_(NewExtents_)(rows, cols);
     if (!t) {
-        return NULL;
+        return nullptr;
     }
 
     F2D_VALUE_T *cells = t->store.cells;
@@ -416,7 +416,7 @@ static uint8_t *F2D_PUB_(PersistSnapshot_)(const void *structure, size_t *len) {
 
 static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -432,7 +432,7 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
         !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &colCap) ||
         !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rows) ||
         !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &cols)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Empty, or power-of-two capacities holding the extents, with
@@ -444,7 +444,7 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
         (!empty && (colCap > (n - 4) / rowCap || rowCap * colCap != n - 4 ||
                     rowCap * colCap > F2D_P_MAX_CELLS_)) ||
         (empty && n != 4)) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller */
@@ -464,7 +464,7 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
         fe = flexNext(f, fe);
         if (!F2D_PUB_(PersistUnbox_)(&box, &t->store.cells[i])) {
             F2D_PUB_(Free)(t);
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -477,7 +477,7 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
         (rows == 0) != (cols == 0) ||
         (rows && (cols > (n - 2) / rows || rows * cols != n - 2)) ||
         (!rows && n != 2)) {
-        return NULL;
+        return nullptr;
     }
 
     const size_t count = n - 2;
@@ -487,7 +487,7 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
         flexGetByTypeBig(fe, &box);
         fe = flexNext(f, fe);
         if (!F2D_PUB_(PersistUnbox_)(&box, &values[i])) {
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -502,7 +502,7 @@ static uint8_t *F2D_PUB_(PersistEncodeOp_)(persistOp op, const void *args,
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3 ||
         !boxes) {
         /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+        return nullptr;
     }
 
     flex *f = flexNewFromDataboxPtrsExact(boxes, argc);

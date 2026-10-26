@@ -57,8 +57,8 @@ SEGMENT_IMPL_SCOPE SEGMENT_FULL_T_ *SEGMENT_FULL_FN_(FullNew)(segmentOp op) {
     seg->capacity = 0;
     seg->maxCapacity = (SEGMENT_INDEX_TYPE_FULL)-1;
     seg->operation = op;
-    seg->tree = NULL;
-    seg->lazy = NULL;
+    seg->tree = nullptr;
+    seg->lazy = nullptr;
     return seg;
 }
 
@@ -129,7 +129,7 @@ SEGMENT_FULL_FN_(FullUpdate)(SEGMENT_FULL_T_ *seg, SEGMENT_INDEX_TYPE_FULL idx,
             *success = false;
         }
 
-        return NULL;
+        return nullptr;
     }
 
     uint64_t leaves = SEGMENT_FULL_LEAVES_(seg);

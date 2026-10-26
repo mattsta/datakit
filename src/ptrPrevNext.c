@@ -525,7 +525,7 @@ int ptrPrevNextTest(int, char *[]) {
 
     TEST("create fill 20 random values") {
         ptrPrevNext *ppn = ptrPrevNextNew();
-        srand(time(NULL) ^ getpid());
+        srand(time(nullptr) ^ getpid());
         for (uint32_t i = 1; i <= 20; i++) {
             const uint32_t a = rand();
             const uint32_t b = rand() >> 7;

@@ -10,9 +10,9 @@ intsetFull *intsetFullNew(void) {
     f->count16 = 0;
     f->count32 = 0;
     f->count64 = 0;
-    f->values16 = NULL;
-    f->values32 = NULL;
-    f->values64 = NULL;
+    f->values16 = nullptr;
+    f->values32 = nullptr;
+    f->values64 = nullptr;
     return f;
 }
 
@@ -302,7 +302,7 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
         if (removed) {
             *removed = false;
         }
-        return NULL;
+        return nullptr;
     }
 
     if (intsetValueFitsInt16(value)) {
@@ -321,7 +321,7 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
         if (f->count16 == 1) {
             /* Last element */
             zfree(f->values16);
-            f->values16 = NULL;
+            f->values16 = nullptr;
             f->count16 = 0;
         } else {
             /* Shift the tail down in place; capacity is retained so
@@ -347,7 +347,7 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
         if (f->count32 == 1) {
             /* Last element */
             zfree(f->values32);
-            f->values32 = NULL;
+            f->values32 = nullptr;
             f->count32 = 0;
         } else {
             /* Shift the tail down in place; capacity is retained so
@@ -373,7 +373,7 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
         if (f->count64 == 1) {
             /* Last element */
             zfree(f->values64);
-            f->values64 = NULL;
+            f->values64 = nullptr;
             f->count64 = 0;
         } else {
             /* Shift the tail down in place; capacity is retained so

@@ -228,7 +228,7 @@ void persistContractValue(uint64_t *rng, databoxBig *out, uint8_t *buf,
 }
 
 bool persistContractSameBytes(const databox *got, const databox *want) {
-    const uint8_t *g = NULL;
+    const uint8_t *g = nullptr;
     if (got->type == DATABOX_BYTES) {
         g = got->data.bytes.start;
     } else if (got->type == DATABOX_BYTES_EMBED) {
@@ -379,7 +379,7 @@ static void pcWal(pcRow *row, const persistOps *ops,
     if (ops->newEmpty) {
         void *e = ops->newEmpty();
         size_t eLen = 0;
-        uint8_t *eSnap = e ? ops->snapshot(e, &eLen) : NULL;
+        uint8_t *eSnap = e ? ops->snapshot(e, &eLen) : nullptr;
         if (!e || !eSnap) {
             PC_FAIL(row, ops, "%s", "newEmpty() gives no snapshot");
             if (e) {
@@ -410,7 +410,7 @@ static void pcWal(pcRow *row, const persistOps *ops,
     size_t midLen = 0;
     uint8_t *mid = ops->snapshot(h, &midLen);
     ops->free(h);
-    void *m = mid ? pcRestore(ops, mid, midLen) : NULL;
+    void *m = mid ? pcRestore(ops, mid, midLen) : nullptr;
     zfree(mid);
     if (!m) {
         PC_FAIL(row, ops, "%s", "mid-point snapshot does not restore");
@@ -434,7 +434,7 @@ static void pcDamaged(pcRow *row, const persistOps *ops, const uint8_t *data,
     row->damagedAccepted++;
     char label[96];
     snprintf(label, sizeof(label), "%s at %zu", what, at);
-    pcRoundTrip(row, ops, r, label, NULL, NULL);
+    pcRoundTrip(row, ops, r, label, nullptr, nullptr);
     ops->free(r);
 }
 
@@ -513,7 +513,7 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
         return;
     }
 
-    uint8_t *snap = NULL;
+    uint8_t *snap = nullptr;
     size_t snapLen = 0;
     if (pcRoundTrip(row, ops, live, "round trip", &snap, &snapLen)) {
         /* A snapshot-only type (no encodeOp/applyOp) has no WAL */
@@ -530,7 +530,7 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
             }
             void *w = hasWal && log.start
                           ? pcRestore(ops, log.start, log.startLen)
-                          : NULL;
+                          : nullptr;
             if (w &&
                 pcReplay(row, ops, &w, &log, 0, log.count, "numeral replay")) {
                 pcHolds(row, t, w, strings, "replayed");
@@ -574,15 +574,16 @@ static pcRow pcRun(const persistContractType *t) {
     pcRow row = {};
     for (size_t i = 0; i < countof(sizes); i++) {
         for (uint64_t seed = 1; seed <= 3; seed++) {
-            pcCase(&row, t, seed * 1000 + i, sizes[i], NULL, NULL, NULL);
+            pcCase(&row, t, seed * 1000 + i, sizes[i], nullptr, nullptr,
+                   nullptr);
         }
     }
 
     /* Damage the snapshots of small builds */
     for (uint64_t seed = 1; seed <= 2; seed++) {
-        uint8_t *snap = NULL;
+        uint8_t *snap = nullptr;
         size_t snapLen = 0;
-        pcCase(&row, t, seed, 37, NULL, &snap, &snapLen);
+        pcCase(&row, t, seed, 37, nullptr, &snap, &snapLen);
         if (snap) {
             pcDamage(&row, t->ops, snap, snapLen, seed);
             zfree(snap);
@@ -595,8 +596,8 @@ static pcRow pcRun(const persistContractType *t) {
             strings[i] = DATABOX_WITH_BYTES((uint8_t *)pcNumerals[i],
                                             strlen(pcNumerals[i]));
         }
-        pcCase(&row, t, 7, 0, strings, NULL, NULL);
-        pcCase(&row, t, 8, 600, strings, NULL, NULL);
+        pcCase(&row, t, 7, 0, strings, nullptr, nullptr);
+        pcCase(&row, t, 8, 600, strings, nullptr, nullptr);
     }
     return row;
 }
@@ -619,7 +620,7 @@ int persistContractTest(int, char *[]) {
         for (unsigned v = 0; v < 256; v++) {
             const char *name = kind == 0 ? persistTypeName((persistType)v)
                                          : persistOpName((persistOp)v);
-            if (name == NULL || name[0] == '\0') {
+            if (name == nullptr || name[0] == '\0') {
                 ERR("%s %u has no name", kind == 0 ? "type" : "op", v);
                 continue;
             }

@@ -31,9 +31,9 @@ size_t multiarraySmallBytes(const multiarraySmall *mar);
 #define multiarraySmallGet(mar, idx) ((mar)->data + _marsOff((mar)->len, idx))
 /* First / last element; NULL when empty (as on every tier) */
 #define multiarraySmallGetHead(mar)                                            \
-    ((mar)->count ? multiarraySmallGet(mar, 0) : NULL)
+    ((mar)->count ? multiarraySmallGet(mar, 0) : nullptr)
 #define multiarraySmallGetTail(mar)                                            \
-    ((mar)->count ? multiarraySmallGet(mar, (mar)->count - 1) : NULL)
+    ((mar)->count ? multiarraySmallGet(mar, (mar)->count - 1) : nullptr)
 
 /* ====================================================================
  * Macro API

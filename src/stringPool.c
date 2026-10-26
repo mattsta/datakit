@@ -96,14 +96,14 @@ stringPool *stringPoolNew(void) {
     pool->ids = STRING_POOL_IDS_REUSE;
 
     stringPool *out = pool;
-    pool = NULL;
+    pool = nullptr;
     return out;
 }
 
 stringPool *stringPoolNewWithIds(const stringPoolIds ids) {
     if (ids != STRING_POOL_IDS_REUSE && ids != STRING_POOL_IDS_PERMANENT &&
         ids != STRING_POOL_IDS_LOWEST) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=stringPoolFree */
@@ -112,7 +112,7 @@ stringPool *stringPoolNewWithIds(const stringPoolIds ids) {
         /* Neither keeps the recycling stack: PERMANENT reuses nothing,
          * LOWEST keeps a free set, created on its first hole */
         zfree(pool->freeList);
-        pool->freeList = NULL;
+        pool->freeList = nullptr;
         pool->freeCapacity = 0;
         pool->ids = ids;
     }
@@ -128,7 +128,7 @@ stringPoolIds stringPoolIdsOf(const stringPool *pool) {
 static void releaseHolesIfEmpty(stringPool *pool) {
     if (pool->freeHoles && multiroarIsEmpty(pool->freeHoles)) {
         multiroarFree(pool->freeHoles);
-        pool->freeHoles = NULL;
+        pool->freeHoles = nullptr;
     }
 }
 
@@ -164,7 +164,7 @@ void stringPoolReset(stringPool *pool) {
     for (size_t i = 0; i < pool->nextId; i++) {
         if (pool->entries[i].data) {
             zfree(pool->entries[i].data);
-            pool->entries[i].data = NULL;
+            pool->entries[i].data = nullptr;
             pool->entries[i].len = 0;
             pool->entries[i].refcount = 0;
         }
@@ -179,7 +179,7 @@ void stringPoolReset(stringPool *pool) {
     pool->freeCount = 0;
     if (pool->ids == STRING_POOL_IDS_LOWEST) {
         multiroarFree(pool->freeHoles);
-        pool->freeHoles = NULL;
+        pool->freeHoles = nullptr;
     }
 }
 
@@ -370,7 +370,7 @@ bool stringPoolLookup(const stringPool *pool, uint64_t id, databox *str) {
     }
 
     poolEntry *entry = &pool->entries[id];
-    if (entry->refcount == 0 || entry->data == NULL) {
+    if (entry->refcount == 0 || entry->data == nullptr) {
         return false;
     }
 
@@ -417,7 +417,7 @@ bool stringPoolRelease(stringPool *pool, uint64_t id) {
 
         /* Free string data */
         zfree(entry->data);
-        entry->data = NULL;
+        entry->data = nullptr;
         entry->len = 0;
 
         /* Recycle ID */
@@ -583,7 +583,7 @@ static bool stringPoolPersistPlace_(stringPool *pool, uint64_t id,
 
 static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -597,7 +597,7 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
         !stringPoolPersistUnsigned_(f, &fe, &live) ||
         mode > STRING_POOL_IDS_LOWEST || next == 0 || live >= next ||
         (n - 3) / 3 < live) {
-        return NULL;
+        return nullptr;
     }
 
     /* Every id below the next id is a row or a listed free id (PERMANENT
@@ -605,7 +605,7 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
     const uint64_t gaps = next - 1 - live;
     if (n - 3 - live * 3 != gaps ||
         (mode == STRING_POOL_IDS_PERMANENT && gaps)) {
-        return NULL;
+        return nullptr;
     }
 
     cleaner(stringPoolFree) stringPool *pool =
@@ -614,7 +614,7 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
      * length), and the id array for every id */
     multidictExpand(pool->strToId, live);
     if (!ensureCapacity(pool, next)) {
-        return NULL;
+        return nullptr;
     }
 
     uint64_t prevId = 0;
@@ -623,7 +623,7 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
         uint64_t refcount;
         databoxBig str;
         if (!stringPoolPersistUnsigned_(f, &fe, &id)) {
-            return NULL;
+            return nullptr;
         }
 
         flexGetByTypeBig(fe, &str);
@@ -634,7 +634,7 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
             (mode == STRING_POOL_IDS_PERMANENT && refcount != 1) ||
             !stringPoolPersistPlace_(pool, id, (const databox *)&str,
                                      refcount)) {
-            return NULL;
+            return nullptr;
         }
 
         prevId = id;
@@ -642,13 +642,13 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
 
     pool->nextId = next;
     if (!ensureCapacity(pool, next)) {
-        return NULL;
+        return nullptr;
     }
 
     /* LOWEST keeps no free id at the top: its highest id is live, and an
      * empty one starts over at 1 */
     if (mode == STRING_POOL_IDS_LOWEST && prevId + 1 != next) {
-        return NULL;
+        return nullptr;
     }
 
     /* The listed free ids are exactly the ids below 'next' with no row:
@@ -685,11 +685,11 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
     }
 
     if (!ok) {
-        return NULL;
+        return nullptr;
     }
 
     stringPool *out = pool;
-    pool = NULL;
+    pool = nullptr;
     return out;
 }
 
@@ -702,7 +702,7 @@ static uint8_t *stringPoolPersistEncodeOp_(persistOp op, const void *args,
     const bool shaped = (op == PERSIST_OP_INSERT && argc == 2) ||
                         (op == PERSIST_OP_NUM_INCR && argc == 2);
     if (!shaped) {
-        return NULL;
+        return nullptr;
     }
     return persistOpEncodeBoxes(args, argc, len);
 }
@@ -841,7 +841,7 @@ int stringPoolTest(int, char *[]) {
 
     TEST("create / free") {
         cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
-        assert(pool != NULL);
+        assert(pool != nullptr);
         assert(stringPoolCount(pool) == 0);
     }
 
@@ -1178,7 +1178,7 @@ int stringPoolTest(int, char *[]) {
          * benchmark below measures against an empty heap; the cleaner
          * skips NULL. */
         stringPoolFree(sp);
-        sp = NULL;
+        sp = nullptr;
 
         /* ============ multimapAtom benchmarks ============ */
         multimapAtom *ma = multimapAtomNew();

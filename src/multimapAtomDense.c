@@ -47,7 +47,7 @@ static uint64_t denseTakeId_(multimapAtomDense *d) {
         multiroarRemove(d->holes, id);
         if (multiroarIsEmpty(d->holes)) {
             multiroarFree(d->holes);
-            d->holes = NULL;
+            d->holes = nullptr;
         }
 
         return id;
@@ -78,7 +78,7 @@ static void denseGiveBack_(multimapAtomDense *d, const uint64_t id) {
 
     if (d->holes && multiroarIsEmpty(d->holes)) {
         multiroarFree(d->holes);
-        d->holes = NULL;
+        d->holes = nullptr;
     }
 }
 
@@ -207,7 +207,7 @@ static uint8_t *densePersistSnapshot_(const void *structure, size_t *len) {
 static void *densePersistRestore_(const uint8_t *data, size_t len) {
     multimapAtom *atoms = persistOpsMultimapAtom.restore(data, len);
     if (!atoms) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multimapAtomDenseFree */
@@ -215,7 +215,7 @@ static void *densePersistRestore_(const uint8_t *data, size_t len) {
     d->atoms = atoms;
     if (multimapAtomIsPermanent(atoms)) {
         multimapAtomDenseFree(d);
-        return NULL;
+        return nullptr;
     }
 
     /* The base restore validated the rows [flags, next, (id, value,
@@ -236,8 +236,8 @@ static void *densePersistRestore_(const uint8_t *data, size_t len) {
 
         d->next = id.data.u + 1;
         fe = flexNext(f, fe);
-        fe = fe ? flexNext(f, fe) : NULL;
-        fe = fe ? flexNext(f, fe) : NULL;
+        fe = fe ? flexNext(f, fe) : nullptr;
+        fe = fe ? flexNext(f, fe) : nullptr;
     }
 
     return d;
@@ -261,7 +261,7 @@ static bool densePersistInsert_(multimapAtomDense *d, const uint64_t id,
         multiroarRemove(d->holes, id);
         if (multiroarIsEmpty(d->holes)) {
             multiroarFree(d->holes);
-            d->holes = NULL;
+            d->holes = nullptr;
         }
     } else {
         if (id > d->next) {

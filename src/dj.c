@@ -201,7 +201,7 @@ void djInitWithBuffer(djState *state, mds *buf) {
     state->s = buf;
 
     /* Default: no extended array and no extended array count */
-    state->ss = NULL;
+    state->ss = nullptr;
     state->ssCount = 0;
 }
 
@@ -289,7 +289,7 @@ mds *djConsumeBuffer(djState *state, const bool reset) {
 
     mds *hollaback = state->s;
     /* @own: container; free=mdsfree */
-    state->s = reset ? mdsemptylen(DEFAULT_LEN) : NULL;
+    state->s = reset ? mdsemptylen(DEFAULT_LEN) : nullptr;
     return hollaback;
 }
 
@@ -765,7 +765,7 @@ void djString(djState *state, const void *data_, size_t len,
         if (!supportUTF8 && next >= 0x80) {
             /* Skipping UTF8 validation here. Assuming sequence is just okay. */
             cstr("\\u");
-            assert(NULL && "Unicode expansion validation not supported yet!");
+            assert(false && "Unicode expansion validation not supported yet!");
         } else if (escapeCharacter) {
             /* Verify we can write up to 6 bytes without overflowing splat */
             SPLAT_ENSURE(6);

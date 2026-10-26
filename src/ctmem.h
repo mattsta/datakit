@@ -78,7 +78,7 @@ static inline bool dkCtMemEq16(const uint8_t *a, const uint8_t *b) {
  * intermediate state. For plain initialization of a fresh struct (no secret
  * has been written into it yet) ordinary `memset` is fine. */
 static inline void dkSecureZero(void *p, size_t n) {
-    if (p == NULL || n == 0) {
+    if (p == nullptr || n == 0) {
         return;
     }
 #if defined(DK_HAVE_MEMSET_EXPLICIT)

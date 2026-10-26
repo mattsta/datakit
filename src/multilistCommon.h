@@ -132,7 +132,7 @@ static inline void multilistIterOffsetAfterDelete_(multilistIterator *iter,
  * otherwise. */
 static inline void multilistPopCopy_(const flexEntry *fe, databox *got) {
     databox found = {};
-    flexGetByTypeInto(fe, &found, NULL);
+    flexGetByTypeInto(fe, &found, nullptr);
     if (found.type == DATABOX_BYTES) {
         if (found.len <= sizeof(found.data.bytes.embed8)) {
             databox embed = {};

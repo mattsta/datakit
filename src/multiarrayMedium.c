@@ -76,7 +76,7 @@ DK_STATIC multiarrayMedium *multiarrayMediumNew_(int16_t len, int16_t rowMax,
 }
 
 multiarrayMedium *multiarrayMediumNew(int16_t len, int16_t rowMax) {
-    return multiarrayMediumNew_(len, rowMax, NULL);
+    return multiarrayMediumNew_(len, rowMax, nullptr);
 }
 
 /* Initialize a new Medium from Small */
@@ -115,7 +115,7 @@ multiarrayMediumGetForwardWorker(multiarrayMedium *mar, int32_t idx) {
     void *nodeData = getNode(nodeIdx)->data;
     multiarrayMediumResult worker = {
         .current = getNode(nodeIdx),
-        .entry = nodeData ? (uint8_t *)nodeData + (mar->len * idx) : NULL,
+        .entry = nodeData ? (uint8_t *)nodeData + (mar->len * idx) : nullptr,
         .offset = idx,
         .nodeIdx = nodeIdx};
 
@@ -236,7 +236,7 @@ void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
               * [CURRENT] -> [OLD CURRENT][SPLIT]
               *  - or -
               * [CURRENT] -> [CURRENT][SPLIT] */
-        multiarrayMediumNode *split = NULL;
+        multiarrayMediumNode *split = nullptr;
         if (offset == 0) { /* found->count < rowMax; inserting at HEAD */
             split = multiarrayMediumNodeInsert(mar, worker.nodeIdx);
             multiarrayMediumLargeSplitNew(split, s, len);
@@ -323,7 +323,7 @@ void *multiarrayMediumGetForward(const multiarrayMedium *mar,
 void *multiarrayMediumGetHead(const multiarrayMedium *mar) {
     /* Node 0 is empty only when it is the array's only node */
     const multiarrayMediumNode *node = getNode(0);
-    return node->count ? node->data : NULL;
+    return node->count ? node->data : nullptr;
 }
 
 void *multiarrayMediumGetTail(const multiarrayMedium *mar) {
@@ -336,11 +336,11 @@ void *multiarrayMediumGetTail(const multiarrayMedium *mar) {
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx) {
-    multiarrayMediumDeleteTaking(mar, idx, NULL);
+    multiarrayMediumDeleteTaking(mar, idx, nullptr);
 }
 
 /* The node index and in-node offset of entry 'idx' */
@@ -387,7 +387,7 @@ void multiarrayMediumDeleteRange(multiarrayMedium *mar, const uint32_t idx,
         if (take == node->count) {
             /* The whole node goes; the last node stays, empty */
             zfree(node->data);
-            node->data = NULL;
+            node->data = nullptr;
             node->count = 0;
             if (mar->count > 1) {
                 multiarraySmallDirectDelete(mar->node, mar->count, nodeIdx);

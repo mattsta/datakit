@@ -32,7 +32,7 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
                                  bool isSet, bool compress,
                                  flexCapSizeLimit limit) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultimapP) multimapP *mp = zcalloc(1, sizeof(*mp));
@@ -43,37 +43,37 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
     /* @own: container; free=multimapFree */
     mp->m = multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
     if (!mp->m) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence for multimap type */
     if (!persistCtxInitForType(ctx, &persistOpsMultimap)) {
         multimapFree(mp->m);
-        return NULL;
+        return nullptr;
     }
 
     /* Take initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, mp->m, &persistOpsMultimap)) {
         multimapFree(mp->m);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     multimapP *out = mp;
-    mp = NULL;
+    mp = nullptr;
     return out;
 }
 
 multimapP *multimapOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Check if files exist; bind the context (refused for another type, or
      * while a wrapper holds it) */
     if (!persistCtxExists(ctx->basePath) ||
         !persistCtxInitForType(ctx, &persistOpsMultimap)) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultimapP) multimapP *mp = zcalloc(1, sizeof(*mp));
@@ -82,7 +82,7 @@ multimapP *multimapOpenP(persistCtx *ctx) {
     /* Recover from snapshot + WAL */
     mp->m = persistCtxRecover(ctx, &persistOpsMultimap);
     if (!mp->m) {
-        return NULL;
+        return nullptr;
     }
 
     /* Get elementsPerEntry from recovered multimap */
@@ -92,7 +92,7 @@ multimapP *multimapOpenP(persistCtx *ctx) {
 
     persistCtxClaim(ctx);
     multimapP *out = mp;
-    mp = NULL;
+    mp = nullptr;
     return out;
 }
 
@@ -116,7 +116,7 @@ void multimapCloseP(multimapP *m) {
 }
 
 multimap *multimapGetP(multimapP *m) {
-    return m ? m->m : NULL;
+    return m ? m->m : nullptr;
 }
 
 /* ============================================================================
@@ -238,7 +238,7 @@ persistLogResult multimapResetP(multimapP *m) {
 
     /* Reset only what the WAL records as reset */
     const persistLogResult logged =
-        persistCtxLogOp(m->ctx, PERSIST_OP_CLEAR, NULL, 0);
+        persistCtxLogOp(m->ctx, PERSIST_OP_CLEAR, nullptr, 0);
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
@@ -409,21 +409,21 @@ int multimapPTest(int, char *[]) {
          * through the WAL, and one after a compaction (a Full snapshot),
          * both come back with that configuration and every row */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m =
             multimapNewConfigureP(ctx, 2, false, true, FLEX_CAP_LEVEL_512);
         for (int64_t k = 0; m && k < 1500; k++) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k);
             const databox *row[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, row, NULL));
+            PTEST_LOGGED(multimapInsertP(m, row, nullptr));
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
         for (int compacted = 0; compacted <= 1; compacted++) {
-            ctx = persistCtxOpen(basePath, NULL);
+            ctx = persistCtxOpen(basePath, nullptr);
             m = multimapOpenP(ctx);
-            const multimap *raw = m ? multimapGetP(m) : NULL;
+            const multimap *raw = m ? multimapGetP(m) : nullptr;
             if (!raw || multimapLimit(raw) != FLEX_CAP_LEVEL_512 ||
                 !multimapCompresses(raw) || multimapCountP(m) != 1500) {
                 ERR("reopen %d lost the configuration or rows", compacted);
@@ -439,7 +439,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP create empty and close") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to create persistCtx");
         }
@@ -461,7 +461,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP insert and lookup") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -471,7 +471,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -486,7 +486,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP update existing keys") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -496,7 +496,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -505,7 +505,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 1000);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -525,14 +525,14 @@ int multimapPTest(int, char *[]) {
 
         /* Create and populate */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multimapP *m = multimapNewP(ctx, 2);
 
             for (int i = 0; i < 30; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -542,7 +542,7 @@ int multimapPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
@@ -562,7 +562,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP delete operations") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -572,7 +572,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -607,14 +607,14 @@ int multimapPTest(int, char *[]) {
 
         /* Create, populate, delete, close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multimapP *m = multimapNewP(ctx, 2);
 
             for (int i = 0; i < 15; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -631,7 +631,7 @@ int multimapPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
@@ -651,7 +651,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP reset and continue") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -661,7 +661,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
         }
 
         if (multimapCountP(m) != 10) {
@@ -680,7 +680,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 2);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -700,14 +700,14 @@ int multimapPTest(int, char *[]) {
 
         /* Create, populate, reset, add more, close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multimapP *m = multimapNewP(ctx, 2);
 
             for (int i = 0; i < 10; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             }
 
             PTEST_LOGGED(multimapResetP(m));
@@ -716,7 +716,7 @@ int multimapPTest(int, char *[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 3);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -726,7 +726,7 @@ int multimapPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
@@ -746,7 +746,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP mixed operations") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -758,7 +758,7 @@ int multimapPTest(int, char *[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * round);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -767,7 +767,7 @@ int multimapPTest(int, char *[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 9999);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -796,10 +796,10 @@ int multimapPTest(int, char *[]) {
             multimapP *m;
 
             if (cycle == 0) {
-                ctx = persistCtxNew(basePath, NULL);
+                ctx = persistCtxNew(basePath, nullptr);
                 m = multimapNewP(ctx, 2);
             } else {
-                ctx = persistCtxOpen(basePath, NULL);
+                ctx = persistCtxOpen(basePath, nullptr);
                 m = multimapOpenP(ctx);
             }
 
@@ -813,7 +813,7 @@ int multimapPTest(int, char *[]) {
                 databox key = DATABOX_SIGNED(cycle * 100 + i);
                 databox val = DATABOX_SIGNED(cycle * 1000 + i);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -835,14 +835,14 @@ int multimapPTest(int, char *[]) {
         ptestKVTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multimapP *m = multimapNewP(ctx, 2);
 
             for (int i = 0; i < 200; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 1000);
                 const databox *entry[] = {&key, &val};
-                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+                PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -851,7 +851,7 @@ int multimapPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
@@ -874,7 +874,7 @@ int multimapPTest(int, char *[]) {
 
         /* Create empty and close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multimapP *m = multimapNewP(ctx, 2);
             multimapCloseP(m);
             persistCtxFree(ctx);
@@ -882,7 +882,7 @@ int multimapPTest(int, char *[]) {
 
         /* Recover and verify empty */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
@@ -907,17 +907,17 @@ int multimapPTest(int, char *[]) {
 
         /* Create with single entry */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multimapP *m = multimapNewP(ctx, 2);
             const databox *entry[] = {&expectedKey, &expectedVal};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
             multimapCloseP(m);
             persistCtxFree(ctx);
         }
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
@@ -947,7 +947,7 @@ int multimapPTest(int, char *[]) {
 
     TEST("multimapP statistics tracking") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
 
         /* Add entries */
@@ -955,7 +955,7 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
         }
 
         /* Delete a few */
@@ -981,14 +981,14 @@ int multimapPTest(int, char *[]) {
         /* Reset logs a CLEAR op; a post-reset refill must survive
          * close + WAL/snapshot recovery with no pre-reset ghosts */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
 
         for (int i = 0; i < 30; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
         }
 
         PTEST_LOGGED(multimapResetP(m));
@@ -1002,14 +1002,14 @@ int multimapPTest(int, char *[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 7);
             const databox *entry[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
+            PTEST_LOGGED(multimapInsertP(m, entry, nullptr));
         }
 
         multimapCloseP(m);
         persistCtxFree(ctx);
 
         /* Recover and verify: exactly the post-reset contents */
-        ctx = persistCtxNew(basePath, NULL);
+        ctx = persistCtxNew(basePath, nullptr);
         m = multimapOpenP(ctx);
         if (!m) {
             ERR("Recovery after reset failed");
@@ -1038,14 +1038,14 @@ int multimapPTest(int, char *[]) {
         /* key -> [counter, label]; increments replay as increments, a
          * refused one (missing key, a bytes field) changes nothing */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 3);
         const databox label = databoxNewBytesString("label");
         for (int64_t i = 0; i < 10; i++) {
             const databox key = DATABOX_SIGNED(i);
             const databox counter = DATABOX_SIGNED(i);
             const databox *row[] = {&key, &counter, &label};
-            PTEST_LOGGED(multimapInsertP(m, row, NULL));
+            PTEST_LOGGED(multimapInsertP(m, row, nullptr));
         }
 
         const databox k3 = DATABOX_SIGNED(3);
@@ -1102,7 +1102,7 @@ int multimapPTest(int, char *[]) {
         multimapCloseP(m);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         m = multimapOpenP(ctx);
         if (!m) {
             ERR("Recovery failed");
@@ -1136,7 +1136,7 @@ int multimapPTest(int, char *[]) {
         /* One key with several rows: replay must remove the same row,
          * not the key's first row */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m =
             multimapNewConfigureP(ctx, 2, true, false, FLEX_CAP_LEVEL_2048);
         static constexpr int64_t rows[][2] = {
@@ -1145,7 +1145,7 @@ int multimapPTest(int, char *[]) {
             const databox key = DATABOX_SIGNED(rows[i][0]);
             const databox val = DATABOX_SIGNED(rows[i][1]);
             const databox *row[] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, row, NULL));
+            PTEST_LOGGED(multimapInsertP(m, row, nullptr));
         }
         const databox one = DATABOX_SIGNED(1);
         const databox eleven = DATABOX_SIGNED(11);
@@ -1159,7 +1159,8 @@ int multimapPTest(int, char *[]) {
         dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
         persistLogResult incr = PERSIST_LOG_BUFFERED;
         DK_DIAG_EXPECT_REPORTS("a set", 1, DK_DIAG_MULTIMAP_SET_REWRITE,
-                               incr = multimapFieldIncrP(m, &one, 1, 1, NULL));
+                               incr =
+                                   multimapFieldIncrP(m, &one, 1, 1, nullptr));
         dkDiagSetPrintMode(priorPrint);
         if (incr != PERSIST_LOG_REFUSED) {
             ERR("an increment in a set was not refused");
@@ -1167,7 +1168,7 @@ int multimapPTest(int, char *[]) {
         multimapCloseP(m);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         m = multimapOpenP(ctx);
         if (!m) {
             ERR("Recovery failed");
@@ -1218,7 +1219,7 @@ int multimapPTest(int, char *[]) {
         /* key -> counter, the counters a boolean and an unsigned: a
          * refused increment keeps the field's value and its type */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         const databox k1 = DATABOX_SIGNED(1);
         const databox k2 = DATABOX_SIGNED(2);
@@ -1229,8 +1230,8 @@ int multimapPTest(int, char *[]) {
         const databox *row1[] = {&k1, &yes};
         const databox *row2[] = {&k2, &nine};
         const databox *row3[] = {&k3, &thirty};
-        PTEST_LOGGED(multimapInsertP(m, row1, NULL));
-        PTEST_LOGGED(multimapInsertP(m, row2, NULL));
+        PTEST_LOGGED(multimapInsertP(m, row1, nullptr));
+        PTEST_LOGGED(multimapInsertP(m, row2, nullptr));
 
         int64_t now1 = -1;
         int64_t now2 = -1;
@@ -1263,21 +1264,22 @@ int multimapPTest(int, char *[]) {
 
         /* Missing arguments: refused or empty answers */
         multimapIterator iter;
-        if (multimapInsertP(NULL, row1, NULL) ||
-            multimapInsertIfNotExistsP(NULL, row1) ||
-            multimapDeleteP(NULL, &k1) ||
-            multimapDeleteFullWidthP(NULL, row1) || multimapResetP(NULL) ||
-            multimapFieldIncrP(NULL, &k1, 1, 1, NULL) ||
-            multimapNewP(NULL, 2) || multimapOpenP(NULL) ||
-            multimapGetP(NULL) || multimapCountP(NULL) ||
-            multimapBytesP(NULL) || multimapExistsP(NULL, &k1) ||
-            multimapLookupP(NULL, &k1, out) || multimapSyncP(NULL) ||
-            multimapCompactP(NULL)) {
+        if (multimapInsertP(nullptr, row1, nullptr) ||
+            multimapInsertIfNotExistsP(nullptr, row1) ||
+            multimapDeleteP(nullptr, &k1) ||
+            multimapDeleteFullWidthP(nullptr, row1) ||
+            multimapResetP(nullptr) ||
+            multimapFieldIncrP(nullptr, &k1, 1, 1, nullptr) ||
+            multimapNewP(nullptr, 2) || multimapOpenP(nullptr) ||
+            multimapGetP(nullptr) || multimapCountP(nullptr) ||
+            multimapBytesP(nullptr) || multimapExistsP(nullptr, &k1) ||
+            multimapLookupP(nullptr, &k1, out) || multimapSyncP(nullptr) ||
+            multimapCompactP(nullptr)) {
             ERR("a call without its wrapper was not refused");
         }
-        multimapIteratorInitP(NULL, &iter, true);
-        multimapGetStatsP(NULL, NULL);
-        multimapCloseP(NULL);
+        multimapIteratorInitP(nullptr, &iter, true);
+        multimapGetStatsP(nullptr, nullptr);
+        multimapCloseP(nullptr);
 
         /* Logging works again (a replace reports itself), and a reopen
          * holds only what was logged */
@@ -1291,7 +1293,7 @@ int multimapPTest(int, char *[]) {
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         m = multimapOpenP(ctx);
         if (!m || multimapCountP(m) != 2 || multimapExistsP(m, &k3)) {
             ERR("a reopen holds %zu rows, key 3 %s", multimapCountP(m),
@@ -1322,13 +1324,13 @@ int multimapPTest(int, char *[]) {
          * to the quarantine); an insert of 4 is then logged with no
          * compaction, and a reopen holds {1, 2, 4} */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multimapP *m = multimapNewP(ctx, 2);
         for (int64_t k = 1; k <= 3; k++) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k * 100);
             const databox *row[2] = {&key, &val};
-            PTEST_LOGGED(multimapInsertP(m, row, NULL));
+            PTEST_LOGGED(multimapInsertP(m, row, nullptr));
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
@@ -1343,7 +1345,7 @@ int multimapPTest(int, char *[]) {
         const databox *row4[2] = {&k4, &v9};
         databox got = {};
         databox *out[1] = {&got};
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         m = multimapOpenP(ctx);
         if (!m || multimapCountP(m) != 2 || multimapExistsP(m, &k3)) {
             ERR("lenient recovery kept %zu rows, want 1, 2",
@@ -1352,14 +1354,14 @@ int multimapPTest(int, char *[]) {
         if (!ptestExpectHealed(ctx, basePath)) {
             ERR("the damaged entry was not healed into the quarantine");
         }
-        if (m && (multimapInsertP(m, row4, NULL) == PERSIST_LOG_REFUSED ||
+        if (m && (multimapInsertP(m, row4, nullptr) == PERSIST_LOG_REFUSED ||
                   !multimapLookupP(m, &k1, out) || got.data.i != 100)) {
             ERR("a change after the healed entry was refused");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         m = multimapOpenP(ctx);
         if (!m || multimapCountP(m) != 3 || !multimapExistsP(m, &k1) ||
             !multimapLookupP(m, &k4, out) || got.data.i != 900) {

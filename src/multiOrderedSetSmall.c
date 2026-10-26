@@ -220,7 +220,7 @@ bool multiOrderedSetSmallRemoveIf(multiOrderedSetSmall *m,
 
 bool multiOrderedSetSmallRemove(multiOrderedSetSmall *m,
                                 const databox *member) {
-    return multiOrderedSetSmallRemoveIf(m, member, NULL, NULL);
+    return multiOrderedSetSmallRemoveIf(m, member, nullptr, nullptr);
 }
 
 bool multiOrderedSetSmallRemoveGetScore(multiOrderedSetSmall *m,
@@ -257,10 +257,10 @@ size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
              * and may shrink its header: the next pair then starts where
              * this one did, measured from the head */
             const size_t offset = (size_t)(entry - flexHead(m->map));
-            const bool hasNext = flexNext(m->map, memberEntry) != NULL;
+            const bool hasNext = flexNext(m->map, memberEntry) != nullptr;
             mosRemoveEntry(m, entry);
             removed++;
-            entry = hasNext ? flexHead(m->map) + offset : NULL;
+            entry = hasNext ? flexHead(m->map) + offset : nullptr;
         } else {
             /* If score > max, we can stop (sorted order) */
             int cmp = databoxCompare(&score, &range->max);
@@ -358,7 +358,7 @@ size_t multiOrderedSetSmallPopMax(multiOrderedSetSmall *m, size_t count,
 
 bool multiOrderedSetSmallExists(const multiOrderedSetSmall *m,
                                 const databox *member) {
-    return mosFindMemberLinear(m->map, member) != NULL;
+    return mosFindMemberLinear(m->map, member) != nullptr;
 }
 
 bool multiOrderedSetSmallGetScore(const multiOrderedSetSmall *m,
@@ -471,11 +471,11 @@ void multiOrderedSetSmallIteratorInit(const multiOrderedSetSmall *m,
         if (count >= MOS_ELEMENTS_PER_ENTRY) {
             iter->current = flexIndex(m->map, count - MOS_ELEMENTS_PER_ENTRY);
         } else {
-            iter->current = NULL;
+            iter->current = nullptr;
         }
     }
 
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
 }
 
 bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
@@ -507,7 +507,7 @@ bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
         entry = flexNext(m->map, memberEntry);
     }
 
-    iter->current = NULL;
+    iter->current = nullptr;
     iter->valid = false;
     return false;
 }
@@ -523,14 +523,14 @@ bool multiOrderedSetSmallIteratorInitAtRank(const multiOrderedSetSmall *m,
     size_t count = multiOrderedSetSmallCount(m);
     rank = mosNormalizeRank(rank, count);
     if (rank < 0) {
-        iter->current = NULL;
+        iter->current = nullptr;
         iter->valid = false;
         return false;
     }
 
     size_t offset = (size_t)rank * MOS_ELEMENTS_PER_ENTRY;
     iter->current = flexIndex(m->map, offset);
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
     return iter->valid;
 }
 
@@ -558,10 +558,10 @@ bool multiOrderedSetSmallIteratorNext(mosIterator *iter, databox *member,
     } else {
         /* Move backwards: the previous pair's score is two elements back */
         flexEntry *prevMember = flexPrev(m->map, entry);
-        iter->current = prevMember ? flexPrev(m->map, prevMember) : NULL;
+        iter->current = prevMember ? flexPrev(m->map, prevMember) : nullptr;
     }
 
-    iter->valid = (iter->current != NULL);
+    iter->valid = (iter->current != nullptr);
     return true;
 }
 

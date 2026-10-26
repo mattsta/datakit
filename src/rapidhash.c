@@ -609,7 +609,7 @@ static rapidhashStreamBulkFn rapidStreamPickBulkFn(rapidhashVariant variant,
 void rapidhashStreamInit(rapidhashCtx *ctx, rapidhashVariant variant,
                          rapidhashMode mode, uint64_t seed,
                          const uint64_t secret[RAPIDHASH_SECRET_LEN]) {
-    if (secret == NULL) {
+    if (secret == nullptr) {
         secret = rapidhashDefaultSecret;
     }
     memset(ctx, 0, sizeof(*ctx));
@@ -1093,7 +1093,7 @@ int rapidhashTest(int, char *[]) {
                     }
                     rapidhashCtx ctx;
                     rapidhashStreamInit(&ctx, variants[idx],
-                                        RAPIDHASH_MODE_FAST, v->seed, NULL);
+                                        RAPIDHASH_MODE_FAST, v->seed, nullptr);
                     size_t off = 0;
                     while (off < v->input_len) {
                         size_t take = chunk;
@@ -1132,7 +1132,7 @@ int rapidhashTest(int, char *[]) {
                     rapidhashCtx ctx;
                     rapidhashStreamInit(&ctx, variants[idx],
                                         RAPIDHASH_MODE_PROTECTED, v->seed,
-                                        NULL);
+                                        nullptr);
                     size_t off = 0;
                     while (off < v->input_len) {
                         size_t take = chunk;

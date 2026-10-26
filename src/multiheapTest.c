@@ -74,7 +74,7 @@ int multiheapTest(int, char *[]) {
             if (got.position != ref || got.extent != ref * 3 ||
                 got.generation != (ref ^ 0xff)) {
                 ERR("ref %" PRIu64 " restored wrong contents!", ref);
-                assert(NULL);
+                assert(false);
             }
         }
 

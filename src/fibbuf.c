@@ -90,7 +90,7 @@ static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {
     const uint16_t *result = fibbuf;
     size_t n = num;
     size_t half = n / 2;
-    const uint16_t *mid = NULL;
+    const uint16_t *mid = nullptr;
 
     BINARY_SEARCH_BRANCH_FREE;
 
@@ -112,7 +112,7 @@ static uint32_t fibbufNextBuffer32(const uint32_t currentBufSize) {
     const uint32_t *result = fibbuf;
     size_t n = num;
     size_t half = n / 2;
-    const uint32_t *mid = NULL;
+    const uint32_t *mid = nullptr;
 
     BINARY_SEARCH_BRANCH_FREE;
 
@@ -139,7 +139,7 @@ static uint64_t fibbufNextBuffer64(const uint64_t currentBufSize) {
     const uint64_t *result = fibbuf;
     size_t n = num;
     size_t half = n / 2;
-    const uint64_t *mid = NULL;
+    const uint64_t *mid = nullptr;
 
     BINARY_SEARCH_BRANCH_FREE;
 

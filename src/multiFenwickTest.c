@@ -195,8 +195,8 @@ int multiFenwickTest(int, char *[]) {
             !mfwSub(&v, &half, &r) || r.data.d64 != -2.5 ||
             !mfwSub(&s, &v, &r) || !mfwBoxIs128(&r, -7) ||
             mfwSub(&v, &bytes, &r) || mfwAdd(&s, &bytes, &r) ||
-            mfwSub(&bytes, &s, &r) || mfwAdd(NULL, &s, &r) ||
-            mfwSub(&s, NULL, &r)) {
+            mfwSub(&bytes, &s, &r) || mfwAdd(nullptr, &s, &r) ||
+            mfwSub(&s, nullptr, &r)) {
             ERR("VOID / non-numeric operands");
         }
 
@@ -225,7 +225,7 @@ int multiFenwickTest(int, char *[]) {
             mfwCmp(&nan, &s) != 0 || mfwCmp(&bytes, &s) != 0 ||
             mfwCmp(&bytes, &bytes) != 0 || mfwCmp(&v, &s) >= 0 ||
             mfwCmp(&s, &v) <= 0 || mfwCmp(&v, &v) != 0 ||
-            mfwCmp(NULL, &s) != 0) {
+            mfwCmp(nullptr, &s) != 0) {
             ERR("compare");
         }
 
@@ -239,7 +239,7 @@ int multiFenwickTest(int, char *[]) {
             !mfwVoid(mfwConvert(&nan, DATABOX_SIGNED_64)) ||
             !mfwVoid(mfwConvert(&bytes, DATABOX_DOUBLE_64)) ||
             !mfwVoid(mfwConvert(&s, DATABOX_VOID)) ||
-            !mfwVoid(mfwConvert(NULL, DATABOX_DOUBLE_64)) ||
+            !mfwVoid(mfwConvert(nullptr, DATABOX_DOUBLE_64)) ||
             !mfwInt(mfwConvert(&half, DATABOX_SIGNED_64), 2) ||
             !mfwInt(mfwConvert(&v, DATABOX_UNSIGNED_64), 0) ||
             mfwConvert(&s, DATABOX_DOUBLE_64).data.d64 != -7.0 ||
@@ -281,10 +281,10 @@ int multiFenwickTest(int, char *[]) {
         }
         if (!mfwVoid(databoxZeroOfType(DATABOX_BYTES)) ||
             !mfwVoid(databoxZeroLike(&bytes)) ||
-            !mfwVoid(databoxZeroLike(NULL)) || !mfwVoid(databoxZeroLike(&v)) ||
-            databoxToDouble(&bytes, &out) || databoxToDouble(NULL, &out) ||
-            !databoxToDouble(&v, &out) || out != 0.0 ||
-            !databoxToDouble(&u, &out) || out != 0x1p64) {
+            !mfwVoid(databoxZeroLike(nullptr)) ||
+            !mfwVoid(databoxZeroLike(&v)) || databoxToDouble(&bytes, &out) ||
+            databoxToDouble(nullptr, &out) || !databoxToDouble(&v, &out) ||
+            out != 0.0 || !databoxToDouble(&u, &out) || out != 0x1p64) {
             ERR("zeros / double views");
         }
 
@@ -750,21 +750,21 @@ int multiFenwickTest(int, char *[]) {
     }
 
     TEST("edge case: NULL parameter handling") {
-        multiFenwickFree(NULL); /* Should not crash */
+        multiFenwickFree(nullptr); /* Should not crash */
 
         databox result;
-        if (multiFenwickQuery(NULL, 0, &result)) {
+        if (multiFenwickQuery(nullptr, 0, &result)) {
             ERR("Query on NULL should fail");
         }
 
-        if (multiFenwickCount(NULL) != 0) {
+        if (multiFenwickCount(nullptr) != 0) {
             ERR("Count on NULL should return 0");
         }
 
-        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = nullptr;
         databox one = DATABOX_SIGNED(10);
         bool success = multiFenwickUpdate(&mfw, 0, &one);
-        if (!success || mfw == NULL) {
+        if (!success || mfw == nullptr) {
             ERR("Update should create tree if NULL");
         }
     }
@@ -888,7 +888,7 @@ int multiFenwickTest(int, char *[]) {
                                    (const databox *)&wideU, &deferred};
 
         /* A refused first update creates no tree. */
-        multiFenwick *none = NULL;
+        multiFenwick *none = nullptr;
         if (multiFenwickUpdate(&none, 3, wides[0]) || none) {
             ERR("Update accepted a wide delta into an empty tree");
         }
@@ -980,7 +980,7 @@ int multiFenwickTest(int, char *[]) {
         odd[5].type = DATABOX_PTR;
         odd[5].data.ptr = odd;
 
-        cleaner(multiFenwickFree) multiFenwick *none = NULL;
+        cleaner(multiFenwickFree) multiFenwick *none = nullptr;
         if (multiFenwickUpdate(&none, 0, &odd[1]) || none) {
             ERR("Update accepted BYTES into an empty tree");
         }
@@ -1068,7 +1068,7 @@ int multiFenwickTest(int, char *[]) {
         const size_t badIdx[] = {(size_t)MULTIFENWICK_INDEX_MAX + 1,
                                  (size_t)1 << 40, SIZE_MAX};
 
-        cleaner(multiFenwickFree) multiFenwick *none = NULL;
+        cleaner(multiFenwickFree) multiFenwick *none = nullptr;
         for (size_t k = 0; k < countof(badIdx); k++) {
             if (multiFenwickUpdate(&none, badIdx[k], &one) ||
                 multiFenwickSet(&none, badIdx[k], &one) || none) {
@@ -1078,7 +1078,7 @@ int multiFenwickTest(int, char *[]) {
 
         constexpr int TX_N = 37;
         int64_t vals[TX_N];
-        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = nullptr;
         for (size_t i = 0; i < TX_N; i++) {
             vals[i] = (int64_t)(i * 13 % 29) - 14;
             const databox v = DATABOX_SIGNED(vals[i]);
@@ -1132,7 +1132,7 @@ int multiFenwickTest(int, char *[]) {
         memset(oracle, 0, sizeof(oracle));
         size_t count = 0;
         uint64_t seed = 4242;
-        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = nullptr;
         bool failed = false;
         for (uint32_t op = 0; op < DIFF_OPS && !failed; op++) {
             const size_t idx = randSeed(&seed) % DIFF_N;
@@ -1201,7 +1201,7 @@ int multiFenwickTest(int, char *[]) {
          * still match.  Then sparse indexes force multi-step doublings. */
         constexpr int GROW_N = 130;
         static int64_t oracle[GROW_N];
-        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = nullptr;
         bool failed = false;
         for (size_t n = 0; n < GROW_N && !failed; n++) {
             oracle[n] = (int64_t)(n * 37 + 1) * (n % 2 ? -1 : 1);
@@ -1231,7 +1231,7 @@ int multiFenwickTest(int, char *[]) {
         const size_t sparse[] = {0, 3, 17, 300, 1025, 5000};
         const int64_t sparseVal[] = {-9, 40, -700, 12345, -1, 77};
         constexpr int SPARSE_N = countof(sparse);
-        cleaner(multiFenwickFree) multiFenwick *sp = NULL;
+        cleaner(multiFenwickFree) multiFenwick *sp = nullptr;
         for (size_t k = 0; k < SPARSE_N && !failed; k++) {
             const databox box = DATABOX_SIGNED(sparseVal[k]);
             if (!multiFenwickUpdate(&sp, sparse[k], &box) ||
@@ -1313,37 +1313,38 @@ int multiFenwickTest(int, char *[]) {
         databox out;
 
         out = one;
-        if (multiFenwickQuery(NULL, 0, &out) || !DATABOX_IS_VOID(&out)) {
+        if (multiFenwickQuery(nullptr, 0, &out) || !DATABOX_IS_VOID(&out)) {
             ERR("Query(NULL) did not fail with VOID");
         }
 
         out = one;
-        if (multiFenwickGet(NULL, 0, &out) || !DATABOX_IS_VOID(&out)) {
+        if (multiFenwickGet(nullptr, 0, &out) || !DATABOX_IS_VOID(&out)) {
             ERR("Get(NULL) did not fail with VOID");
         }
 
         out = one;
-        if (multiFenwickRangeQuery(NULL, 0, 0, &out) ||
+        if (multiFenwickRangeQuery(nullptr, 0, 0, &out) ||
             !DATABOX_IS_VOID(&out)) {
             ERR("RangeQuery(NULL) did not fail with VOID");
         }
 
-        if (multiFenwickLowerBound(NULL, &one) != SIZE_MAX ||
-            multiFenwickCount(NULL) != 0 || multiFenwickBytes(NULL) != 0) {
+        if (multiFenwickLowerBound(nullptr, &one) != SIZE_MAX ||
+            multiFenwickCount(nullptr) != 0 ||
+            multiFenwickBytes(nullptr) != 0) {
             ERR("a NULL tree does not read as empty");
         }
 
-        multiFenwickClear(NULL);
-        multiFenwickFree(NULL);
+        multiFenwickClear(nullptr);
+        multiFenwickFree(nullptr);
 
-        if (multiFenwickUpdate(NULL, 0, &one) ||
-            multiFenwickSet(NULL, 0, &one)) {
+        if (multiFenwickUpdate(nullptr, 0, &one) ||
+            multiFenwickSet(nullptr, 0, &one)) {
             ERR("a NULL pointer-to-pointer was accepted");
         }
 
-        cleaner(multiFenwickFree) multiFenwick *none = NULL;
-        if (multiFenwickUpdate(&none, 0, NULL) ||
-            multiFenwickSet(&none, 0, NULL) || none) {
+        cleaner(multiFenwickFree) multiFenwick *none = nullptr;
+        if (multiFenwickUpdate(&none, 0, nullptr) ||
+            multiFenwickSet(&none, 0, nullptr) || none) {
             ERR("a NULL delta or value was accepted");
         }
 
@@ -1362,7 +1363,7 @@ int multiFenwickTest(int, char *[]) {
         }
 
         /* [4, 0, 7]: a zero delta still extends the count */
-        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = nullptr;
         const databox four = DATABOX_SIGNED(4);
         const databox seven = DATABOX_SIGNED(7);
         if (!multiFenwickUpdate(&mfw, 0, &four) ||
@@ -1400,9 +1401,10 @@ int multiFenwickTest(int, char *[]) {
             ERR("RangeQuery over [4, 0, 7] is wrong");
         }
 
-        if (multiFenwickQuery(mfw, 0, NULL) || multiFenwickGet(mfw, 0, NULL) ||
-            multiFenwickRangeQuery(mfw, 0, 0, NULL) ||
-            multiFenwickLowerBound(mfw, NULL) != SIZE_MAX) {
+        if (multiFenwickQuery(mfw, 0, nullptr) ||
+            multiFenwickGet(mfw, 0, nullptr) ||
+            multiFenwickRangeQuery(mfw, 0, 0, nullptr) ||
+            multiFenwickLowerBound(mfw, nullptr) != SIZE_MAX) {
             ERR("a NULL result or target was accepted");
         }
 
@@ -1432,7 +1434,7 @@ int multiFenwickTest(int, char *[]) {
         databox out;
 
         /* One element at each end of the range, and one step past it */
-        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = nullptr;
         if (!multiFenwickUpdate(&mfw, 0, &umax) ||
             !multiFenwickGet(mfw, 0, &out) || out.type != DATABOX_UNSIGNED_64 ||
             out.data.u64 != UINT64_MAX) {
@@ -1466,7 +1468,7 @@ int multiFenwickTest(int, char *[]) {
 
         /* Results are typed by value: INT64_MAX + 1 is UNSIGNED_64, a
          * negative is SIGNED_64, zero is UNSIGNED_64 */
-        cleaner(multiFenwickFree) multiFenwick *t = NULL;
+        cleaner(multiFenwickFree) multiFenwick *t = nullptr;
         if (!multiFenwickSet(&t, 0, &smax) ||
             !multiFenwickUpdate(&t, 0, &one) || !multiFenwickGet(t, 0, &out) ||
             out.type != DATABOX_UNSIGNED_64 ||
@@ -1488,7 +1490,7 @@ int multiFenwickTest(int, char *[]) {
          * fails; the elements and ranges around it are exact. */
         const uint64_t a = ((uint64_t)1 << 63) + ((uint64_t)1 << 62) - 1;
         const databox boxA = DATABOX_UNSIGNED(a);
-        cleaner(multiFenwickFree) multiFenwick *wide = NULL;
+        cleaner(multiFenwickFree) multiFenwick *wide = nullptr;
         if (!multiFenwickUpdate(&wide, 0, &boxA) ||
             !multiFenwickUpdate(&wide, 3, &smin) ||
             !multiFenwickUpdate(&wide, 2, &boxA)) {
@@ -1559,7 +1561,7 @@ int multiFenwickTest(int, char *[]) {
          * those two cells and must still be the double 2^24 + 1. */
         const databox big = DATABOX_DOUBLE(16777216.0);
         const databox oneD = DATABOX_DOUBLE(1.0);
-        cleaner(multiFenwickFree) multiFenwick *d = NULL;
+        cleaner(multiFenwickFree) multiFenwick *d = nullptr;
         if (!multiFenwickUpdate(&d, 0, &big) ||
             !multiFenwickUpdate(&d, 2, &oneD) ||
             !multiFenwickQuery(d, 2, &out) || out.type != DATABOX_DOUBLE_64 ||
@@ -1573,7 +1575,7 @@ int multiFenwickTest(int, char *[]) {
         databox f2;
         DATABOX_SET_FLOAT(&f1, 1.5f);
         DATABOX_SET_FLOAT(&f2, 0x1p-30f);
-        cleaner(multiFenwickFree) multiFenwick *f = NULL;
+        cleaner(multiFenwickFree) multiFenwick *f = nullptr;
         if (!multiFenwickUpdate(&f, 0, &f1) ||
             !multiFenwickUpdate(&f, 1, &f2) || !multiFenwickQuery(f, 1, &out) ||
             out.type != DATABOX_DOUBLE_64 || out.data.d64 != 1.5 + 0x1p-30) {
@@ -1611,7 +1613,7 @@ int multiFenwickTest(int, char *[]) {
         /* A cell that would overflow to infinity is refused */
         const databox dmax = DATABOX_DOUBLE(DBL_MAX);
         const databox dmin = DATABOX_DOUBLE(-DBL_MAX);
-        cleaner(multiFenwickFree) multiFenwick *g = NULL;
+        cleaner(multiFenwickFree) multiFenwick *g = nullptr;
         if (!multiFenwickUpdate(&g, 0, &dmax) ||
             multiFenwickUpdate(&g, 0, &dmax) || !multiFenwickGet(g, 0, &out) ||
             out.data.d64 != DBL_MAX) {
@@ -1641,7 +1643,7 @@ int multiFenwickTest(int, char *[]) {
         const databox five = DATABOX_UNSIGNED(5);
         databox half;
         DATABOX_SET_FLOAT(&half, 0.5f);
-        cleaner(multiFenwickFree) multiFenwick *m = NULL;
+        cleaner(multiFenwickFree) multiFenwick *m = nullptr;
         if (!multiFenwickUpdate(&m, 0, &three) ||
             !multiFenwickUpdate(&m, 1, &quarter) ||
             !multiFenwickUpdate(&m, 2, &five) ||
@@ -1662,7 +1664,7 @@ int multiFenwickTest(int, char *[]) {
 
         /* An integer prefix next to a float cell stays exact above 2^53 */
         const databox huge = DATABOX_UNSIGNED(((uint64_t)1 << 60) + 1);
-        cleaner(multiFenwickFree) multiFenwick *h = NULL;
+        cleaner(multiFenwickFree) multiFenwick *h = nullptr;
         if (!multiFenwickUpdate(&h, 0, &huge) ||
             !multiFenwickUpdate(&h, 2, &quarter) ||
             !multiFenwickQuery(h, 1, &out) || out.type != DATABOX_UNSIGNED_64 ||
@@ -1690,7 +1692,7 @@ int multiFenwickTest(int, char *[]) {
 
         /* count 0 is an empty tree, with or without 'values' */
         cleaner(multiFenwickFree) multiFenwick *e1 =
-            multiFenwickNewFromArray(NULL, 0);
+            multiFenwickNewFromArray(nullptr, 0);
         cleaner(multiFenwickFree) multiFenwick *e2 =
             multiFenwickNewFromArray(base, 0);
         if (!e1 || !e2 || multiFenwickCount(e1) != 0 ||
@@ -1701,7 +1703,7 @@ int multiFenwickTest(int, char *[]) {
         /* NULL values with a count, and a count past the index limit
          * (refused before 'values' is read), give NULL */
         cleaner(multiFenwickFree) multiFenwick *n1 =
-            multiFenwickNewFromArray(NULL, 5);
+            multiFenwickNewFromArray(nullptr, 5);
         cleaner(multiFenwickFree) multiFenwick *n2 =
             multiFenwickNewFromArray(base, (size_t)MULTIFENWICK_INDEX_MAX + 2);
         cleaner(multiFenwickFree) multiFenwick *n3 =
@@ -1737,7 +1739,7 @@ int multiFenwickTest(int, char *[]) {
 
             cleaner(multiFenwickFree) multiFenwick *built =
                 multiFenwickNewFromArray(values, n);
-            cleaner(multiFenwickFree) multiFenwick *stepped = NULL;
+            cleaner(multiFenwickFree) multiFenwick *stepped = nullptr;
             for (size_t i = 0; i < n; i++) {
                 if (!multiFenwickUpdate(&stepped, i, &values[i])) {
                     failed = true;
@@ -1853,7 +1855,7 @@ int multiFenwickTest(int, char *[]) {
         constexpr int LBN_N = 200;
         static int64_t prefix[LBN_N];
         uint64_t seed = 2024;
-        cleaner(multiFenwickFree) multiFenwick *neg = NULL;
+        cleaner(multiFenwickFree) multiFenwick *neg = nullptr;
         int64_t total = 0;
         int64_t top = INT64_MIN;
         for (size_t i = 0; i < LBN_N; i++) {
@@ -2498,7 +2500,7 @@ int multiFenwickTest(int, char *[]) {
     }
 
     TEST("Repr: nil, empty and holding values") {
-        multiFenwickRepr(NULL);
+        multiFenwickRepr(nullptr);
         multiFenwick *mfw = multiFenwickNew();
         multiFenwickRepr(mfw);
         const databox one = DATABOX_SIGNED(1);

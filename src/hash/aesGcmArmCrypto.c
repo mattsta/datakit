@@ -364,7 +364,7 @@ armInc32Vec(uint8x16_t ctr) {
 
 [[gnu::target("crypto")]] bool
 aesGcmArmCryptoInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
-    if (out == NULL || key == NULL ||
+    if (out == nullptr || key == nullptr ||
         (key_len != AES128_KEY_LEN && key_len != AES256_KEY_LEN)) {
         return false;
     }
@@ -428,16 +428,16 @@ aesGcmArmCryptoSeal(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
                     const uint8_t *aad, size_t aad_len,
                     const uint8_t *plaintext, size_t plaintext_len,
                     uint8_t *ciphertext, uint8_t tag[AES_GCM_TAG_LEN]) {
-    if (k == NULL || nonce == NULL || tag == NULL) {
+    if (k == nullptr || nonce == nullptr || tag == nullptr) {
         return false;
     }
     if (plaintext_len > AES_GCM_MAX_PAYLOAD) {
         return false;
     }
-    if (plaintext_len > 0 && (plaintext == NULL || ciphertext == NULL)) {
+    if (plaintext_len > 0 && (plaintext == nullptr || ciphertext == nullptr)) {
         return false;
     }
-    if (aad_len > 0 && aad == NULL) {
+    if (aad_len > 0 && aad == nullptr) {
         return false;
     }
 
@@ -484,16 +484,16 @@ aesGcmArmCryptoOpen(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
                     const uint8_t *aad, size_t aad_len,
                     const uint8_t *ciphertext, size_t ciphertext_len,
                     const uint8_t tag[AES_GCM_TAG_LEN], uint8_t *plaintext) {
-    if (k == NULL || nonce == NULL || tag == NULL) {
+    if (k == nullptr || nonce == nullptr || tag == nullptr) {
         return false;
     }
     if (ciphertext_len > AES_GCM_MAX_PAYLOAD) {
         return false;
     }
-    if (ciphertext_len > 0 && (ciphertext == NULL || plaintext == NULL)) {
+    if (ciphertext_len > 0 && (ciphertext == nullptr || plaintext == nullptr)) {
         return false;
     }
-    if (aad_len > 0 && aad == NULL) {
+    if (aad_len > 0 && aad == nullptr) {
         return false;
     }
 
@@ -529,7 +529,7 @@ aesGcmArmCryptoOpen(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
     uint8_t computed_tag[16];
     vst1q_u8(computed_tag, veorq_u8(acc_wire, enc_J0));
     if (!dkCtMemEq16(computed_tag, tag)) {
-        if (plaintext != NULL && ciphertext_len > 0) {
+        if (plaintext != nullptr && ciphertext_len > 0) {
             dkSecureZero(plaintext, ciphertext_len);
         }
         return false;

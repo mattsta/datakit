@@ -74,7 +74,7 @@ static void *pcMultimapAtomBuild(const persistContractBuild *b) {
             pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, ref.data.u, &minusOne);
         } else {
             multimapAtomDeleteById(ma, ref.data.u);
-            pcAtomRecordId(b->log, PERSIST_OP_DELETE, ref.data.u, NULL);
+            pcAtomRecordId(b->log, PERSIST_OP_DELETE, ref.data.u, nullptr);
         }
     }
 
@@ -146,7 +146,7 @@ static void *pcMultimapAtomDenseBuild(const persistContractBuild *b) {
             pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, ref.data.u, &minusOne);
         } else {
             multimapAtomDenseDeleteById(d, ref.data.u);
-            pcAtomRecordId(b->log, PERSIST_OP_DELETE, ref.data.u, NULL);
+            pcAtomRecordId(b->log, PERSIST_OP_DELETE, ref.data.u, nullptr);
         }
     }
 
@@ -234,7 +234,7 @@ static void *pcStringPoolBuild(const persistContractBuild *b) {
 
         if (b->size >= 100 && i == b->size / 3) {
             stringPoolReset(pool);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
 
@@ -302,7 +302,7 @@ static void *pcAtomPoolBuild(const persistContractBuild *b) {
 
         if (b->size >= 100 && i == b->size / 3) {
             atomPoolReset(pool);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
 

@@ -346,7 +346,7 @@ DK_LIBC_ALLOCATOR_ char *strdup(const char *s);
  * NULL for a NULL 'from'.  A zero-length copy is still an allocation. */
 [[nodiscard]] static inline void *zmemdup(const void *from, size_t bytes) {
     if (!from) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=zfree */

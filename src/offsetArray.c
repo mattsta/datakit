@@ -248,7 +248,7 @@ int offsetArrayTest(int, char *[]) {
         if (!offsetArrayEmpty(&a)) {
             ERR("Array should be empty after free");
         }
-        if (a.obj != NULL) {
+        if (a.obj != nullptr) {
             ERR("obj should be NULL after free");
         }
         if (a.offset != 0) {

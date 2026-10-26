@@ -142,7 +142,7 @@ static void benchPrint_(const char *name, size_t n, const benchRow *r) {
 #define BENCH_TYPED(T, VT)                                                     \
     static benchRow benchTyped##T(size_t n) {                                  \
         benchRow r = {};                                                       \
-        void *fw = NULL;                                                       \
+        void *fw = nullptr;                                                    \
         const double t0 = benchNow_();                                         \
         for (size_t i = 0; i < n; i++) {                                       \
             fenwick##T##Update(&fw, i, (VT)(i % 7));                           \
@@ -277,7 +277,7 @@ static benchRow benchGrowRow_(double nsPerWrite, size_t bytes, size_t n) {
 
 static benchRow benchGrowTypedI64(size_t n) {
     uint64_t seed = 5;
-    void *fw = NULL;
+    void *fw = nullptr;
     const double t0 = benchNow_();
     for (size_t i = 0; i < n; i++) {
         fenwickI64Update(&fw, benchRand_(&seed) % n, 1);
@@ -291,7 +291,7 @@ static benchRow benchGrowTypedI64(size_t n) {
 #define BENCH_GROW_MULTI(NAME, T)                                              \
     static benchRow benchGrow##NAME(size_t n) {                                \
         uint64_t seed = 5;                                                     \
-        T *fw = NULL;                                                          \
+        T *fw = nullptr;                                                       \
         const databox one = DATABOX_UNSIGNED(1);                               \
         const double t0 = benchNow_();                                         \
         for (size_t i = 0; i < n; i++) {                                       \
@@ -308,7 +308,7 @@ BENCH_GROW_MULTI(Flat, multiFenwickFlat)
 
 static benchRow benchGrowSegmentI64(size_t n) {
     uint64_t seed = 5;
-    void *seg = NULL; /* a NULL tree becomes a SUM tree */
+    void *seg = nullptr; /* a NULL tree becomes a SUM tree */
     const double t0 = benchNow_();
     for (size_t i = 0; i < n; i++) {
         segmentI64Update(&seg, benchRand_(&seed) % n, 1);
@@ -326,7 +326,7 @@ static benchRow benchGrowSegmentI64(size_t n) {
     static benchRow bench2d##T(size_t n) {                                     \
         benchRow r = {};                                                       \
         const size_t side = (size_t)sqrt((double)n);                           \
-        fenwick2d##T *t = NULL;                                                \
+        fenwick2d##T *t = nullptr;                                             \
         const double t0 = benchNow_();                                         \
         for (size_t i = 0; i < side; i++) {                                    \
             for (size_t j = 0; j < side; j++) {                                \
@@ -362,7 +362,7 @@ BENCH_2D_TYPED(Double, double)
 static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
     benchRow r = {};
     const size_t side = (size_t)sqrt((double)n);
-    multiFenwick2d *t = NULL;
+    multiFenwick2d *t = nullptr;
     const double t0 = benchNow_();
     for (size_t i = 0; i < side; i++) {
         for (size_t j = 0; j < side; j++) {

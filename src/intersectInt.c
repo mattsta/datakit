@@ -1673,7 +1673,7 @@ static int32_t testEmptyArrays(intersectFn fn, const char *fnName) {
 
     /* Both empty */
     uint32_t out[16];
-    size_t result = fn(NULL, 0, NULL, 0, out);
+    size_t result = fn(nullptr, 0, nullptr, 0, out);
     if (result != 0) {
         ERR("[%s] Both empty should return 0, got %" PRIu64, fnName,
             (uint64_t)result);
@@ -1681,7 +1681,7 @@ static int32_t testEmptyArrays(intersectFn fn, const char *fnName) {
 
     /* First empty */
     uint32_t b[] = {1, 2, 3, 4};
-    result = fn(NULL, 0, b, 4, out);
+    result = fn(nullptr, 0, b, 4, out);
     if (result != 0) {
         ERR("[%s] First empty should return 0, got %" PRIu64, fnName,
             (uint64_t)result);
@@ -1689,7 +1689,7 @@ static int32_t testEmptyArrays(intersectFn fn, const char *fnName) {
 
     /* Second empty */
     uint32_t a[] = {1, 2, 3, 4};
-    result = fn(a, 4, NULL, 0, out);
+    result = fn(a, 4, nullptr, 0, out);
     if (result != 0) {
         ERR("[%s] Second empty should return 0, got %" PRIu64, fnName,
             (uint64_t)result);
@@ -1713,7 +1713,7 @@ static int32_t testSingleElements(intersectFn fn, const char *fnName) {
     /* Single element, no match */
     const uint32_t a2[] = {10};
     const uint32_t b2[] = {20};
-    if (!testIntersection(fn, fnName, a2, 1, b2, 1, NULL, 0)) {
+    if (!testIntersection(fn, fnName, a2, 1, b2, 1, nullptr, 0)) {
         ERR("[%s] Single no-match failed", fnName);
     }
 
@@ -1728,7 +1728,7 @@ static int32_t testSingleElements(intersectFn fn, const char *fnName) {
     /* Single vs multiple, no match */
     const uint32_t a4[] = {6};
     const uint32_t b4[] = {1, 3, 5, 7, 9};
-    if (!testIntersection(fn, fnName, a4, 1, b4, 5, NULL, 0)) {
+    if (!testIntersection(fn, fnName, a4, 1, b4, 5, nullptr, 0)) {
         ERR("[%s] Single vs multiple no-match failed", fnName);
     }
 
@@ -1742,14 +1742,14 @@ static int32_t testDisjoint(intersectFn fn, const char *fnName) {
     /* Interleaved disjoint */
     const uint32_t a[] = {2, 4, 6, 8, 10};
     const uint32_t b[] = {1, 3, 5, 7, 9};
-    if (!testIntersection(fn, fnName, a, 5, b, 5, NULL, 0)) {
+    if (!testIntersection(fn, fnName, a, 5, b, 5, nullptr, 0)) {
         ERR("[%s] Interleaved disjoint failed", fnName);
     }
 
     /* Non-overlapping ranges */
     const uint32_t a2[] = {1, 2, 3, 4, 5};
     const uint32_t b2[] = {10, 20, 30, 40, 50};
-    if (!testIntersection(fn, fnName, a2, 5, b2, 5, NULL, 0)) {
+    if (!testIntersection(fn, fnName, a2, 5, b2, 5, nullptr, 0)) {
         ERR("[%s] Non-overlapping ranges failed", fnName);
     }
 

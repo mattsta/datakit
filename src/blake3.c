@@ -886,7 +886,7 @@ static blake3Output hasher_final_output(const blake3Hasher *self) {
      * of two chunks, whose last push folded and saved the root's pair
      * above; only a total of 1 pushes without folding, and chunk 0 is
      * completed only when more input follows it */
-    assert(NULL && "one stacked CV, an empty chunk and no root pair");
+    assert(false && "one stacked CV, an empty chunk and no root pair");
     return chunk_output(self);
 }
 
@@ -1009,7 +1009,7 @@ static void *blake3MtWorker(void *arg) {
             ctx->mismatches++;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Lowercase hex of a single byte. */
@@ -2006,12 +2006,13 @@ int blake3Test(int, char *[]) {
             blake3Hash(seed_buf, ctxs[i].payload_len, ctxs[i].expected);
         }
         for (uint32_t i = 0; i < kThreads; i++) {
-            if (pthread_create(&tids[i], NULL, blake3MtWorker, &ctxs[i]) != 0) {
+            if (pthread_create(&tids[i], nullptr, blake3MtWorker, &ctxs[i]) !=
+                0) {
                 ERR("pthread_create failed for thread %u", i);
             }
         }
         for (uint32_t i = 0; i < kThreads; i++) {
-            pthread_join(tids[i], NULL);
+            pthread_join(tids[i], nullptr);
         }
         for (uint32_t i = 0; i < kThreads; i++) {
             if (ctxs[i].mismatches > 0) {

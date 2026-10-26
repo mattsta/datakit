@@ -70,7 +70,7 @@ static bool multiFenwick2dWriteOrCreate_(multiFenwick2d **t, size_t row,
     if (!multiFenwick2dWrite_(*t, row, col, delta)) {
         if (created) {
             multiFenwick2dFree(*t);
-            *t = NULL;
+            *t = nullptr;
         }
 
         return false;
@@ -208,13 +208,13 @@ static uint8_t *multiFenwick2dPersistSnapshot_(const void *structure,
 
 static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
     const size_t n = flexCount(f);
     if (n < 4) {
-        return NULL;
+        return nullptr;
     }
 
     flexEntry *fe = flexHead(f);
@@ -224,7 +224,7 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
         flexGetByTypeBig(fe, &box);
         fe = flexNext(f, fe);
         if (box.type != DATABOX_UNSIGNED_64) {
-            return NULL;
+            return nullptr;
         }
 
         header[h] = box.data.u64;
@@ -241,7 +241,7 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
         (empty && n != 4) ||
         (!empty && (colCap > (n - 4) / rowCap || rowCap * colCap != n - 4 ||
                     rowCap * colCap > MF2D_P_MAX_CELLS_))) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multiFenwick2dFree */
@@ -264,7 +264,7 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
         if (!multiFenwickNumFrom_((const databox *)&box, &num) ||
             !multiFenwickCellEncode(num, &cell)) {
             multiFenwick2dFree(t);
-            return NULL;
+            return nullptr;
         }
 
         multiFenwickCellsPut(&t->store, cells, i, cell);
@@ -280,7 +280,7 @@ static uint8_t *multiFenwick2dPersistEncodeOp_(persistOp op, const void *args,
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3 ||
         !boxes) {
         /* CLEAR has no operand; nothing else is replayed */
-        return NULL;
+        return nullptr;
     }
 
     flex *f = flexNewFromDataboxPtrsExact(boxes, argc);

@@ -610,7 +610,7 @@ DK_STATIC void hyperloglogDenseRegisterHistogram(uint8_t *registers,
 DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     hyperloglog *h = *inHll;
     mdsc *sparse = toMDSC(h);
-    cleaner(mdscfree) mdsc *dense = NULL;
+    cleaner(mdscfree) mdsc *dense = nullptr;
     hyperloglogHeader *hdr;
     hyperloglogHeader *oldhdr = h;
     int32_t idx = 0;
@@ -628,7 +628,7 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     /* New string of the right size filled with zero bytes.
      * Note that the cached cardinality is set to 0 as a side effect
      * that is exactly the cardinality of an empty HLL. */
-    dense = mdscnewlen(NULL, HLL_DENSE_SIZE);
+    dense = mdscnewlen(nullptr, HLL_DENSE_SIZE);
     hdr = (hyperloglog *)dense;
     *hdr = *oldhdr; /* copies cached card */
     hdr->encoding = HLL_DENSE;
@@ -666,14 +666,14 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
     if (idx != HLL_REGISTERS) {
-        assert(NULL && "Conversion error?");
+        assert(false && "Conversion error?");
         return false;
     }
 
     /* Free original representation and set the new one. */
     hyperloglogFree(*inHll);
     *inHll = toHLL(dense);
-    dense = NULL;
+    dense = nullptr;
 
     return true;
 }
@@ -727,8 +727,8 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
     end = p + mdsclen(hmdsc) - HLL_HDR_SIZE;
 
     first = 0;
-    prev = NULL; /* Points to previous opcode at the end of the loop. */
-    next = NULL; /* Points to the next opcode at the end of the loop. */
+    prev = nullptr; /* Points to previous opcode at the end of the loop. */
+    next = nullptr; /* Points to the next opcode at the end of the loop. */
     span = 0;
     while (p < end) {
         int64_t oplen;
@@ -762,7 +762,7 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
 
     next = HLL_SPARSE_IS_XZERO(p) ? p + 2 : p + 1;
     if (next >= end) {
-        next = NULL;
+        next = nullptr;
     }
 
     /* Cache current opcode type to avoid using the macro again and
@@ -951,7 +951,7 @@ updated:
 
 promote: /* Promote to dense representation. */
     if (hyperloglogSparseToDense(toHLLIn(hmdsc)) == false) {
-        assert(NULL && "No convert?");
+        assert(false && "No convert?");
     }
 
     hdr = toHLL(hmdsc);
@@ -1437,7 +1437,7 @@ hyperloglog *hyperloglogNew(void) {
     int_fast32_t aux = HLL_REGISTERS;
 
     /* @own: caller; free=hyperloglogFree */
-    const mdsc *s = mdscnewlen(NULL, sparselen);
+    const mdsc *s = mdscnewlen(nullptr, sparselen);
     hyperloglog *restrict h = toHLL(s);
 
     uint8_t *p = (uint8_t *)h + HLL_HDR_SIZE;
@@ -1467,7 +1467,7 @@ hyperloglog *hyperloglogNewSparse(void) {
 
 hyperloglog *hyperloglogNewDense(void) {
     /* @own: caller; free=hyperloglogFree */
-    hyperloglog *dense = toHLL(mdscnewlen(NULL, HLL_DENSE_SIZE));
+    hyperloglog *dense = toHLL(mdscnewlen(nullptr, HLL_DENSE_SIZE));
     dense->encoding = HLL_DENSE;
     return dense;
 }
@@ -1544,7 +1544,7 @@ uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
     if (invalid) {
         *invalid = !ok;
     }
-    return ok ? hyperloglogCount_(raw, NULL) : 0;
+    return ok ? hyperloglogCount_(raw, nullptr) : 0;
 }
 
 hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense) {
@@ -1622,7 +1622,7 @@ hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n) {
     /* Dense when any input is (a union is at least as full as each) */
     bool anyDense = false;
     if (!hyperloglogFoldAll_(raw, hlls, n, &anyDense)) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=hyperloglogFree */
@@ -1655,18 +1655,18 @@ defcleaner(hllBenchSet, hllBenchSetFree);
  * elements (10M), still crossing every sparse/dense checkpoint */
 static constexpr int HLL_TEST_CYCLES = 1000;
 int hyperloglogTest(int, char *[]) {
-    uint32_t sseed = time(NULL) ^ getpid();
+    uint32_t sseed = time(nullptr) ^ getpid();
     uint32_t shash = HYPERHASH(&sseed, sizeof(sseed), 0xadc83b19ULL);
     srand(shash);
 
     printf("Testing (using seed: %" PRIu32 ") for %" PRId32 " cycles\n",
            (uint32_t)shash, (int32_t)HLL_TEST_CYCLES);
 
-    cleaner(mdscfree) mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
+    cleaner(mdscfree) mdsc *bitcounters = mdscnewlen(nullptr, HLL_DENSE_SIZE);
     hyperloglogHeader *hdr = (hyperloglogHeader *)bitcounters, *hdr2;
     uint8_t bytecounters[HLL_REGISTERS] = {};
     int err = 0;
-    cleaner(hyperloglogFree) hyperloglog *h = NULL;
+    cleaner(hyperloglogFree) hyperloglog *h = nullptr;
 
     /* Every register is accessible, and setting one keeps its value without
      * touching its neighbours */
@@ -1738,8 +1738,8 @@ int hyperloglogTest(int, char *[]) {
             }
 
             /* Check that dense and sparse representations agree. */
-            if (j == checkpoint &&
-                hyperloglogCount(hdr, NULL) != hyperloglogCount(h, NULL)) {
+            if (j == checkpoint && hyperloglogCount(hdr, nullptr) !=
+                                       hyperloglogCount(h, nullptr)) {
                 ERR("dense/sparse disagree at %" PRIu64, j);
                 goto approximationDone;
             }
@@ -1747,7 +1747,7 @@ int hyperloglogTest(int, char *[]) {
             /* Check error. */
             if (j == checkpoint) {
                 int64_t abserr =
-                    checkpoint - (int64_t)hyperloglogCount(hdr, NULL);
+                    checkpoint - (int64_t)hyperloglogCount(hdr, nullptr);
                 uint64_t maxerr = ceil(relerr * 6 * checkpoint);
 
                 /* Adjust the max error we expect for cardinality 10
@@ -1786,14 +1786,14 @@ approximationDone:
             hyperloglogAdd(&h2, &v2, sizeof(v2));
         }
 
-        uint64_t count1 = hyperloglogCount(h1, NULL);
-        uint64_t count2 = hyperloglogCount(h2, NULL);
+        uint64_t count1 = hyperloglogCount(h1, nullptr);
+        uint64_t count2 = hyperloglogCount(h2, nullptr);
 
         /* Merge h2 into a new HLL that also has h1's data */
         const hyperloglog *pair[2] = {h1, h2};
         cleaner(hyperloglogFree) hyperloglog *merged =
             hyperloglogNewUnion(pair, 2);
-        uint64_t countMerged = hyperloglogCount(merged, NULL);
+        uint64_t countMerged = hyperloglogCount(merged, nullptr);
 
         /* Merged count should be approximately count1 + count2 */
         /* Allow 10% error margin */

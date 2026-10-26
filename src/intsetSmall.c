@@ -149,7 +149,7 @@ intsetSmall *intsetSmallRemove(intsetSmall *is, int64_t value, bool *removed) {
         if (removed) {
             *removed = false;
         }
-        return NULL;
+        return nullptr;
     }
 
     uint32_t pos;

@@ -20,11 +20,11 @@ static_assert(alignof(fastWaiter) > FAST_MUTEX_FLAGS,
               "waiter addresses leave the flag bits clear");
 
 static void fast_waiter_init(fastWaiter *w) {
-    pthread_mutex_init(&w->lock, NULL);
-    pthread_cond_init(&w->cond, NULL);
+    pthread_mutex_init(&w->lock, nullptr);
+    pthread_cond_init(&w->cond, nullptr);
     w->waiting = true;
-    w->next = NULL;
-    w->tail = NULL;
+    w->next = nullptr;
+    w->tail = nullptr;
 }
 
 static void fast_waiter_destroy(fastWaiter *w) {
@@ -153,7 +153,7 @@ void fastMutexUnlockSlow(fastMutex *m) {
 }
 
 int fastMutexCondWait(fastCond *c, fastMutex *m) {
-    return fastMutexCondTimedWait(c, m, NULL);
+    return fastMutexCondTimedWait(c, m, nullptr);
 }
 
 int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts) {
@@ -207,7 +207,7 @@ int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts) {
              * its successor, and a removed last node moves it back. */
             if (last == &c->w && waiter.next) {
                 waiter.next->tail = waiter.tail;
-            } else if (c->w && waiter.next == NULL) {
+            } else if (c->w && waiter.next == nullptr) {
                 c->w->tail = lasttail;
             }
         } else {

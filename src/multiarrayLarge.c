@@ -39,7 +39,7 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     const uint32_t nodes = medium->count;
 
     multiarrayLarge tmp = {};
-    multiarrayLargeNode *head = NULL;
+    multiarrayLargeNode *head = nullptr;
     multiarrayLargeResult worker = {};
     for (uint16_t i = 0; i < medium->count; i++) {
         /* @own: container; free=multiarrayLargeFree */
@@ -85,7 +85,7 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
 
 void multiarrayLargeFreeInside(multiarrayLarge *mar) {
     if (mar) {
-        multiarrayLargeNode *prev = NULL;
+        multiarrayLargeNode *prev = nullptr;
         multiarrayLargeNode *e = mar->head;
         while (e) {
             /* Goodbye data array */
@@ -110,7 +110,7 @@ void multiarrayLargeFree(multiarrayLarge *mar) {
 size_t multiarrayLargeCount(const multiarrayLarge *mar) {
     /* Walk the xor-linked node list summing per-node entry counts. */
     size_t total = 0;
-    const multiarrayLargeNode *prev = NULL;
+    const multiarrayLargeNode *prev = nullptr;
     const multiarrayLargeNode *e = mar->head;
     while (e) {
         total += e->count;
@@ -131,7 +131,7 @@ size_t multiarrayLargeBytes(const multiarrayLarge *mar) {
 void multiarrayLargeStats(const multiarrayLarge *mar, dkTierStats *out) {
     uint64_t count = 0;
     uint32_t nodes = 0;
-    const multiarrayLargeNode *prev = NULL;
+    const multiarrayLargeNode *prev = nullptr;
     const multiarrayLargeNode *e = mar->head;
     while (e) {
         count += e->count;
@@ -156,9 +156,9 @@ void multiarrayLargeStats(const multiarrayLarge *mar, dkTierStats *out) {
 DK_STATIC inline multiarrayLargeResult
 multiarrayLargeGetForwardWorker(multiarrayLargeNode *e, int32_t idx,
                                 uint32_t len) {
-    multiarrayLargeNode *prev = NULL;
+    multiarrayLargeNode *prev = nullptr;
     multiarrayLargeNode *current = e;
-    multiarrayLargeNode *next = NULL;
+    multiarrayLargeNode *next = nullptr;
 
     int32_t accum = 0;
     while ((next = getNext(prev, current)) && (accum + current->count) <= idx) {
@@ -409,9 +409,9 @@ void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx) {
     /* Elements back from the end: -1 is 0 back (no overflow at INT32_MIN);
      * the XOR links walk from the tail exactly as from the head */
     const uint32_t back = (uint32_t)(-(idx + 1));
-    multiarrayLargeNode *prev = NULL;
+    multiarrayLargeNode *prev = nullptr;
     multiarrayLargeNode *current = mar->tail;
-    multiarrayLargeNode *next = NULL;
+    multiarrayLargeNode *next = nullptr;
     uint64_t accum = 0;
     while ((next = getNext(prev, current)) && accum + current->count <= back) {
         accum += current->count;
@@ -429,7 +429,7 @@ void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx) {
 
 void *multiarrayLargeGetForward(const multiarrayLarge *mar,
                                 const uint32_t index) {
-    const multiarrayLargeNode *prev = NULL;
+    const multiarrayLargeNode *prev = nullptr;
     const multiarrayLargeNode *current = mar->head;
     const multiarrayLargeNode *next;
     uint32_t accum = 0;
@@ -452,7 +452,7 @@ void *multiarrayLargeGetForward(const multiarrayLarge *mar,
 /* First / last element; NULL when the array is empty */
 void *multiarrayLargeGetHead(const multiarrayLarge *mar) {
     /* The head is empty only when it is the array's only node */
-    return mar->head->count ? mar->head->data : NULL;
+    return mar->head->count ? mar->head->data : nullptr;
 }
 
 void *multiarrayLargeGetTail(const multiarrayLarge *mar) {
@@ -461,9 +461,9 @@ void *multiarrayLargeGetTail(const multiarrayLarge *mar) {
      * element */
     const multiarrayLargeNode *tail = mar->tail;
     if (tail->count == 0) {
-        tail = getNext((const multiarrayLargeNode *)NULL, tail);
+        tail = getNext((const multiarrayLargeNode *)nullptr, tail);
         if (!tail || tail->count == 0) {
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -471,7 +471,7 @@ void *multiarrayLargeGetTail(const multiarrayLarge *mar) {
 }
 
 void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx) {
-    multiarrayLargeDeleteTaking(mar, idx, NULL);
+    multiarrayLargeDeleteTaking(mar, idx, nullptr);
 }
 
 void multiarrayLargeLocate(const multiarrayLarge *mar, const uint32_t idx,
@@ -525,7 +525,7 @@ void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
             if (!prev && !next) {
                 /* The last node stays, empty */
                 zfree(node->data);
-                node->data = NULL;
+                node->data = nullptr;
                 node->count = 0;
                 break;
             }
@@ -533,7 +533,7 @@ void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
             /* Unlinked and freed; 'prev' now links to 'next' */
             multiarrayLargeNodeDelete(mar, worker);
             worker.current = next;
-            worker.next = next ? getNext(prev, next) : NULL;
+            worker.next = next ? getNext(prev, next) : nullptr;
         } else {
             const uint32_t after = node->count - offset - take;
             memmove(node->data + len * offset,
@@ -543,7 +543,8 @@ void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
             node->data = zrealloc(node->data, len * node->count);
             worker.prev = node;
             worker.current = worker.next;
-            worker.next = worker.current ? getNext(node, worker.current) : NULL;
+            worker.next =
+                worker.current ? getNext(node, worker.current) : nullptr;
         }
 
         count -= take;

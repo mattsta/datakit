@@ -295,7 +295,7 @@ int dkFormatTest(int, char *[]) {
             }
         }
 
-        if (dkFormatPrefixRead(&spec, NULL, 10, NULL, NULL) !=
+        if (dkFormatPrefixRead(&spec, nullptr, 10, nullptr, nullptr) !=
             DK_FORMAT_MALFORMED) {
             ERR("a NULL buffer was read");
         }
@@ -306,7 +306,7 @@ int dkFormatTest(int, char *[]) {
     TEST("manifest: every format once, versions in range") {
         dkFormatSpec specs[64];
         const size_t n = dkFormatManifest(specs, 64);
-        if (n != dkFormatManifest(NULL, 0) || n < 19 || n > 64) {
+        if (n != dkFormatManifest(nullptr, 0) || n < 19 || n > 64) {
             ERR("manifest lists %zu formats", n);
         }
         printf("%-34s %8s %8s %8s %18s\n", "format", "id", "writes",

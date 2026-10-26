@@ -107,7 +107,7 @@ DK_INLINE_ALWAYS size_t multimapMediumBinarySearch_(
     databox got;
     databoxWide gotWide;
     multimapGetByTypeInto_(head, &got, &gotWide,
-                           useReference ? referenceContainer : NULL);
+                           useReference ? referenceContainer : nullptr);
 
     const int compared = databoxCompare(&got, key);
 
@@ -122,7 +122,7 @@ DK_INLINE_ALWAYS size_t multimapMediumBinarySearch_(
 
 DK_STATIC size_t multimapMediumBinarySearch(multimapMedium *m,
                                             const databox *key) {
-    return multimapMediumBinarySearch_(m, key, false, NULL);
+    return multimapMediumBinarySearch_(m, key, false, nullptr);
 }
 
 DK_STATIC size_t multimapMediumBinarySearchWithReference(
@@ -205,7 +205,7 @@ bool multimapMediumInsertWithSurrogateKeyIfAbsent(
     const size_t mapIdx = multimapMediumBinarySearchWithReference(
         m, elements[0], referenceContainer);
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
-    flexEntry *found = NULL;
+    flexEntry *found = nullptr;
     if (flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
             &m->map[mapIdx], m->elementsPerEntry, elements, insertKey, &middle,
             referenceContainer, &found, whenAbsent, whenAbsentCtx)) {
@@ -218,7 +218,7 @@ bool multimapMediumInsertWithSurrogateKeyIfAbsent(
 }
 
 bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
-    return multimapMediumInsertReplacing(m, elements, NULL);
+    return multimapMediumInsertReplacing(m, elements, nullptr);
 }
 
 /* 'replacedOut' as multimapSmallInsertReplacing: a map replace reports the
@@ -249,7 +249,7 @@ bool multimapMediumInsertIfAbsent(multimapMedium *m, const databox *elements[],
                                   multimapEntry *me) {
     const size_t mapIdx = multimapMediumBinarySearch(m, elements[0]);
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
-    flexEntry *found = NULL;
+    flexEntry *found = nullptr;
     if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
             &m->map[mapIdx], m->elementsPerEntry, elements, &middle, &found)) {
         if (me) {
@@ -342,7 +342,7 @@ multimapMediumFindKey_(multimapMedium *m, const databox *key,
         databoxWide lastWide;
         multimapGetByTypeInto_(
             flexIndex(m->map[0], -(int32_t)m->elementsPerEntry), &last,
-            &lastWide, useReference ? referenceContainer : NULL);
+            &lastWide, useReference ? referenceContainer : nullptr);
         if (databoxCompare(&last, key) == 0) {
             idx = 0;
         }
@@ -378,7 +378,7 @@ abstractGetUnderlyingEntry(multimapMedium *m, const databox *key,
 
 bool multimapMediumGetUnderlyingEntry(multimapMedium *m, const databox *key,
                                       multimapEntry *me) {
-    return abstractGetUnderlyingEntry(m, key, me, false, NULL);
+    return abstractGetUnderlyingEntry(m, key, me, false, nullptr);
 }
 
 static bool multimapMediumGetUnderlyingEntryGetEntry(multimapMedium *m,
@@ -387,7 +387,7 @@ static bool multimapMediumGetUnderlyingEntryGetEntry(multimapMedium *m,
     /* Position variant: unlike the exact-match search used for direct
      * entry lookup, this returns the insertion point for any key, so
      * "start at or after K" works for keys that don't exist. */
-    me->mapIdx = multimapMediumBinarySearch_(m, key, false, NULL);
+    me->mapIdx = multimapMediumBinarySearch_(m, key, false, nullptr);
     me->fe = flexFindByTypeSortedWithMiddleGetEntry(m->map[me->mapIdx],
                                                     m->elementsPerEntry, key,
                                                     GET_MIDDLE(m, me->mapIdx));
@@ -480,7 +480,7 @@ DK_INLINE_ALWAYS bool abstractLookup(multimapMedium *m, const databox *key,
 
 bool multimapMediumLookup(multimapMedium *m, const databox *key,
                           databox *elements[]) {
-    return abstractLookup(m, key, elements, false, NULL);
+    return abstractLookup(m, key, elements, false, nullptr);
 }
 
 bool multimapMediumLookupWithReference(multimapMedium *m, const databox *key,
@@ -578,7 +578,7 @@ bool multimapMediumDeleteRandomValue(multimapMedium *m,
      * copy the data using multimapRemovedCopy_. This avoids use-after-free
      * since flexGetByType returns pointers to internal flex data which
      * become invalid after multimapMediumDeleteEntry. */
-    if (!multimapMediumRandomValue(m, deleteFromTail, NULL, &me)) {
+    if (!multimapMediumRandomValue(m, deleteFromTail, nullptr, &me)) {
         return false;
     }
 
@@ -604,7 +604,7 @@ DK_INLINE_ALWAYS bool abstractDelete(
 
     if (fullWidth) {
         if (useReference) {
-            assert(NULL && "Not implemented!");
+            assert(false && "Not implemented!");
             unreachable();
         }
         mapIdx = multimapMediumBinarySearchFullWidth(m, elements);
@@ -622,7 +622,7 @@ DK_INLINE_ALWAYS bool abstractDelete(
         if (foundReference) {
             /* The row is being deleted, so a 96/128-bit key is reported
              * type-only (see multimapDeleteWithFound). */
-            flexGetByTypeInto(foundP, foundReference, NULL);
+            flexGetByTypeInto(foundP, foundReference, nullptr);
         }
 
         multimapRemovedOutFill_(m->map[mapIdx], foundP, m->elementsPerEntry,
@@ -655,35 +655,39 @@ void multimapMediumDeleteEntryWithReference(
 }
 
 bool multimapMediumDelete(multimapMedium *m, const databox *key) {
-    return abstractDelete(m, &key, false, false, NULL, NULL, NULL, false);
+    return abstractDelete(m, &key, false, false, nullptr, nullptr, nullptr,
+                          false);
 }
 
 bool multimapMediumDeleteReporting(multimapMedium *m, const databox *key,
                                    databox *removedOut) {
-    return abstractDelete(m, &key, false, false, NULL, NULL, removedOut, false);
+    return abstractDelete(m, &key, false, false, nullptr, nullptr, removedOut,
+                          false);
 }
 
 bool multimapMediumDeleteTaking(multimapMedium *m, const databox *key,
                                 databox *takenOut) {
-    return abstractDelete(m, &key, false, false, NULL, NULL, takenOut, true);
+    return abstractDelete(m, &key, false, false, nullptr, nullptr, takenOut,
+                          true);
 }
 
 bool multimapMediumDeleteWithReference(
     multimapMedium *m, const databox *key,
     const struct multimapAtom *referenceContainer, databox *foundReference) {
     return abstractDelete(m, &key, false, true, referenceContainer,
-                          foundReference, NULL, false);
+                          foundReference, nullptr, false);
 }
 
 bool multimapMediumDeleteWithFound(multimapMedium *m, const databox *key,
                                    databox *foundReference) {
-    return abstractDelete(m, &key, false, true, NULL, foundReference, NULL,
-                          false);
+    return abstractDelete(m, &key, false, true, nullptr, foundReference,
+                          nullptr, false);
 }
 
 bool multimapMediumDeleteFullWidth(multimapMedium *m,
                                    const databox *elements[]) {
-    return abstractDelete(m, elements, true, false, NULL, NULL, NULL, false);
+    return abstractDelete(m, elements, true, false, nullptr, nullptr, nullptr,
+                          false);
 }
 
 /* Locate the row at position 'keyIndex' (0-based forward; negative =
@@ -698,7 +702,7 @@ DK_STATIC flexEntry *multimapMediumRowByPosition_(multimapMedium *m,
 
     int64_t row = keyIndex < 0 ? rows + keyIndex : keyIndex;
     if (row < 0 || row >= rows) {
-        return NULL;
+        return nullptr;
     }
 
     const size_t mapIdx = row < rows0 ? 0 : 1;
@@ -743,7 +747,8 @@ bool multimapMediumDeleteByPosition(multimapMedium *m, int64_t keyIndex) {
 int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
                                 uint32_t fieldOffset, int64_t incrBy) {
     size_t mapIdx;
-    flexEntry *current = multimapMediumFindKey_(m, key, false, NULL, &mapIdx);
+    flexEntry *current =
+        multimapMediumFindKey_(m, key, false, nullptr, &mapIdx);
     if (!current) {
         /* No such key: return 0 rather than walking flexNext from NULL.
          * Matches the multimap-level FieldIncr miss contract. */
@@ -766,7 +771,7 @@ int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
     /* (unlikely) else, return current value; a 96/128-bit value can't be
      * read as int64_t, so it reports 0 (only its type is decoded) */
     databox curVal;
-    flexGetByTypeInto(current, &curVal, NULL);
+    flexGetByTypeInto(current, &curVal, nullptr);
     return databoxIsWideDeferred(&curVal) ? 0 : curVal.data.i;
 }
 
@@ -850,7 +855,7 @@ bool multimapMediumIteratorInitAt(multimapMedium *m, multimapIterator *iter,
             me.map = &m->map[1];
             me.fe = flexHead(m->map[1]);
         } else {
-            me.fe = NULL;
+            me.fe = nullptr;
         }
     }
 
@@ -860,7 +865,7 @@ bool multimapMediumIteratorInitAt(multimapMedium *m, multimapIterator *iter,
 
 bool multimapMediumIteratorInit(multimapMedium *m, multimapIterator *iter,
                                 bool forward) {
-    flex *tmp = NULL;
+    flex *tmp = nullptr;
     multimapEntry me;
 
     if (likely(flexCount(m->map[0]))) {
@@ -881,7 +886,7 @@ bool multimapMediumIteratorInit(multimapMedium *m, multimapIterator *iter,
     } else {
         /* If no entries in the lowest map (which must always have entries if
          * entries exist), then we can't iterate. */
-        me.fe = NULL;
+        me.fe = nullptr;
         me.mapIdx = 1;
         me.map = &tmp;
     }
@@ -923,7 +928,7 @@ DK_INLINE_ALWAYS bool multimapMediumIteratorNext_(multimapIterator *iter,
         if (iter->forward && iter->mapIndex == 0) {
             iter->mapIndex = 1;
             iter->map = ((multimapMedium *)iter->mm)->map[1];
-            iter->entry = flexCount(iter->map) ? flexHead(iter->map) : NULL;
+            iter->entry = flexCount(iter->map) ? flexHead(iter->map) : nullptr;
             continue;
         }
 
@@ -932,7 +937,7 @@ DK_INLINE_ALWAYS bool multimapMediumIteratorNext_(multimapIterator *iter,
         if (!iter->forward && iter->mapIndex == 1) {
             iter->mapIndex = 0;
             iter->map = ((multimapMedium *)iter->mm)->map[0];
-            iter->entry = flexCount(iter->map) ? flexTail(iter->map) : NULL;
+            iter->entry = flexCount(iter->map) ? flexTail(iter->map) : nullptr;
             continue;
         }
 
@@ -941,14 +946,14 @@ DK_INLINE_ALWAYS bool multimapMediumIteratorNext_(multimapIterator *iter,
 }
 
 bool multimapMediumIteratorNext(multimapIterator *iter, databox *elements[]) {
-    return multimapMediumIteratorNext_(iter, elements, NULL);
+    return multimapMediumIteratorNext_(iter, elements, nullptr);
 }
 
 bool multimapMediumIteratorNextWithSlots(multimapIterator *iter,
                                          databox *elements[],
                                          databoxWide *slots) {
     if (!slots) {
-        return multimapMediumIteratorNext_(iter, elements, NULL);
+        return multimapMediumIteratorNext_(iter, elements, nullptr);
     }
 
     return multimapMediumIteratorNext_(iter, elements, slots);
@@ -957,7 +962,7 @@ bool multimapMediumIteratorNextWithSlots(multimapIterator *iter,
 bool multimapMediumDeleteByPredicate(multimapMedium *m,
                                      const multimapPredicate *p) {
     const size_t mapIdx =
-        multimapMediumBinarySearch_(m, &p->compareAgainst, false, NULL);
+        multimapMediumBinarySearch_(m, &p->compareAgainst, false, nullptr);
 
     /* Boundary search, NOT an exact-match search: deleting everything
      * at or below a limit must work for any limit, not only for one
@@ -1007,7 +1012,7 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
         return true;
     default:
         /* We don't support the other predicate types yet */
-        assert(NULL && "Not Implemented!");
+        assert(false && "Not Implemented!");
         return false;
     }
     return false;
@@ -1065,12 +1070,12 @@ static multimapMedium *buildSplitMedium(size_t count, size_t splitAt) {
      * split sizes both halves from the row count, so it must be the
      * flex's middle row. */
     flexEntry *splitEntry = flexIndex(f, (int32_t)(splitAt * 2));
-    assert(splitEntry != NULL);
+    assert(splitEntry != nullptr);
     assert(splitEntry == flexMiddle(f, 2));
     const uint32_t middle = (uint32_t)(splitEntry - f);
 
     /* @own: caller; free=multimapMediumFree */
-    return multimapMediumNewFromOneGrow(NULL, f, middle, 2, false);
+    return multimapMediumNewFromOneGrow(nullptr, f, middle, 2, false);
 }
 
 /* Count how many of the inserted keys live in each map. */
@@ -1399,7 +1404,7 @@ int multimapMediumTest(int, char *[]) {
 
         flexEntry *split = flexMiddle(f, 2);
         cleaner(multimapMediumFree) multimapMedium *m =
-            multimapMediumNewFromOneGrow(NULL, f, (uint32_t)(split - f), 2,
+            multimapMediumNewFromOneGrow(nullptr, f, (uint32_t)(split - f), 2,
                                          false);
 
         /* A key below every row, and one above, through Insert. */
@@ -1498,7 +1503,7 @@ int multimapMediumTest(int, char *[]) {
 
         flexEntry *split = flexMiddle(f, 1);
         cleaner(multimapMediumFree) multimapMedium *m =
-            multimapMediumNewFromOneGrow(NULL, f, (uint32_t)(split - f), 1,
+            multimapMediumNewFromOneGrow(nullptr, f, (uint32_t)(split - f), 1,
                                          false);
 
         __uint128_t above = (__uint128_t)1 << 80;

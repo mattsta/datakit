@@ -204,7 +204,7 @@ bool chacha20NeonAvailable(void) {
  * Asserting in debug builds catches regressions; production builds
  * silently produce zeros (the dispatcher will not invoke us). */
 void chacha20NeonBlock4(const uint32_t[16], uint8_t out[256]) {
-    if (out != NULL) {
+    if (out != nullptr) {
         memset(out, 0, 256);
     }
     assert(!"chacha20NeonBlock4 invoked on non-aarch64 build — caller "

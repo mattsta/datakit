@@ -20,8 +20,8 @@
 
 extern char **environ;
 
-static const char *os_argv_last = NULL;
-static char **global_os_argv = NULL;
+static const char *os_argv_last = nullptr;
+static char **global_os_argv = nullptr;
 
 bool setProctitleInit(char *os_argv[]) {
     size_t size = 0;
@@ -55,7 +55,7 @@ bool setProctitleInit(char *os_argv[]) {
     }
 
     os_argv_last--;
-    os_argv[1] = NULL;
+    os_argv[1] = nullptr;
 
     return true;
 }

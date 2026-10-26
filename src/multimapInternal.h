@@ -46,7 +46,7 @@ DK_INLINE_ALWAYS void multimapIteratorDecode_(const flexEntry *const fe,
 static inline void multimapRemovedCopy_(const flexEntry *const fe,
                                         databox *const box) {
     databox found = {};
-    flexGetByTypeInto(fe, &found, NULL);
+    flexGetByTypeInto(fe, &found, nullptr);
     if (found.type == DATABOX_BYTES) {
         if (found.len <= sizeof(found.data.bytes.embed8)) {
             databox embed = {};
@@ -86,7 +86,7 @@ multimapRemovedOutFill_(const flex *map, const flexEntry *fe,
             multimapRemovedCopy_(fe, &removedOut[i - 1]);
         } else {
             removedOut[i - 1] = (databox){};
-            flexGetByTypeInto(fe, &removedOut[i - 1], NULL);
+            flexGetByTypeInto(fe, &removedOut[i - 1], nullptr);
         }
     }
 }

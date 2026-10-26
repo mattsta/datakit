@@ -186,7 +186,7 @@ static inline void multiFenwickCellsClear(multiFenwickCells *c,
     }
 
     zfree(c->kinds);
-    c->kinds = NULL;
+    c->kinds = nullptr;
 }
 
 static inline size_t multiFenwickCellsBytes(const multiFenwickCells *c,
@@ -198,6 +198,6 @@ static inline size_t multiFenwickCellsBytes(const multiFenwickCells *c,
 static inline void multiFenwickCellsFree(multiFenwickCells *c) {
     zfree(c->bits);
     zfree(c->kinds);
-    c->bits = NULL;
-    c->kinds = NULL;
+    c->bits = nullptr;
+    c->kinds = nullptr;
 }

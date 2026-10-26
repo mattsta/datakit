@@ -148,7 +148,7 @@ void getRandomBytes(uint8_t *p, uint32_t len) {
 
         /* Use time and PID to fill the initial array. */
         struct timeval tv;
-        gettimeofday(&tv, NULL);
+        gettimeofday(&tv, nullptr);
 
         if (l >= sizeof(tv.tv_usec)) {
             memcpy(x, &tv.tv_usec, sizeof(tv.tv_usec));
@@ -246,7 +246,7 @@ bool getRandomHexCharsCounter(uint8_t seed[SHA1_DIGEST_LENGTH],
  * relative or absolute path. This function just checks that no / or \
  * character exists inside the specified path */
 bool pathIsBaseName(char *path) {
-    return strchr(path, '/') == NULL && strchr(path, '\\') == NULL;
+    return strchr(path, '/') == nullptr && strchr(path, '\\') == nullptr;
 }
 
 /* ====================================================================
@@ -412,7 +412,7 @@ void dumpX86Calls(void *addr, size_t len) {
 
         uintptr_t target = (uintptr_t)addr + j + 5;
         target += *((int32_t *)(p + j + 1));
-        if (dladdr((void *)target, &info) != 0 && info.dli_sname != NULL) {
+        if (dladdr((void *)target, &info) != 0 && info.dli_sname != nullptr) {
             if (ht[target & 0xff] != target) {
                 printf("Function at 0x%" PRIxPTR " is %s\n", target, info.dli_sname);
                 ht[target & 0xff] = target;
@@ -691,7 +691,7 @@ int utilTest(int, char **) {
             hex &= (a[i] >= '0' && a[i] <= '9') || (a[i] >= 'a' && a[i] <= 'f');
         }
         if (!hex || memcmp(a, b, sizeof(a)) != 0 || c1 != c2 || c1 == 7 ||
-            getRandomHexCharsCounter(NULL, &c1, a, 1)) {
+            getRandomHexCharsCounter(nullptr, &c1, a, 1)) {
             ERR("counter-mode hex is not deterministic hex");
         }
 

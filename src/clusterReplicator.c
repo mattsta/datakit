@@ -59,10 +59,10 @@ static size_t replicatorAuditTypeTable(const persistOps *const *table,
                                        size_t len) {
     for (size_t i = 0; i < len; i++) {
         const persistOps *ops = table[i];
-        if (ops == NULL) {
+        if (ops == nullptr) {
             continue;
         }
-        if (ops->free == NULL) {
+        if (ops->free == nullptr) {
             return i;
         }
     }
@@ -77,13 +77,13 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
         return false;
     }
     const persistOps *ops = rep->type_table[type_byte];
-    if (ops == NULL || ops->restore == NULL) {
+    if (ops == nullptr || ops->restore == nullptr) {
         return false;
     }
     /* Audit invariant: enforced at Create — every non-NULL entry has
      * a non-NULL free. Defensive assert here so a debug build trips
      * loudly if a caller later mutates the type table behind our back. */
-    if (ops->free == NULL) {
+    if (ops->free == nullptr) {
         return false;
     }
 
@@ -104,7 +104,7 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
 
     void *structure =
         ops->restore(frame->payload + prefix, frame->payload_len - prefix);
-    if (structure == NULL) {
+    if (structure == nullptr) {
         return false;
     }
     const bool accepted = rep->on_restored(frame->origin_id, frame->sequence,
@@ -163,9 +163,9 @@ clusterReplicator *clusterReplicatorCreateEx(
     const persistOps *const *type_table, size_t type_table_len,
     clusterReplicatorApplyFn on_restored, void *apply_ctx,
     const clusterReplicatorConfig *cfg) {
-    if (ring == NULL || type_table == NULL || type_table_len == 0 ||
-        on_restored == NULL) {
-        return NULL;
+    if (ring == nullptr || type_table == nullptr || type_table_len == 0 ||
+        on_restored == nullptr) {
+        return nullptr;
     }
     /* A NULL .free on any populated type-table entry would leak the
      * restored structure on every apply rejection. Refuse construction
@@ -173,7 +173,7 @@ clusterReplicator *clusterReplicatorCreateEx(
      * rather than as a slow leak in production. */
     if (replicatorAuditTypeTable(type_table, type_table_len) !=
         type_table_len) {
-        return NULL;
+        return nullptr;
     }
     cleanerName(zfree, Replicator) clusterReplicator *rep =
         zmalloc(sizeof(*rep));
@@ -181,7 +181,7 @@ clusterReplicator *clusterReplicatorCreateEx(
     rep->type_table_len = type_table_len;
     rep->on_restored = on_restored;
     rep->apply_ctx = apply_ctx;
-    rep->max_apply_retries = (cfg != NULL)
+    rep->max_apply_retries = (cfg != nullptr)
                                  ? cfg->max_apply_retries
                                  : CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES;
     rep->last_reject.origin_id = 0;
@@ -194,9 +194,9 @@ clusterReplicator *clusterReplicatorCreateEx(
      * through to the underlying mailbox. Defaults are equivalent to
      * the legacy clusterMailboxCreateEx path. */
     const bool disable_nonce_log =
-        (cfg != NULL) ? cfg->disable_nonce_log : false;
+        (cfg != nullptr) ? cfg->disable_nonce_log : false;
     const size_t nonce_log_capacity =
-        (cfg != NULL && cfg->nonce_log_capacity != 0u)
+        (cfg != nullptr && cfg->nonce_log_capacity != 0u)
             ? cfg->nonce_log_capacity
             : CLUSTER_REPLICATOR_DEFAULT_NONCE_LOG_CAP;
     const clusterMailboxCreateOptions mb_opts = {
@@ -209,12 +209,12 @@ clusterReplicator *clusterReplicatorCreateEx(
         .nonce_log_capacity = disable_nonce_log ? 0u : nonce_log_capacity,
     };
     rep->mb = clusterMailboxCreateOpts(&mb_opts);
-    if (rep->mb == NULL) {
-        return NULL;
+    if (rep->mb == nullptr) {
+        return nullptr;
     }
 
     clusterReplicator *out = rep;
-    rep = NULL;
+    rep = nullptr;
     return out;
 }
 
@@ -232,7 +232,7 @@ clusterReplicator *clusterReplicatorCreate(
 }
 
 uint64_t clusterReplicatorDroppedCount(const clusterReplicator *rep) {
-    if (rep == NULL) {
+    if (rep == nullptr) {
         return 0u;
     }
     /* Cast-away of const is local to this read of an _Atomic field;
@@ -243,7 +243,7 @@ uint64_t clusterReplicatorDroppedCount(const clusterReplicator *rep) {
 }
 
 uint64_t clusterReplicatorFormatRefusedCount(const clusterReplicator *rep) {
-    if (rep == NULL) {
+    if (rep == nullptr) {
         return 0u;
     }
     /* @sync: relaxed counter */
@@ -253,7 +253,7 @@ uint64_t clusterReplicatorFormatRefusedCount(const clusterReplicator *rep) {
 }
 
 void clusterReplicatorFree(clusterReplicator *rep) {
-    if (rep == NULL) {
+    if (rep == nullptr) {
         return;
     }
     clusterMailboxFree(rep->mb);
@@ -261,14 +261,14 @@ void clusterReplicatorFree(clusterReplicator *rep) {
 }
 
 clusterMailbox *clusterReplicatorMailbox(clusterReplicator *rep) {
-    return (rep != NULL) ? rep->mb : NULL;
+    return (rep != nullptr) ? rep->mb : nullptr;
 }
 
 size_t clusterReplicatorSnapshotSize(clusterReplicator *rep,
                                      const persistOps *ops,
                                      const void *structure) {
-    if (rep == NULL || ops == NULL || ops->snapshot == NULL ||
-        structure == NULL) {
+    if (rep == nullptr || ops == nullptr || ops->snapshot == nullptr ||
+        structure == nullptr) {
         return 0;
     }
     /* The snapshot's own length: ops->estimateSize is an approximation
@@ -277,7 +277,7 @@ size_t clusterReplicatorSnapshotSize(clusterReplicator *rep,
     size_t snapshot_len = 0;
     cleanerName(zfree, Wire) uint8_t *snapshot =
         ops->snapshot(structure, &snapshot_len);
-    if (snapshot == NULL) {
+    if (snapshot == nullptr) {
         return 0;
     }
     const dkFormatSpec spec = persistOpsFormat(ops);
@@ -290,14 +290,14 @@ bool clusterReplicatorSeal(clusterReplicator *rep, const persistOps *ops,
                            const void *structure, uint32_t origin_id,
                            uint64_t sequence, hmacKeyId key_id, uint8_t *out,
                            size_t out_cap, size_t *out_written) {
-    if (rep == NULL || ops == NULL || ops->snapshot == NULL ||
+    if (rep == nullptr || ops == nullptr || ops->snapshot == nullptr ||
         ops->type > UINT8_MAX) {
         return false;
     }
     size_t snapshot_len = 0;
     cleanerName(zfree, Wire) uint8_t *snapshot =
         ops->snapshot(structure, &snapshot_len);
-    if (snapshot == NULL) {
+    if (snapshot == nullptr) {
         return false;
     }
 
@@ -318,7 +318,7 @@ clusterMailboxIngestResult clusterReplicatorIngest(clusterReplicator *rep,
                                                    const uint8_t *bytes,
                                                    size_t len,
                                                    hmacKeyId key_id) {
-    if (rep == NULL) {
+    if (rep == nullptr) {
         return CLUSTER_MAILBOX_ERR_PARAM;
     }
     return clusterMailboxIngest(rep->mb, bytes, len, key_id);
@@ -385,7 +385,7 @@ int clusterReplicatorTest(int, char *[]) {
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, testApply, &app_ctx);
-        if (rep == NULL) {
+        if (rep == nullptr) {
             ERR("create");
         }
 

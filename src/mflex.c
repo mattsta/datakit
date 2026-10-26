@@ -218,7 +218,7 @@ void mflexPushBytes(mflex **mm, mflexState *state, const void *s, size_t len,
 
 #define MFLEX_GROW(fn, ...)                                                    \
     do {                                                                       \
-        flex *f = NULL;                                                        \
+        flex *f = nullptr;                                                     \
         _MFLEX_OPEN(*mm);                                                      \
                                                                                \
         fn(&f, __VA_ARGS__);                                                   \

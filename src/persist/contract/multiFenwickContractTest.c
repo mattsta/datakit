@@ -55,7 +55,7 @@ static databox pcMultiFenwickValue(uint64_t *rng, bool mixed) {
                                                                                \
             if (b->size >= 100 && i == b->size / 3) {                          \
                 NAME##Clear(t);                                                \
-                persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);      \
+                persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);   \
             }                                                                  \
         }                                                                      \
                                                                                \
@@ -95,7 +95,7 @@ static void *pcmultiFenwick2dBuild(const persistContractBuild *b) {
 
         if (b->size >= 100 && i == b->size / 3) {
             multiFenwick2dClear(t);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
 

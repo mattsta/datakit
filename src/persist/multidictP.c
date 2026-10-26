@@ -29,7 +29,7 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
      * the built-in types only */
     if (!ctx ||
         (type != &multidictTypeExactKey && type != &multidictTypeCaseKey)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Every failure below releases all three through their cleaners: the
@@ -40,42 +40,42 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
     cleaner(multidictFree) multidict *dict =
         multidictNew(type, qdc, multidictRandomSeed());
     if (!d || !qdc || !dict) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multidict type, and save the
      * initial snapshot, which records the key type */
     if (!persistCtxInitForType(ctx, &persistOpsMultidict) ||
         !persistCtxSaveSnapshot(ctx, dict, &persistOpsMultidict)) {
-        return NULL;
+        return nullptr;
     }
 
     /* The wrapper holds the dict, and the dict the class, from here on */
     d->ctx = ctx;
     d->d = dict;
-    dict = NULL;
-    qdc = NULL;
+    dict = nullptr;
+    qdc = nullptr;
 
     persistCtxClaim(ctx);
     multidictP *out = d;
-    d = NULL;
+    d = nullptr;
     return out;
 }
 
 multidictP *multidictOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multidict type */
     if (!persistCtxInitForType(ctx, &persistOpsMultidict)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
     multidict *recovered = persistCtxRecover(ctx, &persistOpsMultidict);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multidictCloseP */
@@ -83,7 +83,7 @@ multidictP *multidictOpenP(persistCtx *ctx) {
     if (!d) {
         /* The recovered dict owns its own default class */
         persistOpsMultidict.free(recovered);
-        return NULL;
+        return nullptr;
     }
 
     d->ctx = ctx;
@@ -117,7 +117,7 @@ void multidictCloseP(multidictP *d) {
 }
 
 multidict *multidictGetP(multidictP *d) {
-    return d ? d->d : NULL;
+    return d ? d->d : nullptr;
 }
 
 /* ============================================================================
@@ -230,7 +230,7 @@ persistLogResult multidictEmptyP(multidictP *d) {
     }
 
     const persistLogResult logged =
-        persistCtxLogOp(d->ctx, PERSIST_OP_CLEAR, NULL, 0);
+        persistCtxLogOp(d->ctx, PERSIST_OP_CLEAR, nullptr, 0);
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
@@ -365,7 +365,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP create empty and close") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to create persistCtx");
         }
@@ -387,7 +387,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP add with varied values") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -412,7 +412,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP update existing keys") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -449,7 +449,7 @@ int multidictPTest(int, char *[]) {
 
         /* Create and populate with numeric keys and values */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
 
             for (int i = 0; i < 30; i++) {
@@ -465,7 +465,7 @@ int multidictPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
@@ -485,7 +485,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP delete operations") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -529,7 +529,7 @@ int multidictPTest(int, char *[]) {
 
         /* Create, populate, delete, close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
 
             for (int i = 0; i < 15; i++) {
@@ -552,7 +552,7 @@ int multidictPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
@@ -572,7 +572,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP empty and continue") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -619,7 +619,7 @@ int multidictPTest(int, char *[]) {
 
         /* Create, populate, empty, add more, close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
 
             for (int i = 0; i < 10; i++) {
@@ -643,7 +643,7 @@ int multidictPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
@@ -663,7 +663,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP mixed operations") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         ptestKVTracker tracker;
         ptestKVTrackerInit(&tracker);
@@ -711,10 +711,10 @@ int multidictPTest(int, char *[]) {
             multidictP *d;
 
             if (cycle == 0) {
-                ctx = persistCtxNew(basePath, NULL);
+                ctx = persistCtxNew(basePath, nullptr);
                 d = multidictNewP(ctx);
             } else {
-                ctx = persistCtxOpen(basePath, NULL);
+                ctx = persistCtxOpen(basePath, nullptr);
                 d = multidictOpenP(ctx);
             }
 
@@ -749,7 +749,7 @@ int multidictPTest(int, char *[]) {
         ptestKVTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
 
             for (int i = 0; i < 200; i++) {
@@ -764,7 +764,7 @@ int multidictPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
@@ -787,7 +787,7 @@ int multidictPTest(int, char *[]) {
 
         /* Create empty and close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
             multidictCloseP(d);
             persistCtxFree(ctx);
@@ -795,7 +795,7 @@ int multidictPTest(int, char *[]) {
 
         /* Recover and verify empty */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
@@ -820,7 +820,7 @@ int multidictPTest(int, char *[]) {
 
         /* Create with single entry */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
             MULTIDICT_TEST_OK(mdpAdd(d, &expectedKey, &expectedVal));
             multidictCloseP(d);
@@ -829,7 +829,7 @@ int multidictPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
@@ -858,7 +858,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP statistics tracking") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
 
         /* Add entries */
@@ -902,11 +902,11 @@ int multidictPTest(int, char *[]) {
 
         /* Only built-in types can be reopened */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
-            static multidictType custom = {NULL, NULL};
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
+            static multidictType custom = {nullptr, nullptr};
             custom = multidictTypeCaseKey;
             if (multidictNewPWithType(ctx, &custom) ||
-                multidictNewPWithType(ctx, NULL)) {
+                multidictNewPWithType(ctx, nullptr)) {
                 ERR("multidictNewPWithType accepted a custom type");
             }
             persistCtxFree(ctx);
@@ -916,7 +916,7 @@ int multidictPTest(int, char *[]) {
         /* Session 1: everything lives in the WAL after the empty, tagged
          * snapshot NewP writes */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewPWithType(ctx, &multidictTypeCaseKey);
             if (!d || mdpAdd(d, &alpha, &one) != MULTIDICT_OK_INSERTED ||
                 mdpAdd(d, &beta, &two) != MULTIDICT_OK_INSERTED ||
@@ -930,7 +930,7 @@ int multidictPTest(int, char *[]) {
 
         /* Session 2: replayed from the WAL as a case dict */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
             databox v = {};
             if (!d ||
@@ -954,7 +954,7 @@ int multidictPTest(int, char *[]) {
          * keys differing only in case are still one entry, under the
          * spelling that first inserted it */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
             databox v = {};
             if (!d ||
@@ -994,7 +994,7 @@ int multidictPTest(int, char *[]) {
         const databox one = DATABOX_SIGNED(1);
         const databox two = DATABOX_SIGNED(2);
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multidictP *d = multidictNewP(ctx);
             MULTIDICT_TEST_OK(mdpAdd(d, &lower, &one));
             multidictCompactP(d);
@@ -1004,7 +1004,7 @@ int multidictPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             multidictP *d = multidictOpenP(ctx);
             databox v = {};
             if (!d ||
@@ -1022,7 +1022,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP wrappers return what multidict returns") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewPWithType(ctx, &multidictTypeCaseKey);
         cleaner(multidictDefaultClassFree) multidictClass *qdc =
             multidictDefaultClassNew();
@@ -1085,7 +1085,7 @@ int multidictPTest(int, char *[]) {
         persistCtxFree(ctx);
 
         /* Replaying the WAL gives the plain dict's contents */
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != multidictCount(plain)) {
             ERR("replayed multidictP count differs from multidict");
@@ -1121,7 +1121,7 @@ int multidictPTest(int, char *[]) {
             mkdir(dir, 0700) != 0) {
             ERR("could not create the test directory");
         } else {
-            persistCtx *ctx = persistCtxNew(path, NULL);
+            persistCtx *ctx = persistCtxNew(path, nullptr);
             if (!ctx || !persistCtxInitForType(ctx, &persistOpsMultidict)) {
                 ERR("could not open the test stores");
             }
@@ -1160,7 +1160,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP mutations are one LRU use each and report no-ops") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         multidictEnableLRU(multidictGetP(d), 4);
         const databox key = DATABOX_SIGNED(7);
@@ -1197,7 +1197,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP a refused log changes nothing (replace, delete)") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         multidictEnableLRU(multidictGetP(d), 4);
         const databox key = databoxNewBytesString("the refused key");
@@ -1205,8 +1205,8 @@ int multidictPTest(int, char *[]) {
             databoxNewBytesString("a value long enough to live on the heap");
         const databox other = databoxNewBytesString("other");
         const databox newer = DATABOX_SIGNED(99);
-        PTEST_LOGGED(multidictAddP(d, &key, &kept, NULL));
-        PTEST_LOGGED(multidictAddP(d, &other, &newer, NULL));
+        PTEST_LOGGED(multidictAddP(d, &key, &kept, nullptr));
+        PTEST_LOGGED(multidictAddP(d, &other, &newer, nullptr));
         const int level = multidictGetLRULevel(multidictGetP(d), &key);
 
         const databox fresh = databoxNewBytesString("fresh");
@@ -1227,19 +1227,19 @@ int multidictPTest(int, char *[]) {
         }
 
         /* Missing arguments: refused or empty answers */
-        if (multidictAddP(NULL, &key, &newer, NULL) ||
-            multidictAddP(d, NULL, &newer, NULL) ||
-            multidictReplaceP(NULL, &key, &newer) ||
-            multidictDeleteP(NULL, &key) || multidictEmptyP(NULL) ||
-            multidictNewP(NULL) || multidictOpenP(NULL) ||
-            multidictGetP(NULL) || multidictCountP(NULL) ||
-            multidictBytesP(NULL) || multidictFindP(NULL, &key, &got) ||
-            multidictExistsP(NULL, &key) || multidictSyncP(NULL) ||
-            multidictCompactP(NULL)) {
+        if (multidictAddP(nullptr, &key, &newer, nullptr) ||
+            multidictAddP(d, nullptr, &newer, nullptr) ||
+            multidictReplaceP(nullptr, &key, &newer) ||
+            multidictDeleteP(nullptr, &key) || multidictEmptyP(nullptr) ||
+            multidictNewP(nullptr) || multidictOpenP(nullptr) ||
+            multidictGetP(nullptr) || multidictCountP(nullptr) ||
+            multidictBytesP(nullptr) || multidictFindP(nullptr, &key, &got) ||
+            multidictExistsP(nullptr, &key) || multidictSyncP(nullptr) ||
+            multidictCompactP(nullptr)) {
             ERR("a call without its wrapper or key was not refused");
         }
-        multidictGetStatsP(NULL, NULL);
-        multidictCloseP(NULL);
+        multidictGetStatsP(nullptr, nullptr);
+        multidictCloseP(nullptr);
 
         /* Logging works again, and a reopen holds only what was logged */
         if (multidictReplaceP(d, &key, &newer) == PERSIST_LOG_REFUSED) {
@@ -1247,7 +1247,7 @@ int multidictPTest(int, char *[]) {
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != 2 || !multidictFindP(d, &key, &got) ||
             databoxCompare(&got, &newer) != 0) {
@@ -1260,7 +1260,7 @@ int multidictPTest(int, char *[]) {
 
     TEST("multidictP readers: CountP, BytesP and SyncP") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         const uint64_t emptyBytes = multidictBytesP(d);
         for (int64_t i = 0; i < 50; i++) {
@@ -1283,12 +1283,12 @@ int multidictPTest(int, char *[]) {
          * to the quarantine); an add of 4 is then logged with no
          * compaction, and a reopen holds {1, 2, 4} */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multidictP *d = multidictNewP(ctx);
         for (int64_t k = 1; k <= 3; k++) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k * 100);
-            PTEST_LOGGED(multidictAddP(d, &key, &val, NULL));
+            PTEST_LOGGED(multidictAddP(d, &key, &val, nullptr));
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
@@ -1300,7 +1300,7 @@ int multidictPTest(int, char *[]) {
         const databox k3 = databoxNewSigned(3);
         const databox k4 = databoxNewSigned(4);
         const databox v9 = databoxNewSigned(900);
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != 2 || multidictExistsP(d, &k3)) {
             ERR("lenient recovery kept %" PRIu64 " keys, want 1, 2",
@@ -1310,14 +1310,14 @@ int multidictPTest(int, char *[]) {
         if (!ptestExpectHealed(ctx, basePath)) {
             ERR("the damaged entry was not healed into the quarantine");
         }
-        if (d && (multidictAddP(d, &k4, &v9, NULL) == PERSIST_LOG_REFUSED ||
+        if (d && (multidictAddP(d, &k4, &v9, nullptr) == PERSIST_LOG_REFUSED ||
                   !multidictFindP(d, &k1, &got) || got.data.i != 100)) {
             ERR("a change after the healed entry was refused");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
 
-        ctx = persistCtxOpen(basePath, NULL);
+        ctx = persistCtxOpen(basePath, nullptr);
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != 3 || !multidictExistsP(d, &k1) ||
             !multidictFindP(d, &k4, &got) || got.data.i != 900) {

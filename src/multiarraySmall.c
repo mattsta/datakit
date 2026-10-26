@@ -9,7 +9,7 @@ void *multiarrayIndexRefused_(const char *function, const char *file, int line,
                   line,
                   "index %" PRId64 " (range %" PRIu64 ") is outside the array",
                   idx, count ? count : 1);
-    return NULL;
+    return nullptr;
 }
 
 multiarraySmall *multiarraySmallNew(uint16_t len, uint16_t rowMax) {
@@ -61,7 +61,7 @@ size_t multiarraySmallBytes(const multiarraySmall *mar) {
 }
 
 void multiarraySmallDelete(multiarraySmall *mar, uint32_t idx) {
-    multiarraySmallDeleteTaking(mar, idx, NULL);
+    multiarraySmallDeleteTaking(mar, idx, nullptr);
 }
 
 /* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL */

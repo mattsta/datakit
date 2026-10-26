@@ -68,7 +68,7 @@ static void bigmathFromDigits(bigmath *b, const char *digits) {
  * file holds exactly want and a newline. */
 static bool bigmathTestReprIs(bigmath *b, const char *want) {
     FILE *fp = tmpfile();
-    if (fp == NULL) {
+    if (fp == nullptr) {
         return false;
     }
 
@@ -826,7 +826,7 @@ int bigmathTest(int, char *[]) {
                     }
                 }
 
-                if (memchr(buf, '\0', limit) == NULL) {
+                if (memchr(buf, '\0', limit) == nullptr) {
                     ERR("to_string left no terminator within limit %zu", limit);
                     continue;
                 }

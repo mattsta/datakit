@@ -27,7 +27,7 @@ static void *pcFlexBuild(const persistContractBuild *b) {
         pcFlexPush(&f, b, (const databox *)&v, splitmix64(&rng) & 1);
         if (b->size >= 100 && i == b->size / 3) {
             flexReset(&f);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
 

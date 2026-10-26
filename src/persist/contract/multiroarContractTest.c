@@ -45,13 +45,13 @@ static void *pcMultiroarBuildValues(const persistContractBuild *b) {
             assert(set != MULTIROAR_VALUE_REFUSED); /* in bounds, fits */
             persistContractRecord(b->log, PERSIST_OP_INSERT, words, 2);
         } else {
-            multiroarValueRemoveGetRemoved(r, position, NULL);
+            multiroarValueRemoveGetRemoved(r, position, nullptr);
             persistContractRecord(b->log, PERSIST_OP_DELETE, &position, 1);
         }
 
         if (b->size >= 100 && i == b->size / 3) {
             multiroarClear(r);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
     return r;
@@ -94,7 +94,7 @@ static void *pcMultiroarBuild(const persistContractBuild *b) {
 
         if (b->size >= 100 && i == b->size / 3) {
             multiroarClear(r);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
     return r;

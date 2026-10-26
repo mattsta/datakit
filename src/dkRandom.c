@@ -35,7 +35,7 @@ static void dkRandomForkChild(void) {
 }
 
 static void dkRandomForkHandlerRegister(void) {
-    (void)pthread_atfork(NULL, NULL, dkRandomForkChild);
+    (void)pthread_atfork(nullptr, nullptr, dkRandomForkChild);
 }
 
 /* Per-thread generator and output block, in one struct so a draw

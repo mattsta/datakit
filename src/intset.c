@@ -70,7 +70,7 @@ intset *intsetCopy(const intset *is) {
     }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 void intsetCompact(intset **is) {

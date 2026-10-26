@@ -21,7 +21,7 @@ defcleanerName(multiOrderedSetP *, zfree, MultiOrderedSetP);
 
 multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultiOrderedSetP) multiOrderedSetP *mos =
@@ -37,23 +37,23 @@ multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
     if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet) ||
         !persistCtxSaveSnapshot(ctx, mos->mos, &persistOpsMultiOrderedSet)) {
         multiOrderedSetFree(mos->mos);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     multiOrderedSetP *out = mos;
-    mos = NULL;
+    mos = nullptr;
     return out;
 }
 
 multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multiOrderedSet type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
@@ -63,7 +63,7 @@ multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
     multiOrderedSet *recovered =
         persistCtxRecover(ctx, &persistOpsMultiOrderedSet);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multiOrderedSetCloseP */
@@ -95,7 +95,7 @@ void multiOrderedSetCloseP(multiOrderedSetP *mos) {
 }
 
 multiOrderedSet *multiOrderedSetGetRawP(multiOrderedSetP *mos) {
-    return mos ? mos->mos : NULL;
+    return mos ? mos->mos : nullptr;
 }
 
 /* ============================================================================
@@ -185,7 +185,7 @@ persistLogResult multiOrderedSetResetP(multiOrderedSetP *mos) {
     }
 
     const persistLogResult logged =
-        persistCtxLogOp(mos->ctx, PERSIST_OP_CLEAR, NULL, 0);
+        persistCtxLogOp(mos->ctx, PERSIST_OP_CLEAR, nullptr, 0);
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
@@ -330,7 +330,7 @@ static int test_multiOrderedSetP_basic(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Create new persistent multiOrderedSet */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
     if (!mos) {
         ERR("Failed to create multiOrderedSetP");
@@ -346,11 +346,11 @@ static int test_multiOrderedSetP_basic(int, char *[]) {
 
     databox score2 = databoxNewSigned(200);
     databox member2 = databoxNewBytesAllowEmbed("bob", 3);
-    PTEST_LOGGED(multiOrderedSetAddP(mos, &score2, &member2, NULL));
+    PTEST_LOGGED(multiOrderedSetAddP(mos, &score2, &member2, nullptr));
 
     databox score3 = databoxNewSigned(50);
     databox member3 = databoxNewBytesAllowEmbed("charlie", 7);
-    PTEST_LOGGED(multiOrderedSetAddP(mos, &score3, &member3, NULL));
+    PTEST_LOGGED(multiOrderedSetAddP(mos, &score3, &member3, nullptr));
     if (!multiOrderedSetAddP(mos, &score3, &member3, &updated) || !updated) {
         ERR("re-adding charlie was not an update");
     }
@@ -385,7 +385,7 @@ static int test_multiOrderedSetP_basic(int, char *[]) {
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos) {
         ERR("Failed to reopen multiOrderedSetP");
@@ -426,7 +426,7 @@ static int test_multiOrderedSetP_basic(int, char *[]) {
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos) {
         ERR("Failed to reopen multiOrderedSetP");
@@ -466,7 +466,7 @@ static int test_multiOrderedSetP_iteration(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
 
     /* Add entries in non-sorted order */
@@ -477,14 +477,14 @@ static int test_multiOrderedSetP_iteration(int, char *[]) {
         databox score = databoxNewSigned(scores[i]);
         databox member =
             databoxNewBytesAllowEmbed(members[i], strlen(members[i]));
-        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
     }
 
     /* Close and reopen */
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
 
     /* Iterate forward - should be in score order: 50, 100, 150, 200, 300 */
@@ -545,7 +545,7 @@ static int test_multiOrderedSetP_compaction(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     if (!ctx) {
         ERR("Failed to create persistCtx");
     }
@@ -562,7 +562,7 @@ static int test_multiOrderedSetP_compaction(int, char *[]) {
         snprintf(memberBuf, sizeof(memberBuf), "member_%02" PRId64, i);
         databox member =
             databoxNewBytesAllowEmbed(memberBuf, strlen(memberBuf));
-        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
     }
 
     /* Attempt compaction */
@@ -606,7 +606,7 @@ static int test_multiOrderedSetP_resetReuse(int, char *[]) {
 
     TEST("multiOrderedSetP reset then reuse survives recovery") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
 
         char buf[32];
@@ -614,7 +614,7 @@ static int test_multiOrderedSetP_resetReuse(int, char *[]) {
             snprintf(buf, sizeof(buf), "pre-%d", i);
             const databox score = databoxNewUnsigned((uint64_t)i);
             const databox member = databoxNewBytesString(buf);
-            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
         }
 
         PTEST_LOGGED(multiOrderedSetResetP(mos));
@@ -628,13 +628,13 @@ static int test_multiOrderedSetP_resetReuse(int, char *[]) {
             snprintf(buf, sizeof(buf), "post-%d", i);
             const databox score = databoxNewUnsigned((uint64_t)(i + 100));
             const databox member = databoxNewBytesString(buf);
-            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
         }
 
         multiOrderedSetCloseP(mos);
         persistCtxFree(ctx);
 
-        ctx = persistCtxNew(basePath, NULL);
+        ctx = persistCtxNew(basePath, nullptr);
         mos = multiOrderedSetOpenP(ctx);
         if (!mos) {
             ERR("Recovery after reset failed");
@@ -676,14 +676,14 @@ static int test_multiOrderedSetP_readers(int, char *[]) {
     TEST("multiOrderedSetP readers agree with ten scored members") {
         /* m0..m9 scored 0, 10, ..., 90 */
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
         char name[8];
         for (int i = 0; i < 10; i++) {
             snprintf(name, sizeof(name), "m%d", i);
             const databox score = DATABOX_SIGNED(i * 10);
             const databox member = databoxNewBytesString(name);
-            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
         }
 
         databox member = {};
@@ -762,11 +762,11 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
          "WAL entry")
 
     /* An empty set reopens as an empty set */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos || multiOrderedSetCountP(mos) != 0) {
         ERR("an empty set did not reopen empty");
@@ -775,12 +775,12 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
     persistCtxFree(ctx);
 
     /* A damaged snapshot does not open, and stays as it was */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetNewP(ctx);
     for (int64_t i = 0; i < 20; i++) {
         const databox score = databoxNewSigned(i);
         const databox member = databoxNewSigned(i * 7);
-        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
     }
     multiOrderedSetCompactP(mos);
     multiOrderedSetCloseP(mos);
@@ -797,7 +797,7 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
         fclose(f);
     }
     before[len / 2] ^= 0x5a;
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (mos) {
         ERR("a damaged snapshot opened");
@@ -811,7 +811,7 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
 
     /* No snapshot at all does not open (it used to open as empty) */
     ptestCleanupFiles(basePath);
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (mos) {
         ERR("a set opened with no snapshot");
@@ -824,12 +824,12 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
      * to the quarantine); an add of 40 is then logged with no compaction,
      * and a reopen holds {10, 20, 40} */
     ptestCleanupFiles(basePath);
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     mos = multiOrderedSetNewP(ctx);
     for (int64_t m = 10; m <= 30; m += 10) {
         const databox score = databoxNewSigned(m / 10);
         const databox member = databoxNewSigned(m);
-        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
@@ -840,7 +840,7 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
     const databox m30 = databoxNewSigned(30);
     const databox m40 = databoxNewSigned(40);
     const databox s4 = databoxNewSigned(4);
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos || multiOrderedSetCountP(mos) != 2 ||
         multiOrderedSetExistsP(mos, &m30)) {
@@ -851,12 +851,12 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
         ERR("the damaged entry was not healed into the quarantine");
     }
     if (mos &&
-        multiOrderedSetAddP(mos, &s4, &m40, NULL) == PERSIST_LOG_REFUSED) {
+        multiOrderedSetAddP(mos, &s4, &m40, nullptr) == PERSIST_LOG_REFUSED) {
         ERR("a change after the healed entry was refused");
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos || multiOrderedSetCountP(mos) != 3 ||
         !multiOrderedSetExistsP(mos, &m10) ||
@@ -868,7 +868,7 @@ static int test_multiOrderedSetP_openRefusals(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* A context bound to another type takes no set */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     if (!persistCtxInitForType(ctx, &persistOpsIntset) ||
         multiOrderedSetNewP(ctx) || multiOrderedSetOpenP(ctx)) {
         ERR("a set started on a context bound to an intset");
@@ -897,14 +897,15 @@ static int test_multiOrderedSetP_refusedLog(int, char *[]) {
         static constexpr int sizes[] = {20, 1200};
         for (size_t s = 0; s < countof(sizes); s++) {
             ptestCleanupFiles(basePath);
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
             char buf[32];
             for (int i = 0; i < sizes[s]; i++) {
                 snprintf(buf, sizeof(buf), "m%05d", i);
                 const databox score = databoxNewSigned(i);
                 const databox member = databoxNewBytesString(buf);
-                PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
+                PTEST_LOGGED(
+                    multiOrderedSetAddP(mos, &score, &member, nullptr));
             }
             const databox kept = databoxNewBytesString("m00005");
             const databox ghost = databoxNewBytesString("absent");
@@ -927,20 +928,23 @@ static int test_multiOrderedSetP_refusedLog(int, char *[]) {
             }
 
             /* Missing arguments: refused or empty answers */
-            if (multiOrderedSetAddP(NULL, &high, &kept, NULL) ||
-                multiOrderedSetAddP(mos, NULL, &kept, NULL) ||
-                multiOrderedSetRemoveP(NULL, &kept) ||
-                multiOrderedSetRemoveP(mos, NULL) ||
-                multiOrderedSetResetP(NULL) || multiOrderedSetNewP(NULL) ||
-                multiOrderedSetOpenP(NULL) || multiOrderedSetGetRawP(NULL) ||
-                multiOrderedSetCountP(NULL) || multiOrderedSetBytesP(NULL) ||
-                multiOrderedSetExistsP(NULL, &kept) ||
-                multiOrderedSetGetScoreP(NULL, &kept, &score) ||
-                multiOrderedSetSyncP(NULL) || multiOrderedSetCompactP(NULL)) {
+            if (multiOrderedSetAddP(nullptr, &high, &kept, nullptr) ||
+                multiOrderedSetAddP(mos, nullptr, &kept, nullptr) ||
+                multiOrderedSetRemoveP(nullptr, &kept) ||
+                multiOrderedSetRemoveP(mos, nullptr) ||
+                multiOrderedSetResetP(nullptr) ||
+                multiOrderedSetNewP(nullptr) || multiOrderedSetOpenP(nullptr) ||
+                multiOrderedSetGetRawP(nullptr) ||
+                multiOrderedSetCountP(nullptr) ||
+                multiOrderedSetBytesP(nullptr) ||
+                multiOrderedSetExistsP(nullptr, &kept) ||
+                multiOrderedSetGetScoreP(nullptr, &kept, &score) ||
+                multiOrderedSetSyncP(nullptr) ||
+                multiOrderedSetCompactP(nullptr)) {
                 ERR("a call without its wrapper or member was not refused");
             }
-            multiOrderedSetGetStatsP(NULL, NULL);
-            multiOrderedSetCloseP(NULL);
+            multiOrderedSetGetStatsP(nullptr, nullptr);
+            multiOrderedSetCloseP(nullptr);
 
             /* Logging works again (an update reports itself) */
             const databox six = databoxNewSigned(6);
@@ -954,7 +958,7 @@ static int test_multiOrderedSetP_refusedLog(int, char *[]) {
             multiOrderedSetCloseP(mos);
             persistCtxFree(ctx);
 
-            ctx = persistCtxOpen(basePath, NULL);
+            ctx = persistCtxOpen(basePath, nullptr);
             mos = multiOrderedSetOpenP(ctx);
             const databox next = databoxNewBytesString("m00006");
             if (!mos || multiOrderedSetCountP(mos) != (size_t)sizes[s] - 1 ||

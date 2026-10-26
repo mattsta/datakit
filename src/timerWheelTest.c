@@ -259,7 +259,7 @@ int timerWheelTest(int, char *[]) {
     }
 
     TEST("timerWheel: free NULL safety") {
-        timerWheelFree(NULL);
+        timerWheelFree(nullptr);
     }
 
     TEST("timerWheel: unregister after StopAll, StopAll after stale "
@@ -986,7 +986,7 @@ int timerWheelTest(int, char *[]) {
 
         /* Small delay to ensure timer is "overdue" */
         struct timespec ts = {0, 1'000'000}; /* 1ms */
-        nanosleep(&ts, NULL);
+        nanosleep(&ts, nullptr);
 
         /* Offset should be negative or very small (timer is due) */
         timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
@@ -1861,7 +1861,7 @@ int timerWheelTest(int, char *[]) {
                             ? 50000 + testOracleRand(&rng) % 500000
                             : 0;
                     const timerWheelId id = timerWheelRegister(
-                        tw, delay, repeat, testOracleCallback, NULL);
+                        tw, delay, repeat, testOracleCallback, nullptr);
                     if (nids < countof(ids)) {
                         ids[nids++] = id;
                     } else {
@@ -2046,7 +2046,7 @@ int timerWheelTest(int, char *[]) {
         /* Freed before the multiTimer half so the two halves never
          * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
-        tw = NULL;
+        tw = nullptr;
 
         /* multiTimer */
         cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2085,7 +2085,7 @@ int timerWheelTest(int, char *[]) {
         /* Freed before the multiTimer half so the two halves never
          * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
-        tw = NULL;
+        tw = nullptr;
 
         /* Reset states */
         memset(states, 0, numTimers * sizeof(testCallbackState));
@@ -2135,7 +2135,7 @@ int timerWheelTest(int, char *[]) {
         /* Freed before the multiTimer half so the two halves never
          * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
-        tw = NULL;
+        tw = nullptr;
 
         /* multiTimer */
         cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2188,7 +2188,7 @@ int timerWheelTest(int, char *[]) {
         /* Freed before the multiTimer half so the two halves never
          * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
-        tw = NULL;
+        tw = nullptr;
 
         /* multiTimer */
         cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2331,7 +2331,7 @@ int timerWheelTest(int, char *[]) {
              * hold their timers at the same time; the cleaner skips
              * NULL. */
             timerWheelFree(tw);
-            tw = NULL;
+            tw = nullptr;
 
             /* multiTimer */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2381,7 +2381,7 @@ int timerWheelTest(int, char *[]) {
              * hold their timers at the same time; the cleaner skips
              * NULL. */
             timerWheelFree(tw);
-            tw = NULL;
+            tw = nullptr;
 
             /* multiTimer - register then unregister */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2434,7 +2434,7 @@ int timerWheelTest(int, char *[]) {
              * hold their timers at the same time; the cleaner skips
              * NULL. */
             timerWheelFree(tw);
-            tw = NULL;
+            tw = nullptr;
 
             /* Reset states */
             memset(states, 0, count * sizeof(testCallbackState));
@@ -2491,7 +2491,7 @@ int timerWheelTest(int, char *[]) {
              * hold their timers at the same time; the cleaner skips
              * NULL. */
             timerWheelFree(tw);
-            tw = NULL;
+            tw = nullptr;
 
             /* multiTimer */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2537,11 +2537,11 @@ int timerWheelTest(int, char *[]) {
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < shapes[s].nearCount; i++) {
                 const uint64_t d = 1000 + testOracleRand(&rng) % 254000;
-                timerWheelRegister(tw, d, d, testOracleCallback, NULL);
+                timerWheelRegister(tw, d, d, testOracleCallback, nullptr);
             }
             for (size_t i = 0; i < shapes[s].idleCount; i++) {
                 const uint64_t d = 20000000 + testOracleRand(&rng) % 20000000;
-                timerWheelRegister(tw, d, d, testOracleCallback, NULL);
+                timerWheelRegister(tw, d, d, testOracleCallback, nullptr);
             }
 
             volatile int64_t sink = 0;
@@ -2604,7 +2604,7 @@ int timerWheelTest(int, char *[]) {
              * hold their timers at the same time; the cleaner skips
              * NULL. */
             timerWheelFree(tw);
-            tw = NULL;
+            tw = nullptr;
 
             /* multiTimer */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2651,7 +2651,7 @@ int timerWheelTest(int, char *[]) {
              * hold their timers at the same time; the cleaner skips
              * NULL. */
             timerWheelFree(tw);
-            tw = NULL;
+            tw = nullptr;
 
             /* multiTimer - register then immediately cancel */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2705,7 +2705,7 @@ int timerWheelTest(int, char *[]) {
         /* Freed before the multiTimer half so the two halves never
          * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
-        tw = NULL;
+        tw = nullptr;
 
         /* multiTimer steady-state */
         cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();

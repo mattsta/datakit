@@ -254,7 +254,7 @@ static void isDestroy(void *c) {
 }
 
 static void isPut(void **c, int64_t k, int64_t) {
-    intsetAdd((intset **)c, isEncode(k), NULL);
+    intsetAdd((intset **)c, isEncode(k), nullptr);
 }
 
 static bool isDel(void **c, int64_t k) {

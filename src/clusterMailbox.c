@@ -279,7 +279,7 @@ static clusterMailboxOrigin *cmLookupOriginMut(clusterMailbox *mb,
             return &mb->origins[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Read-only variant for `const clusterMailbox *` accessors. Same
@@ -295,7 +295,7 @@ static const clusterMailboxOrigin *cmLookupOriginConst(const clusterMailbox *mb,
             return &mb->origins[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Allocate a slot for a previously-unseen origin. Caller MUST have
@@ -337,7 +337,7 @@ static clusterMailboxOrigin *cmInsertOrigin(clusterMailbox *mb,
             return &mb->origins[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* Encode the inner frame header (flex-based).
@@ -358,8 +358,8 @@ static flex *cmBuildInnerHeaderFlex(uint32_t origin_id, uint64_t sequence,
                                     uint8_t msg_type) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (f == NULL) {
-        return NULL;
+    if (f == nullptr) {
+        return nullptr;
     }
     flexRow row = FLEX_ROW_INIT;
     flexRowUnsigned(&row, (uint64_t)clusterMailboxProtocol.version);
@@ -378,11 +378,11 @@ static flex *cmBuildInnerHeaderFlex(uint32_t origin_id, uint64_t sequence,
  * path. */
 size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
                            uint64_t sequence, uint8_t msg_type) {
-    if (out == NULL || out_cap < CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN) {
+    if (out == nullptr || out_cap < CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN) {
         return 0;
     }
     flex *f = cmBuildInnerHeaderFlex(origin_id, sequence, msg_type);
-    if (f == NULL) {
+    if (f == nullptr) {
         return 0;
     }
     const size_t n = flexBytes(f);
@@ -426,8 +426,8 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
                          dkFormatStamp *protocol, uint32_t *origin_id,
                          uint64_t *sequence, uint8_t *msg_type,
                          size_t *hdr_len) {
-    if (src == NULL || protocol == NULL || origin_id == NULL ||
-        sequence == NULL || msg_type == NULL || hdr_len == NULL) {
+    if (src == nullptr || protocol == nullptr || origin_id == nullptr ||
+        sequence == nullptr || msg_type == nullptr || hdr_len == nullptr) {
         return false;
     }
     /* Step 1: safely peek the flex prefix's claimed length so we know
@@ -453,7 +453,7 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     }
     /* Step 3: walk + strict-type-check the five entries. */
     flexEntry *fe = flexHead(f);
-    if (fe == NULL) {
+    if (fe == nullptr) {
         return false;
     }
     uint64_t v = 0;
@@ -464,14 +464,14 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
         return false;
     }
     fe = flexNext(f, fe);
-    if (fe == NULL || !cmReadU64(fe, &features)) {
+    if (fe == nullptr || !cmReadU64(fe, &features)) {
         return false;
     }
     const dkFormatStamp stamp = {.id = DK_FORMAT_ID_CLUSTER_MAILBOX,
                                  .version = (uint32_t)v,
                                  .features = features};
     fe = flexNext(f, fe);
-    if (fe == NULL) {
+    if (fe == nullptr) {
         return false;
     }
 
@@ -482,7 +482,7 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     const uint32_t origin = (uint32_t)v;
 
     fe = flexNext(f, fe);
-    if (fe == NULL) {
+    if (fe == nullptr) {
         return false;
     }
     /* Entry 4: sequence (unsigned 64-bit). */
@@ -492,7 +492,7 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     const uint64_t seq = v;
 
     fe = flexNext(f, fe);
-    if (fe == NULL) {
+    if (fe == nullptr) {
         return false;
     }
     /* Entry 5: msg_type (unsigned, must fit in uint8_t). */
@@ -511,18 +511,18 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
 
 clusterMailbox *
 clusterMailboxCreateOpts(const clusterMailboxCreateOptions *opts) {
-    if (opts == NULL || opts->ring == NULL) {
-        return NULL;
+    if (opts == nullptr || opts->ring == nullptr) {
+        return nullptr;
     }
     /* Pin to keyed-class algorithms — checksum-only envelopes don't
      * carry tamper evidence, AEAD class uses a different API path. */
     if (!flexEnvelopeAlgoIsKeyed(opts->envelope_algo) ||
         FLEX_ENV_ALGO_IS_AEAD(opts->envelope_algo)) {
-        return NULL;
+        return nullptr;
     }
     /* Reject unknown flag bits — future-extension hardening. */
     if ((opts->flags & ~(uint32_t)CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW) != 0u) {
-        return NULL;
+        return nullptr;
     }
     cleanerName(zfree, Mailbox) clusterMailbox *mb = zmalloc(sizeof(*mb));
     memset(mb, 0, sizeof(*mb));
@@ -532,7 +532,7 @@ clusterMailboxCreateOpts(const clusterMailboxCreateOptions *opts) {
     mb->envelope_algo = opts->envelope_algo;
     mb->flags = opts->flags;
     /* allocate (or borrow) the nonceLog per options. */
-    if (opts->nonce_log != NULL) {
+    if (opts->nonce_log != nullptr) {
         mb->nonceLog = opts->nonce_log;
         mb->owns_nonce_log = false;
     } else if (!opts->disable_nonce_log) {
@@ -541,20 +541,20 @@ clusterMailboxCreateOpts(const clusterMailboxCreateOptions *opts) {
                                : CLUSTER_MAILBOX_DEFAULT_NONCE_LOG_CAP;
         /* @own: container; free=aeadNonceLogFree */
         mb->nonceLog = aeadNonceLogCreate(cap);
-        if (mb->nonceLog == NULL) {
+        if (mb->nonceLog == nullptr) {
             /* Allocation failure: refuse to construct rather than
              * silently downgrade to no-protection. Callers that genuinely
              * want no log must set disable_nonce_log = true. */
-            return NULL;
+            return nullptr;
         }
         mb->owns_nonce_log = true;
     } else {
-        mb->nonceLog = NULL;
+        mb->nonceLog = nullptr;
         mb->owns_nonce_log = false;
     }
 
     clusterMailbox *out = mb;
-    mb = NULL;
+    mb = nullptr;
     return out;
 }
 
@@ -583,16 +583,16 @@ clusterMailbox *clusterMailboxCreate(hmacKeyring *ring,
 }
 
 void clusterMailboxFree(clusterMailbox *mb) {
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return;
     }
     /* release the nonceLog when we allocated it ourselves; never
      * touch a caller-borrowed log (the caller is responsible for that
      * lifecycle and may share one log across multiple mailboxes). */
-    if (mb->owns_nonce_log && mb->nonceLog != NULL) {
+    if (mb->owns_nonce_log && mb->nonceLog != nullptr) {
         aeadNonceLogFree(mb->nonceLog);
     }
-    mb->nonceLog = NULL;
+    mb->nonceLog = nullptr;
     /* Wipe the origin table — sequence numbers reveal traffic
      * patterns; not strictly secret but worth zeroing along with
      * everything else. */
@@ -601,8 +601,8 @@ void clusterMailboxFree(clusterMailbox *mb) {
 }
 
 aeadNonceLog *clusterMailboxNonceLog(const clusterMailbox *mb) {
-    if (mb == NULL) {
-        return NULL;
+    if (mb == nullptr) {
+        return nullptr;
     }
     return mb->nonceLog;
 }
@@ -610,7 +610,7 @@ aeadNonceLog *clusterMailboxNonceLog(const clusterMailbox *mb) {
 bool clusterMailboxAttachKeyring(clusterMailbox *mb, hmacKeyring *ring,
                                  flexEnvelopeAlgo envelope_algo,
                                  clusterApplyFn on_apply, void *apply_ctx) {
-    if (mb == NULL || ring == NULL) {
+    if (mb == nullptr || ring == nullptr) {
         return false;
     }
     /* Pin to keyed-class algorithms — checksum-only envelopes don't
@@ -630,7 +630,7 @@ bool clusterMailboxAttachKeyring(clusterMailbox *mb, hmacKeyring *ring,
 }
 
 size_t clusterMailboxOriginCount(const clusterMailbox *mb) {
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return 0;
     }
     /* Acquire pairs with the release-increment in cmInsertOrigin, so
@@ -643,11 +643,11 @@ size_t clusterMailboxOriginCount(const clusterMailbox *mb) {
 
 uint64_t clusterMailboxLastApplied(const clusterMailbox *mb,
                                    uint32_t origin_id) {
-    if (mb == NULL || origin_id == 0u) {
+    if (mb == nullptr || origin_id == 0u) {
         return 0;
     }
     const clusterMailboxOrigin *e = cmLookupOriginConst(mb, origin_id);
-    if (e == NULL) {
+    if (e == nullptr) {
         return 0;
     }
     /* Acquire pairs with the release-store in cmAdvanceLastApplied.
@@ -659,7 +659,7 @@ uint64_t clusterMailboxLastApplied(const clusterMailbox *mb,
 }
 
 size_t clusterMailboxSealedSize(const clusterMailbox *mb, size_t payload_len) {
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return 0;
     }
     /* bound by the new flex-based header's worst-case width. The
@@ -680,7 +680,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
                        const uint8_t *payload, size_t payload_len,
                        hmacKeyId key_id, uint8_t *out, size_t out_cap,
                        size_t *out_written) {
-    if (mb == NULL || out == NULL) {
+    if (mb == nullptr || out == nullptr) {
         return false;
     }
     if (sequence == 0 || origin_id == 0u) {
@@ -689,7 +689,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
          * symmetric rejection of bad-frame inner headers. */
         return false;
     }
-    if (payload_len > 0 && payload == NULL) {
+    if (payload_len > 0 && payload == nullptr) {
         return false;
     }
 
@@ -704,7 +704,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
     uint8_t key_copy[HMAC_KEYRING_MAX_KEY_BYTES];
     size_t key_len = 0;
     if (!hmacKeyringGetRawCopy(mb->ring, key_id, key_copy, sizeof(key_copy),
-                               &key_len, NULL)) {
+                               &key_len, nullptr)) {
         return false;
     }
 
@@ -721,7 +721,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
      * + extra memcpy into flexEnvelopeWrap. flexEnvelopeFinalizeWrap
      * then computes the HMAC in place. */
     flex *header_flex = cmBuildInnerHeaderFlex(origin_id, sequence, msg_type);
-    if (header_flex == NULL) {
+    if (header_flex == nullptr) {
         dkSecureZero(key_copy, sizeof(key_copy));
         return false;
     }
@@ -749,7 +749,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
          * future AEAD-class mailbox variant inherits the protection. */
         .nonceLog = mb->nonceLog,
     };
-    uint8_t *payload_region = NULL;
+    uint8_t *payload_region = nullptr;
     size_t env_header_len = 0;
     if (!flexEnvelopeReserveWrap(out, out_cap, (uint64_t)inner_len, &wp,
                                  &payload_region, &env_header_len)) {
@@ -770,7 +770,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
         dkSecureZero(key_copy, sizeof(key_copy));
         return false;
     }
-    if (out_written != NULL) {
+    if (out_written != nullptr) {
         *out_written = written;
     }
     dkSecureZero(key_copy, sizeof(key_copy));
@@ -780,7 +780,7 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
 static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
                                                const uint8_t *bytes, size_t len,
                                                hmacKeyId key_id) {
-    if (mb == NULL || bytes == NULL) {
+    if (mb == nullptr || bytes == nullptr) {
         return CLUSTER_MAILBOX_ERR_PARAM;
     }
 
@@ -819,7 +819,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
     uint8_t key_copy[HMAC_KEYRING_MAX_KEY_BYTES];
     size_t raw_key_len = 0;
     if (!hmacKeyringGetRawCopy(mb->ring, key_id, key_copy, sizeof(key_copy),
-                               &raw_key_len, NULL)) {
+                               &raw_key_len, nullptr)) {
         return CLUSTER_MAILBOX_ERR_KEY_MISSING;
     }
 
@@ -835,7 +835,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
          * FLEX_ENV_VERIFY_FAILED_NONCE_REUSED. */
         .nonceLog = mb->nonceLog,
     };
-    const uint8_t *payload_bytes = NULL;
+    const uint8_t *payload_bytes = nullptr;
     uint64_t payload_bytes_len = 0;
     if (!flexEnvelopeVerify(bytes, len, &vp, &payload_bytes,
                             &payload_bytes_len)) {
@@ -894,7 +894,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
      * we are the sole writer and have no cross-thread ordering
      * obligation INTO this routine — the only outbound ordering is the
      * release-store at the end of the apply path. */
-    if (existing != NULL) {
+    if (existing != nullptr) {
         /* @sync: relaxed owner */
         const uint64_t cur =
             atomic_load_explicit(&existing->last_applied, memory_order_relaxed);
@@ -920,9 +920,9 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
         /* sequence > last_applied: advance watermark + shift window. */
     }
     clusterMailboxOrigin *slot = existing;
-    if (slot == NULL) {
+    if (slot == nullptr) {
         slot = cmInsertOrigin(mb, origin_id);
-        if (slot == NULL) {
+        if (slot == nullptr) {
             return CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL;
         }
     }
@@ -939,7 +939,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
         .origin_id = origin_id,
         .msg_type = msg_type,
     };
-    if (mb->on_apply != NULL) {
+    if (mb->on_apply != nullptr) {
         if (!mb->on_apply(&frame, mb->apply_ctx)) {
             /* Caller rejected — do NOT advance the watermark. This
              * lets the producer retransmit and get re-applied. */
@@ -994,10 +994,10 @@ bool clusterMailboxSeal(clusterMailbox *mb, uint32_t origin_id,
                         hmacKeyId key_id, uint8_t *out, size_t out_cap,
                         size_t *out_written) {
     size_t local_written = 0;
-    size_t *wp = (out_written != NULL) ? out_written : &local_written;
+    size_t *wp = (out_written != nullptr) ? out_written : &local_written;
     const bool ok = cmSealImpl(mb, origin_id, sequence, msg_type, payload,
                                payload_len, key_id, out, out_cap, wp);
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return false;
     }
     if (ok) {
@@ -1013,7 +1013,7 @@ clusterMailboxIngestResult clusterMailboxIngest(clusterMailbox *mb,
                                                 const uint8_t *bytes,
                                                 size_t len, hmacKeyId key_id) {
     const clusterMailboxIngestResult rc = cmIngestImpl(mb, bytes, len, key_id);
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return rc;
     }
     cmBumpCounter(&mb->counters.ingest_total, 1);
@@ -1024,8 +1024,8 @@ clusterMailboxIngestResult clusterMailboxIngest(clusterMailbox *mb,
 
 void clusterMailboxGetStats(const clusterMailbox *mb,
                             clusterMailboxStats *out) {
-    if (mb == NULL || out == NULL) {
-        if (out != NULL) {
+    if (mb == nullptr || out == nullptr) {
+        if (out != nullptr) {
             memset(out, 0, sizeof(*out));
         }
         return;
@@ -1083,7 +1083,7 @@ void clusterMailboxGetStats(const clusterMailbox *mb,
 }
 
 void clusterMailboxResetStats(clusterMailbox *mb) {
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return;
     }
     /* @sync: relaxed counter */
@@ -1127,7 +1127,7 @@ void clusterMailboxResetStats(clusterMailbox *mb) {
 /* === Key rotation choreography ===================================== */
 
 bool clusterRotationInit(clusterRotationState *st, hmacKeyId initial) {
-    if (st == NULL || initial == HMAC_KEY_ID_INVALID) {
+    if (st == nullptr || initial == HMAC_KEY_ID_INVALID) {
         return false;
     }
     st->primary = initial;
@@ -1136,7 +1136,7 @@ bool clusterRotationInit(clusterRotationState *st, hmacKeyId initial) {
 }
 
 bool clusterRotationPromote(clusterRotationState *st, hmacKeyId new_primary) {
-    if (st == NULL || new_primary == HMAC_KEY_ID_INVALID) {
+    if (st == nullptr || new_primary == HMAC_KEY_ID_INVALID) {
         return false;
     }
     if (new_primary == st->primary) {
@@ -1150,14 +1150,14 @@ bool clusterRotationPromote(clusterRotationState *st, hmacKeyId new_primary) {
 }
 
 void clusterRotationRetirePrevious(clusterRotationState *st) {
-    if (st == NULL) {
+    if (st == nullptr) {
         return;
     }
     st->previous = HMAC_KEY_ID_INVALID;
 }
 
 bool clusterRotationAccepts(const clusterRotationState *st, hmacKeyId id) {
-    if (st == NULL || id == HMAC_KEY_ID_INVALID) {
+    if (st == nullptr || id == HMAC_KEY_ID_INVALID) {
         return false;
     }
     return id == st->primary || id == st->previous;
@@ -1175,11 +1175,11 @@ size_t clusterMailboxBuildRotateAnnounce(
      * u64 entry + 1B tail = 16B) fits inside the constant. Typical
      * encodings for the realistic key id range (1..2^32) consume
      * 13-15 bytes — see the test plan for a length assertion. */
-    if (out == NULL || new_id == HMAC_KEY_ID_INVALID) {
+    if (out == nullptr || new_id == HMAC_KEY_ID_INVALID) {
         return 0;
     }
     cleaner(flexFree) flex *f = flexNew();
-    if (f == NULL) {
+    if (f == nullptr) {
         return 0;
     }
     flexPushUnsigned(&f, (uint64_t)new_id, FLEX_ENDPOINT_TAIL);
@@ -1203,7 +1203,7 @@ bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
      * makes the parser safe under arbitrary input bytes; the production
      * path still gates via envelope MAC for replay/authenticity, but a
      * synthetic byte-mutation fuzzer cannot induce an overread here. */
-    if (payload == NULL || out_new_id == NULL) {
+    if (payload == nullptr || out_new_id == nullptr) {
         return false;
     }
     if (!flexValidateBufferDeep(payload, len)) {
@@ -1214,7 +1214,7 @@ bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
         return false;
     }
     flexEntry *fe = flexHead(f);
-    if (fe == NULL) {
+    if (fe == nullptr) {
         return false;
     }
     uint64_t v = 0;
@@ -1269,7 +1269,7 @@ static flex *cmBuildSnapshotFlex(const clusterMailbox *mb) {
 }
 
 size_t clusterMailboxSnapshotSize(const clusterMailbox *mb) {
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return 0;
     }
     flex *f = cmBuildSnapshotFlex(mb);
@@ -1280,7 +1280,7 @@ size_t clusterMailboxSnapshotSize(const clusterMailbox *mb) {
 
 bool clusterMailboxSnapshot(const clusterMailbox *mb, uint8_t *out,
                             size_t out_cap, size_t *out_written) {
-    if (mb == NULL || out == NULL) {
+    if (mb == nullptr || out == nullptr) {
         return false;
     }
     flex *f = cmBuildSnapshotFlex(mb);
@@ -1291,7 +1291,7 @@ bool clusterMailboxSnapshot(const clusterMailbox *mb, uint8_t *out,
     }
     memcpy(out, f, need);
     flexFree(f);
-    if (out_written != NULL) {
+    if (out_written != nullptr) {
         *out_written = need;
     }
     return true;
@@ -1349,7 +1349,7 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
      * and recovery — use the O(N) deep validator so a corrupted on-disk
      * record (or a synthetic byte-tamper) cannot make the per-entry
      * walks below over-read the buffer. */
-    if (mb == NULL || buf == NULL) {
+    if (mb == nullptr || buf == nullptr) {
         return false;
     }
     if (!flexValidateBufferDeep(buf, len)) {
@@ -1376,7 +1376,7 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
 
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < slots; i++) {
-        if (fe == NULL) {
+        if (fe == nullptr) {
             return false;
         }
         uint64_t raw_origin = 0;
@@ -1386,7 +1386,7 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
         }
         recs[i].origin_id = (uint32_t)raw_origin;
         fe = flexNext(f, fe);
-        if (fe == NULL) {
+        if (fe == nullptr) {
             return false;
         }
 
@@ -1394,7 +1394,7 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
             return false;
         }
         fe = flexNext(f, fe);
-        if (fe == NULL) {
+        if (fe == nullptr) {
             return false;
         }
 
@@ -1424,7 +1424,7 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
             repeated = recs[j].origin_id == recs[i].origin_id;
         }
 
-        if (!repeated && cmLookupOriginMut(mb, recs[i].origin_id) == NULL) {
+        if (!repeated && cmLookupOriginMut(mb, recs[i].origin_id) == nullptr) {
             new_origins++;
         }
     }
@@ -1445,10 +1445,10 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
         const uint64_t window_bits = recs[i].window_bits;
 
         clusterMailboxOrigin *slot = cmLookupOriginMut(mb, origin_id);
-        const bool fresh_slot = (slot == NULL);
-        if (slot == NULL) {
+        const bool fresh_slot = (slot == nullptr);
+        if (slot == nullptr) {
             slot = cmInsertOrigin(mb, origin_id);
-            if (slot == NULL) {
+            if (slot == nullptr) {
                 return false; /* unreachable: room was checked above */
             }
         }
@@ -1507,7 +1507,7 @@ static dkFormatStamp cmWrappedStamp(void) {
 
 size_t clusterMailboxSnapshotWrappedSize(const clusterMailbox *mb,
                                          flexEnvelopeAlgo envelope_algo) {
-    if (mb == NULL) {
+    if (mb == nullptr) {
         return 0;
     }
     const dkFormatStamp stamp = cmWrappedStamp();
@@ -1521,7 +1521,7 @@ bool clusterMailboxSnapshotWrapped(const clusterMailbox *mb,
                                    const flexEnvelopeWrapParams *params,
                                    uint8_t *out, size_t out_cap,
                                    size_t *out_written) {
-    if (mb == NULL || params == NULL || out == NULL) {
+    if (mb == nullptr || params == nullptr || out == nullptr) {
         return false;
     }
     /* Reject non-keyed and AEAD algos at the wrapper level — same
@@ -1552,7 +1552,7 @@ bool clusterMailboxSnapshotWrapped(const clusterMailbox *mb,
     if (!ok) {
         return false;
     }
-    if (out_written != NULL) {
+    if (out_written != nullptr) {
         *out_written = written;
     }
     return true;
@@ -1561,10 +1561,10 @@ bool clusterMailboxSnapshotWrapped(const clusterMailbox *mb,
 bool clusterMailboxRestoreWrapped(clusterMailbox *mb,
                                   const flexEnvelopeVerifyParams *params,
                                   const uint8_t *buf, size_t len) {
-    if (mb == NULL || buf == NULL) {
+    if (mb == nullptr || buf == nullptr) {
         return false;
     }
-    const uint8_t *payload = NULL;
+    const uint8_t *payload = nullptr;
     uint64_t payload_len = 0;
     if (!flexEnvelopeVerify(buf, len, params, &payload, &payload_len)) {
         return false;
@@ -1609,9 +1609,9 @@ static clusterMailbox *cmCreateRestoreShell(void) {
     /* @own: caller; free=clusterMailboxFree */
     clusterMailbox *mb = zmalloc(sizeof(*mb));
     memset(mb, 0, sizeof(*mb));
-    mb->ring = NULL;
-    mb->on_apply = NULL;
-    mb->apply_ctx = NULL;
+    mb->ring = nullptr;
+    mb->on_apply = nullptr;
+    mb->apply_ctx = nullptr;
     mb->envelope_algo = FLEX_ENV_ALGO_NONE;
     mb->flags = CLUSTER_MAILBOX_FLAG_NONE;
     return mb;
@@ -1631,16 +1631,16 @@ static clusterMailbox *cmCreateRestoreShell(void) {
  * supply. See `clusterMailboxAttachKeyring` for the post-restore
  * wire-up path. */
 static void *cmPersistRestore(const uint8_t *data, size_t len) {
-    if (data == NULL) {
-        return NULL;
+    if (data == nullptr) {
+        return nullptr;
     }
     clusterMailbox *mb = cmCreateRestoreShell();
-    if (mb == NULL) {
-        return NULL;
+    if (mb == nullptr) {
+        return nullptr;
     }
     if (!clusterMailboxRestore(mb, data, len)) {
         clusterMailboxFree(mb);
-        return NULL;
+        return nullptr;
     }
     return mb;
 }
@@ -1687,11 +1687,11 @@ const persistOps persistOpsClusterMailbox = {
     .newEmpty = cmPersistNewEmpty,
     .count = cmPersistCount,
     .estimateSize = cmPersistEstimateSize,
-    .encodeOp = NULL,
-    .applyOp = NULL,
-    .streamSnapshot = NULL,
-    .streamRestore = NULL,
-    .validate = NULL,
+    .encodeOp = nullptr,
+    .applyOp = nullptr,
+    .streamSnapshot = nullptr,
+    .streamRestore = nullptr,
+    .validate = nullptr,
     .free = cmPersistFree,
 };
 
@@ -1780,7 +1780,7 @@ static flex *cmTestReplaceAny(const flex *src, size_t idx,
     /* @own: caller; free=flexFree */
     flex *out = flexNew();
     size_t i = 0;
-    for (flexEntry *fe = flexHeadIfAny(src); fe != NULL;
+    for (flexEntry *fe = flexHeadIfAny(src); fe != nullptr;
          fe = flexNext(src, fe)) {
         databoxBig box;
         flexGetByTypeBig(fe, &box);
@@ -1856,10 +1856,10 @@ int clusterMailboxTest(int, char *[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        clusterMailbox *rx =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+        clusterMailbox *rx = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
         static constexpr uint32_t origins[] = {1, 300, UINT32_MAX};
         static constexpr uint64_t seqs[] = {1, 70000, UINT64_MAX / 3};
         static constexpr size_t lens[] = {0, 1, 100, 127, 128, 300, 70000};
@@ -1884,7 +1884,7 @@ int clusterMailboxTest(int, char *[]) {
                 const bool shortRefused =
                     ok && n > 0 &&
                     !clusterMailboxSeal(mb, origins[o], seq, 7, payload,
-                                        lens[l], K1, exact, n - 1, NULL);
+                                        lens[l], K1, exact, n - 1, nullptr);
                 refusals += shortRefused;
                 const bool ingested =
                     ok && clusterMailboxIngest(rx, frame, n, K1) ==
@@ -1986,7 +1986,7 @@ int clusterMailboxTest(int, char *[]) {
          * refusal below is due to the replaced field alone. */
         {
             cleaner(flexFree) flex *same =
-                cmTestReplaceEntry(src, SIZE_MAX, NULL);
+                cmTestReplaceEntry(src, SIZE_MAX, nullptr);
             const size_t n = cmTestSealInner(same, test_key, sizeof(test_key),
                                              sealed, sizeof(sealed));
             cmTestPoisonStack();
@@ -2126,8 +2126,8 @@ int clusterMailboxTest(int, char *[]) {
             clusterMailboxParseRotateAnnounce(twoIds, flexBytes(twoIds),
                                               &got) ||
             clusterMailboxParseRotateAnnounce(noIds, flexBytes(noIds), &got) ||
-            clusterMailboxParseRotateAnnounce(NULL, 3, &got) ||
-            clusterMailboxParseRotateAnnounce(ann, sizeof(ann), NULL)) {
+            clusterMailboxParseRotateAnnounce(nullptr, 3, &got) ||
+            clusterMailboxParseRotateAnnounce(ann, sizeof(ann), nullptr)) {
             ERR("announce bounds or counts not exact");
         }
     }
@@ -2198,9 +2198,9 @@ int clusterMailboxTest(int, char *[]) {
          * to the replaced field alone. */
         {
             cleaner(flexFree) flex *same =
-                cmTestReplaceEntry(src, SIZE_MAX, NULL);
+                cmTestReplaceEntry(src, SIZE_MAX, nullptr);
             clusterMailbox *dst = clusterMailboxCreate(
-                ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+                ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
             cmTestPoisonStack();
             if (!clusterMailboxRestore(dst, same, flexBytes(same)) ||
                 clusterMailboxLastApplied(dst, 61u) != 64u) {
@@ -2208,8 +2208,8 @@ int clusterMailboxTest(int, char *[]) {
             }
             clusterMailboxFree(dst);
             size_t n = 0;
-            dst = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL,
-                                       NULL);
+            dst = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr,
+                                       nullptr);
             if (!cmTestWrapStamped(wrapped, sizeof(wrapped),
                                    (const uint8_t *)same, flexBytes(same), &wp,
                                    &n) ||
@@ -2225,7 +2225,7 @@ int clusterMailboxTest(int, char *[]) {
                 cleaner(flexFree) flex *bad =
                     cmTestReplaceEntry(src, idx, &wides[w]);
                 clusterMailbox *dst = clusterMailboxCreate(
-                    ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+                    ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
                 cmTestPoisonStack();
                 if (clusterMailboxRestore(dst, bad, flexBytes(bad))) {
                     ERR("restore accepted value %zu at entry %zu", w, idx);
@@ -2240,7 +2240,7 @@ int clusterMailboxTest(int, char *[]) {
                     continue;
                 }
                 dst = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256,
-                                           NULL, NULL);
+                                           nullptr, nullptr);
                 cmTestPoisonStack();
                 if (clusterMailboxRestoreWrapped(dst, &vp, wrapped, n)) {
                     ERR("wrapped restore accepted value %zu at entry %zu", w,
@@ -2256,20 +2256,20 @@ int clusterMailboxTest(int, char *[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         /* Refuse non-keyed algo. */
         clusterMailbox *bad =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_XXH64, NULL, NULL);
-        if (bad != NULL) {
+            clusterMailboxCreate(ring, FLEX_ENV_ALGO_XXH64, nullptr, nullptr);
+        if (bad != nullptr) {
             ERR("Create should refuse non-keyed algo (XXH64)");
         }
         /* Refuse AEAD algo. */
         bad = clusterMailboxCreate(ring, FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
-                                   NULL, NULL);
-        if (bad != NULL) {
+                                   nullptr, nullptr);
+        if (bad != nullptr) {
             ERR("Create should refuse AEAD algo");
         }
         /* Accept HMAC-SHA-256. */
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        if (mb == NULL) {
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+        if (mb == nullptr) {
             ERR("Create failed for HMAC-SHA-256");
         }
         if (clusterMailboxOriginCount(mb) != 0) {
@@ -2285,12 +2285,12 @@ int clusterMailboxTest(int, char *[]) {
         static constexpr uint8_t k[32] = {7};
         hmacKeyringInstallUnsalted(ring, 3u, &hmacAlgoSHA256, k, sizeof(k));
         cleaner(clusterMailboxFree) clusterMailbox *unknownFlag =
-            clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL,
-                                   1u << 5);
+            clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr,
+                                   nullptr, 1u << 5);
         cleaner(clusterMailboxFree) clusterMailbox *noOpts =
-            clusterMailboxCreateOpts(NULL);
-        cleaner(clusterMailboxFree) clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+            clusterMailboxCreateOpts(nullptr);
+        cleaner(clusterMailboxFree) clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
         if (unknownFlag || noOpts || !mb) {
             ERR("unknown flag bits or no options were accepted");
         }
@@ -2301,11 +2301,11 @@ int clusterMailboxTest(int, char *[]) {
         size_t written = 0;
         static constexpr uint8_t one[1] = {1};
         if (clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_AEAD_AES256_GCM,
-                                        NULL, NULL) ||
-            clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_XXH3_64, NULL,
-                                        NULL) ||
-            clusterMailboxAttachKeyring(NULL, ring, FLEX_ENV_ALGO_HMAC_SHA256,
-                                        NULL, NULL) ||
+                                        nullptr, nullptr) ||
+            clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_XXH3_64,
+                                        nullptr, nullptr) ||
+            clusterMailboxAttachKeyring(
+                nullptr, ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr) ||
             !clusterMailboxSeal(mb, 1u, 1u, 0u, one, sizeof(one), 3u, frame,
                                 sizeof(frame), &written)) {
             ERR("attach took a non-keyed or AEAD algorithm");
@@ -2314,10 +2314,10 @@ int clusterMailboxTest(int, char *[]) {
         /* A payload length that cannot be framed has no sealed size; a
          * NULL payload with bytes, or no output, is refused */
         if (clusterMailboxSealedSize(mb, SIZE_MAX) != 0 ||
-            clusterMailboxSealedSize(NULL, 1) != 0 ||
-            clusterMailboxSeal(mb, 1u, 2u, 0u, NULL, 4, 3u, frame,
+            clusterMailboxSealedSize(nullptr, 1) != 0 ||
+            clusterMailboxSeal(mb, 1u, 2u, 0u, nullptr, 4, 3u, frame,
                                sizeof(frame), &written) ||
-            clusterMailboxSeal(mb, 1u, 2u, 0u, one, sizeof(one), 3u, NULL,
+            clusterMailboxSeal(mb, 1u, 2u, 0u, one, sizeof(one), 3u, nullptr,
                                sizeof(frame), &written)) {
             ERR("an unframeable size, a NULL payload or no output was taken");
         }
@@ -3033,8 +3033,8 @@ int clusterMailboxTest(int, char *[]) {
 
     TEST("restore: malformed snapshots are rejected") {
         hmacKeyring *ring = hmacKeyringCreate();
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
 
         /* Empty / non-flex buffer. */
         const uint8_t empty[1] = {};
@@ -3088,8 +3088,8 @@ int clusterMailboxTest(int, char *[]) {
 
     TEST("restore: a snapshot refused at record N leaves the mailbox as is") {
         hmacKeyring *ring = hmacKeyringCreate();
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
 
         /* Origins 1..5 at sequences 100..500 with window bits set */
         cleaner(flexFree) flex *base = flexNew();
@@ -3343,7 +3343,7 @@ int clusterMailboxTest(int, char *[]) {
             size_t written = 0;
             flexEnvelopeWrap(wrapped, sizeof(wrapped), inner, n, &wp, &written);
             clusterMailbox *mb = clusterMailboxCreate(
-                ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+                ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
             const bool ok =
                 clusterMailboxRestoreWrapped(mb, &vp, wrapped, written);
             if (ok != cases[c].accepted ||
@@ -3429,8 +3429,8 @@ int clusterMailboxTest(int, char *[]) {
 
     TEST("wrapped snapshot refuses non-keyed and AEAD envelope algorithms") {
         hmacKeyring *ring = hmacKeyringCreate();
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
         uint8_t buf[256];
         size_t written = 0;
         flexEnvelopeWrapParams wp_ck = {.algo = FLEX_ENV_ALGO_XXH64};
@@ -3470,7 +3470,7 @@ int clusterMailboxTest(int, char *[]) {
         for (uint32_t b = 0; b < num_buckets; b++) {
             const uint32_t blen = bucket_sizes[b];
             cleanerName(zfree, Bytes) uint8_t *buf =
-                blen > 0 ? zmalloc(blen) : NULL;
+                blen > 0 ? zmalloc(blen) : nullptr;
             for (uint32_t it = 0; it < iters_per_bucket; it++) {
                 for (size_t i = 0; i < blen; i++) {
                     buf[i] = (uint8_t)((i * 1664525u + it * 1013904223u +
@@ -3722,7 +3722,7 @@ int clusterMailboxTest(int, char *[]) {
         size_t snap_len = 0;
         cleanerName(zfree, Bytes) uint8_t *snap =
             persistOpsClusterMailbox.snapshot(mb_a, &snap_len);
-        if (snap == NULL || snap_len == 0) {
+        if (snap == nullptr || snap_len == 0) {
             ERR("persistOps snapshot");
         }
         if (!flexValidateBufferDeep(snap, snap_len)) {
@@ -3777,10 +3777,10 @@ int clusterMailboxTest(int, char *[]) {
     TEST("persistOps name agrees with persistTypeName") {
         const char *expected =
             persistTypeName(PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS);
-        if (expected == NULL) {
+        if (expected == nullptr) {
             ERR("persistTypeName returned NULL for "
                 "PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS");
-        } else if (persistOpsClusterMailbox.name == NULL) {
+        } else if (persistOpsClusterMailbox.name == nullptr) {
             ERR("persistOpsClusterMailbox.name is NULL");
         } else if (strcmp(persistOpsClusterMailbox.name, expected) != 0) {
             ERR("descriptor name '%s' must match persistTypeName '%s'",
@@ -4280,7 +4280,7 @@ static void *cmStatsRaceWriter(void *vctx) {
     /* Nothing reads writer_done; the main thread joins instead. */
     /* @sync: relaxed hint */
     atomic_store_explicit(&c->writer_done, 1, memory_order_relaxed);
-    return NULL;
+    return nullptr;
 }
 
 static void *cmStatsRaceReader(void *vctx) {
@@ -4328,7 +4328,7 @@ static void *cmStatsRaceReader(void *vctx) {
         atomic_fetch_add_explicit(&c->reader_iterations, 1,
                                   memory_order_relaxed);
     }
-    return NULL;
+    return nullptr;
 }
 
 int dkTestMailboxStatsRaceTest(int, char *[]) {
@@ -4348,8 +4348,8 @@ int dkTestMailboxStatsRaceTest(int, char *[]) {
             ERR("statsRace: keyring install failed");
         }
         clusterMailbox *mb = clusterMailboxCreate(
-            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmStatsRaceApply, NULL);
-        if (mb == NULL) {
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmStatsRaceApply, nullptr);
+        if (mb == nullptr) {
             ERR("statsRace: mailbox create failed");
         }
 
@@ -4360,14 +4360,16 @@ int dkTestMailboxStatsRaceTest(int, char *[]) {
 
         pthread_t writer_thr;
         pthread_t reader_thr;
-        if (pthread_create(&writer_thr, NULL, cmStatsRaceWriter, &ctx) != 0) {
+        if (pthread_create(&writer_thr, nullptr, cmStatsRaceWriter, &ctx) !=
+            0) {
             ERR("statsRace: spawn writer failed");
         }
-        if (pthread_create(&reader_thr, NULL, cmStatsRaceReader, &ctx) != 0) {
+        if (pthread_create(&reader_thr, nullptr, cmStatsRaceReader, &ctx) !=
+            0) {
             ERR("statsRace: spawn reader failed");
         }
-        pthread_join(writer_thr, NULL);
-        pthread_join(reader_thr, NULL);
+        pthread_join(writer_thr, nullptr);
+        pthread_join(reader_thr, nullptr);
 
         /* @sync: relaxed init */
         const int seal_fail = atomic_load_explicit(&ctx.writer_seal_failures,
@@ -4438,9 +4440,9 @@ int dkTestMailboxStatsAlignmentTest(int, char *[]) {
                                         sizeof(key))) {
             ERR("cacheLineLayout: keyring install failed");
         }
-        clusterMailbox *mb =
-            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        if (mb == NULL) {
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr);
+        if (mb == nullptr) {
             ERR("cacheLineLayout: mailbox create failed");
         }
 
@@ -4574,7 +4576,7 @@ static void cmRetireRaceCheckCopy(cmRetireRaceCtx *c) {
     uint8_t copy[CM_RACE_COPY_CAP];
     memset(copy, CM_RACE_COPY_SENTINEL, sizeof(copy));
     size_t len = SIZE_MAX;
-    const hmacHashAlgo *algo = NULL;
+    const hmacHashAlgo *algo = nullptr;
     const bool found = hmacKeyringGetRawCopy(c->ring, c->key_id, copy,
                                              sizeof(copy), &len, &algo);
     bool good;
@@ -4584,7 +4586,7 @@ static void cmRetireRaceCheckCopy(cmRetireRaceCtx *c) {
                memcmp(copy, c->key_bytes, c->key_len) == 0;
         untouchedFrom = c->key_len;
     } else {
-        good = len == 0 && algo == NULL;
+        good = len == 0 && algo == nullptr;
         untouchedFrom = 0;
     }
     for (size_t i = untouchedFrom; good && i < sizeof(copy); i++) {
@@ -4655,7 +4657,7 @@ static void *cmRetireRaceWriter(void *vctx) {
             atomic_fetch_add_explicit(&c->writer_ok, 1u, memory_order_relaxed);
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static void *cmRetireRaceRotator(void *vctx) {
@@ -4685,7 +4687,7 @@ static void *cmRetireRaceRotator(void *vctx) {
     /* `rotations` reaches the main thread through pthread_join. */
     /* @sync: relaxed hint */
     atomic_store_explicit(&c->rotator_done, 1, memory_order_relaxed);
-    return NULL;
+    return nullptr;
 }
 
 int dkTestKeyringGetRawCopyMigrationClusterTest(int, char *[]) {
@@ -4707,14 +4709,15 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int, char *[]) {
         ctx.origin = ORIGIN;
 
         hmacKeyring *ring = hmacKeyringCreate();
-        clusterMailbox *mb = NULL;
-        if (ring == NULL || !hmacKeyringInstallUnsalted(
-                                ring, KID, &hmacAlgoSHA256, key, sizeof(key))) {
+        clusterMailbox *mb = nullptr;
+        if (ring == nullptr ||
+            !hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                        sizeof(key))) {
             ERR("retireRace: initial keyring install failed");
         } else {
             mb = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256,
                                       cmRetireRaceApply, &ctx);
-            if (mb == NULL) {
+            if (mb == nullptr) {
                 ERR("retireRace: mailbox create failed");
             }
         }
@@ -4722,14 +4725,14 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int, char *[]) {
         ctx.ring = ring;
 
         bool ran = false;
-        if (mb != NULL) {
+        if (mb != nullptr) {
             pthread_t writer_thr;
             pthread_t rotator_thr;
-            if (pthread_create(&writer_thr, NULL, cmRetireRaceWriter, &ctx) !=
-                0) {
+            if (pthread_create(&writer_thr, nullptr, cmRetireRaceWriter,
+                               &ctx) != 0) {
                 ERR("retireRace: spawn writer failed");
             } else {
-                if (pthread_create(&rotator_thr, NULL, cmRetireRaceRotator,
+                if (pthread_create(&rotator_thr, nullptr, cmRetireRaceRotator,
                                    &ctx) != 0) {
                     ERR("retireRace: spawn rotator failed");
                     /* Release the writer from its start wait. */
@@ -4737,10 +4740,10 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int, char *[]) {
                     atomic_store_explicit(&ctx.rotator_done, 1,
                                           memory_order_relaxed);
                 } else {
-                    pthread_join(rotator_thr, NULL);
+                    pthread_join(rotator_thr, nullptr);
                     ran = true;
                 }
-                pthread_join(writer_thr, NULL);
+                pthread_join(writer_thr, nullptr);
             }
         }
 

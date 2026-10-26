@@ -317,7 +317,7 @@ const uint8_t *StrUtf8Retreat(const void *str, size_t, const uint8_t *pos,
                               size_t n) {
     const uint8_t *start = (const uint8_t *)str;
 
-    if (pos == NULL || pos < start) {
+    if (pos == nullptr || pos < start) {
         return start;
     }
 
@@ -344,7 +344,7 @@ uint32_t StrUtf8Peek(const void *str, size_t len, const uint8_t *pos) {
     const uint8_t *start = (const uint8_t *)str;
     const uint8_t *end = start + len;
 
-    if (pos == NULL || pos < start || pos >= end) {
+    if (pos == nullptr || pos < start || pos >= end) {
         return 0xFFFFFFFF;
     }
 

@@ -24,7 +24,7 @@ defcleanerName(multiroarP *, zfree, MultiroarP);
 static multiroarP *multiroarStartP(persistCtx *ctx, multiroar *roar) {
     if (!ctx || !roar) {
         multiroarFree(roar);
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, MultiroarP) multiroarP *r = zcalloc(1, sizeof(*r));
@@ -34,47 +34,47 @@ static multiroarP *multiroarStartP(persistCtx *ctx, multiroar *roar) {
     /* Initialize persistence context for multiroar type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiroar)) {
         multiroarFree(r->r);
-        return NULL;
+        return nullptr;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, r->r, &persistOpsMultiroar)) {
         multiroarFree(r->r);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     multiroarP *out = r;
-    r = NULL;
+    r = nullptr;
     return out;
 }
 
 multiroarP *multiroarNewP(persistCtx *ctx) {
     /* @own: container; free=multiroarFree */
-    return multiroarStartP(ctx, ctx ? multiroarBitNew() : NULL);
+    return multiroarStartP(ctx, ctx ? multiroarBitNew() : nullptr);
 }
 
 multiroarP *multiroarValueNewP(persistCtx *ctx, uint8_t bitWidth, uint64_t rows,
                                uint64_t cols) {
     /* @own: container; free=multiroarFree */
     return multiroarStartP(ctx, ctx ? multiroarValueNew(bitWidth, rows, cols)
-                                    : NULL);
+                                    : nullptr);
 }
 
 multiroarP *multiroarOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for multiroar type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiroar)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
     multiroar *recovered = persistCtxRecover(ctx, &persistOpsMultiroar);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=multiroarCloseP */
@@ -106,7 +106,7 @@ void multiroarCloseP(multiroarP *r) {
 }
 
 multiroar *multiroarGetRawP(multiroarP *r) {
-    return r ? r->r : NULL;
+    return r ? r->r : nullptr;
 }
 
 /* ============================================================================
@@ -400,7 +400,7 @@ static int test_multiroarP_basic(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Create new persistent multiroar */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiroarP *r = multiroarNewP(ctx);
     if (!r) {
         ERR("Failed to create multiroarP");
@@ -446,7 +446,7 @@ static int test_multiroarP_basic(int, char *[]) {
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r) {
         ERR("Failed to reopen multiroarP");
@@ -482,7 +482,7 @@ static int test_multiroarP_basic(int, char *[]) {
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r) {
         ERR("Failed to reopen multiroarP");
@@ -526,11 +526,11 @@ static int test_multiroarP_recovery(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Create multiroar and add bits */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiroarP *r = multiroarNewP(ctx);
 
     for (uint64_t i = 0; i < 100; i++) {
-        PTEST_LOGGED(multiroarBitSetP(r, i * 10, NULL));
+        PTEST_LOGGED(multiroarBitSetP(r, i * 10, nullptr));
     }
 
     /* Simulate crash - don't call multiroarCloseP */
@@ -538,7 +538,7 @@ static int test_multiroarP_recovery(int, char *[]) {
     zfree(r);
 
     /* Recover */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r) {
         ERR("Failed to recover after crash");
@@ -578,7 +578,7 @@ static int test_multiroarP_compaction(int, char *[]) {
 
     ptestCleanupFiles(basePath);
 
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     if (!ctx) {
         ERR("Failed to create persistCtx");
     }
@@ -590,7 +590,7 @@ static int test_multiroarP_compaction(int, char *[]) {
 
     /* Add many bits */
     for (uint64_t i = 0; i < 50; i++) {
-        PTEST_LOGGED(multiroarBitSetP(r, i, NULL));
+        PTEST_LOGGED(multiroarBitSetP(r, i, nullptr));
     }
 
     /* Attempt compaction */
@@ -645,10 +645,10 @@ static int test_multiroarP_fuzzing(int, char *[]) {
 
         if (op % 2 == 0) {
             /* Insert */
-            PTEST_LOGGED(multiroarBitSetP(r, pos, NULL));
+            PTEST_LOGGED(multiroarBitSetP(r, pos, nullptr));
         } else {
             /* Delete */
-            PTEST_LOGGED(multiroarRemoveP(r, pos, NULL));
+            PTEST_LOGGED(multiroarRemoveP(r, pos, nullptr));
         }
     }
 
@@ -662,7 +662,7 @@ static int test_multiroarP_fuzzing(int, char *[]) {
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarOpenP(ctx);
 
     /* Verify count matches after recovery */
@@ -694,7 +694,7 @@ static int test_multiroarP_ranges(int, char *[]) {
     TEST("multiroarP range set/clear and the readers survive recovery")
 
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiroarP *r = multiroarNewP(ctx);
     if (!multiroarIsEmptyP(r)) {
         ERR("A new roar is not empty");
@@ -703,8 +703,8 @@ static int test_multiroarP_ranges(int, char *[]) {
     /* [100, 400) set, [150, 200) cleared, 120 removed, 9000 set: 250 bits */
     PTEST_LOGGED(multiroarBitSetRangeP(r, 100, 300));
     PTEST_LOGGED(multiroarBitClearRangeP(r, 150, 50));
-    PTEST_LOGGED(multiroarRemoveP(r, 120, NULL));
-    PTEST_LOGGED(multiroarBitSetP(r, 9000, NULL));
+    PTEST_LOGGED(multiroarRemoveP(r, 120, nullptr));
+    PTEST_LOGGED(multiroarBitSetP(r, 9000, nullptr));
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
     if (!multiroarSyncP(r) || multiroarMemoryUsageP(r) == 0) {
@@ -719,7 +719,7 @@ static int test_multiroarP_ranges(int, char *[]) {
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r) {
         ERR("Recovery failed");
@@ -769,7 +769,7 @@ static int test_multiroarP_values(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* 12-bit values in a 50 x 40 grid */
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiroarP *r = multiroarValueNewP(ctx, 12, 50, 40);
     if (!r) {
         ERR("value-mode multiroarP not created");
@@ -783,7 +783,7 @@ static int test_multiroarP_values(int, char *[]) {
         }
     }
     for (uint64_t i = 0; i < 200; i += 5) {
-        if (!multiroarValueRemoveP(r, i * 9, NULL)) {
+        if (!multiroarValueRemoveP(r, i * 9, nullptr)) {
             ERR("remove at %" PRIu64 " refused", i * 9);
         }
     }
@@ -805,7 +805,7 @@ static int test_multiroarP_values(int, char *[]) {
     multiroarFree(r->r);
     zfree(r);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r) {
         ERR("value-mode multiroarP did not recover");
@@ -857,14 +857,14 @@ static int test_multiroarP_lifecycleRefusals(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* No context */
-    if (multiroarNewP(NULL) || multiroarValueNewP(NULL, 8, 4, 4) ||
-        multiroarOpenP(NULL)) {
+    if (multiroarNewP(nullptr) || multiroarValueNewP(nullptr, 8, 4, 4) ||
+        multiroarOpenP(nullptr)) {
         ERR("a NULL context was accepted");
     }
 
     /* Value widths the roar cannot store: nothing starts, and the context
      * stays free for a roar that can */
-    persistCtx *widthCtx = persistCtxNew(basePath, NULL);
+    persistCtx *widthCtx = persistCtxNew(basePath, nullptr);
     if (multiroarValueNewP(widthCtx, 0, 4, 4) ||
         multiroarValueNewP(widthCtx, 65, 4, 4)) {
         ERR("a value width of 0 or 65 was accepted");
@@ -882,7 +882,7 @@ static int test_multiroarP_lifecycleRefusals(int, char *[]) {
      * so neither start nor open succeeds (the roar is freed) */
     char missingDir[PATH_MAX + sizeof("-missing/sub/roar")];
     snprintf(missingDir, sizeof(missingDir), "%s-missing/sub/roar", basePath);
-    persistCtx *ctx = persistCtxNew(missingDir, NULL);
+    persistCtx *ctx = persistCtxNew(missingDir, nullptr);
     if (ctx) {
         if (multiroarNewP(ctx) || multiroarOpenP(ctx)) {
             ERR("a roar started where its files cannot be written");
@@ -891,7 +891,7 @@ static int test_multiroarP_lifecycleRefusals(int, char *[]) {
     }
 
     /* Nothing saved yet: open finds no snapshot to recover */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     if (multiroarOpenP(ctx)) {
         ERR("a roar opened with no snapshot");
     }
@@ -899,9 +899,9 @@ static int test_multiroarP_lifecycleRefusals(int, char *[]) {
     ptestCleanupFiles(basePath);
 
     /* Another structure's files are not a roar */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     intsetP *is = intsetNewP(ctx);
-    if (!is || !intsetAddP(is, 42, NULL)) {
+    if (!is || !intsetAddP(is, 42, nullptr)) {
         ERR("intsetP setup failed");
     }
     /* A context bound to the intset cannot take a roar: its snapshot and
@@ -911,7 +911,7 @@ static int test_multiroarP_lifecycleRefusals(int, char *[]) {
     }
     intsetCloseP(is);
     persistCtxFree(ctx);
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     multiroarP *foreign = multiroarOpenP(ctx);
     if (foreign) {
         ERR("an intset's files opened as a roar");
@@ -940,10 +940,10 @@ static int test_multiroarP_damagedWal(int, char *[]) {
      * logging goes on with no compaction: a set of 9 and a clear of 3 are
      * logged, and a reopen holds {5, 9} */
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiroarP *r = multiroarNewP(ctx);
     for (uint64_t bit = 3; bit <= 7; bit += 2) {
-        PTEST_LOGGED(multiroarBitSetP(r, bit, NULL));
+        PTEST_LOGGED(multiroarBitSetP(r, bit, nullptr));
     }
     multiroarCloseP(r);
     persistCtxFree(ctx);
@@ -951,7 +951,7 @@ static int test_multiroarP_damagedWal(int, char *[]) {
         ERR("could not damage the WAL");
     }
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r || multiroarBitCountP(r) != 2 || multiroarBitGetP(r, 7)) {
         ERR("lenient recovery kept %zu bits, want 3, 5",
@@ -969,7 +969,7 @@ static int test_multiroarP_damagedWal(int, char *[]) {
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
-    ctx = persistCtxOpen(basePath, NULL);
+    ctx = persistCtxOpen(basePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r || multiroarBitCountP(r) != 2 || multiroarBitGetP(r, 3) ||
         !multiroarBitGetP(r, 5) || !multiroarBitGetP(r, 9)) {
@@ -999,7 +999,7 @@ static int test_multiroarP_valueKindsAndModes(int, char *[]) {
      * an empty position logs nothing and reports nothing removed; bit ops
      * on a value roar and value ops without a value are refused */
     ptestCleanupFiles(basePath);
-    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
     multiroarP *r = multiroarValueNewP(ctx, 8, 0, 0);
     if (!r) {
         ERR("value-mode multiroarP not created");
@@ -1019,7 +1019,7 @@ static int test_multiroarP_valueKindsAndModes(int, char *[]) {
         ERR("removing an empty position was logged or reported");
     }
     bool changed = true;
-    if (multiroarValueSetP(r, 14, NULL) != PERSIST_LOG_REFUSED ||
+    if (multiroarValueSetP(r, 14, nullptr) != PERSIST_LOG_REFUSED ||
         multiroarBitSetP(r, 1, &changed) != PERSIST_LOG_REFUSED || changed ||
         multiroarRemoveP(r, 10, &changed) != PERSIST_LOG_REFUSED || changed ||
         multiroarBitSetRangeP(r, 0, 4) != PERSIST_LOG_REFUSED ||
@@ -1033,7 +1033,7 @@ static int test_multiroarP_valueKindsAndModes(int, char *[]) {
     multiroarFree(r->r);
     zfree(r);
 
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarOpenP(ctx);
     static constexpr uint64_t want[3] = {5, 1, 0};
     for (uint64_t i = 0; r && i < 3; i++) {
@@ -1053,7 +1053,7 @@ static int test_multiroarP_valueKindsAndModes(int, char *[]) {
 
     /* A bit roar: an empty range changes and logs nothing, and value
      * removal is refused */
-    ctx = persistCtxNew(basePath, NULL);
+    ctx = persistCtxNew(basePath, nullptr);
     r = multiroarNewP(ctx);
     persistCtxStats before = {};
     persistCtxStats after = {};
@@ -1075,16 +1075,16 @@ static int test_multiroarP_valueKindsAndModes(int, char *[]) {
     /* Every reader answers "nothing" for no roar; controls refuse */
     uint64_t pos = 99;
     persistCtxStats untouched = {.totalOps = 77};
-    multiroarCloseP(NULL);
-    multiroarGetStatsP(NULL, &untouched);
-    if (multiroarGetRawP(NULL) || multiroarBitCountP(NULL) ||
-        multiroarMemoryUsageP(NULL) || !multiroarIsEmptyP(NULL) ||
-        multiroarValueGetP(NULL, 0, NULL) || multiroarValueCountP(NULL) ||
-        multiroarBitGetP(NULL, 0) || multiroarMinP(NULL, &pos) ||
-        multiroarMaxP(NULL, &pos) || multiroarRankP(NULL, 5) ||
-        multiroarSelectP(NULL, 0, &pos) || pos != 99 || multiroarSyncP(NULL) ||
-        multiroarCompactP(NULL) ||
-        multiroarValueRemoveP(NULL, 0, NULL) != PERSIST_LOG_REFUSED ||
+    multiroarCloseP(nullptr);
+    multiroarGetStatsP(nullptr, &untouched);
+    if (multiroarGetRawP(nullptr) || multiroarBitCountP(nullptr) ||
+        multiroarMemoryUsageP(nullptr) || !multiroarIsEmptyP(nullptr) ||
+        multiroarValueGetP(nullptr, 0, nullptr) ||
+        multiroarValueCountP(nullptr) || multiroarBitGetP(nullptr, 0) ||
+        multiroarMinP(nullptr, &pos) || multiroarMaxP(nullptr, &pos) ||
+        multiroarRankP(nullptr, 5) || multiroarSelectP(nullptr, 0, &pos) ||
+        pos != 99 || multiroarSyncP(nullptr) || multiroarCompactP(nullptr) ||
+        multiroarValueRemoveP(nullptr, 0, nullptr) != PERSIST_LOG_REFUSED ||
         untouched.totalOps != 77) {
         ERR("a reader or control answered for no roar");
     }
@@ -1113,10 +1113,10 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
     TEST("multiroarP a refused log changes nothing (bit set, bit remove, "
          "value remove)")
 
-    persistCtx *ctx = persistCtxNew(bitPath, NULL);
+    persistCtx *ctx = persistCtxNew(bitPath, nullptr);
     multiroarP *r = multiroarNewP(ctx);
-    PTEST_LOGGED(multiroarBitSetP(r, 5, NULL));
-    PTEST_LOGGED(multiroarBitSetP(r, 70000, NULL));
+    PTEST_LOGGED(multiroarBitSetP(r, 5, nullptr));
+    PTEST_LOGGED(multiroarBitSetP(r, 70000, nullptr));
     PTEST_LOGGED(multiroarBitSetRangeP(r, 200000, 20000));
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
@@ -1137,27 +1137,29 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
      * answers */
     uint64_t pos = 0;
     const databox one = databoxNewUnsigned(1);
-    if (multiroarBitSetP(NULL, 1, NULL) || multiroarRemoveP(NULL, 1, NULL) ||
-        multiroarBitSetRangeP(NULL, 0, 1) ||
+    if (multiroarBitSetP(nullptr, 1, nullptr) ||
+        multiroarRemoveP(nullptr, 1, nullptr) ||
+        multiroarBitSetRangeP(nullptr, 0, 1) ||
         multiroarBitSetRangeP(r, 0, 0) != PERSIST_LOG_UNCHANGED ||
-        multiroarValueSetP(r, 1, &one) || multiroarValueRemoveP(r, 1, NULL) ||
-        multiroarNewP(NULL) || multiroarOpenP(NULL) || multiroarGetRawP(NULL) ||
-        multiroarBitCountP(NULL) || multiroarMemoryUsageP(NULL) ||
-        !multiroarIsEmptyP(NULL) || multiroarBitGetP(NULL, 5) ||
-        multiroarMinP(NULL, &pos) || multiroarMaxP(NULL, &pos) ||
-        multiroarRankP(NULL, 5) || multiroarSelectP(NULL, 0, &pos) ||
-        multiroarSyncP(NULL) || multiroarCompactP(NULL)) {
+        multiroarValueSetP(r, 1, &one) ||
+        multiroarValueRemoveP(r, 1, nullptr) || multiroarNewP(nullptr) ||
+        multiroarOpenP(nullptr) || multiroarGetRawP(nullptr) ||
+        multiroarBitCountP(nullptr) || multiroarMemoryUsageP(nullptr) ||
+        !multiroarIsEmptyP(nullptr) || multiroarBitGetP(nullptr, 5) ||
+        multiroarMinP(nullptr, &pos) || multiroarMaxP(nullptr, &pos) ||
+        multiroarRankP(nullptr, 5) || multiroarSelectP(nullptr, 0, &pos) ||
+        multiroarSyncP(nullptr) || multiroarCompactP(nullptr)) {
         ERR("a call without its wrapper was not refused");
     }
-    multiroarGetStatsP(NULL, NULL);
-    multiroarCloseP(NULL);
-    if (multiroarBitSetP(r, 6, NULL) == PERSIST_LOG_REFUSED) {
+    multiroarGetStatsP(nullptr, nullptr);
+    multiroarCloseP(nullptr);
+    if (multiroarBitSetP(r, 6, nullptr) == PERSIST_LOG_REFUSED) {
         ERR("the context did not log again after the refusal");
     }
     multiroarBitSet(want, 6);
     multiroarCloseP(r);
     persistCtxFree(ctx);
-    ctx = persistCtxOpen(bitPath, NULL);
+    ctx = persistCtxOpen(bitPath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r || !multiroarEquals(multiroarGetRawP(r), want)) {
         ERR("a reopen did not hold exactly the logged bits");
@@ -1165,7 +1167,7 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
-    ctx = persistCtxNew(valuePath, NULL);
+    ctx = persistCtxNew(valuePath, nullptr);
     r = multiroarValueNewP(ctx, 8, 1000, 1);
     const databox v200 = databoxNewUnsigned(200);
     const databox v0 = databoxNewUnsigned(0);
@@ -1188,14 +1190,16 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
     const databox wide = databoxNewUnsigned(256);
     const databox negative = databoxNewSigned(-1);
     const databox text = databoxNewBytesString("x");
-    if (multiroarBitSetP(r, 1, NULL) || multiroarBitSetRangeP(r, 0, 4) ||
+    if (multiroarBitSetP(r, 1, nullptr) || multiroarBitSetRangeP(r, 0, 4) ||
         multiroarValueSetP(r, 1, &wide) ||
         multiroarValueSetP(r, 1, &negative) ||
         multiroarValueSetP(r, 1, &text) || multiroarValueSetP(r, 1000, &v50) ||
-        multiroarValueSetP(r, 1, NULL) || multiroarValueSetP(NULL, 1, &v50) ||
-        multiroarValueRemoveP(NULL, 1, NULL) ||
-        multiroarValueNewP(NULL, 8, 1, 1) ||
-        multiroarValueGetP(NULL, 7, NULL) || multiroarValueCountP(NULL)) {
+        multiroarValueSetP(r, 1, nullptr) ||
+        multiroarValueSetP(nullptr, 1, &v50) ||
+        multiroarValueRemoveP(nullptr, 1, nullptr) ||
+        multiroarValueNewP(nullptr, 8, 1, 1) ||
+        multiroarValueGetP(nullptr, 7, nullptr) ||
+        multiroarValueCountP(nullptr)) {
         ERR("a value call the roar cannot take was not refused");
     }
 
@@ -1204,10 +1208,10 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
         !changed) {
         ERR("the context did not log again after the refusal");
     }
-    multiroarValueRemoveGetRemoved(wantValues, 7, NULL);
+    multiroarValueRemoveGetRemoved(wantValues, 7, nullptr);
     multiroarCloseP(r);
     persistCtxFree(ctx);
-    ctx = persistCtxOpen(valuePath, NULL);
+    ctx = persistCtxOpen(valuePath, nullptr);
     r = multiroarOpenP(ctx);
     if (!r || !multiroarEquals(multiroarGetRawP(r), wantValues)) {
         ERR("a reopen did not hold exactly the logged values");

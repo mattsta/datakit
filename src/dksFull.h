@@ -27,7 +27,7 @@ DK_STATIC dksType DKS_CONTAINERTYPE(const size_t len, const size_t free) {
         return DKS_48;
     }
 
-    assert(NULL);
+    assert(false);
     unreachable();
 }
 

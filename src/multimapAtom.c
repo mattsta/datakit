@@ -449,7 +449,7 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
 }
 
 bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
-    return conformRefcountDecr(ma, foundRef, NULL);
+    return conformRefcountDecr(ma, foundRef, nullptr);
 }
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
@@ -463,7 +463,7 @@ bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
     }
 
     /* else, releasing something we don't have is an error */
-    assert(NULL && "Releasing something not in the atom table?");
+    assert(false && "Releasing something not in the atom table?");
     return false;
 }
 
@@ -651,7 +651,7 @@ static int atomPersistCompareValues_(const void *a, const void *b) {
 
 static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -663,7 +663,7 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
         !atomPersistUnsigned_(f, &fe, &next) ||
         (flags & ~(uint64_t)ATOM_PERSIST_FLAG_PERMANENT_) ||
         next >= MULTIMAP_ATOM_ID_LIMIT) {
-        return NULL;
+        return nullptr;
     }
 
     cleaner(multimapAtomFree) multimapAtom *ma =
@@ -685,7 +685,7 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
         uint64_t count;
         databoxBig countBox;
         if (!atomPersistUnsigned_(f, &fe, &ids[r])) {
-            return NULL;
+            return nullptr;
         }
 
         flexGetByTypeBig(fe, &values[r]);
@@ -699,7 +699,7 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
             countBox.type != DATABOX_UNSIGNED_64 ||
             !atomPersistCountOf_((const databox *)&countBox, &count) ||
             count > INT64_MAX || (permanent && count)) {
-            return NULL;
+            return nullptr;
         }
 
         const databox ref = {.data.u = ids[r],
@@ -728,14 +728,14 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     multimap *reverse =
         multimapNewFromDumpWithReference(1, FLEX_CAP_LEVEL_512, rows, ma);
     if (!reverse) {
-        return NULL;
+        return nullptr;
     }
 
     multimapFree(ma->mapAtomReverse);
     ma->mapAtomReverse = reverse;
     atomSetNextId_(ma, next);
     multimapAtom *out = ma;
-    ma = NULL;
+    ma = nullptr;
     return out;
 }
 
@@ -746,7 +746,7 @@ static uint8_t *multimapAtomPersistEncodeOp_(persistOp op, const void *args,
                         (op == PERSIST_OP_NUM_INCR && argc == 2) ||
                         (op == PERSIST_OP_DELETE && argc == 1);
     if (!shaped) {
-        return NULL;
+        return nullptr;
     }
     return persistOpEncodeBoxes(args, argc, len);
 }
@@ -799,7 +799,7 @@ static bool multimapAtomPersistApplyOp_(void *structure, persistOp op,
         }
 
         if (b.type == DATABOX_SIGNED_64 && b.data.i64 == -1) {
-            conformRefcountDecr(ma, &ref, NULL);
+            conformRefcountDecr(ma, &ref, nullptr);
             return true;
         }
 
@@ -920,7 +920,7 @@ static bool atomTestIsCleanRef(const databox *box, const uint64_t id) {
 int multimapAtomTest(int, char *[]) {
     int err = 0;
 
-    uint32_t seed = time(NULL);
+    uint32_t seed = time(nullptr);
     srandom(seed);
     printf("Random seed: %" PRIu32 "\n", seed);
 
@@ -1460,14 +1460,14 @@ int multimapAtomTest(int, char *[]) {
                 ERR("Expected forward length to be %zd but it was %zd!\n",
                     doUntil, forwardLen);
                 multimapAtomRepr(ma);
-                assert(NULL);
+                assert(false);
             }
 
             if (reverseLen != doUntil) {
                 ERR("Expected reverse length to be %zd but it was %zd!\n",
                     doUntil, reverseLen);
                 multimapAtomRepr(ma);
-                assert(NULL);
+                assert(false);
             }
 
             /* GO AWAY */
@@ -1526,14 +1526,14 @@ int multimapAtomTest(int, char *[]) {
                 ERR("Expected forward length to be %zd but it was %zd!\n",
                     doUntil, forwardLen);
                 multimapAtomRepr(ma);
-                assert(NULL);
+                assert(false);
             }
 
             if (reverseLen != doUntil) {
                 ERR("Expected reverse length to be %zd but it was %zd!\n",
                     doUntil, reverseLen);
                 multimapAtomRepr(ma);
-                assert(NULL);
+                assert(false);
             }
 
             /* GO AWAY */
@@ -1561,14 +1561,14 @@ int multimapAtomTest(int, char *[]) {
                 ERR("Expected forward length to be 0 but it was %zd!\n",
                     forwardLen);
                 multimapAtomRepr(ma);
-                assert(NULL);
+                assert(false);
             }
 
             if (reverseLen != 0) {
                 ERR("Expected reverse length to be 0 but it was %zd!\n",
                     reverseLen);
                 multimapAtomRepr(ma);
-                assert(NULL);
+                assert(false);
             }
         }
 
@@ -2200,7 +2200,7 @@ int multimapAtomTest(int, char *[]) {
                     ERR("pass %d value %zu: deleted twice", pass, i);
                 }
 
-                const databox *wantMin = NULL;
+                const databox *wantMin = nullptr;
                 const databox fillMin = databoxNewSigned(1'000'000);
                 if (fill) {
                     wantMin = &fillMin;

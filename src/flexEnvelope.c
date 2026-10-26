@@ -107,7 +107,7 @@ static void hashRapidhash(const uint8_t *data, size_t data_len, const uint8_t *,
  * also enforce the same precondition. */
 static void hashBLAKE3Keyed(const uint8_t *data, size_t data_len,
                             const uint8_t *key, size_t key_len, uint8_t *out) {
-    if (key == NULL || key_len != BLAKE3_KEY_LEN) {
+    if (key == nullptr || key_len != BLAKE3_KEY_LEN) {
         /* Poison the digest so any downstream comparator fails closed
          * instead of a caller silently treating a short-key digest as
          * authoritative. */
@@ -136,7 +136,7 @@ static void hashHmacBlake3(const uint8_t *data, size_t data_len,
  * findAlgo and fail all operations cleanly. */
 static const flexEnvelopeAlgoDesc kAlgoDescs[] = {
     /* algo dlen nlen name hash keyed aead dep impl */
-    {FLEX_ENV_ALGO_NONE, 0, 0, "none", NULL, false, false, false, true},
+    {FLEX_ENV_ALGO_NONE, 0, 0, "none", nullptr, false, false, false, true},
     {FLEX_ENV_ALGO_XXH64, 8, 0, "xxh64", hashXXH64, false, false, false, true},
     {FLEX_ENV_ALGO_XXH3_64, 8, 0, "xxh3_64", hashXXH3_64, false, false, false,
      true},
@@ -156,11 +156,11 @@ static const flexEnvelopeAlgoDesc kAlgoDescs[] = {
     {FLEX_ENV_ALGO_HMAC_BLAKE3, 32, 0, "hmac_blake3", hashHmacBlake3, true,
      false, false, true},
     {FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305, 16, 12, "aead_chacha20_poly1305",
-     NULL, true, true, false, true},
-    {FLEX_ENV_ALGO_AEAD_AES128_GCM, 16, 12, "aead_aes128_gcm", NULL, true, true,
-     false, true},
-    {FLEX_ENV_ALGO_AEAD_AES256_GCM, 16, 12, "aead_aes256_gcm", NULL, true, true,
-     false, true},
+     nullptr, true, true, false, true},
+    {FLEX_ENV_ALGO_AEAD_AES128_GCM, 16, 12, "aead_aes128_gcm", nullptr, true,
+     true, false, true},
+    {FLEX_ENV_ALGO_AEAD_AES256_GCM, 16, 12, "aead_aes256_gcm", nullptr, true,
+     true, false, true},
 };
 
 /* Compile-time guard: every registered digest fits in the verify-side
@@ -197,7 +197,7 @@ static const flexEnvelopeAlgoDesc *findAlgo(uint16_t algo) {
             return &kAlgoDescs[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 /* === Algorithm queries ============================================== */
@@ -602,7 +602,7 @@ static bool wrapEmitHeader(uint8_t *out, size_t out_cap, uint64_t payload_len,
 #endif
 
     /* Unconditional: keyed algorithm without a key is rejected. */
-    if (d->is_keyed && (params->key == NULL || params->key_len == 0)) {
+    if (d->is_keyed && (params->key == nullptr || params->key_len == 0)) {
         return false;
     }
 
@@ -695,7 +695,7 @@ bool flexEnvelopeWrap(uint8_t *out, size_t out_cap, const uint8_t *payload,
         return false;
     }
 
-    const flexEnvelopeAlgoDesc *d = NULL;
+    const flexEnvelopeAlgoDesc *d = nullptr;
     size_t header_size = 0;
     size_t needed = 0;
     if (!wrapEmitHeader(out, out_cap, payload_len, params, &d, &header_size,
@@ -736,7 +736,7 @@ bool flexEnvelopeReserveWrap(uint8_t *out, size_t out_cap, uint64_t payload_len,
     if (!payload_region_out || !header_len_out) {
         return false;
     }
-    const flexEnvelopeAlgoDesc *d = NULL;
+    const flexEnvelopeAlgoDesc *d = nullptr;
     size_t header_size = 0;
     size_t needed = 0;
     if (!wrapEmitHeader(out, out_cap, payload_len, params, &d, &header_size,
@@ -781,7 +781,7 @@ bool flexEnvelopeFinalizeWrap(uint8_t *out, size_t out_cap, size_t header_len,
         return false;
     }
 #endif
-    if (d->is_keyed && (params->key == NULL || params->key_len == 0)) {
+    if (d->is_keyed && (params->key == nullptr || params->key_len == 0)) {
         return false;
     }
     /* BLAKE3 native keyed-hash mode requires exactly 32 bytes; mirror
@@ -948,9 +948,9 @@ bool flexEnvelopeVerify(const uint8_t *buf, size_t buf_len,
          * BEFORE the floor check because the ambiguity is structural,
          * not policy-driven — the caller's intent must be explicit even
          * if the wire id would have passed the revoke floor. */
-        const bool caller_supplied_raw = (p->key != NULL && p->key_len > 0);
-        const bool caller_supplied_prep = (p->prepared_key != NULL);
-        if (p->keyring != NULL &&
+        const bool caller_supplied_raw = (p->key != nullptr && p->key_len > 0);
+        const bool caller_supplied_prep = (p->prepared_key != nullptr);
+        if (p->keyring != nullptr &&
             (f.on_wire_flags & FLEX_ENV_FLAG_KEYID_PRESENT) &&
             (caller_supplied_raw || caller_supplied_prep) &&
             !(opts & FLEX_ENV_VERIFY_ACCEPT_WIRE_KEYID)) {
@@ -960,7 +960,7 @@ bool flexEnvelopeVerify(const uint8_t *buf, size_t buf_len,
         /* Keyring auto-resolution: if the wire claims a key id AND the
          * caller bound a keyring, resolve both the prepared handle (for
          * HMAC algos) and the raw bytes (for BLAKE3_KEYED) from it. */
-        if (p->keyring != NULL &&
+        if (p->keyring != nullptr &&
             (f.on_wire_flags & FLEX_ENV_FLAG_KEYID_PRESENT)) {
             /* floor check. Reject ids below the
              * keyring's revoked-key floor BEFORE resolving — a frame
@@ -989,7 +989,7 @@ bool flexEnvelopeVerify(const uint8_t *buf, size_t buf_len,
             size_t copied_len = 0;
             if (hmacKeyringGetRawCopy((struct hmacKeyring *)p->keyring,
                                       f.key_id, key_copy, sizeof(key_copy),
-                                      &copied_len, NULL)) {
+                                      &copied_len, nullptr)) {
                 key_copy_populated = true;
                 effective_raw_key = key_copy;
                 effective_raw_key_len = copied_len;
@@ -1000,12 +1000,12 @@ bool flexEnvelopeVerify(const uint8_t *buf, size_t buf_len,
                  * key so the downstream HMAC compute uses the keyring-
                  * resolved raw bytes, not the caller's (now-overridden)
                  * prepared handle. */
-                effective_prep_key = NULL;
+                effective_prep_key = nullptr;
             }
         }
         const bool have_raw_key =
-            (effective_raw_key != NULL && effective_raw_key_len > 0);
-        const bool have_prep_key = (effective_prep_key != NULL);
+            (effective_raw_key != nullptr && effective_raw_key_len > 0);
+        const bool have_prep_key = (effective_prep_key != nullptr);
         if (!have_raw_key && !have_prep_key) {
             goto cleanup;
         }
@@ -1122,7 +1122,7 @@ cleanup:
 
 flex *flexEnvelopeUnwrapAsFlex(const uint8_t *buf, size_t buf_len,
                                const flexEnvelopeVerifyParams *params) {
-    const uint8_t *payload = NULL;
+    const uint8_t *payload = nullptr;
     uint64_t payload_len = 0;
 
     /* Build local params that ensure flex validation runs. */
@@ -1135,13 +1135,13 @@ flex *flexEnvelopeUnwrapAsFlex(const uint8_t *buf, size_t buf_len,
     local.opts |= FLEX_ENV_VERIFY_REQUIRE_FLEX;
 
     if (!flexEnvelopeVerify(buf, buf_len, &local, &payload, &payload_len)) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=flexFree */
     flex *f = zmalloc((size_t)payload_len);
     if (!f) {
-        return NULL;
+        return nullptr;
     }
     memcpy(f, payload, (size_t)payload_len);
     return f;
@@ -1195,14 +1195,14 @@ static bool sealResolveKey(const flexEnvelopeSealParams *params,
                            bool *fromRing) {
     *resolved = *params;
     *fromRing = false;
-    if (params->key != NULL || params->key_len != 0 ||
-        params->keyring == NULL || params->key_id == 0u) {
+    if (params->key != nullptr || params->key_len != 0 ||
+        params->keyring == nullptr || params->key_id == 0u) {
         return true;
     }
     size_t len = 0;
     if (!hmacKeyringGetRawCopy((struct hmacKeyring *)params->keyring,
                                params->key_id, buf, HMAC_KEYRING_MAX_KEY_BYTES,
-                               &len, NULL)) {
+                               &len, nullptr)) {
         return false;
     }
     resolved->key = buf;
@@ -1232,10 +1232,10 @@ static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
     if (!d || !d->is_implemented || !d->is_aead) {
         return false;
     }
-    if (params->key == NULL || params->key_len != sealKeyLen(params->algo)) {
+    if (params->key == nullptr || params->key_len != sealKeyLen(params->algo)) {
         return false;
     }
-    if (params->nonce == NULL || params->nonce_len != d->nonce_len) {
+    if (params->nonce == nullptr || params->nonce_len != d->nonce_len) {
         return false;
     }
     if ((params->on_wire_flags & ~FLEX_ENV_FLAGS_VALID_V1) != 0) {
@@ -1366,8 +1366,8 @@ static bool sealRunCipher(uint8_t *out, size_t aad_len,
 /* (key_id, nonce) reuse check shared by Seal and FinalizeSeal. */
 static bool sealObserveNonce(const flexEnvelopeSealParams *params,
                              const flexEnvelopeAlgoDesc *d) {
-    if (params->nonceLog != NULL && d->nonce_len == AEAD_NONCE_LOG_NONCE_LEN &&
-        params->key_id != 0u) {
+    if (params->nonceLog != nullptr &&
+        d->nonce_len == AEAD_NONCE_LOG_NONCE_LEN && params->key_id != 0u) {
         if (!aeadNonceLogObserve(params->nonceLog, params->key_id,
                                  params->nonce)) {
             setVerifyErr(FLEX_ENV_VERIFY_FAILED_NONCE_REUSED);
@@ -1385,7 +1385,7 @@ static bool sealOneShot(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
         return false;
     }
 
-    const flexEnvelopeAlgoDesc *d = NULL;
+    const flexEnvelopeAlgoDesc *d = nullptr;
     size_t header_size = 0;
     size_t aad_len = 0;
     size_t needed = 0;
@@ -1472,7 +1472,7 @@ bool flexEnvelopeReserveSeal(uint8_t *out, size_t out_cap,
     if (fromRing) {
         dkSecureZero(keyBuf, sizeof(keyBuf));
     }
-    const flexEnvelopeAlgoDesc *d = NULL;
+    const flexEnvelopeAlgoDesc *d = nullptr;
     size_t header_size = 0;
     size_t aad_len = 0;
     size_t needed = 0;
@@ -1535,10 +1535,10 @@ static bool sealFinalize(uint8_t *out, size_t out_cap,
     if (!d || !d->is_implemented || !d->is_aead) {
         return false;
     }
-    if (params->key == NULL || params->key_len != sealKeyLen(params->algo)) {
+    if (params->key == nullptr || params->key_len != sealKeyLen(params->algo)) {
         return false;
     }
-    if (params->nonce == NULL || params->nonce_len != d->nonce_len) {
+    if (params->nonce == nullptr || params->nonce_len != d->nonce_len) {
         return false;
     }
     if ((params->on_wire_flags & ~FLEX_ENV_FLAGS_VALID_V1) != 0) {
@@ -1635,7 +1635,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
     if (!f.algo_desc->is_implemented || !f.algo_desc->is_aead) {
         goto cleanup;
     }
-    if (params == NULL) {
+    if (params == nullptr) {
         goto cleanup;
     }
 
@@ -1659,8 +1659,8 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
      * the caller supplied `params->key` directly (no keyring binding) or
      * when no keyring is bound — both paths fall back to ad-hoc init. */
     hmacKeyId resolved_key_id = HMAC_KEY_ID_INVALID;
-    if (effective_key == NULL && effective_key_len == 0 &&
-        params->keyring != NULL &&
+    if (effective_key == nullptr && effective_key_len == 0 &&
+        params->keyring != nullptr &&
         (f.on_wire_flags & FLEX_ENV_FLAG_KEYID_PRESENT)) {
         const hmacKeyId floor =
             hmacKeyringMinValidKeyId((struct hmacKeyring *)params->keyring);
@@ -1676,7 +1676,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
         size_t copied_len = 0;
         if (hmacKeyringGetRawCopy((struct hmacKeyring *)params->keyring,
                                   f.key_id, key_copy, sizeof(key_copy),
-                                  &copied_len, NULL)) {
+                                  &copied_len, nullptr)) {
             key_copy_populated = true;
             effective_key = key_copy;
             effective_key_len = copied_len;
@@ -1684,7 +1684,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
         }
     }
 
-    if (effective_key == NULL || effective_key_len == 0) {
+    if (effective_key == nullptr || effective_key_len == 0) {
         goto cleanup;
     }
     if (f.payload_len > (uint64_t)plaintext_out_cap) {
@@ -1773,7 +1773,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
      * attacker is replaying — either way, the second Open is rejected
      * with a typed error so the caller can distinguish from generic
      * "framing bad" failures. */
-    if (params->nonceLog != NULL &&
+    if (params->nonceLog != nullptr &&
         f.algo_desc->nonce_len == AEAD_NONCE_LOG_NONCE_LEN &&
         (f.on_wire_flags & FLEX_ENV_FLAG_KEYID_PRESENT) && f.key_id != 0u) {
         if (!aeadNonceLogObserve(params->nonceLog, f.key_id, nonce)) {
@@ -1822,7 +1822,7 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
     }
     case FLEX_ENV_ALGO_RAPIDHASH:
         rapidhashStreamInit((rapidhashCtx *)u_state, RAPIDHASH_VARIANT_MAIN,
-                            RAPIDHASH_MODE_FAST, 0, NULL);
+                            RAPIDHASH_MODE_FAST, 0, nullptr);
         return true;
     case FLEX_ENV_ALGO_XXH3_64:
     case FLEX_ENV_ALGO_XXH3_128: {
@@ -1846,7 +1846,7 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
          * full 256-bit digest. Mirrors the explicit AEAD key-length
          * guard sealRunCipher / Open use for ChaCha20-Poly1305 +
          * AES-GCM keys. */
-        if (key == NULL || key_len != BLAKE3_KEY_LEN) {
+        if (key == nullptr || key_len != BLAKE3_KEY_LEN) {
             return false;
         }
         blake3HasherInitKeyed((blake3Hasher *)u_state, key);
@@ -1862,7 +1862,7 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
          * K_ipad and K_opad — pays off in the streaming verify hot
          * path (cluster apply mailbox, replication ingest) where the
          * same key is used across millions of envelopes. */
-        if (prepared_key != NULL && prepared_key->algo == &hmacAlgoSHA256) {
+        if (prepared_key != nullptr && prepared_key->algo == &hmacAlgoSHA256) {
             hmacInitFromPrepared(hmac, prepared_key, hmac_storage,
                                  hmac_storage_cap);
             return true;
@@ -1876,7 +1876,7 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
         if (need > hmac_storage_cap) {
             return false;
         }
-        if (prepared_key != NULL && prepared_key->algo == &hmacAlgoBLAKE3) {
+        if (prepared_key != nullptr && prepared_key->algo == &hmacAlgoBLAKE3) {
             hmacInitFromPrepared(hmac, prepared_key, hmac_storage,
                                  hmac_storage_cap);
             return true;
@@ -2025,7 +2025,7 @@ bool flexEnvelopeWrapStreamInit(flexEnvelopeWrapStream *ctx,
         return false;
     }
 #endif
-    if (d->is_keyed && (params->key == NULL || params->key_len == 0)) {
+    if (d->is_keyed && (params->key == nullptr || params->key_len == 0)) {
         return false;
     }
     /* BLAKE3 native keyed-hash mode requires exactly 32 bytes; mirror
@@ -2076,7 +2076,7 @@ bool flexEnvelopeWrapStreamInit(flexEnvelopeWrapStream *ctx,
      * matching digest stream. */
     if (!streamHashInit((uint16_t)params->algo, &ctx->u, &ctx->hmac,
                         ctx->hmac_storage, sizeof(ctx->hmac_storage),
-                        params->key, params->key_len, NULL)) {
+                        params->key, params->key_len, nullptr)) {
         return false;
     }
 
@@ -2228,8 +2228,8 @@ bool flexEnvelopeVerifyStreamInit(flexEnvelopeVerifyStream *ctx,
         return false;
     }
     if (f.algo_desc->is_keyed) {
-        const bool have_raw_key = (p->key != NULL && p->key_len > 0);
-        const bool have_prep_key = (p->prepared_key != NULL);
+        const bool have_raw_key = (p->key != nullptr && p->key_len > 0);
+        const bool have_prep_key = (p->prepared_key != nullptr);
         if (!have_raw_key && !have_prep_key) {
             return false;
         }
@@ -2344,9 +2344,9 @@ bool flexEnvelopeVerifyStreamUpdate(flexEnvelopeVerifyStream *ctx,
 static void verifyStreamWipeSecrets(flexEnvelopeVerifyStream *ctx) {
     dkSecureZero(&ctx->hmac_storage, sizeof(ctx->hmac_storage));
     dkSecureZero(&ctx->u, sizeof(ctx->u));
-    ctx->raw_key = NULL;
+    ctx->raw_key = nullptr;
     ctx->raw_key_len = 0;
-    ctx->prepared_key = NULL;
+    ctx->prepared_key = nullptr;
 }
 
 bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
@@ -2461,7 +2461,7 @@ static void fillPseudoRandom(uint8_t *dst, size_t len, uint64_t seed) {
 
 static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
                          const uint8_t *key, size_t key_len) {
-    cleanerName(zfree, Bytes) uint8_t *payload = NULL;
+    cleanerName(zfree, Bytes) uint8_t *payload = nullptr;
     if (payload_len > 0) {
         payload = zmalloc(payload_len);
         fillPseudoRandom(payload, payload_len, 0xC0FFEEUL ^ payload_len);
@@ -2493,7 +2493,7 @@ static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
         .key_len = key_len,
         .opts = FLEX_ENV_VERIFY_DEFAULT,
     };
-    const uint8_t *out_payload = NULL;
+    const uint8_t *out_payload = nullptr;
     uint64_t out_payload_len = 0;
     ok = flexEnvelopeVerify(buf, wrapped_size, &vp, &out_payload,
                             &out_payload_len);
@@ -2538,7 +2538,7 @@ static void envBreakWrap(flexEnvelopeWrapParams *p, envBadWrap bad,
         p->algo = FLEX_ENV_ALGO_NONE;
         break;
     case ENV_BAD_NO_KEY:
-        p->key = NULL;
+        p->key = nullptr;
         break;
     case ENV_BAD_KEY_EMPTY:
         p->key_len = 0;
@@ -2593,13 +2593,13 @@ int flexEnvelopeTest(int, char *[]) {
         static uint8_t streamed[4099 + 256];
         for (size_t a = 0; a < countof(algos); a++) {
             const bool keyed = FLEX_ENV_ALGO_IS_KEYED(algos[a]);
-            const flexEnvelopeWrapParams wp = {.key = keyed ? key : NULL,
+            const flexEnvelopeWrapParams wp = {.key = keyed ? key : nullptr,
                                                .key_len =
                                                    keyed ? sizeof(key) : 0,
                                                .algo = algos[a]};
             const flexEnvelopeVerifyParams vp = {
                 .max_payload_len = sizeof(payload),
-                .key = keyed ? key : NULL,
+                .key = keyed ? key : nullptr,
                 .key_len = keyed ? sizeof(key) : 0};
             for (size_t s = 0; s < countof(sizes); s++) {
                 const size_t n = sizes[s];
@@ -2660,7 +2660,7 @@ int flexEnvelopeTest(int, char *[]) {
                                                                  take);
                         }
                         vok = vok && flexEnvelopeVerifyStreamFinal(&vs);
-                        const uint8_t *out = NULL;
+                        const uint8_t *out = nullptr;
                         uint64_t outLen = 0;
                         const bool once =
                             flexEnvelopeVerify(env, envLen, &vp, &out, &outLen);
@@ -2725,7 +2725,7 @@ int flexEnvelopeTest(int, char *[]) {
         }
         for (int e = 0; e < ENV_COUNT; e++) {
             const bool keyed = FLEX_ENV_ALGO_IS_KEYED(envAlgo[e]);
-            const flexEnvelopeWrapParams wp = {.key = keyed ? key : NULL,
+            const flexEnvelopeWrapParams wp = {.key = keyed ? key : nullptr,
                                                .key_len =
                                                    keyed ? sizeof(key) : 0,
                                                .algo = envAlgo[e]};
@@ -2783,7 +2783,7 @@ int flexEnvelopeTest(int, char *[]) {
             const uint8_t *buf = env[cases[c].env];
             const size_t len =
                 cases[c].len ? cases[c].len : envLen[cases[c].env];
-            const uint8_t *out = NULL;
+            const uint8_t *out = nullptr;
             uint64_t outLen = 0;
             const bool once =
                 flexEnvelopeVerify(buf, len, &cases[c].vp, &out, &outLen);
@@ -2832,7 +2832,7 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t reserved[256];
         size_t oneLen = 0;
         size_t resLen = 0;
-        uint8_t *region = NULL;
+        uint8_t *region = nullptr;
         size_t headerLen = 0;
         const bool okOne = flexEnvelopeWrap(oneShot, sizeof(oneShot), payload,
                                             sizeof(payload), &good, &oneLen);
@@ -2869,7 +2869,7 @@ int flexEnvelopeTest(int, char *[]) {
                 okOne, okFin, okStream, oneLen, resLen, streamLen);
         }
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
-        const uint8_t *got = NULL;
+        const uint8_t *got = nullptr;
         uint64_t gotLen = 0;
         flexEnvelopeVerifyStream vs;
         size_t consumed = 0;
@@ -2896,7 +2896,7 @@ int flexEnvelopeTest(int, char *[]) {
             envBreakWrap(&bad, (envBadWrap)b, key16);
             uint8_t out[256];
             size_t outLen = 0;
-            uint8_t *r = NULL;
+            uint8_t *r = nullptr;
             size_t h = 0;
             flexEnvelopeWrapStream badStream;
             size_t badHead = 0;
@@ -2906,7 +2906,7 @@ int flexEnvelopeTest(int, char *[]) {
                 out, sizeof(out), sizeof(payload), &bad, &r, &h);
             /* Finalize with the bad params after a good Reserve */
             uint8_t fin[256];
-            uint8_t *finRegion = NULL;
+            uint8_t *finRegion = nullptr;
             size_t finHead = 0;
             flexEnvelopeReserveWrap(fin, sizeof(fin), sizeof(payload), &good,
                                     &finRegion, &finHead);
@@ -2924,7 +2924,7 @@ int flexEnvelopeTest(int, char *[]) {
 
         /* Finalize also refuses what Reserve did not set up */
         uint8_t fin[256];
-        uint8_t *finRegion = NULL;
+        uint8_t *finRegion = nullptr;
         size_t finHead = 0;
         size_t finLen = 0;
         flexEnvelopeReserveWrap(fin, sizeof(fin), sizeof(payload), &good,
@@ -2938,8 +2938,8 @@ int flexEnvelopeTest(int, char *[]) {
         const bool mangled = flexEnvelopeFinalizeWrap(
             fin, sizeof(fin), finHead, sizeof(payload), &good, &finLen);
         if (wrongHeader || tooSmall || mangled ||
-            flexEnvelopeFinalizeWrap(NULL, 0, 0, 0, &good, &finLen) ||
-            flexEnvelopeFinalizeWrap(fin, sizeof(fin), finHead, 0, NULL,
+            flexEnvelopeFinalizeWrap(nullptr, 0, 0, 0, &good, &finLen) ||
+            flexEnvelopeFinalizeWrap(fin, sizeof(fin), finHead, 0, nullptr,
                                      &finLen)) {
             ERR("finalize accepted: wrong header %d, short buffer %d, "
                 "mangled magic %d",
@@ -2979,7 +2979,7 @@ int flexEnvelopeTest(int, char *[]) {
             size_t ringLen = 0;
             size_t keyLen = 0;
             size_t resLen = 0;
-            uint8_t *region = NULL;
+            uint8_t *region = nullptr;
             size_t head = 0;
             const bool okRing =
                 flexEnvelopeSeal(viaRing, sizeof(viaRing), plain, sizeof(plain),
@@ -3022,7 +3022,7 @@ int flexEnvelopeTest(int, char *[]) {
                 .keyring = ring};
             uint8_t out[128];
             size_t outLen = 0;
-            uint8_t *r = NULL;
+            uint8_t *r = nullptr;
             size_t h = 0;
             if (flexEnvelopeSeal(out, sizeof(out), plain, sizeof(plain), &bad,
                                  &outLen) ||
@@ -3054,7 +3054,7 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t reserved[256];
         size_t oneLen = 0;
         size_t resLen = 0;
-        uint8_t *region = NULL;
+        uint8_t *region = nullptr;
         size_t headLen = 0;
         const bool okOne = flexEnvelopeSeal(oneShot, sizeof(oneShot), plain,
                                             sizeof(plain), &good, &oneLen);
@@ -3103,14 +3103,14 @@ int flexEnvelopeTest(int, char *[]) {
                 bad.algo = FLEX_ENV_ALGO_HMAC_SHA256;
                 break;
             case SEAL_BAD_NO_KEY:
-                bad.key = NULL;
+                bad.key = nullptr;
                 bad.key_len = 0;
                 break;
             case SEAL_BAD_KEY_LEN:
                 bad.key_len = 16;
                 break;
             case SEAL_BAD_NO_NONCE:
-                bad.nonce = NULL;
+                bad.nonce = nullptr;
                 break;
             case SEAL_BAD_NONCE_LEN:
                 bad.nonce_len = 8;
@@ -3124,14 +3124,14 @@ int flexEnvelopeTest(int, char *[]) {
             }
             uint8_t out[256];
             size_t outLen = 0;
-            uint8_t *r = NULL;
+            uint8_t *r = nullptr;
             size_t h = 0;
             const bool seal = flexEnvelopeSeal(out, sizeof(out), plain,
                                                sizeof(plain), &bad, &outLen);
             const bool reserve = flexEnvelopeReserveSeal(
                 out, sizeof(out), sizeof(plain), &bad, &r, &h);
             uint8_t fin[256];
-            uint8_t *finRegion = NULL;
+            uint8_t *finRegion = nullptr;
             size_t finHead = 0;
             flexEnvelopeReserveSeal(fin, sizeof(fin), sizeof(plain), &good,
                                     &finRegion, &finHead);
@@ -3232,7 +3232,7 @@ int flexEnvelopeTest(int, char *[]) {
             for (uint32_t i = 0; i < 8u; i++) {
                 want[i] = (uint8_t)(kats[k].xxh64 >> (i * 8u));
             }
-            hashXXH64(input, len, NULL, 0, got);
+            hashXXH64(input, len, nullptr, 0, got);
             if (memcmp(got, want, 8) != 0) {
                 ERR("xxh64 envelope digest bytes mismatch at length %zu", len);
             }
@@ -3240,7 +3240,7 @@ int flexEnvelopeTest(int, char *[]) {
             for (uint32_t i = 0; i < 8u; i++) {
                 want[i] = (uint8_t)(kats[k].xxh3_64 >> (i * 8u));
             }
-            hashXXH3_64(input, len, NULL, 0, got);
+            hashXXH3_64(input, len, nullptr, 0, got);
             if (memcmp(got, want, 8) != 0) {
                 ERR("xxh3_64 envelope digest bytes mismatch at length %zu",
                     len);
@@ -3250,7 +3250,7 @@ int flexEnvelopeTest(int, char *[]) {
                 want[i] = (uint8_t)(kats[k].xxh3_128Low >> (i * 8u));
                 want[8u + i] = (uint8_t)(kats[k].xxh3_128High >> (i * 8u));
             }
-            hashXXH3_128(input, len, NULL, 0, got);
+            hashXXH3_128(input, len, nullptr, 0, got);
             if (memcmp(got, want, 16) != 0) {
                 ERR("xxh3_128 envelope digest bytes mismatch at length %zu",
                     len);
@@ -3275,7 +3275,7 @@ int flexEnvelopeTest(int, char *[]) {
                                 (size_t)65536,
                                 (size_t)1 << 20};
         for (size_t i = 0; i < countof(sizes); i++) {
-            if (!roundTripOne(FLEX_ENV_ALGO_XXH64, sizes[i], NULL, 0)) {
+            if (!roundTripOne(FLEX_ENV_ALGO_XXH64, sizes[i], nullptr, 0)) {
                 ERR("xxh64 round-trip failed at size %zu", sizes[i]);
             }
         }
@@ -3284,7 +3284,7 @@ int flexEnvelopeTest(int, char *[]) {
     TEST("envelope: round-trip xxh3_64 across size matrix") {
         const size_t sizes[] = {0, 1, 1024, 65536, 1 << 20};
         for (size_t i = 0; i < countof(sizes); i++) {
-            if (!roundTripOne(FLEX_ENV_ALGO_XXH3_64, sizes[i], NULL, 0)) {
+            if (!roundTripOne(FLEX_ENV_ALGO_XXH3_64, sizes[i], nullptr, 0)) {
                 ERR("xxh3_64 round-trip failed at size %zu", sizes[i]);
             }
         }
@@ -3293,7 +3293,7 @@ int flexEnvelopeTest(int, char *[]) {
     TEST("envelope: round-trip xxh3_128 across size matrix") {
         const size_t sizes[] = {0, 1, 1024, 65536, 1 << 20};
         for (size_t i = 0; i < countof(sizes); i++) {
-            if (!roundTripOne(FLEX_ENV_ALGO_XXH3_128, sizes[i], NULL, 0)) {
+            if (!roundTripOne(FLEX_ENV_ALGO_XXH3_128, sizes[i], nullptr, 0)) {
                 ERR("xxh3_128 round-trip failed at size %zu", sizes[i]);
             }
         }
@@ -3303,7 +3303,7 @@ int flexEnvelopeTest(int, char *[]) {
         const size_t sizes[] = {0,    1,     63,    64,    65,    1023,
                                 1024, 16383, 16384, 16385, 65536, 1 << 20};
         for (size_t i = 0; i < countof(sizes); i++) {
-            if (!roundTripOne(FLEX_ENV_ALGO_RAPIDHASH, sizes[i], NULL, 0)) {
+            if (!roundTripOne(FLEX_ENV_ALGO_RAPIDHASH, sizes[i], nullptr, 0)) {
                 ERR("rapidhash round-trip failed at size %zu", sizes[i]);
             }
         }
@@ -3336,7 +3336,7 @@ int flexEnvelopeTest(int, char *[]) {
             mutated[i] ^= 0xFF; /* flip all 8 bits to maximize signal */
 
             flexEnvelopeVerifyParams vp = {.opts = 0};
-            const uint8_t *p = NULL;
+            const uint8_t *p = nullptr;
             uint64_t pl = 0;
             if (flexEnvelopeVerify(mutated, total, &vp, &p, &pl)) {
                 undetected++;
@@ -3355,7 +3355,7 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t out[64];
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_NONE};
         size_t written = 0;
-        if (flexEnvelopeWrap(out, sizeof(out), NULL, 0, &wp, &written)) {
+        if (flexEnvelopeWrap(out, sizeof(out), nullptr, 0, &wp, &written)) {
             ERR("Wrap accepted ALGO_NONE without "
                 "DATAKIT_ENABLE_INSECURE_TEST_ALGOS — secure-by-default "
                 "barrier failed!");
@@ -3366,11 +3366,11 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t out[256];
         flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_HMAC_SHA256,
-            .key = NULL,
+            .key = nullptr,
             .key_len = 0,
         };
         size_t written = 0;
-        if (flexEnvelopeWrap(out, sizeof(out), NULL, 0, &wp, &written)) {
+        if (flexEnvelopeWrap(out, sizeof(out), nullptr, 0, &wp, &written)) {
             ERR("Wrap accepted keyed algo with no key");
         }
     }
@@ -3420,7 +3420,7 @@ int flexEnvelopeTest(int, char *[]) {
         /* Verify with keyring auto-resolution — caller passes no
          * key/prepared_key; verify pulls the right one by id. */
         flexEnvelopeVerifyParams vp = {.keyring = ring};
-        const uint8_t *out_payload = NULL;
+        const uint8_t *out_payload = nullptr;
         uint64_t out_plen = 0;
         if (!flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
             ERR("Keyring auto-resolve verify failed");
@@ -3467,7 +3467,7 @@ int flexEnvelopeTest(int, char *[]) {
             .on_wire_flags = FLEX_ENV_FLAG_KEYID_PRESENT,
             .key_id = 0u,
         };
-        if (flexEnvelopeWrap(out, sizeof(out), NULL, 0, &wp, &written)) {
+        if (flexEnvelopeWrap(out, sizeof(out), nullptr, 0, &wp, &written)) {
             ERR("Wrap must refuse key_id=0 paired with KEYID_PRESENT flag");
         }
     }
@@ -3477,7 +3477,7 @@ int flexEnvelopeTest(int, char *[]) {
         buf[0] = 0xAB;
         buf[1] = 0xCD;
         flexEnvelopeVerifyParams vp = {};
-        if (flexEnvelopeVerify(buf, sizeof(buf), &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, sizeof(buf), &vp, nullptr, nullptr)) {
             ERR("Verify accepted bad magic");
         }
     }
@@ -3485,13 +3485,13 @@ int flexEnvelopeTest(int, char *[]) {
     TEST("envelope: verify rejects truncated framing") {
         uint8_t buf[2] = {FLEX_ENVELOPE_MAGIC_0, FLEX_ENVELOPE_MAGIC_1};
         flexEnvelopeVerifyParams vp = {};
-        if (flexEnvelopeVerify(buf, sizeof(buf), &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, sizeof(buf), &vp, nullptr, nullptr)) {
             ERR("Verify accepted 2-byte buffer with only magic");
         }
-        if (flexEnvelopeVerify(buf, 0, &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, 0, &vp, nullptr, nullptr)) {
             ERR("Verify accepted empty buffer");
         }
-        if (flexEnvelopeVerify(NULL, 100, &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(nullptr, 100, &vp, nullptr, nullptr)) {
             ERR("Verify accepted NULL buffer");
         }
     }
@@ -3510,13 +3510,13 @@ int flexEnvelopeTest(int, char *[]) {
         memset(buf + total, 0xAB, 8);
 
         flexEnvelopeVerifyParams vp = {.opts = 0};
-        if (flexEnvelopeVerify(buf, total + 8, &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, total + 8, &vp, nullptr, nullptr)) {
             ERR("Verify accepted trailing bytes without "
                 "ALLOW_TRAILING flag");
         }
 
         vp.opts = FLEX_ENV_VERIFY_ALLOW_TRAILING;
-        if (!flexEnvelopeVerify(buf, total + 8, &vp, NULL, NULL)) {
+        if (!flexEnvelopeVerify(buf, total + 8, &vp, nullptr, nullptr)) {
             ERR("Verify rejected trailing bytes WITH ALLOW_TRAILING "
                 "flag");
         }
@@ -3543,7 +3543,7 @@ int flexEnvelopeTest(int, char *[]) {
         pos += w;
 
         flexEnvelopeVerifyParams vp = {.opts = 0};
-        if (flexEnvelopeVerify(buf, pos, &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, pos, &vp, nullptr, nullptr)) {
             ERR("Verify did not reject forged 2 GiB length on small "
                 "buffer (framing payload-fit check)");
         }
@@ -3630,7 +3630,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyParams vp = {
             .opts = FLEX_ENV_VERIFY_REQUIRE_FLEX,
         };
-        const uint8_t *p = NULL;
+        const uint8_t *p = nullptr;
         uint64_t pl = 0;
         if (!flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
             ERR("REQUIRE_FLEX rejected a valid wrapped flex");
@@ -3665,7 +3665,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyParams vp = {
             .opts = FLEX_ENV_VERIFY_PEEK_ONLY,
         };
-        const uint8_t *p = NULL;
+        const uint8_t *p = nullptr;
         uint64_t pl = 0;
         if (!flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
             ERR("PEEK_ONLY failed to skip digest");
@@ -3694,7 +3694,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyParams vp = {
             .opts = FLEX_ENV_VERIFY_REQUIRE_HMAC,
         };
-        if (flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, total, &vp, nullptr, nullptr)) {
             ERR("REQUIRE_HMAC accepted xxh64 (checksum class)");
         }
     }
@@ -3714,12 +3714,12 @@ int flexEnvelopeTest(int, char *[]) {
             .opts = FLEX_ENV_VERIFY_BOUND_PAYLOAD,
             .max_payload_len = 512,
         };
-        if (flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, total, &vp, nullptr, nullptr)) {
             ERR("BOUND_PAYLOAD did not enforce caller's 512 cap "
                 "against 1024-byte payload");
         }
         vp.max_payload_len = 2048;
-        if (!flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
+        if (!flexEnvelopeVerify(buf, total, &vp, nullptr, nullptr)) {
             ERR("BOUND_PAYLOAD rejected payload smaller than cap");
         }
     }
@@ -3741,7 +3741,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeWrap(buf, total, (const uint8_t *)f, flex_bytes, &wp,
                          &written);
 
-        flex *restored = flexEnvelopeUnwrapAsFlex(buf, total, NULL);
+        flex *restored = flexEnvelopeUnwrapAsFlex(buf, total, nullptr);
         if (!restored) {
             ERR("UnwrapAsFlex returned NULL on valid envelope");
         } else {
@@ -3819,7 +3819,7 @@ int flexEnvelopeTest(int, char *[]) {
                 .key = key_right,
                 .key_len = sizeof(key_right),
             };
-            if (!flexEnvelopeVerify(buf, total, &vp_ok, NULL, NULL)) {
+            if (!flexEnvelopeVerify(buf, total, &vp_ok, nullptr, nullptr)) {
                 ERR("Verify with right key rejected for %s",
                     flexEnvelopeAlgoName(algos[i]));
             }
@@ -3829,7 +3829,7 @@ int flexEnvelopeTest(int, char *[]) {
                 .key = key_wrong,
                 .key_len = sizeof(key_wrong),
             };
-            if (flexEnvelopeVerify(buf, total, &vp_bad, NULL, NULL)) {
+            if (flexEnvelopeVerify(buf, total, &vp_bad, nullptr, nullptr)) {
                 ERR("Verify with wrong key ACCEPTED for %s "
                     "— authentication broken!",
                     flexEnvelopeAlgoName(algos[i]));
@@ -3837,7 +3837,7 @@ int flexEnvelopeTest(int, char *[]) {
 
             /* Verify with NO key: must fail (unconditional invariant). */
             flexEnvelopeVerifyParams vp_nokey = {};
-            if (flexEnvelopeVerify(buf, total, &vp_nokey, NULL, NULL)) {
+            if (flexEnvelopeVerify(buf, total, &vp_nokey, nullptr, nullptr)) {
                 ERR("Verify with NO key ACCEPTED for keyed algo %s",
                     flexEnvelopeAlgoName(algos[i]));
             }
@@ -3876,7 +3876,7 @@ int flexEnvelopeTest(int, char *[]) {
                     .key = key,
                     .key_len = sizeof(key),
                 };
-                if (flexEnvelopeVerify(mutated, total, &vp, NULL, NULL)) {
+                if (flexEnvelopeVerify(mutated, total, &vp, nullptr, nullptr)) {
                     undetected++;
                 }
             }
@@ -3916,7 +3916,7 @@ int flexEnvelopeTest(int, char *[]) {
             .key = key,
             .key_len = sizeof(key),
         };
-        if (!flexEnvelopeVerify(buf, total, &vp_plain, NULL, NULL)) {
+        if (!flexEnvelopeVerify(buf, total, &vp_plain, nullptr, nullptr)) {
             ERR("Plain-key verify failed on valid HMAC envelope");
         }
 
@@ -3927,14 +3927,14 @@ int flexEnvelopeTest(int, char *[]) {
         hmacPrepareKey(&prep, &hmacAlgoSHA256, prepStorage, prepSize, key,
                        sizeof(key));
         flexEnvelopeVerifyParams vp_prep = {.prepared_key = &prep};
-        if (!flexEnvelopeVerify(buf, total, &vp_prep, NULL, NULL)) {
+        if (!flexEnvelopeVerify(buf, total, &vp_prep, nullptr, nullptr)) {
             ERR("Prepared-key verify failed on valid HMAC envelope");
         }
 
         /* Sanity: a forged envelope (1-byte flip) must still be
          * rejected under the prepared-key path. */
         buf[total / 2] ^= 0x01;
-        if (flexEnvelopeVerify(buf, total, &vp_prep, NULL, NULL)) {
+        if (flexEnvelopeVerify(buf, total, &vp_prep, nullptr, nullptr)) {
             ERR("Prepared-key path accepted forged envelope!");
         }
     }
@@ -3979,7 +3979,7 @@ int flexEnvelopeTest(int, char *[]) {
         for (uint32_t b = 0; b < numBuckets; b++) {
             const uint32_t bufLen = lenBuckets[b];
             cleanerName(zfree, Bytes) uint8_t *buf =
-                bufLen > 0 ? zmalloc(bufLen) : NULL;
+                bufLen > 0 ? zmalloc(bufLen) : nullptr;
             for (uint32_t iter = 0; iter < iterationsPerBucket; iter++) {
                 fillPseudoRandom(buf, bufLen,
                                  (uint64_t)b * 1000003ull +
@@ -3999,7 +3999,7 @@ int flexEnvelopeTest(int, char *[]) {
                     .opts = policy,
                     .max_payload_len = FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD,
                 };
-                const uint8_t *payload = NULL;
+                const uint8_t *payload = nullptr;
                 uint64_t payloadLen = 0;
                 const bool ok = flexEnvelopeVerify(buf, (size_t)bufLen, &vp,
                                                    &payload, &payloadLen);
@@ -4083,7 +4083,7 @@ int flexEnvelopeTest(int, char *[]) {
             for (size_t pi = 0; pi < countof(plens); pi++) {
                 const size_t plen = plens[pi];
                 cleanerName(zfree, Bytes) uint8_t *payload =
-                    plen > 0 ? zmalloc(plen) : NULL;
+                    plen > 0 ? zmalloc(plen) : nullptr;
                 if (payload) {
                     fillPseudoRandom(payload, plen,
                                      0xABCDEFUL ^ (uint64_t)plen ^
@@ -4095,7 +4095,7 @@ int flexEnvelopeTest(int, char *[]) {
                 cleanerName(zfree, Bytes) uint8_t *oneshot_buf = zmalloc(total);
                 flexEnvelopeWrapParams wp = {
                     .algo = algo,
-                    .key = need_key ? key : NULL,
+                    .key = need_key ? key : nullptr,
                     .key_len = need_key ? sizeof(key) : 0,
                 };
                 size_t one_written = 0;
@@ -4163,7 +4163,7 @@ int flexEnvelopeTest(int, char *[]) {
                 /* Streaming verify equivalence. */
                 {
                     flexEnvelopeVerifyParams vp = {
-                        .key = need_key ? key : NULL,
+                        .key = need_key ? key : nullptr,
                         .key_len = need_key ? sizeof(key) : 0,
                     };
                     flexEnvelopeVerifyStream vctx;
@@ -4217,14 +4217,14 @@ int flexEnvelopeTest(int, char *[]) {
                     tampered[hdr.header_size + (plen / 2)] ^= 0xFF;
 
                     flexEnvelopeVerifyParams vp = {
-                        .key = need_key ? key : NULL,
+                        .key = need_key ? key : nullptr,
                         .key_len = need_key ? sizeof(key) : 0,
                     };
                     flexEnvelopeVerifyStream vctx;
                     size_t consumed = 0;
                     if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, tampered,
-                                                      total, &consumed, NULL,
-                                                      NULL)) {
+                                                      total, &consumed, nullptr,
+                                                      nullptr)) {
                         ERR("verify-stream Init failed on tamper case "
                             "(algo=%s)",
                             flexEnvelopeAlgoName(algo));
@@ -4245,8 +4245,8 @@ int flexEnvelopeTest(int, char *[]) {
                     memcpy(tampered, oneshot_buf, total);
                     tampered[total - 1] ^= 0x55;
                     if (flexEnvelopeVerifyStreamInit(&vctx, &vp, tampered,
-                                                     total, &consumed, NULL,
-                                                     NULL)) {
+                                                     total, &consumed, nullptr,
+                                                     nullptr)) {
                         flexEnvelopeVerifyStreamUpdate(
                             &vctx, tampered + consumed, total - consumed);
                         if (flexEnvelopeVerifyStreamFinal(&vctx)) {
@@ -4266,7 +4266,7 @@ int flexEnvelopeTest(int, char *[]) {
         size_t hw = 0;
         flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_HMAC_SHA256,
-            .key = NULL,
+            .key = nullptr,
             .key_len = 0,
         };
         if (flexEnvelopeWrapStreamInit(&ctx, 100, &wp, header, sizeof(header),
@@ -4343,7 +4343,7 @@ int flexEnvelopeTest(int, char *[]) {
             }
             env[e][envLen[e]] = 0x00; /* one trailing byte */
             if (!opens || shortOpens || !wiped ||
-                flexEnvelopeOpen(env[e], envLen[e], NULL, out, sizeof(out),
+                flexEnvelopeOpen(env[e], envLen[e], nullptr, out, sizeof(out),
                                  &got) ||
                 flexEnvelopeOpen(env[e], envLen[e], &wrongLen, out, sizeof(out),
                                  &got) ||
@@ -4383,7 +4383,7 @@ int flexEnvelopeTest(int, char *[]) {
                 continue;
             }
             const bool ok = flexEnvelopeWrapStreamFinal(
-                &ctx, misuse == 2 ? NULL : digest,
+                &ctx, misuse == 2 ? nullptr : digest,
                 misuse == 1 ? 31 : sizeof(digest), &written);
             if (misuse == 3) {
                 if (!ok || written != 32) {
@@ -4417,10 +4417,10 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t storage[8];
         const bool off16 =
             streamHashInit(FLEX_ENV_ALGO_XXH3_64, raw + 16, &hmac, storage,
-                           sizeof(storage), NULL, 0, NULL);
+                           sizeof(storage), nullptr, 0, nullptr);
         const bool off0 =
             streamHashInit(FLEX_ENV_ALGO_XXH3_128, raw, &hmac, storage,
-                           sizeof(storage), NULL, 0, NULL);
+                           sizeof(storage), nullptr, 0, nullptr);
         if (!ok64 || !ok128 || off16 || !off0) {
             ERR("XXH3 stream init: aligned %d/%d, misaligned %d, raw %d", ok64,
                 ok128, off16, off0);
@@ -4527,8 +4527,8 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
         flexEnvelopeVerifyStream vctx;
         size_t consumed = 0;
-        if (flexEnvelopeVerifyStreamInit(&vctx, &vp, hdr, pos, &consumed, NULL,
-                                         NULL)) {
+        if (flexEnvelopeVerifyStreamInit(&vctx, &vp, hdr, pos, &consumed,
+                                         nullptr, nullptr)) {
             ERR("verify stream Init must reject AEAD class");
         }
     }
@@ -4591,7 +4591,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyStream vctx;
         size_t consumed = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, out_buf, total, &consumed,
-                                          NULL, NULL)) {
+                                          nullptr, nullptr)) {
             ERR("64MiB verify-stream Init failed");
         }
         size_t voff = consumed;
@@ -4649,7 +4649,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyStream ctx;
         size_t consumed = 0;
         if (!flexEnvelopeVerifyStreamInit(&ctx, &vp, buf, total, &consumed,
-                                          NULL, NULL)) {
+                                          nullptr, nullptr)) {
             ERR("Init failed");
         }
 
@@ -4720,7 +4720,8 @@ int flexEnvelopeTest(int, char *[]) {
             flexEnvelopeVerifyStream vctx_raw;
             size_t consumed_raw = 0;
             if (!flexEnvelopeVerifyStreamInit(&vctx_raw, &vp_raw, buf, total,
-                                              &consumed_raw, NULL, NULL)) {
+                                              &consumed_raw, nullptr,
+                                              nullptr)) {
                 ERR("Raw-key stream Init failed for algo=%u", (uint32_t)algo);
             }
             if (!flexEnvelopeVerifyStreamUpdate(&vctx_raw, buf + consumed_raw,
@@ -4740,7 +4741,8 @@ int flexEnvelopeTest(int, char *[]) {
             flexEnvelopeVerifyStream vctx_prep;
             size_t consumed_prep = 0;
             if (!flexEnvelopeVerifyStreamInit(&vctx_prep, &vp_prep, buf, total,
-                                              &consumed_prep, NULL, NULL)) {
+                                              &consumed_prep, nullptr,
+                                              nullptr)) {
                 ERR("Prepared-key stream Init failed for algo=%u",
                     (uint32_t)algo);
             }
@@ -4761,7 +4763,8 @@ int flexEnvelopeTest(int, char *[]) {
             flexEnvelopeVerifyStream vctx_tamper;
             size_t consumed_t = 0;
             if (!flexEnvelopeVerifyStreamInit(&vctx_tamper, &vp_prep, buf,
-                                              total, &consumed_t, NULL, NULL)) {
+                                              total, &consumed_t, nullptr,
+                                              nullptr)) {
                 ERR("Tamper-test Init failed for algo=%u", (uint32_t)algo);
             }
             (void)flexEnvelopeVerifyStreamUpdate(&vctx_tamper, buf + consumed_t,
@@ -4791,7 +4794,7 @@ int flexEnvelopeTest(int, char *[]) {
         for (uint32_t s = 0; s < countof(plens); s++) {
             const size_t plen = plens[s];
             cleanerName(zfree, Bytes) uint8_t *plain =
-                plen > 0 ? zmalloc(plen) : NULL;
+                plen > 0 ? zmalloc(plen) : nullptr;
             for (size_t i = 0; i < plen; i++) {
                 plain[i] = (uint8_t)((i * 37u + 11u) & 0xFFu);
             }
@@ -4933,7 +4936,7 @@ int flexEnvelopeTest(int, char *[]) {
 
         flexEnvelopeSealParams sp = {
             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
-            .key = NULL,
+            .key = nullptr,
             .key_len = 0,
             .nonce = nonce,
             .nonce_len = sizeof(nonce),
@@ -4948,7 +4951,7 @@ int flexEnvelopeTest(int, char *[]) {
             ERR("Seal must refuse wrong key length");
         }
         sp.key_len = sizeof(key);
-        sp.nonce = NULL;
+        sp.nonce = nullptr;
         if (flexEnvelopeSeal(buf, sizeof(buf), plain, plen, &sp, &written)) {
             ERR("Seal must refuse NULL nonce");
         }
@@ -4973,7 +4976,7 @@ int flexEnvelopeTest(int, char *[]) {
             .key = key,
             .key_len = sizeof(key),
         };
-        const uint8_t *p = NULL;
+        const uint8_t *p = nullptr;
         uint64_t pl = 0;
         if (flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
             ERR("Verify must reject AEAD envelope (route through Open)");
@@ -5002,7 +5005,7 @@ int flexEnvelopeTest(int, char *[]) {
                 const bool need_key = flexEnvelopeAlgoIsKeyed(algos[a]);
                 flexEnvelopeWrapParams wp = {
                     .algo = algos[a],
-                    .key = need_key ? bench_key : NULL,
+                    .key = need_key ? bench_key : nullptr,
                     .key_len = need_key ? sizeof(bench_key) : 0,
                 };
                 size_t written = 0;
@@ -5027,12 +5030,12 @@ int flexEnvelopeTest(int, char *[]) {
                     (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
 
                 flexEnvelopeVerifyParams vp = {
-                    .key = need_key ? bench_key : NULL,
+                    .key = need_key ? bench_key : nullptr,
                     .key_len = need_key ? sizeof(bench_key) : 0,
                 };
                 clock_gettime(CLOCK_MONOTONIC, &t0);
                 for (uint32_t i = 0; i < iters; i++) {
-                    const uint8_t *p = NULL;
+                    const uint8_t *p = nullptr;
                     uint64_t pl = 0;
                     flexEnvelopeVerify(buf, total, &vp, &p, &pl);
                 }
@@ -5192,7 +5195,7 @@ int flexEnvelopeTest(int, char *[]) {
         }
 
         flexEnvelopeVerifyParams vp = {.keyring = ring};
-        const uint8_t *out = NULL;
+        const uint8_t *out = nullptr;
         uint64_t out_len = 0;
         /* Pre-condition: both wraps verify when floor is 0 — sanity
          * check by saving + clearing floor. Skip this; instead just
@@ -5282,7 +5285,7 @@ int flexEnvelopeTest(int, char *[]) {
         }
 
         /* Reserve-wrap with 16-byte key MUST fail. */
-        uint8_t *region = NULL;
+        uint8_t *region = nullptr;
         size_t hlen = 0;
         if (flexEnvelopeReserveWrap(buf, wrapped, plen, &wp_short, &region,
                                     &hlen)) {
@@ -5318,7 +5321,7 @@ int flexEnvelopeTest(int, char *[]) {
             .key = short_key,
             .key_len = sizeof(short_key),
         };
-        const uint8_t *vp_out = NULL;
+        const uint8_t *vp_out = nullptr;
         uint64_t vp_out_len = 0;
         if (flexEnvelopeVerify(buf, w2, &vp_short, &vp_out, &vp_out_len)) {
             ERR("flexEnvelopeVerify must reject 16-byte key under "
@@ -5329,7 +5332,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyStream vctx;
         size_t consumed = 0;
         if (flexEnvelopeVerifyStreamInit(&vctx, &vp_short, buf, w2, &consumed,
-                                         NULL, NULL)) {
+                                         nullptr, nullptr)) {
             ERR("Verify-stream Init must reject 16-byte key under "
                 "BLAKE3_KEYED");
         }
@@ -5339,7 +5342,7 @@ int flexEnvelopeTest(int, char *[]) {
             .key = full_key,
             .key_len = sizeof(full_key),
         };
-        const uint8_t *vp_full_out = NULL;
+        const uint8_t *vp_full_out = nullptr;
         uint64_t vp_full_out_len = 0;
         if (!flexEnvelopeVerify(buf, w2, &vp_full2, &vp_full_out,
                                 &vp_full_out_len)) {
@@ -5349,7 +5352,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyStream vctx2;
         size_t consumed2 = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx2, &vp_full2, buf, w2,
-                                          &consumed2, NULL, NULL)) {
+                                          &consumed2, nullptr, nullptr)) {
             ERR("Verify-stream Init must accept full 32-byte BLAKE3_KEYED "
                 "key");
         }
@@ -5394,7 +5397,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyStream vctx;
         size_t consumed = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, buf, wrapped, &consumed,
-                                          NULL, NULL)) {
+                                          nullptr, nullptr)) {
             ERR("verify-stream Init failed");
         }
         /* Feed only HALF the payload then call Final. Final must
@@ -5422,7 +5425,7 @@ int flexEnvelopeTest(int, char *[]) {
         flexEnvelopeVerifyStream vctx2;
         size_t consumed2 = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx2, &vp, buf, wrapped, &consumed2,
-                                          NULL, NULL)) {
+                                          nullptr, nullptr)) {
             ERR("verify-stream Init failed (2)");
         }
         /* Feed exactly payload, no digest. */
@@ -5567,7 +5570,7 @@ int flexEnvelopeTest(int, char *[]) {
             memset(&vctx, 0xA5, sizeof(vctx));
             size_t consumed = 0;
             if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, buf, wrapped,
-                                              &consumed, NULL, NULL)) {
+                                              &consumed, nullptr, nullptr)) {
                 ERR("verify-stream Init failed for algo=%u", (uint32_t)algo);
                 continue;
             }
@@ -5590,11 +5593,11 @@ int flexEnvelopeTest(int, char *[]) {
                     "(pre-fill 0xA5 not scrubbed)",
                     (uint32_t)algo);
             }
-            if (vctx.raw_key != NULL || vctx.raw_key_len != 0) {
+            if (vctx.raw_key != nullptr || vctx.raw_key_len != 0) {
                 ERR("verify-stream Final left raw_key non-NULL for algo=%u",
                     (uint32_t)algo);
             }
-            if (vctx.prepared_key != NULL) {
+            if (vctx.prepared_key != nullptr) {
                 ERR("verify-stream Final left prepared_key non-NULL for "
                     "algo=%u",
                     (uint32_t)algo);
@@ -5641,7 +5644,7 @@ int flexEnvelopeTest(int, char *[]) {
 
         /* Verify via the keyring (the migrated path). */
         flexEnvelopeVerifyParams vp = {.keyring = ring};
-        const uint8_t *out_payload = NULL;
+        const uint8_t *out_payload = nullptr;
         uint64_t out_plen = 0;
         if (!flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
             ERR("keyringRawCopyMigrate: verify after migration failed");
@@ -5776,7 +5779,7 @@ static void *envRetireRaceWriter(void *vctx) {
          * fail when the rotator's Retire lands between our framing
          * peek and the keyring resolve — that surfaces as a clean
          * generic-failed return, which is correct. */
-        const uint8_t *out_payload = NULL;
+        const uint8_t *out_payload = nullptr;
         uint64_t out_plen = 0;
         (void)flexEnvelopeVerify(c->hmac_frame, c->hmac_frame_len, &vp,
                                  &out_payload, &out_plen);
@@ -5798,7 +5801,7 @@ static void *envRetireRaceWriter(void *vctx) {
         atomic_fetch_add_explicit(&c->writer_iters_done, 1u,
                                   memory_order_relaxed);
     }
-    return NULL;
+    return nullptr;
 }
 
 static void *envRetireRaceRotator(void *vctx) {
@@ -5815,7 +5818,7 @@ static void *envRetireRaceRotator(void *vctx) {
         atomic_fetch_add_explicit(&c->rotator_iters_done, 1u,
                                   memory_order_relaxed);
     }
-    return NULL;
+    return nullptr;
 }
 
 int dkTestFlexEnvelopeKeyringRetireRaceTest(int, char *[]) {
@@ -5900,15 +5903,16 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int, char *[]) {
 
         pthread_t writer_thr;
         pthread_t rotator_thr;
-        if (pthread_create(&writer_thr, NULL, envRetireRaceWriter, &ctx) != 0) {
+        if (pthread_create(&writer_thr, nullptr, envRetireRaceWriter, &ctx) !=
+            0) {
             ERR("envRetireRace: spawn writer failed");
         }
-        if (pthread_create(&rotator_thr, NULL, envRetireRaceRotator, &ctx) !=
+        if (pthread_create(&rotator_thr, nullptr, envRetireRaceRotator, &ctx) !=
             0) {
             ERR("envRetireRace: spawn rotator failed");
         }
-        pthread_join(writer_thr, NULL);
-        pthread_join(rotator_thr, NULL);
+        pthread_join(writer_thr, nullptr);
+        pthread_join(rotator_thr, nullptr);
 
         /* @sync: relaxed init */
         const int violations = atomic_load_explicit(

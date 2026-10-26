@@ -199,7 +199,7 @@ SGT_DIFF(U128, __uint128_t, __uint128_t, 0, ~(__uint128_t)0, 0)
                 segment##T##Update(&byUpdate, i, values[i]);                   \
             }                                                                  \
                                                                                \
-            void *seg = segment##T##NewFromArray(op, n ? values : NULL, n);    \
+            void *seg = segment##T##NewFromArray(op, n ? values : nullptr, n); \
             segment##T##CopyTo(seg, copied);                                   \
             if (!seg || segment##T##Count(seg) != n ||                         \
                 memcmp(copied, values, n * sizeof(VT)) != 0) {                 \
@@ -262,7 +262,7 @@ int segmentTypesTest(int, char *[]) {
         err += sgtBulk##T(SEGMENT_OP_MAX, 33);                                 \
     }                                                                          \
     TEST("Repr: segment" #T " nil, Small and Full") {                          \
-        segment##T##Repr(NULL);                                                \
+        segment##T##Repr(nullptr);                                             \
         void *seg = segment##T##New(SEGMENT_OP_SUM);                           \
         segment##T##Update(&seg, 3, 1);                                        \
         segment##T##Repr(seg);                                                 \

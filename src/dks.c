@@ -277,16 +277,16 @@ DK_STATIC size_t DKS_GETPREVIOUSINTEGERWITHTYPEREMOVED(
 /* New empty (zero length) dks string. Even in this case the string
  * always has an implicit null term. */
 DKS_TYPE *DKS_EMPTY(void) {
-    return DKS_NEWLEN(NULL, 0);
+    return DKS_NEWLEN(nullptr, 0);
 }
 
 DKS_TYPE *DKS_EMPTYLEN(size_t len) {
-    return DKS_NEWLEN(NULL, len);
+    return DKS_NEWLEN(nullptr, len);
 }
 
 /* New dks starting from null terminated C string. */
 DKS_TYPE *DKS_NEW(const char *init) {
-    const size_t initlen = (init == NULL) ? 0 : strlen(init);
+    const size_t initlen = (init == nullptr) ? 0 : strlen(init);
     return DKS_NEWLEN(init, initlen);
 }
 
@@ -302,7 +302,7 @@ DKS_TYPE *DKS_DUP(const DKS_TYPE *s) {
 
 void DKS_FREE(DKS_TYPE *s) {
     if (s) {
-        zfree(DKS_BASE(s, NULL));
+        zfree(DKS_BASE(s, nullptr));
     }
 }
 
@@ -311,7 +311,7 @@ DK_FN_NO_OPTIMIZE void DKS_FREEZERO(DKS_TYPE *s) {
         /* Wipe everything the string tracks (header, contents, free space
          * and the terminator) and any slack the allocator reports past it.
          * dkSecureZero cannot be dropped as a dead store before the free. */
-        void *const base = DKS_BASE(s, NULL);
+        void *const base = DKS_BASE(s, nullptr);
         const size_t tracked = DKS_ALLOCSIZE(s);
         const size_t usable = zusablesize(base);
         dkSecureZero(base, usable > tracked ? usable : tracked);
@@ -326,7 +326,7 @@ uint8_t *DKS_NATIVE(DKS_TYPE *s, size_t *len) {
     uint8_t *base = (uint8_t *)(DKS_BASE(s, &info));
     // cppcheck-suppress uselessAssignmentPtrArg - defensive: prevent
     // use-after-free of invalidated pointer
-    s = NULL;
+    s = nullptr;
 
     if (len) {
         *len = info.len;
@@ -372,7 +372,7 @@ DK_STATIC size_t DKS_INCREASELENGTHBYNOTERMINATE(dksInfo *info, ssize_t len) {
 DKS_TYPE *DKS_NEWFROMFILE(const char *filename) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        return NULL;
+        return nullptr;
     }
 
     /* ftell fails (-1) on what is not a seekable file (a directory, a
@@ -383,21 +383,21 @@ DKS_TYPE *DKS_NEWFROMFILE(const char *filename) {
     }
     if (length < 0) {
         fclose(fp);
-        return NULL;
+        return nullptr;
     }
     rewind(fp);
 
-    DKS_TYPE *t = DKS_NEWLEN(NULL, (size_t)length);
+    DKS_TYPE *t = DKS_NEWLEN(nullptr, (size_t)length);
     if (!t) {
         fclose(fp);
-        return NULL;
+        return nullptr;
     }
 
     /* Read contents of 'filename' into 't' */
     if (fread(t, 1, length, fp) != (size_t)length) {
         DKS_FREE(t);
         fclose(fp);
-        return NULL;
+        return nullptr;
     }
 
     fclose(fp);
@@ -432,7 +432,7 @@ __uint128_t DKS_XXH3_128(const DKS_TYPE *s, const uint64_t seed) {
 void DKS_UPDATELENFORCE(DKS_TYPE *s, size_t newlen) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
     DKS_INFOUPDATELENFREENOTERMINATE(&info, newlen,
                                      info.free + info.len - newlen);
 }
@@ -447,7 +447,7 @@ void DKS_UPDATELEN(DKS_TYPE *s) {
 void DKS_CLEAR(DKS_TYPE *s) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     /* Clear means length = 0 then free += length */
     size_t newLen = 0;
@@ -586,7 +586,7 @@ DKS_TYPE *DKS_EXPANDBY(DKS_TYPE *s, size_t addlen) {
      * up to the next allocation size class. */
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
     DKS_INFOEXPANDBY(&info, addlen);
     return info.buf;
 }
@@ -596,7 +596,7 @@ DKS_TYPE *DKS_EXPANDBYEXACT(DKS_TYPE *s, const size_t addlen) {
      * the allocation with the additional allocation size class. */
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     /* If 'free' is greater than requested expansion, no need
      * for more free space. */
@@ -613,7 +613,7 @@ DKS_TYPE *DKS_EXPANDBYEXACT(DKS_TYPE *s, const size_t addlen) {
 DKS_TYPE *DKS_REMOVEFREESPACE(DKS_TYPE *s) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
 #if defined(DATAKIT_DKS_COMPACT) || defined(DATAKIT_DKS_COMPACT_HEADER)
     /* compact DKS ('mdsc') has no free space to remove! */
@@ -646,7 +646,7 @@ DKS_TYPE *DKS_REMOVEFREESPACE(DKS_TYPE *s) {
 size_t DKS_ALLOCSIZE(DKS_TYPE *s) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     /*                    DKS_HEADER +      len +      free + NULL */
     return _dksHeaderSize(info.type) + info.len + info.free + 1;
@@ -676,7 +676,7 @@ size_t DKS_ALLOCSIZE(DKS_TYPE *s) {
 void DKS_INCRLEN(DKS_TYPE *s, ssize_t incr) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     /* If caller sets size > length of this entire DKS_TYPE,
      * bad things will happen.
@@ -694,7 +694,7 @@ void DKS_INCRLEN(DKS_TYPE *s, ssize_t incr) {
 DKS_TYPE *DKS_GROWZERO(DKS_TYPE *s, const size_t len) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
     const size_t curlen = info.len;
 
     if (len <= curlen) {
@@ -717,7 +717,7 @@ DKS_TYPE *DKS_GROWZERO(DKS_TYPE *s, const size_t len) {
 DKS_TYPE *DKS_CATLEN(DKS_TYPE *s, const void *t, const size_t len) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     DKS_INFOEXPANDBY(&info, len);
 
@@ -733,7 +733,7 @@ DKS_TYPE *DKS_CATLEN(DKS_TYPE *s, const void *t, const size_t len) {
 DKS_TYPE *DKS_CATLEN_CHECK_COMMA(DKS_TYPE *s, const void *t, size_t len) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     if (unlikely(!len)) {
         return info.buf;
@@ -769,7 +769,7 @@ DKS_TYPE *DKS_CATLEN_QUOTE_RAW(DKS_TYPE *s, const void *t, size_t len,
                                const uint8_t append) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     const size_t growWithQuotes = append ? 3 : 2;
     DKS_INFOEXPANDBY(&info, len + growWithQuotes);
@@ -804,7 +804,7 @@ DKS_TYPE *DKS_CATLEN_NOQUOTE_RAW(DKS_TYPE *s, const void *t, size_t len,
                                  const uint8_t append) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     const size_t growWith = append ? 1 : 0;
     DKS_INFOEXPANDBY(&info, len + growWith);
@@ -833,7 +833,7 @@ DKS_TYPE *DKS_CATLEN_NOQUOTE_RAW(DKS_TYPE *s, const void *t, size_t len,
 DKS_TYPE *DKS_PREPENDLEN(DKS_TYPE *s, const void *t, const size_t len) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     /* Doesn't alter 'len', only grows extra space */
     DKS_INFOEXPANDBY(&info, len);
@@ -864,7 +864,7 @@ DKS_TYPE *DKS_CATANOTHER(DKS_TYPE *s, const DKS_TYPE *t) {
 DKS_TYPE *DKS_COPYLEN(DKS_TYPE *s, const char *t, size_t newLength) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
     size_t allocationSize = info.free + info.len;
 
     if (allocationSize < newLength) {
@@ -900,7 +900,7 @@ DKS_TYPE *DKS_CATVPRINTF(DKS_TYPE *s, const char *fmt, va_list ap) {
     char staticbuf[2048];
     /* 'heapbuf' owns every heap buffer 'buf' ever points at; 'buf' itself
      * is a borrowed view of either the stack buffer or 'heapbuf'. */
-    cleanerName(zfree, Chars) char *heapbuf = NULL;
+    cleanerName(zfree, Chars) char *heapbuf = nullptr;
     char *buf = staticbuf;
     char *t;
     size_t buflen = strlen(fmt) * 2;
@@ -977,7 +977,7 @@ DKS_TYPE *DKS_CATPRINTF(DKS_TYPE *s, const char *fmt, ...) {
 DKS_TYPE *DKS_CATFMT(DKS_TYPE *s, char const *fmt, ...) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
     size_t initlen = info.len;
     va_list ap;
 
@@ -1047,7 +1047,7 @@ DKS_TYPE *DKS_CATFMT(DKS_TYPE *s, char const *fmt, ...) {
                                                  box->data.d64);
                     break;
                 default:
-                    assert(NULL && "Unsupported box data!");
+                    assert(false && "Unsupported box data!");
                     l = 0; /* avoid warning when NDEBUG compile */
                 }
 
@@ -1125,7 +1125,7 @@ DKS_TYPE *DKS_CATFMT(DKS_TYPE *s, char const *fmt, ...) {
 DKS_TYPE *DKS_TRIM(DKS_TYPE *s, const char *cset) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
     char *start, *end, *sp, *ep;
     size_t len;
 
@@ -1169,7 +1169,7 @@ DKS_TYPE *DKS_TRIM(DKS_TYPE *s, const char *cset) {
 void DKS_RANGE(DKS_TYPE *s, ssize_t start, ssize_t end) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     const size_t len = info.len;
     if (len == 0) {
@@ -1213,7 +1213,7 @@ void DKS_RANGE(DKS_TYPE *s, ssize_t start, ssize_t end) {
 void DKS_SUBSTR(DKS_TYPE *s, size_t start, size_t length) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     const size_t len = info.len;
     /* If start position is beyond the end of the string, don't do anything. */
@@ -1236,7 +1236,7 @@ void DKS_SUBSTR(DKS_TYPE *s, size_t start, size_t length) {
 void DKS_SUBSTR_UTF8(DKS_TYPE *s, size_t start, size_t length) {
     dksInfo info;
     DKS_BASE(s, &info);
-    s = NULL;
+    s = nullptr;
 
     const size_t len = info.len;
     const uint8_t *str = (uint8_t *)info.buf;
@@ -1432,7 +1432,7 @@ DKS_TYPE **DKS_SPLITLEN_MAX(const void *const s_, const size_t len,
 
     if (!len || !sepLen) {
         *count = 0;
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=DKS_SPLITLENFREE */
@@ -1631,8 +1631,8 @@ DK_STATIC int DKS_HEXDIGITTOINT(char c) {
  */
 DKS_TYPE **DKS_SPLITARGS(const char *line, int *argc) {
     const char *p = line;
-    char *current = NULL;
-    char **vector = NULL;
+    char *current = nullptr;
+    char **vector = nullptr;
 
     *argc = 0;
     while (1) {
@@ -1647,7 +1647,7 @@ DKS_TYPE **DKS_SPLITARGS(const char *line, int *argc) {
             int insq = 0; /* set to 1 if we are in 'single quotes' */
             int done = 0;
 
-            if (current == NULL) {
+            if (current == nullptr) {
                 current = DKS_EMPTY();
             }
 
@@ -1748,10 +1748,10 @@ DKS_TYPE **DKS_SPLITARGS(const char *line, int *argc) {
             vector = zrealloc(vector, ((*argc) + 1) * sizeof(char *));
             vector[*argc] = current;
             (*argc)++;
-            current = NULL;
+            current = nullptr;
         } else {
             /* Even on empty input string return something not NULL. */
-            if (vector == NULL) {
+            if (vector == nullptr) {
                 /* @own: caller; free=DKS_SPLITLENFREE */
                 vector = zmalloc(sizeof(void *));
             }
@@ -1768,7 +1768,7 @@ err:
     zfree(vector);
     DKS_FREE(current);
     *argc = 0;
-    return NULL;
+    return nullptr;
 }
 
 /* In-place substitute all the occurrences in 'from' to corresponding 'to'.
@@ -1832,9 +1832,9 @@ DKS_TYPE *DKS_GETABSOLUTEPATH(char *filename) {
     }
 
     /* If path is relative, join cwd and relative path. */
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    if (getcwd(cwd, sizeof(cwd)) == nullptr) {
         DKS_FREE(relpath);
-        return NULL;
+        return nullptr;
     }
 
     abspath = DKS_NEW(cwd);
@@ -2082,7 +2082,7 @@ size_t DKS_UTF8GRAPHEMETRUNCATE(const DKS_TYPE *s, size_t n) {
         if (!((got)compare(want))) {                                           \
             ERR("%s: got " fmt ", want " #compare " " fmt, descr, got, want);  \
             if (hardStop) {                                                    \
-                assert(NULL);                                                  \
+                assert(false);                                                 \
             }                                                                  \
         }                                                                      \
     } while (0)
@@ -2114,7 +2114,7 @@ DK_STATIC char *DKS_TYPENAME(dksType type) {
         return "DKS_48";
     }
 
-    assert(NULL);
+    assert(false);
     unreachable();
 }
 
@@ -2135,7 +2135,7 @@ DK_STATIC void DKS_RANDBYTES(uint8_t *buf, size_t len) {
     ssize_t got = read(randfd, buf, attempt);
     if (got < 0) {
         perror("read error");
-        assert(NULL);
+        assert(false);
     }
 
     close(randfd);
@@ -2264,7 +2264,7 @@ int DKS_TEST(int argc, char *argv[]) {
                  "%d");
         DKS_FREE(x);
 
-        x = DKS_NEWLEN(NULL, 6);
+        x = DKS_NEWLEN(nullptr, 6);
         testCond("New length empty string", DKS_LEN(x), (size_t)6, "%zu");
         testCond("New length empty string, avail", DKS_AVAIL(x), (size_t)0,
                  "%zu");
@@ -3084,7 +3084,7 @@ int DKS_TEST(int argc, char *argv[]) {
         const size_t fzAvail = DKS_AVAIL(x);
         memset(x + fzLen, 'S', fzAvail); /* secret bytes in the free space */
 
-        uint8_t *const fzBase = DKS_BASE(x, NULL);
+        uint8_t *const fzBase = DKS_BASE(x, nullptr);
         const size_t fzTracked = DKS_ALLOCSIZE(x);
         const size_t fzUsable = zusablesize(fzBase);
         if (datakitConfigMemory__.localUsableSize) {
@@ -3127,7 +3127,7 @@ int DKS_TEST(int argc, char *argv[]) {
         printf("NOTE: The remaining tests allocate 4 GB to 10 GB RAM.\n");
         printf("Testing > 4 GB dks...\n");
         size_t len = ((size_t)1 << 32) + 1024;
-        DKS_TYPE *x = NULL;
+        DKS_TYPE *x = nullptr;
         {
             /* Scope bounds the 4 GB source buffer: it's released before
              * the grow below so peak RSS stays at one extra copy. */
@@ -3519,7 +3519,7 @@ int DKS_TEST(int argc, char *argv[]) {
                  (size_t)limit.startType, "%zu");
 
         /* implicit test for DKS_NATIVE() */
-        zfree(DKS_NATIVE(testing, NULL));
+        zfree(DKS_NATIVE(testing, nullptr));
     }
 
     /* ====================================================================
@@ -3619,11 +3619,11 @@ int DKS_TEST(int argc, char *argv[]) {
         for (size_t i = 0; i < countof(refused); i++) {
             args = DKS_SPLITARGS(refused[i], &nargs);
             testCond("SPLITARGS() refuses unbalanced or glued quotes",
-                     args == NULL && nargs == 0, true, "%d");
+                     args == nullptr && nargs == 0, true, "%d");
         }
         args = DKS_SPLITARGS("   ", &nargs);
         testCond("SPLITARGS() of blanks is an empty vector",
-                 args != NULL && nargs == 0, true, "%d");
+                 args != nullptr && nargs == 0, true, "%d");
         DKS_SPLITLENFREE(args, 0);
 
         /* CATREPR then SPLITARGS gives back every byte, NUL and high
@@ -3807,7 +3807,7 @@ int DKS_TEST(int argc, char *argv[]) {
             unlink(path);
         }
         testCond("NEWFROMFILE() of a missing file",
-                 DKS_NEWFROMFILE("dks-no-such-file") == NULL, true, "%d");
+                 DKS_NEWFROMFILE("dks-no-such-file") == nullptr, true, "%d");
     }
 
     TEST_FINAL_RESULT;

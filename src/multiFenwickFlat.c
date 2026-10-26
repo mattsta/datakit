@@ -111,19 +111,19 @@ multiFenwickFlat *multiFenwickFlatNewFromArray(const databox *values,
     }
 
     if (!values || count - 1 > MULTIFENWICK_FLAT_INDEX_MAX) {
-        return NULL;
+        return nullptr;
     }
 
     for (size_t i = 0; i < count; i++) {
         multiFenwickNum n;
         if (!multiFenwickNumFrom_(&values[i], &n)) {
-            return NULL;
+            return nullptr;
         }
     }
 
     cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = multiFenwickFlatNew();
     if (!mfw) {
-        return NULL;
+        return nullptr;
     }
 
     const uint64_t capacity = multiFenwickCapacityFor_(0, count - 1);
@@ -152,14 +152,14 @@ multiFenwickFlat *multiFenwickFlatNewFromArray(const databox *values,
                 multiFenwickNumAdd_(multiFenwickFlatCellGet_(mfw, parent - 1),
                                     multiFenwickFlatCellGet_(mfw, j - 1)),
                 &cell)) {
-            return NULL;
+            return nullptr;
         }
 
         multiFenwickCellsPut(&mfw->cells, capacity, parent - 1, cell);
     }
 
     multiFenwickFlat *out = mfw;
-    mfw = NULL;
+    mfw = nullptr;
     return out;
 }
 
@@ -494,7 +494,7 @@ static uint8_t *multiFenwickFlatPersistSnapshot_(const void *structure,
 
 static void *multiFenwickFlatPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
-        return NULL;
+        return nullptr;
     }
 
     const flex *f = (const flex *)data;
@@ -513,7 +513,7 @@ static void *multiFenwickFlatPersistRestore_(const uint8_t *data, size_t len) {
     if (n < 2 || capacity != n - 2 || count > capacity ||
         (capacity & (capacity - 1)) || (count == 0) != (capacity == 0) ||
         capacity > MULTIFENWICK_FLAT_INDEX_MAX + 1) {
-        return NULL;
+        return nullptr;
     }
 
     cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = multiFenwickFlatNew();
@@ -530,14 +530,14 @@ static void *multiFenwickFlatPersistRestore_(const uint8_t *data, size_t len) {
         multiFenwickCell cell;
         if (!multiFenwickNumFrom_((const databox *)&box, &num) ||
             !multiFenwickCellEncode(num, &cell)) {
-            return NULL;
+            return nullptr;
         }
 
         multiFenwickCellsPut(&mfw->cells, capacity, i, cell);
     }
 
     multiFenwickFlat *out = mfw;
-    mfw = NULL;
+    mfw = nullptr;
     return out;
 }
 
@@ -548,7 +548,7 @@ static uint8_t *multiFenwickFlatPersistEncodeOp_(persistOp op, const void *args,
         return persistOpNoBody(len);
     }
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2) {
-        return NULL; /* nothing else is replayed */
+        return nullptr; /* nothing else is replayed */
     }
     return persistOpEncodeBoxes(args, argc, len);
 }

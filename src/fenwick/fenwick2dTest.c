@@ -42,7 +42,7 @@ static size_t f2tIndex_(uint64_t *s) {
         VT *grid = gridMem;                                                    \
         size_t rows = 0;                                                       \
         size_t cols = 0;                                                       \
-        fenwick2d##T *t = NULL;                                                \
+        fenwick2d##T *t = nullptr;                                             \
         for (size_t op = 0; op < 1500 && !err; op++) {                         \
             const size_t r = f2tIndex_(&seed);                                 \
             const size_t c = f2tIndex_(&seed);                                 \
@@ -142,21 +142,22 @@ static size_t f2tIndex_(uint64_t *s) {
 #define F2T_EDGES(T, VT, VMAX, IS_FLOAT)                                       \
     static int f2tEdges##T(void) {                                             \
         int err = 0;                                                           \
-        if (fenwick2d##T##Rows(NULL) != 0 || fenwick2d##T##Cols(NULL) != 0 ||  \
-            fenwick2d##T##Bytes(NULL) != 0 ||                                  \
-            fenwick2d##T##Get(NULL, 0, 0) != 0 ||                              \
-            fenwick2d##T##Query(NULL, 5, 5) != 0 ||                            \
-            fenwick2d##T##RangeQuery(NULL, 0, 0, 5, 5) != 0 ||                 \
-            fenwick2d##T##Update(NULL, 0, 0, 1)) {                             \
+        if (fenwick2d##T##Rows(nullptr) != 0 ||                                \
+            fenwick2d##T##Cols(nullptr) != 0 ||                                \
+            fenwick2d##T##Bytes(nullptr) != 0 ||                               \
+            fenwick2d##T##Get(nullptr, 0, 0) != 0 ||                           \
+            fenwick2d##T##Query(nullptr, 5, 5) != 0 ||                         \
+            fenwick2d##T##RangeQuery(nullptr, 0, 0, 5, 5) != 0 ||              \
+            fenwick2d##T##Update(nullptr, 0, 0, 1)) {                          \
             ERR(#T ": a NULL tree is not an empty tree");                      \
         }                                                                      \
-        fenwick2d##T##Clear(NULL);                                             \
-        fenwick2d##T##Free(NULL);                                              \
+        fenwick2d##T##Clear(nullptr);                                          \
+        fenwick2d##T##Free(nullptr);                                           \
                                                                                \
-        fenwick2d##T *t = NULL;                                                \
+        fenwick2d##T *t = nullptr;                                             \
         if (fenwick2d##T##Update(&t, (size_t)1 << 32, 0, 1) ||                 \
             fenwick2d##T##Update(&t, (size_t)1 << 20, (size_t)1 << 20, 1) ||   \
-            t != NULL) {                                                       \
+            t != nullptr) {                                                    \
             ERR(#T ": a write past 2^32 cells was accepted or left a tree");   \
         }                                                                      \
                                                                                \
@@ -194,7 +195,7 @@ static size_t f2tIndex_(uint64_t *s) {
             cleaner(zfree) void *bufB = zcalloc(n + 1, sizeof(VT));            \
             VT *values = bufA;                                                 \
             VT *copied = bufB;                                                 \
-            fenwick2d##T *bySet = NULL;                                        \
+            fenwick2d##T *bySet = nullptr;                                     \
             for (size_t i = 0; i < n; i++) {                                   \
                 const uint64_t r = f2tRand_(&seed);                            \
                 values[i] = IS_FLOAT ? (VT)((int64_t)(r % 21) - 10) : (VT)r;   \
@@ -203,7 +204,7 @@ static size_t f2tIndex_(uint64_t *s) {
             }                                                                  \
                                                                                \
             fenwick2d##T *t =                                                  \
-                fenwick2d##T##NewFromArray(n ? values : NULL, rows, cols);     \
+                fenwick2d##T##NewFromArray(n ? values : nullptr, rows, cols);  \
             fenwick2d##T##CopyTo(t, copied);                                   \
             if (!t || fenwick2d##T##Rows(t) != rows ||                         \
                 fenwick2d##T##Cols(t) != cols ||                               \
@@ -303,15 +304,15 @@ int fenwick2dTest(int, char *[]) {
     }
 
     TEST("float trees refuse non-finite values; a NULL tree stays NULL") {
-        fenwick2dFloat *f = NULL;
+        fenwick2dFloat *f = nullptr;
         if (fenwick2dFloatUpdate(&f, 0, 0, NAN) ||
-            fenwick2dFloatSet(&f, 0, 0, INFINITY) || f != NULL) {
+            fenwick2dFloatSet(&f, 0, 0, INFINITY) || f != nullptr) {
             ERR("a non-finite float was accepted or left a tree");
         }
 
-        fenwick2dDouble *d = NULL;
+        fenwick2dDouble *d = nullptr;
         if (fenwick2dDoubleUpdate(&d, 0, 0, NAN) ||
-            fenwick2dDoubleSet(&d, 0, 0, INFINITY) || d != NULL) {
+            fenwick2dDoubleSet(&d, 0, 0, INFINITY) || d != nullptr) {
             ERR("a non-finite double was accepted or left a tree");
         }
     }

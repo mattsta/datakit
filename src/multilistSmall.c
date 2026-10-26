@@ -113,7 +113,7 @@ void multilistSmallInsertByTypeAfter(multilistSmall *ml,
                                      const multilistEntry *entry,
                                      const databox *box) {
     flexEntry *next = flexNext(ml->fl, entry->fe);
-    if (next == NULL) {
+    if (next == nullptr) {
         flexPushByTypeExact(&ml->fl, box, FLEX_ENDPOINT_TAIL);
     } else {
         flexInsertByType(&ml->fl, next, box);
@@ -292,13 +292,13 @@ bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
     }
 
     /* A single read has no wide storage: a wide value is deferred */
-    flexGetByTypeInto(entry->fe, &entry->box, NULL);
+    flexGetByTypeInto(entry->fe, &entry->box, nullptr);
     return true;
 }
 
 bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
                          multilistEntry *entry) {
-    return multilistSmallIndexNear(ml, index, NULL, 0, entry);
+    return multilistSmallIndexNear(ml, index, nullptr, 0, entry);
 }
 
 /* ====================================================================

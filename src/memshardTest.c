@@ -38,7 +38,7 @@ static void test_calloc_zero(void) {
     }
     mi_free(p);
     /* overflow must return NULL, not a tiny buffer */
-    assert(mi_calloc((size_t)-1, 2) == NULL);
+    assert(mi_calloc((size_t)-1, 2) == nullptr);
 }
 
 static void test_realloc(void) {
@@ -116,17 +116,17 @@ static void *mt_local(void *) {
             mi_free(keep[s]);
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static void test_mt_local(void) {
     T("memshard: MT local alloc/free churn (8 threads)");
     pthread_t th[MT_THREADS];
     for (int i = 0; i < MT_THREADS; i++) {
-        assert(pthread_create(&th[i], NULL, mt_local, NULL) == 0);
+        assert(pthread_create(&th[i], nullptr, mt_local, nullptr) == 0);
     }
     for (int i = 0; i < MT_THREADS; i++) {
-        pthread_join(th[i], NULL);
+        pthread_join(th[i], nullptr);
     }
 }
 
@@ -144,7 +144,7 @@ static void *mt_producer(void *) {
         /* @sync: release memshardTest.xqSlot */
         atomic_store_explicit(&xq_count, i + 1, memory_order_release);
     }
-    return NULL;
+    return nullptr;
 }
 
 static void *mt_consumer(void *) {
@@ -160,7 +160,7 @@ static void *mt_consumer(void *) {
         }
         mi_free(xq[idx]); /* freed by a thread that did NOT allocate it */
     }
-    return NULL;
+    return nullptr;
 }
 
 static void test_mt_crossfree(void) {
@@ -172,13 +172,13 @@ static void test_mt_crossfree(void) {
     /* @sync: relaxed init */
     atomic_store_explicit(&xq_count, 0, memory_order_relaxed);
     pthread_t prod, cons[3];
-    pthread_create(&prod, NULL, mt_producer, NULL);
+    pthread_create(&prod, nullptr, mt_producer, nullptr);
     for (int i = 0; i < 3; i++) {
-        pthread_create(&cons[i], NULL, mt_consumer, NULL);
+        pthread_create(&cons[i], nullptr, mt_consumer, nullptr);
     }
-    pthread_join(prod, NULL);
+    pthread_join(prod, nullptr);
     for (int i = 0; i < 3; i++) {
-        pthread_join(cons[i], NULL);
+        pthread_join(cons[i], nullptr);
     }
     mi_free(xq);
 }
@@ -202,7 +202,7 @@ static void *hd_freer(void *) {
     for (int i = 0; i < HD_BLOCKS; i++) {
         mi_free(hd_blocks[i]); /* cross-thread: the owner is deleting */
     }
-    return NULL;
+    return nullptr;
 }
 
 static void test_mt_heap_delete_crossfree(void) {
@@ -220,11 +220,11 @@ static void test_mt_heap_delete_crossfree(void) {
         /* @sync: relaxed init */
         atomic_store_explicit(&hd_go, 0, memory_order_relaxed);
         pthread_t th;
-        assert(pthread_create(&th, NULL, hd_freer, NULL) == 0);
+        assert(pthread_create(&th, nullptr, hd_freer, nullptr) == 0);
         /* @sync: release memshardTest.hdGo */
         atomic_store_explicit(&hd_go, 1, memory_order_release);
         mi_heap_delete(h); /* pages move to this thread's default heap */
-        pthread_join(th, NULL);
+        pthread_join(th, nullptr);
         mi_collect(true); /* process every delayed free */
     }
 }
@@ -253,7 +253,7 @@ static void *us_reader(void *arg) {
             }
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static void test_mt_usable_size_remote(void) {
@@ -266,7 +266,7 @@ static void test_mt_usable_size_remote(void) {
     atomic_store_explicit(&us_state, 0, memory_order_relaxed);
     size_t bad = 0;
     pthread_t th;
-    assert(pthread_create(&th, NULL, us_reader, &bad) == 0);
+    assert(pthread_create(&th, nullptr, us_reader, &bad) == 0);
     /* @sync: release memshardTest.usState */
     atomic_store_explicit(&us_state, 1, memory_order_release);
     void *churn[1024];
@@ -281,7 +281,7 @@ static void test_mt_usable_size_remote(void) {
     }
     /* @sync: relaxed hint */
     atomic_store_explicit(&us_state, 2, memory_order_relaxed);
-    pthread_join(th, NULL);
+    pthread_join(th, nullptr);
     assert(bad == 0);
     for (int i = 0; i < US_PINNED; i++) {
         mi_free(us_pinned[i]);

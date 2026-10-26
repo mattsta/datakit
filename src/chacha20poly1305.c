@@ -765,7 +765,7 @@ bool chacha20poly1305Open(const uint8_t key[CHACHA20_POLY1305_KEY_LEN],
     if (neq != 0) {
         /* Authentication failed: zero plaintext output as defense in
          * depth against callers that ignore the return. */
-        if (ciphertext_len > 0 && plaintext != NULL) {
+        if (ciphertext_len > 0 && plaintext != nullptr) {
             dkSecureZero(plaintext, ciphertext_len);
         }
         return false;
@@ -824,10 +824,10 @@ static void streamInitCommon(chacha20poly1305StreamCtx *ctx,
 void chacha20poly1305SealStreamInit(chacha20poly1305StreamCtx *ctx,
                                     const uint8_t key[32],
                                     const uint8_t nonce[12]) {
-    if (ctx == NULL || key == NULL || nonce == NULL) {
+    if (ctx == nullptr || key == nullptr || nonce == nullptr) {
         /* No return value says so: the diagnostic is the only signal */
         AEAD_MISUSE_("stream init with no context, key or nonce");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             /* Wipe the ctx (any prior key/nonce from a previous Init)
              * before leaving in the rejection state; mirrors
              * streamFinalise's contract that every failure path
@@ -842,10 +842,10 @@ void chacha20poly1305SealStreamInit(chacha20poly1305StreamCtx *ctx,
 void chacha20poly1305OpenStreamInit(chacha20poly1305StreamCtx *ctx,
                                     const uint8_t key[32],
                                     const uint8_t nonce[12]) {
-    if (ctx == NULL || key == NULL || nonce == NULL) {
+    if (ctx == nullptr || key == nullptr || nonce == nullptr) {
         /* No return value says so: the diagnostic is the only signal */
         AEAD_MISUSE_("stream init with no context, key or nonce");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             /* Wipe the ctx (any prior key/nonce from a previous Init)
              * before leaving in the rejection state; mirrors
              * streamFinalise's contract that every failure path
@@ -863,10 +863,10 @@ void chacha20poly1305OpenStreamInit(chacha20poly1305StreamCtx *ctx,
  * so key/nonce do not linger on the caller's stack frame. */
 static bool streamAadCommon(chacha20poly1305StreamCtx *ctx, const uint8_t *aad,
                             size_t len) {
-    if (ctx == NULL || ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD) {
+    if (ctx == nullptr || ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD) {
         AEAD_MISUSE_("stream AAD with no context, after the body began, or "
                      "on a finished context");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             dkSecureZero(ctx, sizeof(*ctx));
         }
         return false;
@@ -874,7 +874,7 @@ static bool streamAadCommon(chacha20poly1305StreamCtx *ctx, const uint8_t *aad,
     if (len == 0) {
         return true;
     }
-    if (aad == NULL) {
+    if (aad == nullptr) {
         AEAD_MISUSE_("stream AAD: a NULL buffer for a nonzero length");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
@@ -939,11 +939,11 @@ static bool streamRefillKeystream(chacha20poly1305StreamCtx *ctx) {
 bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
                                       const uint8_t *plaintext, size_t len,
                                       uint8_t *ciphertext_out) {
-    if (ctx == NULL || (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD &&
-                        ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY)) {
+    if (ctx == nullptr || (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD &&
+                           ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY)) {
         AEAD_MISUSE_("stream update with no context or on a finished "
                      "context");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             dkSecureZero(ctx, sizeof(*ctx));
         }
         return false;
@@ -952,7 +952,7 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
         streamCloseAad(ctx);
         return true;
     }
-    if (plaintext == NULL || ciphertext_out == NULL) {
+    if (plaintext == nullptr || ciphertext_out == nullptr) {
         AEAD_MISUSE_("stream update: a NULL buffer for a nonzero length");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
@@ -1023,11 +1023,11 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
 bool chacha20poly1305OpenStreamUpdate(chacha20poly1305StreamCtx *ctx,
                                       const uint8_t *ciphertext, size_t len,
                                       uint8_t *plaintext_out) {
-    if (ctx == NULL || (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD &&
-                        ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY)) {
+    if (ctx == nullptr || (ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_AAD &&
+                           ctx->phase != CHACHA20_POLY1305_STREAM_PHASE_BODY)) {
         AEAD_MISUSE_("stream update with no context or on a finished "
                      "context");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             /* Wipe the ctx (key, nonce, keystream_buf, etc.) before
              * marking poisoned: streamFinalise's failure path does the
              * same, so any poison transition leaves the caller's
@@ -1040,7 +1040,7 @@ bool chacha20poly1305OpenStreamUpdate(chacha20poly1305StreamCtx *ctx,
         streamCloseAad(ctx);
         return true;
     }
-    if (ciphertext == NULL || plaintext_out == NULL) {
+    if (ciphertext == nullptr || plaintext_out == nullptr) {
         AEAD_MISUSE_("stream update: a NULL buffer for a nonzero length");
         dkSecureZero(ctx, sizeof(*ctx));
         return false;
@@ -1148,9 +1148,9 @@ static bool streamFinalise(chacha20poly1305StreamCtx *ctx, uint8_t tag[16]) {
 
 bool chacha20poly1305SealStreamFinal(chacha20poly1305StreamCtx *ctx,
                                      uint8_t tag[16]) {
-    if (ctx == NULL || tag == NULL) {
+    if (ctx == nullptr || tag == nullptr) {
         AEAD_MISUSE_("stream final with no context or no tag buffer");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             /* Wipe everything; per the streamFinalise contract the
              * post-failure ctx must be bytewise zero so key/nonce
              * material does not linger on the stack frame. */
@@ -1163,9 +1163,9 @@ bool chacha20poly1305SealStreamFinal(chacha20poly1305StreamCtx *ctx,
 
 bool chacha20poly1305OpenStreamFinal(chacha20poly1305StreamCtx *ctx,
                                      const uint8_t expected_tag[16]) {
-    if (ctx == NULL || expected_tag == NULL) {
+    if (ctx == nullptr || expected_tag == nullptr) {
         AEAD_MISUSE_("stream final with no context or no tag");
-        if (ctx != NULL) {
+        if (ctx != nullptr) {
             /* Wipe everything; per the streamFinalise contract the
              * post-failure ctx must be bytewise zero so key/nonce
              * material does not linger on the stack frame. */
@@ -1428,7 +1428,7 @@ static void *mtWorker(void *p) {
             a->errors++;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static void runBench(size_t payload, uint32_t iters) {
@@ -1443,7 +1443,8 @@ static void runBench(size_t payload, uint32_t iters) {
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (uint32_t i = 0; i < iters; i++) {
-        (void)chacha20poly1305Seal(key, nonce, NULL, 0, pt, payload, ct, tag);
+        (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, payload, ct,
+                                   tag);
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double seal_secs = (double)(t1.tv_sec - t0.tv_sec) +
@@ -1454,7 +1455,8 @@ static void runBench(size_t payload, uint32_t iters) {
 
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (uint32_t i = 0; i < iters; i++) {
-        (void)chacha20poly1305Open(key, nonce, NULL, 0, ct, payload, tag, out);
+        (void)chacha20poly1305Open(key, nonce, nullptr, 0, ct, payload, tag,
+                                   out);
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double open_secs = (double)(t1.tv_sec - t0.tv_sec) +
@@ -1562,16 +1564,18 @@ int chacha20poly1305Test(int, char *[]) {
 
         for (size_t si = 0; si < countof(sizes); si++) {
             size_t n = sizes[si];
-            cleanerName(zfree, Bytes) uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
-            cleanerName(zfree, Bytes) uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *pt =
+                (n > 0) ? zmalloc(n) : nullptr;
+            cleanerName(zfree, Bytes) uint8_t *ct =
+                (n > 0) ? zmalloc(n) : nullptr;
             cleanerName(zfree, Bytes) uint8_t *out =
-                (n > 0) ? zmalloc(n) : NULL;
+                (n > 0) ? zmalloc(n) : nullptr;
             if (n > 0) {
                 fillPseudoRandom(pt, n, (uint32_t)(0x100 + n));
             }
-            (void)chacha20poly1305Seal(key, nonce, NULL, 0, pt, n, ct, tag);
+            (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, n, ct, tag);
             bool ok =
-                chacha20poly1305Open(key, nonce, NULL, 0, ct, n, tag, out);
+                chacha20poly1305Open(key, nonce, nullptr, 0, ct, n, tag, out);
             if (!ok) {
                 ERR("round-trip Open failed size=%zu", n);
             }
@@ -1594,13 +1598,13 @@ int chacha20poly1305Test(int, char *[]) {
                 size_t n = sizes[si];
                 size_t alen = aad_sizes[ai];
                 cleanerName(zfree, Bytes) uint8_t *pt =
-                    (n > 0) ? zmalloc(n) : NULL;
+                    (n > 0) ? zmalloc(n) : nullptr;
                 cleanerName(zfree, Bytes) uint8_t *ct =
-                    (n > 0) ? zmalloc(n) : NULL;
+                    (n > 0) ? zmalloc(n) : nullptr;
                 cleanerName(zfree, Bytes) uint8_t *out =
-                    (n > 0) ? zmalloc(n) : NULL;
+                    (n > 0) ? zmalloc(n) : nullptr;
                 cleanerName(zfree, Bytes) uint8_t *aad =
-                    (alen > 0) ? zmalloc(alen) : NULL;
+                    (alen > 0) ? zmalloc(alen) : nullptr;
                 if (n > 0) {
                     fillPseudoRandom(pt, n, (uint32_t)(0x200 + n + alen));
                 }
@@ -1631,9 +1635,10 @@ int chacha20poly1305Test(int, char *[]) {
         fillPseudoRandom(buf, n, 0x33333333);
         memcpy(ref, buf, n);
 
-        (void)chacha20poly1305Seal(key, nonce, NULL, 0, buf, n, buf, tag);
+        (void)chacha20poly1305Seal(key, nonce, nullptr, 0, buf, n, buf, tag);
         /* buf now holds ciphertext.  Decrypt in place. */
-        bool ok = chacha20poly1305Open(key, nonce, NULL, 0, buf, n, tag, buf);
+        bool ok =
+            chacha20poly1305Open(key, nonce, nullptr, 0, buf, n, tag, buf);
         if (!ok) {
             ERR("in-place Open returned false");
         }
@@ -1720,19 +1725,19 @@ int chacha20poly1305Test(int, char *[]) {
         fillPseudoRandom(key, sizeof(key), 0xF1);
         fillPseudoRandom(nonce, sizeof(nonce), 0xF2);
         fillPseudoRandom(pt, n, 0xF3);
-        (void)chacha20poly1305Seal(key, nonce, NULL, 0, pt, n, ct, tag);
+        (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, n, ct, tag);
 
         uint8_t bad_nonce[12];
         memcpy(bad_nonce, nonce, 12);
         bad_nonce[0] ^= 0x01;
-        if (chacha20poly1305Open(key, bad_nonce, NULL, 0, ct, n, tag, out)) {
+        if (chacha20poly1305Open(key, bad_nonce, nullptr, 0, ct, n, tag, out)) {
             ERR("bad nonce accepted");
         }
 
         uint8_t bad_key[32];
         memcpy(bad_key, key, 32);
         bad_key[31] ^= 0x80;
-        if (chacha20poly1305Open(bad_key, nonce, NULL, 0, ct, n, tag, out)) {
+        if (chacha20poly1305Open(bad_key, nonce, nullptr, 0, ct, n, tag, out)) {
             ERR("bad key accepted");
         }
     }
@@ -1744,7 +1749,7 @@ int chacha20poly1305Test(int, char *[]) {
         fillPseudoRandom(key, sizeof(key), 0x77);
         fillPseudoRandom(nonce, sizeof(nonce), 0x88);
         fillPseudoRandom(pt, n, 0x99);
-        (void)chacha20poly1305Seal(key, nonce, NULL, 0, pt, n, ct, tag);
+        (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, n, ct, tag);
 
         memset(out, 0xab, sizeof(out));
         uint8_t bad_tag[16];
@@ -1752,7 +1757,7 @@ int chacha20poly1305Test(int, char *[]) {
         bad_tag[0] ^= 0xff;
 
         bool ok =
-            chacha20poly1305Open(key, nonce, NULL, 0, ct, n, bad_tag, out);
+            chacha20poly1305Open(key, nonce, nullptr, 0, ct, n, bad_tag, out);
         if (ok) {
             ERR("bad-tag Open returned true");
         }
@@ -1858,7 +1863,7 @@ int chacha20poly1305Test(int, char *[]) {
         const uint8_t nonce[12] = {0x11};
         const uint8_t pt[100] = {0x42};
         uint8_t ct[100], tag[16];
-        chacha20poly1305Seal(key, nonce, NULL, 0, pt, sizeof(pt), ct, tag);
+        chacha20poly1305Seal(key, nonce, nullptr, 0, pt, sizeof(pt), ct, tag);
 
         /* Flip a tag byte. */
         tag[7] ^= 0x01;
@@ -1914,13 +1919,13 @@ int chacha20poly1305Test(int, char *[]) {
             args[i].errors = 0;
             args[i].thread_id = i + 1;
             args[i].iters = 256;
-            int rc = pthread_create(&threads[i], NULL, mtWorker, &args[i]);
+            int rc = pthread_create(&threads[i], nullptr, mtWorker, &args[i]);
             if (rc != 0) {
                 ERR("pthread_create rc=%d", rc);
             }
         }
         for (uint32_t i = 0; i < kThreads; i++) {
-            pthread_join(threads[i], NULL);
+            pthread_join(threads[i], nullptr);
             if (args[i].errors != 0) {
                 /* one report for the thread, counting all its errors */
                 ERR("thread %u: %" PRId64 " errors", i, args[i].errors);
@@ -1953,7 +1958,7 @@ int chacha20poly1305Test(int, char *[]) {
             uint8_t ct_sentinel[32];
             memset(ct_sentinel, 0xAA, sizeof(ct_sentinel));
             const uint64_t diagBefore = dkDiagCount();
-            if (chacha20poly1305Seal(key, nonce, NULL, 0u, in_small, over,
+            if (chacha20poly1305Seal(key, nonce, nullptr, 0u, in_small, over,
                                      ct_sentinel, tag)) {
                 ERR("Seal must refuse plaintext_len past 256 GiB bound");
             }
@@ -1967,8 +1972,8 @@ int chacha20poly1305Test(int, char *[]) {
             }
             uint8_t pt_sentinel[32];
             memset(pt_sentinel, 0xAA, sizeof(pt_sentinel));
-            if (chacha20poly1305Open(key, nonce, NULL, 0u, in_small, over, tag,
-                                     pt_sentinel)) {
+            if (chacha20poly1305Open(key, nonce, nullptr, 0u, in_small, over,
+                                     tag, pt_sentinel)) {
                 ERR("Open must refuse ciphertext_len past 256 GiB bound");
             }
             if (dkDiagCount() != diagBefore) {
@@ -2016,11 +2021,12 @@ int chacha20poly1305Test(int, char *[]) {
         chacha20ForceBackend saved = chacha20GetForceBackend();
         for (size_t i = 0; i < n_sizes; i++) {
             const size_t n = sizes[i];
-            cleanerName(zfree, Bytes) uint8_t *in = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *in =
+                (n > 0) ? zmalloc(n) : nullptr;
             cleanerName(zfree, Bytes) uint8_t *out_simd =
-                (n > 0) ? zmalloc(n) : NULL;
+                (n > 0) ? zmalloc(n) : nullptr;
             cleanerName(zfree, Bytes) uint8_t *out_scalar =
-                (n > 0) ? zmalloc(n) : NULL;
+                (n > 0) ? zmalloc(n) : nullptr;
             if (n > 0) {
                 fillPseudoRandom(in, n, (uint32_t)(0xABCD + n));
             }
@@ -2082,15 +2088,15 @@ int chacha20poly1305Test(int, char *[]) {
         memset(ct_buf, 0xDD, sizeof(ct_buf));
 
         const uint64_t diagBefore = dkDiagCount();
-        if (chacha20poly1305Open(key, nonce, NULL, 0u, NULL, 16u, tag,
+        if (chacha20poly1305Open(key, nonce, nullptr, 0u, nullptr, 16u, tag,
                                  pt_buf)) {
             ERR("Open with NULL ciphertext (len>0) must return false");
         }
-        if (chacha20poly1305Open(key, nonce, NULL, 0u, ct_buf, 16u, tag,
-                                 NULL)) {
+        if (chacha20poly1305Open(key, nonce, nullptr, 0u, ct_buf, 16u, tag,
+                                 nullptr)) {
             ERR("Open with NULL plaintext (len>0) must return false");
         }
-        if (chacha20poly1305Seal(key, nonce, NULL, 0u, NULL, 16u, ct_buf,
+        if (chacha20poly1305Seal(key, nonce, nullptr, 0u, nullptr, 16u, ct_buf,
                                  tag)) {
             ERR("Seal with NULL plaintext (len>0) must return false");
         }
@@ -2104,7 +2110,8 @@ int chacha20poly1305Test(int, char *[]) {
         /* len == 0 with NULL pointers must remain valid (no read, no
          * write).  It's effectively an authenticate-AAD-only call. */
         const uint64_t diagValid = dkDiagCount();
-        if (chacha20poly1305Open(key, nonce, NULL, 0u, NULL, 0u, tag, NULL)) {
+        if (chacha20poly1305Open(key, nonce, nullptr, 0u, nullptr, 0u, tag,
+                                 nullptr)) {
             /* Tag is all-zero and won't match the real MAC of empty
              * input under this key/nonce, so a false is expected — but
              * the caller-supplied NULLs must not crash before that. */
@@ -2157,7 +2164,7 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32] = {0x11};
         uint8_t nonce[12] = {0x22};
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
-        if (chacha20poly1305OpenStreamUpdate(&ctx, NULL, 16u, out_buf)) {
+        if (chacha20poly1305OpenStreamUpdate(&ctx, nullptr, 16u, out_buf)) {
             ERR("Update with NULL ciphertext (len>0) must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
@@ -2230,7 +2237,7 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32] = {0x33};
         uint8_t nonce[12] = {0x44};
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
-        if (chacha20poly1305SealStreamUpdate(&ctx, NULL, 16u, out_buf)) {
+        if (chacha20poly1305SealStreamUpdate(&ctx, nullptr, 16u, out_buf)) {
             ERR("Seal Update with NULL plaintext (len>0) must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
@@ -2291,7 +2298,7 @@ int chacha20poly1305Test(int, char *[]) {
         /* Seal side. */
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
         /* Now Init again with NULL key — prior key/nonce must be wiped. */
-        chacha20poly1305SealStreamInit(&ctx, NULL, nonce);
+        chacha20poly1305SealStreamInit(&ctx, nullptr, nonce);
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
                 ERR("SealStreamInit NULL-key path left nonzero byte at "
@@ -2303,7 +2310,7 @@ int chacha20poly1305Test(int, char *[]) {
 
         /* Re-init for the NULL-nonce variant. */
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
-        chacha20poly1305SealStreamInit(&ctx, key, NULL);
+        chacha20poly1305SealStreamInit(&ctx, key, nullptr);
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
                 ERR("SealStreamInit NULL-nonce path left nonzero byte "
@@ -2315,7 +2322,7 @@ int chacha20poly1305Test(int, char *[]) {
 
         /* Open side. */
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
-        chacha20poly1305OpenStreamInit(&ctx, NULL, nonce);
+        chacha20poly1305OpenStreamInit(&ctx, nullptr, nonce);
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
                 ERR("OpenStreamInit NULL-key path left nonzero byte at "
@@ -2326,7 +2333,7 @@ int chacha20poly1305Test(int, char *[]) {
         }
 
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
-        chacha20poly1305OpenStreamInit(&ctx, key, NULL);
+        chacha20poly1305OpenStreamInit(&ctx, key, nullptr);
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
                 ERR("OpenStreamInit NULL-nonce path left nonzero byte "
@@ -2370,7 +2377,7 @@ int chacha20poly1305Test(int, char *[]) {
 
         /* (2) NULL-aad with non-zero len on Open side. */
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
-        if (chacha20poly1305OpenStreamAad(&ctx, NULL, sizeof(aad))) {
+        if (chacha20poly1305OpenStreamAad(&ctx, nullptr, sizeof(aad))) {
             ERR("Open Aad with NULL aad (len>0) must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
@@ -2403,7 +2410,7 @@ int chacha20poly1305Test(int, char *[]) {
         /* Seal side. */
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
         /* Advance to BODY (zero-len Update transitions AAD -> BODY). */
-        if (!chacha20poly1305SealStreamUpdate(&ctx, NULL, 0u, NULL)) {
+        if (!chacha20poly1305SealStreamUpdate(&ctx, nullptr, 0u, nullptr)) {
             ERR("Seal Update len=0 must transition to BODY");
         }
         /* Force wrap state: counter == 0, keystream exhausted. */
@@ -2424,7 +2431,7 @@ int chacha20poly1305Test(int, char *[]) {
 
         /* Open side. */
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
-        if (!chacha20poly1305OpenStreamUpdate(&ctx, NULL, 0u, NULL)) {
+        if (!chacha20poly1305OpenStreamUpdate(&ctx, nullptr, 0u, nullptr)) {
             ERR("Open Update len=0 must transition to BODY");
         }
         ctx.chacha_counter = 0u;

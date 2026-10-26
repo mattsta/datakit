@@ -619,7 +619,7 @@ StrScanFmt StrScanScan(const uint8_t *p, databox *box, StrScanOpt opt,
         int cmask = StrCharDIGIT;
         int base = (opt & STRSCAN_OPT_C) && *p == '0' ? 0 : 10;
         const uint8_t *sp;
-        const uint8_t *dp = NULL;
+        const uint8_t *dp = nullptr;
         uint32_t dig = 0;
         uint32_t hasdig = 0;
         uint32_t x = 0;

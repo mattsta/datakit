@@ -58,7 +58,7 @@ bool jebufUseNewAllocation(const size_t originalSize, const size_t newSize) {
                  * round-trips lose precision at these magnitudes),            \
                  * saturating so the result never shrinks below the            \
                  * request on overflow */                                      \
-                assert(NULL && "who needs this much memory?");                 \
+                assert(false && "who needs this much memory?");                \
                 const size_t grown_ = currentBufSize + (currentBufSize / 5);   \
                 return grown_ >= currentBufSize ? grown_ : SIZE_MAX;           \
             }                                                                  \
@@ -68,7 +68,7 @@ bool jebufUseNewAllocation(const size_t originalSize, const size_t newSize) {
             /* found upper limit, ok. */                                       \
             return *result;                                                    \
         }                                                                      \
-        assert(NULL && "unexpected combination of conditions");                \
+        assert(false && "unexpected combination of conditions");               \
         unreachable();                                                         \
     } while (0)
 
@@ -102,7 +102,7 @@ static size_t jebufSizeAllocation16(const size_t currentBufSize) {
     const uint16_t *result = jebuf;
     size_t n = num;
     size_t half = n / 2;
-    const uint16_t *mid = NULL;
+    const uint16_t *mid = nullptr;
 
     BINARY_SEARCH_BRANCH_FREE;
 
@@ -192,7 +192,7 @@ static size_t jebufSizeAllocation32(const size_t currentBufSize) {
     const uint32_t *result = jebuf;
     size_t n = num;
     size_t half = n / 2;
-    const uint32_t *mid = NULL;
+    const uint32_t *mid = nullptr;
 
     BINARY_SEARCH_BRANCH_FREE;
 
@@ -271,7 +271,7 @@ static size_t jebufSizeAllocation64(const size_t currentBufSize) {
     const uint64_t *result = jebuf;
     size_t n = num;
     size_t half = n / 2;
-    const uint64_t *mid = NULL;
+    const uint64_t *mid = nullptr;
 
     BINARY_SEARCH_BRANCH_FREE;
 

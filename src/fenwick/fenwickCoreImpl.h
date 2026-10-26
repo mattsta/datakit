@@ -86,7 +86,7 @@ FENWICK_SMALL_FN_(SmallNewFromArray)(const FENWICK_VALUE_TYPE *values,
 
     for (FENWICK_INDEX_TYPE_SMALL i = 0; i < count; i++) {
         if (!FENWICK_SMALL_FN_(AlgoValid_)(values[i])) {
-            return NULL;
+            return nullptr;
         }
     }
 

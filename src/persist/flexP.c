@@ -20,7 +20,7 @@ defcleanerName(flexP *, zfree, FlexP);
 
 flexP *flexNewP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     cleanerName(zfree, FlexP) flexP *f = zcalloc(1, sizeof(*f));
@@ -30,41 +30,41 @@ flexP *flexNewP(persistCtx *ctx) {
     /* @own: container; free=flexFree */
     f->f = flexNew();
     if (!f->f) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for flex type */
     if (!persistCtxInitForType(ctx, &persistOpsFlex)) {
         flexFree(f->f);
-        return NULL;
+        return nullptr;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, f->f, &persistOpsFlex)) {
         flexFree(f->f);
-        return NULL;
+        return nullptr;
     }
 
     persistCtxClaim(ctx);
     flexP *out = f;
-    f = NULL;
+    f = nullptr;
     return out;
 }
 
 flexP *flexOpenP(persistCtx *ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
 
     /* Initialize persistence context for flex type */
     if (!persistCtxInitForType(ctx, &persistOpsFlex)) {
-        return NULL;
+        return nullptr;
     }
 
     /* Recover from snapshot + WAL */
     flex *recovered = persistCtxRecover(ctx, &persistOpsFlex);
     if (!recovered) {
-        return NULL;
+        return nullptr;
     }
 
     /* @own: caller; free=flexCloseP */
@@ -96,7 +96,7 @@ void flexCloseP(flexP *f) {
 }
 
 flex *flexGetP(flexP *f) {
-    return f ? f->f : NULL;
+    return f ? f->f : nullptr;
 }
 
 /* ============================================================================
@@ -148,7 +148,7 @@ persistLogResult flexResetP(flexP *f) {
     }
 
     const persistLogResult logged =
-        persistCtxLogOp(f->ctx, PERSIST_OP_CLEAR, NULL, 0);
+        persistCtxLogOp(f->ctx, PERSIST_OP_CLEAR, nullptr, 0);
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
@@ -165,7 +165,7 @@ persistLogResult flexResetP(flexP *f) {
 
 flexEntry *flexIndexP(const flexP *f, int32_t index) {
     if (!f || !f->f) {
-        return NULL;
+        return nullptr;
     }
     return flexIndex(f->f, index);
 }
@@ -253,7 +253,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP create empty and close") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         if (!ctx) {
             ERR("Failed to create persistCtx");
         }
@@ -276,7 +276,7 @@ int flexPTest(int, char *[]) {
     TEST("flexP refusals change nothing: a refused log, missing arguments, "
          "a held or other-type context") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
         const databox one = DATABOX_SIGNED(1);
         PTEST_LOGGED(flexPushTailP(f, &one));
@@ -288,25 +288,26 @@ int flexPTest(int, char *[]) {
 
         /* Missing arguments: refused or empty answers */
         databox got = {};
-        if (flexPushTailP(NULL, &one) || flexPushHeadP(f, NULL) ||
-            flexResetP(NULL) || flexNewP(NULL) || flexOpenP(NULL) ||
-            flexGetP(NULL) || flexCountP(NULL) || flexBytesP(NULL) ||
-            flexIndexP(NULL, 0) || flexSyncP(NULL) || flexCompactP(NULL)) {
+        if (flexPushTailP(nullptr, &one) || flexPushHeadP(f, nullptr) ||
+            flexResetP(nullptr) || flexNewP(nullptr) || flexOpenP(nullptr) ||
+            flexGetP(nullptr) || flexCountP(nullptr) || flexBytesP(nullptr) ||
+            flexIndexP(nullptr, 0) || flexSyncP(nullptr) ||
+            flexCompactP(nullptr)) {
             ERR("a call without its wrapper or value was not refused");
         }
-        flexGetByTypeP(NULL, NULL, &got);
-        flexGetStatsP(NULL, NULL);
-        flexCloseP(NULL);
+        flexGetByTypeP(nullptr, nullptr, &got);
+        flexGetStatsP(nullptr, nullptr);
+        flexCloseP(nullptr);
 
         /* A held context takes no second wrapper; once it is let go, it
          * stays bound to flex, so another type's wrapper is refused */
         const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
         dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
-        flexP *second = NULL;
+        flexP *second = nullptr;
         DK_DIAG_EXPECT_REPORTS("a held context", 1, DK_DIAG_PERSIST_CTX_CLAIMED,
                                second = flexNewP(ctx));
         flexCloseP(f);
-        intsetP *other = NULL;
+        intsetP *other = nullptr;
         DK_DIAG_EXPECT_REPORTS("a flex context", 1,
                                DK_DIAG_PERSIST_CTX_WRONG_TYPE,
                                other = intsetNewP(ctx));
@@ -322,7 +323,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP push tail with all data types") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -346,7 +347,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP push head with all data types") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -382,15 +383,15 @@ int flexPTest(int, char *[]) {
                 ERR("push %zu was not durable", i);
             }
         }
-        if (flexPushTailP(f, NULL) != PERSIST_LOG_REFUSED ||
+        if (flexPushTailP(f, nullptr) != PERSIST_LOG_REFUSED ||
             flexCountP(f) != 4) {
             ERR("a NULL push was not refused");
         }
 
         /* The readers agree with the flex they wrap */
         if (flexBytesP(f) != flexBytes(flexGetP(f)) || flexBytesP(f) == 0 ||
-            !flexSyncP(f) || flexBytesP(NULL) != 0 || flexGetP(NULL) ||
-            flexSyncP(NULL)) {
+            !flexSyncP(f) || flexBytesP(nullptr) != 0 || flexGetP(nullptr) ||
+            flexSyncP(nullptr)) {
             ERR("flexBytesP / flexGetP / flexSyncP disagree");
         }
 
@@ -428,7 +429,7 @@ int flexPTest(int, char *[]) {
          * one. */
         ptestCleanupFiles(basePath);
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
             for (int64_t v = 1; v <= 3; v++) {
                 const databox box = DATABOX_SIGNED(v * 11);
@@ -442,7 +443,7 @@ int flexPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
             if (!f || flexCountP(f) != 2) {
                 ERR("lenient recovery kept %zu values, want 2",
@@ -463,7 +464,7 @@ int flexPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
             databox got = {};
             if (f && flexCountP(f) == 3) {
@@ -488,7 +489,7 @@ int flexPTest(int, char *[]) {
 
         /* Phase 1: Create and populate with all types */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
 
             for (int type = 0; type < PTEST_TYPE_COUNT; type++) {
@@ -506,7 +507,7 @@ int flexPTest(int, char *[]) {
 
         /* Phase 2: Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -526,7 +527,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP mixed head/tail push") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -559,7 +560,7 @@ int flexPTest(int, char *[]) {
 
         /* Create with mixed pushes */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
 
             for (int i = 0; i < 50; i++) {
@@ -579,7 +580,7 @@ int flexPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -599,7 +600,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP reset and continue") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
@@ -641,7 +642,7 @@ int flexPTest(int, char *[]) {
 
         /* Create, populate, reset, repopulate, close */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
 
             for (int i = 0; i < 10; i++) {
@@ -663,7 +664,7 @@ int flexPTest(int, char *[]) {
 
         /* Recover and verify only post-reset data */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -692,10 +693,10 @@ int flexPTest(int, char *[]) {
             flexP *f;
 
             if (cycle == 0) {
-                ctx = persistCtxNew(basePath, NULL);
+                ctx = persistCtxNew(basePath, nullptr);
                 f = flexNewP(ctx);
             } else {
-                ctx = persistCtxOpen(basePath, NULL);
+                ctx = persistCtxOpen(basePath, nullptr);
                 f = flexOpenP(ctx);
                 if (!f) {
                     ERR("Failed to recover at cycle %d", cycle);
@@ -721,7 +722,7 @@ int flexPTest(int, char *[]) {
 
         /* Final verification */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -745,7 +746,7 @@ int flexPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
 
             /* Push various strings */
@@ -762,7 +763,7 @@ int flexPTest(int, char *[]) {
 
         /* Recover and verify strings */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -788,7 +789,7 @@ int flexPTest(int, char *[]) {
 
         /* Add many values */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
 
             for (int i = 0; i < 500; i++) {
@@ -804,7 +805,7 @@ int flexPTest(int, char *[]) {
 
         /* Recover and verify */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -827,7 +828,7 @@ int flexPTest(int, char *[]) {
 
         /* Create empty, close, reopen */
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
             flexCloseP(f);
             persistCtxFree(ctx);
@@ -835,7 +836,7 @@ int flexPTest(int, char *[]) {
 
         /* Recover empty */
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
@@ -858,7 +859,7 @@ int flexPTest(int, char *[]) {
         databox testBox = DATABOX_SIGNED(42);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
             PTEST_LOGGED(flexPushTailP(f, &testBox));
             flexCloseP(f);
@@ -866,7 +867,7 @@ int flexPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (flexCountP(f) != 1) {
@@ -900,7 +901,7 @@ int flexPTest(int, char *[]) {
 
             /* Add values in pattern order */
             {
-                persistCtx *ctx = persistCtxNew(basePath, NULL);
+                persistCtx *ctx = persistCtxNew(basePath, nullptr);
                 flexP *f = flexNewP(ctx);
 
                 for (int i = 0; i < 100; i++) {
@@ -916,7 +917,7 @@ int flexPTest(int, char *[]) {
 
             /* Recover and verify */
             {
-                persistCtx *ctx = persistCtxOpen(basePath, NULL);
+                persistCtx *ctx = persistCtxOpen(basePath, nullptr);
                 flexP *f = flexOpenP(ctx);
 
                 if (!f) {
@@ -941,7 +942,7 @@ int flexPTest(int, char *[]) {
         ptestBoxTracker tracker;
         ptestBoxTrackerInit(&tracker);
 
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
 
         /* Add many values */
@@ -974,7 +975,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP statistics tracking") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
 
         /* Perform known number of operations */
@@ -1001,7 +1002,7 @@ int flexPTest(int, char *[]) {
 
     TEST("flexP negative index access") {
         ptestCleanupFiles(basePath);
-        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
         flexP *f = flexNewP(ctx);
 
         /* Push 10 values */
@@ -1046,7 +1047,7 @@ int flexPTest(int, char *[]) {
         ptestBoxTrackerInit(&tracker);
 
         {
-            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
             flexP *f = flexNewP(ctx);
 
             /* Test all edge case integers */
@@ -1061,7 +1062,7 @@ int flexPTest(int, char *[]) {
         }
 
         {
-            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            persistCtx *ctx = persistCtxOpen(basePath, nullptr);
             flexP *f = flexOpenP(ctx);
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {

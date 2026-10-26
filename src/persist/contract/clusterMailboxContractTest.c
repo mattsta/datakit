@@ -19,8 +19,8 @@
  * fixture, since a mailbox borrows its ring until clusterMailboxFree
  * and the harness frees mailboxes through the descriptor alone. */
 static hmacKeyring *pcMailboxRing(void) {
-    static hmacKeyring *ring = NULL;
-    if (ring == NULL) {
+    static hmacKeyring *ring = nullptr;
+    if (ring == nullptr) {
         /* @own: container; free=hmacKeyringFree */
         ring = hmacKeyringCreate();
         static constexpr char key[] = "persistContract mailbox test key";

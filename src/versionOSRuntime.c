@@ -69,7 +69,7 @@ int versionOSRuntimeTest(int, char *[]) {
                     cases[i].release, got, want);
             }
         }
-        if (versionOSRuntimeParse(NULL) != 0) {
+        if (versionOSRuntimeParse(nullptr) != 0) {
             ERR("NULL release parsed");
         }
 

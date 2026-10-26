@@ -47,8 +47,8 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
             multilistPop(&ml, state, &got, tail);
             databoxFreeData(&got);
             persistContractRecord(
-                b->log, tail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD, NULL,
-                0);
+                b->log, tail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD,
+                nullptr, 0);
         } else if (roll == 24) {
             /* A short range from either end (negative starts count from
              * the tail) */
@@ -79,7 +79,7 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
                 mflexState *pair[2] = {state, second};
                 multilistRotate(ml, pair);
             }
-            persistContractRecord(b->log, PERSIST_OP_ROTATE, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_ROTATE, nullptr, 0);
         } else {
             databoxBig v;
             persistContractValue(&rng, &v, buf, sizeof(buf));
@@ -92,7 +92,7 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
 
         if (b->size >= 100 && i == b->size / 3) {
             multilistReset(&ml);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
 
