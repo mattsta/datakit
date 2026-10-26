@@ -706,6 +706,21 @@ uv run --project tools dktools countof [--dry-run] [FILE ...]
   a pointer's bytes.
 - Prints each file's count. Exits 0, or 2 for a missing file.
 
+## dropargs — cut every call of a function to the kept arguments
+
+```sh
+uv run --project tools dktools dropargs NAME --keep 0,2 --arity 5 [--dry-run] [FILE ...]
+```
+
+- Each call `NAME(a0, a1, a2, a3, a4)` in code becomes `NAME(a0, a2)`:
+  the call-site half of retiring parameters (change the definition by
+  hand). Arguments split at top-level commas; nested brackets, comments
+  and literals stay whole.
+- Every call must have `--arity` arguments, else the file is left alone
+  and the call is listed (exit 1). Preprocessor lines are skipped, and
+  a call of NAME nested in another's arguments is left as written.
+- Files default to the tracked `src/**/*.c` and `*.h`.
+
 ## stdattr — `__attribute__` in the standard `[[...]]` form
 
 ```sh

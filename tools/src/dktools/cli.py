@@ -18,6 +18,7 @@ from . import (
     countof,
     coverage,
     defconst,
+    dropargs,
     dropinclude,
     enumconst,
     formatting,
@@ -304,6 +305,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     co.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     co.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    da = sub.add_parser(
+        "dropargs",
+        help="cut every call of a function to the kept argument positions "
+        "(exit 0, 1 when a call has another arity)",
+    )
+    da.add_argument("name", help="the function or macro called")
+    da.add_argument("--keep", required=True, help="kept positions, e.g. 0,2")
+    da.add_argument("--arity", type=int, required=True, help="arguments each call has")
+    da.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    da.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     sa = sub.add_parser(
         "stdattr",
@@ -1115,6 +1127,11 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "countof":
         return countof.run(args.repo, tuple(args.paths), args.dry_run)
+
+    if args.command == "dropargs":
+        return dropargs.run(
+            args.repo, args.name, args.keep, args.arity, tuple(args.paths), args.dry_run
+        )
 
     if args.command == "stdattr":
         return stdattr.run(args.repo, tuple(args.paths), args.dry_run)
