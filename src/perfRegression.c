@@ -30,6 +30,7 @@
 #include "multiarray.h"
 #include "multidict.h"
 #include "multilist.h"
+#include "multilru.h"
 #include "multimapAtom.h"
 #include "multimapAtomDense.h"
 #include "persist/intsetP.h"
@@ -620,6 +621,8 @@ defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(multimapAtomDense *, multimapAtomDenseFree);
 defcleaner(stringPool *, stringPoolFree);
 defcleaner(intset *, intsetFree);
+defcleaner(multilru *, multilruFree);
+defcleanerName(multilruPtr *, zfree, PerfLruPtrs);
 defcleaner(multimap *, multimapFree);
 defcleaner(multiroar *, multiroarFree);
 defcleaner(multilist *, multilistFree);
@@ -1640,6 +1643,48 @@ static void benchMultilist(void) {
     perfContainerSink = sink;
 }
 
+/* An LRU of 'n' entries ('n' picks the entry width: 5 bytes up to 64K
+ * entries, 6 bytes to 1M): inserts, promotions of scattered entries,
+ * deletes of every fourth entry, and evicting the rest, each running
+ * through the per-entry link and flag accessors.  The bytes column is
+ * 'n'. */
+static void benchMultilru(const uint32_t n) {
+    cleaner(multilruFree) multilru *mlru = multilruNew();
+    /* @own: scope; free=zfree */
+    cleanerName(zfree, PerfLruPtrs) multilruPtr *ptrs =
+        zcalloc(n, sizeof(*ptrs));
+    uint64_t sink = 0;
+
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        ptrs[i] = multilruInsert(mlru);
+    }
+    emitRow("multilru", "insert", n, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        multilruIncrease(mlru, ptrs[(i * 7919u) % n]);
+    }
+    emitRow("multilru", "increase", n, n, monoNowSec() - t0);
+
+    const uint32_t deletes = n / 4;
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < deletes; i++) {
+        /* every fourth entry, n / 4 distinct ones */
+        multilruDelete(mlru, ptrs[(uint32_t)(((uint64_t)i * 4 + 1) % n)]);
+    }
+    emitRow("multilru", "delete", n, deletes, monoNowSec() - t0);
+
+    const size_t left = multilruCount(mlru);
+    t0 = monoNowSec();
+    multilruPtr out;
+    while (multilruRemoveMinimum(mlru, &out)) {
+        sink += out;
+    }
+    emitRow("multilru", "removeMinimum", n, (uint32_t)left, monoNowSec() - t0);
+    perfContainerSink = sink;
+}
+
 /* A reusing atom table of PERF_CONTAINER_N string atoms: interning new
  * and present values, retains and releases by value (the last release
  * deletes), and deletes by id */
@@ -1962,6 +2007,11 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("multilist")) {
             benchMultilist();
+        }
+
+        if (perfWanted("multilru")) {
+            benchMultilru(50'000);
+            benchMultilru(PERF_CONTAINER_N);
         }
 
         /* membound allocator: per-op alloc/free cost for the three
