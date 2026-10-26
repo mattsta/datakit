@@ -259,10 +259,9 @@ persistLogResult multiroarValueSetP(multiroarP *r, uint64_t position,
     }
     /* Checked above: a value roar, in bounds, a value within the width */
     databox stored = databoxNewUnsigned(v);
-    const multiroarValueSetResult set =
+    [[maybe_unused]] const multiroarValueSetResult set =
         multiroarValueSet(r->r, position, &stored);
     assert(set != MULTIROAR_VALUE_REFUSED);
-    (void)set;
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
     return logged;
 }
@@ -286,10 +285,9 @@ persistLogResult multiroarValueRemoveP(multiroarP *r, uint64_t position,
         persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &position, 1);
     if (logged == PERSIST_LOG_REFUSED) {
         /* The position just held `was`, so it takes it back */
-        const multiroarValueSetResult restored =
+        [[maybe_unused]] const multiroarValueSetResult restored =
             multiroarValueSet(r->r, position, &was);
         assert(restored == MULTIROAR_VALUE_ADDED);
-        (void)restored;
         return logged;
     }
     if (removed) {

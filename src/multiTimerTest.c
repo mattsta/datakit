@@ -1023,11 +1023,10 @@ int multiTimerTest(int, char *[]) {
 
         PERF_TIMERS_SETUP;
 
-        volatile multiTimerSystemMonotonicUs next = 0;
+        [[maybe_unused]] volatile multiTimerSystemMonotonicUs next = 0;
         for (size_t i = 0; i < numLookups; i++) {
             next = multiTimerNextTimerEventStartUs(t);
         }
-        (void)next;
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numLookups, "nextTimerEvent lookups");
     }
@@ -1192,11 +1191,10 @@ int multiTimerTest(int, char *[]) {
         /* Test lookup performance at scale */
         PERF_TIMERS_SETUP;
 
-        volatile multiTimerSystemMonotonicUs next = 0;
+        [[maybe_unused]] volatile multiTimerSystemMonotonicUs next = 0;
         for (size_t i = 0; i < 100000; i++) {
             next = multiTimerNextTimerEventStartUs(t);
         }
-        (void)next;
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(100000, "lookups with 1M timers");
     }

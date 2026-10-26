@@ -311,8 +311,8 @@ FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
     const float in = 3.333333333333333333333;
     const uint16_t created = 44444;
 
-    size_t incr = 0;
-    float incrf = 0.0;
+    [[maybe_unused]] size_t incr = 0;
+    [[maybe_unused]] float incrf = 0.0;
     int err = 0;
 
     /* bfloat16 is exactly the high half of a float: every pattern decodes
@@ -665,10 +665,6 @@ FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
         free(scalarHalfs);
         free(scalarFloats);
     }
-
-    /* Suppress unused value warnings from benchmark accumulators */
-    (void)incr;
-    (void)incrf;
 
     TEST_FINAL_RESULT;
 }

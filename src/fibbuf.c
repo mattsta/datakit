@@ -293,7 +293,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(0);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 0");
         }
@@ -303,7 +302,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(5000);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 5000");
         }
@@ -313,7 +311,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(30000);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 30000");
         }
@@ -323,7 +320,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(2178309 + 1);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 2178309 + 1");
         }
@@ -335,7 +331,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(0);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 0");
         }
@@ -345,7 +340,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(5000);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 5000");
         }
@@ -355,7 +349,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(30000);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 30000");
         }
@@ -365,7 +358,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(2178309 + 1);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 2178309 + 1");
         }
@@ -375,7 +367,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(16777216);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 16777216");
         }
@@ -387,7 +378,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(0);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 0");
         }
@@ -397,7 +387,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(5000);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 5000");
         }
@@ -407,7 +396,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(30000);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 30000");
         }
@@ -417,7 +405,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(2178309 + 1);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 2178309 + 1");
         }
@@ -427,7 +414,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(16777216);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 16777216");
         }
@@ -437,7 +423,6 @@ int fibbufTest(int, char *[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(139583862445);
                 assert(next);
-                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 139583862445");
         }

@@ -106,9 +106,8 @@ static bool denseInsertIfNew_(multimapAtomDense *d, databox *key,
             multimapAtomRetainByRef(d->atoms, &ref);
         }
     } else {
-        const uint64_t taken = denseTakeId_(d);
+        [[maybe_unused]] const uint64_t taken = denseTakeId_(d);
         assert(taken == id);
-        (void)taken;
     }
 
     *key = denseRef_(ref.data.u);

@@ -978,8 +978,8 @@ bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
             assert(useOffset >= 0);
 
             uint32_t localIVAL;
-            const bool got = intsetU32Get(use, useOffset, &localIVAL);
-            (void)got;
+            [[maybe_unused]] const bool got =
+                intsetU32Get(use, useOffset, &localIVAL);
             assert(got);
 
             valueFromBucketOffset(&bucket, localIVAL, val);
@@ -1036,8 +1036,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
 
     /* Create and free empty set */
     TEST("create and free") {
-        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
-        (void)isb;
+        [[maybe_unused]] cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
     }
 
     /* Add small (bucket 0) to new set */
@@ -1237,11 +1236,10 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
             size_t count = 2650000;
             TIME_INIT;
             for (size_t i = 0; i < count; i++, val *= 10) {
-                const size_t written = StrUInt64ToBuf(buf, sizeof(buf), val);
+                (void)StrUInt64ToBuf(buf, sizeof(buf), val);
                 if (val > UINT64_MAX / 100) {
                     val = 10;
                 }
-                (void)written;
             }
             TIME_FINISH(count, "StrUInt64ToBuf");
         }

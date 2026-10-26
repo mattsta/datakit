@@ -951,7 +951,7 @@ int intsetTest(int, char *[]) {
 
         /* Empty set */
         int64_t r = intsetRandom(is);
-        (void)r; /* Random from empty is undefined but shouldn't crash */
+        /* Random from empty is undefined but shouldn't crash */
 
         /* Single element */
         intsetAdd(&is, 42, NULL);

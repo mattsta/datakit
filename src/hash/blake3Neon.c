@@ -119,13 +119,6 @@ static void neon_compress_pre(uint32x4_t out[4], const uint32_t cv[8],
     uint32x4_t v0 = vld1q_u32(&cv[0]);
     uint32x4_t v1 = vld1q_u32(&cv[4]);
     uint32x4_t v2 = vld1q_u32(BLAKE3N_IV);
-    uint32_t low_words[4] = {
-        BLAKE3N_IV[4],
-        BLAKE3N_IV[5],
-        BLAKE3N_IV[6],
-        BLAKE3N_IV[7],
-    };
-    (void)low_words; /* v3 below uses counter/block_len/flags */
     uint32_t v3_words[4] = {
         (uint32_t)(counter & 0xFFFFFFFFul),
         (uint32_t)(counter >> 32),
@@ -677,7 +670,7 @@ int blake3NeonTest(int, char *[]) {
         uint32_t cv[8];
         memcpy(cv, REF_IV, sizeof(cv));
         const uint32_t niters = 64;
-        volatile uint32_t portable_sink = 0;
+        [[maybe_unused]] volatile uint32_t portable_sink = 0;
         t0 = now_seconds();
         for (uint32_t i = 0; i < niters; i++) {
             uint32_t cur[8];
@@ -692,7 +685,6 @@ int blake3NeonTest(int, char *[]) {
             }
         }
         t1 = now_seconds();
-        (void)portable_sink;
         double portable_mib_s = (double)niters / (t1 - t0);
 
         /* NEON single-block compress throughput: raw block-level
@@ -701,7 +693,7 @@ int blake3NeonTest(int, char *[]) {
         /* Volatile sink defeats dead-code elimination: without consuming
          * `cur` after the loop, -O3 NDEBUG can fold the whole bench away
          * and report `inf MiB/s`. */
-        volatile uint32_t neon_sink = 0;
+        [[maybe_unused]] volatile uint32_t neon_sink = 0;
         for (uint32_t i = 0; i < niters; i++) {
             uint32_t cur[8];
             memcpy(cur, cv, sizeof(cur));
@@ -715,12 +707,11 @@ int blake3NeonTest(int, char *[]) {
             }
         }
         t1 = now_seconds();
-        (void)neon_sink;
         double neon_mib_s = (double)niters / (t1 - t0);
 
         /* 4-way batch: same workload spread over 4 lanes. */
         t0 = now_seconds();
-        volatile uint32_t batch_sink = 0;
+        [[maybe_unused]] volatile uint32_t batch_sink = 0;
         for (uint32_t i = 0; i < niters; i++) {
             uint32_t cur[4][8];
             for (uint32_t k = 0; k < 4; k++) {
@@ -751,7 +742,6 @@ int blake3NeonTest(int, char *[]) {
             }
         }
         t1 = now_seconds();
-        (void)batch_sink;
         double batch_mib_s = (double)niters / (t1 - t0);
 
         printf("    public blake3Hash (dispatched): %7.1f MiB/s\n",

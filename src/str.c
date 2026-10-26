@@ -347,7 +347,6 @@ defcleanerName(uint8_t *, zfree, U8);
 DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
     char buf[32];
     int64_t v;
-    (void)v;
 
     /* May not start with +. */
     strcpy(buf, "+1");
@@ -432,7 +431,6 @@ DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
 DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
     char buf[32];
     uint64_t v;
-    (void)v;
 
     TIME_INIT;
 
@@ -560,7 +558,6 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
     uint64_t lz = 0;
     assert(StrBufToUInt64FastCheckNumeric("007", 3, &lz) && lz == 7);
     assert(!StrBufToUInt64FastCheckNumeric("0x7", 3, &lz));
-    (void)lz;
 }
 
 static void testStrInt64ToBuf(size_t (*strFn)(void *, size_t, int64_t)) {
@@ -1715,7 +1712,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     TEST("Small integer convert") {
         const size_t loopers = 10'000'000;
         const char *numeristr = "1234567891234567";
-        uint64_t result = 0;
+        [[maybe_unused]] uint64_t result = 0;
 
         TIME_INIT;
         for (size_t i = 0; i < loopers; i++) {
@@ -1760,14 +1757,13 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             }
         }
 
-        (void)result; /* Used for benchmarking only */
         TIME_FINISH(loopers * 15, "Byte Lengths Type A");
     }
 
     TEST("Medium integer convert") {
         const size_t loopers = 10'000'000;
         const char *numeristr = "1234567891234567";
-        uint64_t result = 0;
+        [[maybe_unused]] uint64_t result = 0;
 
         TIME_INIT;
         for (size_t i = 0; i < loopers; i++) {
@@ -1783,7 +1779,6 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             }
         }
 
-        (void)result; /* Used for benchmarking only */
         TIME_FINISH(loopers * 15, "Byte Lengths Type B");
     }
 
@@ -2629,7 +2624,6 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 const bool parsed = errno == 0 && end == digits + 20;
                 PERF_TIMERS_STAT_STOP(i);
                 assert(parsed);
-                (void)parsed;
                 assert(intval == 18446744073709551615ULL);
             }
             TIME_FINISH(loopBooster, "strtoull");
@@ -4305,13 +4299,12 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                  "The quick brown fox jumps over the lazy dog.";
         const size_t asciiLen = strlen(asciiHeavy);
         const size_t iterations = 1'000'000;
-        const uint8_t *result;
+        [[maybe_unused]] const uint8_t *result;
 
         /* SIMD version */
         TIME_INIT;
         for (size_t i = 0; i < iterations; i++) {
             result = StrUtf8Advance(asciiHeavy, asciiLen, 45);
-            (void)result;
         }
         TIME_FINISH(iterations, "SIMD Advance (ASCII)");
 
@@ -4319,7 +4312,6 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         TIME_INIT;
         for (size_t i = 0; i < iterations; i++) {
             result = StrUtf8AdvanceScalar(asciiHeavy, asciiLen, 45);
-            (void)result;
         }
         TIME_FINISH(iterations, "Scalar Advance (ASCII)");
 
@@ -4332,7 +4324,6 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         TIME_INIT;
         for (size_t i = 0; i < iterations; i++) {
             result = StrUtf8Advance(mixedUtf8, mixedLen, mixedChars / 2);
-            (void)result;
         }
         TIME_FINISH(iterations, "SIMD Advance (Mixed)");
 
@@ -4340,7 +4331,6 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         TIME_INIT;
         for (size_t i = 0; i < iterations; i++) {
             result = StrUtf8AdvanceScalar(mixedUtf8, mixedLen, mixedChars / 2);
-            (void)result;
         }
         TIME_FINISH(iterations, "Scalar Advance (Mixed)");
 

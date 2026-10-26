@@ -743,7 +743,6 @@ bool flexEnvelopeReserveWrap(uint8_t *out, size_t out_cap, uint64_t payload_len,
                         &needed)) {
         return false;
     }
-    (void)d;
     *payload_region_out = out + header_size;
     *header_len_out = header_size;
     return true;
@@ -1394,7 +1393,6 @@ static bool sealOneShot(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
                         &aad_len, &needed)) {
         return false;
     }
-    (void)header_size;
 
     /* defense-in-depth (key_id, nonce) reuse check.
      * If the caller bound an aeadNonceLog AND the nonce width matches
@@ -1482,8 +1480,6 @@ bool flexEnvelopeReserveSeal(uint8_t *out, size_t out_cap,
                         &header_size, &aad_len, &needed)) {
         return false;
     }
-    (void)header_size;
-    (void)needed;
     /* Catch nonce reuse here, BEFORE the caller spends cycles producing
      * plaintext into the reserved region. Mirrors the one-shot Seal
      * sequencing (observe → cipher) — a duplicate is fatal anyway. */
@@ -4491,7 +4487,6 @@ int flexEnvelopeTest(int, char *[]) {
         memset(header, 0xCDu, sizeof(header));
         size_t hw = 999u; /* sentinel */
         uint8_t key[32] = {};
-        uint8_t nonce[12] = {};
         flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
             .key = key,
@@ -4499,7 +4494,6 @@ int flexEnvelopeTest(int, char *[]) {
             /* nonce field ignored by wrap stream init (AEAD goes
              * through Seal anyway). */
         };
-        (void)nonce;
         if (flexEnvelopeWrapStreamInit(&ctx, 16u, &wp, header, sizeof(header),
                                        &hw)) {
             ERR("wrap stream Init must reject AEAD class");
@@ -4519,10 +4513,6 @@ int flexEnvelopeTest(int, char *[]) {
         /* The framing magic + algo varint + dummy bytes look like an
          * AEAD envelope; verify stream must reject before doing any
          * keyed work. */
-        flexEnvelopeWrapParams wp_seal = {
-            .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
-        };
-        (void)wp_seal;
         /* Hand-craft a minimal AEAD framing header that parses
          * cleanly: magic + version=1 + algo=200 + flags=0 + plen=0.
          * The streaming verify must reject before it tries to consume

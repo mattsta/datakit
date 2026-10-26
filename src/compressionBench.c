@@ -860,7 +860,7 @@ static void runFloat16Benchmarks(void) {
     /* 0 hardware encode, 1 software encode, 2 hardware decode, 3 software
      * decode; ns per value */
     double runs[4][BENCH_CODEC_ROUNDS];
-    volatile float sink = 0;
+    [[maybe_unused]] volatile float sink = 0;
     for (size_t r = 0; r < BENCH_CODEC_ROUNDS; r++) {
         uint64_t t = timeUtilMonotonicNs();
         for (size_t i = 0; i < count; i++) {
@@ -889,7 +889,6 @@ static void runFloat16Benchmarks(void) {
         sink += acc;
     }
 
-    (void)sink;
     printf("\n  float16 conversion, %zu values, median of %d interleaved "
            "rounds (hardware path: %s)\n",
            count, BENCH_CODEC_ROUNDS, BENCH_FLOAT16_HARDWARE);

@@ -75,9 +75,9 @@ void bigmathReprFile(bigmath *b, FILE *fp) {
         buf = heapBuf;
     }
 
-    const mp_result res = mp_int_to_string(MPZ(b), 10, buf, (size_t)need);
+    [[maybe_unused]] const mp_result res =
+        mp_int_to_string(MPZ(b), 10, buf, (size_t)need);
     assert(res == MP_OK);
-    (void)res;
     fprintf(fp, "%s\n", buf);
 }
 
@@ -139,17 +139,15 @@ uint64_t bigmathToNativeUnsigned(bigmath *b) {
     /* Out-of-range values return 0 (never uninitialized garbage);
      * callers own keeping values in native range */
     mp_usmall result = 0;
-    const mp_result status = mp_int_to_uint(MPZ(b), &result);
+    [[maybe_unused]] const mp_result status = mp_int_to_uint(MPZ(b), &result);
     assert(status == MP_OK);
-    (void)status;
     return result;
 }
 
 int64_t bigmathToNativeSigned(bigmath *b) {
     mp_small result = 0;
-    const mp_result status = mp_int_to_int(MPZ(b), &result);
+    [[maybe_unused]] const mp_result status = mp_int_to_int(MPZ(b), &result);
     assert(status == MP_OK);
-    (void)status;
     return result;
 }
 

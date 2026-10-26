@@ -1568,7 +1568,7 @@ int blake3Test(int, char *[]) {
             const size_t nblocks = N * 16;
             const uint32_t iters = iters_per_size[s];
             struct timespec t0, t1;
-            volatile uint32_t sink = 0;
+            [[maybe_unused]] volatile uint32_t sink = 0;
 
             /* --- Scalar primitive: N*16 sequential calls --- */
             uint32_t cv_s[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -1694,7 +1694,6 @@ int blake3Test(int, char *[]) {
                          (t1.tv_nsec - t0.tv_nsec) / 1e9) *
                         1e9 / iters;
             }
-            (void)sink;
 
             if (c4_valid) {
                 printf("    %-7zu  %-13.0f  %-14.0f  %-14.0f\n", N, scalar_ns,
@@ -1888,7 +1887,7 @@ int blake3Test(int, char *[]) {
         clock_gettime(CLOCK_MONOTONIC, &t0);
         /* Volatile sink defeats DCE — otherwise -O3 may collapse the
          * inner loop since `cv` is only used internally. */
-        volatile uint32_t sink = 0;
+        [[maybe_unused]] volatile uint32_t sink = 0;
         for (uint32_t it = 0; it < iters; it++) {
             memcpy(cv, IV, sizeof(cv));
             const size_t nblocks = MB / BLAKE3_BLOCK_LEN;
@@ -1901,7 +1900,6 @@ int blake3Test(int, char *[]) {
             }
         }
         clock_gettime(CLOCK_MONOTONIC, &t1);
-        (void)sink;
         double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
         double total_mib = (double)iters * MB / (1024.0 * 1024.0);
         printf("    portable CompressInPlace: %.1f MiB in %.3fs "

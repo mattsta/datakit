@@ -72,7 +72,7 @@ static void run(const char *name, int64_t n) {
 
     const int64_t M = 10'000'000; /* probes */
     uint64_t seed = 0x9e3779b97f4a7c15ull;
-    volatile int64_t sink = 0;
+    [[maybe_unused]] volatile int64_t sink = 0;
 
     uint64_t t0 = nowns();
     for (int64_t i = 0; i < M; i++) {
@@ -93,7 +93,6 @@ static void run(const char *name, int64_t n) {
     printf("%-12s n=%9" PRId64 "  branchy=%7.2f ns  branchless+pf=%7.2f ns  "
            "speedup=%.2fx\n",
            name, n, branchy, branchless, branchy / branchless);
-    (void)sink;
     free(a);
 }
 

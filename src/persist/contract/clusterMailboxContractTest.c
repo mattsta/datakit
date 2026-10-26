@@ -77,7 +77,6 @@ static void *pcMailboxBuild(const persistContractBuild *b) {
                    rc == CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL ||
                    rc == (payload[0] ? CLUSTER_MAILBOX_OK
                                      : CLUSTER_MAILBOX_ERR_APPLY_REJECTED));
-            (void)rc;
         }
     }
     return mb;

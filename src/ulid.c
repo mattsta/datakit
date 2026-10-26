@@ -2568,7 +2568,7 @@ int ulidTest(int, char *[]) {
         }
 
         /* An encoder this build lacks cannot be chosen; the choice stays */
-        const ulidEncodeImpl before = ulidGetEncodeImpl();
+        [[maybe_unused]] const ulidEncodeImpl before = ulidGetEncodeImpl();
 #if !ULID_HAS_AVX2
         if (ulidSetEncodeImpl(ULID_ENCODE_AVX2) ||
             ulidGetEncodeImpl() != before) {
@@ -2580,7 +2580,6 @@ int ulidTest(int, char *[]) {
             ulidIsImplAvailable((ulidEncodeImpl)99)) {
             ERR("encoder names or availability are wrong");
         }
-        (void)before;
     }
 
     TEST("generator seeds carry whole bytes from the OS random source") {

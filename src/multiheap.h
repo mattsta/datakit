@@ -66,10 +66,9 @@ DK_FN_UNUSED static void *
 multiheapReadByKey(multiheap *restrict const heap,
                    const databox *restrict const key) {
     multimapEntry entry_MHRBK;
-    const bool found =
+    [[maybe_unused]] const bool found =
         multimapGetUnderlyingEntry((multimap *)heap, key, &entry_MHRBK);
     assert(found);
-    (void)found;
 
     /* the retrieved mulimapEntry points *to* 'key', so we need to advance
      * by one to reach the value offset: */

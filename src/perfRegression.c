@@ -214,35 +214,33 @@ static void benchXxh64(size_t bytes) {
     cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x64u);
     const uint32_t iters = pickIters(bytes);
-    volatile uint64_t sink = 0;
+    [[maybe_unused]] volatile uint64_t sink = 0;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
         sink ^= XXH64(buf, bytes, 0);
     }
     const double secs = monoNowSec() - t0;
     emitRow("xxh64", "hash", bytes, iters, secs);
-    (void)sink;
 }
 
 static void benchXxh3_64(size_t bytes) {
     cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x33u);
     const uint32_t iters = pickIters(bytes);
-    volatile uint64_t sink = 0;
+    [[maybe_unused]] volatile uint64_t sink = 0;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
         sink ^= XXH3_64bits(buf, bytes);
     }
     const double secs = monoNowSec() - t0;
     emitRow("xxh3_64", "hash", bytes, iters, secs);
-    (void)sink;
 }
 
 static void benchXxh3_128(size_t bytes) {
     cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x77u);
     const uint32_t iters = pickIters(bytes);
-    volatile uint64_t sink = 0;
+    [[maybe_unused]] volatile uint64_t sink = 0;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
         XXH128_hash_t h = XXH3_128bits(buf, bytes);
@@ -250,7 +248,6 @@ static void benchXxh3_128(size_t bytes) {
     }
     const double secs = monoNowSec() - t0;
     emitRow("xxh3_128", "hash", bytes, iters, secs);
-    (void)sink;
 }
 
 /* ---- rapidhash: three variants × two modes ---------------------- */
@@ -262,14 +259,13 @@ static void benchRapidhashOneShot(const char *label, rapidhashOneShot fn,
     cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0xD3u);
     const uint32_t iters = pickIters(bytes);
-    volatile uint64_t sink = 0;
+    [[maybe_unused]] volatile uint64_t sink = 0;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
         sink ^= fn(buf, bytes);
     }
     const double secs = monoNowSec() - t0;
     emitRow("rapidhash", label, bytes, iters, secs);
-    (void)sink;
 }
 
 /* Streaming: 64-byte chunks across the input.  This represents the
@@ -281,7 +277,7 @@ static void benchRapidhashStream(const char *label, rapidhashVariant variant,
     fillDeterministic(buf, bytes, 0xD7u);
     const size_t chunk = 64;
     const uint32_t iters = pickIters(bytes);
-    volatile uint64_t sink = 0;
+    [[maybe_unused]] volatile uint64_t sink = 0;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
         rapidhashCtx ctx;
@@ -299,7 +295,6 @@ static void benchRapidhashStream(const char *label, rapidhashVariant variant,
     }
     const double secs = monoNowSec() - t0;
     emitRow("rapidhash", label, bytes, iters, secs);
-    (void)sink;
 }
 
 /* ---- SHA-256 4-lane multi-buffer (ARM crypto fast path) ---------- */
@@ -598,7 +593,7 @@ static void benchMailbox(size_t bytes) {
  * scheduling-noisy for a regression gate). "op" here = one alloc+free. */
 static void benchMembound(const char *name, membound *pool, size_t bytes) {
     const uint32_t iters = 2000000u;
-    volatile void *sink = NULL;
+    [[maybe_unused]] volatile void *sink = NULL;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
         void *p = memboundAlloc(pool, bytes);
@@ -607,7 +602,6 @@ static void benchMembound(const char *name, membound *pool, size_t bytes) {
     }
     const double secs = monoNowSec() - t0;
     emitRow("membound", name, bytes, iters, secs);
-    (void)sink;
 }
 
 /* Container rows: one operation type per row over PERF_CONTAINER_N

@@ -43,7 +43,6 @@ static void *pcMultiroarBuildValues(const persistContractBuild *b) {
             const multiroarValueSetResult set =
                 multiroarValueSet(r, position, (databox *)&value);
             assert(set != MULTIROAR_VALUE_REFUSED); /* in bounds, fits */
-            (void)set;
             persistContractRecord(b->log, PERSIST_OP_INSERT, words, 2);
         } else {
             multiroarValueRemoveGetRemoved(r, position, NULL);

@@ -299,10 +299,9 @@ ptrPrevNextPtr ptrPrevNextAdd(ptrPrevNext *ppn, const size_t atomIndex,
         ptrPrevNextEncodedLen_(atomIndex, prevOffset, nextOffset));
     const size_t freeAt = ptrPrevNextFreeTake_(ppn, span);
     if (freeAt != SIZE_MAX) {
-        const size_t written = ptrPrevNextPopulateAll(
+        [[maybe_unused]] const size_t written = ptrPrevNextPopulateAll(
             atomIndex, prevOffset, nextOffset, MOFF(ppn->ms, freeAt), span);
         assert(written);
-        (void)written;
         return freeAt / SPATIAL_OFFSET;
     }
 
@@ -354,10 +353,9 @@ ptrPrevNextPtr ptrPrevNextUpdate(ptrPrevNext *ppn,
     }
 
     /* Too big for its place: free it and add it again */
-    uint8_t atomLen;
+    [[maybe_unused]] uint8_t atomLen;
     size_t atomRef;
     varintSplitFull16Get_(MOFF(ppn->ms, at), atomLen, atomRef);
-    (void)atomLen;
     memset(MOFF(ppn->ms, at), 0, spanEnd - at);
     ptrPrevNextFreeSpan_(ppn, at, spanEnd);
     return ptrPrevNextAdd(ppn, atomRef, prevOffset, nextOffset);

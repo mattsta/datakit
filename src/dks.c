@@ -3274,9 +3274,9 @@ int DKS_TEST(int argc, char *argv[]) {
         size_t exactSize =
             belowSize + limit.incrby; /* e.g. MAX - 20 + 20 == at max */
 
-        size_t aboveSize =
+        /* not used for COMPACT testing */
+        [[maybe_unused]] size_t aboveSize =
             exactSize + limit.incrby; /* e.g. MAX - 20 + 20 + 20 == above max */
-        (void)aboveSize;              /* not used for COMPACT testing */
 
         cleanerName(zfree, U8) uint8_t *belowlimitbuf =
             zmalloc(belowSize); /* WARNING: can be big (> 4 GB) */

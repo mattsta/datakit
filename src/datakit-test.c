@@ -1057,7 +1057,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     const char *before = setlocale(LC_ALL, NULL);
     char saved[64];
     snprintf(saved, sizeof(saved), "%s", before ? before : "");
-    volatile uint64_t sink = 0;
+    [[maybe_unused]] volatile uint64_t sink = 0;
     PERF_TIMERS_SETUP;
     for (int i = 0; i < 3; i++) {
         PERF_TIMERS_STAT_START;
@@ -1105,7 +1105,6 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     const char *after = setlocale(LC_ALL, NULL);
     PHEXPECT(after && strcmp(saved, after) == 0,
              "printing leaves the process locale alone");
-    (void)sink;
 #undef PHEXPECT
     return failures;
 }
@@ -2664,7 +2663,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
     {
         ownedSlot sa = OWNED_SLOT_INIT(&dkSlotDeclA_);
         ownedSlotState prior = OWNED_SLOT_RETIRED;
-        uint64_t fields = 0;
+        [[maybe_unused]] uint64_t fields = 0;
         uint64_t cargo = 0xC0FFEE;
         g_dkSlotReleases = 0;
         g_dkSlotNotes = 0;
@@ -2911,7 +2910,6 @@ static int dkTestOwnedStateTest(int, char *[]) {
                     ownedSlotLoad(&sp) == OWNED_SLOT_RETIRED,
                 "slot: a repeated Publish after the claimant's release "
                 "releases nothing");
-        (void)fields;
     }
 
     /* ownedSeq */
@@ -10534,7 +10532,6 @@ static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
         };
         const clusterResult added = clusterRingAddNode(ring, &nc);
         assert(added == CLUSTER_OK); /* distinct ids on a fresh ring */
-        (void)added;
     }
 
     size_t len = 0;

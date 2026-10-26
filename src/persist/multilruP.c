@@ -97,9 +97,9 @@ static persistLogResult multilruPInsert_(multilruP *mlru, uint64_t weight,
     if (logged == PERSIST_LOG_REFUSED) {
         return logged;
     }
-    const multilruPtr got = multilruInsertWeighted(mlru->mlru, weight);
+    [[maybe_unused]] const multilruPtr got =
+        multilruInsertWeighted(mlru->mlru, weight);
     assert(got == handle);
-    (void)got;
 
     logged = multilruPEnforceLimits(mlru, logged);
     persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);

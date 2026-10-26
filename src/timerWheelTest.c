@@ -2480,7 +2480,7 @@ int timerWheelTest(int, char *[]) {
                                    testCountingCallback, &state);
             }
 
-            volatile int64_t sink = 0;
+            [[maybe_unused]] volatile int64_t sink = 0;
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < queries; i++) {
                 sink += timerWheelNextTimerEventStartUs(tw);
@@ -2492,7 +2492,6 @@ int timerWheelTest(int, char *[]) {
              * NULL. */
             timerWheelFree(tw);
             tw = NULL;
-            (void)sink;
 
             /* multiTimer */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
@@ -2508,7 +2507,6 @@ int timerWheelTest(int, char *[]) {
             }
             PERF_TIMERS_FINISH;
             double mtNs = (double)lps.global.ns.duration / queries;
-            (void)sink;
 
             printf("    %-12zu  %9.1f ns  %9.1f ns  %7.2fx\n", count, twNs,
                    mtNs, mtNs / twNs);
@@ -2558,7 +2556,6 @@ int timerWheelTest(int, char *[]) {
                 processNs += b - a;
                 queryNs += c - b;
             }
-            (void)sink;
 
             printf("    %-8zu  %-8zu  %14.0f  %14.0f\n", shapes[s].nearCount,
                    shapes[s].idleCount, (double)queryNs / iterations,
@@ -3030,18 +3027,15 @@ int timerWheelTest(int, char *[]) {
         testCallbackState states[3] = {};
 
         /* All go to wheel 1 slot 1 */
-        timerWheelId id1 =
+        [[maybe_unused]] timerWheelId id1 =
             timerWheelRegister(tw, 300000, 0, testCountingCallback, &states[0]);
         timerWheelId id2 =
             timerWheelRegister(tw, 350000, 0, testCountingCallback, &states[1]);
-        timerWheelId id3 =
+        [[maybe_unused]] timerWheelId id3 =
             timerWheelRegister(tw, 400000, 0, testCountingCallback, &states[2]);
 
         /* Cancel middle timer before cascade */
         timerWheelUnregister(tw, id2);
-
-        (void)id1;
-        (void)id3;
 
         /* Advance past cascade point (512ms) */
         timerWheelAdvanceTime(tw, 520000);
