@@ -1347,17 +1347,14 @@ int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
 /* ====================================================================
  * Debuggles API
  * ==================================================================== */
-DK_FN_UNUSED static void strictConsistencyCheck(const multimapFull *m) {
-    /* Verify all range boxes are not sequentially equal... */
-    /* Note: will fail if duplicate keys are allowed, kinda obviously. */
-    databox *rangeBoxPrev;
-    for (size_t i = 0; i < m->count - 1; i++) {
-        databox *const box = getRangeBox(m, i);
-        if (i > 1) {
-            assert(databoxCompare(rangeBoxPrev, box) != 0);
-        }
-
-        rangeBoxPrev = box;
+/* Consecutive range boxes differ (fails by design when duplicate keys are
+ * allowed). Asserts only: nothing to do under NDEBUG. */
+DK_FN_UNUSED static void
+strictConsistencyCheck([[maybe_unused]] const multimapFull *m) {
+#ifndef NDEBUG
+    /* map i (i >= 1) owns range box i - 1 */
+    for (size_t i = 1; i + 1 < m->count; i++) {
+        assert(databoxCompare(getRangeBox(m, i - 1), getRangeBox(m, i)) != 0);
     }
 
     /* Walk only the key of each row, so any row width works. */
@@ -1399,6 +1396,7 @@ DK_FN_UNUSED static void strictConsistencyCheck(const multimapFull *m) {
             prev = key;
         }
     }
+#endif
 }
 
 /* ====================================================================
