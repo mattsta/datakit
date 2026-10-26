@@ -303,8 +303,7 @@ static void benchSha256Multi4(size_t bytes_per_lane) {
      * entry point sees identical work per lane. */
     const size_t nb = bytes_per_lane / SHA256_BLOCK_LEN;
     const size_t actual = nb * SHA256_BLOCK_LEN;
-    __attribute__((cleanup(freeLaneBufs4_cleanup)))
-    uint8_t *bufs[4] = {NULL, NULL, NULL, NULL};
+    cleaner(freeLaneBufs4) uint8_t *bufs[4] = {NULL, NULL, NULL, NULL};
     for (uint32_t lane = 0; lane < 4; lane++) {
         bufs[lane] = zmalloc(actual ? actual : 1u);
         fillDeterministic(bufs[lane], actual, 0xC1u + lane);
@@ -527,8 +526,7 @@ static void benchMailbox(size_t bytes) {
          * number on origin 1).  Cap the batch so we don't blow up
          * memory at large `bytes`. */
         const uint32_t batch_n = (bytes <= 1024u) ? 256u : 32u;
-        __attribute__((
-            cleanup(perfRegPtrArray_cleanup))) perfRegPtrArray envelopesArr = {
+        cleaner(perfRegPtrArray) perfRegPtrArray envelopesArr = {
             .items = zmalloc(batch_n * sizeof(uint8_t *)), /* @own: container */
             .count = batch_n,
         };

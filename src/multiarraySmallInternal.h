@@ -20,7 +20,7 @@ struct multiarraySmall {
  * the array: reports DK_DIAG_MULTIARRAY_INDEX for 'function' and answers
  * NULL.  Cold and not variadic, so a tier's hot path reaches it with a
  * tail call and keeps no frame for it.  Sites use the two macros. */
-__attribute__((cold, noinline)) void *
+[[gnu::cold, gnu::noinline]] void *
 multiarrayIndexRefused_(const char *function, const char *file, int line,
                         int64_t idx, uint64_t count);
 #define MA_INDEX_REFUSED_(idx)                                                 \

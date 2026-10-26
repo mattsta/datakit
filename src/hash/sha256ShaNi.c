@@ -39,7 +39,7 @@ bool sha256ShaNiAvailable(void) {
     return __builtin_cpu_supports("sha") != 0;
 }
 
-__attribute__((target("sha,sse4.2,ssse3"))) void
+[[gnu::target("sha,sse4.2,ssse3")]] void
 sha256ShaNiCompressBlocks(uint32_t state[8], const uint8_t *blocks,
                           size_t num_blocks) {
     /* Shuffle constant used to byte-swap each 32-bit word from big-endian
@@ -291,10 +291,8 @@ sha256ShaNiCompressBlocks(uint32_t state[8], const uint8_t *blocks,
  * interleaved-intrinsics version is a follow-up worth doing on
  * hardware where we can measure; the simple form is correct by
  * construction and matches the API contract today. */
-__attribute__((target("sha,sse4.2,ssse3"))) void
-sha256ShaNiCompressBlocksMulti4(uint32_t states[4][8],
-                                const uint8_t *const blocks[4],
-                                size_t num_blocks) {
+[[gnu::target("sha,sse4.2,ssse3")]] void sha256ShaNiCompressBlocksMulti4(
+    uint32_t states[4][8], const uint8_t *const blocks[4], size_t num_blocks) {
     if (num_blocks == 0) {
         return;
     }

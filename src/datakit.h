@@ -181,27 +181,27 @@
 /* ====================================================================
  * Function attributes
  * ==================================================================== */
-#define DK_INLINE_ALWAYS static inline __attribute__((always_inline))
+#define DK_INLINE_ALWAYS [[gnu::always_inline]] static inline
 
 /* 'pure' means a function doesn't modify any memory and only interacts
  * with the world through its return value. */
-#define DK_FN_PURE __attribute__((pure))
+#define DK_FN_PURE [[gnu::pure]]
 
 /* 'const' means a function accepts scalar arguments and only interacts
  * with the world through its return value based on its scalar arguments.
  * No memory accesses are allowed (also means no pointer parameters). */
-#define DK_FN_CONST __attribute__((const))
+#define DK_FN_CONST [[gnu::const]]
 
-#define DK_FN_NONNULL __attribute__((returns_nonnull))
+#define DK_FN_NONNULL [[gnu::returns_nonnull]]
 #define DK_FN_UNUSED [[maybe_unused]]
 
 /* Keep a function unoptimized: timing loops the optimizer would fold away,
  * or stores it could drop.  clang spells this optnone; GCC has no optnone
  * and takes optimize("O0"). */
 #if defined(__clang__)
-#define DK_FN_NO_OPTIMIZE __attribute__((optnone))
+#define DK_FN_NO_OPTIMIZE [[clang::optnone]]
 #else
-#define DK_FN_NO_OPTIMIZE __attribute__((optimize("O0")))
+#define DK_FN_NO_OPTIMIZE [[gnu::optimize("O0")]]
 #endif
 
 /* Exempt intended unsigned wraparound (and, in the second form, intended
@@ -209,10 +209,9 @@
  * exist only in clang; GCC's sanitizers have nothing to exempt. */
 #if defined(__clang__)
 #define DK_FN_NO_SANITIZE_UNSIGNED_WRAP                                        \
-    __attribute__((no_sanitize("unsigned-integer-overflow")))
+    [[gnu::no_sanitize("unsigned-integer-overflow")]]
 #define DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION                             \
-    __attribute__((                                                            \
-        no_sanitize("unsigned-integer-overflow", "implicit-conversion")))
+    [[gnu::no_sanitize("unsigned-integer-overflow", "implicit-conversion")]]
 #else
 #define DK_FN_NO_SANITIZE_UNSIGNED_WRAP
 #define DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
@@ -282,16 +281,20 @@ bool datakitConfigSet(datakitConfig *conf);
          : (size_t)0)
 
 #ifndef IKNOWWHATIMDOING
-void *calloc(size_t count, size_t size) __attribute__((deprecated));
-int posix_memalign(void **memptr, size_t alignment, size_t size)
-    __attribute__((deprecated));
-void free(void *ptr) __attribute__((deprecated));
-void *malloc(size_t size) __attribute__((deprecated));
-void *realloc(void *ptr, size_t size) __attribute__((deprecated));
+/* libc's allocators are banned in datakit sources: the warning names the
+ * replacement (dktools allocaudit also reports any call) */
+#define DK_LIBC_ALLOCATOR_                                                     \
+    [[deprecated("datakit allocates through zmalloc/zcalloc/zrealloc/zfree")]]
+DK_LIBC_ALLOCATOR_ void *calloc(size_t count, size_t size);
+DK_LIBC_ALLOCATOR_ int posix_memalign(void **memptr, size_t alignment,
+                                      size_t size);
+DK_LIBC_ALLOCATOR_ void free(void *ptr);
+DK_LIBC_ALLOCATOR_ void *malloc(size_t size);
+DK_LIBC_ALLOCATOR_ void *realloc(void *ptr, size_t size);
 #ifndef strdup
 /* on some versions of linux, strdup is a macro and this breaks things
  * without checking for the 'strdup' macro first.. */
-char *strdup(const char *s) __attribute__((deprecated));
+DK_LIBC_ALLOCATOR_ char *strdup(const char *s);
 #endif
 #endif
 

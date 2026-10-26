@@ -28,7 +28,7 @@ uint64_t versionOSRuntimeParse(const char *release) {
 
 /* Read once at startup: avoids a race on first use and keeps the read
  * off every later path */
-static void __attribute__((constructor)) versionOSRuntimeInit(void) {
+[[gnu::constructor]] static void versionOSRuntimeInit(void) {
     struct utsname unameFields;
     if (uname(&unameFields) == 0) {
         versionOSRuntimeKernelVersion =

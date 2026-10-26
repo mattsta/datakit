@@ -56,7 +56,7 @@ static constexpr int MEMBOUND_TLS_BATCH_DEFAULT = 64;
 /* A free refused for misuse, reported (the tier's counter, where it has
  * one, is the caller's).  Callers may hold the pool lock, so a dkDiag hook
  * runs under it. */
-__attribute__((cold, noinline)) static void
+[[gnu::cold, gnu::noinline]] static void
 memboundRefusedFree_(const char *function, int line, const void *ptr,
                      const char *why) {
     dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MEMBOUND_INVALID_FREE, function,

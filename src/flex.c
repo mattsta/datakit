@@ -510,7 +510,7 @@ DK_STATIC size_t flexTotalBytes_(const flex *const f) {
  *   - Read the type of the element
  *   - Read the size of the element
  *   - Jump back N bytes and give us the last element in the flex. */
-flexEntry DK_FN_PURE *flexTail(const flex *const f) {
+DK_FN_PURE flexEntry *flexTail(const flex *const f) {
     flexEntry *end = FLEX_ENTRY_END(f);
 
     if (IS_HEAD(end, f)) {
@@ -542,7 +542,7 @@ flexEntry DK_FN_PURE *flexTail(const flex *const f) {
     return tail;
 }
 
-flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
+DK_FN_PURE flexEntry *flexTailWithElements(const flex *const f,
                                            uint_fast32_t elementsPerEntry) {
     flexEntry *tail = flexTail(f);
 
@@ -558,7 +558,7 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
 
 /* This is an optimization for inline size determination.  None of the split
  * varint macros can do all of this without creating additional temp vars. */
-DK_INLINE_ALWAYS DK_FN_CONST varintWidth
+DK_FN_CONST DK_INLINE_ALWAYS varintWidth
 flexVarintSplitFullNoZeroLenEmbedded_(size_t len) {
     if (len <= VARINT_SPLIT_FULL_NO_ZERO_STORAGE_1) {
         return 1 + 0;
@@ -871,7 +871,7 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncoding(
 #undef FLEX_FIXED_WIDTH_RETURN_
 }
 
-DK_STATIC DK_FN_CONST uint_fast8_t flexEncodingLength(flexEncoding encoding,
+DK_FN_CONST DK_STATIC uint_fast8_t flexEncodingLength(flexEncoding encoding,
                                                       size_t rawlen) {
     if (FLEX_IS_STR(encoding)) {
         varintWidth len;
@@ -910,7 +910,7 @@ DK_STATIC uint_fast8_t flexWriteEncodingReversedForward(
     return 1;
 }
 
-DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsigned(uint64_t value) {
+DK_FN_CONST DK_STATIC flexEncoding flexEncodingUnsigned(uint64_t value) {
     /* Determine the smallest encoding for 'value' */
 
     /* Our unsigned encodings are 2 entries apart in the type map,
@@ -939,7 +939,7 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsigned(uint64_t value) {
     return encoding;
 }
 
-DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsignedBig(__uint128_t value) {
+DK_FN_CONST DK_STATIC flexEncoding flexEncodingUnsignedBig(__uint128_t value) {
     /* Determine the smallest encoding for 'value' */
 
     const uint64_t topUse = value >> 64;
@@ -975,8 +975,8 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsignedBig(__uint128_t value) {
 #define REFERENCE_MAX_56 ((uint64_t)REFERENCE_MAX_48 + ((1ULL << 56) - 1))
 #define REFERENCE_MAX_64 (UINT64_MAX)
 
-DK_STATIC
-DK_FN_CONST uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
+DK_FN_CONST
+DK_STATIC uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
     /* TODO: we could rearrange this to be binary search */
     if (value <= REFERENCE_MAX_8) {
         return value;
@@ -1016,7 +1016,7 @@ DK_FN_CONST uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
     unreachable();
 }
 
-DK_STATIC DK_FN_CONST uint64_t
+DK_FN_CONST DK_STATIC uint64_t
 flexEncodingReferenceUnsignedDecode(flexEncoding encoding, uint64_t value) {
     if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_8) {
         return value;
@@ -1054,7 +1054,7 @@ flexEncodingReferenceUnsignedDecode(flexEncoding encoding, uint64_t value) {
     unreachable();
 }
 
-DK_STATIC DK_FN_CONST flexEncoding
+DK_FN_CONST DK_STATIC flexEncoding
 flexEncodingReferenceUnsigned(uint64_t encodedValue) {
     if (encodedValue <= REFERENCE_MAX_8) {
         return FLEX_CONTAINER_REFERENCE_EXTERNAL_8;
@@ -1098,7 +1098,7 @@ flexEncodingReferenceUnsigned(uint64_t encodedValue) {
  * magnitude -v - 1, and the decoder restores it as -magnitude - 1. */
 #define SIGNED_PREPARE(v) ((v) + 1)
 
-DK_STATIC DK_FN_CONST inline int64_t flexPrepareSigned(int64_t value) {
+DK_FN_CONST DK_STATIC inline int64_t flexPrepareSigned(int64_t value) {
     /* We don't store "signed zero," so we can save
      * one integer position on all negative numbers.
      *
@@ -1112,7 +1112,7 @@ DK_STATIC DK_FN_CONST inline int64_t flexPrepareSigned(int64_t value) {
     return value;
 }
 
-DK_STATIC DK_FN_CONST inline __int128_t flexPrepareSignedBig(__int128_t value) {
+DK_FN_CONST DK_STATIC inline __int128_t flexPrepareSignedBig(__int128_t value) {
     /* We don't store "signed zero," so we can save
      * one integer position on all negative numbers.
      *
@@ -1131,7 +1131,7 @@ DK_STATIC DK_FN_CONST inline __int128_t flexPrepareSignedBig(__int128_t value) {
     return value;
 }
 
-DK_STATIC DK_FN_CONST flexEncoding flexEncodingSigned(int64_t value) {
+DK_FN_CONST DK_STATIC flexEncoding flexEncodingSigned(int64_t value) {
     /* Determine the smallest encoding for 'value' */
 
     if (value < 0) {
@@ -1151,7 +1151,7 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingSigned(int64_t value) {
     return flexEncodingUnsigned(value);
 }
 
-DK_STATIC DK_FN_CONST flexEncoding flexEncodingSignedBig(__int128_t value) {
+DK_FN_CONST DK_STATIC flexEncoding flexEncodingSignedBig(__int128_t value) {
     /* Determine the smallest encoding for 'value' */
 
     if (value < 0) {
@@ -1371,7 +1371,7 @@ typedef enum flexWideStore_ {
 /* Set up 'r' for a 96/128-bit value and return the storage to write it
  * through, or NULL to leave it deferred.  Only the wide arms call this,
  * so it stays out of line and off the narrow path. */
-static __attribute__((noinline, cold)) void *
+[[gnu::noinline, gnu::cold]] static void *
 flexWideTarget_(databox *r, databoxWide *slot, const flexWideStore_ store) {
     switch (store) {
     case FLEX_WIDE_STORE_SLOT_:
@@ -2387,7 +2387,7 @@ void flexInsertBytes(flex **const ff, flexEntry *const fe, const void *data,
  * (a FATAL DK_DIAG_FLEX_BOX_UNENCODABLE diagnostic) and stopped in every
  * build, never left to undefined behaviour where assertions are compiled
  * out */
-[[noreturn]] __attribute__((cold)) static void
+[[noreturn]] [[gnu::cold]] static void
 flexBoxTypeUnsupported_(const databox *box, const char *where) {
     DK_DIAG_FATAL(DK_DIAG_FLEX_BOX_UNENCODABLE,
                   "%s: a box of type %d has no flex encoding", where,
@@ -2564,7 +2564,7 @@ typedef enum conversionOverride {
  * tests when trying to minimize float/double storage. */
 /* Returns true if conversion was applied.
  * Returns false if no conversion applied. */
-__attribute__((no_sanitize("float-cast-overflow"))) DK_STATIC bool
+[[gnu::no_sanitize("float-cast-overflow")]] DK_STATIC bool
 insertContentsFromBox(databox *box, flexInsertContents *c,
                       const conversionOverride override, const size_t idx,
                       __int128_t *scratchBuf) {
@@ -3899,11 +3899,11 @@ bool flexEntryIsValid(const flex *f, flexEntry *fe) {
     return true;
 }
 
-flexEntry DK_FN_PURE *flexHead(const flex *f) {
+DK_FN_PURE flexEntry *flexHead(const flex *f) {
     return FLEX_ENTRY_HEAD(f);
 }
 
-flexEntry DK_FN_PURE *flexHeadIfAny(const flex *f) {
+DK_FN_PURE flexEntry *flexHeadIfAny(const flex *f) {
     flexEntry *const head = FLEX_ENTRY_HEAD(f);
     return head == GET_END(f) ? NULL : head;
 }

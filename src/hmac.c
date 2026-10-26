@@ -993,8 +993,7 @@ int hmacTest(int, char *[]) {
     TEST("hmacComputeBatch4: perf bench (4 lanes, 1KiB each)") {
         const uint8_t key[32] = {0xBB};
         const size_t ps = hmacPreparedSize(&hmacAlgoSHA256);
-        __attribute__((cleanup(freeLaneStorage4_cleanup)))
-        uint8_t *st[4] = {NULL, NULL, NULL, NULL};
+        cleaner(freeLaneStorage4) uint8_t *st[4] = {NULL, NULL, NULL, NULL};
         hmacKey p[4];
         const hmacKey *preps[4];
         for (uint32_t i = 0; i < 4u; i++) {

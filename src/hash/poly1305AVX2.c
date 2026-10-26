@@ -102,7 +102,7 @@ bool poly1305AVX2Available(void) {
 
 /* Load a 16-byte Poly1305 block as 5x 26-bit limbs and append the
  * 1<<24 hibit marker.  Identical to the scalar load path. */
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 poly1305_load_block_avx2(const uint8_t *m, uint64_t out[5]) {
     uint32_t t0 = (uint32_t)m[0] | ((uint32_t)m[1] << 8) |
                   ((uint32_t)m[2] << 16) | ((uint32_t)m[3] << 24);
@@ -121,7 +121,7 @@ poly1305_load_block_avx2(const uint8_t *m, uint64_t out[5]) {
 }
 
 /* Horizontal sum of 4 uint64 lanes in a __m256i. */
-__attribute__((target("avx2"), always_inline)) static inline uint64_t
+[[gnu::target("avx2"), gnu::always_inline]] static inline uint64_t
 hsum_u64_avx2(__m256i v) {
     /* Sum upper-128 with lower-128, then sum the two remaining lanes. */
     __m128i lo = _mm256_castsi256_si128(v);
@@ -133,7 +133,7 @@ hsum_u64_avx2(__m256i v) {
     return tmp[0] + tmp[1];
 }
 
-__attribute__((target("avx2"))) void
+[[gnu::target("avx2")]] void
 poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5], const uint32_t r2[5],
                     const uint32_t r3[5], const uint32_t r4[5],
                     const uint8_t *msg, size_t num_groups) {

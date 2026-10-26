@@ -139,9 +139,10 @@ static uint32_t kSubWord(uint32_t w) {
  * on `vaeseq_u8` for key-schedule generation while still keeping the
  * inner encrypt loop fully hardware-driven.  The schedule produced is
  * byte-identical to FIPS-197. */
-__attribute__((target("crypto"))) static void
-aesArmKeyExpand(uint8x16_t *rk, const uint8_t *key, size_t key_len,
-                size_t num_rounds) {
+[[gnu::target("crypto")]] static void aesArmKeyExpand(uint8x16_t *rk,
+                                                      const uint8_t *key,
+                                                      size_t key_len,
+                                                      size_t num_rounds) {
     /* Use a uint32_t scratch in little-endian (host) order — same as
      * the original NIST bytes when reinterpreted via memcpy. */
     const size_t Nk = key_len / 4u;      /* 4 or 8 */
@@ -189,7 +190,7 @@ aesArmKeyExpand(uint8x16_t *rk, const uint8_t *key, size_t key_len,
  * round, and the final round XORs with RK[Nr] manually after the last
  * SB+SR.
  */
-__attribute__((target("crypto"), always_inline)) static inline uint8x16_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline uint8x16_t
 aesArmEncBlock(const uint8x16_t *rk, size_t num_rounds, uint8x16_t state) {
     /* Rounds 1..Nr-1: aese (SR+SB+AddRoundKey RK[r-1]) + aesmc. */
     for (size_t r = 0; r < num_rounds - 1u; r++) {
@@ -209,23 +210,23 @@ aesArmEncBlock(const uint8x16_t *rk, size_t num_rounds, uint8x16_t state) {
 /* Byte-reverse mask (lane-wise) used to swap MSB-first (GCM wire) <->
  * LSB-first (xmm-style natural) within a 128-bit lane.  Same pattern
  * as `bswapMask` in hash/aesGcmNi.c. */
-__attribute__((target("crypto"), always_inline)) static inline uint8x16_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline uint8x16_t
 armBswap128(uint8x16_t v) {
     return vrev64q_u8(vextq_u8(v, v, 8));
 }
 
 /* Helpers: extract the low/high 64 bits as a poly64_t. */
-__attribute__((target("crypto"), always_inline)) static inline poly64_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline poly64_t
 lo64(uint8x16_t v) {
     return (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(v), 0);
 }
-__attribute__((target("crypto"), always_inline)) static inline poly64_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline poly64_t
 hi64(uint8x16_t v) {
     return (poly64_t)vgetq_lane_u64(vreinterpretq_u64_u8(v), 1);
 }
 
 /* Cast a poly128_t result of vmull_p64 back to a uint8x16_t. */
-__attribute__((target("crypto"), always_inline)) static inline uint8x16_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline uint8x16_t
 p128ToU8(poly128_t p) {
     return vreinterpretq_u8_p128(p);
 }
@@ -238,7 +239,7 @@ p128ToU8(poly128_t p) {
  * Both inputs are in the "reflected" representation (each block
  * byte-reversed on load); `h` has been pre-shifted by one bit during
  * key setup so we avoid paying the shift cost per-multiply. */
-__attribute__((target("crypto"), always_inline)) static inline uint8x16_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline uint8x16_t
 armGhashMul(uint8x16_t x, uint8x16_t h) {
     /* Schoolbook 4-clmul: form lo, hi, mid.
      *   r_lo  = x.lo * h.lo
@@ -288,7 +289,7 @@ armGhashMul(uint8x16_t x, uint8x16_t h) {
 /* GHASH absorb: XOR `data` (one 16-byte block) into `acc` then
  * multiply by H.  Caller already has `acc` and `h` in reflected
  * representation.  `block` is in wire (MSB-first) form. */
-__attribute__((target("crypto"), always_inline)) static inline uint8x16_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline uint8x16_t
 armGhashAbsorbBlock(uint8x16_t acc, uint8x16_t h, const uint8_t block[16]) {
     uint8x16_t b = vld1q_u8(block);
     b = armBswap128(b);
@@ -296,7 +297,7 @@ armGhashAbsorbBlock(uint8x16_t acc, uint8x16_t h, const uint8_t block[16]) {
     return armGhashMul(acc, h);
 }
 
-__attribute__((target("crypto"))) static uint8x16_t
+[[gnu::target("crypto")]] static uint8x16_t
 armGhashAbsorb(uint8x16_t acc, uint8x16_t h, const uint8_t *data, size_t len) {
     while (len >= 16) {
         acc = armGhashAbsorbBlock(acc, h, data);
@@ -315,7 +316,7 @@ armGhashAbsorb(uint8x16_t acc, uint8x16_t h, const uint8_t *data, size_t len) {
 /* GCTR (CTR-mode encrypt under inc32 counter)                            */
 /* ====================================================================== */
 
-__attribute__((target("crypto"), always_inline)) static inline uint8x16_t
+[[gnu::target("crypto"), gnu::always_inline]] static inline uint8x16_t
 armInc32Vec(uint8x16_t ctr) {
     /* Increment the big-endian 32-bit counter occupying the low 4
      * bytes of the second 64-bit lane (memory layout: bytes [12..15]).
@@ -334,9 +335,10 @@ armInc32Vec(uint8x16_t ctr) {
     return vld1q_u8(tmp);
 }
 
-__attribute__((target("crypto"))) static void
-armGctr(const uint8x16_t *rk, size_t num_rounds, uint8x16_t icb,
-        const uint8_t *in, uint8_t *out, size_t len) {
+[[gnu::target("crypto")]] static void armGctr(const uint8x16_t *rk,
+                                              size_t num_rounds, uint8x16_t icb,
+                                              const uint8_t *in, uint8_t *out,
+                                              size_t len) {
     while (len >= 16) {
         uint8x16_t ks = aesArmEncBlock(rk, num_rounds, icb);
         uint8x16_t p = vld1q_u8(in);
@@ -360,7 +362,7 @@ armGctr(const uint8x16_t *rk, size_t num_rounds, uint8x16_t icb,
 /* Init / Seal / Open                                                     */
 /* ====================================================================== */
 
-__attribute__((target("crypto"))) bool
+[[gnu::target("crypto")]] bool
 aesGcmArmCryptoInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
     if (out == NULL || key == NULL ||
         (key_len != AES128_KEY_LEN && key_len != AES256_KEY_LEN)) {
@@ -421,7 +423,7 @@ aesGcmArmCryptoInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
     return true;
 }
 
-__attribute__((target("crypto"))) bool
+[[gnu::target("crypto")]] bool
 aesGcmArmCryptoSeal(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
                     const uint8_t *aad, size_t aad_len,
                     const uint8_t *plaintext, size_t plaintext_len,
@@ -477,7 +479,7 @@ aesGcmArmCryptoSeal(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
     return true;
 }
 
-__attribute__((target("crypto"))) bool
+[[gnu::target("crypto")]] bool
 aesGcmArmCryptoOpen(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
                     const uint8_t *aad, size_t aad_len,
                     const uint8_t *ciphertext, size_t ciphertext_len,

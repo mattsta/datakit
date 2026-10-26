@@ -30,7 +30,7 @@
 
 #include <string.h>
 
-#include "datakit.h" /* zmalloc/zfree (test driver only) */
+#include "datakit.h" /* DK_INLINE_ALWAYS; zmalloc/zfree in the test driver */
 
 /* ----- Constants ------------------------------------------------------- */
 
@@ -81,12 +81,11 @@ static inline uint32_t rotr32(uint32_t x, uint32_t n) {
  * compiler keep the 16-word state in registers across all 7 rounds and
  * pick its own unroll heuristics.  Without these attributes -O3 may
  * keep the helpers as out-of-line functions, costing a per-call frame
- * setup and forcing state through memory. */
-#define B3_HOT_INLINE static inline __attribute__((always_inline))
+ * setup and forcing state through memory (DK_INLINE_ALWAYS below). */
 
 /* G mixing function: ChaCha-style quarterround over the 16-word state. */
-B3_HOT_INLINE void g_mix(uint32_t state[16], uint32_t a, uint32_t b, uint32_t c,
-                         uint32_t d, uint32_t mx, uint32_t my) {
+DK_INLINE_ALWAYS void g_mix(uint32_t state[16], uint32_t a, uint32_t b,
+                            uint32_t c, uint32_t d, uint32_t mx, uint32_t my) {
     state[a] = state[a] + state[b] + mx;
     state[d] = rotr32(state[d] ^ state[a], 16);
     state[c] = state[c] + state[d];
@@ -97,8 +96,8 @@ B3_HOT_INLINE void g_mix(uint32_t state[16], uint32_t a, uint32_t b, uint32_t c,
     state[b] = rotr32(state[b] ^ state[c], 7);
 }
 
-B3_HOT_INLINE void round_fn(uint32_t state[16], const uint32_t m[16],
-                            const uint8_t schedule[16]) {
+DK_INLINE_ALWAYS void round_fn(uint32_t state[16], const uint32_t m[16],
+                               const uint8_t schedule[16]) {
     /* Column step. */
     g_mix(state, 0, 4, 8, 12, m[schedule[0]], m[schedule[1]]);
     g_mix(state, 1, 5, 9, 13, m[schedule[2]], m[schedule[3]]);
@@ -113,10 +112,10 @@ B3_HOT_INLINE void round_fn(uint32_t state[16], const uint32_t m[16],
 
 /* Core compression. Produces the 16-word output state (CV in lower 8
  * words; XOR-folded output material in all 16 for finalize). */
-B3_HOT_INLINE void compress_pre(uint32_t state[16], const uint32_t cv[8],
-                                const uint8_t block[BLAKE3_BLOCK_LEN],
-                                uint8_t block_len, uint64_t counter,
-                                uint8_t flags) {
+DK_INLINE_ALWAYS void compress_pre(uint32_t state[16], const uint32_t cv[8],
+                                   const uint8_t block[BLAKE3_BLOCK_LEN],
+                                   uint8_t block_len, uint64_t counter,
+                                   uint8_t flags) {
     uint32_t m[16];
     for (uint32_t i = 0; i < 16; i++) {
         m[i] = load_u32_le(block + i * 4);

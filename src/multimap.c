@@ -742,8 +742,8 @@ bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
 /* An in-place rewrite of a set row (replace, resize, increment): every
  * element of a set row is part of its order, so the rewrite is refused
  * and reported as misuse (DK_DIAG_MULTIMAP_SET_REWRITE) */
-__attribute__((cold, noinline)) static bool mmSetRewrite_(const char *function,
-                                                          int line) {
+[[gnu::cold, gnu::noinline]] static bool mmSetRewrite_(const char *function,
+                                                       int line) {
     dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIMAP_SET_REWRITE, function,
                   __FILE__, line, "%s",
                   "a set row cannot be rewritten in place: delete it and "

@@ -881,7 +881,7 @@ defcleaner(multimap *, multimapFree);
 /* Fill the stack below the caller with 0xFF so a temporary that is read
  * before it is set up sees big = 1 and an all-ones pointer.  ASan is off
  * here so the array is not framed by redzones. */
-static __attribute__((noinline, no_sanitize("address"))) void
+[[gnu::noinline, gnu::no_sanitize("address")]] static void
 atomTestPoisonStack(void) {
     volatile uint8_t junk[8192];
     for (size_t i = 0; i < sizeof(junk); i++) {

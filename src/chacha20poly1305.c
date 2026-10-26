@@ -676,7 +676,7 @@ static void computeAeadTag(const uint8_t otk[32], const uint8_t *aad,
 /* An AEAD call made wrongly (NULL buffers for a nonzero length, a stream
  * call out of order or on a finished context): refused by the caller of
  * this, and reported as misuse */
-__attribute__((cold, noinline)) static void
+[[gnu::cold, gnu::noinline]] static void
 aeadMisuse_(const char *function, int line, const char *what) {
     dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_AEAD_MISUSE, function, __FILE__, line,
                   "%s", what);

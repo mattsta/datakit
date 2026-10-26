@@ -40,13 +40,13 @@ bool chacha20AVX2Available(void) {
 /* AVX2 rotate helpers                                                 */
 /* ------------------------------------------------------------------ */
 
-__attribute__((target("avx2"), always_inline)) static inline __m256i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m256i
 rotl32_avx2(__m256i x, int n) {
     return _mm256_or_si256(_mm256_slli_epi32(x, n),
                            _mm256_srli_epi32(x, 32 - n));
 }
 
-__attribute__((target("avx2"), always_inline)) static inline __m256i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m256i
 rotl32_16_avx2(__m256i x) {
     /* Byte permute: per 32-bit lane, byte j <- byte (j-2 mod 4).
      * Equivalent to rotate-left by 16. */
@@ -56,7 +56,7 @@ rotl32_16_avx2(__m256i x) {
     return _mm256_shuffle_epi8(x, mask);
 }
 
-__attribute__((target("avx2"), always_inline)) static inline __m256i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m256i
 rotl32_8_avx2(__m256i x) {
     /* Byte permute: per 32-bit lane, byte j <- byte (j-1 mod 4).
      * Equivalent to rotate-left by 8. */
@@ -84,8 +84,8 @@ rotl32_8_avx2(__m256i x) {
         (b) = rotl32_avx2((b), 7);                                             \
     } while (0)
 
-__attribute__((target("avx2"))) void
-chacha20AVX2Block8(const uint32_t state[16], uint8_t out[512]) {
+[[gnu::target("avx2")]] void chacha20AVX2Block8(const uint32_t state[16],
+                                                uint8_t out[512]) {
     /* Initialise the 16 transposed state vectors.  state[0..11] are
      * the same across all 8 blocks; state[12] is the counter and
      * increments by 1 per block. */
@@ -151,7 +151,7 @@ chacha20AVX2Block8(const uint32_t state[16], uint8_t out[512]) {
     /* De-transpose: block i's word j lives in lane i of x[j].  Spill
      * each vector to a 16x8 staging area aligned for AVX2 stores,
      * then pack out per block. */
-    uint32_t staging[16][8] __attribute__((aligned(32)));
+    alignas(32) uint32_t staging[16][8];
     _mm256_store_si256((__m256i *)staging[0], x0);
     _mm256_store_si256((__m256i *)staging[1], x1);
     _mm256_store_si256((__m256i *)staging[2], x2);

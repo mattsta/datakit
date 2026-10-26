@@ -45,8 +45,7 @@ const uint64_t *rapidhashGetDefaultSecret(void) {
  * Endian-aware unaligned reads                                  *
  * ============================================================ */
 
-static inline __attribute__((always_inline)) uint64_t
-rapidRead64(const uint8_t *p) {
+[[gnu::always_inline]] static inline uint64_t rapidRead64(const uint8_t *p) {
     uint64_t v;
     memcpy(&v, p, sizeof(v));
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -55,8 +54,7 @@ rapidRead64(const uint8_t *p) {
     return v;
 }
 
-static inline __attribute__((always_inline)) uint64_t
-rapidRead32(const uint8_t *p) {
+[[gnu::always_inline]] static inline uint64_t rapidRead32(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, sizeof(v));
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -69,8 +67,8 @@ rapidRead32(const uint8_t *p) {
  * 64x64 -> 128 multiply                                         *
  * ============================================================ */
 
-static inline __attribute__((always_inline)) void
-rapidMum(uint64_t *A, uint64_t *B, bool prot) {
+[[gnu::always_inline]] static inline void rapidMum(uint64_t *A, uint64_t *B,
+                                                   bool prot) {
 #if defined(__SIZEOF_INT128__)
     __uint128_t r = (__uint128_t)*A * (__uint128_t)*B;
     uint64_t lo = (uint64_t)r;
@@ -95,9 +93,8 @@ rapidMum(uint64_t *A, uint64_t *B, bool prot) {
     }
 }
 
-static inline __attribute__((always_inline)) uint64_t rapidMix(uint64_t a,
-                                                               uint64_t b,
-                                                               bool prot) {
+[[gnu::always_inline]] static inline uint64_t rapidMix(uint64_t a, uint64_t b,
+                                                       bool prot) {
     rapidMum(&a, &b, prot);
     return a ^ b;
 }
@@ -138,10 +135,11 @@ static inline __attribute__((always_inline)) uint64_t rapidMix(uint64_t a,
 
 /* Common post-bulk path: lane reduction (only if bulk fired), tail
  * ladder, final fold.  Same for both COMPACT and UNROLLED. */
-static inline __attribute__((always_inline)) uint64_t rapidhashMainPostBulk(
-    const uint8_t *p, size_t i, uint64_t seed, uint64_t s1, uint64_t s2,
-    uint64_t s3, uint64_t s4, uint64_t s5, uint64_t s6, const uint64_t *secret,
-    bool bulk_engaged, bool prot) {
+[[gnu::always_inline]] static inline uint64_t
+rapidhashMainPostBulk(const uint8_t *p, size_t i, uint64_t seed, uint64_t s1,
+                      uint64_t s2, uint64_t s3, uint64_t s4, uint64_t s5,
+                      uint64_t s6, const uint64_t *secret, bool bulk_engaged,
+                      bool prot) {
     if (bulk_engaged) {
         /* Asymmetric reduction tree — order-sensitive. */
         seed ^= s1;
@@ -184,7 +182,7 @@ static inline __attribute__((always_inline)) uint64_t rapidhashMainPostBulk(
 }
 
 /* Common small-input ≤16 branch + final fold. */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidhashMainSmall(const uint8_t *p, size_t len, uint64_t seed,
                    const uint64_t *secret, bool prot) {
     uint64_t a = 0, b = 0;
@@ -208,7 +206,7 @@ rapidhashMainSmall(const uint8_t *p, size_t len, uint64_t seed,
 }
 
 /* ----- Main variant, COMPACT shape (7-lane / 112 B stride) ----- */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidhashBodyMainCompact(const void *key, size_t len, uint64_t seed,
                          const uint64_t *secret, bool prot) {
     const uint8_t *p = (const uint8_t *)key;
@@ -237,7 +235,7 @@ rapidhashBodyMainCompact(const void *key, size_t len, uint64_t seed,
  * Bit-identical output to COMPACT.  Wins ~10%% on long inputs from
  * additional ILP; for inputs <= 224 B the outer doubled loop never
  * fires and execution reduces to the same path COMPACT would take. */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidhashBodyMainUnrolled(const void *key, size_t len, uint64_t seed,
                           const uint64_t *secret, bool prot) {
     const uint8_t *p = (const uint8_t *)key;
@@ -286,7 +284,7 @@ static rapidhashImpl rapidForcedImpl = RAPIDHASH_IMPL_AUTO;
  * out of the bench's tight loop.  Measured: removing always_inline
  * here costs ~36% on the 1 MB one-shot row on Apple Silicon — the
  * audit's theoretical i-cache argument did not survive the bench. */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidhashBodyMain(const void *key, size_t len, uint64_t seed,
                   const uint64_t *secret, bool prot) {
     rapidhashImpl pick = rapidForcedImpl;
@@ -313,7 +311,7 @@ size_t rapidhashAutoUnrollThreshold(void) {
 }
 
 /* ----- 5-lane micro variant (stride 80) ----- */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidhashBodyMicro(const void *key, size_t len, uint64_t seed,
                    const uint64_t *secret, bool prot) {
     const uint8_t *p = (const uint8_t *)key;
@@ -383,7 +381,7 @@ rapidhashBodyMicro(const void *key, size_t len, uint64_t seed,
 }
 
 /* ----- 3-lane nano variant (stride 48) ----- */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidhashBodyNano(const void *key, size_t len, uint64_t seed,
                   const uint64_t *secret, bool prot) {
     const uint8_t *p = (const uint8_t *)key;
@@ -524,7 +522,7 @@ uint64_t rapidhashNanoProtected(const void *key, size_t len) {
  * Streaming context                                             *
  * ============================================================ */
 
-static inline __attribute__((always_inline)) void
+[[gnu::always_inline]] static inline void
 rapidStreamBulkMain(rapidhashCtx *ctx, const uint8_t *p, bool prot) {
     /* One 7-lane main iteration over a single 112-byte stride. */
     const uint64_t *s = ctx->secret;
@@ -544,7 +542,7 @@ rapidStreamBulkMain(rapidhashCtx *ctx, const uint8_t *p, bool prot) {
                              rapidRead64(p + 104) ^ ctx->lanes[6], prot);
 }
 
-static inline __attribute__((always_inline)) void
+[[gnu::always_inline]] static inline void
 rapidStreamBulkMicro(rapidhashCtx *ctx, const uint8_t *p, bool prot) {
     const uint64_t *s = ctx->secret;
     ctx->lanes[0] = rapidMix(rapidRead64(p) ^ s[0],
@@ -559,7 +557,7 @@ rapidStreamBulkMicro(rapidhashCtx *ctx, const uint8_t *p, bool prot) {
                              rapidRead64(p + 72) ^ ctx->lanes[4], prot);
 }
 
-static inline __attribute__((always_inline)) void
+[[gnu::always_inline]] static inline void
 rapidStreamBulkNano(rapidhashCtx *ctx, const uint8_t *p, bool prot) {
     const uint64_t *s = ctx->secret;
     ctx->lanes[0] = rapidMix(rapidRead64(p) ^ s[0],
@@ -647,8 +645,8 @@ void rapidhashStreamInit(rapidhashCtx *ctx, rapidhashVariant variant,
  * 16-byte read when the residual is < 16.  Dispatches through the
  * specialized callback installed at Init — no runtime branch on
  * variant/mode inside the per-stride hot loop. */
-static inline __attribute__((always_inline)) void
-rapidStreamFlush(rapidhashCtx *ctx, const uint8_t *p) {
+[[gnu::always_inline]] static inline void rapidStreamFlush(rapidhashCtx *ctx,
+                                                           const uint8_t *p) {
     ctx->bulk_fn(ctx, p);
     ctx->bulk_engaged = 1;
     memcpy(ctx->bulk_tail, p + ctx->stride - 16, 16);
@@ -713,7 +711,7 @@ void rapidhashStreamUpdate(rapidhashCtx *ctx, const void *data, size_t len) {
  * the last bulk-consumed region.  We reconstruct that read by
  * splicing the trailing 16 bytes of the most recently flushed stride
  * (saved in ctx->bulk_tail) with the head of buf. */
-static inline __attribute__((always_inline)) uint64_t
+[[gnu::always_inline]] static inline uint64_t
 rapidStreamFinalTail(rapidhashCtx *ctx, bool prot) {
     const uint8_t *p = ctx->buf;
     size_t i = ctx->buf_len;

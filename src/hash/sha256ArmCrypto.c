@@ -68,7 +68,7 @@ static constexpr uint32_t K_table[64] = {
 
 /* The target("crypto") attribute lets this function emit sha256h*
  * regardless of whether the global -march= enables it. */
-__attribute__((target("crypto"))) static void
+[[gnu::target("crypto")]] static void
 compressBlocks(uint32_t state[8], const uint8_t *blocks, size_t num_blocks) {
     /* Load chaining state once and keep across blocks. */
     uint32x4_t abcd = vld1q_u32(state);
@@ -240,7 +240,7 @@ void sha256ArmCryptoCompressBlocks(uint32_t state[8], const uint8_t *blocks,
  * four streams inside every round group lets the OoO core overlap the
  * ~4-cycle vsha256hq latency across lanes; throughput is bounded by
  * issue port (not latency) once all four lanes are in flight. */
-__attribute__((target("crypto"))) static void
+[[gnu::target("crypto")]] static void
 compressBlocksMulti4(uint32_t states[4][8], const uint8_t *const blocks[4],
                      size_t num_blocks) {
     uint32x4_t abcd0 = vld1q_u32(states[0]);
@@ -475,7 +475,7 @@ compressBlocksMulti4(uint32_t states[4][8], const uint8_t *const blocks[4],
  *
  * To compare experimentally, change sha256ArmCryptoCompressBlocksMulti4
  * below to call compressBlocksMulti4V2 instead of compressBlocksMulti4. */
-[[maybe_unused]] __attribute__((target("crypto"))) static void
+[[maybe_unused]] [[gnu::target("crypto")]] static void
 compressBlocksMulti4V2(uint32_t states[4][8], const uint8_t *const blocks[4],
                        size_t num_blocks) {
     uint32x4_t abcd0 = vld1q_u32(states[0]);

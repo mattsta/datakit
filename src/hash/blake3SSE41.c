@@ -62,7 +62,7 @@ static constexpr uint8_t SSE41_MSG_SCHEDULE[7][16] = {
     {11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13},
 };
 
-#define SSE41_TARGET __attribute__((target("sse4.1")))
+#define SSE41_TARGET [[gnu::target("sse4.1")]]
 
 /* --- Rotation helpers (right rotates of 32-bit lanes). ----------------- */
 

@@ -158,7 +158,7 @@ void chacha20NeonBlock4(const uint32_t state[16], uint8_t out[256]) {
      * The most direct approach is to spill each vector to a 4x4 staging
      * area and pack out per block.  NEON loads are little-endian on
      * AArch64 which matches ChaCha's byte order. */
-    uint32_t staging[16][4] __attribute__((aligned(16)));
+    alignas(16) uint32_t staging[16][4];
     vst1q_u32(staging[0], x0);
     vst1q_u32(staging[1], x1);
     vst1q_u32(staging[2], x2);

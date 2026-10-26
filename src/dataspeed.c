@@ -54,20 +54,11 @@ defcleanerName(char *, zfree, Chars);
 /* Prevent compiler from optimizing away a value */
 #define DO_NOT_OPTIMIZE(val) __asm__ volatile("" : "+r,m"(val) : : "memory")
 
-/* Clang/GCC specific: disable optimization for a function */
-#if defined(__clang__)
-#define DATASPEED_NO_OPTIMIZE __attribute__((optnone))
-#elifdef __GNUC__
-#define DATASPEED_NO_OPTIMIZE __attribute__((optimize("O0")))
-#else
-#define DATASPEED_NO_OPTIMIZE
-#endif
-
 /* Force function to not be inlined */
-#define DATASPEED_NOINLINE __attribute__((noinline))
+#define DATASPEED_NOINLINE [[gnu::noinline]]
 
 /* Combined: no optimization, no inlining */
-#define DATASPEED_BENCHMARK_FUNC DATASPEED_NOINLINE DATASPEED_NO_OPTIMIZE
+#define DATASPEED_BENCHMARK_FUNC DATASPEED_NOINLINE DK_FN_NO_OPTIMIZE
 
 /* Memory fence for accurate timing - prevents instruction reordering */
 #if defined(__aarch64__)
@@ -1386,7 +1377,7 @@ static void doStop(int) {
     stopProcessing = true;
 }
 
-DATASPEED_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
+DK_FN_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
     const sig_t prev = signal(SIGINT, doStop);
 
     printf("=== DATASPEED - System Performance Benchmark ===\n\n");

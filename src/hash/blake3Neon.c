@@ -362,10 +362,10 @@ defcleanerName(uint8_t *, zfree, U8);
 /* ----- Portable reference primitives (weak forward decls) ----------- */
 /* If blake3.c exposes these wrappers, the linker resolves them.
  * Otherwise the test falls back to a local re-implementation. */
-__attribute__((weak)) void blake3PortableCompressInPlace(
+[[gnu::weak]] void blake3PortableCompressInPlace(
     uint32_t cv[8], const uint8_t block[BLAKE3_BLOCK_LEN], uint8_t block_len,
     uint64_t counter, uint8_t flags);
-__attribute__((weak)) void blake3PortableCompressXof(
+[[gnu::weak]] void blake3PortableCompressXof(
     const uint32_t cv[8], const uint8_t block[BLAKE3_BLOCK_LEN],
     uint8_t block_len, uint64_t counter, uint8_t flags, uint8_t out[64]);
 

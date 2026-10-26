@@ -1747,7 +1747,7 @@ static bool cmRecordApply(const clusterFrame *frame, void *ctx) {
  * uninitialized box sees big = 1 and an all-ones pointer.  ASan is off
  * here so the array is not framed by redzones, which would leave the
  * top of the next frame unpoisoned. */
-static __attribute__((noinline, no_sanitize("address"))) void
+[[gnu::noinline, gnu::no_sanitize("address")]] static void
 cmTestPoisonStack(void) {
     volatile uint8_t junk[8192];
     for (size_t i = 0; i < sizeof(junk); i++) {

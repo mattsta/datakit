@@ -34,7 +34,7 @@
 #include "databox.h"
 
 /* Packed structure for linear encoding: type byte + value union */
-typedef struct __attribute__((packed)) databoxLinear {
+typedef struct [[gnu::packed]] databoxLinear {
     uint8_t type;
     databoxUnion data;
 } databoxLinear;

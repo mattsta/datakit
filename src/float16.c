@@ -56,7 +56,7 @@ static constexpr int norC = 0x00400; // min flt32 normal down shifted
 
 /* Ignore sanitizer because it doesn't like multiplying floats into ints
  * ("outside the range of representation") */
-__attribute__((no_sanitize("float-cast-overflow"))) uint16_t
+[[gnu::no_sanitize("float-cast-overflow")]] uint16_t
 float16Encode_(const float value) {
     Bits v = {.f = value};
     Bits s = {.si = mulN};
@@ -76,8 +76,7 @@ float16Encode_(const float value) {
     return v.ui | sign;
 }
 
-__attribute__((no_sanitize("shift"))) float
-float16Decode_(const uint16_t value) {
+[[gnu::no_sanitize("shift")]] float float16Decode_(const uint16_t value) {
     Bits v = {.ui = value};
     int32_t sign = v.si & signC;
     Bits s = {.si = mulC};
@@ -301,11 +300,10 @@ defcleanerName(uint16_t *, zfree, U16Buf);
  * clang-only, so GCC gets its own spelling of each. */
 #if defined(__clang__)
 #define FLOAT16_TEST_ATTRS                                                     \
-    __attribute__((no_sanitize("integer", "undefined")))                       \
-    __attribute__((optnone))
+    [[gnu::no_sanitize("integer", "undefined")]] [[clang::optnone]]
 #else
 #define FLOAT16_TEST_ATTRS                                                     \
-    __attribute__((no_sanitize("undefined"))) __attribute__((optimize("O0")))
+    [[gnu::no_sanitize("undefined")]] [[gnu::optimize("O0")]]
 #endif
 
 FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {

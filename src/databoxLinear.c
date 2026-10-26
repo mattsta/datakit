@@ -54,7 +54,7 @@ typedef enum databoxLinearType {
 /* ====================================================================
  * Number Prep
  * ==================================================================== */
-DK_STATIC DK_FN_CONST databoxLinearType
+DK_FN_CONST DK_STATIC databoxLinearType
 databoxLinearEncodingUnsigned(uint64_t value) {
     /* Determine the smallest encoding for 'value' */
 
@@ -84,8 +84,8 @@ databoxLinearEncodingUnsigned(uint64_t value) {
 /* restore the sign bit then go one lower to reverse SIGNED_PREPARE */
 #define SIGNED_RESTORE(v) (-(v) - 1)
 
-DK_STATIC
-DK_FN_CONST databoxLinearType databoxLinearEncodingSigned(int64_t value) {
+DK_FN_CONST
+DK_STATIC databoxLinearType databoxLinearEncodingSigned(int64_t value) {
     /* Determine the smallest encoding for 'value' */
 
     if (value < 0) {

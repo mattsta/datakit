@@ -1169,7 +1169,7 @@ static void mosWideFill_(mosWidePair *p, size_t n) {
 
 /* Fill the stack below the caller with 0xFF, so a temporary that is
  * read before it is set up sees big = 1 and an all-ones pointer. */
-static __attribute__((noinline)) void mosTestPoisonStack_(void) {
+[[gnu::noinline]] static void mosTestPoisonStack_(void) {
     volatile uint8_t junk[8192];
     for (size_t i = 0; i < sizeof(junk); i++) {
         junk[i] = 0xFF;

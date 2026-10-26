@@ -26,8 +26,8 @@ defcleaner(void *, zfree);
  * refused with a defined answer, and reported as misuse
  * (DK_DIAG_MULTIARRAY_NATIVE).  NULL is refused the same way without a
  * report: NULL is every container call's "nothing" */
-__attribute__((cold, noinline)) static void *
-maNativeRefused_(const char *function, int line) {
+[[gnu::cold, gnu::noinline]] static void *maNativeRefused_(const char *function,
+                                                           int line) {
     dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIARRAY_NATIVE, function, __FILE__,
                   line,
                   "a container call was given a native multiarray (use the "
@@ -208,7 +208,7 @@ void multiarrayInsert(multiarray **m, multiarrayIdx idx, void *what) {
 
 /* Large -> Medium: the nodes move, in list order, into one node array; their
  * element data is kept as it is */
-__attribute__((noinline)) static multiarrayMedium *
+[[gnu::noinline]] static multiarrayMedium *
 multiarrayMediumFromLarge_(multiarrayLarge *large) {
     const uint32_t nodes = large->nodes;
     const uint16_t len = large->len;
@@ -238,7 +238,7 @@ multiarrayMediumFromLarge_(multiarrayLarge *large) {
 
 /* Medium -> Small: the 'total' elements of at most two nodes, joined in the
  * first node's buffer */
-__attribute__((noinline)) static multiarraySmall *
+[[gnu::noinline]] static multiarraySmall *
 multiarraySmallFromMedium_(multiarrayMedium *med, uint32_t total) {
     const size_t len = med->len;
     const uint16_t rowMax = med->rowMax;

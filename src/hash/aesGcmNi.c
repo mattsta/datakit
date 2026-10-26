@@ -68,8 +68,7 @@ bool aesGcmNiAvailable(void) {
 /* Per AES-128 the standard "assist" pattern: rot+sub+rcon a copy of
  * the previous round key's word3, fold the temp into each of the four
  * words of the new round key. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 aes128KeyExpandAssist(__m128i prev, __m128i temp) {
     temp = _mm_shuffle_epi32(temp, 0xff);
     prev = _mm_xor_si128(prev, _mm_slli_si128(prev, 4));
@@ -78,7 +77,7 @@ aes128KeyExpandAssist(__m128i prev, __m128i temp) {
     return _mm_xor_si128(prev, temp);
 }
 
-__attribute__((target("aes,pclmul,sse4.1"))) static void
+[[gnu::target("aes,pclmul,sse4.1")]] static void
 aes128KeyExpand(__m128i rk[11], const uint8_t key[16]) {
     rk[0] = _mm_loadu_si128((const __m128i *)key);
     rk[1] =
@@ -110,8 +109,7 @@ aes128KeyExpand(__m128i rk[11], const uint8_t key[16]) {
  * constant integer, so the AES-256 schedule is fully unrolled below
  * (no loop indexing into a runtime rcons[] table).  The schedule
  * produces 15 round keys total (rk[0..14]) — 14 rounds + initial. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 aes256ExpandA(__m128i prev_minus_one, __m128i assisted) {
     /* assisted = _mm_aeskeygenassist_si128(prev, RCON) with the relevant
      * RCON.  Caller produces it because RCON must be an immediate. */
@@ -123,8 +121,7 @@ aes256ExpandA(__m128i prev_minus_one, __m128i assisted) {
     return _mm_xor_si128(v, assisted);
 }
 
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 aes256ExpandB(__m128i prev_minus_one, __m128i prev) {
     __m128i assisted = _mm_aeskeygenassist_si128(prev, 0x00);
     assisted = _mm_shuffle_epi32(assisted, 0xaa);
@@ -135,7 +132,7 @@ aes256ExpandB(__m128i prev_minus_one, __m128i prev) {
     return _mm_xor_si128(v, assisted);
 }
 
-__attribute__((target("aes,pclmul,sse4.1"))) static void
+[[gnu::target("aes,pclmul,sse4.1")]] static void
 aes256KeyExpand(__m128i rk[15], const uint8_t key[32]) {
     rk[0] = _mm_loadu_si128((const __m128i *)(key + 0));
     rk[1] = _mm_loadu_si128((const __m128i *)(key + 16));
@@ -160,8 +157,7 @@ aes256KeyExpand(__m128i rk[15], const uint8_t key[32]) {
 
 /* AES-128 single block: XOR with round-0, aesenc rounds 1..9,
  * aesenclast round 10. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 aes128EncBlock(const __m128i rk[11], __m128i state) {
     state = _mm_xor_si128(state, rk[0]);
     state = _mm_aesenc_si128(state, rk[1]);
@@ -179,8 +175,7 @@ aes128EncBlock(const __m128i rk[11], __m128i state) {
 
 /* AES-256 single block: XOR with round-0, aesenc rounds 1..13,
  * aesenclast round 14. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 aes256EncBlock(const __m128i rk[15], __m128i state) {
     state = _mm_xor_si128(state, rk[0]);
     state = _mm_aesenc_si128(state, rk[1]);
@@ -201,8 +196,7 @@ aes256EncBlock(const __m128i rk[15], __m128i state) {
 }
 
 /* Wrapper that picks 128 vs 256 by num_rounds. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 aesEncBlock(const __m128i *rk, uint8_t num_rounds, __m128i state) {
     if (num_rounds == 10) {
         return aes128EncBlock(rk, state);
@@ -216,8 +210,7 @@ aesEncBlock(const __m128i *rk, uint8_t num_rounds, __m128i state) {
 
 /* Byte-reverse mask used to swap MSB-first (GCM wire) <-> LSB-first
  * (xmm natural) within a 128-bit lane. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 bswapMask(void) {
     return _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 }
@@ -235,8 +228,7 @@ bswapMask(void) {
  *   3. Two-pass Montgomery-style reduction using
  *      p64 = 0xc200000000000000:0x0000000000000000 (the upper half
  *      of the bit-reflected GCM polynomial). */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 ghashMul(__m128i x, __m128i h) {
     /* Schoolbook 4-clmul (textbook is competitive with Karatsuba on
      * modern CPUs and simpler to verify). */
@@ -266,8 +258,7 @@ ghashMul(__m128i x, __m128i h) {
 /* GHASH absorb: XOR `data` (one 16-byte block) into `acc` then
  * multiply by H.  Caller already has `acc` and `h` in reflected
  * representation.  `block` is in wire (MSB-first) form. */
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 ghashAbsorbBlock(__m128i acc, __m128i h, const uint8_t block[16]) {
     __m128i b = _mm_loadu_si128((const __m128i *)block);
     b = _mm_shuffle_epi8(b, bswapMask());
@@ -275,7 +266,7 @@ ghashAbsorbBlock(__m128i acc, __m128i h, const uint8_t block[16]) {
     return ghashMul(acc, h);
 }
 
-__attribute__((target("aes,pclmul,sse4.1"))) static __m128i
+[[gnu::target("aes,pclmul,sse4.1")]] static __m128i
 ghashAbsorb(__m128i acc, __m128i h, const uint8_t *data, size_t len) {
     while (len >= 16) {
         acc = ghashAbsorbBlock(acc, h, data);
@@ -294,8 +285,7 @@ ghashAbsorb(__m128i acc, __m128i h, const uint8_t *data, size_t len) {
 /* GCTR (CTR-mode encrypt under inc32 counter)                            */
 /* ====================================================================== */
 
-__attribute__((target("aes,pclmul,sse4.1"),
-               always_inline)) static inline __m128i
+[[gnu::target("aes,pclmul,sse4.1"), gnu::always_inline]] static inline __m128i
 inc32Vec(__m128i ctr) {
     /* Increment the big-endian 32-bit counter occupying the high 32
      * bits of the second 64-bit lane (memory layout: bytes [12..15]). */
@@ -315,7 +305,7 @@ inc32Vec(__m128i ctr) {
     return _mm_loadu_si128((const __m128i *)tmp);
 }
 
-__attribute__((target("aes,pclmul,sse4.1"))) static void
+[[gnu::target("aes,pclmul,sse4.1")]] static void
 gctr(const __m128i *rk, uint8_t num_rounds, __m128i icb, const uint8_t *in,
      uint8_t *out, size_t len) {
     while (len >= 16) {
@@ -341,7 +331,7 @@ gctr(const __m128i *rk, uint8_t num_rounds, __m128i icb, const uint8_t *in,
 /* Init / Seal / Open                                                     */
 /* ====================================================================== */
 
-__attribute__((target("aes,pclmul,sse4.1"))) bool
+[[gnu::target("aes,pclmul,sse4.1")]] bool
 aesGcmNiInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
     if (out == NULL || key == NULL ||
         (key_len != AES128_KEY_LEN && key_len != AES256_KEY_LEN)) {
@@ -398,7 +388,7 @@ aesGcmNiInit(aesGcmKey *out, const uint8_t *key, size_t key_len) {
     return true;
 }
 
-__attribute__((target("aes,pclmul,sse4.1"))) bool
+[[gnu::target("aes,pclmul,sse4.1")]] bool
 aesGcmNiSeal(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
              const uint8_t *aad, size_t aad_len, const uint8_t *plaintext,
              size_t plaintext_len, uint8_t *ciphertext,
@@ -454,7 +444,7 @@ aesGcmNiSeal(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
     return true;
 }
 
-__attribute__((target("aes,pclmul,sse4.1"))) bool
+[[gnu::target("aes,pclmul,sse4.1")]] bool
 aesGcmNiOpen(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],
              const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext,
              size_t ciphertext_len, const uint8_t tag[AES_GCM_TAG_LEN],

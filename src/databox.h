@@ -253,8 +253,8 @@ static inline bool databoxIsWideDeferred(const databox *box) {
  * 96/128-bit arms, reports it (a FATAL DK_DIAG_DATABOX_WIDE_DEFERRED
  * diagnostic naming the caller) and aborts instead of dereferencing
  * NULL.  Narrow values never reach it. */
-[[noreturn]] __attribute__((cold)) void
-databoxWidePayloadMissing(const databox *box, const char *where);
+[[noreturn]] [[gnu::cold]] void databoxWidePayloadMissing(const databox *box,
+                                                          const char *where);
 #define databoxWidePayloadRequire(box)                                         \
     do {                                                                       \
         if (unlikely(!(box)->data.ptr)) {                                      \

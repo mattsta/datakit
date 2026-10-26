@@ -482,7 +482,7 @@ flexEntry *flexPrev(const flex *f, flexEntry *fe);
 bool flexEntryIsValid(const flex *f, flexEntry *fe);
 
 /* Quick endpoint retrieval */
-flexEntry DK_FN_PURE *flexHead(const flex *f);
+DK_FN_PURE flexEntry *flexHead(const flex *f);
 /* flexHead for ITERATION: NULL when the flex holds no entries.
  *
  * flexHead returns an insertion POSITION and is deliberately non-NULL even
@@ -492,9 +492,9 @@ flexEntry DK_FN_PURE *flexHead(const flex *f);
  * flexNext ever gets to apply its end check.  Use this as the loop
  * initializer instead: it applies the same end check flexNext does, so the
  * loop is correct at both ends and empty is simply zero iterations. */
-flexEntry DK_FN_PURE *flexHeadIfAny(const flex *f);
-flexEntry DK_FN_PURE *flexTail(const flex *f);
-flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
+DK_FN_PURE flexEntry *flexHeadIfAny(const flex *f);
+DK_FN_PURE flexEntry *flexTail(const flex *f);
+DK_FN_PURE flexEntry *flexTailWithElements(const flex *const f,
                                            uint_fast32_t elementsPerEntry);
 #define flexHeadOrTail(f, endpoint)                                            \
     ((endpoint) == FLEX_ENDPOINT_TAIL ? flexTail(f) : flexHead(f))
@@ -677,12 +677,12 @@ flexEntry *flexFindByTypeReverse(flex *f, flexEntry *fe, const databox *box,
                                  uint32_t skip);
 
 /* Metadata */
-bool DK_FN_PURE flexIsEmpty(const flex *f);
-size_t DK_FN_PURE flexCount(const flex *f);
-size_t DK_FN_PURE flexBytes(const flex *f);
+DK_FN_PURE bool flexIsEmpty(const flex *f);
+DK_FN_PURE size_t flexCount(const flex *f);
+DK_FN_PURE size_t flexBytes(const flex *f);
 /* The width in bytes of the header's total-bytes field (it widens as the
  * flex grows) */
-size_t DK_FN_PURE flexBytesLength(const flex *f);
+DK_FN_PURE size_t flexBytesLength(const flex *f);
 
 /* Verify metadata and physical entries are equal in both flexes. */
 bool flexEqual(const flex *a, const flex *b);

@@ -54,8 +54,8 @@ static thread_local dkRandomThread dkRandomTls = {.blockUsed =
                                                       DK_RANDOM_BLOCK_WORDS};
 
 /* Out of line so the draw path stays a load, a compare and a return. */
-__attribute__((noinline)) static void
-dkRandomRefill(dkRandomThread *const t, const uint64_t generation) {
+[[gnu::noinline]] static void dkRandomRefill(dkRandomThread *const t,
+                                             const uint64_t generation) {
     if (!t->seeded) {
         /* Seed with the real pid, never -1: portableRandom skips its
          * fork check for a state initialised with -1, and that check is

@@ -1293,7 +1293,7 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
 /* multidictAdd for a key matched by the type's compare: a key stored under
  * another spelling keeps that spelling.  Kept out of line so the exact
  * path's frame does not carry the key copy. */
-DK_STATIC __attribute__((noinline)) multidictResult multidictAddMatched_(
+[[gnu::noinline]] DK_STATIC multidictResult multidictAddMatched_(
     multidict *d, const databox *keybox, const databox *valbox) {
     mdKeyCopy copy;
     const databox *key = mdKeyForUpdate_(d, keybox, &copy);
@@ -1509,7 +1509,7 @@ DK_STATIC bool multidictRemoveExact_(multidict *d, const databox *keybox,
 
 /* multidictDelete for a key matched by the type's compare, out of line as
  * multidictAddMatched_ is */
-DK_STATIC __attribute__((noinline)) bool
+[[gnu::noinline]] DK_STATIC bool
 multidictRemoveMatched_(multidict *d, const databox *keybox,
                         databox *removedVal, bool take,
                         const mdRemoveAsk_ *ask) {
@@ -4047,7 +4047,7 @@ static size_t mdWideFind_(const mdWidePair *p, size_t n, const databox *key) {
 
 /* Fill the stack below the caller with 0xFF, so a temporary that is
  * read before it is set up sees big = 1 and an all-ones pointer. */
-static __attribute__((noinline)) void mdTestPoisonStack_(void) {
+[[gnu::noinline]] static void mdTestPoisonStack_(void) {
     volatile uint8_t junk[8192];
     for (size_t i = 0; i < sizeof(junk); i++) {
         junk[i] = 0xFF;

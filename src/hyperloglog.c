@@ -79,12 +79,12 @@ defcleaner(mdsc *, mdscfree);
 /* TODO:
  *   - when clang adds support, add:
  *     - __attribute__ ((scalar_storage_order("little-endian"))) */
-typedef struct hyperloglogHeader {
+typedef struct [[gnu::packed]] hyperloglogHeader {
     uint64_t cardinality : 61;     /* Cached cardinality */
     uint64_t cardinalityValid : 1; /* Boolean, is cardinality valid? */
     uint64_t encoding : 2;         /* Encoding; one of SPARSE, DENSE, or RAW */
     uint8_t registers[];           /* Data bytes. */
-} __attribute__((packed)) hyperloglogHeader;
+} hyperloglogHeader;
 
 static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t),
               "Header got too big?");
@@ -1116,7 +1116,7 @@ static void hyperloglogRawRegisterHistogramScalar(uint8_t *registers,
 /* Helper function sigma as defined in
  * "New cardinality estimation algorithms for HyperLogLog sketches"
  * Otmar Ertl, arXiv:1702.01284 */
-static DK_FN_PURE double hllSigma(double x) {
+DK_FN_PURE static double hllSigma(double x) {
     if (x == 1.) {
         return INFINITY;
     }
@@ -1137,7 +1137,7 @@ static DK_FN_PURE double hllSigma(double x) {
 /* Helper function tau as defined in
  * "New cardinality estimation algorithms for HyperLogLog sketches"
  * Otmar Ertl, arXiv:1702.01284 */
-static DK_FN_PURE double hllTau(double x) {
+DK_FN_PURE static double hllTau(double x) {
     if (x == 0. || x == 1.) {
         return 0.;
     }

@@ -33,13 +33,13 @@ uint64_t timeUtilS(void) {
 /* This is a weird constructor because of the static 'unitOffset'
  * init. We don't want a race condition on init, so pre-init as constructor. */
 #if DK_OS_APPLE
-#define TIME_INIT __attribute__((constructor))
+#define TIME_UTIL_CONSTRUCTOR [[gnu::constructor]]
 #else
-#define TIME_INIT
+#define TIME_UTIL_CONSTRUCTOR
 #endif
 
 /* We only care about an abstract monotonic time */
-uint64_t TIME_INIT timeUtilMonotonicNs(void) {
+TIME_UTIL_CONSTRUCTOR uint64_t timeUtilMonotonicNs(void) {
 #if DK_OS_APPLE
     /* Apple platforms use mach_absolute_time() which returns ticks.
      * We must convert using timebase info - even on macOS where

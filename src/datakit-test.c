@@ -7070,8 +7070,7 @@ static int dkTestRevokedKeyFloorTest(int, char *[]) {
     }
 
     const uint8_t payload[24] = "c3-revoked-payload";
-    __attribute__((cleanup(freeBytesArray3_cleanup)))
-    uint8_t *envs[3] = {NULL, NULL, NULL};
+    cleaner(freeBytesArray3) uint8_t *envs[3] = {NULL, NULL, NULL};
     size_t env_lens[3] = {0, 0, 0};
     const hmacKeyId ids[3] = {K1, K2, K3};
     const uint8_t *keys[3] = {key1, key2, key3};
@@ -11569,8 +11568,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
     /* Declared here (before any goto to `cleanup_after_phase1`) so the
      * scope-exit cleaner attribute below never bypasses an initializer
      * across a jump. */
-    __attribute__((cleanup(freeE2ESavedArray_cleanup)))
-    dkTestClusterE2ESaved *saved = NULL;
+    cleaner(freeE2ESavedArray) dkTestClusterE2ESaved *saved = NULL;
 
     hmacKeyring *ring = hmacKeyringCreate();
     if (ring == NULL) {

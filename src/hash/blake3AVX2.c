@@ -78,20 +78,20 @@ bool blake3AVX2Available(void) {
 /* Rotates each 32-bit lane right by n. AVX2 has no rotate; we synthesize
  * it. For n=16/8 we can also use _mm_shuffle_epi8 with a byte-mask, but
  * the shift-or form is short and compiles to two ops either way. */
-__attribute__((target("avx2"), always_inline)) static inline __m128i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m128i
 rotr_epi32_128(__m128i x, int n) {
     return _mm_or_si128(_mm_srli_epi32(x, n), _mm_slli_epi32(x, 32 - n));
 }
 
 /* Byte-shuffle masks for the two power-of-byte rotations (rotr16/rotr8). */
-__attribute__((target("avx2"), always_inline)) static inline __m128i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m128i
 rotr16_128(__m128i x) {
     const __m128i mask =
         _mm_set_epi8(13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2);
     return _mm_shuffle_epi8(x, mask);
 }
 
-__attribute__((target("avx2"), always_inline)) static inline __m128i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m128i
 rotr8_128(__m128i x) {
     const __m128i mask =
         _mm_set_epi8(12, 15, 14, 13, 8, 11, 10, 9, 4, 7, 6, 5, 0, 3, 2, 1);
@@ -100,7 +100,7 @@ rotr8_128(__m128i x) {
 
 /* One G-quarterround vertically over the state rows. m0/m1 are message
  * words selected by the caller for this quarterround. */
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 g_round_128(__m128i *row_a, __m128i *row_b, __m128i *row_c, __m128i *row_d,
             __m128i m0, __m128i m1) {
     *row_a = _mm_add_epi32(_mm_add_epi32(*row_a, *row_b), m0);
@@ -116,14 +116,14 @@ g_round_128(__m128i *row_a, __m128i *row_b, __m128i *row_c, __m128i *row_d,
 /* Diagonalize / un-diagonalize between column and diagonal G groups.
  * The state is held as four rows of {0..3,4..7,8..11,12..15}; to make
  * the diagonal G groups vertical, we cyclically rotate rows b/c/d. */
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 diagonalize(__m128i *row_b, __m128i *row_c, __m128i *row_d) {
     *row_b = _mm_shuffle_epi32(*row_b, _MM_SHUFFLE(0, 3, 2, 1));
     *row_c = _mm_shuffle_epi32(*row_c, _MM_SHUFFLE(1, 0, 3, 2));
     *row_d = _mm_shuffle_epi32(*row_d, _MM_SHUFFLE(2, 1, 0, 3));
 }
 
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 undiagonalize(__m128i *row_b, __m128i *row_c, __m128i *row_d) {
     *row_b = _mm_shuffle_epi32(*row_b, _MM_SHUFFLE(2, 1, 0, 3));
     *row_c = _mm_shuffle_epi32(*row_c, _MM_SHUFFLE(1, 0, 3, 2));
@@ -133,7 +133,7 @@ undiagonalize(__m128i *row_b, __m128i *row_c, __m128i *row_d) {
 /* Build the four message-word vectors {m[s[0,2,4,6]], m[s[1,3,5,7]],
  * m[s[8,10,12,14]], m[s[9,11,13,15]]} for one round. Used by both the
  * column step and the diagonal step. */
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 load_msg_vectors_128(const uint32_t m[16], const uint8_t s[16], __m128i *col0,
                      __m128i *col1, __m128i *diag0, __m128i *diag1) {
     *col0 =
@@ -147,7 +147,7 @@ load_msg_vectors_128(const uint32_t m[16], const uint8_t s[16], __m128i *col0,
 }
 
 /* Core single-block compressor — writes the full 16-word state. */
-__attribute__((target("avx2"))) static void
+[[gnu::target("avx2")]] static void
 compress_pre_avx2(__m128i rows[4], const uint32_t cv[8],
                   const uint8_t block[BLAKE3_BLOCK_LEN], uint8_t block_len,
                   uint64_t counter, uint8_t flags) {
@@ -172,7 +172,7 @@ compress_pre_avx2(__m128i rows[4], const uint32_t cv[8],
     }
 }
 
-__attribute__((target("avx2"))) void
+[[gnu::target("avx2")]] void
 blake3AVX2CompressInPlace(uint32_t cv[8], const uint8_t block[BLAKE3_BLOCK_LEN],
                           uint8_t block_len, uint64_t counter, uint8_t flags) {
     __m128i rows[4];
@@ -185,7 +185,7 @@ blake3AVX2CompressInPlace(uint32_t cv[8], const uint8_t block[BLAKE3_BLOCK_LEN],
     _mm_storeu_si128((__m128i *)&cv[4], out1);
 }
 
-__attribute__((target("avx2"))) void
+[[gnu::target("avx2")]] void
 blake3AVX2CompressXof(const uint32_t cv[8],
                       const uint8_t block[BLAKE3_BLOCK_LEN], uint8_t block_len,
                       uint64_t counter, uint8_t flags, uint8_t out[64]) {
@@ -210,13 +210,13 @@ blake3AVX2CompressXof(const uint32_t cv[8],
  * Likewise vector mv_i holds message word i across 8 chunks. Every G
  * operation is therefore lane-parallel across 8 chunks at once. */
 
-__attribute__((target("avx2"), always_inline)) static inline __m256i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m256i
 rotr_epi32_256(__m256i x, int n) {
     return _mm256_or_si256(_mm256_srli_epi32(x, n),
                            _mm256_slli_epi32(x, 32 - n));
 }
 
-__attribute__((target("avx2"), always_inline)) static inline __m256i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m256i
 rotr16_256(__m256i x) {
     const __m256i mask =
         _mm256_set_epi8(13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2,
@@ -224,7 +224,7 @@ rotr16_256(__m256i x) {
     return _mm256_shuffle_epi8(x, mask);
 }
 
-__attribute__((target("avx2"), always_inline)) static inline __m256i
+[[gnu::target("avx2"), gnu::always_inline]] static inline __m256i
 rotr8_256(__m256i x) {
     const __m256i mask =
         _mm256_set_epi8(12, 15, 14, 13, 8, 11, 10, 9, 4, 7, 6, 5, 0, 3, 2, 1,
@@ -235,7 +235,7 @@ rotr8_256(__m256i x) {
 /* The 8-way G. Operates on the 4 state vectors (a, b, c, d) — each
  * vector holds the same state word across all 8 chunks — and two
  * message vectors. This is the same G as scalar, replicated 8x. */
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 g_round_256(__m256i *a, __m256i *b, __m256i *c, __m256i *d, __m256i mx,
             __m256i my) {
     *a = _mm256_add_epi32(_mm256_add_epi32(*a, *b), mx);
@@ -249,7 +249,7 @@ g_round_256(__m256i *a, __m256i *b, __m256i *c, __m256i *d, __m256i mx,
 }
 
 /* Compute one full round over the transposed 16-vector state v[0..15]. */
-__attribute__((target("avx2"), always_inline)) static inline void
+[[gnu::target("avx2"), gnu::always_inline]] static inline void
 round_256(__m256i v[16], const __m256i m[16], const uint8_t s[16]) {
     /* Column step. */
     g_round_256(&v[0], &v[4], &v[8], &v[12], m[s[0]], m[s[1]]);
@@ -263,14 +263,13 @@ round_256(__m256i v[16], const __m256i m[16], const uint8_t s[16]) {
     g_round_256(&v[3], &v[4], &v[9], &v[14], m[s[14]], m[s[15]]);
 }
 
-void blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
-                         const uint8_t *const blocks[8],
-                         const uint8_t block_lens[8],
-                         const uint64_t counters[8], const uint8_t flag_set[8],
-                         uint8_t out_cvs[8][32])
-    __attribute__((target("avx2")));
+[[gnu::target("avx2")]] void
+blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
+                    const uint8_t *const blocks[8], const uint8_t block_lens[8],
+                    const uint64_t counters[8], const uint8_t flag_set[8],
+                    uint8_t out_cvs[8][32]);
 
-__attribute__((target("avx2"))) void
+[[gnu::target("avx2")]] void
 blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
                     const uint8_t *const blocks[8], const uint8_t block_lens[8],
                     const uint64_t counters[8], const uint8_t flag_set[8],
@@ -394,7 +393,7 @@ blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
     /* Spill to a staging array and pack per-chunk. The transpose cost
      * is amortized over 8 chunks worth of work; a true 8x8 in-register
      * transpose with unpacks/permutes would be marginally faster. */
-    uint32_t staging[8][8] __attribute__((aligned(32)));
+    alignas(32) uint32_t staging[8][8];
     for (int i = 0; i < 8; i++) {
         _mm256_store_si256((__m256i *)staging[i], out_words[i]);
     }

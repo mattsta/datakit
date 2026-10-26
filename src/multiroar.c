@@ -51,7 +51,7 @@ struct multiroar {
 
 /* A roar given to an operation of the other mode: refused, and reported as
  * misuse (DK_DIAG_MULTIROAR_WRONG_MODE) with the API function and line */
-__attribute__((cold, noinline)) static bool
+[[gnu::cold, gnu::noinline]] static bool
 mrWrongMode_(const char *function, int line, const char *what) {
     dkDiagReport_(DK_DIAG_MISUSE, DK_DIAG_MULTIROAR_WRONG_MODE, function,
                   __FILE__, line, "%s", what);
@@ -7038,7 +7038,7 @@ int multiroarTest(int, char *[]) {
 
     TEST("N-way operations with many inputs (N=10)") {
         const uint64_t n = 10;
-        __attribute__((cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+        cleaner(roarArrayFree) roarArray roarsArr = {
             .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
         multiroar **roars = roarsArr.items;
 
@@ -7088,8 +7088,7 @@ int multiroarTest(int, char *[]) {
 
         for (uint64_t trial = 0; trial < trials; trial++) {
             uint64_t n = 2 + (rand() % (maxN - 1)); /* 2 to 7 inputs */
-            __attribute__((
-                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            cleaner(roarArrayFree) roarArray roarsArr = {
                 .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
             multiroar **roars = roarsArr.items;
 
@@ -7249,8 +7248,7 @@ int multiroarTest(int, char *[]) {
         srand(111111);
         for (int trial = 0; trial < 1000; trial++) {
             int n = 2 + (rand() % 8); /* 2-9 inputs */
-            __attribute__((
-                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            cleaner(roarArrayFree) roarArray roarsArr = {
                 .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
             multiroar **roars = roarsArr.items;
 
@@ -7303,8 +7301,7 @@ int multiroarTest(int, char *[]) {
         srand(222222);
         for (int trial = 0; trial < 1000; trial++) {
             int n = 2 + (rand() % 8);
-            __attribute__((
-                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            cleaner(roarArrayFree) roarArray roarsArr = {
                 .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
             multiroar **roars = roarsArr.items;
 
@@ -7343,8 +7340,7 @@ int multiroarTest(int, char *[]) {
         srand(333333);
         for (int trial = 0; trial < 1000; trial++) {
             int n = 2 + (rand() % 8);
-            __attribute__((
-                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            cleaner(roarArrayFree) roarArray roarsArr = {
                 .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
             multiroar **roars = roarsArr.items;
 
@@ -7434,7 +7430,7 @@ int multiroarTest(int, char *[]) {
 
     TEST("EDGE: N-way operations with very large N (N=100)") {
         const int n = 100;
-        __attribute__((cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+        cleaner(roarArrayFree) roarArray roarsArr = {
             .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
         multiroar **roars = roarsArr.items;
 
@@ -7756,7 +7752,7 @@ int multiroarTest(int, char *[]) {
 
     TEST("PERF: N-way operations vs chained binary (N=10)") {
         const int n = 10;
-        __attribute__((cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+        cleaner(roarArrayFree) roarArray roarsArr = {
             .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
         multiroar **roars = roarsArr.items;
 

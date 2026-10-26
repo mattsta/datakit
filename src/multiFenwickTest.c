@@ -112,28 +112,27 @@ static bool mfwInt(databox box, __int128_t want) {
 /* One call site each for the header's inline helpers, which the helper
  * test calls dozens of times (gcc -Winline warns on every call it will
  * not inline); noinline keeps gcc from folding these back in */
-__attribute__((noinline)) static bool mfwAdd(const databox *a, const databox *b,
-                                             databox *r) {
+[[gnu::noinline]] static bool mfwAdd(const databox *a, const databox *b,
+                                     databox *r) {
     return databoxAdd(a, b, r);
 }
 
-__attribute__((noinline)) static bool mfwSub(const databox *a, const databox *b,
-                                             databox *r) {
+[[gnu::noinline]] static bool mfwSub(const databox *a, const databox *b,
+                                     databox *r) {
     return databoxSubtract(a, b, r);
 }
 
-__attribute__((noinline)) static int mfwCmp(const databox *a,
-                                            const databox *b) {
+[[gnu::noinline]] static int mfwCmp(const databox *a, const databox *b) {
     return databoxCompareNumeric(a, b);
 }
 
-__attribute__((noinline)) static databox mfwConvert(const databox *src,
-                                                    databoxType type) {
+[[gnu::noinline]] static databox mfwConvert(const databox *src,
+                                            databoxType type) {
     return databoxConvertToType(src, type);
 }
 
-__attribute__((noinline)) static databoxType mfwResultType(const databox *a,
-                                                           const databox *b) {
+[[gnu::noinline]] static databoxType mfwResultType(const databox *a,
+                                                   const databox *b) {
     return databoxResultType(a, b);
 }
 

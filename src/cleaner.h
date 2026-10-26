@@ -20,11 +20,10 @@
         }                                                                      \
     }
 
-#define cleaner(cleanupFunction)                                               \
-    __attribute__((cleanup(cleanupFunction##_cleanup)))
+#define cleaner(cleanupFunction) [[gnu::cleanup(cleanupFunction##_cleanup)]]
 
 #define cleanerName(cleanupFunction, name)                                     \
-    __attribute__((cleanup(cleanupFunction##name##_cleanup)))
+    [[gnu::cleanup(cleanupFunction##name##_cleanup)]]
 
 /* File-descriptor scope: `cleaner(fdClose) int fd = open(...);` closes
  * fd at scope exit when it is >= 0, so -1 (the failure value of every

@@ -154,10 +154,10 @@ dkDiagPrintMode dkDiagGetPrintMode(void);
 #define DK_DIAG_FATAL(code, ...)                                               \
     dkDiagFatal_((code), __func__, __FILE__, __LINE__, __VA_ARGS__)
 
-__attribute__((cold, noinline, format(printf, 6, 7))) void
+[[gnu::cold, gnu::noinline, gnu::format(printf, 6, 7)]] void
 dkDiagReport_(dkDiagSeverity severity, dkDiagCode code, const char *function,
               const char *file, int line, const char *fmt, ...);
-[[noreturn]] __attribute__((cold, noinline, format(printf, 5, 6))) void
+[[noreturn]] [[gnu::cold, gnu::noinline, gnu::format(printf, 5, 6)]] void
 dkDiagFatal_(dkDiagCode code, const char *function, const char *file, int line,
              const char *fmt, ...);
 

@@ -159,7 +159,7 @@ typedef enum dodMax {
  *       must be unique across all types (i.e. for the 7/9/12 types,
  *       they must have a 0 terminator after so they don't get confused
  *       for the wider 8/16/24/32/40/48/56/64 bit types). */
-typedef enum __attribute__((packed)) dodType {
+typedef enum [[gnu::packed]] dodType {
     /* 0 bits */
     DOD_TYPE_ZERO = 0x00, /* 00000000 */
 

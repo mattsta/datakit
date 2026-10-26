@@ -408,8 +408,8 @@ static const databox *mlpWideValue(uint32_t i, databoxBig *storage, char *str,
  * order, with the tracker: every wide element must come back whole. */
 static bool verifyMultilistIterMatchesTracker(multilistP *ml,
                                               const ptestBoxTracker *tracker) {
-    __attribute__((cleanup(freeMflexStates2_cleanup)))
-    mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
+    cleaner(freeMflexStates2)
+        mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
     multilistIterator iter;
     memset(&iter, 0xFF, sizeof(iter));
     multilistIteratorInitForwardReadOnlyP(ml, states, &iter);
@@ -569,8 +569,8 @@ int multilistPTest(int, char *[]) {
         }
 
         /* Verify all elements have correct sequential values */
-        __attribute__((cleanup(freeMflexStates2_cleanup)))
-        mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
+        cleaner(freeMflexStates2)
+            mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
         multilistIterator iter;
         multilistIteratorInitForwardReadOnlyP(ml, states, &iter);
 

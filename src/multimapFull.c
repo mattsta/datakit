@@ -415,7 +415,7 @@ mapNewAfterExisting_(multimapFull *m, multimapFullIdx mapIdxLower, flex *lower,
 
 #if 0
 /* Iterate over all maps and conform them under maxSize */
-DK_STATIC DK_FN_UNUSED void conformMapsSplit(multimapFull *m) {
+DK_FN_UNUSED DK_STATIC void conformMapsSplit(multimapFull *m) {
     /* Note: 'm->count' gets updated (grows) during this iteration, so when we
      * split '0' into '0, 1', we then iterate over what we just split
      * and the count increases. */
@@ -556,7 +556,7 @@ void multimapFullCompactWithReference(multimapFull *m,
 
 /* Iterate over all maps and conform them (pairwise) to <= maxSize */
 #if 0
-DK_STATIC DK_FN_UNUSED void conformMapsMerge(multimapFull *m) {
+DK_FN_UNUSED DK_STATIC void conformMapsMerge(multimapFull *m) {
     /* Note: 'm->count' gets updated (shrinks) during this iteration, so when we
      * merge '0, 1' into '0', we then iterate over 0 again but m->count has
      * also shrunk by one. */
