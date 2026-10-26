@@ -23,7 +23,6 @@
         switch ((box)->type) {                                                 \
         /* we know 64 bit integers are okay! */                                \
         case DATABOX_UNSIGNED_64:                                              \
-        /* fallthrough */                                                      \
         case DATABOX_SIGNED_64:                                                \
             break;                                                             \
         case DATABOX_UNSIGNED_128:                                             \

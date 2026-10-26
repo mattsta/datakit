@@ -837,7 +837,6 @@ bool djBox(djState *state, const databox *const box) {
         len = StrInt64ToBuf(&buf, sizeof(buf), box->data.i);
         goto writeNumberBytesDirectly;
     case DATABOX_PTR:
-        /* fallthrough */
     case DATABOX_UNSIGNED_64:
         len = StrUInt64ToBuf(&buf, sizeof(buf), box->data.u);
         goto writeNumberBytesDirectly;

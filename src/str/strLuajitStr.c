@@ -162,7 +162,7 @@ DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
             break;
         }
 
-    /* fallthrough */
+        [[fallthrough]];
     case STRSCAN_U32:
         if (dig > 8) {
             return STRSCAN_ERROR;
@@ -217,7 +217,7 @@ DK_STATIC StrScanFmt StrScanOctal(const uint8_t *p, databox *box,
             fmt = STRSCAN_U32;
         }
 
-    /* fallthrough */
+        [[fallthrough]];
     case STRSCAN_U32:
         if ((x >> 32)) {
             return STRSCAN_ERROR;
@@ -327,7 +327,7 @@ DK_STATIC StrScanFmt StrScanDecimal(const uint8_t *p, databox *box,
                     goto plainnumber;
                 }
 
-            /* fallthrough */
+                [[fallthrough]];
             case STRSCAN_U32:
                 if ((x >> 32) != 0) {
                     return STRSCAN_ERROR;

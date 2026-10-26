@@ -597,7 +597,7 @@ DK_INLINE_ALWAYS int databoxCompareInteger(const databox *a, const databox *b) {
             return -1;
         }
 
-        /* fallthrough */
+        [[fallthrough]];
     case c1b(true, true):
         /* Here both values are signed (or we've restricted
          * their values to be compared as signed), so compare

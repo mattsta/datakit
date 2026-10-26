@@ -2579,7 +2579,7 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
     switch (box->type) {
     case DATABOX_BYTES_VOID:
         c->isVoidEntry = true;
-        /* fallthrough */
+        [[fallthrough]];
     case DATABOX_BYTES_EMBED:
         c->data = box->data.bytes.embed;
         c->len = box->len;
@@ -2622,7 +2622,6 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
          * Of course, persisting pointers to storage and
          * restoring them won't have desired effects unless
          * you calculate offsets against a common base. */
-        /* fallthrough */
     case DATABOX_UNSIGNED_64:
 #if 0
     becomeUnsigned:

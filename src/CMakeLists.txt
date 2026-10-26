@@ -344,6 +344,14 @@ if(HAVE_WERROR_FORMAT_TRUNCATION)
 endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-math-errno") # We don't use errno for libc math
 
+# Every intended switch fallthrough says [[fallthrough]]; gcc level 5
+# accepts only the attribute, never a comment
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wimplicit-fallthrough")
+else()
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wimplicit-fallthrough=5")
+endif()
+
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     # Clang-specific warnings
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")
