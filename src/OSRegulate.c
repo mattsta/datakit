@@ -1379,7 +1379,7 @@ int OSRegulateTest(int, char *[]) {
                   {"172.32.0.1", false, false}, {"192.168.1.1", true, false},
                   {"127.0.0.1", true, false},   {"8.8.8.8", false, false},
                   {"0.0.0.0", false, true}};
-        for (size_t i = 0; i < sizeof(v4) / sizeof(*v4); i++) {
+        for (size_t i = 0; i < countof(v4); i++) {
             struct sockaddr_in sa = {.sin_family = AF_INET};
             inet_pton(AF_INET, v4[i].addr, &sa.sin_addr);
             struct addrinfo ai = {.ai_family = AF_INET,
@@ -1400,7 +1400,7 @@ int OSRegulateTest(int, char *[]) {
                   {"::1", true, false},
                   {"2001:db8::1", false, false},
                   {"::", false, true}};
-        for (size_t i = 0; i < sizeof(v6) / sizeof(*v6); i++) {
+        for (size_t i = 0; i < countof(v6); i++) {
             struct sockaddr_in6 sa6 = {.sin6_family = AF_INET6};
             inet_pton(AF_INET6, v6[i].addr, &sa6.sin6_addr);
             struct addrinfo ai = {.ai_family = AF_INET6,
@@ -1457,7 +1457,7 @@ int OSRegulateTest(int, char *[]) {
             {"(junk)", "12x", UINT64_MAX, false, 0},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             char line[256];
             snprintf(line, sizeof(line),
                      "4242 %s S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 "
@@ -1484,7 +1484,7 @@ int OSRegulateTest(int, char *[]) {
             "4242 (cat)S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 "
             "21 22",
         };
-        for (size_t i = 0; i < sizeof(malformed) / sizeof(*malformed); i++) {
+        for (size_t i = 0; i < countof(malformed); i++) {
             uint64_t pages = 31337;
             if (osrProcStatRssPages_(malformed[i], UINT64_MAX, &pages) ||
                 pages != 31337) {
@@ -1516,7 +1516,7 @@ int OSRegulateTest(int, char *[]) {
             {"128\n", -5, true}, /* nothing requested */
             {"2147483647\n", INT_MAX, true},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             if (osrBacklogFits_(cases[i].contents, cases[i].requested) !=
                 cases[i].fits) {
                 ERR("somaxconn '%s' for %d: want fits=%d",

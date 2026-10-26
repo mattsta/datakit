@@ -931,7 +931,7 @@ static int memtest_run_unit_tests(void) {
             {4, 50, true, 4, 50},     {50, 200, true, 50, 200},
             {50, 200, false, 20, 80},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             struct winsize ws = {.ws_row = cases[i].rows,
                                  .ws_col = cases[i].cols};
             memtestFitWindow_(&ws, cases[i].queried);
@@ -1038,7 +1038,7 @@ static int memtest_run_unit_tests(void) {
             {"ag", 16, UINT64_MAX, false, 0},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             uint64_t got = 12345;
             const bool ok =
                 memtestParseU64_(cases[i].s, cases[i].base, cases[i].max, &got);
@@ -1080,7 +1080,7 @@ static int memtest_run_unit_tests(void) {
             {"", false, 0, 0},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             uint64_t start = 7;
             uint64_t end = 7;
             const bool ok =
@@ -1101,7 +1101,7 @@ static int memtest_run_unit_tests(void) {
             {"1", "0"},    {"1", "1001"},     {"1", "2x"},
             {"1", "-3"},
         };
-        for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        for (size_t i = 0; i < countof(bad); i++) {
             char *argv[3] = {"memtest", (char *)bad[i][0], (char *)bad[i][1]};
             const int argc = bad[i][1] ? 3 : 2;
             if (memtestTest(argc, argv) != 1) {

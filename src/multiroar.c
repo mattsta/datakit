@@ -4072,7 +4072,7 @@ static int mrCheckForms(const multiroar *r, const uint64_t *o,
         {0, MR_FORM_BITS}, {100, 200},     {8000, 8400},   {8192, 16384},
         {12000, 30000},    {24575, 24577}, {40000, 40000}, {50000, 57344},
     };
-    for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+    for (size_t i = 0; i < countof(ranges); i++) {
         const uint64_t want = mrOracleCount(o, ranges[i][0], ranges[i][1]);
         const uint64_t have =
             multiroarRangeCount(r, ranges[i][0], ranges[i][1]);
@@ -4395,7 +4395,7 @@ int multiroarTest(int, char *[]) {
         static constexpr uint64_t lens[] = {1, 3, 7, 8, 9, 15, 16, 17, 23, 64};
         uint8_t bitmap[64];
         uint64_t rng = 0xb17;
-        for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
+        for (size_t l = 0; l < countof(lens); l++) {
             const uint64_t bytes = lens[l];
             for (uint64_t trial = 0; trial < bytes * 8 + 1 + 40; trial++) {
                 memset(bitmap, 0, sizeof(bitmap));
@@ -4888,8 +4888,7 @@ int multiroarTest(int, char *[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t boundaries[] = {0,     8191,  8192,  8193,  16383,
                                        16384, 16385, 24575, 24576, 24577};
-        const uint64_t numBoundaries =
-            sizeof(boundaries) / sizeof(boundaries[0]);
+        const uint64_t numBoundaries = countof(boundaries);
 
         /* Set all boundary bits */
         for (uint64_t i = 0; i < numBoundaries; i++) {
@@ -4977,7 +4976,7 @@ int multiroarTest(int, char *[]) {
                                       600,  700,  800,  900,  1000, 1500,
                                       2000, 2500, 3000, 3500, 4000, 4500,
                                       5000, 5500, 6000, 6500, 7000};
-        const uint64_t numPositions = sizeof(positions) / sizeof(positions[0]);
+        const uint64_t numPositions = countof(positions);
 
         /* First, fill up to trigger bitmap conversion */
         for (uint64_t i = 0; i < 700; i++) {
@@ -5202,8 +5201,7 @@ int multiroarTest(int, char *[]) {
         const uint64_t byteBoundaries[] = {0,   7,   8,   15,  16, 23,
                                            24,  31,  32,  63,  64, 127,
                                            128, 255, 256, 511, 512};
-        for (uint64_t i = 0;
-             i < sizeof(byteBoundaries) / sizeof(byteBoundaries[0]); i++) {
+        for (uint64_t i = 0; i < countof(byteBoundaries); i++) {
             uint64_t pos = byteBoundaries[i];
             if (pos < 700) {
                 if (!multiroarBitGet(r, pos)) {
@@ -5217,8 +5215,7 @@ int multiroarTest(int, char *[]) {
         const uint64_t wordBoundaries[] = {63,  64,  127, 128, 191, 192,
                                            255, 256, 319, 320, 383, 384,
                                            447, 448, 511, 512};
-        for (uint64_t i = 0;
-             i < sizeof(wordBoundaries) / sizeof(wordBoundaries[0]); i++) {
+        for (uint64_t i = 0; i < countof(wordBoundaries); i++) {
             uint64_t pos = wordBoundaries[i];
             if (pos < 700) {
                 if (!multiroarBitGet(r, pos)) {
@@ -5245,7 +5242,7 @@ int multiroarTest(int, char *[]) {
             chunkBits * 2 + 999, /* Chunk 2 */
             chunkBits * 3 + 8191 /* Chunk 3, last bit */
         };
-        const uint64_t numPositions = sizeof(positions) / sizeof(positions[0]);
+        const uint64_t numPositions = countof(positions);
 
         for (uint64_t i = 0; i < numPositions; i++) {
             multiroarBitSet(r, positions[i]);
@@ -5362,8 +5359,7 @@ int multiroarTest(int, char *[]) {
         const uint64_t largePositions[] = {SIZE_MAX - 1, SIZE_MAX - 8192,
                                            SIZE_MAX - 8193, SIZE_MAX / 2,
                                            SIZE_MAX / 2 + 1};
-        const uint64_t numLarge =
-            sizeof(largePositions) / sizeof(largePositions[0]);
+        const uint64_t numLarge = countof(largePositions);
 
         for (uint64_t i = 0; i < numLarge; i++) {
             multiroarBitSet(r, largePositions[i]);
@@ -5642,7 +5638,7 @@ int multiroarTest(int, char *[]) {
             500, 100, 900, 50, 950,  25,  975, 12,  988, 6,  994, 3,
             997, 1,   999, 0,  1000, 2,   998, 4,   996, 8,  992, 16,
             984, 32,  968, 64, 936,  128, 872, 256, 744, 512};
-        const uint64_t numPos = sizeof(positions) / sizeof(positions[0]);
+        const uint64_t numPos = countof(positions);
 
         for (uint64_t i = 0; i < numPos; i++) {
             multiroarBitSet(r, positions[i]);
@@ -6128,8 +6124,7 @@ int multiroarTest(int, char *[]) {
             SIZE_MAX - 1,      SIZE_MAX - 200,    SIZE_MAX - 8192,
             SIZE_MAX - 16384,  SIZE_MAX / 2,      SIZE_MAX / 4,
             (uint64_t)1 << 40, (uint64_t)1 << 50, (uint64_t)1 << 60};
-        const uint64_t numLarge =
-            sizeof(largePositions) / sizeof(largePositions[0]);
+        const uint64_t numLarge = countof(largePositions);
 
         for (uint64_t i = 0; i < numLarge; i++) {
             multiroarBitSet(r, largePositions[i]);
@@ -7620,15 +7615,14 @@ int multiroarTest(int, char *[]) {
             1'000'000,      10'000'000,      100'000'000,     1'000'000'000,
             10000000000ULL, 100000000000ULL, 1000000000000ULL};
 
-        for (uint64_t i = 0; i < sizeof(positions) / sizeof(positions[0]);
-             i++) {
+        for (uint64_t i = 0; i < countof(positions); i++) {
             multiroarBitSet(r, positions[i]);
         }
 
         uint64_t count = multiroarBitCount(r);
-        if (count != sizeof(positions) / sizeof(positions[0])) {
+        if (count != countof(positions)) {
             ERR("Large positions bitcount: expected %zu, got %" PRIu64,
-                sizeof(positions) / sizeof(positions[0]), count);
+                countof(positions), count);
         }
     }
 
@@ -7848,8 +7842,7 @@ int multiroarTest(int, char *[]) {
         uint64_t testPositions[] = {0,    1,    100,    8191,
                                     8192, 8193, 100000, 1'000'000};
 
-        for (uint64_t i = 0;
-             i < sizeof(testPositions) / sizeof(testPositions[0]); i++) {
+        for (uint64_t i = 0; i < countof(testPositions); i++) {
             cleaner(multiroarFree) multiroar *r = multiroarBitNew();
             uint64_t pos = testPositions[i];
 
@@ -9890,7 +9883,7 @@ int multiroarTest(int, char *[]) {
             {{8, 0, 0, 1, 1, 1, 0}, 7, false},    /* a stray byte */
             {{8, 0, 0, 2, 1, 1}, 6, false},       /* a value missing */
         };
-        for (size_t s = 0; s < sizeof(streams) / sizeof(*streams); s++) {
+        for (size_t s = 0; s < countof(streams); s++) {
             cleaner(multiroarFree) multiroar *r =
                 multiroarDeserializeRaw(streams[s].bytes, streams[s].len);
             if ((r != NULL) != streams[s].valid) {
@@ -10757,7 +10750,7 @@ int multiroarTest(int, char *[]) {
             uint64_t want;
         } cases[] = {{100, 0},     {101, 1},     {164, 64}, /* crosses word 1 */
                      {2100, 2000}, {8191, 2000}, {8192, 2001}};
-        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             uint64_t got = multiroarRank(a, cases[i].at);
             if (got != cases[i].want) {
                 ERR("Rank(%" PRIu64 "): expected %" PRIu64 ", got %" PRIu64,
@@ -10845,7 +10838,7 @@ int multiroarTest(int, char *[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         FILL_ALL_ONES(r, 0);
         const uint64_t unset[] = {0, 63, 64, 100, 4000, 8191};
-        const int U = (int)(sizeof(unset) / sizeof(unset[0]));
+        const int U = (int)(countof(unset));
         for (int i = 0; i < U; i++) {
             multiroarRemove(r, unset[i]);
         }
@@ -10898,7 +10891,7 @@ int multiroarTest(int, char *[]) {
             {"short runs", 300, NULL},
         };
 
-        for (size_t p = 0; p < sizeof(patterns) / sizeof(patterns[0]); p++) {
+        for (size_t p = 0; p < countof(patterns); p++) {
             const uint64_t n = patterns[p].count;
             cleanerName(zfree, UInt64) uint64_t *positions =
                 zmalloc(n * sizeof(uint64_t));
@@ -10984,7 +10977,7 @@ int multiroarTest(int, char *[]) {
          * match an oracle. */
         const uint32_t counts[] = {1,    2,    240,  241,  300, 2287,
                                    2288, 4000, 8191, 8192, 9000};
-        for (size_t c = 0; c < COUNT_ARRAY(counts); c++) {
+        for (size_t c = 0; c < countof(counts); c++) {
             for (uint64_t stride = 1; stride <= 2; stride++) {
                 for (int order = 0; order < 3; order++) {
                     const uint32_t n = counts[c];

@@ -375,7 +375,7 @@ int databoxLinearTest(int, char *[]) {
 
     TEST("unsigned integers - small values") {
         uint64_t values[] = {0, 1, 2, 127, 128, 255};
-        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             databox a = databoxNewUnsigned(values[i]);
             databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
@@ -443,7 +443,7 @@ int databoxLinearTest(int, char *[]) {
 
     TEST("signed integers - small values") {
         int64_t values[] = {0, 1, -1, 127, -128, 128, -129};
-        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             databox a = databoxNewSigned(values[i]);
             databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
@@ -511,7 +511,7 @@ int databoxLinearTest(int, char *[]) {
 
     TEST("float - basic values") {
         float values[] = {0.0f, 1.0f, -1.0f, 0.5f, 3.14159f};
-        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             databox a = {.data.f32 = values[i], .type = DATABOX_FLOAT_32};
             databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
@@ -532,7 +532,7 @@ int databoxLinearTest(int, char *[]) {
     TEST("float - float16 downgrade") {
         /* These values can be exactly represented in float16 */
         float values[] = {0.0f, 1.0f, 2.0f, 0.5f, -1.0f};
-        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             databox a = {.data.f32 = values[i], .type = DATABOX_FLOAT_32};
             databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
@@ -557,7 +557,7 @@ int databoxLinearTest(int, char *[]) {
 
     TEST("double - basic values") {
         double values[] = {0.0, 1.0, -1.0, 3.141592653589793};
-        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             databox a = {.data.d64 = values[i], .type = DATABOX_DOUBLE_64};
             databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
@@ -609,7 +609,7 @@ int databoxLinearTest(int, char *[]) {
 
     TEST("boolean and null types") {
         databoxType types[] = {DATABOX_TRUE, DATABOX_FALSE, DATABOX_NULL};
-        for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
+        for (size_t i = 0; i < countof(types); i++) {
             databox a = {.type = types[i]};
             databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
@@ -691,7 +691,7 @@ int databoxLinearTest(int, char *[]) {
             {1ULL << 24, 4}, {UINT32_MAX, 4}, {(uint64_t)UINT32_MAX + 1, 5},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             databox a = databoxNewUnsigned(cases[i].val);
             databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
@@ -742,8 +742,7 @@ int databoxLinearTest(int, char *[]) {
             INT64_MIN,                    /* 8-byte boundary */
         };
 
-        for (size_t i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]);
-             i++) {
+        for (size_t i = 0; i < countof(boundaries); i++) {
             databox a = databoxNewSigned(boundaries[i]);
             databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
@@ -1022,7 +1021,7 @@ int databoxLinearTest(int, char *[]) {
     TEST("roundtrip - encode twice gives same result") {
         uint64_t vals[] = {0, 1, 255, 256, 65535, UINT32_MAX, UINT64_MAX};
 
-        for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             databox a = databoxNewUnsigned(vals[i]);
 
             databoxLinear dl1 = {}, dl2 = {};
@@ -1099,7 +1098,7 @@ int databoxLinearTest(int, char *[]) {
             {.type = DATABOX_NULL},
         };
 
-        for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        for (size_t i = 0; i < countof(inputs); i++) {
             databoxLinear dl = {};
             databoxLinearEncode(&inputs[i], &dl);
 
@@ -1155,7 +1154,7 @@ int databoxLinearTest(int, char *[]) {
             {UINT64_MAX, 8},
         };
 
-        for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+        for (size_t i = 0; i < countof(ranges); i++) {
             /* Test max value for this width */
             databox a = databoxNewUnsigned(ranges[i].maxVal);
             databoxLinear dl = {};
@@ -1191,7 +1190,7 @@ int databoxLinearTest(int, char *[]) {
             {-(1LL << 55), 7},  {INT64_MIN, 8},
         };
 
-        for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+        for (size_t i = 0; i < countof(ranges); i++) {
             databox a = databoxNewSigned(ranges[i].minVal);
             databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
