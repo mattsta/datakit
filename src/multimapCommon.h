@@ -57,14 +57,22 @@ typedef uint32_t multimapFullMiddle;
  * Uses uint64_t to support large multimaps with >4B total key-value pairs. */
 typedef uint64_t multimapFullValues;
 
+/* The tier tag. No fixed underlying type: an enum bit-field narrower than
+ * a fixed type warns on gcc, and the values fit the iterator's 2 bits. */
+typedef enum multimapType {
+    MULTIMAP_TYPE_SMALL = 1,  /* 16 bytes, fixed. */
+    MULTIMAP_TYPE_MEDIUM = 2, /* 32 bytes, fixed. */
+    MULTIMAP_TYPE_FULL = 3,   /* 48 bytes + per-map growable arrays */
+} multimapType;
+
 typedef struct multimapIterator {
     void *mm; /* pointer back to the multimap (untagged) instance itself */
     flexEntry *entry;
     flex *map;
     uint32_t mapIndex; /* for Medium and Full: which index 'mm' came from */
     uint32_t elementsPerEntry : 16; /* cached value mm->elementsPerEntry */
-    uint32_t type : 2;    /* original tagged type of 'mm'; values: 1, 2, 3 */
-    uint32_t forward : 1; /* are we iterating forward? */
+    enum multimapType type : 2;     /* original tagged type of 'mm' */
+    uint32_t forward : 1;           /* are we iterating forward? */
     uint32_t unused : 13;
 } multimapIterator;
 
@@ -93,9 +101,3 @@ typedef struct multimapPredicate {
     multimapCondition condition;
     databox compareAgainst;
 } multimapPredicate;
-
-typedef enum multimapType {
-    MULTIMAP_TYPE_SMALL = 1,  /* 16 bytes, fixed. */
-    MULTIMAP_TYPE_MEDIUM = 2, /* 32 bytes, fixed. */
-    MULTIMAP_TYPE_FULL = 3,   /* 48 bytes + per-map growable arrays */
-} multimapType;

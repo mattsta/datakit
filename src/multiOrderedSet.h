@@ -255,15 +255,24 @@ typedef struct mosRangeSpec {
 /* ====================================================================
  * Iterator
  * ==================================================================== */
+/* The tier tag. No fixed underlying type: an enum bit-field narrower than
+ * a fixed type warns on gcc, and the values fit the iterator's 2 bits. */
+typedef enum multiOrderedSetType {
+    MOS_TYPE_SMALL = 1,  /* Single flex, 16 bytes fixed */
+    MOS_TYPE_MEDIUM = 2, /* Array of flex, ~32 bytes fixed */
+    MOS_TYPE_FULL = 3    /* Dual structure, ~64 bytes */
+} multiOrderedSetType;
+
 typedef struct mosIterator {
     void *mos;         /* pointer to multiOrderedSet (untagged) */
     void *current;     /* current position (implementation-specific) */
     uint32_t mapIndex; /* for Medium/Full: which sub-map */
-    uint32_t type : 2; /* tier type (1=Small, 2=Medium, 3=Full) */
+    enum multiOrderedSetType type : 2; /* tier: Small, Medium or Full */
     uint32_t forward : 1;
     uint32_t valid : 1; /* is iterator still valid? */
     uint32_t unused : 28;
 } mosIterator;
+static_assert(sizeof(mosIterator) == 24, "the tier tag packs with the flags");
 
 /* ====================================================================
  * Creation / Destruction

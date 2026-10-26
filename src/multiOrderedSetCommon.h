@@ -4,8 +4,9 @@
 #include "databox.h"
 #include "flex.h"
 #include "flexCapacityManagement.h"
-#include "str.h"  /* xorshift64star */
-#include <math.h> /* isfinite */
+#include "multiOrderedSet.h" /* multiOrderedSetType */
+#include "str.h"             /* xorshift64star */
+#include <math.h>            /* isfinite */
 #include <stdint.h>
 
 /* ====================================================================
@@ -19,12 +20,6 @@
  * ==================================================================== */
 
 #define MOS_ELEMENTS_PER_ENTRY 2
-
-typedef enum multiOrderedSetType {
-    MOS_TYPE_SMALL = 1,  /* Single flex, 16 bytes fixed */
-    MOS_TYPE_MEDIUM = 2, /* Array of flex, ~32 bytes fixed */
-    MOS_TYPE_FULL = 3    /* Dual structure, ~64 bytes */
-} multiOrderedSetType;
 
 /* Index types for consistency with multimap */
 typedef uint32_t mosMapIdx;
