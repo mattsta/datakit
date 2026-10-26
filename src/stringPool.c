@@ -338,7 +338,7 @@ uint64_t stringPoolIntern(stringPool *pool, const databox *str) {
     keyBox.data.bytes.start = data;
 
     databox valBox = databoxNewUnsigned(id);
-    multidictAdd(pool->strToId, &keyBox, &valBox);
+    multidictPut(pool->strToId, &keyBox, &valBox);
 
     pool->count++;
     return id;

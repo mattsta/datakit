@@ -1313,6 +1313,12 @@ multidictResult multidictAdd(multidict *d, const databox *keybox,
     return multidictAddExact_(d, keybox, valbox);
 }
 
+bool multidictPut(multidict *d, const databox *keybox, const databox *valbox) {
+    const multidictResult result = multidictAdd(d, keybox, valbox);
+    assert(result != MULTIDICT_ERR);
+    return result == MULTIDICT_OK_INSERTED;
+}
+
 /* ====================================================================
  * Conditional Insert Operations
  * ==================================================================== */
@@ -2534,7 +2540,10 @@ static void multidictLRUOnInsert(multidict *d, const databox *keybox) {
 
     /* Store key -> ptr mapping */
     databox ptrBox = DATABOX_UNSIGNED(ptr);
-    multidictAdd(d->lruKeyToPtr, keybox, &ptrBox);
+    if (multidictAdd(d->lruKeyToPtr, keybox, &ptrBox) == MULTIDICT_ERR) {
+        multilruDelete(d->lru, ptr); /* the class refused: track nothing */
+        return;
+    }
 
     /* Store ptr -> hash mapping (no key duplication!) */
     if (!lruPtrToKeyGrow(d, ptr + 1)) {
@@ -2724,11 +2733,16 @@ multidict *multidictCopy(const multidict *src) {
     multidictIterator iter;
     multidictIteratorInit((multidict *)src, &iter);
     multidictEntry entry;
-    while (multidictIteratorNext(&iter, &entry)) {
-        multidictAdd(dst, &entry.key, &entry.val);
+    bool copied = true;
+    while (copied && multidictIteratorNext(&iter, &entry)) {
+        copied = multidictAdd(dst, &entry.key, &entry.val) != MULTIDICT_ERR;
     }
     multidictIteratorRelease(&iter);
 
+    if (!copied) {
+        multidictFree(dst); /* the class refused an entry */
+        return NULL;
+    }
     return dst;
 }
 
@@ -2749,8 +2763,9 @@ uint64_t multidictMerge(multidict *dst, const multidict *src,
         switch (mode) {
         case MULTIDICT_MERGE_REPLACE:
             /* Always add/replace from src */
-            multidictAdd(dst, &entry.key, &entry.val);
-            merged++;
+            if (multidictAdd(dst, &entry.key, &entry.val) != MULTIDICT_ERR) {
+                merged++;
+            }
             break;
 
         case MULTIDICT_MERGE_KEEP:
@@ -3578,6 +3593,38 @@ defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictMmClassFree);
 defcleaner(flex *, flexFree);
 
+/* A conditional add or replace applies exactly when 'applies' (read
+ * before the call) holds */
+#define MD_TEST_APPLIES_IF(applies, call)                                      \
+    do {                                                                       \
+        const bool applies_ = (applies);                                       \
+        const multidictResult result_ = (call);                                \
+        if ((result_ != MULTIDICT_ERR) != applies_) {                          \
+            ERR("%s returned %d, applies %d", #call, (int)result_,             \
+                (int)applies_);                                                \
+        }                                                                      \
+    } while (0)
+
+/* What mdTestRefusingInsert refuses */
+typedef enum mdTestRefuseMode {
+    MD_TEST_REFUSE_NONE = 0,
+    MD_TEST_REFUSE_ALL,      /* every add */
+    MD_TEST_REFUSE_UNSIGNED, /* an unsigned value, such as an LRU handle */
+} mdTestRefuseMode;
+static mdTestRefuseMode mdTestRefuse = MD_TEST_REFUSE_NONE;
+
+/* The default insert, refusing as mdTestRefuse says */
+static int64_t mdTestRefusingInsert(multidictClass *qdc, multidictSlot **slot,
+                                    const databox *keybox,
+                                    const databox *valbox, databox *replaced) {
+    if (mdTestRefuse == MD_TEST_REFUSE_ALL ||
+        (mdTestRefuse == MD_TEST_REFUSE_UNSIGNED &&
+         valbox->type == DATABOX_UNSIGNED_64)) {
+        return -1;
+    }
+    return mmSlotInsert(qdc, slot, keybox, valbox, replaced);
+}
+
 /* Simple PRNG for reproducible tests */
 static uint32_t testRandState = 12345;
 static uint32_t testRand(void) {
@@ -4240,7 +4287,7 @@ static int multidictTestDeleteIf_(void) {
     for (int64_t k = 0; k < n; k++) {
         const databox key = databoxNewSigned(k);
         const databox val = databoxNewSigned(k * 3);
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
     }
 
     size_t live = n;
@@ -4448,7 +4495,8 @@ static int multidictTestWide_(mdWideMode mode) {
             databoxBig val;
             mdWideBox_(&key, &p[i].key);
             mdWideBox_(&val, &p[i].val);
-            multidictAdd(e, (databox *)&key, (databox *)&val);
+            MULTIDICT_TEST_OK(
+                multidictAdd(e, (databox *)&key, (databox *)&val));
         }
 
         /* Evict with a rehash in flight and resizing on, so the find and
@@ -4723,7 +4771,7 @@ static int multidictTestKeyCompare_(void) {
         for (uint32_t k = 0; k < keys; k++) {
             const databox kb = databoxNewBytes(set[k], blocks * 2);
             const databox vb = DATABOX_UNSIGNED(k);
-            multidictAdd(d2, &kb, &vb);
+            MULTIDICT_TEST_OK(multidictAdd(d2, &kb, &vb));
         }
         for (int32_t pass = 0; pass < 2; pass++) {
             while (multidictRehash(d2, 100)) {
@@ -4855,7 +4903,7 @@ static int multidictTestCaseOps_(void) {
 
     /* Exists, by box and by string, and FindByString */
     databox bytesVal = databoxNewBytesString("payload");
-    multidictAdd(d, &key, &bytesVal); /* replaces "Key" */
+    MULTIDICT_TEST_OK(multidictAdd(d, &key, &bytesVal)); /* replaces "Key" */
     uint8_t *found = NULL;
     if (!multidictExists(d, &kEY) || !multidictExistsByString(d, "KEY") ||
         multidictExistsByString(d, "KEYS") ||
@@ -4962,8 +5010,9 @@ static int multidictTestCaseOps_(void) {
             multidictNew(&multidictTypeCaseKey, qdc, 5);
         databox delta = databoxNewBytesString("Delta");
         const databox ninety = DATABOX_SIGNED(90);
-        multidictAdd(src, &seconds[0], &ninety); /* "ALPHA" */
-        multidictAdd(src, &delta, &ninety);
+        MULTIDICT_TEST_OK(
+            multidictAdd(src, &seconds[0], &ninety)); /* "ALPHA" */
+        MULTIDICT_TEST_OK(multidictAdd(src, &delta, &ninety));
         if (multidictMerge(copy, src, MULTIDICT_MERGE_KEEP) != 1 ||
             multidictCount(copy) != 4 ||
             !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 10)) {
@@ -4998,7 +5047,7 @@ static int multidictTestCaseOps_(void) {
     multidictSetEvictionCallback(d, NULL, NULL);
 
     /* Pop random hands back the stored spelling */
-    multidictAdd(d, &firsts[1], &one);
+    MULTIDICT_TEST_OK(multidictAdd(d, &firsts[1], &one));
     databox pk = {{0}};
     databox pv = {{0}};
     if (!multidictPopRandom(d, &pk, &pv) || !testBoxIsBytes_(&pk, "BETA", 4) ||
@@ -5260,8 +5309,8 @@ static int multidictTestPersistKeys_(void) {
         multidictNew(&testTrimType_, qdc, 4);
     multidict *const all[] = {exact, ci, custom};
     for (size_t i = 0; i < 3; i++) {
-        multidictAdd(all[i], &foo, &one);
-        multidictAdd(all[i], &bar, &one);
+        MULTIDICT_TEST_OK(multidictAdd(all[i], &foo, &one));
+        MULTIDICT_TEST_OK(multidictAdd(all[i], &bar, &one));
     }
 
     size_t exactLen, ciLen, ciEmptyLen, customLen;
@@ -5637,8 +5686,8 @@ static int multidictTestLruPromotion_(multidictType *type) {
     const databox other = databoxNewBytesString("bystander");
     const databox text = databoxNewBytesString("text");
     const databox ten = DATABOX_SIGNED(10);
-    multidictAdd(d, &stored, &text);
-    multidictAdd(d, &other, &ten);
+    MULTIDICT_TEST_OK(multidictAdd(d, &stored, &text));
+    MULTIDICT_TEST_OK(multidictAdd(d, &other, &ten));
 
     /* Spellings: a case dict sees "rank" under these, an exact one
      * always as "rank" */
@@ -5838,7 +5887,7 @@ static int multidictTestCountersUnderUpdates_(void) {
         switch ((rng >> 33) % 8) {
         case 0: {
             const databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             break;
         }
         case 7: {
@@ -5856,14 +5905,17 @@ static int multidictTestCountersUnderUpdates_(void) {
             /* A long string replaces whatever was there, or nothing */
             const databox val =
                 databoxNewBytes(longValue, 1 + (size_t)(i % 199));
-            multidictAddXX(d, &key, &val);
+            MD_TEST_APPLIES_IF(multidictExistsNoTouch(d, &key),
+                               multidictAddXX(d, &key, &val));
             break;
         }
+        /* An increment of a string value is refused; the counters are
+         * the check */
         case 2:
-            multidictIncrBy(d, &key, i - 2000, NULL);
+            (void)multidictIncrBy(d, &key, i - 2000, NULL);
             break;
         case 3:
-            multidictIncrByFloat(d, &key, 0.5, NULL);
+            (void)multidictIncrByFloat(d, &key, 0.5, NULL);
             break;
         case 4:
             multidictDelete(d, &key);
@@ -5907,7 +5959,7 @@ static int multidictTestAddNXMidRehash_(void) {
     for (int64_t i = 0; i < present; i++) {
         const databox key = databoxNewSigned(i);
         const databox val = databoxNewSigned(i * 3);
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
     }
 
     while (multidictRehash(d, 100)) {
@@ -5985,7 +6037,7 @@ static int multidictTestRehashReads_(void) {
     for (uint64_t k = 0; k < n; k++) {
         const databox key = DATABOX_UNSIGNED(k);
         const databox val = DATABOX_UNSIGNED(k * 3);
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
     }
     while (multidictRehash(d, 100)) {
     }
@@ -6092,7 +6144,7 @@ static int multidictTestLRUToggle_(void) {
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
         const databox val = DATABOX_UNSIGNED(k);
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
     }
     multidictDisableLRU(d);
     if (multidictHasLRU(d) ||
@@ -6144,7 +6196,7 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
     for (int64_t i = 0; i < N; i++) {
         const databox k = databoxNewSigned(i);
         const databox v = databoxNewSigned(i * 3);
-        multidictAdd(d, &k, &v);
+        MULTIDICT_TEST_OK(multidictAdd(d, &k, &v));
     }
     for (int64_t i = 0; i < N; i++) {
         if (i % 20) {
@@ -6265,7 +6317,7 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
         for (int64_t k = 0; k < 50; k++) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k * 7);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
         size_t len = 0;
         cleanerName(zfree, SeenBytes) uint8_t *snap =
@@ -6315,7 +6367,7 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
         memset(buf, 'a' + (int)(i % 26), sizeof(buf));
         const databox key = databoxNewSigned(i);
         const databox val = databoxNewBytes(buf, sizeof(buf));
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
     }
     while (multidictIsRehashing(d)) {
         multidictRehash(d, 100);
@@ -6441,7 +6493,7 @@ int multidictTest(int argc, char *argv[]) {
     TEST("1.8 multidictFindByString") {
         databox key = databoxNewBytesString("strkey");
         databox val = databoxNewBytesString("strval");
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         /* A present byte-string value: its bytes, borrowed from the dict */
         static const char strkey[] = "strkey";
@@ -6460,7 +6512,7 @@ int multidictTest(int argc, char *argv[]) {
 
         databox intKey = databoxNewBytesString("strint");
         databox intVal = databoxNewSigned(42);
-        multidictAdd(d, &intKey, &intVal);
+        MULTIDICT_TEST_OK(multidictAdd(d, &intKey, &intVal));
         found = multidictFindByString(d, "strint", &untouched);
         assert(found == false && untouched == &sentinel);
 
@@ -6479,7 +6531,7 @@ int multidictTest(int argc, char *argv[]) {
             char valBuf[2] = {(char)('A' + i), '\0'};
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
         assert(multidictSize(d) == 26);
 
@@ -6505,7 +6557,7 @@ int multidictTest(int argc, char *argv[]) {
 
         databox key = databoxNewBytesString(longKey);
         databox val = databoxNewBytesString(longVal);
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         databox found;
         assert(multidictFind(d, &key, &found) == true);
@@ -6529,7 +6581,7 @@ int multidictTest(int argc, char *argv[]) {
         for (int i = 0; i < numSpecial; i++) {
             databox key = databoxNewBytesString(specialKeys[i]);
             databox val = databoxNewBytesString("value");
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Verify accessible */
@@ -6551,7 +6603,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "%d", i * 7919); /* prime gaps */
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
         assert(multidictSize(d) == 1000);
 
@@ -6583,7 +6635,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "iter%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         multidictIterator iter;
@@ -6608,7 +6660,7 @@ int multidictTest(int argc, char *argv[]) {
             if (count == 100) {
                 databox key = databoxNewBytesString("safeadd");
                 databox val = databoxNewBytesString("during_iter");
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             }
         }
         multidictIteratorRelease(&iter);
@@ -6652,7 +6704,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "block_rehash_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Force an expand to start rehashing */
@@ -6677,7 +6729,7 @@ int multidictTest(int argc, char *argv[]) {
          * when iterators are active. Adding an entry invokes this. */
         databox testKey = databoxNewBytesString("rehash_test");
         databox testVal = databoxNewSigned(999);
-        multidictAdd(d, &testKey, &testVal);
+        MULTIDICT_TEST_OK(multidictAdd(d, &testKey, &testVal));
 
         /* Rehash index should not have advanced due to iterator */
         assert(d->rehashidx == rehashIdxBefore);
@@ -6688,7 +6740,7 @@ int multidictTest(int argc, char *argv[]) {
 
         /* Now operations should trigger rehash steps */
         databox testKey2 = databoxNewBytesString("rehash_test2");
-        multidictAdd(d, &testKey2, &testVal);
+        MULTIDICT_TEST_OK(multidictAdd(d, &testKey2, &testVal));
 
         /* Complete the rehash */
         while (multidictIsRehashing(d)) {
@@ -6704,7 +6756,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "no_advance_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Init safe iterator but don't advance it */
@@ -6729,7 +6781,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "multi_safe_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Start two safe iterators */
@@ -6763,7 +6815,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "iter_rehash_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Start rehashing */
@@ -6800,7 +6852,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "reinit_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Start safe iterator */
@@ -6838,7 +6890,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "rh%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         bool expanded = multidictExpand(d, 2048);
@@ -6867,7 +6919,7 @@ int multidictTest(int argc, char *argv[]) {
         /* Add during rehash */
         databox key = databoxNewBytesString("during_rehash");
         databox val = databoxNewBytesString("value");
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         /* Find during rehash */
         databox found;
@@ -6974,7 +7026,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "rehash_test_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Trigger expansion to start rehashing */
@@ -7046,7 +7098,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "del_rehash_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Trigger rehashing */
@@ -7095,7 +7147,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "fuzz_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i * 100);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Trigger rehashing */
@@ -7120,7 +7172,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "fuzz_new_%d", idx);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(idx);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
                 adds++;
             } else if (opType < 6) { /* 30% finds */
                 char keyBuf[32];
@@ -7146,7 +7198,8 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "fuzz_%d", idx % FUZZ_ENTRIES);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(idx * 200);
-                multidictReplace(d, &key, &val);
+                MD_TEST_APPLIES_IF(multidictExistsNoTouch(d, &key),
+                                   multidictReplace(d, &key, &val));
                 replaces++;
             }
 
@@ -7180,7 +7233,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "incr_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(0);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Trigger rehashing */
@@ -7259,7 +7312,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "gad_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i * 5);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Trigger rehashing */
@@ -7309,7 +7362,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "stress_%d", i);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(i);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             }
 
             /* Trigger multiple expansions */
@@ -7333,17 +7386,19 @@ int multidictTest(int argc, char *argv[]) {
                 }
                 case 1: { /* Replace */
                     databox val = databoxNewSigned(idx + 1000);
-                    multidictReplace(d, &key, &val);
+                    MD_TEST_APPLIES_IF(multidictExistsNoTouch(d, &key),
+                                       multidictReplace(d, &key, &val));
                     break;
                 }
                 case 2: { /* AddNX (might fail if exists) */
                     databox val = databoxNewSigned(idx);
-                    multidictAddNX(d, &key, &val);
+                    MD_TEST_APPLIES_IF(!multidictExistsNoTouch(d, &key),
+                                       multidictAddNX(d, &key, &val));
                     break;
                 }
                 case 3: { /* IncrBy */
                     int64_t result;
-                    multidictIncrBy(d, &key, 1, &result);
+                    MULTIDICT_TEST_OK(multidictIncrBy(d, &key, 1, &result));
                     break;
                 }
                 case 4: { /* Exists */
@@ -7393,7 +7448,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "scan%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         int scanCount = 0;
@@ -7449,7 +7504,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "fuzz_%d", i);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(i);
-                multidictAdd(dScan, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(dScan, &key, &val));
             }
 
             /* Scan and verify we see all entries */
@@ -7478,7 +7533,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "large_%d_%d", testRun, i);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(i);
-                multidictAdd(dScan, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(dScan, &key, &val));
             }
 
             /* Trigger rehashing */
@@ -7523,7 +7578,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "mod_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(dScan, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dScan, &key, &val));
         }
 
         /* Trigger rehashing */
@@ -7549,7 +7604,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "new_%d", modifications);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(modifications);
-                multidictAdd(dScan, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(dScan, &key, &val));
                 modifications++;
             }
 
@@ -7575,7 +7630,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "exact_%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(dScan, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dScan, &key, &val));
         }
 
         /* Trigger rehash to medium state */
@@ -7627,7 +7682,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "extreme_%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(dScan, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dScan, &key, &val));
         }
 
         /* Start rehashing */
@@ -7667,7 +7722,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "rand%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         databox randomKey;
@@ -7709,7 +7764,7 @@ int multidictTest(int argc, char *argv[]) {
             for (int i = 0; i < 1500; i++) {
                 const databox k = databoxNewSigned(i * 31);
                 const databox v = databoxNewSigned(i);
-                multidictAdd(sd, &k, &v);
+                MULTIDICT_TEST_OK(multidictAdd(sd, &k, &v));
             }
             multidictResizeEnable(sd);
             multidictExpand(sd, shrink ? 64 : 16384);
@@ -7775,7 +7830,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "grk%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(rd, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(rd, &key, &val));
             alive[i] = true;
             order[i] = i;
         }
@@ -7870,7 +7925,7 @@ int multidictTest(int argc, char *argv[]) {
             switch (op) {
             case 0: { /* Insert */
                 databox val = databoxNewSigned(keyNum);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
                 inserted++;
                 break;
             }
@@ -7905,7 +7960,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "cycle%d_%d", cycle, i);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(i);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             }
 
             /* Expand and rehash */
@@ -7927,7 +7982,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "inter%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Start rehash */
@@ -7944,7 +7999,7 @@ int multidictTest(int argc, char *argv[]) {
             switch (op) {
             case 0: { /* Insert */
                 databox val = databoxNewSigned(keyNum);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
                 break;
             }
             case 1: { /* Delete */
@@ -7989,7 +8044,7 @@ int multidictTest(int argc, char *argv[]) {
             if (testRand() % 2 == 0) {
                 /* Insert */
                 databox val = databoxNewSigned(keyNum);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
                 if (!exists[keyNum]) {
                     exists[keyNum] = true;
                     expectedCount++;
@@ -8036,7 +8091,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "trans%d", i);
                 databox key = databoxNewBytesString(keyBuf);
                 databox val = databoxNewSigned(i);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             }
             assert(multidictSize(d) == 100);
 
@@ -8051,7 +8106,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "resize%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         multidictResizeDisable(d);
@@ -8073,7 +8128,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "fp%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Unsafe iterator - fingerprint captured */
@@ -8183,7 +8238,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "stats%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
         multidictPrintStats(d);
     }
@@ -8208,7 +8263,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictRepr(dRepr);
         const databox key = databoxNewBytesString("printed");
         const databox val = databoxNewSigned(1);
-        multidictAdd(dRepr, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(dRepr, &key, &val));
         multidictRepr(dRepr);
         multidictOp op;
         multidictFindSlotForKeyNewest(dRepr, &op, &key, NULL);
@@ -8243,7 +8298,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "value%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(dBytes, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dBytes, &key, &val));
             expectedKeyBytes += strlen(keyBuf);
             expectedValBytes += strlen(valBuf);
         }
@@ -8271,7 +8326,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "toDelete%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(dBytes, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dBytes, &key, &val));
         }
 
         uint64_t bytesBeforeDelete =
@@ -8307,7 +8362,7 @@ int multidictTest(int argc, char *argv[]) {
         /* Insert with short value */
         databox key = databoxNewBytesString("replaceMe");
         databox shortVal = databoxNewBytesString("short");
-        multidictAdd(dBytes, &key, &shortVal);
+        MULTIDICT_TEST_OK(multidictAdd(dBytes, &key, &shortVal));
 
         uint64_t bytesWithShort = dBytes->ht[0].valBytes;
 
@@ -8338,7 +8393,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "rh%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(dBytes, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dBytes, &key, &val));
         }
 
         uint64_t keyBytesBefore = dBytes->ht[0].keyBytes;
@@ -8402,7 +8457,7 @@ int multidictTest(int argc, char *argv[]) {
         /* Add another key and verify */
         databox key2 = databoxNewBytesString("key2");
         databox val2 = databoxNewBytesString("val2");
-        multidictAdd(d, &key2, &val2);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key2, &val2));
         assert(multidictExistsByString(d, "key2") == true);
     }
 
@@ -8432,7 +8487,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "loadkey%d", j);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(j);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         uint32_t lf = multidictLoadFactor(d);
@@ -8632,7 +8687,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBufs[j], sizeof(valBufs[j]), "limitval%d", j);
             databox key = databoxNewBytesString(keyBufs[j]);
             databox val = databoxNewBytesString(valBufs[j]);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Set a very low limit - use user bytes (key+val), not totalBytes */
@@ -8684,7 +8739,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBufs2[j], sizeof(valBufs2[j]), "cbval%d", j);
             databox key = databoxNewBytesString(keyBufs2[j]);
             databox val = databoxNewBytesString(valBufs2[j]);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Set limit and evict */
@@ -8710,7 +8765,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(vetoBufs[j], sizeof(vetoBufs[j]), "vetokey%d", j);
             databox key = databoxNewBytesString(vetoBufs[j]);
             databox val = databoxNewBytesString(vetoBufs[j]);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         multidictSetEvictionCallback(d, vetoEvictionCb_, &testVetoCount_);
@@ -8828,7 +8883,7 @@ int multidictTest(int argc, char *argv[]) {
 
             if (op < 5) {
                 /* 50% insert */
-                multidictAdd(d, &keys[idx], &vals[idx]);
+                MULTIDICT_TEST_OK(multidictAdd(d, &keys[idx], &vals[idx]));
                 inserts++;
             } else if (op < 8) {
                 /* 30% find */
@@ -8897,7 +8952,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBufs[j], sizeof(valBufs[j]), "iterval%d", j);
             databox key = databoxNewBytesString(keyBufs[j]);
             databox val = databoxNewBytesString(valBufs[j]);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Iterate with safe iterator while modifying */
@@ -8915,7 +8970,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(newVal, sizeof(newVal), "newval%d", iterated);
                 databox key = databoxNewBytesString(newKey);
                 databox val = databoxNewBytesString(newVal);
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             }
         }
         multidictIteratorRelease(&iter);
@@ -8939,7 +8994,7 @@ int multidictTest(int argc, char *argv[]) {
             databox key = databoxNewBytesString(keyBufs[j]);
             databox val = databoxNewBytesString(valBufs[j]);
 
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             totalInserted++;
 
             /* Periodically evict if over limit */
@@ -9011,7 +9066,7 @@ int multidictTest(int argc, char *argv[]) {
         }
 
         /* Add the key first */
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         /* Now AddXX should succeed */
         databox val2 = databoxNewBytesString("xx-value-updated");
@@ -9031,7 +9086,7 @@ int multidictTest(int argc, char *argv[]) {
         }
 
         /* Add key, then replace */
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         databox val2 = databoxNewBytesString("replaced!");
         if (multidictReplace(d, &key, &val2) != MULTIDICT_OK_REPLACED) {
             ERRR("Replace should succeed for an existing key");
@@ -9044,7 +9099,7 @@ int multidictTest(int argc, char *argv[]) {
     TEST("17.1 GetAndDelete") {
         databox key = databoxNewBytesString("gad-key");
         databox val = databoxNewBytesString("gad-value");
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         databox foundVal = {{0}};
         if (!multidictGetAndDelete(d, &key, &foundVal)) {
@@ -9079,7 +9134,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "pop-val-%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         uint64_t initialCount = multidictCount(d);
@@ -9151,7 +9206,7 @@ int multidictTest(int argc, char *argv[]) {
     TEST("18.3 IncrBy on a non-numeric value is refused") {
         databox key = databoxNewBytesString("string-key");
         databox val = databoxNewBytesString("not-a-number");
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         int64_t result = 0;
         multidictResult r = multidictIncrBy(d, &key, 1, &result);
@@ -9173,11 +9228,11 @@ int multidictTest(int argc, char *argv[]) {
         const databox vBig = databoxNewUnsigned(UINT64_MAX);
         const databox vFloat = {.type = DATABOX_FLOAT_32, .data.f32 = 2.5f};
         const databox vHuge = databoxNewReal(DBL_MAX);
-        multidictAdd(d, &kMax, &vMax);
-        multidictAdd(d, &kMin, &vMin);
-        multidictAdd(d, &kBig, &vBig);
-        multidictAdd(d, &kFloat, &vFloat);
-        multidictAdd(d, &kHuge, &vHuge);
+        MULTIDICT_TEST_OK(multidictAdd(d, &kMax, &vMax));
+        MULTIDICT_TEST_OK(multidictAdd(d, &kMin, &vMin));
+        MULTIDICT_TEST_OK(multidictAdd(d, &kBig, &vBig));
+        MULTIDICT_TEST_OK(multidictAdd(d, &kFloat, &vFloat));
+        MULTIDICT_TEST_OK(multidictAdd(d, &kHuge, &vHuge));
 
         int64_t ir = 42;
         double dr = 42;
@@ -9222,7 +9277,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "copy-val-%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         cleaner(multidictFree) multidict *copy = multidictCopy(d);
@@ -9262,7 +9317,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "dst-val-%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Add entries to src (overlapping + new) */
@@ -9272,7 +9327,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "src-val-%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(src, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(src, &key, &val));
         }
 
         uint64_t merged = multidictMerge(d, src, MULTIDICT_MERGE_REPLACE);
@@ -9302,7 +9357,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "dst-val-%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Add overlapping entries to src */
@@ -9312,7 +9367,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "src-val-%d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(src, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(src, &key, &val));
         }
 
         /* KEEP mode - only non-existent keys should be added */
@@ -9325,6 +9380,55 @@ int multidictTest(int argc, char *argv[]) {
             ERR("after the merge the count should be 15, got %" PRIu64,
                 multidictCount(d));
         }
+    }
+
+    TEST("19.4 a refusing class: Copy fails, Merge counts what landed, LRU "
+         "tracks no refused key") {
+        cleaner(multidictMmClassFree) multidictClass *refusing =
+            multidictMmClassNew();
+        refusing->insertByType = mdTestRefusingInsert;
+        mdTestRefuse = MD_TEST_REFUSE_NONE;
+        cleaner(multidictFree) multidict *src =
+            multidictNew(&multidictTypeExactKey, refusing, 7);
+        for (int64_t i = 0; i < 20; i++) {
+            const databox key = DATABOX_SIGNED(i);
+            const databox val = DATABOX_SIGNED(-i);
+            MULTIDICT_TEST_OK(multidictAdd(src, &key, &val));
+        }
+
+        mdTestRefuse = MD_TEST_REFUSE_ALL;
+        multidict *copy = multidictCopy(src);
+        if (copy) {
+            ERRR("a copy its class refuses returned a dict");
+            multidictFree(copy);
+        }
+
+        cleaner(multidictFree) multidict *dst =
+            multidictNew(&multidictTypeExactKey, refusing, 8);
+        const uint64_t merged =
+            multidictMerge(dst, src, MULTIDICT_MERGE_REPLACE);
+        if (merged != 0 || multidictCount(dst) != 0) {
+            ERR("a refused merge counted %" PRIu64 ", holds %" PRIu64, merged,
+                multidictCount(dst));
+        }
+
+        /* The dict takes the key; its LRU index (an unsigned handle) is
+         * refused, so the LRU tracks nothing */
+        mdTestRefuse = MD_TEST_REFUSE_UNSIGNED;
+        if (!multidictEnableLRU(dst, 4)) {
+            ERRR("LRU did not enable");
+        } else {
+            const databox key = DATABOX_SIGNED(1);
+            const databox val = DATABOX_SIGNED(2);
+            MULTIDICT_TEST_OK(multidictAdd(dst, &key, &val));
+            if (multidictCount(dst) != 1 || multilruCount(dst->lru) != 0 ||
+                multidictCount(dst->lruKeyToPtr) != 0) {
+                ERR("count %" PRIu64 ", LRU %zu, LRU index %" PRIu64,
+                    multidictCount(dst), multilruCount(dst->lru),
+                    multidictCount(dst->lruKeyToPtr));
+            }
+        }
+        mdTestRefuse = MD_TEST_REFUSE_NONE;
     }
 
     /* ================================================================
@@ -9367,7 +9471,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "lruval%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
             /* Trigger eviction periodically */
             if (i % 100 == 99) {
@@ -9412,7 +9516,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "hval%04d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Touch key 0 repeatedly to make it hot */
@@ -9428,7 +9532,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "hval%04d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             if (i % 20 == 0) {
                 multidictEvictToLimit(d);
             }
@@ -9464,7 +9568,7 @@ int multidictTest(int argc, char *argv[]) {
 
             if (op < 40) {
                 /* 40%: Insert */
-                multidictAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
                 inserts++;
             } else if (op < 55) {
                 /* 15%: Delete */
@@ -9512,7 +9616,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "rhval%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         /* Now set a limit and evict during potential rehashing */
@@ -9531,7 +9635,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valBuf, sizeof(valBuf), "rhval%05d", 1000 + i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewBytesString(valBuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
             multidictEvictToLimit(d);
         }
 
@@ -9559,7 +9663,7 @@ int multidictTest(int argc, char *argv[]) {
         /* Insert a key */
         databox key = databoxNewBytesString("leveltest");
         databox val = databoxNewBytesString("value");
-        multidictAdd(d, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         int level0 = multidictGetLRULevel(d, &key);
         /* Touch repeatedly to promote */
@@ -9586,7 +9690,7 @@ int multidictTest(int argc, char *argv[]) {
         databox val = databoxNewBytesString("val");
         multidictTouch(dNoLru, &key);
         assert(multidictGetLRULevel(dNoLru, &key) == -1);
-        multidictAdd(dNoLru, &key, &val);
+        MULTIDICT_TEST_OK(multidictAdd(dNoLru, &key, &val));
         multidictTouch(dNoLru, &key);
         multidictDelete(dNoLru, &key);
 
@@ -9613,7 +9717,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "lruveto-%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(vd, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(vd, &key, &val));
             present[i] = true;
         }
         for (int32_t i = cold; i < total; i++) {
@@ -9827,7 +9931,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "samehash-%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i * 2);
-            multidictAdd(hd, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(hd, &key, &val));
         }
         databox key0 = databoxNewBytesString("samehash-00000");
         multidictTouch(hd, &key0);
@@ -9882,7 +9986,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keyBuf, sizeof(keyBuf), "lruveto-%05d", i);
             databox key = databoxNewBytesString(keyBuf);
             databox val = databoxNewSigned(i);
-            multidictAdd(wd, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(wd, &key, &val));
         }
         assert(testLruTrackingExact_(wd));
 
@@ -9977,7 +10081,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valbuf, sizeof(valbuf), "value%d", i);
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         multidictGetLoadMetrics(d, &metrics);
@@ -10008,7 +10112,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valbuf, sizeof(valbuf), "v%d", i);
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
         }
 
         multidictLoadMetrics metrics;
@@ -10038,7 +10142,7 @@ int multidictTest(int argc, char *argv[]) {
             valbuf[sizeof(valbuf) - 1] = '\0';
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
         }
 
         uint32_t finalSlots = multidictSlotCount(dByte);
@@ -10071,7 +10175,7 @@ int multidictTest(int argc, char *argv[]) {
             valbuf[sizeof(valbuf) - 1] = '\0';
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
         }
 
         uint32_t finalSlots = multidictSlotCount(dByte);
@@ -10108,7 +10212,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(valbuf, sizeof(valbuf), "v%d", i % 10);
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
             /* exact: 100 * count against the backstop's share of slots */
             if (!multidictIsRehashing(dByte) &&
                 multidictCount(dByte) * 100 >
@@ -10157,7 +10261,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(keybuf, sizeof(keybuf), "eff%d", i);
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
         }
 
         multidictLoadMetrics metrics;
@@ -10198,7 +10302,7 @@ int multidictTest(int argc, char *argv[]) {
                 for (int i = 0; i < perfN[size]; i++) {
                     const databox key = databoxNewSigned(i * 7919);
                     const databox val = databoxNewSigned(i);
-                    multidictAdd(perfD, &key, &val);
+                    MULTIDICT_TEST_OK(multidictAdd(perfD, &key, &val));
                 }
                 perOp[size][mode] =
                     (double)(timeUtilMonotonicNs() - t0) / perfN[size];
@@ -10242,11 +10346,11 @@ int multidictTest(int argc, char *argv[]) {
             valbuf[sizeof(valbuf) - 1] = '\0';
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
 
             databox key2 = databoxNewBytesString(keybuf);
             databox val2 = databoxNewBytesString(valbuf);
-            multidictAdd(dCount, &key2, &val2);
+            MULTIDICT_TEST_OK(multidictAdd(dCount, &key2, &val2));
         }
 
         uint32_t byteSlots = multidictSlotCount(dByte);
@@ -10274,7 +10378,7 @@ int multidictTest(int argc, char *argv[]) {
             valbuf[sizeof(valbuf) - 1] = '\0';
             databox key = databoxNewBytesString(keybuf);
             databox val = databoxNewBytesString(valbuf);
-            multidictAdd(dByte, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
 
             /* Interleave rehash steps */
             if (multidictIsRehashing(dByte)) {
@@ -10319,7 +10423,7 @@ int multidictTest(int argc, char *argv[]) {
                 valbuf[valsize] = '\0';
                 databox key = databoxNewBytesString(keybuf);
                 databox val = databoxNewBytesString(valbuf);
-                multidictAdd(dByte, &key, &val);
+                MULTIDICT_TEST_OK(multidictAdd(dByte, &key, &val));
                 adds++;
             } else if (op < 85) { /* 25% find */
                 char keybuf[32];
@@ -10369,7 +10473,7 @@ int multidictTest(int argc, char *argv[]) {
             snprintf(kb, sizeof(kb), "rk:%d", i);
             databox key = databoxNewBytesString(kb);
             databox val = databoxNewUnsigned((uint64_t)i);
-            multidictAdd(r, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(r, &key, &val));
         }
         assert(multidictSize(r) == N);
 
@@ -10420,7 +10524,7 @@ int multidictTest(int argc, char *argv[]) {
             for (uint64_t i = 0; i < 500; i++) {
                 const databox keybox = databoxNewUnsigned(0x9000 + i);
                 const databox valbox = databoxNewUnsigned(i * 3);
-                multidictAdd(d, &keybox, &valbox);
+                MULTIDICT_TEST_OK(multidictAdd(d, &keybox, &valbox));
             }
             if (multidictCount(d) != 500) {
                 ERR("cycle %d expected 500, got %" PRIu64, cycle,
@@ -10438,7 +10542,7 @@ int multidictTest(int argc, char *argv[]) {
         for (uint64_t i = 0; i < 500; i++) {
             const databox keybox = databoxNewUnsigned(0x9000 + i);
             const databox valbox = databoxNewUnsigned(i + 11);
-            multidictAdd(d, &keybox, &valbox);
+            MULTIDICT_TEST_OK(multidictAdd(d, &keybox, &valbox));
         }
         for (uint64_t i = 0; i < 500; i++) {
             const databox keybox = databoxNewUnsigned(0x9000 + i);
@@ -10505,7 +10609,7 @@ int multidictTest(int argc, char *argv[]) {
             const databox k =
                 databoxNewBytes(names[i], strlen((char *)names[i]));
             const databox v = databoxNewUnsigned((uint64_t)i);
-            multidictAdd(nd, &k, &v);
+            MULTIDICT_TEST_OK(multidictAdd(nd, &k, &v));
         }
         int found = 0;
         for (int i = 0; i < 3; i++) {
@@ -10549,7 +10653,7 @@ int multidictTest(int argc, char *argv[]) {
         for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
             const databox k = MD_BENCH_KEY(i);
             const databox v = databoxNewUnsigned(i);
-            multidictAdd(bd, &k, &v);
+            MULTIDICT_TEST_OK(multidictAdd(bd, &k, &v));
         }
         const uint64_t addNs = timeUtilMonotonicNs() - start;
 
@@ -10563,7 +10667,7 @@ int multidictTest(int argc, char *argv[]) {
             for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
                 const databox k = MD_BENCH_KEY(i);
                 const databox v = databoxNewUnsigned(i);
-                multidictAdd(pd, &k, &v);
+                MULTIDICT_TEST_OK(multidictAdd(pd, &k, &v));
             }
             presizedNs = timeUtilMonotonicNs() - start;
         }

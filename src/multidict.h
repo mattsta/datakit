@@ -9,7 +9,7 @@ typedef struct multidict multidict;
 /* ====================================================================
  * Result Codes
  * ==================================================================== */
-typedef enum {
+typedef enum [[nodiscard]] {
     MULTIDICT_ERR = -1,        /* Operation failed */
     MULTIDICT_OK_REPLACED = 0, /* Key existed, value was replaced */
     MULTIDICT_OK_INSERTED = 1  /* New key was inserted */
@@ -338,6 +338,9 @@ void multidictDefaultClassFree(multidictClass *qdc);
 bool multidictExpand(multidict *d, uint64_t size);
 multidictResult multidictAdd(multidict *d, const databox *keybox,
                              const databox *valbox);
+/* multidictAdd for a dict whose class never refuses an add (such as the
+ * default class): true when the key was new */
+bool multidictPut(multidict *d, const databox *keybox, const databox *valbox);
 bool multidictDelete(multidict *ht, const databox *keybox);
 void multidictFree(multidict *d);
 bool multidictFind(multidict *d, const databox *keybox, databox *valbox);
@@ -534,6 +537,15 @@ void multidictOpRepr(const multidictOp *op);
 
 #ifdef DATAKIT_TEST
 int multidictTest(int argc, char *argv[]);
+
+/* A test add or replace that must not be refused (ctest.h's ERR and an
+ * 'err' in scope) */
+#define MULTIDICT_TEST_OK(call)                                                \
+    do {                                                                       \
+        if ((call) == MULTIDICT_ERR) {                                         \
+            ERR("refused: %s", #call);                                         \
+        }                                                                      \
+    } while (0)
 #endif
 
 /* Hash Tables Implementation.

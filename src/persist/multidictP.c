@@ -401,7 +401,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 20; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -425,7 +425,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -433,7 +433,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 1000);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -459,7 +459,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 30; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -498,7 +498,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 20; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -539,7 +539,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 15; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -585,7 +585,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
         }
 
         if (multidictCountP(d) != 10) {
@@ -603,7 +603,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 100; i < 115; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 2);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -629,7 +629,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 10; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
             }
 
             PTEST_LOGGED(multidictEmptyP(d));
@@ -637,7 +637,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 50; i < 60; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 3);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -678,7 +678,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = round * 10; i < round * 10 + 8; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * round);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -686,7 +686,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = round * 10; i < round * 10 + 3; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 9999);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -731,7 +731,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 10; i++) {
                 databox key = DATABOX_SIGNED(cycle * 100 + i);
                 databox val = DATABOX_SIGNED(cycle * 1000 + i);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -759,7 +759,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 200; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 1000);
-                mdpAdd(d, &key, &val);
+                MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -826,7 +826,7 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multidictP *d = multidictNewP(ctx);
-            mdpAdd(d, &expectedKey, &expectedVal);
+            MULTIDICT_TEST_OK(mdpAdd(d, &expectedKey, &expectedVal));
             multidictCloseP(d);
             persistCtxFree(ctx);
         }
@@ -869,7 +869,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 15; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
         }
 
         /* Delete a few */
@@ -1000,9 +1000,9 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multidictP *d = multidictNewP(ctx);
-            mdpAdd(d, &lower, &one);
+            MULTIDICT_TEST_OK(mdpAdd(d, &lower, &one));
             multidictCompactP(d);
-            mdpAdd(d, &upper, &two);
+            MULTIDICT_TEST_OK(mdpAdd(d, &upper, &two));
             multidictCloseP(d);
             persistCtxFree(ctx);
         }
@@ -1270,7 +1270,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int64_t i = 0; i < 50; i++) {
             const databox key = DATABOX_SIGNED(i);
             const databox val = DATABOX_SIGNED(i * i);
-            mdpAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(mdpAdd(d, &key, &val));
         }
         if (!multidictSyncP(d) || multidictCountP(d) != 50 ||
             multidictBytesP(d) <= emptyBytes) {

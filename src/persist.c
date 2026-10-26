@@ -4648,8 +4648,8 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         flexGetByTypeBig(fe, &val);
         fe = flexNext(f, fe);
 
-        /* Add to multidict */
-        multidictAdd(d, (databox *)&key, (databox *)&val);
+        /* Add to multidict (its default class never refuses) */
+        multidictPut(d, (databox *)&key, (databox *)&val);
     }
 
     return d;
@@ -4721,10 +4721,14 @@ static bool multidictPersistApplyOp(void *structure, persistOp op,
         if (!flexGetTwoDataboxesBig(data, len, &key, &val)) {
             return false;
         }
+        /* A refusal (a REPLACE of an absent key) is the one the logged
+         * call met, so it replays as the same no-op */
         if (op == PERSIST_OP_REPLACE) {
-            multidictReplace(*d, (const databox *)&key, (const databox *)&val);
+            (void)multidictReplace(*d, (const databox *)&key,
+                                   (const databox *)&val);
         } else {
-            multidictAdd(*d, (const databox *)&key, (const databox *)&val);
+            (void)multidictAdd(*d, (const databox *)&key,
+                               (const databox *)&val);
         }
         return true;
     }
@@ -8029,7 +8033,7 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 0; i < 20; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 1000);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         persist *p = persistCreate(&persistOpsMultidict, NULL);
@@ -8818,7 +8822,7 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 0; i < 1000; i++) {
             databox key = DATABOX_SIGNED(i * 17); /* Spread keys */
             databox val = DATABOX_SIGNED(i);
-            multidictAdd(d, &key, &val);
+            MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         }
 
         persist *p = persistCreate(&persistOpsMultidict, NULL);
@@ -8859,7 +8863,7 @@ int persistTest(int argc, char *argv[]) {
             multidictNew(&multidictTypeCaseKey, qdc, 0);
         const databox alpha = databoxNewBytesString("Alpha");
         const databox one = DATABOX_SIGNED(1);
-        multidictAdd(d, &alpha, &one);
+        MULTIDICT_TEST_OK(multidictAdd(d, &alpha, &one));
 
         persist *p = persistCreate(&persistOpsMultidict, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -8940,8 +8944,8 @@ int persistTest(int argc, char *argv[]) {
             multidictClass *qdc = multidictDefaultClassNew();
             cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
                 multidictNew(&multidictTypeExactKey, qdc, 0);
-            multidictAdd(d, &s22, &s42);
-            multidictAdd(d, &i22, &s007);
+            MULTIDICT_TEST_OK(multidictAdd(d, &s22, &s42));
+            MULTIDICT_TEST_OK(multidictAdd(d, &i22, &s007));
 
             persist *p = persistCreate(&persistOpsMultidict, NULL);
             persistStore *snapStore = persistStoreMemory(0);

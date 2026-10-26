@@ -1356,7 +1356,7 @@ static clusterResult clusterRingAddNodeInternal(clusterRing *ring,
     /* Add to lookup dict */
     valbox.type = DATABOX_PTR;
     valbox.data.ptr = node;
-    multidictAdd(ring->nodeById, &keybox, &valbox);
+    multidictPut(ring->nodeById, &keybox, &valbox);
 
     /* Update healthy count */
     if (node->state == CLUSTER_NODE_UP) {
@@ -2660,7 +2660,7 @@ clusterResult clusterRingAddKeySpace(clusterRing *ring,
 
     valbox.type = DATABOX_PTR;
     valbox.data.ptr = ks;
-    multidictAdd(ring->keySpaceByName, &keybox, &valbox);
+    multidictPut(ring->keySpaceByName, &keybox, &valbox);
 
     if (out) {
         *out = ks;

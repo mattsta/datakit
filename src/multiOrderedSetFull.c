@@ -788,7 +788,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
     multidictIteratorInit((multidict *)m->memberIndex, &iter);
     multidictEntry entry;
     while (multidictIteratorNext(&iter, &entry)) {
-        multidictAdd(copy->memberIndex, &entry.key, &entry.val);
+        multidictPut(copy->memberIndex, &entry.key, &entry.val);
     }
     multidictIteratorRelease(&iter);
 

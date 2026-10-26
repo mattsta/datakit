@@ -44,10 +44,11 @@ static void *pcMultidictBuild(const persistContractBuild *b) {
         persistContractValue(&rng, &val, valBuf, sizeof(valBuf));
         const databox *pair[] = {(const databox *)&key, (const databox *)&val};
         if (roll == 1) {
-            multidictReplace(d, pair[0], pair[1]);
+            /* Logged either way: replay meets the same absent key */
+            (void)multidictReplace(d, pair[0], pair[1]);
             persistContractRecord(b->log, PERSIST_OP_REPLACE, pair, 2);
         } else {
-            multidictAdd(d, pair[0], pair[1]);
+            multidictPut(d, pair[0], pair[1]);
             persistContractRecord(b->log, PERSIST_OP_INSERT, pair, 2);
         }
 
@@ -60,7 +61,7 @@ static void *pcMultidictBuild(const persistContractBuild *b) {
     /* Each string as a key and as a value */
     for (size_t i = 0; i < b->stringCount; i++) {
         const databox *pair[] = {&b->strings[i], &b->strings[i]};
-        multidictAdd(d, pair[0], pair[1]);
+        multidictPut(d, pair[0], pair[1]);
         persistContractRecord(b->log, PERSIST_OP_INSERT, pair, 2);
     }
     return d;
