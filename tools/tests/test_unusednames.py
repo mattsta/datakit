@@ -264,6 +264,24 @@ class Converts(unittest.TestCase):
             convert(src)[0],
         )
 
+    def test_a_field_or_shadowing_local_of_the_same_name_is_not_a_read(self) -> None:
+        src = (
+            "int fTest(int argc, char *argv[], int n) {\n"
+            "    (void)argc;\n"
+            "    (void)n;\n"
+            "    typedef struct call { int op; size_t argc; } call;\n"
+            "    call c = {.op = 1, .argc = 2};\n"
+            "    {\n"
+            "        int n = 3;\n"
+            "        use(n, c.argc, argv);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        out, count, refusals = convert(src)
+        self.assertEqual((count, refusals), (2, []))
+        self.assertTrue(out.startswith("int fTest(int, char *argv[], int) {\n"))
+
     def test_a_return_type_on_its_own_line(self) -> None:
         src = (
             "// 'ctx' names the owner\n"
@@ -391,6 +409,31 @@ class Locals(unittest.TestCase):
         out, _, _ = convert(f"#ifdef DATAKIT_TEST\nint x;\n#else\n{body}#endif\n")
         self.assertIn("[[maybe_unused]] size_t bytes", out)
 
+    def test_a_local_counts_reads_in_its_own_block_only(self) -> None:
+        # another block's 'deleted' is another variable
+        src = (
+            "int fTest(void) {\n"
+            "    {\n"
+            "        const bool deleted = release(a);\n"
+            "        (void)deleted;\n"
+            "#if 0\n"
+            '        printf("%d", deleted);\n'
+            "#endif\n"
+            "    }\n"
+            "    {\n"
+            "        const bool deleted = release(b);\n"
+            "        show(deleted);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        out, count, refusals = convert(src)
+        self.assertEqual((count, refusals), (1, []))
+        self.assertIn(
+            "        [[maybe_unused]] const bool deleted = release(a);\n", out
+        )
+        self.assertIn("        const bool deleted = release(b);\n", out)
+
     def test_a_local_read_under_one_branch_is_maybe_unused(self) -> None:
         src = (
             "void f(void) {\n"
@@ -516,6 +559,28 @@ class Refuses(unittest.TestCase):
         self.assertEqual(
             (count, [r.reason for r in refusals]), (0, [unusednames.IMPLICIT])
         )
+
+    def test_words_in_a_macro_string_or_comment_are_not_names(self) -> None:
+        src = (
+            '#define MISS(k) report("key " #k " not found") /* found */\n'
+            "static void f(int found) {\n"
+            "    (void)found;\n"
+            "    MISS(x);\n"
+            "}\n"
+        )
+        self.assertIn("static void f(int) {", convert(src)[0])
+
+    def test_the_refusal_names_the_macro(self) -> None:
+        src = (
+            "#define BUMP() (err++)\n"
+            "#define FAIL() BUMP()\n"
+            "static void f(int *err) {\n"
+            "    (void)err;\n"
+            "    FAIL();\n"
+            "}\n"
+        )
+        _, _, refusals = unusednames.unname(src.encode())
+        self.assertEqual(refusals[0].detail, "via FAIL")
 
     def test_a_macro_parameter_of_the_same_name_is_not_implicit(self) -> None:
         src = (

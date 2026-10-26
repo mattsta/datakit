@@ -84,6 +84,7 @@ class Refusal:
     line: int
     name: str
     reason: str
+    detail: str = ""  # such as the macro that uses the name
 
 
 @dataclass
@@ -344,9 +345,10 @@ def unname(
     refusals: list[Refusal] = []
     count = 0
 
-    def refuse(m: re.Match[bytes], reason: str) -> None:
+    def refuse(m: re.Match[bytes], reason: str, detail: str = "") -> None:
         name = (m.group(1) or m.group(2)).decode()
-        refusals.append(Refusal(src.count(b"\n", 0, m.start()) + 1, name, reason))
+        line = src.count(b"\n", 0, m.start()) + 1
+        refusals.append(Refusal(line, name, reason, detail))
 
     by_function: dict[int, list[re.Match[bytes]]] = {}
     for m in silencers:
@@ -403,7 +405,7 @@ def unname(
                 refuse(m, DIRECTIVE)
                 continue
             if name in implicit:
-                refuse(m, IMPLICIT)
+                refuse(m, IMPLICIT, f"via {implicit[name].decode()}")
                 continue
             decl = None
             if name not in params:
@@ -414,14 +416,23 @@ def unname(
                 if decl.shared:
                     refuse(m, SHARED_DECLARATION)
                     continue
+            # a parameter's scope is the body; a local's, its own block
+            lo, hi = (
+                (fn.body_open, fn.body_close)
+                if decl is None
+                else (decl.start, decl.scope_end)
+            )
+            own = -1 if decl is None else decl.declarator
+            shadows = _shadowed(src, mask, name, lo, hi, own)
             uses = [
                 t.start()
-                for t in IDENT.finditer(src, fn.body_open, fn.body_close)
+                for t in IDENT.finditer(src, lo, hi)
                 if t.group() == name
                 and all(mask[t.start() : t.end()])
                 and not _is_member(src, mask, t.start())
                 and not any(a <= t.start() < b for a, b in spans)
-                and (decl is None or t.start() != decl.declarator)
+                and t.start() != own
+                and not _inside(t.start(), shadows)
             ]
             reads = [at for at in uses if not _is_write(src, mask, at, len(name))]
             if decl is not None and not uses and not decl.marked:
@@ -466,6 +477,7 @@ class _Declaration:
     declarator: int  # offset of the declared name
     shared: bool  # declares other names too (int a, b)
     marked: bool  # already [[maybe_unused]]
+    scope_end: int  # the '}' closing the block it is declared in
 
 
 #: a declaration's text before its name: an optional attribute, then type
@@ -485,38 +497,93 @@ STATEMENT_WORDS = frozenset(
 def _declaration(
     src: bytes, mask: bytearray, lo: int, before: int, name: bytes
 ) -> _Declaration | None:
-    """The nearest declaration of the local 'name' in [lo, before)."""
+    """The nearest declaration of the local 'name' in [lo, before) whose
+    block still holds 'before'."""
     found = None
     for t in IDENT.finditer(src, lo, before):
         if t.group() != name or not all(mask[t.start() : t.end()]):
             continue
-        nxt = _next_code(src, mask, t.end())
-        if nxt < 0 or src[nxt] not in b"=;[,":
-            continue
-        if src[nxt] == 0x3D and src[nxt + 1 : nxt + 2] == b"=":  # ==
-            continue
-        boundary = _prev_code(src, mask, t.start())
-        while boundary >= lo and src[boundary] not in b";{}":
-            boundary = _prev_code(src, mask, boundary)
-        start = _next_code(src, mask, boundary + 1)
-        # the code before the name (comments and directives between blanked)
-        prefix = bytes(src[k] if mask[k] else 0x20 for k in range(start, t.start()))
-        words = IDENT.findall(prefix)
-        if not words or words[0] in STATEMENT_WORDS:
-            continue
-        m = DECLARATION_PREFIX.fullmatch(prefix.rstrip())
-        if m:
-            shared = _declares_more(src, mask, t.end())
-        else:
-            # a later name of 'int a = 1, b': the text before the first
-            # ',' or '=' declares 'a'
-            head = re.split(rb"[,=]", prefix, maxsplit=1)[0].rstrip()
-            lead = DECLARATION_PREFIX.fullmatch(head)
-            if b"," not in prefix or not lead:
-                continue
-            m, shared = lead, True
-        found = _Declaration(start, t.start(), shared, m.group(1) is not None)
+        decl = _declarator(src, mask, t.start(), t.end(), lo)
+        if decl is not None and decl.scope_end >= before:  # not a closed sibling's
+            found = decl
     return found
+
+
+def _declarator(
+    src: bytes, mask: bytearray, at: int, end: int, lo: int
+) -> _Declaration | None:
+    """The declaration whose declared name is the token [at, end): a local,
+    or a field of a struct defined in the body; None for any other use."""
+    nxt = _next_code(src, mask, end)
+    if nxt < 0 or src[nxt] not in b"=;[,":
+        return None
+    if src[nxt] == 0x3D and src[nxt + 1 : nxt + 2] == b"=":  # ==
+        return None
+    boundary = _prev_code(src, mask, at)
+    while boundary >= lo and src[boundary] not in b";{}":
+        boundary = _prev_code(src, mask, boundary)
+    start = _next_code(src, mask, boundary + 1)
+    # the code before the name (comments and directives between blanked)
+    prefix = bytes(src[k] if mask[k] else 0x20 for k in range(start, at))
+    words = IDENT.findall(prefix)
+    if not words or words[0] in STATEMENT_WORDS:
+        return None
+    m = DECLARATION_PREFIX.fullmatch(prefix.rstrip())
+    if m:
+        shared = _declares_more(src, mask, end)
+    else:
+        # a later name of 'int a = 1, b': the text before the first ',' or
+        # '=' declares 'a'
+        head = re.split(rb"[,=]", prefix, maxsplit=1)[0].rstrip()
+        lead = DECLARATION_PREFIX.fullmatch(head)
+        if b"," not in prefix or not lead:
+            return None
+        m, shared = lead, True
+    return _Declaration(
+        start, at, shared, m.group(1) is not None, _block_end(src, mask, at, lo)
+    )
+
+
+def _shadowed(
+    src: bytes, mask: bytearray, name: bytes, lo: int, hi: int, own: int
+) -> list[tuple[int, int]]:
+    """The ranges of [lo, hi) where another declaration of 'name' (a
+    shadowing local or a struct field; not the one at 'own') is in force."""
+    out = []
+    for t in IDENT.finditer(src, lo, hi):
+        if t.group() != name or t.start() == own or not all(mask[t.start() : t.end()]):
+            continue
+        decl = _declarator(src, mask, t.start(), t.end(), lo)
+        if decl is not None:
+            out.append((t.start(), decl.scope_end))
+    return out
+
+
+def _block_end(src: bytes, mask: bytearray, at: int, lo: int) -> int:
+    """The '}' closing the innermost block that holds 'at' (lo: the
+    function body's '{')."""
+    depth = 0
+    i = at - 1
+    while i > lo:
+        if mask[i]:
+            if src[i] == 0x7D:  # }
+                depth += 1
+            elif src[i] == 0x7B:  # {
+                if depth == 0:
+                    break
+                depth -= 1
+        i -= 1
+    depth = 0
+    for j in range(i, len(src)):
+        if not mask[j]:
+            continue
+        if src[j] == 0x7B:
+            depth += 1
+        elif src[j] == 0x7D:
+            depth -= 1
+            if depth == 0:
+                return j
+    return len(src)
 
 
 def _declares_more(src: bytes, mask: bytearray, at: int) -> bool:
@@ -611,27 +678,35 @@ def macro_names(src: bytes) -> Macros:
     out: Macros = {}
     for m in DEFINE.finditer(src):
         params = {p.strip() for p in (m.group(3) or b"").split(b",")}
-        body = set(NAME_TOKEN.findall(m.group(4))) - params - MACRO_KEYWORDS
+        text = m.group(4)
+        mask = code_mask(text)  # words in the body's strings and comments are not names
+        words = {
+            t.group()
+            for t in NAME_TOKEN.finditer(text)
+            if all(mask[t.start() : t.end()])
+        }
+        body = words - params - MACRO_KEYWORDS
         body.discard(m.group(1))
         out[m.group(1)] = frozenset(body)
     return out
 
 
-def _implicit_uses(body_names: set[bytes], macros: Macros) -> set[bytes]:
-    """The names the macros called in a body use by themselves, following
-    macros that call macros."""
+def _implicit_uses(body_names: set[bytes], macros: Macros) -> dict[bytes, bytes]:
+    """The names the macros called in a body use by themselves -> the
+    macro the body calls that reaches each (following macros that call
+    macros)."""
     seen: set[bytes] = set()
-    todo = [n for n in body_names if n in macros]
-    found: set[bytes] = set()
+    todo = [(n, n) for n in sorted(body_names) if n in macros]
+    found: dict[bytes, bytes] = {}
     while todo:
-        name = todo.pop()
+        name, root = todo.pop()
         if name in seen:
             continue
         seen.add(name)
-        for used in macros[name]:
-            found.add(used)
+        for used in sorted(macros[name]):
+            found.setdefault(used, root)
             if used in macros:
-                todo.append(used)
+                todo.append((used, root))
     return found
 
 
@@ -745,7 +820,8 @@ def run(repo: Path, paths: tuple[str, ...], dry_run: bool) -> int:
         src = target.read_bytes()
         out, count, refusals = unname(src, bool(TEST_FILE.search(path)), macros)
         for r in refusals:
-            print(f"  {path}:{r.line}: {r.name}: {r.reason}")
+            detail = f" ({r.detail})" if r.detail else ""
+            print(f"  {path}:{r.line}: {r.name}: {r.reason}{detail}")
         refused += len(refusals)
         if count:
             total += count
