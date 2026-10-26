@@ -16,6 +16,7 @@ from . import (
     configure,
     countof,
     coverage,
+    defconst,
     dropinclude,
     enumconst,
     formatting,
@@ -300,6 +301,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     co.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     co.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    dc = sub.add_parser(
+        "defconst",
+        help="classify numeric #defines and rewrite the convertible ones as "
+        "static constexpr of the literal's type (C23); --dry-run reports",
+    )
+    dc.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    dc.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     ec = sub.add_parser(
         "enumconst",
@@ -1043,6 +1052,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "countof":
         return countof.run(args.repo, tuple(args.paths), args.dry_run)
+
+    if args.command == "defconst":
+        return defconst.run(args.repo, tuple(args.paths), args.dry_run)
 
     if args.command == "enumconst":
         return enumconst.run(args.repo, tuple(args.paths), args.dry_run)
