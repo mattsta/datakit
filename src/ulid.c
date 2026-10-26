@@ -909,6 +909,10 @@ uint64_t ulidGetRandom(const ulid_t *ulid) {
 }
 
 size_t ulidGenerateAndEncode(ulidGen *g, char *out, size_t outLen) {
+    if (!g) {
+        return 0;
+    }
+
     ulid_t id;
     ulidGenerate(g, &id);
     return ulidEncode(&id, out, outLen);
@@ -1790,6 +1794,7 @@ typedef enum interleaveImpl {
 
 static interleaveImpl g_interleaveImpl = INTERLEAVE_AUTO;
 
+#ifdef DATAKIT_TEST
 /* Set implementation (for benchmarking) */
 static void setInterleaveImpl(interleaveImpl impl) {
     g_interleaveImpl = impl;
@@ -1799,6 +1804,7 @@ static void setInterleaveImpl(interleaveImpl impl) {
 static interleaveImpl getInterleaveImpl(void) {
     return g_interleaveImpl;
 }
+#endif
 
 /* Dispatch wrapper for interleave */
 static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
@@ -2126,6 +2132,10 @@ uint32_t ulid32GetRandom(const ulid32_t *id, ulidVariantType type) {
 
 size_t ulid64GenerateAndEncode(ulidGen *g, char *out, size_t outLen,
                                ulidVariantType type) {
+    if (!g) {
+        return 0;
+    }
+
     ulid64_t id;
     ulid64Generate(g, &id, type);
     return ulid64Encode(&id, out, outLen);
@@ -3414,6 +3424,17 @@ int ulidTest(int, char *[]) {
         ulid_t decoded;
         if (!ulidDecode(encoded, &decoded)) {
             ERR("Failed to decode GenerateAndEncode result: %s", encoded);
+        }
+
+        /* No generator: nothing generated, nothing encoded */
+        if (ulidGenerateAndEncode(NULL, encoded, sizeof(encoded)) != 0) {
+            ERR("GenerateAndEncode without a generator should return 0");
+        }
+
+        char encoded64[ULID64_ENCODED_LENGTH + 1];
+        if (ulid64GenerateAndEncode(NULL, encoded64, sizeof(encoded64),
+                                    ULID_VARIANT_NS) != 0) {
+            ERR("ulid64GenerateAndEncode without a generator should return 0");
         }
     }
 

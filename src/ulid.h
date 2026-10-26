@@ -135,7 +135,8 @@ uint64_t ulidGetTimestampNs(const ulid_t *ulid);
 /* Extract randomness component from ULID */
 uint64_t ulidGetRandom(const ulid_t *ulid);
 
-/* Convenience: generate and encode in one call */
+/* Convenience: generate and encode in one call; returns the encoded
+ * length, 0 without a generator or with too small a buffer */
 size_t ulidGenerateAndEncode(ulidGen *g, char *out, size_t outLen);
 
 /* ====================================================================
@@ -285,7 +286,8 @@ uint64_t ulid64GetTimestampNs(const ulid64_t *id, ulidVariantType type);
 /* Extract random/sequence component from ULID64 */
 uint64_t ulid64GetRandom(const ulid64_t *id, ulidVariantType type);
 
-/* Convenience: generate and encode in one call */
+/* Convenience: generate and encode in one call; returns the encoded
+ * length, 0 without a generator or with too small a buffer */
 size_t ulid64GenerateAndEncode(ulidGen *g, char *out, size_t outLen,
                                ulidVariantType type);
 
