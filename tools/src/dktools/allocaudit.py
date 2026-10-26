@@ -28,7 +28,12 @@ of exactly two machine-verifiable ways:
      static    — deliberate process-lifetime allocation, never freed.
      cache     — owned by a cache/pool that manages reuse and release.
 
-A site that is neither SCOPED nor validly ANNOTATED is a violation.
+A site that is neither SCOPED nor validly ANNOTATED is a violation, and
+so is any call to a libc allocator (malloc, calloc, realloc, free,
+posix_memalign, aligned_alloc, strdup, strndup): datakit allocates
+through zmalloc/zcalloc/zrealloc/zfree. A file opts out only explicitly,
+with ``#define IKNOWWHATIMDOING`` (the allocator implementation and its
+configuration, a libc baseline benchmark, a standalone program).
 ``check`` mode exits nonzero unless the tree is 100% clean; ``report``
 mode additionally classifies each site's apparent data flow so the
 migration can proceed file by file with evidence in hand.
@@ -530,6 +535,40 @@ def _classify_flow(
         site.flow = "local:unresolved"
 
 
+#: libc allocation calls: datakit allocates through zmalloc/zcalloc/
+#: zrealloc/zfree (datakit.h marks these deprecated). A file opts out
+#: explicitly with '#define IKNOWWHATIMDOING' (the allocator implementation,
+#: allocator configuration, a libc baseline benchmark, a standalone program).
+LIBC_ALLOCATORS = frozenset(
+    (
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "posix_memalign",
+        "aligned_alloc",
+        "strdup",
+        "strndup",
+    )
+)
+LIBC_OPT_OUT_RE = re.compile(r"(?m)^\s*#\s*define\s+IKNOWWHATIMDOING\b")
+
+
+def _is_libc_call(tokens: list, i: int) -> bool:
+    """Whether the libc allocator name at tokens[i] is called: followed by
+    '(', not a member (o->free(p)), not a declaration (void free(...),
+    char *strdup(...))."""
+    if i + 1 >= len(tokens) or tokens[i + 1].spelling != "(":
+        return False
+    if i == 0:
+        return True
+    prev = tokens[i - 1]
+    if prev.spelling in (".", "->", "*"):
+        return False
+    kinds = (cindex.TokenKind.IDENTIFIER, cindex.TokenKind.KEYWORD)
+    return prev.kind not in kinds or prev.spelling == "return"
+
+
 def audit_file(
     repo: Path, path: Path, index: cindex.Index, include_constructors: bool = False
 ) -> AuditResult:
@@ -564,8 +603,25 @@ def audit_file(
             if kind != cindex.TokenKind.COMMENT:
                 tokens.append(_Tok(t.spelling, kind, _Loc(loc.line, loc.column)))
 
+    libc_ok = LIBC_OPT_OUT_RE.search(source) is not None
     for i, tok in enumerate(tokens):
         if tok.kind != cindex.TokenKind.IDENTIFIER:
+            continue
+        if tok.spelling in LIBC_ALLOCATORS:
+            if not libc_ok and _is_libc_call(tokens, i):
+                result.sites.append(
+                    Site(
+                        path=str(path.relative_to(repo)),
+                        line=tok.location.line,
+                        col=tok.location.column,
+                        allocator=tok.spelling,
+                        function=_containing_function(extents, tok.location.line),
+                        statement=lines[tok.location.line - 1].strip(),
+                        status="VIOLATION",
+                        flow="libc",
+                        evidence=["libc allocator: datakit allocates through z*"],
+                    )
+                )
             continue
         is_ctor = include_constructors and tok.spelling in CONSTRUCTORS
         if tok.spelling not in ALLOCATORS and not is_ctor:

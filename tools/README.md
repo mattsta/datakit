@@ -22,6 +22,13 @@ heuristics, and the `CONSTRUCTORS` registry (constructor → releasing
 function — the single place new containers get registered) live in
 `src/dktools/allocaudit.py`.
 
+A call to a libc allocator (`malloc`, `calloc`, `realloc`, `free`,
+`posix_memalign`, `aligned_alloc`, `strdup`, `strndup`) is a violation:
+datakit allocates through `zmalloc`/`zcalloc`/`zrealloc`/`zfree`. A file
+opts out only explicitly, with `#define IKNOWWHATIMDOING` (the allocator
+implementation and its configuration, a libc baseline benchmark, a
+standalone program).
+
 ```sh
 uv run dktools allocaudit check                 # allocators only
 uv run dktools allocaudit check --constructors  # full discipline (the gate)
@@ -680,6 +687,24 @@ uv run --project tools dktools dropinclude stdbool.h [--dry-run] [FILE ...]
   lines stay.
 - Prints each file's count. Exits 0, or 2 for a bad header name or a
   missing file.
+
+## countof — element counts as countof(X)
+
+```sh
+uv run --project tools dktools countof [--dry-run] [FILE ...]
+```
+
+- In the tracked `src/**/*.c` and `*.h` (vendored `src/memshard`
+  excluded), or the files given, where every byte is code (macro bodies
+  included; comments and literals never): `sizeof(X) / sizeof(*X)` and
+  `sizeof(X) / sizeof(X[0])` (also `sizeof((X)[0])` and unparenthesized
+  `sizeof X / sizeof X[0]`) become `countof(X)`, X a name with any
+  `.member`, `->member` and `[index]`; `COUNT_ARRAY(X)` becomes
+  `countof(X)`.
+- A ratio with any other divisor stays. `countof` (src/dkC23.h) refuses
+  a pointer at compile time, so a site that stops compiling was counting
+  a pointer's bytes.
+- Prints each file's count. Exits 0, or 2 for a missing file.
 
 ## unusednames — retire `(void)name;` silencers for the C23 forms
 

@@ -82,6 +82,36 @@ class AllocAudit(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("VIOLATION src/c.c:2 in leak", out)
 
+    def test_a_libc_allocator_call_is_a_violation(self) -> None:
+        self.write(
+            "src/c.c",
+            "void t(void) {\n    unsigned *a = malloc(8);\n    free(a);\n}\n",
+        )
+        result = allocaudit.run_audit(self.repo, jobs=2)
+        libc = [
+            (s.line, s.allocator, s.status) for s in result.sites if s.path == "src/c.c"
+        ]
+        self.assertEqual(libc, [(2, "malloc", "VIOLATION"), (3, "free", "VIOLATION")])
+        code, out, _ = self.cli("check", "-j", "2")
+        self.assertEqual(code, 1, out)
+
+    def test_an_explicit_opt_out_a_field_or_a_declaration_is_not(self) -> None:
+        self.write(
+            "src/c.c",
+            "#define IKNOWWHATIMDOING /* a libc baseline on purpose */\n"
+            "void t(void) { void *p = malloc(8); free(p); }\n",
+        )
+        self.write(
+            "src/d.c",
+            "struct s { void (*free)(void *); };\n"
+            "void *calloc(unsigned long n, unsigned long size);\n"
+            "void u(struct s *o, struct s v, void *p) { o->free(p); v.free(p); }\n",
+        )
+        result = allocaudit.run_audit(self.repo, jobs=2)
+        self.assertEqual(
+            [s for s in result.sites if s.path in ("src/c.c", "src/d.c")], []
+        )
+
     def test_killed_worker_exits_2_without_hanging(self) -> None:
         start = time.monotonic()
         with mock.patch.object(allocaudit, "_audit_one", prochelpers.die_audit):
