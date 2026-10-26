@@ -158,7 +158,7 @@ dkDiagPrintMode dkDiagGetPrintMode(void);
 __attribute__((cold, noinline, format(printf, 6, 7))) void
 dkDiagReport_(dkDiagSeverity severity, dkDiagCode code, const char *function,
               const char *file, int line, const char *fmt, ...);
-__attribute__((cold, noinline, noreturn, format(printf, 5, 6))) void
+[[noreturn]] __attribute__((cold, noinline, format(printf, 5, 6))) void
 dkDiagFatal_(dkDiagCode code, const char *function, const char *file, int line,
              const char *fmt, ...);
 

@@ -19,12 +19,20 @@
  * dkTestPoly1305SimdParity in the test driver.
  *
  * On non-x86_64 hosts the symbols are stubs: Available() returns
- * false; Block4x() asserts (callers must gate on the probe).  This
- * matches the pattern used by hash/aesGcmNi.c and hash/chacha20AVX2.c. */
+ * false and Block4x() aborts, so it is declared [[noreturn]] there
+ * (callers must gate on the probe). */
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#if defined(__x86_64__)
+#define POLY1305_AVX2_BUILD 1
+#define POLY1305_AVX2_STUB_NORETURN
+#else
+#define POLY1305_AVX2_BUILD 0
+#define POLY1305_AVX2_STUB_NORETURN [[noreturn]]
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,10 +59,10 @@ bool poly1305AVX2Available(void);
  *
  * Postcondition: h is fully updated to reflect 4*num_groups message
  * blocks consumed; no internal buffer state changes. */
-void poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5],
-                         const uint32_t r2[5], const uint32_t r3[5],
-                         const uint32_t r4[5], const uint8_t *msg,
-                         size_t num_groups);
+POLY1305_AVX2_STUB_NORETURN void
+poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5], const uint32_t r2[5],
+                    const uint32_t r3[5], const uint32_t r4[5],
+                    const uint8_t *msg, size_t num_groups);
 
 /* Precompute r^2, r^3, r^4 mod p as 5x 26-bit limbs given r.  Trivially
  * done scalar (three multiplies) — provided here so the dispatcher and

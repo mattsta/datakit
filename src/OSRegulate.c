@@ -347,9 +347,8 @@ bool OSRegulateWritePidToFile(const char *path) {
     return true;
 }
 
-void OSRegulateExitClean(void) {
+[[noreturn]] void OSRegulateExitClean(void) {
     _exit(0);
-    __builtin_unreachable();
 }
 
 bool OSRegulateRequestSignalChildWhenParentExits(int sig) {

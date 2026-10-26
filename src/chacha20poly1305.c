@@ -284,7 +284,7 @@ static void chacha20XorStream(const uint8_t key[32], uint32_t initial_counter,
     /* AVX2 8-block path: 512 bytes per call.  Counter is incremented
      * by 8 per iteration; the SIMD routine reads state[12] as the
      * base counter and produces blocks for c+0..c+7. */
-    if (backend == CHACHA20_BACKEND_AVX2) {
+    if (CHACHA20_AVX2_BUILD && backend == CHACHA20_BACKEND_AVX2) {
         uint8_t ks[512];
         uint32_t state[16];
         while (len >= 512u) {
@@ -500,7 +500,8 @@ static void poly1305Update(poly1305State *st, const uint8_t *data, size_t len) {
      * Output is bit-identical to scalar — enforced by
      * dkTestPoly1305SimdParity. */
     const poly1305Backend pbk = poly1305ActiveBackend();
-    if (pbk == POLY1305_BACKEND_AVX2 && len >= 64u * 4u) {
+    if (POLY1305_AVX2_BUILD && pbk == POLY1305_BACKEND_AVX2 &&
+        len >= 64u * 4u) {
         uint32_t r2[5], r3[5], r4[5];
         poly1305AVX2PrecomputePowers(st->r, r2, r3, r4);
         size_t groups = len / 64u;

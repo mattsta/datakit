@@ -14,12 +14,20 @@
  * (on aarch64) or scalar paths.
  *
  * On non-x86_64 hosts the symbols are stubs: Available() returns
- * false; Block8() asserts (callers must gate on the probe).  This
- * matches the pattern used by hash/aesGcmNi.c and hash/blake3AVX2.c. */
+ * false and Block8() aborts, so it is declared [[noreturn]] there
+ * (callers must gate on the probe). */
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#if defined(__x86_64__)
+#define CHACHA20_AVX2_BUILD 1
+#define CHACHA20_AVX2_STUB_NORETURN
+#else
+#define CHACHA20_AVX2_BUILD 0
+#define CHACHA20_AVX2_STUB_NORETURN [[noreturn]]
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +45,8 @@ bool chacha20AVX2Available(void);
  *
  * `out` MUST point to at least 512 bytes (8 x 64).  Blocks are laid
  * out contiguously: block i in bytes [i*64 .. i*64+63]. */
-void chacha20AVX2Block8(const uint32_t state[16], uint8_t out[512]);
+CHACHA20_AVX2_STUB_NORETURN void chacha20AVX2Block8(const uint32_t state[16],
+                                                    uint8_t out[512]);
 
 #ifdef __cplusplus
 } /* extern "C" */

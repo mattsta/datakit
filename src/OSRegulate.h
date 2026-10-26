@@ -24,7 +24,7 @@ OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg);
  * already running) or the file cannot be opened or written. */
 bool OSRegulateWritePidToFile(const char *path);
 void OSRegulateDaemonizeThenExitNoWait(void);
-void OSRegulateExitClean(void);
+[[noreturn]] void OSRegulateExitClean(void);
 
 /* Readiness channel: a one-shot cross-process "ready" event.  The
  * child sends one byte when ready; the parent waits on the read end and

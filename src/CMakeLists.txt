@@ -352,6 +352,14 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wimplicit-fallthrough=5")
 endif()
 
+# A function that never returns says [[noreturn]], so callers and the
+# optimizer know the path ends there
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wmissing-noreturn")
+else()
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wsuggest-attribute=noreturn")
+endif()
+
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     # Clang-specific warnings
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")

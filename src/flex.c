@@ -2392,7 +2392,7 @@ void flexInsertBytes(flex **const ff, flexEntry *const fe, const void *data,
  * (a FATAL DK_DIAG_FLEX_BOX_UNENCODABLE diagnostic) and stopped in every
  * build, never left to undefined behaviour where assertions are compiled
  * out */
-__attribute__((noreturn, cold)) static void
+[[noreturn]] __attribute__((cold)) static void
 flexBoxTypeUnsupported_(const databox *box, const char *where) {
     DK_DIAG_FATAL(DK_DIAG_FLEX_BOX_UNENCODABLE,
                   "%s: a box of type %d has no flex encoding", where,
@@ -9179,7 +9179,7 @@ static int32_t flexTestReplaceSign(void) {
 #define FLEX_TEST_DEFERRED_PATHS 4
 #define FLEX_TEST_ABORT_STATUS 86
 #define FLEX_TEST_BARE_ABORT_STATUS 87
-static void flexTestAbortHandler_(int sig) {
+[[noreturn]] static void flexTestAbortHandler_(int sig) {
     (void)sig;
     _exit(FLEX_TEST_BARE_ABORT_STATUS);
 }

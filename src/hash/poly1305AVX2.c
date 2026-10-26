@@ -37,13 +37,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
-
-#if defined(__x86_64__)
-#define POLY1305_AVX2_BUILD 1
-#else
-#define POLY1305_AVX2_BUILD 0
-#endif
 
 /* Scalar reference for r^k precompute, shared between SIMD and scalar
  * paths to keep arithmetic bit-identical. */
@@ -271,10 +266,14 @@ bool poly1305AVX2Available(void) {
     return false;
 }
 
-void poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5],
-                         const uint32_t r2[5], const uint32_t r3[5],
-                         const uint32_t r4[5], const uint8_t *msg,
-                         size_t num_groups) {
+/* Unreachable: the dispatcher selects AVX2 only after
+ * poly1305AVX2Available(), and returning would leave the MAC state
+ * unabsorbed, so a call aborts */
+[[noreturn]] void poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5],
+                                      const uint32_t r2[5],
+                                      const uint32_t r3[5],
+                                      const uint32_t r4[5], const uint8_t *msg,
+                                      size_t num_groups) {
     (void)h;
     (void)r;
     (void)r2;
@@ -282,8 +281,7 @@ void poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5],
     (void)r4;
     (void)msg;
     (void)num_groups;
-    assert(!"poly1305AVX2Block4x invoked on non-x86_64 build — caller "
-            "must check poly1305AVX2Available() first");
+    abort();
 }
 
 #endif /* POLY1305_AVX2_BUILD */

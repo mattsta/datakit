@@ -1236,7 +1236,7 @@ void databoxRepr(const databox *const box) {
  * keeps the platform crash reporter out of it, and sends its stderr to
  * /dev/null so the expected message does not clutter the test log. */
 #define DATABOX_TEST_ABORT_STATUS 86
-static void databoxTestAbortHandler_(int sig) {
+[[noreturn]] static void databoxTestAbortHandler_(int sig) {
     (void)sig;
     _exit(DATABOX_TEST_ABORT_STATUS);
 }

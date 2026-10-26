@@ -25,13 +25,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
-
-#if defined(__x86_64__)
-#define CHACHA20_AVX2_BUILD 1
-#else
-#define CHACHA20_AVX2_BUILD 0
-#endif
 
 #if CHACHA20_AVX2_BUILD
 
@@ -199,13 +194,14 @@ bool chacha20AVX2Available(void) {
     return false;
 }
 
-void chacha20AVX2Block8(const uint32_t state[16], uint8_t out[512]) {
+/* Unreachable: the dispatcher selects AVX2 only after
+ * chacha20AVX2Available(), and a keystream of zeros would leave the
+ * plaintext in the clear, so a call aborts */
+[[noreturn]] void chacha20AVX2Block8(const uint32_t state[16],
+                                     uint8_t out[512]) {
     (void)state;
-    if (out != NULL) {
-        memset(out, 0, 512);
-    }
-    assert(!"chacha20AVX2Block8 invoked on non-x86_64 build — caller "
-            "must check chacha20AVX2Available() first");
+    (void)out;
+    abort();
 }
 
 #endif /* CHACHA20_AVX2_BUILD */
