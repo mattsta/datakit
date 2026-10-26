@@ -3095,6 +3095,39 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
     }
 
+    TEST("lenutf8countbytes every lead byte") {
+        /* Each lead byte declares its character's length; the bytes of
+         * the first k characters always end on a character boundary.
+         * Prefixes of 1 and 10 bytes reach the tail loop and the
+         * step-by-word loop. */
+        static const char prefix[] = "abcdefghij";
+        static const size_t prefixLens[] = {1, 10};
+        for (uint32_t lead = 0xC2; lead <= 0xF4; lead++) {
+            const size_t n = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
+            for (size_t p = 0; p < countof(prefixLens); p++) {
+                const size_t pre = prefixLens[p];
+                uint8_t buf[16];
+                memcpy(buf, prefix, pre);
+                buf[pre] = (uint8_t)lead;
+                memset(buf + pre + 1, 0x80, n - 1);
+                buf[pre + n] = 'z';
+                const size_t len = pre + n + 1;
+
+                const size_t through = StrLenUtf8CountBytes(buf, len, pre + 1);
+                if (through != pre + n) {
+                    ERR("lead 0x%02" PRIX32 " after %zu: %zu bytes, want %zu",
+                        lead, pre, through, pre + n);
+                }
+
+                const size_t all = StrLenUtf8CountBytes(buf, len, pre + 2);
+                if (all != len) {
+                    ERR("lead 0x%02" PRIX32 " after %zu: %zu bytes, want %zu",
+                        lead, pre, all, len);
+                }
+            }
+        }
+    }
+
 #define _TU8MIDDLES                                                            \
     "\xF0\x9F\x98\x81"                                                         \
     "\xF0\x9F\x98\x82"                                                         \

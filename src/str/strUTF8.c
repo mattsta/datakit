@@ -392,17 +392,17 @@ size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
                  * exactly 'backupBy' characters since that's
                  * the number of characters we overshot by. */
 
-                /* (*s & 0xC0) selects the top two bits of *s */
-                switch (*s & 0xC0) {
-                case 0x80:
+                /* classify *s by its top two bits */
+                switch (*s & 0b1100'0000) {
+                case 0b1000'0000:
                     /* if top two bits are 10, skip because
                      * it's a member byte, not a start byte. */
                     break;
-                case 0x00:
-                case 0x40:
+                case 0b0000'0000:
+                case 0b0100'0000:
                 /* if the top two bits are 00 or 01,
                  * count it for removal because it's ASCII */
-                case 0xC0:
+                case 0b1100'0000:
                     /* all bytes starting with 11 are multibyte
                      * start indicators, so we've iterated over
                      * a full character to count for removal. */
@@ -417,7 +417,7 @@ size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
              * iterate up until the next character start byte so
              * we consume a full character (otherwise we could be returning
              * byte counts with the last UTF-8 character not fully counted). */
-            while (len-- && ((*s & 0xC0) == 0x80)) {
+            while (len-- && ((*s & 0b1100'0000) == 0b1000'0000)) {
                 s++;
             }
 
@@ -443,49 +443,33 @@ size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
         uint8_t byteStep = 1;    /* byteStep == 1 == 1 byte */
         uint8_t memberBytes = 0; /* memberBytes == 0 == no UTF-8 bytes */
 
-        /* For counting byte offsets we step over complete characters. */
-        /* The 'default' case where nothing matches assumes a
-         * one byte UTF-8/ascii character. */
-        switch (*s & 0xF0) {
-        /* These first four special cases check the upper four
-         * bits of a member byte when the byte starts with '10'.
-         * Member bytes starting with '10' are left over from our
-         * step-by-8 processing, but we have to account for them
-         * individually here since we step by entire characters below.
-         * These four catch every combination of '10xx0000' */
-        case 0x80:
-        /* 10000000 */
-        case 0x90:
-        /* 10010000 */
-        case 0xA0:
-        /* 10100000 */
-        case 0xB0:
-            /* 10110000 */
-            /* RESIDUAL MEMBER BYTE ACCOUNTING */
-            /* 1 character member byte, not character boundary. */
-            /* These catch special cases where we have trailing
-             * member bytes left over from 'STRLEN_UTF8_STEP_SIZE' iterations.
-             * We need to include the "extra character" but
-             * not count any full characters. */
-
-            /* use default 'byteStep' assigned above. */
+        /* For counting byte offsets we step over complete characters,
+         * classified by the top four bits; the 'default' case where
+         * nothing matches is a one byte UTF-8/ascii character. */
+        switch (*s & 0b1111'0000) {
+        case 0b1000'0000:
+        case 0b1001'0000:
+        case 0b1010'0000:
+        case 0b1011'0000:
+            /* A member byte (10xxxxxx) left over from the
+             * 'STRLEN_UTF8_STEP_SIZE' iterations: it counts as an
+             * extra byte but not as a character. Use the default
+             * 'byteStep' assigned above. */
             memberBytes = 1;
             break;
-        case 0xC0:
-            /* 11000000 */
-            /* 2 character utf8 */
+        case 0b1100'0000:
+        case 0b1101'0000:
+            /* 110xxxxx: 2 byte character */
             byteStep = 2;
             memberBytes = 1;
             break;
-        case 0xE0:
-            /* 11100000 */
-            /* 3 character utf8 */
+        case 0b1110'0000:
+            /* 1110xxxx: 3 byte character */
             byteStep = 3;
             memberBytes = 2;
             break;
-        case 0xF0:
-            /* 11110000 */
-            /* 4 character utf8 */
+        case 0b1111'0000:
+            /* 11110xxx: 4 byte character */
             byteStep = 4;
             memberBytes = 3;
             break;
