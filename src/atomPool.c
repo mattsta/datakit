@@ -1228,7 +1228,7 @@ int atomPoolTest(int, char *[]) {
             const databox a = databoxNewBytesString("alpha");
             const databox b = databoxNewBytesString("beta");
             const uint64_t ida = atomPoolIntern(pool, &a);
-            const uint64_t idb = atomPoolIntern(pool, &b);
+            (void)atomPoolIntern(pool, &b);
             atomPoolRetain(pool, ida);
             if (atomPoolRelease(pool, ida) || atomPoolRelease(pool, ida) ||
                 atomPoolCount(pool) != 2 || atomPoolRefcount(pool, ida) != 1 ||
@@ -1245,7 +1245,6 @@ int atomPoolTest(int, char *[]) {
                     atomPoolTypeName((atomPoolType)t));
             }
 
-            (void)idb;
             atomPoolFree(pool);
         }
     }

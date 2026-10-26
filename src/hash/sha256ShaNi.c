@@ -18,8 +18,9 @@
 
 #include <immintrin.h>
 
-/* SHA-256 round constants (cube roots of the first 64 primes, low 32 bits). */
-static constexpr uint32_t K_const[64] = {
+/* SHA-256 round constants (cube roots of the first 64 primes, low 32 bits).
+ * The rounds below carry them as immediates; this table is their reference. */
+[[maybe_unused]] static constexpr uint32_t K_const[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
     0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
     0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
@@ -276,8 +277,6 @@ sha256ShaNiCompressBlocks(uint32_t state[8], const uint8_t *blocks,
     __m128i efgh = _mm_alignr_epi8(STATE1, STATE0, 8);    /* HGFE */
     _mm_storeu_si128((__m128i *)&state[0], abcd);
     _mm_storeu_si128((__m128i *)&state[4], efgh);
-
-    (void)K_const; /* K is embedded in the immediate sequence above. */
 }
 
 /* Multi-buffer path.  Implemented as four interleaved single-buffer

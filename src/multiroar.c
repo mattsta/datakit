@@ -4679,8 +4679,8 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("create") {
-        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        (void)r;
+        [[maybe_unused]] cleaner(multiroarFree) multiroar *r =
+            multiroarBitNew();
     }
 
     TEST("set and get") {
@@ -7701,8 +7701,8 @@ int multiroarTest(int, char *[]) {
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (int i = 0; i < iterations; i++) {
-            volatile uint64_t count = multiroarBitCount(sparse);
-            (void)count;
+            [[maybe_unused]] volatile uint64_t count =
+                multiroarBitCount(sparse);
         }
         clock_gettime(CLOCK_MONOTONIC, &end);
         double sparseNs =
@@ -7717,8 +7717,7 @@ int multiroarTest(int, char *[]) {
 
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (int i = 0; i < iterations; i++) {
-            volatile uint64_t count = multiroarBitCount(dense);
-            (void)count;
+            [[maybe_unused]] volatile uint64_t count = multiroarBitCount(dense);
         }
         clock_gettime(CLOCK_MONOTONIC, &end);
         double denseNs =

@@ -313,12 +313,9 @@ const uint8_t *StrUtf8Advance(const void *str, size_t len, size_t n) {
  * ==================================================================== */
 
 /* Move cursor backward by N codepoints */
-const uint8_t *StrUtf8Retreat(const void *str, size_t len, const uint8_t *pos,
+const uint8_t *StrUtf8Retreat(const void *str, size_t, const uint8_t *pos,
                               size_t n) {
     const uint8_t *start = (const uint8_t *)str;
-    const uint8_t *end = start + len;
-
-    (void)end; /* Unused, but kept for bounds checking if needed */
 
     if (pos == NULL || pos < start) {
         return start;

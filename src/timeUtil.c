@@ -148,9 +148,11 @@ int timeUtilTest(int, char *[]) {
             ERR("timeUtilMonotonicUs decreased: %" PRIu64 " -> %" PRIu64, us1,
                 us2);
         }
-        /* ms may not increase in 1ms, suppress unused warnings */
-        (void)ms1;
-        (void)ms2;
+        /* ms may not increase in 1ms, but never goes back */
+        if (ms2 < ms1) {
+            ERR("timeUtilMonotonicMs decreased: %" PRIu64 " -> %" PRIu64, ms1,
+                ms2);
+        }
 
         /* Check that the delta is reasonable (~1ms = 1000us = 1000000ns) */
         uint64_t deltaUs = us2 - us1;
