@@ -1968,16 +1968,16 @@ static int multilistFullCompare(flexEntry *p1, const void *val, int vcount) {
     return flexCompareBytes(p1, val, vcount);
 }
 
-#define mlVerify(a, b, c, d, e)                                                \
+#define mlVerify(ml, values)                                                   \
     do {                                                                       \
-        err += mlVerify_(a, s, b, c, d, e);                                    \
+        err += mlVerify_(ml, s, values);                                       \
     } while (0)
 
-/* Verify list metadata matches physical list contents. */
-static int mlVerify_(multilistFull *ml, mflexState *state[2],
-                     [[maybe_unused]] mlNodeId count, uint32_t values,
-                     [[maybe_unused]] uint32_t headValues,
-                     [[maybe_unused]] uint32_t tailValues) {
+/* Verify list metadata matches physical list contents: the cached value
+ * count against 'values' and against a walk in each direction.  Node and
+ * per-end counts are not expected: accounting is by size, so they follow
+ * the bytes. */
+static int mlVerify_(multilistFull *ml, mflexState *state[2], uint32_t values) {
     int err = 0;
 
 #if 0
@@ -1993,9 +1993,6 @@ static int mlVerify_(multilistFull *ml, mflexState *state[2],
         ERR("multilistFull values wrong: expected %d, got %" PRIu64, values,
             ml->values);
     }
-
-    /* Node and per-end counts are not checked: accounting is by size, so
-     * the node count and the head and tail entry counts follow the bytes */
 
     int loopr = itrprintr(ml, state, false);
     if (loopr != (int)ml->values) {
@@ -2276,7 +2273,7 @@ int multilistFullTest(int, char *[]) {
         TEST("create list") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2286,7 +2283,7 @@ int multilistFullTest(int, char *[]) {
             const databox pushBox = databoxNewBytesString("hello");
             multilistFullPushByTypeTail(ml, s0, &pushBox);
             /* 1 for head and 1 for tail beacuse 1 node = head = tail */
-            mlVerify(ml, 1, 1, 1, 1);
+            mlVerify(ml, 1);
             multilistFullFree(ml);
         }
 
@@ -2296,7 +2293,7 @@ int multilistFullTest(int, char *[]) {
             const databox pushBox = databoxNewBytesString("hello");
             multilistFullPushByTypeHead(ml, s0, &pushBox);
             /* 1 for head and 1 for tail beacuse 1 node = head = tail */
-            mlVerify(ml, 1, 1, 1, 1);
+            mlVerify(ml, 1);
             multilistFullFree(ml);
         }
 
@@ -2315,7 +2312,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 1, 5, 5, 5);
+                    mlVerify(ml, 5);
                 }
 
                 multilistFullFree(ml);
@@ -2337,7 +2334,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 1, 5, 5, 5);
+                    mlVerify(ml, 5);
                 }
 
                 multilistFullFree(ml);
@@ -2359,7 +2356,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 16, 500, 32, 20);
+                    mlVerify(ml, 500);
                 }
 
                 multilistFullFree(ml);
@@ -2379,7 +2376,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 16, 500, 20, 32);
+                    mlVerify(ml, 500);
                 }
 
                 multilistFullFree(ml);
@@ -2390,7 +2387,7 @@ int multilistFullTest(int, char *[]) {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             multilistFullRotate(ml, s);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2436,7 +2433,7 @@ int multilistFullTest(int, char *[]) {
 
                 /* Ignore compression verify because flex is
                  * too small to compress. */
-                mlVerify(ml, 1, 1, 1, 1);
+                mlVerify(ml, 1);
                 multilistFullFree(ml);
             }
         }
@@ -2464,11 +2461,11 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 1) {
-                    mlVerify(ml, 504, 504, 1, 1);
+                    mlVerify(ml, 504);
                 } else if (f == 2) {
-                    mlVerify(ml, 252, 504, 2, 2);
+                    mlVerify(ml, 504);
                 } else if (f == 32) {
-                    mlVerify(ml, 16, 504, 32, 24);
+                    mlVerify(ml, 504);
                 }
 
                 multilistFullFree(ml);
@@ -2481,7 +2478,7 @@ int multilistFullTest(int, char *[]) {
             databox box = {};
             bool found = multilistFullPopHead(ml, s0, &box);
             assert(!found);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2507,7 +2504,7 @@ int multilistFullTest(int, char *[]) {
                     bytes, data, populate);
             }
 
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             databoxFreeData(&box);
             multilistFullFree(ml);
         }
@@ -2535,7 +2532,7 @@ int multilistFullTest(int, char *[]) {
                 !DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
                 ERR("integer did not pop as 55513");
             }
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             databoxFreeData(&box);
             multilistFullFree(ml);
         }
@@ -2565,7 +2562,7 @@ int multilistFullTest(int, char *[]) {
                 databoxFreeData(&box);
             }
 
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2598,7 +2595,7 @@ int multilistFullTest(int, char *[]) {
                 }
                 databoxFreeData(&box);
             }
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2628,7 +2625,7 @@ int multilistFullTest(int, char *[]) {
                 ERR("Didn't iterate over exactly 500 elements (%d)", i);
             }
 
-            mlVerify(ml, 16, 500, 20, 32);
+            mlVerify(ml, 500);
             multilistFullFree(ml);
         }
 
@@ -2657,7 +2654,7 @@ int multilistFullTest(int, char *[]) {
                 ERR("Didn't iterate over exactly 500 elements (%d)", i);
             }
 
-            mlVerify(ml, 16, 500, 20, 32);
+            mlVerify(ml, 500);
             multilistFullFree(ml);
         }
 
@@ -2667,7 +2664,7 @@ int multilistFullTest(int, char *[]) {
             multilistEntry entry;
             multilistFullIndexGet(ml, s0, 0, &entry);
             multilistFullInsertBefore(ml, s, &entry, "abc", 4);
-            mlVerify(ml, 1, 1, 1, 1);
+            mlVerify(ml, 1);
             multilistFullFree(ml);
         }
 
@@ -2677,7 +2674,7 @@ int multilistFullTest(int, char *[]) {
             multilistEntry entry;
             multilistFullIndexGet(ml, s0, 0, &entry);
             multilistFullInsertAfter(ml, s, &entry, "abc", 4);
-            mlVerify(ml, 1, 1, 1, 1);
+            mlVerify(ml, 1);
             multilistFullFree(ml);
         }
 
@@ -2688,7 +2685,7 @@ int multilistFullTest(int, char *[]) {
             multilistEntry entry;
             multilistFullIndexGet(ml, s0, 0, &entry);
             multilistFullInsertAfter(ml, s, &entry, "abc", 4);
-            mlVerify(ml, 1, 2, 2, 2);
+            mlVerify(ml, 2);
             multilistFullFree(ml);
         }
 
@@ -2699,7 +2696,7 @@ int multilistFullTest(int, char *[]) {
             multilistEntry entry;
             multilistFullIndexGet(ml, s0, 0, &entry);
             multilistFullInsertAfter(ml, s, &entry, "abc", 4);
-            mlVerify(ml, 1, 2, 2, 2);
+            mlVerify(ml, 2);
             multilistFullFree(ml);
         }
 
@@ -2796,7 +2793,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 25, 750, 32, 20);
+                    mlVerify(ml, 750);
                 }
 
                 multilistFullFree(ml);
@@ -2825,7 +2822,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 26, 750, 20, 32);
+                    mlVerify(ml, 750);
                 }
 
                 multilistFullFree(ml);
@@ -2835,9 +2832,9 @@ int multilistFullTest(int, char *[]) {
         TEST("duplicate empty list") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFull *copy = multilistFullDuplicate(ml);
-            mlVerify(copy, 1, 0, 0, 0);
+            mlVerify(copy, 0);
             multilistFullFree(ml);
             multilistFullFree(copy);
         }
@@ -2846,9 +2843,9 @@ int multilistFullTest(int, char *[]) {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             multilistFullPushHead(ml, s0, genstr("hello", 3), 32);
-            mlVerify(ml, 1, 1, 1, 1);
+            mlVerify(ml, 1);
             multilistFull *copy = multilistFullDuplicate(ml);
-            mlVerify(copy, 1, 1, 1, 1);
+            mlVerify(copy, 1);
             multilistFullFree(ml);
             multilistFullFree(copy);
         }
@@ -2860,10 +2857,10 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            mlVerify(ml, 16, 500, 20, 32);
+            mlVerify(ml, 500);
 
             multilistFull *copy = multilistFullDuplicate(ml);
-            mlVerify(copy, 16, 500, 20, 32);
+            mlVerify(copy, 500);
             multilistFullFree(ml);
             multilistFullFree(copy);
         }
@@ -2960,7 +2957,7 @@ int multilistFullTest(int, char *[]) {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             multilistFullDelRange(ml, s0, 5, 20);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2971,9 +2968,9 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            mlVerify(ml, 1, 32, 32, 32);
+            mlVerify(ml, 32);
             multilistFullDelRange(ml, s0, 0, 32);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2984,9 +2981,9 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            mlVerify(ml, 1, 32, 32, 32);
+            mlVerify(ml, 32);
             multilistFullDelRange(ml, s0, 0, 128);
-            mlVerify(ml, 1, 0, 0, 0);
+            mlVerify(ml, 0);
             multilistFullFree(ml);
         }
 
@@ -2997,9 +2994,9 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
 
-            mlVerify(ml, 16, 500, 32, 20);
+            mlVerify(ml, 500);
             multilistFullDelRange(ml, s0, 200, 100);
-            mlVerify(ml, 14, 400, 32, 20);
+            mlVerify(ml, 400);
             multilistFullFree(ml);
         }
 
@@ -3010,9 +3007,9 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
 
-            mlVerify(ml, 16, 500, 32, 20);
+            mlVerify(ml, 500);
             multilistFullDelRange(ml, s0, -1, 1);
-            mlVerify(ml, 16, 499, 32, 19);
+            mlVerify(ml, 499);
             multilistFullFree(ml);
         }
 
@@ -3023,9 +3020,9 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
 
-            mlVerify(ml, 16, 500, 32, 20);
+            mlVerify(ml, 500);
             multilistFullDelRange(ml, s0, -1, 128);
-            mlVerify(ml, 16, 499, 32, 19);
+            mlVerify(ml, 499);
             multilistFullFree(ml);
         }
 
@@ -3037,7 +3034,7 @@ int multilistFullTest(int, char *[]) {
             }
 
             multilistFullDelRange(ml, s0, -100, 100);
-            mlVerify(ml, 13, 400, 32, 16);
+            mlVerify(ml, 400);
             multilistFullFree(ml);
         }
 
@@ -3048,9 +3045,9 @@ int multilistFullTest(int, char *[]) {
                 multilistFullPushTail(ml, s0, genstr("hello", i + 1), 32);
             }
 
-            mlVerify(ml, 2, 50, 32, 18);
+            mlVerify(ml, 50);
             multilistFullDelRange(ml, s0, -10, 5);
-            mlVerify(ml, 2, 45, 32, 13);
+            mlVerify(ml, 45);
             multilistFullFree(ml);
         }
 
@@ -3061,7 +3058,7 @@ int multilistFullTest(int, char *[]) {
                 const databox num = databoxNewSigned(v);
                 multilistFullPushByTypeTail(ml, s0, &num);
             }
-            mlVerify(ml, 1, 4, 4, 4);
+            mlVerify(ml, 4);
             multilistEntry entry;
             multilistFullIndexGet(ml, s0, 0, &entry);
             if (entry.box.data.i64 != 1111) {
@@ -3143,7 +3140,7 @@ int multilistFullTest(int, char *[]) {
                 ERR("String val not match: %s", entry.box.data.bytes.start);
             }
 
-            mlVerify(ml, 157, 5001, 32, 9);
+            mlVerify(ml, 5001);
             multilistFullFree(ml);
         }
 
@@ -3351,7 +3348,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 1, 32, 32, 32);
+                    mlVerify(ml, 32);
                 }
 
                 /* ltrim 25 53 (keep [25,32] inclusive = 7 remaining) */
@@ -3368,7 +3365,7 @@ int multilistFullTest(int, char *[]) {
                     }
                 }
                 if (f == 32) {
-                    mlVerify(ml, 1, 7, 7, 7);
+                    mlVerify(ml, 7);
                 }
 
                 multilistFullFree(ml);
@@ -3391,14 +3388,14 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 2, 33, 32, 1);
+                    mlVerify(ml, 33);
                 }
 
                 /* ltrim 5 16 (keep [5,16] inclusive = 12 remaining) */
                 multilistFullDelRange(ml, s0, 0, 5);
                 multilistFullDelRange(ml, s0, -16, 16);
                 if (f == 32) {
-                    mlVerify(ml, 1, 12, 12, 12);
+                    mlVerify(ml, 12);
                 }
 
                 multilistEntry entry;
@@ -3449,7 +3446,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 2, 33, 32, 1);
+                    mlVerify(ml, 33);
                 }
 
                 /* ltrim 3 3 (keep [3,3] inclusive = 1 remaining) */
@@ -3457,7 +3454,7 @@ int multilistFullTest(int, char *[]) {
                 multilistFullDelRange(ml, s0, -29,
                                       4000); /* make sure not loop forever */
                 if (f == 32) {
-                    mlVerify(ml, 1, 1, 1, 1);
+                    mlVerify(ml, 1);
                 }
 
                 multilistEntry entry;
@@ -3486,7 +3483,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 if (f == 32) {
-                    mlVerify(ml, 2, 33, 32, 1);
+                    mlVerify(ml, 33);
                 }
 
                 multilistFullDelRange(ml, s0, -12, 3);
@@ -3525,11 +3522,11 @@ int multilistFullTest(int, char *[]) {
                     multilistFullNewFromFlex(f, depth[_i], s0, fl);
 
                 if (f == 1) {
-                    mlVerify(ml, 66, 66, 1, 1);
+                    mlVerify(ml, 66);
                 } else if (f == 32) {
-                    mlVerify(ml, 3, 66, 32, 2);
+                    mlVerify(ml, 66);
                 } else if (f == 66) {
-                    mlVerify(ml, 1, 66, 66, 66);
+                    mlVerify(ml, 66);
                 }
 
                 multilistFullFree(ml);
