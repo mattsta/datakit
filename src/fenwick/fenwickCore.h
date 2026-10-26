@@ -102,9 +102,6 @@ int fenwickTypesTest(int argc, char *argv[]);
  * ZERO VALUE HELPER
  * ==================================================================== */
 
-/* Get zero value appropriate for type */
-#define FENWICK_ZERO(type, is_floating) ((is_floating) ? (type)0.0 : (type)0)
-
 /* ====================================================================
  * STRUCTURE DEFINITION MACROS
  * ==================================================================== */

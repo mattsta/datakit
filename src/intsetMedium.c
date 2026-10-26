@@ -68,8 +68,7 @@ static intsetSearchResult intsetMediumFind16(const intsetMedium *m,
 
     uint64_t idx;
     bool hit;
-    INTSET_BRANCHLESS_LOWER_BOUND(int16_t, m->values16, m->count16, val16, idx,
-                                  hit);
+    INTSET_BRANCHLESS_LOWER_BOUND(m->values16, m->count16, val16, idx, hit);
     if (pos) {
         *pos = (uint32_t)idx; /* hit: matching index; miss: insert point */
     }
@@ -88,8 +87,7 @@ static intsetSearchResult intsetMediumFind32(const intsetMedium *m,
 
     uint64_t idx;
     bool hit;
-    INTSET_BRANCHLESS_LOWER_BOUND(int32_t, m->values32, m->count32, val32, idx,
-                                  hit);
+    INTSET_BRANCHLESS_LOWER_BOUND(m->values32, m->count32, val32, idx, hit);
     if (pos) {
         *pos = (uint32_t)idx;
     }

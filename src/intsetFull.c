@@ -84,8 +84,7 @@ static intsetSearchResult intsetFullFind16(const intsetFull *f, int16_t val16,
 
     uint64_t idx;
     bool hit;
-    INTSET_BRANCHLESS_LOWER_BOUND(int16_t, f->values16, f->count16, val16, idx,
-                                  hit);
+    INTSET_BRANCHLESS_LOWER_BOUND(f->values16, f->count16, val16, idx, hit);
     if (pos) {
         *pos = idx; /* hit: matching index; miss: insert point */
     }
@@ -104,8 +103,7 @@ static intsetSearchResult intsetFullFind32(const intsetFull *f, int32_t val32,
 
     uint64_t idx;
     bool hit;
-    INTSET_BRANCHLESS_LOWER_BOUND(int32_t, f->values32, f->count32, val32, idx,
-                                  hit);
+    INTSET_BRANCHLESS_LOWER_BOUND(f->values32, f->count32, val32, idx, hit);
     if (pos) {
         *pos = idx;
     }
@@ -124,8 +122,7 @@ static intsetSearchResult intsetFullFind64(const intsetFull *f, int64_t val64,
 
     uint64_t idx;
     bool hit;
-    INTSET_BRANCHLESS_LOWER_BOUND(int64_t, f->values64, f->count64, val64, idx,
-                                  hit);
+    INTSET_BRANCHLESS_LOWER_BOUND(f->values64, f->count64, val64, idx, hit);
     if (pos) {
         *pos = idx;
     }

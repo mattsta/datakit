@@ -2,7 +2,7 @@
 
 /* Common types, enums, and macros for the tiered intset system */
 
-#include "intset.h" /* For intsetEnc enum */
+#include "intset.h" /* intset, intsetEnc and its values */
 #include <stdint.h>
 
 /* Tier type identifiers (stored in lower 2 bits of pointer) */
@@ -56,11 +56,11 @@ typedef enum [[nodiscard]] intsetSearchResult {
  * == v). The `?:` compiles to a conditional-move on clang/gcc (no data branch),
  * and the two prefetches hide the cache-miss tail — measured 1.3-2.1x faster
  * than the branchy search across all sizes (intsetSearchBench). Comparisons use
- * the element type T so signedness matches the original. Multi-evaluates
+ * arr's element type so signedness matches the original. Multi-evaluates
  * arr/n/v (callers pass plain lvalues, no side effects). */
-#define INTSET_BRANCHLESS_LOWER_BOUND(T, arr, n, v, outIdx, outHit)            \
+#define INTSET_BRANCHLESS_LOWER_BOUND(arr, n, v, outIdx, outHit)               \
     do {                                                                       \
-        const T *_b = (arr);                                                   \
+        const typeof_unqual(*(arr)) *_b = (arr);                               \
         uint64_t _len = (uint64_t)(n);                                         \
         while (_len > 1) {                                                     \
             const uint64_t _half = _len >> 1;                                  \

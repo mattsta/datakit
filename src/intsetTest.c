@@ -42,7 +42,7 @@ defcleaner(intset *, intsetFree);
         uint64_t lidx = 0;                                                     \
         bool lhit = false;                                                     \
         if (n > 0) {                                                           \
-            INTSET_BRANCHLESS_LOWER_BOUND(T, arr, n, v, lidx, lhit);           \
+            INTSET_BRANCHLESS_LOWER_BOUND(arr, n, v, lidx, lhit);              \
         }                                                                      \
         return (lhit == bfound && lidx == refIdx) ? 0 : 1;                     \
     }
