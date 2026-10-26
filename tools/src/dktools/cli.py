@@ -22,6 +22,7 @@ from . import (
     perfcompare,
     perfdiff,
     procs,
+    retoken,
     testtime,
     toolchain,
     tune,
@@ -260,6 +261,17 @@ def main(argv: list[str] | None = None) -> int:
         dest="every",
         help="every tracked and untracked (not ignored) file",
     )
+
+    rt = sub.add_parser(
+        "retoken",
+        help="rename a C token where code uses it (never in comments or "
+        "literals) across the tracked sources or the given files",
+    )
+    rt.add_argument("old", help="the token to replace")
+    rt.add_argument("new", help="its replacement")
+    rt.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    rt.add_argument("--dry-run", action="store_true", help="report, change no file")
+    rt.add_argument("--comments", action="store_true", help="rename in comments too")
 
     wc = sub.add_parser(
         "wrapcalls",
@@ -903,6 +915,16 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "format":
         return formatting.run(args.repo, args.action, args.paths, args.every)
+
+    if args.command == "retoken":
+        return retoken.run(
+            args.repo,
+            args.old,
+            args.new,
+            tuple(args.paths),
+            args.dry_run,
+            args.comments,
+        )
 
     if args.command == "wrapcalls":
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.macro):

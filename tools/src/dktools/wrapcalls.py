@@ -25,6 +25,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .clex import code_mask
+
 WARNING = re.compile(
     r"^(?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+): warning: ignoring "
     r"return value of type '(?P<type>[^']+)' declared with 'nodiscard'"
@@ -76,46 +78,6 @@ def sites(lines: Iterable[str], type_name: str, repo: Path) -> list[Site]:
         if path is not None:
             found.add(Site(path, int(hit["line"]), int(hit["col"])))
     return sorted(found)
-
-
-def code_mask(src: bytes) -> bytearray:
-    """1 for each byte of code; 0 for comments, string and character
-    literals and preprocessor lines."""
-    mask = bytearray(len(src))
-    i = 0
-    n = len(src)
-    line_start = True
-    while i < n:
-        c = src[i : i + 1]
-        if line_start and c in (b" ", b"\t"):
-            mask[i] = 1
-            i += 1
-            continue
-        if line_start and c == b"#":
-            # a directive runs to an unescaped newline
-            while i < n and not (src[i] == 0x0A and src[i - 1] != 0x5C):
-                i += 1
-            continue
-        line_start = False
-        if src.startswith(b"/*", i):
-            end = src.find(b"*/", i + 2)
-            i = n if end < 0 else end + 2
-            continue
-        if src.startswith(b"//", i):
-            end = src.find(b"\n", i)
-            i = n if end < 0 else end
-            continue
-        if c in (b'"', b"'"):
-            i += 1
-            while i < n and src[i : i + 1] != c:
-                i += 2 if src[i] == 0x5C else 1
-            i += 1
-            continue
-        mask[i] = 1
-        if c == b"\n":
-            line_start = True
-        i += 1
-    return mask
 
 
 def _call_end(src: bytes, mask: bytearray, start: int) -> int | None:

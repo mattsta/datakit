@@ -601,6 +601,20 @@ uv run --project tools dktools wrapcalls build/dktools/verify/NAME/build.log --t
 - `--path` (repeatable) limits it to the named files.
 - Exits 0 when every site was wrapped, 1 when any was skipped.
 
+## retoken — rename a C token where code uses it
+
+```sh
+uv run --project tools dktools retoken _Static_assert static_assert [--comments] [--dry-run] [FILE ...]
+```
+
+- Renames whole-identifier occurrences in the tracked `src/**/*.c` and
+  `*.h` (vendored `src/memshard` excluded), or in the files given.
+- Macro bodies are code and change; string and character literals
+  never do; comments change only with `--comments` (prose naming the
+  token).
+- Prints each file's count. Exits 0, or 2 for a token that is not a C
+  identifier or a missing file.
+
 ## perfdiff — perf regression comparison
 
 Compares two `perfRegression` TSV outputs row by row, keyed on
