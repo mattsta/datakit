@@ -107,10 +107,7 @@ class ValidateRun(unittest.TestCase):
 
     def default_dir(self) -> str:
         """The default matrix's work directory for HEAD"""
-        return (
-            f"{self.head[:10]}-clang22-dev+clang22-debug+gcc15-release"
-            f"+clang22-dev-{LIBRARY_ONLY}+gcc15-release-{LIBRARY_ONLY}"
-        )
+        return f"{self.head[:10]}-clang22-dev+clang22-debug+gcc15-release"
 
     def run_validate(self, runner: MatrixRunner, **kw) -> tuple[int, str]:
         opts = validate.ValidateOptions(
@@ -139,17 +136,7 @@ class ValidateRun(unittest.TestCase):
         for label in ("clang22-dev", "clang22-debug", "gcc15-release"):
             for step in ("configure", "build", "ctest", "ctest-serial"):
                 self.assertIn(f"{label} {step}", names)
-        # Each compiler's library-only build configures and builds with
-        # test mode off, and runs no tests.
-        for label in (f"clang22-dev-{LIBRARY_ONLY}", f"gcc15-release-{LIBRARY_ONLY}"):
-            self.assertIn(f"{label} build", names)
-            self.assertNotIn(f"{label} ctest", names)
-            self.assertNotIn(f"{label} ctest-serial", names)
-            configure = runner.command(f"{label} configure")
-            self.assertEqual(
-                configure[-2:], ["-DDatakitTestMode=OFF", "-DBuildTestBinary=OFF"]
-            )
-            self.assertIn(f"| {label} |", out)
+        self.assertFalse(any(LIBRARY_ONLY in name for name in names))
         self.assertEqual(names[-3:], ["allocaudit", "atomicaudit", "outputaudit"])
 
         # All targets: no --target.
@@ -290,8 +277,24 @@ class ValidateRun(unittest.TestCase):
         self.assertEqual(code, 0, out)
         base = self.root / "validate"
         self.assertTrue((base / self.default_dir() / "summary.md").exists())
-        tsan_dir = f"{self.head[:10]}-clang22-tsan+clang22-dev-{LIBRARY_ONLY}"
-        self.assertTrue((base / tsan_dir / "summary.md").exists())
+        self.assertTrue(
+            (base / f"{self.head[:10]}-clang22-tsan" / "summary.md").exists()
+        )
+
+    def test_library_only_builds_without_tests_when_asked(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(runner, library_only=True)
+        self.assertEqual(code, 0, out)
+        names = [name for name, _ in runner.calls]
+        for label in (f"clang22-dev-{LIBRARY_ONLY}", f"gcc15-release-{LIBRARY_ONLY}"):
+            self.assertIn(f"{label} build", names)
+            self.assertNotIn(f"{label} ctest", names)
+            self.assertNotIn(f"{label} ctest-serial", names)
+            configure = runner.command(f"{label} configure")
+            self.assertEqual(
+                configure[-2:], ["-DDatakitTestMode=OFF", "-DBuildTestBinary=OFF"]
+            )
+            self.assertIn(f"| {label} |", out)
 
     def test_warnings_are_split_by_area(self) -> None:
         tree = (self.root / "validate" / self.default_dir() / "src").resolve()

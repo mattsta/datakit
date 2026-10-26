@@ -717,11 +717,10 @@ def main(argv: list[str] | None = None) -> int:
         "that the default quick tier skips",
     )
     va.add_argument(
-        "--no-library-only",
-        dest="library_only",
-        action="store_false",
-        help="skip the library-only builds (DatakitTestMode=OFF, no test "
-        "binary; built once per compiler by default and judged on warnings)",
+        "--library-only",
+        action="store_true",
+        help="also build the library with DatakitTestMode=OFF and no test "
+        "binary, once per compiler, judged on warnings (no tests)",
     )
     slow_default = validate.DEFAULT_SLOW or "none"
     debug_slow_default = validate.DEFAULT_DEBUG_SLOW or "none"

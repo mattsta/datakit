@@ -10,10 +10,10 @@ REV (default HEAD) is exported with ``git archive`` into
 ``ROOT/validate/<short hash>-<configs>/src`` (``<configs>`` joins the
 matrix's labels, so matrices on one revision keep separate logs);
 uncommitted work never takes part.
-The matrix also holds each compiler's library-only build (its default
+``--library-only`` adds each compiler's library-only build (its default
 preset with ``DatakitTestMode=OFF BuildTestBinary=OFF``, what a
 consumer without test mode compiles): it must configure and build with
-no warning, and runs no tests (``--no-library-only`` leaves it out).
+no warning, and runs no tests.
 For each (compiler, preset) of the matrix (see
 ``toolchain.matrix``: gcc15 builds ``release``) it runs a clean
 configure, an all-targets build, then ctest twice: every test outside
@@ -97,7 +97,7 @@ class ValidateOptions:
     debug_slow: str = DEFAULT_DEBUG_SLOW
     full: bool = False
     #: also build each compiler's library-only config (test mode off)
-    library_only: bool = True
+    library_only: bool = False
     leak_base: str = DEFAULT_LEAK_BASE
     root: Path | None = None
     jobs: int | None = None
