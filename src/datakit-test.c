@@ -12736,6 +12736,9 @@ static const TestEntry testRegistry[] = {
     /* Default size limits the plain tiered constructors read */
     T_A(dkTierLimit, "tierlimit"),
 
+    /* C23 library pieces under their standard names (dkC23.h) */
+    T_A(dkC23, "stdbit"),
+
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),
     T_A(dkTestChaChaStreamCtxWipe, "chachaStreamCtxWipe"),

@@ -69,7 +69,9 @@
 #include <inttypes.h>  /* PRId64, PRIu64, etc */
 #include <limits.h>    /* UINT_MAX, etc */
 #include <stdckdint.h> /* ckd_add, ckd_sub, ckd_mul: checked arithmetic */
-#include <stddef.h>    /* ptrdiff_t, size_t */
+
+#include "dkC23.h"  /* <stdbit.h>, or its subset where libc lacks it */
+#include <stddef.h> /* ptrdiff_t, size_t */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>   /* memcpy, memmem, etc */
