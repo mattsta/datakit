@@ -38,6 +38,7 @@
 #include "persist/persistCtx.h"
 #include "rapidhash.h"
 #include "sha256.h"
+#include "str.h" /* StrScanScanReliable */
 #include "stringPool.h"
 
 #include <inttypes.h>
@@ -1121,6 +1122,36 @@ static void benchMultiroar(void) {
     perfContainerSink = multiroarBitCount(r) + multiroarBitCount(b);
 }
 
+/* numeric: the two paths dk_float_extended serves (floatExtended.h), timed
+ * so a change of extended type is measured: decimal text through the
+ * reliable scan, and databoxCompare of large integers against nearby
+ * doubles */
+static void benchNumeric(void) {
+    const uint32_t n = PERF_CONTAINER_N;
+    enum { slot = 32 };
+    cleanerName(zfree, PerfKeys) char *texts = zcalloc(n, slot);
+    cleanerName(zfree, U8Buf) uint8_t *lens = zcalloc(n, 1);
+    for (uint32_t i = 0; i < n; i++) {
+        lens[i] =
+            (uint8_t)snprintf(&texts[(size_t)i * slot], slot, "%u.%06u",
+                              7074451u + i * 131u, (i * 7919u) % 999'983u);
+    }
+
+    uint64_t sink = 0;
+    PERF_ROW("numeric", "scanReliableReal", n, databox box = {};
+             sink +=
+             StrScanScanReliable(&texts[(size_t)i * slot], lens[i], &box);
+             sink += box.type);
+
+    PERF_ROW("numeric", "compareIntDouble", n,
+             const databox a = DATABOX_SIGNED((int64_t)1 << 62 | i);
+             const databox b = databoxNewReal((double)((int64_t)1 << 62) +
+                                              (double)(i * 1024u));
+             sink += (uint64_t)(databoxCompare(&a, &b) + 1));
+
+    perfContainerSink = sink;
+}
+
 static void benchMultidictP(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -1884,6 +1915,10 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfWanted("multiroar")) {
             benchMultiroar();
+        }
+
+        if (perfWanted("numeric")) {
+            benchNumeric();
         }
 
         if (perfWanted("multiOrderedSet")) {

@@ -62,8 +62,8 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
 
     uint32_t dig = 0; /* byte index into 'p', the sign included */
 
-    /* The overflow builtins below take every operand as uint64_t, so
-     * their constants are spelled UINT64_C to keep all types equal. */
+    /* ckd_mul and ckd_add below see every operand as uint64_t: their
+     * constants are spelled UINT64_C so all types match. */
     uint64_t x = 0; /* significand */
     /* Largest magnitude a SIGNED_64 holds for the sign: INT64_MAX, or 2^63
      * after a leading '-'. */
@@ -106,18 +106,11 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
             /* This is just: x = (x * 10) + (*p & 0x0f) */
             /* Note: DO NOT remove the UINT64_C type specifiers below
              *       or else this function goes from 500 cycles to 12,000 cycles
-             *       per run.
-             *       (We could also use __builtin_uaddll_overflow, etc here
-             *        which also fixes the performance problem because it forces
-             *        types at compile time too, but the current situation is
-             *        fine as long as all the types match.) */
+             *       per run: every operand must have the same type. */
             if (ckd_mul(&x, x, UINT64_C(10)) ||
                 ckd_add(&x, x, pDeref & UINT64_C(0x0F))) {
-                /* If multiply or add caused overflow, we can't
-                 * continue.
-                 *
-                 * These are elderly gcc builtins, so they return 0/false
-                 * on success and 1/true as an error condition. */
+                /* ckd_* return true when the result overflowed: the
+                 * number does not fit 64 bits */
                 return false;
             }
         } else if (pDeref == '.' && (x < (1ULL << DBL_MANT_DIG))) {
@@ -1868,12 +1861,20 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
          *           we're doing string double conversion checks even
          *           though they are slower and may require in-line
          *           bignum allocs */
-        databox got;
+        databox got = {};
         bool scanResult = StrScanScanReliable("7074451188.598104", 17, &got);
 
-#if DK_HAS_FLOAT_EXTENDED
-        /* With extended precision, round-trip detection catches the precision
-         * loss, so this should return false (unreliable conversion). */
+#if DK_HAS_FLOAT_EXTENDED && DK_FLOAT_EXTENDED_MANTISSA_BITS >= 113
+        /* binary128 scales without a second rounding: the nearest double,
+         * which prints back as the input */
+        if (!scanResult || got.type != DATABOX_DOUBLE_64 ||
+            got.data.d64 != 7074451188.598104) {
+            ERR("binary128 scan of 7074451188.598104: %d, %.17g", scanResult,
+                got.data.d64);
+        }
+#elif DK_HAS_FLOAT_EXTENDED
+        /* x86's 64-bit significand rounds twice and lands on the neighbor
+         * double, which prints differently: not a reliable conversion */
         assert(scanResult == false);
 #else
         /* Without extended precision, we have less strict expectations.
