@@ -706,6 +706,48 @@ uv run --project tools dktools countof [--dry-run] [FILE ...]
   a pointer's bytes.
 - Prints each file's count. Exits 0, or 2 for a missing file.
 
+## stdattr — `__attribute__` in the standard `[[...]]` form
+
+```sh
+uv run --project tools dktools stdattr [--dry-run] [FILE ...]
+```
+
+- Each `__attribute__((a, b(x)))` in code or a macro body becomes
+  `[[gnu::a, gnu::b(x)]]` (`deprecated` is standard, `optnone` is
+  `clang::optnone`, `aligned(N)` on an object is `alignas(N)`).
+- Placement keeps the meaning: a standard attribute after a specifier
+  attaches to the type, so one written after `static`/`inline` or after
+  the declarator moves to the start of the declaration (the start of the
+  body in a macro); right after `struct`/`union`/`enum` it stays.
+- Then each use of an attribute macro (a macro whose body is only
+  attributes, such as `DK_FN_CONST` or `cleaner(fn)`) that follows other
+  specifiers moves to the front of its declaration, arguments included.
+- A preprocessor line ends a declaration; text that is not one
+  declaration's specifiers (macro calls without semicolons) is left and
+  reported, as is an attribute after a struct body.
+- An ignored attribute warns on both compilers, so the zero-warning
+  build gate proves every placement.
+
+## defconst — numeric #defines as typed constexpr constants
+
+```sh
+uv run --project tools dktools defconst [--dry-run] [FILE ...]
+```
+
+- Gives every `#define NAME <integer literal>` (and every `static
+constexpr` integer constant) a verdict. It stays a macro when the
+  preprocessor reads the name (`#if`/`#elif`/`#ifdef`/`#ifndef`/
+  `#undef`/`#pragma`, `#` or `##` in a macro body, directly or through
+  another macro an `#if` reads, in `src/` or the vendored `deps/`
+  headers), when it is defined more than once, when it is in a public
+  header, when nothing uses it (reported for a person), or when it is
+  defined inside a function.
+- Otherwise it becomes `static constexpr T NAME = LITERAL;` with `T` the
+  literal's own C type (`int`, `unsigned`, `int64_t`, `uint64_t`), a
+  trailing comment kept. A `constexpr` constant an `#if` reads goes back
+  to `#define`, so a rerun with better rules converges.
+- `--dry-run` reports. Exits 0, or 2 for a missing file.
+
 ## enumconst — one-constant enums as constexpr int
 
 ```sh

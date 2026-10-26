@@ -29,6 +29,7 @@ from . import (
     perfdiff,
     procs,
     retoken,
+    stdattr,
     testtime,
     toolchain,
     tune,
@@ -301,6 +302,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     co.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     co.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    sa = sub.add_parser(
+        "stdattr",
+        help="rewrite __attribute__((...)) in the standard [[...]] form, placed "
+        "where it means the same, and move attribute-macro uses to the front",
+    )
+    sa.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    sa.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     dc = sub.add_parser(
         "defconst",
@@ -1052,6 +1061,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "countof":
         return countof.run(args.repo, tuple(args.paths), args.dry_run)
+
+    if args.command == "stdattr":
+        return stdattr.run(args.repo, tuple(args.paths), args.dry_run)
 
     if args.command == "defconst":
         return defconst.run(args.repo, tuple(args.paths), args.dry_run)
