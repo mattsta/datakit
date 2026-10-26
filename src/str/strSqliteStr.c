@@ -1,6 +1,7 @@
 #include "../str.h"
 #include "../floatExtended.h"
 #include <float.h> /* DBL_MANT_DIG */
+#include <stdio.h> /* snprintf */
 
 /* ====================================================================
  * Global String Helper Tables (sqlite3)
