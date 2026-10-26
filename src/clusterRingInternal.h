@@ -256,7 +256,7 @@ uint32_t clusterLocateBounded(const clusterRing *ring, const void *key,
 
 /* Virtual node management */
 clusterResult clusterRingAddVnodes(clusterRing *ring, clusterNode *node);
-clusterResult clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId);
+void clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId);
 void clusterRingSortVnodes(clusterRing *ring);
 
 /* Hash functions */

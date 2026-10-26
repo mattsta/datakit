@@ -70,7 +70,7 @@ typedef struct clusterRebalancePlan clusterRebalancePlan;
  * Result Codes
  * ==================================================================== */
 
-typedef enum clusterResult {
+typedef enum [[nodiscard]] clusterResult {
     CLUSTER_OK = 0,
     CLUSTER_ERR = -1,
     CLUSTER_ERR_NOT_FOUND = -2,

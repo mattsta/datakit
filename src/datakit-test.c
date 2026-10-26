@@ -6307,7 +6307,11 @@ static int dkTestRingPersistOpsDescriptorRoundTripTest(int argc, char *argv[]) {
             .capacityBytes = 1024u * 1024u,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(src, &nc);
+        if (clusterRingAddNode(src, &nc) != CLUSTER_OK) {
+            printf("dkTestRingPersistOpsDescriptorRoundTrip: add node "
+                   "failed\n");
+            failures++;
+        }
     }
 
     if (persistOpsClusterRing.type != PERSIST_TYPE_CLUSTER_RING) {
@@ -10677,7 +10681,9 @@ static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
             .address = "y",
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(ring, &nc);
+        const clusterResult added = clusterRingAddNode(ring, &nc);
+        assert(added == CLUSTER_OK); /* distinct ids on a fresh ring */
+        (void)added;
     }
 
     size_t len = 0;
@@ -10800,7 +10806,10 @@ static int dkTestClusterRingTruncatedBufferTest(int argc, char *argv[]) {
             .weight = 10u,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(src, &nc);
+        if (clusterRingAddNode(src, &nc) != CLUSTER_OK) {
+            printf("dkTestClusterRingTruncatedBuffer: add node failed\n");
+            failures++;
+        }
     }
 
     size_t snap_len = 0;

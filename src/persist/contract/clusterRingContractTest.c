@@ -14,6 +14,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* A seeded change the ring may refuse (a taken id, an unknown node, a
+ * bad config): the contract checks the ring it leaves either way */
+#define PC_RING_MAY_REFUSE(call) ((void)(call))
+
 /* A seeded affinity rule list of 0..3 rules */
 static uint8_t pcRingRules(uint64_t *rng, clusterAffinityRule rules[3]) {
     const uint8_t count = (uint8_t)(splitmix64(rng) % 4);
@@ -87,19 +91,20 @@ static void *pcRingBuild(const persistContractBuild *b) {
                     (clusterNodeState)(splitmix64(&rng) %
                                        (CLUSTER_NODE_MAINTENANCE + 1)),
             };
-            clusterRingAddNode(ring, &nc);
+            PC_RING_MAY_REFUSE(clusterRingAddNode(ring, &nc));
         } else if (roll < 10) {
-            clusterRingRemoveNode(ring, id);
+            PC_RING_MAY_REFUSE(clusterRingRemoveNode(ring, id));
         } else if (roll < 12) {
-            clusterRingSetNodeState(
+            PC_RING_MAY_REFUSE(clusterRingSetNodeState(
                 ring, id,
                 (clusterNodeState)(splitmix64(&rng) %
-                                   (CLUSTER_NODE_MAINTENANCE + 1)));
+                                   (CLUSTER_NODE_MAINTENANCE + 1))));
         } else if (roll == 12) {
-            clusterRingSetNodeWeight(ring, id,
-                                     (uint32_t)(splitmix64(&rng) % 400));
+            PC_RING_MAY_REFUSE(clusterRingSetNodeWeight(
+                ring, id, (uint32_t)(splitmix64(&rng) % 400)));
         } else if (roll == 13) {
-            clusterRingSetNodeUsedBytes(ring, id, splitmix64(&rng) >> 4);
+            PC_RING_MAY_REFUSE(
+                clusterRingSetNodeUsedBytes(ring, id, splitmix64(&rng) >> 4));
         } else if (roll == 14) {
             snprintf(name, sizeof(name), "ks-%" PRIu64, id % 32);
             clusterAffinityRule rules[3];
@@ -111,10 +116,10 @@ static void *pcRingBuild(const persistContractBuild *b) {
                 .strategy = (clusterStrategyType)(splitmix64(&rng) %
                                                   CLUSTER_STRATEGY_CUSTOM),
             };
-            clusterRingAddKeySpace(ring, &kc, NULL);
+            PC_RING_MAY_REFUSE(clusterRingAddKeySpace(ring, &kc, NULL));
         } else {
             snprintf(name, sizeof(name), "ks-%" PRIu64, id % 32);
-            clusterRingRemoveKeySpace(ring, name);
+            PC_RING_MAY_REFUSE(clusterRingRemoveKeySpace(ring, name));
         }
     }
 
@@ -127,10 +132,10 @@ static void *pcRingBuild(const persistContractBuild *b) {
         memcpy(text, databoxBytes(&b->strings[i]), len);
         text[len] = '\0';
         const clusterNodeConfig nc = {.id = idSpace + i, .name = text};
-        clusterRingAddNode(ring, &nc);
+        PC_RING_MAY_REFUSE(clusterRingAddNode(ring, &nc));
         const clusterKeySpaceConfig kc = {.name = text,
                                           .quorum = CLUSTER_QUORUM_BALANCED};
-        clusterRingAddKeySpace(ring, &kc, NULL);
+        PC_RING_MAY_REFUSE(clusterRingAddKeySpace(ring, &kc, NULL));
     }
     return ring;
 }

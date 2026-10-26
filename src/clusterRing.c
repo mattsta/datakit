@@ -63,6 +63,15 @@ static void clusterRingRebuildMaglev(clusterRing *ring);
 #define CLUSTER_UNLIKELY(x) (x)
 #endif
 
+/* A call whose arguments the caller has already checked, so it cannot
+ * fail */
+#define CLUSTER_MUST(call)                                                     \
+    do {                                                                       \
+        const clusterResult must_ = (call);                                    \
+        assert(must_ == CLUSTER_OK);                                           \
+        (void)must_;                                                           \
+    } while (0)
+
 /* ====================================================================
  * Pre-defined Quorum Profiles
  * ==================================================================== */
@@ -1110,9 +1119,9 @@ clusterResult clusterRingAddVnodes(clusterRing *ring, clusterNode *node) {
     return CLUSTER_OK;
 }
 
-clusterResult clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId) {
+void clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId) {
     if (!clusterRingHasVnodes(ring)) {
-        return CLUSTER_OK;
+        return;
     }
 
     clusterKetamaData *data = &ring->vnodes;
@@ -1130,7 +1139,6 @@ clusterResult clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId) {
     data->vnodeCount = writeIdx;
 
     /* Array is still sorted if it was before */
-    return CLUSTER_OK;
 }
 
 /* ====================================================================
@@ -2947,7 +2955,7 @@ static void clusterPlanSegment(void *ctx, uint64_t lo, uint64_t hi,
                                                .targetNodeId = target,
                                                .estimatedBytes = estimate};
             index = c->plan->moveCount;
-            clusterRebalancePlanAddMove(c->plan, &move);
+            CLUSTER_MUST(clusterRebalancePlanAddMove(c->plan, &move));
         }
         c->next[c->nextCount++] = index;
     }
@@ -3208,11 +3216,11 @@ clusterResult clusterRingPollHealth(clusterRing *ring) {
         if (p->checkHealth) {
             const clusterNodeHealth health =
                 p->checkHealth(p->providerData, id);
-            clusterRingUpdateNodeHealth(ring, id, &health);
+            CLUSTER_MUST(clusterRingUpdateNodeHealth(ring, id, &health));
         }
         if (p->getLoad) {
             const clusterNodeLoad load = p->getLoad(p->providerData, id);
-            clusterRingUpdateNodeLoad(ring, id, &load);
+            CLUSTER_MUST(clusterRingUpdateNodeLoad(ring, id, &load));
         }
     }
     return CLUSTER_OK;
@@ -3239,12 +3247,14 @@ clusterResult clusterRingUpdateNodeHealth(clusterRing *ring, uint64_t nodeId,
     if (!health->reachable) {
         node->failureCount++;
         if (node->state == CLUSTER_NODE_UP && node->failureCount >= 3) {
-            clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_SUSPECT);
+            CLUSTER_MUST(
+                clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_SUSPECT));
         }
     } else {
         node->failureCount = 0;
         if (node->state == CLUSTER_NODE_SUSPECT) {
-            clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_UP);
+            CLUSTER_MUST(
+                clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_UP));
         }
     }
 
@@ -4108,6 +4118,24 @@ const persistOps persistOpsClusterRing = {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
+/* A call the test needs to succeed: any other result fails the test */
+#define CR_OK(call)                                                            \
+    do {                                                                       \
+        const clusterResult crOk_ = (call);                                    \
+        if (crOk_ != CLUSTER_OK) {                                             \
+            ERR("%s returned %d", #call, (int)crOk_);                          \
+        }                                                                      \
+    } while (0)
+
+/* A call naming a node that may already be gone */
+#define CR_OK_OR_NOT_FOUND(call)                                               \
+    do {                                                                       \
+        const clusterResult crOk_ = (call);                                    \
+        if (crOk_ != CLUSTER_OK && crOk_ != CLUSTER_ERR_NOT_FOUND) {           \
+            ERR("%s returned %d", #call, (int)crOk_);                          \
+        }                                                                      \
+    } while (0)
+
 defcleaner(flex *, flexFree);
 defcleaner(mdsc *, mdscfree);
 
@@ -4196,9 +4224,9 @@ static int testRingLifecycle(void) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         const uint64_t v0 = clusterRingGetVersion(ring);
         const clusterNodeConfig nc = {.id = 1};
-        clusterRingAddNode(ring, &nc);
+        CR_OK(clusterRingAddNode(ring, &nc));
         const uint64_t v1 = clusterRingGetVersion(ring);
-        clusterRingSetNodeState(ring, 1, CLUSTER_NODE_DOWN);
+        CR_OK(clusterRingSetNodeState(ring, 1, CLUSTER_NODE_DOWN));
         const uint64_t v2 = clusterRingGetVersion(ring);
         if (!(v0 < v1 && v1 < v2) || clusterRingGetVersion(NULL) != 0) {
             ERR("versions %" PRIu64 ", %" PRIu64 ", %" PRIu64, v0, v1, v2);
@@ -4422,7 +4450,7 @@ static int testPlacement(void) {
             .initialState = CLUSTER_NODE_UP,
             .location = {.rackId = (uint32_t)i, .dcId = 1, .azId = 1},
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     TEST("Basic placement") {
@@ -4452,8 +4480,8 @@ static int testPlacement(void) {
 
     TEST("Consistent placement") {
         clusterPlacement p1, p2;
-        clusterRingLocate(ring, "consistent-key", 14, &p1);
-        clusterRingLocate(ring, "consistent-key", 14, &p2);
+        CR_OK(clusterRingLocate(ring, "consistent-key", 14, &p1));
+        CR_OK(clusterRingLocate(ring, "consistent-key", 14, &p2));
 
         if (p1.primary->id != p2.primary->id) {
             ERRR("Same key should map to same primary");
@@ -4465,8 +4493,8 @@ static int testPlacement(void) {
 
     TEST("Different keys different placement") {
         clusterPlacement p1, p2;
-        clusterRingLocate(ring, "key-alpha", 9, &p1);
-        clusterRingLocate(ring, "key-beta", 8, &p2);
+        CR_OK(clusterRingLocate(ring, "key-alpha", 9, &p1));
+        CR_OK(clusterRingLocate(ring, "key-beta", 8, &p2));
 
         /* With 5 nodes, different keys will likely hit different primaries */
         /* This isn't guaranteed but is highly probable */
@@ -4528,7 +4556,7 @@ static int testPlacement(void) {
 
     TEST("Select read node") {
         clusterPlacement p;
-        clusterRingLocate(ring, "select-key", 10, &p);
+        CR_OK(clusterRingLocate(ring, "select-key", 10, &p));
 
         const clusterNode *selected;
         clusterResult result = clusterRingSelectReadNode(ring, &p, &selected);
@@ -4578,7 +4606,7 @@ static int testStrategies(void) {
                     .weight = 100,
                     .initialState = CLUSTER_NODE_UP,
                 };
-                clusterRingAddNode(ring, &nodeConfig);
+                CR_OK(clusterRingAddNode(ring, &nodeConfig));
             }
 
             /* Test placement */
@@ -4596,7 +4624,7 @@ static int testStrategies(void) {
 
             /* Test consistency */
             clusterPlacement p2;
-            clusterRingLocate(ring, "test", 4, &p2);
+            CR_OK(clusterRingLocate(ring, "test", 4, &p2));
             if (p.primary->id != p2.primary->id) {
                 ERR("%s: Inconsistent placement", strategyNames[s]);
                 err++;
@@ -4622,7 +4650,7 @@ static int testKeyspaces(void) {
             .weight = 100,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     TEST("Add keyspace") {
@@ -4707,7 +4735,7 @@ static int testSerialization(void) {
             .initialState = CLUSTER_NODE_UP,
             .location = {.rackId = (uint32_t)i, .dcId = 1},
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     /* Add keyspace */
@@ -4715,7 +4743,7 @@ static int testSerialization(void) {
         .name = "test-ks",
         .quorum = CLUSTER_QUORUM_BALANCED,
     };
-    clusterRingAddKeySpace(ring, &ksConfig, NULL);
+    CR_OK(clusterRingAddKeySpace(ring, &ksConfig, NULL));
 
     TEST("Serialization roundtrip") {
         size_t size = clusterRingSerializeSize(ring);
@@ -4748,8 +4776,8 @@ static int testSerialization(void) {
 
                 /* Verify placement is same */
                 clusterPlacement p1, p2;
-                clusterRingLocate(ring, "ser-test", 8, &p1);
-                clusterRingLocate(restored, "ser-test", 8, &p2);
+                CR_OK(clusterRingLocate(ring, "ser-test", 8, &p1));
+                CR_OK(clusterRingLocate(restored, "ser-test", 8, &p2));
 
                 if (p1.primary->id != p2.primary->id) {
                     ERRR("Placement mismatch after restore");
@@ -4777,12 +4805,12 @@ static int testSerialization(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(numeric, &nc);
+            CR_OK(clusterRingAddNode(numeric, &nc));
         }
 
         clusterKeySpaceConfig kc = {.name = "123",
                                     .quorum = CLUSTER_QUORUM_BALANCED};
-        clusterRingAddKeySpace(numeric, &kc, NULL);
+        CR_OK(clusterRingAddKeySpace(numeric, &kc, NULL));
 
         const size_t need = clusterRingSerializeSize(numeric);
         cleaner(zfree) void *buf = zmalloc(need ? need : 1);
@@ -4823,7 +4851,7 @@ static int testDistribution(void) {
             .weight = 100,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     TEST("Distribution across nodes") {
@@ -4835,7 +4863,7 @@ static int testDistribution(void) {
             snprintf(key, sizeof(key), "key-%u", i);
 
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             if (p.primary && p.primary->id <= 10) {
                 counts[p.primary->id]++;
             }
@@ -4868,9 +4896,9 @@ static int testDistribution(void) {
         clusterNodeConfig config3 = {
             .id = 3, .weight = 300, .initialState = CLUSTER_NODE_UP};
 
-        clusterRingAddNode(ring, &config1);
-        clusterRingAddNode(ring, &config2);
-        clusterRingAddNode(ring, &config3);
+        CR_OK(clusterRingAddNode(ring, &config1));
+        CR_OK(clusterRingAddNode(ring, &config2));
+        CR_OK(clusterRingAddNode(ring, &config3));
 
         uint32_t counts[4] = {0};
         const uint32_t numKeys = 10000;
@@ -4880,7 +4908,7 @@ static int testDistribution(void) {
             snprintf(key, sizeof(key), "wkey-%u", i);
 
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             if (p.primary && p.primary->id <= 3) {
                 counts[p.primary->id]++;
             }
@@ -4921,21 +4949,21 @@ static int testNodeFailure(void) {
             .weight = 100,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     /* Get initial placement for a key */
     clusterPlacement pBefore;
-    clusterRingLocate(ring, "failover-test", 13, &pBefore);
+    CR_OK(clusterRingLocate(ring, "failover-test", 13, &pBefore));
     uint64_t primaryBefore = pBefore.primary->id;
     clusterPlacementFree(&pBefore);
 
     TEST("Placement changes on node failure") {
         /* Mark primary as down */
-        clusterRingSetNodeState(ring, primaryBefore, CLUSTER_NODE_DOWN);
+        CR_OK(clusterRingSetNodeState(ring, primaryBefore, CLUSTER_NODE_DOWN));
 
         clusterPlacement pAfter;
-        clusterRingLocate(ring, "failover-test", 13, &pAfter);
+        CR_OK(clusterRingLocate(ring, "failover-test", 13, &pAfter));
 
         /* Primary should change */
         if (pAfter.primary->id == primaryBefore) {
@@ -4959,10 +4987,10 @@ static int testNodeFailure(void) {
 
     TEST("Placement recovers when node comes back") {
         /* Bring node back */
-        clusterRingSetNodeState(ring, primaryBefore, CLUSTER_NODE_UP);
+        CR_OK(clusterRingSetNodeState(ring, primaryBefore, CLUSTER_NODE_UP));
 
         clusterPlacement pRecovered;
-        clusterRingLocate(ring, "failover-test", 13, &pRecovered);
+        CR_OK(clusterRingLocate(ring, "failover-test", 13, &pRecovered));
 
         /* Should return to original primary */
         if (pRecovered.primary->id != primaryBefore) {
@@ -4986,7 +5014,7 @@ static int testStats(void) {
     for (uint64_t i = 1; i <= 5; i++) {
         clusterNodeConfig config = {
             .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     /* Perform some operations */
@@ -4995,15 +5023,15 @@ static int testStats(void) {
         snprintf(key, sizeof(key), "stats-key-%d", i);
 
         clusterPlacement p;
-        clusterRingLocate(ring, key, strlen(key), &p);
+        CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
         clusterPlacementFree(&p);
 
         clusterWriteSet ws;
-        clusterRingPlanWrite(ring, key, strlen(key), NULL, &ws);
+        CR_OK(clusterRingPlanWrite(ring, key, strlen(key), NULL, &ws));
         clusterWriteSetFree(&ws);
 
         clusterReadSet rs;
-        clusterRingPlanRead(ring, key, strlen(key), NULL, &rs);
+        CR_OK(clusterRingPlanRead(ring, key, strlen(key), NULL, &rs));
         clusterReadSetFree(&rs);
     }
 
@@ -5132,7 +5160,7 @@ static int testCallbacks(void) {
             .id = 1,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
 
         /* Callback should be called on add */
         if (cbData.callCount < 1) {
@@ -5143,7 +5171,7 @@ static int testCallbacks(void) {
         int prevCount = cbData.callCount;
 
         /* Change state */
-        clusterRingSetNodeState(ring, 1, CLUSTER_NODE_DOWN);
+        CR_OK(clusterRingSetNodeState(ring, 1, CLUSTER_NODE_DOWN));
 
         if (cbData.callCount <= prevCount) {
             ERRR("Callback should be called on state change");
@@ -5181,7 +5209,7 @@ static int testCallbacks(void) {
             for (uint64_t i = 1; i <= 70; i++) {
                 clusterNodeConfig nodeConfig = {
                     .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-                clusterRingAddNode(r, &nodeConfig);
+                CR_OK(clusterRingAddNode(r, &nodeConfig));
             }
             testPlaceOnRemove place = {.removing = 70};
             clusterRingSetNodeStateCallback(r, testPlaceOnRemoveCallback,
@@ -5232,7 +5260,7 @@ static int testIteration(void) {
             .initialState = (i <= 3) ? CLUSTER_NODE_UP : CLUSTER_NODE_DOWN,
             .location = {.rackId = (uint32_t)(i % 2 + 1)},
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
     }
 
     TEST("Iterate all nodes") {
@@ -5325,7 +5353,7 @@ static int testFuzzNodeChurn(void) {
                 /* Remove random node (40%) */
                 uint32_t idx = (uint32_t)(rand() % activeCount);
                 uint64_t nodeId = activeNodes[idx];
-                clusterRingRemoveNode(ring, nodeId);
+                CR_OK(clusterRingRemoveNode(ring, nodeId));
                 activeNodes[idx] = activeNodes[--activeCount];
             }
 
@@ -5367,7 +5395,7 @@ static int testFuzzPlacementConsistency(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         /* Record placements for 100 keys */
@@ -5379,7 +5407,7 @@ static int testFuzzPlacementConsistency(void) {
             char key[32];
             snprintf(key, sizeof(key), "consistency-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             primaryIds[i] = p.primary->id;
             clusterPlacementFree(&p);
         }
@@ -5390,7 +5418,7 @@ static int testFuzzPlacementConsistency(void) {
                 char key[32];
                 snprintf(key, sizeof(key), "consistency-key-%d", i);
                 clusterPlacement p;
-                clusterRingLocate(ring, key, strlen(key), &p);
+                CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
                 if (p.primary->id != primaryIds[i]) {
                     ERR("Key %d: inconsistent placement %" PRIu64
                         " vs %" PRIu64,
@@ -5412,7 +5440,7 @@ static int testFuzzPlacementConsistency(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         /* Record placements for 1000 keys */
@@ -5424,14 +5452,14 @@ static int testFuzzPlacementConsistency(void) {
             char key[32];
             snprintf(key, sizeof(key), "movement-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             beforePrimary[i] = p.primary->id;
             clusterPlacementFree(&p);
         }
 
         /* Remove one node */
         uint64_t removedId = 5;
-        clusterRingRemoveNode(ring, removedId);
+        CR_OK(clusterRingRemoveNode(ring, removedId));
 
         /* Count how many keys moved */
         int movedCount = 0;
@@ -5439,7 +5467,7 @@ static int testFuzzPlacementConsistency(void) {
             char key[32];
             snprintf(key, sizeof(key), "movement-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
 
             if (beforePrimary[i] == removedId) {
                 /* This key HAD to move */
@@ -5493,7 +5521,7 @@ static int testFuzzAllStrategies(void) {
                             .dcId = (uint32_t)(i % 3 + 1),
                         },
                 };
-                clusterRingAddNode(ring, &nodeConfig);
+                CR_OK(clusterRingAddNode(ring, &nodeConfig));
             }
 
             /* Hammer with placements */
@@ -5541,7 +5569,7 @@ static int testFuzzStateTransitions(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         clusterNodeState states[] = {
@@ -5554,7 +5582,7 @@ static int testFuzzStateTransitions(void) {
         for (int op = 0; op < 500; op++) {
             uint64_t nodeId = (uint64_t)(rand() % 20 + 1);
             clusterNodeState newState = states[rand() % 6];
-            clusterRingSetNodeState(ring, nodeId, newState);
+            CR_OK(clusterRingSetNodeState(ring, nodeId, newState));
 
             /* Verify placement still works (may fail if all nodes down) */
             clusterPlacement p;
@@ -5601,14 +5629,14 @@ static int testFuzzSerializationRoundtrip(void) {
                              .dcId = (uint32_t)(i % 2),
                              .azId = (uint32_t)(i % 2)},
             };
-            clusterRingAddNode(src, &nc);
+            CR_OK(clusterRingAddNode(src, &nc));
         }
         const clusterKeySpaceConfig ks1 = {.name = "alpha",
                                            .quorum = CLUSTER_QUORUM_BALANCED};
         const clusterKeySpaceConfig ks2 = {.name = "beta",
                                            .quorum = CLUSTER_QUORUM_BALANCED};
-        clusterRingAddKeySpace(src, &ks1, NULL);
-        clusterRingAddKeySpace(src, &ks2, NULL);
+        CR_OK(clusterRingAddKeySpace(src, &ks1, NULL));
+        CR_OK(clusterRingAddKeySpace(src, &ks2, NULL));
 
         const size_t size = clusterRingSerializeSize(src);
         cleaner(zfree) void *bufMem = zmalloc(size);
@@ -5692,7 +5720,7 @@ static int testFuzzSerializationRoundtrip(void) {
             for (uint32_t n = 1; n <= shapes[s].nodes; n++) {
                 clusterNodeConfig nc = {
                     .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
-                clusterRingAddNode(ring, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
             }
             clusterRingSortVnodes(ring);
             const clusterKetamaData *data = &ring->vnodes;
@@ -5755,7 +5783,7 @@ static int testFuzzSerializationRoundtrip(void) {
         for (uint32_t n = 1; n <= 4; n++) {
             clusterNodeConfig nc = {
                 .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         size_t differ = 0;
         uint32_t nodesSeen = 0;
@@ -5772,9 +5800,9 @@ static int testFuzzSerializationRoundtrip(void) {
             clusterPlacement pb;
             clusterPlacement pn;
             clusterPlacement pm;
-            clusterRingLocateBox(ring, &asBytes, &pb);
-            clusterRingLocateBox(ring, &asNever, &pn);
-            clusterRingLocateBox(ring, &asMdsc, &pm);
+            CR_OK(clusterRingLocateBox(ring, &asBytes, &pb));
+            CR_OK(clusterRingLocateBox(ring, &asNever, &pn));
+            CR_OK(clusterRingLocateBox(ring, &asMdsc, &pm));
             const clusterNode *b = clusterPlacementGetReplica(&pb, 0);
             differ += b != clusterPlacementGetReplica(&pn, 0) ||
                       b != clusterPlacementGetReplica(&pm, 0);
@@ -5819,7 +5847,7 @@ static int testFuzzSerializationRoundtrip(void) {
         for (uint32_t n = 1; n <= 3; n++) {
             clusterNodeConfig nc = {
                 .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         cleaner(flexFree) flex *good = clusterRingBuildSnapshotFlex(ring);
         const size_t total = flexCount(good);
@@ -5884,7 +5912,7 @@ static int testFuzzSerializationRoundtrip(void) {
         for (uint32_t n = 1; n <= 2; n++) {
             clusterNodeConfig nc = {
                 .id = n, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         const clusterQuorum tooMany = {.replicaCount = 3,
                                        .writeQuorum = 3,
@@ -5954,7 +5982,7 @@ static int testFuzzSerializationRoundtrip(void) {
                             .azId = (uint32_t)(rand() % 3),
                         },
                 };
-                clusterRingAddNode(ring, &nodeConfig);
+                CR_OK(clusterRingAddNode(ring, &nodeConfig));
             }
 
             /* Add random keyspaces */
@@ -5966,7 +5994,7 @@ static int testFuzzSerializationRoundtrip(void) {
                     .name = ksNames[i],
                     .quorum = CLUSTER_QUORUM_BALANCED,
                 };
-                clusterRingAddKeySpace(ring, &ksConfig, NULL);
+                CR_OK(clusterRingAddKeySpace(ring, &ksConfig, NULL));
             }
 
             /* Serialize */
@@ -6013,8 +6041,8 @@ static int testFuzzSerializationRoundtrip(void) {
                 snprintf(key, sizeof(key), "verify-key-%d", k);
 
                 clusterPlacement p1, p2;
-                clusterRingLocate(ring, key, strlen(key), &p1);
-                clusterRingLocate(restored, key, strlen(key), &p2);
+                CR_OK(clusterRingLocate(ring, key, strlen(key), &p1));
+                CR_OK(clusterRingLocate(restored, key, strlen(key), &p2));
 
                 if (p1.primary->id != p2.primary->id) {
                     ERR("Trial %d key %d: placement mismatch", trial, k);
@@ -6050,17 +6078,18 @@ static int testFuzzConcurrentModification(void) {
                     .weight = (uint32_t)(rand() % 200 + 50),
                     .initialState = CLUSTER_NODE_UP,
                 };
-                clusterRingAddNode(ring, &config);
+                CR_OK(clusterRingAddNode(ring, &config));
             } else if (action < 5 && clusterRingNodeCount(ring) > 3) {
                 /* Remove random node */
                 uint64_t removeId = (uint64_t)(rand() % (nextId - 1) + 1);
-                clusterRingRemoveNode(ring, removeId);
+                CR_OK_OR_NOT_FOUND(clusterRingRemoveNode(ring, removeId));
             } else if (action < 7 && clusterRingNodeCount(ring) > 0) {
                 /* Change state */
                 uint64_t nodeId = (uint64_t)(rand() % (nextId - 1) + 1);
                 clusterNodeState state =
                     rand() % 2 == 0 ? CLUSTER_NODE_UP : CLUSTER_NODE_DOWN;
-                clusterRingSetNodeState(ring, nodeId, state);
+                CR_OK_OR_NOT_FOUND(
+                    clusterRingSetNodeState(ring, nodeId, state));
             } else {
                 /* Lookup */
                 char key[32];
@@ -6099,7 +6128,7 @@ static int testFuzzLargeScale(void) {
                         .regionId = (uint32_t)(i % 5 + 1),
                     },
             };
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         if (clusterRingNodeCount(ring) != 500) {
@@ -6165,7 +6194,7 @@ static int testFuzzLargeScale(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Request placement with many replicas */
@@ -6233,7 +6262,7 @@ static int testFuzzLargeScale(void) {
                         .weight = 100,
                         .initialState = CLUSTER_NODE_UP,
                     };
-                    clusterRingAddNode(ring, &nodeConfig);
+                    CR_OK(clusterRingAddNode(ring, &nodeConfig));
                 }
                 const size_t want = sizes[z].nodes < sizes[z].replicas
                                         ? sizes[z].nodes
@@ -6281,7 +6310,7 @@ static int testFuzzLargeScale(void) {
             for (uint64_t i = 1; i <= 5; i++) {
                 clusterNodeConfig nodeConfig = {
                     .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-                clusterRingAddNode(ring, &nodeConfig);
+                CR_OK(clusterRingAddNode(ring, &nodeConfig));
             }
             uint32_t shortSets = 0;
             for (uint32_t k = 0; k < 2000; k++) {
@@ -6342,7 +6371,7 @@ static int testFuzzEdgeCases(void) {
             .weight = 100,
             .initialState = CLUSTER_NODE_UP,
         };
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
 
         /* All keys should map to the single node */
         for (int i = 0; i < 100; i++) {
@@ -6369,7 +6398,7 @@ static int testFuzzEdgeCases(void) {
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         clusterPlacement p;
@@ -6386,7 +6415,7 @@ static int testFuzzEdgeCases(void) {
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         cleanerName(zfree, Chars) char *longKey = zmalloc(10000);
@@ -6409,7 +6438,7 @@ static int testFuzzEdgeCases(void) {
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         /* Key with null bytes and binary data */
@@ -6438,8 +6467,8 @@ static int testFuzzEdgeCases(void) {
         clusterNodeConfig config2 = {
             .id = 2, .weight = 10000, .initialState = CLUSTER_NODE_UP};
 
-        clusterRingAddNode(ring, &config1);
-        clusterRingAddNode(ring, &config2);
+        CR_OK(clusterRingAddNode(ring, &config1));
+        CR_OK(clusterRingAddNode(ring, &config2));
 
         /* Heavy node should get most traffic */
         uint32_t counts[3] = {0};
@@ -6448,7 +6477,7 @@ static int testFuzzEdgeCases(void) {
             snprintf(key, sizeof(key), "weight-key-%d", i);
 
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             if (p.primary && p.primary->id <= 2) {
                 counts[p.primary->id]++;
             }
@@ -6494,7 +6523,7 @@ static int testBenchmarkLocate(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Benchmark: 100K lookups */
@@ -6505,7 +6534,7 @@ static int testBenchmarkLocate(void) {
             char key[32];
             snprintf(key, sizeof(key), "benchmark-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             clusterPlacementFree(&p);
         }
 
@@ -6533,7 +6562,7 @@ static int testBenchmarkLocate(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Benchmark: 10K lookups (Rendezvous is O(n) per lookup) */
@@ -6544,7 +6573,7 @@ static int testBenchmarkLocate(void) {
             char key[32];
             snprintf(key, sizeof(key), "benchmark-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             clusterPlacementFree(&p);
         }
 
@@ -6571,7 +6600,7 @@ static int testBenchmarkLocate(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Benchmark: 100K lookups */
@@ -6582,7 +6611,7 @@ static int testBenchmarkLocate(void) {
             char key[32];
             snprintf(key, sizeof(key), "benchmark-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             clusterPlacementFree(&p);
         }
 
@@ -6609,7 +6638,7 @@ static int testBenchmarkLocate(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Benchmark: 100K lookups */
@@ -6620,7 +6649,7 @@ static int testBenchmarkLocate(void) {
             char key[32];
             snprintf(key, sizeof(key), "benchmark-key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             clusterPlacementFree(&p);
         }
 
@@ -6647,7 +6676,7 @@ static int testBenchmarkLocate(void) {
                 .weight = 100,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Create batch of keys */
@@ -6669,8 +6698,8 @@ static int testBenchmarkLocate(void) {
         for (int iter = 0; iter < iterations; iter++) {
             for (int i = 0; i < batchSize; i++) {
                 clusterPlacement p;
-                clusterRingLocate(ring, keyStrings[i], strlen(keyStrings[i]),
-                                  &p);
+                CR_OK(clusterRingLocate(ring, keyStrings[i],
+                                        strlen(keyStrings[i]), &p));
                 clusterPlacementFree(&p);
             }
         }
@@ -6679,7 +6708,7 @@ static int testBenchmarkLocate(void) {
         /* Benchmark bulk calls */
         uint64_t bulkStart = timeUtilMonotonicNs();
         for (int iter = 0; iter < iterations; iter++) {
-            clusterRingLocateBulk(ring, keys, batchSize, placements);
+            CR_OK(clusterRingLocateBulk(ring, keys, batchSize, placements));
             for (int i = 0; i < batchSize; i++) {
                 clusterPlacementFree(&placements[i]);
             }
@@ -6711,7 +6740,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 64; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         /* Should use small bitmap optimization */
@@ -6732,7 +6761,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 65; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         /* Should use medium bitmap optimization */
@@ -6753,7 +6782,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 512; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         clusterPlacement p;
@@ -6773,7 +6802,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 513; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         clusterPlacement p;
@@ -6798,7 +6827,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 3; i++) {
             clusterNodeConfig nodeConfig = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Request 10 replicas - should return only 3 */
@@ -6817,7 +6846,7 @@ static int testOptimizationEdgeCases(void) {
 
         clusterNodeConfig nodeConfig = {
             .id = 42, .weight = 100, .initialState = CLUSTER_NODE_UP};
-        clusterRingAddNode(ring, &nodeConfig);
+        CR_OK(clusterRingAddNode(ring, &nodeConfig));
 
         /* Check that vnodes have valid nodePtr */
         const clusterKetamaData *data = &ring->vnodes;
@@ -6844,14 +6873,14 @@ static int testOptimizationEdgeCases(void) {
 
         clusterNodeConfig config = {
             .id = 1, .weight = 100, .initialState = CLUSTER_NODE_UP};
-        clusterRingAddNode(ring, &config);
+        CR_OK(clusterRingAddNode(ring, &config));
 
         /* Multiple locate calls to exercise prefetch code */
         for (int i = 0; i < 10; i++) {
             char key[16];
             snprintf(key, sizeof(key), "key-%d", i);
             clusterPlacement p;
-            clusterRingLocate(ring, key, strlen(key), &p);
+            CR_OK(clusterRingLocate(ring, key, strlen(key), &p));
             clusterPlacementFree(&p);
         }
     }
@@ -6867,7 +6896,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 10; i++) {
             clusterNodeConfig nodeConfig = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Request multiple replicas to exercise the prefetch loop */
@@ -6886,7 +6915,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 10; i++) {
             clusterNodeConfig config = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &config);
+            CR_OK(clusterRingAddNode(ring, &config));
         }
 
         /* Mix of different key types */
@@ -6932,7 +6961,7 @@ static int testOptimizationEdgeCases(void) {
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig nodeConfig = {
                 .id = i, .weight = 100, .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nodeConfig);
+            CR_OK(clusterRingAddNode(ring, &nodeConfig));
         }
 
         /* Create 500-byte key */
@@ -7042,8 +7071,12 @@ static uint32_t clusterRingTestCheckPlan(const clusterRing *from,
         const int len = snprintf(key, sizeof(key), "c%u", k);
         clusterPlacement before;
         clusterPlacement after;
-        clusterRingLocate(from, key, (uint32_t)len, &before);
-        clusterRingLocate(to, key, (uint32_t)len, &after);
+        if (clusterRingLocate(from, key, (uint32_t)len, &before) !=
+                CLUSTER_OK ||
+            clusterRingLocate(to, key, (uint32_t)len, &after) != CLUSTER_OK) {
+            violations++;
+            continue;
+        }
         const uint64_t hash = after.hashValue;
 
         uint32_t covering = 0;
@@ -7229,7 +7262,7 @@ static int testAffinityOracleAndKeyTypes(void) {
                     nc.location.continentId = (uint8_t)i;
                     break;
                 }
-                clusterRingAddNode(ring, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
                 nodes[i] = clusterRingGetNode(ring, 100 + i);
             }
             for (size_t m = 0; m < nLevels; m++) {
@@ -7269,7 +7302,7 @@ static int testAffinityOracleAndKeyTypes(void) {
             clusterNodeConfig nc = {.id = 1 + i};
             nc.location.nodeId = i;
             nc.location.rackId = i % 4; /* four racks, three nodes each */
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         uint32_t placed = 0;
         for (uint32_t k = 0; k < 300; k++) {
@@ -7298,7 +7331,7 @@ static int testAffinityOracleAndKeyTypes(void) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         for (uint32_t i = 0; i < 8; i++) {
             const clusterNodeConfig nc = {.id = 1 + i};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         static uint8_t sharedBytes[] = {1, 2, 3, 4, 5};
         __uint128_t wide = ((__uint128_t)0x1234 << 64) | 0x5678;
@@ -7333,8 +7366,8 @@ static int testAffinityOracleAndKeyTypes(void) {
         /* The bytes of a string key: the same as locating the bytes */
         clusterPlacement viaBox;
         clusterPlacement viaBytes;
-        clusterRingLocateBox(ring, &keys[0], &viaBox);
-        clusterRingLocate(ring, "a key", 5, &viaBytes);
+        CR_OK(clusterRingLocateBox(ring, &keys[0], &viaBox));
+        CR_OK(clusterRingLocate(ring, "a key", 5, &viaBytes));
         if (viaBox.hashValue != viaBytes.hashValue) {
             ERRR("a string box hashed other than its bytes");
         }
@@ -7399,7 +7432,7 @@ int clusterRingTest(int argc, char *argv[]) {
                 .capacityBytes = 1024u * 1024u,
                 .initialState = CLUSTER_NODE_UP,
             };
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         size_t snap_len = 0;
         uint8_t *snap = persistOpsClusterRing.snapshot(ring, &snap_len);
@@ -7440,7 +7473,7 @@ int clusterRingTest(int argc, char *argv[]) {
             clusterNodeConfig nc = {.id = (uint64_t)i * 10u,
                                     .weight = 100u,
                                     .initialState = CLUSTER_NODE_UP};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         clusterKeySpaceConfig ksc = {
             .name = "ks",
@@ -7550,8 +7583,8 @@ int clusterRingTest(int argc, char *argv[]) {
 
         /* Weight 0 is the default weight, whether set at add or later */
         const clusterNodeConfig nc = {.id = 7, .weight = 300};
-        clusterRingAddNode(ring, &nc);
-        clusterRingSetNodeWeight(ring, 7, 0);
+        CR_OK(clusterRingAddNode(ring, &nc));
+        CR_OK(clusterRingSetNodeWeight(ring, 7, 0));
         if (clusterNodeGetWeight(clusterRingGetNode(ring, 7)) != 100) {
             ERRR("weight 0 did not set the default weight");
         }
@@ -7569,7 +7602,7 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         for (uint64_t id = 1; id <= 12; id++) {
             const clusterNodeConfig nc = {.id = id};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
 
         const char text[] = "abc";
@@ -7585,8 +7618,8 @@ int clusterRingTest(int argc, char *argv[]) {
         for (size_t i = 0; i < 2; i++) {
             clusterPlacement a;
             clusterPlacement b;
-            clusterRingLocateBox(ring, pairs[i][0], &a);
-            clusterRingLocateBox(ring, pairs[i][1], &b);
+            CR_OK(clusterRingLocateBox(ring, pairs[i][0], &a));
+            CR_OK(clusterRingLocateBox(ring, pairs[i][1], &b));
             if (a.hashValue != b.hashValue || a.primary != b.primary) {
                 ERR("pair %zu placed differently", i);
             }
@@ -7606,7 +7639,7 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         for (size_t i = 0; i < 10; i++) {
             clusterPlacement one;
-            clusterRingLocateBox(ring, &keys[i], &one);
+            CR_OK(clusterRingLocateBox(ring, &keys[i], &one));
             if (one.primary != bulk[i].primary) {
                 ERR("key %zu placed differently in bulk", i);
             }
@@ -7644,8 +7677,8 @@ int clusterRingTest(int argc, char *argv[]) {
                     .location = {.nodeId = id,
                                  .rackId = (uint32_t)(id % 4),
                                  .azId = (uint32_t)(id % 3)}};
-                clusterRingAddNode(ring, &nc);
-                clusterRingAddNode(plain, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
+                CR_OK(clusterRingAddNode(plain, &nc));
             }
 
             for (uint32_t k = 0; k < 200; k++) {
@@ -7658,7 +7691,7 @@ int clusterRingTest(int argc, char *argv[]) {
                     ERR("strategy %d key %u not placed", (int)s, k);
                     continue;
                 }
-                clusterRingLocate(plain, key, (uint32_t)len, &q);
+                CR_OK(clusterRingLocate(plain, key, (uint32_t)len, &q));
                 const size_t n = clusterPlacementReplicaCount(&p);
                 uint64_t rackSeen = 0;
                 for (size_t r = 0; r < n; r++) {
@@ -7689,11 +7722,11 @@ int clusterRingTest(int argc, char *argv[]) {
                                           .ruleCount = 1,
                                           .strategy = s};
             clusterKeySpace *hardKs = NULL;
-            clusterRingAddKeySpace(ring, &hard, &hardKs);
+            CR_OK(clusterRingAddKeySpace(ring, &hard, &hardKs));
             five.required = false;
             hard.name = "soft";
             clusterKeySpace *softKs = NULL;
-            clusterRingAddKeySpace(ring, &hard, &softKs);
+            CR_OK(clusterRingAddKeySpace(ring, &hard, &softKs));
             clusterPlacement p;
             if (clusterRingLocateKeyspace(ring, hardKs, "k", 1, &p) !=
                 CLUSTER_ERR_AFFINITY) {
@@ -7712,7 +7745,7 @@ int clusterRingTest(int argc, char *argv[]) {
             const clusterKeySpaceConfig two = {
                 .name = "two", .quorum = {.replicaCount = 2}, .strategy = s};
             clusterKeySpace *twoKs = NULL;
-            clusterRingAddKeySpace(ring, &two, &twoKs);
+            CR_OK(clusterRingAddKeySpace(ring, &two, &twoKs));
             if (clusterRingLocateKeyspace(ring, twoKs, "k", 1, &p) !=
                 CLUSTER_ERR_AFFINITY) {
                 ERR("strategy %d: ring rule (3 racks) met by 2 replicas",
@@ -7752,11 +7785,11 @@ int clusterRingTest(int argc, char *argv[]) {
             clusterRingNew(&ketamaConfig);
         for (uint64_t id = 1; id <= 8; id++) {
             const clusterNodeConfig nc = {.id = id, .capacityBytes = 1000};
-            clusterRingAddNode(ring, &nc);
-            clusterRingAddNode(ketama, &nc);
-            clusterRingSetNodeUsedBytes(ring, id, 100);
+            CR_OK(clusterRingAddNode(ring, &nc));
+            CR_OK(clusterRingAddNode(ketama, &nc));
+            CR_OK(clusterRingSetNodeUsedBytes(ring, id, 100));
         }
-        clusterRingSetNodeUsedBytes(ring, 3, 900); /* 0.9 vs mean 0.2 */
+        CR_OK(clusterRingSetNodeUsedBytes(ring, 3, 900)); /* 0.9 vs mean 0.2 */
 
         uint32_t ketamaPrimary3 = 0;
         for (uint32_t k = 0; k < 400; k++) {
@@ -7764,8 +7797,8 @@ int clusterRingTest(int argc, char *argv[]) {
             const int len = snprintf(key, sizeof(key), "b%u", k);
             clusterPlacement p;
             clusterPlacement q;
-            clusterRingLocate(ring, key, (uint32_t)len, &p);
-            clusterRingLocate(ketama, key, (uint32_t)len, &q);
+            CR_OK(clusterRingLocate(ring, key, (uint32_t)len, &p));
+            CR_OK(clusterRingLocate(ketama, key, (uint32_t)len, &q));
             ketamaPrimary3 += q.primary->id == 3;
             if (p.primary->id == 3 || clusterPlacementReplicaCount(&p) != 8 ||
                 clusterPlacementGetReplica(&p, 7)->id != 3) {
@@ -7780,9 +7813,9 @@ int clusterRingTest(int argc, char *argv[]) {
         }
 
         /* The fill sum tracks every change exactly */
-        clusterRingSetNodeState(ring, 5, CLUSTER_NODE_DOWN);
-        clusterRingRemoveNode(ring, 6);
-        clusterRingSetNodeUsedBytes(ring, 7, 400);
+        CR_OK(clusterRingSetNodeState(ring, 5, CLUSTER_NODE_DOWN));
+        CR_OK(clusterRingRemoveNode(ring, 6));
+        CR_OK(clusterRingSetNodeUsedBytes(ring, 7, 400));
         double sum = 0;
         uint32_t nodes = 0;
         for (uint32_t i = 0; i < ring->nodeCount; i++) {
@@ -7848,24 +7881,26 @@ int clusterRingTest(int argc, char *argv[]) {
                 for (uint64_t id = 1; id <= 3; id++) {
                     const clusterNodeConfig nc = {.id = id,
                                                   .capacityBytes = 1000};
-                    clusterRingAddNode(ring, &nc);
-                    clusterRingAddNode(ref, &nc);
+                    CR_OK(clusterRingAddNode(ring, &nc));
+                    CR_OK(clusterRingAddNode(ref, &nc));
                 }
                 const clusterKeySpaceConfig kc = {.name = "ks", .strategy = s};
                 clusterKeySpace *ks = NULL;
-                clusterRingAddKeySpace(ring, &kc, &ks);
+                CR_OK(clusterRingAddKeySpace(ring, &kc, &ks));
                 for (int b = 0; b < 2; b++) {
                     for (uint64_t id = 4; id <= 16; id++) {
                         const clusterNodeConfig nc = {
                             .id = id,
                             .weight = (uint32_t)(50 + id * 10),
                             .capacityBytes = 1000};
-                        clusterRingAddNode(both[b], &nc);
-                        clusterRingSetNodeUsedBytes(both[b], id, id * 40);
+                        CR_OK(clusterRingAddNode(both[b], &nc));
+                        CR_OK(
+                            clusterRingSetNodeUsedBytes(both[b], id, id * 40));
                     }
-                    clusterRingRemoveNode(both[b], 5);
-                    clusterRingSetNodeState(both[b], 7, CLUSTER_NODE_DOWN);
-                    clusterRingSetNodeWeight(both[b], 9, 400);
+                    CR_OK(clusterRingRemoveNode(both[b], 5));
+                    CR_OK(
+                        clusterRingSetNodeState(both[b], 7, CLUSTER_NODE_DOWN));
+                    CR_OK(clusterRingSetNodeWeight(both[b], 9, 400));
                 }
 
                 for (int round = 0; round < 2; round++) {
@@ -7874,9 +7909,9 @@ int clusterRingTest(int argc, char *argv[]) {
                         const int len = snprintf(key, sizeof(key), "q%u", k);
                         clusterPlacement p;
                         clusterPlacement q;
-                        clusterRingLocateKeyspace(ring, ks, key, (uint32_t)len,
-                                                  &p);
-                        clusterRingLocate(ref, key, (uint32_t)len, &q);
+                        CR_OK(clusterRingLocateKeyspace(ring, ks, key,
+                                                        (uint32_t)len, &p));
+                        CR_OK(clusterRingLocate(ref, key, (uint32_t)len, &q));
                         const size_t n = clusterPlacementReplicaCount(&p);
                         bool same = n == clusterPlacementReplicaCount(&q);
                         for (size_t i = 0; same && i < n; i++) {
@@ -7914,7 +7949,7 @@ int clusterRingTest(int argc, char *argv[]) {
                 }
 
                 /* Removing the keyspace frees state only it used */
-                clusterRingRemoveKeySpace(ring, "ks");
+                CR_OK(clusterRingRemoveKeySpace(ring, "ks"));
                 const bool vnodesLive = r == CLUSTER_STRATEGY_KETAMA ||
                                         r == CLUSTER_STRATEGY_BOUNDED;
                 if ((ring->vnodes.vnodes != NULL) != vnodesLive ||
@@ -7987,7 +8022,7 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         for (uint64_t id = 1; id <= 5; id++) {
             const clusterNodeConfig nc = {.id = id};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         clusterRingStats stats;
         clusterRingGetStats(ring, &stats);
@@ -8023,7 +8058,7 @@ int clusterRingTest(int argc, char *argv[]) {
             cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
             for (uint64_t id = 1; id <= 8; id++) {
                 const clusterNodeConfig nc = {.id = id};
-                clusterRingAddNode(ring, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
             }
             if (clusterRingPollHealth(ring) != CLUSTER_ERR) {
                 ERRR("polled without a provider");
@@ -8031,9 +8066,9 @@ int clusterRingTest(int argc, char *argv[]) {
 
             /* Without load reports the read goes to the first replica */
             clusterPlacement p;
-            clusterRingLocate(ring, "k", 1, &p);
+            CR_OK(clusterRingLocate(ring, "k", 1, &p));
             const clusterNode *selected = NULL;
-            clusterRingSelectReadNode(ring, &p, &selected);
+            CR_OK(clusterRingSelectReadNode(ring, &p, &selected));
             if (selected != p.primary) {
                 ERRR("unreported loads should keep preference order");
             }
@@ -8060,7 +8095,7 @@ int clusterRingTest(int argc, char *argv[]) {
             }
 
             /* Loads arrive by polling: the least loaded replica reads */
-            clusterRingPollHealth(ring);
+            CR_OK(clusterRingPollHealth(ring));
             const clusterNode *least = NULL;
             for (size_t r = 0; r < clusterPlacementReplicaCount(&p); r++) {
                 const clusterNode *n = clusterPlacementGetReplica(&p, r);
@@ -8068,7 +8103,7 @@ int clusterRingTest(int argc, char *argv[]) {
                     least = n;
                 }
             }
-            clusterRingSelectReadNode(ring, &p, &selected);
+            CR_OK(clusterRingSelectReadNode(ring, &p, &selected));
             if (selected != least || clusterNodeGetLoad(selected)->cpuUsage !=
                                          second.cpu[least->id]) {
                 ERRR("read did not go to the least loaded replica");
@@ -8080,23 +8115,23 @@ int clusterRingTest(int argc, char *argv[]) {
             const uint64_t victim = 5;
             const clusterNode *node = clusterRingGetNode(ring, victim);
             second.reachable[victim] = false;
-            clusterRingPollHealth(ring);
-            clusterRingPollHealth(ring);
+            CR_OK(clusterRingPollHealth(ring));
+            CR_OK(clusterRingPollHealth(ring));
             second.reachable[victim] = true;
-            clusterRingPollHealth(ring);
+            CR_OK(clusterRingPollHealth(ring));
             second.reachable[victim] = false;
-            clusterRingPollHealth(ring);
-            clusterRingPollHealth(ring);
+            CR_OK(clusterRingPollHealth(ring));
+            CR_OK(clusterRingPollHealth(ring));
             if (clusterNodeGetState(node) != CLUSTER_NODE_UP) {
                 ERRR("non-consecutive failures suspected the node");
             }
-            clusterRingPollHealth(ring);
+            CR_OK(clusterRingPollHealth(ring));
             if (clusterNodeGetState(node) != CLUSTER_NODE_SUSPECT ||
                 clusterNodeGetHealth(node)->reachable) {
                 ERRR("three consecutive failures did not suspect the node");
             }
             second.reachable[victim] = true;
-            clusterRingPollHealth(ring);
+            CR_OK(clusterRingPollHealth(ring));
             if (clusterNodeGetState(node) != CLUSTER_NODE_UP) {
                 ERRR("a reachable report did not restore the node");
             }
@@ -8120,8 +8155,8 @@ int clusterRingTest(int argc, char *argv[]) {
                     .id = id,
                     .location = {.nodeId = id, .rackId = (uint32_t)(id % 4)},
                     .capacityBytes = 1u << 30};
-                clusterRingAddNode(ring, &nc);
-                clusterRingSetNodeUsedBytes(ring, id, id << 20);
+                CR_OK(clusterRingAddNode(ring, &nc));
+                CR_OK(clusterRingSetNodeUsedBytes(ring, id, id << 20));
             }
             uint32_t callbacks = 0;
             clusterRingSetRebalanceCallback(ring, clusterRingTestCountPlan,
@@ -8137,20 +8172,20 @@ int clusterRingTest(int argc, char *argv[]) {
                 case 1: {
                     const clusterNodeConfig nc = {
                         .id = 9, .location = {.nodeId = 9, .rackId = 1}};
-                    clusterRingAddNode(ring, &nc);
+                    CR_OK(clusterRingAddNode(ring, &nc));
                     break;
                 }
                 case 2:
-                    clusterRingRemoveNode(ring, 3);
+                    CR_OK(clusterRingRemoveNode(ring, 3));
                     break;
                 case 3:
-                    clusterRingSetNodeState(ring, 5, CLUSTER_NODE_DOWN);
+                    CR_OK(clusterRingSetNodeState(ring, 5, CLUSTER_NODE_DOWN));
                     break;
                 case 4:
-                    clusterRingSetNodeWeight(ring, 2, 400);
+                    CR_OK(clusterRingSetNodeWeight(ring, 2, 400));
                     break;
                 case 5:
-                    clusterRingSetNodeState(ring, 5, CLUSTER_NODE_UP);
+                    CR_OK(clusterRingSetNodeState(ring, 5, CLUSTER_NODE_UP));
                     break;
                 }
                 if (clusterRingPlanRebalance(ring, settled) != CLUSTER_OK) {
@@ -8194,13 +8229,13 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
         for (uint64_t id = 1; id <= 6; id++) {
             const clusterNodeConfig nc = {.id = id};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         const uint64_t used = (uint64_t)7 << 40;
-        clusterRingSetNodeUsedBytes(ring, 4, used);
+        CR_OK(clusterRingSetNodeUsedBytes(ring, 4, used));
         cleaner(clusterRingFree) clusterRing *settled = clusterRingCopy(ring);
-        clusterRingRemoveNode(ring, 4);
-        clusterRingPlanRebalance(ring, settled);
+        CR_OK(clusterRingRemoveNode(ring, 4));
+        CR_OK(clusterRingPlanRebalance(ring, settled));
 
         /* With one replica every range node 4 held moves off it, so its
          * moves' estimates add up to its bytes (less per-range rounding) */
@@ -8226,7 +8261,7 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         for (uint64_t id = 1; id <= 4; id++) {
             const clusterNodeConfig nc = {.id = id};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         if (clusterRingStartMove(ring, 0) != CLUSTER_ERR ||
             clusterRingCancelRebalance(ring) != CLUSTER_ERR) {
@@ -8234,11 +8269,11 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         cleaner(clusterRingFree) clusterRing *settled = clusterRingCopy(ring);
         const clusterNodeConfig nc = {.id = 5};
-        clusterRingAddNode(ring, &nc);
+        CR_OK(clusterRingAddNode(ring, &nc));
         uint32_t callbacks = 0;
         clusterRingSetRebalanceCallback(ring, clusterRingTestCountPlan,
                                         &callbacks);
-        clusterRingPlanRebalance(ring, settled);
+        CR_OK(clusterRingPlanRebalance(ring, settled));
 
         const clusterRebalancePlan *plan = clusterRingGetRebalancePlan(ring);
         const uint32_t moves = clusterRebalancePlanMoveCount(plan);
@@ -8255,8 +8290,8 @@ int clusterRingTest(int argc, char *argv[]) {
         }
 
         /* Move 0 fails once, then every move starts and completes */
-        clusterRingStartMove(ring, 0);
-        clusterRingFailMove(ring, 0);
+        CR_OK(clusterRingStartMove(ring, 0));
+        CR_OK(clusterRingFailMove(ring, 0));
         clusterRebalancePlanGetInfo(plan, &info);
         if (info.failedCount != 1 || info.startedAtMs == 0) {
             ERRR("failed move not counted");
@@ -8322,19 +8357,19 @@ int clusterRingTest(int argc, char *argv[]) {
             for (uint64_t id = 1; id <= 5; id++) {
                 const clusterNodeConfig nc = {.id = id,
                                               .location = {.nodeId = id}};
-                clusterRingAddNode(ring, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
             }
 
             /* locate places the ring; preferenceOrder ranks for rules */
             clusterPlacement p;
-            clusterRingLocate(ring, "k", 1, &p);
+            CR_OK(clusterRingLocate(ring, "k", 1, &p));
             const uint64_t plainPrimary = p.primary->id;
             clusterPlacementFree(&p);
             const clusterKeySpaceConfig kc = {
                 .name = "spread", .rules = &nodeSpread, .ruleCount = 1};
             clusterKeySpace *ks = NULL;
-            clusterRingAddKeySpace(ring, &kc, &ks);
-            clusterRingLocateKeyspace(ring, ks, "k", 1, &p);
+            CR_OK(clusterRingAddKeySpace(ring, &kc, &ks));
+            CR_OK(clusterRingLocateKeyspace(ring, ks, "k", 1, &p));
             const uint64_t rankedPrimary = p.primary->id;
             clusterPlacementFree(&p);
             if (plainPrimary != 1 || rankedPrimary != 5) {
@@ -8346,7 +8381,7 @@ int clusterRingTest(int argc, char *argv[]) {
             {
                 cleaner(clusterRingFree) clusterRing *copy =
                     clusterRingCopy(ring);
-                clusterRingLocate(copy, "k", 1, &p);
+                CR_OK(clusterRingLocate(copy, "k", 1, &p));
                 if (!p.primary || p.primary->id != plainPrimary) {
                     ERRR("copy places differently");
                 }
@@ -8375,9 +8410,9 @@ int clusterRingTest(int argc, char *argv[]) {
             cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
             for (uint64_t id = 1; id <= 7; id++) {
                 const clusterNodeConfig nc = {.id = id, .weight = 50 * id};
-                clusterRingAddNode(ring, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
             }
-            clusterRingSetNodeState(ring, 3, CLUSTER_NODE_DOWN);
+            CR_OK(clusterRingSetNodeState(ring, 3, CLUSTER_NODE_DOWN));
             cleaner(clusterRingFree) clusterRing *copy = clusterRingCopy(ring);
             for (uint32_t k = 0; k < 500; k++) {
                 if (clusterRingTestPrimary(ring, k) !=
@@ -8395,7 +8430,7 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&mc);
         for (uint64_t id = 1; id <= 9; id++) {
             const clusterNodeConfig nc = {.id = id};
-            clusterRingAddNode(ring, &nc);
+            CR_OK(clusterRingAddNode(ring, &nc));
         }
         const clusterKeySpaceConfig kc = {.name = "jump",
                                           .quorum = {.replicaCount = 2},
@@ -8412,8 +8447,9 @@ int clusterRingTest(int argc, char *argv[]) {
             expect[k] = clusterRingTestPrimary(ring, k);
             expectKs[k] = clusterRingTestKeyspacePrimary(ring, ks, k);
         }
-        clusterRingSetNodeState(ring, 4, CLUSTER_NODE_DOWN);
-        clusterRingSetNodeState(ring, 4, CLUSTER_NODE_UP); /* stale, same set */
+        CR_OK(clusterRingSetNodeState(ring, 4, CLUSTER_NODE_DOWN));
+        CR_OK(clusterRingSetNodeState(ring, 4,
+                                      CLUSTER_NODE_UP)); /* stale, same set */
 
         pthread_t threads[4];
         for (int t = 0; t < 4; t++) {
@@ -8452,17 +8488,17 @@ int clusterRingTest(int argc, char *argv[]) {
                 {.id = 1, .weight = 50, .location = {.rackId = 1, .azId = 1}},
                 {.id = 2, .location = {.rackId = 2, .azId = 2}},
                 {.id = 3, .weight = 200, .location = {.rackId = 3}}};
-            clusterRingAddNodes(ring, batch, 3);
+            CR_OK(clusterRingAddNodes(ring, batch, 3));
             for (uint64_t id = 4; id <= 40; id++) {
                 const clusterNodeConfig nc = {
                     .id = id,
                     .weight = (uint32_t)(id * 7),
                     .location = {.rackId = (uint32_t)(id % 4),
                                  .azId = (uint32_t)(id % 3)}};
-                clusterRingAddNode(ring, &nc);
+                CR_OK(clusterRingAddNode(ring, &nc));
             }
-            clusterRingRemoveNode(ring, 5);
-            clusterRingSetNodeWeight(ring, 9, 900);
+            CR_OK(clusterRingRemoveNode(ring, 5));
+            CR_OK(clusterRingSetNodeWeight(ring, 9, 900));
 
             size_t len = 0;
             uint8_t *snap = persistOpsClusterRing.snapshot(ring, &len);
@@ -8513,7 +8549,7 @@ int clusterRingTest(int argc, char *argv[]) {
         clusterRing *ring = clusterRingNewDefault();
         clusterRingRepr(ring); /* empty */
         const clusterNodeConfig node = {.id = 1, .name = "a", .weight = 100};
-        clusterRingAddNode(ring, &node);
+        CR_OK(clusterRingAddNode(ring, &node));
         clusterRingRepr(ring);
         clusterNodeRepr(clusterRingGetNode(ring, 1));
         clusterPlacement p;
