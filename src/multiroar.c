@@ -2126,7 +2126,7 @@ void multiroarBitSetMany(multiroar *r, const uint64_t *positions,
      * collapse to one map op per chunk; runs too short to amortize the
      * expand/compress cost keep the exact per-bit path, so random
      * order never regresses. */
-    enum { SET_MANY_RUN_MIN = 4 };
+    constexpr int SET_MANY_RUN_MIN = 4;
 
     uint64_t i = 0;
     while (i < count) {
@@ -4433,7 +4433,7 @@ int multiroarTest(int, char *[]) {
          * removed and set again elsewhere in their chunk.  Every call's
          * answer, the reads, the bit count and the chunk rows follow. */
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        enum { chunks = 300 };
+        constexpr int chunks = 300;
         for (uint64_t c = 0; c < chunks; c++) {
             const uint64_t p =
                 c * BITMAP_SIZE_IN_BITS + (c * 37) % BITMAP_SIZE_IN_BITS;
@@ -11031,7 +11031,7 @@ int multiroarTest(int, char *[]) {
          * step the count, min, max, emptiness, ranks, selects and range
          * counts agree with the oracle (min and max scan past chunks
          * other operations left empty). */
-        enum { MR_BITS = 4 * BITMAP_SIZE_IN_BITS };
+        constexpr int MR_BITS = 4 * BITMAP_SIZE_IN_BITS;
         static uint8_t oracle[MR_BITS];
         static uint8_t other[MR_BITS];
         memset(oracle, 0, sizeof(oracle));

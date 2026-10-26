@@ -499,7 +499,7 @@ static uint8_t *stringPoolPersistSnapshot_(const void *structure, size_t *len) {
     flexAppendMultipleExact(&f, 3, header);
 
     /* Live strings in id order, 21 at a time */
-    enum { BATCH = 21 };
+    constexpr int BATCH = 21;
     databox boxes[BATCH * 3];
     const databox *ptrs[BATCH * 3];
     size_t used = 0;

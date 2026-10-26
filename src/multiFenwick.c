@@ -546,7 +546,7 @@ static uint8_t *multiFenwickPersistSnapshot_(const void *structure,
         multilistIteratorInitForwardReadOnly(mfw->tree, s, &iter);
 
         /* 64 cells per flex growth */
-        enum { BATCH = 64 };
+        constexpr int BATCH = 64;
         databox boxes[BATCH];
         const databox *ptrs[BATCH];
         size_t used = 0;
@@ -608,7 +608,7 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
      * stores it.  The cells are gathered 64 at a time into one flex, then
      * cut into the multilist's nodes in one pass. */
     cleaner(flexFree) flex *cells = flexNew();
-    enum { BATCH = 64 };
+    constexpr int BATCH = 64;
     databox boxes[BATCH];
     const databox *ptrs[BATCH];
     for (uint64_t at = 0; at < capacity; at += BATCH) {

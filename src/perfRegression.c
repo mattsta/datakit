@@ -1124,7 +1124,7 @@ static void benchMultiroar(void) {
  * doubles */
 static void benchNumeric(void) {
     const uint32_t n = PERF_CONTAINER_N;
-    enum { slot = 32 };
+    constexpr int slot = 32;
     cleanerName(zfree, PerfKeys) char *texts = zcalloc(n, slot);
     cleanerName(zfree, U8Buf) uint8_t *lens = zcalloc(n, 1);
     for (uint32_t i = 0; i < n; i++) {

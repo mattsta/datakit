@@ -3303,7 +3303,7 @@ static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
         /* Members are appended a chunk at a time, each decoded into its
          * own slot (a 96/128-bit value lives in its databoxBig), so a
          * large set grows its flex once per chunk, not once per member */
-        enum { ISB_CHUNK_ = 32 };
+        constexpr int ISB_CHUNK_ = 32;
         databoxBig values[ISB_CHUNK_];
         const databox *chunk[ISB_CHUNK_];
         intsetBigIterator it = {};

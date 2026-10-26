@@ -3203,8 +3203,8 @@ int databoxTest(int, char *[]) {
         static const databoxType types[] = {
             DATABOX_SIGNED_64, DATABOX_UNSIGNED_64, DATABOX_FLOAT_32,
             DATABOX_DOUBLE_64, DATABOX_SIGNED_128,  DATABOX_UNSIGNED_128};
-        enum { NV = countof(twice) };
-        enum { NT = countof(types) };
+        constexpr int NV = countof(twice);
+        constexpr int NT = countof(types);
         databoxBig boxes[NV * NT];
         __int128 value2[NV * NT];
         size_t n = 0;
@@ -3707,8 +3707,9 @@ int databoxTest(int, char *[]) {
         const __uint128_t aboveValues[] = {(__uint128_t)INT128_MAX + 1,
                                            (__uint128_t)INT128_MAX + 2,
                                            UINT128_MAX - 1, UINT128_MAX};
-        enum { MATRIX_FORMS_ = 4 };
-        enum { MATRIX_VALUES_ = countof(signedValues) + countof(aboveValues) };
+        constexpr int MATRIX_FORMS_ = 4;
+        constexpr int MATRIX_VALUES_ =
+            countof(signedValues) + countof(aboveValues);
 
         databoxBig boxes[MATRIX_VALUES_ * MATRIX_FORMS_];
         struct {

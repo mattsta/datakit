@@ -3626,7 +3626,7 @@ int multilistTest(int, char *[]) {
          * the same list, emptied by pops, refuses everything, iterates
          * nothing, and still takes a first insert through IndexGet's
          * entry. */
-        enum { EI_MAX = 600 };
+        constexpr int EI_MAX = 600;
         const struct {
             const char *name;
             flexCapSizeLimit limit;
@@ -3849,7 +3849,7 @@ int multilistTest(int, char *[]) {
         }
 
         char buf[MLR_LEN + 1];
-        enum { LK_N = 200 };
+        constexpr int LK_N = 200;
         static uint32_t want[2 * LK_N];
         cleaner(flexFree) flex *src = flexNew();
         for (uint32_t i = 0; i < LK_N; i++) {
@@ -4036,7 +4036,7 @@ int multilistTest(int, char *[]) {
          * harness can never silently regress into single-tier testing. */
         uint64_t rng = 0x9E3779B97F4A7C15ULL;
 #define FUZZ_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
-        enum { SHADOW_MAX = 512 };
+        constexpr int SHADOW_MAX = 512;
         static int64_t shadow[SHADOW_MAX];
         int32_t shadowCount = 0;
         int64_t nextId = 0;

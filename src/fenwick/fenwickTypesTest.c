@@ -173,7 +173,7 @@ static size_t fwtIndex_(uint64_t *s) {
 #define FWT_LOWER_BOUND(T, VT)                                                 \
     static int fwtLowerBound##T(uint64_t seed) {                               \
         int err = 0;                                                           \
-        enum { N = 200 };                                                      \
+        constexpr int N = 200;                                                 \
         VT elem[N];                                                            \
         void *fw = NULL;                                                       \
         for (size_t i = 0; i < N; i++) {                                       \

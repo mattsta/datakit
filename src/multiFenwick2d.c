@@ -185,7 +185,7 @@ static uint8_t *multiFenwick2dPersistSnapshot_(const void *structure,
     }
 
     /* 64 cells per flex growth */
-    enum { BATCH = 64 };
+    constexpr int BATCH = 64;
     databox boxes[BATCH];
     const databox *ptrs[BATCH];
     const uint64_t cells = t->rowCap * t->colCap;

@@ -4694,7 +4694,7 @@ static void *tcExitWorker(void *arg) {
  * handing the same block to two threads. */
 static void *tcStressWorker(void *arg) {
     membound *m = (membound *)arg;
-    enum { LIVE = 64 };
+    constexpr int LIVE = 64;
     void *p[LIVE];
     const unsigned char tag = (unsigned char)((uintptr_t)pthread_self() >> 4);
     for (int r = 0; r < 400; r++) {
@@ -4717,7 +4717,7 @@ static void *tcStressWorker(void *arg) {
  * primary) and frees them (an emptied non-primary extent is released). */
 static void *tcExtentChurnWorker(void *arg) {
     membound *m = (membound *)arg;
-    enum { BIG = 3 };
+    constexpr int BIG = 3;
     void *p[BIG];
     for (int r = 0; r < 60; r++) {
         for (int i = 0; i < BIG; i++) {
@@ -7991,7 +7991,7 @@ int memboundTest(int, char *[]) {
                               .threadCache = true};
         membound *m = memboundCreateWithConfig(&cfg);
         assert(m);
-        enum { NTH = 4 };
+        constexpr int NTH = 4;
         pthread_t th[NTH];
         for (int i = 0; i < NTH; i++) {
             assert(pthread_create(&th[i], NULL, tcStressWorker, m) == 0);
@@ -8057,7 +8057,7 @@ int memboundTest(int, char *[]) {
                               .shrinkThreshold = 0.5f};
         membound *m = memboundCreateWithConfig(&cfg);
         assert(m);
-        enum { N = 40 };
+        constexpr int N = 40;
         void *p[N];
         for (size_t i = 0; i < N; i++) {
             p[i] = memboundAlloc(m, 48 << 10);
@@ -8171,7 +8171,7 @@ int memboundTest(int, char *[]) {
         if (memboundAdaptiveGetStrategy(m) != MEMBOUND_STRATEGY_FIRST_FIT) {
             ERR("an empty pool is not fragmented");
         }
-        enum { NB = 48 };
+        constexpr int NB = 48;
         void *p[NB];
         for (size_t i = 0; i < NB; i++) {
             p[i] = memboundAlloc(m, 8 << 10);
@@ -8255,7 +8255,7 @@ int memboundTest(int, char *[]) {
                               .threadCacheBatch = 4};
         membound *m = memboundCreateWithConfig(&cfg);
         assert(m);
-        enum { NCACHE = 2 };
+        constexpr int NCACHE = 2;
         pthread_t cache[NCACHE];
         pthread_t churn;
         for (int i = 0; i < NCACHE; i++) {

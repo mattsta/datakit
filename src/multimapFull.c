@@ -4181,7 +4181,7 @@ int multimapFullTest(int, char *[]) {
          * regroups, and inserts, splits, merges and trims keep moving
          * rangeBoxes.  A move copies the box but not its heap payload, so
          * every wide boundary key must still read back by value. */
-        enum { fwRows = 9000 };
+        constexpr int fwRows = 9000;
         cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         m->maxSize = 64;
 
@@ -4363,7 +4363,7 @@ int multimapFullTest(int, char *[]) {
          * multimapAtom's reverse map.  The copy is checked against an
          * oracle of the ids it holds right after the copy and again after
          * inserts and deletes on it; the source must stay unchanged. */
-        enum { copyAtoms = 2400 };
+        constexpr int copyAtoms = 2400;
         multimapAtom *ma = multimapAtomNew();
         static __uint128_t wideVals[copyAtoms];
         static char strVals[copyAtoms][24];

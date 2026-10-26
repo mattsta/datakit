@@ -1151,7 +1151,7 @@ int djTest(int, char *[]) {
          * follows ','; in an array every element after the first follows
          * ',' */
         cleaner(mdsfree) mds *expected = mdsempty();
-        enum { maxDepth = sizeof(DJ_BITMAP) * 8 * (2 + 3) + 2 };
+        constexpr int maxDepth = sizeof(DJ_BITMAP) * 8 * (2 + 3) + 2;
         bool isMap[maxDepth];
         uint32_t elements[maxDepth];
         int32_t depth = -1;

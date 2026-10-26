@@ -1213,7 +1213,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int, char *[]) {
 
     /* Overfill so inserts auto-evict; each eviction must be WAL-logged
      * as a DELETE or replay would resurrect it. */
-    enum { INSERTED = 30 };
+    constexpr int INSERTED = 30;
     multilruPtr handles[INSERTED];
     for (int i = 0; i < INSERTED; i++) {
         handles[i] = mlruTestInsert(mlru, 0);

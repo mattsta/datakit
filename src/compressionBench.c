@@ -790,10 +790,10 @@ static void runMultilistBenchmarks(void) {
      * and background load hit every depth alike. Sanitized builds run one
      * short round as a smoke test; their timings mean nothing. */
 #ifdef BENCH_SANITIZED
-    enum { ROUNDS = 1 };
+    constexpr int ROUNDS = 1;
     const size_t count = 100000;
 #else
-    enum { ROUNDS = 7 };
+    constexpr int ROUNDS = 7;
     const size_t count = 1'000'000;
 #endif
     const uint32_t timedDepths[] = {0, 2, 1};

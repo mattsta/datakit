@@ -2185,7 +2185,7 @@ static void testEvictionCallback(size_t ptr, void *) {
  * caches mean the entry encoding round-trips at both widths. */
 #define MLRU_WIDTH_TRACE_MAX 8192
 static size_t mlruWidthWorkload_(multilru *mlru, uint64_t *trace) {
-    enum { inserts = 1500 };
+    constexpr int inserts = 1500;
     multilruPtr ptrs[inserts];
     size_t n = 0;
     uint64_t seed[2] = {0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL};
@@ -2289,7 +2289,7 @@ int multilruTest(int, char *[]) {
          * upgrade survive it, and removal by minimum drains every entry
          * once in non-decreasing level order */
         multilru *mlru = multilruNewWithLevels(7);
-        enum { N = 70000 };
+        constexpr int N = 70000;
         cleanerName(zfree, Ptrs) multilruPtr *ptrs =
             zcalloc(N, sizeof(multilruPtr));
         cleanerName(zfree, Bytes) uint8_t *want = zcalloc(N, 1);

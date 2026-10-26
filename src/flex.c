@@ -1966,7 +1966,7 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
      * multimap arity up to 5 with headroom on the hot path; wider             \
      * entries (large multimap arity, wide flexAppendMultiple) spill to        \
      * a single heap allocation that frees itself at scope exit. */            \
-    enum { COMMON_INSERT_MAX_CONTENTS_ = 8 };                                  \
+    static constexpr int COMMON_INSERT_MAX_CONTENTS_ = 8;                      \
     int64_t commonFlexSelfOffsetStack_[COMMON_INSERT_MAX_CONTENTS_] = {};      \
     bool commonFlexSelfBoolStack_[2 * COMMON_INSERT_MAX_CONTENTS_] = {};       \
     int64_t *commonFlexSelfOffset_ = commonFlexSelfOffsetStack_;               \
@@ -3325,7 +3325,7 @@ static flex *flexNewFromBoxes_(const databox *boxes, const databox *const *ptrs,
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
 
-    enum { FACTORY_CHUNK_ = 64 };
+    constexpr int FACTORY_CHUNK_ = 64;
     const databox *chunk[FACTORY_CHUNK_];
     for (size_t at = 0; at < n; at += FACTORY_CHUNK_) {
         const size_t len = n - at < FACTORY_CHUNK_ ? n - at : FACTORY_CHUNK_;
@@ -3372,7 +3372,7 @@ flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n) {
 size_t flexEncodeDataboxPtrsExact(void *dst, size_t cap,
                                   const databox *const *boxes, size_t n) {
     /* Rows wider than the stack scratch are built and copied */
-    enum { ENCODE_STACK_ELEMENTS_ = 8 };
+    constexpr int ENCODE_STACK_ELEMENTS_ = 8;
     if (n > ENCODE_STACK_ELEMENTS_) {
         cleaner(flexFree) flex *made = flexNewFromDataboxPtrsExact(boxes, n);
         const size_t bytes = flexBytes(made);
@@ -4990,7 +4990,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     /* Most use cases don't have many entries: stack scratch covers
      * multimap arity up to 8 (matching COMMON_INSERT_MAX_CONTENTS_),
      * so common sorted inserts never allocate. */
-    enum { SORTED_INSERT_STACK_ELEMENTS_ = 8 };
+    constexpr int SORTED_INSERT_STACK_ELEMENTS_ = 8;
     databox copyBox_[SORTED_INSERT_STACK_ELEMENTS_];
     flexInsertContents content_[SORTED_INSERT_STACK_ELEMENTS_];
     flexInsertContents *contents_[SORTED_INSERT_STACK_ELEMENTS_];
@@ -5325,7 +5325,7 @@ void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
     /* Fixed stack scratch for common widths; wider appends spill to
      * one heap block (alignment-descending carve, scope-exit freed) so
      * arbitrary widths can't blow the stack via VLAs. */
-    enum { APPEND_STACK_ELEMENTS_ = 8 };
+    constexpr int APPEND_STACK_ELEMENTS_ = 8;
     databox copyBoxStack[APPEND_STACK_ELEMENTS_];
     flexInsertContents contentStack[APPEND_STACK_ELEMENTS_];
     flexInsertContents *contentsStack[APPEND_STACK_ELEMENTS_];
@@ -5371,7 +5371,7 @@ void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
      * those for their canonical boxes and append exactly.  A canonical
      * 96/128-bit result lives in its scratch slot, so rows are appended a
      * chunk at a time; a row of at most one chunk is one reallocation. */
-    enum { APPEND_AUTO_CHUNK_ = 32 };
+    constexpr int APPEND_AUTO_CHUNK_ = 32;
     databoxBig scratch[APPEND_AUTO_CHUNK_];
     const databox *chunk[APPEND_AUTO_CHUNK_];
     uint_fast32_t n = 0;
@@ -7872,7 +7872,7 @@ static int32_t flexTestUntrustedGetters(void) {
  * the remaining values checked against the model. */
 static int32_t flexTestDeleteUpTo(void) {
     int err = 0;
-    enum { N = 6 };
+    constexpr int N = 6;
     for (int32_t start = -1; start < N; start++) {
         for (int32_t more = 0; more <= N + 1; more++) {
             cleaner(flexFree) flex *f = flexNew();
@@ -7959,7 +7959,7 @@ static int32_t flexTestReferenceSet(void) {
     int err = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
                                   "banana", "cherry", "date", "grape"};
-    enum { W = countof(words) };
+    constexpr int W = countof(words);
     cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
     cleaner(flexFree) flex *f = flexNew();
     for (size_t i = 0; i < W - 1; i++) {
@@ -8292,7 +8292,7 @@ static int32_t flexTestWideSorted(void) {
         return err;
     }
 
-    enum { ROWS = 32 };
+    constexpr int ROWS = 32;
     struct {
         int64_t key;
         flexTestWide val;
@@ -10043,7 +10043,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 #endif
         static constexpr uint64_t refs[] = {
             0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
-        enum { PUSH_TYPE_CASES_ = countof(refs) + 2 };
+        constexpr int PUSH_TYPE_CASES_ = countof(refs) + 2;
         for (size_t i = 0; i < PUSH_TYPE_CASES_; i++) {
             databox in = {};
             databoxType wantType = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
@@ -10147,7 +10147,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             ref,
         };
         /* Every box, then a NULL value (stored as null) */
-        enum { ROW_REPEAT_ = 3 };
+        constexpr int ROW_REPEAT_ = 3;
         const size_t types = countof(boxes) + 1;
         const databox *row[(countof(boxes) + 1) * ROW_REPEAT_];
         for (size_t i = 0; i < types * ROW_REPEAT_; i++) {
@@ -11023,7 +11023,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * a userspace pointer fits the 6-byte form) read back as the same
          * pointer, with the string's length */
         static const char *const texts[] = {"", "x", "a longer mdsc text"};
-        enum { N_TEXTS = countof(texts) };
+        constexpr int N_TEXTS = countof(texts);
         mdsc *strs[N_TEXTS];
         cleaner(flexFree) flex *pf = flexNew();
         for (size_t i = 0; i < N_TEXTS; i++) {

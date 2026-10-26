@@ -1253,7 +1253,7 @@ int atomPoolTest(int, char *[]) {
         /* The same seeded interns and releases on both backends: each new
          * atom must get the lowest id not in use (ids are 1-based), so
          * the two id sequences are identical */
-        enum { LOW_IDS_ = 512 };
+        constexpr int LOW_IDS_ = 512;
         uint64_t sequence[2][2000] = {};
         static char names[LOW_IDS_ + 1][32];
         for (int t = 0; t < 2; t++) {

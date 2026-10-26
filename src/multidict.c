@@ -4248,7 +4248,7 @@ static int multidictTestDeleteIf_(void) {
     cleaner(multidictFree) multidict *d =
         multidictNew(&multidictTypeExactKey, qdc, 0);
     multidictEnableLRU(d, 4);
-    enum { n = 2000 };
+    constexpr int n = 2000;
     for (int64_t k = 0; k < n; k++) {
         const databox key = databoxNewSigned(k);
         const databox val = databoxNewSigned(k * 3);
@@ -5912,7 +5912,7 @@ static int multidictTestAddNXMidRehash_(void) {
     cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
     cleaner(multidictFree) multidict *d =
         multidictNew(&multidictTypeExactKey, qdc, 77);
-    enum { present = 300 };
+    constexpr int present = 300;
     for (int64_t i = 0; i < present; i++) {
         const databox key = databoxNewSigned(i);
         const databox val = databoxNewSigned(i * 3);
@@ -6147,7 +6147,7 @@ static void mdShrinkScanCb_(void *privdata, const databox *key,
 static int mdTestShrinkingRehashScan_(multidictClass *qdc,
                                       int32_t stepsBetween) {
     int err = 0;
-    enum { N = 2000 };
+    constexpr int N = 2000;
     cleaner(multidictFree) multidict *d =
         multidictNew(&multidictTypeExactKey, qdc, 7);
     for (int64_t i = 0; i < N; i++) {
@@ -9907,7 +9907,7 @@ int multidictTest(int, char *[]) {
         /* Five keys, all at level 0 in insertion order, so every refill
          * of the candidate window comes back short.  Key 0, the coldest,
          * is vetoed. */
-        enum { keys = 5 };
+        constexpr int keys = 5;
         for (int32_t i = 0; i < keys; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "lruveto-%05d", i);
@@ -10177,7 +10177,7 @@ int multidictTest(int, char *[]) {
             multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 256, 1 << 20);
 
-        enum { BIG_ENTRIES = 300 };
+        constexpr int BIG_ENTRIES = 300;
         char valbuf[1000];
         memset(valbuf, 'Z', sizeof(valbuf) - 1);
         valbuf[sizeof(valbuf) - 1] = '\0';
@@ -10388,7 +10388,7 @@ int multidictTest(int, char *[]) {
      * over a populated-then-sparsified table (lots of NULL slot runs in HT0
      * mid-rehash) and verifies the rehash terminates and preserves data. */
     TEST("single-step rehash through a sparse table") {
-        enum { N = 4000 };
+        constexpr int N = 4000;
         cleaner(multidictFree) multidict *r =
             multidictNew(&multidictTypeExactKey, qdc, 0xABCDEF);
         assert(r != NULL);
@@ -10495,7 +10495,7 @@ int multidictTest(int, char *[]) {
     TEST("integer hash functions") {
         /* The 32-bit mixer is a bijection: distinct keys never collide.
          * The 64-bit one folds to 32 bits: collisions stay rare. */
-        enum { MD_HASH_KEYS = 65536 };
+        constexpr int MD_HASH_KEYS = 65536;
         cleanerName(zfree, HashWords) uint32_t *h32 =
             zcalloc(MD_HASH_KEYS, sizeof(uint32_t));
         cleanerName(zfree, HashWords) uint32_t *h64 =
@@ -10557,14 +10557,14 @@ int multidictTest(int, char *[]) {
     /* Per-entry cost of the core operations (meaningful under the perf
      * preset; checks the results too) */
     TEST("smoke benchmark (ns per entry)") {
-        enum { MD_BENCH_KEYS = 100000 };
+        constexpr int MD_BENCH_KEYS = 100000;
         cleaner(multidictMmClassFree) multidictClass *bc =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *bd =
             multidictNew(&multidictTypeExactKey, bc, 7);
 
         /* 16-byte keys, built before timing */
-        enum { MD_BENCH_KEY_LEN = 16 };
+        constexpr int MD_BENCH_KEY_LEN = 16;
         cleanerName(zfree, BenchKeys) char *keys =
             zmalloc((size_t)MD_BENCH_KEYS * MD_BENCH_KEY_LEN + 1);
         for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {

@@ -1285,7 +1285,7 @@ int strDoubleFormatTest(int, char *[]) {
          * changes are measurable in isolation from wall-clock noise */
         uint64_t rng = 0x9E3779B97F4A7C15ULL;
 #define SDF_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
-        enum { SDF_CORPUS = 4096 };
+        constexpr int SDF_CORPUS = 4096;
         static double corpus64[SDF_CORPUS];
         static double corpus128[SDF_CORPUS];
         static double corpusBig[SDF_CORPUS];

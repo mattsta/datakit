@@ -283,7 +283,7 @@ bool multimapLast(multimap *m, databox *elements[]);
  * literal `n` the wiring loop unrolls to the same address-of stores
  * the hand-rolled initializer produced.
  * ==================================================================== */
-enum { MULTIMAP_INTO_MAX = 16 };
+static constexpr int MULTIMAP_INTO_MAX = 16;
 
 /* n == elementsPerEntry - 1 (value elements only) */
 static inline bool multimapLookupInto(const multimap *m, const databox *key,

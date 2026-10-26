@@ -1634,7 +1634,7 @@ defcleanerName(uint8_t *, zfree, U8);
 defcleaner(hyperloglog *, hyperloglogFree);
 
 /* The merge benchmark's sketches, released together */
-enum { HLL_BENCH_COUNT = 100 };
+static constexpr int HLL_BENCH_COUNT = 100;
 typedef hyperloglog *hllBenchSet[HLL_BENCH_COUNT];
 static void hllBenchSetFree(hyperloglog **set) {
     for (size_t i = 0; i < HLL_BENCH_COUNT; i++) {

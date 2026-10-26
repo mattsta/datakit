@@ -2865,7 +2865,7 @@ int ulidTest(int, char *[]) {
         ulidGenInit(&a, ULID_CLOCK_REALTIME);
         ulidGenInit(&b, ULID_CLOCK_REALTIME);
 
-        enum { STREAM_N = 8 };
+        constexpr int STREAM_N = 8;
         for (int32_t i = 0; i < STREAM_N; i++) {
             ulid_t ida;
             ulid_t idb;

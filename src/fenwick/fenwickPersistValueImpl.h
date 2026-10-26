@@ -111,7 +111,7 @@ static bool FPV_FN(Unbox_)(const databoxBig *b, FPV_T *out) {
 
 /* Append values[0, n) exactly, 64 entries per flex growth */
 static void FPV_FN(Append_)(flex **f, const FPV_T *values, uint64_t n) {
-    enum { BATCH = 64 };
+    constexpr int BATCH = 64;
     databoxBig boxes[BATCH];
     const databox *ptrs[BATCH];
     for (uint64_t at = 0; at < n; at += BATCH) {

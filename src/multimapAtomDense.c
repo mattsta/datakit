@@ -387,7 +387,7 @@ static uint64_t denseTestRand_(uint64_t *s) {
     return z ^ (z >> 31);
 }
 
-enum { DENSE_TEST_IDS_ = 2048 };
+static constexpr int DENSE_TEST_IDS_ = 2048;
 
 /* The oracle: which ids are live, the value each holds and its
  * references */

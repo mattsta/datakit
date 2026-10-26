@@ -895,7 +895,7 @@ int multiFenwickTest(int, char *[]) {
         }
         multiFenwickFree(none);
 
-        enum { WIDE_N = 8 };
+        constexpr int WIDE_N = 8;
         const int64_t vals[WIDE_N] = {5, -2, 8, 1, 9, -3, 7, 4};
         databox values[WIDE_N];
         for (size_t i = 0; i < WIDE_N; i++) {
@@ -1077,7 +1077,7 @@ int multiFenwickTest(int, char *[]) {
             }
         }
 
-        enum { TX_N = 37 };
+        constexpr int TX_N = 37;
         int64_t vals[TX_N];
         cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
         for (size_t i = 0; i < TX_N; i++) {
@@ -1200,7 +1200,7 @@ int multiFenwickTest(int, char *[]) {
         /* Appending one element at a time crosses every power of two up
          * to 256; after each append every element and prefix sum must
          * still match.  Then sparse indexes force multi-step doublings. */
-        enum { GROW_N = 130 };
+        constexpr int GROW_N = 130;
         static int64_t oracle[GROW_N];
         cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
         bool failed = false;
@@ -1231,7 +1231,7 @@ int multiFenwickTest(int, char *[]) {
 
         const size_t sparse[] = {0, 3, 17, 300, 1025, 5000};
         const int64_t sparseVal[] = {-9, 40, -700, 12345, -1, 77};
-        enum { SPARSE_N = countof(sparse) };
+        constexpr int SPARSE_N = countof(sparse);
         cleaner(multiFenwickFree) multiFenwick *sp = NULL;
         for (size_t k = 0; k < SPARSE_N && !failed; k++) {
             const databox box = DATABOX_SIGNED(sparseVal[k]);
@@ -1268,7 +1268,7 @@ int multiFenwickTest(int, char *[]) {
     TEST("differential: LowerBound against an array") {
         /* LowerBound needs non-negative values (monotonic prefix sums).
          * Targets are random, every exact prefix sum, and past the end. */
-        enum { LB_N = 200 };
+        constexpr int LB_N = 200;
         static int64_t prefix[LB_N];
         uint64_t seed = 777;
         cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
@@ -1716,7 +1716,7 @@ int multiFenwickTest(int, char *[]) {
          * as the values applied one Update at a time.  Integer counts use
          * signed values up to 2^40; every third count uses halves, which
          * double sums keep exact. */
-        enum { NFA_MAX = 70 };
+        constexpr int NFA_MAX = 70;
         static databox values[NFA_MAX];
         static int64_t ints[NFA_MAX];
         static double reals[NFA_MAX];
@@ -1851,7 +1851,7 @@ int multiFenwickTest(int, char *[]) {
         /* With negative elements a result is a crossing point:
          * prefix(i) >= target and (i == 0 or prefix(i - 1) < target).
          * When no prefix sum reaches the target the result is SIZE_MAX. */
-        enum { LBN_N = 200 };
+        constexpr int LBN_N = 200;
         static int64_t prefix[LBN_N];
         uint64_t seed = 2024;
         cleaner(multiFenwickFree) multiFenwick *neg = NULL;
@@ -2458,7 +2458,7 @@ int multiFenwickTest(int, char *[]) {
         /* An independent implementation over the same values (5000 cells
          * span many list nodes, so each read walks between them); values
          * are non-negative, so prefix sums rise and lower bounds exist */
-        enum { cells = 5000 };
+        constexpr int cells = 5000;
         uint64_t seed = 77;
         cleanerName(zfree, DataboxArray) databox *values =
             zcalloc(cells, sizeof(*values));

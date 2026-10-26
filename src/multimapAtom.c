@@ -572,7 +572,7 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
     flexAppendMultipleExact(&f, 2, header);
 
     /* Rows in id order (the forward map's order), 21 at a time */
-    enum { BATCH = 21 };
+    constexpr int BATCH = 21;
     databox boxes[BATCH * 3];
     databoxWide wide[BATCH * 3];
     const databox *ptrs[BATCH * 3];
@@ -2510,7 +2510,7 @@ int multimapAtomTest(int, char *[]) {
          * itself resolves the new id: its forward row must already exist.
          * Each value is offered twice; the second offer finds the first
          * one's reference. */
-        enum { atoms = 3000 };
+        constexpr int atoms = 3000;
         for (int32_t order = 0; order < 2; order++) {
             cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
             cleanerName(zfree, U64) uint64_t *refs =
@@ -2634,7 +2634,7 @@ int multimapAtomTest(int, char *[]) {
         /* Enough string atoms for both maps to split into sub-maps; the
          * last releases empty whole runs of rows, so sub-maps empty and
          * merge while every other atom must still resolve both ways */
-        enum { atoms = 3000 };
+        constexpr int atoms = 3000;
         multimapAtom *ma = multimapAtomNew();
         char name[32];
         for (int32_t i = 0; i < atoms; i++) {

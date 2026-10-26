@@ -1074,7 +1074,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     /* What a clock read costs (reported; the bound is only a sanity
      * check): the nanosecond clock and the counter, against
      * gettimeofday, the microsecond clock perf.h used to read. */
-    enum { kReads = 100000 };
+    constexpr int kReads = 100000;
     uint64_t acc = 0;
     PERF_TIMERS_SETUP;
     for (int i = 0; i < kReads; i++) {
@@ -5882,7 +5882,7 @@ static int dkTestBlake3DeriveKeyContextsTest(int, char *[]) {
     static constexpr size_t ctx_lens[] = {0, 1, 32, 128, 1024};
     const size_t n_ctx = countof(ctx_lens);
 
-    enum { CTX_MAX = 1024 };
+    constexpr int CTX_MAX = 1024;
     uint8_t ctx_buf[CTX_MAX];
     for (size_t i = 0; i < CTX_MAX; i++) {
         ctx_buf[i] = (uint8_t)((i * 31u + 0x5Au) & 0xFFu);
@@ -5895,7 +5895,7 @@ static int dkTestBlake3DeriveKeyContextsTest(int, char *[]) {
         ikm_b[i] = (uint8_t)(0xB0u + i);
     }
 
-    enum { OUT_LEN = 64 };
+    constexpr int OUT_LEN = 64;
     uint8_t per_ctx_out[5][OUT_LEN];
 
     for (size_t i = 0; i < n_ctx; i++) {

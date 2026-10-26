@@ -1394,7 +1394,7 @@ int multilistPTest(int, char *[]) {
          * from the snapshot plus the WAL.  Each state is read back through
          * IndexWide and Next against the tracker, under strictRecovery so
          * a refused WAL row fails the reopen. */
-        enum { MLP_MATRIX_MAX = 420 };
+        constexpr int MLP_MATRIX_MAX = 420;
         static databoxBig storage[MLP_MATRIX_MAX];
         static char strs[MLP_MATRIX_MAX][48];
         static const char *const dataName[MLP_DATA_COUNT] = {

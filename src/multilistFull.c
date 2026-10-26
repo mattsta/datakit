@@ -4222,7 +4222,7 @@ int multilistFullTest(int, char *[]) {
          * flex must add nothing.  The list must then match an array
          * oracle with no empty node, follow the depth rule, and pop its
          * head correctly. */
-        enum { AE_N = 20 };
+        constexpr int AE_N = 20;
         static uint32_t want[AE_N + 8];
         char buf[MLF_SPLIT_LEN + 1];
         for (uint32_t d = 0; d <= 1; d++) {
@@ -4375,7 +4375,7 @@ int multilistFullTest(int, char *[]) {
         /* Element i: a positive or negative wide value unique to i, a
          * string, or a negative 64-bit value.  Entries are 0xFF-poisoned
          * before every read. */
-        enum { WIDE_N = 240 };
+        constexpr int WIDE_N = 240;
         databoxBig want[WIDE_N];
         char strs[WIDE_N][32];
         cleaner(flexFree) flex *src = flexNew();

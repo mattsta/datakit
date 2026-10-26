@@ -1913,7 +1913,7 @@ int32_t multimapInsertReplacingSweep(void) {
          * size every ~19 rows, so most of these inserts land on the
          * split / new-map path.  Every fresh long key must come back as an
          * allocation, whichever path stored it. */
-        enum { splitRows = 200 };
+        constexpr int splitRows = 200;
         cleanerName(multimapFullFree, Sweep) multimapFull *m =
             multimapFullNew(2);
         void *allocs[splitRows] = {};
@@ -1976,7 +1976,7 @@ int32_t multimapInsertReplacingSweep(void) {
          * externalized), each inserted twice, in enough volume to split
          * sub-maps.  The second insert of a member is a no-op that reports
          * found, so count and the physical rows agree. */
-        enum { setRows = 120 };
+        constexpr int setRows = 120;
         cleanerName(multimapFullFree, Sweep) multimapFull *m =
             multimapFullSetNew(2, 2048);
         /* A wrongly minted second allocation stays referenced by the map,
@@ -2982,7 +2982,7 @@ static int32_t mwExerciseFullWidth(const char *tier, multimap **m,
 int32_t multimapWideSweep(void) {
     int32_t err = 0;
     uint64_t rng = 0x9E3779B97F4A7C15ULL;
-    enum { mwMaxRows = 96 };
+    constexpr int mwMaxRows = 96;
     mwRow rows[mwMaxRows];
 
     struct {
@@ -3300,7 +3300,7 @@ static size_t mxBuildRows(mwRow *rows, const size_t cap, const mxMode mode,
     return mwSortUnique(rows, cap);
 }
 
-enum { mxPoolMax = 160 };
+static constexpr int mxPoolMax = 160;
 
 /* 'want' evenly spaced rows of the sorted 'pool', both extremes included. */
 static size_t mxSubset(mwRow *dst, const mwRow *pool, const size_t built,
@@ -4029,7 +4029,7 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
     }
 
     /* A seeded random() sequence is the same with draws interleaved. */
-    enum { streamLen = 16 };
+    constexpr int streamLen = 16;
     const uint32_t seed = 0x5eed;
     uint64_t expected[streamLen];
     srandom(seed);

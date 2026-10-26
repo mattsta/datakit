@@ -414,7 +414,7 @@ int multiFenwickFlatTest(int, char *[]) {
     }
 
     TEST("independent oracle: exact integer sums against an int128 array") {
-        enum { N = 300 };
+        constexpr int N = 300;
         __int128_t oracle[N] = {};
         cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw = NULL;
         uint64_t seed = 77;
