@@ -1560,7 +1560,7 @@ int chacha20poly1305Test(int, char *[]) {
         fillPseudoRandom(key, sizeof(key), 0xC0FFEE);
         fillPseudoRandom(nonce, sizeof(nonce), 0xDEADBEEF);
 
-        for (size_t si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
+        for (size_t si = 0; si < countof(sizes); si++) {
             size_t n = sizes[si];
             cleanerName(zfree, Bytes) uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
             cleanerName(zfree, Bytes) uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
@@ -1589,9 +1589,8 @@ int chacha20poly1305Test(int, char *[]) {
         fillPseudoRandom(key, sizeof(key), 0xCAFEBABE);
         fillPseudoRandom(nonce, sizeof(nonce), 0xFACEFEED);
 
-        for (size_t si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
-            for (size_t ai = 0; ai < sizeof(aad_sizes) / sizeof(aad_sizes[0]);
-                 ai++) {
+        for (size_t si = 0; si < countof(sizes); si++) {
+            for (size_t ai = 0; ai < countof(aad_sizes); ai++) {
                 size_t n = sizes[si];
                 size_t alen = aad_sizes[ai];
                 cleanerName(zfree, Bytes) uint8_t *pt =
@@ -1775,11 +1774,11 @@ int chacha20poly1305Test(int, char *[]) {
         const size_t test_sizes[] = {0u,    1u,    63u,   64u,   65u,
                                      127u,  128u,  129u,  255u,  256u,
                                      1023u, 1024u, 1025u, 4096u, 8192u};
-        const size_t num_sizes = sizeof(test_sizes) / sizeof(test_sizes[0]);
+        const size_t num_sizes = countof(test_sizes);
         const size_t chunk_sizes[] = {1u,   7u,   16u,   31u,     32u,
                                       33u,  63u,  64u,   65u,     127u,
                                       128u, 256u, 1024u, SIZE_MAX};
-        const size_t num_chunks = sizeof(chunk_sizes) / sizeof(chunk_sizes[0]);
+        const size_t num_chunks = countof(chunk_sizes);
         cleanerName(zfree, Bytes) uint8_t *plain = zmalloc(8192u);
         for (size_t i = 0; i < 8192u; i++) {
             plain[i] = (uint8_t)(i * 17u + 3u);
@@ -2008,7 +2007,7 @@ int chacha20poly1305Test(int, char *[]) {
                                 255u,  256u,  257u,  384u,  511u,  512u,
                                 513u,  768u,  1023u, 1024u, 1025u, 1536u,
                                 2047u, 2048u, 2049u, 4096u, 8192u, 16384u};
-        const size_t n_sizes = sizeof(sizes) / sizeof(sizes[0]);
+        const size_t n_sizes = countof(sizes);
 
         uint8_t key[32], nonce[12];
         fillPseudoRandom(key, sizeof(key), 0xBEEFCAFE);

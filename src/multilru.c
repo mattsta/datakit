@@ -132,7 +132,7 @@ static const lruWidthTier WIDTH_TIERS[] = {
     {12, 44, (1ULL << 44) - 1}, /* 16T */
     {16, 60, (1ULL << 60) - 1}, /* 1E */
 };
-#define NUM_WIDTH_TIERS (sizeof(WIDTH_TIERS) / sizeof(WIDTH_TIERS[0]))
+#define NUM_WIDTH_TIERS (countof(WIDTH_TIERS))
 
 /* Constants for each width tier (use WIDTH_TIERS array when possible) */
 #define MAX_ENTRIES_W5 ((1ULL << 16) - 1)
@@ -5301,7 +5301,7 @@ int multilruTest(int, char *[]) {
         const multilruPtr b = multilruInsertWeighted(mlru, 11);
         const uint64_t total = multilruTotalWeight(mlru);
         const multilruPtr bogus[] = {0, (multilruPtr)1 << 40, a + b + 1000};
-        for (size_t i = 0; i < sizeof(bogus) / sizeof(*bogus); i++) {
+        for (size_t i = 0; i < countof(bogus); i++) {
             multilruUpdateWeight(mlru, bogus[i], 1000);
             multilruIncrease(mlru, bogus[i]);
             multilruDecrease(mlru, bogus[i]);

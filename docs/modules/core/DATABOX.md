@@ -576,7 +576,7 @@ void databoxRetainBytesSelfExact(databox *dst, void *bytes);
 databoxRetainCache cache = {0};
 
 /* Pre-allocate cache slots (slot i holds 128 << i bytes) */
-for (size_t i = 0; i < COUNT_ARRAY(cache.bytes); i++) {
+for (size_t i = 0; i < countof(cache.bytes); i++) {
     cache.bytes[i] = zmalloc((size_t)128 << i);
 }
 
@@ -586,7 +586,7 @@ box = databoxNewBytes(data, 1000);
 const ssize_t slot = databoxRetainBytesSelf(&box, &cache);
 
 /* Clean up cache */
-for (size_t i = 0; i < COUNT_ARRAY(cache.bytes); i++) {
+for (size_t i = 0; i < countof(cache.bytes); i++) {
     zfree(cache.bytes[i]);
 }
 ```
@@ -887,7 +887,7 @@ const char *inputs[] = {
     "a", "bc", "def", "ghij", "klmno", "pqrstu", "vwxyz12"
 };
 
-for (int i = 0; i < COUNT_ARRAY(inputs); i++) {
+for (size_t i = 0; i < countof(inputs); i++) {
     /* Automatically embeds strings ≤ 8 bytes */
     strings[i] = databoxNewBytesAllowEmbed(inputs[i], strlen(inputs[i]));
 

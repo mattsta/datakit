@@ -2430,7 +2430,7 @@ int multiOrderedSetFullTest(int, char *[]) {
                 ERR("pooled %d: removing ranks 2000..2399 left %zu members",
                     pooled, multiOrderedSetFullCount(m));
             }
-            for (size_t a = 0; a < COUNT_ARRAY(around); a++) {
+            for (size_t a = 0; a < countof(around); a++) {
                 databox member;
                 databox score;
                 if (!multiOrderedSetFullGetByRank(m, around[a].rank, &member,

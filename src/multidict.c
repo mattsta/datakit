@@ -4594,7 +4594,7 @@ static int multidictTestKeyCompare_(void) {
         {"Z_", 2, "z_", 2, false, true},
     };
 
-    for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+    for (size_t i = 0; i < countof(cases); i++) {
         const bool e = exact(NULL, cases[i].a, cases[i].alen, cases[i].b,
                              cases[i].blen) != 0;
         const bool f = fold(NULL, cases[i].a, cases[i].alen, cases[i].b,
@@ -4655,7 +4655,7 @@ static int multidictTestKeyCompare_(void) {
      * keys that fit one fold chunk and for keys streamed in several */
     static constexpr uint32_t lens[] = {0,   1,   7,   63,  64,  255, 256,
                                         257, 300, 511, 512, 513, 1000};
-    for (size_t li = 0; li < sizeof(lens) / sizeof(*lens); li++) {
+    for (size_t li = 0; li < countof(lens); li++) {
         uint8_t raw[1000];
         uint8_t folded[1000];
         uint8_t flipped[1000];
@@ -4763,7 +4763,7 @@ static int multidictTestKeyCompare_(void) {
 
     static const char *latin1[] = {"en_US.ISO8859-1", "en_US.ISO-8859-1",
                                    "de_DE.ISO8859-1"};
-    for (size_t i = 0; i < sizeof(latin1) / sizeof(*latin1); i++) {
+    for (size_t i = 0; i < countof(latin1); i++) {
         if (setlocale(LC_CTYPE, latin1[i])) {
             if (fold(NULL, "\xc4", 1, "\xe4", 1) ||
                 !fold(NULL, "A\xc4", 2, "a\xc4", 2)) {
@@ -5076,7 +5076,7 @@ static int multidictTestBinaryKeys_(multidictType *type) {
         {"a\0b", 3}, {"a\0c", 3}, {"a", 1},       {"a\0", 2},     {"\0", 1},
         {"\0\0", 2}, {"", 0},     {"x\0\xc4", 3}, {"x\0\xe4", 3},
     };
-    const size_t n = sizeof(keys) / sizeof(*keys);
+    const size_t n = countof(keys);
 
     for (size_t i = 0; i < n; i++) {
         const databox k = databoxNewBytes(keys[i].bytes, keys[i].len);
@@ -6516,7 +6516,7 @@ int multidictTest(int, char *[]) {
             "émojis🎉",
             "日本語",
             "مرحبا"};
-        int numSpecial = sizeof(specialKeys) / sizeof(specialKeys[0]);
+        int numSpecial = countof(specialKeys);
 
         for (int i = 0; i < numSpecial; i++) {
             databox key = databoxNewBytesString(specialKeys[i]);
@@ -7430,8 +7430,7 @@ int multidictTest(int, char *[]) {
     TEST("5.4 scan fuzz - small dict sizes") {
         /* Test scanning with various small dict sizes */
         const int testSizes[] = {1, 2, 3, 5, 10, 50, 100, 500};
-        for (size_t sizeIdx = 0;
-             sizeIdx < sizeof(testSizes) / sizeof(testSizes[0]); sizeIdx++) {
+        for (size_t sizeIdx = 0; sizeIdx < countof(testSizes); sizeIdx++) {
             int targetSize = testSizes[sizeIdx];
             cleaner(multidictFree) multidict *dScan =
                 multidictNew(&multidictTypeExactKey, qdc, 0);
@@ -7455,8 +7454,7 @@ int multidictTest(int, char *[]) {
 
             assert(scanCount >= targetSize);
         }
-        printf("  Tested %zu different dict sizes\n",
-               sizeof(testSizes) / sizeof(testSizes[0]));
+        printf("  Tested %zu different dict sizes\n", countof(testSizes));
     }
 
     TEST("5.5 scan fuzz - large dicts with rehashing at various stages") {
@@ -8104,7 +8102,7 @@ int multidictTest(int, char *[]) {
 
         /* Any spelling finds the one entry */
         static const char *spellings[] = {"hello", "HELLO", "HeLLo", "hellO"};
-        for (size_t i = 0; i < sizeof(spellings) / sizeof(*spellings); i++) {
+        for (size_t i = 0; i < countof(spellings); i++) {
             databox key = databoxNewBytesString(spellings[i]);
             databox found = {};
             if (!multidictFind(dCase, &key, &found) ||

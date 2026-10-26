@@ -52,10 +52,9 @@ static void boolIdxSet(djState *state, size_t offset, bool value) {
 
     /* Extents count entries: the inline array, or vBig once allocated. */
     static constexpr size_t totalBytesInDefaultV =
-        bytesPerEntry * COUNT_ARRAY(state->boolIdx.v);
-    const size_t extent = state->boolIdx.vBigExtent
-                              ? state->boolIdx.vBigExtent
-                              : COUNT_ARRAY(state->boolIdx.v);
+        bytesPerEntry * countof(state->boolIdx.v);
+    const size_t extent = state->boolIdx.vBigExtent ? state->boolIdx.vBigExtent
+                                                    : countof(state->boolIdx.v);
 
     if (vOffset >= extent) {
         /* The entry is past the current extent, so EITHER:
@@ -104,8 +103,7 @@ DK_INLINE_ALWAYS bool boolIdxRead(djState *state, const size_t offset) {
         state->boolIdx.vBigExtent ? state->boolIdx.vBig : state->boolIdx.v;
 
     /* kinda (really) bad if our offset is womped into a goober */
-    assert(vOffset <
-           (state->boolIdx.vBigExtent ?: COUNT_ARRAY(state->boolIdx.v)));
+    assert(vOffset < (state->boolIdx.vBigExtent ?: countof(state->boolIdx.v)));
 
     /* If bitmap position is 0, this is an ARRAY currently.
      * If bitmap position is 1, this is a MAP / OBJECT currently. */
@@ -1501,8 +1499,7 @@ int djTest(int, char *[]) {
          */
         const size_t boundaryPos[] = {0,  1,  15, 16, 17, 31,
                                       32, 33, 47, 48, 63, 64};
-        for (size_t bp = 0; bp < sizeof(boundaryPos) / sizeof(boundaryPos[0]);
-             bp++) {
+        for (size_t bp = 0; bp < countof(boundaryPos); bp++) {
             const size_t pos = boundaryPos[bp];
             const size_t len = 128;
 
@@ -1628,13 +1625,13 @@ int djTest(int, char *[]) {
             {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = 9},
             {.type = DATABOX_ARRAY_START},
         };
-        for (size_t i = 0; i < COUNT_ARRAY(written); i++) {
+        for (size_t i = 0; i < countof(written); i++) {
             if (!djBox(&st, &written[i])) {
                 ERR("scalar %zu was refused", i);
             }
 
             /* A refusal between writes leaves no trace in the output */
-            const databox *r = &refused[i % COUNT_ARRAY(refused)];
+            const databox *r = &refused[i % countof(refused)];
             if (djBox(&st, r)) {
                 ERR("type %d was written", r->type);
             }
@@ -1664,7 +1661,7 @@ int djTest(int, char *[]) {
             DATABOX_NAN, /* refused value */
             x,
         };
-        for (size_t i = 0; i < COUNT_ARRAY(steps); i++) {
+        for (size_t i = 0; i < countof(steps); i++) {
             const bool wrote = djBox(&st, &steps[i]);
             if (wrote != (i != 7)) {
                 ERR("step %zu wrote %d", i, wrote);

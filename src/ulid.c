@@ -2518,7 +2518,7 @@ int ulidTest(int, char *[]) {
         if (!ulidDecodeScalar(good, &want)) {
             ERR("the scalar decoder refused a valid string");
         }
-        for (size_t c = 0; c < sizeof(codecs) / sizeof(*codecs); c++) {
+        for (size_t c = 0; c < countof(codecs); c++) {
             const codec *k = &codecs[c];
             ulid_t got = {};
             char text[ULID_ENCODED_LENGTH + 1];
@@ -2527,7 +2527,7 @@ int ulidTest(int, char *[]) {
                 strcmp(text, good) != 0) {
                 ERR("%s: the valid string did not round-trip", k->name);
             }
-            for (size_t p = 0; p < sizeof(at) / sizeof(*at); p++) {
+            for (size_t p = 0; p < countof(at); p++) {
                 for (size_t b = 0; b < sizeof(bad); b++) {
                     char probe[ULID_ENCODED_LENGTH + 1];
                     memcpy(probe, good, sizeof(probe));
@@ -2721,7 +2721,7 @@ int ulidTest(int, char *[]) {
             {ULID_VARIANT_HYBRID, 0, 1},
             {ULID_VARIANT_SNOWFLAKE, 0, 1'000'000},
         };
-        for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); v++) {
+        for (size_t v = 0; v < countof(variants); v++) {
             const ulidVariantType type = variants[v].type;
             const uint64_t lo = variants[v].lowNs;
             const uint64_t hi = ulid64GetMaxTimestamp(type);
@@ -3950,10 +3950,10 @@ int ulidTest(int, char *[]) {
             };
 
             uint64_t zseed[2] = {0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL};
-            for (size_t zc = 0; zc < COUNT_ARRAY(zcases) + 2000; zc++) {
+            for (size_t zc = 0; zc < countof(zcases) + 2000; zc++) {
                 uint64_t a1, a2, b1, b2;
                 int want;
-                if (zc < COUNT_ARRAY(zcases)) {
+                if (zc < countof(zcases)) {
                     a1 = zcases[zc].a1;
                     a2 = zcases[zc].a2;
                     b1 = zcases[zc].b1;
@@ -4117,7 +4117,7 @@ int ulidTest(int, char *[]) {
             ULID_VARIANT_MS,        ULID_VARIANT_NSCOUNT,
             ULID_VARIANT_HYBRID,    ULID_VARIANT_SNOWFLAKE};
 
-        for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); v++) {
+        for (size_t v = 0; v < countof(variants); v++) {
             ulidVariantType type = variants[v];
 
             for (int32_t test = 0; test < 100; test++) {
@@ -4653,7 +4653,7 @@ int ulidTest(int, char *[]) {
             memset(allZ, 'Z', ULID_ENCODED_LENGTH);
             allZ[ULID_ENCODED_LENGTH] = '\0';
 
-            for (size_t d = 0; d < sizeof(decoders) / sizeof(*decoders); d++) {
+            for (size_t d = 0; d < countof(decoders); d++) {
                 ulid_t got = {};
                 if (!decoders[d](s, &got) ||
                     memcmp(got.data, max.data, sizeof(max.data)) != 0) {

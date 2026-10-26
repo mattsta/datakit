@@ -671,7 +671,7 @@ int aesGcmTest(int, char *[]) {
         aesGcmKey k;
         aesGcmInit(&k, key, 32);
         const size_t sizes[] = {0, 1, 15, 16, 17, 63, 64, 65, 4096};
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
             cleanerName(zfree, Bytes) uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
             cleanerName(zfree, Bytes) uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
@@ -717,9 +717,8 @@ int aesGcmTest(int, char *[]) {
         static constexpr size_t aadLens[] = {0, 7, 16, 33};
         uint64_t rng = 0xae5;
         for (size_t kl = 16; kl <= 32; kl += 16) {
-            for (size_t li = 0; li < sizeof(lens) / sizeof(*lens); li++) {
-                for (size_t ai = 0; ai < sizeof(aadLens) / sizeof(*aadLens);
-                     ai++) {
+            for (size_t li = 0; li < countof(lens); li++) {
+                for (size_t ai = 0; ai < countof(aadLens); ai++) {
                     const size_t n = lens[li];
                     const size_t an = aadLens[ai];
                     uint8_t key[32], nonce[12], pt[200], aad[33];
@@ -865,7 +864,7 @@ int aesGcmTest(int, char *[]) {
             static const aesGcmForceBackend backends[] = {
                 AES_GCM_FORCE_SCALAR, AES_GCM_FORCE_AESNI,
                 AES_GCM_FORCE_ARMCRYPTO, AES_GCM_FORCE_AUTO};
-            for (size_t b = 0; b < COUNT_ARRAY(backends); b++) {
+            for (size_t b = 0; b < countof(backends); b++) {
                 aesGcmSetForceBackend(backends[b]);
                 uint8_t out[16];
                 memset(out, 0xAA, sizeof(out));

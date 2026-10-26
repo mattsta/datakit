@@ -1174,7 +1174,7 @@ int multilistPTest(int, char *[]) {
                          {INT64_MIN, 5},
                          {(mlOffsetId)1 << 32, 1},
                          {-1, 0}};
-            for (size_t k = 0; k < sizeof(noops) / sizeof(*noops); k++) {
+            for (size_t k = 0; k < countof(noops); k++) {
                 if (multilistDelRangeP(ml, noops[k].start, noops[k].values) !=
                     PERSIST_LOG_UNCHANGED) {
                     ERR("DelRangeP(%" PRId64 ", %" PRId64 ") was accepted",
@@ -1188,7 +1188,7 @@ int multilistPTest(int, char *[]) {
             const mlOffsetId badIdx[] = {
                 n,         -n - 1,  INT32_MAX,   INT32_MIN, INT64_MAX,
                 INT64_MIN, big + 1, big + n - 1, -big,      -big - 1};
-            for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
+            for (size_t k = 0; k < countof(badIdx); k++) {
                 if (multilistReplaceAtIndexP(ml, badIdx[k], &rep)) {
                     ERR("ReplaceAtIndexP(%" PRId64 ") was accepted", badIdx[k]);
                 }
@@ -1414,7 +1414,7 @@ int multilistPTest(int, char *[]) {
         };
 
         for (uint32_t d = 0; d < MLP_DATA_COUNT; d++) {
-            for (size_t t = 0; t < sizeof(tiers) / sizeof(*tiers); t++) {
+            for (size_t t = 0; t < countof(tiers); t++) {
                 const mlpData data = (mlpData)d;
                 const uint32_t count = tiers[t].count;
                 ptestCleanupFiles(basePath);

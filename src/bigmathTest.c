@@ -91,7 +91,7 @@ int bigmathTest(int, char *[]) {
     TEST("native round trips and ordering") {
         const int64_t signedVals[] = {0,  1,  -1, INT64_MAX, INT64_MIN + 1,
                                       42, -42};
-        for (size_t i = 0; i < COUNT_ARRAY(signedVals); i++) {
+        for (size_t i = 0; i < countof(signedVals); i++) {
             bigmath b;
             bigmathInitSigned(&b, signedVals[i]);
             if (bigmathToNativeSigned(&b) != signedVals[i]) {
@@ -102,7 +102,7 @@ int bigmathTest(int, char *[]) {
 
         const uint64_t unsignedVals[] = {0, 1, UINT64_MAX, 1ULL << 63,
                                          10000000000000000000ULL};
-        for (size_t i = 0; i < COUNT_ARRAY(unsignedVals); i++) {
+        for (size_t i = 0; i < countof(unsignedVals); i++) {
             bigmath b;
             bigmathInitUnsigned(&b, unsignedVals[i]);
             if (bigmathToNativeUnsigned(&b) != unsignedVals[i]) {
@@ -350,7 +350,7 @@ int bigmathTest(int, char *[]) {
         /* single-digit storage covers 384 bits; pin both sides of the
          * heap-spill edge with the shift/multiply identity */
         const uint32_t edges[] = {382, 383, 384, 385, 700};
-        for (size_t i = 0; i < COUNT_ARRAY(edges); i++) {
+        for (size_t i = 0; i < countof(edges); i++) {
             bigmath A;
             bigmath T;
             bigmath P;
@@ -382,7 +382,7 @@ int bigmathTest(int, char *[]) {
         /* MP_MULT_THRESH is 22 digits (704 bits); verify multiply at
          * sizes below/at/above via the (x*y)/y == x identity */
         const uint32_t bits[] = {640, 672, 704, 736, 1408};
-        for (size_t i = 0; i < COUNT_ARRAY(bits); i++) {
+        for (size_t i = 0; i < countof(bits); i++) {
             bigmath X;
             bigmath Y;
             bigmath T;
@@ -692,7 +692,7 @@ int bigmathTest(int, char *[]) {
     TEST("imath: binary codec round trips including sign") {
         const int64_t vals[] = {0,   1,    -1,        127,          -128,
                                 255, -256, INT64_MAX, INT64_MIN + 1};
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             mpz_t A;
             mpz_t B;
             mp_int_init_value(&A, vals[i]);
@@ -765,7 +765,7 @@ int bigmathTest(int, char *[]) {
 
     TEST("Repr prints values of every size in full") {
         const size_t lens[] = {1, 1023, 1024, 1025, 5000};
-        for (size_t i = 0; i < COUNT_ARRAY(lens); i++) {
+        for (size_t i = 0; i < countof(lens); i++) {
             const size_t n = lens[i];
             /* digits[0] is reserved for the negative form's '-' */
             cleanerName(zfree, Chars) char *digits = zmalloc(n + 2);

@@ -67,7 +67,7 @@ void xoroshiro128plusNext(uint64_t s[2]) {
 
     uint64_t s0 = 0;
     uint64_t s1 = 0;
-    for (int i = 0; i < COUNT_ARRAY(JUMP); i++)
+    for (int i = 0; i < countof(JUMP); i++)
         for (int b = 0; b < 64; b++) {
             if (JUMP[i] & UINT64_C(1) << b) {
                 s0 ^= s[0];

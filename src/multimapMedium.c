@@ -1513,7 +1513,7 @@ int multimapMediumTest(int, char *[]) {
              1},
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             const size_t got =
                 multimapMediumBinarySearchWithReference(m, &cases[i].probe, ma);
             if (got != cases[i].mapIdx) {

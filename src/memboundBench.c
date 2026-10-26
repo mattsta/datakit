@@ -325,7 +325,7 @@ int main(void) {
     printf("\n=== PER-ALLOCATION OVERHEAD (usable bytes returned for request) "
            "===\n");
     const size_t osizes[] = {8, 16, 32, 48, 64, 100, 256, 512, 1000, 4096};
-    const size_t nos = sizeof(osizes) / sizeof(osizes[0]);
+    const size_t nos = countof(osizes);
     const Alloc *ov[3] = {&sys, &mi, &mbs};
     printf("%-14s", "request->");
     for (size_t s = 0; s < nos; s++) {

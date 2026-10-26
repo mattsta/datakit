@@ -1242,7 +1242,7 @@ int multiarrayTest(int, char *[]) {
         cleaner(zfree) void *want = zcalloc((size_t)n, sizeof(int64_t));
         cleaner(zfree) void *got = zcalloc((size_t)n, sizeof(int64_t));
         const uint32_t keepEvery[] = {3, 5, 4, 30};
-        for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery); p++) {
+        for (size_t p = 0; p < countof(keepEvery); p++) {
             /* Back to front, so each index is still the element's */
             for (int64_t i = (int64_t)multiarrayCount(m) - 1; i >= 0; i--) {
                 if (i % keepEvery[p]) {
@@ -1994,7 +1994,7 @@ int multiarrayTest(int, char *[]) {
          * an insert-built twin */
         static constexpr size_t counts[] = {0, 5, 8, 9, 40, 63, 64, 65, 500};
         const uint16_t perNode = 8;
-        for (size_t c = 0; c < COUNT_ARRAY(counts); c++) {
+        for (size_t c = 0; c < countof(counts); c++) {
             const size_t n = counts[c];
             cleanerName(zfree, S16) s16 *want = zcalloc(n + 1, sizeof(s16));
             cleaner(multiarrayFree) multiarray *twin =

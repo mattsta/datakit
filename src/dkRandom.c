@@ -354,7 +354,7 @@ int dkRandomTest(int, char *[]) {
         };
         const uint64_t drawsPerBound = 1024;
 
-        for (size_t i = 0; i < COUNT_ARRAY(bounds); i++) {
+        for (size_t i = 0; i < countof(bounds); i++) {
             const uint64_t bound = bounds[i];
 
             for (uint64_t d = 0; d < drawsPerBound; d++) {

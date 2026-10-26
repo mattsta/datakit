@@ -407,7 +407,7 @@ int fenwickBenchTest(int, char *[]) {
     int err = 0;
 
     const size_t sizes[] = {1000, 100000, 4000000};
-    const size_t nSizes = sizeof(sizes) / sizeof(*sizes);
+    const size_t nSizes = countof(sizes);
     benchRow r;
 #define BENCH_ROW(label, call)                                                 \
     do {                                                                       \

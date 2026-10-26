@@ -90,7 +90,7 @@ static const EawRange eawWideRanges[] = {
     {0x30000, 0x3FFFF, EAW_W},
 };
 
-#define EAW_WIDE_COUNT (sizeof(eawWideRanges) / sizeof(eawWideRanges[0]))
+#define EAW_WIDE_COUNT (countof(eawWideRanges))
 
 /* Zero-width character ranges */
 static const EawRange zeroWidthRanges[] = {
@@ -126,7 +126,7 @@ static const EawRange zeroWidthRanges[] = {
     {0xE0100, 0xE01EF, 0},
 };
 
-#define ZERO_WIDTH_COUNT (sizeof(zeroWidthRanges) / sizeof(zeroWidthRanges[0]))
+#define ZERO_WIDTH_COUNT (countof(zeroWidthRanges))
 
 /* Binary search in range table */
 static bool inRangeTable(uint32_t cp, const EawRange *table, size_t count) {

@@ -1160,7 +1160,7 @@ int blake3Test(int, char *[]) {
         size_t test_sizes[] = {0,    1,    31,   63,   64,   65,   127,
                                128,  129,  1023, 1024, 1025, 2047, 2048,
                                2049, 4095, 4096, 4097, 8191, 8192, 8193};
-        size_t n_sizes = sizeof(test_sizes) / sizeof(test_sizes[0]);
+        size_t n_sizes = countof(test_sizes);
 
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(8193);
         fill_test_input(buf, 8193);
@@ -1173,8 +1173,7 @@ int blake3Test(int, char *[]) {
 
             /* Several different chunking strategies. */
             size_t step_sizes[] = {1, 7, 31, 63, 64, 127, 128, 1023, 1024};
-            for (size_t k = 0; k < sizeof(step_sizes) / sizeof(step_sizes[0]);
-                 k++) {
+            for (size_t k = 0; k < countof(step_sizes); k++) {
                 size_t step = step_sizes[k];
                 blake3Hasher h;
                 blake3HasherInit(&h);
@@ -1208,14 +1207,14 @@ int blake3Test(int, char *[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(maxTotal);
         fill_test_input(buf, maxTotal);
         const blake3ForceImpl saved = blake3GetForceImpl();
-        for (size_t t = 0; t < sizeof(totals) / sizeof(*totals); t++) {
+        for (size_t t = 0; t < countof(totals); t++) {
             uint8_t want[64];
             blake3SetForceImpl(BLAKE3_IMPL_SCALAR);
             blake3Hasher ref;
             blake3HasherInit(&ref);
             blake3HasherUpdate(&ref, buf, totals[t]);
             blake3HasherFinalize(&ref, want, sizeof(want));
-            for (size_t s = 0; s < sizeof(splits) / sizeof(*splits); s++) {
+            for (size_t s = 0; s < countof(splits); s++) {
                 const size_t p = splits[s];
                 if (p >= totals[t]) {
                     continue;
@@ -1243,7 +1242,7 @@ int blake3Test(int, char *[]) {
     TEST("blake3 chunk-boundary inputs are stable") {
         size_t boundaries[] = {1023, 1024, 1025, 2047, 2048, 2049,
                                3071, 3072, 3073, 4095, 4096, 4097};
-        size_t n = sizeof(boundaries) / sizeof(boundaries[0]);
+        size_t n = countof(boundaries);
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(4097);
         fill_test_input(buf, 4097);
         for (size_t i = 0; i < n; i++) {
@@ -1342,12 +1341,12 @@ int blake3Test(int, char *[]) {
         dkSecureZero(h->key, sizeof(h->key));
         dkSecureZero(h->cv, sizeof(h->cv));
 
-        for (size_t i = 0; i < sizeof(h->key) / sizeof(h->key[0]); i++) {
+        for (size_t i = 0; i < countof(h->key); i++) {
             if (h->key[i] != 0) {
                 ERR("h->key not zero post-wipe at word %zu", i);
             }
         }
-        for (size_t i = 0; i < sizeof(h->cv) / sizeof(h->cv[0]); i++) {
+        for (size_t i = 0; i < countof(h->cv); i++) {
             if (h->cv[i] != 0) {
                 ERR("h->cv not zero post-wipe at word %zu", i);
             }
@@ -1400,12 +1399,12 @@ int blake3Test(int, char *[]) {
         dkSecureZero(h->key, sizeof(h->key));
         dkSecureZero(h->cv, sizeof(h->cv));
 
-        for (size_t i = 0; i < sizeof(h->key) / sizeof(h->key[0]); i++) {
+        for (size_t i = 0; i < countof(h->key); i++) {
             if (h->key[i] != 0) {
                 ERR("h->key not zero post-wipe at word %zu", i);
             }
         }
-        for (size_t i = 0; i < sizeof(h->cv) / sizeof(h->cv[0]); i++) {
+        for (size_t i = 0; i < countof(h->cv); i++) {
             if (h->cv[i] != 0) {
                 ERR("h->cv not zero post-wipe at word %zu", i);
             }
@@ -1497,7 +1496,7 @@ int blake3Test(int, char *[]) {
         size_t sizes[] = {0, 1, 64, 1024, 1025, 4096};
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(4096);
         fill_test_input(buf, 4096);
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             blake3Hasher h;
             blake3HasherInit(&h);
             blake3HasherUpdate(&h, buf, sizes[s]);
@@ -1550,7 +1549,7 @@ int blake3Test(int, char *[]) {
          * benches give the real numbers */
         const uint32_t iters_per_size[] = {4000, 2000, 1600, 1200, 1000, 800,
                                            700,  600,  400,  300,  160,  80};
-        const size_t n_sizes = sizeof(chunks) / sizeof(chunks[0]);
+        const size_t n_sizes = countof(chunks);
         const size_t maxBlocks = chunks[n_sizes - 1] * 16;
         const size_t maxBytes = maxBlocks * BLAKE3_BLOCK_LEN;
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(maxBytes);
@@ -1725,7 +1724,7 @@ int blake3Test(int, char *[]) {
          * benches give the real numbers */
         const uint32_t iters_per_size[] = {4000, 2000, 1600, 1200, 1000, 800,
                                            700,  600,  400,  300,  160,  80};
-        const size_t n_sizes = sizeof(chunks) / sizeof(chunks[0]);
+        const size_t n_sizes = countof(chunks);
 
         const size_t maxBytes = chunks[n_sizes - 1] * BLAKE3_CHUNK_LEN;
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(maxBytes);
@@ -1824,13 +1823,13 @@ int blake3Test(int, char *[]) {
         }
         static constexpr size_t lens[] = {0, 3, 1024, 5000};
         static constexpr uint64_t seeks[] = {0, 1, 63, 64, 65, 127, 200};
-        for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
+        for (size_t l = 0; l < countof(lens); l++) {
             blake3Hasher h;
             blake3HasherInit(&h);
             blake3HasherUpdate(&h, seekInput, lens[l]);
             uint8_t full[300];
             blake3HasherFinalize(&h, full, sizeof(full));
-            for (size_t s = 0; s < sizeof(seeks) / sizeof(*seeks); s++) {
+            for (size_t s = 0; s < countof(seeks); s++) {
                 uint8_t part[90];
                 blake3HasherFinalizeSeek(&h, seeks[s], part, sizeof(part));
                 if (memcmp(part, full + seeks[s], sizeof(part)) != 0) {
@@ -1853,7 +1852,7 @@ int blake3Test(int, char *[]) {
             small_input[i] = (uint8_t)i;
         }
         uint8_t digest[32];
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
             for (uint32_t i = 0; i < iters; i++) {

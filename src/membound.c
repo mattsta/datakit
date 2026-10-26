@@ -5166,15 +5166,15 @@ int memboundTest(int, char *[]) {
 
         size_t sizes[] = {1,   7,    64,   100,   255,   256,   257,
                           500, 1000, 4096, 10000, 65536, 100000};
-        void *ptrs[sizeof(sizes) / sizeof(sizes[0])];
+        void *ptrs[countof(sizes)];
 
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             ptrs[i] = memboundAlloc(m, sizes[i]);
             assert(ptrs[i] != NULL);
             memset(ptrs[i], (int)i, sizes[i]);
         }
 
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             memboundFree(m, ptrs[i]);
         }
 
@@ -5399,7 +5399,7 @@ int memboundTest(int, char *[]) {
         size_t sizes[] = {64, 128, 256, 512, 1024, 2048, 4096};
         void *ptrs[7];
 
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             ptrs[i] = memboundAlloc(m, sizes[i]);
             if (!ptrs[i]) {
                 break; /* Exhausted */
@@ -5408,7 +5408,7 @@ int memboundTest(int, char *[]) {
             memset(ptrs[i], (int)i, sizes[i]);
         }
 
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             if (ptrs[i]) {
                 memboundFree(m, ptrs[i]);
             }
@@ -5603,7 +5603,7 @@ int memboundTest(int, char *[]) {
             a + 1,
             b + 256, /* on the grid, inside the live block */
         };
-        for (size_t i = 0; i < sizeof(foreign) / sizeof(*foreign); i++) {
+        for (size_t i = 0; i < countof(foreign); i++) {
             if (i < 4 && memboundUsableSize(m, foreign[i]) != 0) {
                 ERR("foreign pointer %zu reports %zu usable bytes", i,
                     memboundUsableSize(m, foreign[i]));
@@ -7683,7 +7683,7 @@ int memboundTest(int, char *[]) {
                 keep + 1001, /* off the grid past the block */
                 keep + 256,  /* on the grid, inside the live block */
             };
-            for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+            for (size_t i = 0; i < countof(bad); i++) {
                 memboundStats before;
                 memboundStats after;
                 memboundGetStats(m, &before);
@@ -8215,7 +8215,7 @@ int memboundTest(int, char *[]) {
              .threadSafe = true,
              .growthSize = 1 << 18},
         };
-        for (size_t k = 0; k < sizeof(cfgs) / sizeof(cfgs[0]); k++) {
+        for (size_t k = 0; k < countof(cfgs); k++) {
             statsRaceCtx c = {.m = memboundCreateWithConfig(&cfgs[k])};
             assert(c.m);
             pthread_t churn[2];

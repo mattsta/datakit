@@ -351,7 +351,3 @@ char *strdup(const char *s) __attribute__((deprecated));
     memcpy(to, from, bytes);
     return to;
 }
-
-#ifndef COUNT_ARRAY
-#define COUNT_ARRAY(x) (sizeof(x) / sizeof(*(x)))
-#endif

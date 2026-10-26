@@ -1,4 +1,5 @@
 #include "fibbuf.h"
+#include "dkC23.h" /* countof */
 #include "jebuf.h"
 #include <assert.h>
 
@@ -32,8 +33,7 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
     return fibbufNextBuffer64(currentBufSize);
 }
 
-#define COUNT(array) (sizeof(array) / sizeof(*array))
-#define FIBEND (fibbuf + COUNT(fibbuf) - 1)
+#define FIBEND (fibbuf + countof(fibbuf) - 1)
 
 #define BINARY_SEARCH_BRANCH_FREE                                              \
     do {                                                                       \
@@ -85,7 +85,7 @@ static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {
     static constexpr uint16_t fibbuf[] = {34,    55,    89,    144,  233,  377,
                                           610,   987,   1597,  2584, 4181, 6765,
                                           10946, 17711, 28657, 46368};
-    static constexpr size_t num = COUNT(fibbuf);
+    static constexpr size_t num = countof(fibbuf);
 
     const uint16_t *result = fibbuf;
     size_t n = num;
@@ -107,7 +107,7 @@ static uint32_t fibbufNextBuffer32(const uint32_t currentBufSize) {
         1346269,   2178309,   3524578,    5702887,    9227465,   14930352,
         24157817,  39088169,  63245986,   102334155,  165580141, 267914296,
         433494437, 701408733, 1134903170, 1836311903, 2971215073};
-    static constexpr size_t num = COUNT(fibbuf);
+    static constexpr size_t num = countof(fibbuf);
 
     const uint32_t *result = fibbuf;
     size_t n = num;
@@ -134,7 +134,7 @@ static uint64_t fibbufNextBuffer64(const uint64_t currentBufSize) {
             32951280099,  53316291173,  86267571272,  139583862445,
             225851433717, 365435296162, 591286729879, 956722026041,
             1548008755920}; /* stops at a 1.54 TB buffer size */
-    static constexpr size_t num = COUNT(fibbuf);
+    static constexpr size_t num = countof(fibbuf);
 
     const uint64_t *result = fibbuf;
     size_t n = num;
@@ -169,7 +169,7 @@ int fibbufTest(int, char *[]) {
 
     TEST("the next allocation size: past the current, at the next buffer") {
         static constexpr size_t sizes[] = {1, 100, 46367, 46368, 1u << 20};
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             const size_t buffer = fibbufNextSizeBuffer(sizes[i]);
             const size_t alloc = fibbufNextSizeAllocation(sizes[i]);
             if (buffer <= sizes[i] || alloc < buffer ||
@@ -438,7 +438,7 @@ int fibbufTest(int, char *[]) {
             4000000000ULL, 4807526976ULL, 1548008755920ULL,
         };
 
-        for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        for (size_t i = 0; i < countof(probes); i++) {
             const size_t next = fibbufNextSizeBuffer(probes[i]);
             if (next <= probes[i]) {
                 ERR("growth(%zu) = %zu is not larger", probes[i], next);

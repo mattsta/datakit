@@ -577,9 +577,9 @@ int portableRandomTest(int, char *[]) {
         portableRandomTestFreeze(&r, &byWord);
 
         uint64_t filled[300];
-        portableRandomFill64(&byFill, filled, COUNT_ARRAY(filled));
+        portableRandomFill64(&byFill, filled, countof(filled));
 
-        for (size_t w = 0; w < COUNT_ARRAY(filled); w++) {
+        for (size_t w = 0; w < countof(filled); w++) {
             const uint64_t want = portableRandom64(&byWord);
             if (filled[w] != want) {
                 ERR("fill word %zu is 0x%016" PRIx64 ", not 0x%016" PRIx64, w,
@@ -605,8 +605,8 @@ int portableRandomTest(int, char *[]) {
                 (int64_t)r.remainingBytesBeforeRefuel, want);
         }
 
-        portableRandomFill64(&r, out, COUNT_ARRAY(out));
-        want -= (int64_t)(COUNT_ARRAY(out) * 8);
+        portableRandomFill64(&r, out, countof(out));
+        want -= (int64_t)(countof(out) * 8);
         if (r.remainingBytesBeforeRefuel != want) {
             ERR("after a 300-word fill the budget is %" PRId64 ", not "
                 "%" PRId64,
@@ -632,7 +632,7 @@ int portableRandomTest(int, char *[]) {
         const int64_t slack[] = {(int64_t)sizeof(uint64_t),
                                  -(int64_t)sizeof(uint64_t)};
 
-        for (size_t c = 0; c < COUNT_ARRAY(slack); c++) {
+        for (size_t c = 0; c < countof(slack); c++) {
             const bool rekeys = slack[c] < 0;
             portableRandomState r;
             portableRandom_init(&r, getpid());
@@ -644,8 +644,8 @@ int portableRandomTest(int, char *[]) {
 
             uint64_t got[64];
             uint64_t old[64];
-            portableRandomFill64(&r, got, COUNT_ARRAY(got));
-            portableRandomFill64(&frozen, old, COUNT_ARRAY(old));
+            portableRandomFill64(&r, got, countof(got));
+            portableRandomFill64(&frozen, old, countof(old));
 
             const int64_t want =
                 rekeys ? (int64_t)DK_PR_REFUEL_BYTES - chunkBytes : slack[c];
@@ -750,7 +750,7 @@ int portableRandomTest(int, char *[]) {
         const size_t lens[] = {1, 256, 257, 4096};
         const size_t guard = 16;
 
-        for (size_t i = 0; i < COUNT_ARRAY(lens); i++) {
+        for (size_t i = 0; i < countof(lens); i++) {
             const size_t len = lens[i];
             cleanerName(zfree, Bytes) uint8_t *a = zcalloc(1, len + guard);
             cleanerName(zfree, Bytes) uint8_t *b = zcalloc(1, len + guard);

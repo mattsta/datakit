@@ -1250,7 +1250,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         DATABOX_BIG_UNSIGNED_128(&testers[(62 + 64) + 1], bigU);
 
         /* Add elements to set */
-        for (size_t i = 0; i < COUNT_ARRAY(testers); i++) {
+        for (size_t i = 0; i < countof(testers); i++) {
             databoxBig *use = &testers[i];
 
 #if 0
@@ -1262,7 +1262,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         }
 
         /* Now check if added elements can be found again */
-        for (size_t i = 0; i < COUNT_ARRAY(testers); i++) {
+        for (size_t i = 0; i < countof(testers); i++) {
             databoxBig *use = &testers[i];
 
             if (!intsetBigExists(isb, use)) {
@@ -1284,7 +1284,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         }
 
         /* Now remove added elements */
-        for (size_t i = 0; i < COUNT_ARRAY(testers); i++) {
+        for (size_t i = 0; i < countof(testers); i++) {
             databoxBig *use = &testers[i];
 
             if (!intsetBigRemove(isb, use)) {
@@ -1365,7 +1365,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
             DATABOX_BIG_UNSIGNED(1ULL << 30), DATABOX_BIG_SIGNED(-(1LL << 25)),
             DATABOX_BIG_UNSIGNED(0)};
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             intsetBigAdd(isb, &vals[i]);
         }
 
@@ -1376,7 +1376,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
             ERR("Copy should have same count!");
         }
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             if (!intsetBigExists(copy, &vals[i])) {
                 ERR("Copy missing value %zu!", i);
             }
@@ -1414,7 +1414,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
                               DATABOX_BIG_SIGNED(-50),
                               DATABOX_BIG_UNSIGNED(1ULL << 35)};
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             intsetBigAdd(a, &vals[i]);
             intsetBigAdd(b, &vals[i]);
         }
@@ -1446,7 +1446,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
             DATABOX_BIG_UNSIGNED(10), DATABOX_BIG_UNSIGNED(20),
             DATABOX_BIG_UNSIGNED(30), DATABOX_BIG_UNSIGNED(40)};
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             intsetBigAdd(b, &vals[i]);
         }
 
@@ -1669,14 +1669,14 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
             DATABOX_BIG_SIGNED(-(int64_t)(boundary + 1)), /* in bucket -2 */
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             if (!intsetBigAdd(isb, &vals[i])) {
                 ERR("Failed to add boundary value %zu!", i);
             }
         }
 
         /* Verify all exist */
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             if (!intsetBigExists(isb, &vals[i])) {
                 ERR("Boundary value %zu not found!", i);
             }
@@ -1689,7 +1689,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         }
 
         /* Remove and verify */
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             if (!intsetBigRemove(isb, &vals[i])) {
                 ERR("Failed to remove boundary value %zu!", i);
             }
@@ -2121,7 +2121,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
 
         /* Verify all elements */
         databoxBig allVals[] = {a0, a2, a4, b1, b2, b3};
-        for (size_t i = 0; i < COUNT_ARRAY(allVals); i++) {
+        for (size_t i = 0; i < countof(allVals); i++) {
             if (!intsetBigExists(a, &allVals[i])) {
                 ERR("Missing element %zu!", i);
             }
@@ -2474,7 +2474,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         uint64_t vals[] = {100, BUCKET_SIZE + 50, 2 * BUCKET_SIZE + 200,
                            5 * BUCKET_SIZE + 1000};
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(vals[i]));
             intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(vals[i]));
         }

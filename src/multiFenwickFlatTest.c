@@ -307,7 +307,7 @@ int multiFenwickFlatTest(int, char *[]) {
             size_t idx;
             size_t capacity;
         } steps[] = {{0, 1}, {1, 2}, {2, 4}, {4, 8}, {5, 8}, {1000, 1024}};
-        for (size_t s = 0; s < sizeof(steps) / sizeof(*steps); s++) {
+        for (size_t s = 0; s < countof(steps); s++) {
             if (!multiFenwickFlatUpdate(&mfw, steps[s].idx, &one)) {
                 ERR("Update(%zu) refused", steps[s].idx);
             }
@@ -480,7 +480,7 @@ int multiFenwickFlatTest(int, char *[]) {
     TEST("differential: NewFromArray matches multiFenwick") {
         uint64_t seed = 99;
         const size_t sizes[] = {1, 2, 3, 7, 8, 9, 100, 513};
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
             for (size_t round = 0; round < 6; round++) {
                 cleanerName(zfree, DataboxArray) databox *vals =
@@ -509,7 +509,7 @@ int multiFenwickFlatTest(int, char *[]) {
                "mfw/flat | flat/i64\n");
         const size_t sizes[] = {1000, 100000};
         const size_t OPS = 200000;
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
             cleanerName(zfree, DataboxArray) databox *vals =
                 zcalloc(n, sizeof(databox));

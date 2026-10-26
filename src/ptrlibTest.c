@@ -64,7 +64,7 @@ int ptrlibTest(int, char *[]) {
 
     TEST("top bits: 8_1/8_2/16 set+get round-trips at boundaries") {
         const uintptr_t vals8[] = {0, 1, 0x7f, 0x80, 0xff};
-        for (size_t i = 0; i < sizeof(vals8) / sizeof(vals8[0]); i++) {
+        for (size_t i = 0; i < countof(vals8); i++) {
             void *p1 = _PTRLIB_TOP_SET_8_1(alloc, vals8[i]);
             if (_PTRLIB_TOP_8_1(p1) != vals8[i]) {
                 ERR("8_1 round-trip failed for 0x%zx", (size_t)vals8[i]);

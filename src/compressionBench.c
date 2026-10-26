@@ -765,7 +765,7 @@ static void runMultilistBenchmarks(void) {
     printf("\n  multilist LZ4 footprint (FLEX_CAP_LEVEL_4096 nodes; depth N "
            "leaves N nodes at each end uncompressed, 0 = never compress)\n");
     const uint32_t depths[] = {0, 1, 2, 5};
-    for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
+    for (size_t d = 0; d < countof(depths); d++) {
         benchListFootprint("log100", 1'000'000, depths[d]);
     }
 
@@ -774,7 +774,7 @@ static void runMultilistBenchmarks(void) {
 
     printf("\n  mflex LZ4 footprint (one mflex; stored is what it keeps)\n");
     const size_t counts[] = {512, 4096};
-    for (size_t c = 0; c < sizeof(counts) / sizeof(*counts); c++) {
+    for (size_t c = 0; c < countof(counts); c++) {
         benchMflexFootprint("repeated integers (42)", MFLEX_REPEATED,
                             counts[c]);
         benchMflexFootprint("sequential integers (0, 1, 2, ...)",

@@ -1918,7 +1918,7 @@ approximationDone:
          * iterative form agrees to 1e-12, and is 0 at both ends */
         static constexpr double xs[] = {1e-6, 0.001, 0.25, 0.5, 0.75, 0.999};
         bool agree = hllTau(0.0) == 0.0 && hllTau(1.0) == 0.0;
-        for (size_t i = 0; i < sizeof(xs) / sizeof(*xs); i++) {
+        for (size_t i = 0; i < countof(xs); i++) {
             double sum = 0.0;
             for (int k = 1; k <= 60; k++) {
                 const double root = pow(xs[i], ldexp(1.0, -k));

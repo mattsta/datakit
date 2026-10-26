@@ -1,4 +1,5 @@
 #include "jebuf.h"
+#include "dkC23.h" /* countof */
 #include <assert.h>
 
 #include <stdint.h>
@@ -34,8 +35,7 @@ bool jebufUseNewAllocation(const size_t originalSize, const size_t newSize) {
     return jebufSizeAllocation(newSize) < jebufSizeAllocation(originalSize);
 }
 
-#define COUNT(array) (sizeof(array) / sizeof(*array))
-#define JEEND (jebuf + COUNT(jebuf) - 1)
+#define JEEND (jebuf + countof(jebuf) - 1)
 
 #define BINARY_SEARCH_BRANCH_FREE                                              \
     do {                                                                       \
@@ -97,7 +97,7 @@ static size_t jebufSizeAllocation16(const size_t currentBufSize) {
         16 KiB, 20 KiB, 24 KiB, 28 KiB, 32 KiB, 40 KiB, 48 KiB, 54 KiB,
     };
 
-    static constexpr size_t num = COUNT(jebuf);
+    static constexpr size_t num = countof(jebuf);
 
     const uint16_t *result = jebuf;
     size_t n = num;
@@ -187,7 +187,7 @@ static size_t jebufSizeAllocation32(const size_t currentBufSize) {
         3584 MiB,
     };
 
-    static constexpr size_t num = COUNT(jebuf);
+    static constexpr size_t num = countof(jebuf);
 
     const uint32_t *result = jebuf;
     size_t n = num;
@@ -266,7 +266,7 @@ static size_t jebufSizeAllocation64(const size_t currentBufSize) {
          * any larger requests will assert failure. */
     };
 
-    static constexpr size_t num = COUNT(jebuf);
+    static constexpr size_t num = countof(jebuf);
 
     const uint64_t *result = jebuf;
     size_t n = num;

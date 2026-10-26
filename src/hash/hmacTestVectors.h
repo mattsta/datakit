@@ -169,5 +169,4 @@ static const hmacTestVector hmacTestVectorsTable[] = {
 };
 /* clang-format on */
 
-#define HMAC_TEST_VECTOR_COUNT                                                 \
-    (sizeof(hmacTestVectorsTable) / sizeof(hmacTestVectorsTable[0]))
+#define HMAC_TEST_VECTOR_COUNT (countof(hmacTestVectorsTable))

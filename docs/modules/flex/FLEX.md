@@ -2144,7 +2144,7 @@ for (size_t i = 0; i < 10000; i++) {
 }
 
 flex *f = flexNew();
-flexBulkPushBytesMembers(&f, members, COUNT_ARRAY(members));
+flexBulkPushBytesMembers(&f, members, countof(members));
 ```
 
 ### 4. Use Drain for Bulk Deletes

@@ -18,6 +18,7 @@
  *     7-lane mix body the one-shot uses. */
 
 #include "rapidhash.h"
+#include "dkC23.h" /* countof */
 
 #include <string.h>
 
@@ -910,7 +911,7 @@ static int isPrime(uint64_t n) {
     static constexpr uint64_t bases[] = {2,  3,  5,  7,  11, 13,
                                          17, 19, 23, 29, 31, 37};
     /* Deterministic for 64-bit n via Miller-Rabin with these 12 bases. */
-    for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+    for (size_t i = 0; i < countof(bases); i++) {
         if (bases[i] >= n) {
             break;
         }
@@ -1076,7 +1077,7 @@ int rapidhashTest(int, char *[]) {
      *   80           — exactly Micro stride (deferred-flush boundary)
      *   112          — exactly Main stride (deferred-flush boundary) */
     const size_t chunkSizes[] = {1, 17, 48, 80, 112, 113};
-    const size_t nChunkSizes = sizeof(chunkSizes) / sizeof(chunkSizes[0]);
+    const size_t nChunkSizes = countof(chunkSizes);
 
     TEST("streaming matches one-shot, FAST, all three variants") {
         for (size_t i = 0; i < rapidhashTestVectorsCount; i++) {

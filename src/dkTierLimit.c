@@ -144,7 +144,7 @@ int dkTierLimitTest(int, char *[]) {
              DK_TIER_LIMIT_BAD_FAMILY},
             {UINT32_MAX, FLEX_CAP_LEVEL_512, DK_TIER_LIMIT_BAD_FAMILY},
         };
-        for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+        for (size_t i = 0; i < countof(bad); i++) {
             const dkTierLimitResult got = dkTierSetDefaultLimit(
                 (dkTierFamily)bad[i].family, (flexCapSizeLimit)bad[i].level);
             if (got != bad[i].want) {

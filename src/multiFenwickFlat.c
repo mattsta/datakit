@@ -258,7 +258,7 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
             base = total;
         }
 
-        assert(steps < sizeof(planned) / sizeof(*planned));
+        assert(steps < countof(planned));
         if (!multiFenwickCellEncode(multiFenwickNumAdd_(base, delta),
                                     &planned[steps])) {
             return false;

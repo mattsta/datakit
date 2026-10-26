@@ -530,7 +530,7 @@ int segmentI64Test(int, char *[]) {
         /* Smoke size (naive scans reach 100K elements per op) */
         const size_t NUM_OPS = 5000;
 
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             size_t N = sizes[s];
             uint64_t seed = 12345;
 
@@ -610,7 +610,7 @@ int segmentI64Test(int, char *[]) {
         /* Smoke size (naive scans reach 100K elements per op) */
         const size_t NUM_OPS = 5000;
 
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             size_t N = sizes[s];
             uint64_t seed = 99999;
 
@@ -680,7 +680,7 @@ int segmentI64Test(int, char *[]) {
         /* Smoke size (naive scans reach 100K elements per op) */
         const size_t NUM_OPS = 5000;
 
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             size_t N = sizes[s];
             uint64_t seed = 11111;
 

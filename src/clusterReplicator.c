@@ -536,7 +536,7 @@ int clusterReplicatorTest(int, char *[]) {
             {{spec.id, spec.version, UINT64_C(1) << 33}, true},
         };
         uint64_t refused = 0;
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             uint8_t payload[64];
             const size_t prefix =
                 dkFormatPrefixWrite(&cases[c].stamp, payload, sizeof(payload));

@@ -1275,7 +1275,7 @@ int tierSimTest(int, char *[]) {
     int err = 0;
 
     TEST("tier simulation: every family through every phase") {
-        for (size_t f = 0; f < COUNT_ARRAY(simFamilies); f++) {
+        for (size_t f = 0; f < countof(simFamilies); f++) {
             if (simRunFamily(&simFamilies[f], 0x243F6A8885A308D3ULL + f)) {
                 ERR("%s: simulation failed", simFamilies[f].name);
             }
@@ -1283,7 +1283,7 @@ int tierSimTest(int, char *[]) {
     }
 
     TEST("tier simulation: every sequence family through every phase") {
-        for (size_t f = 0; f < COUNT_ARRAY(simSequences); f++) {
+        for (size_t f = 0; f < countof(simSequences); f++) {
             if (simRunSequence(&simSequences[f], 0x13198A2E03707344ULL + f)) {
                 ERR("%s: simulation failed", simSequences[f].name);
             }

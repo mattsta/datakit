@@ -2261,7 +2261,7 @@ int multilistFullTest(int, char *[]) {
     uint32_t err = 0;
 
     const int depth[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    const size_t depthCount = sizeof(depth) / sizeof(*depth);
+    const size_t depthCount = countof(depth);
     int64_t runtime[depthCount];
     const int defaultCompressSizeLimit = 1;
 
@@ -3234,7 +3234,7 @@ int multilistFullTest(int, char *[]) {
                  * because we only have two foo) */
                 multilistFullIteratorInitReverseReadOnly(ml, s, &iter);
                 i = 0;
-                size_t resB = sizeof(resultB) / sizeof(*resultB);
+                size_t resB = countof(resultB);
                 while (multilistFullNext(&iter, &entry)) {
                     /* Result must be: abc, foo, foobar, foobared, zap, test,
                      * foo */
@@ -3549,10 +3549,9 @@ int multilistFullTest(int, char *[]) {
     const int listSizes[] = {30, 251, 1000, 5000};
     const size_t depths[] = {1, 2, 3, 5, 8, 13, 21, 39};
     int64_t start = timeUtilMs();
-    for (size_t list = 0; list < (sizeof(listSizes) / sizeof(*listSizes));
-         list++) {
+    for (size_t list = 0; list < (countof(listSizes)); list++) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
-            for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
+            for (size_t d = 0; d < countof(depths); d++) {
                 const size_t _depth = depths[d];
                 TEST_DESC("verify specific compression of interior nodes with "
                           "%d list "
@@ -4094,9 +4093,8 @@ int multilistFullTest(int, char *[]) {
                                   perNode * 2, perNode * 3, perNode * 5 + 1,
                                   perNode * 8, perNode * 13};
         bool failed = false;
-        for (size_t z = 0; z < sizeof(sizes) / sizeof(*sizes) && !failed; z++) {
-            for (size_t q = 0; q < sizeof(seqs) / sizeof(*seqs) && !failed;
-                 q++) {
+        for (size_t z = 0; z < countof(sizes) && !failed; z++) {
+            for (size_t q = 0; q < countof(seqs) && !failed; q++) {
                 uint32_t n = sizes[z];
                 uint32_t nextId = SD_NEW;
                 if (n + 64 > SD_MAX) {

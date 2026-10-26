@@ -1345,7 +1345,7 @@ int multimapAtomTest(int, char *[]) {
         const size_t loopExtent = 200;
         multimapAtom *ma = multimapAtomNew();
 
-        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             const int16_t *use = vals[i];
             if (i >= backupDeleteBy) {
                 /* Remove i - 5 */
@@ -1499,7 +1499,7 @@ int multimapAtomTest(int, char *[]) {
         /* Sizes on both sides of each tier change and of 450 (a size that
          * once crashed), then the largest; each cycle empties the table */
         static const ssize_t sizes[] = {1, 30, 90, 449, 450, 451, 900, 1800};
-        for (size_t j = 0; j < sizeof(sizes) / sizeof(*sizes); j++) {
+        for (size_t j = 0; j < countof(sizes); j++) {
             printf(".");
             fflush(stdout);
             const ssize_t doUntil = sizes[j];
@@ -1579,7 +1579,7 @@ int multimapAtomTest(int, char *[]) {
     TEST("populate and delete and populate (providing atom id)") {
         multimapAtom *ma = multimapAtomNew();
         static const ssize_t sizes[] = {0, 1, 30, 90, 449, 450, 451, 900, 1800};
-        for (size_t j = 0; j < sizeof(sizes) / sizeof(*sizes); j++) {
+        for (size_t j = 0; j < countof(sizes); j++) {
             const ssize_t doUntil = sizes[j];
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i % 2 == 0 ? -i : i;
@@ -2569,7 +2569,7 @@ int multimapAtomTest(int, char *[]) {
         const int32_t sizes[] = {6, 60, 200, 400, 900, 2500};
         bool sawTier[MULTIMAP_TYPE_FULL + 1] = {false};
         char name[32];
-        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             const int32_t n = sizes[s];
             cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
             for (int32_t i = 0; i < n; i++) {

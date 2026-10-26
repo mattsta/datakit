@@ -142,7 +142,7 @@ static const rapidhashTestVector rapidhashTestVectorsTable[] = {
 /* clang-format on */
 
 static constexpr size_t rapidhashTestVectorsCount =
-    sizeof(rapidhashTestVectorsTable) / sizeof(rapidhashTestVectorsTable[0]);
+    countof(rapidhashTestVectorsTable);
 
 /* -------------------------------------------------------------------------
  * PROTECTED-mode rapidhash test vectors.
@@ -252,8 +252,7 @@ static const rapidhashTestVector rapidhashProtectedTestVectorsTable[] = {
 /* clang-format on */
 
 static constexpr size_t rapidhashProtectedTestVectorsCount =
-    sizeof(rapidhashProtectedTestVectorsTable) /
-    sizeof(rapidhashProtectedTestVectorsTable[0]);
+    countof(rapidhashProtectedTestVectorsTable);
 
 /* -------------------------------------------------------------------------
  * make_secret() KAT vectors.
@@ -286,5 +285,4 @@ static const rapidhashSecretTestVector rapidhashSecretTestVectorsTable[] = {
 /* clang-format on */
 
 static constexpr size_t rapidhashSecretTestVectorsCount =
-    sizeof(rapidhashSecretTestVectorsTable) /
-    sizeof(rapidhashSecretTestVectorsTable[0]);
+    countof(rapidhashSecretTestVectorsTable);

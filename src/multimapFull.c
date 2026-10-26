@@ -762,14 +762,14 @@ flex *multimapFullDump(const multimapFull *m) {
      *   multiarray for maps is native (max 8192 instead of 64),
      *   then just pass it directly to flexBulkMergeFlex()
      *   (else, allocate local) */
-    if (m->count <= COUNT_ARRAY(localMaps)) {
+    if (m->count <= countof(localMaps)) {
         useMaps = localMaps;
     } else {
         /* An array of m->count POINTERS — the element size must be
          * sizeof(*useMaps), not 1: allocating m->count BYTES here
          * under-allocated 8x and the pointer-fill loop below wrote
          * past the block for any multimapFull spanning more than
-         * COUNT_ARRAY(localMaps) sub-maps. */
+         * countof(localMaps) sub-maps. */
         heapMaps = zcalloc(m->count, sizeof(*useMaps));
         useMaps = heapMaps;
     }
@@ -815,7 +815,7 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
     multimapFullMiddle *middles = middles_;
     cleanerName(zfree, Middles) multimapFullMiddle *heapMiddlesSpill = NULL;
 
-    if (howMany > COUNT_ARRAY(maps_)) {
+    if (howMany > countof(maps_)) {
         heapMapsSpill = zcalloc(howMany, sizeof(*maps));
         maps = heapMapsSpill;
         heapMiddlesSpill = zcalloc(howMany, sizeof(*middles));
@@ -4346,7 +4346,7 @@ int multimapFullTest(int, char *[]) {
              1},
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             const multimapFullIdx got =
                 multimapFullBinarySearch(m, &cases[i].probe);
             if (got != cases[i].mapIdx) {

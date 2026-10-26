@@ -186,7 +186,7 @@ ssize_t databoxRetainBytesSelf(databox *restrict dst,
     size_t start = 128;
     /* Find the smallest populated size class that fits; each slot
      * doubles the previous slot's capacity. */
-    for (ssize_t slot = 0; slot < (ssize_t)COUNT_ARRAY(cache->bytes);
+    for (ssize_t slot = 0; slot < (ssize_t)countof(cache->bytes);
          slot++, start *= 2) {
         if (dst->len <= start) {
             if (cache->bytes[slot]) {
@@ -1125,8 +1125,8 @@ defcleaner(mdsc *, mdscfree);
 
 const char *databoxReprStr(const databox *const box) {
     thread_local static char buf[256];
-    thread_local static char bufBig[COUNT_ARRAY(buf)];
-    static constexpr size_t bufLen = COUNT_ARRAY(buf);
+    thread_local static char bufBig[countof(buf)];
+    static constexpr size_t bufLen = countof(buf);
 
     switch (box->type) {
     case DATABOX_VOID:
@@ -1750,7 +1750,7 @@ int databoxTest(int, char *[]) {
             {-INFINITY, 0, 0},
             {NAN, 0, 0},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             const databox in = DATABOX_DOUBLE(cases[i].d);
             databox out = databoxNewSigned(-77);
             const bool whole = databoxIntegralRealAsInteger(&in, &out);
@@ -1915,8 +1915,7 @@ int databoxTest(int, char *[]) {
         /* Test signed integers at boundaries */
         int64_t signedVals[] = {INT64_MIN, INT64_MIN + 1, -1'000'000, -1, 0, 1,
                                 1'000'000, INT64_MAX - 1, INT64_MAX};
-        for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]);
-             i++) {
+        for (size_t i = 0; i < countof(signedVals); i++) {
             databox a = databoxNewSigned(signedVals[i]);
             if (databoxCompare(&a, &a) != 0) {
                 ERR("Reflexivity failed for signed %" PRId64, signedVals[i]);
@@ -1925,8 +1924,7 @@ int databoxTest(int, char *[]) {
 
         /* Test unsigned integers */
         uint64_t unsignedVals[] = {0, 1, 1'000'000, UINT64_MAX - 1, UINT64_MAX};
-        for (size_t i = 0; i < sizeof(unsignedVals) / sizeof(unsignedVals[0]);
-             i++) {
+        for (size_t i = 0; i < countof(unsignedVals); i++) {
             databox a = databoxNewUnsigned(unsignedVals[i]);
             if (databoxCompare(&a, &a) != 0) {
                 ERR("Reflexivity failed for unsigned %" PRIu64,
@@ -1937,7 +1935,7 @@ int databoxTest(int, char *[]) {
         /* Test floats/doubles */
         double realVals[] = {-1e38, -1e10, -1.0, -0.5, 0.0,
                              0.5,   1.0,   1e10, 1e38};
-        for (size_t i = 0; i < sizeof(realVals) / sizeof(realVals[0]); i++) {
+        for (size_t i = 0; i < countof(realVals); i++) {
             databox a = databoxNewReal(realVals[i]);
             if (databoxCompare(&a, &a) != 0) {
                 ERR("Reflexivity failed for real %f", realVals[i]);
@@ -1946,7 +1944,7 @@ int databoxTest(int, char *[]) {
 
         /* Test bytes */
         const char *strings[] = {"", "a", "ab", "abc", "hello world"};
-        for (size_t i = 0; i < sizeof(strings) / sizeof(strings[0]); i++) {
+        for (size_t i = 0; i < countof(strings); i++) {
             databox a = databoxNewBytesString(strings[i]);
             if (databoxCompare(&a, &a) != 0) {
                 ERR("Reflexivity failed for string '%s'", strings[i]);
@@ -2145,12 +2143,12 @@ int databoxTest(int, char *[]) {
         const databox one = databoxNewSigned(1);
         const databox *const nans[] = {&nanD, &nanNegD, &nanF};
 
-        for (size_t i = 0; i < COUNT_ARRAY(nans); i++) {
+        for (size_t i = 0; i < countof(nans); i++) {
             /* NaN equals nothing, not even itself... */
             if (databoxEqual(nans[i], nans[i])) {
                 ERR("NaN %zu equals itself", i);
             }
-            for (size_t j = 0; j < COUNT_ARRAY(nans); j++) {
+            for (size_t j = 0; j < countof(nans); j++) {
                 if (databoxEqual(nans[i], nans[j])) {
                     ERR("NaN %zu equals NaN %zu", i, j);
                 }
@@ -2191,7 +2189,7 @@ int databoxTest(int, char *[]) {
             "g_2_39",  "g_10_0", "g_1_6",  "g_0_2",  "g_0_45",
             "g_10_47", "g_1_47", "g_2_40", "g_2_42",
         };
-        const size_t n = sizeof(cases) / sizeof(cases[0]);
+        const size_t n = countof(cases);
         databox boxes[9];
         for (size_t i = 0; i < n; i++) {
             boxes[i] = databoxNewBytesString(cases[i]);
@@ -2466,7 +2464,7 @@ int databoxTest(int, char *[]) {
         const char *strings[] = {"apple",  "banana",   "cherry", "date",
                                  "elder",  "fig",      "grape",  "honeydew",
                                  "indigo", "jackfruit"};
-        const int N = sizeof(strings) / sizeof(strings[0]);
+        const int N = countof(strings);
         databox sorted[10];
         for (int i = 0; i < N; i++) {
             sorted[i] = databoxNewBytesString(strings[i]);
@@ -2656,7 +2654,7 @@ int databoxTest(int, char *[]) {
                               1'000'000'000LL,
                               INT64_MAX / 2,
                               INT64_MAX};
-        const int N = sizeof(testVals) / sizeof(testVals[0]);
+        const int N = countof(testVals);
 
         /* Create sorted array */
         databox sorted[13];
@@ -2703,8 +2701,7 @@ int databoxTest(int, char *[]) {
         /* Test signed integers at boundaries */
         int64_t signedTests[] = {INT64_MIN, INT64_MIN + 1, -1,       0,
                                  1,         INT64_MAX - 1, INT64_MAX};
-        for (size_t i = 0; i < sizeof(signedTests) / sizeof(signedTests[0]);
-             i++) {
+        for (size_t i = 0; i < countof(signedTests); i++) {
             databox box = databoxNewSigned(signedTests[i]);
             if (box.type != DATABOX_SIGNED_64 ||
                 box.data.i64 != signedTests[i]) {
@@ -2714,8 +2711,7 @@ int databoxTest(int, char *[]) {
 
         /* Test unsigned integers at boundaries */
         uint64_t unsignedTests[] = {0, 1, UINT64_MAX - 1, UINT64_MAX};
-        for (size_t i = 0; i < sizeof(unsignedTests) / sizeof(unsignedTests[0]);
-             i++) {
+        for (size_t i = 0; i < countof(unsignedTests); i++) {
             databox box = databoxNewUnsigned(unsignedTests[i]);
             if (box.type != DATABOX_UNSIGNED_64 ||
                 box.data.u64 != unsignedTests[i]) {
@@ -2725,8 +2721,7 @@ int databoxTest(int, char *[]) {
 
         /* Test float/double */
         float floatTests[] = {-1e38f, -1.0f, 0.0f, 1.0f, 1e38f};
-        for (size_t i = 0; i < sizeof(floatTests) / sizeof(floatTests[0]);
-             i++) {
+        for (size_t i = 0; i < countof(floatTests); i++) {
             databox box;
             DATABOX_SET_FLOAT(&box, floatTests[i]);
             if (box.type != DATABOX_FLOAT_32 || box.data.f32 != floatTests[i]) {
@@ -2738,8 +2733,7 @@ int databoxTest(int, char *[]) {
          * as FLOAT_32. So we only check extreme values that require DOUBLE_64
          */
         double doubleTests[] = {-1e308, 1e308};
-        for (size_t i = 0; i < sizeof(doubleTests) / sizeof(doubleTests[0]);
-             i++) {
+        for (size_t i = 0; i < countof(doubleTests); i++) {
             databox box = databoxNewReal(doubleTests[i]);
             if (box.type != DATABOX_DOUBLE_64 ||
                 box.data.d64 != doubleTests[i]) {
@@ -2748,8 +2742,7 @@ int databoxTest(int, char *[]) {
         }
         /* Test values that fit in float get stored as FLOAT_32 */
         double floatCompatible[] = {-1.0, 0.0, 1.0, 100.0};
-        for (size_t i = 0;
-             i < sizeof(floatCompatible) / sizeof(floatCompatible[0]); i++) {
+        for (size_t i = 0; i < countof(floatCompatible); i++) {
             databox box = databoxNewReal(floatCompatible[i]);
             /* These get optimized to FLOAT_32 */
             if (box.type != DATABOX_FLOAT_32) {
@@ -2819,8 +2812,7 @@ int databoxTest(int, char *[]) {
             INT128_MIN,    INT128_MIN + 1, (__int128_t)-1, (__int128_t)0,
             (__int128_t)1, INT128_MAX - 1, INT128_MAX};
 
-        for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]);
-             i++) {
+        for (size_t i = 0; i < countof(signedVals); i++) {
             DATABOX_BIG_SIGNED_128(&bigBox, signedVals[i]);
             if (bigBox.type != DATABOX_SIGNED_128) {
                 ERR("128-bit signed type incorrect for index %zu", i);
@@ -2834,8 +2826,7 @@ int databoxTest(int, char *[]) {
         __uint128_t unsignedVals[] = {(__uint128_t)0, (__uint128_t)1,
                                       UINT128_MAX - 1, UINT128_MAX};
 
-        for (size_t i = 0; i < sizeof(unsignedVals) / sizeof(unsignedVals[0]);
-             i++) {
+        for (size_t i = 0; i < countof(unsignedVals); i++) {
             DATABOX_BIG_UNSIGNED_128(&bigBox, unsignedVals[i]);
             if (bigBox.type != DATABOX_UNSIGNED_128) {
                 ERR("128-bit unsigned type incorrect for index %zu", i);
@@ -2870,7 +2861,7 @@ int databoxTest(int, char *[]) {
         databoxBig in;
         DATABOX_BIG_UNSIGNED_128(&in, wide);
         cleaner(flexFree) flex *f = flexNewFromDataboxBig(&in);
-        for (size_t i = 0; i < COUNT_ARRAY(where); i++) {
+        for (size_t i = 0; i < countof(where); i++) {
             databoxBig *const b = where[i];
             if (((uintptr_t)b->extra % 16) != 0) {
                 ERR("databoxBig.extra at placement %zu is not 16-aligned", i);
@@ -3027,7 +3018,7 @@ int databoxTest(int, char *[]) {
 
         /* Compare float vs double with same value */
         float floatVals[] = {-1000.0f, -1.0f, 0.0f, 1.0f, 1000.0f};
-        for (size_t i = 0; i < sizeof(floatVals) / sizeof(floatVals[0]); i++) {
+        for (size_t i = 0; i < countof(floatVals); i++) {
             databox floatBox;
             DATABOX_SET_FLOAT(&floatBox, floatVals[i]);
             databox doubleBox = databoxNewReal((double)floatVals[i]);
@@ -3212,8 +3203,8 @@ int databoxTest(int, char *[]) {
         static const databoxType types[] = {
             DATABOX_SIGNED_64, DATABOX_UNSIGNED_64, DATABOX_FLOAT_32,
             DATABOX_DOUBLE_64, DATABOX_SIGNED_128,  DATABOX_UNSIGNED_128};
-        enum { NV = sizeof(twice) / sizeof(*twice) };
-        enum { NT = sizeof(types) / sizeof(*types) };
+        enum { NV = countof(twice) };
+        enum { NT = countof(types) };
         databoxBig boxes[NV * NT];
         __int128 value2[NV * NT];
         size_t n = 0;
@@ -3312,7 +3303,7 @@ int databoxTest(int, char *[]) {
         };
         static const char *const want[] = {
             "some bytes to read", "some bytes to read", "tiny", "mdsc bytes"};
-        for (size_t i = 0; i < sizeof(withBytes) / sizeof(*withBytes); i++) {
+        for (size_t i = 0; i < countof(withBytes); i++) {
             uint8_t *buf = NULL;
             size_t len = 0;
             size_t size = 0;
@@ -3327,7 +3318,7 @@ int databoxTest(int, char *[]) {
                           {.type = DATABOX_FALSE},
                           {.type = DATABOX_NULL},
                           {.type = DATABOX_SIGNED_128}};
-        for (size_t i = 0; i < sizeof(none) / sizeof(*none); i++) {
+        for (size_t i = 0; i < countof(none); i++) {
             uint8_t *buf = NULL;
             size_t len = 0;
             if (databoxGetBytes(&none[i], &buf, &len)) {
@@ -3361,7 +3352,7 @@ int databoxTest(int, char *[]) {
             {{.type = DATABOX_PTR_MDSC, .data.ptr = mds3, .len = 3},
              DATABOX_PTR_MDSC},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             for (int inPlace = 0; inPlace <= 1; inPlace++) {
                 const databox *src = &cases[c].box;
                 databox copy = *src;
@@ -3399,12 +3390,12 @@ int databoxTest(int, char *[]) {
             (__uint128_t)1 << 95, (__uint128_t)1 << 127,
             UINT128_MAX,          (__uint128_t)INT128_MAX,
         };
-        const size_t n = COUNT_ARRAY(sw) + COUNT_ARRAY(uw);
+        const size_t n = countof(sw) + countof(uw);
 
         for (size_t i = 0; i < n; i++) {
-            const bool neg = i < COUNT_ARRAY(sw);
+            const bool neg = i < countof(sw);
             const __uint128_t want =
-                neg ? (__uint128_t)sw[i] : uw[i - COUNT_ARRAY(sw)];
+                neg ? (__uint128_t)sw[i] : uw[i - countof(sw)];
             const databoxType type =
                 neg ? DATABOX_SIGNED_128 : DATABOX_UNSIGNED_128;
 
@@ -3433,7 +3424,7 @@ int databoxTest(int, char *[]) {
             memset(src.extra, 0xA5, sizeof(src.extra));
 
             databox *const copies[] = {&copy, &bytesCopy, &borrowed};
-            for (size_t c = 0; c < COUNT_ARRAY(copies); c++) {
+            for (size_t c = 0; c < countof(copies); c++) {
                 const databox *const got = copies[c];
                 __uint128_t v = 0;
                 if (got->data.ptr) {
@@ -3451,7 +3442,7 @@ int databoxTest(int, char *[]) {
                     allocated, again);
             }
 
-            for (size_t c = 0; c < COUNT_ARRAY(copies); c++) {
+            for (size_t c = 0; c < countof(copies); c++) {
                 databoxFreeData(copies[c]);
                 if (copies[c]->type != DATABOX_VOID || copies[c]->data.ptr ||
                     copies[c]->allocated || copies[c]->big) {
@@ -3575,7 +3566,7 @@ int databoxTest(int, char *[]) {
         /* Wide type with no payload is deferred, for either signedness. */
         const databoxType wideTypes[] = {DATABOX_SIGNED_128,
                                          DATABOX_UNSIGNED_128};
-        for (size_t i = 0; i < COUNT_ARRAY(wideTypes); i++) {
+        for (size_t i = 0; i < countof(wideTypes); i++) {
             databox deferred;
             memset(&deferred, 0xFF, sizeof(deferred));
             deferred.type = wideTypes[i];
@@ -3591,7 +3582,7 @@ int databoxTest(int, char *[]) {
         const databox narrow[] = {databoxNewSigned(0), databoxNewUnsigned(0),
                                   DATABOX_DOUBLE(0.0), databoxNull(),
                                   databoxVoid(),       {{0}}};
-        for (size_t i = 0; i < COUNT_ARRAY(narrow); i++) {
+        for (size_t i = 0; i < countof(narrow); i++) {
             if (databoxIsWideDeferred(&narrow[i])) {
                 ERR("narrow box %zu reads as deferred", i);
             }
@@ -3613,7 +3604,7 @@ int databoxTest(int, char *[]) {
              "{UNSIGNED128: 340282366920938463463374607431768211455}"},
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             databox deferred;
             memset(&deferred, 0xFF, sizeof(deferred));
             deferred.type = cases[i].type;
@@ -3661,7 +3652,7 @@ int databoxTest(int, char *[]) {
             {&deferredS, &real},
             {&real, &deferredU},
         };
-        for (size_t i = 0; i < COUNT_ARRAY(dies); i++) {
+        for (size_t i = 0; i < countof(dies); i++) {
             if (!databoxTestCompareAborts_(dies[i].a, dies[i].b)) {
                 ERR("compare case %zu did not abort", i);
             }
@@ -3717,24 +3708,20 @@ int databoxTest(int, char *[]) {
                                            (__uint128_t)INT128_MAX + 2,
                                            UINT128_MAX - 1, UINT128_MAX};
         enum { MATRIX_FORMS_ = 4 };
-        enum {
-            MATRIX_VALUES_ =
-                COUNT_ARRAY(signedValues) + COUNT_ARRAY(aboveValues)
-        };
+        enum { MATRIX_VALUES_ = countof(signedValues) + countof(aboveValues) };
 
         databoxBig boxes[MATRIX_VALUES_ * MATRIX_FORMS_];
         struct {
             bool above;
             __int128_t s;
             __uint128_t u;
-        } oracle[COUNT_ARRAY(boxes)];
+        } oracle[countof(boxes)];
         size_t count = 0;
         for (size_t v = 0; v < MATRIX_VALUES_; v++) {
-            const bool above = v >= COUNT_ARRAY(signedValues);
+            const bool above = v >= countof(signedValues);
             const __int128_t s = above ? 0 : signedValues[v];
             const __uint128_t u =
-                above ? aboveValues[v - COUNT_ARRAY(signedValues)]
-                      : (__uint128_t)s;
+                above ? aboveValues[v - countof(signedValues)] : (__uint128_t)s;
             for (int form = 0; form < MATRIX_FORMS_; form++) {
                 databoxBig *const b = &boxes[count];
                 memset(b, 0, sizeof(*b));
@@ -3851,14 +3838,14 @@ int databoxTest(int, char *[]) {
                                    INT64_MIN,
                                    INT64_MIN + 1,
                                    16777217};
-        for (size_t i = 0; i < COUNT_ARRAY(signeds); i++) {
+        for (size_t i = 0; i < countof(signeds); i++) {
             DB_ORDER_ADD(databoxNewSigned(signeds[i]));
         }
 
         const uint64_t unsigneds[] = {UINT64_C(9223372036854775808),
                                       UINT64_C(9223372036854775809), UINT64_MAX,
                                       UINT64_MAX - 2047, 5};
-        for (size_t i = 0; i < COUNT_ARRAY(unsigneds); i++) {
+        for (size_t i = 0; i < countof(unsigneds); i++) {
             DB_ORDER_ADD(databoxNewUnsigned(unsigneds[i]));
         }
 
@@ -3899,7 +3886,7 @@ int databoxTest(int, char *[]) {
                                   -1e300,
                                   4.9e-324,
                                   -4.9e-324};
-        for (size_t i = 0; i < COUNT_ARRAY(doubles); i++) {
+        for (size_t i = 0; i < countof(doubles); i++) {
             DB_ORDER_ADD(DATABOX_DOUBLE(doubles[i]));
         }
 
@@ -3936,9 +3923,9 @@ int databoxTest(int, char *[]) {
 #undef DB_ORDER_ADD_U128
 #undef DB_ORDER_ADD_I128
 #undef DB_ORDER_ADD
-        assert(n <= COUNT_ARRAY(corpus));
+        assert(n <= countof(corpus));
 
-        int8_t got[COUNT_ARRAY(corpus)][COUNT_ARRAY(corpus)];
+        int8_t got[countof(corpus)][countof(corpus)];
         size_t mismatches = 0;
         for (size_t i = 0; i < n; i++) {
             const dbOrderValue_ oi = dbOrderOf_((const databox *)&corpus[i]);
@@ -3998,7 +3985,7 @@ int databoxTest(int, char *[]) {
          * must share a key.  The corpus holds no unequal pair whose keys
          * may legitimately collide, so any shared key between unequal
          * values is reported too. */
-        uint64_t keys[COUNT_ARRAY(corpus)];
+        uint64_t keys[countof(corpus)];
         for (size_t i = 0; i < n; i++) {
             if (!databoxNumericHashKey((const databox *)&corpus[i], &keys[i])) {
                 ERR("%s has no numeric hash key",
@@ -4030,7 +4017,7 @@ int databoxTest(int, char *[]) {
         const databox notNumbers[] = {databoxNewBytesString("5"),
                                       DATABOX_BOX_TRUE, DATABOX_BOX_NULL,
                                       DATABOX_BOX_VOID};
-        for (size_t i = 0; i < COUNT_ARRAY(notNumbers); i++) {
+        for (size_t i = 0; i < countof(notNumbers); i++) {
             uint64_t key = UINT64_C(0xA5A5A5A5A5A5A5A5);
             if (databoxNumericHashKey(&notNumbers[i], &key) ||
                 key != UINT64_C(0xA5A5A5A5A5A5A5A5)) {
@@ -4120,7 +4107,7 @@ int databoxTest(int, char *[]) {
 #undef DB_CANON_ROW
         };
 
-        for (size_t r = 0; r < COUNT_ARRAY(rows); r++) {
+        for (size_t r = 0; r < countof(rows); r++) {
             const size_t len = strlen(rows[r].s);
             const databox in = {.data.bytes.ccstart = rows[r].s,
                                 .type = DATABOX_BYTES,
@@ -4203,7 +4190,7 @@ int databoxTest(int, char *[]) {
              .type = DATABOX_BYTES_NEVER_FREE,
              .len = 2},
         };
-        for (size_t o = 0; o < COUNT_ARRAY(others); o++) {
+        for (size_t o = 0; o < countof(others); o++) {
             databoxBig out;
             memset(&out, 0xA5, sizeof(out));
             const databoxBig poison = out;
@@ -4223,14 +4210,14 @@ int databoxTest(int, char *[]) {
         /* Each width's boundaries, one either side, with both signs: the
          * signed maximum and minimum and the unsigned maximum. */
         static constexpr uint32_t widths[] = {8, 16, 32, 64, 128};
-        for (size_t w = 0; w < COUNT_ARRAY(widths); w++) {
+        for (size_t w = 0; w < countof(widths); w++) {
             const uint32_t bits = widths[w];
             const __uint128_t half = (__uint128_t)1 << (bits - 1);
             const __uint128_t full =
                 bits == 128 ? UINT128_MAX : ((__uint128_t)1 << bits) - 1;
             const __uint128_t magnitudes[] = {half - 2, half - 1, half,
                                               half + 1, full - 1, full};
-            for (size_t m = 0; m < COUNT_ARRAY(magnitudes); m++) {
+            for (size_t m = 0; m < countof(magnitudes); m++) {
                 for (int negative = 0; negative < 2; negative++) {
                     dbCanonSpell_(spelled, magnitudes[m], negative);
                     err +=
@@ -4260,7 +4247,7 @@ int databoxTest(int, char *[]) {
             "-1000000000000000000000000000000000000000",
             "10000000000000000000000000000000000000000",
         };
-        for (size_t b = 0; b < COUNT_ARRAY(beyond); b++) {
+        for (size_t b = 0; b < countof(beyond); b++) {
             err += dbCanonCheck_(beyond[b], strlen(beyond[b]), false, &tally);
             err += dbCanonMutations_(beyond[b], &tally);
         }
@@ -4269,7 +4256,7 @@ int databoxTest(int, char *[]) {
         __uint128_t power = 1;
         for (int k = 0; k <= 38; k++) {
             const __uint128_t near[] = {power - 1, power, power + 1};
-            for (size_t n = 0; n < COUNT_ARRAY(near); n++) {
+            for (size_t n = 0; n < countof(near); n++) {
                 for (int negative = 0; negative < 2; negative++) {
                     dbCanonSpell_(spelled, near[n], negative);
                     err +=
@@ -4411,7 +4398,7 @@ int databoxTest(int, char *[]) {
         dbCanonTally_ tally = {};
         char s[64];
         for (uint32_t c = 0; c < 256; c++) {
-            for (size_t t = 0; t < COUNT_ARRAY(tails); t++) {
+            for (size_t t = 0; t < countof(tails); t++) {
                 const size_t tailLen = strlen(tails[t]);
                 s[0] = (char)c;
                 memcpy(s + 1, tails[t], tailLen);
@@ -4486,7 +4473,7 @@ int databoxTest(int, char *[]) {
             {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = 9},
             *(const databox *)&wide,
         };
-        for (size_t i = 0; i < COUNT_ARRAY(boxes); i++) {
+        for (size_t i = 0; i < countof(boxes); i++) {
             databoxRepr(&boxes[i]);
             databoxReprSay("box:", &boxes[i]);
         }

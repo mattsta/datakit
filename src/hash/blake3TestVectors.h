@@ -171,5 +171,4 @@ static const blake3TestVector blake3TestVectors[] = {
      "4652cff7a3f385a6103b5c260fc1593e13c778dbe608efb092fe7ee69df6e9c6"},
 };
 
-#define BLAKE3_TEST_VECTOR_COUNT                                               \
-    (sizeof(blake3TestVectors) / sizeof(blake3TestVectors[0]))
+#define BLAKE3_TEST_VECTOR_COUNT (countof(blake3TestVectors))

@@ -318,7 +318,7 @@ FWT_LOWER_BOUND(Double, double)
     static int fwtBulk##T(uint64_t seed) {                                     \
         int err = 0;                                                           \
         static constexpr size_t sizes[] = {0, 1, 5, 1000, 40000};              \
-        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {                      \
+        for (size_t s = 0; s < countof(sizes); s++) {                          \
             const size_t n = sizes[s];                                         \
             cleaner(zfree) void *bufA = zcalloc(n + 1, sizeof(VT));            \
             cleaner(zfree) void *bufB = zcalloc(n + 1, sizeof(VT));            \

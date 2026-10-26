@@ -4235,8 +4235,7 @@ static int testRingLifecycle(void) {
             CLUSTER_STRATEGY_BOUNDED,
         };
 
-        for (size_t i = 0; i < sizeof(strategies) / sizeof(strategies[0]);
-             i++) {
+        for (size_t i = 0; i < countof(strategies); i++) {
             clusterRingConfig config = {
                 .name = "strategy-test",
                 .strategyType = strategies[i],
@@ -4569,7 +4568,7 @@ static int testStrategies(void) {
 
     const char *strategyNames[] = {"Ketama", "Jump", "Rendezvous", "Maglev"};
 
-    for (size_t s = 0; s < sizeof(strategies) / sizeof(strategies[0]); s++) {
+    for (size_t s = 0; s < countof(strategies); s++) {
         TEST_DESC("Strategy %s basic placement", strategyNames[s]) {
             clusterRingConfig config = {
                 .name = "strategy-test",
@@ -5178,7 +5177,7 @@ static int testCallbacks(void) {
             CLUSTER_STRATEGY_KETAMA, CLUSTER_STRATEGY_JUMP,
             CLUSTER_STRATEGY_RENDEZVOUS, CLUSTER_STRATEGY_MAGLEV,
             CLUSTER_STRATEGY_BOUNDED};
-        for (size_t s = 0; s < sizeof(strategies) / sizeof(*strategies); s++) {
+        for (size_t s = 0; s < countof(strategies); s++) {
             clusterRingConfig config = {
                 .name = "remove-callback",
                 .strategyType = strategies[s],
@@ -5477,7 +5476,7 @@ static int testFuzzAllStrategies(void) {
     };
     const char *strategyNames[] = {"Ketama", "Jump", "Rendezvous", "Maglev"};
 
-    for (size_t s = 0; s < sizeof(strategies) / sizeof(strategies[0]); s++) {
+    for (size_t s = 0; s < countof(strategies); s++) {
         TEST_DESC("FUZZ: %s stress test", strategyNames[s]) {
             clusterRingConfig config = {
                 .name = "fuzz-test",
@@ -5684,7 +5683,7 @@ static int testFuzzSerializationRoundtrip(void) {
             uint32_t nodes;
             uint32_t perNode;
         } shapes[] = {{3, 2}, {3, 5}, {3, 10}, {4, 8}, {3, 40}};
-        for (size_t s = 0; s < sizeof(shapes) / sizeof(*shapes); s++) {
+        for (size_t s = 0; s < countof(shapes); s++) {
             clusterRingConfig config = {
                 .name = "ketama-walk",
                 .strategyType = CLUSTER_STRATEGY_KETAMA,
@@ -6223,8 +6222,8 @@ static int testFuzzLargeScale(void) {
             uint32_t nodes;
             uint8_t replicas;
         } sizes[] = {{100, 200}, {300, 255}};
-        for (size_t s = 0; s < sizeof(strategies) / sizeof(*strategies); s++) {
-            for (size_t z = 0; z < sizeof(sizes) / sizeof(*sizes); z++) {
+        for (size_t s = 0; s < countof(strategies); s++) {
+            for (size_t z = 0; z < countof(sizes); z++) {
                 clusterRingConfig config = {
                     .name = "wide-replicas",
                     .strategyType = strategies[s],
@@ -6275,7 +6274,7 @@ static int testFuzzLargeScale(void) {
         /* Small rings: 5 nodes, 3 replicas, 2000 keys; every placement
          * gets 3 distinct nodes (Jump used to lose one whenever a seed
          * landed on a node already chosen) */
-        for (size_t s = 0; s < sizeof(strategies) / sizeof(*strategies); s++) {
+        for (size_t s = 0; s < countof(strategies); s++) {
             clusterRingConfig config = {
                 .name = "small-replicas",
                 .strategyType = strategies[s],
@@ -7189,7 +7188,7 @@ static int testAffinityOracleAndKeyTypes(void) {
             CLUSTER_LEVEL_COUNTRY,
             CLUSTER_LEVEL_CONTINENT,
         };
-        const size_t nLevels = sizeof(levels) / sizeof(levels[0]);
+        const size_t nLevels = countof(levels);
         for (size_t l = 0; l < nLevels; l++) {
             cleaner(clusterRingFree) clusterRing *ring =
                 clusterRingNewDefault();
@@ -7507,7 +7506,7 @@ int clusterRingTest(int, char *[]) {
             {.maxVnodesPerNode = CLUSTER_VNODES_PER_NODE_MAX + 1},
             {.minVnodesPerNode = MAX_VNODES_PER_NODE + 1},
         };
-        for (size_t i = 0; i < sizeof(badVnodes) / sizeof(*badVnodes); i++) {
+        for (size_t i = 0; i < countof(badVnodes); i++) {
             const clusterRingConfig c = {.vnodes = badVnodes[i]};
             cleaner(clusterRingFree) clusterRing *r = clusterRingNew(&c);
             if (r) {
@@ -7523,7 +7522,7 @@ int clusterRingTest(int, char *[]) {
                  (clusterStrategyType)(CLUSTER_STRATEGY_CUSTOM + 1)},
             {.affinityRules = &badRule, .affinityRuleCount = 1},
         };
-        for (size_t i = 0; i < sizeof(badConfigs) / sizeof(*badConfigs); i++) {
+        for (size_t i = 0; i < countof(badConfigs); i++) {
             cleaner(clusterRingFree) clusterRing *r =
                 clusterRingNew(&badConfigs[i]);
             if (r) {
@@ -7538,8 +7537,7 @@ int clusterRingTest(int, char *[]) {
              .strategy = (clusterStrategyType)(CLUSTER_STRATEGY_CUSTOM + 1)},
             {.name = "r", .rules = &badRule, .ruleCount = 1},
         };
-        for (size_t i = 0; i < sizeof(badKeyspaces) / sizeof(*badKeyspaces);
-             i++) {
+        for (size_t i = 0; i < countof(badKeyspaces); i++) {
             if (clusterRingAddKeySpace(ring, &badKeyspaces[i], NULL) !=
                 CLUSTER_ERR_INVALID_CONFIG) {
                 ERR("keyspace config %zu not refused", i);

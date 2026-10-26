@@ -135,10 +135,6 @@ static size_t dodHeaderRead(const dod *const d, dodVal *const t0,
  * Extended helper values for stacked ranges
  * ==================================================================== */
 
-#ifndef COUNT_ARRAY
-#define COUNT_ARRAY(x) (sizeof(x) / sizeof(*(x)))
-#endif
-
 /* Note: these are *exclusive* dodMax, not *inclusive* dodMax;
  *       the commented ranges below are one minus the max value */
 typedef enum dodMax {
@@ -752,7 +748,7 @@ static void dodWriteInteger(dod *restrict const d,
 
     /* clang and GCC both honor this spelling; GCC ignores "unroll 5" */
 #pragma GCC unroll 5
-    for (size_t i = 1; i < COUNT_ARRAY(dodBitCategory) - 1; i++) {
+    for (size_t i = 1; i < countof(dodBitCategory) - 1; i++) {
         const int64_t rangeCheck = (1LL << fmt.val) + adjustmentBase;
 
         /* Yes, our ranges are symmetric.
@@ -1262,7 +1258,7 @@ static void dodModelAppend(uint64_t *buf, size_t *pos, const dodVal t0,
 
     const __int128 mag = r < 0 ? -r : r;
     __int128 base = 1; /* smallest magnitude of the current category */
-    for (size_t k = 0; k < COUNT_ARRAY(dodModelCategories); k++) {
+    for (size_t k = 0; k < countof(dodModelCategories); k++) {
         const dodModelCategory *c = &dodModelCategories[k];
         const __int128 span = (__int128)1 << c->valBits;
         if (mag < base + span) {
@@ -1763,18 +1759,16 @@ int dodTest(int, char *[]) {
                                            7079668028863987745LL, INT64_MIN};
 
         err += dodCheckRoundTrip("alternating MIN/MAX", altMinMax,
-                                 COUNT_ARRAY(altMinMax));
+                                 countof(altMinMax));
         err += dodCheckRoundTrip("alternating MAX/MIN", altMaxMin,
-                                 COUNT_ARRAY(altMaxMin));
-        err += dodCheckRoundTrip("mixed extremes", mixed, COUNT_ARRAY(mixed));
-        err +=
-            dodCheckRoundTrip("constant MIN", constMin, COUNT_ARRAY(constMin));
-        err +=
-            dodCheckRoundTrip("constant MAX", constMax, COUNT_ARRAY(constMax));
+                                 countof(altMaxMin));
+        err += dodCheckRoundTrip("mixed extremes", mixed, countof(mixed));
+        err += dodCheckRoundTrip("constant MIN", constMin, countof(constMin));
+        err += dodCheckRoundTrip("constant MAX", constMax, countof(constMax));
         err += dodCheckRoundTrip("ramp across the wrap", wrapRamp,
-                                 COUNT_ARRAY(wrapRamp));
+                                 countof(wrapRamp));
         err += dodCheckRoundTrip("deltas past int64", bigDeltas,
-                                 COUNT_ARRAY(bigDeltas));
+                                 countof(bigDeltas));
     }
 
     TEST("full int64 range: every category boundary and the int64 ends") {
@@ -1783,9 +1777,9 @@ int dodTest(int, char *[]) {
 
         /* Category k holds magnitudes [base_k, base_k + 2^valBits) */
         int64_t base = 1;
-        for (size_t k = 0; k + 1 < COUNT_ARRAY(dodModelCategories); k++) {
+        for (size_t k = 0; k + 1 < countof(dodModelCategories); k++) {
             const int64_t edges[] = {base - 1, base, base + 1};
-            for (size_t e = 0; e < COUNT_ARRAY(edges); e++) {
+            for (size_t e = 0; e < countof(edges); e++) {
                 dods[ndods++] = edges[e];
                 dods[ndods++] = -edges[e];
             }
@@ -1798,11 +1792,11 @@ int dodTest(int, char *[]) {
                                 -(base - 1),   -base,         -(base + 1),
                                 INT64_MAX,     INT64_MIN,     INT64_MAX - 1,
                                 INT64_MIN + 1, INT64_MIN + 2, 0};
-        for (size_t e = 0; e < COUNT_ARRAY(ends); e++) {
+        for (size_t e = 0; e < countof(ends); e++) {
             dods[ndods++] = ends[e];
         }
 
-        assert(ndods + 2 <= COUNT_ARRAY(dods));
+        assert(ndods + 2 <= countof(dods));
 
         const dodVal starts[][2] = {{0, 0},
                                     {INT64_MAX, INT64_MAX},
@@ -1810,7 +1804,7 @@ int dodTest(int, char *[]) {
                                     {INT64_MIN, INT64_MAX},
                                     {1700000000000LL, 1700000001000LL}};
         dodVal seq[130];
-        for (size_t s = 0; s < COUNT_ARRAY(starts); s++) {
+        for (size_t s = 0; s < countof(starts); s++) {
             dodSequenceFromDods(seq, starts[s][0], starts[s][1], dods, ndods);
 
             /* The generated sequence must carry exactly these dods */
@@ -1844,7 +1838,7 @@ int dodTest(int, char *[]) {
                     static const dodVal edge[] = {INT64_MIN, INT64_MIN + 1,
                                                   INT64_MAX, INT64_MAX - 1,
                                                   0,         -1};
-                    values[i] = edge[(pick >> 8) % COUNT_ARRAY(edge)];
+                    values[i] = edge[(pick >> 8) % countof(edge)];
                     break;
                 }
                 case 2: /* small step, wrapping */
@@ -1931,8 +1925,8 @@ int dodTest(int, char *[]) {
 
         uint64_t rng = 0x13198a2e03707344ULL;
         dodVal vals[40];
-        for (size_t p = 0; p < COUNT_ARRAY(pairs); p++) {
-            for (size_t l = 0; l < COUNT_ARRAY(lengths); l++) {
+        for (size_t p = 0; p < countof(pairs); p++) {
+            for (size_t l = 0; l < countof(lengths); l++) {
                 const size_t n = lengths[l];
                 vals[0] = pairs[p].first;
                 vals[1] = pairs[p].second;

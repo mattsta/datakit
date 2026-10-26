@@ -2094,7 +2094,7 @@ static int32_t stressTestSizes(void) {
     size_t sizes[] = {0,   1,   2,   3,   4,    7,    8,    9,    15,  16,  17,
                       31,  32,  33,  63,  64,   65,   100,  127,  128, 129, 255,
                       256, 257, 500, 512, 1000, 1024, 2000, 4096, 8192};
-    size_t numSizes = sizeof(sizes) / sizeof(sizes[0]);
+    size_t numSizes = countof(sizes);
 
     /* Allocate buffers for largest test */
     cleanerName(zfree, U32) uint32_t *a = zmalloc(8192 * sizeof(uint32_t));
@@ -2465,7 +2465,7 @@ static int32_t stressTestBoundaries(void) {
     /* Test sizes around 4 (SSE/NEON 128-bit = 4x32-bit) and 8 (AVX 256-bit) */
     size_t sizes[] = {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
                       13, 14, 15, 16, 17, 31, 32, 33, 63, 64, 65};
-    size_t numSizes = sizeof(sizes) / sizeof(sizes[0]);
+    size_t numSizes = countof(sizes);
 
     uint32_t a[128], b[128], out_scalar[128], out_simd[128];
 

@@ -480,7 +480,7 @@ static const char *const pcNumerals[] = {
     "-170141183460469231731687303715884105728",
     "340282366920938463463374607431768211455",
 };
-#define PC_NUMERALS (sizeof(pcNumerals) / sizeof(*pcNumerals))
+#define PC_NUMERALS (countof(pcNumerals))
 
 static void pcHolds(pcRow *row, const persistContractType *t, const void *s,
                     const databox *strings, const char *what) {
@@ -572,7 +572,7 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
 static pcRow pcRun(const persistContractType *t) {
     static constexpr size_t sizes[] = {0, 1, 2, 37, 600, 6000};
     pcRow row = {};
-    for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
+    for (size_t i = 0; i < countof(sizes); i++) {
         for (uint64_t seed = 1; seed <= 3; seed++) {
             pcCase(&row, t, seed * 1000 + i, sizes[i], NULL, NULL, NULL);
         }
@@ -639,7 +639,7 @@ int persistContractTest(int, char *[]) {
            "restore ns/elem | WAL ops replayed | damaged refused | "
            "damaged accepted | result |\n");
     printf("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
-    for (size_t i = 0; i < sizeof(pcRegistry) / sizeof(*pcRegistry); i++) {
+    for (size_t i = 0; i < countof(pcRegistry); i++) {
         const persistContractType *t = pcRegistry[i];
         if (only && strcmp(only, t->ops->name) != 0) {
             continue;

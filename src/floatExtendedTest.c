@@ -333,7 +333,7 @@ static int testFallbackEdgeCases(void) {
             INT64_MIN, INT64_MIN + 1,   -1000000000000LL, -1,       0,
             1,         1000000000000LL, INT64_MAX - 1,    INT64_MAX};
 
-        for (size_t i = 0; i < COUNT_ARRAY(values) - 1; i++) {
+        for (size_t i = 0; i < countof(values) - 1; i++) {
             int cmp = dk_compare_int64_double(values[i], (double)values[i + 1]);
             if (cmp >= 0 && values[i] < values[i + 1]) {
                 /* May happen due to double precision loss at extremes */

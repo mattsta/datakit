@@ -893,7 +893,7 @@ int flexPTest(int, char *[]) {
                                     PTEST_SEQ_RANDOM_ISH, PTEST_SEQ_ALTERNATING,
                                     PTEST_SEQ_POWERS};
 
-        for (size_t p = 0; p < sizeof(patterns) / sizeof(patterns[0]); p++) {
+        for (size_t p = 0; p < countof(patterns); p++) {
             ptestCleanupFiles(basePath);
             ptestBoxTracker tracker;
             ptestBoxTrackerInit(&tracker);

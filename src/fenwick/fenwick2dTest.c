@@ -186,7 +186,7 @@ static size_t f2tIndex_(uint64_t *s) {
         int err = 0;                                                           \
         static constexpr size_t shapes[][2] = {{0, 0}, {1, 1},   {1, 9},       \
                                                {7, 3}, {33, 65}, {64, 64}};    \
-        for (size_t s = 0; s < COUNT_ARRAY(shapes); s++) {                     \
+        for (size_t s = 0; s < countof(shapes); s++) {                         \
             const size_t rows = shapes[s][0];                                  \
             const size_t cols = shapes[s][1];                                  \
             const size_t n = rows * cols;                                      \

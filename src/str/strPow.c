@@ -3,7 +3,7 @@
 /* ====================================================================
  * Powers
  * ==================================================================== */
-#define tenPow64Count COUNT_ARRAY(tenPow64)
+#define tenPow64Count countof(tenPow64)
 static constexpr uint64_t tenPow64[] = {1,
                                         10,
                                         100,
@@ -60,6 +60,6 @@ __uint128_t StrTenPowBig(const size_t exp) {
         (((__uint128_t)542101086242752217ULL) << 64) | 68739955140067328ULL,
         (((__uint128_t)5421010862427522170ULL) << 64) | 687399551400673280ULL};
 
-    assert(exp < (tenPow64Count + COUNT_ARRAY(table)));
+    assert(exp < (tenPow64Count + countof(table)));
     return table[exp - tenPow64Count];
 }

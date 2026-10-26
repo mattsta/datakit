@@ -770,7 +770,7 @@ int sha256ArmCryptoTest(int, char *[]) {
          "call") {
         static const char *vectors[] = {
             "", "abc", "The quick brown fox jumps over the lazy dog"};
-        for (size_t i = 0; i < sizeof(vectors) / sizeof(vectors[0]); i++) {
+        for (size_t i = 0; i < countof(vectors); i++) {
             const char *s = vectors[i];
             const size_t n = strlen(s);
             uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
@@ -806,7 +806,7 @@ int sha256ArmCryptoTest(int, char *[]) {
              "5",
              65},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             uint8_t expected[SHA256_DIGEST_LEN];
             uint8_t got[SHA256_DIGEST_LEN];
             sha256Hash(cases[i].input, cases[i].len, expected);

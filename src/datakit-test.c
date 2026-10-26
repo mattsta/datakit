@@ -242,7 +242,7 @@ static int dkTestSecureZeroTest(int, char *[]) {
     static constexpr size_t sizes[] = {1, 7, 16, 32, 64, 256, 4096, 65536};
     int failures = 0;
 
-    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+    for (size_t i = 0; i < countof(sizes); i++) {
         size_t n = sizes[i];
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(n);
         if (buf == NULL) {
@@ -287,7 +287,7 @@ static int dkTestSecureZeroTest(int, char *[]) {
 
     if (failures == 0) {
         printf("dkTestSecureZero: OK (%zu size classes + guards)\n",
-               sizeof(sizes) / sizeof(sizes[0]));
+               countof(sizes));
         return 0;
     }
     return 1;
@@ -307,7 +307,7 @@ static int dkTestSecureZeroTest(int, char *[]) {
  * ==================================================================== */
 static int testCtMemEqStructuralTest(int, char *[]) {
     static constexpr size_t kLens[] = {1u, 15u, 16u, 17u, 32u, 64u};
-    const size_t kNumLens = sizeof(kLens) / sizeof(kLens[0]);
+    const size_t kNumLens = countof(kLens);
     int failures = 0;
     size_t totalDiffChecks = 0;
 
@@ -569,7 +569,7 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
      * while no child exists. */
     {
         static const pid_t badPids[] = {0, -1};
-        for (size_t i = 0; i < sizeof(badPids) / sizeof(badPids[0]); i++) {
+        for (size_t i = 0; i < countof(badPids); i++) {
             int status = 12345;
             errno = 0;
             PEXPECT(!OSRegulateProcessReapNow(badPids[i], &status) &&
@@ -1022,7 +1022,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
         {12.5, 1, "12.5"},
         {100000, 0, "100,000"},
     };
-    for (size_t i = 0; i < sizeof(grouped) / sizeof(grouped[0]); i++) {
+    for (size_t i = 0; i < countof(grouped); i++) {
         char out[40];
         perfFormatGrouped(grouped[i].v, grouped[i].decimals, out, sizeof(out));
         if (strcmp(out, grouped[i].want) != 0) {
@@ -1038,7 +1038,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     /* Population mean 5 and stddev 2 */
     perfStateStat st = {};
     static constexpr double samples[] = {2, 4, 4, 4, 5, 5, 7, 9};
-    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
+    for (size_t i = 0; i < countof(samples); i++) {
         perfStatAdd(&st, samples[i]);
     }
     PHEXPECT(st.samples == 8 && fabs(st.runningMean - 5.0) < 1e-12 &&
@@ -4619,7 +4619,7 @@ static int dkTestAesNiTest(int, char *[]) {
          "000000000000000000000000", NULL, 0, NULL, 0, NULL,
          "530f8afbc74536b9a963b4f1c4cb738b"},
     };
-    const size_t n_vectors = sizeof(vectors) / sizeof(vectors[0]);
+    const size_t n_vectors = countof(vectors);
 
     const bool ni_here = aesGcmNiAvailable();
     const aesGcmBackend default_backend = aesGcmActiveBackend();
@@ -4743,7 +4743,7 @@ static int dkTestAesNiTest(int, char *[]) {
 
     static constexpr size_t sweep_sizes[] = {
         0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 4095, 4096, 4097};
-    const size_t n_sweep = sizeof(sweep_sizes) / sizeof(sweep_sizes[0]);
+    const size_t n_sweep = countof(sweep_sizes);
     uint8_t key[32];
     for (size_t i = 0; i < 32; i++) {
         key[i] = (uint8_t)(i * 11u + 3u);
@@ -4829,7 +4829,7 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
          "000000000000000000000000", NULL, 0, NULL, 0, NULL,
          "530f8afbc74536b9a963b4f1c4cb738b"},
     };
-    const size_t n_vectors = sizeof(vectors) / sizeof(vectors[0]);
+    const size_t n_vectors = countof(vectors);
 
     const bool arm_here = aesGcmArmCryptoAvailable();
 
@@ -5656,7 +5656,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
          "8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662",
          "76fc6ece0f4e1768cddf8853bb2d551b"},
     };
-    const size_t n_vectors = sizeof(vectors) / sizeof(vectors[0]);
+    const size_t n_vectors = countof(vectors);
 
     for (size_t i = 0; i < n_vectors; i++) {
         const a5Vector *v = &vectors[i];
@@ -5722,8 +5722,8 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
             0,  1,  7,  15,  16,  17,  31,  32,   33,
             63, 64, 65, 127, 128, 255, 256, 1023, 4096};
         static constexpr size_t aad_lens[] = {0, 1, 20};
-        const size_t n_sizes = sizeof(sweep_sizes) / sizeof(sweep_sizes[0]);
-        const size_t n_aads = sizeof(aad_lens) / sizeof(aad_lens[0]);
+        const size_t n_sizes = countof(sweep_sizes);
+        const size_t n_aads = countof(aad_lens);
 
         uint8_t key[32];
         for (size_t i = 0; i < 32; i++) {
@@ -5880,7 +5880,7 @@ static int dkTestBlake3DeriveKeyContextsTest(int, char *[]) {
     int failures = 0;
 
     static constexpr size_t ctx_lens[] = {0, 1, 32, 128, 1024};
-    const size_t n_ctx = sizeof(ctx_lens) / sizeof(ctx_lens[0]);
+    const size_t n_ctx = countof(ctx_lens);
 
     enum { CTX_MAX = 1024 };
     uint8_t ctx_buf[CTX_MAX];
@@ -5979,7 +5979,7 @@ static int dkTestPersistTypeNameAllRegisteredTest(int, char *[]) {
         {PERSIST_TYPE_CLUSTER_RING, "clusterRing"},
         {PERSIST_TYPE_AEAD_NONCE_LOG, "aeadNonceLog"},
     };
-    const size_t n = sizeof(known) / sizeof(known[0]);
+    const size_t n = countof(known);
     int failures = 0;
 
     for (size_t i = 0; i < n; i++) {
@@ -6321,7 +6321,7 @@ static int dkTestPersistMultilistTieredApplyTest(int, char *[]) {
         "MULTILIST_MEDIUM",
         "MULTILIST_FULL",
     };
-    const size_t nTiers = sizeof(tiers) / sizeof(tiers[0]);
+    const size_t nTiers = countof(tiers);
     int failures = 0;
 
     for (size_t t = 0; t < nTiers; t++) {
@@ -6465,7 +6465,7 @@ static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int, char *[]) {
         uint32_t origin_id;
         uint64_t max_seq;
     } peers[] = {{1001u, 5u}, {2002u, 11u}, {3003u, 100u}};
-    const size_t kPeers = sizeof(peers) / sizeof(peers[0]);
+    const size_t kPeers = countof(peers);
 
     uint8_t scratch[512];
     for (size_t p = 0; p < kPeers; p++) {
@@ -6665,7 +6665,7 @@ static int dkTestBlake3Avx2DispatchTest(int, char *[]) {
     /* Sweep chunk counts around the 8-chunk AVX2 / 4-chunk NEON boundaries. */
     const size_t sweep_chunks[] = {1,  2,  3,  4,  5,  7,  8,  9,  12, 15,
                                    16, 17, 23, 24, 25, 32, 33, 48, 64};
-    const size_t n_sweep = sizeof(sweep_chunks) / sizeof(sweep_chunks[0]);
+    const size_t n_sweep = countof(sweep_chunks);
     for (size_t i = 0; i < n_sweep; i++) {
         const size_t len = sweep_chunks[i] * BLAKE3_CHUNK_LEN;
         if (len > N) {
@@ -7780,7 +7780,7 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
 
     const size_t sweep_chunks[] = {1,  2,  3,  4,  5,  7,  8,  9,  12, 15,
                                    16, 17, 23, 24, 25, 32, 33, 48, 64};
-    const size_t n_sweep = sizeof(sweep_chunks) / sizeof(sweep_chunks[0]);
+    const size_t n_sweep = countof(sweep_chunks);
     for (size_t i = 0; i < n_sweep; i++) {
         const size_t len = sweep_chunks[i] * BLAKE3_CHUNK_LEN;
         if (len > N) {
@@ -7934,7 +7934,7 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
 
     const size_t kCap = 4096u;
     const uint32_t kKeys[] = {7u, 13u, 29u, 31u};
-    const size_t kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);
+    const size_t kKeyCount = countof(kKeys);
     const size_t kPerKey = 250u;
     const size_t kTotal = kKeyCount * kPerKey;
     size_t need = 0;
@@ -8348,7 +8348,7 @@ static int testNonceLogAllAeadAlgosTest(int, char *[]) {
         {FLEX_ENV_ALGO_AEAD_AES128_GCM, 16u, "aes128_gcm"},
         {FLEX_ENV_ALGO_AEAD_AES256_GCM, 32u, "aes256_gcm"},
     };
-    const size_t kNumCases = sizeof(kCases) / sizeof(kCases[0]);
+    const size_t kNumCases = countof(kCases);
 
     /* 32-byte key buffer covers the longest case (AES-256 + chacha20).
      * AES-128 reads the first 16 bytes only. */
@@ -10359,7 +10359,7 @@ static int dkTestClusterRingFlexSerializeTest(int, char *[]) {
           .countryId = 392,
           .continentId = 0}},
     };
-    const size_t kN = sizeof(src_nodes) / sizeof(src_nodes[0]);
+    const size_t kN = countof(src_nodes);
 
     for (size_t i = 0; i < kN; i++) {
         clusterNodeConfig nc = {
@@ -11956,7 +11956,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
         "hmac_sha256",     "hmac_blake3",     "aead_chacha20_poly1305",
         "aead_aes128_gcm", "aead_aes256_gcm",
     };
-    const size_t kNumAlgos = sizeof(kAlgos) / sizeof(kAlgos[0]);
+    const size_t kNumAlgos = countof(kAlgos);
 
     static constexpr uint8_t kKey32[32] = {
         0x4f, 0xe5, 0x9b, 0x21, 0x3a, 0x8c, 0x7d, 0x52, 0xaa, 0xbe, 0xdc,

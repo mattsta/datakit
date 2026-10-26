@@ -642,7 +642,7 @@ int persistCtxTest(int, char *[]) {
             &persistOpsMultiarray,  &persistOpsMultiOrderedSet,
             &persistOpsMultiLRU,
         };
-        const size_t n = sizeof(types) / sizeof(*types);
+        const size_t n = countof(types);
         uint64_t untouched = 0x5e17; /* never read by a refused call */
         /* Each refused call reports DK_DIAG_PERSIST_CTX_WRONG_TYPE once */
         const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
@@ -748,7 +748,7 @@ int persistCtxTest(int, char *[]) {
             } modes[] = {{PERSIST_CTX_SYNC_NONE, PERSIST_LOG_BUFFERED},
                          {PERSIST_CTX_SYNC_ALWAYS, PERSIST_LOG_DURABLE}};
             const databox one = DATABOX_SIGNED(1);
-            for (size_t m = 0; m < COUNT_ARRAY(modes); m++) {
+            for (size_t m = 0; m < countof(modes); m++) {
                 ptestCleanupFiles(path);
                 persistCtxConfig config = persistCtxDefaultConfig();
                 config.syncMode = modes[m].mode;

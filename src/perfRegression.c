@@ -992,7 +992,7 @@ static void benchMultimapLimits(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;
-    for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
+    for (size_t l = 0; l < countof(perfSweepLimits); l++) {
         const flexCapSizeLimit limit = perfSweepLimits[l];
         cleaner(multimapFree) multimap *m = multimapNewLimit(2, limit);
         PERF_LIMIT_ROW(
@@ -1024,7 +1024,7 @@ static void benchMultiOrderedSetLimits(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;
-    for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
+    for (size_t l = 0; l < countof(perfSweepLimits); l++) {
         const flexCapSizeLimit limit = perfSweepLimits[l];
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
             multiOrderedSetNewLimit(limit);
@@ -1063,7 +1063,7 @@ static void benchMultilistLimits(void) {
     const uint32_t n = PERF_CONTAINER_N;
     cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
     uint64_t sink = 0;
-    for (size_t l = 0; l < COUNT_ARRAY(perfSweepLimits); l++) {
+    for (size_t l = 0; l < countof(perfSweepLimits); l++) {
         const flexCapSizeLimit limit = perfSweepLimits[l];
         cleaner(multilistFree) multilist *ml = multilistNewLimit(limit, 0);
         PERF_LIMIT_ROW("multilistLimits", "pushTail", limit, perfListTotal(ml),
@@ -1781,8 +1781,7 @@ int perfRegressionTest(int, char *[]) {
          * 16384 and 65536 so the same rows exist in sizes_rh (above)
          * and direct row-by-row diffs against rapidhash are trivial. */
         const size_t sizes_hash[] = {64u, 1024u, 16384u, 65536u, 1048576u};
-        const uint32_t n_sizes =
-            (uint32_t)(sizeof(sizes_hash) / sizeof(sizes_hash[0]));
+        const uint32_t n_sizes = (uint32_t)(countof(sizes_hash));
 
         for (uint32_t i = 0; perfWanted("blake3") && i < n_sizes; i++) {
             benchBlake3(sizes_hash[i]);
@@ -1813,9 +1812,7 @@ int perfRegressionTest(int, char *[]) {
             8u,   16u,  32u,  48u,  49u,  64u,   80u,    81u,    96u,     112u,
             113u, 128u, 224u, 225u, 256u, 1024u, 16384u, 65536u, 1048576u};
         const uint32_t n_rh =
-            perfWanted("rapidhash")
-                ? (uint32_t)(sizeof(sizes_rh) / sizeof(sizes_rh[0]))
-                : 0;
+            perfWanted("rapidhash") ? (uint32_t)(countof(sizes_rh)) : 0;
         for (uint32_t i = 0; i < n_rh; i++) {
             benchRapidhashOneShot("main", rapidhash, sizes_rh[i]);
             benchRapidhashOneShot("micro", rapidhashMicro, sizes_rh[i]);
@@ -1846,9 +1843,7 @@ int perfRegressionTest(int, char *[]) {
          * that the bulk path is actually exercised. */
         const size_t sizes_rh_stream[] = {1024u, 16384u, 1048576u};
         for (uint32_t i = 0;
-             perfWanted("rapidhash") &&
-             i < sizeof(sizes_rh_stream) / sizeof(sizes_rh_stream[0]);
-             i++) {
+             perfWanted("rapidhash") && i < countof(sizes_rh_stream); i++) {
             benchRapidhashStream("stream-main", RAPIDHASH_VARIANT_MAIN,
                                  RAPIDHASH_MODE_FAST, sizes_rh_stream[i]);
             benchRapidhashStream("stream-micro", RAPIDHASH_VARIANT_MICRO,
@@ -1867,9 +1862,7 @@ int perfRegressionTest(int, char *[]) {
         /* HMAC: prepared-key advantage shows on small messages. */
         const size_t sizes_hmac[] = {64u, 256u, 1024u, 65536u};
         for (uint32_t i = 0;
-             perfWanted("hmac") &&
-             i < (uint32_t)(sizeof(sizes_hmac) / sizeof(sizes_hmac[0]));
-             i++) {
+             perfWanted("hmac") && i < (uint32_t)(countof(sizes_hmac)); i++) {
             benchHmacSha256Plain(sizes_hmac[i]);
             benchHmacSha256Prepared(sizes_hmac[i]);
         }
@@ -1888,8 +1881,7 @@ int perfRegressionTest(int, char *[]) {
             {FLEX_ENV_ALGO_HMAC_SHA256, "hmac_sha256"},
             {FLEX_ENV_ALGO_HMAC_BLAKE3, "hmac_blake3"},
         };
-        for (uint32_t a = 0;
-             perfWanted("envelope") && a < sizeof(algos) / sizeof(algos[0]);
+        for (uint32_t a = 0; perfWanted("envelope") && a < countof(algos);
              a++) {
             for (uint32_t s = 0; s < n_sizes; s++) {
                 benchEnvelope(algos[a].algo, algos[a].label, sizes_hash[s]);
@@ -1905,9 +1897,7 @@ int perfRegressionTest(int, char *[]) {
          * representative message sizes. */
         const size_t sizes_mb[] = {64u, 1024u, 65536u};
         for (uint32_t i = 0;
-             perfWanted("mailbox") &&
-             i < (uint32_t)(sizeof(sizes_mb) / sizeof(sizes_mb[0]));
-             i++) {
+             perfWanted("mailbox") && i < (uint32_t)(countof(sizes_mb)); i++) {
             benchMailbox(sizes_mb[i]);
         }
 
@@ -1978,9 +1968,7 @@ int perfRegressionTest(int, char *[]) {
          * Single-thread by design; the MT comparison is in memboundBench. */
         const size_t sizes_mb_alloc[] = {64u, 256u, 1024u};
         const uint32_t n_mb_alloc =
-            perfWanted("membound")
-                ? (uint32_t)(sizeof(sizes_mb_alloc) / sizeof(sizes_mb_alloc[0]))
-                : 0;
+            perfWanted("membound") ? (uint32_t)(countof(sizes_mb_alloc)) : 0;
         membound *mbStd = memboundCreateDynamic(8u << 20, 0, 8u << 20);
         membound *mbEnt = memboundCreateEnterprise(8u << 20, 0);
         const memboundConfig mbTcCfg = {.mode = MEMBOUND_MODE_DYNAMIC,

@@ -345,7 +345,7 @@ int sha256Test(int, char *[]) {
         static constexpr size_t sizes[] = {0,   1,   55,   56,   63,
                                            64,  65,  119,  120,  127,
                                            128, 129, 1023, 1024, 1025};
-        const size_t nSizes = sizeof(sizes) / sizeof(sizes[0]);
+        const size_t nSizes = countof(sizes);
         const size_t maxSize = 1025;
         cleanerName(zfree, U8) uint8_t *buf = zmalloc(maxSize);
         /* Deterministic fill so streaming/one-shot use identical input. */

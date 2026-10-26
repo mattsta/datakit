@@ -1111,7 +1111,7 @@ int multimapPTest(int, char *[]) {
                 int64_t key;
                 int64_t counter;
             } want[] = {{3, 8}, {4, -6}, {5, 5}, {50, 500}};
-            for (size_t i = 0; i < sizeof(want) / sizeof(*want); i++) {
+            for (size_t i = 0; i < countof(want); i++) {
                 const databox key = DATABOX_SIGNED(want[i].key);
                 const databox expect = DATABOX_SIGNED(want[i].counter);
                 databox vals[2];

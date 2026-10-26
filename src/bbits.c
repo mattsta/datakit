@@ -903,7 +903,7 @@ int bbitsTest(int, char *[]) {
 
         const ssize_t pastEnd[] = {(ssize_t)numElements,
                                    (ssize_t)numElements + 7};
-        for (size_t p = 0; p < sizeof(pastEnd) / sizeof(*pastEnd); p++) {
+        for (size_t p = 0; p < countof(pastEnd); p++) {
             ssize_t count = 1;
             uint64_t *keys = NULL;
             uint64_t *vals = NULL;
@@ -932,7 +932,7 @@ int bbitsTest(int, char *[]) {
             {1000, (ssize_t)numElements, (ssize_t)numElements - 1000},
             {(ssize_t)numElements - 1, 1, 1},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             const size_t start = cases[c][0] < 0
                                      ? numElements + (size_t)cases[c][0]
                                      : (size_t)cases[c][0];
@@ -1015,7 +1015,7 @@ int bbitsTest(int, char *[]) {
 
         /* {offset, count}: whole set, a middle window, one element */
         const ssize_t windows[][2] = {{0, -1}, {700, 1500}, {2999, 1}};
-        for (size_t w = 0; w < sizeof(windows) / sizeof(*windows); w++) {
+        for (size_t w = 0; w < countof(windows); w++) {
             const size_t start = (size_t)windows[w][0];
             const size_t n =
                 windows[w][1] < 0 ? numElements - start : (size_t)windows[w][1];

@@ -32,12 +32,12 @@ size_t dkFormatManifest(dkFormatSpec *out, size_t cap) {
     };
 
     size_t n = 0;
-    for (size_t i = 0; i < sizeof(fixed) / sizeof(*fixed); i++, n++) {
+    for (size_t i = 0; i < countof(fixed); i++, n++) {
         if (out && n < cap) {
             out[n] = *fixed[i];
         }
     }
-    for (size_t i = 0; i < sizeof(structures) / sizeof(*structures); i++, n++) {
+    for (size_t i = 0; i < countof(structures); i++, n++) {
         if (out && n < cap) {
             out[n] = persistOpsFormat(structures[i]);
         }

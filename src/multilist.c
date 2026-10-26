@@ -1361,7 +1361,7 @@ int multilistTest(int, char *[]) {
     mflexState *s[2] = {s0, s1};
 
     const int depth[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    const size_t depthCount = sizeof(depth) / sizeof(*depth);
+    const size_t depthCount = countof(depth);
     int64_t runtime[depthCount];
     const int defaultCompressSizeLimit = 1;
 
@@ -1408,7 +1408,7 @@ int multilistTest(int, char *[]) {
                 {0, 500, MULTILIST_TYPE_FULL},
             };
 
-            for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            for (size_t c = 0; c < countof(configs); c++) {
                 const int total = configs[c].total;
                 cleaner(multilistFree) multilist *ml =
                     multilistNewLimit(configs[c].limit, depth[_i]);
@@ -1428,8 +1428,7 @@ int multilistTest(int, char *[]) {
 
                 const int anchors[] = {0, total / 4, total / 2, 3 * total / 4,
                                        total - 1};
-                for (size_t ai = 0; ai < sizeof(anchors) / sizeof(*anchors);
-                     ai++) {
+                for (size_t ai = 0; ai < countof(anchors); ai++) {
                     multilistEntry anchor = {};
                     assert(multilistIndexCheck(ml, s0, anchors[ai], &anchor));
 
@@ -2319,7 +2318,7 @@ int multilistTest(int, char *[]) {
                 multilistIteratorInitReverseReadOnly(ml, s, &iter);
                 multilistRepr(ml);
                 i = 0;
-                const size_t resB = sizeof(resultB) / sizeof(*resultB);
+                const size_t resB = countof(resultB);
                 while (multilistNext(&iter, &entry)) {
                     /* Result must be: abc, foo, foobar, foobared, zap, test,
                      * foo */
@@ -2614,10 +2613,9 @@ int multilistTest(int, char *[]) {
     const int listSizes[] = {30, 251, 1000, 5000};
     const size_t depths[] = {1, 2, 3, 5, 8, 13, 21, 39};
     int64_t start = timeUtilMs();
-    for (size_t list = 0; list < (sizeof(listSizes) / sizeof(*listSizes));
-         list++) {
+    for (size_t list = 0; list < (countof(listSizes)); list++) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
-            for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
+            for (size_t d = 0; d < countof(depths); d++) {
                 const size_t _depth = depths[d];
                 const int n = listSizes[list];
                 TEST_DESC("verify specific compression of interior nodes with "
@@ -2968,8 +2966,7 @@ int multilistTest(int, char *[]) {
             }
 
             const int64_t keepEvery[] = {1, 4, 40, 400, 3000};
-            for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery);
-                 p++) {
+            for (size_t p = 0; p < countof(keepEvery); p++) {
                 /* Back to front, so each index is still the value's */
                 for (int64_t i = (int64_t)multilistCount(ml) - 1; i >= 0; i--) {
                     if (i % keepEvery[p]) {
@@ -3466,7 +3463,7 @@ int multilistTest(int, char *[]) {
         static mlNodeId nodeOf[DO_MAX];
         static bool gone[DO_MAX];
         uint32_t negativeOffsets = 0;
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+        for (size_t c = 0; c < countof(configs); c++) {
             const uint32_t n = configs[c].count;
             for (int from = 0; from < DO_STARTS; from++) {
                 /* forward from the head, reverse from the tail, then
@@ -3644,7 +3641,7 @@ int multilistTest(int, char *[]) {
         };
         static uint32_t want[EI_MAX];
         const mlOffsetId big = (mlOffsetId)1 << 32;
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+        for (size_t c = 0; c < countof(configs); c++) {
             const char *name = configs[c].name;
             uint32_t n = configs[c].count;
             cleaner(multilistFree) multilist *ml =
@@ -3665,7 +3662,7 @@ int multilistTest(int, char *[]) {
             multilistEntry entry;
             multilistIterator iter;
             const mlOffsetId good[] = {0, sn - 1, -1, -sn};
-            for (size_t k = 0; k < sizeof(good) / sizeof(*good); k++) {
+            for (size_t k = 0; k < countof(good); k++) {
                 const uint32_t pos =
                     (uint32_t)(good[k] < 0 ? sn + good[k] : good[k]);
                 if (!multilistIndexGet(ml, s0, good[k], &entry) ||
@@ -3678,7 +3675,7 @@ int multilistTest(int, char *[]) {
             const mlOffsetId bad[] = {sn,      sn + 1,    -sn - 1,
                                       -sn - 2, INT64_MAX, INT64_MIN,
                                       big,     big + 1,   -big};
-            for (size_t k = 0; k < sizeof(bad) / sizeof(*bad); k++) {
+            for (size_t k = 0; k < countof(bad); k++) {
                 if (multilistIndexGet(ml, s0, bad[k], &entry) ||
                     multilistIndexCheck(ml, s0, bad[k], &entry)) {
                     ERR("%s: index %" PRId64 " was accepted", name, bad[k]);
@@ -3710,7 +3707,7 @@ int multilistTest(int, char *[]) {
                                          -big,
                                          -big + 1,
                                          -big - 1};
-            for (size_t k = 0; k < sizeof(badRep) / sizeof(*badRep); k++) {
+            for (size_t k = 0; k < countof(badRep); k++) {
                 if (multilistReplaceByTypeAtIndex(&ml, s0, badRep[k], &rep)) {
                     ERR("%s: Replace(%" PRId64 ") was accepted", name,
                         badRep[k]);
@@ -3723,7 +3720,7 @@ int multilistTest(int, char *[]) {
             } noop[] = {{0, 0},   {sn - 1, 0},  {0, -1},        {0, INT64_MIN},
                         {sn, 1},  {-sn - 1, 1}, {INT64_MAX, 1}, {INT64_MIN, 3},
                         {big, 1}, {-big, 1}};
-            for (size_t k = 0; k < sizeof(noop) / sizeof(*noop); k++) {
+            for (size_t k = 0; k < countof(noop); k++) {
                 if (multilistDelRange(&ml, s0, noop[k].start, noop[k].values)) {
                     ERR("%s: DelRange(%" PRId64 ", %" PRId64 ") was accepted",
                         name, noop[k].start, noop[k].values);
@@ -3778,7 +3775,7 @@ int multilistTest(int, char *[]) {
             }
 
             const mlOffsetId emptyIdx[] = {0, -1, 1, INT64_MIN};
-            for (size_t k = 0; k < sizeof(emptyIdx) / sizeof(*emptyIdx); k++) {
+            for (size_t k = 0; k < countof(emptyIdx); k++) {
                 if (multilistIndexGet(ml, s0, emptyIdx[k], &entry) ||
                     multilistIndexCheck(ml, s0, emptyIdx[k], &entry) ||
                     multilistIteratorInitAtIdx(ml, s, &iter, emptyIdx[k], true,
@@ -4238,7 +4235,7 @@ int multilistTest(int, char *[]) {
             {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
         };
 
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+        for (size_t c = 0; c < countof(configs); c++) {
             for (int ro = 0; ro < 2; ro++) {
                 const uint32_t n = configs[c].count;
                 cleaner(multilistFree) multilist *ml =
@@ -4325,7 +4322,7 @@ int multilistTest(int, char *[]) {
             {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
         };
 
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+        for (size_t c = 0; c < countof(configs); c++) {
             for (int ro = 0; ro < 2; ro++) {
                 const uint32_t n = configs[c].count;
                 const bool full = configs[c].wantType == MULTILIST_TYPE_FULL;
@@ -4416,8 +4413,7 @@ int multilistTest(int, char *[]) {
             {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
         };
 
-        for (size_t cd = 0;
-             cd < MLW_DATA_COUNT * (sizeof(configs) / sizeof(*configs)); cd++) {
+        for (size_t cd = 0; cd < MLW_DATA_COUNT * (countof(configs)); cd++) {
             const mlwData data = (mlwData)(cd % MLW_DATA_COUNT);
             const size_t c = cd / MLW_DATA_COUNT;
             char name[64];
@@ -4462,7 +4458,7 @@ int multilistTest(int, char *[]) {
             /* IteratorInitAtIdx, forward and reverse. */
             const mlOffsetId starts[] = {0, (mlOffsetId)n / 3, -1,
                                          -(mlOffsetId)n / 2};
-            for (size_t k = 0; k < sizeof(starts) / sizeof(*starts); k++) {
+            for (size_t k = 0; k < countof(starts); k++) {
                 err +=
                     mlwVerifyFrom(ml, s, want, n, starts[k], true, true, name);
                 err +=
@@ -4518,7 +4514,7 @@ int multilistTest(int, char *[]) {
              * anchors open their nodes with s1 so the targets' s0 decodes
              * cannot overwrite an anchor's open view. */
             const size_t anchorAt[] = {0, n / 4, n / 2, 3 * n / 4, n - 1};
-            for (size_t a = 0; a < sizeof(anchorAt) / sizeof(*anchorAt); a++) {
+            for (size_t a = 0; a < countof(anchorAt); a++) {
                 multilistEntry anchor;
                 memset(&anchor, 0xFF, sizeof(anchor));
                 if (!multilistIndexGet(ml, s1, (mlOffsetId)anchorAt[a],
@@ -4585,8 +4581,7 @@ int multilistTest(int, char *[]) {
 
             /* Replace with wide values (normal values in normal data). */
             const size_t replaceAt[] = {0, n / 2, n - 1};
-            for (size_t k = 0; k < sizeof(replaceAt) / sizeof(*replaceAt);
-                 k++) {
+            for (size_t k = 0; k < countof(replaceAt); k++) {
                 const mlwVal v = MLW_PICK(mlwBoundary((uint32_t)k + 4));
                 databoxBig storage;
                 char buf[64];
@@ -4787,8 +4782,7 @@ int multilistTest(int, char *[]) {
             {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
         };
 
-        for (size_t cd = 0;
-             cd < MLW_DATA_COUNT * (sizeof(configs) / sizeof(*configs)); cd++) {
+        for (size_t cd = 0; cd < MLW_DATA_COUNT * (countof(configs)); cd++) {
             const mlwData data = (mlwData)(cd % MLW_DATA_COUNT);
             const size_t c = cd / MLW_DATA_COUNT;
             char name[64];
@@ -4936,9 +4930,9 @@ int multilistTest(int, char *[]) {
         static constexpr int64_t dumpSizes[] = {0, 5, 120, 400, 5000};
         static constexpr uint32_t compressDepths[] = {0, 2};
         cleaner(mflexStateFree) mflexState *scratch = mflexStateCreate();
-        for (size_t d = 0; d < COUNT_ARRAY(compressDepths); d++) {
+        for (size_t d = 0; d < countof(compressDepths); d++) {
             const uint32_t compressDepth = compressDepths[d];
-            for (size_t z = 0; z < COUNT_ARRAY(dumpSizes); z++) {
+            for (size_t z = 0; z < countof(dumpSizes); z++) {
                 cleaner(multilistFree) multilist *orig =
                     multilistNewLimit(FLEX_CAP_LEVEL_512, compressDepth);
                 for (int64_t i = 0; i < dumpSizes[z]; i++) {

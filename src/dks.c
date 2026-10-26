@@ -3170,8 +3170,7 @@ int DKS_TEST(int argc, char *argv[]) {
     };
 
     printf("Beginning creation tests...\n");
-    for (size_t i = 0; i < sizeof(initialLimits) / sizeof(*initialLimits);
-         i++) {
+    for (size_t i = 0; i < countof(initialLimits); i++) {
         struct testLimit limit = initialLimits[i];
         printf("[%s] Testing initial creation type for %s...\n", DKS_IMPL_STR,
                DKS_TYPENAME(limit.startType));
@@ -3264,7 +3263,7 @@ int DKS_TEST(int argc, char *argv[]) {
     };
 
     printf("Beginning conversion tests...\n");
-    for (size_t i = 0; i < sizeof(growLimits) / sizeof(*growLimits); i++) {
+    for (size_t i = 0; i < countof(growLimits); i++) {
         struct testLimit limit = growLimits[i];
         printf("Testing conversion from %s to %s...\n",
                DKS_TYPENAME(limit.startType), DKS_TYPENAME(limit.newType));
@@ -3390,7 +3389,7 @@ int DKS_TEST(int argc, char *argv[]) {
          .newType = DKS_16},
     };
 
-    for (size_t i = 0; i < sizeof(shrinkLimits) / sizeof(*shrinkLimits); i++) {
+    for (size_t i = 0; i < countof(shrinkLimits); i++) {
         struct testLimit limit = shrinkLimits[i];
         printf("Testing non-conversion for %s...\n",
                DKS_TYPENAME(limit.startType));
@@ -3466,7 +3465,7 @@ int DKS_TEST(int argc, char *argv[]) {
          .newType = DKS_40},
     };
 
-    for (size_t i = 0; i < sizeof(growbyLimits) / sizeof(*growbyLimits); i++) {
+    for (size_t i = 0; i < countof(growbyLimits); i++) {
         struct testLimit limit = growbyLimits[i];
         printf("Testing grow happens at proper limits %s...\n",
                DKS_TYPENAME(limit.startType));
@@ -3617,7 +3616,7 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_SPLITLENFREE(args, (size_t)nargs);
         static const char *const refused[] = {"\"unterminated", "'open",
                                               "\"a\"b", "'a'b"};
-        for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        for (size_t i = 0; i < countof(refused); i++) {
             args = DKS_SPLITARGS(refused[i], &nargs);
             testCond("SPLITARGS() refuses unbalanced or glued quotes",
                      args == NULL && nargs == 0, true, "%d");

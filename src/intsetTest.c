@@ -189,7 +189,7 @@ int intsetTest(int, char *[]) {
         const uint64_t n64[] = {0, 0, 0, 0, 0, 1};
         const uint32_t ceiling[] = {INTSET_SMALL_MAX_BYTES,
                                     INTSET_MEDIUM_MAX_BYTES, 0};
-        for (size_t i = 0; i < COUNT_ARRAY(members); i++) {
+        for (size_t i = 0; i < countof(members); i++) {
             intsetAdd(&is, members[i], NULL);
             dkTierStats s;
             intsetStats(is, &s);
@@ -213,7 +213,7 @@ int intsetTest(int, char *[]) {
     TEST("Copy in every tier: same members and tier, independent of the "
          "original") {
         const int64_t reach[] = {7, 100000, INT64_MAX};
-        for (size_t t = 0; t < COUNT_ARRAY(reach); t++) {
+        for (size_t t = 0; t < countof(reach); t++) {
             cleaner(intsetFree) intset *is = intsetNew();
             for (int64_t v = -40; v < 40; v += 3) {
                 intsetAdd(&is, v, NULL);
@@ -259,7 +259,7 @@ int intsetTest(int, char *[]) {
             intsetAdd(&is, v, NULL);
         }
         const int64_t wide[] = {100000, -70000, INT64_MAX, INT64_MIN + 1};
-        for (size_t i = 0; i < COUNT_ARRAY(wide); i++) {
+        for (size_t i = 0; i < countof(wide); i++) {
             intsetAdd(&is, wide[i], NULL);
         }
 
@@ -277,7 +277,7 @@ int intsetTest(int, char *[]) {
          * (Medium), then no 32-bit values (Small) */
         const int64_t drop[] = {INT64_MIN + 1, 100000, -70000};
         const uint8_t want[] = {2, 2, 1};
-        for (size_t i = 0; i < COUNT_ARRAY(drop); i++) {
+        for (size_t i = 0; i < countof(drop); i++) {
             intsetRemove(&is, drop[i], NULL);
             dkTierStats was;
             intsetStats(is, &was);
@@ -316,7 +316,7 @@ int intsetTest(int, char *[]) {
     TEST("Reset from every tier gives an empty Small that takes new members") {
         /* A 16-bit, then a 32-bit, then a 64-bit member reach each tier */
         const int64_t reach[] = {7, 100000, INT64_MAX};
-        for (size_t t = 0; t < COUNT_ARRAY(reach); t++) {
+        for (size_t t = 0; t < countof(reach); t++) {
             cleaner(intsetFree) intset *is = intsetNew();
             for (size_t i = 0; i <= t; i++) {
                 intsetAdd(&is, reach[i], NULL);
@@ -1126,7 +1126,7 @@ int intsetTest(int, char *[]) {
         /* Expected sorted order: 10, 30, 50, 70, 90, 20000, 40000, 60000, 80000
          */
         int64_t expected[] = {10, 30, 50, 70, 90, 20000, 40000, 60000, 80000};
-        size_t count = sizeof(expected) / sizeof(expected[0]);
+        size_t count = countof(expected);
 
         if (intsetCount(is) != count) {
             ERR("Count should be %zu, got %zu", count, intsetCount(is));
@@ -1160,7 +1160,7 @@ int intsetTest(int, char *[]) {
 
         /* Add values that cross the int16/int32 boundary */
         int64_t values[] = {32760, 32765, 32770, 32775, 32780, 32785};
-        size_t count = sizeof(values) / sizeof(values[0]);
+        size_t count = countof(values);
 
         for (size_t i = 0; i < count; i++) {
             intsetAdd(&is, values[i], NULL);
@@ -1232,7 +1232,7 @@ int intsetTest(int, char *[]) {
                               INT32_MAX + 1000LL,
                               INT32_MAX + 2000LL,
                               INT32_MAX + 3000LL};
-        size_t count = sizeof(expected) / sizeof(expected[0]);
+        size_t count = countof(expected);
 
         if (intsetCount(is) != count) {
             ERR("Count should be %zu, got %zu", count, intsetCount(is));
@@ -1393,7 +1393,7 @@ int intsetTest(int, char *[]) {
         const int sizes[] = {0,   1,    2,    3,    4,    5,   7,   8,
                              16,  17,   31,   32,   63,   64,  255, 256,
                              257, 1023, 1024, 1025, 4095, 4096};
-        for (size_t si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
+        for (size_t si = 0; si < countof(sizes); si++) {
             const int n = sizes[si];
             for (int i = 0; i < n; i++) {
                 a32[i] = (int32_t)(i * 2 - n); /* sorted, unique, spans 0 */

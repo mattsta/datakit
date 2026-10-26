@@ -810,7 +810,7 @@ int strDoubleFormatTest(int, char *[]) {
                                   0x1999999999999ULL,
                                   0x1000000000001ULL};
         for (int32_t e = -1074; e <= 970; e++) {
-            for (size_t fi = 0; fi < COUNT_ARRAY(fracs); fi++) {
+            for (size_t fi = 0; fi < countof(fracs); fi++) {
                 const double v = ldexp((double)fracs[fi], e);
                 if (!isfinite(v) || v == 0.0) {
                     continue;
@@ -846,9 +846,9 @@ int strDoubleFormatTest(int, char *[]) {
 #define FE_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
         const double pinned[] = {1.0,  2.0,    0.5, DBL_MIN,  DBL_MAX, 5e-324,
                                  1e17, 1e-300, 0.1, 6.25e-310 /* denormal */};
-        for (size_t t = 0; t < 20000 + COUNT_ARRAY(pinned); t++) {
+        for (size_t t = 0; t < 20000 + countof(pinned); t++) {
             double v;
-            if (t < COUNT_ARRAY(pinned)) {
+            if (t < countof(pinned)) {
                 v = pinned[t];
             } else {
                 const uint64_t bits = FE_NEXT();
@@ -954,7 +954,7 @@ int strDoubleFormatTest(int, char *[]) {
          * the documented minimum and succeed at it */
         const uint64_t worstBits[] = {0xc451a2101c943a1eULL,
                                       0xbecca11f1ad2249dULL};
-        for (size_t i = 0; i < COUNT_ARRAY(worstBits); i++) {
+        for (size_t i = 0; i < countof(worstBits); i++) {
             double v;
             memcpy(&v, &worstBits[i], sizeof(v));
 
@@ -997,7 +997,7 @@ int strDoubleFormatTest(int, char *[]) {
             {"places<=-6 exponential negative", 1.5e-10, "1.5e-10"},
             {"negative sign passthrough", -12.5, "-12.5"},
         };
-        for (size_t i = 0; i < COUNT_ARRAY(vectors); i++) {
+        for (size_t i = 0; i < countof(vectors); i++) {
             uint8_t buf[64] = {};
             const size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), vectors[i].value);
@@ -1031,7 +1031,7 @@ int strDoubleFormatTest(int, char *[]) {
             {2.71828182845905, "2.71828182845905"},
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(tests); i++) {
+        for (size_t i = 0; i < countof(tests); i++) {
             uint8_t buf[64] = {};
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), tests[i].value);
@@ -1052,7 +1052,7 @@ int strDoubleFormatTest(int, char *[]) {
             0x1.fffffffffffffp+1023, /* Just below DBL_MAX */
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(edgeCases); i++) {
+        for (size_t i = 0; i < countof(edgeCases); i++) {
             uint8_t buf[64] = {};
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), edgeCases[i]);
@@ -1077,7 +1077,7 @@ int strDoubleFormatTest(int, char *[]) {
             -9.99999999999e35,
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(boundaryTests); i++) {
+        for (size_t i = 0; i < countof(boundaryTests); i++) {
             uint8_t buf[64] = {};
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), boundaryTests[i]);
@@ -1169,8 +1169,8 @@ int strDoubleFormatTest(int, char *[]) {
                            "7074451188.598104",
                            "7074451188.5981045",
                            "0.0078125"};
-        assert(COUNT_ARRAY(digits) == COUNT_ARRAY(results));
-        for (size_t i = 0; i < COUNT_ARRAY(digits); i++) {
+        assert(countof(digits) == countof(results));
+        for (size_t i = 0; i < countof(digits); i++) {
             uint8_t buf[64] = {};
             uint32_t resultLen =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), digits[i]);

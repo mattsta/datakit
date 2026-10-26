@@ -1759,7 +1759,7 @@ void flexBulkPushBytesMembers(flex **const ff,
     flex *chunkStack[FLEX_BULK_PUSH_CHUNK_STACK_SLOTS];
     flex **merge = chunkStack;
     cleanerName(zfree, FlexPtrs) flex **mergeHeap = NULL;
-    if (mergeCap > (sizeof(chunkStack) / sizeof(chunkStack[0]))) {
+    if (mergeCap > (countof(chunkStack))) {
         mergeHeap = zcalloc(mergeCap, sizeof(*merge));
         merge = mergeHeap;
     }
@@ -7025,7 +7025,7 @@ static int32_t flexTestWideDecoders(void) {
             databoxNewBytesString("a value longer than eight bytes"),
             databoxNewBytesString(""),
         };
-        for (size_t k = 0; k < COUNT_ARRAY(narrow); k++) {
+        for (size_t k = 0; k < countof(narrow); k++) {
             flexPushByType(&mixed, &narrow[k], FLEX_ENDPOINT_TAIL);
         }
 
@@ -7043,8 +7043,8 @@ static int32_t flexTestWideDecoders(void) {
             }
         }
 
-        if (k != COUNT_ARRAY(narrow)) {
-            ERR("mixed flex decoded %zu of %zu", k, COUNT_ARRAY(narrow));
+        if (k != countof(narrow)) {
+            ERR("mixed flex decoded %zu of %zu", k, countof(narrow));
         }
     }
 
@@ -7251,7 +7251,7 @@ static int32_t flexTestWideDecoders(void) {
             {three, flexBytes(three)},
             {p3, flexBytes(p3) - 1},
         };
-        for (size_t r = 0; r < COUNT_ARRAY(refuse); r++) {
+        for (size_t r = 0; r < countof(refuse); r++) {
             databoxBig poison;
             memset(&poison, 0xFF, sizeof(poison));
             memset(&a, 0xFF, sizeof(a));
@@ -7598,7 +7598,7 @@ int32_t flexValidateTotalitySweep(void) {
                                             "a longer member so the entry "
                                             "length varint grows past one "
                                             "byte of storage"};
-        for (size_t i = 0; i < sizeof(words) / sizeof(*words); i++) {
+        for (size_t i = 0; i < countof(words); i++) {
             flexPushBytes(&strs, words[i], strlen(words[i]),
                           FLEX_ENDPOINT_TAIL);
         }
@@ -7634,7 +7634,7 @@ int32_t flexValidateTotalitySweep(void) {
         cleaner(flexFree) flex *nums = flexNew();
         static constexpr int64_t values[] = {
             0, 1, -1, INT8_MAX, INT16_MIN, INT32_MAX, INT64_MIN, INT64_MAX};
-        for (size_t i = 0; i < sizeof(values) / sizeof(*values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             flexPushSigned(&nums, values[i], FLEX_ENDPOINT_TAIL);
         }
         const databox t = {.type = DATABOX_TRUE};
@@ -7668,7 +7668,7 @@ int32_t flexValidateTotalitySweep(void) {
 
         static constexpr uint64_t refs[] = {
             0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
-        for (size_t i = 0; i < sizeof(refs) / sizeof(*refs); i++) {
+        for (size_t i = 0; i < countof(refs); i++) {
             const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                                  .data.u64 = refs[i]};
             const databox *refBox[1] = {&ref};
@@ -7742,7 +7742,7 @@ static uint64_t flexTestWideRand(uint64_t *state) {
 static int32_t flexTestVoidEntries(void) {
     int err = 0;
     static constexpr size_t sizes[] = {1, 7, 8, 9, 100, 300, 70000};
-    for (size_t s = 0; s < 2 * (sizeof(sizes) / sizeof(*sizes)); s++) {
+    for (size_t s = 0; s < 2 * (countof(sizes)); s++) {
         const bool sorted = s % 2 == 1;
         const size_t n = sizes[s / 2];
         const databox reserve = {.type = DATABOX_BYTES_VOID, .len = n};
@@ -7959,7 +7959,7 @@ static int32_t flexTestReferenceSet(void) {
     int err = 0;
     static const char *words[] = {"pear",   "apple",  "fig",  "kiwi",
                                   "banana", "cherry", "date", "grape"};
-    enum { W = sizeof(words) / sizeof(words[0]) };
+    enum { W = countof(words) };
     cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
     cleaner(flexFree) flex *f = flexNew();
     for (size_t i = 0; i < W - 1; i++) {
@@ -8003,7 +8003,7 @@ static int32_t flexTestReferenceSet(void) {
         {"aaa", "apple"},   {"coconut", "date"}, {"lime", "pear"},
         {"zzz", NULL},
     };
-    for (size_t i = 0; i < sizeof(probes) / sizeof(*probes); i++) {
+    for (size_t i = 0; i < countof(probes); i++) {
         const databox key = databoxNewBytesString(probes[i].probe);
         flexEntry *fe = flexGetByTypeSortedWithMiddleWithReference(
             f, 1, &key, flexMiddle(f, 1), atoms);
@@ -8394,7 +8394,7 @@ static int32_t flexTestNeg64Wide(void) {
     const uint64_t top = UINT64_C(1) << 63;
     const uint64_t mags[] = {top, top + 1, top + 12345, UINT64_MAX - 1,
                              UINT64_MAX};
-    const size_t magCount = sizeof(mags) / sizeof(mags[0]);
+    const size_t magCount = countof(mags);
 
     for (size_t i = 0; i < magCount; i++) {
         const flexTestWide want = flexTestNeg64Value(mags[i]);
@@ -8508,7 +8508,7 @@ static int32_t flexTestNeg64Wide(void) {
         {flexTestWideU(5), 0},
         {flexTestWideU((__uint128_t)1 << 64), 0},
     };
-    const size_t rowCount = sizeof(rows) / sizeof(rows[0]);
+    const size_t rowCount = countof(rows);
 
     cleaner(flexFree) flex *f = flexNew();
     for (size_t i = 0; i < rowCount; i++) {
@@ -8539,7 +8539,7 @@ static int32_t flexTestNeg64Wide(void) {
         flexTestWideS(-((__int128_t)1 << 63) - 1 - 12346),
         flexTestWideS((__int128_t)INT64_MIN + 1),
     };
-    for (size_t i = 0; i < sizeof(absent) / sizeof(absent[0]); i++) {
+    for (size_t i = 0; i < countof(absent); i++) {
         databoxBig k;
         flexTestWideBox(absent[i], false, &k);
         if (flexFindByTypeSorted(f, 1, (const databox *)&k)) {
@@ -8553,14 +8553,13 @@ static int32_t flexTestNeg64Wide(void) {
         flexTestWideS(-((__int128_t)1 << 63) - 100),
         flexTestWideS((__int128_t)INT64_MIN + 1),
     };
-    flexTestWide oracle[sizeof(rows) / sizeof(rows[0]) +
-                        sizeof(added) / sizeof(added[0])];
+    flexTestWide oracle[countof(rows) + countof(added)];
     size_t oracleCount = 0;
     for (size_t i = 0; i < rowCount; i++) {
         oracle[oracleCount++] = rows[i].v;
     }
 
-    for (size_t i = 0; i < sizeof(added) / sizeof(added[0]); i++) {
+    for (size_t i = 0; i < countof(added); i++) {
         databoxBig k;
         flexTestWideBox(added[i], false, &k);
         flexInsertByTypeSorted(&f, (const databox *)&k);
@@ -8679,7 +8678,7 @@ static int32_t flexTestTypedFind(void) {
         DATABOX_BOX_FALSE,              /* 9 */
         DATABOX_BOX_NULL,               /* 10 */
     };
-    for (size_t i = 0; i < COUNT_ARRAY(entries); i++) {
+    for (size_t i = 0; i < countof(entries); i++) {
         flexPushByTypeExact(&f, &entries[i], FLEX_ENDPOINT_TAIL);
     }
 
@@ -8719,7 +8718,7 @@ static int32_t flexTestTypedFind(void) {
          11},
         {"by type missing 2.5", flexFindByType(f, head, &probeMissing, 0), -1},
     };
-    for (size_t i = 0; i < COUNT_ARRAY(checks); i++) {
+    for (size_t i = 0; i < countof(checks); i++) {
         const int32_t at = flexTestIndexOf(f, checks[i].got);
         if (at != checks[i].want) {
             ERR("%s found at %" PRId32 ", expected %" PRId32, checks[i].what,
@@ -8745,7 +8744,7 @@ static int32_t flexTestExactPath(void) {
         "hello",
     };
 
-    for (size_t i = 0; i < COUNT_ARRAY(strs); i++) {
+    for (size_t i = 0; i < countof(strs); i++) {
         const char *s = strs[i];
         const size_t len = strlen(s);
         const databox box = databoxNewBytes(s, len);
@@ -8759,7 +8758,7 @@ static int32_t flexTestExactPath(void) {
         cleaner(flexFree) flex *viaBig = flexNewFromDataboxBigExact(&big);
 
         const flex *const all[] = {viaBytes, viaFactory, viaBig};
-        for (size_t f = 0; f < COUNT_ARRAY(all); f++) {
+        for (size_t f = 0; f < countof(all); f++) {
             for (flexEntry *fe = flexHead(all[f]); fe;
                  fe = flexNext(all[f], fe)) {
                 if (!flexTestEntryIsBytes(fe, s, len)) {
@@ -8854,7 +8853,7 @@ static int32_t flexTestNegWideRange(void) {
          * single-buffer reader that runs it. */
         const __uint128_t over[] = {top, top + 1, top + 12345, UINT128_MAX - 1,
                                     UINT128_MAX};
-        for (size_t i = 0; i < sizeof(over) / sizeof(over[0]); i++) {
+        for (size_t i = 0; i < countof(over); i++) {
             varintExternalPutFixedWidthBig(fe + 1, over[i], VARINT_WIDTH_128B);
             if (flexValidateBufferDeep(f, flexBytes(f))) {
                 ERR("NEG_128B magnitude over INT128_MAX (%zu) accepted", i);
@@ -8935,8 +8934,8 @@ static int32_t flexTestReplaceSign(void) {
                                  200, -128, INT64_MIN, INT64_MAX};
     const uint64_t unsignedNew[] = {0, 255, 65535, UINT64_MAX};
 
-    for (size_t s = 0; s < sizeof(starts) / sizeof(starts[0]); s++) {
-        for (size_t n = 0; n < sizeof(signedNew) / sizeof(signedNew[0]); n++) {
+    for (size_t s = 0; s < countof(starts); s++) {
+        for (size_t n = 0; n < countof(signedNew); n++) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
             flexPushSigned(&f, starts[s], FLEX_ENDPOINT_TAIL);
@@ -8949,8 +8948,7 @@ static int32_t flexTestReplaceSign(void) {
             }
         }
 
-        for (size_t n = 0; n < sizeof(unsignedNew) / sizeof(unsignedNew[0]);
-             n++) {
+        for (size_t n = 0; n < countof(unsignedNew); n++) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
             flexPushSigned(&f, starts[s], FLEX_ENDPOINT_TAIL);
@@ -8968,7 +8966,7 @@ static int32_t flexTestReplaceSign(void) {
         int64_t start;
         int64_t by;
     } incrs[] = {{-3, -1}, {3, -10}, {-3, 10}, {-1, 1}, {0, -1}, {-300, 299}};
-    for (size_t i = 0; i < sizeof(incrs) / sizeof(incrs[0]); i++) {
+    for (size_t i = 0; i < countof(incrs); i++) {
         cleaner(flexFree) flex *f = flexNew();
         flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&f, incrs[i].start, FLEX_ENDPOINT_TAIL);
@@ -8991,7 +8989,7 @@ static int32_t flexTestReplaceSign(void) {
             int64_t by;
         } bools[] = {
             {true, 5}, {false, 1}, {true, -1}, {true, -5}, {false, -2}};
-        for (size_t i = 0; i < sizeof(bools) / sizeof(bools[0]); i++) {
+        for (size_t i = 0; i < countof(bools); i++) {
             cleaner(flexFree) flex *f = flexNew();
             const databox b = {.type = bools[i].start ? DATABOX_TRUE
                                                       : DATABOX_FALSE};
@@ -9039,7 +9037,7 @@ static int32_t flexTestReplaceSign(void) {
             int64_t start;
             int64_t by;
         } over[] = {{INT64_MAX, 1}, {INT64_MIN, -1}, {INT64_MAX - 5, 6}};
-        for (size_t i = 0; i < sizeof(over) / sizeof(over[0]); i++) {
+        for (size_t i = 0; i < countof(over); i++) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
             flexPushSigned(&f, over[i].start, FLEX_ENDPOINT_TAIL);
@@ -9095,8 +9093,8 @@ static int32_t flexTestReplaceSign(void) {
             0,         1,         -1,           2,  -2,  1000, -1000, INT64_MAX,
             INT64_MIN, 1LL << 32, -(1LL << 32), -6, -10,
         };
-        for (size_t s = 0; s < sizeof(stored) / sizeof(*stored); s++) {
-            for (size_t d = 0; d < sizeof(deltas) / sizeof(*deltas); d++) {
+        for (size_t s = 0; s < countof(stored); s++) {
+            for (size_t d = 0; d < countof(deltas); d++) {
                 const __int128_t sum = stored[s] + deltas[d];
                 for (int sgn = 0; sgn < 2; sgn++) {
                     cleaner(flexFree) flex *f = flexNew();
@@ -9390,7 +9388,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             {UINT64_C(0x1122334455667788), FLEX_UINT_64B,
              FLEX_EXTERNAL_MDSC_64B},
         };
-        for (size_t i = 0; i < COUNT_ARRAY(retags); i++) {
+        for (size_t i = 0; i < countof(retags); i++) {
             cleaner(flexFree) flex *retag = flexNew();
             flexPushUnsigned(&retag, retags[i].value, FLEX_ENDPOINT_TAIL);
             flexEntry *const rf = flexHead(retag);
@@ -9582,14 +9580,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         for (size_t i = 0; i < sizeof(memberBytes); i++) {
             memberBytes[i] = (char)('a' + i % 26);
         }
-        for (size_t c = 0; c < sizeof(bulkCounts) / sizeof(bulkCounts[0]);
-             c++) {
+        for (size_t c = 0; c < countof(bulkCounts); c++) {
             const size_t n = bulkCounts[c];
             cleanerName(zfree, BulkMembers) flexBytesMember *many =
                 zcalloc(n, sizeof(*many));
             for (size_t i = 0; i < n; i++) {
-                const size_t len = memberLens[i % (sizeof(memberLens) /
-                                                   sizeof(memberLens[0]))];
+                const size_t len = memberLens[i % (countof(memberLens))];
                 many[i] = (flexBytesMember){memberBytes + (i % 7), len};
             }
             cleaner(flexFree) flex *bulkN = flexNew();
@@ -9764,7 +9760,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             -4294967296, -4294967297, INT64_MIN + 1, INT64_MIN, 0,
             1,           255,         256,           65536,     INT64_MAX,
         };
-        for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+        for (size_t i = 0; i < countof(vals); i++) {
             cleaner(flexFree) flex *rt = flexNew();
             const databox in = databoxNewSigned(vals[i]);
             flexInsertByType(&rt, FLEX_ENTRY_AFTER_TAIL(rt), &in);
@@ -9799,7 +9795,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             -((__int128_t)1 << 63) - 1, -((__int128_t)1 << 63) - 2,
             -((__int128_t)1 << 64) + 1, -((__int128_t)1 << 64),
         };
-        for (size_t i = 0; i < sizeof(bigVals) / sizeof(bigVals[0]); i++) {
+        for (size_t i = 0; i < countof(bigVals); i++) {
             cleaner(flexFree) flex *rt = flexNew();
             databoxBig in;
             DATABOX_BIG_SIGNED_128(&in, bigVals[i]);
@@ -9826,8 +9822,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
         printf("  (%zu values, box and bytes; %zu 128-bit values)\n",
-               sizeof(vals) / sizeof(vals[0]),
-               sizeof(bigVals) / sizeof(bigVals[0]));
+               countof(vals), countof(bigVals));
     }
 
     TEST("pushed and inserted numerals store as their canonical numbers") {
@@ -9878,7 +9873,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         };
         uint32_t numerals = 0;
         uint32_t wide = 0;
-        for (size_t i = 0; i < COUNT_ARRAY(spellings); i++) {
+        for (size_t i = 0; i < countof(spellings); i++) {
             const char *const s = spellings[i];
             const size_t len = strlen(s);
             const databox bytes = {
@@ -9945,8 +9940,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                 "wide)",
                 numerals, wide);
         }
-        printf("  (%zu spellings, %" PRIu32 " numerals)\n",
-               COUNT_ARRAY(spellings), numerals);
+        printf("  (%zu spellings, %" PRIu32 " numerals)\n", countof(spellings),
+               numerals);
     }
 
     TEST("flexFind matches strings by bytes and numbers by value") {
@@ -9987,7 +9982,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             {"18446744073709551616", 1, -1},
             {"-0", 1, -1},
         };
-        for (size_t i = 0; i < COUNT_ARRAY(finds); i++) {
+        for (size_t i = 0; i < countof(finds); i++) {
             const flexEntry *const found = flexFind(
                 ff, finds[i].s, (uint32_t)strlen(finds[i].s), finds[i].skip);
             const flexEntry *const want =
@@ -10024,7 +10019,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             REFERENCE_MAX_64 - 1,
             REFERENCE_MAX_64,
         };
-        for (size_t i = 0; i < COUNT_ARRAY(refVals); i++) {
+        for (size_t i = 0; i < countof(refVals); i++) {
             const uint64_t v = refVals[i];
             const flexEncoding enc = flexEncodingReferenceUnsigned(v);
             const uint64_t encoded = flexEncodingReferenceUnsignedEncode(v);
@@ -10048,14 +10043,14 @@ int32_t flexTest(int32_t argc, char **argv) {
 #endif
         static constexpr uint64_t refs[] = {
             0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
-        enum { PUSH_TYPE_CASES_ = COUNT_ARRAY(refs) + 2 };
+        enum { PUSH_TYPE_CASES_ = countof(refs) + 2 };
         for (size_t i = 0; i < PUSH_TYPE_CASES_; i++) {
             databox in = {};
             databoxType wantType = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
-            if (i < COUNT_ARRAY(refs)) {
+            if (i < countof(refs)) {
                 in.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
                 in.data.u64 = refs[i];
-            } else if (i == COUNT_ARRAY(refs)) {
+            } else if (i == countof(refs)) {
                 in.type = DATABOX_PTR;
                 in.data.ptr = &err;
                 wantType = DATABOX_UNSIGNED_64;
@@ -10087,7 +10082,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             const size_t oracleBytes = flexBytes(oracle);
             const flex *const writes[3] = {pushed, inserted, again};
             bool sameBytes = true;
-            for (size_t w = 0; w < COUNT_ARRAY(writes); w++) {
+            for (size_t w = 0; w < countof(writes); w++) {
                 sameBytes = sameBytes && flexBytes(writes[w]) == oracleBytes &&
                             memcmp(writes[w], oracle, oracleBytes) == 0;
             }
@@ -10153,10 +10148,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         };
         /* Every box, then a NULL value (stored as null) */
         enum { ROW_REPEAT_ = 3 };
-        const size_t types = COUNT_ARRAY(boxes) + 1;
-        const databox *row[(COUNT_ARRAY(boxes) + 1) * ROW_REPEAT_];
+        const size_t types = countof(boxes) + 1;
+        const databox *row[(countof(boxes) + 1) * ROW_REPEAT_];
         for (size_t i = 0; i < types * ROW_REPEAT_; i++) {
-            row[i] = i % types < COUNT_ARRAY(boxes) ? &boxes[i % types] : NULL;
+            row[i] = i % types < countof(boxes) ? &boxes[i % types] : NULL;
         }
 
         size_t converted = 0;
@@ -10220,7 +10215,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             const databox x = databoxNewBytes("x", 1);
             const databox big = databoxNewUnsigned(UINT64_MAX);
             const databox *const order[] = {&v22, &five, &x, &big};
-            for (size_t i = 0; i < COUNT_ARRAY(order); i++) {
+            for (size_t i = 0; i < countof(order); i++) {
                 if (exact) {
                     flexPushByTypeExact(&pushed, order[i], FLEX_ENDPOINT_TAIL);
                 } else {
@@ -10274,7 +10269,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             {&newKey, &small, DATABOX_VOID},
         };
 
-        for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        for (size_t i = 0; i < countof(steps); i++) {
             const databox *row[2] = {steps[i].key, steps[i].val};
             flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
                 &m, 2, row, &mid, true, replaced);
@@ -10347,7 +10342,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * cover empty, one row, even/odd row counts, and enough rows
          * that all four anchor quadrants are exercised. */
         const int rowCounts[] = {0, 1, 2, 3, 8, 63, 200};
-        for (size_t rc = 0; rc < COUNT_ARRAY(rowCounts); rc++) {
+        for (size_t rc = 0; rc < countof(rowCounts); rc++) {
             cleaner(flexFree) flex *sf = flexNew();
             for (int r = 0; r < rowCounts[rc]; r++) {
                 const databox kbox = databoxNewSigned(r);
@@ -10377,7 +10372,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         static constexpr float values[] = {1.5f, -2.0f, 3.14159f, 0.0f};
         cleaner(flexFree) flex *pushed = flexNew();
         cleaner(flexFree) flex *inserted = flexNew();
-        for (size_t i = 0; i < sizeof(values) / sizeof(*values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             flexPushFloatB16(&pushed, values[i], FLEX_ENDPOINT_TAIL);
             flexInsertFloatB16(&inserted, FLEX_ENTRY_AFTER_TAIL(inserted),
                                values[i]);
@@ -10883,7 +10878,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         char v[3][257] = {};
         flexEntryData e[3] = {};
 
-        for (size_t i = 0; i < (sizeof(v) / sizeof(v[0])); i++) {
+        for (size_t i = 0; i < (countof(v)); i++) {
             memset(v[i], 'a' + i, sizeof(v[0]));
         }
 
@@ -10892,7 +10887,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         v[2][256] = '\0';
 
         f = flexNew();
-        for (size_t i = 0; i < (sizeof(v) / sizeof(v[0])); i++) {
+        for (size_t i = 0; i < (countof(v)); i++) {
             flexPushBytes(&f, v[i], strlen(v[i]), FLEX_ENDPOINT_TAIL);
         }
 
@@ -11028,7 +11023,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * a userspace pointer fits the 6-byte form) read back as the same
          * pointer, with the string's length */
         static const char *const texts[] = {"", "x", "a longer mdsc text"};
-        enum { N_TEXTS = sizeof(texts) / sizeof(*texts) };
+        enum { N_TEXTS = countof(texts) };
         mdsc *strs[N_TEXTS];
         cleaner(flexFree) flex *pf = flexNew();
         for (size_t i = 0; i < N_TEXTS; i++) {
@@ -12804,13 +12799,13 @@ int32_t flexTest(int32_t argc, char **argv) {
             /* Common values */
             -1, 0, 1, -100, 100, -1000, 1000};
 
-        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+        for (size_t i = 0; i < countof(testVals); i++) {
             flexPushSigned(&f, testVals[i], FLEX_ENDPOINT_TAIL);
         }
 
         /* Verify all values can be retrieved correctly */
         fe = flexHead(f);
-        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+        for (size_t i = 0; i < countof(testVals); i++) {
             databox box;
             flexGetByType(fe, &box);
             int64_t retrieved;
@@ -12848,12 +12843,12 @@ int32_t flexTest(int32_t argc, char **argv) {
                                      UINT64_MAX,
                                      UINT64_MAX - 1};
 
-        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+        for (size_t i = 0; i < countof(testVals); i++) {
             flexPushUnsigned(&f, testVals[i], FLEX_ENDPOINT_TAIL);
         }
 
         fe = flexHead(f);
-        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+        for (size_t i = 0; i < countof(testVals); i++) {
             databox box;
             flexGetByType(fe, &box);
             uint64_t retrieved = (box.type == DATABOX_UNSIGNED_64)
@@ -12883,12 +12878,12 @@ int32_t flexTest(int32_t argc, char **argv) {
                                    127,  128,  255,  256,  511,  512,  1023,
                                    1024, 2047, 2048, 4095, 4096, 8191, 8192};
 
-        for (size_t i = 0; i < sizeof(testLens) / sizeof(testLens[0]); i++) {
+        for (size_t i = 0; i < countof(testLens); i++) {
             flexPushBytes(&f, buf, testLens[i], FLEX_ENDPOINT_TAIL);
         }
 
         fe = flexHead(f);
-        for (size_t i = 0; i < sizeof(testLens) / sizeof(testLens[0]); i++) {
+        for (size_t i = 0; i < countof(testLens); i++) {
             databox box;
             flexGetByType(fe, &box);
             size_t len = databoxLen(&box);
@@ -14155,7 +14150,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             const databox *ptrs[10];
             for (size_t i = 0; i < n; i++) {
                 rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
-                ptrs[i] = &kinds[(rng >> 33) % COUNT_ARRAY(kinds)];
+                ptrs[i] = &kinds[(rng >> 33) % countof(kinds)];
             }
             cleaner(flexFree) flex *made = flexNewFromDataboxPtrsExact(ptrs, n);
             const size_t want = flexBytes(made);
@@ -14194,7 +14189,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * without writing the output. */
         static constexpr uint32_t badWidths[] = {0,  9,  10, 11, 12, 13,
                                                  14, 15, 16, 17, 255};
-        for (size_t i = 0; i < sizeof(badWidths) / sizeof(*badWidths); i++) {
+        for (size_t i = 0; i < countof(badWidths); i++) {
             uint64_t out = UINT64_MAX;
             assert(!varintExternalTryGet(buf, (varintWidth)badWidths[i], &out));
             assert(out == UINT64_MAX);
@@ -14245,7 +14240,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * tunnel through. */
         const uint8_t bad_tags[] = {(uint8_t)FLEX_REAL_32D,
                                     (uint8_t)FLEX_REAL_64D};
-        for (size_t i = 0; i < sizeof(bad_tags) / sizeof(bad_tags[0]); i++) {
+        for (size_t i = 0; i < countof(bad_tags); i++) {
             uint8_t buf[3];
             buf[0] = 0x02u; /* split-varint: total_bytes = 3 */
             buf[1] = 0x01u; /* tagged-varint: count = 1 */

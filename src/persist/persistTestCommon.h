@@ -37,7 +37,7 @@
         }                                                                      \
         const persistLogResult refused_[] = {__VA_ARGS__};                     \
         persistCtxTestRefuseLogsEnd((ctx), &refusal_);                         \
-        for (size_t r_ = 0; r_ < COUNT_ARRAY(refused_); r_++) {                \
+        for (size_t r_ = 0; r_ < countof(refused_); r_++) {                    \
             if (refused_[r_] != PERSIST_LOG_REFUSED) {                         \
                 ERR("call %zu under a refusing WAL returned %d", r_,           \
                     (int)refused_[r_]);                                        \

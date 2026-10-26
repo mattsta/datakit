@@ -165,7 +165,7 @@ int dkFormatTest(int, char *[]) {
                                           DK_FORMAT_VERSION_TOO_NEW,
                                           DK_FORMAT_VERSION_TOO_OLD,
                                           DK_FORMAT_FEATURE_UNKNOWN};
-        const size_t n = sizeof(results) / sizeof(*results);
+        const size_t n = countof(results);
         for (size_t i = 0; i < n; i++) {
             const char *name = dkFormatResultName(results[i]);
             for (size_t j = 0; j < i; j++) {
@@ -198,7 +198,7 @@ int dkFormatTest(int, char *[]) {
             /* unknown ignorable bits only */
             {{77, 3, UINT64_C(0xFFFFFFFF00000000)}, DK_FORMAT_OK},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             const dkFormatResult got = dkFormatCheck(&spec, &cases[i].stamp);
             if (got != cases[i].want) {
                 ERR("case %zu: %s, want %s", i, dkFormatResultName(got),
@@ -219,7 +219,7 @@ int dkFormatTest(int, char *[]) {
             {77, 3, UINT64_MAX & ~(DK_FORMAT_MUST_UNDERSTAND & ~UINT64_C(1))},
         };
         static constexpr uint8_t payload[] = "payload bytes";
-        for (size_t s = 0; s < sizeof(stamps) / sizeof(*stamps); s++) {
+        for (size_t s = 0; s < countof(stamps); s++) {
             const size_t prefix = dkFormatPrefixSize(&stamps[s]);
             const size_t total = prefix + sizeof(payload);
             cleanerName(zfree, FormatBytes) uint8_t *buf = zmalloc(total);
@@ -280,7 +280,7 @@ int dkFormatTest(int, char *[]) {
             {DATABOX_UNSIGNED(77), DATABOX_UNSIGNED(3), *(databox *)&wide},
         };
         const size_t counts[] = {4, 3, 3, 3, 3};
-        for (size_t c = 0; c < sizeof(counts) / sizeof(*counts); c++) {
+        for (size_t c = 0; c < countof(counts); c++) {
             cleaner(flexFree) flex *f = flexNew();
             flexRow row = FLEX_ROW_INIT;
             for (size_t i = 0; i < counts[c]; i++) {

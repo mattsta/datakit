@@ -1070,7 +1070,7 @@ int multiFenwickTest(int, char *[]) {
                                  (size_t)1 << 40, SIZE_MAX};
 
         cleaner(multiFenwickFree) multiFenwick *none = NULL;
-        for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
+        for (size_t k = 0; k < countof(badIdx); k++) {
             if (multiFenwickUpdate(&none, badIdx[k], &one) ||
                 multiFenwickSet(&none, badIdx[k], &one) || none) {
                 ERR("index %zu: a refused write created a tree", badIdx[k]);
@@ -1089,7 +1089,7 @@ int multiFenwickTest(int, char *[]) {
         }
 
         const size_t bytesBefore = multiFenwickBytes(mfw);
-        for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
+        for (size_t k = 0; k < countof(badIdx); k++) {
             if (multiFenwickUpdate(&mfw, badIdx[k], &one) ||
                 multiFenwickSet(&mfw, badIdx[k], &one)) {
                 ERR("index %zu was accepted", badIdx[k]);
@@ -1231,7 +1231,7 @@ int multiFenwickTest(int, char *[]) {
 
         const size_t sparse[] = {0, 3, 17, 300, 1025, 5000};
         const int64_t sparseVal[] = {-9, 40, -700, 12345, -1, 77};
-        enum { SPARSE_N = sizeof(sparse) / sizeof(*sparse) };
+        enum { SPARSE_N = countof(sparse) };
         cleaner(multiFenwickFree) multiFenwick *sp = NULL;
         for (size_t k = 0; k < SPARSE_N && !failed; k++) {
             const databox box = DATABOX_SIGNED(sparseVal[k]);
@@ -1374,7 +1374,7 @@ int multiFenwickTest(int, char *[]) {
         }
 
         const size_t past[] = {3, 4, 1000, SIZE_MAX};
-        for (size_t k = 0; mfw && k < sizeof(past) / sizeof(*past); k++) {
+        for (size_t k = 0; mfw && k < countof(past); k++) {
             out = one;
             if (multiFenwickQuery(mfw, past[k], &out) ||
                 !DATABOX_IS_VOID(&out)) {
@@ -1823,7 +1823,7 @@ int multiFenwickTest(int, char *[]) {
             {DATABOX_UNSIGNED(UINT64_MAX), SIZE_MAX},
         };
 
-        for (size_t k = 0; mfw && k < sizeof(cases) / sizeof(*cases); k++) {
+        for (size_t k = 0; mfw && k < countof(cases); k++) {
             const size_t got = multiFenwickLowerBound(mfw, &cases[k].target);
             if (got != cases[k].want) {
                 ERR("case %zu: LowerBound = %zu, want %zu", k, got,

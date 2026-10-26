@@ -590,7 +590,7 @@ int multimapAtomDenseTest(int, char *[]) {
         }
         zfree(body);
         const uint64_t want[] = {2, 3, 4, 5, 7};
-        for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
+        for (size_t i = 0; i < countof(want); i++) {
             databox x = databoxNewSigned(100 + (int64_t)i);
             multimapAtomDenseInsertConvert(d, &x);
             if (x.data.u != want[i]) {
@@ -614,7 +614,7 @@ int multimapAtomDenseTest(int, char *[]) {
         multimapAtomDenseReleaseById(d, 2);
         multimapAtomDenseDeleteById(d, 6);
         const uint64_t want[] = {2, 5, 6, 8};
-        for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
+        for (size_t i = 0; i < countof(want); i++) {
             databox x = databoxNewSigned(600 + (int64_t)i);
             multimapAtomDenseInsertConvert(d, &x);
             if (x.data.u != want[i]) {

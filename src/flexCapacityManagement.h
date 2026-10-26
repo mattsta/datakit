@@ -7,7 +7,7 @@
 static constexpr uint32_t flexOptimizationSizeLimit[] = {
     0, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
 static constexpr size_t flexOptimizationSizeLimits =
-    sizeof(flexOptimizationSizeLimit) / sizeof(*flexOptimizationSizeLimit);
+    countof(flexOptimizationSizeLimit);
 
 typedef enum flexCapSizeLimit {
     FLEX_CAP_LEVEL_0 = 0,

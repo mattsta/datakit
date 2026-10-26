@@ -1675,7 +1675,7 @@ static int mosRandomMembersCheck_(const multiOrderedSet *mos, size_t total) {
     cleanerName(zfree, Boxes) databox *scores = zcalloc(cap, sizeof(*scores));
     cleanerName(zfree, Seen) uint8_t *seen = zcalloc(total, 1);
 
-    for (size_t c = 0; c < sizeof(counts) / sizeof(*counts); c++) {
+    for (size_t c = 0; c < countof(counts); c++) {
         const int64_t count = counts[c];
         const bool distinct = count >= 0;
         const size_t want =
@@ -2195,7 +2195,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         } tiers[] = {{60, MOS_TYPE_SMALL},
                      {400, MOS_TYPE_MEDIUM},
                      {1200, MOS_TYPE_FULL}};
-        for (size_t t = 0; t < sizeof(tiers) / sizeof(*tiers); t++) {
+        for (size_t t = 0; t < countof(tiers); t++) {
             const int64_t n = tiers[t].n;
             cleaner(multiOrderedSetFree) multiOrderedSet *mos =
                 multiOrderedSetNew();
@@ -2283,9 +2283,9 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             {-2, 100},       {3, 3},         {-1, -1},         {1, -2},
             {INT64_MIN, -1}, {10000, 20000}, {-20000, -10000},
         };
-        for (size_t t = 0; t < sizeof(ns) / sizeof(*ns); t++) {
+        for (size_t t = 0; t < countof(ns); t++) {
             const int64_t n = ns[t];
-            for (size_t r = 0; r < sizeof(ranges) / sizeof(*ranges); r++) {
+            for (size_t r = 0; r < countof(ranges); r++) {
                 multiOrderedSet *mos =
                     multiOrderedSetNewLimit(FLEX_CAP_LEVEL_128);
                 for (int64_t i = 0; i < n; i++) {
@@ -2445,7 +2445,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         cleanerName(zfree, Int64) int64_t *after =
             zcalloc((size_t)members, sizeof(int64_t));
         const int64_t keepEvery[] = {1, 4, 40, 400, 3000};
-        for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery); p++) {
+        for (size_t p = 0; p < countof(keepEvery); p++) {
             for (int64_t i = 0; i < members; i++) {
                 if (i % keepEvery[p]) {
                     const databox member = databoxNewSigned(i);
@@ -2780,12 +2780,12 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         static constexpr double weights[3] = {1.0, 0.5, 3.0};
         static const mosAggregate hows[] = {
             MOS_AGGREGATE_SUM, MOS_AGGREGATE_MIN, MOS_AGGREGATE_MAX};
-        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             const uint32_t n = sizes[s];
             multiOrderedSet *in[3] = {NULL, NULL, NULL};
             mosAlgebraSets_(n, in);
             const multiOrderedSet *sets[3] = {in[0], in[1], in[2]};
-            for (size_t h = 0; h < COUNT_ARRAY(hows); h++) {
+            for (size_t h = 0; h < countof(hows); h++) {
                 for (int intersect = 0; intersect <= 1; intersect++) {
                     cleanerName(zfree, Doubles) double *want =
                         zcalloc(n, sizeof(*want));
@@ -2943,7 +2943,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         bool tierSeen[3] = {false, false, false};
         size_t have = 0;
         char buf[16];
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             for (; have < sizes[s]; have++) {
                 databox member;
                 databox score;
@@ -3273,7 +3273,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             UINT64_MAX - 1,   /* Near max */
             UINT64_MAX        /* Max value */
         };
-        size_t numValues = sizeof(testValues) / sizeof(testValues[0]);
+        size_t numValues = countof(testValues);
 
         for (size_t i = 0; i < numValues; i++) {
             databox score = databoxNewUnsigned(testValues[i]);
@@ -3356,7 +3356,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                                 (1LL << 53) - 1,
                                 INT64_MAX - 1,
                                 INT64_MAX};
-        size_t numValues = sizeof(testValues) / sizeof(testValues[0]);
+        size_t numValues = countof(testValues);
 
         for (size_t i = 0; i < numValues; i++) {
             databox score = databoxNewSigned(testValues[i]);
@@ -3830,8 +3830,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     /* Test at various sizes like multimap does */
     static constexpr size_t testCounts[] = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
-    static constexpr size_t numTestCounts =
-        sizeof(testCounts) / sizeof(testCounts[0]);
+    static constexpr size_t numTestCounts = countof(testCounts);
 
     TEST("(full width) insert / exists / lookup / delete / rank at various "
          "sizes") {
@@ -3978,8 +3977,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
          */
 
         const size_t COMPARE_COUNTS[] = {100, 1000, 10000};
-        const size_t NUM_COMPARE =
-            sizeof(COMPARE_COUNTS) / sizeof(COMPARE_COUNTS[0]);
+        const size_t NUM_COMPARE = countof(COMPARE_COUNTS);
 
         for (size_t cc = 0; cc < NUM_COMPARE; cc++) {
             size_t count = COMPARE_COUNTS[cc];

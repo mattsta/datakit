@@ -60,7 +60,7 @@ int versionOSRuntimeTest(int, char *[]) {
             {"5.4abc", 5, 4, 0},
             {"7~rc1", 7, 0, 0},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             const uint64_t got = versionOSRuntimeParse(cases[i].release);
             const uint64_t want = versionOSRuntimeCode(
                 cases[i].major, cases[i].minor, cases[i].patch);

@@ -631,7 +631,7 @@ int intsetPTest(int, char *[]) {
                                     PTEST_SEQ_RANDOM_ISH, PTEST_SEQ_ALTERNATING,
                                     PTEST_SEQ_POWERS};
 
-        for (size_t p = 0; p < sizeof(patterns) / sizeof(patterns[0]); p++) {
+        for (size_t p = 0; p < countof(patterns); p++) {
             ptestCleanupFiles(basePath);
             ptestIntTracker tracker;
             ptestTrackerInit(&tracker);
@@ -946,7 +946,7 @@ int intsetPTest(int, char *[]) {
         static constexpr int64_t values[] = {INT64_MIN, -5000000000, -70000,
                                              -3,        0,           7,
                                              40000,     9000000000,  INT64_MAX};
-        const size_t n = sizeof(values) / sizeof(*values);
+        const size_t n = countof(values);
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         intsetP *is = intsetNewP(ctx);
@@ -1039,7 +1039,7 @@ int intsetPTest(int, char *[]) {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         intsetP *is = intsetNewP(ctx);
-        for (size_t i = 0; i < COUNT_ARRAY(held); i++) {
+        for (size_t i = 0; i < countof(held); i++) {
             PTEST_LOGGED(intsetAddP(is, held[i], NULL));
         }
 
@@ -1049,7 +1049,7 @@ int intsetPTest(int, char *[]) {
                              intsetRemoveP(is, 7, &changed),
                              intsetRemoveP(is, -3, &changed));
         if (intsetAddP(is, 300, &changed) != PERSIST_LOG_UNCHANGED || changed ||
-            !intsetPHolds_(intsetGetRawP(is), held, COUNT_ARRAY(held))) {
+            !intsetPHolds_(intsetGetRawP(is), held, countof(held))) {
             ERR("a refused change changed the set");
         }
 
@@ -1074,8 +1074,7 @@ int intsetPTest(int, char *[]) {
         ctx = persistCtxOpen(basePath, NULL);
         is = intsetOpenP(ctx);
         static constexpr int64_t logged[] = {-3, 7, 300, 40000};
-        if (!is ||
-            !intsetPHolds_(intsetGetRawP(is), logged, COUNT_ARRAY(logged))) {
+        if (!is || !intsetPHolds_(intsetGetRawP(is), logged, countof(logged))) {
             ERR("a reopen did not hold exactly the logged changes");
         }
         intsetCloseP(is);

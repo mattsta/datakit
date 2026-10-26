@@ -316,7 +316,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
             base = total;
         }
 
-        assert(steps < sizeof(planned) / sizeof(*planned));
+        assert(steps < countof(planned));
         if (!multiFenwickNumBox_(multiFenwickNumAdd_(base, delta),
                                  &planned[steps])) {
             return false;

@@ -399,7 +399,7 @@ DK_FN_UNUSED static void dataspeedCacheFromSysctl_(dataspeedCacheInfo *cache,
         {"hw.l3cachesize", &cache->l3_size},
     };
 
-    for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
+    for (size_t i = 0; i < countof(sizes); i++) {
         int64_t value = 0;
         if (read(ctx, sizes[i].name, &value) && value > 0) {
             *sizes[i].dst = (size_t)value;
@@ -1552,7 +1552,7 @@ static bool dataspeedSysctlReadSample_(void *ctx, const char *name,
     return false;
 }
 
-#define DS_LAYOUT_(rows) {(rows), sizeof(rows) / sizeof(*(rows))}
+#define DS_LAYOUT_(rows) {(rows), countof(rows)}
 
 static int dataspeedCheckCache_(const char *what, const dataspeedCacheInfo *got,
                                 const dataspeedCacheInfo *want) {

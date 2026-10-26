@@ -830,7 +830,7 @@ int listTest(int, char *[]) {
         listInsertNode(l, listLast(l), &v[6], true);
 
         const int32_t want[] = {0, 1, 15, 2, 25, 3, 4};
-        const size_t n = COUNT_ARRAY(want);
+        const size_t n = countof(want);
         size_t forward = 0;
         for (listNode *node = listFirst(l); node; node = node->next) {
             if (forward >= n ||

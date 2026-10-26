@@ -103,5 +103,4 @@ static const sha256TestVector sha256TestVectorsTable[] = {
 
 /* clang-format on */
 
-#define SHA256_TEST_VECTOR_COUNT                                               \
-    (sizeof(sha256TestVectorsTable) / sizeof(sha256TestVectorsTable[0]))
+#define SHA256_TEST_VECTOR_COUNT (countof(sha256TestVectorsTable))

@@ -191,7 +191,7 @@ static_assert(12 <= FLEX_ENV_MAX_NONCE_LEN,
               "ChaCha20-Poly1305 nonce exceeds wire slot");
 
 static const flexEnvelopeAlgoDesc *findAlgo(uint16_t algo) {
-    const size_t n = sizeof(kAlgoDescs) / sizeof(kAlgoDescs[0]);
+    const size_t n = countof(kAlgoDescs);
     for (size_t i = 0; i < n; i++) {
         if (kAlgoDescs[i].algo == (flexEnvelopeAlgo)algo) {
             return &kAlgoDescs[i];
@@ -2591,7 +2591,7 @@ int flexEnvelopeTest(int, char *[]) {
         }
         static uint8_t oneShot[4099 + 256];
         static uint8_t streamed[4099 + 256];
-        for (size_t a = 0; a < sizeof(algos) / sizeof(*algos); a++) {
+        for (size_t a = 0; a < countof(algos); a++) {
             const bool keyed = FLEX_ENV_ALGO_IS_KEYED(algos[a]);
             const flexEnvelopeWrapParams wp = {.key = keyed ? key : NULL,
                                                .key_len =
@@ -2601,7 +2601,7 @@ int flexEnvelopeTest(int, char *[]) {
                 .max_payload_len = sizeof(payload),
                 .key = keyed ? key : NULL,
                 .key_len = keyed ? sizeof(key) : 0};
-            for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+            for (size_t s = 0; s < countof(sizes); s++) {
                 const size_t n = sizes[s];
                 size_t envLen = 0;
                 if (!flexEnvelopeWrap(oneShot, sizeof(oneShot), payload, n, &wp,
@@ -2610,7 +2610,7 @@ int flexEnvelopeTest(int, char *[]) {
                     ERR("algo %d size %zu: wrap failed", (int)algos[a], n);
                     continue;
                 }
-                for (size_t c = 0; c < sizeof(chunks) / sizeof(*chunks); c++) {
+                for (size_t c = 0; c < countof(chunks); c++) {
                     const size_t step = chunks[c];
                     flexEnvelopeWrapStream ws;
                     size_t at = 0;
@@ -2779,7 +2779,7 @@ int flexEnvelopeTest(int, char *[]) {
              0,
              false},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             const uint8_t *buf = env[cases[c].env];
             const size_t len =
                 cases[c].len ? cases[c].len : envLen[cases[c].env];
@@ -2964,7 +2964,7 @@ int flexEnvelopeTest(int, char *[]) {
         static const flexEnvelopeAlgo algos[] = {
             FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
             FLEX_ENV_ALGO_AEAD_AES256_GCM};
-        for (size_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
+        for (size_t a = 0; a < countof(algos); a++) {
             const flexEnvelopeSealParams byRing = {.nonce = nonce,
                                                    .nonce_len = sizeof(nonce),
                                                    .algo = algos[a],
@@ -3213,7 +3213,7 @@ int flexEnvelopeTest(int, char *[]) {
             input[i] = (uint8_t)(i * 131 + 7);
         }
 
-        for (size_t k = 0; k < sizeof(kats) / sizeof(kats[0]); k++) {
+        for (size_t k = 0; k < countof(kats); k++) {
             const size_t len = kats[k].len;
             const XXH128_hash_t h128 = XXH3_128bits(input, len);
             if (XXH64(input, len, 0) != kats[k].xxh64) {
@@ -3274,7 +3274,7 @@ int flexEnvelopeTest(int, char *[]) {
                                 16385,
                                 (size_t)65536,
                                 (size_t)1 << 20};
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             if (!roundTripOne(FLEX_ENV_ALGO_XXH64, sizes[i], NULL, 0)) {
                 ERR("xxh64 round-trip failed at size %zu", sizes[i]);
             }
@@ -3283,7 +3283,7 @@ int flexEnvelopeTest(int, char *[]) {
 
     TEST("envelope: round-trip xxh3_64 across size matrix") {
         const size_t sizes[] = {0, 1, 1024, 65536, 1 << 20};
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             if (!roundTripOne(FLEX_ENV_ALGO_XXH3_64, sizes[i], NULL, 0)) {
                 ERR("xxh3_64 round-trip failed at size %zu", sizes[i]);
             }
@@ -3292,7 +3292,7 @@ int flexEnvelopeTest(int, char *[]) {
 
     TEST("envelope: round-trip xxh3_128 across size matrix") {
         const size_t sizes[] = {0, 1, 1024, 65536, 1 << 20};
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             if (!roundTripOne(FLEX_ENV_ALGO_XXH3_128, sizes[i], NULL, 0)) {
                 ERR("xxh3_128 round-trip failed at size %zu", sizes[i]);
             }
@@ -3302,7 +3302,7 @@ int flexEnvelopeTest(int, char *[]) {
     TEST("envelope: round-trip rapidhash across size matrix") {
         const size_t sizes[] = {0,    1,     63,    64,    65,    1023,
                                 1024, 16383, 16384, 16385, 65536, 1 << 20};
-        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        for (size_t i = 0; i < countof(sizes); i++) {
             if (!roundTripOne(FLEX_ENV_ALGO_RAPIDHASH, sizes[i], NULL, 0)) {
                 ERR("rapidhash round-trip failed at size %zu", sizes[i]);
             }
@@ -3576,7 +3576,7 @@ int flexEnvelopeTest(int, char *[]) {
             {0, false, 0, UINT64_MAX - 20, false},
             {0, false, 0, UINT64_MAX, false},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             uint8_t buf[64] = {};
             size_t pos = 0;
             size_t w = 0;
@@ -3763,7 +3763,7 @@ int flexEnvelopeTest(int, char *[]) {
             FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_HMAC_BLAKE3,
         };
-        for (size_t i = 0; i < sizeof(keyed) / sizeof(keyed[0]); i++) {
+        for (size_t i = 0; i < countof(keyed); i++) {
             const flexEnvelopeAlgo algo = keyed[i];
 
             /* Round-trip with key. */
@@ -3800,7 +3800,7 @@ int flexEnvelopeTest(int, char *[]) {
             FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_HMAC_BLAKE3,
         };
-        for (size_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
+        for (size_t i = 0; i < countof(algos); i++) {
             const size_t total = flexEnvelopeWrappedSize(plen, algos[i], 0);
             cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
             flexEnvelopeWrapParams wp = {
@@ -3856,7 +3856,7 @@ int flexEnvelopeTest(int, char *[]) {
             FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_HMAC_BLAKE3,
         };
-        for (size_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
+        for (size_t a = 0; a < countof(algos); a++) {
             const size_t total = flexEnvelopeWrappedSize(plen, algos[a], 0);
             cleanerName(zfree, Bytes) uint8_t *orig = zmalloc(total);
             cleanerName(zfree, Bytes) uint8_t *mutated = zmalloc(total);
@@ -3955,8 +3955,7 @@ int flexEnvelopeTest(int, char *[]) {
         const uint32_t lenBuckets[] = {0u,    1u,    2u,    8u,   16u,
                                        32u,   64u,   128u,  256u, 512u,
                                        1024u, 4096u, 65536u};
-        const uint32_t numBuckets =
-            (uint32_t)(sizeof(lenBuckets) / sizeof(lenBuckets[0]));
+        const uint32_t numBuckets = (uint32_t)(countof(lenBuckets));
         const uint32_t policies[] = {
             FLEX_ENV_VERIFY_DEFAULT,         FLEX_ENV_VERIFY_ALLOW_TRAILING,
             FLEX_ENV_VERIFY_REQUIRE_FLEX,    FLEX_ENV_VERIFY_REQUIRE_HMAC,
@@ -3964,8 +3963,7 @@ int flexEnvelopeTest(int, char *[]) {
             FLEX_ENV_VERIFY_PEEK_ONLY,       FLEX_ENV_VERIFY_FAST_COMPARE,
             FLEX_ENV_VERIFY_BOUND_PAYLOAD,   FLEX_ENV_VERIFY_ALLOW_DEPRECATED,
         };
-        const uint32_t numPolicies =
-            (uint32_t)(sizeof(policies) / sizeof(policies[0]));
+        const uint32_t numPolicies = (uint32_t)(countof(policies));
 
         /* Fixed key for HMAC verify attempts — fuzz only the buffer,
          * not the key, so verify either rejects the framing or fails
@@ -4076,14 +4074,13 @@ int flexEnvelopeTest(int, char *[]) {
         };
         const size_t plens[] = {0, 1, 7, 64, 1024, 65537};
 
-        for (size_t ai = 0; ai < sizeof(all_algos) / sizeof(all_algos[0]);
-             ai++) {
+        for (size_t ai = 0; ai < countof(all_algos); ai++) {
             const flexEnvelopeAlgo algo = all_algos[ai];
             uint8_t key[32];
             fillPseudoRandom(key, sizeof(key), 0x51EA1U + (uint64_t)algo);
             const bool need_key = flexEnvelopeAlgoIsKeyed(algo);
 
-            for (size_t pi = 0; pi < sizeof(plens) / sizeof(plens[0]); pi++) {
+            for (size_t pi = 0; pi < countof(plens); pi++) {
                 const size_t plen = plens[pi];
                 cleanerName(zfree, Bytes) uint8_t *payload =
                     plen > 0 ? zmalloc(plen) : NULL;
@@ -4690,7 +4687,7 @@ int flexEnvelopeTest(int, char *[]) {
 
         const flexEnvelopeAlgo algos[] = {FLEX_ENV_ALGO_HMAC_SHA256,
                                           FLEX_ENV_ALGO_HMAC_BLAKE3};
-        for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
+        for (uint32_t i = 0; i < countof(algos); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const size_t total = flexEnvelopeWrappedSize(plen, algo, 0);
             cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
@@ -4791,7 +4788,7 @@ int flexEnvelopeTest(int, char *[]) {
             nonce[i] = (uint8_t)(0xA0u + i);
         }
 
-        for (uint32_t s = 0; s < sizeof(plens) / sizeof(plens[0]); s++) {
+        for (uint32_t s = 0; s < countof(plens); s++) {
             const size_t plen = plens[s];
             cleanerName(zfree, Bytes) uint8_t *plain =
                 plen > 0 ? zmalloc(plen) : NULL;
@@ -4993,8 +4990,8 @@ int flexEnvelopeTest(int, char *[]) {
             FLEX_ENV_ALGO_XXH3_128,    FLEX_ENV_ALGO_BLAKE3_KEYED,
             FLEX_ENV_ALGO_HMAC_SHA256, FLEX_ENV_ALGO_HMAC_BLAKE3};
         printf("\nenvelope perf bench (wrap + verify per algo × size):\n");
-        for (size_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
-            for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t a = 0; a < countof(algos); a++) {
+            for (size_t s = 0; s < countof(sizes); s++) {
                 const size_t plen = sizes[s];
                 cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(plen);
                 fillPseudoRandom(payload, plen, 42);
@@ -5083,7 +5080,7 @@ int flexEnvelopeTest(int, char *[]) {
         }
         /* Tamper at a few positions. */
         const size_t tamper_at[] = {0, written / 2, written - 1};
-        for (size_t i = 0; i < sizeof(tamper_at) / sizeof(tamper_at[0]); i++) {
+        for (size_t i = 0; i < countof(tamper_at); i++) {
             buf[tamper_at[i]] ^= 0x01;
             if (flexEnvelopeOpen(buf, written, &vp, rec, plen, &r_len)) {
                 ERR("AES-128-GCM accepted tamper @ %zu", tamper_at[i]);
@@ -5478,7 +5475,7 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t u_zero[sizeof(((flexEnvelopeWrapStream *)0)->u)];
         memset(u_zero, 0, sizeof(u_zero));
 
-        for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
+        for (uint32_t i = 0; i < countof(algos); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const size_t wrapped = flexEnvelopeWrappedSize(plen, algo, 0);
             cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped);
@@ -5544,7 +5541,7 @@ int flexEnvelopeTest(int, char *[]) {
         uint8_t u_zero[sizeof(((flexEnvelopeVerifyStream *)0)->u)];
         memset(u_zero, 0, sizeof(u_zero));
 
-        for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
+        for (uint32_t i = 0; i < countof(algos); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const size_t wrapped = flexEnvelopeWrappedSize(plen, algo, 0);
             cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped);

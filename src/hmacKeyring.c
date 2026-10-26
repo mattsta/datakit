@@ -1618,7 +1618,7 @@ int hmacKeyringTest(int, char *[]) {
             ERR("key 3 setup failed");
         }
         static const hmacKeyId ids[] = {HMAC_KEY_ID_INVALID, 4u};
-        for (size_t i = 0; i < sizeof(ids) / sizeof(*ids); i++) {
+        for (size_t i = 0; i < countof(ids); i++) {
             const hmacKeyId id = ids[i];
             const uint8_t *bytes = NULL;
             size_t len = 0;
@@ -2459,7 +2459,7 @@ int hmacKeyringTest(int, char *[]) {
             {databoxNewUnsigned(9), databoxNewSigned(-10)},
         };
         hmacKeyring *target = src;
-        for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+        for (size_t i = 0; i < countof(bad); i++) {
             cleaner(flexFree) flex *rec = flexNew();
             flexPushByType(&rec, &bad[i].id, FLEX_ENDPOINT_TAIL);
             flexPushByType(&rec, &bad[i].limit, FLEX_ENDPOINT_TAIL);

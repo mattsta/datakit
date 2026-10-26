@@ -76,7 +76,7 @@ uint64_t humanToBytes(const void *buf_, const size_t len, bool *err) {
     if (unitLen == 0) {
         mul = 1;
     } else {
-        for (size_t i = 0; i < COUNT_ARRAY(humanUnits); i++) {
+        for (size_t i = 0; i < countof(humanUnits); i++) {
             if (strlen(humanUnits[i].name) == unitLen &&
                 !strncasecmp(unit, humanUnits[i].name, unitLen)) {
                 mul = humanUnits[i].mul;
@@ -129,7 +129,7 @@ bool bytesToHuman(void *const buf, const size_t len, const uint64_t n) {
                                         "TiB", "PiB", "EiB"};
     size_t unit = 0;
     double d = (double)n / 1024;
-    while (unit + 1 < sizeof(units) / sizeof(*units) && d >= 1024 - 0.000005) {
+    while (unit + 1 < countof(units) && d >= 1024 - 0.000005) {
         d /= 1024;
         unit++;
     }
@@ -562,7 +562,7 @@ int utilTest(int, char **) {
                      {"HELLO", "hello", 0, false},
                      {"*", "", 0, true},
                      {"a\\*b", "a*b", 0, true}};
-        for (size_t i = 0; i < sizeof(globs) / sizeof(*globs); i++) {
+        for (size_t i = 0; i < countof(globs); i++) {
             if (stringmatch(globs[i].pattern, globs[i].string,
                             globs[i].nocase) != globs[i].match) {
                 ERR("stringmatch(\"%s\", \"%s\")", globs[i].pattern,
@@ -598,7 +598,7 @@ int utilTest(int, char **) {
             {"[^]", "a", 0, true},    {"*.c", "x.c", 0, true},
             {"*.c", "x.h", 0, false}, {"a?c", "abc", 0, true},
         };
-        for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
+        for (size_t i = 0; i < countof(edges); i++) {
             const size_t pl = strlen(edges[i].pattern);
             const size_t sl = strlen(edges[i].string);
             cleanerName(zfree, Bytes) uint8_t *p = zmalloc(pl ? pl : 1);
@@ -658,7 +658,7 @@ int utilTest(int, char **) {
         } spans[] = {{1e-8, " ns"},    {1e-5, " us"},     {0.5, " ms"},
                      {5, " seconds"},  {120, " minutes"}, {7200, " hours"},
                      {200000, " days"}};
-        for (size_t i = 0; i < sizeof(spans) / sizeof(*spans); i++) {
+        for (size_t i = 0; i < countof(spans); i++) {
             secondsToHuman(human, sizeof(human), spans[i].sec);
             if (!strstr(human, spans[i].unit)) {
                 ERR("secondsToHuman(%g) = \"%s\"", spans[i].sec, human);
@@ -780,7 +780,7 @@ int utilTest(int, char **) {
             {"EiB", 1152921504606846976},
         };
 
-        for (size_t i = 0; i < sizeof(units) / sizeof(*units); i++) {
+        for (size_t i = 0; i < countof(units); i++) {
             const uint64_t max = UINT64_MAX / units[i].mul;
             char buf[64];
             bool e = true;
@@ -826,7 +826,7 @@ int utilTest(int, char **) {
                                  "gb",
                                  "",
                                  "18446744073709551616"};
-        for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+        for (size_t i = 0; i < countof(refused); i++) {
             bool e = false;
             const uint64_t got =
                 humanToBytes(refused[i], strlen(refused[i]), &e);
@@ -866,7 +866,7 @@ int utilTest(int, char **) {
             {(1ULL << 30) + (1ULL << 29), "1.50000 GiB"},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             char buf[64];
             const bool ok = bytesToHuman(buf, sizeof(buf), cases[i].n);
             if (!ok || strcmp(buf, cases[i].want) != 0) {
@@ -923,7 +923,7 @@ int utilTest(int, char **) {
             (1ULL << 63) - 1,
         };
 
-        for (size_t i = 0; i < sizeof(edgeCases) / sizeof(edgeCases[0]); i++) {
+        for (size_t i = 0; i < countof(edgeCases); i++) {
             uint64_t x = edgeCases[i];
             uint64_t result = pow2Ceiling64(x);
             uint64_t expected = pow2Ceiling64_reference(x);

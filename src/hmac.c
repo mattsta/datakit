@@ -812,7 +812,7 @@ int hmacTest(int, char *[]) {
 
         const size_t sizes[] = {0u,  1u,   31u,  32u,  63u,  64u,
                                 65u, 127u, 128u, 129u, 511u, 1023u};
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
             cleanerName(zfree, Bytes) uint8_t *msg =
                 (n > 0) ? zmalloc(n) : NULL;
@@ -933,7 +933,7 @@ int hmacTest(int, char *[]) {
             {0, 64, 128, 192},    /* ascending incl. empty */
             {4096, 64, 1, 0},     /* descending */
         };
-        const size_t kCases = sizeof(test_lens) / sizeof(test_lens[0]);
+        const size_t kCases = countof(test_lens);
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(8192);
         for (size_t i = 0; i < 8192; i++) {
             buf[i] = (uint8_t)(i * 13u + 7u);

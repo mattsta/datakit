@@ -419,7 +419,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
                                           "-01",
                                           "+1",
                                           "1-"};
-    for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+    for (size_t i = 0; i < countof(refused); i++) {
         v = 12345;
         if (StrBufToInt64(refused[i], strlen(refused[i]), &v) || v != 12345) {
             printf("StrBufToInt64 accepted '%s'\n", refused[i]);
@@ -494,7 +494,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
         "99999999999999999999",  "184467440737095516150", /* UINT64_MAX*10 */
         "100000000000000000000",                          /* 21 digits */
     };
-    for (size_t i = 0; i < sizeof(above) / sizeof(*above); i++) {
+    for (size_t i = 0; i < countof(above); i++) {
         v = 12345;
         if (StrBufToUInt64(above[i], strlen(above[i]), &v) || v != 12345) {
             printf("StrBufToUInt64 accepted %s\n", above[i]);
@@ -527,7 +527,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
         {"1844674407370955161", UINT64_MAX / 10},
         {"10", 10},
     };
-    for (size_t i = 0; i < sizeof(edge) / sizeof(*edge); i++) {
+    for (size_t i = 0; i < countof(edge); i++) {
         const size_t len = strlen(edge[i].s);
         uint64_t a = 0;
         uint64_t b = 0;
@@ -546,7 +546,7 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
      * FastCheck parsers allow leading zeros */
     static const char *const malformed[] = {
         "", "00", "007", "-1", "-0", "1a", "a1", "1.0", "1e3", "1-", "1 2"};
-    for (size_t i = 0; i < sizeof(malformed) / sizeof(*malformed); i++) {
+    for (size_t i = 0; i < countof(malformed); i++) {
         v = 12345;
         if (StrBufToUInt64(malformed[i], strlen(malformed[i]), &v) ||
             v != 12345) {
@@ -737,8 +737,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             const size_t count = (size_t)((rng >> 33) % 12);
             for (size_t k = 0; k < count; k++) {
                 rng = rng * 6364136223846793005ULL + 1;
-                const size_t p =
-                    (size_t)((rng >> 40) % (sizeof(pieces) / sizeof(*pieces)));
+                const size_t p = (size_t)((rng >> 40) % (countof(pieces)));
                 memcpy(s + L, pieces[p].bytes, pieces[p].len);
                 L += pieces[p].len;
             }
@@ -836,12 +835,12 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                               0x0483 /* combining */,
                                               0x0660 /* Arabic 0 */,
                                               0x3000 /* ideographic space */};
-        for (size_t i = 0; i < sizeof(letters) / sizeof(*letters); i++) {
+        for (size_t i = 0; i < countof(letters); i++) {
             if (!StrUnicodeIsLetter(letters[i])) {
                 ERR("U+%04" PRIX32 " is a letter", letters[i]);
             }
         }
-        for (size_t i = 0; i < sizeof(others) / sizeof(*others); i++) {
+        for (size_t i = 0; i < countof(others); i++) {
             if (StrUnicodeIsLetter(others[i])) {
                 ERR("U+%04" PRIX32 " is not a letter", others[i]);
             }
@@ -849,7 +848,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* The digits it knows */
         static constexpr uint32_t digits[] = {'5', 0xFF15, 0x0665, 0x06F5,
                                               0x096B};
-        for (size_t i = 0; i < sizeof(digits) / sizeof(*digits); i++) {
+        for (size_t i = 0; i < countof(digits); i++) {
             if (!StrUnicodeIsDigit(digits[i]) ||
                 StrUnicodeIsLetter(digits[i])) {
                 ERR("U+%04" PRIX32 " is a digit, not a letter", digits[i]);
@@ -888,7 +887,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {0x1F1E6, 0x1F1E7, false, "GB12 RI x RI"},
             {0x0061, 0x0062, true, "GB999"},
         };
-        for (size_t i = 0; i < sizeof(pairs) / sizeof(*pairs); i++) {
+        for (size_t i = 0; i < countof(pairs); i++) {
             if (StrUnicodeIsGraphemeBreak(pairs[i].a, pairs[i].b) !=
                 pairs[i].brk) {
                 ERR("%s: U+%04" PRIX32 " U+%04" PRIX32 " wrong", pairs[i].rule,
@@ -1007,8 +1006,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             999999,    1'000'000, 9999999,   10'000'000, 99999999, 100'000'000,
             999999999, 123456789, 987654321, 111111111,  500000000};
 
-        for (size_t i = 0; i < sizeof(testValues) / sizeof(testValues[0]);
-             i++) {
+        for (size_t i = 0; i < countof(testValues); i++) {
             uint32_t val = testValues[i];
             char buf[10] = {};
             StrUInt9DigitsToBuf(buf, val);
@@ -1092,8 +1090,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         const uint32_t test8Values[] = {0,        1,        99,       999,
                                         9999,     99999,    999999,   9999999,
                                         99999999, 12345678, 87654321, 50000000};
-        for (size_t i = 0; i < sizeof(test8Values) / sizeof(test8Values[0]);
-             i++) {
+        for (size_t i = 0; i < countof(test8Values); i++) {
             uint32_t val = test8Values[i];
             char buf[9] = {};
             StrUInt8DigitsToBuf(buf, val);
@@ -1158,7 +1155,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         };
 
         /* The sign is parsed with or without the float words */
-        for (size_t c = 0; c < 2 * sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < 2 * countof(cases); c++) {
             const size_t i = c / 2;
             const bool words = c % 2;
             databox box = {};
@@ -1193,7 +1190,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"123456789012345678901234567890", 1, INT64_MAX},
             {"-123456789012345678901234567890", 1, INT64_MIN},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             int64_t got = 0;
             const int32_t rc = StrAtoi64(
                 cases[i].s, &got, (int32_t)strlen(cases[i].s), STR_UTF8, false);
@@ -1231,7 +1228,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"-", false},
             {".", false},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             const char *s = cases[i].s;
             double got = -1.0;
             const bool ok =
@@ -1304,7 +1301,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             "0x1.fffffffffffff8p1023",
             "0x123456789abcdef0123p-40",
         };
-        for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
+        for (size_t i = 0; i < countof(edges); i++) {
             databox box = {};
             const StrScanFmt fmt = StrScanScan((const uint8_t *)edges[i], &box,
                                                STRSCAN_OPT_TONUM, false, false);
@@ -1410,7 +1407,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"1e99999", 0, STRSCAN_NUM, 0, INFINITY},
             {"-1e-99999", 0, STRSCAN_NUM, 0, -0.0},
         };
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             databox box = {};
             const StrScanFmt fmt =
                 StrScanScan((const uint8_t *)cases[i].s, &box,
@@ -1466,7 +1463,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                      "",
                                      "92233720368547758070",
                                      "-9223372036854775808"};
-        for (size_t i = 0; i < sizeof(nums) / sizeof(*nums); i++) {
+        for (size_t i = 0; i < countof(nums); i++) {
             const size_t n = strlen(nums[i]);
             uint8_t le[64] = {};
             uint8_t be[64] = {};
@@ -1522,7 +1519,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"9223372036854775808", 2, INT64_MAX},
             {"12a", 1, 12},
         };
-        for (size_t i = 0; i < sizeof(h64) / sizeof(*h64); i++) {
+        for (size_t i = 0; i < countof(h64); i++) {
             int64_t got = 0;
             const int32_t rc = StrDecOrHexToInt64(h64[i].s, &got);
             if (rc != h64[i].rc || (rc != 1 && got != h64[i].want) ||
@@ -1549,7 +1546,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"00000000042abc", true, 42},
             {"12345678901", false, 0},
         };
-        for (size_t i = 0; i < sizeof(i32) / sizeof(*i32); i++) {
+        for (size_t i = 0; i < countof(i32); i++) {
             int32_t got = -1;
             const bool ok = StrGetInt32(i32[i].s, &got);
             if (ok != i32[i].ok || (ok && got != i32[i].want) ||
@@ -1592,7 +1589,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"''", ""},         {"'", ""},
             {"'a'tail", "a"},
         };
-        for (size_t i = 0; i < sizeof(dq) / sizeof(*dq); i++) {
+        for (size_t i = 0; i < countof(dq); i++) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%s", dq[i].in);
             StrDequote(buf);
@@ -1637,7 +1634,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {'*', INT64_C(1) << 62, -2, true, INT64_MIN},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             int64_t v = cases[i].a;
             bool ok;
             if (cases[i].op == '+') {
@@ -2238,7 +2235,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"-10000000000000000000", false, DATABOX_VOID, 0, 0},
             {"18446744073709551616", false, DATABOX_VOID, 0, 0},
         };
-        for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
+        for (size_t i = 0; i < countof(rows); i++) {
             databox result = {};
             const bool worked =
                 StrScanScanReliable(rows[i].s, strlen(rows[i].s), &result);
@@ -2361,8 +2358,8 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                        "2147483649",           "1.234",
                        "789498543789543.13",   "21542136560502.847656"};
 
-        size_t len[COUNT_ARRAY(str)] = {};
-        for (size_t i = 0; i < COUNT_ARRAY(str); i++) {
+        size_t len[countof(str)] = {};
+        for (size_t i = 0; i < countof(str); i++) {
             len[i] = strlen(str[i]);
         }
 
@@ -2372,7 +2369,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 databox result = {};
                 for (size_t i = 0; i < loopBooster; i++) {
                     PERF_TIMERS_STAT_START;
-                    const size_t useStr = i % COUNT_ARRAY(str);
+                    const size_t useStr = i % countof(str);
                     if (StrScanScanReliable(str[useStr], len[useStr],
                                             &result)) {
                         assert(result.type);
@@ -2393,7 +2390,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                     PERF_TIMERS_STAT_START;
                     int64_t ivalue = 0;
                     double dvalue = 0;
-                    const size_t useStr = i % COUNT_ARRAY(str);
+                    const size_t useStr = i % countof(str);
                     if (len[useStr] <= 32 &&
                         StrAtoi64(str[useStr], &ivalue, len[useStr], STR_UTF8,
                                   false) == 0) {
@@ -2730,7 +2727,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                              UINT64_MAX};
         char buf[32];
         char want[32];
-        for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
+        for (size_t i = 0; i < countof(edges); i++) {
             const int wantLen =
                 snprintf(want, sizeof(want), "%" PRIu64, edges[i]);
             const size_t got = StrUInt64ToBufTable(buf, sizeof(buf), edges[i]);
@@ -2940,8 +2937,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         const uint32_t ones = StrPopCntAligned(more, sizeof(more));
         assert(ones == 16);
 
-        for (size_t i = 0; i < sizeof(setPositions) / sizeof(*setPositions);
-             i++) {
+        for (size_t i = 0; i < countof(setPositions); i++) {
             /* The lowest number element we need to compare against */
             const uint32_t extent = setPositions[i] / (sizeof(*more) * 8);
 
@@ -3376,8 +3372,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         };
         const size_t iterations = 2000000;
 
-        for (size_t t = 0; t < sizeof(testNumbers) / sizeof(testNumbers[0]);
-             t++) {
+        for (size_t t = 0; t < countof(testNumbers); t++) {
             const char *num = testNumbers[t];
             const size_t len = strlen(num);
             uint64_t resultSWAR = 0;
@@ -3840,7 +3835,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             0x10FFFF, /* max valid codepoint */
         };
 
-        for (size_t i = 0; i < COUNT_ARRAY(testCps); i++) {
+        for (size_t i = 0; i < countof(testCps); i++) {
             uint32_t cp = testCps[i];
 
             /* Encode */
@@ -4273,8 +4268,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             "",
         };
 
-        for (size_t i = 0; i < sizeof(testStrings) / sizeof(testStrings[0]);
-             i++) {
+        for (size_t i = 0; i < countof(testStrings); i++) {
             const char *str = testStrings[i];
             size_t len = strlen(str);
             size_t charCount = StrLenUtf8(str, len);
@@ -5301,7 +5295,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             /* UINT128_MAX + 1, then 40 digits */
             "340282366920938463463374607431768211456",
             "1000000000000000000000000000000000000000"};
-        for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+        for (size_t i = 0; i < countof(refused); i++) {
             const size_t len = strlen(refused[i]);
             __uint128_t u = 7;
             __int128_t s = 7;
@@ -5352,7 +5346,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"12345", DATABOX_SIGNED_64, false},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t i = 0; i < countof(cases); i++) {
             databox small;
             databoxBig big;
             memset(&small, 0xA5, sizeof(small));
@@ -5439,7 +5433,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             "1000000000000000000.0", "12345678901234567890a",
         };
         size_t accepted = 0;
-        for (size_t i = 0; i < sizeof(inputs) / sizeof(*inputs); i++) {
+        for (size_t i = 0; i < countof(inputs); i++) {
             const size_t len = strlen(inputs[i]);
             databox narrow = {};
             const bool want = StrScanScanReliable(inputs[i], len, &narrow);
@@ -5466,7 +5460,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
 
         printf("    %zu of %zu long non-integers are numerals\n", accepted,
-               sizeof(inputs) / sizeof(*inputs));
+               countof(inputs));
     }
 
     TEST_FINAL_RESULT;

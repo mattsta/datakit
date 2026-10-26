@@ -1869,7 +1869,7 @@ int clusterMailboxTest(int, char *[]) {
         memset(payload, 0x3c, sizeof(payload));
         uint64_t refusals = 0;
         for (size_t o = 0; o < 3; o++) {
-            for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
+            for (size_t l = 0; l < countof(lens); l++) {
                 /* Increasing per origin, a different width per origin */
                 const uint64_t seq = seqs[o] + l;
                 size_t n = 0;
@@ -1933,7 +1933,7 @@ int clusterMailboxTest(int, char *[]) {
             {v, 1, CLUSTER_MAILBOX_ERR_PROTOCOL},
             {v, UINT64_C(1) << 40, CLUSTER_MAILBOX_OK},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             cleaner(flexFree) flex *hdr = flexNew();
             flexRow row = FLEX_ROW_INIT;
             flexRowUnsigned(&row, cases[c].version);
@@ -2069,7 +2069,7 @@ int clusterMailboxTest(int, char *[]) {
         uint8_t mtype = 0;
         size_t consumed = 0;
         dkFormatStamp protocol;
-        for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+        for (size_t i = 0; i < countof(refused); i++) {
             cleaner(flexFree) flex *bad =
                 cmTestReplaceAny(src, refused[i].idx, refused[i].value);
             if (cmDecodeInnerHeader(bad, flexBytes(bad), &protocol, &origin,
@@ -2110,7 +2110,7 @@ int clusterMailboxTest(int, char *[]) {
         const databoxBig zero = DATABOX_BIG_UNSIGNED(0);
         const databoxBig *badIds[] = {&zero, &u32, &neg, &asText};
         hmacKeyId got = 0;
-        for (size_t i = 0; i < sizeof(badIds) / sizeof(*badIds); i++) {
+        for (size_t i = 0; i < countof(badIds); i++) {
             cleaner(flexFree) flex *bad =
                 cmTestReplaceAny(annSrc, 0, badIds[i]);
             if (clusterMailboxParseRotateAnnounce(bad, flexBytes(bad), &got)) {
@@ -2327,7 +2327,7 @@ int clusterMailboxTest(int, char *[]) {
         const flexEnvelopeAlgo algos[] = {FLEX_ENV_ALGO_HMAC_SHA256,
                                           FLEX_ENV_ALGO_HMAC_BLAKE3,
                                           FLEX_ENV_ALGO_BLAKE3_KEYED};
-        for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
+        for (uint32_t i = 0; i < countof(algos); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const hmacHashAlgo *hash_algo = (algo == FLEX_ENV_ALGO_HMAC_BLAKE3)
                                                 ? &hmacAlgoBLAKE3
@@ -3330,7 +3330,7 @@ int clusterMailboxTest(int, char *[]) {
             {{PERSIST_TYPE_CLUSTER_RING, current.version, 0}, true, false},
             {current, false, false},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             uint8_t inner[128];
             size_t n = 0;
             if (cases[c].stamped) {
@@ -3463,8 +3463,7 @@ int clusterMailboxTest(int, char *[]) {
 
         const uint32_t bucket_sizes[] = {0u,   1u,   2u,   16u,   32u,  64u,
                                          128u, 256u, 512u, 1024u, 4096u};
-        const uint32_t num_buckets =
-            (uint32_t)(sizeof(bucket_sizes) / sizeof(bucket_sizes[0]));
+        const uint32_t num_buckets = (uint32_t)(countof(bucket_sizes));
         const uint32_t iters_per_bucket = 2048u;
 
         uint64_t accepted = 0;

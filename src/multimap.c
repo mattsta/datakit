@@ -2097,7 +2097,7 @@ int32_t multimapInsertReplacingSweep(void) {
         cleanerName(multimapFullFree, Sweep) multimapFull *full =
             multimapFullNew(RP_WIDTH);
         cleaner(multimapFree) multimap *generic = multimapNew(RP_WIDTH);
-        for (uint64_t w = 0; w < COUNT_ARRAY(wide); w++) {
+        for (uint64_t w = 0; w < countof(wide); w++) {
             const databoxType t = wide[w].type;
             err += rpWide("flex wide", rpFlex, &f, w, &wide[w], t);
             err += rpWide("small wide", rpSmall, small, w, &wide[w], t);
@@ -2322,7 +2322,7 @@ static size_t mwBuildRows(mwRow *rows, const size_t cap, uint64_t *rng) {
 
     size_t n = 0;
     while (n < cap) {
-        rows[n].key = n < COUNT_ARRAY(fixed) ? fixed[n] : mwRandWide(rng);
+        rows[n].key = n < countof(fixed) ? fixed[n] : mwRandWide(rng);
         rows[n].val =
             (n % 3 == 2) ? mwSmall((int64_t)(n * 7) - 50) : mwRandWide(rng);
         rows[n].present = false;
@@ -2996,7 +2996,7 @@ int32_t multimapWideSweep(void) {
         {"full", mwMaxRows, FLEX_CAP_LEVEL_64, MULTIMAP_TYPE_FULL},
     };
 
-    for (size_t p = 0; p < COUNT_ARRAY(plans); p++) {
+    for (size_t p = 0; p < countof(plans); p++) {
         /* Build the full sorted set, then keep an evenly spaced subset
          * that includes both extremes (INT128_MIN and UINT128_MAX). */
         const size_t built = mwBuildRows(rows, mwMaxRows, &rng);
@@ -3021,7 +3021,7 @@ int32_t multimapWideSweep(void) {
                                          FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
     const multimapType fwTiers[] = {MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM,
                                     MULTIMAP_TYPE_FULL};
-    for (size_t t = 0; t < COUNT_ARRAY(fwLimits); t++) {
+    for (size_t t = 0; t < countof(fwLimits); t++) {
         cleaner(multimapFree) multimap *m = multimapNewLimit(2, fwLimits[t]);
         err += mwExerciseFullWidth(t == 0   ? "small"
                                    : t == 1 ? "medium"
@@ -3285,8 +3285,7 @@ static size_t mxBuildRows(mwRow *rows, const size_t cap, const mxMode mode,
 
     const bool wide = mode == MX_EXTENDED;
     const mwInt *fixed = wide ? wideFixed : narrowFixed;
-    const size_t fixedCount =
-        wide ? COUNT_ARRAY(wideFixed) : COUNT_ARRAY(narrowFixed);
+    const size_t fixedCount = wide ? countof(wideFixed) : countof(narrowFixed);
     for (size_t n = 0; n < cap; n++) {
         if (n < fixedCount) {
             rows[n].key = fixed[n];
@@ -3710,7 +3709,7 @@ int32_t multimapWideMatrixSweep(void) {
     for (size_t mode = MX_NORMAL; mode <= MX_MIXED; mode++) {
         mwRow pool[mxPoolMax];
         const size_t built = mxBuildRows(pool, mxPoolMax, mode, &rng);
-        for (size_t p = 0; p < COUNT_ARRAY(plans); p++) {
+        for (size_t p = 0; p < countof(plans); p++) {
             char where[64];
             snprintf(where, sizeof(where), "%s %s", mxModeName[mode],
                      plans[p].tier);
@@ -3784,7 +3783,7 @@ int32_t multimapWidePersistSweep(void) {
     for (size_t mode = MX_NORMAL; mode <= MX_MIXED; mode++) {
         mwRow pool[mxPoolMax];
         const size_t built = mxBuildRows(pool, mxPoolMax, mode, &rng);
-        for (size_t p = 0; p < COUNT_ARRAY(plans); p++) {
+        for (size_t p = 0; p < countof(plans); p++) {
             char where[64];
             snprintf(where, sizeof(where), "persist %s %s", mxModeName[mode],
                      plans[p].tier);
@@ -4077,7 +4076,7 @@ static int32_t multimapFullWidthEntrySweep_(void) {
                                        FLEX_CAP_LEVEL_64};
     const multimapType tiers[] = {MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM,
                                   MULTIMAP_TYPE_FULL};
-    for (size_t t = 0; t < COUNT_ARRAY(keys); t++) {
+    for (size_t t = 0; t < countof(keys); t++) {
         cleaner(multimapFree) multimap *a =
             multimapNewConfigure(2, true, false, limits[t]);
         cleaner(multimapFree) multimap *b =
@@ -4279,7 +4278,7 @@ static int32_t multimapDeleteEntrySweep_(void) {
     int32_t err = 0;
     const int64_t sizes[] = {20, 200, 3000};
     bool sawType[MULTIMAP_TYPE_FULL + 1] = {false};
-    for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+    for (size_t s = 0; s < countof(sizes); s++) {
         const int64_t n = sizes[s];
         cleaner(multimapFree) multimap *m =
             multimapNewLimit(2, FLEX_CAP_LEVEL_512);
@@ -4356,7 +4355,7 @@ int multimapTest(int, char *[]) {
          * Small, Medium and Full tiers; an absent key is not */
         static constexpr size_t sizes[] = {3, 100, 150, 200, 300, 2000};
         unsigned tiers = 0;
-        for (size_t t = 0; t < sizeof(sizes) / sizeof(*sizes); t++) {
+        for (size_t t = 0; t < countof(sizes); t++) {
             cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
             multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
             for (size_t i = 0; i < sizes[t]; i++) {
@@ -4418,7 +4417,7 @@ int multimapTest(int, char *[]) {
         }
         static constexpr int64_t later[] = {19500, 18500, 17999, 16001,
                                             15500, 19999, 14500};
-        for (size_t i = 0; i < sizeof(later) / sizeof(*later); i++) {
+        for (size_t i = 0; i < countof(later); i++) {
             keys[NK++] = later[i];
         }
         for (int64_t k = 990; k >= 800; k -= 10) {
@@ -4518,7 +4517,7 @@ int multimapTest(int, char *[]) {
         static constexpr size_t sizes[] = {6, 150, 1500};
         static char bigValue[600];
         memset(bigValue, 'v', sizeof(bigValue));
-        for (size_t t = 0; t < sizeof(sizes) / sizeof(*sizes); t++) {
+        for (size_t t = 0; t < countof(sizes); t++) {
             cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
             multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
             for (size_t i = 0; i < sizes[t]; i++) {
@@ -4768,7 +4767,7 @@ int multimapTest(int, char *[]) {
          * the end every key must round-trip its exact shadow value. */
         const int64_t deltas[] = {
             1, 100, 30000, 8000000, INT64_C(3000000000), INT64_MAX / 4};
-        const size_t nDeltas = sizeof(deltas) / sizeof(*deltas);
+        const size_t nDeltas = countof(deltas);
 
         /* 256 keys already put a 64-byte-limit map deep into Full (many
          * inner maps); verifying after every operation is O(n) */
@@ -4856,7 +4855,7 @@ int multimapTest(int, char *[]) {
          * every mutation must leave middles and rangeBoxes coherent. */
         static constexpr size_t lens[] = {1,   8,    63, 64,   65,
                                           250, 1024, 5,  4096, 2};
-        const size_t nLens = sizeof(lens) / sizeof(*lens);
+        const size_t nLens = countof(lens);
         const int count = 256;
 
         cleaner(multimapFree) multimap *m =
@@ -4911,7 +4910,7 @@ int multimapTest(int, char *[]) {
          * prefix is unspecified), exercising grow, shrink, and the
          * regularize/split path for oversized maps. */
         static constexpr size_t resizeTo[] = {9, 2048, 3};
-        for (size_t L = 0; L < sizeof(resizeTo) / sizeof(*resizeTo); L++) {
+        for (size_t L = 0; L < countof(resizeTo); L++) {
             for (int i = 0; i < count; i++) {
                 char keyBuf[32];
                 snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
@@ -5528,7 +5527,7 @@ int multimapTest(int, char *[]) {
         /* Test extreme integer values */
         int64_t extremeKeys[] = {INT64_MIN, INT64_MIN + 1, -1,       0,
                                  1,         INT64_MAX - 1, INT64_MAX};
-        size_t numKeys = sizeof(extremeKeys) / sizeof(extremeKeys[0]);
+        size_t numKeys = countof(extremeKeys);
 
         /* Insert all extreme values */
         for (size_t i = 0; i < numKeys; i++) {
@@ -5748,7 +5747,7 @@ int multimapTest(int, char *[]) {
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "\x00\x01\x02",
             "\xFF\xFE\xFD"};
-        const size_t numKeys = sizeof(stringKeys) / sizeof(stringKeys[0]);
+        const size_t numKeys = countof(stringKeys);
 
         for (size_t i = 0; i < numKeys; i++) {
             databox key = databoxNewBytesString(stringKeys[i]);
@@ -5783,7 +5782,7 @@ int multimapTest(int, char *[]) {
         /* Compact after the fill, then at points down the drain: three of
          * every four rows gone, then most of the rest, then nearly all */
         const int64_t keepEvery[] = {1, 4, 40, 400, 3000};
-        for (size_t p = 0; p < sizeof(keepEvery) / sizeof(*keepEvery); p++) {
+        for (size_t p = 0; p < countof(keepEvery); p++) {
             for (int64_t i = 0; i < rows; i++) {
                 if (i % keepEvery[p]) {
                     const databox kb = databoxNewSigned(i);
@@ -5897,7 +5896,7 @@ int multimapTest(int, char *[]) {
             flexCapSizeLimit limit;
         } configs[] = {{false, false, FLEX_CAP_LEVEL_64},
                        {true, true, FLEX_CAP_LEVEL_128}};
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+        for (size_t c = 0; c < countof(configs); c++) {
             for (int32_t tier = MULTIMAP_TYPE_SMALL; tier <= MULTIMAP_TYPE_FULL;
                  tier++) {
                 cleaner(multimapFree) multimap *m = multimapNewConfigure(
@@ -6581,7 +6580,7 @@ int multimapTest(int, char *[]) {
             INT64_MAX - 1,
             INT64_MAX,
         };
-        size_t numBoundary = sizeof(boundaryKeys) / sizeof(boundaryKeys[0]);
+        size_t numBoundary = countof(boundaryKeys);
 
         /* Insert all boundary values */
         for (size_t i = 0; i < numBoundary; i++) {
@@ -6806,7 +6805,7 @@ int multimapTest(int, char *[]) {
 
         /* Various string patterns */
         const char *prefixes[] = {"", "a", "aa", "aaa", "b", "ab", "ba", "z"};
-        size_t numPrefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+        size_t numPrefixes = countof(prefixes);
 
         for (int32_t i = 0; i < 1000; i++) {
             char buf[128];
@@ -8177,7 +8176,7 @@ int multimapTest(int, char *[]) {
             {"generic", rpGeneric, &generic},
         };
 
-        for (size_t l = 0; l < COUNT_ARRAY(layers); l++) {
+        for (size_t l = 0; l < countof(layers); l++) {
             const char *where = layers[l].where;
             for (uint64_t key = 0; key < 8; key++) {
                 const databox k = databoxNewUnsigned(key);
@@ -8235,8 +8234,8 @@ int multimapTest(int, char *[]) {
         static constexpr int32_t sizes[] = {6, 400, 4000};
         static constexpr int64_t bounds[] = {5, 10, 15, 20, 25, 1005, -1, -2};
         for (uint32_t width = 1; width <= 3; width++) {
-            for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
-                for (size_t b = 0; b < sizeof(bounds) / sizeof(*bounds); b++) {
+            for (size_t s = 0; s < countof(sizes); s++) {
+                for (size_t b = 0; b < countof(bounds); b++) {
                     const int32_t n = sizes[s];
                     cleaner(multimapFree) multimap *m = multimapNew(width);
                     for (int32_t i = n; i >= 1; i--) {
@@ -8280,7 +8279,7 @@ int multimapTest(int, char *[]) {
         static bool inA[3000];
         static bool inB[3000];
         uint64_t rng = 0x5e7;
-        for (size_t t = 0; t < sizeof(ns) / sizeof(*ns); t++) {
+        for (size_t t = 0; t < countof(ns); t++) {
             for (int round = 0; round < 4; round++) {
                 const int32_t n = ns[t];
                 cleaner(multimapFree) multimap *a = multimapSetNew(1);
@@ -8403,7 +8402,7 @@ int multimapTest(int, char *[]) {
         cleaner(multimapFree) multimap *set = multimapSetNew(2);
         cleaner(multimapFree) multimap *map = multimapNew(2);
         static constexpr int64_t rows[][2] = {{1, 1}, {1, 5}, {2, 3}};
-        for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
+        for (size_t i = 0; i < countof(rows); i++) {
             const databox k = databoxNewSigned(rows[i][0]);
             const databox v = databoxNewSigned(rows[i][1]);
             const databox *row[] = {&k, &v};
@@ -8447,7 +8446,7 @@ int multimapTest(int, char *[]) {
         if (!mapWrote || !multimapLookup(map, &one, out) || got.data.i != 11) {
             ERR("a map's value column was not rewritten");
         }
-        for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
+        for (size_t i = 0; i < countof(rows); i++) {
             const databox k = databoxNewSigned(rows[i][0]);
             const databox v = databoxNewSigned(rows[i][1]);
             const databox *row[] = {&k, &v};
@@ -8527,7 +8526,7 @@ int multimapTest(int, char *[]) {
         const int64_t keys[] = {4, 24, 1200};
         const flexCapSizeLimit limits[] = {
             FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
-        for (size_t t = 0; t < COUNT_ARRAY(keys); t++) {
+        for (size_t t = 0; t < countof(keys); t++) {
             cleaner(multimapFree) multimap *m =
                 multimapNewConfigure(2, true, false, limits[t]);
             for (int64_t k = 0; k < keys[t]; k++) {
@@ -8611,7 +8610,7 @@ int multimapTest(int, char *[]) {
          * deletes leave both with the same dump */
         const int64_t counts[] = {10, 150, 3000};
         for (int set = 0; set < 2; set++) {
-            for (size_t t = 0; t < COUNT_ARRAY(counts); t++) {
+            for (size_t t = 0; t < countof(counts); t++) {
                 cleaner(multimapFree) multimap *m =
                     set ? multimapSetNew(2) : multimapNew(2);
                 for (int64_t k = 0; k < counts[t]; k++) {
@@ -8671,7 +8670,7 @@ int multimapTest(int, char *[]) {
                                       MULTIMAP_TYPE_FULL};
         /* Two passes of rows each: sized so each tier is reached */
         const int64_t counts[] = {10, 60, 1000};
-        for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
+        for (size_t t = 0; t < countof(limits); t++) {
             for (int compress = 0; compress <= 1; compress++) {
                 cleaner(multimapFree) multimap *appended =
                     compress ? multimapNewCompress(2, limits[t])
@@ -8727,7 +8726,7 @@ int multimapTest(int, char *[]) {
         const multimapType tiers[] = {MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM,
                                       MULTIMAP_TYPE_FULL};
         const int64_t counts[] = {20, 120, 2000};
-        for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
+        for (size_t t = 0; t < countof(limits); t++) {
             cleaner(multimapFree) multimap *m = multimapNewLimit(2, limits[t]);
             for (int64_t k = 0; k < counts[t]; k++) {
                 const databox key = databoxNewSigned(2 * k);

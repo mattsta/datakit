@@ -6160,7 +6160,7 @@ int persistTest(int, char *[]) {
             PERSIST_CHECKSUM_XXH3_128,    PERSIST_CHECKSUM_BLAKE3_KEYED,
             PERSIST_CHECKSUM_HMAC_SHA256, PERSIST_CHECKSUM_HMAC_BLAKE3,
         };
-        const size_t algoCount = sizeof(algos) / sizeof(algos[0]);
+        const size_t algoCount = countof(algos);
 
         /* 32-byte test key — required size for BLAKE3_KEYED; any size
          * works for HMAC_*; ignored for unkeyed algorithms. */
@@ -7216,7 +7216,7 @@ int persistTest(int, char *[]) {
         /* Verify all values */
         int64_t values[] = {0,         INT64_MAX, INT64_MIN, -1,       1,
                             INT16_MAX, INT16_MIN, INT32_MAX, INT32_MIN};
-        for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             if (!intsetFind(restored, values[i])) {
                 ERR("Missing value: %" PRId64, values[i]);
             }
@@ -7380,7 +7380,7 @@ int persistTest(int, char *[]) {
             {"Full", FLEX_CAP_LEVEL_128, 1, 400, 3 * 128, SIZE_MAX},
         };
 
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+        for (size_t c = 0; c < countof(configs); c++) {
             const char *const name = configs[c].name;
             uint32_t ids[400];
             size_t n = 0;
@@ -7506,7 +7506,7 @@ int persistTest(int, char *[]) {
 
         /* REPLACE [index, wide value] */
         const size_t replaceAt[] = {0, 5, n - 1};
-        for (size_t k = 0; k < sizeof(replaceAt) / sizeof(*replaceAt); k++) {
+        for (size_t k = 0; k < countof(replaceAt); k++) {
             const uint32_t id = 5 * (nextId++) + (uint32_t)(k % 2);
             const databox *box =
                 persistTestMlValue(id, &storage, buf, sizeof(buf));
@@ -7718,7 +7718,7 @@ int persistTest(int, char *[]) {
              false},
         };
 
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             const persistOps *ops = cases[c].ops;
             persistConfig cfg = persistDefaultConfig();
             cfg.strictRecovery = true;
@@ -7822,7 +7822,7 @@ int persistTest(int, char *[]) {
             {"64-bit operand at the tail", true, 59, 0, 0},
         };
 
-        for (size_t k = 0; k < sizeof(pops) / sizeof(*pops); k++) {
+        for (size_t k = 0; k < countof(pops); k++) {
             const uint64_t deep0 = persistMultilistPopIdentityDeepRemoveTotal();
             const uint64_t absent0 =
                 persistMultilistPopIdentityAbsentNoopTotal();
@@ -7881,7 +7881,7 @@ int persistTest(int, char *[]) {
          * from one node to many. */
         const flexCapSizeLimit limits[] = {
             FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
-        for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
+        for (size_t t = 0; t < countof(limits); t++) {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(limits[t], 0);
             cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
@@ -7910,7 +7910,7 @@ int persistTest(int, char *[]) {
                 {"REPLACE past the tail", PERSIST_OP_REPLACE, 40, 7},
                 {"REPLACE past the head", PERSIST_OP_REPLACE, -41, 7},
             };
-            for (size_t k = 0; k < COUNT_ARRAY(noops); k++) {
+            for (size_t k = 0; k < countof(noops); k++) {
                 const databox a = DATABOX_SIGNED(noops[k].a);
                 const databox b = DATABOX_SIGNED(noops[k].b);
                 const databox *args[2] = {&a, &b};
@@ -7984,7 +7984,7 @@ int persistTest(int, char *[]) {
                     {"DELETE_AT of UINT64_MAX", PERSIST_OP_DELETE_AT, &one,
                      &huge},
                 };
-                for (size_t k = 0; k < COUNT_ARRAY(bad); k++) {
+                for (size_t k = 0; k < countof(bad); k++) {
                     const databox *args[2] = {bad[k].a, bad[k].b};
                     size_t len = 0;
                     cleanerName(zfree, Bytes) uint8_t *row =
@@ -8297,7 +8297,7 @@ int persistTest(int, char *[]) {
         /* Add values that fit in int16 */
         int16_t smallValues[] = {0,     1,      -1,    100,   -100,
                                  32767, -32768, 12345, -12345};
-        for (size_t i = 0; i < COUNT_ARRAY(smallValues); i++) {
+        for (size_t i = 0; i < countof(smallValues); i++) {
             intsetAdd(&is, smallValues[i], &success);
         }
 
@@ -8311,12 +8311,12 @@ int persistTest(int, char *[]) {
             ERR("Small tier intset restore failed");
         }
 
-        if (intsetCount(restored) != COUNT_ARRAY(smallValues)) {
+        if (intsetCount(restored) != countof(smallValues)) {
             ERR("Count mismatch: %zu vs %zu", intsetCount(restored),
-                COUNT_ARRAY(smallValues));
+                countof(smallValues));
         }
 
-        for (size_t i = 0; i < COUNT_ARRAY(smallValues); i++) {
+        for (size_t i = 0; i < countof(smallValues); i++) {
             if (!intsetFind(restored, smallValues[i])) {
                 ERR("Missing small value: %d", smallValues[i]);
             }
@@ -8334,7 +8334,7 @@ int persistTest(int, char *[]) {
         int64_t values[] = {0,       1,          -1,         32767,
                             -32768,  32768,      -32769,     100000,
                             -100000, 2147483647, -2147483648};
-        for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             intsetAdd(&is, values[i], &success);
         }
 
@@ -8348,12 +8348,12 @@ int persistTest(int, char *[]) {
             ERR("Medium tier intset restore failed");
         }
 
-        if (intsetCount(restored) != COUNT_ARRAY(values)) {
+        if (intsetCount(restored) != countof(values)) {
             ERR("Count mismatch: %zu vs %zu", intsetCount(restored),
-                COUNT_ARRAY(values));
+                countof(values));
         }
 
-        for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             if (!intsetFind(restored, values[i])) {
                 ERR("Missing medium value: %" PRId64, values[i]);
             }
@@ -8381,7 +8381,7 @@ int persistTest(int, char *[]) {
                             (int64_t)INT32_MIN - 1,
                             4611686018427387903LL,
                             -4611686018427387903LL};
-        for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             intsetAdd(&is, values[i], &success);
         }
 
@@ -8395,12 +8395,12 @@ int persistTest(int, char *[]) {
             ERR("Full tier intset restore failed");
         }
 
-        if (intsetCount(restored) != COUNT_ARRAY(values)) {
+        if (intsetCount(restored) != countof(values)) {
             ERR("Count mismatch: %zu vs %zu", intsetCount(restored),
-                COUNT_ARRAY(values));
+                countof(values));
         }
 
-        for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
+        for (size_t i = 0; i < countof(values); i++) {
             if (!intsetFind(restored, values[i])) {
                 ERR("Missing full tier value: %" PRId64, values[i]);
             }
@@ -8567,7 +8567,7 @@ int persistTest(int, char *[]) {
         /* String keys */
         const char *stringKeys[] = {"alpha", "beta", "gamma", "delta",
                                     "epsilon"};
-        for (size_t i = 0; i < COUNT_ARRAY(stringKeys); i++) {
+        for (size_t i = 0; i < countof(stringKeys); i++) {
             databox key = DATABOX_WITH_BYTES((uint8_t *)stringKeys[i],
                                              strlen(stringKeys[i]));
             databox val = DATABOX_SIGNED((int64_t)i * 1000);
@@ -8598,7 +8598,7 @@ int persistTest(int, char *[]) {
         }
 
         /* Verify string keys */
-        for (size_t i = 0; i < COUNT_ARRAY(stringKeys); i++) {
+        for (size_t i = 0; i < countof(stringKeys); i++) {
             databox key = DATABOX_WITH_BYTES((uint8_t *)stringKeys[i],
                                              strlen(stringKeys[i]));
             if (!multimapExists(restored, &key)) {
@@ -8691,7 +8691,7 @@ int persistTest(int, char *[]) {
 
         /* Large integers */
         int64_t largeVals[] = {INT64_MIN, INT64_MAX, INT32_MIN, INT32_MAX};
-        for (size_t i = 0; i < COUNT_ARRAY(largeVals); i++) {
+        for (size_t i = 0; i < countof(largeVals); i++) {
             databox box = DATABOX_SIGNED(largeVals[i]);
             multilistPushByTypeTail(&ml, state, &box);
         }
@@ -8699,7 +8699,7 @@ int persistTest(int, char *[]) {
         /* Strings */
         const char *strings[] = {"hello", "world", "",
                                  "test string with spaces"};
-        for (size_t i = 0; i < COUNT_ARRAY(strings); i++) {
+        for (size_t i = 0; i < countof(strings); i++) {
             databox box =
                 DATABOX_WITH_BYTES((uint8_t *)strings[i], strlen(strings[i]));
             multilistPushByTypeTail(&ml, state, &box);
@@ -8715,8 +8715,7 @@ int persistTest(int, char *[]) {
             ERR("Mixed multilist restore failed");
         }
 
-        size_t expectedCount =
-            201 + COUNT_ARRAY(largeVals) + COUNT_ARRAY(strings);
+        size_t expectedCount = 201 + countof(largeVals) + countof(strings);
         if (multilistCount(restored) != expectedCount) {
             ERR("Expected %zu elements, got %zu", expectedCount,
                 multilistCount(restored));
@@ -9016,10 +9015,10 @@ int persistTest(int, char *[]) {
             snapStore->seek(snapStore->ctx, 0, SEEK_SET);
             multilist *r = persistRecover(p);
             const databox *want[] = {&s22, &i22, &s007};
-            if (!r || multilistCount(r) != COUNT_ARRAY(want)) {
+            if (!r || multilistCount(r) != countof(want)) {
                 ERR("multilist: recovered count is not 3");
             } else {
-                for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
+                for (size_t i = 0; i < countof(want); i++) {
                     multilistEntry e = {};
                     /* A string stays a string and a number a number; a
                      * number may come back in its minimal same-type
@@ -9158,7 +9157,7 @@ int persistTest(int, char *[]) {
             }
 
             intsetAdd(&is, val, &success);
-            if (success && addedCount < COUNT_ARRAY(addedValues)) {
+            if (success && addedCount < countof(addedValues)) {
                 addedValues[addedCount++] = val;
             }
         }
@@ -10049,7 +10048,7 @@ int persistTest(int, char *[]) {
             &persistOpsMultidict,
             &persistOpsMultiOrderedSet,
         };
-        for (size_t t = 0; t < sizeof(tables) / sizeof(*tables); t++) {
+        for (size_t t = 0; t < countof(tables); t++) {
             err += persistTestDecoderMatrix(tables[t], NULL);
         }
 
@@ -10076,7 +10075,7 @@ int persistTest(int, char *[]) {
             &persistOpsMultiOrderedSet,
             &persistOpsMultiLRU,
         };
-        for (size_t t = 0; t < sizeof(all) / sizeof(*all); t++) {
+        for (size_t t = 0; t < countof(all); t++) {
             const persistOps *ops = all[t];
             void *s = persistTestPopulate(ops, 40);
             if (!s) {
@@ -10522,7 +10521,7 @@ int persistTest(int, char *[]) {
                                     {&longVal, &num, &shortKey},
                                     {&shortKey, NULL, &num}};
         const size_t widths[] = {1, 2, 3, 3};
-        for (size_t r = 0; r < COUNT_ARRAY(rows); r++) {
+        for (size_t r = 0; r < countof(rows); r++) {
             size_t allocLen = 0;
             cleanerName(zfree, Bytes) uint8_t *alloc =
                 persistOpEncodeBoxes(rows[r], widths[r], &allocLen);
@@ -10645,7 +10644,7 @@ int persistTest(int, char *[]) {
             {PERSIST_FAULT_REWRITE_COMMIT, 0},
         };
         const int64_t wantFirst[] = {1, 2, 3};
-        for (size_t i = 0; i < sizeof(faults) / sizeof(faults[0]); i++) {
+        for (size_t i = 0; i < countof(faults); i++) {
             persistStoreFaultyArm(snap, faults[i].op, faults[i].nth);
             if (persistSnapshot(p, second)) {
                 ERR("fault %zu: the snapshot succeeded through a failure", i);
@@ -10682,7 +10681,7 @@ int persistTest(int, char *[]) {
             {false, false, PERSIST_LOG_BUFFERED}, /* not retried per op */
             {true, false, PERSIST_LOG_DURABLE},
         };
-        for (size_t i = 0; i < sizeof(steps) / sizeof(*steps); i++) {
+        for (size_t i = 0; i < countof(steps); i++) {
             if (steps[i].syncFails) {
                 persistStoreFaultyArm(wal, PERSIST_FAULT_SYNC, 0);
             } else {
@@ -11390,7 +11389,7 @@ int persistTest(int, char *[]) {
             {persistTestSnapIgnorable, 0, PERSIST_ERR_NONE, DK_FORMAT_OK},
             {NULL, 24, PERSIST_ERR_NONE, DK_FORMAT_OK},
         };
-        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+        for (size_t c = 0; c < countof(cases); c++) {
             cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
             persistTestPushRange(p, 0, 3);
             cleaner(flexFree) flex *live = persistRecover(p);

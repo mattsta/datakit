@@ -678,7 +678,7 @@ int xofTest(int, char *[]) {
 
     double deltas[] = {0.77,   0.077,   0.0077, 0.00077, 0.33,  0.033,
                        0.0033, 0.00033, 1,      2,       0.0004};
-    for (size_t q = 0; q < sizeof(deltas) / sizeof(*deltas); q++) {
+    for (size_t q = 0; q < countof(deltas); q++) {
         TEST_DESC("random (bounded random delta range; delta %f)", deltas[q]) {
             cleanerName(zfree, Bits) xof *bits =
                 zcalloc(loopers * 2, sizeof(*bits));
@@ -795,9 +795,9 @@ int xofTest(int, char *[]) {
             0x7FF0000000000001ULL, 0xFFF0000000000000ULL, 0xFFF0000000000000ULL,
             0x3FF0000000000000ULL, 0x0000000000000000ULL,
         };
-        const size_t count = sizeof(patterns) / sizeof(*patterns);
+        const size_t count = countof(patterns);
 
-        double values[sizeof(patterns) / sizeof(*patterns)];
+        double values[countof(patterns)];
         for (size_t i = 0; i < count; i++) {
             values[i] = xofDoubleFromBits(patterns[i]);
         }
@@ -818,7 +818,7 @@ int xofTest(int, char *[]) {
                 (uint64_t)varintBitstreamGet(bits, 0, 64), patterns[0]);
         }
 
-        double all[sizeof(patterns) / sizeof(*patterns)];
+        double all[countof(patterns)];
         xofReadAll(bits, all, count);
 
         xofReader r;
@@ -994,7 +994,7 @@ int xofTest(int, char *[]) {
 
         /* Write some values */
         double values[] = {100.0, 100.5, 101.0, 101.5, 102.0};
-        size_t count = sizeof(values) / sizeof(*values);
+        size_t count = countof(values);
         for (size_t i = 0; i < count; i++) {
             xofWrite(&w, values[i]);
         }
@@ -1039,7 +1039,7 @@ int xofTest(int, char *[]) {
                                  3.5,
                                  xofDoubleFromBits(1ULL),
                                  -0.0};
-        const size_t count = sizeof(values) / sizeof(*values);
+        const size_t count = countof(values);
 
         for (int stale = 0; stale < 2; stale++) {
             xofWriter w = {};
@@ -1058,7 +1058,7 @@ int xofTest(int, char *[]) {
 
             xofReader r;
             xofReaderInitFromWriter(&r, &w);
-            double all[sizeof(values) / sizeof(*values)];
+            double all[countof(values)];
             xofReadAll(w.d, all, count);
             for (size_t i = 0; i < count; i++) {
                 const double viaReader =

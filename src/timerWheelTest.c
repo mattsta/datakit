@@ -1862,7 +1862,7 @@ int timerWheelTest(int, char *[]) {
                             : 0;
                     const timerWheelId id = timerWheelRegister(
                         tw, delay, repeat, testOracleCallback, NULL);
-                    if (nids < sizeof(ids) / sizeof(ids[0])) {
+                    if (nids < countof(ids)) {
                         ids[nids++] = id;
                     } else {
                         ids[testOracleRand(&rng) % nids] = id;
@@ -2308,7 +2308,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
         const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
                                  BENCH_SCALE_100K, BENCH_SCALE_500K};
-        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+        const size_t numScales = countof(scales);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
                "multiTimer", "Speedup");
@@ -2354,7 +2354,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
         const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
                                  BENCH_SCALE_50K};
-        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+        const size_t numScales = countof(scales);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
                "multiTimer", "Speedup");
@@ -2407,7 +2407,7 @@ int timerWheelTest(int, char *[]) {
         printf("    Measuring batch timer expiration throughput...\n");
         const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
                                  BENCH_SCALE_50K, BENCH_SCALE_100K};
-        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+        const size_t numScales = countof(scales);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
                "multiTimer", "Speedup");
@@ -2462,7 +2462,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
         const size_t timerCounts[] = {100, BENCH_SCALE_1K, BENCH_SCALE_10K,
                                       BENCH_SCALE_100K};
-        const size_t numCounts = sizeof(timerCounts) / sizeof(timerCounts[0]);
+        const size_t numCounts = countof(timerCounts);
         const size_t queries = BENCH_QUERY_COUNT;
 
         printf("    %-12s  %12s  %12s  %8s\n", "Timers", "timerWheel",
@@ -2533,7 +2533,7 @@ int timerWheelTest(int, char *[]) {
         printf("    %-8s  %-8s  %14s  %14s\n", "Near", "Idle", "query ns/iter",
                "process ns/iter");
         uint64_t rng = 12345;
-        for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++) {
+        for (size_t s = 0; s < countof(shapes); s++) {
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < shapes[s].nearCount; i++) {
                 const uint64_t d = 1000 + testOracleRand(&rng) % 254000;
@@ -2580,8 +2580,7 @@ int timerWheelTest(int, char *[]) {
             {"Clustered", 5000, 5100},             /* 5ms ± 50μs */
             {"Wide spread", 1000, 3600000000ULL},  /* 1ms-1hr */
         };
-        const size_t numDists =
-            sizeof(distributions) / sizeof(distributions[0]);
+        const size_t numDists = countof(distributions);
 
         printf("    %-16s  %12s  %12s  %8s\n", "Distribution", "timerWheel",
                "multiTimer", "Speedup");
@@ -2628,7 +2627,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
         const size_t scales[] = {BENCH_SCALE_10K, BENCH_SCALE_50K,
                                  BENCH_SCALE_100K};
-        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+        const size_t numScales = countof(scales);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
                "multiTimer", "Speedup");
@@ -2743,7 +2742,7 @@ int timerWheelTest(int, char *[]) {
         /* Smoke size, as for bulk registration above */
         const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
                                  BENCH_SCALE_100K};
-        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+        const size_t numScales = countof(scales);
 
         printf("    %-12s  %14s  %12s\n", "Timers", "Memory", "Bytes/Timer");
         printf("    %-12s  %14s  %12s\n", "------", "------", "-----------");

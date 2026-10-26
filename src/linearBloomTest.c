@@ -370,7 +370,7 @@ int linearBloomTest(int, char *[]) {
          * ends of a word group */
         static constexpr uint64_t targets[] = {0,  1,  20, 21, 22,
                                                41, 42, 43, 63, 64};
-        for (size_t t = 0; t < sizeof(targets) / sizeof(*targets); t++) {
+        for (size_t t = 0; t < countof(targets); t++) {
             const uint64_t at = targets[t];
             linearBloomCountReset(bloom);
             if (at > 0) {
@@ -405,7 +405,7 @@ int linearBloomTest(int, char *[]) {
         uint8_t lut[8];
         const double factors[] = {-1.0, -0.5, 0.0, 0.3, 0.75,
                                   1.0,  2.0,  1e9, NAN};
-        for (size_t f = 0; f < sizeof(factors) / sizeof(*factors); f++) {
+        for (size_t f = 0; f < countof(factors); f++) {
             linearBloomCountBuildDecayLUT(lut, factors[f]);
             for (int v = 0; v < 8; v++) {
                 const double exact = v * factors[f];
@@ -655,7 +655,7 @@ int linearBloomTest(int, char *[]) {
                                 LINEARBLOOM_EXTENT_BITS - 100,
                                 LINEARBLOOM_EXTENT_BITS - 1};
 
-        for (size_t i = 0; i < sizeof(positions) / sizeof(positions[0]); i++) {
+        for (size_t i = 0; i < countof(positions); i++) {
             uint64_t hash[2] = {positions[i], positions[i] * 31};
             linearBloomHashSet(bloom, hash);
         }
@@ -1050,8 +1050,7 @@ int linearBloomTest(int, char *[]) {
             LINEARBLOOM_EXTENT_BITS - 1                 /* Last bit */
         };
 
-        for (size_t i = 0; i < sizeof(testPositions) / sizeof(testPositions[0]);
-             i++) {
+        for (size_t i = 0; i < countof(testPositions); i++) {
             uint64_t hash[2] = {
                 testPositions[i],
                 0}; /* hash[1]=0 so position = hash[0] % EXTENT */
@@ -1059,8 +1058,7 @@ int linearBloomTest(int, char *[]) {
         }
 
         /* Verify all positions are set */
-        for (size_t i = 0; i < sizeof(testPositions) / sizeof(testPositions[0]);
-             i++) {
+        for (size_t i = 0; i < countof(testPositions); i++) {
             uint64_t hash[2] = {testPositions[i], 0};
             if (!linearBloomHashCheck(bloom, hash)) {
                 ERR("Boundary position %" PRIu64 " not found!",
@@ -1509,8 +1507,7 @@ int linearBloomTest(int, char *[]) {
         /* Test with various fill levels */
         size_t fillLevels[] = {100, 1000, 10000, 100000, 500000};
 
-        for (size_t f = 0; f < sizeof(fillLevels) / sizeof(fillLevels[0]);
-             f++) {
+        for (size_t f = 0; f < countof(fillLevels); f++) {
             linearBloomReset(bloom);
             size_t fillLevel = fillLevels[f];
 
@@ -1571,8 +1568,7 @@ int linearBloomTest(int, char *[]) {
         };
 
         /* Set each to max value */
-        for (size_t i = 0; i < sizeof(testEntries) / sizeof(testEntries[0]);
-             i++) {
+        for (size_t i = 0; i < countof(testEntries); i++) {
             size_t entry = testEntries[i];
             if (entry < LINEARBLOOMCOUNT_EXTENT_ENTRIES) {
                 varintPacked3Set(bloom, entry, 7);
@@ -1586,8 +1582,7 @@ int linearBloomTest(int, char *[]) {
 
         /* Verify all match */
         size_t mismatches = 0;
-        for (size_t i = 0; i < sizeof(testEntries) / sizeof(testEntries[0]);
-             i++) {
+        for (size_t i = 0; i < countof(testEntries); i++) {
             size_t entry = testEntries[i];
             if (entry < LINEARBLOOMCOUNT_EXTENT_ENTRIES) {
                 uint8_t swarVal = varintPacked3Get(bloom, entry);
@@ -1913,7 +1908,7 @@ int linearBloomTest(int, char *[]) {
              0.5}, /* 1 half-life */
         };
 
-        for (size_t t = 0; t < sizeof(tests) / sizeof(tests[0]); t++) {
+        for (size_t t = 0; t < countof(tests); t++) {
             double factor = linearBloomCountComputeDecayFactor(
                 tests[t].elapsed_ms, tests[t].half_life_ms);
             if (fabs(factor - tests[t].expected_factor) > 0.01) {
