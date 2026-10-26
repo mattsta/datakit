@@ -146,7 +146,7 @@ static int osRegulatePollUntil(struct pollfd *pfd, const uint64_t startMs,
  * creation.  Platforms with SOCK_CLOEXEC / pipe2() never call this, so
  * only they close the window in which another thread's fork+exec
  * inherits the descriptor. */
-static DK_FN_UNUSED bool osRegulateSetCloexec(int fd) {
+DK_FN_UNUSED static bool osRegulateSetCloexec(int fd) {
     const int flags = fcntl(fd, F_GETFD, 0);
     return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) >= 0;
 }

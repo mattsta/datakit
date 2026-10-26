@@ -475,7 +475,7 @@ compressBlocksMulti4(uint32_t states[4][8], const uint8_t *const blocks[4],
  *
  * To compare experimentally, change sha256ArmCryptoCompressBlocksMulti4
  * below to call compressBlocksMulti4V2 instead of compressBlocksMulti4. */
-__attribute__((target("crypto"))) __attribute__((unused)) static void
+[[maybe_unused]] __attribute__((target("crypto"))) static void
 compressBlocksMulti4V2(uint32_t states[4][8], const uint8_t *const blocks[4],
                        size_t num_blocks) {
     uint32x4_t abcd0 = vld1q_u32(states[0]);

@@ -27,7 +27,7 @@ typedef struct roarArray {
     uint64_t count;
 } roarArray;
 
-static DK_FN_UNUSED void roarArrayFree_cleanup(roarArray *a) {
+DK_FN_UNUSED static void roarArrayFree_cleanup(roarArray *a) {
     if (a->items) {
         for (uint64_t i = 0; i < a->count; i++) {
             multiroarFree(a->items[i]);
@@ -82,9 +82,9 @@ mrWrongMode_(const char *function, int line, const char *what) {
 
 #define BITMAP_SIZE_IN_BYTES (BITMAP_SIZE_IN_BITS / 8)
 
-__attribute__((unused)) static const uint64_t
+[[maybe_unused]] static const uint64_t
     _allZeroes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {0};
-__attribute__((unused)) static const uint64_t
+[[maybe_unused]] static const uint64_t
     _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
         0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
         0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
@@ -156,7 +156,7 @@ __attribute__((unused)) static const uint64_t
 #define PACK_FUNCTION_PREFIX varintPacked
 /* This file's own copy of the template functions */
 #undef PACKED_STATIC
-#define PACKED_STATIC __attribute__((unused)) static
+#define PACKED_STATIC [[maybe_unused]] static
 #include "../deps/varint/src/varintPacked.h"
 #undef PACKED_STATIC
 
@@ -388,10 +388,8 @@ DK_STATIC void convertPositionPackedArrayToBitmap(multiroar *r,
     _convertPositionPackedArrayToBitmap(r, key, value, me, true);
 }
 
-__attribute__((unused)) DK_STATIC void
-convertNegativePositionPackedArrayToBitmap(multiroar *r, const databox *key,
-                                           const databox *value,
-                                           multimapEntry *me) {
+[[maybe_unused]] DK_STATIC void convertNegativePositionPackedArrayToBitmap(
+    multiroar *r, const databox *key, const databox *value, multimapEntry *me) {
     _convertPositionPackedArrayToBitmap(r, key, value, me, false);
 }
 
@@ -439,19 +437,21 @@ DK_STATIC uint16_t _bitmapToPositions(const void *bitmap, uint8_t positions[],
     return idx;
 }
 
-__attribute__((unused)) DK_STATIC inline uint16_t
+[[maybe_unused]] DK_STATIC inline uint16_t
 bitmapToSetPositions(const void *bitmap, uint8_t positions[]) {
     return _bitmapToPositions(bitmap, positions, true);
 }
 
-__attribute__((unused)) DK_STATIC inline uint16_t
+[[maybe_unused]] DK_STATIC inline uint16_t
 bitmapToNegativePositions(const void *bitmap, uint8_t positions[]) {
     return _bitmapToPositions(bitmap, positions, false);
 }
 
-DK_STATIC void convertBitmapToPositionList(
-    multiroar *r, const databox *key __attribute__((unused)),
-    const databox *value, multimapEntry *me, bool trackSetPositions) {
+DK_STATIC void convertBitmapToPositionList(multiroar *r,
+                                           [[maybe_unused]] const databox *key,
+                                           const databox *value,
+                                           multimapEntry *me,
+                                           bool trackSetPositions) {
     uint8_t packedArray[BITMAP_SIZE_IN_BYTES + 16] = {0};
     uint8_t *packedArrayStart = packedArray + 1;
 
@@ -475,7 +475,7 @@ DK_STATIC void convertBitmapToPositionList(
     multimapReplaceEntry(&r->map, me, &box);
 }
 
-__attribute__((unused)) DK_STATIC void convertBitmapToSparsePositionPackedArray(
+[[maybe_unused]] DK_STATIC void convertBitmapToSparsePositionPackedArray(
     multiroar *r, const databox *key, const databox *value, multimapEntry *me) {
     convertBitmapToPositionList(r, key, value, me, true);
 }

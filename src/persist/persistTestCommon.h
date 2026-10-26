@@ -66,7 +66,7 @@ typedef enum {
 } ptestDataType;
 
 /* Generate a databox of specified type with given seed for variation */
-static DK_FN_UNUSED void ptestGenerateBox(databox *box, ptestDataType type,
+DK_FN_UNUSED static void ptestGenerateBox(databox *box, ptestDataType type,
                                           int seed) {
     switch (type) {
     case PTEST_TYPE_SIGNED_SMALL:
@@ -113,7 +113,7 @@ static DK_FN_UNUSED void ptestGenerateBox(databox *box, ptestDataType type,
 }
 
 /* Generate varied integer for intset testing */
-static DK_FN_UNUSED int64_t ptestGenerateInt(int seed, int variation) {
+DK_FN_UNUSED static int64_t ptestGenerateInt(int seed, int variation) {
     switch (variation % 5) {
     case 0:
         return (int64_t)seed; /* Simple */
@@ -138,7 +138,7 @@ static DK_FN_UNUSED int64_t ptestGenerateInt(int seed, int variation) {
 /* Remove the snapshot and WAL files of basePath.  Tests take basePath
  * from a per-run dkTestTmpDir, whose scope cleanup removes anything
  * else a test leaves behind. */
-static DK_FN_UNUSED void ptestCleanupFiles(const char *basePath) {
+DK_FN_UNUSED static void ptestCleanupFiles(const char *basePath) {
     char snapPath[PATH_MAX];
     char walPath[PATH_MAX];
     const int snapLen =
@@ -162,7 +162,7 @@ static DK_FN_UNUSED void ptestCleanupFiles(const char *basePath) {
 /* After recovery met a damaged entry: the context reports it CORRUPT and
  * HEALED, and basePath.quarantine holds one record ("DKPQ", version 1)
  * whose byte count is the report's and whose bytes follow its header */
-static DK_FN_UNUSED bool ptestExpectHealed(const persistCtx *ctx,
+DK_FN_UNUSED static bool ptestExpectHealed(const persistCtx *ctx,
                                            const char *basePath) {
     persistBadEntryReport report;
     if (!persistCtxLastBadEntry(ctx, &report) ||
@@ -197,7 +197,7 @@ static DK_FN_UNUSED bool ptestExpectHealed(const persistCtx *ctx,
  * every entry before it, and a context heals the WAL (the damaged entry
  * moves to basePath.quarantine; see ptestExpectHealed).  False if the WAL
  * could not be read and rewritten. */
-static DK_FN_UNUSED bool ptestDamageLastWalEntry(const char *basePath) {
+DK_FN_UNUSED static bool ptestDamageLastWalEntry(const char *basePath) {
     char walPath[PATH_MAX];
     const int walLen = snprintf(walPath, sizeof(walPath), "%s.wal", basePath);
     if (walLen < 0 || (size_t)walLen >= sizeof(walPath)) {
@@ -222,7 +222,7 @@ static DK_FN_UNUSED bool ptestDamageLastWalEntry(const char *basePath) {
  */
 
 /* Compare two databoxes for equality - use datakit's native comparison */
-static DK_FN_UNUSED bool ptestBoxesEqual(const databox *a, const databox *b) {
+DK_FN_UNUSED static bool ptestBoxesEqual(const databox *a, const databox *b) {
     return databoxEqual(a, b);
 }
 
@@ -239,7 +239,7 @@ typedef enum {
     PTEST_SEQ_POWERS,      /* 1, 2, 4, 8, 16, ... */
 } ptestSequence;
 
-static DK_FN_UNUSED int ptestGetSeqValue(ptestSequence seq, int index,
+DK_FN_UNUSED static int ptestGetSeqValue(ptestSequence seq, int index,
                                          int max) {
     switch (seq) {
     case PTEST_SEQ_LINEAR:
@@ -314,7 +314,7 @@ static const int64_t PTEST_INT_EDGE_CASES[] = {
 #define PTEST_INT_EDGE_COUNT (sizeof(PTEST_INT_EDGE_CASES) / sizeof(int64_t))
 
 /* Generate a comprehensive set of integers covering ranges */
-static DK_FN_UNUSED int64_t ptestIntByRange(int index) {
+DK_FN_UNUSED static int64_t ptestIntByRange(int index) {
     /* Cycle through different ranges */
     int range = index % 8;
     int val = index / 8;
@@ -355,12 +355,12 @@ typedef struct {
     uint32_t count;
 } ptestIntTracker;
 
-static DK_FN_UNUSED void ptestTrackerInit(ptestIntTracker *t) {
+DK_FN_UNUSED static void ptestTrackerInit(ptestIntTracker *t) {
     t->count = 0;
 }
 
 /* Add value in sorted order (like intset does) */
-static DK_FN_UNUSED bool ptestTrackerAdd(ptestIntTracker *t, int64_t value) {
+DK_FN_UNUSED static bool ptestTrackerAdd(ptestIntTracker *t, int64_t value) {
     if (t->count >= PTEST_MAX_TRACKED) {
         return false;
     }
@@ -386,7 +386,7 @@ static DK_FN_UNUSED bool ptestTrackerAdd(ptestIntTracker *t, int64_t value) {
 }
 
 /* Remove value */
-static DK_FN_UNUSED bool ptestTrackerRemove(ptestIntTracker *t, int64_t value) {
+DK_FN_UNUSED static bool ptestTrackerRemove(ptestIntTracker *t, int64_t value) {
     for (uint32_t i = 0; i < t->count; i++) {
         if (t->values[i] == value) {
             memmove(&t->values[i], &t->values[i + 1],
@@ -401,7 +401,7 @@ static DK_FN_UNUSED bool ptestTrackerRemove(ptestIntTracker *t, int64_t value) {
     return false;
 }
 
-static DK_FN_UNUSED bool ptestTrackerContains(const ptestIntTracker *t,
+DK_FN_UNUSED static bool ptestTrackerContains(const ptestIntTracker *t,
                                               int64_t value) {
     /* Binary search since sorted */
     int32_t lo = 0, hi = (int32_t)t->count - 1;
@@ -430,11 +430,11 @@ typedef struct {
     uint32_t count;
 } ptestBoxTracker;
 
-static DK_FN_UNUSED void ptestBoxTrackerInit(ptestBoxTracker *t) {
+DK_FN_UNUSED static void ptestBoxTrackerInit(ptestBoxTracker *t) {
     t->count = 0;
 }
 
-static DK_FN_UNUSED bool ptestBoxTrackerPushHead(ptestBoxTracker *t,
+DK_FN_UNUSED static bool ptestBoxTrackerPushHead(ptestBoxTracker *t,
                                                  const databox *box) {
     if (t->count >= PTEST_MAX_TRACKED) {
         return false;
@@ -445,7 +445,7 @@ static DK_FN_UNUSED bool ptestBoxTrackerPushHead(ptestBoxTracker *t,
     return true;
 }
 
-static DK_FN_UNUSED bool ptestBoxTrackerPushTail(ptestBoxTracker *t,
+DK_FN_UNUSED static bool ptestBoxTrackerPushTail(ptestBoxTracker *t,
                                                  const databox *box) {
     if (t->count >= PTEST_MAX_TRACKED) {
         return false;
@@ -454,7 +454,7 @@ static DK_FN_UNUSED bool ptestBoxTrackerPushTail(ptestBoxTracker *t,
     return true;
 }
 
-static DK_FN_UNUSED bool ptestBoxTrackerPopHead(ptestBoxTracker *t,
+DK_FN_UNUSED static bool ptestBoxTrackerPopHead(ptestBoxTracker *t,
                                                 databox *box) {
     if (t->count == 0) {
         return false;
@@ -465,7 +465,7 @@ static DK_FN_UNUSED bool ptestBoxTrackerPopHead(ptestBoxTracker *t,
     return true;
 }
 
-static DK_FN_UNUSED bool ptestBoxTrackerPopTail(ptestBoxTracker *t,
+DK_FN_UNUSED static bool ptestBoxTrackerPopTail(ptestBoxTracker *t,
                                                 databox *box) {
     if (t->count == 0) {
         return false;
@@ -475,7 +475,7 @@ static DK_FN_UNUSED bool ptestBoxTrackerPopTail(ptestBoxTracker *t,
     return true;
 }
 
-static DK_FN_UNUSED bool ptestBoxTrackerGet(const ptestBoxTracker *t,
+DK_FN_UNUSED static bool ptestBoxTrackerGet(const ptestBoxTracker *t,
                                             uint32_t index, databox *box) {
     if (index >= t->count) {
         return false;
@@ -497,12 +497,12 @@ typedef struct {
     uint32_t count;
 } ptestKVTracker;
 
-static DK_FN_UNUSED void ptestKVTrackerInit(ptestKVTracker *t) {
+DK_FN_UNUSED static void ptestKVTrackerInit(ptestKVTracker *t) {
     t->count = 0;
 }
 
 /* Find index of key, or -1 if not found */
-static DK_FN_UNUSED int32_t ptestKVTrackerFindKey(const ptestKVTracker *t,
+DK_FN_UNUSED static int32_t ptestKVTrackerFindKey(const ptestKVTracker *t,
                                                   const databox *key) {
     for (uint32_t i = 0; i < t->count; i++) {
         if (ptestBoxesEqual(&t->keys[i], key)) {
@@ -512,7 +512,7 @@ static DK_FN_UNUSED int32_t ptestKVTrackerFindKey(const ptestKVTracker *t,
     return -1;
 }
 
-static DK_FN_UNUSED bool ptestKVTrackerInsert(ptestKVTracker *t,
+DK_FN_UNUSED static bool ptestKVTrackerInsert(ptestKVTracker *t,
                                               const databox *key,
                                               const databox *value) {
     /* Check for existing key */
@@ -533,7 +533,7 @@ static DK_FN_UNUSED bool ptestKVTrackerInsert(ptestKVTracker *t,
     return true;
 }
 
-static DK_FN_UNUSED bool ptestKVTrackerDelete(ptestKVTracker *t,
+DK_FN_UNUSED static bool ptestKVTrackerDelete(ptestKVTracker *t,
                                               const databox *key) {
     int32_t idx = ptestKVTrackerFindKey(t, key);
     if (idx < 0) {
@@ -548,7 +548,7 @@ static DK_FN_UNUSED bool ptestKVTrackerDelete(ptestKVTracker *t,
     return true;
 }
 
-static DK_FN_UNUSED bool ptestKVTrackerLookup(const ptestKVTracker *t,
+DK_FN_UNUSED static bool ptestKVTrackerLookup(const ptestKVTracker *t,
                                               const databox *key,
                                               databox *value) {
     int32_t idx = ptestKVTrackerFindKey(t, key);
@@ -588,7 +588,7 @@ static const char *PTEST_STRINGS[] = {
 };
 #define PTEST_STRING_COUNT (sizeof(PTEST_STRINGS) / sizeof(char *))
 
-static DK_FN_UNUSED void ptestGenerateStringBox(databox *box, int seed) {
+DK_FN_UNUSED static void ptestGenerateStringBox(databox *box, int seed) {
     const char *str = PTEST_STRINGS[seed % PTEST_STRING_COUNT];
     box->type = DATABOX_BYTES;
     box->len = strlen(str);
@@ -642,7 +642,7 @@ typedef enum {
 } ptestOpType;
 
 /* Generate operation type based on seed - weighted towards inserts */
-static DK_FN_UNUSED ptestOpType ptestGetOpType(int seed, int totalOps) {
+DK_FN_UNUSED static ptestOpType ptestGetOpType(int seed, int totalOps) {
     int threshold = seed % 100;
 
     /* First half of test: mostly inserts */

@@ -130,10 +130,9 @@ size_t intersectIntOneSidedGalloping(const uint32_t *smallset,
  * Fast scalar scheme designed by N. Kurz.  The x86 kernels and the generic
  * fallback use it; arm64's dispatch does not.
  */
-__attribute__((unused)) static size_t scalar(const uint32_t *A,
-                                             const size_t lenA,
-                                             const uint32_t *B,
-                                             const size_t lenB, uint32_t *out) {
+[[maybe_unused]] static size_t scalar(const uint32_t *A, const size_t lenA,
+                                      const uint32_t *B, const size_t lenB,
+                                      uint32_t *out) {
     const uint32_t *const initout = out;
     if (lenA == 0 || lenB == 0) {
         return 0;
@@ -170,9 +169,10 @@ __attribute__((unused)) static size_t scalar(const uint32_t *A,
     return (out - initout); // NOTREACHED
 }
 
-__attribute__((unused)) static size_t
-match_scalar(const uint32_t *A, const size_t lenA, const uint32_t *B,
-             const size_t lenB, uint32_t *out) {
+[[maybe_unused]] static size_t match_scalar(const uint32_t *A,
+                                            const size_t lenA,
+                                            const uint32_t *B,
+                                            const size_t lenB, uint32_t *out) {
     const uint32_t *initout = out;
     if (lenA == 0 || lenB == 0) {
         return 0;

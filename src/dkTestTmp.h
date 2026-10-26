@@ -37,7 +37,7 @@ typedef struct dkTestTmpDir {
 
 /* The directory new scratch directories are created in: $TMPDIR when
  * set and non-empty, else the platform default. */
-static DK_FN_UNUSED const char *dkTestTmpRoot(void) {
+DK_FN_UNUSED static const char *dkTestTmpRoot(void) {
     const char *root = getenv("TMPDIR");
     if (root && *root) {
         return root;
@@ -52,7 +52,7 @@ static DK_FN_UNUSED const char *dkTestTmpRoot(void) {
 
 /* Create the directory if it does not exist yet.  Returns false (with
  * errno set) when the path does not fit or mkdtemp fails. */
-static DK_FN_UNUSED bool dkTestTmpDirCreate(dkTestTmpDir *d) {
+DK_FN_UNUSED static bool dkTestTmpDirCreate(dkTestTmpDir *d) {
     if (d->path[0]) {
         return true;
     }
@@ -82,7 +82,7 @@ static DK_FN_UNUSED bool dkTestTmpDirCreate(dkTestTmpDir *d) {
 /* Write "<dir>/<name>" into out, creating the directory on first use.
  * Returns false when the directory cannot be created or the joined
  * path does not fit in outLen. */
-static DK_FN_UNUSED bool dkTestTmpDirPath(dkTestTmpDir *d, const char *name,
+DK_FN_UNUSED static bool dkTestTmpDirPath(dkTestTmpDir *d, const char *name,
                                           char *out, size_t outLen) {
     if (!dkTestTmpDirCreate(d)) {
         return false;
@@ -97,7 +97,7 @@ static DK_FN_UNUSED bool dkTestTmpDirPath(dkTestTmpDir *d, const char *name,
     return true;
 }
 
-static DK_FN_UNUSED void dkTestTmpCloseDir_cleanup(DIR **dir) {
+DK_FN_UNUSED static void dkTestTmpCloseDir_cleanup(DIR **dir) {
     if (*dir) {
         closedir(*dir);
     }
@@ -109,7 +109,7 @@ static DK_FN_UNUSED void dkTestTmpCloseDir_cleanup(DIR **dir) {
  * read-only still cleans up.  Entries removed during a readdir pass
  * may make some filesystems skip others, so a directory is rescanned
  * until a pass finds nothing left or removes nothing. */
-static DK_FN_UNUSED bool dkTestTmpRemoveTree(const char *path) {
+DK_FN_UNUSED static bool dkTestTmpRemoveTree(const char *path) {
     struct stat st;
     if (lstat(path, &st) != 0) {
         return errno == ENOENT;
@@ -165,7 +165,7 @@ static DK_FN_UNUSED bool dkTestTmpRemoveTree(const char *path) {
 /* Remove the directory and its contents, then mark it empty so a later
  * call (or the scope cleanup) does nothing.  Returns true when nothing
  * is left on disk. */
-static DK_FN_UNUSED bool dkTestTmpDirRemove(dkTestTmpDir *d) {
+DK_FN_UNUSED static bool dkTestTmpDirRemove(dkTestTmpDir *d) {
     if (!d->path[0]) {
         return true;
     }
@@ -175,6 +175,6 @@ static DK_FN_UNUSED bool dkTestTmpDirRemove(dkTestTmpDir *d) {
     return ok;
 }
 
-static DK_FN_UNUSED void dkTestTmpDirRemove_cleanup(dkTestTmpDir *d) {
+DK_FN_UNUSED static void dkTestTmpDirRemove_cleanup(dkTestTmpDir *d) {
     (void)dkTestTmpDirRemove(d);
 }

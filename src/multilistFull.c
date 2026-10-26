@@ -1904,7 +1904,7 @@ CTEST_INCLUDE_GEN(str)
 #define ML_TEST_VERBOSE 0
 #endif
 
-__attribute__((unused)) static void compressedRepr(multilistFull *ml) {
+[[maybe_unused]] static void compressedRepr(multilistFull *ml) {
     printf("[");
     for (mlNodeId depth = 0; depth < ml->count; depth++) {
         printf("%s, ", mflexIsCompressed(getNode(depth)) ? "C" : "U");

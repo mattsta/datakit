@@ -246,8 +246,8 @@ static inline const char *perfFormatNs(double ns, char *out, size_t cap) {
 }
 
 /* Print the region timed by SETUP/FINISH: `count` units of work. */
-static void __attribute__((unused))
-PERF_TIMERS_RESULT_PRINT(const size_t count, const char *units) {
+[[maybe_unused]] static void PERF_TIMERS_RESULT_PRINT(const size_t count,
+                                                      const char *units) {
     PERF_TIMERS_STAT_RESULT(count);
     const double ns = (double)lps.global.ns.duration;
     const double seconds = ns / 1e9;

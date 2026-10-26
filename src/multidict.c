@@ -747,7 +747,7 @@ DK_STATIC bool multidictExpandIfNeeded_(multidict *d) {
                   metrics.maxSlotBytes, metrics.byteLoadFactor);
 
         bool shouldExpand = false;
-        const char *expandReason __attribute__((unused)) = NULL;
+        [[maybe_unused]] const char *expandReason = NULL;
 
         /* Primary trigger: Average slot size exceeds target */
         if (metrics.avgSlotBytes > d->targetSlotBytes) {

@@ -25,7 +25,7 @@ defcleanerName(uint8_t *, zfree, Bytes);
 #ifdef DATAKIT_TEST
 /* Scope-exit cleaner for a fixed 4-lane array of owned buffers
  * (defcleanerName only covers single pointers). */
-static DK_FN_UNUSED void freeLaneStorage4_cleanup(uint8_t *(*lanes)[4]) {
+DK_FN_UNUSED static void freeLaneStorage4_cleanup(uint8_t *(*lanes)[4]) {
     for (uint32_t lane = 0; lane < 4; lane++) {
         if ((*lanes)[lane]) {
             zfree((*lanes)[lane]);

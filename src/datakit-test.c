@@ -163,7 +163,7 @@ defcleaner(hyperloglog *, hyperloglogFree);
 /* Scope-exit cleaner for a fixed 3-slot owned-buffer array (used by
  * dkTestRevokedKeyFloorTest's per-key wrapped envelopes): frees whichever
  * slots were allocated. */
-static DK_FN_UNUSED void freeBytesArray3_cleanup(uint8_t *(*arr)[3]) {
+DK_FN_UNUSED static void freeBytesArray3_cleanup(uint8_t *(*arr)[3]) {
     for (uint32_t i = 0; i < 3; i++) {
         if ((*arr)[i]) {
             zfree((*arr)[i]);
@@ -11720,7 +11720,7 @@ typedef struct dkTestClusterE2ESaved {
 
 /* Scope-exit cleaner for the D4_VALID_INGESTS-sized saved-wire array:
  * frees each element's owned wire buffer, then the array itself. */
-static DK_FN_UNUSED void
+DK_FN_UNUSED static void
 freeE2ESavedArray_cleanup(dkTestClusterE2ESaved **arr) {
     if (*arr) {
         for (size_t i = 0; i < D4_VALID_INGESTS; i++) {

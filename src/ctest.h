@@ -15,8 +15,7 @@
 /* Generate new string concatenating integer i against string 'prefix'.
  * Marked unused: a TU may enable the generator but reference only some. */
 #define CTEST_INCLUDE_GEN(named)                                               \
-    __attribute__((unused)) static char *gen##named(const char *prefix,        \
-                                                    int i) {                   \
+    [[maybe_unused]] static char *gen##named(const char *prefix, int i) {      \
         static char result[64] = {0};                                          \
         memset(result, 0, sizeof(result));                                     \
         snprintf(result, sizeof(result), "%s%d", prefix, i);                   \

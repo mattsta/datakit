@@ -1472,7 +1472,7 @@ __uint128_t ulidToDualNsU128(const ulid_t *id) {
  * The result sorts in Z-order: the most significant bit where either
  * timestamp differs decides, with ts2's bit above ts1's at each position.
  * It is not ordered by ts1 alone. */
-static inline __uint128_t interleaveBits64(__attribute__((unused)) uint64_t ts1,
+static inline __uint128_t interleaveBits64([[maybe_unused]] uint64_t ts1,
                                            uint64_t ts2) {
     __uint128_t result = 0;
 

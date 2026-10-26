@@ -5,7 +5,7 @@
  * copy, so two files using defcleaner on the same function never
  * collide at link time. */
 #define defcleaner(type, cleanupFunction)                                      \
-    static DK_FN_UNUSED void cleanupFunction##_cleanup(type *t) {              \
+    DK_FN_UNUSED static void cleanupFunction##_cleanup(type *t) {              \
         if (*t) {                                                              \
             cleanupFunction(*t);                                               \
         }                                                                      \
@@ -14,7 +14,7 @@
 /* Sometimes we need the same 'cleanupFunction' but with different type params,
  * so allow unlimited name differences even for the same 'cleanupFunction' */
 #define defcleanerName(type, cleanupFunction, name)                            \
-    static DK_FN_UNUSED void cleanupFunction##name##_cleanup(type *t) {        \
+    DK_FN_UNUSED static void cleanupFunction##name##_cleanup(type *t) {        \
         if (*t) {                                                              \
             cleanupFunction(*t);                                               \
         }                                                                      \
@@ -33,7 +33,7 @@
  * failing call and the caller still reads that call's errno.  Transfer
  * ownership with fdRelease(), which hands back the descriptor and
  * disarms the local. */
-static DK_FN_UNUSED void fdClose_cleanup(int *fd) {
+DK_FN_UNUSED static void fdClose_cleanup(int *fd) {
     if (*fd >= 0) {
         const int savedErrno = errno;
         close(*fd);
@@ -80,7 +80,7 @@ static inline int fdRelease(int *fd) {
  * then the array (see roarArray in multiroar.c; perfRegPtrArray in
  * perfRegression.c for the runtime-sized variant):
  *     typedef struct xArray { x **items; uint64_t count; } xArray;
- *     static DK_FN_UNUSED void xArrayFree_cleanup(xArray *a) { ... }
+ *     DK_FN_UNUSED static void xArrayFree_cleanup(xArray *a) { ... }
  *     __attribute__((cleanup(xArrayFree_cleanup))) xArray arr = {...};
  *
  * Wipe-then-free secret buffers: the cleanup fn only receives the

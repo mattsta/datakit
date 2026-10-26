@@ -32,7 +32,7 @@ typedef uint64_t linearBloomCount;
 #define PACK_FUNCTION_PREFIX varintPacked
 /* Each including file's own copy of the template functions */
 #undef PACKED_STATIC
-#define PACKED_STATIC __attribute__((unused)) static
+#define PACKED_STATIC [[maybe_unused]] static
 #include "../deps/varint/src/varintPacked.h"
 #undef PACKED_STATIC
 

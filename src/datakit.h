@@ -197,7 +197,7 @@
 #define DK_FN_CONST __attribute__((const))
 
 #define DK_FN_NONNULL __attribute__((returns_nonnull))
-#define DK_FN_UNUSED __attribute__((unused))
+#define DK_FN_UNUSED [[maybe_unused]]
 
 /* Keep a function unoptimized: timing loops the optimizer would fold away,
  * or stores it could drop.  clang spells this optnone; GCC has no optnone

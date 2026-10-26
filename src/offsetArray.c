@@ -8,7 +8,7 @@
 
 /* Keeps the translation unit non-empty in non-test builds (offsetArray is
  * header-only) */
-__attribute__((unused)) static const char *offsetArrayDummy_(void) {
+[[maybe_unused]] static const char *offsetArrayDummy_(void) {
     return "offsetArray";
 }
 

@@ -54,7 +54,7 @@ defcleanerName(uint8_t *, zfree, U8Buf);
 
 /* Scope-exit cleaner for a fixed 4-lane buffer array (benchSha256Multi4):
  * frees whichever slots were allocated. */
-static DK_FN_UNUSED void freeLaneBufs4_cleanup(uint8_t *(*bufs)[4]) {
+DK_FN_UNUSED static void freeLaneBufs4_cleanup(uint8_t *(*bufs)[4]) {
     for (uint32_t lane = 0; lane < 4; lane++) {
         if ((*bufs)[lane]) {
             zfree((*bufs)[lane]);
@@ -70,7 +70,7 @@ typedef struct perfRegPtrArray {
     uint32_t count;
 } perfRegPtrArray;
 
-static DK_FN_UNUSED void perfRegPtrArray_cleanup(perfRegPtrArray *pa) {
+DK_FN_UNUSED static void perfRegPtrArray_cleanup(perfRegPtrArray *pa) {
     if (pa->items) {
         for (uint32_t i = 0; i < pa->count; i++) {
             if (pa->items[i]) {

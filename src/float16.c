@@ -279,7 +279,7 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
 #include <immintrin.h>
 #endif
 
-__attribute__((unused)) static void yieldAllFloats(void) {
+[[maybe_unused]] static void yieldAllFloats(void) {
     printf("float16 floats\n");
     for (size_t i = 0; i <= UINT16_MAX; i++) {
         printf("%zu: %.16g\n", i, float16Decode(i));

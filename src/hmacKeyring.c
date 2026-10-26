@@ -110,7 +110,7 @@ typedef struct hkrSecretBuf {
     size_t len;
 } hkrSecretBuf;
 
-static DK_FN_UNUSED void hkrSecretBufWipeFree_cleanup(hkrSecretBuf *b) {
+DK_FN_UNUSED static void hkrSecretBufWipeFree_cleanup(hkrSecretBuf *b) {
     if (b->ptr != NULL) {
         hmacKeyringSecureWipe(b->ptr, b->len);
         zfree(b->ptr);

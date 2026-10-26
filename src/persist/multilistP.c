@@ -16,7 +16,7 @@ defcleanerName(multilistP *, zfree, MultilistP);
 
 /* Scope-exit cleaner for the fixed 2-slot mflex state array the read-only
  * iterator requires: frees whichever slots were created. */
-static DK_FN_UNUSED void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
+DK_FN_UNUSED static void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
     for (size_t i = 0; i < 2; i++) {
         if ((*arr)[i]) {
             mflexStateFree((*arr)[i]);
