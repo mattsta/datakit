@@ -260,11 +260,15 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
 }
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
+#include "datakit.h"
 #include "perf.h"
 #include <assert.h>
 #include <inttypes.h>
-#include <stdlib.h>
+
+defcleanerName(float *, zfree, FloatBuf);
+defcleanerName(uint16_t *, zfree, U16Buf);
 
 #define REPORT_TIME 1
 #if REPORT_TIME
@@ -551,9 +555,12 @@ FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
         /* Allocate test arrays */
         const size_t batchSize = 1024;
         const size_t batchIterations = testers / batchSize;
-        float *srcFloats = malloc(batchSize * sizeof(float));
-        uint16_t *dstHalfs = malloc(batchSize * sizeof(uint16_t));
-        float *dstFloats = malloc(batchSize * sizeof(float));
+        cleanerName(zfree, FloatBuf) float *srcFloats =
+            zmalloc(batchSize * sizeof(float));
+        cleanerName(zfree, U16Buf) uint16_t *dstHalfs =
+            zmalloc(batchSize * sizeof(uint16_t));
+        cleanerName(zfree, FloatBuf) float *dstFloats =
+            zmalloc(batchSize * sizeof(float));
 
         /* Initialize source with varied values */
         for (size_t i = 0; i < batchSize; i++) {
@@ -571,7 +578,8 @@ FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
         }
 
         /* Store scalar results for verification */
-        uint16_t *scalarHalfs = malloc(batchSize * sizeof(uint16_t));
+        cleanerName(zfree, U16Buf) uint16_t *scalarHalfs =
+            zmalloc(batchSize * sizeof(uint16_t));
         float16EncodeBatchScalar(srcFloats, scalarHalfs, batchSize);
 
         /* Benchmark batch encode: SIMD */
@@ -623,7 +631,8 @@ FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
         }
 
         /* Store scalar decode results for verification */
-        float *scalarFloats = malloc(batchSize * sizeof(float));
+        cleanerName(zfree, FloatBuf) float *scalarFloats =
+            zmalloc(batchSize * sizeof(float));
         float16DecodeBatchScalar(dstHalfs, scalarFloats, batchSize);
 
         /* Benchmark batch decode: SIMD */
@@ -658,12 +667,6 @@ FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
                     mismatches, batchSize);
             }
         }
-
-        free(srcFloats);
-        free(dstHalfs);
-        free(dstFloats);
-        free(scalarHalfs);
-        free(scalarFloats);
     }
 
     TEST_FINAL_RESULT;

@@ -7,6 +7,7 @@
  */
 
 #include "intersectInt.h"
+#include "datakit.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -214,14 +215,6 @@ FINISH:
  */
 #if defined(__x86_64__) || defined(__i386__)
 
-#ifdef __GNUC__
-// #define COMPILER_LIKELY(x) __builtin_expect((x), 1)
-#define COMPILER_RARELY(x) __builtin_expect((x), 0)
-#else
-#define COMPILER_LIKELY(x) x
-#define COMPILER_RARELY(x) x
-#endif
-
 /**
  * Intersections scheme designed by N. Kurz that works very
  * well when intersecting an array with another where the density
@@ -250,7 +243,7 @@ size_t v1(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
     const uint32_t *stopFreq = &freq[lenFreq] - kFreqSpace;
     const uint32_t *stopRare = &rare[lenRare] - kRareSpace;
 
-    if (COMPILER_RARELY((rare >= stopRare) || (freq >= stopFreq))) {
+    if (unlikely((rare >= stopRare) || (freq >= stopFreq))) {
         goto FINISH_SCALAR;
     }
 
@@ -261,7 +254,7 @@ size_t v1(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
     __m128i F0 = _mm_lddqu_si128((const __m128i *)(freq));
     __m128i F1 = _mm_lddqu_si128((const __m128i *)(freq + 4));
 
-    if (COMPILER_RARELY(maxFreq < valRare)) {
+    if (unlikely(maxFreq < valRare)) {
         goto ADVANCE_FREQ;
     }
 
@@ -269,7 +262,7 @@ ADVANCE_RARE:
     do {
         *matchOut = valRare;
         rare += 1;
-        if (COMPILER_RARELY(rare >= stopRare)) {
+        if (unlikely(rare >= stopRare)) {
             rare -= 1;
             goto FINISH_SCALAR;
         }
@@ -301,7 +294,7 @@ ADVANCE_FREQ:
         const uint64_t kProbe = (0 + 1) * 2 * 4;
         const uint32_t *probeFreq = freq + kProbe;
 
-        if (COMPILER_RARELY(probeFreq >= stopFreq)) {
+        if (unlikely(probeFreq >= stopFreq)) {
             goto FINISH_SCALAR;
         }
 
@@ -997,7 +990,7 @@ size_t v1_avx2(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
     printf("StopRare: %p, Rare: %p, END: %p\n", stopRare, rare, rare + lenRare);
 #endif
 
-    if (COMPILER_RARELY((rare >= stopRare) || (freq >= stopFreq))) {
+    if (unlikely((rare >= stopRare) || (freq >= stopFreq))) {
         goto FINISH_SCALAR;
     }
 
@@ -1006,7 +999,7 @@ size_t v1_avx2(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
     __m256i Rare = _mm256_set1_epi32(valRare);
     __m256i F = _mm256_loadu_si256((const __m256i *)(freq));
 
-    if (COMPILER_RARELY(maxFreq < valRare)) {
+    if (unlikely(maxFreq < valRare)) {
         goto ADVANCE_FREQ;
     }
 
@@ -1017,7 +1010,7 @@ ADVANCE_RARE:
         /* TODO: refactor all this offset math to use more logical logic than
          * this poor 'stopRare' and 'stopFreq' measurement. Make sure we don't
          * read ahead of the stop condition. */
-        if (COMPILER_RARELY((rare + 1) >= stopRare)) {
+        if (unlikely((rare + 1) >= stopRare)) {
             goto FINISH_SCALAR;
         }
 
@@ -1042,7 +1035,7 @@ ADVANCE_FREQ:
 
         /* Check compiler condition before reading memory beyond our expected
          * extent. */
-        if (COMPILER_RARELY(probeFreq >= stopFreq)) {
+        if (unlikely(probeFreq >= stopFreq)) {
             goto FINISH_SCALAR;
         }
 
@@ -1631,10 +1624,13 @@ size_t lemire_highlyscalable_intersect_SIMD(const uint32_t *A, const size_t s_a,
 #endif /* x86 for highlyscalable functions */
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #include <inttypes.h> /* PRIu64, PRIu32 */
 #include <string.h>   /* memset */
+
+defcleanerName(uint32_t *, zfree, U32);
 
 /* ====================================================================
  * Helper functions for tests
@@ -2101,19 +2097,12 @@ static int32_t stressTestSizes(void) {
     size_t numSizes = sizeof(sizes) / sizeof(sizes[0]);
 
     /* Allocate buffers for largest test */
-    uint32_t *a = malloc(8192 * sizeof(uint32_t));
-    uint32_t *b = malloc(8192 * sizeof(uint32_t));
-    uint32_t *out_scalar = malloc(8192 * sizeof(uint32_t));
-    uint32_t *out_simd = malloc(8192 * sizeof(uint32_t));
-
-    if (!a || !b || !out_scalar || !out_simd) {
-        ERR("memory allocation failed");
-        free(a);
-        free(b);
-        free(out_scalar);
-        free(out_simd);
-        return err;
-    }
+    cleanerName(zfree, U32) uint32_t *a = zmalloc(8192 * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *b = zmalloc(8192 * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_scalar =
+        zmalloc(8192 * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_simd =
+        zmalloc(8192 * sizeof(uint32_t));
 
     for (size_t si = 0; si < numSizes; si++) {
         size_t sizeA = sizes[si];
@@ -2140,10 +2129,6 @@ static int32_t stressTestSizes(void) {
         }
     }
 
-    free(a);
-    free(b);
-    free(out_scalar);
-    free(out_simd);
     return err;
 }
 
@@ -2153,19 +2138,12 @@ static int32_t stressTestRandom(void) {
     printf("  Testing random data patterns...\n");
 
     const size_t maxSize = 10000;
-    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
-
-    if (!a || !b || !out_scalar || !out_simd) {
-        ERR("memory allocation failed");
-        free(a);
-        free(b);
-        free(out_scalar);
-        free(out_simd);
-        return err;
-    }
+    cleanerName(zfree, U32) uint32_t *a = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *b = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_scalar =
+        zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_simd =
+        zmalloc(maxSize * sizeof(uint32_t));
 
     /* Test with different random seeds and densities */
     uint32_t seeds[] = {12345, 67890, 11111, 99999, 0xDEADBEEF};
@@ -2201,10 +2179,6 @@ static int32_t stressTestRandom(void) {
         }
     }
 
-    free(a);
-    free(b);
-    free(out_scalar);
-    free(out_simd);
     return err;
 }
 
@@ -2214,19 +2188,12 @@ static int32_t stressTestEdgeCases(void) {
     printf("  Testing edge cases...\n");
 
     const size_t maxSize = 1000;
-    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
-
-    if (!a || !b || !out_scalar || !out_simd) {
-        ERR("memory allocation failed");
-        free(a);
-        free(b);
-        free(out_scalar);
-        free(out_simd);
-        return err;
-    }
+    cleanerName(zfree, U32) uint32_t *a = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *b = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_scalar =
+        zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_simd =
+        zmalloc(maxSize * sizeof(uint32_t));
 
     /* Test 1: No overlap - disjoint ranges */
     for (size_t i = 0; i < 500; i++) {
@@ -2347,10 +2314,6 @@ static int32_t stressTestEdgeCases(void) {
                               len_simd, "scalar", "intersectInt");
     }
 
-    free(a);
-    free(b);
-    free(out_scalar);
-    free(out_simd);
     return err;
 }
 
@@ -2360,19 +2323,12 @@ static int32_t stressTestSkewedRatios(void) {
     printf("  Testing skewed size ratios (galloping paths)...\n");
 
     const size_t maxSize = 50000;
-    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
-
-    if (!a || !b || !out_scalar || !out_simd) {
-        ERR("memory allocation failed");
-        free(a);
-        free(b);
-        free(out_scalar);
-        free(out_simd);
-        return err;
-    }
+    cleanerName(zfree, U32) uint32_t *a = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *b = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_scalar =
+        zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_simd =
+        zmalloc(maxSize * sizeof(uint32_t));
 
     /* Test ratios that trigger different algorithm selections:
      * - ratio >= 1000:1 triggers SIMDgalloping
@@ -2417,10 +2373,6 @@ static int32_t stressTestSkewedRatios(void) {
         }
     }
 
-    free(a);
-    free(b);
-    free(out_scalar);
-    free(out_simd);
     return err;
 }
 
@@ -2430,23 +2382,16 @@ static int32_t stressTestPlatformSIMD(void) {
     printf("  Testing platform-specific SIMD implementations...\n");
 
     const size_t maxSize = 10000;
-    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_v1 = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_v3 = malloc(maxSize * sizeof(uint32_t));
-    uint32_t *out_gallop = malloc(maxSize * sizeof(uint32_t));
-
-    if (!a || !b || !out_scalar || !out_v1 || !out_v3 || !out_gallop) {
-        ERR("memory allocation failed");
-        free(a);
-        free(b);
-        free(out_scalar);
-        free(out_v1);
-        free(out_v3);
-        free(out_gallop);
-        return err;
-    }
+    cleanerName(zfree, U32) uint32_t *a = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *b = zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_scalar =
+        zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_v1 =
+        zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_v3 =
+        zmalloc(maxSize * sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *out_gallop =
+        zmalloc(maxSize * sizeof(uint32_t));
 
     uint32_t seed = 0xCAFEBABE;
     size_t sizes[] = {100, 500, 1000, 2000, 5000};
@@ -2509,12 +2454,6 @@ static int32_t stressTestPlatformSIMD(void) {
 #endif
     }
 
-    free(a);
-    free(b);
-    free(out_scalar);
-    free(out_v1);
-    free(out_v3);
-    free(out_gallop);
     return err;
 }
 

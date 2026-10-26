@@ -351,8 +351,13 @@ void blake3NeonCompress4(const uint32_t *const cv_inputs[4],
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
+#include "datakit.h" /* zmalloc/zfree */
 #include <time.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 /* ----- Portable reference primitives (weak forward decls) ----------- */
 /* If blake3.c exposes these wrappers, the linker resolves them.
@@ -647,11 +652,7 @@ int blake3NeonTest(int, char *[]) {
 
     TEST("blake3 neon performance bench") {
         const size_t MB = 1024 * 1024;
-        uint8_t *buf = (uint8_t *)malloc(MB);
-        if (!buf) {
-            ERR("alloc failed");
-            return err;
-        }
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(MB);
         prng_fill(buf, MB);
 
         /* Public one-shot hasher. It dispatches to the NEON paths on this
@@ -754,7 +755,6 @@ int blake3NeonTest(int, char *[]) {
         printf("    NEON 4-way batched:             %7.1f MiB/s (%.2fx "
                "portable)\n",
                batch_mib_s, batch_mib_s / portable_mib_s);
-        free(buf);
     }
 
     TEST_FINAL_RESULT;

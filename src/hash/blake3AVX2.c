@@ -454,7 +454,12 @@ void blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
+#include "datakit.h" /* zmalloc/zfree */
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -643,7 +648,7 @@ int blake3AVX2Test(int, char *[]) {
     TEST("blake3AVX2 perf bench") {
         const size_t MB = 1024 * 1024;
         const size_t n_blocks = MB / BLAKE3_BLOCK_LEN; /* 16384 */
-        uint8_t *buf = (uint8_t *)malloc(MB);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(MB);
         fill_random(buf, MB);
         uint32_t cv[8];
         for (int i = 0; i < 8; i++) {
@@ -710,8 +715,6 @@ int blake3AVX2Test(int, char *[]) {
                mib_per_s_a / mib_per_s_p);
         printf("  blake3 AVX2 8-way:  %.1f MiB/s  (%.2fx)\n", mib_per_s_b,
                mib_per_s_b / mib_per_s_p);
-
-        free(buf);
     }
 
     TEST_FINAL_RESULT;

@@ -11,6 +11,9 @@
  *
  * Built by the `intsetSearchBench` CMake target; run under the `perf` preset.
  */
+
+/* A standalone program without datakit: it allocates with libc */
+#define IKNOWWHATIMDOING
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
