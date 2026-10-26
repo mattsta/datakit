@@ -60,6 +60,9 @@ class PerfCompareOptions:
     )
     root: Path | None = None
     jobs: int | None = None
+    #: cmake cache entries (NAME=VALUE) for the current side only, to time
+    #: a build option against the same base
+    current_defines: tuple[str, ...] = ()
 
 
 def perf_preset(compiler: toolchain.Compiler) -> str | None:
@@ -177,6 +180,9 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
     modules = parse_modules(opts.modules)
     bench = [(gitutil.repo_path(p), None) for p in opts.bench_paths]
     config = toolchain.build_config(opts.compiler, perf_preset(opts.compiler))
+    current_config = toolchain.build_config(
+        opts.compiler, perf_preset(opts.compiler), opts.current_defines
+    )
     size = procs.sizing(opts.jobs)
 
     base_commit = gitutil.resolve_commit(repo, opts.base)
@@ -193,11 +199,14 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         repo, root, "perfcompare", name, base_commit, "perfcompare"
     )
     sides = []
-    for label, tree in (("base", base_tree), ("current", current_tree)):
+    for label, tree, side_config in (
+        ("base", base_tree, config),
+        ("current", current_tree, current_config),
+    ):
         src = work / label
         gitutil.export_tree(repo, tree, src)
-        config.check_presets_file(src)
-        sides.append(Side(label, tree, src, config))
+        side_config.check_presets_file(src)
+        sides.append(Side(label, tree, src, side_config))
 
     for side in sides:
         step = build_side(side, work, size)

@@ -417,6 +417,14 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("name", help="work-dir name under ROOT/perfcompare")
     pc.add_argument("--base", required=True, help="base revision")
     pc.add_argument(
+        "--current-define",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="cmake cache entry for the current side only, repeatable "
+        "(times a build option against the same base)",
+    )
+    pc.add_argument(
         "--modules",
         default=None,
         help="comma-separated perfRegression modules (default: all)",
@@ -814,6 +822,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 compiler=toolchain.from_args(args.compiler, args),
                 root=args.root,
                 jobs=args.jobs,
+                current_defines=tuple(args.current_define),
             ),
         )
 

@@ -103,6 +103,7 @@ class Refusals(unittest.TestCase):
             {"modules": "bad name"},
             {"name": "../escape"},
             {"bench_paths": ["/abs/path.c"]},
+            {"current_defines": ("NoValue",)},
         ):
             with self.assertRaises(ToolError, msg=str(kw)):
                 perfcompare.run(repo, self.options(**kw))
