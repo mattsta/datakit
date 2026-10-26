@@ -268,13 +268,13 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             multiFenwickFlatQuery(NULL, 0, &r) || r.type != DATABOX_VOID ||
             multiFenwickFlatGet(NULL, 0, NULL) ||
             multiFenwickFlatLowerBound(NULL, &one) != SIZE_MAX) {
-            ERRR("NULL tree is not an empty tree");
+            ERR("NULL tree is not an empty tree");
         }
 
         multiFenwickFlatClear(NULL);
         multiFenwickFlatFree(NULL);
         if (multiFenwickFlatUpdate(NULL, 0, &one)) {
-            ERRR("Update accepted a NULL tree pointer");
+            ERR("Update accepted a NULL tree pointer");
         }
 
         cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw =
@@ -284,20 +284,20 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             multiFenwickFlatQuery(mfw, 0, &r) || r.type != DATABOX_VOID ||
             multiFenwickFlatRangeQuery(mfw, 0, 0, &r) ||
             multiFenwickFlatLowerBound(mfw, &one) != SIZE_MAX) {
-            ERRR("new tree is not empty");
+            ERR("new tree is not empty");
         }
 
         multiFenwickFlatClear(mfw); /* no cells: nothing to clear */
         cleaner(multiFenwickFlatFree) multiFenwickFlat *fromNone =
             multiFenwickFlatNewFromArray(NULL, 0);
         if (!fromNone || multiFenwickFlatCount(fromNone) != 0) {
-            ERRR("NewFromArray(NULL, 0) is not a new empty tree");
+            ERR("NewFromArray(NULL, 0) is not a new empty tree");
         }
 
         cleaner(multiFenwickFlatFree) multiFenwickFlat *refused =
             multiFenwickFlatNewFromArray(NULL, 3);
         if (refused) {
-            ERRR("NewFromArray accepted NULL values with a count");
+            ERR("NewFromArray accepted NULL values with a count");
         }
     }
 
@@ -335,12 +335,12 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             d.type != DATABOX_DOUBLE_64 || d.data.d64 != 6.5 ||
             !multiFenwickFlatGet(mfw, 4, &d) || d.type != DATABOX_UNSIGNED_64 ||
             d.data.u64 != 1) {
-            ERRR("values changed when the kinds array was added");
+            ERR("values changed when the kinds array was added");
         }
 
         const databox minusHalf = DATABOX_DOUBLE(-0.5);
         if (!multiFenwickFlatUpdate(&mfw, 3, &minusHalf)) {
-            ERRR("Update(-0.5) refused");
+            ERR("Update(-0.5) refused");
         }
 
         /* Elements 0, 1, 2, 4, 5 and 1000 are 1; everything else is 0,
@@ -350,7 +350,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             r.type != DATABOX_DOUBLE_64 || r.data.d64 != 6 ||
             !multiFenwickFlatGet(mfw, 3, &r) || r.data.u64 != 0 ||
             !multiFenwickFlatGet(mfw, 1000, &r) || r.data.u64 != 1) {
-            ERRR("values lost across growth");
+            ERR("values lost across growth");
         }
 
         multiFenwickFlatClear(mfw);
@@ -358,8 +358,8 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             multiFenwickFlatBytes(mfw) != base + 8 * 1024 ||
             !multiFenwickFlatQuery(mfw, 1000, &r) ||
             r.type != DATABOX_UNSIGNED_64 || r.data.u64 != 0) {
-            ERRR("Clear did not zero every cell, keep count and capacity, "
-                 "and drop the kinds array");
+            ERR("Clear did not zero every cell, keep count and capacity, "
+                "and drop the kinds array");
         }
     }
 
@@ -372,7 +372,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             multiFenwickFlatUpdate(&mfw, 0, &bytes) ||
             multiFenwickFlatSet(&mfw, MULTIFENWICK_FLAT_INDEX_MAX + 1, &big) ||
             mfw != NULL) {
-            ERRR("a refused write created a tree");
+            ERR("a refused write created a tree");
         }
 
         /* Elements [UINT64_MAX, 0, 2^63, INT64_MIN]: cell 2 (elements
@@ -382,7 +382,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
         if (!multiFenwickFlatUpdate(&mfw, 0, &big) ||
             !multiFenwickFlatUpdate(&mfw, 3, &min) ||
             !multiFenwickFlatUpdate(&mfw, 2, &half)) {
-            ERRR("in-range writes refused");
+            ERR("in-range writes refused");
         }
 
         /* Adding to element 1 overflows cell 2; growing to index 4 adds
@@ -392,7 +392,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
         if (multiFenwickFlatUpdate(&mfw, 1, &one) ||
             multiFenwickFlatUpdate(&mfw, 4, &one) ||
             multiFenwickFlatSet(&mfw, 0, &bytes)) {
-            ERRR("an out-of-range block sum was accepted");
+            ERR("an out-of-range block sum was accepted");
         }
 
         databox r;
@@ -403,7 +403,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             r.data.u64 != 0 || !multiFenwickFlatGet(mfw, 2, &r) ||
             r.data.u64 != half.data.u64 || !multiFenwickFlatGet(mfw, 3, &r) ||
             r.type != DATABOX_SIGNED_64 || r.data.i64 != INT64_MIN) {
-            ERRR("a refused write changed the tree");
+            ERR("a refused write changed the tree");
         }
 
         /* The prefix sum through 2 (UINT64_MAX + 2^63) has no 64-bit
@@ -412,7 +412,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
             !multiFenwickFlatRangeQuery(mfw, 1, 2, &r) ||
             r.data.u64 != half.data.u64 || !multiFenwickFlatQuery(mfw, 3, &r) ||
             r.data.u64 != UINT64_MAX) {
-            ERRR("out-of-range prefix or in-range range handled wrongly");
+            ERR("out-of-range prefix or in-range range handled wrongly");
         }
     }
 

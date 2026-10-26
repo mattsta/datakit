@@ -39,7 +39,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     TEST("empty array state") {
         offsetArrayInt a = {};
         if (!offsetArrayEmpty(&a)) {
-            ERRR("New array should be empty");
+            ERR("New array should be empty");
         }
         if (offsetArrayCount(&a) != 0) {
             ERR("Empty array count should be 0, got %zu", offsetArrayCount(&a));
@@ -51,7 +51,7 @@ int offsetArrayTest(int argc, char *argv[]) {
         offsetArrayGrow(&a, 100);
 
         if (offsetArrayEmpty(&a)) {
-            ERRR("Array should not be empty after grow");
+            ERR("Array should not be empty after grow");
         }
         if (a.offset != 100) {
             ERR("offset should be 100, got %d", a.offset);
@@ -146,7 +146,7 @@ int offsetArrayTest(int argc, char *argv[]) {
         offsetArrayGrow(&a, 100); /* Should be no-op */
 
         if (a.obj != oldObj) {
-            ERRR("Grow to existing index should not reallocate");
+            ERR("Grow to existing index should not reallocate");
         }
         if (offsetArrayGet(&a, 100) != 42) {
             ERR("Value should be unchanged, got %d", offsetArrayGet(&a, 100));
@@ -169,7 +169,7 @@ int offsetArrayTest(int argc, char *argv[]) {
 
         if (a.obj != oldObj || a.offset != oldOffset ||
             a.highest != oldHighest) {
-            ERRR("Grow within range should be complete no-op");
+            ERR("Grow within range should be complete no-op");
         }
         if (offsetArrayGet(&a, 150) != 1500) {
             ERR("Value should be unchanged, got %d", offsetArrayGet(&a, 150));
@@ -188,19 +188,19 @@ int offsetArrayTest(int argc, char *argv[]) {
         offsetArrayGrow(&a, 200);
 
         if (!offsetArrayContains(&a, 100)) {
-            ERRR("Should contain low bound");
+            ERR("Should contain low bound");
         }
         if (!offsetArrayContains(&a, 200)) {
-            ERRR("Should contain high bound");
+            ERR("Should contain high bound");
         }
         if (!offsetArrayContains(&a, 150)) {
-            ERRR("Should contain middle value");
+            ERR("Should contain middle value");
         }
         if (offsetArrayContains(&a, 99)) {
-            ERRR("Should not contain below low");
+            ERR("Should not contain below low");
         }
         if (offsetArrayContains(&a, 201)) {
-            ERRR("Should not contain above high");
+            ERR("Should not contain above high");
         }
 
         offsetArrayFree(&a);
@@ -248,10 +248,10 @@ int offsetArrayTest(int argc, char *argv[]) {
         offsetArrayFree(&a);
 
         if (!offsetArrayEmpty(&a)) {
-            ERRR("Array should be empty after free");
+            ERR("Array should be empty after free");
         }
         if (a.obj != NULL) {
-            ERRR("obj should be NULL after free");
+            ERR("obj should be NULL after free");
         }
         if (a.offset != 0) {
             ERR("offset should be 0 after free, got %d", a.offset);
@@ -576,7 +576,7 @@ int offsetArrayTest(int argc, char *argv[]) {
         }
         if (offsetArrayGet(&arrs[1], 10) != 99 ||
             offsetArrayGet(&arrs[1], 11) != 0) {
-            ERRR("Checked write landed on the wrong element");
+            ERR("Checked write landed on the wrong element");
         }
 
         offsetArrayFree(&arrs[1]);
@@ -590,7 +590,7 @@ int offsetArrayTest(int argc, char *argv[]) {
         p->id = 1;
         offsetArrayGetChecked_(&s, 5).id = 2;
         if (offsetArrayGet(&s, -5).id != 1 || offsetArrayGet(&s, 5).id != 2) {
-            ERRR("Struct members written through checked access were lost");
+            ERR("Struct members written through checked access were lost");
         }
         offsetArrayFree(&s);
 
@@ -602,7 +602,7 @@ int offsetArrayTest(int argc, char *argv[]) {
         offsetArrayGetChecked_(&z, lo) = 40;
         offsetArrayGetChecked_(&z, hi) = 43;
         if (offsetArrayGet(&z, lo) != 40 || offsetArrayGet(&z, hi) != 43) {
-            ERRR("size_t values written through checked access were lost");
+            ERR("size_t values written through checked access were lost");
         }
         offsetArrayFree(&z);
     }

@@ -491,7 +491,7 @@ int blake3SSE41Test(int argc, char *argv[]) {
         blake3PortableCompressInPlace(cv_ref, block, block_len, counter, flags);
         blake3SSE41CompressInPlace(cv_simd, block, block_len, counter, flags);
         if (memcmp(cv_ref, cv_simd, sizeof(cv_ref)) != 0) {
-            ERRR("Stub/SIMD compress-in-place output != portable");
+            ERR("Stub/SIMD compress-in-place output != portable");
         }
     }
 

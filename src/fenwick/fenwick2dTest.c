@@ -125,7 +125,7 @@ static size_t f2tIndex_(uint64_t *s) {
         if (fenwick2d##T##Rows(t) != rows ||                                   \
             fenwick2d##T##Query(t, F2T_DIM, F2T_DIM) != 0 ||                   \
             fenwick2d##T##Get(t, 0, 0) != 0) {                                 \
-            ERRR(#T ": Clear did not zero the grid and keep the extents");     \
+            ERR(#T ": Clear did not zero the grid and keep the extents");      \
         }                                                                      \
         fenwick2d##T##Free(t);                                                 \
         return err;                                                            \
@@ -148,7 +148,7 @@ static size_t f2tIndex_(uint64_t *s) {
             fenwick2d##T##Query(NULL, 5, 5) != 0 ||                            \
             fenwick2d##T##RangeQuery(NULL, 0, 0, 5, 5) != 0 ||                 \
             fenwick2d##T##Update(NULL, 0, 0, 1)) {                             \
-            ERRR(#T ": a NULL tree is not an empty tree");                     \
+            ERR(#T ": a NULL tree is not an empty tree");                      \
         }                                                                      \
         fenwick2d##T##Clear(NULL);                                             \
         fenwick2d##T##Free(NULL);                                              \
@@ -157,7 +157,7 @@ static size_t f2tIndex_(uint64_t *s) {
         if (fenwick2d##T##Update(&t, (size_t)1 << 32, 0, 1) ||                 \
             fenwick2d##T##Update(&t, (size_t)1 << 20, (size_t)1 << 20, 1) ||   \
             t != NULL) {                                                       \
-            ERRR(#T ": a write past 2^32 cells was accepted or left a tree");  \
+            ERR(#T ": a write past 2^32 cells was accepted or left a tree");   \
         }                                                                      \
                                                                                \
         const VT step = (IS_FLOAT) ? (VT)(VMAX) : (VT)1;                       \
@@ -165,7 +165,7 @@ static size_t f2tIndex_(uint64_t *s) {
             fenwick2d##T##Update(&t, 3, 2, step) ||                            \
             fenwick2d##T##Get(t, 3, 2) != (VT)(VMAX) ||                        \
             fenwick2d##T##Rows(t) != 4 || fenwick2d##T##Cols(t) != 3) {        \
-            ERRR(#T ": an element overflow was accepted or changed the tree"); \
+            ERR(#T ": an element overflow was accepted or changed the tree");  \
         }                                                                      \
                                                                                \
         const size_t bytes = fenwick2d##T##Bytes(t);                           \
@@ -308,13 +308,13 @@ int fenwick2dTest(int argc, char *argv[]) {
         fenwick2dFloat *f = NULL;
         if (fenwick2dFloatUpdate(&f, 0, 0, NAN) ||
             fenwick2dFloatSet(&f, 0, 0, INFINITY) || f != NULL) {
-            ERRR("a non-finite float was accepted or left a tree");
+            ERR("a non-finite float was accepted or left a tree");
         }
 
         fenwick2dDouble *d = NULL;
         if (fenwick2dDoubleUpdate(&d, 0, 0, NAN) ||
             fenwick2dDoubleSet(&d, 0, 0, INFINITY) || d != NULL) {
-            ERRR("a non-finite double was accepted or left a tree");
+            ERR("a non-finite double was accepted or left a tree");
         }
     }
 

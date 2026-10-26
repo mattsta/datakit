@@ -290,13 +290,13 @@ int intsetPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to create persistCtx");
+            ERR("Failed to create persistCtx");
         }
 
         intsetP *is = intsetNewP(ctx);
         if (!is) {
             persistCtxFree(ctx);
-            ERRR("Failed to create intsetP");
+            ERR("Failed to create intsetP");
         }
 
         PTEST_VERIFY_COUNT(is, 0, intsetCountP);
@@ -329,7 +329,7 @@ int intsetPTest(int argc, char *argv[]) {
 
         /* Verify complete match */
         if (!verifyIntsetMatchesTracker(is, &tracker)) {
-            ERRR("Intset/tracker mismatch");
+            ERR("Intset/tracker mismatch");
         }
 
         intsetCloseP(is);
@@ -363,11 +363,11 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
-                ERRR("Failed to recover intsetP");
+                ERR("Failed to recover intsetP");
             }
 
             if (!verifyIntsetMatchesTracker(is, &tracker)) {
-                ERRR("Intset/tracker mismatch");
+                ERR("Intset/tracker mismatch");
             }
 
             intsetCloseP(is);
@@ -392,7 +392,7 @@ int intsetPTest(int argc, char *argv[]) {
         }
 
         if (!verifyIntsetMatchesTracker(is, &tracker)) {
-            ERRR("Intset/tracker mismatch");
+            ERR("Intset/tracker mismatch");
         }
 
         intsetCloseP(is);
@@ -426,11 +426,11 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             }
 
             if (!verifyIntsetMatchesTracker(is, &tracker)) {
-                ERRR("Intset/tracker mismatch");
+                ERR("Intset/tracker mismatch");
             }
 
             intsetCloseP(is);
@@ -487,7 +487,7 @@ int intsetPTest(int argc, char *argv[]) {
         }
 
         if (!verifyIntsetMatchesTracker(is, &tracker)) {
-            ERRR("Intset/tracker mismatch");
+            ERR("Intset/tracker mismatch");
         }
 
         /* Removing an absent value changes nothing and logs nothing */
@@ -504,7 +504,7 @@ int intsetPTest(int argc, char *argv[]) {
         persistCtxStats after;
         persistCtxGetStats(ctx, &after);
         if (after.totalOps != before.totalOps) {
-            ERRR("removing absent values wrote WAL entries");
+            ERR("removing absent values wrote WAL entries");
         }
 
         intsetCloseP(is);
@@ -546,11 +546,11 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             }
 
             if (!verifyIntsetMatchesTracker(is, &tracker)) {
-                ERRR("Intset/tracker mismatch");
+                ERR("Intset/tracker mismatch");
             }
 
             intsetCloseP(is);
@@ -614,11 +614,11 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
-                ERRR("Final recovery failed");
+                ERR("Final recovery failed");
             }
 
             if (!verifyIntsetMatchesTracker(is, &tracker)) {
-                ERRR("Intset/tracker mismatch");
+                ERR("Intset/tracker mismatch");
             }
 
             intsetCloseP(is);
@@ -713,7 +713,7 @@ int intsetPTest(int argc, char *argv[]) {
         }
 
         if (!verifyIntsetMatchesTracker(is, &tracker)) {
-            ERRR("Intset/tracker mismatch");
+            ERR("Intset/tracker mismatch");
         }
 
         intsetCloseP(is);
@@ -747,11 +747,11 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
-                ERRR("Recovery of large dataset failed");
+                ERR("Recovery of large dataset failed");
             }
 
             if (!verifyIntsetMatchesTracker(is, &tracker)) {
-                ERRR("Intset/tracker mismatch");
+                ERR("Intset/tracker mismatch");
             }
 
             intsetCloseP(is);
@@ -778,7 +778,7 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetOpenP(ctx);
 
             if (!is) {
-                ERRR("Empty recovery failed");
+                ERR("Empty recovery failed");
             }
 
             PTEST_VERIFY_COUNT(is, 0, intsetCountP);
@@ -832,7 +832,7 @@ int intsetPTest(int argc, char *argv[]) {
         }
 
         if (!verifyIntsetMatchesTracker(is, &tracker)) {
-            ERRR("Intset/tracker mismatch");
+            ERR("Intset/tracker mismatch");
         }
 
         /* Remove all values */
@@ -899,12 +899,12 @@ int intsetPTest(int argc, char *argv[]) {
 
         /* Force compaction */
         if (!intsetCompactP(is)) {
-            ERRR("Compaction failed");
+            ERR("Compaction failed");
         }
 
         /* Verify after compaction (within same session) */
         if (!verifyIntsetMatchesTracker(is, &tracker)) {
-            ERRR("Intset/tracker mismatch");
+            ERR("Intset/tracker mismatch");
         }
 
         intsetCloseP(is);
@@ -960,7 +960,7 @@ int intsetPTest(int argc, char *argv[]) {
         PTEST_LOGGED(intsetRemoveP(is, 123, NULL));
         if (!intsetSyncP(is) || intsetBytesP(is) == 0 ||
             intsetCount(intsetGetRawP(is)) != n) {
-            ERRR("Sync, bytes or raw count wrong");
+            ERR("Sync, bytes or raw count wrong");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
@@ -968,7 +968,7 @@ int intsetPTest(int argc, char *argv[]) {
         ctx = persistCtxOpen(basePath, NULL);
         is = intsetOpenP(ctx);
         if (!is) {
-            ERRR("Recovery failed");
+            ERR("Recovery failed");
         } else {
             intsetIterator it;
             intsetIteratorInit(&it, intsetGetRawP(is));
@@ -1004,7 +1004,7 @@ int intsetPTest(int argc, char *argv[]) {
         intsetCloseP(is);
         persistCtxFree(ctx);
         if (!ptestDamageLastWalEntry(basePath)) {
-            ERRR("could not damage the WAL");
+            ERR("could not damage the WAL");
         }
 
         ctx = persistCtxOpen(basePath, NULL);
@@ -1014,12 +1014,12 @@ int intsetPTest(int argc, char *argv[]) {
                 is ? intsetCountP(is) : 0);
         }
         if (!ptestExpectHealed(ctx, basePath)) {
-            ERRR("the damaged entry was not healed into the quarantine");
+            ERR("the damaged entry was not healed into the quarantine");
         }
         bool changed = false;
         if (is &&
             (intsetAddP(is, 40, &changed) == PERSIST_LOG_REFUSED || !changed)) {
-            ERRR("a change after the healed entry was refused");
+            ERR("a change after the healed entry was refused");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
@@ -1028,7 +1028,7 @@ int intsetPTest(int argc, char *argv[]) {
         is = intsetOpenP(ctx);
         if (!is || intsetCountP(is) != 3 || !intsetFindP(is, 10) ||
             !intsetFindP(is, 20) || !intsetFindP(is, 40)) {
-            ERRR("reopen does not hold 10, 20, 40");
+            ERR("reopen does not hold 10, 20, 40");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
@@ -1053,7 +1053,7 @@ int intsetPTest(int argc, char *argv[]) {
                              intsetRemoveP(is, -3, &changed));
         if (intsetAddP(is, 300, &changed) != PERSIST_LOG_UNCHANGED || changed ||
             !intsetPHolds_(intsetGetRawP(is), held, COUNT_ARRAY(held))) {
-            ERRR("a refused change changed the set");
+            ERR("a refused change changed the set");
         }
 
         /* Missing arguments: refused or empty answers */
@@ -1063,14 +1063,14 @@ int intsetPTest(int argc, char *argv[]) {
             intsetCountP(NULL) || intsetBytesP(NULL) || intsetFindP(NULL, 1) ||
             intsetGetAtP(NULL, 0, &at) || intsetGetAtP(is, 0, NULL) ||
             intsetSyncP(NULL) || intsetCompactP(NULL)) {
-            ERRR("a call without its wrapper was not refused");
+            ERR("a call without its wrapper was not refused");
         }
         intsetGetStatsP(NULL, NULL);
         intsetCloseP(NULL);
 
         /* Logging works again, and a reopen holds only what was logged */
         if (intsetAddP(is, 40000, NULL) == PERSIST_LOG_REFUSED) {
-            ERRR("the context did not log again after the refusal");
+            ERR("the context did not log again after the refusal");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
@@ -1079,7 +1079,7 @@ int intsetPTest(int argc, char *argv[]) {
         static constexpr int64_t logged[] = {-3, 7, 300, 40000};
         if (!is ||
             !intsetPHolds_(intsetGetRawP(is), logged, COUNT_ARRAY(logged))) {
-            ERRR("a reopen did not hold exactly the logged changes");
+            ERR("a reopen did not hold exactly the logged changes");
         }
         intsetCloseP(is);
         persistCtxFree(ctx);

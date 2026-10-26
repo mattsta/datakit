@@ -1672,13 +1672,13 @@ int multilistTest(int argc, char *argv[]) {
             multilistPopHead(&ml, s0, &box);
             if (!DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
                 memcmp(databoxBytes(&box), "55513", 5) != 0) {
-                ERRR("numeral string did not pop as the same string");
+                ERR("numeral string did not pop as the same string");
             }
             databoxFreeData(&box);
             box = (databox){};
             multilistPopHead(&ml, s0, &box);
             if (!DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
-                ERRR("integer did not pop as 55513");
+                ERR("integer did not pop as 55513");
             }
             databoxFreeData(&box);
         }
@@ -3620,7 +3620,7 @@ int multilistTest(int argc, char *argv[]) {
         }
 
         if (!negativeOffsets) {
-            ERRR("no walk produced a tail-relative offset");
+            ERR("no walk produced a tail-relative offset");
         }
     }
 
@@ -3876,7 +3876,7 @@ int multilistTest(int argc, char *argv[]) {
                     multilistSmallAdapterNewFromFlexConsume(fl), fl);
             cleaner(flexFree) flex *dump = multilistMediumAdapterDump(md, s0);
             if (!mlaFlexIs(dump, want, LK_N)) {
-                ERRR("Medium NewFromFlexConsumeGrow differs");
+                ERR("Medium NewFromFlexConsumeGrow differs");
             }
         }
 
@@ -3891,8 +3891,8 @@ int multilistTest(int argc, char *argv[]) {
             cleaner(flexFree) flex *db = multilistFullDump(b, s0);
             if (!mlaFlexIs(da, want, 2 * LK_N) ||
                 !mlaFlexIs(db, want, 2 * LK_N)) {
-                ERRR("Full NewFromFlex / FulllCreateFlex / AppendValues "
-                     "differ");
+                ERR("Full NewFromFlex / FulllCreateFlex / AppendValues "
+                    "differ");
             }
 
             /* Depth 1 compresses interior nodes, depth 0 decompresses */
@@ -3906,12 +3906,12 @@ int multilistTest(int argc, char *argv[]) {
             if (!compressed ||
                 multilistFullBytesActual(a) != multilistFullBytes(a) ||
                 multilistFullBytesActual(b) != multilistFullBytes(b)) {
-                ERRR("Full SetOptions / SetDepth did not apply the depth");
+                ERR("Full SetOptions / SetDepth did not apply the depth");
             }
 
             cleaner(flexFree) flex *da2 = multilistFullDump(a, s0);
             if (!mlaFlexIs(da2, want, 2 * LK_N)) {
-                ERRR("Full SetOptions changed the contents");
+                ERR("Full SetOptions changed the contents");
             }
         }
     }
@@ -4033,7 +4033,7 @@ int multilistTest(int argc, char *argv[]) {
         }
 
         if (!sawMedium) {
-            ERRR("Sweep never reached Medium tier - sizing is wrong");
+            ERR("Sweep never reached Medium tier - sizing is wrong");
         }
     }
 

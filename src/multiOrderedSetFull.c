@@ -2148,10 +2148,10 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
     TEST("multiOrderedSetFull — create and free") {
         multiOrderedSetFull *mos = multiOrderedSetFullNew();
         if (!mos) {
-            ERRR("Failed to create multiOrderedSetFull");
+            ERR("Failed to create multiOrderedSetFull");
         }
         if (multiOrderedSetFullCount(mos) != 0) {
-            ERRR("New set should be empty");
+            ERR("New set should be empty");
         }
         multiOrderedSetFullFree(mos);
     }
@@ -2234,14 +2234,14 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             !multiOrderedSetFullGetScore(a, &m7, &sa) || sa.data.i64 != 7 ||
             !multiOrderedSetFullGetScore(b, &m7, &sb) || sb.data.i64 != 7 ||
             atomPoolCount(shared) != 50) {
-            ERRR("a pooled set lost members or scores");
+            ERR("a pooled set lost members or scores");
         }
 
         /* Freeing the set leaves the external pool to its owner */
         multiOrderedSetFullFree(a);
         multiOrderedSetFullFree(b);
         if (atomPoolCount(shared) > 50) {
-            ERRR("the external pool grew after its set was freed");
+            ERR("the external pool grew after its set was freed");
         }
         atomPoolFree(shared);
     }
@@ -3049,7 +3049,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             multiOrderedSetFullAdd(m, &score, &member);
         }
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariant oracle reported violations (ascending)");
+            ERR("invariant oracle reported violations (ascending)");
         }
         if (multiOrderedSetFullCount(m) != 1000) {
             ERR("count expected 1000, got %zu", multiOrderedSetFullCount(m));
@@ -3073,7 +3073,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             multiOrderedSetFullAdd(m, &score, &member);
         }
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariant oracle reported violations (random/dup scores)");
+            ERR("invariant oracle reported violations (random/dup scores)");
         }
         multiOrderedSetFullFree(m);
     }
@@ -3097,7 +3097,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             ERR("expected splits, mapCount=%u", m->mapCount);
         }
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariant oracle reported violations after splits");
+            ERR("invariant oracle reported violations after splits");
         }
         if (multiOrderedSetFullCount(m) != (size_t)N) {
             ERR("count expected %d got %zu", N, multiOrderedSetFullCount(m));
@@ -3215,7 +3215,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 multiOrderedSetFullCount(m));
         }
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariants violated after re-add");
+            ERR("invariants violated after re-add");
         }
         multiOrderedSetFullFree(m);
     }
@@ -3242,7 +3242,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             ERR("expected splits, mapCount=%u", m->mapCount);
         }
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariants violated with 96/128-bit heads");
+            ERR("invariants violated with 96/128-bit heads");
         }
 
         /* A positive wide value reads back UNSIGNED_128 (canonical form) */
@@ -3318,7 +3318,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 want, multiOrderedSetFullCount(m));
         }
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariants violated after wide range removal");
+            ERR("invariants violated after wide range removal");
         }
         multiOrderedSetFullFree(m);
     }
@@ -3333,7 +3333,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         multiOrderedSetFullAdd(m, &narrowScore, &m1);
         const databox *rb = getRangeBox(m, 0);
         if (mosBoxIsWide(rb) || rb->allocated || rb->big) {
-            ERRR("narrow head should own nothing");
+            ERR("narrow head should own nothing");
         }
 
         /* narrow -> wide: the head gets a payload */
@@ -3346,7 +3346,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         const void *payload = rb->data.ptr;
         if (rb->type != DATABOX_SIGNED_128 || !rb->allocated || !rb->big ||
             !payload || *rb->data.i128 != w1) {
-            ERRR("wide head did not get an owned payload");
+            ERR("wide head did not get an owned payload");
         }
 
         /* wide -> wide: the same payload is rewritten in place */
@@ -3357,13 +3357,13 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         multiOrderedSetFullAdd(m, (const databox *)&s3, &m3);
         rb = getRangeBox(m, 0);
         if (rb->data.ptr != payload || *rb->data.i128 != w2) {
-            ERRR("wide head refresh did not reuse its payload");
+            ERR("wide head refresh did not reuse its payload");
         }
 
         multiOrderedSetFullRemove(m, &m3);
         rb = getRangeBox(m, 0);
         if (rb->data.ptr != payload || *rb->data.i128 != w1) {
-            ERRR("wide head after removal did not reuse its payload");
+            ERR("wide head after removal did not reuse its payload");
         }
 
         /* wide -> narrow: the payload is freed (the leak checker sees it
@@ -3372,20 +3372,20 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         rb = getRangeBox(m, 0);
         if (mosBoxIsWide(rb) || rb->allocated || rb->big ||
             rb->data.i64 != 10) {
-            ERRR("narrow head after a wide one kept a payload");
+            ERR("narrow head after a wide one kept a payload");
         }
 
         /* wide again, then drop it through the empty-map sentinel and Free */
         multiOrderedSetFullAdd(m, (const databox *)&s2, &m2);
         multiOrderedSetFullRemove(m, &m1);
         if (mosFullCheckInvariants(m) != 0) {
-            ERRR("invariants violated across head transitions");
+            ERR("invariants violated across head transitions");
         }
         multiOrderedSetFullRemove(m, &m2);
         rb = getRangeBox(m, 0);
         if (rb->type != DATABOX_SIGNED_64 || rb->data.i64 != INT64_MAX ||
             rb->allocated) {
-            ERRR("empty sub-map should hold the narrow sentinel");
+            ERR("empty sub-map should hold the narrow sentinel");
         }
         multiOrderedSetFullAdd(m, (const databox *)&s3, &m3);
         multiOrderedSetFullReset(m);

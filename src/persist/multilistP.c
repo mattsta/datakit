@@ -490,17 +490,17 @@ int multilistPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to create persistCtx");
+            ERR("Failed to create persistCtx");
         }
 
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         if (!ml) {
             persistCtxFree(ctx);
-            ERRR("Failed to create multilistP");
+            ERR("Failed to create multilistP");
         }
 
         if (multilistCountP(ml) != 0) {
-            ERRR("New list should be empty");
+            ERR("New list should be empty");
         }
 
         multilistCloseP(ml);
@@ -517,13 +517,13 @@ int multilistPTest(int argc, char *argv[]) {
         /* Session 1: Create, add 100 elements, compact, add 50 more */
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to create persistCtx");
+            ERR("Failed to create persistCtx");
         }
 
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         if (!ml) {
             persistCtxFree(ctx);
-            ERRR("Failed to create multilistP");
+            ERR("Failed to create multilistP");
         }
 
         /* Push 100 elements */
@@ -537,7 +537,7 @@ int multilistPTest(int argc, char *argv[]) {
 
         /* Force compaction */
         if (!multilistCompactP(ml)) {
-            ERRR("Compaction failed");
+            ERR("Compaction failed");
         }
 
         /* Push 50 more elements AFTER compaction */
@@ -556,13 +556,13 @@ int multilistPTest(int argc, char *argv[]) {
         /* Session 2: Recover and verify count is exactly 150 (not 250) */
         ctx = persistCtxOpen(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to open persistCtx");
+            ERR("Failed to open persistCtx");
         }
 
         ml = multilistOpenP(ctx);
         if (!ml) {
             persistCtxFree(ctx);
-            ERRR("Failed to recover multilistP");
+            ERR("Failed to recover multilistP");
         }
 
         size_t recoveredCount = multilistCountP(ml);
@@ -629,7 +629,7 @@ int multilistPTest(int argc, char *argv[]) {
             !databoxEqual(&head.box, &ten) ||
             !multilistIndexGetP(ml, state, 1, &tail) ||
             !databoxEqual(&tail.box, &twenty)) {
-            ERRR("a refused change changed the list");
+            ERR("a refused change changed the list");
         }
 
         /* Missing arguments: refused or empty answers; an empty list's
@@ -647,7 +647,7 @@ int multilistPTest(int argc, char *argv[]) {
             multilistCountP(NULL) || multilistBytesP(NULL) ||
             multilistIndexGetP(NULL, state, 0, &head) || multilistSyncP(NULL) ||
             multilistCompactP(NULL)) {
-            ERRR("a call without its wrapper or value was not refused");
+            ERR("a call without its wrapper or value was not refused");
         }
         multilistIterator iter;
         mflexState *states[2] = {state, state};
@@ -656,7 +656,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistCloseP(NULL);
         PTEST_LOGGED(multilistResetP(ml));
         if (multilistPopTailP(ml, &popped) != PERSIST_LOG_UNCHANGED) {
-            ERRR("an empty list's pop was logged");
+            ERR("an empty list's pop was logged");
         }
         multilistGetStatsP(ml, &stats);
         if (stats.totalOps != ops + 1) {
@@ -682,7 +682,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-            ERRR("Multilist/tracker mismatch");
+            ERR("Multilist/tracker mismatch");
         }
 
         multilistCloseP(ml);
@@ -705,7 +705,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-            ERRR("Multilist/tracker mismatch");
+            ERR("Multilist/tracker mismatch");
         }
 
         multilistCloseP(ml);
@@ -740,11 +740,11 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("Recovery verification failed");
+                ERR("Recovery verification failed");
             }
 
             multilistCloseP(ml);
@@ -770,27 +770,27 @@ int multilistPTest(int argc, char *argv[]) {
         /* Pop from tail */
         databox got = {};
         if (!multilistPopTailP(ml, &got)) {
-            ERRR("Pop tail failed");
+            ERR("Pop tail failed");
         }
         databox expected;
         ptestBoxTrackerPopTail(&tracker, &expected);
         if (!ptestBoxesEqual(&got, &expected)) {
-            ERRR("Pop tail value mismatch");
+            ERR("Pop tail value mismatch");
         }
         databoxFreeData(&got);
 
         /* Pop from head */
         if (!multilistPopHeadP(ml, &got)) {
-            ERRR("Pop head failed");
+            ERR("Pop head failed");
         }
         ptestBoxTrackerPopHead(&tracker, &expected);
         if (!ptestBoxesEqual(&got, &expected)) {
-            ERRR("Pop head value mismatch");
+            ERR("Pop head value mismatch");
         }
         databoxFreeData(&got);
 
         if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-            ERRR("Post-pop verification failed");
+            ERR("Post-pop verification failed");
         }
 
         multilistCloseP(ml);
@@ -838,11 +838,11 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("Pop recovery verification failed");
+                ERR("Pop recovery verification failed");
             }
 
             multilistCloseP(ml);
@@ -886,7 +886,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-            ERRR("Mixed operations verification failed");
+            ERR("Mixed operations verification failed");
         }
 
         multilistCloseP(ml);
@@ -910,7 +910,7 @@ int multilistPTest(int argc, char *argv[]) {
         ptestBoxTrackerInit(&tracker);
 
         if (multilistCountP(ml) != 0) {
-            ERRR("Count should be 0 after reset");
+            ERR("Count should be 0 after reset");
         }
 
         for (int i = 100; i < 110; i++) {
@@ -920,7 +920,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-            ERRR("Post-reset verification failed");
+            ERR("Post-reset verification failed");
         }
 
         multilistCloseP(ml);
@@ -959,11 +959,11 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
-                ERRR("Reset recovery failed");
+                ERR("Reset recovery failed");
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("Reset recovery verification failed");
+                ERR("Reset recovery verification failed");
             }
 
             multilistCloseP(ml);
@@ -1013,11 +1013,11 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
-                ERRR("Final recovery failed");
+                ERR("Final recovery failed");
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("Final verification failed");
+                ERR("Final verification failed");
             }
 
             multilistCloseP(ml);
@@ -1054,11 +1054,11 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
-                ERRR("Large dataset recovery failed");
+                ERR("Large dataset recovery failed");
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("Large dataset verification failed");
+                ERR("Large dataset verification failed");
             }
 
             multilistCloseP(ml);
@@ -1083,11 +1083,11 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (!ml) {
-                ERRR("Empty recovery failed");
+                ERR("Empty recovery failed");
             }
 
             if (multilistCountP(ml) != 0) {
-                ERRR("Empty multilist should have count 0");
+                ERR("Empty multilist should have count 0");
             }
 
             multilistCloseP(ml);
@@ -1114,16 +1114,16 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistOpenP(ctx);
 
             if (multilistCountP(ml) != 1) {
-                ERRR("Should have 1 element");
+                ERR("Should have 1 element");
             }
 
             multilistEntry entry;
             if (!multilistIndex(ml->ml, ml->state, 0, &entry, false)) {
-                ERRR("Failed to get index 0");
+                ERR("Failed to get index 0");
             }
 
             if (!ptestBoxesEqual(&entry.box, &testBox)) {
-                ERRR("Single element mismatch");
+                ERR("Single element mismatch");
             }
 
             multilistCloseP(ml);
@@ -1155,7 +1155,7 @@ int multilistPTest(int argc, char *argv[]) {
                 multilistDelRangeP(ml, -1, 1) != PERSIST_LOG_UNCHANGED ||
                 multilistReplaceAtIndexP(ml, 0, &rep) ||
                 multilistReplaceAtIndexP(ml, -1, &rep)) {
-                ERRR("an empty list accepted a delete or a replace");
+                ERR("an empty list accepted a delete or a replace");
             }
 
             for (mlOffsetId i = 0; i < n; i++) {
@@ -1205,13 +1205,13 @@ int multilistPTest(int argc, char *argv[]) {
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("a refused call changed the list");
+                ERR("a refused call changed the list");
             }
 
             /* The edges are still accepted. */
             if (!multilistReplaceAtIndexP(ml, -1, &rep) ||
                 !multilistDelRangeP(ml, -n, 1)) {
-                ERRR("an edge replace or delete was refused");
+                ERR("an edge replace or delete was refused");
             }
             tracker.boxes[n - 1] = rep;
             memmove(&tracker.boxes[0], &tracker.boxes[1],
@@ -1226,10 +1226,10 @@ int multilistPTest(int argc, char *argv[]) {
             persistCtx *ctx = persistCtxOpen(basePath, NULL);
             multilistP *ml = multilistOpenP(ctx);
             if (!ml) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             } else {
                 if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                    ERRR("recovered list differs");
+                    ERR("recovered list differs");
                 }
 
                 multilistCloseP(ml);
@@ -1285,7 +1285,7 @@ int multilistPTest(int argc, char *argv[]) {
         persistCtx *ctx = persistCtxNew(basePath, &cfg);
         multilistP *ml = ctx ? multilistNewP(ctx, FLEX_CAP_LEVEL_128, 0) : NULL;
         if (!ml) {
-            ERRR("Failed to create multilistP");
+            ERR("Failed to create multilistP");
         }
 
         for (uint32_t i = 0; ml && i < MLP_WIDE_COUNT; i++) {
@@ -1306,7 +1306,7 @@ int multilistPTest(int argc, char *argv[]) {
                 mlpWideValue(1, &storage[MLP_WIDE_COUNT], strs[MLP_WIDE_COUNT],
                              sizeof(strs[MLP_WIDE_COUNT]));
             if (!multilistReplaceAtIndexP(ml, 7, rep)) {
-                ERRR("wide replace failed");
+                ERR("wide replace failed");
             }
             tracker.boxes[7] = *rep;
 
@@ -1316,7 +1316,7 @@ int multilistPTest(int argc, char *argv[]) {
             if (!multilistPopTailP(ml, &got) ||
                 !ptestBoxTrackerPopTail(&tracker, &expected) ||
                 !ptestBoxesEqual(&got, &expected)) {
-                ERRR("tail pop of the wide list read back wrong");
+                ERR("tail pop of the wide list read back wrong");
             }
             databoxFreeData(&got);
 
@@ -1325,7 +1325,7 @@ int multilistPTest(int argc, char *argv[]) {
             if (!multilistPopHeadP(ml, (databox *)&gotBig) ||
                 !ptestBoxTrackerPopHead(&tracker, &expected) ||
                 !ptestBoxesEqual((databox *)&gotBig, &expected)) {
-                ERRR("head pop of the wide list read back wrong");
+                ERR("head pop of the wide list read back wrong");
             }
             databoxFreeData((databox *)&gotBig);
 
@@ -1336,7 +1336,7 @@ int multilistPTest(int argc, char *argv[]) {
             }
 
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("live wide list does not match the tracker");
+                ERR("live wide list does not match the tracker");
             }
 
             multilistCloseP(ml);
@@ -1347,16 +1347,16 @@ int multilistPTest(int argc, char *argv[]) {
         ctx = persistCtxOpen(basePath, &cfg);
         ml = ctx ? multilistOpenP(ctx) : NULL;
         if (!ml) {
-            ERRR("WAL replay of the wide list failed");
+            ERR("WAL replay of the wide list failed");
         } else {
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("WAL-replayed wide list does not match the tracker");
+                ERR("WAL-replayed wide list does not match the tracker");
             }
 
             /* Compact (snapshot via the dump), then log more wide values on
              * top. */
             if (!multilistCompactP(ml)) {
-                ERRR("compaction of the wide list failed");
+                ERR("compaction of the wide list failed");
             }
 
             for (uint32_t k = 0; k < 3; k++) {
@@ -1376,11 +1376,11 @@ int multilistPTest(int argc, char *argv[]) {
         ctx = persistCtxOpen(basePath, &cfg);
         ml = ctx ? multilistOpenP(ctx) : NULL;
         if (!ml) {
-            ERRR("snapshot + WAL recovery of the wide list failed");
+            ERR("snapshot + WAL recovery of the wide list failed");
         } else {
             if (!verifyMultilistMatchesTracker(ml, &tracker)) {
-                ERRR("snapshot-recovered wide list does not match the "
-                     "tracker");
+                ERR("snapshot-recovered wide list does not match the "
+                    "tracker");
             }
 
             multilistCloseP(ml);
@@ -1577,7 +1577,7 @@ int multilistPTest(int argc, char *argv[]) {
             !multilistIndexGetP(ml, state, -1, &last) ||
             !databoxEqual(&last.box, &want9) ||
             multilistIndexCheckP(ml, state, 10, &last)) {
-            ERRR("GetP/IndexP/SyncP disagree with the pushes");
+            ERR("GetP/IndexP/SyncP disagree with the pushes");
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);
@@ -1601,7 +1601,7 @@ int multilistPTest(int argc, char *argv[]) {
         if (!ml || multilistLimit(multilistGetP(ml)) != FLEX_CAP_LEVEL_512 ||
             multilistDepth(multilistGetP(ml)) != 2 ||
             multilistCount(multilistGetP(ml)) != 300) {
-            ERRR("Reopened list lost its configuration or elements");
+            ERR("Reopened list lost its configuration or elements");
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);
@@ -1623,7 +1623,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistCloseP(ml);
         persistCtxFree(ctx);
         if (!ptestDamageLastWalEntry(basePath)) {
-            ERRR("could not damage the WAL");
+            ERR("could not damage the WAL");
         }
 
         const databox four = databoxNewSigned(4);
@@ -1634,10 +1634,10 @@ int multilistPTest(int argc, char *argv[]) {
                 ml ? multilistCountP(ml) : (size_t)0);
         }
         if (!ptestExpectHealed(ctx, basePath)) {
-            ERRR("the damaged entry was not healed into the quarantine");
+            ERR("the damaged entry was not healed into the quarantine");
         }
         if (ml && multilistPushTailP(ml, &four) == PERSIST_LOG_REFUSED) {
-            ERRR("a change after the healed entry was refused");
+            ERR("a change after the healed entry was refused");
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);
@@ -1653,7 +1653,7 @@ int multilistPTest(int argc, char *argv[]) {
                    at.box.data.i == want[i];
         }
         if (!same) {
-            ERRR("reopen does not hold 1, 2, 4");
+            ERR("reopen does not hold 1, 2, 4");
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);

@@ -2107,7 +2107,7 @@ static int32_t stressTestSizes(void) {
     uint32_t *out_simd = malloc(8192 * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        ERRR("memory allocation failed");
+        ERR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
@@ -2159,7 +2159,7 @@ static int32_t stressTestRandom(void) {
     uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        ERRR("memory allocation failed");
+        ERR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
@@ -2220,7 +2220,7 @@ static int32_t stressTestEdgeCases(void) {
     uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        ERRR("memory allocation failed");
+        ERR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
@@ -2239,7 +2239,7 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("no_overlap", out_scalar, len_scalar, out_simd,
                               len_simd, "scalar", "intersectInt");
         if (len_scalar != 0 || len_simd != 0) {
-            ERRR("[no_overlap] expected 0 results");
+            ERR("[no_overlap] expected 0 results");
         }
     }
 
@@ -2274,7 +2274,7 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("single_overlap_start", out_scalar, len_scalar,
                               out_simd, len_simd, "scalar", "intersectInt");
         if (len_scalar != 1 || out_scalar[0] != 42) {
-            ERRR("[single_overlap_start] expected [42]");
+            ERR("[single_overlap_start] expected [42]");
         }
     }
 
@@ -2293,7 +2293,7 @@ static int32_t stressTestEdgeCases(void) {
         err |= compareResults("single_overlap_end", out_scalar, len_scalar,
                               out_simd, len_simd, "scalar", "intersectInt");
         if (len_scalar != 1 || out_scalar[0] != 99999) {
-            ERRR("[single_overlap_end] expected [99999]");
+            ERR("[single_overlap_end] expected [99999]");
         }
     }
 
@@ -2366,7 +2366,7 @@ static int32_t stressTestSkewedRatios(void) {
     uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_simd) {
-        ERRR("memory allocation failed");
+        ERR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);
@@ -2438,7 +2438,7 @@ static int32_t stressTestPlatformSIMD(void) {
     uint32_t *out_gallop = malloc(maxSize * sizeof(uint32_t));
 
     if (!a || !b || !out_scalar || !out_v1 || !out_v3 || !out_gallop) {
-        ERRR("memory allocation failed");
+        ERR("memory allocation failed");
         free(a);
         free(b);
         free(out_scalar);

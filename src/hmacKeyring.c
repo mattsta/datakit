@@ -1442,7 +1442,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *after = zmalloc(cap * 2 + 256);
         size_t len = 0;
         if (!hmacKeyringSnapshot(src, snap, cap, &len)) {
-            ERRR("damage sweep: snapshot failed");
+            ERR("damage sweep: snapshot failed");
         }
 
         size_t changedOnRefusal = 0;
@@ -1501,7 +1501,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {'1', '2', '3', '4'};
         if (!hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            ERRR("install failed");
+            ERR("install failed");
         }
 
         const size_t sz = hmacKeyringSnapshotSize(ring);
@@ -1512,12 +1512,12 @@ int hmacKeyringTest(int argc, char *argv[]) {
         size_t gotLen = 0;
         if (!hmacKeyringSnapshot(ring, buf, sz, &written) ||
             !hmacKeyringRestore(dst, buf, written)) {
-            ERRR("a keyring with a digit salt and key did not restore");
+            ERR("a keyring with a digit salt and key did not restore");
         } else if (!hmacKeyringGetRawCopy(dst, 3u, got, sizeof(got), &gotLen,
                                           NULL) ||
                    gotLen != sizeof(key) ||
                    memcmp(got, key, sizeof(key)) != 0) {
-            ERRR("the restored key differs");
+            ERR("the restored key differs");
         }
 
         hmacKeyringFree(dst);
@@ -1540,7 +1540,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!hmacKeyringSnapshot(ring, buf, sz, &written)) {
-            ERRR("snapshot failed");
+            ERR("snapshot failed");
         }
         hmacKeyringFree(ring);
         const flex *src = (const flex *)buf;
@@ -1564,7 +1564,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
             if (!hmacKeyringRestore(dst, same, flexBytes(same)) ||
                 hmacKeyringSize(dst) != 2u ||
                 hmacKeyringMinValidKeyId(dst) != 5u) {
-                ERRR("unmodified rebuild did not restore");
+                ERR("unmodified rebuild did not restore");
             }
             hmacKeyringFree(dst);
         }
@@ -1596,10 +1596,10 @@ int hmacKeyringTest(int argc, char *argv[]) {
     TEST("create + free roundtrip on empty keyring") {
         hmacKeyring *ring = hmacKeyringCreate();
         if (ring == NULL) {
-            ERRR("Create returned NULL");
+            ERR("Create returned NULL");
         }
         if (hmacKeyringSize(ring) != 0) {
-            ERRR("Empty keyring should report size 0");
+            ERR("Empty keyring should report size 0");
         }
         hmacKeyringFree(ring);
     }
@@ -1617,7 +1617,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                 salt) ||
             !hmacKeyringGetGeneration(ring, 3u, &gen) ||
             !hmacKeyringPeekAeadCounter(ring, 3u, &counter)) {
-            ERRR("key 3 setup failed");
+            ERR("key 3 setup failed");
         }
         static const hmacKeyId ids[] = {HMAC_KEY_ID_INVALID, 4u};
         for (size_t i = 0; i < sizeof(ids) / sizeof(*ids); i++) {
@@ -1650,7 +1650,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
             !hmacKeyringGetGeneration(ring, 3u, &genAfter) || genAfter != gen ||
             !hmacKeyringPeekAeadCounter(ring, 3u, &counterAfter) ||
             counterAfter != counter) {
-            ERRR("refused calls changed key 3");
+            ERR("refused calls changed key 3");
         }
     }
 
@@ -1661,14 +1661,14 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                                             0xA1};
         if (!hmacKeyringInstall(ring, 7u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            ERRR("Install of id=7 should succeed");
+            ERR("Install of id=7 should succeed");
         }
         if (hmacKeyringSize(ring) != 1) {
-            ERRR("Size should be 1 after install");
+            ERR("Size should be 1 after install");
         }
         const hmacKey *handle = hmacKeyringLookup(ring, 7u);
         if (handle == NULL) {
-            ERRR("Lookup of installed id should return a handle");
+            ERR("Lookup of installed id should return a handle");
         }
         /* Round-trip the prepared key through hmacComputeWithKey and
          * verify it matches a fresh one-shot computation. */
@@ -1676,16 +1676,16 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacCompute(&hmacAlgoSHA256, key, sizeof(key), "abc", 3, expected);
         hmacComputeWithKey(handle, "abc", 3, observed);
         if (memcmp(expected, observed, sizeof(expected)) != 0) {
-            ERRR("Prepared key disagreed with fresh hmacCompute");
+            ERR("Prepared key disagreed with fresh hmacCompute");
         }
         if (!hmacKeyringRetire(ring, 7u)) {
-            ERRR("Retire of id=7 should succeed");
+            ERR("Retire of id=7 should succeed");
         }
         if (hmacKeyringLookup(ring, 7u) != NULL) {
-            ERRR("Retired id should no longer look up");
+            ERR("Retired id should no longer look up");
         }
         if (hmacKeyringSize(ring) != 0) {
-            ERRR("Size should be 0 after retire");
+            ERR("Size should be 0 after retire");
         }
         hmacKeyringFree(ring);
     }
@@ -1697,15 +1697,15 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                                             0x78};
         if (hmacKeyringInstall(ring, HMAC_KEY_ID_INVALID, &hmacAlgoSHA256, key,
                                sizeof(key), salt)) {
-            ERRR("Install with id=0 must be refused");
+            ERR("Install with id=0 must be refused");
         }
         if (!hmacKeyringInstall(ring, 1u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            ERRR("Install of id=1 should succeed");
+            ERR("Install of id=1 should succeed");
         }
         if (hmacKeyringInstall(ring, 1u, &hmacAlgoSHA256, key, sizeof(key),
                                salt)) {
-            ERRR("Duplicate install of id=1 must be refused");
+            ERR("Duplicate install of id=1 must be refused");
         }
         hmacKeyringFree(ring);
     }
@@ -1719,19 +1719,19 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                NULL) ||
             hmacKeyringInstall(ring, 2u, &hmacAlgoSHA256, key, sizeof(key),
                                zero)) {
-            ERRR("a NULL or all-zero salt must be refused");
+            ERR("a NULL or all-zero salt must be refused");
         }
         dkDiagnostic d;
         if (dkDiagCount() != diagBefore + 2 || !dkDiagLast(&d) ||
             d.code != DK_DIAG_HMAC_KEYRING_ZERO_SALT) {
-            ERRR("each refused salt must be reported once");
+            ERR("each refused salt must be reported once");
         }
         /* The unsalted entry point is the sanctioned way: no report */
         const uint64_t diagUnsalted = dkDiagCount();
         if (!hmacKeyringInstallUnsalted(ring, 2u, &hmacAlgoSHA256, key,
                                         sizeof(key)) ||
             dkDiagCount() != diagUnsalted) {
-            ERRR("an unsalted install must succeed without a report");
+            ERR("an unsalted install must succeed without a report");
         }
         hmacKeyringFree(ring);
     }
@@ -1744,10 +1744,10 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const uint8_t salt_b[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x10, 0x11, 0x12,
                                                               0x13};
         if (!hmacKeyringInstall(ring, 10u, &hmacAlgoSHA256, key, 32, salt_a)) {
-            ERRR("Install SHA256 id=10");
+            ERR("Install SHA256 id=10");
         }
         if (!hmacKeyringInstall(ring, 11u, &hmacAlgoBLAKE3, key, 32, salt_b)) {
-            ERRR("Install BLAKE3 id=11");
+            ERR("Install BLAKE3 id=11");
         }
         if (hmacKeyringSize(ring) != 2) {
             ERR("Expected size=2, got %zu", hmacKeyringSize(ring));
@@ -1755,7 +1755,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const hmacKey *h_sha = hmacKeyringLookup(ring, 10u);
         const hmacKey *h_b3 = hmacKeyringLookup(ring, 11u);
         if (h_sha == NULL || h_b3 == NULL) {
-            ERRR("Both lookups should succeed");
+            ERR("Both lookups should succeed");
         }
         /* Both must produce different digests on the same input — they
          * are different MAC constructions. */
@@ -1763,7 +1763,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacComputeWithKey(h_sha, "hello", 5, out_sha);
         hmacComputeWithKey(h_b3, "hello", 5, out_b3);
         if (memcmp(out_sha, out_b3, 32) == 0) {
-            ERRR("HMAC-SHA256 and HMAC-BLAKE3 must produce different output");
+            ERR("HMAC-SHA256 and HMAC-BLAKE3 must produce different output");
         }
         hmacKeyringFree(ring);
     }
@@ -1779,14 +1779,14 @@ int hmacKeyringTest(int argc, char *argv[]) {
             }
         }
         if (hmacKeyringInstall(ring, 17u, &hmacAlgoSHA256, key, 16, salt)) {
-            ERRR("17th install must be refused (capacity)");
+            ERR("17th install must be refused (capacity)");
         }
         /* Retire one and re-install should now succeed. */
         if (!hmacKeyringRetire(ring, 5u)) {
-            ERRR("Retire id=5");
+            ERR("Retire id=5");
         }
         if (!hmacKeyringInstall(ring, 17u, &hmacAlgoSHA256, key, 16, salt)) {
-            ERRR("Re-install after retire should succeed");
+            ERR("Re-install after retire should succeed");
         }
         hmacKeyringFree(ring);
     }
@@ -1808,7 +1808,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
          * own previous insert). Drop one slot first so the writer
          * has room. */
         if (!hmacKeyringRetire(ring, 16u)) {
-            ERRR("Pre-retire id=16 failed");
+            ERR("Pre-retire id=16 failed");
         }
 
         const uint32_t kReaders = 7u;
@@ -1866,13 +1866,13 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, 7u, &hmacAlgoSHA256, key, sizeof(key));
         uint8_t n0[12], n1[12], n2[12];
         if (!hmacKeyringNextAeadNonce(ring, 7u, n0)) {
-            ERRR("NextAeadNonce 0 should succeed");
+            ERR("NextAeadNonce 0 should succeed");
         }
         if (!hmacKeyringNextAeadNonce(ring, 7u, n1)) {
-            ERRR("NextAeadNonce 1 should succeed");
+            ERR("NextAeadNonce 1 should succeed");
         }
         if (!hmacKeyringNextAeadNonce(ring, 7u, n2)) {
-            ERRR("NextAeadNonce 2 should succeed");
+            ERR("NextAeadNonce 2 should succeed");
         }
         /* Counter low byte should be 0, 1, 2; remaining bytes all zero
          * (no salt installed). */
@@ -1882,17 +1882,17 @@ int hmacKeyringTest(int argc, char *argv[]) {
         uint8_t expect2[12] = {};
         expect2[0] = 2u;
         if (memcmp(n0, expect0, 12) != 0) {
-            ERRR("nonce0 layout");
+            ERR("nonce0 layout");
         }
         if (memcmp(n1, expect1, 12) != 0) {
-            ERRR("nonce1 layout");
+            ERR("nonce1 layout");
         }
         if (memcmp(n2, expect2, 12) != 0) {
-            ERRR("nonce2 layout");
+            ERR("nonce2 layout");
         }
         uint64_t peek = 0;
         if (!hmacKeyringPeekAeadCounter(ring, 7u, &peek)) {
-            ERRR("Peek should succeed");
+            ERR("Peek should succeed");
         }
         if (peek != 3u) {
             ERR("Peek expected 3, got %" PRIu64, peek);
@@ -1910,18 +1910,18 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0xDE, 0xAD, 0xBE,
                                                             0xEF};
         if (!hmacKeyringSetAeadSalt(ring, 9u, salt)) {
-            ERRR("SetAeadSalt should succeed");
+            ERR("SetAeadSalt should succeed");
         }
         uint8_t n[12];
         if (!hmacKeyringNextAeadNonce(ring, 9u, n)) {
-            ERRR("NextAeadNonce");
+            ERR("NextAeadNonce");
         }
         /* Counter LE in bytes 0..7, salt in bytes 8..11. */
         if (n[0] != 0u || n[1] != 0u) {
-            ERRR("counter low bytes");
+            ERR("counter low bytes");
         }
         if (n[8] != 0xDE || n[9] != 0xAD || n[10] != 0xBE || n[11] != 0xEF) {
-            ERRR("salt bytes not propagated to nonce");
+            ERR("salt bytes not propagated to nonce");
         }
         hmacKeyringFree(ring);
     }
@@ -1934,27 +1934,27 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, 11u, &hmacAlgoSHA256, key,
                                    sizeof(key));
         if (!hmacKeyringRestoreAeadCounter(ring, 11u, 1000u)) {
-            ERRR("Restore to 1000 should succeed");
+            ERR("Restore to 1000 should succeed");
         }
         uint8_t n[12];
         if (!hmacKeyringNextAeadNonce(ring, 11u, n)) {
-            ERRR("NextAeadNonce");
+            ERR("NextAeadNonce");
         }
         if (n[0] != (uint8_t)(1000u & 0xFFu) ||
             n[1] != (uint8_t)((1000u >> 8) & 0xFFu)) {
-            ERRR("counter did not pick up restored value");
+            ERR("counter did not pick up restored value");
         }
         /* Now at 1001; restore to 1500 forward — ok. */
         if (!hmacKeyringRestoreAeadCounter(ring, 11u, 1500u)) {
-            ERRR("Forward restore should succeed");
+            ERR("Forward restore should succeed");
         }
         /* Restore to 500 backward — refused. */
         if (hmacKeyringRestoreAeadCounter(ring, 11u, 500u)) {
-            ERRR("Backward restore must be refused");
+            ERR("Backward restore must be refused");
         }
         /* Restore to UINT64_MAX — refused (would exhaust). */
         if (hmacKeyringRestoreAeadCounter(ring, 11u, UINT64_MAX)) {
-            ERRR("Restore to UINT64_MAX must be refused");
+            ERR("Restore to UINT64_MAX must be refused");
         }
         hmacKeyringFree(ring);
     }
@@ -1965,15 +1965,15 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, 13u, &hmacAlgoSHA256, key,
                                    sizeof(key));
         if (!hmacKeyringRestoreAeadCounter(ring, 13u, UINT64_MAX - 1u)) {
-            ERRR("Restore to UINT64_MAX-1 should succeed");
+            ERR("Restore to UINT64_MAX-1 should succeed");
         }
         uint8_t n[12];
         if (!hmacKeyringNextAeadNonce(ring, 13u, n)) {
-            ERRR("Last NextAeadNonce should succeed");
+            ERR("Last NextAeadNonce should succeed");
         }
         /* Counter now == UINT64_MAX; next call must refuse. */
         if (hmacKeyringNextAeadNonce(ring, 13u, n)) {
-            ERRR("Past-exhaustion NextAeadNonce must refuse");
+            ERR("Past-exhaustion NextAeadNonce must refuse");
         }
         hmacKeyringFree(ring);
     }
@@ -2030,10 +2030,10 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hkrTestReserve r = {.ring = ring};
         if (hmacKeyringSetAeadReservation(ring, 0, hkrTestReserveFn, &r) ||
             hmacKeyringSetAeadReservation(NULL, 4, hkrTestReserveFn, &r)) {
-            ERRR("a zero window or a NULL ring must be refused");
+            ERR("a zero window or a NULL ring must be refused");
         }
         if (!hmacKeyringSetAeadReservation(ring, 4, hkrTestReserveFn, &r)) {
-            ERRR("SetAeadReservation");
+            ERR("SetAeadReservation");
         }
         for (uint64_t i = 0; i < 10; i++) {
             uint8_t n[12];
@@ -2069,11 +2069,11 @@ int hmacKeyringTest(int argc, char *argv[]) {
         for (int i = 0; i < 20; i++) {
             uint8_t n[12];
             if (!hmacKeyringNextAeadNonce(ring, 31u, n)) {
-                ERRR("issuance with reservation off");
+                ERR("issuance with reservation off");
             }
         }
         if (r.calls != 3) {
-            ERRR("a reservation ran after it was turned off");
+            ERR("a reservation ran after it was turned off");
         }
         hmacKeyringFree(ring);
     }
@@ -2115,12 +2115,12 @@ int hmacKeyringTest(int argc, char *argv[]) {
         uint64_t peek = UINT64_MAX;
         if (hmacKeyringNextAeadNonce(ring, 32u, n) ||
             !hmacKeyringPeekAeadCounter(ring, 32u, &peek) || peek != 0) {
-            ERRR("a refused reservation must fail closed, counter unmoved");
+            ERR("a refused reservation must fail closed, counter unmoved");
         }
         r.refuse = false;
         if (!hmacKeyringNextAeadNonce(ring, 32u, n) ||
             hkrTestNonceCounter(n) != 0 || r.calls != 2) {
-            ERRR("after the refusal, the next nonce reserves and is 0");
+            ERR("after the refusal, the next nonce reserves and is 0");
         }
         hmacKeyringFree(ring);
     }
@@ -2224,18 +2224,18 @@ int hmacKeyringTest(int argc, char *argv[]) {
         if (!persistSnapshot(p, ring) ||
             !hmacKeyringSetAeadReservation(
                 ring, 16, hmacKeyringReserveThroughPersist, p)) {
-            ERRR("persist setup");
+            ERR("persist setup");
         }
         uint64_t highest = 0;
         for (int i = 0; i < 40; i++) {
             uint8_t n[12];
             if (!hmacKeyringNextAeadNonce(ring, 36u, n)) {
-                ERRR("issuance through persist reservations");
+                ERR("issuance through persist reservations");
                 break;
             }
             highest = hkrTestNonceCounter(n);
             if (i == 19 && !persistSnapshot(p, ring)) {
-                ERRR("mid-way snapshot");
+                ERR("mid-way snapshot");
             }
         }
         hmacKeyring *recovered = persistRecover(p);
@@ -2259,7 +2259,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
          * fails the reservation fails and no nonce is issued past the
          * window already reserved; once it syncs, issuance resumes. */
         if (hmacKeyringReserveThroughPersist(NULL, 37u, 8)) {
-            ERRR("a NULL persist reserved");
+            ERR("a NULL persist reserved");
         }
         static const persistSyncMode modes[2] = {PERSIST_SYNC_ALWAYS,
                                                  PERSIST_SYNC_NONE};
@@ -2279,7 +2279,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
             if (!persistSnapshot(p, ring) ||
                 !hmacKeyringSetAeadReservation(
                     ring, 8, hmacKeyringReserveThroughPersist, p)) {
-                ERRR("persist setup");
+                ERR("persist setup");
             }
             uint8_t n[12];
             bool ok = true;
@@ -2324,12 +2324,12 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         const size_t sz = hmacKeyringSnapshotSize(src);
         if (sz < 8u) {
-            ERRR("snapshot size too small");
+            ERR("snapshot size too small");
         }
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!hmacKeyringSnapshot(src, buf, sz, &written)) {
-            ERRR("snapshot should succeed");
+            ERR("snapshot should succeed");
         }
         if (written != sz) {
             ERR("written %zu != sz %zu", written, sz);
@@ -2337,7 +2337,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         hmacKeyring *dst = hmacKeyringCreate();
         if (!hmacKeyringRestore(dst, buf, sz)) {
-            ERRR("restore should succeed on fresh keyring");
+            ERR("restore should succeed on fresh keyring");
         }
         if (hmacKeyringSize(dst) != 2u) {
             ERR("dst size expected 2, got %zu", hmacKeyringSize(dst));
@@ -2349,7 +2349,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacCompute(&hmacAlgoSHA256, key_a, sizeof(key_a), "x", 1, exp);
         hmacComputeWithKey(prep, "x", 1, got);
         if (memcmp(exp, got, 32) != 0) {
-            ERRR("restored id=11 MAC mismatch");
+            ERR("restored id=11 MAC mismatch");
         }
 
         /* Counter + salt survived. */
@@ -2362,14 +2362,14 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringNextAeadNonce(dst, 11u, nonce);
         if (nonce[8] != 0xAA || nonce[9] != 0xBB || nonce[10] != 0xCC ||
             nonce[11] != 0xDD) {
-            ERRR("restored salt did not propagate to nonce");
+            ERR("restored salt did not propagate to nonce");
         }
         /* The issued nonce's counter should equal 7777 (the saved
          * value); subsequent peek should be 7778. */
         uint8_t expect_lo = (uint8_t)(7777u & 0xFFu);
         uint8_t expect_hi = (uint8_t)((7777u >> 8) & 0xFFu);
         if (nonce[0] != expect_lo || nonce[1] != expect_hi) {
-            ERRR("restored counter did not advance from saved value");
+            ERR("restored counter did not advance from saved value");
         }
 
         hmacKeyringFree(src);
@@ -2388,11 +2388,10 @@ int hmacKeyringTest(int argc, char *argv[]) {
         /* Truncate by one byte. */
         hmacKeyring *dst = hmacKeyringCreate();
         if (hmacKeyringRestore(dst, buf, written - 1u)) {
-            ERRR("Truncated buffer must be rejected");
+            ERR("Truncated buffer must be rejected");
         }
         if (hmacKeyringSize(dst) != 0u) {
-            ERRR(
-                "Rollback failed: dst should be empty after malformed restore");
+            ERR("Rollback failed: dst should be empty after malformed restore");
         }
 
         /* Bad magic. */
@@ -2400,7 +2399,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         memcpy(bad, buf, written);
         bad[0] ^= 0xFF;
         if (hmacKeyringRestore(dst, bad, written)) {
-            ERRR("Bad magic must be rejected");
+            ERR("Bad magic must be rejected");
         }
 
         /* Trailing junk. */
@@ -2408,7 +2407,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         memcpy(big, buf, written);
         big[written] = 0xCC;
         if (hmacKeyringRestore(dst, big, written + 1u)) {
-            ERRR("Trailing junk must be rejected");
+            ERR("Trailing junk must be rejected");
         }
 
         hmacKeyringFree(src);
@@ -2431,7 +2430,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
             hmacKeyringRestore(dst, (const uint8_t *)partial,
                                flexBytes(partial)) ||
             hmacKeyringSize(dst) != 0u) {
-            ERRR("a flex with no floor or a partial slot row restored");
+            ERR("a flex with no floor or a partial slot row restored");
         }
 
         /* A buffer one byte short of the snapshot: refused, nothing
@@ -2439,14 +2438,14 @@ int hmacKeyringTest(int argc, char *argv[]) {
         uint8_t buf[256];
         size_t written = 0;
         if (!hmacKeyringSnapshot(src, buf, sizeof(buf), &written)) {
-            ERRR("snapshot into a roomy buffer failed");
+            ERR("snapshot into a roomy buffer failed");
         }
         uint8_t shortBuf[256];
         memset(shortBuf, 0xEE, sizeof(shortBuf));
         size_t shortWritten = 77;
         if (hmacKeyringSnapshot(src, shortBuf, written - 1, &shortWritten) ||
             shortWritten != 77 || shortBuf[0] != 0xEE) {
-            ERRR("a short snapshot buffer was written or reported");
+            ERR("a short snapshot buffer was written or reported");
         }
 
         /* A reservation record names a 32-bit nonzero key id and an
@@ -2478,7 +2477,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         if (persistOpsHmacKeyring.applyOp(&target, PERSIST_OP_INSERT,
                                           (const uint8_t *)good,
                                           flexBytes(good))) {
-            ERRR("a reservation under another op was applied");
+            ERR("a reservation under another op was applied");
         }
     }
 
@@ -2491,7 +2490,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         uint8_t buf[256];
         size_t written = 0;
         if (!hmacKeyringSnapshot(src, buf, sizeof(buf), &written)) {
-            ERRR("Snapshot failed");
+            ERR("Snapshot failed");
         }
 
         /* Give the last entry (the 16-byte key) the encoding byte of a
@@ -2515,18 +2514,18 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         last[0] = longEntry[0];
         if (!flexValidateBuffer(buf, written)) {
-            ERRR("the corrupt snapshot's header should still validate");
+            ERR("the corrupt snapshot's header should still validate");
         }
         if (flexValidateBufferDeep(buf, written)) {
-            ERRR("the corrupt snapshot should fail deep validation");
+            ERR("the corrupt snapshot should fail deep validation");
         }
 
         hmacKeyring *dst = hmacKeyringCreate();
         if (hmacKeyringRestore(dst, buf, written)) {
-            ERRR("Restore accepted a corrupt key entry");
+            ERR("Restore accepted a corrupt key entry");
         }
         if (hmacKeyringSize(dst) != 0u) {
-            ERRR("Refused restore left keys installed");
+            ERR("Refused restore left keys installed");
         }
 
         hmacKeyringFree(src);
@@ -2564,7 +2563,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         hmacKeyring *dst = hmacKeyringCreate();
         if (hmacKeyringRestore(dst, snap, flex_bytes)) {
-            ERRR("Restore of oversized-key snapshot MUST be rejected");
+            ERR("Restore of oversized-key snapshot MUST be rejected");
         }
         if (hmacKeyringSize(dst) != 0u) {
             ERR("Oversized-key reject left %zu slots installed (must be 0)",
@@ -2590,7 +2589,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         hmacKeyring *dst_ok = hmacKeyringCreate();
         if (!hmacKeyringRestore(dst_ok, ok_snap, ok_bytes)) {
-            ERRR("Restore at the cap boundary must succeed");
+            ERR("Restore at the cap boundary must succeed");
         }
         if (hmacKeyringSize(dst_ok) != 1u) {
             ERR("Boundary restore expected size 1, got %zu",
@@ -2609,13 +2608,13 @@ int hmacKeyringTest(int argc, char *argv[]) {
         memset(over, 0xEF, HMAC_KEYRING_MAX_KEY_BYTES + 1u);
         if (hmacKeyringInstallUnsalted(direct, 1u, &hmacAlgoSHA256, over,
                                        HMAC_KEYRING_MAX_KEY_BYTES + 1u)) {
-            ERRR("InstallUnsalted with oversized key MUST be refused");
+            ERR("InstallUnsalted with oversized key MUST be refused");
         }
         const uint8_t s[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x11, 0x22, 0x33,
                                                          0x44};
         if (hmacKeyringInstall(direct, 1u, &hmacAlgoSHA256, over,
                                HMAC_KEYRING_MAX_KEY_BYTES + 1u, s)) {
-            ERRR("Install with oversized key MUST be refused");
+            ERR("Install with oversized key MUST be refused");
         }
         hmacKeyringFree(direct);
     }
@@ -2633,7 +2632,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         /* Pre-install id=10 to force a collision on second record. */
         hmacKeyringInstallUnsalted(dst, 10u, &hmacAlgoSHA256, key, sizeof(key));
         if (hmacKeyringRestore(dst, buf, written)) {
-            ERRR("Collision must be rejected");
+            ERR("Collision must be rejected");
         }
         /* Rollback must have un-installed any partially-loaded records. */
         if (hmacKeyringSize(dst) != 1u) {
@@ -2646,7 +2645,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const hmacHashAlgo *algo = NULL;
         hmacKeyringGetRaw(dst, 10u, &kb, &kb_len, &algo);
         if (algo != &hmacAlgoSHA256) {
-            ERRR("Pre-existing id=10 should still be SHA256");
+            ERR("Pre-existing id=10 should still be SHA256");
         }
 
         hmacKeyringFree(src);
@@ -2663,13 +2662,13 @@ int hmacKeyringTest(int argc, char *argv[]) {
         size_t blen = 0;
         const hmacHashAlgo *algo = NULL;
         if (!hmacKeyringGetRaw(ring, 42u, &bytes, &blen, &algo)) {
-            ERRR("getRaw of installed id should succeed");
+            ERR("getRaw of installed id should succeed");
         }
         if (blen != sizeof(key) || memcmp(bytes, key, blen) != 0) {
-            ERRR("getRaw bytes did not match installed bytes");
+            ERR("getRaw bytes did not match installed bytes");
         }
         if (algo != &hmacAlgoSHA256) {
-            ERRR("getRaw algo pointer did not match");
+            ERR("getRaw algo pointer did not match");
         }
         hmacKeyringFree(ring);
     }
@@ -2690,7 +2689,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                                             0x40};
         if (!hmacKeyringInstall(ring, 17u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            ERRR("setup install must succeed");
+            ERR("setup install must succeed");
         }
 
         /* Success path: copy into a buffer large enough. */
@@ -2700,17 +2699,17 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const hmacHashAlgo *algo = NULL;
         if (!hmacKeyringGetRawCopy(ring, 17u, buf, sizeof(buf), &copied,
                                    &algo)) {
-            ERRR("GetRawCopy of installed id must succeed");
+            ERR("GetRawCopy of installed id must succeed");
         }
         if (copied != sizeof(key)) {
             ERR("GetRawCopy wrote %zu bytes, expected %zu", copied,
                 sizeof(key));
         }
         if (memcmp(buf, key, sizeof(key)) != 0) {
-            ERRR("GetRawCopy bytes did not match installed bytes");
+            ERR("GetRawCopy bytes did not match installed bytes");
         }
         if (algo != &hmacAlgoSHA256) {
-            ERRR("GetRawCopy algo pointer did not match");
+            ERR("GetRawCopy algo pointer did not match");
         }
 
         /* Too-small buffer rejects with out_len set to zero. */
@@ -2718,7 +2717,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         size_t tiny_len = 999u;
         if (hmacKeyringGetRawCopy(ring, 17u, tiny, sizeof(tiny), &tiny_len,
                                   NULL)) {
-            ERRR("GetRawCopy into too-small buffer must reject");
+            ERR("GetRawCopy into too-small buffer must reject");
         }
         if (tiny_len != 0u) {
             ERR("rejected GetRawCopy left out_len = %zu (must be 0)", tiny_len);
@@ -2728,7 +2727,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         size_t missing_len = 999u;
         if (hmacKeyringGetRawCopy(ring, 9999u, buf, sizeof(buf), &missing_len,
                                   NULL)) {
-            ERRR("GetRawCopy of missing id must reject");
+            ERR("GetRawCopy of missing id must reject");
         }
         if (missing_len != 0u) {
             ERR("missing-id reject left out_len = %zu (must be 0)",
@@ -2737,35 +2736,35 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         /* NULL out_buf rejects. */
         if (hmacKeyringGetRawCopy(ring, 17u, NULL, 16u, NULL, NULL)) {
-            ERRR("GetRawCopy with NULL out_buf must reject");
+            ERR("GetRawCopy with NULL out_buf must reject");
         }
 
         /* HMAC_KEY_ID_INVALID rejects. */
         if (hmacKeyringGetRawCopy(ring, HMAC_KEY_ID_INVALID, buf, sizeof(buf),
                                   NULL, NULL)) {
-            ERRR("GetRawCopy with id == 0 must reject");
+            ERR("GetRawCopy with id == 0 must reject");
         }
 
         /* NULL ring rejects. */
         if (hmacKeyringGetRawCopy(NULL, 17u, buf, sizeof(buf), NULL, NULL)) {
-            ERRR("GetRawCopy on NULL ring must reject");
+            ERR("GetRawCopy on NULL ring must reject");
         }
 
         /* After Retire, the local copy still holds the original bytes
          * — independence from keyring mutation is the whole point. */
         if (!hmacKeyringRetire(ring, 17u)) {
-            ERRR("Retire after copy must succeed");
+            ERR("Retire after copy must succeed");
         }
         if (memcmp(buf, key, sizeof(key)) != 0) {
-            ERRR("local copy was disturbed by Retire — independence broken");
+            ERR("local copy was disturbed by Retire — independence broken");
         }
         size_t after_retire_len = 999u;
         if (hmacKeyringGetRawCopy(ring, 17u, buf, sizeof(buf),
                                   &after_retire_len, NULL)) {
-            ERRR("post-Retire GetRawCopy must reject");
+            ERR("post-Retire GetRawCopy must reject");
         }
         if (after_retire_len != 0u) {
-            ERRR("post-Retire reject left out_len non-zero");
+            ERR("post-Retire reject left out_len non-zero");
         }
 
         hmacKeyringFree(ring);
@@ -2789,22 +2788,22 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                                             0xDD};
         if (!hmacKeyringInstall(ring, 23u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            ERRR("setup install with AES-256-length key must succeed");
+            ERR("setup install with AES-256-length key must succeed");
         }
 
         /* Success path: copy populates a self-contained struct. Compare
          * to the borrowed pointer to confirm bit-identical copy. */
         const aesGcmKey *borrowed = hmacKeyringGetAesGcmKey(ring, 23u);
         if (borrowed == NULL) {
-            ERRR("setup: borrowed AES schedule was NULL (slot lacks cache)");
+            ERR("setup: borrowed AES schedule was NULL (slot lacks cache)");
         }
         aesGcmKey local;
         memset(&local, 0xCC, sizeof(local));
         if (!hmacKeyringGetAesGcmKeyCopy(ring, 23u, &local)) {
-            ERRR("GetAesGcmKeyCopy of installed AES-class id must succeed");
+            ERR("GetAesGcmKeyCopy of installed AES-class id must succeed");
         }
         if (memcmp(&local, borrowed, sizeof(local)) != 0) {
-            ERRR("Copy did not match borrowed schedule bytes");
+            ERR("Copy did not match borrowed schedule bytes");
         }
         if (local.key_size != AES256_KEY_LEN) {
             ERR("Copy reported key_size %u, expected %u",
@@ -2815,46 +2814,46 @@ int hmacKeyringTest(int argc, char *argv[]) {
         aesGcmKey miss;
         memset(&miss, 0x77, sizeof(miss));
         if (hmacKeyringGetAesGcmKeyCopy(ring, 9999u, &miss)) {
-            ERRR("GetAesGcmKeyCopy of missing id must reject");
+            ERR("GetAesGcmKeyCopy of missing id must reject");
         }
         /* Non-AES-key-length slot has no cached schedule — reject. */
         const uint8_t hmac_key[20] = {1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
                                       11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
         if (!hmacKeyringInstall(ring, 24u, &hmacAlgoSHA256, hmac_key,
                                 sizeof(hmac_key), salt)) {
-            ERRR("setup install with 20-byte HMAC key must succeed");
+            ERR("setup install with 20-byte HMAC key must succeed");
         }
         if (hmacKeyringGetAesGcmKeyCopy(ring, 24u, &miss)) {
-            ERRR("GetAesGcmKeyCopy must reject slots without cached schedule");
+            ERR("GetAesGcmKeyCopy must reject slots without cached schedule");
         }
 
         /* NULL guards. */
         if (hmacKeyringGetAesGcmKeyCopy(NULL, 23u, &miss)) {
-            ERRR("GetAesGcmKeyCopy on NULL ring must reject");
+            ERR("GetAesGcmKeyCopy on NULL ring must reject");
         }
         if (hmacKeyringGetAesGcmKeyCopy(ring, 23u, NULL)) {
-            ERRR("GetAesGcmKeyCopy with NULL out_key must reject");
+            ERR("GetAesGcmKeyCopy with NULL out_key must reject");
         }
         if (hmacKeyringGetAesGcmKeyCopy(ring, HMAC_KEY_ID_INVALID, &miss)) {
-            ERRR("GetAesGcmKeyCopy with id == 0 must reject");
+            ERR("GetAesGcmKeyCopy with id == 0 must reject");
         }
 
         /* Independence: Retire the slot after the copy. The local copy
          * must remain intact (this is the entire point of the API). */
         if (!hmacKeyringRetire(ring, 23u)) {
-            ERRR("Retire after copy must succeed");
+            ERR("Retire after copy must succeed");
         }
         /* Re-snapshot a fresh copy from a known-clean local — proves the
          * existing `local` is unchanged by the keyring teardown. */
         aesGcmKey reference;
         if (!aesGcmInit(&reference, key, sizeof(key))) {
-            ERRR("aesGcmInit of reference must succeed");
+            ERR("aesGcmInit of reference must succeed");
         }
         if (memcmp(&local, &reference, sizeof(local)) != 0) {
-            ERRR("local copy was disturbed by Retire — independence broken");
+            ERR("local copy was disturbed by Retire — independence broken");
         }
         if (hmacKeyringGetAesGcmKeyCopy(ring, 23u, &miss)) {
-            ERRR("post-Retire GetAesGcmKeyCopy must reject");
+            ERR("post-Retire GetAesGcmKeyCopy must reject");
         }
         dkSecureZero(&local, sizeof(local));
         dkSecureZero(&reference, sizeof(reference));
@@ -2868,20 +2867,20 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         /* Default floor is zero. */
         if (hmacKeyringMinValidKeyId(ring) != HMAC_KEY_ID_INVALID) {
-            ERRR("default floor should be HMAC_KEY_ID_INVALID (0)");
+            ERR("default floor should be HMAC_KEY_ID_INVALID (0)");
         }
 
         /* NULL-safe. */
         if (hmacKeyringMinValidKeyId(NULL) != HMAC_KEY_ID_INVALID) {
-            ERRR("NULL ring should return floor=0");
+            ERR("NULL ring should return floor=0");
         }
         if (hmacKeyringSetMinValidKeyId(NULL, 5u)) {
-            ERRR("Set on NULL ring must refuse");
+            ERR("Set on NULL ring must refuse");
         }
 
         /* Raise to 7; observe value. */
         if (!hmacKeyringSetMinValidKeyId(ring, 7u)) {
-            ERRR("Set floor=7 should succeed from default 0");
+            ERR("Set floor=7 should succeed from default 0");
         }
         if (hmacKeyringMinValidKeyId(ring) != 7u) {
             ERR("floor expected 7 got %u",
@@ -2890,23 +2889,23 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         /* Equal value is idempotent success. */
         if (!hmacKeyringSetMinValidKeyId(ring, 7u)) {
-            ERRR("re-setting same floor must be idempotent success");
+            ERR("re-setting same floor must be idempotent success");
         }
 
         /* Forward move succeeds. */
         if (!hmacKeyringSetMinValidKeyId(ring, 10u)) {
-            ERRR("forward move 7->10 should succeed");
+            ERR("forward move 7->10 should succeed");
         }
         if (hmacKeyringMinValidKeyId(ring) != 10u) {
-            ERRR("floor did not advance to 10");
+            ERR("floor did not advance to 10");
         }
 
         /* Backward move refused. */
         if (hmacKeyringSetMinValidKeyId(ring, 5u)) {
-            ERRR("backward move 10->5 MUST be refused");
+            ERR("backward move 10->5 MUST be refused");
         }
         if (hmacKeyringMinValidKeyId(ring) != 10u) {
-            ERRR("refused backward move corrupted floor");
+            ERR("refused backward move corrupted floor");
         }
 
         /* Snapshot/restore preserves the floor. */
@@ -2918,11 +2917,11 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!hmacKeyringSnapshot(ring, buf, sz, &written)) {
-            ERRR("snapshot with floor set must succeed");
+            ERR("snapshot with floor set must succeed");
         }
         hmacKeyring *dst = hmacKeyringCreate();
         if (!hmacKeyringRestore(dst, buf, written)) {
-            ERRR("restore with a floor must succeed");
+            ERR("restore with a floor must succeed");
         }
         if (hmacKeyringMinValidKeyId(dst) != 10u) {
             ERR("restored floor expected 10 got %u",
@@ -2952,7 +2951,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         }
         hmacKeyring *dst = hmacKeyringCreate();
         if (!hmacKeyringRestore(dst, buf, sz)) {
-            ERRR("restore of a no-floor snapshot must succeed");
+            ERR("restore of a no-floor snapshot must succeed");
         }
         if (hmacKeyringMinValidKeyId(dst) != HMAC_KEY_ID_INVALID) {
             ERR("no-floor restore expected floor=0 got %u",

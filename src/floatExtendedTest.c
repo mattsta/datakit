@@ -136,7 +136,7 @@ static int testInt64DoubleComparison(void) {
         printf("  INT64_MAX vs (double)INT64_MAX: %d\n", cmp);
         /* Result depends on precision - just verify it's deterministic */
         if (dk_compare_int64_double(INT64_MAX, d_max) != cmp) {
-            ERRR("Non-deterministic comparison result");
+            ERR("Non-deterministic comparison result");
         }
 
         /* INT64_MIN */
@@ -269,7 +269,7 @@ static int testPow10(void) {
         /* 10^308 is near DBL_MAX */
         p = dk_pow10_extended(308);
         if (!isfinite(p)) {
-            ERRR("pow10(308) should be finite");
+            ERR("pow10(308) should be finite");
         }
         printf("  pow10(308) = %g\n", p);
 
@@ -296,7 +296,7 @@ static int testPow10(void) {
 
         /* They should be equal when cast to double */
         if ((double)pf != pd) {
-            ERRR("pow10_extended_full and pow10_extended disagree");
+            ERR("pow10_extended_full and pow10_extended disagree");
         }
     }
 

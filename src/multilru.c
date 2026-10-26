@@ -5297,7 +5297,7 @@ int multilruTest(int argc, char *argv[]) {
         if (multilruEvictToSize(plain, 0, NULL, 4) != 0 ||
             multilruGetWeight(plain, p) != 0 ||
             multilruTotalWeight(plain) != 0) {
-            ERRR("an unweighted LRU took a weight");
+            ERR("an unweighted LRU took a weight");
         }
 
         /* Weighted, levels asked past 64 clamp to 64 */
@@ -5321,14 +5321,14 @@ int multilruTest(int argc, char *argv[]) {
         if (multilruTotalWeight(mlru) != total || multilruCount(mlru) != 2 ||
             multilruGetWeight(mlru, a) != 7 ||
             multilruGetWeight(mlru, b) != 11) {
-            ERRR("a refused update changed the weights");
+            ERR("a refused update changed the weights");
         }
         if (multilruLevelCount(mlru, 63) != 0 ||
             multilruLevelCount(mlru, 64) != 0 ||
             multilruLevelWeight(mlru, 64) != 0 ||
             multilruLevelCount(mlru, 0) != 2 ||
             multilruLevelWeight(mlru, 0) != 18) {
-            ERRR("level queries past the 64 levels answered");
+            ERR("level queries past the 64 levels answered");
         }
         /* Valid update moves the totals */
         multilruUpdateWeight(mlru, a, 70);

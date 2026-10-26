@@ -401,7 +401,7 @@ int OSRegulateProcessExitWatchFd(pid_t pid) {
     }
 
     return fdRelease(&kq);
-#elif defined(OS_REGULATE_HAVE_PIDFD)
+#elifdef OS_REGULATE_HAVE_PIDFD
     /* pidfd_open() has no libc wrapper on every supported glibc/musl
      * vintage, so go through the syscall directly.  The returned fd
      * becomes readable (POLLIN) when the process exits. */
@@ -557,7 +557,7 @@ bool OSRegulateWakeFdNew(int *outRead, int *outWrite) {
     *outRead = efd;
     *outWrite = efd;
     return true;
-#elif defined(OS_REGULATE_HAVE_PIPE2)
+#elifdef OS_REGULATE_HAVE_PIPE2
     int fds[2];
     if (pipe2(fds, O_NONBLOCK | O_CLOEXEC) != 0) {
         return false;
@@ -1218,7 +1218,7 @@ size_t OSRegulateTotalMemoryGet(void) {
     mib[0] = CTL_HW;
 #if defined(HW_MEMSIZE)
     mib[1] = HW_MEMSIZE; /* OSX. --------------------- */
-#elif defined(HW_PHYSMEM64)
+#elifdef HW_PHYSMEM64
     mib[1] = HW_PHYSMEM64; /* NetBSD, OpenBSD. --------- */
 #endif
     int64_t size = 0; /* 64-bit */
@@ -1238,7 +1238,7 @@ size_t OSRegulateTotalMemoryGet(void) {
     mib[0] = CTL_HW;
 #if defined(HW_REALMEM)
     mib[1] = HW_REALMEM; /* FreeBSD. ----------------- */
-#elif defined(HW_PYSMEM)
+#elifdef HW_PYSMEM
     mib[1] = HW_PHYSMEM; /* Others. ------------------ */
 #endif
     uint32_t size = 0; /* 32-bit */
@@ -1533,7 +1533,7 @@ int OSRegulateTest(int argc, char *argv[]) {
 
     TEST("this process has a resident set") {
         if (OSRegulateRSSGet() == 0) {
-            ERRR("OSRegulateRSSGet returned 0 for a running process");
+            ERR("OSRegulateRSSGet returned 0 for a running process");
         }
     }
 

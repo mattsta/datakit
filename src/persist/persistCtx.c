@@ -535,10 +535,10 @@ int persistCtxTest(int argc, char *argv[]) {
     TEST("persistCtx default config") {
         persistCtxConfig config = persistCtxDefaultConfig();
         if (config.syncMode != PERSIST_CTX_SYNC_EVERYSEC) {
-            ERRR("Default sync mode should be EVERYSEC");
+            ERR("Default sync mode should be EVERYSEC");
         }
         if (config.compactAfterOps != 10000) {
-            ERRR("Default compact after ops should be 10000");
+            ERR("Default compact after ops should be 10000");
         }
     }
 
@@ -549,10 +549,10 @@ int persistCtxTest(int argc, char *argv[]) {
         } else {
             persistCtx *ctx = persistCtxNew(path, NULL);
             if (!ctx) {
-                ERRR("Failed to create persistCtx");
+                ERR("Failed to create persistCtx");
             } else {
                 if (strcmp(ctx->basePath, path) != 0) {
-                    ERRR("Base path not set correctly");
+                    ERR("Base path not set correctly");
                 }
                 persistCtxFree(ctx);
             }
@@ -570,7 +570,7 @@ int persistCtxTest(int argc, char *argv[]) {
         } else {
             /* Should not exist initially */
             if (persistCtxExists(path)) {
-                ERRR("Context should not exist yet");
+                ERR("Context should not exist yet");
             }
 
             /* Create files manually */
@@ -581,7 +581,7 @@ int persistCtxTest(int argc, char *argv[]) {
 
             /* Now should exist */
             if (!persistCtxExists(path)) {
-                ERRR("Context should exist now");
+                ERR("Context should exist now");
             }
         }
     }
@@ -811,7 +811,7 @@ int persistCtxTest(int argc, char *argv[]) {
                                    claimed = persistCtxClaim(ctx));
             dkDiagSetPrintMode(priorPrint);
             if (claimed) {
-                ERRR("a held context was claimed again");
+                ERR("a held context was claimed again");
             }
             flexCloseP(f);
             persistCtxFree(ctx);
@@ -828,7 +828,7 @@ int persistCtxTest(int argc, char *argv[]) {
             flexCloseP(f);
             persistCtxFree(ctx);
             if (!ptestDamageLastWalEntry(path)) {
-                ERRR("could not damage the WAL");
+                ERR("could not damage the WAL");
             }
             int notified = 0;
             ctx = persistCtxOpen(path, NULL);
@@ -854,7 +854,7 @@ int persistCtxTest(int argc, char *argv[]) {
                 persistCtxSaveSnapshot(NULL, NULL, &persistOpsFlex) ||
                 persistCtxClaim(NULL) ||
                 persistCtxLastBadEntry(NULL, &report)) {
-                ERRR("a call without its context was not refused");
+                ERR("a call without its context was not refused");
             }
             persistCtxGetStats(NULL, &stats);
             persistCtxSetBadEntryNotify(NULL, persistCtxTestNotify, &notified);
@@ -879,21 +879,21 @@ int persistCtxTest(int argc, char *argv[]) {
 
             const uint64_t syncs = ctx->totalSyncs;
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs) {
-                ERRR("synced before a second had passed");
+                ERR("synced before a second had passed");
             }
             ctx->lastSyncTime -= 2000000;
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
-                ERRR("did not sync once a second had passed");
+                ERR("did not sync once a second had passed");
             }
 
             /* Other modes leave syncing to their own policy */
             ctx->config.syncMode = PERSIST_CTX_SYNC_NONE;
             ctx->lastSyncTime -= 2000000;
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
-                ERRR("synced a SYNC_NONE context");
+                ERR("synced a SYNC_NONE context");
             }
             if (persistCtxSyncIfDue(NULL)) {
-                ERRR("accepted a NULL context");
+                ERR("accepted a NULL context");
             }
 
             flexCloseP(f);
@@ -923,7 +923,7 @@ int persistCtxTest(int argc, char *argv[]) {
             const databox two = DATABOX_SIGNED(2);
             if (persistCtxLogOp(ctx, PERSIST_OP_PUSH_TAIL, &two, 1) !=
                 PERSIST_LOG_NOT_DURABLE) {
-                ERRR("a failed sync was not reported as NOT_DURABLE");
+                ERR("a failed sync was not reported as NOT_DURABLE");
             }
             PTEST_LOGGED(flexPushTailP(f, &two));
             wal->sync = sync;
@@ -937,7 +937,7 @@ int persistCtxTest(int argc, char *argv[]) {
                     stats.lastSyncError);
             }
             if (flexCountP(f) != 2) {
-                ERRR("the wrapper dropped an op whose sync failed");
+                ERR("the wrapper dropped an op whose sync failed");
             }
             flexCloseP(f);
             persistCtxFree(ctx);
@@ -948,7 +948,7 @@ int persistCtxTest(int argc, char *argv[]) {
             /* @own: caller; free=flexCloseP */
             f = flexOpenP(ctx);
             if (!f || flexCountP(f) != 3) {
-                ERRR("ops logged across a failed sync did not recover");
+                ERR("ops logged across a failed sync did not recover");
             }
             flexCloseP(f);
             persistCtxFree(ctx);
@@ -956,7 +956,7 @@ int persistCtxTest(int argc, char *argv[]) {
     }
 
     if (!dkTestTmpDirRemove(&tmp)) {
-        ERRR("could not remove the scratch directory");
+        ERR("could not remove the scratch directory");
     }
 
     TEST_FINAL_RESULT;

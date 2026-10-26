@@ -3162,19 +3162,19 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
     TEST("envelope: algorithm queries are sane") {
         if (flexEnvelopeAlgoDigestLen(FLEX_ENV_ALGO_XXH64) != 8) {
-            ERRR("xxh64 digest_len should be 8");
+            ERR("xxh64 digest_len should be 8");
         }
         if (flexEnvelopeAlgoDigestLen(FLEX_ENV_ALGO_XXH3_128) != 16) {
-            ERRR("xxh3_128 digest_len should be 16");
+            ERR("xxh3_128 digest_len should be 16");
         }
         if (flexEnvelopeAlgoIsKeyed(FLEX_ENV_ALGO_XXH64)) {
-            ERRR("xxh64 must NOT be classified as keyed");
+            ERR("xxh64 must NOT be classified as keyed");
         }
         if (!flexEnvelopeAlgoIsKeyed(FLEX_ENV_ALGO_HMAC_SHA256)) {
-            ERRR("hmac_sha256 must be classified as keyed");
+            ERR("hmac_sha256 must be classified as keyed");
         }
         if (flexEnvelopeAlgoDigestLen((flexEnvelopeAlgo)9999) != 0) {
-            ERRR("unknown algo should report digest_len 0");
+            ERR("unknown algo should report digest_len 0");
         }
     }
 
@@ -3371,9 +3371,9 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_NONE};
         size_t written = 0;
         if (flexEnvelopeWrap(out, sizeof(out), NULL, 0, &wp, &written)) {
-            ERRR("Wrap accepted ALGO_NONE without "
-                 "DATAKIT_ENABLE_INSECURE_TEST_ALGOS — secure-by-default "
-                 "barrier failed!");
+            ERR("Wrap accepted ALGO_NONE without "
+                "DATAKIT_ENABLE_INSECURE_TEST_ALGOS — secure-by-default "
+                "barrier failed!");
         }
     }
 
@@ -3386,7 +3386,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (flexEnvelopeWrap(out, sizeof(out), NULL, 0, &wp, &written)) {
-            ERRR("Wrap accepted keyed algo with no key");
+            ERR("Wrap accepted keyed algo with no key");
         }
     }
 
@@ -3420,12 +3420,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, sz, payload, plen, &wp, &written)) {
-            ERRR("Wrap with key_id=42 failed");
+            ERR("Wrap with key_id=42 failed");
         }
         /* Peek must surface the embedded key id. */
         flexEnvelopeHeader hdr = {};
         if (!flexEnvelopePeek(buf, written, &hdr)) {
-            ERRR("Peek failed");
+            ERR("Peek failed");
         }
         if (!(hdr.flags & FLEX_ENV_FLAG_KEYID_PRESENT) || hdr.key_id != 42u) {
             ERR("Peek did not surface key_id=42 (flags=0x%x id=%u)", hdr.flags,
@@ -3438,10 +3438,10 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const uint8_t *out_payload = NULL;
         uint64_t out_plen = 0;
         if (!flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
-            ERRR("Keyring auto-resolve verify failed");
+            ERR("Keyring auto-resolve verify failed");
         }
         if (out_plen != plen || memcmp(out_payload, payload, plen) != 0) {
-            ERRR("Auto-resolved payload mismatch");
+            ERR("Auto-resolved payload mismatch");
         }
 
         /* Tamper: bump the wire's key_id varint so it points at a key
@@ -3453,7 +3453,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * small ids) and verify the keyring path rejects. */
         buf[6] ^= 0x40;
         if (flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
-            ERRR("Tampered framing must fail verify");
+            ERR("Tampered framing must fail verify");
         }
         buf[6] ^= 0x40;
 
@@ -3461,7 +3461,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * material; if neither is provided we reject. */
         hmacKeyringRetire(ring, 42u);
         if (flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
-            ERRR("Verify must fail when keyring miss and no fallback");
+            ERR("Verify must fail when keyring miss and no fallback");
         }
         /* But verify with raw key still works — backward path
          * preserved. Reinstall id=42 so the cleanup path is sane. */
@@ -3483,7 +3483,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .key_id = 0u,
         };
         if (flexEnvelopeWrap(out, sizeof(out), NULL, 0, &wp, &written)) {
-            ERRR("Wrap must refuse key_id=0 paired with KEYID_PRESENT flag");
+            ERR("Wrap must refuse key_id=0 paired with KEYID_PRESENT flag");
         }
     }
 
@@ -3493,7 +3493,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         buf[1] = 0xCD;
         flexEnvelopeVerifyParams vp = {};
         if (flexEnvelopeVerify(buf, sizeof(buf), &vp, NULL, NULL)) {
-            ERRR("Verify accepted bad magic");
+            ERR("Verify accepted bad magic");
         }
     }
 
@@ -3501,13 +3501,13 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         uint8_t buf[2] = {FLEX_ENVELOPE_MAGIC_0, FLEX_ENVELOPE_MAGIC_1};
         flexEnvelopeVerifyParams vp = {};
         if (flexEnvelopeVerify(buf, sizeof(buf), &vp, NULL, NULL)) {
-            ERRR("Verify accepted 2-byte buffer with only magic");
+            ERR("Verify accepted 2-byte buffer with only magic");
         }
         if (flexEnvelopeVerify(buf, 0, &vp, NULL, NULL)) {
-            ERRR("Verify accepted empty buffer");
+            ERR("Verify accepted empty buffer");
         }
         if (flexEnvelopeVerify(NULL, 100, &vp, NULL, NULL)) {
-            ERRR("Verify accepted NULL buffer");
+            ERR("Verify accepted NULL buffer");
         }
     }
 
@@ -3526,14 +3526,14 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         flexEnvelopeVerifyParams vp = {.opts = 0};
         if (flexEnvelopeVerify(buf, total + 8, &vp, NULL, NULL)) {
-            ERRR("Verify accepted trailing bytes without "
-                 "ALLOW_TRAILING flag");
+            ERR("Verify accepted trailing bytes without "
+                "ALLOW_TRAILING flag");
         }
 
         vp.opts = FLEX_ENV_VERIFY_ALLOW_TRAILING;
         if (!flexEnvelopeVerify(buf, total + 8, &vp, NULL, NULL)) {
-            ERRR("Verify rejected trailing bytes WITH ALLOW_TRAILING "
-                 "flag");
+            ERR("Verify rejected trailing bytes WITH ALLOW_TRAILING "
+                "flag");
         }
     }
 
@@ -3559,8 +3559,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         flexEnvelopeVerifyParams vp = {.opts = 0};
         if (flexEnvelopeVerify(buf, pos, &vp, NULL, NULL)) {
-            ERRR("Verify did not reject forged 2 GiB length on small "
-                 "buffer (framing payload-fit check)");
+            ERR("Verify did not reject forged 2 GiB length on small "
+                "buffer (framing payload-fit check)");
         }
         /* Even if buf_len were huge (it isn't), default cap of 1 GiB
          * blocks it. Test that path symbolically: the framing already
@@ -3648,7 +3648,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const uint8_t *p = NULL;
         uint64_t pl = 0;
         if (!flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
-            ERRR("REQUIRE_FLEX rejected a valid wrapped flex");
+            ERR("REQUIRE_FLEX rejected a valid wrapped flex");
         }
 
         /* Wrap junk and confirm REQUIRE_FLEX rejects it. */
@@ -3659,8 +3659,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *jbuf = zmalloc(junkTotal);
         flexEnvelopeWrap(jbuf, junkTotal, junk, sizeof(junk), &wp, &written);
         if (flexEnvelopeVerify(jbuf, junkTotal, &vp, &p, &pl)) {
-            ERRR("REQUIRE_FLEX accepted non-flex payload "
-                 "(flexValidateBuffer not gating)");
+            ERR("REQUIRE_FLEX accepted non-flex payload "
+                "(flexValidateBuffer not gating)");
         }
     }
 
@@ -3683,7 +3683,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const uint8_t *p = NULL;
         uint64_t pl = 0;
         if (!flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
-            ERRR("PEEK_ONLY failed to skip digest");
+            ERR("PEEK_ONLY failed to skip digest");
         }
         if (pl != plen) {
             ERR("PEEK_ONLY returned wrong payload_len: %" PRIu64, pl);
@@ -3691,7 +3691,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         /* Without PEEK_ONLY, the corrupt digest must be caught. */
         vp.opts = 0;
         if (flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
-            ERRR("Default verify did not catch corrupted digest");
+            ERR("Default verify did not catch corrupted digest");
         }
     }
 
@@ -3710,7 +3710,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .opts = FLEX_ENV_VERIFY_REQUIRE_HMAC,
         };
         if (flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
-            ERRR("REQUIRE_HMAC accepted xxh64 (checksum class)");
+            ERR("REQUIRE_HMAC accepted xxh64 (checksum class)");
         }
     }
 
@@ -3730,12 +3730,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .max_payload_len = 512,
         };
         if (flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
-            ERRR("BOUND_PAYLOAD did not enforce caller's 512 cap "
-                 "against 1024-byte payload");
+            ERR("BOUND_PAYLOAD did not enforce caller's 512 cap "
+                "against 1024-byte payload");
         }
         vp.max_payload_len = 2048;
         if (!flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
-            ERRR("BOUND_PAYLOAD rejected payload smaller than cap");
+            ERR("BOUND_PAYLOAD rejected payload smaller than cap");
         }
     }
 
@@ -3758,7 +3758,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         flex *restored = flexEnvelopeUnwrapAsFlex(buf, total, NULL);
         if (!restored) {
-            ERRR("UnwrapAsFlex returned NULL on valid envelope");
+            ERR("UnwrapAsFlex returned NULL on valid envelope");
         } else {
             if (flexCount(restored) != flexCount(f)) {
                 ERR("UnwrapAsFlex count mismatch: %zu vs %zu",
@@ -3932,7 +3932,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .key_len = sizeof(key),
         };
         if (!flexEnvelopeVerify(buf, total, &vp_plain, NULL, NULL)) {
-            ERRR("Plain-key verify failed on valid HMAC envelope");
+            ERR("Plain-key verify failed on valid HMAC envelope");
         }
 
         /* Prepared-key path. */
@@ -3943,14 +3943,14 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                        sizeof(key));
         flexEnvelopeVerifyParams vp_prep = {.prepared_key = &prep};
         if (!flexEnvelopeVerify(buf, total, &vp_prep, NULL, NULL)) {
-            ERRR("Prepared-key verify failed on valid HMAC envelope");
+            ERR("Prepared-key verify failed on valid HMAC envelope");
         }
 
         /* Sanity: a forged envelope (1-byte flip) must still be
          * rejected under the prepared-key path. */
         buf[total / 2] ^= 0x01;
         if (flexEnvelopeVerify(buf, total, &vp_prep, NULL, NULL)) {
-            ERRR("Prepared-key path accepted forged envelope!");
+            ERR("Prepared-key path accepted forged envelope!");
         }
     }
 
@@ -4289,12 +4289,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         if (flexEnvelopeWrapStreamInit(&ctx, 100, &wp, header, sizeof(header),
                                        &hw)) {
-            ERRR("wrap stream Init accepted keyed algo with no key");
+            ERR("wrap stream Init accepted keyed algo with no key");
         }
         wp.algo = FLEX_ENV_ALGO_BLAKE3_KEYED;
         if (flexEnvelopeWrapStreamInit(&ctx, 100, &wp, header, sizeof(header),
                                        &hw)) {
-            ERRR("wrap stream Init accepted BLAKE3_KEYED with no key");
+            ERR("wrap stream Init accepted BLAKE3_KEYED with no key");
         }
     }
 
@@ -4335,7 +4335,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                               &sp[1], &envLen[1]) ||
             !flexEnvelopeWrap(xxh, sizeof(xxh), plain, sizeof(plain), &wp,
                               &xxhLen)) {
-            ERRR("envelope setup failed");
+            ERR("envelope setup failed");
         }
         for (int e = 0; e < 2; e++) {
             const flexEnvelopeVerifyParams right = {.key = sp[e].key,
@@ -4405,7 +4405,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 misuse == 1 ? 31 : sizeof(digest), &written);
             if (misuse == 3) {
                 if (!ok || written != 32) {
-                    ERRR("a correct Final was refused");
+                    ERR("a correct Final was refused");
                 }
                 continue;
             }
@@ -4452,7 +4452,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_NONE};
         if (flexEnvelopeWrapStreamInit(&ctx, 0, &wp, header, sizeof(header),
                                        &hw)) {
-            ERRR("wrap stream Init accepted ALGO_NONE without insecure gate");
+            ERR("wrap stream Init accepted ALGO_NONE without insecure gate");
         }
     }
 
@@ -4471,25 +4471,25 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t hw = 0;
         if (!flexEnvelopeWrapStreamInit(&ctx, /* payload_len */ 16u, &wp,
                                         header, sizeof(header), &hw)) {
-            ERRR("wrap stream Init setup failed");
+            ERR("wrap stream Init setup failed");
         }
         /* Feed 17 bytes when only 16 declared — must fail. */
         uint8_t blob[17];
         memset(blob, 0xBB, sizeof(blob));
         if (flexEnvelopeWrapStreamUpdate(&ctx, blob, sizeof(blob))) {
-            ERRR("Update past declared payload_len must fail");
+            ERR("Update past declared payload_len must fail");
         }
         /* Subsequent Update with the correct count must ALSO fail
          * because the ctx is now poisoned. */
         if (flexEnvelopeWrapStreamUpdate(&ctx, blob, 16u)) {
-            ERRR("Update on poisoned wrap stream must fail");
+            ERR("Update on poisoned wrap stream must fail");
         }
         /* Final on poisoned ctx must also fail. */
         uint8_t digest_buf[32];
         size_t dw = 0;
         if (flexEnvelopeWrapStreamFinal(&ctx, digest_buf, sizeof(digest_buf),
                                         &dw)) {
-            ERRR("Final on poisoned wrap stream must fail");
+            ERR("Final on poisoned wrap stream must fail");
         }
     }
 
@@ -4513,7 +4513,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         (void)nonce;
         if (flexEnvelopeWrapStreamInit(&ctx, 16u, &wp, header, sizeof(header),
                                        &hw)) {
-            ERRR("wrap stream Init must reject AEAD class");
+            ERR("wrap stream Init must reject AEAD class");
         }
         if (hw != 0u) {
             ERR("On failure *header_written must be 0, got %zu", hw);
@@ -4553,7 +4553,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (flexEnvelopeVerifyStreamInit(&vctx, &vp, hdr, pos, &consumed, NULL,
                                          NULL)) {
-            ERRR("verify stream Init must reject AEAD class");
+            ERR("verify stream Init must reject AEAD class");
         }
     }
 
@@ -4585,7 +4585,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t header_written = 0;
         if (!flexEnvelopeWrapStreamInit(&wctx, (uint64_t)plen, &wp, out_buf,
                                         total, &header_written)) {
-            ERRR("64MiB stream Init failed");
+            ERR("64MiB stream Init failed");
         }
         size_t off = 0;
         while (off < plen) {
@@ -4604,7 +4604,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (!flexEnvelopeWrapStreamFinal(&wctx, out_buf + header_written + plen,
                                          total - header_written - plen,
                                          &digest_written)) {
-            ERRR("64MiB stream Final failed");
+            ERR("64MiB stream Final failed");
         }
         /* Verify what we just wrote. */
         flexEnvelopeVerifyParams vp = {
@@ -4616,7 +4616,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, out_buf, total, &consumed,
                                           NULL, NULL)) {
-            ERRR("64MiB verify-stream Init failed");
+            ERR("64MiB verify-stream Init failed");
         }
         size_t voff = consumed;
         while (voff < total) {
@@ -4631,12 +4631,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             voff += step;
         }
         if (!flexEnvelopeVerifyStreamFinal(&vctx)) {
-            ERRR("64MiB verify-stream Final returned false");
+            ERR("64MiB verify-stream Final returned false");
         }
         /* ctx sizeof must NOT have grown (it can't — but document the
          * invariant). */
         if (sizeof(wctx) != ctx_size_before) {
-            ERRR("ctx sizeof changed mid-test (impossible compiler bug)");
+            ERR("ctx sizeof changed mid-test (impossible compiler bug)");
         }
     }
 
@@ -4674,7 +4674,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (!flexEnvelopeVerifyStreamInit(&ctx, &vp, buf, total, &consumed,
                                           NULL, NULL)) {
-            ERRR("Init failed");
+            ERR("Init failed");
         }
 
         /* Feed the entire remaining buffer in one chunk — that's
@@ -4684,15 +4684,15 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const size_t remaining = total - consumed;
         if (flexEnvelopeVerifyStreamUpdate(&ctx, buf + consumed,
                                            remaining + 1u)) {
-            ERRR("Update with len > payload+digest_remaining must fail");
+            ERR("Update with len > payload+digest_remaining must fail");
         }
         /* The stream is now poisoned: even feeding the correct bytes
          * after must fail. */
         if (flexEnvelopeVerifyStreamUpdate(&ctx, buf + consumed, 1u)) {
-            ERRR("Update after poison must fail");
+            ERR("Update after poison must fail");
         }
         if (flexEnvelopeVerifyStreamFinal(&ctx)) {
-            ERRR("Final after poison must fail");
+            ERR("Final after poison must fail");
         }
     }
 
@@ -4891,7 +4891,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t written = 0;
         if (!flexEnvelopeSeal(buf, total, plain, (uint64_t)plen, &sp,
                               &written)) {
-            ERRR("Seal setup failed");
+            ERR("Seal setup failed");
         }
 
         flexEnvelopeVerifyParams vp = {
@@ -4901,7 +4901,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *recovered = zmalloc(plen);
         size_t r_len = 0;
         if (!flexEnvelopeOpen(buf, total, &vp, recovered, plen, &r_len)) {
-            ERRR("Baseline open failed");
+            ERR("Baseline open failed");
         }
 
         /* Flip every byte position and verify Open rejects each. */
@@ -4925,7 +4925,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .key_len = sizeof(wrong_key),
         };
         if (flexEnvelopeOpen(buf, total, &vp_wrong, recovered, plen, &r_len)) {
-            ERRR("Open accepted forged envelope under wrong key");
+            ERR("Open accepted forged envelope under wrong key");
         }
 
         /* Same key+plaintext but different nonce produces different
@@ -4938,7 +4938,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t written2 = 0;
         flexEnvelopeSeal(buf2, total, plain, (uint64_t)plen, &sp, &written2);
         if (memcmp(buf, buf2, total) == 0) {
-            ERRR("Distinct nonces should produce distinct ciphertexts");
+            ERR("Distinct nonces should produce distinct ciphertexts");
         }
     }
 
@@ -4964,22 +4964,22 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (flexEnvelopeSeal(buf, sizeof(buf), plain, plen, &sp, &written)) {
-            ERRR("Seal must refuse NULL key");
+            ERR("Seal must refuse NULL key");
         }
         sp.key = key;
         sp.key_len = 16u; /* wrong length for chacha20-poly1305 */
         if (flexEnvelopeSeal(buf, sizeof(buf), plain, plen, &sp, &written)) {
-            ERRR("Seal must refuse wrong key length");
+            ERR("Seal must refuse wrong key length");
         }
         sp.key_len = sizeof(key);
         sp.nonce = NULL;
         if (flexEnvelopeSeal(buf, sizeof(buf), plain, plen, &sp, &written)) {
-            ERRR("Seal must refuse NULL nonce");
+            ERR("Seal must refuse NULL nonce");
         }
         sp.nonce = nonce;
         sp.nonce_len = 8u;
         if (flexEnvelopeSeal(buf, sizeof(buf), plain, plen, &sp, &written)) {
-            ERRR("Seal must refuse wrong nonce length");
+            ERR("Seal must refuse wrong nonce length");
         }
 
         /* And the wrap/verify path must still reject AEAD algos. */
@@ -4989,7 +4989,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .key_len = sizeof(key),
         };
         if (flexEnvelopeWrap(buf, sizeof(buf), plain, plen, &wp, &written)) {
-            ERRR("Wrap must reject AEAD algo");
+            ERR("Wrap must reject AEAD algo");
         }
         sp.nonce_len = sizeof(nonce);
         flexEnvelopeSeal(buf, sizeof(buf), plain, plen, &sp, &written);
@@ -5000,7 +5000,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const uint8_t *p = NULL;
         uint64_t pl = 0;
         if (flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
-            ERRR("Verify must reject AEAD envelope (route through Open)");
+            ERR("Verify must reject AEAD envelope (route through Open)");
         }
     }
 
@@ -5091,16 +5091,16 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (!flexEnvelopeSeal(buf, cap, pt, (uint64_t)plen, &sp, &written)) {
-            ERRR("AES-128-GCM Seal failed");
+            ERR("AES-128-GCM Seal failed");
         }
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
         uint8_t rec[100];
         size_t r_len = 0;
         if (!flexEnvelopeOpen(buf, written, &vp, rec, plen, &r_len)) {
-            ERRR("AES-128-GCM Open failed");
+            ERR("AES-128-GCM Open failed");
         }
         if (r_len != plen || memcmp(rec, pt, plen) != 0) {
-            ERRR("AES-128-GCM round-trip mismatch");
+            ERR("AES-128-GCM round-trip mismatch");
         }
         /* Tamper at a few positions. */
         const size_t tamper_at[] = {0, written / 2, written - 1};
@@ -5133,21 +5133,21 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (!flexEnvelopeSeal(buf, cap, pt, (uint64_t)plen, &sp, &written)) {
-            ERRR("AES-256-GCM Seal failed");
+            ERR("AES-256-GCM Seal failed");
         }
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
         cleanerName(zfree, Bytes) uint8_t *rec = zmalloc(plen);
         size_t r_len = 0;
         if (!flexEnvelopeOpen(buf, written, &vp, rec, plen, &r_len)) {
-            ERRR("AES-256-GCM Open failed");
+            ERR("AES-256-GCM Open failed");
         }
         if (r_len != plen || memcmp(rec, pt, plen) != 0) {
-            ERRR("AES-256-GCM round-trip mismatch");
+            ERR("AES-256-GCM round-trip mismatch");
         }
         /* Wrong key length must refuse. */
         flexEnvelopeVerifyParams vp_bad = {.key = key, .key_len = 16u};
         if (flexEnvelopeOpen(buf, written, &vp_bad, rec, plen, &r_len)) {
-            ERRR("AES-256-GCM accepted 16-byte key");
+            ERR("AES-256-GCM accepted 16-byte key");
         }
     }
 
@@ -5168,11 +5168,11 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                                                              0x1};
         if (!hmacKeyringInstall(ring, 100u, &hmacAlgoSHA256, key1, sizeof(key1),
                                 salt1)) {
-            ERRR("install K1 failed");
+            ERR("install K1 failed");
         }
         if (!hmacKeyringInstall(ring, 200u, &hmacAlgoSHA256, key2, sizeof(key2),
                                 salt2)) {
-            ERRR("install K2 failed");
+            ERR("install K2 failed");
         }
 
         const uint8_t payload[16] = "hello-revoke";
@@ -5190,7 +5190,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t written1 = 0;
         if (!flexEnvelopeWrap(env1, cap1, payload, sizeof(payload), &wp1,
                               &written1)) {
-            ERRR("wrap under K1 failed");
+            ERR("wrap under K1 failed");
         }
 
         /* Wrap under K2, key_id=200 */
@@ -5207,12 +5207,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t written2 = 0;
         if (!flexEnvelopeWrap(env2, cap2, payload, sizeof(payload), &wp2,
                               &written2)) {
-            ERRR("wrap under K2 failed");
+            ERR("wrap under K2 failed");
         }
 
         /* Set floor to 200 (revoke K1). */
         if (!hmacKeyringSetMinValidKeyId(ring, 200u)) {
-            ERRR("set floor=200 failed");
+            ERR("set floor=200 failed");
         }
 
         flexEnvelopeVerifyParams vp = {.keyring = ring};
@@ -5224,7 +5224,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         /* K1 verify must fail with KEY_REVOKED. */
         if (flexEnvelopeVerify(env1, written1, &vp, &out, &out_len)) {
-            ERRR("K1 verify under floor MUST fail");
+            ERR("K1 verify under floor MUST fail");
         }
         if (flexEnvelopeLastVerifyError() !=
             FLEX_ENV_VERIFY_FAILED_KEY_REVOKED) {
@@ -5234,7 +5234,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         /* K2 verify succeeds. */
         if (!flexEnvelopeVerify(env2, written2, &vp, &out, &out_len)) {
-            ERRR("K2 verify above floor MUST succeed");
+            ERR("K2 verify above floor MUST succeed");
         }
         if (flexEnvelopeLastVerifyError() != FLEX_ENV_VERIFY_OK) {
             ERR("K2 verify err expected OK, got %d",
@@ -5246,11 +5246,11 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(sz);
         size_t snap_w = 0;
         if (!hmacKeyringSnapshot(ring, snap, sz, &snap_w)) {
-            ERRR("snapshot after floor failed");
+            ERR("snapshot after floor failed");
         }
         hmacKeyring *restored = hmacKeyringCreate();
         if (!hmacKeyringRestore(restored, snap, snap_w)) {
-            ERRR("restore failed");
+            ERR("restore failed");
         }
         if (hmacKeyringMinValidKeyId(restored) != 200u) {
             ERR("restored floor expected 200 got %u",
@@ -5258,7 +5258,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
         flexEnvelopeVerifyParams vp_restored = {.keyring = restored};
         if (flexEnvelopeVerify(env1, written1, &vp_restored, &out, &out_len)) {
-            ERRR("post-restore K1 verify MUST still fail (floor preserved)");
+            ERR("post-restore K1 verify MUST still fail (floor preserved)");
         }
         if (flexEnvelopeLastVerifyError() !=
             FLEX_ENV_VERIFY_FAILED_KEY_REVOKED) {
@@ -5301,8 +5301,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t written = 0;
         if (flexEnvelopeWrap(buf, wrapped, payload, plen, &wp_short,
                              &written)) {
-            ERRR("flexEnvelopeWrap must reject 16-byte key under "
-                 "BLAKE3_KEYED");
+            ERR("flexEnvelopeWrap must reject 16-byte key under "
+                "BLAKE3_KEYED");
         }
 
         /* Reserve-wrap with 16-byte key MUST fail. */
@@ -5310,8 +5310,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t hlen = 0;
         if (flexEnvelopeReserveWrap(buf, wrapped, plen, &wp_short, &region,
                                     &hlen)) {
-            ERRR("flexEnvelopeReserveWrap must reject 16-byte key under "
-                 "BLAKE3_KEYED");
+            ERR("flexEnvelopeReserveWrap must reject 16-byte key under "
+                "BLAKE3_KEYED");
         }
 
         /* Streaming init MUST reject the short key explicitly. */
@@ -5320,8 +5320,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t hw = 0;
         if (flexEnvelopeWrapStreamInit(&wctx, plen, &wp_short, header,
                                        sizeof(header), &hw)) {
-            ERRR("Wrap-stream Init must reject 16-byte key under "
-                 "BLAKE3_KEYED");
+            ERR("Wrap-stream Init must reject 16-byte key under "
+                "BLAKE3_KEYED");
         }
 
         /* Build a valid envelope with a proper 32-byte key so we can
@@ -5333,7 +5333,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         size_t w2 = 0;
         if (!flexEnvelopeWrap(buf, wrapped, payload, plen, &wp_full, &w2)) {
-            ERRR("Full-length BLAKE3_KEYED wrap must succeed");
+            ERR("Full-length BLAKE3_KEYED wrap must succeed");
         }
 
         /* One-shot verify with 16-byte key MUST fail (even though the
@@ -5345,8 +5345,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const uint8_t *vp_out = NULL;
         uint64_t vp_out_len = 0;
         if (flexEnvelopeVerify(buf, w2, &vp_short, &vp_out, &vp_out_len)) {
-            ERRR("flexEnvelopeVerify must reject 16-byte key under "
-                 "BLAKE3_KEYED");
+            ERR("flexEnvelopeVerify must reject 16-byte key under "
+                "BLAKE3_KEYED");
         }
 
         /* Streaming verify init MUST reject the short key explicitly. */
@@ -5354,8 +5354,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (flexEnvelopeVerifyStreamInit(&vctx, &vp_short, buf, w2, &consumed,
                                          NULL, NULL)) {
-            ERRR("Verify-stream Init must reject 16-byte key under "
-                 "BLAKE3_KEYED");
+            ERR("Verify-stream Init must reject 16-byte key under "
+                "BLAKE3_KEYED");
         }
 
         /* Sanity: full-length key must still succeed on both paths. */
@@ -5367,24 +5367,24 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         uint64_t vp_full_out_len = 0;
         if (!flexEnvelopeVerify(buf, w2, &vp_full2, &vp_full_out,
                                 &vp_full_out_len)) {
-            ERRR("flexEnvelopeVerify must accept full 32-byte BLAKE3_KEYED "
-                 "key");
+            ERR("flexEnvelopeVerify must accept full 32-byte BLAKE3_KEYED "
+                "key");
         }
         flexEnvelopeVerifyStream vctx2;
         size_t consumed2 = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx2, &vp_full2, buf, w2,
                                           &consumed2, NULL, NULL)) {
-            ERRR("Verify-stream Init must accept full 32-byte BLAKE3_KEYED "
-                 "key");
+            ERR("Verify-stream Init must accept full 32-byte BLAKE3_KEYED "
+                "key");
         }
         if (!flexEnvelopeVerifyStreamUpdate(&vctx2, buf + consumed2,
                                             w2 - consumed2)) {
-            ERRR("Verify-stream Update on valid 32-byte BLAKE3_KEYED envelope "
-                 "failed");
+            ERR("Verify-stream Update on valid 32-byte BLAKE3_KEYED envelope "
+                "failed");
         }
         if (!flexEnvelopeVerifyStreamFinal(&vctx2)) {
-            ERRR("Verify-stream Final rejected valid 32-byte BLAKE3_KEYED "
-                 "envelope");
+            ERR("Verify-stream Final rejected valid 32-byte BLAKE3_KEYED "
+                "envelope");
         }
     }
 
@@ -5410,7 +5410,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written)) {
-            ERRR("setup wrap failed");
+            ERR("setup wrap failed");
         }
 
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
@@ -5419,25 +5419,25 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, buf, wrapped, &consumed,
                                           NULL, NULL)) {
-            ERRR("verify-stream Init failed");
+            ERR("verify-stream Init failed");
         }
         /* Feed only HALF the payload then call Final. Final must
          * return false (byte count mismatch) AND poison the ctx. */
         const size_t half = plen / 2u;
         if (!flexEnvelopeVerifyStreamUpdate(&vctx, buf + consumed, half)) {
-            ERRR("verify-stream Update of half-payload failed");
+            ERR("verify-stream Update of half-payload failed");
         }
         if (flexEnvelopeVerifyStreamFinal(&vctx)) {
-            ERRR("verify-stream Final must reject byte-count mismatch");
+            ERR("verify-stream Final must reject byte-count mismatch");
         }
         /* Now try to feed the remaining payload + digest bytes: the
          * poisoned ctx must refuse every subsequent operation. */
         if (flexEnvelopeVerifyStreamUpdate(&vctx, buf + consumed + half,
                                            wrapped - consumed - half)) {
-            ERRR("Update on poisoned verify-stream ctx must fail");
+            ERR("Update on poisoned verify-stream ctx must fail");
         }
         if (flexEnvelopeVerifyStreamFinal(&vctx)) {
-            ERRR("Final on poisoned verify-stream ctx must fail");
+            ERR("Final on poisoned verify-stream ctx must fail");
         }
 
         /* === digest-byte-count branch === */
@@ -5447,24 +5447,24 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t consumed2 = 0;
         if (!flexEnvelopeVerifyStreamInit(&vctx2, &vp, buf, wrapped, &consumed2,
                                           NULL, NULL)) {
-            ERRR("verify-stream Init failed (2)");
+            ERR("verify-stream Init failed (2)");
         }
         /* Feed exactly payload, no digest. */
         if (!flexEnvelopeVerifyStreamUpdate(&vctx2, buf + consumed2, plen)) {
-            ERRR("verify-stream Update of full payload failed");
+            ERR("verify-stream Update of full payload failed");
         }
         if (flexEnvelopeVerifyStreamFinal(&vctx2)) {
-            ERRR("verify-stream Final must reject digest-len mismatch");
+            ERR("verify-stream Final must reject digest-len mismatch");
         }
         /* Poisoned ctx must reject further Update. */
         if (flexEnvelopeVerifyStreamUpdate(&vctx2, buf + consumed2 + plen,
                                            wrapped - consumed2 - plen)) {
-            ERRR("Update on poisoned (digest-mismatch) verify-stream ctx must "
-                 "fail");
+            ERR("Update on poisoned (digest-mismatch) verify-stream ctx must "
+                "fail");
         }
         if (flexEnvelopeVerifyStreamFinal(&vctx2)) {
-            ERRR("Final on poisoned (digest-mismatch) verify-stream ctx must "
-                 "fail");
+            ERR("Final on poisoned (digest-mismatch) verify-stream ctx must "
+                "fail");
         }
     }
 
@@ -5643,7 +5643,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoBLAKE3, k_bytes,
                                         sizeof(k_bytes))) {
-            ERRR("keyringRawCopyMigrate: install failed");
+            ERR("keyringRawCopyMigrate: install failed");
         }
 
         const uint8_t payload[] = "wave-4-track-h-migration";
@@ -5660,7 +5660,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, sz, payload, plen, &wp, &written)) {
-            ERRR("keyringRawCopyMigrate: wrap failed");
+            ERR("keyringRawCopyMigrate: wrap failed");
         }
 
         /* Verify via the keyring (the migrated path). */
@@ -5668,19 +5668,19 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const uint8_t *out_payload = NULL;
         uint64_t out_plen = 0;
         if (!flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
-            ERRR("keyringRawCopyMigrate: verify after migration failed");
+            ERR("keyringRawCopyMigrate: verify after migration failed");
         }
         if (out_plen != plen || memcmp(out_payload, payload, plen) != 0) {
-            ERRR("keyringRawCopyMigrate: verify returned wrong payload");
+            ERR("keyringRawCopyMigrate: verify returned wrong payload");
         }
 
         /* Now Retire the slot and re-verify: the keyring lookup must
          * fail cleanly, NOT dereference freed bytes. */
         if (!hmacKeyringRetire(ring, KID)) {
-            ERRR("keyringRawCopyMigrate: retire failed");
+            ERR("keyringRawCopyMigrate: retire failed");
         }
         if (flexEnvelopeVerify(buf, written, &vp, &out_payload, &out_plen)) {
-            ERRR("keyringRawCopyMigrate: verify must fail after retire");
+            ERR("keyringRawCopyMigrate: verify must fail after retire");
         }
 
         hmacKeyringFree(ring);
@@ -5699,14 +5699,14 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstall(ring, KID, &hmacAlgoSHA256, k_bytes,
                                 sizeof(k_bytes), salt)) {
-            ERRR("openMigrate: install failed");
+            ERR("openMigrate: install failed");
         }
 
         const uint8_t payload[] = "wave-4-track-h-aead-migration";
         const size_t plen = sizeof(payload) - 1u;
         uint8_t nonce[12];
         if (!hmacKeyringNextAeadNonce(ring, KID, nonce)) {
-            ERRR("openMigrate: NextAeadNonce failed");
+            ERR("openMigrate: NextAeadNonce failed");
         }
         flexEnvelopeSealParams sp = {
             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
@@ -5722,7 +5722,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!flexEnvelopeSeal(buf, sz, payload, plen, &sp, &written)) {
-            ERRR("openMigrate: seal failed");
+            ERR("openMigrate: seal failed");
         }
 
         flexEnvelopeVerifyParams vp = {.keyring = ring};
@@ -5730,20 +5730,20 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         size_t pt_written = 0;
         if (!flexEnvelopeOpen(buf, written, &vp, plaintext, sizeof(plaintext),
                               &pt_written)) {
-            ERRR("openMigrate: keyring auto-resolve Open failed");
+            ERR("openMigrate: keyring auto-resolve Open failed");
         }
         if (pt_written != plen || memcmp(plaintext, payload, plen) != 0) {
-            ERRR("openMigrate: Open returned wrong plaintext");
+            ERR("openMigrate: Open returned wrong plaintext");
         }
 
         /* Retire the slot — subsequent Open must fail cleanly. */
         if (!hmacKeyringRetire(ring, KID)) {
-            ERRR("openMigrate: retire failed");
+            ERR("openMigrate: retire failed");
         }
         memset(plaintext, 0, sizeof(plaintext));
         if (flexEnvelopeOpen(buf, written, &vp, plaintext, sizeof(plaintext),
                              &pt_written)) {
-            ERRR("openMigrate: Open must fail after retire");
+            ERR("openMigrate: Open must fail after retire");
         }
 
         hmacKeyringFree(ring);
@@ -5866,7 +5866,7 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstall(ring, KID, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            ERRR("envRetireRace: initial keyring install failed");
+            ERR("envRetireRace: initial keyring install failed");
         }
 
         /* Wrap an HMAC-SHA-256 frame addressed to KID. */
@@ -5884,14 +5884,14 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         size_t hmac_written = 0;
         if (!flexEnvelopeWrap(hmac_frame, hmac_cap, hmac_payload,
                               hmac_payload_len, &wp, &hmac_written)) {
-            ERRR("envRetireRace: HMAC wrap failed");
+            ERR("envRetireRace: HMAC wrap failed");
         }
 
         /* Seal an AES-256-GCM frame addressed to KID. */
         const size_t aead_payload_len = sizeof(aead_payload) - 1u;
         uint8_t nonce[12];
         if (!hmacKeyringNextAeadNonce(ring, KID, nonce)) {
-            ERRR("envRetireRace: NextAeadNonce failed");
+            ERR("envRetireRace: NextAeadNonce failed");
         }
         flexEnvelopeSealParams sp = {
             .algo = FLEX_ENV_ALGO_AEAD_AES256_GCM,
@@ -5908,7 +5908,7 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         size_t aead_written = 0;
         if (!flexEnvelopeSeal(aead_frame, aead_cap, aead_payload,
                               aead_payload_len, &sp, &aead_written)) {
-            ERRR("envRetireRace: AEAD seal failed");
+            ERR("envRetireRace: AEAD seal failed");
         }
 
         envRetireRaceCtx ctx = {
@@ -5927,11 +5927,11 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         pthread_t writer_thr;
         pthread_t rotator_thr;
         if (pthread_create(&writer_thr, NULL, envRetireRaceWriter, &ctx) != 0) {
-            ERRR("envRetireRace: spawn writer failed");
+            ERR("envRetireRace: spawn writer failed");
         }
         if (pthread_create(&rotator_thr, NULL, envRetireRaceRotator, &ctx) !=
             0) {
-            ERRR("envRetireRace: spawn rotator failed");
+            ERR("envRetireRace: spawn rotator failed");
         }
         pthread_join(writer_thr, NULL);
         pthread_join(rotator_thr, NULL);

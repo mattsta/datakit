@@ -126,14 +126,14 @@ int multiTimerTest(int argc, char *argv[]) {
     TEST("multiTimer: create and free") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         if (!t) {
-            ERRR("Failed to create multiTimer");
+            ERR("Failed to create multiTimer");
         }
     }
 
     TEST("multiTimer: init and deinit on stack") {
         multiTimer t;
         if (!multiTimerInit(&t)) {
-            ERRR("Failed to init multiTimer");
+            ERR("Failed to init multiTimer");
         } else {
             if (multiTimerCount(&t) != 0) {
                 ERR("Expected 0 timers, got %zu", multiTimerCount(&t));
@@ -157,7 +157,7 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerId id =
             multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
         if (id == 0) {
-            ERRR("Timer ID should not be 0");
+            ERR("Timer ID should not be 0");
         }
 
         if (multiTimerCount(t) != 1) {
@@ -239,7 +239,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* Timer should still be scheduled */
         if (multiTimerCount(t) == 0) {
-            ERRR("Repeating timer was incorrectly removed");
+            ERR("Repeating timer was incorrectly removed");
         }
     }
 
@@ -381,7 +381,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* Second timer (created by first) should be scheduled */
         if (multiTimerCount(t) == 0) {
-            ERRR("Nested timer was not scheduled");
+            ERR("Nested timer was not scheduled");
         }
 
         /* Wait for nested timer */
@@ -610,7 +610,7 @@ int multiTimerTest(int argc, char *argv[]) {
         memset(&t, 0xA5, sizeof(t));
 
         if (!multiTimerInit(&t)) {
-            ERRR("Failed to init multiTimer");
+            ERR("Failed to init multiTimer");
         } else {
             testCallbackState state = {};
             multiTimerId id =
@@ -640,10 +640,10 @@ int multiTimerTest(int argc, char *argv[]) {
         testCallbackState state = {};
 
         if (multiTimerUnregister(t, 0)) {
-            ERRR("Unregister of id 0 should return false");
+            ERR("Unregister of id 0 should return false");
         }
         if (multiTimerUnregister(t, 9999)) {
-            ERRR("Unregister of never-issued id should return false");
+            ERR("Unregister of never-issued id should return false");
         }
 
         /* A rejected id must not plant a stop entry that could block a
@@ -658,10 +658,10 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerId id =
             multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
         if (!multiTimerUnregister(t, id)) {
-            ERRR("Unregister of live id should return true");
+            ERR("Unregister of live id should return true");
         }
         if (!multiTimerUnregister(t, id)) {
-            ERRR("Double unregister should still return true");
+            ERR("Double unregister should still return true");
         }
 
         multiTimerGetStats(t, &stats);
@@ -718,7 +718,7 @@ int multiTimerTest(int argc, char *argv[]) {
          * mask a stale stop entry: the unregister itself must detect
          * the id is gone */
         if (!multiTimerUnregister(t, a)) {
-            ERRR("Unregister of fired id should return true");
+            ERR("Unregister of fired id should return true");
         }
         if (multiTimerCount(t) != 1) {
             ERR("Fired-id unregister skewed count, got %zu",
@@ -916,8 +916,8 @@ int multiTimerTest(int argc, char *argv[]) {
         dkDiagnostic d;
         if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
             d.code != DK_DIAG_TIMER_REENTERED) {
-            ERRR("a re-entered ProcessTimerEvents must report "
-                 "TIMER_REENTERED once");
+            ERR("a re-entered ProcessTimerEvents must report "
+                "TIMER_REENTERED once");
         }
         if (later.callCount != 1) {
             ERR("Second timer fired %d times, expected 1", later.callCount);

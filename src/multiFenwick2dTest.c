@@ -212,13 +212,13 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             multiFenwick2dUpdate(&t, (size_t)1 << 32, 0, &one) ||
             multiFenwick2dUpdate(&t, (size_t)1 << 20, (size_t)1 << 20, &one) ||
             t != NULL) {
-            ERRR("a refused write was accepted or left a tree");
+            ERR("a refused write was accepted or left a tree");
         }
 
         /* (0, 0) = UINT64_MAX fills every cell covering it; adding 1 at
          * (1, 1) would push cell (2, 2), which covers both, past it */
         if (!multiFenwick2dUpdate(&t, 0, 0, &big)) {
-            ERRR("UINT64_MAX refused");
+            ERR("UINT64_MAX refused");
         }
 
         const size_t bytesBefore = multiFenwick2dBytes(t);
@@ -227,7 +227,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             multiFenwick2dBytes(t) != bytesBefore ||
             multiFenwick2dRows(t) != 1 || multiFenwick2dCols(t) != 1 ||
             !multiFenwick2dGet(t, 0, 0, &r) || r.data.u64 != UINT64_MAX) {
-            ERRR("an out-of-range cell was accepted or changed the tree");
+            ERR("an out-of-range cell was accepted or changed the tree");
         }
     }
 
@@ -252,7 +252,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             !multiFenwick2dQuery(t, 7, 3, &r) || r.type != DATABOX_DOUBLE_64 ||
             r.data.d64 != 6.5 || !multiFenwick2dGet(t, 5, 2, &r) ||
             !mf2tIsInt_(&r, 3)) {
-            ERRR("adding a double lost values or did not add the kinds");
+            ERR("adding a double lost values or did not add the kinds");
         }
 
         /* A cell above INT64_MAX also needs kinds; Clear drops them */
@@ -262,7 +262,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             !multiFenwick2dUpdate(&t, 2, 0, &big) ||
             multiFenwick2dBytes(t) != base + 9 * 32 ||
             !multiFenwick2dGet(t, 2, 0, &r) || !mf2tIsInt_(&r, UINT64_MAX)) {
-            ERRR("Clear or an unsigned cell mishandled the kinds array");
+            ERR("Clear or an unsigned cell mishandled the kinds array");
         }
     }
 
@@ -281,7 +281,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             !multiFenwick2dGet(one, 0, 0, &r) || !mf2tIsInt_(&r, m) ||
             !multiFenwick2dSet(&one, 0, 0, &big) ||
             !multiFenwick2dGet(one, 0, 0, &r) || !mf2tIsInt_(&r, u)) {
-            ERRR("exact Set across the 64-bit range failed");
+            ERR("exact Set across the 64-bit range failed");
         }
 
         /* e[0][0] = U, e[3][3] = M, e[3][2] = M, e[2][2] = U, written in an
@@ -293,7 +293,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             !multiFenwick2dUpdate(&t, 3, 3, &min) ||
             !multiFenwick2dUpdate(&t, 3, 2, &min) ||
             !multiFenwick2dUpdate(&t, 2, 2, &big)) {
-            ERRR("in-range cells refused");
+            ERR("in-range cells refused");
         }
 
         if (!multiFenwick2dQuery(t, 3, 3, &r) || !mf2tIsInt_(&r, u - 1) ||
@@ -301,7 +301,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
             !multiFenwick2dRangeQuery(t, 2, 2, 3, 3, &r) ||
             !mf2tIsInt_(&r, u + 2 * m) || !multiFenwick2dGet(t, 3, 2, &r) ||
             !mf2tIsInt_(&r, m)) {
-            ERRR("exact sums past 64 bits mishandled");
+            ERR("exact sums past 64 bits mishandled");
         }
 
         /* Setting e[0][0] to M needs cell (4, 4) at U - 1 - U + M, below
@@ -309,7 +309,7 @@ int multiFenwick2dTest(int argc, char *argv[]) {
         if (multiFenwick2dSet(&t, 0, 0, &min) ||
             !multiFenwick2dGet(t, 0, 0, &r) || !mf2tIsInt_(&r, u) ||
             !multiFenwick2dQuery(t, 3, 3, &r) || !mf2tIsInt_(&r, u - 1)) {
-            ERRR("an out-of-range Set was accepted or changed the tree");
+            ERR("an out-of-range Set was accepted or changed the tree");
         }
     }
 

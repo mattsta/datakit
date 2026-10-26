@@ -371,17 +371,17 @@ int multidictPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to create persistCtx");
+            ERR("Failed to create persistCtx");
         }
 
         multidictP *d = multidictNewP(ctx);
         if (!d) {
             persistCtxFree(ctx);
-            ERRR("Failed to create multidictP");
+            ERR("Failed to create multidictP");
         }
 
         if (multidictCountP(d) != 0) {
-            ERRR("New dict should be empty");
+            ERR("New dict should be empty");
         }
 
         multidictCloseP(d);
@@ -406,7 +406,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultidictMatchesTracker(d, &tracker)) {
-            ERRR("Multidict/tracker mismatch after adds");
+            ERR("Multidict/tracker mismatch after adds");
         }
 
         multidictCloseP(d);
@@ -438,7 +438,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultidictMatchesTracker(d, &tracker)) {
-            ERRR("Multidict/tracker mismatch after updates");
+            ERR("Multidict/tracker mismatch after updates");
         }
 
         multidictCloseP(d);
@@ -473,11 +473,11 @@ int multidictPTest(int argc, char *argv[]) {
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
-                ERRR("Failed to recover multidictP");
+                ERR("Failed to recover multidictP");
             }
 
             if (!verifyMultidictMatchesTracker(d, &tracker)) {
-                ERRR("Multidict/tracker mismatch after recovery");
+                ERR("Multidict/tracker mismatch after recovery");
             }
 
             multidictCloseP(d);
@@ -510,7 +510,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultidictMatchesTracker(d, &tracker)) {
-            ERRR("Multidict/tracker mismatch after deletes");
+            ERR("Multidict/tracker mismatch after deletes");
         }
 
         /* Verify deleted keys don't exist */
@@ -560,11 +560,11 @@ int multidictPTest(int argc, char *argv[]) {
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
-                ERRR("Failed to recover multidictP after delete");
+                ERR("Failed to recover multidictP after delete");
             }
 
             if (!verifyMultidictMatchesTracker(d, &tracker)) {
-                ERRR("Multidict/tracker mismatch after delete recovery");
+                ERR("Multidict/tracker mismatch after delete recovery");
             }
 
             multidictCloseP(d);
@@ -589,14 +589,14 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         if (multidictCountP(d) != 10) {
-            ERRR("Count should be 10 before empty");
+            ERR("Count should be 10 before empty");
         }
 
         /* Empty the dict */
         PTEST_LOGGED(multidictEmptyP(d));
 
         if (multidictCountP(d) != 0) {
-            ERRR("Count should be 0 after empty");
+            ERR("Count should be 0 after empty");
         }
 
         /* Add new entries */
@@ -608,7 +608,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultidictMatchesTracker(d, &tracker)) {
-            ERRR("Multidict/tracker mismatch after empty and re-add");
+            ERR("Multidict/tracker mismatch after empty and re-add");
         }
 
         multidictCloseP(d);
@@ -651,11 +651,11 @@ int multidictPTest(int argc, char *argv[]) {
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
-                ERRR("Failed to recover multidictP after empty");
+                ERR("Failed to recover multidictP after empty");
             }
 
             if (!verifyMultidictMatchesTracker(d, &tracker)) {
-                ERRR("Multidict/tracker mismatch after empty recovery");
+                ERR("Multidict/tracker mismatch after empty recovery");
             }
 
             multidictCloseP(d);
@@ -697,7 +697,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultidictMatchesTracker(d, &tracker)) {
-            ERRR("Multidict/tracker mismatch after mixed ops");
+            ERR("Multidict/tracker mismatch after mixed ops");
         }
 
         multidictCloseP(d);
@@ -772,11 +772,11 @@ int multidictPTest(int argc, char *argv[]) {
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
-                ERRR("Large dataset recovery failed");
+                ERR("Large dataset recovery failed");
             }
 
             if (!verifyMultidictMatchesTracker(d, &tracker)) {
-                ERRR("Large dataset verification failed");
+                ERR("Large dataset verification failed");
             }
 
             multidictCloseP(d);
@@ -803,11 +803,11 @@ int multidictPTest(int argc, char *argv[]) {
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
-                ERRR("Empty dict recovery failed");
+                ERR("Empty dict recovery failed");
             }
 
             if (multidictCountP(d) != 0) {
-                ERRR("Recovered empty dict should have 0 entries");
+                ERR("Recovered empty dict should have 0 entries");
             }
 
             multidictCloseP(d);
@@ -837,20 +837,20 @@ int multidictPTest(int argc, char *argv[]) {
             multidictP *d = multidictOpenP(ctx);
 
             if (!d) {
-                ERRR("Single entry recovery failed");
+                ERR("Single entry recovery failed");
             }
 
             if (multidictCountP(d) != 1) {
-                ERRR("Should have exactly 1 entry");
+                ERR("Should have exactly 1 entry");
             }
 
             databox val;
             if (!multidictFindP(d, &expectedKey, &val)) {
-                ERRR("Expected key not found");
+                ERR("Expected key not found");
             }
 
             if (!ptestBoxesEqual(&val, &expectedVal)) {
-                ERRR("Value mismatch after recovery");
+                ERR("Value mismatch after recovery");
             }
 
             multidictCloseP(d);
@@ -911,7 +911,7 @@ int multidictPTest(int argc, char *argv[]) {
             custom = multidictTypeCaseKey;
             if (multidictNewPWithType(ctx, &custom) ||
                 multidictNewPWithType(ctx, NULL)) {
-                ERRR("multidictNewPWithType accepted a custom type");
+                ERR("multidictNewPWithType accepted a custom type");
             }
             persistCtxFree(ctx);
             ptestCleanupFiles(basePath);
@@ -926,7 +926,7 @@ int multidictPTest(int argc, char *argv[]) {
                 mdpAdd(d, &beta, &two) != MULTIDICT_OK_INSERTED ||
                 mdpAdd(d, &ALPHA, &three) != MULTIDICT_OK_REPLACED ||
                 multidictCountP(d) != 2) {
-                ERRR("case multidictP session 1");
+                ERR("case multidictP session 1");
             }
             multidictCloseP(d);
             persistCtxFree(ctx);
@@ -942,13 +942,13 @@ int multidictPTest(int argc, char *argv[]) {
                 multidictCountP(d) != 2 || !multidictFindP(d, &aLpHa, &v) ||
                 !ptestBoxesEqual(&v, &three) || !mdpDelete(d, &betaLow) ||
                 multidictCountP(d) != 1) {
-                ERRR("case multidictP after WAL replay");
+                ERR("case multidictP after WAL replay");
             }
 
             /* Compact, then keep logging on top of the new snapshot */
             if (!multidictCompactP(d) ||
                 mdpAdd(d, &gamma, &one) != MULTIDICT_OK_INSERTED) {
-                ERRR("case multidictP compaction");
+                ERR("case multidictP compaction");
             }
             multidictCloseP(d);
             persistCtxFree(ctx);
@@ -968,7 +968,7 @@ int multidictPTest(int argc, char *argv[]) {
                 !ptestBoxesEqual(&v, &three) ||
                 mdpAdd(d, &aLpHa, &two) != MULTIDICT_OK_REPLACED ||
                 multidictCountP(d) != 2) {
-                ERRR("case multidictP after compaction");
+                ERR("case multidictP after compaction");
             }
 
             bool alphaKept = false;
@@ -982,7 +982,7 @@ int multidictPTest(int argc, char *argv[]) {
             }
             multidictIteratorRelease(&iter);
             if (!alphaKept) {
-                ERRR("case multidictP lost the stored spelling");
+                ERR("case multidictP lost the stored spelling");
             }
             multidictCloseP(d);
             persistCtxFree(ctx);
@@ -1015,7 +1015,7 @@ int multidictPTest(int argc, char *argv[]) {
                 multidictGetType(multidictGetP(d)) != &multidictTypeExactKey ||
                 multidictCountP(d) != 2 || !multidictFindP(d, &upper, &v) ||
                 !ptestBoxesEqual(&v, &two)) {
-                ERRR("exact multidictP did not reopen exact");
+                ERR("exact multidictP did not reopen exact");
             }
             multidictCloseP(d);
             persistCtxFree(ctx);
@@ -1042,11 +1042,11 @@ int multidictPTest(int argc, char *argv[]) {
         if (mdpReplace(d, &absent, &one) != MULTIDICT_ERR ||
             multidictReplace(plain, &absent, &one) != MULTIDICT_ERR ||
             multidictCountP(d) != 0) {
-            ERRR("replace of an absent key did not fail");
+            ERR("replace of an absent key did not fail");
         }
         multidictGetStatsP(d, &after);
         if (after.totalOps != before.totalOps) {
-            ERRR("failed replace was logged");
+            ERR("failed replace was logged");
         }
 
         /* The same script through both, with mixed-case keys */
@@ -1092,7 +1092,7 @@ int multidictPTest(int argc, char *argv[]) {
         ctx = persistCtxOpen(basePath, NULL);
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != multidictCount(plain)) {
-            ERRR("replayed multidictP count differs from multidict");
+            ERR("replayed multidictP count differs from multidict");
         } else {
             multidictIterator iter;
             multidictIteratorInit(plain, &iter);
@@ -1101,7 +1101,7 @@ int multidictPTest(int argc, char *argv[]) {
                 databox pv = {};
                 if (!multidictFindP(d, &e.key, &pv) ||
                     !ptestBoxesEqual(&pv, &e.val)) {
-                    ERRR("replayed multidictP entry differs from multidict");
+                    ERR("replayed multidictP entry differs from multidict");
                     break;
                 }
             }
@@ -1123,11 +1123,11 @@ int multidictPTest(int argc, char *argv[]) {
             !dkTestTmpDirPath(&tmp, "readOnly/dict", path, sizeof(path)) ||
             !dkTestTmpDirPath(&tmp, "readOnly/probe", probe, sizeof(probe)) ||
             mkdir(dir, 0700) != 0) {
-            ERRR("could not create the test directory");
+            ERR("could not create the test directory");
         } else {
             persistCtx *ctx = persistCtxNew(path, NULL);
             if (!ctx || !persistCtxInitForType(ctx, &persistOpsMultidict)) {
-                ERRR("could not open the test stores");
+                ERR("could not open the test stores");
             }
 
             chmod(dir, 0500);
@@ -1146,7 +1146,7 @@ int multidictPTest(int argc, char *argv[]) {
                     const int64_t live = multimapTestAllocCountEnd();
                     if (d) {
                         multidictCloseP(d);
-                        ERRR("multidictNewP succeeded without a snapshot");
+                        ERR("multidictNewP succeeded without a snapshot");
                     } else if (live != 0) {
                         ERR("failed multidictNewP left %" PRId64
                             " blocks allocated",
@@ -1173,7 +1173,7 @@ int multidictPTest(int argc, char *argv[]) {
         multidictResult added = MULTIDICT_ERR;
         if (!multidictAddP(d, &key, &one, &added) ||
             added != MULTIDICT_OK_INSERTED) {
-            ERRR("add was not an insert");
+            ERR("add was not an insert");
         }
         const int before = multidictGetLRULevel(multidictGetP(d), &key);
         if (!multidictReplaceP(d, &key, &two) ||
@@ -1188,11 +1188,11 @@ int multidictPTest(int argc, char *argv[]) {
         const uint64_t ops = stats.totalOps;
         if (multidictReplaceP(d, &absent, &one) != PERSIST_LOG_UNCHANGED ||
             multidictDeleteP(d, &absent) != PERSIST_LOG_UNCHANGED) {
-            ERRR("an absent key's replace or delete was not UNCHANGED");
+            ERR("an absent key's replace or delete was not UNCHANGED");
         }
         persistCtxGetStats(ctx, &stats);
         if (stats.totalOps != ops) {
-            ERRR("no-op mutations were logged");
+            ERR("no-op mutations were logged");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
@@ -1224,10 +1224,10 @@ int multidictPTest(int argc, char *argv[]) {
         if (!multidictFindP(d, &key, &got) ||
             databoxCompare(&got, &kept) != 0 || multidictCountP(d) != 2 ||
             multidictExistsP(d, &fresh) || added != MULTIDICT_ERR) {
-            ERRR("a refused change changed the dict");
+            ERR("a refused change changed the dict");
         }
         if (multidictGetLRULevel(multidictGetP(d), &key) < level) {
-            ERRR("a refused change lost the key's LRU level");
+            ERR("a refused change lost the key's LRU level");
         }
 
         /* Missing arguments: refused or empty answers */
@@ -1240,14 +1240,14 @@ int multidictPTest(int argc, char *argv[]) {
             multidictBytesP(NULL) || multidictFindP(NULL, &key, &got) ||
             multidictExistsP(NULL, &key) || multidictSyncP(NULL) ||
             multidictCompactP(NULL)) {
-            ERRR("a call without its wrapper or key was not refused");
+            ERR("a call without its wrapper or key was not refused");
         }
         multidictGetStatsP(NULL, NULL);
         multidictCloseP(NULL);
 
         /* Logging works again, and a reopen holds only what was logged */
         if (multidictReplaceP(d, &key, &newer) == PERSIST_LOG_REFUSED) {
-            ERRR("the context did not log again after the refusal");
+            ERR("the context did not log again after the refusal");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
@@ -1255,7 +1255,7 @@ int multidictPTest(int argc, char *argv[]) {
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != 2 || !multidictFindP(d, &key, &got) ||
             databoxCompare(&got, &newer) != 0) {
-            ERRR("a reopen did not hold exactly the logged changes");
+            ERR("a reopen did not hold exactly the logged changes");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
@@ -1274,7 +1274,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
         if (!multidictSyncP(d) || multidictCountP(d) != 50 ||
             multidictBytesP(d) <= emptyBytes) {
-            ERRR("CountP/BytesP/SyncP disagree with 50 adds");
+            ERR("CountP/BytesP/SyncP disagree with 50 adds");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
@@ -1297,7 +1297,7 @@ int multidictPTest(int argc, char *argv[]) {
         multidictCloseP(d);
         persistCtxFree(ctx);
         if (!ptestDamageLastWalEntry(basePath)) {
-            ERRR("could not damage the WAL");
+            ERR("could not damage the WAL");
         }
 
         const databox k1 = databoxNewSigned(1);
@@ -1312,11 +1312,11 @@ int multidictPTest(int argc, char *argv[]) {
         }
         databox got = {};
         if (!ptestExpectHealed(ctx, basePath)) {
-            ERRR("the damaged entry was not healed into the quarantine");
+            ERR("the damaged entry was not healed into the quarantine");
         }
         if (d && (multidictAddP(d, &k4, &v9, NULL) == PERSIST_LOG_REFUSED ||
                   !multidictFindP(d, &k1, &got) || got.data.i != 100)) {
-            ERRR("a change after the healed entry was refused");
+            ERR("a change after the healed entry was refused");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);
@@ -1325,7 +1325,7 @@ int multidictPTest(int argc, char *argv[]) {
         d = multidictOpenP(ctx);
         if (!d || multidictCountP(d) != 3 || !multidictExistsP(d, &k1) ||
             !multidictFindP(d, &k4, &got) || got.data.i != 900) {
-            ERRR("reopen does not hold 1, 2, 4");
+            ERR("reopen does not hold 1, 2, 4");
         }
         multidictCloseP(d);
         persistCtxFree(ctx);

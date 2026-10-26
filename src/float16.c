@@ -161,7 +161,7 @@ size_t float16EncodeBatch(const float *src, uint16_t *dst, size_t count) {
 
     return count;
 
-#elif defined(__aarch64__)
+#elifdef __aarch64__
     /* ARM64 with FP16: process 4 floats at a time using NEON */
     size_t i = 0;
 
@@ -221,7 +221,7 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
 
     return count;
 
-#elif defined(__aarch64__)
+#elifdef __aarch64__
     /* ARM64 with FP16: process 4/8 halfs at a time using NEON */
     size_t i = 0;
 

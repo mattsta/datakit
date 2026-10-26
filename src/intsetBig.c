@@ -1041,7 +1041,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     TEST("add to bucket 0") {
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_UNSIGNED(25))) {
-            ERRR("Failed to add to bucket 0!");
+            ERR("Failed to add to bucket 0!");
         }
     }
 
@@ -1049,7 +1049,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     TEST("add to bucket -1") {
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_SIGNED(-25))) {
-            ERRR("Failed to add to bucket -1!");
+            ERR("Failed to add to bucket -1!");
         }
     }
 
@@ -1057,7 +1057,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     TEST("add to bucket 1") {
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_UNSIGNED((1ULL << 35)))) {
-            ERRR("Failed to add to bucket 1!");
+            ERR("Failed to add to bucket 1!");
         }
     }
 
@@ -1065,7 +1065,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     TEST("add to bucket -2") {
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_SIGNED(-(1LL << 35)))) {
-            ERRR("Failed to add to bucket -2!");
+            ERR("Failed to add to bucket -2!");
         }
     }
 
@@ -1089,7 +1089,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, final)) {
-            ERRR("Failed to add smallest?");
+            ERR("Failed to add smallest?");
         }
 
         intsetBigIterator isbIter;
@@ -1126,7 +1126,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, final)) {
-            ERRR("Failed to add biggest?");
+            ERR("Failed to add biggest?");
         }
 
         intsetBigIterator isbIter;
@@ -1292,11 +1292,11 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         if (intsetBigCountBuckets(isb)) {
-            ERRR("Has buckets?");
+            ERR("Has buckets?");
         }
 
         if (intsetBigCountElements(isb)) {
-            ERRR("Has elements?");
+            ERR("Has elements?");
         }
     }
 
@@ -1305,15 +1305,15 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig val = DATABOX_BIG_UNSIGNED(12345);
 
         if (!intsetBigAdd(isb, &val)) {
-            ERRR("First add should succeed!");
+            ERR("First add should succeed!");
         }
 
         if (intsetBigAdd(isb, &val)) {
-            ERRR("Duplicate add should return false!");
+            ERR("Duplicate add should return false!");
         }
 
         if (intsetBigCountElements(isb) != 1) {
-            ERRR("Count should be 1 after duplicate add!");
+            ERR("Count should be 1 after duplicate add!");
         }
     }
 
@@ -1322,18 +1322,18 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig val = DATABOX_BIG_UNSIGNED(12345);
 
         if (intsetBigRemove(isb, &val)) {
-            ERRR("Remove from empty set should return false!");
+            ERR("Remove from empty set should return false!");
         }
 
         /* Add one value, try to remove different value */
         intsetBigAdd(isb, &val);
         databoxBig other = DATABOX_BIG_UNSIGNED(99999);
         if (intsetBigRemove(isb, &other)) {
-            ERRR("Remove non-existent should return false!");
+            ERR("Remove non-existent should return false!");
         }
 
         if (intsetBigCountElements(isb) != 1) {
-            ERRR("Count should still be 1!");
+            ERR("Count should still be 1!");
         }
     }
 
@@ -1342,7 +1342,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig val = DATABOX_BIG_UNSIGNED(12345);
 
         if (intsetBigExists(isb, &val)) {
-            ERRR("Exists on empty set should return false!");
+            ERR("Exists on empty set should return false!");
         }
     }
 
@@ -1353,7 +1353,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         intsetBigIteratorInit(isb, &iter);
         if (intsetBigIteratorNextBox(&iter, &val)) {
-            ERRR("Iterator on empty set should yield nothing!");
+            ERR("Iterator on empty set should yield nothing!");
         }
     }
 
@@ -1372,7 +1372,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Verify copy has same elements */
         if (intsetBigCountElements(copy) != intsetBigCountElements(isb)) {
-            ERRR("Copy should have same count!");
+            ERR("Copy should have same count!");
         }
 
         for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
@@ -1386,11 +1386,11 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigAdd(isb, &newVal);
 
         if (intsetBigExists(copy, &newVal)) {
-            ERRR("Copy should be independent of original!");
+            ERR("Copy should be independent of original!");
         }
 
         if (intsetBigCountElements(copy) != 5) {
-            ERRR("Copy count should still be 5!");
+            ERR("Copy count should still be 5!");
         }
     }
 
@@ -1400,12 +1400,12 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Empty sets are equal */
         if (!intsetBigEqual(a, b)) {
-            ERRR("Empty sets should be equal!");
+            ERR("Empty sets should be equal!");
         }
 
         /* Same set is equal to itself */
         if (!intsetBigEqual(a, a)) {
-            ERRR("Set should equal itself!");
+            ERR("Set should equal itself!");
         }
 
         /* Add same elements to both */
@@ -1419,7 +1419,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         if (!intsetBigEqual(a, b)) {
-            ERRR("Sets with same elements should be equal!");
+            ERR("Sets with same elements should be equal!");
         }
 
         /* Add different element to one */
@@ -1427,7 +1427,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigAdd(a, &extra);
 
         if (intsetBigEqual(a, b)) {
-            ERRR("Sets with different elements should not be equal!");
+            ERR("Sets with different elements should not be equal!");
         }
     }
 
@@ -1437,7 +1437,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Empty set is subset of any set */
         if (!intsetBigSubset(a, b)) {
-            ERRR("Empty set should be subset of empty set!");
+            ERR("Empty set should be subset of empty set!");
         }
 
         /* Add elements to b */
@@ -1451,7 +1451,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Empty set is subset of non-empty */
         if (!intsetBigSubset(a, b)) {
-            ERRR("Empty set should be subset of non-empty set!");
+            ERR("Empty set should be subset of non-empty set!");
         }
 
         /* Add subset of elements to a */
@@ -1459,7 +1459,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigAdd(a, &vals[2]);
 
         if (!intsetBigSubset(a, b)) {
-            ERRR("a should be subset of b!");
+            ERR("a should be subset of b!");
         }
 
         /* Add element not in b to a */
@@ -1467,7 +1467,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigAdd(a, &extra);
 
         if (intsetBigSubset(a, b)) {
-            ERRR("a with extra element should not be subset of b!");
+            ERR("a with extra element should not be subset of b!");
         }
     }
 
@@ -1479,7 +1479,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         /* Intersect empty sets */
         size_t count = intsetBigIntersect(a, b, result);
         if (count != 0 || intsetBigCountElements(result) != 0) {
-            ERRR("Intersect of empty sets should be empty!");
+            ERR("Intersect of empty sets should be empty!");
         }
 
         /* Add elements: a = {1, 2, 3, 4}, b = {2, 4, 6, 8} */
@@ -1510,11 +1510,11 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig one = DATABOX_BIG_UNSIGNED(1);
 
         if (!intsetBigExists(result, &two) || !intsetBigExists(result, &four)) {
-            ERRR("Intersection should contain 2 and 4!");
+            ERR("Intersection should contain 2 and 4!");
         }
 
         if (intsetBigExists(result, &one)) {
-            ERRR("Intersection should not contain 1!");
+            ERR("Intersection should not contain 1!");
         }
     }
 
@@ -1562,18 +1562,18 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         if (intsetBigCountElements(isb) != 100) {
-            ERRR("Should have 100 elements!");
+            ERR("Should have 100 elements!");
         }
 
         /* Get random elements and verify they exist */
         for (int i = 0; i < 50; i++) {
             databoxBig randomVal;
             if (!intsetBigRandom(isb, &randomVal)) {
-                ERRR("Random should succeed on non-empty set!");
+                ERR("Random should succeed on non-empty set!");
             }
 
             if (!intsetBigExists(isb, &randomVal)) {
-                ERRR("Random value should exist in set!");
+                ERR("Random value should exist in set!");
             }
         }
 
@@ -1586,22 +1586,22 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
             }
 
             if (intsetBigExists(isb, &deleted)) {
-                ERRR("Deleted value should not exist anymore!");
+                ERR("Deleted value should not exist anymore!");
             }
         }
 
         if (intsetBigCountElements(isb) != 0) {
-            ERRR("Set should be empty after deleting all elements!");
+            ERR("Set should be empty after deleting all elements!");
         }
 
         /* Empty set: Random and RandomDelete report false, no crash */
         databoxBig none;
         if (intsetBigRandom(isb, &none)) {
-            ERRR("Random on an empty set must return false!");
+            ERR("Random on an empty set must return false!");
         }
 
         if (intsetBigRandomDelete(isb, &none)) {
-            ERRR("RandomDelete on an empty set must return false!");
+            ERR("RandomDelete on an empty set must return false!");
         }
     }
 
@@ -1623,11 +1623,11 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         for (int i = 0; i < 2000; i++) {
             databoxBig randomVal;
             if (!intsetBigRandom(isb, &randomVal)) {
-                ERRR("Random should succeed on multi-bucket set!");
+                ERR("Random should succeed on multi-bucket set!");
             }
 
             if (!intsetBigExists(isb, &randomVal)) {
-                ERRR("Random value should exist in multi-bucket set!");
+                ERR("Random value should exist in multi-bucket set!");
             }
         }
     }
@@ -1637,7 +1637,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         size_t emptyBytes = intsetBigBytes(isb);
 
         if (emptyBytes == 0) {
-            ERRR("Even empty set should have some bytes!");
+            ERR("Even empty set should have some bytes!");
         }
 
         /* Add elements and verify bytes increase */
@@ -1648,7 +1648,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         size_t fullBytes = intsetBigBytes(isb);
         if (fullBytes <= emptyBytes) {
-            ERRR("Bytes should increase with more elements!");
+            ERR("Bytes should increase with more elements!");
         }
     }
 
@@ -1695,7 +1695,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         if (intsetBigCountElements(isb) != 0) {
-            ERRR("Should be empty after removing all!");
+            ERR("Should be empty after removing all!");
         }
     }
 
@@ -1710,16 +1710,16 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Both representations of zero should exist */
         if (!intsetBigExists(isb, &uzero)) {
-            ERRR("Unsigned zero should exist!");
+            ERR("Unsigned zero should exist!");
         }
 
         /* Signed zero also goes to bucket 0 offset 0 */
         if (!intsetBigExists(isb, &szero)) {
-            ERRR("Signed zero should also be found!");
+            ERR("Signed zero should also be found!");
         }
 
         if (intsetBigCountElements(isb) != 1) {
-            ERRR("Should only have 1 element (zero)!");
+            ERR("Should only have 1 element (zero)!");
         }
     }
 
@@ -1757,7 +1757,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         while (intsetBigIteratorNextBox(&iter, &val)) {
             if (!first) {
                 if (databoxCompare((databox *)&prev, (databox *)&val) >= 0) {
-                    ERRR("Iterator should yield sorted ascending order!");
+                    ERR("Iterator should yield sorted ascending order!");
                 }
             }
             prev = val;
@@ -1827,10 +1827,10 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
                 if (count > 0) {
                     databoxBig randomVal;
                     if (!intsetBigRandom(isb, &randomVal)) {
-                        ERRR("Random failed on non-empty set!");
+                        ERR("Random failed on non-empty set!");
                     }
                     if (!intsetBigExists(isb, &randomVal)) {
-                        ERRR("Random value doesn't exist!");
+                        ERR("Random value doesn't exist!");
                     }
                 }
                 break;
@@ -1890,7 +1890,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         while (intsetBigIteratorNextBox(&iter, &val)) {
             if (!first) {
                 if (databoxCompare((databox *)&prev, (databox *)&val) >= 0) {
-                    ERRR("Iteration order should be ascending!");
+                    ERR("Iteration order should be ascending!");
                 }
             }
             prev = val;
@@ -2022,19 +2022,19 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Verify all elements present */
         if (!intsetBigExists(a, &a0)) {
-            ERRR("Missing a0!");
+            ERR("Missing a0!");
         }
         if (!intsetBigExists(a, &a1)) {
-            ERRR("Missing a1!");
+            ERR("Missing a1!");
         }
         if (!intsetBigExists(a, &b1)) {
-            ERRR("Missing b1!");
+            ERR("Missing b1!");
         }
         if (!intsetBigExists(a, &b2)) {
-            ERRR("Missing b2 (from B's bucket 2)!");
+            ERR("Missing b2 (from B's bucket 2)!");
         }
         if (!intsetBigExists(a, &b3)) {
-            ERRR("Missing b3 (from B's bucket 3)!");
+            ERR("Missing b3 (from B's bucket 3)!");
         }
 
         /* Verify bucket count */
@@ -2076,11 +2076,11 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         /* Verify all elements */
         if (!intsetBigExists(a, &a0) || !intsetBigExists(a, &a2) ||
             !intsetBigExists(a, &a4)) {
-            ERRR("Missing A elements!");
+            ERR("Missing A elements!");
         }
         if (!intsetBigExists(a, &b1) || !intsetBigExists(a, &b3) ||
             !intsetBigExists(a, &b5)) {
-            ERRR("Missing B elements!");
+            ERR("Missing B elements!");
         }
     }
 
@@ -2188,7 +2188,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig v2 = DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100);
         if (!intsetBigExists(a, &v0) || !intsetBigExists(a, &v1) ||
             !intsetBigExists(a, &v2)) {
-            ERRR("Missing merged elements!");
+            ERR("Missing merged elements!");
         }
     }
 
@@ -2218,7 +2218,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         if (!intsetBigExists(a, &neg3) || !intsetBigExists(a, &neg2) ||
             !intsetBigExists(a, &neg1) || !intsetBigExists(a, &pos0)) {
-            ERRR("Missing elements after negative bucket merge!");
+            ERR("Missing elements after negative bucket merge!");
         }
     }
 
@@ -2275,7 +2275,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         while (intsetBigIteratorNextBox(&iter, &val)) {
             if (!first) {
                 if (databoxCompare((databox *)&prev, (databox *)&val) >= 0) {
-                    ERRR("Iteration order not sorted after merge!");
+                    ERR("Iteration order not sorted after merge!");
                 }
             }
             prev = val;
@@ -2327,7 +2327,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig v1 = DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100);
         databoxBig v2 = DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100);
         if (!intsetBigExists(result, &v1) || !intsetBigExists(result, &v2)) {
-            ERRR("Intersection missing expected values!");
+            ERR("Intersection missing expected values!");
         }
     }
 
@@ -2376,7 +2376,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         /* Exact set equality both directions */
         if (!intsetBigSubset(inplace, fresh) ||
             !intsetBigSubset(fresh, inplace)) {
-            ERRR("in-place intersection differs from fresh intersection!");
+            ERR("in-place intersection differs from fresh intersection!");
         }
 
         /* The known intersection: exactly the two matching values */
@@ -2457,7 +2457,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         databoxBig expected = DATABOX_BIG_SIGNED(-100);
         if (!intsetBigExists(result, &expected)) {
-            ERRR("Missing expected intersection value!");
+            ERR("Missing expected intersection value!");
         }
     }
 
@@ -2479,13 +2479,13 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         if (!intsetBigEqual(a, b)) {
-            ERRR("Sets with same multi-bucket values should be equal!");
+            ERR("Sets with same multi-bucket values should be equal!");
         }
 
         /* Add one more to a */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100));
         if (intsetBigEqual(a, b)) {
-            ERRR("Sets with different bucket counts should not be equal!");
+            ERR("Sets with different bucket counts should not be equal!");
         }
     }
 
@@ -2505,13 +2505,13 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100));
 
         if (!intsetBigSubset(a, b)) {
-            ERRR("A should be subset of B!");
+            ERR("A should be subset of B!");
         }
 
         /* Add element not in B */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(4 * BUCKET_SIZE + 999));
         if (intsetBigSubset(a, b)) {
-            ERRR("A with extra bucket should not be subset of B!");
+            ERR("A with extra bucket should not be subset of B!");
         }
     }
 
@@ -2835,14 +2835,14 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigIteratorInit(a, &iter);
         while (intsetBigIteratorNextBox(&iter, &val)) {
             if (!intsetBigExists(aCopy, &val)) {
-                ERRR("128-bit merge missing element from A!");
+                ERR("128-bit merge missing element from A!");
             }
         }
 
         intsetBigIteratorInit(b, &iter);
         while (intsetBigIteratorNextBox(&iter, &val)) {
             if (!intsetBigExists(aCopy, &val)) {
-                ERRR("128-bit merge missing element from B!");
+                ERR("128-bit merge missing element from B!");
             }
         }
     }
@@ -2865,7 +2865,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         /* After merge, we should find the exact value from B */
         databoxBig check = DATABOX_BIG_UNSIGNED(bVal);
         if (!intsetBigExists(a, &check)) {
-            ERRR("Value from B's bucket not found - wrong bucket key used!");
+            ERR("Value from B's bucket not found - wrong bucket key used!");
         }
 
         if (intsetBigCountElements(a) != 2) {
@@ -2899,7 +2899,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         if (!intsetBigExists(a, &b10) || !intsetBigExists(a, &b11) ||
             !intsetBigExists(a, &b12)) {
-            ERRR("Missing B's high bucket elements (remainder loop bug)!");
+            ERR("Missing B's high bucket elements (remainder loop bug)!");
         }
     }
 
@@ -2936,7 +2936,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
             intsetBigNewFromMembers(walked);
         if (!back || !intsetBigEqual(isb, back) ||
             intsetBigCountElements(back) != intsetBigCountElements(isb)) {
-            ERRR("A walked set did not rebuild equal");
+            ERR("A walked set did not rebuild equal");
         }
 
         /* Disorder: the walk backwards */
@@ -2954,7 +2954,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBig *bad1 = intsetBigNewFromMembers(reversed);
         intsetBig *bad2 = intsetBigNewFromMembers(wide);
         if (bad1 || bad2) {
-            ERRR("Disordered or out-of-range members were accepted");
+            ERR("Disordered or out-of-range members were accepted");
         }
         intsetBigFree(bad1);
         intsetBigFree(bad2);

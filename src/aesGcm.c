@@ -542,13 +542,13 @@ int aesGcmTest(int argc, char *argv[]) {
         uint8_t tag[16];
         aesGcmKey k;
         if (!aesGcmInit(&k, key, 16)) {
-            ERRR("init");
+            ERR("init");
         }
         aesGcmSeal(&k, nonce, NULL, 0, NULL, 0, NULL, tag);
         uint8_t exp_tag[16];
         hexDec("58e2fccefa7e3061367f1d57a4e7455a", exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
-            ERRR("tag mismatch");
+            ERR("tag mismatch");
         }
     }
 
@@ -565,10 +565,10 @@ int aesGcmTest(int argc, char *argv[]) {
         hexDec("0388dace60b6a392f328c2b971b2fe78", exp_ct, 16);
         hexDec("ab6e47d42cec13bdf53a67b21257bddf", exp_tag, 16);
         if (memcmp(ct, exp_ct, 16) != 0) {
-            ERRR("CT mismatch");
+            ERR("CT mismatch");
         }
         if (memcmp(tag, exp_tag, 16) != 0) {
-            ERRR("tag mismatch");
+            ERR("tag mismatch");
         }
     }
 
@@ -591,18 +591,18 @@ int aesGcmTest(int argc, char *argv[]) {
         aesGcmInit(&k, key, 16);
         aesGcmSeal(&k, nonce, NULL, 0, pt, 64, ct, tag);
         if (memcmp(ct, exp_ct, 64) != 0) {
-            ERRR("CT mismatch");
+            ERR("CT mismatch");
         }
         if (memcmp(tag, exp_tag, 16) != 0) {
-            ERRR("tag mismatch");
+            ERR("tag mismatch");
         }
         /* Round-trip Open. */
         uint8_t recovered[64];
         if (!aesGcmOpen(&k, nonce, NULL, 0, ct, 64, tag, recovered)) {
-            ERRR("Open failed");
+            ERR("Open failed");
         }
         if (memcmp(recovered, pt, 64) != 0) {
-            ERRR("Open plaintext mismatch");
+            ERR("Open plaintext mismatch");
         }
     }
 
@@ -626,17 +626,17 @@ int aesGcmTest(int argc, char *argv[]) {
         aesGcmInit(&k, key, 16);
         aesGcmSeal(&k, nonce, aad, 20, pt, 60, ct, tag);
         if (memcmp(ct, exp_ct, 60) != 0) {
-            ERRR("CT mismatch");
+            ERR("CT mismatch");
         }
         if (memcmp(tag, exp_tag, 16) != 0) {
-            ERRR("tag mismatch");
+            ERR("tag mismatch");
         }
         uint8_t rec[60];
         if (!aesGcmOpen(&k, nonce, aad, 20, ct, 60, tag, rec)) {
-            ERRR("Open");
+            ERR("Open");
         }
         if (memcmp(rec, pt, 60) != 0) {
-            ERRR("Open PT mismatch");
+            ERR("Open PT mismatch");
         }
     }
 
@@ -647,13 +647,13 @@ int aesGcmTest(int argc, char *argv[]) {
         uint8_t tag[16];
         aesGcmKey k;
         if (!aesGcmInit(&k, key, 32)) {
-            ERRR("init");
+            ERR("init");
         }
         aesGcmSeal(&k, nonce, NULL, 0, NULL, 0, NULL, tag);
         uint8_t exp_tag[16];
         hexDec("530f8afbc74536b9a963b4f1c4cb738b", exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
-            ERRR("tag mismatch");
+            ERR("tag mismatch");
         }
     }
 
@@ -806,10 +806,10 @@ int aesGcmTest(int argc, char *argv[]) {
         aesGcmKey k;
         const uint8_t key[24] = {};
         if (aesGcmInit(&k, key, 24)) {
-            ERRR("24-byte key (AES-192) must refuse");
+            ERR("24-byte key (AES-192) must refuse");
         }
         if (aesGcmInit(&k, key, 0)) {
-            ERRR("0-byte key must refuse");
+            ERR("0-byte key must refuse");
         }
     }
 
@@ -818,7 +818,7 @@ int aesGcmTest(int argc, char *argv[]) {
         aesGcmKey k;
         const uint8_t key[16] = {7};
         if (!aesGcmInit(&k, key, sizeof(key))) {
-            ERRR("a 16-byte key must initialise");
+            ERR("a 16-byte key must initialise");
         }
         const uint8_t nonce[12] = {};
         uint8_t tag[16] = {};
@@ -828,7 +828,7 @@ int aesGcmTest(int argc, char *argv[]) {
             aesGcmSeal(&k, nonce, NULL, 4, buf, 16, buf, tag) ||
             aesGcmOpen(&k, nonce, NULL, 0, buf, 16, tag, NULL) ||
             aesGcmOpen(NULL, nonce, NULL, 0, buf, 16, tag, buf)) {
-            ERRR("a NULL buffer for a nonzero length must refuse");
+            ERR("a NULL buffer for a nonzero length must refuse");
         }
         dkDiagnostic d;
         if (dkDiagCount() != diagBefore + 4 || !dkDiagLast(&d) ||
@@ -839,10 +839,10 @@ int aesGcmTest(int argc, char *argv[]) {
         /* A tag that does not verify is data, not misuse */
         const uint64_t diagData = dkDiagCount();
         if (aesGcmOpen(&k, nonce, NULL, 0, buf, 16, tag, buf)) {
-            ERRR("an all-zero tag must not verify");
+            ERR("an all-zero tag must not verify");
         }
         if (dkDiagCount() != diagData) {
-            ERRR("a failed tag check must not report");
+            ERR("a failed tag check must not report");
         }
         dkSecureZero(&k, sizeof(k));
     }
@@ -857,7 +857,7 @@ int aesGcmTest(int argc, char *argv[]) {
             aesGcmKey k;
             const uint8_t key[16] = {9};
             if (!aesGcmInit(&k, key, sizeof(key))) {
-                ERRR("a 16-byte key must initialise");
+                ERR("a 16-byte key must initialise");
             }
             const size_t over = (size_t)(AES_GCM_MAX_PAYLOAD + 1u);
             const uint8_t nonce[12] = {};
@@ -913,7 +913,7 @@ int aesGcmTest(int argc, char *argv[]) {
         uint8_t key128[16];
         memset(key128, 0x7B, sizeof(key128));
         if (!aesGcmInit(k, key128, sizeof(key128))) {
-            ERRR("AES-128 Init failed");
+            ERR("AES-128 Init failed");
         }
         /* Post-Init we expect round_keys and h to be populated (non-zero
          * for the canonical 0x7B-pattern key). */
@@ -926,8 +926,8 @@ int aesGcmTest(int argc, char *argv[]) {
             }
         }
         if (!any_nonzero) {
-            ERRR("aesGcmInit produced an all-zero schedule (test premise "
-                 "invalid: cannot distinguish zero-init from wipe)");
+            ERR("aesGcmInit produced an all-zero schedule (test premise "
+                "invalid: cannot distinguish zero-init from wipe)");
         }
         /* Apply the same scrub the flexEnvelope cold path uses. */
         dkSecureZero(k, sizeof(*k));
@@ -945,7 +945,7 @@ int aesGcmTest(int argc, char *argv[]) {
         uint8_t key256[32];
         memset(key256, 0x4F, sizeof(key256));
         if (!aesGcmInit(k, key256, sizeof(key256))) {
-            ERRR("AES-256 Init failed");
+            ERR("AES-256 Init failed");
         }
         dkSecureZero(k, sizeof(*k));
         for (size_t i = 0; i < sizeof(*k); i++) {

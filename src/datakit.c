@@ -8,13 +8,13 @@ static size_t datakitUsableSize_(const void *ptr) {
     return malloc_size(ptr);
 }
 #define DATAKIT_USABLE_SIZE datakitUsableSize_
-#elif defined(__linux__)
+#elifdef __linux__
 #include <malloc.h>
 static size_t datakitUsableSize_(const void *ptr) {
     return malloc_usable_size((void *)ptr);
 }
 #define DATAKIT_USABLE_SIZE datakitUsableSize_
-#elif defined(__FreeBSD__)
+#elifdef __FreeBSD__
 #include <malloc_np.h>
 static size_t datakitUsableSize_(const void *ptr) {
     return malloc_usable_size(ptr);

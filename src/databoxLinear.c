@@ -436,7 +436,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.data.u != UINT64_MAX) {
-            ERRR("UINT64_MAX roundtrip failed");
+            ERR("UINT64_MAX roundtrip failed");
         }
     }
 
@@ -484,10 +484,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.type != DATABOX_SIGNED_64) {
-            ERRR("INT64_MIN should decode as SIGNED");
+            ERR("INT64_MIN should decode as SIGNED");
         }
         if (b.data.i != INT64_MIN) {
-            ERRR("INT64_MIN roundtrip failed");
+            ERR("INT64_MIN roundtrip failed");
         }
     }
 
@@ -504,7 +504,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         databoxLinearDecode(&dl, &b);
         /* INT64_MAX is positive, so it decodes as unsigned */
         if (b.data.u != (uint64_t)INT64_MAX) {
-            ERRR("INT64_MAX roundtrip failed");
+            ERR("INT64_MAX roundtrip failed");
         }
     }
 
@@ -599,10 +599,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.type != DATABOX_DOUBLE_64) {
-            ERRR("High-precision double should remain DOUBLE_64");
+            ERR("High-precision double should remain DOUBLE_64");
         }
         if (b.data.d64 != val) {
-            ERRR("High-precision double roundtrip failed");
+            ERR("High-precision double roundtrip failed");
         }
     }
 
@@ -643,7 +643,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         databox b = {};
         bool ok = databoxLinearDecodeParts(dl.type, &dl.data, &b);
         if (!ok) {
-            ERRR("DecodeParts failed");
+            ERR("DecodeParts failed");
         }
         if (b.data.u != 12345) {
             ERR("DecodeParts value mismatch: got %" PRIuMAX, b.data.u);
@@ -669,13 +669,13 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("DATABOX_LINEAR_TYPE_IS_BYTES") {
         if (!DATABOX_LINEAR_TYPE_IS_BYTES(DATABOX_LINEAR_TYPE_BYTES)) {
-            ERRR("TYPE_IS_BYTES should return true for BYTES type");
+            ERR("TYPE_IS_BYTES should return true for BYTES type");
         }
         if (DATABOX_LINEAR_TYPE_IS_BYTES(0)) {
-            ERRR("TYPE_IS_BYTES should return false for type 0");
+            ERR("TYPE_IS_BYTES should return false for type 0");
         }
         if (DATABOX_LINEAR_TYPE_IS_BYTES(2)) {
-            ERRR("TYPE_IS_BYTES should return false for type 2");
+            ERR("TYPE_IS_BYTES should return false for type 2");
         }
     }
 
@@ -1054,7 +1054,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         databoxLinearDecode(&dl, &b2);
 
         if (b1.type != b2.type || b1.data.u != b2.data.u) {
-            ERRR("Double decode gave different results");
+            ERR("Double decode gave different results");
         }
     }
 

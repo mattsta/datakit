@@ -431,7 +431,7 @@ int multimapPTest(int argc, char *argv[]) {
                 ERR("reopen %d lost the configuration or rows", compacted);
             }
             if (m && !compacted && !multimapCompactP(m)) {
-                ERRR("compaction failed");
+                ERR("compaction failed");
             }
             multimapCloseP(m);
             persistCtxFree(ctx);
@@ -443,17 +443,17 @@ int multimapPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to create persistCtx");
+            ERR("Failed to create persistCtx");
         }
 
         multimapP *m = multimapNewP(ctx, 2);
         if (!m) {
             persistCtxFree(ctx);
-            ERRR("Failed to create multimapP");
+            ERR("Failed to create multimapP");
         }
 
         if (multimapCountP(m) != 0) {
-            ERRR("New multimap should be empty");
+            ERR("New multimap should be empty");
         }
 
         multimapCloseP(m);
@@ -478,7 +478,7 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultimapMatchesTracker(m, &tracker)) {
-            ERRR("Multimap/tracker mismatch after inserts");
+            ERR("Multimap/tracker mismatch after inserts");
         }
 
         multimapCloseP(m);
@@ -512,7 +512,7 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultimapMatchesTracker(m, &tracker)) {
-            ERRR("Multimap/tracker mismatch after updates");
+            ERR("Multimap/tracker mismatch after updates");
         }
 
         multimapCloseP(m);
@@ -548,11 +548,11 @@ int multimapPTest(int argc, char *argv[]) {
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
-                ERRR("Failed to recover multimapP");
+                ERR("Failed to recover multimapP");
             }
 
             if (!verifyMultimapMatchesTracker(m, &tracker)) {
-                ERRR("Multimap/tracker mismatch after recovery");
+                ERR("Multimap/tracker mismatch after recovery");
             }
 
             multimapCloseP(m);
@@ -586,7 +586,7 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultimapMatchesTracker(m, &tracker)) {
-            ERRR("Multimap/tracker mismatch after deletes");
+            ERR("Multimap/tracker mismatch after deletes");
         }
 
         /* Verify deleted keys don't exist */
@@ -637,11 +637,11 @@ int multimapPTest(int argc, char *argv[]) {
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
-                ERRR("Failed to recover multimapP after delete");
+                ERR("Failed to recover multimapP after delete");
             }
 
             if (!verifyMultimapMatchesTracker(m, &tracker)) {
-                ERRR("Multimap/tracker mismatch after delete recovery");
+                ERR("Multimap/tracker mismatch after delete recovery");
             }
 
             multimapCloseP(m);
@@ -667,14 +667,14 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         if (multimapCountP(m) != 10) {
-            ERRR("Count should be 10 before reset");
+            ERR("Count should be 10 before reset");
         }
 
         /* Reset the multimap */
         PTEST_LOGGED(multimapResetP(m));
 
         if (multimapCountP(m) != 0) {
-            ERRR("Count should be 0 after reset");
+            ERR("Count should be 0 after reset");
         }
 
         /* Add new entries */
@@ -687,7 +687,7 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultimapMatchesTracker(m, &tracker)) {
-            ERRR("Multimap/tracker mismatch after reset and re-add");
+            ERR("Multimap/tracker mismatch after reset and re-add");
         }
 
         multimapCloseP(m);
@@ -732,11 +732,11 @@ int multimapPTest(int argc, char *argv[]) {
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
-                ERRR("Failed to recover multimapP after reset");
+                ERR("Failed to recover multimapP after reset");
             }
 
             if (!verifyMultimapMatchesTracker(m, &tracker)) {
-                ERRR("Multimap/tracker mismatch after reset recovery");
+                ERR("Multimap/tracker mismatch after reset recovery");
             }
 
             multimapCloseP(m);
@@ -780,7 +780,7 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         if (!verifyMultimapMatchesTracker(m, &tracker)) {
-            ERRR("Multimap/tracker mismatch after mixed ops");
+            ERR("Multimap/tracker mismatch after mixed ops");
         }
 
         multimapCloseP(m);
@@ -857,11 +857,11 @@ int multimapPTest(int argc, char *argv[]) {
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
-                ERRR("Large dataset recovery failed");
+                ERR("Large dataset recovery failed");
             }
 
             if (!verifyMultimapMatchesTracker(m, &tracker)) {
-                ERRR("Large dataset verification failed");
+                ERR("Large dataset verification failed");
             }
 
             multimapCloseP(m);
@@ -888,11 +888,11 @@ int multimapPTest(int argc, char *argv[]) {
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
-                ERRR("Empty recovery failed");
+                ERR("Empty recovery failed");
             }
 
             if (multimapCountP(m) != 0) {
-                ERRR("Recovered empty multimap should have 0 entries");
+                ERR("Recovered empty multimap should have 0 entries");
             }
 
             multimapCloseP(m);
@@ -923,21 +923,21 @@ int multimapPTest(int argc, char *argv[]) {
             multimapP *m = multimapOpenP(ctx);
 
             if (!m) {
-                ERRR("Single entry recovery failed");
+                ERR("Single entry recovery failed");
             }
 
             if (multimapCountP(m) != 1) {
-                ERRR("Should have exactly 1 entry");
+                ERR("Should have exactly 1 entry");
             }
 
             databox foundVal;
             databox *found[] = {&foundVal};
             if (!multimapLookupP(m, &expectedKey, found)) {
-                ERRR("Expected key not found");
+                ERR("Expected key not found");
             }
 
             if (!ptestBoxesEqual(&foundVal, &expectedVal)) {
-                ERRR("Value mismatch after recovery");
+                ERR("Value mismatch after recovery");
             }
 
             multimapCloseP(m);
@@ -995,7 +995,7 @@ int multimapPTest(int argc, char *argv[]) {
 
         PTEST_LOGGED(multimapResetP(m));
         if (multimapCountP(m) != 0) {
-            ERRR("Expected empty after reset");
+            ERR("Expected empty after reset");
         }
 
         /* Refill with DIFFERENT keys so any ghost from before the
@@ -1014,7 +1014,7 @@ int multimapPTest(int argc, char *argv[]) {
         ctx = persistCtxNew(basePath, NULL);
         m = multimapOpenP(ctx);
         if (!m) {
-            ERRR("Recovery after reset failed");
+            ERR("Recovery after reset failed");
         } else {
             if (multimapCountP(m) != 20) {
                 ERR("Expected 20 post-recovery, got %zu", multimapCountP(m));
@@ -1022,12 +1022,12 @@ int multimapPTest(int argc, char *argv[]) {
 
             databox probeOld = DATABOX_SIGNED(3);
             if (multimapExistsP(m, &probeOld)) {
-                ERRR("Pre-reset ghost key survived recovery");
+                ERR("Pre-reset ghost key survived recovery");
             }
 
             databox probeNew = DATABOX_SIGNED(110);
             if (!multimapExistsP(m, &probeNew)) {
-                ERRR("Post-reset key lost in recovery");
+                ERR("Post-reset key lost in recovery");
             }
 
             multimapCloseP(m);
@@ -1057,10 +1057,10 @@ int multimapPTest(int argc, char *argv[]) {
         const databox k99 = DATABOX_SIGNED(99);
         int64_t value = 0;
         if (!multimapFieldIncrP(m, &k3, 1, 5, &value) || value != 8) {
-            ERRR("3 + 5 should be 8");
+            ERR("3 + 5 should be 8");
         }
         if (!multimapFieldIncrP(m, &k4, 1, -10, &value) || value != -6) {
-            ERRR("4 - 10 should be -6");
+            ERR("4 - 10 should be -6");
         }
 
         /* Refused increments, an overflow included, log nothing */
@@ -1068,38 +1068,38 @@ int multimapPTest(int argc, char *argv[]) {
         persistCtxGetStats(ctx, &before);
         if (multimapFieldIncrP(m, &k99, 1, 1, &value) != PERSIST_LOG_REFUSED ||
             value != 0) {
-            ERRR("A missing key's increment was not refused with 0");
+            ERR("A missing key's increment was not refused with 0");
         }
         if (multimapFieldIncrP(m, &k3, 2, 1, &value) != PERSIST_LOG_REFUSED ||
             value != 0) {
-            ERRR("A bytes field's increment was not refused with 0");
+            ERR("A bytes field's increment was not refused with 0");
         }
         if (multimapFieldIncrP(m, &k3, 1, INT64_MAX, &value) !=
                 PERSIST_LOG_REFUSED ||
             value != 8) {
-            ERRR("An overflowing increment was not refused at 8");
+            ERR("An overflowing increment was not refused at 8");
         }
         if (multimapFieldIncrP(m, &k3, 1, 0, &value) != PERSIST_LOG_UNCHANGED ||
             value != 8) {
-            ERRR("An increment by 0 was logged");
+            ERR("An increment by 0 was logged");
         }
         const databox other = DATABOX_SIGNED(-1);
         const databox *dup[] = {&k5, &other, &label};
         if (multimapInsertIfNotExistsP(m, dup) != PERSIST_LOG_UNCHANGED) {
-            ERRR("Insert-if-absent replaced key 5");
+            ERR("Insert-if-absent replaced key 5");
         }
         persistCtxStats after;
         persistCtxGetStats(ctx, &after);
         if (after.totalOps != before.totalOps) {
-            ERRR("refused or unchanged ops wrote WAL entries");
+            ERR("refused or unchanged ops wrote WAL entries");
         }
         const databox fifty = DATABOX_SIGNED(500);
         const databox *added[] = {&k50, &fifty, &label};
         if (!multimapInsertIfNotExistsP(m, added)) {
-            ERRR("Insert-if-absent refused absent key 50");
+            ERR("Insert-if-absent refused absent key 50");
         }
         if (!multimapSyncP(m) || multimapBytesP(m) == 0) {
-            ERRR("Sync or byte count failed");
+            ERR("Sync or byte count failed");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
@@ -1107,7 +1107,7 @@ int multimapPTest(int argc, char *argv[]) {
         ctx = persistCtxOpen(basePath, NULL);
         m = multimapOpenP(ctx);
         if (!m) {
-            ERRR("Recovery failed");
+            ERR("Recovery failed");
         } else {
             static const struct {
                 int64_t key;
@@ -1154,7 +1154,7 @@ int multimapPTest(int argc, char *argv[]) {
         const databox *gone[] = {&one, &eleven};
         if (!multimapDeleteFullWidthP(m, gone) ||
             multimapDeleteFullWidthP(m, gone) != PERSIST_LOG_UNCHANGED) {
-            ERRR("Full-row delete found no row, or deleted it twice");
+            ERR("Full-row delete found no row, or deleted it twice");
         }
         /* An increment in a set is refused as misuse, and logs nothing */
         const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
@@ -1164,7 +1164,7 @@ int multimapPTest(int argc, char *argv[]) {
                                incr = multimapFieldIncrP(m, &one, 1, 1, NULL));
         dkDiagSetPrintMode(priorPrint);
         if (incr != PERSIST_LOG_REFUSED) {
-            ERRR("an increment in a set was not refused");
+            ERR("an increment in a set was not refused");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
@@ -1172,10 +1172,10 @@ int multimapPTest(int argc, char *argv[]) {
         ctx = persistCtxOpen(basePath, NULL);
         m = multimapOpenP(ctx);
         if (!m) {
-            ERRR("Recovery failed");
+            ERR("Recovery failed");
         } else {
             if (!multimapIsSet(multimapGetP(m))) {
-                ERRR("A set came back as a map");
+                ERR("A set came back as a map");
             }
             static constexpr int64_t remain[][2] = {{1, 10}, {1, 12}, {2, 20}};
             multimapIterator iter;
@@ -1203,11 +1203,11 @@ int multimapPTest(int argc, char *argv[]) {
                 !multimapIteratorInitAtP(m, &iter, true, &two) ||
                 !multimapIteratorNext(&iter, out) ||
                 !databoxEqual(&got[0], &two)) {
-                ERRR("First/Last/IteratorInitAt disagree with the rows");
+                ERR("First/Last/IteratorInitAt disagree with the rows");
             }
             multimapEntry me;
             if (!multimapRandomValueP(m, false, out, &me)) {
-                ERRR("RandomValue found no row");
+                ERR("RandomValue found no row");
             }
             multimapCloseP(m);
         }
@@ -1244,7 +1244,7 @@ int multimapPTest(int argc, char *argv[]) {
                              multimapInsertP(m, row3, &replaced),
                              multimapDeleteP(m, &k1), multimapResetP(m));
         if (replaced) {
-            ERRR("a refused insert reported a replace");
+            ERR("a refused insert reported a replace");
         }
         if (now1 != 1 || now2 != 9) {
             ERR("refused increments reported %" PRId64 " and %" PRId64
@@ -1255,12 +1255,12 @@ int multimapPTest(int argc, char *argv[]) {
         databox *out[] = {&got};
         if (multimapCountP(m) != 2 || multimapExistsP(m, &k3) ||
             !multimapExistsFullWidth(multimapGetP(m), row2)) {
-            ERRR("a refused insert or delete changed the rows");
+            ERR("a refused insert or delete changed the rows");
         }
         if (!multimapLookupP(m, &k1, out) || got.type != DATABOX_TRUE ||
             !multimapLookupP(m, &k2, out) || got.type != DATABOX_UNSIGNED_64 ||
             got.data.u != 9) {
-            ERRR("a refused increment changed a field's value or type");
+            ERR("a refused increment changed a field's value or type");
         }
 
         /* Missing arguments: refused or empty answers */
@@ -1275,7 +1275,7 @@ int multimapPTest(int argc, char *argv[]) {
             multimapBytesP(NULL) || multimapExistsP(NULL, &k1) ||
             multimapLookupP(NULL, &k1, out) || multimapSyncP(NULL) ||
             multimapCompactP(NULL)) {
-            ERRR("a call without its wrapper was not refused");
+            ERR("a call without its wrapper was not refused");
         }
         multimapIteratorInitP(NULL, &iter, true);
         multimapGetStatsP(NULL, NULL);
@@ -1285,11 +1285,11 @@ int multimapPTest(int argc, char *argv[]) {
          * holds only what was logged */
         if (multimapInsertP(m, row1, &replaced) == PERSIST_LOG_REFUSED ||
             !replaced) {
-            ERRR("a logged replace did not report itself");
+            ERR("a logged replace did not report itself");
         }
         if (multimapFieldIncrP(m, &k1, 1, 1, &now1) == PERSIST_LOG_REFUSED ||
             now1 != 2) {
-            ERRR("the context did not log again after the refusal");
+            ERR("the context did not log again after the refusal");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
@@ -1335,7 +1335,7 @@ int multimapPTest(int argc, char *argv[]) {
         multimapCloseP(m);
         persistCtxFree(ctx);
         if (!ptestDamageLastWalEntry(basePath)) {
-            ERRR("could not damage the WAL");
+            ERR("could not damage the WAL");
         }
 
         const databox k1 = databoxNewSigned(1);
@@ -1352,11 +1352,11 @@ int multimapPTest(int argc, char *argv[]) {
                 m ? multimapCountP(m) : (size_t)0);
         }
         if (!ptestExpectHealed(ctx, basePath)) {
-            ERRR("the damaged entry was not healed into the quarantine");
+            ERR("the damaged entry was not healed into the quarantine");
         }
         if (m && (multimapInsertP(m, row4, NULL) == PERSIST_LOG_REFUSED ||
                   !multimapLookupP(m, &k1, out) || got.data.i != 100)) {
-            ERRR("a change after the healed entry was refused");
+            ERR("a change after the healed entry was refused");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
@@ -1365,7 +1365,7 @@ int multimapPTest(int argc, char *argv[]) {
         m = multimapOpenP(ctx);
         if (!m || multimapCountP(m) != 3 || !multimapExistsP(m, &k1) ||
             !multimapLookupP(m, &k4, out) || got.data.i != 900) {
-            ERRR("reopen does not hold 1, 2, 4");
+            ERR("reopen does not hold 1, 2, 4");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);

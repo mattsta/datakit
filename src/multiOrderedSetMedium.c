@@ -1208,10 +1208,10 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
     TEST("multiOrderedSetMedium — create and free") {
         multiOrderedSetMedium *mos = multiOrderedSetMediumNew();
         if (!mos) {
-            ERRR("Failed to create multiOrderedSetMedium");
+            ERR("Failed to create multiOrderedSetMedium");
         }
         if (multiOrderedSetMediumCount(mos) != 0) {
-            ERRR("New set should be empty");
+            ERR("New set should be empty");
         }
         multiOrderedSetMediumFree(mos);
     }
@@ -1233,13 +1233,13 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
         databox prev = {};
         if (!multiOrderedSetMediumAddGetPrevious(mos, &wider, &m3, &prev) ||
             prev.data.i != (INT64_C(3) << 40)) {
-            ERRR("the rewrite did not report m3's old score");
+            ERR("the rewrite did not report m3's old score");
         }
         databox got = {};
         if (!multiOrderedSetMediumGetScore(mos, &m3, &got) ||
             got.type != DATABOX_DOUBLE_64 || got.data.d64 != 3.5e12 ||
             multiOrderedSetMediumGetRank(mos, &m3) != 3) {
-            ERRR("m3 lost its new score or its rank");
+            ERR("m3 lost its new score or its rank");
         }
 
         /* A new member through AddGetPrevious; misses rank -1 */
@@ -1250,7 +1250,7 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
             multiOrderedSetMediumGetRank(mos, &mNew) != 6 ||
             multiOrderedSetMediumGetRank(mos, &ghost) != -1 ||
             multiOrderedSetMediumGetReverseRank(mos, &ghost) != -1) {
-            ERRR("a new member was misplaced or a miss was ranked");
+            ERR("a new member was misplaced or a miss was ranked");
         }
 
         /* Every row in ascending order */
@@ -1278,7 +1278,7 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
             multiOrderedSetMediumIteratorNext(&iter, &m, &s) ||
             multiOrderedSetMediumIteratorInitAtRank(mos, &iter, 11, true) ||
             multiOrderedSetMediumIteratorNext(&iter, &m, &s)) {
-            ERRR("an iterator started past the end");
+            ERR("an iterator started past the end");
         }
         multiOrderedSetMediumFree(mos);
 
@@ -1287,7 +1287,7 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
         databox scores[2];
         if (multiOrderedSetMediumRandomMembers(empty, 2, members, scores) !=
             0) {
-            ERRR("an empty set gave random members");
+            ERR("an empty set gave random members");
         }
         multiOrderedSetMediumFree(empty);
     }

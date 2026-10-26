@@ -1924,7 +1924,7 @@ approximationDone:
             agree = agree && fabs(hllTau(xs[i]) - want) < 1e-12;
         }
         if (!agree) {
-            ERRR("tau differs from its series");
+            ERR("tau differs from its series");
         }
     }
 
@@ -2056,7 +2056,7 @@ approximationDone:
         cleaner(hyperloglogFree) hyperloglog *b = hyperloglogNew();
         bool invalid = false;
         if (hyperloglogCount(a, &invalid) != 0 || invalid) {
-            ERRR("a new sparse HLL is not empty");
+            ERR("a new sparse HLL is not empty");
         }
         /* Fixed-size keys: members 0..1499, a holds 0..999, b 500..1499 */
         for (uint64_t i = 0; i < 1500; i++) {

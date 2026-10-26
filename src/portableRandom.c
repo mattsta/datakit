@@ -557,7 +557,7 @@ int portableRandomTest(int argc, char *argv[]) {
 
         const uint64_t before = portableRandom64(&r);
         if (before != portableRandom64(&frozen)) {
-            ERRR("a draw before the refuel edge left the frozen stream");
+            ERR("a draw before the refuel edge left the frozen stream");
         }
 
         const uint64_t crossing = portableRandom64(&r);
@@ -622,7 +622,7 @@ int portableRandomTest(int argc, char *argv[]) {
         out[0] = 0x5A;
         portableRandomFill64(&r, out, 0);
         if (r.remainingBytesBeforeRefuel != want || out[0] != 0x5A) {
-            ERRR("a zero-word fill changed the budget or the output");
+            ERR("a zero-word fill changed the budget or the output");
         }
     }
 
@@ -661,12 +661,12 @@ int portableRandomTest(int argc, char *argv[]) {
             }
 
             if (rekeys && got[0] == old[0]) {
-                ERRR("a fill that exhausts the budget generated its first "
-                     "word from the old key");
+                ERR("a fill that exhausts the budget generated its first "
+                    "word from the old key");
             }
 
             if (!rekeys && memcmp(got, old, sizeof(got)) != 0) {
-                ERRR("a fill within the budget left the old key stream");
+                ERR("a fill within the budget left the old key stream");
             }
         }
     }
@@ -709,13 +709,13 @@ int portableRandomTest(int argc, char *argv[]) {
         portableRandom_add(&r, key, 0);
 
         if (r.i != i || r.j != j || memcmp(s, r.s, sizeof(s)) != 0) {
-            ERRR("portableRandom_add with an empty key changed the state");
+            ERR("portableRandom_add with an empty key changed the state");
         } else {
             /* A caller with no key may well pass NULL. */
             portableRandom_add(&r, NULL, 0);
 
             if (r.i != i || r.j != j || memcmp(s, r.s, sizeof(s)) != 0) {
-                ERRR("portableRandom_add(NULL, 0) changed the state");
+                ERR("portableRandom_add(NULL, 0) changed the state");
             }
         }
     }
@@ -732,17 +732,17 @@ int portableRandomTest(int argc, char *argv[]) {
 
         if (portableRandomUrandom(a, len) != (ssize_t)len ||
             portableRandomUrandom(b, len) != (ssize_t)len) {
-            ERRR("a 300-byte /dev/urandom read came back short");
+            ERR("a 300-byte /dev/urandom read came back short");
         } else if (!portableRandomTestAllZero(a + len, sizeof(a) - len) ||
                    !portableRandomTestAllZero(b + len, sizeof(b) - len)) {
-            ERRR("a /dev/urandom read wrote past the end");
+            ERR("a /dev/urandom read wrote past the end");
         } else if (portableRandomTestAllZero(a, len) ||
                    memcmp(a, b, len) == 0) {
-            ERRR("two /dev/urandom reads were all zero or identical");
+            ERR("two /dev/urandom reads were all zero or identical");
         }
 
         if (portableRandomUrandom(a, 0) != 0) {
-            ERRR("an empty /dev/urandom read must return 0");
+            ERR("an empty /dev/urandom read must return 0");
         }
     }
 
@@ -792,7 +792,7 @@ int portableRandomTest(int argc, char *argv[]) {
         for (uint32_t t = 0; t < 32 && !anyNonZero; t++) {
             uint8_t one = 0;
             if (!portableRandomDirectFull(&one, 1)) {
-                ERRR("portableRandomDirectFull(1) returned false");
+                ERR("portableRandomDirectFull(1) returned false");
                 break;
             }
 
@@ -800,13 +800,13 @@ int portableRandomTest(int argc, char *argv[]) {
         }
 
         if (!anyNonZero) {
-            ERRR("32 one-byte portableRandomDirectFull fills were all zero");
+            ERR("32 one-byte portableRandomDirectFull fills were all zero");
         }
 
         uint8_t untouched = 0x5A;
         if (!portableRandomDirectFull(&untouched, 0) || untouched != 0x5A) {
-            ERRR("a zero-length portableRandomDirectFull must succeed "
-                 "without writing");
+            ERR("a zero-length portableRandomDirectFull must succeed "
+                "without writing");
         }
     }
 
@@ -826,7 +826,7 @@ int portableRandomTest(int argc, char *argv[]) {
             uint64_t parentWord = 0;
             if (!portableRandomTestForkedNextWord(&r, fill, &childWord,
                                                   &parentWord)) {
-                ERRR("the fork probe could not run (pipe/fork/read failed)");
+                ERR("the fork probe could not run (pipe/fork/read failed)");
             } else if (childWord == parentWord) {
                 ERR("%s: a forked child drew 0x%016" PRIx64 ", the same "
                     "word as the parent",
@@ -846,7 +846,7 @@ int portableRandomTest(int argc, char *argv[]) {
         uint64_t parentWord = 0;
         if (!portableRandomTestForkedNextWord(&r, false, &childWord,
                                               &parentWord)) {
-            ERRR("the fork probe could not run (pipe/fork/read failed)");
+            ERR("the fork probe could not run (pipe/fork/read failed)");
         } else if (childWord != parentWord) {
             ERR("with pid -1 a forked child drew 0x%016" PRIx64 " and the "
                 "parent 0x%016" PRIx64,

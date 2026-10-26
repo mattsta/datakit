@@ -242,26 +242,26 @@ int bigmathTest(int argc, char *argv[]) {
         bigmath expect;
 
         if (!bigmathInitFromString(&b, "0")) {
-            ERRR("Failed to parse zero");
+            ERR("Failed to parse zero");
         }
         if (bigmathToNativeUnsigned(&b) != 0) {
-            ERRR("Zero string parsed wrong");
+            ERR("Zero string parsed wrong");
         }
         bigmathReset(&b);
 
         if (!bigmathInitFromString(&b, "18446744073709551615")) {
-            ERRR("Failed to parse UINT64_MAX");
+            ERR("Failed to parse UINT64_MAX");
         }
         if (bigmathToNativeUnsigned(&b) != UINT64_MAX) {
-            ERRR("UINT64_MAX string parsed wrong");
+            ERR("UINT64_MAX string parsed wrong");
         }
         bigmathReset(&b);
 
         if (!bigmathInitFromString(&b, "-12345678901234567")) {
-            ERRR("Failed to parse negative");
+            ERR("Failed to parse negative");
         }
         if (bigmathToNativeSigned(&b) != -12345678901234567LL) {
-            ERRR("Negative string parsed wrong");
+            ERR("Negative string parsed wrong");
         }
         bigmathReset(&b);
 
@@ -269,18 +269,18 @@ int bigmathTest(int argc, char *argv[]) {
          * 10^40 built arithmetically */
         if (!bigmathInitFromString(
                 &b, "10000000000000000000000000000000000000000")) {
-            ERRR("Failed to parse 10^40");
+            ERR("Failed to parse 10^40");
         }
         bigmathInit(&expect);
         bigmathExponent(10, 40, &expect);
         if (bigmathCompare(&b, &expect) != 0) {
-            ERRR("10^40 string mismatch vs arithmetic");
+            ERR("10^40 string mismatch vs arithmetic");
         }
         bigmathReset(&b);
         bigmathReset(&expect);
 
         if (bigmathInitFromString(&b, "not a number")) {
-            ERRR("Parsed garbage as a number");
+            ERR("Parsed garbage as a number");
         }
         bigmathReset(&b);
     }
@@ -420,17 +420,17 @@ int bigmathTest(int argc, char *argv[]) {
 
         bigmathExponent(10, 0, &R);
         if (bigmathToNativeUnsigned(&R) != 1) {
-            ERRR("10^0 != 1");
+            ERR("10^0 != 1");
         }
 
         bigmathExponent(0, 5, &R);
         if (bigmathToNativeUnsigned(&R) != 0) {
-            ERRR("0^5 != 0");
+            ERR("0^5 != 0");
         }
 
         bigmathExponent(2, 0, &R);
         if (bigmathToNativeUnsigned(&R) != 1) {
-            ERRR("2^0 != 1");
+            ERR("2^0 != 1");
         }
 
         bigmathReset(&R);
@@ -493,7 +493,7 @@ int bigmathTest(int argc, char *argv[]) {
 
         bigmathInitUnsigned(&b, 7);
         if (bigmathToNativeUnsigned(&b) != 7) {
-            ERRR("Reused bigmath carried stale state");
+            ERR("Reused bigmath carried stale state");
         }
         bigmathReset(&b);
     }
@@ -506,7 +506,7 @@ int bigmathTest(int argc, char *argv[]) {
         bigmathMultiplyValue(&src, 1000, &src);
 
         if (bigmathToNativeUnsigned(&copy) != 999) {
-            ERRR("Copy mutated alongside source");
+            ERR("Copy mutated alongside source");
         }
 
         bigmathReset(&src);
@@ -634,14 +634,14 @@ int bigmathTest(int argc, char *argv[]) {
         mp_int_init(&R);
 
         if (mp_int_mod(&A, &M, &R) != MP_RANGE) {
-            ERRR("mod by a negative modulus must return MP_RANGE");
+            ERR("mod by a negative modulus must return MP_RANGE");
         }
 
         mp_int_set_value(&M, 5);
         mp_small got = 0;
         if (mp_int_mod(&A, &M, &R) != MP_OK ||
             (mp_int_to_int(&R, &got), got) != 2) {
-            ERRR("17 mod 5 should be 2");
+            ERR("17 mod 5 should be 2");
         }
 
         mp_int_clear(&A);
@@ -681,12 +681,12 @@ int bigmathTest(int argc, char *argv[]) {
         mp_int_init_value(&N, -8);
         mp_int_init(&R);
         if (mp_int_root(&N, 2, &R) == MP_OK) {
-            ERRR("Even root of a negative should fail");
+            ERR("Even root of a negative should fail");
         }
         mp_small sgot = 0;
         if (mp_int_root(&N, 3, &R) != MP_OK ||
             (mp_int_to_int(&R, &sgot), sgot) != -2) {
-            ERRR("Cube root of -8 should be -2");
+            ERR("Cube root of -8 should be -2");
         }
         mp_int_clear(&N);
         mp_int_clear(&R);
@@ -720,7 +720,7 @@ int bigmathTest(int argc, char *argv[]) {
         mpz_t Z;
         mp_int_init(&Z);
         if (mp_int_is_pow2(&Z) >= 0) {
-            ERRR("is_pow2(0) must be negative (no k gives 2^k == 0)");
+            ERR("is_pow2(0) must be negative (no k gives 2^k == 0)");
         }
 
         for (uint32_t k = 0; k <= 200; k += 13) {
@@ -752,13 +752,13 @@ int bigmathTest(int argc, char *argv[]) {
         mp_usmall got = 0;
         mp_int_to_uint(&BIG, &got);
         if (got != 42 || mp_int_compare(&SMALL, &BIGREF) != 0) {
-            ERRR("Swap mixed inline/heap corrupted a value");
+            ERR("Swap mixed inline/heap corrupted a value");
         }
 
         mp_int_swap(&SMALL, &BIG);
         mp_int_to_uint(&SMALL, &got);
         if (got != 42 || mp_int_compare(&BIG, &BIGREF) != 0) {
-            ERRR("Swap back corrupted a value");
+            ERR("Swap back corrupted a value");
         }
 
         mp_int_clear(&SMALL);
@@ -791,7 +791,7 @@ int bigmathTest(int argc, char *argv[]) {
         bigmath zero;
         bigmathInit(&zero);
         if (!bigmathTestReprIs(&zero, "0")) {
-            ERRR("Repr of zero is not \"0\"");
+            ERR("Repr of zero is not \"0\"");
         }
         bigmathReset(&zero);
     }

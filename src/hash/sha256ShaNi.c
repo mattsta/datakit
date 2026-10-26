@@ -592,7 +592,7 @@ int sha256ShaNiTest(int argc, char *argv[]) {
                          (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
 
         if (memcmp(stRef, stAcc, sizeof(stRef)) != 0) {
-            ERRR("portable and SHA-NI compress disagree on the bench input");
+            ERR("portable and SHA-NI compress disagree on the bench input");
         }
 
         double mib = (double)bufSize / (1024.0 * 1024.0);

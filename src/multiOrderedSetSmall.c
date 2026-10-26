@@ -680,10 +680,10 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
     TEST("multiOrderedSetSmall — create and free") {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
         if (!mos) {
-            ERRR("Failed to create multiOrderedSetSmall");
+            ERR("Failed to create multiOrderedSetSmall");
         }
         if (multiOrderedSetSmallCount(mos) != 0) {
-            ERRR("New set should be empty");
+            ERR("New set should be empty");
         }
         multiOrderedSetSmallFree(mos);
     }
@@ -702,13 +702,13 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
 
         /* Add entries */
         if (multiOrderedSetSmallAdd(mos, &score1, &member1)) {
-            ERRR("First add should return false (new)");
+            ERR("First add should return false (new)");
         }
         if (multiOrderedSetSmallAdd(mos, &score2, &member2)) {
-            ERRR("Second add should return false (new)");
+            ERR("Second add should return false (new)");
         }
         if (multiOrderedSetSmallAdd(mos, &score3, &member3)) {
-            ERRR("Third add should return false (new)");
+            ERR("Third add should return false (new)");
         }
 
         if (multiOrderedSetSmallCount(mos) != 3) {
@@ -718,21 +718,21 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         /* Check ordering (should be: member2=50, member3=75, member1=100) */
         databox m, s;
         if (!multiOrderedSetSmallGetByRank(mos, 0, &m, &s)) {
-            ERRR("GetByRank(0) failed");
+            ERR("GetByRank(0) failed");
         }
         if (s.data.i != 50) {
             ERR("Rank 0 should have score 50, got %" PRIdMAX, s.data.i);
         }
 
         if (!multiOrderedSetSmallGetByRank(mos, 1, &m, &s)) {
-            ERRR("GetByRank(1) failed");
+            ERR("GetByRank(1) failed");
         }
         if (s.data.i != 75) {
             ERR("Rank 1 should have score 75, got %" PRIdMAX, s.data.i);
         }
 
         if (!multiOrderedSetSmallGetByRank(mos, 2, &m, &s)) {
-            ERRR("GetByRank(2) failed");
+            ERR("GetByRank(2) failed");
         }
         if (s.data.i != 100) {
             ERR("Rank 2 should have score 100, got %" PRIdMAX, s.data.i);
@@ -741,7 +741,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         /* Test GetScore */
         databox foundScore;
         if (!multiOrderedSetSmallGetScore(mos, &member1, &foundScore)) {
-            ERRR("GetScore for member1 failed");
+            ERR("GetScore for member1 failed");
         }
         if (foundScore.data.i != 100) {
             ERR("member1 score should be 100, got %" PRIdMAX,
@@ -773,17 +773,17 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         /* Update to new score */
         databox newScore = databoxNewSigned(200);
         if (!multiOrderedSetSmallAdd(mos, &newScore, &member1)) {
-            ERRR("Update should return true (existed)");
+            ERR("Update should return true (existed)");
         }
 
         if (multiOrderedSetSmallCount(mos) != 1) {
-            ERRR("Count should still be 1");
+            ERR("Count should still be 1");
         }
 
         databox foundScore;
         multiOrderedSetSmallGetScore(mos, &member1, &foundScore);
         if (foundScore.data.i != 200) {
-            ERRR("Score should be updated to 200");
+            ERR("Score should be updated to 200");
         }
 
         multiOrderedSetSmallFree(mos);
@@ -802,19 +802,19 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         multiOrderedSetSmallAdd(mos, &score2, &member2);
 
         if (!multiOrderedSetSmallRemove(mos, &member1)) {
-            ERRR("Remove should return true");
+            ERR("Remove should return true");
         }
 
         if (multiOrderedSetSmallCount(mos) != 1) {
-            ERRR("Count should be 1 after remove");
+            ERR("Count should be 1 after remove");
         }
 
         if (multiOrderedSetSmallExists(mos, &member1)) {
-            ERRR("member1 should not exist after remove");
+            ERR("member1 should not exist after remove");
         }
 
         if (!multiOrderedSetSmallExists(mos, &member2)) {
-            ERRR("member2 should still exist");
+            ERR("member2 should still exist");
         }
 
         multiOrderedSetSmallFree(mos);
@@ -869,7 +869,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         }
 
         if (multiOrderedSetSmallCount(mos) != 5) {
-            ERRR("Count should be 5");
+            ERR("Count should be 5");
         }
 
         /* Pop min */
@@ -879,17 +879,17 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             ERR("Should pop 2, got %zu", popped);
         }
         if (scores[0].data.i != 0) {
-            ERRR("First popped score should be 0");
+            ERR("First popped score should be 0");
         }
         if (scores[1].data.i != 10) {
-            ERRR("Second popped score should be 10");
+            ERR("Second popped score should be 10");
         }
         for (size_t j = 0; j < popped; j++) {
             databoxFreeData(&members[j]);
         }
 
         if (multiOrderedSetSmallCount(mos) != 3) {
-            ERRR("Count should be 3 after pop min");
+            ERR("Count should be 3 after pop min");
         }
 
         /* Pop max */
@@ -904,7 +904,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         databoxFreeData(&members[0]);
 
         if (multiOrderedSetSmallCount(mos) != 2) {
-            ERRR("Count should be 2 after pop max");
+            ERR("Count should be 2 after pop max");
         }
 
         multiOrderedSetSmallFree(mos);
@@ -965,7 +965,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             prev.data.i != -1 || multiOrderedSetSmallGetRank(mos, &e) != 2 ||
             !multiOrderedSetSmallAddGetPrevious(mos, &score50, &e, &prev) ||
             prev.data.i != 25 || multiOrderedSetSmallGetRank(mos, &e) != 4) {
-            ERRR("AddGetPrevious misplaced a new or moved member");
+            ERR("AddGetPrevious misplaced a new or moved member");
         }
 
         const databox zz = databoxNewBytesAllowEmbed("zz", 2);
@@ -974,7 +974,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             gone.data.i != -7 || multiOrderedSetSmallGetRank(mos, &zz) != -1 ||
             multiOrderedSetSmallGetReverseRank(mos, &zz) != -1 ||
             multiOrderedSetSmallCount(mos) != 5) {
-            ERRR("a missing member was found or removed");
+            ERR("a missing member was found or removed");
         }
 
         /* [15, 30] removes b and c, keeping a (below the minimum) */
@@ -984,7 +984,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
                                   .max = databoxNewSigned(100)};
         if (multiOrderedSetSmallRemoveRangeByScore(mos, &middle) != 2 ||
             multiOrderedSetSmallCountByScore(mos, &all) != 3) {
-            ERRR("the score-range removal took the wrong rows");
+            ERR("the score-range removal took the wrong rows");
         }
 
         /* Left: a=10, d=40, e=50 */
@@ -996,7 +996,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         if (multiOrderedSetSmallIteratorInitAtScore(mos, &iter, &score60,
                                                     true) ||
             iter.valid || multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {
-            ERRR("an iterator started past the highest score");
+            ERR("an iterator started past the highest score");
         }
         int64_t seen[4] = {};
         size_t n = 0;
@@ -1005,7 +1005,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             seen[n++] = s.data.i;
         }
         if (n != 2 || seen[0] != 40 || seen[1] != 50) {
-            ERRR("an iterator at score 40 did not give 40, 50");
+            ERR("an iterator at score 40 did not give 40, 50");
         }
         n = 0;
         multiOrderedSetSmallIteratorInit(mos, &iter, false);
@@ -1013,14 +1013,14 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             seen[n++] = s.data.i;
         }
         if (n != 3 || seen[0] != 50 || seen[1] != 40 || seen[2] != 10) {
-            ERRR("reverse iteration did not give 50, 40, 10");
+            ERR("reverse iteration did not give 50, 40, 10");
         }
         if (multiOrderedSetSmallIteratorInitAtRank(mos, &iter, 3, true) ||
             iter.valid ||
             !multiOrderedSetSmallIteratorInitAtRank(mos, &iter, -1, true) ||
             !multiOrderedSetSmallIteratorNext(&iter, &m, &s) ||
             s.data.i != 50) {
-            ERRR("an iterator by rank started in the wrong place");
+            ERR("an iterator by rank started in the wrong place");
         }
 
         cleaner(multiOrderedSetSmallFree) multiOrderedSetSmall *empty =
@@ -1041,7 +1041,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             multiOrderedSetSmallIteratorInitAtScore(empty, &iter, &score40,
                                                     true) ||
             multiOrderedSetSmallRandomMembers(empty, 2, members, scores) != 0) {
-            ERRR("an empty set reported a member or a position");
+            ERR("an empty set reported a member or a position");
         }
     }
 
@@ -1054,12 +1054,12 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
 
         multiOrderedSetSmall *copy = multiOrderedSetSmallCopy(mos);
         if (multiOrderedSetSmallCount(copy) != 1) {
-            ERRR("Copy should have count 1");
+            ERR("Copy should have count 1");
         }
 
         databox foundScore;
         if (!multiOrderedSetSmallGetScore(copy, &member, &foundScore)) {
-            ERRR("Copy should contain member");
+            ERR("Copy should contain member");
         }
 
         /* Modify original */
@@ -1069,7 +1069,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         /* Copy should be unchanged */
         multiOrderedSetSmallGetScore(copy, &member, &foundScore);
         if (foundScore.data.i != 42) {
-            ERRR("Copy should be independent of original");
+            ERR("Copy should be independent of original");
         }
 
         multiOrderedSetSmallFree(mos);

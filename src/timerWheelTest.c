@@ -270,7 +270,7 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("timerWheel: create and free") {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         if (!tw) {
-            ERRR("Failed to create timerWheel");
+            ERR("Failed to create timerWheel");
         }
     }
 
@@ -293,11 +293,11 @@ int timerWheelTest(int argc, char *argv[]) {
         const size_t cancelledByStop = stats.totalCancellations;
         if (!timerWheelUnregister(tw, a) || timerWheelCount(tw) != 0 ||
             cancelledByStop != 2) {
-            ERRR("StopAll or a later unregister of its id miscounted");
+            ERR("StopAll or a later unregister of its id miscounted");
         }
         timerWheelGetStats(tw, &stats);
         if (stats.totalCancellations != cancelledByStop) {
-            ERRR("unregistering a StopAll-covered id billed a cancellation");
+            ERR("unregistering a StopAll-covered id billed a cancellation");
         }
 
         /* An unregister of a fired id leaves a stale tombstone; StopAll
@@ -349,7 +349,7 @@ int timerWheelTest(int argc, char *argv[]) {
         if (stats.totalRegistrations || stats.totalCancellations ||
             stats.totalExpirations || stats.totalCascades ||
             stats.memoryBytes == 0) {
-            ERRR("ResetStats left a counter or cleared the state");
+            ERR("ResetStats left a counter or cleared the state");
         }
     }
 
@@ -364,7 +364,7 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelId id =
             timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
         if (id == 0) {
-            ERRR("Timer ID should not be 0");
+            ERR("Timer ID should not be 0");
         }
 
         if (timerWheelCount(tw) != 1) {
@@ -440,8 +440,8 @@ int timerWheelTest(int argc, char *argv[]) {
         dkDiagnostic d;
         if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
             d.code != DK_DIAG_TIMER_REENTERED) {
-            ERRR("a re-entered ProcessTimerEvents must report "
-                 "TIMER_REENTERED once");
+            ERR("a re-entered ProcessTimerEvents must report "
+                "TIMER_REENTERED once");
         }
     }
 
@@ -461,7 +461,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         if (timerWheelCount(tw) == 0) {
-            ERRR("Repeating timer was incorrectly removed");
+            ERR("Repeating timer was incorrectly removed");
         }
     }
 
@@ -571,7 +571,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         if (timerWheelCount(tw) == 0) {
-            ERRR("Nested timer was not scheduled");
+            ERR("Nested timer was not scheduled");
         }
 
         timerWheelAdvanceTime(tw, 5000);
@@ -708,7 +708,7 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelId id =
             timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
         if (id == 0) {
-            ERRR("Timer ID should not be 0");
+            ERR("Timer ID should not be 0");
         }
 
         /* Timer should be in pending, not yet fired */
@@ -720,8 +720,8 @@ int timerWheelTest(int argc, char *argv[]) {
         /* nextTimerEventStartUs should report the pending timer */
         timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
         if (next == 0) {
-            ERRR("nextTimerEventStartUs should return non-zero for pending "
-                 "timer");
+            ERR("nextTimerEventStartUs should return non-zero for pending "
+                "timer");
         }
 
         timerWheelProcessTimerEvents(tw);
@@ -814,7 +814,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* nextTimerEventStartUs should return non-zero */
         timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
         if (next == 0) {
-            ERRR("nextTimerEventStartUs should not be 0 with pending timers");
+            ERR("nextTimerEventStartUs should not be 0 with pending timers");
         }
 
         /* Offset should be <= 0 (timer is due now) */
@@ -846,7 +846,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* nextTimerEventStartUs should return the pending timer's time */
         timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
         if (next == 0) {
-            ERRR("nextTimerEventStartUs should return non-zero");
+            ERR("nextTimerEventStartUs should return non-zero");
         }
 
         timerWheelProcessTimerEvents(tw);
@@ -1037,7 +1037,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* Verify nextTimerEventStartUs still works */
         timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
         if (next == 0) {
-            ERRR("nextTimerEventStartUs returned 0 after stress test");
+            ERR("nextTimerEventStartUs returned 0 after stress test");
         }
     }
 
@@ -1096,7 +1096,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         if (timerWheelCount(tw) == 0) {
-            ERRR("Repeating timer was dropped from the wheel");
+            ERR("Repeating timer was dropped from the wheel");
         }
     }
 
@@ -1221,7 +1221,7 @@ int timerWheelTest(int argc, char *argv[]) {
 
         /* Cancelling an id that already fired is a harmless no-op */
         if (!timerWheelUnregister(tw, id)) {
-            ERRR("Unregister of fired id should return true");
+            ERR("Unregister of fired id should return true");
         }
         if (timerWheelCount(tw) != 0) {
             ERR("Expected 0 timers, got %zu", timerWheelCount(tw));
@@ -1263,7 +1263,7 @@ int timerWheelTest(int argc, char *argv[]) {
          * wheel cannot detect inline (no id index); stats must still
          * report the exact value and reconcile must repair count */
         if (!timerWheelUnregister(tw, a)) {
-            ERRR("Unregister of fired id should return true");
+            ERR("Unregister of fired id should return true");
         }
 
         timerWheelStats stats;
@@ -1274,7 +1274,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         if (!timerWheelReconcileCancellations(tw)) {
-            ERRR("Reconcile should succeed outside callbacks");
+            ERR("Reconcile should succeed outside callbacks");
         }
         if (timerWheelCount(tw) != 1) {
             ERR("Count wrong after reconcile, got %zu", timerWheelCount(tw));
@@ -1283,7 +1283,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* A tombstone matching a live timer must survive reconcile */
         timerWheelUnregister(tw, far);
         if (!timerWheelReconcileCancellations(tw)) {
-            ERRR("Reconcile should succeed outside callbacks");
+            ERR("Reconcile should succeed outside callbacks");
         }
         if (timerWheelCount(tw) != 0) {
             ERR("Live cancellation lost by reconcile, count=%zu",
@@ -1325,7 +1325,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* Each one is still there to cancel */
         timerWheelUnregister(tw, ids[1]);
         if (!timerWheelReconcileCancellations(tw)) {
-            ERRR("reconcile failed outside a callback");
+            ERR("reconcile failed outside a callback");
         }
         timerWheelGetStats(tw, &stats);
         if (timerWheelCount(tw) != 2 || stats.cancelledPending != 1) {
@@ -1368,7 +1368,7 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelUnregister(tw, fired);
 
         if (!timerWheelReconcileCancellations(tw)) {
-            ERRR("reconcile failed outside a callback");
+            ERR("reconcile failed outside a callback");
         }
         timerWheelGetStats(tw, &stats);
         if (timerWheelCount(tw) != 6 || stats.cancelledPending != 3) {
@@ -1514,8 +1514,8 @@ int timerWheelTest(int argc, char *argv[]) {
             timerWheelNextTimerEventStartUs(tw);
         const uint64_t after = timeUtilMonotonicUs();
         if (next == 0) {
-            ERRR("A live timer was masked by a tombstone-only nearer slot: "
-                 "the query answered no timer");
+            ERR("A live timer was masked by a tombstone-only nearer slot: "
+                "the query answered no timer");
         } else if (!twDueWithin_(next, (int64_t)before, (int64_t)after,
                                  bDelayUs)) {
             ERR("Query should name the live %" PRIu64 "us timer, got %" PRId64,
@@ -1548,8 +1548,8 @@ int timerWheelTest(int argc, char *argv[]) {
             timerWheelNextTimerEventStartUs(tw);
         const uint64_t after = timeUtilMonotonicUs();
         if (next == 0) {
-            ERRR("A live wheel-1 timer was masked by a cancelled nearer "
-                 "wheel-1 slot: the query answered no timer");
+            ERR("A live wheel-1 timer was masked by a cancelled nearer "
+                "wheel-1 slot: the query answered no timer");
         } else if (!twDueWithin_(next, (int64_t)before, (int64_t)after,
                                  pDelayUs)) {
             ERR("Query should name the live %" PRIu64 "us timer, got %" PRId64,
@@ -1802,8 +1802,8 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Expected no live timer, got %zu", timerWheelCount(tw));
         }
         if (timerWheelNextTimerEventStartUs(tw) != 0) {
-            ERRR("A wheel holding only a cancelled overflow timer must "
-                 "report no next event");
+            ERR("A wheel holding only a cancelled overflow timer must "
+                "report no next event");
         }
 
         /* A cancelled overflow head must not hide the live one behind

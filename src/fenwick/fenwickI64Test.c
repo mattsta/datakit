@@ -86,12 +86,12 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Query on empty tree should return 0 */
         if (fenwickI64Query(fw, 0) != 0) {
-            ERRR("Query on empty tree should return 0");
+            ERR("Query on empty tree should return 0");
         }
 
         /* Get on empty tree should return 0 */
         if (fenwickI64Get(fw, 0) != 0) {
-            ERRR("Get on empty tree should return 0");
+            ERR("Get on empty tree should return 0");
         }
 
         fenwickI64Free(fw);
@@ -104,7 +104,7 @@ int fenwickI64Test(int argc, char *argv[]) {
         /* Add single element */
         success = fenwickI64Update(&fw, 0, 42);
         if (!success) {
-            ERRR("Failed to update element 0");
+            ERR("Failed to update element 0");
         }
 
         if (fenwickI64Count(fw) != 1) {
@@ -124,7 +124,7 @@ int fenwickI64Test(int argc, char *argv[]) {
         /* Update again (add delta) */
         success = fenwickI64Update(&fw, 0, 8);
         if (!success) {
-            ERRR("Failed to update element 0 again");
+            ERR("Failed to update element 0 again");
         }
 
         if (fenwickI64Get(fw, 0) != 50) {
@@ -326,14 +326,14 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Should be small tier */
         if (FENWICK_I64_TYPE(fw) != FENWICK_I64_TYPE_SMALL) {
-            ERRR("100 elements should be in SMALL tier");
+            ERR("100 elements should be in SMALL tier");
         }
 
         /* Force upgrade to Full (2-tier: no Medium!) */
         fenwickI64Update(&fw, 20000, 42);
 
         if (FENWICK_I64_TYPE(fw) != FENWICK_I64_TYPE_FULL) {
-            ERRR("Should be in FULL tier after exceeding small threshold");
+            ERR("Should be in FULL tier after exceeding small threshold");
         }
 
         /* Verify original data still intact */
@@ -369,11 +369,11 @@ int fenwickI64Test(int argc, char *argv[]) {
         fenwickI64Update(&fw, 2, 10);
 
         if (fenwickI64Get(fw, 2) != 10) {
-            ERRR("Get(2) should be 10 after update");
+            ERR("Get(2) should be 10 after update");
         }
 
         if (fenwickI64Query(fw, 4) != 10) {
-            ERRR("Query(4) should be 10 (only element 2 is non-zero)");
+            ERR("Query(4) should be 10 (only element 2 is non-zero)");
         }
 
         fenwickI64Free(fw);
@@ -417,7 +417,7 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Elements between should be 0 */
         if (fenwickI64Get(fw, 50) != 0) {
-            ERRR("Gap element should be 0");
+            ERR("Gap element should be 0");
         }
 
         /* Range queries */
@@ -427,7 +427,7 @@ int fenwickI64Test(int argc, char *argv[]) {
         }
 
         if (fenwickI64RangeQuery(fw, 101, 999) != 0) {
-            ERRR("Range [101,999] should be 0 (all zeros)");
+            ERR("Range [101,999] should be 0 (all zeros)");
         }
 
         fenwickI64Free(fw);
@@ -455,13 +455,13 @@ int fenwickI64Test(int argc, char *argv[]) {
         /* Test index 0 */
         fenwickI64Set(&fw, 0, 42);
         if (fenwickI64Get(fw, 0) != 42) {
-            ERRR("Index 0 should work");
+            ERR("Index 0 should work");
         }
 
         /* Test high index */
         fenwickI64Set(&fw, 9999, 100);
         if (fenwickI64Get(fw, 9999) != 100) {
-            ERRR("High index 9999 should work");
+            ERR("High index 9999 should work");
         }
 
         if (fenwickI64Count(fw) != 10000) {
@@ -504,7 +504,7 @@ int fenwickI64Test(int argc, char *argv[]) {
         }
 
         if (fenwickI64LowerBound(fw, 100) != SIZE_MAX) {
-            ERRR("LowerBound(100) should be SIZE_MAX (not found)");
+            ERR("LowerBound(100) should be SIZE_MAX (not found)");
         }
 
         fenwickI64Free(fw);
@@ -530,13 +530,13 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Count should remain */
         if (fenwickI64Count(fw) != 5) {
-            ERRR("Count should remain 5 after clear");
+            ERR("Count should remain 5 after clear");
         }
 
         /* Can still update after clear */
         fenwickI64Update(&fw, 2, 10);
         if (fenwickI64Get(fw, 2) != 10) {
-            ERRR("Should be able to update after clear");
+            ERR("Should be able to update after clear");
         }
 
         fenwickI64Free(fw);
@@ -547,28 +547,28 @@ int fenwickI64Test(int argc, char *argv[]) {
         fenwickI64Free(NULL); /* Should not crash */
 
         if (fenwickI64Query(NULL, 0) != 0) {
-            ERRR("Query on NULL should return 0");
+            ERR("Query on NULL should return 0");
         }
 
         if (fenwickI64Get(NULL, 0) != 0) {
-            ERRR("Get on NULL should return 0");
+            ERR("Get on NULL should return 0");
         }
 
         if (fenwickI64Count(NULL) != 0) {
-            ERRR("Count on NULL should return 0");
+            ERR("Count on NULL should return 0");
         }
 
         if (fenwickI64Bytes(NULL) != 0) {
-            ERRR("Bytes on NULL should return 0");
+            ERR("Bytes on NULL should return 0");
         }
 
         void *fw = NULL;
         bool success = fenwickI64Update(&fw, 0, 10);
         if (!success) {
-            ERRR("Update should create tree if NULL");
+            ERR("Update should create tree if NULL");
         }
         if (fw == NULL) {
-            ERRR("Tree should be created");
+            ERR("Tree should be created");
         }
 
         fenwickI64Free(fw);
@@ -646,7 +646,7 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Should be in Full tier */
         if (FENWICK_I64_TYPE(fw2) != FENWICK_I64_TYPE_FULL) {
-            ERRR("20K elements should be in FULL tier");
+            ERR("20K elements should be in FULL tier");
         }
 
         size_t full_bytes = fenwickI64Bytes(fw2);
@@ -733,11 +733,11 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Verify individual elements */
         if (fenwickI64Get(fw, 1) != INT64_MAX / 2) {
-            ERRR("Large positive value incorrect");
+            ERR("Large positive value incorrect");
         }
 
         if (fenwickI64Get(fw, 2) != -INT64_MAX / 2) {
-            ERRR("Large negative value incorrect");
+            ERR("Large negative value incorrect");
         }
 
         fenwickI64Free(fw);
@@ -815,7 +815,7 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         /* Verify we're in Full tier */
         if (FENWICK_I64_TYPE(fw) != FENWICK_I64_TYPE_FULL) {
-            ERRR("20K elements should be in FULL tier");
+            ERR("20K elements should be in FULL tier");
         }
 
         naiveArray *naive = naiveNew(N);

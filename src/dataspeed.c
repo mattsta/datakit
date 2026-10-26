@@ -30,10 +30,10 @@ defcleanerName(char *, zfree, Chars);
 #if defined(__AVX512F__)
 #define DATASPEED_USE_AVX512 1
 #include <immintrin.h>
-#elif defined(__AVX2__)
+#elifdef __AVX2__
 #define DATASPEED_USE_AVX2 1
 #include <immintrin.h>
-#elif defined(__SSE2__)
+#elifdef __SSE2__
 #define DATASPEED_USE_SSE2 1
 #include <immintrin.h>
 #endif
@@ -50,7 +50,7 @@ defcleanerName(char *, zfree, Chars);
 #if defined(__APPLE__)
 #include <mach/mach_time.h>
 #include <sys/sysctl.h>
-#elif defined(__linux__)
+#elifdef __linux__
 #include <sched.h>
 #endif
 
@@ -68,7 +68,7 @@ defcleanerName(char *, zfree, Chars);
 /* Clang/GCC specific: disable optimization for a function */
 #if defined(__clang__)
 #define DATASPEED_NO_OPTIMIZE __attribute__((optnone))
-#elif defined(__GNUC__)
+#elifdef __GNUC__
 #define DATASPEED_NO_OPTIMIZE __attribute__((optimize("O0")))
 #else
 #define DATASPEED_NO_OPTIMIZE
@@ -83,7 +83,7 @@ defcleanerName(char *, zfree, Chars);
 /* Memory fence for accurate timing - prevents instruction reordering */
 #if defined(__aarch64__)
 #define MEMORY_FENCE() __asm__ volatile("dmb sy" ::: "memory")
-#elif defined(__x86_64__)
+#elifdef __x86_64__
 #define MEMORY_FENCE() __asm__ volatile("mfence" ::: "memory")
 #else
 #define MEMORY_FENCE() COMPILER_BARRIER()
@@ -123,7 +123,7 @@ static inline uint64_t dataspeed_rdtsc(void) {
     uint64_t result;
     __asm__ __volatile__("mrs %0, CNTVCT_EL0" : "=r"(result));
     return result;
-#elif defined(__x86_64__)
+#elifdef __x86_64__
     uint32_t lo, hi;
     __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
@@ -479,7 +479,7 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     sysctlbyname("hw.memsize", &memsize, &len, NULL, 0);
     info->total_memory = memsize;
 
-#elif defined(__linux__)
+#elifdef __linux__
     /* CPU model from /proc/cpuinfo */
     FILE *fp = fopen("/proc/cpuinfo", "r");
     if (fp) {

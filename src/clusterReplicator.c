@@ -388,7 +388,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, testApply, &app_ctx);
         if (rep == NULL) {
-            ERRR("create");
+            ERR("create");
         }
 
         /* Build a real flex with multiple typed entries. */
@@ -404,17 +404,17 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         size_t written = 0;
         if (!clusterReplicatorSeal(rep, &persistOpsFlex, src, 7u, 1u, KID, wire,
                                    cap, &written)) {
-            ERRR("seal");
+            ERR("seal");
         }
         if (clusterReplicatorIngest(rep, wire, written, KID) !=
             CLUSTER_MAILBOX_OK) {
-            ERRR("ingest");
+            ERR("ingest");
         }
         if (app_ctx.count != 1u) {
             ERR("expected 1 restored, got %zu", app_ctx.count);
         }
         if (app_ctx.origins[0] != 7u || app_ctx.seqs[0] != 1u) {
-            ERRR("origin/seq mismatch");
+            ERR("origin/seq mismatch");
         }
         /* Byte-exact integrity: a flex is uniquely defined by its
          * bytes, so memcmp of the source and restored is the
@@ -422,7 +422,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         if (flexCount(app_ctx.restored[0]) != flexCount(src) ||
             flexBytes(app_ctx.restored[0]) != flexBytes(src) ||
             memcmp(app_ctx.restored[0], src, flexBytes(src)) != 0) {
-            ERRR("restored flex differs from source");
+            ERR("restored flex differs from source");
         }
         flexFree(app_ctx.restored[0]);
 
@@ -431,17 +431,17 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         wire[written / 2] ^= 0x80;
         if (clusterReplicatorIngest(rep, wire, written, KID) !=
             CLUSTER_MAILBOX_ERR_VERIFY_FAILED) {
-            ERRR("tampered frame must fail verify");
+            ERR("tampered frame must fail verify");
         }
         if (app_ctx.count != 0u) {
-            ERRR("apply must not fire on verify failure");
+            ERR("apply must not fire on verify failure");
         }
         wire[written / 2] ^= 0x80;
 
         /* Replay rejection. */
         if (clusterReplicatorIngest(rep, wire, written, KID) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("replay must be rejected");
+            ERR("replay must be rejected");
         }
 
         /* Apply rejection + retry. */
@@ -451,19 +451,19 @@ int clusterReplicatorTest(int argc, char *argv[]) {
                               &w2);
         if (clusterReplicatorIngest(rep, wire, w2, KID) !=
             CLUSTER_MAILBOX_ERR_APPLY_REJECTED) {
-            ERRR("apply-rejected expected");
+            ERR("apply-rejected expected");
         }
         if (clusterMailboxLastApplied(clusterReplicatorMailbox(rep), 7u) !=
             1u) {
-            ERRR("watermark must stay at 1 after apply-rejected");
+            ERR("watermark must stay at 1 after apply-rejected");
         }
         app_ctx.reject_next = false;
         if (clusterReplicatorIngest(rep, wire, w2, KID) != CLUSTER_MAILBOX_OK) {
-            ERRR("retry must succeed");
+            ERR("retry must succeed");
         }
         if (clusterMailboxLastApplied(clusterReplicatorMailbox(rep), 7u) !=
             2u) {
-            ERRR("watermark must advance to 2 after successful retry");
+            ERR("watermark must advance to 2 after successful retry");
         }
         flexFree(app_ctx.restored[0]);
 
@@ -593,10 +593,10 @@ int clusterReplicatorTest(int argc, char *argv[]) {
                            sizeof(payload), KID, wire, cap, &written);
         if (clusterMailboxIngest(mb, wire, written, KID) !=
             CLUSTER_MAILBOX_ERR_APPLY_REJECTED) {
-            ERRR("unknown type must surface as apply-rejected");
+            ERR("unknown type must surface as apply-rejected");
         }
         if (app_ctx.count != 0) {
-            ERRR("no apply must fire on unknown type");
+            ERR("no apply must fire on unknown type");
         }
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);

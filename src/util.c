@@ -575,7 +575,7 @@ int utilTest(int argc, char **argv) {
         /* The length form reads only the given bytes */
         if (!stringmatchlen("ab*", 3, "abcdef", 3, 0) ||
             stringmatchlen("abc", 3, "abd", 3, 0)) {
-            ERRR("stringmatchlen ignored its lengths");
+            ERR("stringmatchlen ignored its lengths");
         }
 
         /* Pattern and string each copied into an allocation of exactly
@@ -651,7 +651,7 @@ int utilTest(int argc, char **argv) {
         char run[200];
         memset(run, 'a', sizeof(run));
         if (stringmatchlen(hard, (int)strlen(hard), run, (int)sizeof(run), 0)) {
-            ERRR("an unmatchable star pattern matched");
+            ERR("an unmatchable star pattern matched");
         }
 
         char human[64];
@@ -673,7 +673,7 @@ int utilTest(int argc, char **argv) {
         char dos[] = "dir\\file.txt";
         if (!pathIsBaseName(base) || pathIsBaseName(unix) ||
             pathIsBaseName(dos)) {
-            ERRR("pathIsBaseName misjudged a path");
+            ERR("pathIsBaseName misjudged a path");
         }
 
         /* Counter mode: the seed and counter decide the output */
@@ -681,7 +681,7 @@ int utilTest(int argc, char **argv) {
         uint8_t shortSeed[4];
         if (getRandomHexCharsCounterInit(shortSeed, sizeof(shortSeed)) ||
             !getRandomHexCharsCounterInit(seed, sizeof(seed))) {
-            ERRR("counter init accepted a short seed or refused a full one");
+            ERR("counter init accepted a short seed or refused a full one");
         }
         uint64_t c1 = 7;
         uint64_t c2 = 7;
@@ -695,7 +695,7 @@ int utilTest(int argc, char **argv) {
         }
         if (!hex || memcmp(a, b, sizeof(a)) != 0 || c1 != c2 || c1 == 7 ||
             getRandomHexCharsCounter(NULL, &c1, a, 1)) {
-            ERRR("counter-mode hex is not deterministic hex");
+            ERR("counter-mode hex is not deterministic hex");
         }
 
         /* OS-random bytes: two 32-byte draws differ, and across 64 draws
@@ -842,7 +842,7 @@ int utilTest(int argc, char **argv) {
         /* Only the first 'len' bytes count */
         bool e = true;
         if (humanToBytes("12GBxyz", 4, &e) != 12000000000ULL || e) {
-            ERRR("len-bounded \"12GB\" should parse");
+            ERR("len-bounded \"12GB\" should parse");
         }
     }
 

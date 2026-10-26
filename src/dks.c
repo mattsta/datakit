@@ -266,7 +266,7 @@ DK_STATIC size_t DKS_GETPREVIOUSINTEGERWITHTYPEREMOVED(
 #include "dksCompact.h"
 #define DKS_IMPL 'C'
 #define DKS_IMPL_STR "COMPACT"
-#elif defined(DATAKIT_DKS_FULL)
+#elifdef DATAKIT_DKS_FULL
 #include "dksFull.h"
 #define DKS_IMPL 'F'
 #define DKS_IMPL_STR "FULL"

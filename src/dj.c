@@ -1724,7 +1724,7 @@ int djTest(int argc, char *argv[]) {
         djTestNumbers(&src1, 10, 20);
         djAppend(&dst, &src1);
         if (src1.s || src1.ss) {
-            ERRR("the appended source was not left zeroed");
+            ERR("the appended source was not left zeroed");
         }
 
         /* Enough to move the tail buffer before the next append */
@@ -1804,7 +1804,7 @@ int djTest(int argc, char *argv[]) {
         djFree(&dst);
         djFree(&dst);
         if (dst.s || dst.ss || dst.ssCount) {
-            ERRR("djFree did not leave the state zeroed");
+            ERR("djFree did not leave the state zeroed");
         }
     }
 
@@ -1838,7 +1838,7 @@ int djTest(int argc, char *argv[]) {
         want = mdscatlen(want, "}", 1);
         cleaner(mdsfree) mds *out = djFinalize(&st);
         if (!djTestIs(out, want)) {
-            ERRR("deep nesting closed the wrong container types");
+            ERR("deep nesting closed the wrong container types");
         }
 
         djFree(&st); /* the finalize released the bitmap: a no-op */

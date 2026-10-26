@@ -1804,7 +1804,7 @@ static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
     if (impl == INTERLEAVE_AUTO) {
 #if defined(__AVX2__) && defined(__BMI2__)
         impl = INTERLEAVE_AVX2;
-#elif defined(__SSE2__)
+#elifdef __SSE2__
         impl = INTERLEAVE_SSE2;
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
         impl = INTERLEAVE_NEON;
@@ -1840,7 +1840,7 @@ static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
     if (impl == INTERLEAVE_AUTO) {
 #if defined(__AVX2__) && defined(__BMI2__)
         impl = INTERLEAVE_AVX2;
-#elif defined(__SSE2__)
+#elifdef __SSE2__
         impl = INTERLEAVE_SSE2;
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
         impl = INTERLEAVE_NEON;
@@ -2519,7 +2519,7 @@ int ulidTest(int argc, char *argv[]) {
         static constexpr size_t at[] = {0, 15, 16, 24};
         ulid_t want = {};
         if (!ulidDecodeScalar(good, &want)) {
-            ERRR("the scalar decoder refused a valid string");
+            ERR("the scalar decoder refused a valid string");
         }
         for (size_t c = 0; c < sizeof(codecs) / sizeof(*codecs); c++) {
             const codec *k = &codecs[c];
@@ -2567,7 +2567,7 @@ int ulidTest(int argc, char *argv[]) {
             ulidGetFirstTimestampNs(NULL) || ulidGetSecondTimestampNs(NULL) ||
             ulidGetFirstTimestampNsInterleaved(NULL) ||
             ulidGetSecondTimestampNsInterleaved(NULL)) {
-            ERRR("a 64/32-bit codec or an accessor took bad input");
+            ERR("a 64/32-bit codec or an accessor took bad input");
         }
 
         /* An encoder this build lacks cannot be chosen; the choice stays */
@@ -2575,13 +2575,13 @@ int ulidTest(int argc, char *argv[]) {
 #if !ULID_HAS_AVX2
         if (ulidSetEncodeImpl(ULID_ENCODE_AVX2) ||
             ulidGetEncodeImpl() != before) {
-            ERRR("an unavailable encoder was chosen");
+            ERR("an unavailable encoder was chosen");
         }
 #endif
         if (strcmp(ulidGetImplName(ULID_ENCODE_AUTO), "auto") != 0 ||
             strcmp(ulidGetImplName((ulidEncodeImpl)99), "unknown") != 0 ||
             ulidIsImplAvailable((ulidEncodeImpl)99)) {
-            ERRR("encoder names or availability are wrong");
+            ERR("encoder names or availability are wrong");
         }
         (void)before;
     }
@@ -2661,7 +2661,7 @@ int ulidTest(int argc, char *argv[]) {
             ulid32_t none;
             ulid32Generate(&g, &none, ULID_VARIANT_NS);
             if (none.data != 0) {
-                ERRR("ulid32Generate made a 64-bit variant");
+                ERR("ulid32Generate made a 64-bit variant");
             }
         }
 
@@ -2679,7 +2679,7 @@ int ulidTest(int argc, char *argv[]) {
             ulid64Compare(&a64, NULL) <= 0 || ulidCompare(&a128, &b128) >= 0 ||
             ulidCompare(NULL, &a128) >= 0 || ulidCompare(&a128, NULL) <= 0 ||
             ulidCompare(NULL, NULL) != 0) {
-            ERRR("compares");
+            ERR("compares");
         }
 
         ulidVariantConfig cfg = {.type = ULID_VARIANT_SNOWFLAKE,
@@ -2696,13 +2696,13 @@ int ulidTest(int argc, char *argv[]) {
         if (!snowOk || snowBad || !epochOk || epochBad ||
             ulidVariantConfigValidate(&cfg) ||
             ulidVariantConfigValidate(NULL)) {
-            ERRR("config validation");
+            ERR("config validation");
         }
         if (ulid64GetMaxTimestamp(ULID_VARIANT_DUALNS) != UINT64_MAX ||
             ulid64GetMaxTimestamp(ULID_VARIANT_COUNT) != 0 ||
             ulid64GetMaxTimestamp(ULID_VARIANT_EPOCHCUSTOM) !=
                 0xFFFFFFFFFFFFULL) {
-            ERRR("max timestamps");
+            ERR("max timestamps");
         }
     }
 
@@ -2763,7 +2763,7 @@ int ulidTest(int argc, char *argv[]) {
         }
         if (ulid64ValidateTimestamp(ULID_EPOCH_2024_NS - 1,
                                     ULID_VARIANT_EPOCH2024)) {
-            ERRR("a timestamp before the 2024 epoch read as valid");
+            ERR("a timestamp before the 2024 epoch read as valid");
         }
     }
 
@@ -2789,23 +2789,23 @@ int ulidTest(int argc, char *argv[]) {
         ulid64Generate(&g, &b, ULID_VARIANT_NSCOUNT);
         /* NSCOUNT: 40-bit ns + 24-bit counter, ids rising */
         if (ulid64GetCounter(&a) >> 24 || ulid64Compare(&a, &b) >= 0) {
-            ERRR("NSCOUNT counter outside 24 bits or ids not rising");
+            ERR("NSCOUNT counter outside 24 bits or ids not rising");
         }
         ulid64Generate(&g, &a, ULID_VARIANT_HYBRID);
         if (ulid64GetNsDelta(&a) >> 20) {
-            ERRR("HYBRID ns delta outside 20 bits");
+            ERR("HYBRID ns delta outside 20 bits");
         }
         ulid64Generate(&g, &a, ULID_VARIANT_MS);
         if (ulid64GetRandom(&a, ULID_VARIANT_MS) >> 22) {
-            ERRR("MS random outside 22 bits");
+            ERR("MS random outside 22 bits");
         }
         ulid64Copy(&b, &a);
         if (ulid64IsZero(&a) || ulid64Compare(&a, &b) != 0) {
-            ERRR("a generated id is zero or did not copy");
+            ERR("a generated id is zero or did not copy");
         }
         ulid64Clear(&b);
         if (!ulid64IsZero(&b)) {
-            ERRR("a cleared id is not zero");
+            ERR("a cleared id is not zero");
         }
 
         /* The largest timestamp a variant holds validates; one past not */
@@ -2815,7 +2815,7 @@ int ulidTest(int argc, char *argv[]) {
             !ulid64ValidateTimestamp(max, ULID_VARIANT_EPOCH2024) ||
             ulid64ValidateTimestamp(max + 1, ULID_VARIANT_EPOCH2024) ||
             max <= ULID_EPOCH_2024_NS) {
-            ERRR("the EPOCH2024 timestamp bounds are wrong");
+            ERR("the EPOCH2024 timestamp bounds are wrong");
         }
 
         ulid32_t s;
@@ -2825,15 +2825,15 @@ int ulidTest(int argc, char *argv[]) {
         if (ulid32GetRandom(&s, ULID_VARIANT_32S) >> 10 ||
             ulid32Compare(&s, &t) != 0 ||
             ulid32GetTimestampNs(&s, ULID_VARIANT_32S) % 1000000000 != 0) {
-            ERRR("a 32S id's random or second-resolution timestamp is wrong");
+            ERR("a 32S id's random or second-resolution timestamp is wrong");
         }
         ulid32Clear(&t);
         if (!ulid32IsZero(&t) || ulid32IsZero(&s)) {
-            ERRR("ulid32 IsZero / Clear disagree");
+            ERR("ulid32 IsZero / Clear disagree");
         }
 
         if ((unsigned)ulidGetEncodeImpl() >= ULID_ENCODE_COUNT) {
-            ERRR("the encoding implementation is not a known one");
+            ERR("the encoding implementation is not a known one");
         }
     }
 
@@ -2843,13 +2843,13 @@ int ulidTest(int argc, char *argv[]) {
         ulidGenerate(&z, &id);
 
         if (ulidIsZero(&id)) {
-            ERRR("Zero-init generator produced zero ULID");
+            ERR("Zero-init generator produced zero ULID");
         }
         if (z.rng[0] == 0 && z.rng[1] == 0) {
-            ERRR("Zero-init generator did not self-seed");
+            ERR("Zero-init generator did not self-seed");
         }
         if (z.lastEmittedNs == 0) {
-            ERRR("Zero-init generator did not advance its watermark");
+            ERR("Zero-init generator did not advance its watermark");
         }
     }
 
@@ -2858,7 +2858,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         ulidGenerate(h, &id);
         if (ulidIsZero(&id)) {
-            ERRR("Heap generator produced zero ULID");
+            ERR("Heap generator produced zero ULID");
         }
         ulidGenFree(h);
     }
@@ -2922,7 +2922,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t third;
         ulidGenerate(&m, &third);
         if (ulidGetTimestampNs(&third) <= ulidGetTimestampNs(&second)) {
-            ERRR("Emission regressed after forced watermark");
+            ERR("Emission regressed after forced watermark");
         }
     }
 
@@ -2986,16 +2986,16 @@ int ulidTest(int argc, char *argv[]) {
                ulidGetTimestampNs(&id2));
 
         if (ulidIsZero(&id1)) {
-            ERRR("Generated ULID is zero");
+            ERR("Generated ULID is zero");
         }
 
         if (ulidIsZero(&id2)) {
-            ERRR("Second generated ULID is zero");
+            ERR("Second generated ULID is zero");
         }
 
         /* IDs should be different */
         if (ulidCompare(&id1, &id2) == 0) {
-            ERRR("Two generated ULIDs are identical");
+            ERR("Two generated ULIDs are identical");
         }
 
         /* Timestamps should be monotonically increasing or equal */
@@ -3003,7 +3003,7 @@ int ulidTest(int argc, char *argv[]) {
         uint64_t ts2 = ulidGetTimestampNs(&id2);
 
         if (ts1 == 0) {
-            ERRR("Timestamp extraction failed for first ULID");
+            ERR("Timestamp extraction failed for first ULID");
         }
         if (ts2 < ts1) {
             ERR("Timestamps not monotonic: %" PRIu64 " > %" PRIu64, ts1, ts2);
@@ -3022,7 +3022,7 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         if (encoded[ULID_ENCODED_LENGTH] != '\0') {
-            ERRR("Encoded string not null-terminated");
+            ERR("Encoded string not null-terminated");
         }
 
         if (strlen(encoded) != ULID_ENCODED_LENGTH) {
@@ -3083,11 +3083,11 @@ int ulidTest(int argc, char *argv[]) {
             }
 
             if (ulidGetTimestampNs(&orig) != ulidGetTimestampNs(&decoded)) {
-                ERRR("Timestamp mismatch after roundtrip");
+                ERR("Timestamp mismatch after roundtrip");
             }
 
             if (ulidGetRandom(&orig) != ulidGetRandom(&decoded)) {
-                ERRR("Random component mismatch after roundtrip");
+                ERR("Random component mismatch after roundtrip");
             }
         }
     }
@@ -3308,7 +3308,7 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         if (ulidCompare(&id, &decoded) != 0) {
-            ERRR("Lowercase decode produced different result");
+            ERR("Lowercase decode produced different result");
         }
     }
 
@@ -3368,28 +3368,28 @@ int ulidTest(int argc, char *argv[]) {
 
         /* Wrong length */
         if (ulidDecode("ABC", &id)) {
-            ERRR("Accepted too-short input");
+            ERR("Accepted too-short input");
         }
 
         if (ulidDecode("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", &id)) {
-            ERRR("Accepted too-long input");
+            ERR("Accepted too-long input");
         }
 
         /* Invalid characters */
         char invalid[ULID_ENCODED_LENGTH + 1] = "0000000000000000000000000";
         invalid[0] = '!';
         if (ulidDecode(invalid, &id)) {
-            ERRR("Accepted invalid character '!'");
+            ERR("Accepted invalid character '!'");
         }
 
         invalid[0] = '[';
         if (ulidDecode(invalid, &id)) {
-            ERRR("Accepted invalid character '['");
+            ERR("Accepted invalid character '['");
         }
 
         invalid[0] = ' ';
         if (ulidDecode(invalid, &id)) {
-            ERRR("Accepted space character");
+            ERR("Accepted space character");
         }
     }
 
@@ -3401,18 +3401,18 @@ int ulidTest(int argc, char *argv[]) {
         /* Test copy */
         ulidCopy(&copy, &id1);
         if (ulidCompare(&id1, &copy) != 0) {
-            ERRR("Copy produced different ULID");
+            ERR("Copy produced different ULID");
         }
 
         /* Test clear */
         ulidClear(&id2);
         if (!ulidIsZero(&id2)) {
-            ERRR("Clear did not zero ULID");
+            ERR("Clear did not zero ULID");
         }
 
         /* Test isZero */
         if (ulidIsZero(&id1)) {
-            ERRR("Non-zero ULID reported as zero");
+            ERR("Non-zero ULID reported as zero");
         }
     }
 
@@ -3683,10 +3683,10 @@ int ulidTest(int argc, char *argv[]) {
         printf("      [3] %s\n", enc3);
 
         if (ulid64Compare(&id1, &id2) >= 0) {
-            ERRR("IDs not monotonically increasing: id1 >= id2");
+            ERR("IDs not monotonically increasing: id1 >= id2");
         }
         if (ulid64Compare(&id2, &id3) >= 0) {
-            ERRR("IDs not monotonically increasing: id2 >= id3");
+            ERR("IDs not monotonically increasing: id2 >= id3");
         }
 
         /* Lexicographic ordering should match */
@@ -4158,7 +4158,7 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         if (ulid32Compare(&orig, &decoded) != 0) {
-            ERRR("32MS roundtrip failed");
+            ERR("32MS roundtrip failed");
         }
     }
 
@@ -4171,7 +4171,7 @@ int ulidTest(int argc, char *argv[]) {
         config.customEpochNs = ULID_EPOCH_2020_NS;
 
         if (!ulidVariantConfigValidate(&config)) {
-            ERRR("Failed to validate custom epoch config");
+            ERR("Failed to validate custom epoch config");
         }
 
         ulid64_t id;
@@ -4569,13 +4569,13 @@ int ulidTest(int argc, char *argv[]) {
 
             if (!ulid64Decode("3w5e11264sgsf", &got) ||
                 got.data != UINT64_MAX) {
-                ERRR("ulid64 lowercase max did not decode");
+                ERR("ulid64 lowercase max did not decode");
             }
 
             char over[ULID64_ENCODED_LENGTH + 2];
             memcpy(over, s, sizeof(over));
             if (!ulidTestBase36Increment(over, ULID64_ENCODED_LENGTH)) {
-                ERRR("ulid64 max has no successor");
+                ERR("ulid64 max has no successor");
             }
             got.data = 7;
             if (ulid64Decode(over, &got) || got.data != 7) {
@@ -4583,12 +4583,12 @@ int ulidTest(int argc, char *argv[]) {
             }
 
             if (ulid64Decode("ZZZZZZZZZZZZZ", &got)) {
-                ERRR("ulid64 all-Z was accepted");
+                ERR("ulid64 all-Z was accepted");
             }
 
             if (ulid64Decode("00000000000000", &got) ||
                 ulid64Decode("000000000000", &got)) {
-                ERRR("ulid64 accepted a wrong length");
+                ERR("ulid64 accepted a wrong length");
             }
         }
 
@@ -4609,7 +4609,7 @@ int ulidTest(int argc, char *argv[]) {
             char over[ULID32_ENCODED_LENGTH + 2];
             memcpy(over, s, sizeof(over));
             if (!ulidTestBase36Increment(over, ULID32_ENCODED_LENGTH)) {
-                ERRR("ulid32 max has no successor");
+                ERR("ulid32 max has no successor");
             }
             got.data = 7;
             if (ulid32Decode(over, &got) || got.data != 7) {
@@ -4619,7 +4619,7 @@ int ulidTest(int argc, char *argv[]) {
             if (ulid32Decode("ZZZZZZZ", &got) ||
                 ulid32Decode("00000000", &got) ||
                 ulid32Decode("000000", &got)) {
-                ERRR("ulid32 accepted all-Z or a wrong length");
+                ERR("ulid32 accepted all-Z or a wrong length");
             }
         }
 
@@ -4646,7 +4646,7 @@ int ulidTest(int argc, char *argv[]) {
             char over[ULID_ENCODED_LENGTH + 2];
             memcpy(over, s, sizeof(over));
             if (!ulidTestBase36Increment(over, ULID_ENCODED_LENGTH)) {
-                ERRR("ulid max has no successor");
+                ERR("ulid max has no successor");
             }
 
             char tooLong[ULID_ENCODED_LENGTH + 2];

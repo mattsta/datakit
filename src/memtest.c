@@ -731,7 +731,7 @@ size_t memtestProcessMemory(int passes) {
     return errors;
 }
 
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 
 /* macOS: Process memory testing via Mach VM is unreliable due to guard pages
  * and other protected regions that can cause crashes. Return unsupported. */
@@ -854,7 +854,7 @@ static int memtest_run_unit_tests(void) {
         assert(mem);
         int errors = memtestAddressing(mem, bytes);
         if (errors != 0) {
-            ERRR("Addressing test found errors on good memory");
+            ERR("Addressing test found errors on good memory");
         }
         free(mem);
     }
@@ -867,7 +867,7 @@ static int memtest_run_unit_tests(void) {
         memtestFillRandom(mem, bytes);
         int errors = memtestCompare(mem, bytes);
         if (errors != 0) {
-            ERRR("Random fill does not produce matching halves");
+            ERR("Random fill does not produce matching halves");
         }
         free(mem);
     }
@@ -881,13 +881,13 @@ static int memtest_run_unit_tests(void) {
         memtestFillPattern(mem, bytes, 0, (uint64_t)-1);
         int errors = memtestCompare(mem, bytes);
         if (errors != 0) {
-            ERRR("Solid fill does not produce matching halves");
+            ERR("Solid fill does not produce matching halves");
         }
 
         memtestFillPattern(mem, bytes, ULONG_ONEZERO, ULONG_ZEROONE);
         errors = memtestCompare(mem, bytes);
         if (errors != 0) {
-            ERRR("Checkerboard fill does not produce matching halves");
+            ERR("Checkerboard fill does not produce matching halves");
         }
 
         free(mem);
@@ -906,13 +906,13 @@ static int memtest_run_unit_tests(void) {
             ERR("Found %zu errors on 1MB test", result.errors_found);
         }
         if (result.passes_complete != 1) {
-            ERRR("Did not complete 1 pass");
+            ERR("Did not complete 1 pass");
         }
         if (result.bytes_tested != bytes) {
-            ERRR("Did not test correct size");
+            ERR("Did not test correct size");
         }
         if (result.duration_s <= 0) {
-            ERRR("Duration not recorded");
+            ERR("Duration not recorded");
         }
 
         free(mem);
@@ -1003,7 +1003,7 @@ static int memtest_run_unit_tests(void) {
             }
         }
         if (!preserved) {
-            ERRR("Original data not preserved after test");
+            ERR("Original data not preserved after test");
         }
 
         free(mem);
@@ -1121,7 +1121,7 @@ static int memtest_run_unit_tests(void) {
             ERR("Found %zu errors on allocated memory", errors);
         }
         if (result.bytes_tested != 1024 * 1024) {
-            ERRR("Did not test 1MB");
+            ERR("Did not test 1MB");
         }
     }
 

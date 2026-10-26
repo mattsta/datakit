@@ -755,7 +755,7 @@ static int benchCmpDouble(const void *a, const void *b) {
 
 #if defined(__SANITIZE_ADDRESS__)
 #define BENCH_SANITIZED 1
-#elif defined(__has_feature)
+#elifdef __has_feature
 #if __has_feature(address_sanitizer)
 #define BENCH_SANITIZED 1
 #endif
@@ -839,7 +839,7 @@ static double benchMedian(double *runs, size_t n) {
 
 #if __F16C__
 #define BENCH_FLOAT16_HARDWARE "F16C"
-#elif defined(__aarch64__)
+#elifdef __aarch64__
 #define BENCH_FLOAT16_HARDWARE "NEON"
 #else
 #define BENCH_FLOAT16_HARDWARE "none (software path)"

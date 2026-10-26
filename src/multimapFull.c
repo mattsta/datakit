@@ -3072,14 +3072,14 @@ int multimapFullTest(int argc, char *argv[]) {
             multimapFullDelete(m, &k);
             err += rangeBoxOwnershipCheck_("delete Wn3", m);
             if (getRangeBox(m, 0)->data.ptr != p0) {
-                ERRR("wide to wide refresh moved the payload");
+                ERR("wide to wide refresh moved the payload");
             }
 
             k = RB_WN(2);
             multimapFullDelete(m, &k);
             err += rangeBoxOwnershipCheck_("delete Wn2", m);
             if (getRangeBox(m, 0)->type != DATABOX_UNSIGNED_64) {
-                ERRR("wide to narrow refresh kept a wide rangeBox");
+                ERR("wide to narrow refresh kept a wide rangeBox");
             }
 
             /* Narrow to narrow, then narrow to wide allocates. */
@@ -3090,7 +3090,7 @@ int multimapFullTest(int argc, char *argv[]) {
             multimapFullDelete(m, &k);
             err += rangeBoxOwnershipCheck_("delete N6", m);
             if (getRangeBox(m, 1)->type != DATABOX_UNSIGNED_128) {
-                ERRR("narrow to wide refresh didn't take the wide key");
+                ERR("narrow to wide refresh didn't take the wide key");
             }
 
             /* An insert above a wide head splits that map; the lower half
@@ -3100,7 +3100,7 @@ int multimapFullTest(int argc, char *argv[]) {
             multimapFullInsert(m, row);
             err += rangeBoxOwnershipCheck_("insert Wp8", m);
             if (getRangeBox(m, 2)->data.ptr != p2) {
-                ERRR("insert refresh moved the wide payload");
+                ERR("insert refresh moved the wide payload");
             }
 
             /* A copy rebuilds its own payloads (freed at the block's end,
@@ -3131,7 +3131,7 @@ int multimapFullTest(int argc, char *argv[]) {
             multimapFullDelete(m, &k);
             err += rangeBoxOwnershipCheck_("delete map1", m);
             if (!rangeBoxIsWide_(getRangeBox(m, 0))) {
-                ERRR("rangeBox[0] should hold Wp1 before map 0 goes");
+                ERR("rangeBox[0] should hold Wp1 before map 0 goes");
             }
 
             k = RB_WN(9);
@@ -3234,8 +3234,8 @@ int multimapFullTest(int argc, char *argv[]) {
         if (missing_via_exists > 0) {
             printf("multimapFullExists missed %zu of %zu inserted keys\n",
                    missing_via_exists, n);
-            ERRR("multimapFullExists missed keys that were just inserted "
-                 "(natural-sort comparator non-transitive — BUG-A regressed)");
+            ERR("multimapFullExists missed keys that were just inserted "
+                "(natural-sort comparator non-transitive — BUG-A regressed)");
         }
         /* Iteration must visit at least n distinct keys. */
         multimapIterator iter;
@@ -3248,7 +3248,7 @@ int multimapFullTest(int argc, char *argv[]) {
         }
         if (walked != n) {
             printf("iteration walked %zu but inserted %zu\n", walked, n);
-            ERRR("iteration entry count != insertion count");
+            ERR("iteration entry count != insertion count");
         }
     }
 
@@ -3275,18 +3275,18 @@ int multimapFullTest(int argc, char *argv[]) {
         if (m->count <= 64) {
             printf("only %u sub-maps built from %zu inserts\n",
                    (unsigned)m->count, inserted);
-            ERRR("failed to construct >64 sub-maps — the heap-spill "
-                 "dump arm was never exercised");
+            ERR("failed to construct >64 sub-maps — the heap-spill "
+                "dump arm was never exercised");
         }
         cleaner(flexFree) flex *combined = multimapFullDump(m);
         if (!combined) {
-            ERRR("multimapFullDump returned NULL for a populated map");
+            ERR("multimapFullDump returned NULL for a populated map");
         }
         const size_t dumped = flexCount(combined) / m->elementsPerEntry;
         if (dumped != inserted) {
             printf("dump carried %zu entries, inserted %zu\n", dumped,
                    inserted);
-            ERRR("dump lost entries across the >64-submap merge");
+            ERR("dump lost entries across the >64-submap merge");
         }
     }
 
@@ -3560,8 +3560,8 @@ int multimapFullTest(int argc, char *argv[]) {
         const databox *insert2[2] = {&keybox, &v2box};
         const bool existed2 = multimapFullInsert(m, insert2);
         if (!existed2) {
-            ERRR("REPLACE on existing key reported as new insert "
-                 "(returned !existed) — bug regressed!");
+            ERR("REPLACE on existing key reported as new insert "
+                "(returned !existed) — bug regressed!");
         }
 
         if (multimapFullCount(m) != 1) {
@@ -3579,8 +3579,8 @@ int multimapFullTest(int argc, char *argv[]) {
         if (foundVal.len != v2box.len ||
             memcmp(foundVal.data.bytes.start, v2box.data.bytes.start,
                    v2box.len) != 0) {
-            ERRR("Lookup after REPLACE returned the OLD value (binary "
-                 "search picked the wrong map) — bug regressed!");
+            ERR("Lookup after REPLACE returned the OLD value (binary "
+                "search picked the wrong map) — bug regressed!");
         }
 
         /* Structural invariants — verify no duplicate keys leaked
@@ -4068,7 +4068,7 @@ int multimapFullTest(int argc, char *argv[]) {
         const databox gone = DATABOX_SIGNED(0);
         const databox kept = DATABOX_SIGNED(2999);
         if (multimapFullExists(m, &gone) || !multimapFullExists(m, &kept)) {
-            ERRR("the deleted map's rows or the rest are wrong");
+            ERR("the deleted map's rows or the rest are wrong");
         }
 
         /* Past the last map: empty, one map kept, usable again */
@@ -4080,7 +4080,7 @@ int multimapFullTest(int argc, char *argv[]) {
         const databox *row[2] = {&kept, &val};
         multimapFullInsert(m, row);
         if (multimapFullCount(m) != 1 || !multimapFullExists(m, &kept)) {
-            ERRR("an emptied map did not take a new row");
+            ERR("an emptied map did not take a new row");
         }
     }
 
@@ -4108,7 +4108,7 @@ int multimapFullTest(int argc, char *argv[]) {
             !multimapFullDeleteFullWidthWithFound(m, right, &found) ||
             found.data.i != 30 || multimapFullExists(m, &k30) ||
             multimapFullCount(m) != 39) {
-            ERRR("NewFromOneGrow / DeleteFullWidthWithFound misbehaved");
+            ERR("NewFromOneGrow / DeleteFullWidthWithFound misbehaved");
         }
 
         /* An oversize map splits the same with or without a (NULL)
@@ -4122,7 +4122,7 @@ int multimapFullTest(int argc, char *argv[]) {
             multimapFullNodeCount(m) < 2 || multimapFullCount(m) != 39 ||
             !multimapFullExists(m, &k33) || !multimapFullExists(m, &k117) ||
             multimapFullExists(m, &k31)) {
-            ERRR("RegularizeMapWithReference did not split the map");
+            ERR("RegularizeMapWithReference did not split the map");
         }
     }
 
@@ -4167,13 +4167,13 @@ int multimapFullTest(int argc, char *argv[]) {
         ptrs[1] = (databox *)&out128;
 
         if (!multimapFullFirst(m, ptrs)) {
-            ERRR("multimapFullFirst failed on wide 128-bit map");
+            ERR("multimapFullFirst failed on wide 128-bit map");
         }
         if (out[0].data.u64 != 0) {
             ERR("Wrong first key: %" PRIu64, out[0].data.u64);
         }
         if (*out128.data.i128 != bigVal) {
-            ERRR("128-bit payload corrupted (scratch carve overlap)");
+            ERR("128-bit payload corrupted (scratch carve overlap)");
         }
         for (uint32_t j = 2; j < arity; j++) {
             if (out[j].data.u64 != 0xAA00 + j) {
@@ -4336,7 +4336,7 @@ int multimapFullTest(int argc, char *argv[]) {
         const databox *rb = getRangeBox(m, 0);
         if (rb->type != DATABOX_UNSIGNED_128 || !rb->big || !rb->allocated ||
             !rb->data.u128 || *rb->data.u128 != wideAtom) {
-            ERRR("rangeBox does not own the wide atom value");
+            ERR("rangeBox does not own the wide atom value");
         }
 
         __uint128_t above = (__uint128_t)1 << 80;

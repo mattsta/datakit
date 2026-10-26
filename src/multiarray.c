@@ -1051,7 +1051,7 @@ static int multiarrayBoundsCheck_(uint32_t n, multiarrayType tier) {
             ERR("%" PRIu32 " elements: the appended element did not pop", n);
         }
     } else if (head || tail) {
-        ERRR("an empty array has a head or tail");
+        ERR("an empty array has a head or tail");
     }
 #undef MA_BOUNDS_
     dkDiagSetPrintMode(priorPrint);
@@ -1211,7 +1211,7 @@ int multiarrayTest(int argc, char *argv[]) {
         dkDiagSetPrintMode(priorPrint);
         if (!tail || tail->a != rowMax - 1 || back != tail || !first ||
             first->a != 0 || past || before || dkDiagCount() != c0 + 2) {
-            ERRR("a promoted Medium's ends or bounds are wrong");
+            ERR("a promoted Medium's ends or bounds are wrong");
         }
 
         /* And as a Large, which keeps the empty trailing node */
@@ -1220,7 +1220,7 @@ int multiarrayTest(int argc, char *argv[]) {
         const s16 *ltail = multiarrayLargeGetTail(large);
         if (!ltail || ltail->a != rowMax - 1 ||
             multiarrayLargeGet(large, -1) != ltail) {
-            ERRR("a Large carrying an empty trailing node lost its tail");
+            ERR("a Large carrying an empty trailing node lost its tail");
         }
         multiarrayLargeFree(large);
     }
@@ -1332,7 +1332,7 @@ int multiarrayTest(int argc, char *argv[]) {
             }
         }
         if (multiarrayCopy(NULL)) {
-            ERRR("a copy of NULL is not NULL");
+            ERR("a copy of NULL is not NULL");
         }
     }
 
@@ -1464,7 +1464,7 @@ int multiarrayTest(int argc, char *argv[]) {
         s16 *held = NULL;
         multiarrayNativeGet(nat, s16, held, 0);
         if (!held || held->a != 11) {
-            ERRR("the native element changed");
+            ERR("the native element changed");
         }
         multiarrayNativeFree(nat);
     }

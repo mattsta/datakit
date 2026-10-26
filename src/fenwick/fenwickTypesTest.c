@@ -162,7 +162,7 @@ static size_t fwtIndex_(uint64_t *s) {
         if (count && (fenwick##T##Count(fw) != count ||                        \
                       fenwick##T##Query(fw, count - 1) != 0 ||                 \
                       fenwick##T##Get(fw, count / 2) != 0)) {                  \
-            ERRR(#T ": Clear did not zero the tree and keep the count");       \
+            ERR(#T ": Clear did not zero the tree and keep the count");        \
         }                                                                      \
         fenwick##T##Free(fw);                                                  \
         return err;                                                            \
@@ -282,7 +282,7 @@ FWT_LOWER_BOUND(U128, __uint128_t)
             fenwick##T##Get(fw, 0) != elem[0] ||                               \
             fenwick##T##Get(fw, 1) != big ||                                   \
             fenwick##T##Count(fw) != before) {                                 \
-            ERRR(#T ": a non-finite delta, value or element was accepted");    \
+            ERR(#T ": a non-finite delta, value or element was accepted");     \
         }                                                                      \
                                                                                \
         /* Growth across the Small tier's limit keeps every element */         \
@@ -290,7 +290,7 @@ FWT_LOWER_BOUND(U128, __uint128_t)
             fenwick##T##Get(fw, 40000) != (VT)3 ||                             \
             fenwick##T##Get(fw, 0) != elem[0] ||                               \
             fenwick##T##Get(fw, 1) != big) {                                   \
-            ERRR(#T ": growth lost a value");                                  \
+            ERR(#T ": growth lost a value");                                   \
         }                                                                      \
                                                                                \
         /* Clear keeps the count and zeroes every element */                   \
@@ -299,7 +299,7 @@ FWT_LOWER_BOUND(U128, __uint128_t)
         if (fenwick##T##Count(fw) != grown ||                                  \
             fenwick##T##Get(fw, 1) != (VT)0 ||                                 \
             fenwick##T##Query(fw, grown - 1) != (VT)0) {                       \
-            ERRR(#T ": Clear did not zero the tree and keep the count");       \
+            ERR(#T ": Clear did not zero the tree and keep the count");        \
         }                                                                      \
                                                                                \
         fenwick##T##Free(fw);                                                  \

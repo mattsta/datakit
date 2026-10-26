@@ -668,8 +668,8 @@ int hmacTest(int argc, char *argv[]) {
             }
         }
         if (!all_zero) {
-            ERRR("hmacFinal did not zero ctx->scratch (K_ipad/K_opad "
-                 "remained resident)");
+            ERR("hmacFinal did not zero ctx->scratch (K_ipad/K_opad "
+                "remained resident)");
         }
 
         /* Mirror on BLAKE3 so the contract holds for every algorithm. */
@@ -692,7 +692,7 @@ int hmacTest(int argc, char *argv[]) {
             }
         }
         if (!b3_all_zero) {
-            ERRR("hmacFinal did not zero BLAKE3 ctx->scratch");
+            ERR("hmacFinal did not zero BLAKE3 ctx->scratch");
         }
     }
 
@@ -711,7 +711,7 @@ int hmacTest(int argc, char *argv[]) {
         hmacCompute(&hmacAlgoSHA256, key_b, sizeof(key_b), data,
                     sizeof(data) - 1, out_b);
         if (digestEqual(out_a, out_b, 32)) {
-            ERRR("HMAC outputs equal under different keys (avalanche failure)");
+            ERR("HMAC outputs equal under different keys (avalanche failure)");
         }
     }
 
@@ -726,7 +726,7 @@ int hmacTest(int argc, char *argv[]) {
         hmacCompute(&hmacAlgoSHA256, key, sizeof(key), data, sizeof(data) - 1,
                     out_second);
         if (!digestEqual(out_first, out_second, 32)) {
-            ERRR("HMAC nondeterministic across identical calls");
+            ERR("HMAC nondeterministic across identical calls");
         }
     }
 
@@ -862,7 +862,7 @@ int hmacTest(int argc, char *argv[]) {
         hmacUpdate(&single, joined, (sizeof(a) - 1u) + (sizeof(b) - 1u));
         hmacFinal(&single, one_shot);
         if (memcmp(one_shot, split, sizeof(one_shot)) != 0) {
-            ERRR("Chunked vs concatenated streaming update mismatch");
+            ERR("Chunked vs concatenated streaming update mismatch");
         }
     }
 
@@ -1043,7 +1043,7 @@ int hmacTest(int argc, char *argv[]) {
 
         /* Sanity: lane 0 of both must match. */
         if (memcmp(serial_out[0], batch_out[0], 32) != 0) {
-            ERRR("perf bench: serial vs batch lane 0 mismatch");
+            ERR("perf bench: serial vs batch lane 0 mismatch");
         }
     }
 

@@ -32,7 +32,7 @@
     do {                                                                       \
         persistCtxTestRefusal refusal_;                                        \
         if (!persistCtxTestRefuseLogsBegin((ctx), &refusal_)) {                \
-            ERRR("could not arm a refusing WAL");                              \
+            ERR("could not arm a refusing WAL");                               \
             break;                                                             \
         }                                                                      \
         const persistLogResult refused_[] = {__VA_ARGS__};                     \

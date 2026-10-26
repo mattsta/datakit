@@ -1972,7 +1972,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         const size_t hlen =
             cmEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
         if (hlen == 0) {
-            ERRR("encode failed");
+            ERR("encode failed");
         }
         const flex *src = (const flex *)hdr;
 
@@ -1995,7 +1995,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
             if (n == 0 ||
                 clusterMailboxIngest(mb, sealed, n, K1) != CLUSTER_MAILBOX_OK ||
                 ctx.apply_count != 1u || ctx.sequence != 12345u) {
-                ERRR("hand-sealed unmodified header was not applied");
+                ERR("hand-sealed unmodified header was not applied");
             }
         }
 
@@ -2032,7 +2032,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         if (ctx.apply_count != 1u ||
             clusterMailboxLastApplied(mb, 7u) != 12345u) {
-            ERRR("a refused frame reached apply or moved the watermark");
+            ERR("a refused frame reached apply or moved the watermark");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -2046,7 +2046,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         const size_t hlen =
             cmEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
         if (hlen == 0) {
-            ERRR("encode failed");
+            ERR("encode failed");
         }
         const flex *src = (const flex *)hdr;
         const databox text = databoxNewBytesString("x");
@@ -2089,7 +2089,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                  &seq, &mtype, &consumed) ||
             origin != UINT32_MAX || mtype != UINT8_MAX || seq != 12345u ||
             consumed != flexBytes(edge)) {
-            ERRR("inner header refused the largest in-range values");
+            ERR("inner header refused the largest in-range values");
         }
         /* Four or six entries */
         cleaner(flexFree) flex *shortHdr = flexDuplicate(src);
@@ -2100,13 +2100,13 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                 &origin, &seq, &mtype, &consumed) ||
             cmDecodeInnerHeader(longHdr, flexBytes(longHdr), &protocol, &origin,
                                 &seq, &mtype, &consumed)) {
-            ERRR("an inner header of 4 or 6 entries was accepted");
+            ERR("an inner header of 4 or 6 entries was accepted");
         }
 
         /* Rotation announce: one key id, 1..UINT32_MAX */
         uint8_t ann[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         if (clusterMailboxBuildRotateAnnounce(ann, 0x1234u) == 0) {
-            ERRR("build failed");
+            ERR("build failed");
         }
         const flex *annSrc = (const flex *)ann;
         const databoxBig zero = DATABOX_BIG_UNSIGNED(0);
@@ -2130,7 +2130,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
             clusterMailboxParseRotateAnnounce(noIds, flexBytes(noIds), &got) ||
             clusterMailboxParseRotateAnnounce(NULL, 3, &got) ||
             clusterMailboxParseRotateAnnounce(ann, sizeof(ann), NULL)) {
-            ERRR("announce bounds or counts not exact");
+            ERR("announce bounds or counts not exact");
         }
     }
 
@@ -2139,7 +2139,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         cmTestWideValues(wides);
         uint8_t buf[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         if (clusterMailboxBuildRotateAnnounce(buf, 0x1234u) == 0) {
-            ERRR("build failed");
+            ERR("build failed");
         }
         const flex *src = (const flex *)buf;
         for (size_t w = 0; w < CM_TEST_WIDE_COUNT; w++) {
@@ -2176,7 +2176,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(snap_sz);
         size_t snap_len = 0;
         if (!clusterMailboxSnapshot(mb, snap, snap_sz, &snap_len)) {
-            ERRR("snapshot failed");
+            ERR("snapshot failed");
         }
         clusterMailboxFree(mb);
         const flex *src = (const flex *)snap;
@@ -2206,7 +2206,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
             cmTestPoisonStack();
             if (!clusterMailboxRestore(dst, same, flexBytes(same)) ||
                 clusterMailboxLastApplied(dst, 61u) != 64u) {
-                ERRR("unmodified rebuild did not restore");
+                ERR("unmodified rebuild did not restore");
             }
             clusterMailboxFree(dst);
             size_t n = 0;
@@ -2217,7 +2217,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                    &n) ||
                 !clusterMailboxRestoreWrapped(dst, &vp, wrapped, n) ||
                 clusterMailboxLastApplied(dst, 60u) != 63u) {
-                ERRR("unmodified rebuild did not restore wrapped");
+                ERR("unmodified rebuild did not restore wrapped");
             }
             clusterMailboxFree(dst);
         }
@@ -2260,22 +2260,22 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailbox *bad =
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_XXH64, NULL, NULL);
         if (bad != NULL) {
-            ERRR("Create should refuse non-keyed algo (XXH64)");
+            ERR("Create should refuse non-keyed algo (XXH64)");
         }
         /* Refuse AEAD algo. */
         bad = clusterMailboxCreate(ring, FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
                                    NULL, NULL);
         if (bad != NULL) {
-            ERRR("Create should refuse AEAD algo");
+            ERR("Create should refuse AEAD algo");
         }
         /* Accept HMAC-SHA-256. */
         clusterMailbox *mb =
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
         if (mb == NULL) {
-            ERRR("Create failed for HMAC-SHA-256");
+            ERR("Create failed for HMAC-SHA-256");
         }
         if (clusterMailboxOriginCount(mb) != 0) {
-            ERRR("Origin count must start at 0");
+            ERR("Origin count must start at 0");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -2294,7 +2294,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         cleaner(clusterMailboxFree) clusterMailbox *mb =
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
         if (unknownFlag || noOpts || !mb) {
-            ERRR("unknown flag bits or no options were accepted");
+            ERR("unknown flag bits or no options were accepted");
         }
 
         /* Attach keeps the keyed-class pin; a refusal leaves the bound
@@ -2310,7 +2310,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                         NULL, NULL) ||
             !clusterMailboxSeal(mb, 1u, 1u, 0u, one, sizeof(one), 3u, frame,
                                 sizeof(frame), &written)) {
-            ERRR("attach took a non-keyed or AEAD algorithm");
+            ERR("attach took a non-keyed or AEAD algorithm");
         }
 
         /* A payload length that cannot be framed has no sealed size; a
@@ -2321,7 +2321,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                sizeof(frame), &written) ||
             clusterMailboxSeal(mb, 1u, 2u, 0u, one, sizeof(one), 3u, NULL,
                                sizeof(frame), &written)) {
-            ERRR("an unframeable size, a NULL payload or no output was taken");
+            ERR("an unframeable size, a NULL payload or no output was taken");
         }
     }
 
@@ -2389,7 +2389,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 1u, 5u, 1u, payload, sizeof(payload), K1, buf,
                            sz, &written);
         if (clusterMailboxIngest(mb, buf, written, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("First ingest failed");
+            ERR("First ingest failed");
         }
         if (ctx.apply_count != 1) {
             ERR("Apply count after first ingest should be 1, got %u",
@@ -2398,7 +2398,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         /* Re-ingest the same bytes — replay. */
         if (clusterMailboxIngest(mb, buf, written, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Second ingest must be rejected as replay");
+            ERR("Second ingest must be rejected as replay");
         }
         if (ctx.apply_count != 1) {
             ERR("Apply count must not advance on replay, got %u",
@@ -2427,11 +2427,11 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &w5);
         /* Apply seq=10 first, then try seq=5 — must be rejected. */
         if (clusterMailboxIngest(mb, seal10, w10, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("Apply of seq=10 failed");
+            ERR("Apply of seq=10 failed");
         }
         if (clusterMailboxIngest(mb, seal5, w5, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Out-of-order seq=5 must be rejected as replay");
+            ERR("Out-of-order seq=5 must be rejected as replay");
         }
         if (clusterMailboxLastApplied(mb, 9u) != 10u) {
             ERR("Watermark should still be 10, got %" PRIu64,
@@ -2460,7 +2460,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 7u, 100u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("seq=100");
+            ERR("seq=100");
         }
         for (uint64_t s = 99u; s >= 97u; s--) {
             clusterMailboxSeal(mb, 7u, s, 0u, payload, sizeof(payload), K1, buf,
@@ -2473,21 +2473,21 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ERR("expected 4 applies, got %u", ctx.apply_count);
         }
         if (clusterMailboxLastApplied(mb, 7u) != 100u) {
-            ERRR("Watermark should remain 100 after in-window fills");
+            ERR("Watermark should remain 100 after in-window fills");
         }
         /* Duplicate seq=99 — bit set; reject. */
         clusterMailboxSeal(mb, 7u, 99u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Duplicate in-window must be REPLAY");
+            ERR("Duplicate in-window must be REPLAY");
         }
         /* Duplicate of watermark itself — bit 0 set; reject. */
         clusterMailboxSeal(mb, 7u, 100u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Duplicate watermark must be REPLAY");
+            ERR("Duplicate watermark must be REPLAY");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -2512,27 +2512,27 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 8u, 200u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("seq=200");
+            ERR("seq=200");
         }
         /* age=63 (last in-window) should accept. */
         clusterMailboxSeal(mb, 8u, 137u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("age=63 must accept");
+            ERR("age=63 must accept");
         }
         /* age=64 (just out) must reject. */
         clusterMailboxSeal(mb, 8u, 136u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("age=64 must REPLAY");
+            ERR("age=64 must REPLAY");
         }
         /* age=100 well out of window must reject. */
         clusterMailboxSeal(mb, 8u, 100u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("age=100 must REPLAY");
+            ERR("age=100 must REPLAY");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -2541,38 +2541,38 @@ int clusterMailboxTest(int argc, char *argv[]) {
     TEST("rotation state: init/promote/retire/accepts") {
         clusterRotationState st;
         if (clusterRotationInit(&st, 0u)) {
-            ERRR("init with 0 must refuse");
+            ERR("init with 0 must refuse");
         }
         if (!clusterRotationInit(&st, 5u)) {
-            ERRR("init with 5 must succeed");
+            ERR("init with 5 must succeed");
         }
         if (!clusterRotationAccepts(&st, 5u)) {
-            ERRR("primary should be accepted");
+            ERR("primary should be accepted");
         }
         if (clusterRotationAccepts(&st, 7u)) {
-            ERRR("non-primary must not be accepted before promote");
+            ERR("non-primary must not be accepted before promote");
         }
         if (clusterRotationPromote(&st, 5u)) {
-            ERRR("promote to same id must refuse (no-op)");
+            ERR("promote to same id must refuse (no-op)");
         }
         if (clusterRotationPromote(&st, 0u)) {
-            ERRR("promote to INVALID must refuse");
+            ERR("promote to INVALID must refuse");
         }
         if (!clusterRotationPromote(&st, 7u)) {
-            ERRR("promote to 7 must succeed");
+            ERR("promote to 7 must succeed");
         }
         if (!clusterRotationAccepts(&st, 7u)) {
-            ERRR("new primary accepted");
+            ERR("new primary accepted");
         }
         if (!clusterRotationAccepts(&st, 5u)) {
-            ERRR("previous still accepted during overlap");
+            ERR("previous still accepted during overlap");
         }
         clusterRotationRetirePrevious(&st);
         if (clusterRotationAccepts(&st, 5u)) {
-            ERRR("retired previous must not be accepted");
+            ERR("retired previous must not be accepted");
         }
         if (!clusterRotationAccepts(&st, 7u)) {
-            ERRR("primary still accepted after retire");
+            ERR("primary still accepted after retire");
         }
     }
 
@@ -2583,30 +2583,30 @@ int clusterMailboxTest(int argc, char *argv[]) {
          * an ASAN stack-buffer-overflow as soon as flexBytes(f) > 4. */
         uint8_t buf[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         if (clusterMailboxBuildRotateAnnounce(buf, 0u) != 0) {
-            ERRR("build with 0 must refuse");
+            ERR("build with 0 must refuse");
         }
         const size_t built =
             clusterMailboxBuildRotateAnnounce(buf, 0x12345678u);
         if (built == 0) {
-            ERRR("build must return non-zero");
+            ERR("build must return non-zero");
         }
         if (built > CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN) {
             ERR("build returned %zu > payload cap", built);
         }
         hmacKeyId got = 0;
         if (!clusterMailboxParseRotateAnnounce(buf, built, &got)) {
-            ERRR("parse should succeed");
+            ERR("parse should succeed");
         }
         if (got != 0x12345678u) {
             ERR("round-trip mismatch: got 0x%x", got);
         }
         /* Malformed: truncated length, zero id. */
         if (clusterMailboxParseRotateAnnounce(buf, built - 1u, &got)) {
-            ERRR("short-len parse must refuse");
+            ERR("short-len parse must refuse");
         }
         const uint8_t zeros[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN] = {};
         if (clusterMailboxParseRotateAnnounce(zeros, built, &got)) {
-            ERRR("zero-id parse must refuse");
+            ERR("zero-id parse must refuse");
         }
     }
 
@@ -2638,11 +2638,11 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(prod, 3u, 1u, 0u, payload, sizeof(payload),
                            rs_prod.primary, buf, sz, &w);
         if (!clusterRotationAccepts(&rs_cons, rs_prod.primary)) {
-            ERRR("consumer must accept producer's primary");
+            ERR("consumer must accept producer's primary");
         }
         if (clusterMailboxIngest(cons, buf, w, rs_prod.primary) !=
             CLUSTER_MAILBOX_OK) {
-            ERRR("phase 1 ingest");
+            ERR("phase 1 ingest");
         }
 
         /* Phase 2: producer sends rotation announcement under K1
@@ -2661,15 +2661,15 @@ int clusterMailboxTest(int argc, char *argv[]) {
             announce_payload, announce_len, rs_prod.primary, buf, sz, &w);
         if (clusterMailboxIngest(cons, buf, w, rs_prod.primary) !=
             CLUSTER_MAILBOX_OK) {
-            ERRR("phase 2 announcement ingest");
+            ERR("phase 2 announcement ingest");
         }
         hmacKeyId new_id = 0;
         if (!clusterMailboxParseRotateAnnounce(
                 ctx_cons.last_payload, ctx_cons.last_payload_len, &new_id)) {
-            ERRR("consumer parse announce");
+            ERR("consumer parse announce");
         }
         if (!clusterRotationPromote(&rs_cons, new_id)) {
-            ERRR("consumer promote");
+            ERR("consumer promote");
         }
 
         /* Producer also promotes; both now accept K2 (and overlap K1). */
@@ -2679,18 +2679,18 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(prod, 3u, 3u, 0u, payload, sizeof(payload),
                            rs_prod.primary, buf, sz, &w);
         if (!clusterRotationAccepts(&rs_cons, rs_prod.primary)) {
-            ERRR("consumer must accept new primary");
+            ERR("consumer must accept new primary");
         }
         if (clusterMailboxIngest(cons, buf, w, rs_prod.primary) !=
             CLUSTER_MAILBOX_OK) {
-            ERRR("phase 3 ingest under K2");
+            ERR("phase 3 ingest under K2");
         }
 
         /* Phase 4: retire previous on both sides. */
         clusterRotationRetirePrevious(&rs_prod);
         clusterRotationRetirePrevious(&rs_cons);
         if (clusterRotationAccepts(&rs_cons, K1)) {
-            ERRR("K1 must be retired");
+            ERR("K1 must be retired");
         }
 
         clusterMailboxFree(prod);
@@ -2714,24 +2714,24 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &w);
         /* OK ingest. */
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("ingest OK");
+            ERR("ingest OK");
         }
         /* Replay. */
         if (clusterMailboxIngest(mb, buf, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("ingest replay");
+            ERR("ingest replay");
         }
         /* Tamper a byte — verify failure. */
         buf[w / 2] ^= 0x80;
         if (clusterMailboxIngest(mb, buf, w, K1) !=
             CLUSTER_MAILBOX_ERR_VERIFY_FAILED) {
-            ERRR("ingest verify_failed");
+            ERR("ingest verify_failed");
         }
         buf[w / 2] ^= 0x80; /* restore */
         /* Unknown key id. */
         if (clusterMailboxIngest(mb, buf, w, 99999u) !=
             CLUSTER_MAILBOX_ERR_KEY_MISSING) {
-            ERRR("ingest key_missing");
+            ERR("ingest key_missing");
         }
 
         clusterMailboxStats st;
@@ -2740,32 +2740,32 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ERR("ingest_total expected 4, got %" PRIu64, st.ingest_total);
         }
         if (st.apply_ok != 1u) {
-            ERRR("apply_ok != 1");
+            ERR("apply_ok != 1");
         }
         if (st.replay_rejected != 1u) {
-            ERRR("replay_rejected != 1");
+            ERR("replay_rejected != 1");
         }
         if (st.verify_failed != 1u) {
-            ERRR("verify_failed != 1");
+            ERR("verify_failed != 1");
         }
         if (st.key_missing != 1u) {
-            ERRR("key_missing != 1");
+            ERR("key_missing != 1");
         }
         if (st.seal_total != 1u) {
-            ERRR("seal_total != 1");
+            ERR("seal_total != 1");
         }
         if (st.bytes_sealed != (uint64_t)w) {
-            ERRR("bytes_sealed != w");
+            ERR("bytes_sealed != w");
         }
         if (st.bytes_ingested != (uint64_t)w * 4u) {
-            ERRR("bytes_ingested mismatch");
+            ERR("bytes_ingested mismatch");
         }
 
         clusterMailboxResetStats(mb);
         clusterMailboxGetStats(mb, &st);
         if (st.ingest_total != 0u || st.apply_ok != 0u ||
             st.bytes_sealed != 0u) {
-            ERRR("reset failed to clear counters");
+            ERR("reset failed to clear counters");
         }
 
         clusterMailboxFree(mb);
@@ -2791,17 +2791,17 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 9u, 10u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("seq=10");
+            ERR("seq=10");
         }
         clusterMailboxSeal(mb, 9u, 10000u, 0u, payload, sizeof(payload), K1,
                            buf, sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("seq=10000");
+            ERR("seq=10000");
         }
         clusterMailboxSeal(mb, 9u, 9999u, 0u, payload, sizeof(payload), K1, buf,
                            sz, &w);
         if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("age=1 after big jump must accept");
+            ERR("age=1 after big jump must accept");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -2856,7 +2856,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &written);
         /* Baseline ingest passes. */
         if (clusterMailboxIngest(mb, buf, written, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("Baseline ingest failed");
+            ERR("Baseline ingest failed");
         }
         /* Reset state so we can re-test each flip. */
         clusterMailboxFree(mb);
@@ -2901,7 +2901,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &written);
         /* First ingest accepts (apply_count becomes 1). */
         if (clusterMailboxIngest(mb, buf, written, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("First ingest failed");
+            ERR("First ingest failed");
         }
 
         /* Build seq=2. With threshold=1 and apply_count now 1, the
@@ -2979,12 +2979,12 @@ int clusterMailboxTest(int argc, char *argv[]) {
         size_t snap_written = 0;
         if (!clusterMailboxSnapshot(mb_a, snap, snap_size, &snap_written) ||
             snap_written != snap_size) {
-            ERRR("Snapshot write failed");
+            ERR("Snapshot write failed");
         }
         /* Snapshot is a valid flex buffer with 3 entries per slot.
          * Deep validation also catches any internal-length corruption. */
         if (!flexValidateBufferDeep(snap, snap_size)) {
-            ERRR("Snapshot is not a valid flex buffer");
+            ERR("Snapshot is not a valid flex buffer");
         }
         if (flexCount((const flex *)snap) != 3u * 3u) {
             ERR("Expected 9 flex entries (3 slots * 3 entries), got %zu",
@@ -2997,7 +2997,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailbox *mb_b = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b);
         if (!clusterMailboxRestore(mb_b, snap, snap_size)) {
-            ERRR("Restore failed");
+            ERR("Restore failed");
         }
         if (clusterMailboxOriginCount(mb_b) != 3u) {
             ERR("Origin count after restore should be 3, got %zu",
@@ -3006,7 +3006,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         if (clusterMailboxLastApplied(mb_b, 10u) != 3u ||
             clusterMailboxLastApplied(mb_b, 20u) != 7u ||
             clusterMailboxLastApplied(mb_b, 30u) != 1u) {
-            ERRR("Watermarks did not round-trip through snapshot/restore");
+            ERR("Watermarks did not round-trip through snapshot/restore");
         }
 
         /* Critical: an attacker replaying an old frame (origin=20,
@@ -3017,7 +3017,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            replay, sz, &replay_w);
         if (clusterMailboxIngest(mb_b, replay, replay_w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Replay after restore must be rejected");
+            ERR("Replay after restore must be rejected");
         }
         /* But seq=8 (next after restored watermark) must apply. */
         cleanerName(zfree, Bytes) uint8_t *advance = zmalloc(sz);
@@ -3026,7 +3026,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            advance, sz, &advance_w);
         if (clusterMailboxIngest(mb_b, advance, advance_w, K1) !=
             CLUSTER_MAILBOX_OK) {
-            ERRR("Forward progress (seq=8) after restore must succeed");
+            ERR("Forward progress (seq=8) after restore must succeed");
         }
 
         clusterMailboxFree(mb_b);
@@ -3041,10 +3041,10 @@ int clusterMailboxTest(int argc, char *argv[]) {
         /* Empty / non-flex buffer. */
         const uint8_t empty[1] = {};
         if (clusterMailboxRestore(mb, empty, 0)) {
-            ERRR("Restore must reject empty buffer");
+            ERR("Restore must reject empty buffer");
         }
         if (clusterMailboxRestore(mb, empty, 1)) {
-            ERRR("Restore must reject non-flex bytes");
+            ERR("Restore must reject non-flex bytes");
         }
 
         /* Entry count NOT a multiple of 3 — flex valid but wrong shape. */
@@ -3053,7 +3053,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         flexPushUnsigned(&bad_count, 42u, FLEX_ENDPOINT_TAIL);
         if (clusterMailboxRestore(mb, (const uint8_t *)bad_count,
                                   flexBytes(bad_count))) {
-            ERRR("Restore must reject entry count not divisible by 3");
+            ERR("Restore must reject entry count not divisible by 3");
         }
         /* Record with seq == 0 (sentinel). */
         cleaner(flexFree) flex *seq_zero = flexNew();
@@ -3062,7 +3062,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         flexPushUnsigned(&seq_zero, 0u, FLEX_ENDPOINT_TAIL);  /* window_bits */
         if (clusterMailboxRestore(mb, (const uint8_t *)seq_zero,
                                   flexBytes(seq_zero))) {
-            ERRR("Restore must reject seq==0 record");
+            ERR("Restore must reject seq==0 record");
         }
         /* Record with origin_id == 0 (reserved sentinel). */
         cleaner(flexFree) flex *origin_zero = flexNew();
@@ -3071,7 +3071,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         flexPushUnsigned(&origin_zero, 0u, FLEX_ENDPOINT_TAIL);  /* window */
         if (clusterMailboxRestore(mb, (const uint8_t *)origin_zero,
                                   flexBytes(origin_zero))) {
-            ERRR("Restore must reject origin_id==0 record");
+            ERR("Restore must reject origin_id==0 record");
         }
         /* Slot count exceeds origin table capacity. */
         cleaner(flexFree) flex *too_many = flexNew();
@@ -3082,7 +3082,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         if (clusterMailboxRestore(mb, (const uint8_t *)too_many,
                                   flexBytes(too_many))) {
-            ERRR("Restore must reject slot count > capacity");
+            ERR("Restore must reject slot count > capacity");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -3102,7 +3102,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         if (!clusterMailboxRestore(mb, (const uint8_t *)base,
                                    flexBytes(base))) {
-            ERRR("Restore of the base snapshot failed");
+            ERR("Restore of the base snapshot failed");
         }
 
         clusterMailboxOrigin before[CLUSTER_MAILBOX_ORIGIN_CAP];
@@ -3175,7 +3175,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
             clusterMailboxLastApplied(mb, 2u) != 250u ||
             clusterMailboxLastApplied(mb, 5u) != 500u ||
             clusterMailboxOriginCount(mb) != countBefore) {
-            ERRR("Restore of the valid leading records did not merge");
+            ERR("Restore of the valid leading records did not merge");
         }
 
         clusterMailboxFree(mb);
@@ -3211,10 +3211,10 @@ int clusterMailboxTest(int argc, char *argv[]) {
         const bool ok =
             clusterMailboxRestore(mb, (const uint8_t *)stale, flexBytes(stale));
         if (!ok) {
-            ERRR("Stale snapshot restore should succeed (it MAX-merges)");
+            ERR("Stale snapshot restore should succeed (it MAX-merges)");
         }
         if (clusterMailboxLastApplied(mb, 5u) != 10u) {
-            ERRR("Stale snapshot must NOT rewind the watermark below 10");
+            ERR("Stale snapshot must NOT rewind the watermark below 10");
         }
 
         clusterMailboxFree(mb);
@@ -3259,7 +3259,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         size_t written = 0;
         if (!clusterMailboxSnapshotWrapped(mb_a, &wp, wrapped, wrapped_sz,
                                            &written)) {
-            ERRR("Wrapped snapshot failed");
+            ERR("Wrapped snapshot failed");
         }
         if (written != wrapped_sz) {
             ERR("Wrapped snapshot wrote %zu, expected %zu", written,
@@ -3278,11 +3278,11 @@ int clusterMailboxTest(int argc, char *argv[]) {
             .key_len = sizeof(test_key),
         };
         if (!clusterMailboxRestoreWrapped(mb_b, &vp, wrapped, wrapped_sz)) {
-            ERRR("Wrapped restore failed");
+            ERR("Wrapped restore failed");
         }
         if (clusterMailboxLastApplied(mb_b, 50u) != 4u ||
             clusterMailboxLastApplied(mb_b, 51u) != 9u) {
-            ERRR("Watermarks did not round-trip through envelope");
+            ERR("Watermarks did not round-trip through envelope");
         }
 
         /* Replay attack against the restored mailbox: send seq=9 on
@@ -3293,7 +3293,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            replay, sz, &replay_w);
         if (clusterMailboxIngest(mb_b, replay, replay_w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Replay must be rejected after wrapped restore");
+            ERR("Replay must be rejected after wrapped restore");
         }
 
         clusterMailboxFree(mb_b);
@@ -3396,12 +3396,12 @@ int clusterMailboxTest(int argc, char *argv[]) {
             .key_len = sizeof(test_key),
         };
         if (clusterMailboxRestoreWrapped(mb, &vp, wrap_buf, wsz)) {
-            ERRR("Tampered wrapped snapshot must be rejected");
+            ERR("Tampered wrapped snapshot must be rejected");
         }
         /* Mailbox state must be unchanged — we never reached the
          * inner restore. Origin 77 still at seq=5. */
         if (clusterMailboxLastApplied(mb, 77u) != 5u) {
-            ERRR("Failed restore must leave mailbox untouched");
+            ERR("Failed restore must leave mailbox untouched");
         }
 
         /* Wrong key — also rejected, mailbox untouched. */
@@ -3414,15 +3414,15 @@ int clusterMailboxTest(int argc, char *argv[]) {
             .key_len = sizeof(wrong_key),
         };
         if (clusterMailboxRestoreWrapped(mb, &vp_wrong, wrap_buf, wsz)) {
-            ERRR("Wrong-key wrapped restore must be rejected");
+            ERR("Wrong-key wrapped restore must be rejected");
         }
         if (clusterMailboxLastApplied(mb, 77u) != 5u) {
-            ERRR("Wrong-key restore must leave mailbox untouched");
+            ERR("Wrong-key restore must leave mailbox untouched");
         }
 
         /* Sanity: correct key still works. */
         if (!clusterMailboxRestoreWrapped(mb, &vp, wrap_buf, wsz)) {
-            ERRR("Correct-key restore should still succeed");
+            ERR("Correct-key restore should still succeed");
         }
 
         clusterMailboxFree(mb);
@@ -3438,14 +3438,14 @@ int clusterMailboxTest(int argc, char *argv[]) {
         flexEnvelopeWrapParams wp_ck = {.algo = FLEX_ENV_ALGO_XXH64};
         if (clusterMailboxSnapshotWrapped(mb, &wp_ck, buf, sizeof(buf),
                                           &written)) {
-            ERRR("Wrapped snapshot must refuse checksum algo");
+            ERR("Wrapped snapshot must refuse checksum algo");
         }
         flexEnvelopeWrapParams wp_aead = {
             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
         };
         if (clusterMailboxSnapshotWrapped(mb, &wp_aead, buf, sizeof(buf),
                                           &written)) {
-            ERRR("Wrapped snapshot must refuse AEAD algo");
+            ERR("Wrapped snapshot must refuse AEAD algo");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -3541,7 +3541,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         if (clusterMailboxLastApplied(mb, 1u) != 6u ||
             clusterMailboxLastApplied(mb, 2u) != 3u) {
-            ERRR("Per-origin watermarks did not advance independently");
+            ERR("Per-origin watermarks did not advance independently");
         }
         if (clusterMailboxOriginCount(mb) != 2u) {
             ERR("Expected 2 origins, got %zu", clusterMailboxOriginCount(mb));
@@ -3574,7 +3574,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 5u, 10u, 0u, payload, sizeof(payload), K1,
                            seal10, sz, &w10);
         if (clusterMailboxIngest(mb, seal10, w10, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("First ingest (apply count 0 < threshold) should succeed");
+            ERR("First ingest (apply count 0 < threshold) should succeed");
         }
 
         /* Next apply will be rejected. Send seq=11 — apply rejects;
@@ -3585,7 +3585,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            seal11, sz, &w11);
         if (clusterMailboxIngest(mb, seal11, w11, K1) !=
             CLUSTER_MAILBOX_ERR_APPLY_REJECTED) {
-            ERRR("Second ingest should be apply-rejected");
+            ERR("Second ingest should be apply-rejected");
         }
         if (clusterMailboxLastApplied(mb, 5u) != 10u) {
             ERR("Watermark should still be 10 after apply rejection, got "
@@ -3603,7 +3603,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &w_r);
         if (clusterMailboxIngest(mb, replay, w_r, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("Older seq must be rejected as REPLAY after apply-reject");
+            ERR("Older seq must be rejected as REPLAY after apply-reject");
         }
 
         /* origin_count must still be 1 — the apply rejection must NOT
@@ -3641,7 +3641,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxSeal(mb, 50u, 5u, 0u, payload, sizeof(payload), K1, b50,
                            sz, &w50);
         if (clusterMailboxIngest(mb, b50, w50, K1) != CLUSTER_MAILBOX_OK) {
-            ERRR("First ingest must succeed");
+            ERR("First ingest must succeed");
         }
         /* Origin 60: apply REJECTS (apply_count is now 1 == threshold).
          * Slot is created (origin_id=60) but last_applied stays 0. */
@@ -3651,7 +3651,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &w60);
         if (clusterMailboxIngest(mb, b60, w60, K1) !=
             CLUSTER_MAILBOX_ERR_APPLY_REJECTED) {
-            ERRR("Second ingest must be apply-rejected");
+            ERR("Second ingest must be apply-rejected");
         }
         /* origin_count is now 2 but only origin 50 has a persistable
          * watermark. Snapshot must contain exactly 1 slot × 3 flex
@@ -3661,7 +3661,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         uint8_t snap[64];
         size_t snap_written = 0;
         if (!clusterMailboxSnapshot(mb, snap, sizeof(snap), &snap_written)) {
-            ERRR("Snapshot failed");
+            ERR("Snapshot failed");
         }
         if (snap_written != expected_size) {
             ERR("Snapshot wrote %zu, expected %zu", snap_written,
@@ -3677,15 +3677,15 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailbox *mb_b = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b);
         if (!clusterMailboxRestore(mb_b, snap, snap_written)) {
-            ERRR("Restore of one-record snapshot failed");
+            ERR("Restore of one-record snapshot failed");
         }
         if (clusterMailboxLastApplied(mb_b, 50u) != 5u) {
             ERR("Origin 50 should be at seq 5 after restore, got %" PRIu64,
                 clusterMailboxLastApplied(mb_b, 50u));
         }
         if (clusterMailboxLastApplied(mb_b, 60u) != 0u) {
-            ERRR("Origin 60 must NOT be persisted (apply-rejected has no "
-                 "watermark)");
+            ERR("Origin 60 must NOT be persisted (apply-rejected has no "
+                "watermark)");
         }
 
         clusterMailboxFree(mb_b);
@@ -3726,16 +3726,16 @@ int clusterMailboxTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *snap =
             persistOpsClusterMailbox.snapshot(mb_a, &snap_len);
         if (snap == NULL || snap_len == 0) {
-            ERRR("persistOps snapshot");
+            ERR("persistOps snapshot");
         }
         if (!flexValidateBufferDeep(snap, snap_len)) {
-            ERRR("persistOps snapshot must be valid flex");
+            ERR("persistOps snapshot must be valid flex");
         }
         if (persistOpsClusterMailbox.count(mb_a) != 2u) {
-            ERRR("persistOps count should be 2");
+            ERR("persistOps count should be 2");
         }
         if (persistOpsClusterMailbox.estimateSize(mb_a) != snap_len) {
-            ERRR("estimateSize must agree with snapshot length");
+            ERR("estimateSize must agree with snapshot length");
         }
 
         /* "Restart": destroy + new mailbox, restore via the direct API
@@ -3746,11 +3746,11 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
         if (!clusterMailboxRestore(mb_b, snap, snap_len)) {
-            ERRR("restore from persistOps snapshot");
+            ERR("restore from persistOps snapshot");
         }
         if (clusterMailboxLastApplied(mb_b, 40u) != 6u ||
             clusterMailboxLastApplied(mb_b, 41u) != 12u) {
-            ERRR("watermarks did not survive persistOps round-trip");
+            ERR("watermarks did not survive persistOps round-trip");
         }
 
         /* Replay-protection survives: a producer trying to re-send
@@ -3761,14 +3761,14 @@ int clusterMailboxTest(int argc, char *argv[]) {
                            sz, &w);
         if (clusterMailboxIngest(mb_b, b, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("replay (40,5) must be rejected after restart");
+            ERR("replay (40,5) must be rejected after restart");
         }
         clusterMailboxSeal(mb_b, 41u, 11u, 0u, payload, sizeof(payload), K1, b,
                            sz, &w);
         if (clusterMailboxIngest(mb_b, b, w, K1) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            ERRR("replay (41,11) must be rejected after restart "
-                 "(window state was persisted)");
+            ERR("replay (41,11) must be rejected after restart "
+                "(window state was persisted)");
         }
         clusterMailboxFree(mb_b);
         hmacKeyringFree(ring);
@@ -3781,10 +3781,10 @@ int clusterMailboxTest(int argc, char *argv[]) {
         const char *expected =
             persistTypeName(PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS);
         if (expected == NULL) {
-            ERRR("persistTypeName returned NULL for "
-                 "PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS");
+            ERR("persistTypeName returned NULL for "
+                "PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS");
         } else if (persistOpsClusterMailbox.name == NULL) {
-            ERRR("persistOpsClusterMailbox.name is NULL");
+            ERR("persistOpsClusterMailbox.name is NULL");
         } else if (strcmp(persistOpsClusterMailbox.name, expected) != 0) {
             ERR("descriptor name '%s' must match persistTypeName '%s'",
                 persistOpsClusterMailbox.name, expected);
@@ -3806,7 +3806,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         size_t written = 0;
         if (clusterMailboxSeal(mb, 0u, 1u, 0u, payload, sizeof(payload), K1,
                                buf, sz, &written)) {
-            ERRR("Seal must refuse origin_id == 0");
+            ERR("Seal must refuse origin_id == 0");
         }
 
         /* Hand-craft an envelope-wrapped frame with inner origin_id==0
@@ -3935,14 +3935,14 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
         D5_INGEST(mb_src, 10u);
         D5_INGEST(mb_src, 30u);
         if (clusterMailboxLastApplied(mb_src, ORIGIN) != 30u) {
-            ERRR("snapshotRestore: src last_applied not 30");
+            ERR("snapshotRestore: src last_applied not 30");
         }
 
         const size_t snap_size = clusterMailboxSnapshotSize(mb_src);
         cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(snap_size);
         size_t snap_written = 0;
         if (!clusterMailboxSnapshot(mb_src, snap, snap_size, &snap_written)) {
-            ERRR("snapshotRestore: snapshot write failed");
+            ERR("snapshotRestore: snapshot write failed");
         }
         clusterMailboxFree(mb_src);
 
@@ -3958,7 +3958,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
             D5_INGEST(mb_tgt, s);
         }
         if (clusterMailboxLastApplied(mb_tgt, ORIGIN) != 80u) {
-            ERRR("snapshotRestore: tgt last_applied not 80");
+            ERR("snapshotRestore: tgt last_applied not 80");
         }
 
         /* Restore — snapshot is behind current; under Policy B bits are
@@ -3969,11 +3969,11 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
          * gracefully dropped (those seqs are outside the merged window
          * and would always be ancient-replay-rejected). */
         if (!clusterMailboxRestore(mb_tgt, snap, snap_size)) {
-            ERRR("snapshotRestore: restore failed (spec scenario)");
+            ERR("snapshotRestore: restore failed (spec scenario)");
         }
         if (clusterMailboxLastApplied(mb_tgt, ORIGIN) != 80u) {
-            ERRR("snapshotRestore: last_applied must not rewind (monotonic "
-                 "invariant)");
+            ERR("snapshotRestore: last_applied must not rewind (monotonic "
+                "invariant)");
         }
         /* Replays inside the current window remain rejected. */
         D5_TRY_INGEST(mb_tgt, 30u, CLUSTER_MAILBOX_ERR_REPLAY);
@@ -4023,7 +4023,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
         D5_INGEST(mb_tgt, 50u);
         if (clusterMailboxLastApplied(mb_tgt, ORIGIN) != 50u) {
-            ERRR("snapshotRestore bug-reveal: tgt last_applied != 50");
+            ERR("snapshotRestore bug-reveal: tgt last_applied != 50");
         }
 
         /* Restore — Policy B re-orients snap bits forward by gap=40
@@ -4036,10 +4036,10 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
          * replaying seq 10 would then be accepted as in-window
          * out-of-order — a silent replay-protection downgrade. */
         if (!clusterMailboxRestore(mb_tgt, snap, snap_size)) {
-            ERRR("snapshotRestore bug-reveal: restore failed");
+            ERR("snapshotRestore bug-reveal: restore failed");
         }
         if (clusterMailboxLastApplied(mb_tgt, ORIGIN) != 50u) {
-            ERRR("snapshotRestore bug-reveal: last_applied rewound");
+            ERR("snapshotRestore bug-reveal: last_applied rewound");
         }
 
         /* The critical assertion: replaying seq 10 (which the snapshot
@@ -4095,10 +4095,10 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
          * Then OR with snap.bits (just bit 0 for seq 100). Final:
          * bits {0, 40, 50} set, last_applied=100. */
         if (!clusterMailboxRestore(mb_tgt, snap, snap_size)) {
-            ERRR("snapshotAhead: restore failed");
+            ERR("snapshotAhead: restore failed");
         }
         if (clusterMailboxLastApplied(mb_tgt, ORIGIN) != 100u) {
-            ERRR("snapshotAhead: last_applied should advance to 100");
+            ERR("snapshotAhead: last_applied should advance to 100");
         }
         D5_TRY_INGEST(mb_tgt, 100u, CLUSTER_MAILBOX_ERR_REPLAY);
         D5_TRY_INGEST(mb_tgt, 60u, CLUSTER_MAILBOX_ERR_REPLAY);
@@ -4137,7 +4137,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
         D5_INGEST(mb_tgt, 10u);
 
         if (!clusterMailboxRestore(mb_tgt, snap, snap_size)) {
-            ERRR("snapshotSame: restore failed");
+            ERR("snapshotSame: restore failed");
         }
         /* Final bits should be {0, 5, 7}: seqs {10, 5, 3} all applied. */
         D5_TRY_INGEST(mb_tgt, 5u, CLUSTER_MAILBOX_ERR_REPLAY);
@@ -4354,12 +4354,12 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                         sizeof(key))) {
-            ERRR("statsRace: keyring install failed");
+            ERR("statsRace: keyring install failed");
         }
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmStatsRaceApply, NULL);
         if (mb == NULL) {
-            ERRR("statsRace: mailbox create failed");
+            ERR("statsRace: mailbox create failed");
         }
 
         cmStatsRaceCtx ctx = {};
@@ -4370,10 +4370,10 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
         pthread_t writer_thr;
         pthread_t reader_thr;
         if (pthread_create(&writer_thr, NULL, cmStatsRaceWriter, &ctx) != 0) {
-            ERRR("statsRace: spawn writer failed");
+            ERR("statsRace: spawn writer failed");
         }
         if (pthread_create(&reader_thr, NULL, cmStatsRaceReader, &ctx) != 0) {
-            ERRR("statsRace: spawn reader failed");
+            ERR("statsRace: spawn reader failed");
         }
         pthread_join(writer_thr, NULL);
         pthread_join(reader_thr, NULL);
@@ -4401,7 +4401,7 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
             ERR("statsRace: reader invariant failures: %d", reader_fail);
         }
         if (reader_iters == 0u) {
-            ERRR("statsRace: reader did not run any iterations");
+            ERR("statsRace: reader did not run any iterations");
         }
         if (clusterMailboxLastApplied(mb, ORIGIN) != 1000u) {
             ERR("statsRace: final last_applied != 1000, got %" PRIu64,
@@ -4447,12 +4447,12 @@ int dkTestMailboxStatsAlignmentTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstallUnsalted(ring, 7u, &hmacAlgoSHA256, key,
                                         sizeof(key))) {
-            ERRR("cacheLineLayout: keyring install failed");
+            ERR("cacheLineLayout: keyring install failed");
         }
         clusterMailbox *mb =
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
         if (mb == NULL) {
-            ERRR("cacheLineLayout: mailbox create failed");
+            ERR("cacheLineLayout: mailbox create failed");
         }
 
         /* Hot block starts at offset 0 of `counters`; both the struct
@@ -4723,12 +4723,12 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
         clusterMailbox *mb = NULL;
         if (ring == NULL || !hmacKeyringInstallUnsalted(
                                 ring, KID, &hmacAlgoSHA256, key, sizeof(key))) {
-            ERRR("retireRace: initial keyring install failed");
+            ERR("retireRace: initial keyring install failed");
         } else {
             mb = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256,
                                       cmRetireRaceApply, &ctx);
             if (mb == NULL) {
-                ERRR("retireRace: mailbox create failed");
+                ERR("retireRace: mailbox create failed");
             }
         }
         ctx.mb = mb;
@@ -4740,11 +4740,11 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
             pthread_t rotator_thr;
             if (pthread_create(&writer_thr, NULL, cmRetireRaceWriter, &ctx) !=
                 0) {
-                ERRR("retireRace: spawn writer failed");
+                ERR("retireRace: spawn writer failed");
             } else {
                 if (pthread_create(&rotator_thr, NULL, cmRetireRaceRotator,
                                    &ctx) != 0) {
-                    ERRR("retireRace: spawn rotator failed");
+                    ERR("retireRace: spawn rotator failed");
                     /* Release the writer from its start wait. */
                     /* @sync: relaxed hint */
                     atomic_store_explicit(&ctx.rotator_done, 1,
@@ -4806,8 +4806,8 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
             const uint64_t copiesOkBefore = ctx.copies_ok;
             cmRetireRaceCheckCopy(&ctx);
             if (ctx.copies_ok != copiesOkBefore + 1u) {
-                ERRR("retireRace: GetRawCopy after join did not return the "
-                     "complete key");
+                ERR("retireRace: GetRawCopy after join did not return the "
+                    "complete key");
             }
             const size_t cap =
                 clusterMailboxSealedSize(mb, CM_RACE_PAYLOAD_LEN);

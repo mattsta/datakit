@@ -52,18 +52,12 @@ CTEST_INCLUDE_GEN(val)
         err++;                                                                 \
     } while (0)
 
+/* A test failure: the message is a printf format, with or without
+ * arguments */
 #define ERR(x, ...)                                                            \
     do {                                                                       \
         currentFilename();                                                     \
-        printf("ERROR! " x "\n", __VA_ARGS__);                                 \
-        fflush(stdout);                                                        \
-        err++;                                                                 \
-    } while (0)
-
-#define ERRR(x)                                                                \
-    do {                                                                       \
-        currentFilename();                                                     \
-        printf("ERROR! " x "\n");                                              \
+        printf("ERROR! " x "\n" __VA_OPT__(, ) __VA_ARGS__);                   \
         fflush(stdout);                                                        \
         err++;                                                                 \
     } while (0)

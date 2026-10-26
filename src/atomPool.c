@@ -661,7 +661,7 @@ int atomPoolTest(int argc, char *argv[]) {
             strcmp(atomPoolTypeName(ATOM_POOL_HASH),
                    atomPoolTypeName(ATOM_POOL_TREE)) == 0 ||
             strcmp(atomPoolTypeName((atomPoolType)99), "UNKNOWN") != 0) {
-            ERRR("default pool, GetType or TypeName wrong");
+            ERR("default pool, GetType or TypeName wrong");
         }
     }
 
@@ -676,7 +676,7 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool basic operations") {
             cleaner(atomPoolFree) atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             /* Intern some strings */
@@ -689,7 +689,7 @@ int atomPoolTest(int argc, char *argv[]) {
             uint64_t id3 = atomPoolIntern(pool, &s3);
 
             if (id1 == 0 || id2 == 0 || id3 == 0) {
-                ERRR("Intern returned 0");
+                ERR("Intern returned 0");
             }
 
             if (id1 != id3) {
@@ -699,7 +699,7 @@ int atomPoolTest(int argc, char *argv[]) {
             }
 
             if (id1 == id2) {
-                ERRR("Different strings got same ID");
+                ERR("Different strings got same ID");
             }
 
             /* Check count */
@@ -715,22 +715,22 @@ int atomPoolTest(int argc, char *argv[]) {
             }
             if (resolved.len != s1.len ||
                 memcmp(resolved.data.ptr, s1.data.ptr, s1.len) != 0) {
-                ERRR("Lookup returned wrong string");
+                ERR("Lookup returned wrong string");
             }
 
             /* GetId without retain */
             uint64_t lookupId = atomPoolGetId(pool, &s1);
             if (lookupId != id1) {
-                ERRR("GetId returned wrong ID");
+                ERR("GetId returned wrong ID");
             }
 
             /* Exists */
             if (!atomPoolExists(pool, &s1)) {
-                ERRR("Exists returned false for interned string");
+                ERR("Exists returned false for interned string");
             }
             databox notExist = databoxNewBytesString("nothere");
             if (atomPoolExists(pool, &notExist)) {
-                ERRR("Exists returned true for non-existent string");
+                ERR("Exists returned true for non-existent string");
             }
 
             /* Refcount: hello was interned twice */
@@ -759,7 +759,7 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool reset") {
             atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             databox s1 = databoxNewBytesString("test1");
@@ -768,7 +768,7 @@ int atomPoolTest(int argc, char *argv[]) {
             atomPoolIntern(pool, &s2);
 
             if (atomPoolCount(pool) != 2) {
-                ERRR("Count before reset should be 2");
+                ERR("Count before reset should be 2");
             }
 
             atomPoolReset(pool);
@@ -790,7 +790,7 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool refcount lifecycle") {
             atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             databox s1 = databoxNewBytesString("refcount_test");
@@ -805,7 +805,7 @@ int atomPoolTest(int argc, char *argv[]) {
             /* Second intern of same string: refcount = 2 */
             uint64_t id2 = atomPoolIntern(pool, &s1);
             if (id1 != id2) {
-                ERRR("Same string should get same ID");
+                ERR("Same string should get same ID");
             }
             if (atomPoolRefcount(pool, id1) != 2) {
                 ERR("Refcount after second intern should be 2, got %" PRIu64,
@@ -833,11 +833,11 @@ int atomPoolTest(int argc, char *argv[]) {
             /* Verify entry still exists and is correct */
             databox resolved = {};
             if (!atomPoolLookup(pool, id1, &resolved)) {
-                ERRR("Lookup failed after releases");
+                ERR("Lookup failed after releases");
             }
             if (resolved.len != s1.len ||
                 memcmp(resolved.data.ptr, s1.data.ptr, s1.len) != 0) {
-                ERRR("Lookup returned wrong string");
+                ERR("Lookup returned wrong string");
             }
 
             atomPoolFree(pool);
@@ -846,7 +846,7 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool release to deletion") {
             atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             databox s1 = databoxNewBytesString("delete_me");
@@ -869,23 +869,23 @@ int atomPoolTest(int argc, char *argv[]) {
             /* Lookup should fail */
             databox resolved = {};
             if (atomPoolLookup(pool, id1, &resolved)) {
-                ERRR("Lookup should fail for deleted entry");
+                ERR("Lookup should fail for deleted entry");
             }
 
             /* GetId should return 0 for deleted entry */
             if (atomPoolGetId(pool, &s1) != 0) {
-                ERRR("GetId should return 0 for deleted entry");
+                ERR("GetId should return 0 for deleted entry");
             }
 
             /* Exists should return false */
             if (atomPoolExists(pool, &s1)) {
-                ERRR("Exists should return false for deleted entry");
+                ERR("Exists should return false for deleted entry");
             }
 
             /* Re-interning should work and give a new (possibly same) ID */
             uint64_t id2 = atomPoolIntern(pool, &s1);
             if (id2 == 0) {
-                ERRR("Re-intern returned 0");
+                ERR("Re-intern returned 0");
             }
             if (atomPoolCount(pool) != 1) {
                 ERR("Count should be 1 after re-intern, got %zu",
@@ -898,7 +898,7 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool GetId vs Intern") {
             atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             databox s1 = databoxNewBytesString("getid_test");
@@ -936,7 +936,7 @@ int atomPoolTest(int argc, char *argv[]) {
             /* Intern should increment refcount */
             uint64_t id3 = atomPoolIntern(pool, &s1);
             if (id3 != id1) {
-                ERRR("Intern returned different ID");
+                ERR("Intern returned different ID");
             }
             if (atomPoolRefcount(pool, id1) != 2) {
                 ERR("Intern should increment refcount to 2, got %" PRIu64,
@@ -949,19 +949,19 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool edge cases") {
             atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             /* Empty string */
             databox empty = databoxNewBytesString("");
             uint64_t emptyId = atomPoolIntern(pool, &empty);
             if (emptyId == 0) {
-                ERRR("Intern of empty string returned 0");
+                ERR("Intern of empty string returned 0");
             }
 
             databox emptyResolved = {};
             if (!atomPoolLookup(pool, emptyId, &emptyResolved)) {
-                ERRR("Lookup of empty string failed");
+                ERR("Lookup of empty string failed");
             }
             if (emptyResolved.len != 0) {
                 ERR("Empty string should have len 0, got %" PRIu64,
@@ -975,12 +975,12 @@ int atomPoolTest(int argc, char *argv[]) {
             databox longBox = databoxNewBytesString(longStr);
             uint64_t longId = atomPoolIntern(pool, &longBox);
             if (longId == 0) {
-                ERRR("Intern of long string returned 0");
+                ERR("Intern of long string returned 0");
             }
 
             databox longResolved = {};
             if (!atomPoolLookup(pool, longId, &longResolved)) {
-                ERRR("Lookup of long string failed");
+                ERR("Lookup of long string failed");
             }
             if (longResolved.len != sizeof(longStr) - 1) {
                 ERR("Long string len mismatch: %" PRIu64 " vs %zu",
@@ -989,18 +989,18 @@ int atomPoolTest(int argc, char *argv[]) {
 
             /* Invalid ID should not crash and return appropriate values */
             if (atomPoolRefcount(pool, 0) != 0) {
-                ERRR("Refcount of ID 0 should be 0");
+                ERR("Refcount of ID 0 should be 0");
             }
             if (atomPoolRefcount(pool, 999999) != 0) {
-                ERRR("Refcount of non-existent ID should be 0");
+                ERR("Refcount of non-existent ID should be 0");
             }
 
             databox invalidResolved = {};
             if (atomPoolLookup(pool, 0, &invalidResolved)) {
-                ERRR("Lookup of ID 0 should fail");
+                ERR("Lookup of ID 0 should fail");
             }
             if (atomPoolLookup(pool, 999999, &invalidResolved)) {
-                ERRR("Lookup of non-existent ID should fail");
+                ERR("Lookup of non-existent ID should fail");
             }
 
             atomPoolFree(pool);
@@ -1009,7 +1009,7 @@ int atomPoolTest(int argc, char *argv[]) {
         TEST("atomPool many entries with refcounts") {
             cleaner(atomPoolFree) atomPool *pool = atomPoolNew(type);
             if (!pool) {
-                ERRR("Failed to create atomPool");
+                ERR("Failed to create atomPool");
             }
 
             const size_t N = 1000;
@@ -1205,7 +1205,7 @@ int atomPoolTest(int argc, char *argv[]) {
     TEST("id behaviours: an unknown one is refused; each reports itself") {
         if (atomPoolNewWithIds(ATOM_POOL_TREE, (atomPoolIds)7) ||
             atomPoolNewWithIds((atomPoolType)7, ATOM_POOL_IDS_REUSE)) {
-            ERRR("an unknown type or id behaviour was accepted");
+            ERR("an unknown type or id behaviour was accepted");
         }
 
         for (int t = 0; t < 2; t++) {
@@ -1343,7 +1343,7 @@ int atomPoolTest(int argc, char *argv[]) {
         }
 
         if (memcmp(sequence[0], sequence[1], sizeof(sequence[0])) != 0) {
-            ERRR("the two backends handed out different ids");
+            ERR("the two backends handed out different ids");
         }
     }
 

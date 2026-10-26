@@ -72,7 +72,7 @@ int versionOSRuntimeTest(int argc, char *argv[]) {
             }
         }
         if (versionOSRuntimeParse(NULL) != 0) {
-            ERRR("NULL release parsed");
+            ERR("NULL release parsed");
         }
 
         /* A patch past 255 stays below the next minor version */
@@ -82,15 +82,15 @@ int versionOSRuntimeTest(int argc, char *argv[]) {
               versionOSRuntimeParse("4.19.299")) ||
             !(versionOSRuntimeParse("3.9.0") <
               versionOSRuntimeParse("3.10.0"))) {
-            ERRR("version codes out of order");
+            ERR("version codes out of order");
         }
 
         /* The running kernel was read at startup */
         if (versionOSRuntimeKernelVersion == 0 || !osVersionGTE(1, 0, 0)) {
-            ERRR("the running kernel version was not read");
+            ERR("the running kernel version was not read");
         }
         if (osVersionGTE(65535, 65535, 65534)) {
-            ERRR("a version above any real kernel compared as reached");
+            ERR("a version above any real kernel compared as reached");
         }
     }
 

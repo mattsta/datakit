@@ -105,11 +105,11 @@ int segmentI64Test(int argc, char *argv[]) {
         void *seg = segmentI64New(SEGMENT_OP_SUM);
 
         if (segmentI64Count(seg) != 0) {
-            ERRR("Empty tree should have count 0");
+            ERR("Empty tree should have count 0");
         }
 
         if (SEGMENT_I64_TYPE(seg) != SEGMENT_I64_TYPE_SMALL) {
-            ERRR("New tree should start as SMALL tier");
+            ERR("New tree should start as SMALL tier");
         }
 
         segmentI64Free(seg);
@@ -230,15 +230,15 @@ int segmentI64Test(int argc, char *argv[]) {
         segmentI64Update(&seg, 1000, 3);
 
         if (segmentI64Get(seg, 0) != 1) {
-            ERRR("Element at 0 incorrect");
+            ERR("Element at 0 incorrect");
         }
 
         if (segmentI64Get(seg, 100) != 2) {
-            ERRR("Element at 100 incorrect");
+            ERR("Element at 100 incorrect");
         }
 
         if (segmentI64Get(seg, 1000) != 3) {
-            ERRR("Element at 1000 incorrect");
+            ERR("Element at 1000 incorrect");
         }
 
         int64_t sum = segmentI64Query(seg, 0, 1000);
@@ -269,7 +269,7 @@ int segmentI64Test(int argc, char *argv[]) {
         }
 
         if (segmentI64Query(seg, 0, 99) != (99 * 100) / 2) {
-            ERRR("Sum[0,99] incorrect");
+            ERR("Sum[0,99] incorrect");
         }
 
         segmentI64Free(seg);

@@ -750,14 +750,14 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         const size_t need = aeadNonceLogToBytes(log, NULL, 0);
         cleanerName(zfree, TestBytes) uint8_t *snap = zcalloc(1, need);
         if (aeadNonceLogToBytes(log, snap, need) != need) {
-            ERRR("ToBytes failed");
+            ERR("ToBytes failed");
         }
 
         {
             cleaner(aeadNonceLogFree) aeadNonceLog *back =
                 aeadNonceLogFromBytes(snap, need);
             if (back == NULL || aeadNonceLogSize(back) != 2u) {
-                ERRR("unmodified snapshot did not restore");
+                ERR("unmodified snapshot did not restore");
             }
         }
 
@@ -781,16 +781,16 @@ int aeadNonceLogTest(int argc, char *argv[]) {
 
         last[0] = wideEntry[0];
         if (!flexValidateBuffer(snap, need)) {
-            ERRR("the corrupt snapshot's header should still validate");
+            ERR("the corrupt snapshot's header should still validate");
         }
         if (flexValidateBufferDeep(snap, need)) {
-            ERRR("the corrupt snapshot should fail deep validation");
+            ERR("the corrupt snapshot should fail deep validation");
         }
 
         cleaner(aeadNonceLogFree) aeadNonceLog *back =
             aeadNonceLogFromBytes(snap, need);
         if (back != NULL) {
-            ERRR("FromBytes accepted a corrupt last entry");
+            ERR("FromBytes accepted a corrupt last entry");
         }
     }
 
@@ -807,7 +807,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         const size_t need = aeadNonceLogToBytes(log, NULL, 0);
         cleanerName(zfree, TestBytes) uint8_t *snap = zcalloc(1, need);
         if (aeadNonceLogToBytes(log, snap, need) != need) {
-            ERRR("ToBytes failed");
+            ERR("ToBytes failed");
         }
         const flex *src = (const flex *)snap;
         const size_t entries = flexCount(src);
@@ -829,7 +829,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             cleaner(aeadNonceLogFree) aeadNonceLog *back =
                 aeadNonceLogFromBytes((const uint8_t *)same, flexBytes(same));
             if (back == NULL || aeadNonceLogSize(back) != 2u) {
-                ERRR("unmodified rebuild did not restore");
+                ERR("unmodified rebuild did not restore");
             }
         }
 
@@ -874,7 +874,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         memcpy(slotsCopy, log->slots, cap * sizeof(*slotsCopy));
         memcpy(linksCopy, log->links, cap * sizeof(*linksCopy));
         if (!anlPersistValidate(log)) {
-            ERRR("a valid log did not validate");
+            ERR("a valid log did not validate");
         }
         const size_t head = log->fifo_head;
         const size_t second = log->links[head].next;
@@ -929,23 +929,23 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             memcpy(links, linksCopy, cap * sizeof(*linksCopy));
         }
         if (!anlPersistValidate(log)) {
-            ERRR("the restored log did not validate");
+            ERR("the restored log did not validate");
         }
         cleaner(aeadNonceLogFree) aeadNonceLog *empty = aeadNonceLogCreate(0);
         empty->fifo_head = 0;
         if (anlPersistValidate(empty)) {
-            ERRR("an empty log with a FIFO head validated");
+            ERR("an empty log with a FIFO head validated");
         }
         empty->fifo_head = AEAD_NONCE_LOG_NIL;
         if (!anlPersistValidate(empty) || anlPersistValidate(NULL)) {
-            ERRR("an empty log, or NULL, validated wrongly");
+            ERR("an empty log, or NULL, validated wrongly");
         }
     }
 
     TEST("create/free round-trip") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         if (log == NULL) {
-            ERRR("Create returned NULL");
+            ERR("Create returned NULL");
         }
         if (aeadNonceLogCapacity(log) < 64u) {
             ERR("capacity below minimum: %zu", aeadNonceLogCapacity(log));
@@ -957,10 +957,10 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         uint8_t nonce[12] = {};
         nonceFromCounter(42u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
-            ERRR("first observe should succeed");
+            ERR("first observe should succeed");
         }
         if (aeadNonceLogObserve(log, 1u, nonce)) {
-            ERRR("duplicate observe must be refused");
+            ERR("duplicate observe must be refused");
         }
         if (aeadNonceLogSize(log) != 1u) {
             ERR("size expected 1, got %zu", aeadNonceLogSize(log));
@@ -972,16 +972,16 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         uint8_t nonce[12] = {};
         nonceFromCounter(7u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
-            ERRR("k=1");
+            ERR("k=1");
         }
         if (!aeadNonceLogObserve(log, 2u, nonce)) {
-            ERRR("k=2");
+            ERR("k=2");
         }
         if (aeadNonceLogObserve(log, 1u, nonce)) {
-            ERRR("dup k=1 refused");
+            ERR("dup k=1 refused");
         }
         if (aeadNonceLogObserve(log, 2u, nonce)) {
-            ERRR("dup k=2 refused");
+            ERR("dup k=2 refused");
         }
     }
 
@@ -1003,11 +1003,11 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         /* key=1 entries should now be insertable again. */
         nonceFromCounter(0u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
-            ERRR("post-clear re-observe of k=1 should succeed");
+            ERR("post-clear re-observe of k=1 should succeed");
         }
         /* key=2 entries should still be detected as duplicates. */
         if (aeadNonceLogObserve(log, 2u, nonce)) {
-            ERRR("k=2 entries must survive clearKey(1)");
+            ERR("k=2 entries must survive clearKey(1)");
         }
     }
 
@@ -1024,7 +1024,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
                 break;
             }
             if (aeadNonceLogSize(log) > aeadNonceLogCapacity(log)) {
-                ERRR("size exceeded capacity");
+                ERR("size exceeded capacity");
             }
         }
     }
@@ -1047,7 +1047,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         aeadNonceLogObserve(log, 2u, second);
         aeadNonceLogClearKey(log, 1u);
         if (aeadNonceLogObserve(log, 2u, second)) {
-            ERRR("reuse accepted after ClearKey emptied its run's head");
+            ERR("reuse accepted after ClearKey emptied its run's head");
         }
 
         /* Eviction: the oldest tuple heads the run; filling to the load
@@ -1064,10 +1064,10 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             ERR("expected 56 tuples, got %zu", aeadNonceLogSize(full));
         }
         if (aeadNonceLogObserve(full, 2u, second)) {
-            ERRR("reuse accepted after eviction emptied its run's head");
+            ERR("reuse accepted after eviction emptied its run's head");
         }
         if (!persistOpsAeadNonceLog.validate(full)) {
-            ERRR("validate refused the log after an eviction");
+            ERR("validate refused the log after an eviction");
         }
     }
 
@@ -1131,7 +1131,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             cleaner(aeadNonceLogFree) aeadNonceLog *huge =
                 aeadNonceLogCreate(AEAD_NONCE_LOG_MAX_CAP + 1u);
             if (huge != NULL) {
-                ERRR("a capacity past the limit was accepted");
+                ERR("a capacity past the limit was accepted");
             }
         }
 
@@ -1153,13 +1153,13 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         cleaner(aeadNonceLogFree) aeadNonceLog *back =
             aeadNonceLogFromBytes((const uint8_t *)snap, len);
         if (!back) {
-            ERRR("restore refused a live snapshot");
+            ERR("restore refused a live snapshot");
         } else {
             size_t len2 = 0;
             cleaner(flexFree) flex *snap2 =
                 (flex *)persistOpsAeadNonceLog.snapshot(back, &len2);
             if (len2 != len || memcmp(snap, snap2, len) != 0) {
-                ERRR("restored log does not snapshot to the same bytes");
+                ERR("restored log does not snapshot to the same bytes");
             }
 
             /* Further evictions remove the same (oldest) tuples */
@@ -1175,7 +1175,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             cleaner(flexFree) flex *b =
                 (flex *)persistOpsAeadNonceLog.snapshot(back, &lenB);
             if (lenA != lenB || memcmp(a, b, lenA) != 0) {
-                ERRR("live and restored logs diverged after evictions");
+                ERR("live and restored logs diverged after evictions");
             }
         }
     }
@@ -1184,13 +1184,13 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         uint8_t nonce[12] = {};
         if (aeadNonceLogObserve(NULL, 1u, nonce)) {
-            ERRR("NULL log accepted");
+            ERR("NULL log accepted");
         }
         if (aeadNonceLogObserve(log, 0u, nonce)) {
-            ERRR("key_id=0 accepted");
+            ERR("key_id=0 accepted");
         }
         if (aeadNonceLogObserve(log, 1u, NULL)) {
-            ERRR("NULL nonce accepted");
+            ERR("NULL nonce accepted");
         }
     }
 
@@ -1250,7 +1250,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(1024);
         datakitConfigSet(&saved); /* restore before any allocation */
         if (log != NULL) {
-            ERRR("aeadNonceLogCreate must return NULL under OOM (fail closed)");
+            ERR("aeadNonceLogCreate must return NULL under OOM (fail closed)");
         }
     }
 

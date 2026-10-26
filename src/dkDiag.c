@@ -278,7 +278,7 @@ int dkDiagTest(int argc, char *argv[]) {
         dkDiagLast(&d);
         if (!condition || d.severity != DK_DIAG_INTERNAL ||
             dkDiagCount() != before + 3) {
-            ERRR("condition / internal severities");
+            ERR("condition / internal severities");
         }
     }
 
@@ -288,11 +288,11 @@ int dkDiagTest(int argc, char *argv[]) {
         dkDiagClear();
         dkDiagnostic d;
         if (dkDiagLast(&d) || dkDiagLast(NULL) || dkDiagCount() != count) {
-            ERRR("clear left a diagnostic or moved the count");
+            ERR("clear left a diagnostic or moved the count");
         }
         DK_DIAG(DK_DIAG_MULTIARRAY_NATIVE, "y");
         if (!dkDiagLast(NULL) || dkDiagCount() != count + 1) {
-            ERRR("a report after clear was not recorded");
+            ERR("a report after clear was not recorded");
         }
     }
 
@@ -340,7 +340,7 @@ int dkDiagTest(int argc, char *argv[]) {
         uint64_t theirs[2] = {};
         pthread_t t;
         if (pthread_create(&t, NULL, dkDiagTestThread_, theirs) != 0) {
-            ERRR("pthread_create failed");
+            ERR("pthread_create failed");
         } else {
             pthread_join(t, NULL);
             dkDiagnostic d;
@@ -370,7 +370,7 @@ int dkDiagTest(int argc, char *argv[]) {
             strcmp(dkDiagCodeName((dkDiagCode)-1), "unknown") != 0 ||
             strcmp(dkDiagSeverityName(DK_DIAG_FATAL), "fatal") != 0 ||
             strcmp(dkDiagSeverityName((dkDiagSeverity)0), "unknown") != 0) {
-            ERRR("out-of-range names");
+            ERR("out-of-range names");
         }
     }
 
@@ -397,14 +397,14 @@ int dkDiagTest(int argc, char *argv[]) {
         const bool roundTrip = dkDiagGetPrintMode() == DK_DIAG_PRINT_ALWAYS;
         dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
         if (!roundTrip || dkDiagGetPrintMode() != DK_DIAG_PRINT_NEVER) {
-            ERRR("print mode get/set");
+            ERR("print mode get/set");
         }
     }
 
     TEST("a fatal report runs the hook, then aborts") {
         int fds[2];
         if (pipe(fds) != 0) {
-            ERRR("pipe failed");
+            ERR("pipe failed");
         } else {
             fflush(stdout);
             fflush(stderr);

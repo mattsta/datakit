@@ -336,7 +336,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
     if (!mos) {
-        ERRR("Failed to create multiOrderedSetP");
+        ERR("Failed to create multiOrderedSetP");
     }
 
     /* Add some entries ('updated': the member was already present) */
@@ -344,7 +344,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     databox score1 = databoxNewSigned(100);
     databox member1 = databoxNewBytesAllowEmbed("alice", 5);
     if (!multiOrderedSetAddP(mos, &score1, &member1, &updated) || updated) {
-        ERRR("alice was not added as a new member");
+        ERR("alice was not added as a new member");
     }
 
     databox score2 = databoxNewSigned(200);
@@ -355,18 +355,18 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     databox member3 = databoxNewBytesAllowEmbed("charlie", 7);
     PTEST_LOGGED(multiOrderedSetAddP(mos, &score3, &member3, NULL));
     if (!multiOrderedSetAddP(mos, &score3, &member3, &updated) || !updated) {
-        ERRR("re-adding charlie was not an update");
+        ERR("re-adding charlie was not an update");
     }
 
     /* Verify entries */
     if (!multiOrderedSetExistsP(mos, &member1)) {
-        ERRR("alice should exist");
+        ERR("alice should exist");
     }
     if (!multiOrderedSetExistsP(mos, &member2)) {
-        ERRR("bob should exist");
+        ERR("bob should exist");
     }
     if (!multiOrderedSetExistsP(mos, &member3)) {
-        ERRR("charlie should exist");
+        ERR("charlie should exist");
     }
 
     /* Check count */
@@ -377,7 +377,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     /* Verify scores */
     databox retrievedScore;
     if (!multiOrderedSetGetScoreP(mos, &member1, &retrievedScore)) {
-        ERRR("Failed to get alice's score");
+        ERR("Failed to get alice's score");
     }
     if (retrievedScore.data.i != 100) {
         ERR("alice's score should be 100, got %" PRIdMAX,
@@ -391,7 +391,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos) {
-        ERRR("Failed to reopen multiOrderedSetP");
+        ERR("Failed to reopen multiOrderedSetP");
     }
 
     /* Verify entries after recovery */
@@ -401,10 +401,10 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     }
 
     if (!multiOrderedSetExistsP(mos, &member1)) {
-        ERRR("alice should exist after recovery");
+        ERR("alice should exist after recovery");
     }
     if (!multiOrderedSetGetScoreP(mos, &member1, &retrievedScore)) {
-        ERRR("Failed to get alice's score after recovery");
+        ERR("Failed to get alice's score after recovery");
     }
     if (retrievedScore.data.i != 100) {
         ERR("alice's score should be 100 after recovery, got %" PRIdMAX,
@@ -413,13 +413,13 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
 
     /* Remove an entry */
     if (!multiOrderedSetRemoveP(mos, &member2)) {
-        ERRR("Failed to remove bob");
+        ERR("Failed to remove bob");
     }
     if (multiOrderedSetRemoveP(mos, &member2) != PERSIST_LOG_UNCHANGED) {
-        ERRR("removing absent bob was logged");
+        ERR("removing absent bob was logged");
     }
     if (multiOrderedSetExistsP(mos, &member2)) {
-        ERRR("bob should be removed");
+        ERR("bob should be removed");
     }
     if (multiOrderedSetCountP(mos) != 2) {
         ERR("Count should be 2, got %zu", multiOrderedSetCountP(mos));
@@ -432,7 +432,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos) {
-        ERRR("Failed to reopen multiOrderedSetP");
+        ERR("Failed to reopen multiOrderedSetP");
     }
 
     /* Verify after second recovery */
@@ -441,10 +441,10 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
             multiOrderedSetCountP(mos));
     }
     if (multiOrderedSetExistsP(mos, &member2)) {
-        ERRR("bob should still be removed after recovery");
+        ERR("bob should still be removed after recovery");
     }
     if (!multiOrderedSetExistsP(mos, &member1)) {
-        ERRR("alice should exist after second recovery");
+        ERR("alice should exist after second recovery");
     }
 
     /* Cleanup */
@@ -504,7 +504,7 @@ static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
     databox iterMember, iterScore;
     while (multiOrderedSetIteratorNextP(&iter, &iterMember, &iterScore)) {
         if (idx >= 5) {
-            ERRR("Too many entries in iteration");
+            ERR("Too many entries in iteration");
         }
 
         int64_t actualScore = iterScore.data.i;
@@ -556,12 +556,12 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
 
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     if (!ctx) {
-        ERRR("Failed to create persistCtx");
+        ERR("Failed to create persistCtx");
     }
 
     multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
     if (!mos) {
-        ERRR("Failed to create multiOrderedSetP");
+        ERR("Failed to create multiOrderedSetP");
     }
 
     /* Add many entries */
@@ -577,7 +577,7 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
     /* Attempt compaction */
     bool compacted = multiOrderedSetCompactP(mos);
     if (!compacted) {
-        ERRR("Compaction failed");
+        ERR("Compaction failed");
     }
 
     /* Verify data is intact */
@@ -631,7 +631,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
 
         PTEST_LOGGED(multiOrderedSetResetP(mos));
         if (multiOrderedSetCountP(mos) != 0) {
-            ERRR("Expected empty after reset");
+            ERR("Expected empty after reset");
         }
 
         /* Refill with DIFFERENT members so pre-reset ghosts are
@@ -649,7 +649,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
         ctx = persistCtxNew(basePath, NULL);
         mos = multiOrderedSetOpenP(ctx);
         if (!mos) {
-            ERRR("Recovery after reset failed");
+            ERR("Recovery after reset failed");
         } else {
             if (multiOrderedSetCountP(mos) != 20) {
                 ERR("Expected 20 post-recovery, got %zu",
@@ -658,12 +658,12 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
 
             const databox ghost = databoxNewBytesString("pre-3");
             if (multiOrderedSetExistsP(mos, &ghost)) {
-                ERRR("Pre-reset ghost member survived recovery");
+                ERR("Pre-reset ghost member survived recovery");
             }
 
             const databox kept = databoxNewBytesString("post-7");
             if (!multiOrderedSetExistsP(mos, &kept)) {
-                ERRR("Post-reset member lost in recovery");
+                ERR("Post-reset member lost in recovery");
             }
 
             multiOrderedSetCloseP(mos);
@@ -709,15 +709,15 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
         const databox m9 = databoxNewBytesString("m9");
         if (!multiOrderedSetFirstP(mos, &member, &score) ||
             !databoxEqual(&member, &m0)) {
-            ERRR("FirstP is not m0");
+            ERR("FirstP is not m0");
         }
         if (!multiOrderedSetLastP(mos, &member, &score) ||
             !databoxEqual(&member, &m9)) {
-            ERRR("LastP is not m9");
+            ERR("LastP is not m9");
         }
         if (!multiOrderedSetGetByRankP(mos, 3, &member, &score) ||
             !databoxEqual(&member, &m3)) {
-            ERRR("GetByRankP(3) is not m3");
+            ERR("GetByRankP(3) is not m3");
         }
         const mosRangeSpec range = {.min = DATABOX_SIGNED(20),
                                     .max = DATABOX_SIGNED(50)};
@@ -730,7 +730,7 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
         if (!multiOrderedSetIteratorInitAtScoreP(mos, &iter, &at, true) ||
             !multiOrderedSetIteratorNextP(&iter, &member, &score) ||
             !databoxEqual(&member, &m5)) {
-            ERRR("IteratorInitAtScoreP(45) does not start at m5");
+            ERR("IteratorInitAtScoreP(45) does not start at m5");
         }
         multiOrderedSetIteratorReleaseP(&iter);
 
@@ -739,7 +739,7 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
         if (!multiOrderedSetSyncP(mos) || multiOrderedSetBytesP(mos) == 0 ||
             multiOrderedSetCount(multiOrderedSetGetRawP(mos)) != 10 ||
             stats.totalOps < 10) {
-            ERRR("SyncP/BytesP/GetRawP/GetStatsP disagree");
+            ERR("SyncP/BytesP/GetRawP/GetStatsP disagree");
         }
 
         multiOrderedSetCloseP(mos);
@@ -787,7 +787,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mos = multiOrderedSetOpenP(ctx);
     if (!mos || multiOrderedSetCountP(mos) != 0) {
-        ERRR("an empty set did not reopen empty");
+        ERR("an empty set did not reopen empty");
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
@@ -809,7 +809,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     FILE *f = fopen(snapPath, "r+b");
     if (!f || len < 16 || fseek(f, (long)(len / 2), SEEK_SET) != 0 ||
         fputc(before[len / 2] ^ 0x5a, f) == EOF) {
-        ERRR("could not damage the snapshot");
+        ERR("could not damage the snapshot");
     }
     if (f) {
         fclose(f);
@@ -818,13 +818,13 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mos = multiOrderedSetOpenP(ctx);
     if (mos) {
-        ERRR("a damaged snapshot opened");
+        ERR("a damaged snapshot opened");
         multiOrderedSetCloseP(mos);
     }
     persistCtxFree(ctx);
     if (test_mosPReadFile(snapPath, after, sizeof(after)) != len ||
         memcmp(before, after, len) != 0) {
-        ERRR("a refused open changed the snapshot");
+        ERR("a refused open changed the snapshot");
     }
 
     /* No snapshot at all does not open (it used to open as empty) */
@@ -832,7 +832,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mos = multiOrderedSetOpenP(ctx);
     if (mos) {
-        ERRR("a set opened with no snapshot");
+        ERR("a set opened with no snapshot");
         multiOrderedSetCloseP(mos);
     }
     persistCtxFree(ctx);
@@ -852,7 +852,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
     if (!ptestDamageLastWalEntry(basePath)) {
-        ERRR("could not damage the WAL");
+        ERR("could not damage the WAL");
     }
     const databox m10 = databoxNewSigned(10);
     const databox m30 = databoxNewSigned(30);
@@ -866,11 +866,11 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
             mos ? multiOrderedSetCountP(mos) : (size_t)0);
     }
     if (!ptestExpectHealed(ctx, basePath)) {
-        ERRR("the damaged entry was not healed into the quarantine");
+        ERR("the damaged entry was not healed into the quarantine");
     }
     if (mos &&
         multiOrderedSetAddP(mos, &s4, &m40, NULL) == PERSIST_LOG_REFUSED) {
-        ERRR("a change after the healed entry was refused");
+        ERR("a change after the healed entry was refused");
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
@@ -879,7 +879,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     if (!mos || multiOrderedSetCountP(mos) != 3 ||
         !multiOrderedSetExistsP(mos, &m10) ||
         !multiOrderedSetExistsP(mos, &m40)) {
-        ERRR("reopen does not hold 10, 20, 40");
+        ERR("reopen does not hold 10, 20, 40");
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
@@ -889,7 +889,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     if (!persistCtxInitForType(ctx, &persistOpsIntset) ||
         multiOrderedSetNewP(ctx) || multiOrderedSetOpenP(ctx)) {
-        ERRR("a set started on a context bound to an intset");
+        ERR("a set started on a context bound to an intset");
     }
     persistCtxFree(ctx);
     ptestCleanupFiles(basePath);
@@ -958,7 +958,7 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
                 multiOrderedSetExistsP(NULL, &kept) ||
                 multiOrderedSetGetScoreP(NULL, &kept, &score) ||
                 multiOrderedSetSyncP(NULL) || multiOrderedSetCompactP(NULL)) {
-                ERRR("a call without its wrapper or member was not refused");
+                ERR("a call without its wrapper or member was not refused");
             }
             multiOrderedSetGetStatsP(NULL, NULL);
             multiOrderedSetCloseP(NULL);
@@ -970,7 +970,7 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
                 multiOrderedSetAddP(mos, &six, &next6, &updated) ==
                     PERSIST_LOG_REFUSED ||
                 !updated) {
-                ERRR("the context did not log again after the refusal");
+                ERR("the context did not log again after the refusal");
             }
             multiOrderedSetCloseP(mos);
             persistCtxFree(ctx);

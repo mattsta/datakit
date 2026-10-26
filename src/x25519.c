@@ -610,23 +610,23 @@ int x25519Test(int argc, char *argv[]) {
         x25519Base(alice_pub, alice_priv);
         x25519Base(bob_pub, bob_priv);
         if (memcmp(alice_pub, alice_pub_expect, 32) != 0) {
-            ERRR("Alice's derived public key does not match §6.1");
+            ERR("Alice's derived public key does not match §6.1");
         }
         if (memcmp(bob_pub, bob_pub_expect, 32) != 0) {
-            ERRR("Bob's derived public key does not match §6.1");
+            ERR("Bob's derived public key does not match §6.1");
         }
 
         if (!x25519(shared_a, alice_priv, bob_pub)) {
-            ERRR("Alice's ECDH should not flag low-order");
+            ERR("Alice's ECDH should not flag low-order");
         }
         if (!x25519(shared_b, bob_priv, alice_pub)) {
-            ERRR("Bob's ECDH should not flag low-order");
+            ERR("Bob's ECDH should not flag low-order");
         }
         if (memcmp(shared_a, shared_b, 32) != 0) {
-            ERRR("Alice and Bob computed different shared secrets");
+            ERR("Alice and Bob computed different shared secrets");
         }
         if (memcmp(shared_a, shared_expect, 32) != 0) {
-            ERRR("Shared secret does not match §6.1");
+            ERR("Shared secret does not match §6.1");
         }
     }
 
@@ -641,7 +641,7 @@ int x25519Test(int argc, char *argv[]) {
         uint8_t peer_zero[32] = {};
         uint8_t out[32];
         if (x25519(out, priv, peer_zero)) {
-            ERRR("Low-order peer key must surface as false");
+            ERR("Low-order peer key must surface as false");
         }
     }
 
@@ -654,7 +654,7 @@ int x25519Test(int argc, char *argv[]) {
         x25519Base(pub1, priv);
         x25519Base(pub2, priv);
         if (memcmp(pub1, pub2, 32) != 0) {
-            ERRR("Base derivation must be deterministic");
+            ERR("Base derivation must be deterministic");
         }
     }
 

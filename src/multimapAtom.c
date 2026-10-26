@@ -1895,16 +1895,16 @@ int multimapAtomTest(int argc, char *argv[]) {
         databox foundKey;
         if (!multimapAtomLookup(ma, &ref, &foundKey) ||
             databoxCompare(&foundKey, &keyB) != 0) {
-            ERRR("id 5 did not resolve to the rebound key");
+            ERR("id 5 did not resolve to the rebound key");
         }
 
         databox refOut;
         if (multimapAtomLookupReference(ma, &keyA, &refOut)) {
-            ERRR("old key A still bound after id rebind");
+            ERR("old key A still bound after id rebind");
         }
         if (!multimapAtomLookupReference(ma, &keyB, &refOut) ||
             refOut.data.u != 5) {
-            ERRR("new key B not bound to id 5");
+            ERR("new key B not bound to id 5");
         }
 
         multimapAtomFree(ma);
@@ -2038,7 +2038,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             }
 
             if (pass == 1 && multimapCount(ma->mapAtomForward) < 400) {
-                ERRR("filler rows missing from the forward map");
+                ERR("filler rows missing from the forward map");
             }
         }
 
@@ -2093,7 +2093,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                 multimapIteratorInit(ma->mapAtomReverse, &reverseIter, true);
                 if (forwardIter.type != MULTIMAP_TYPE_FULL ||
                     reverseIter.type != MULTIMAP_TYPE_FULL) {
-                    ERRR("filler atoms did not make both maps Full");
+                    ERR("filler atoms did not make both maps Full");
                 }
             }
 
@@ -2290,7 +2290,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         multimapAtom *ma = multimapAtomNewPermanent();
         multimapAtom *reusing = multimapAtomNew();
         if (!multimapAtomIsPermanent(ma) || multimapAtomIsPermanent(reusing)) {
-            ERRR("the id behaviour is not what the constructor chose");
+            ERR("the id behaviour is not what the constructor chose");
         }
 
         multimapAtomFree(reusing);
@@ -2308,7 +2308,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         for (int i = 0; i < 3; i++) {
             if (multimapAtomRelease(ma, &a) ||
                 multimapAtomReleaseById(ma, &ids[0])) {
-                ERRR("a permanent atom reported being freed");
+                ERR("a permanent atom reported being freed");
             }
         }
 
@@ -2319,14 +2319,14 @@ int multimapAtomTest(int argc, char *argv[]) {
         if (multimapAtomCount(ma) != 3 ||
             !multimapAtomLookup(ma, &ids[0], &found) || found.data.i != 100 ||
             count.data.u != 0) {
-            ERRR("Release or Retain changed a permanent table");
+            ERR("Release or Retain changed a permanent table");
         }
 
         /* Delete the top atom, then everything: no id comes back */
         const databox c = databoxNewSigned(102);
         databox d = databoxNewSigned(103);
         if (!multimapAtomDelete(ma, &c)) {
-            ERRR("Delete refused a permanent atom");
+            ERR("Delete refused a permanent atom");
         }
 
         multimapAtomInsertConvert(ma, &d);
@@ -2355,7 +2355,7 @@ int multimapAtomTest(int argc, char *argv[]) {
 
         /* Releasing the top atom frees its id for the next atom */
         if (!multimapAtomReleaseById(ma, &v[4])) {
-            ERRR("the last release did not delete the atom");
+            ERR("the last release did not delete the atom");
         }
 
         databox f = databoxNewSigned(300);
@@ -2420,7 +2420,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             !multimapAtomLookup(ma, &exactRef, &found) ||
             databoxCompare(&found, &exactKey) != 0 ||
             !multimapAtomLookup(ma, &gen, &found) || found.data.i != 600) {
-            ERRR("an exact id and a generated id do not resolve separately");
+            ERR("an exact id and a generated id do not resolve separately");
         }
 
         multimapAtomFree(ma);
@@ -2488,25 +2488,25 @@ int multimapAtomTest(int argc, char *argv[]) {
         multimapAtomRetain(ma, &goneKey); /* two references */
 
         if (multimapAtomDelete(ma, &missing) || multimapAtomCount(ma) != 2) {
-            ERRR("deleting a missing key changed the table");
+            ERR("deleting a missing key changed the table");
         }
 
         if (multimapAtomRelease(ma, &goneKey) || multimapAtomCount(ma) != 2) {
-            ERRR("releasing one of two references removed the atom");
+            ERR("releasing one of two references removed the atom");
         }
 
         databox ref = {};
         if (!multimapAtomRelease(ma, &goneKey) || multimapAtomCount(ma) != 1 ||
             multimapCount(ma->mapAtomReverse) != 1 ||
             multimapAtomLookupReference(ma, &goneKey, &ref)) {
-            ERRR("the last release did not remove both rows");
+            ERR("the last release did not remove both rows");
         }
 
         databox found = {};
         if (!multimapAtomLookup(ma, &keep, &found) || found.data.i != 10 ||
             !multimapAtomDelete(ma, &keepKey) || multimapAtomCount(ma) != 0 ||
             multimapCount(ma->mapAtomReverse) != 0) {
-            ERRR("Delete by key did not remove both rows of a live atom");
+            ERR("Delete by key did not remove both rows of a live atom");
         }
 
         multimapAtomFree(ma);

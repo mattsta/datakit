@@ -547,7 +547,7 @@ static int denseSoak_(const uint64_t seed, const size_t ops) {
 
     if (multimapAtomDenseCount(d) != 0 || multimapAtomDenseNextId(d) != 0 ||
         d->holes || d->next != 0) {
-        ERRR("a drained table did not return to id 0 with no holes");
+        ERR("a drained table did not return to id 0 with no holes");
     }
 
     multimapAtomDenseFree(d);
@@ -570,7 +570,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
         if (!multimapAtomDenseDelete(d, &one) ||
             multimapAtomDenseCount(d) != 1 ||
             multimapAtomDenseDelete(d, &one)) {
-            ERRR("a delete by value did not remove exactly that atom");
+            ERR("a delete by value did not remove exactly that atom");
         }
         databox c = databoxNewSigned(3);
         multimapAtomDenseInsertConvert(d, &c);
@@ -589,7 +589,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
         multimapAtomDense *target = d;
         if (!body || !persistOpsMultimapAtomDense.applyOp(
                          &target, PERSIST_OP_INSERT, body, len)) {
-            ERRR("the replayed insert was refused");
+            ERR("the replayed insert was refused");
         }
         zfree(body);
         const uint64_t want[] = {2, 3, 4, 5, 7};
@@ -648,7 +648,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
             multimapAtomDenseDelete(d, &missing) ||
             multimapAtomDenseDeleteById(d, 9) ||
             multimapAtomDenseCount(d) != 1 || multimapAtomDenseNextId(d) != 1) {
-            ERRR("a miss changed the table");
+            ERR("a miss changed the table");
         }
 
         multimapAtomDenseFree(d);
@@ -669,7 +669,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
             multimapAtomDenseRelease(d, &apple) ||
             !multimapAtomDenseRelease(d, &apple) ||
             multimapAtomDenseCount(d) != 0) {
-            ERRR("three retains did not take three releases");
+            ERR("three retains did not take three releases");
         }
         multimapAtomDenseFree(d);
     }
@@ -695,7 +695,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
 
         const size_t full = multimapAtomDenseBytes(d);
         if (d->holes) {
-            ERRR("a table without holes keeps a free set");
+            ERR("a table without holes keeps a free set");
         }
 
         for (uint64_t id = 0; id < 1000; id += 2) {
@@ -703,7 +703,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
         }
 
         if (!d->holes || multimapAtomDenseNextId(d) != 0) {
-            ERRR("500 holes are not tracked");
+            ERR("500 holes are not tracked");
         }
 
         for (int i = 0; i < 500; i++) {
@@ -712,7 +712,7 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
         }
 
         if (d->holes || multimapAtomDenseNextId(d) != 1000) {
-            ERRR("refilling every hole did not release the free set");
+            ERR("refilling every hole did not release the free set");
         }
 
         printf("    1000 atoms: %zu bytes; free set released when empty\n",

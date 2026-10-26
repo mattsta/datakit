@@ -717,7 +717,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             StrDigitCountInt64(INT64_MIN) != 20 ||
             StrDigitCountInt64(INT64_MAX) != 19 ||
             StrDigitCountInt64(-1) != 2 || StrDigitCountInt64(0) != 1) {
-            ERRR("digit count wrong at 0, a maximum or a signed extreme");
+            ERR("digit count wrong at 0, a maximum or a signed extreme");
         }
     }
 
@@ -1289,7 +1289,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         double spaced = 0;
         if (!StrAtoF("  42  ", &spaced, 6, STR_UTF8, true) || spaced != 42.0 ||
             StrAtoF("  42  ", &spaced, 6, STR_UTF8, false)) {
-            ERRR("StrAtoF space skipping");
+            ERR("StrAtoF space skipping");
         }
     }
 
@@ -1464,7 +1464,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             box.data.i64 != 3 ||
             StrScanScan((const uint8_t *)"3.5", &box, STRSCAN_OPT_TOINT, false,
                         false) != STRSCAN_NUM) {
-            ERRR("StrScanScan float words, spaces or TOINT");
+            ERR("StrScanScan float words, spaces or TOINT");
         }
     }
 
@@ -1515,7 +1515,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         int64_t iw = 0;
         if (StrAtoF(wide, &dw, 6, STR_UTF16LE, true) || dw != 12.0 ||
             StrAtoi64(wide, &iw, 6, STR_UTF16LE, true) != 1 || iw != 12) {
-            ERRR("UTF-16 non-Latin unit read as part of a number");
+            ERR("UTF-16 non-Latin unit read as part of a number");
         }
     }
 
@@ -1571,7 +1571,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             }
         }
         if (StrAtoi(NULL) != 0 || StrAtoi("-17") != -17) {
-            ERRR("StrAtoi");
+            ERR("StrAtoi");
         }
 
         static constexpr char digits[] = "0123456789abcdefABCDEF";
@@ -1587,12 +1587,12 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         cleanerName(zfree, Chars) char *none = StrHexToBlob("", 0);
         if (memcmp(blob, "\x00\xff\x7a", 4) != 0 ||
             memcmp(odd, "\xab", 2) != 0 || none[0] != 0) {
-            ERRR("StrHexToBlob");
+            ERR("StrHexToBlob");
         }
 
         if (StrAbsInt32(5) != 5 || StrAbsInt32(-5) != 5 ||
             StrAbsInt32(0) != 0 || StrAbsInt32(INT32_MIN) != INT32_MAX) {
-            ERRR("StrAbsInt32");
+            ERR("StrAbsInt32");
         }
 
         static const struct {
@@ -1619,7 +1619,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             StrNICmp("a", NULL, 3) <= 0 || StrNICmp("abcX", "ABCY", 3) != 0 ||
             StrNICmp("abcX", "ABCY", 4) >= 0 || StrICmp("ABC", "abd") >= 0 ||
             StrICmp("abc", "ABC") != 0 || StrICmp("abc", "ab") <= 0) {
-            ERRR("StrICmp / StrNICmp");
+            ERR("StrICmp / StrNICmp");
         }
     }
 
@@ -2721,7 +2721,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                  p64[i] == unsetWant[i];
         }
         if (!ok) {
-            ERRR("a wide bitmap reader disagrees with the naive walk");
+            ERR("a wide bitmap reader disagrees with the naive walk");
         }
     }
 
@@ -2766,7 +2766,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             !StrDoubleCanBeCastToInt64(42.0) ||
             StrDoubleCanBeCastToInt64(42.5) ||
             StrDoubleCanBeCastToInt64(1e300)) {
-            ERRR("a double cast is wrong");
+            ERR("a double cast is wrong");
         }
 
         /* ASCII case-insensitive comparison agrees with strcasecmp */
@@ -2796,7 +2796,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         if (StrLogEst(1) != 0 || StrLogEst(2) != 10 || StrLogEst(10) != 33 ||
             StrLogEst(1000) != 99 || StrLogEst(1 << 20) != 200 ||
             StrLogEstFromDouble(1000.0) != 99 || StrLogEstAdd(99, 99) != 109) {
-            ERRR("a LogEst value is wrong");
+            ERR("a LogEst value is wrong");
         }
         for (int k = 0; k < 60; k++) {
             if (StrLogEstToInt(StrLogEst((uint64_t)1 << k)) != (uint64_t)1
@@ -2815,7 +2815,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             StrScanToDouble("inf", &box, false, false) ||
             !StrScanToDouble("inf", &box, true, false) ||
             !isinf(box.data.d64)) {
-            ERRR("StrScanToDouble disagrees with the scanner rules");
+            ERR("StrScanToDouble disagrees with the scanner rules");
         }
 
         /* "nan" and decimal overflow are real NaN and infinities */
@@ -2835,7 +2835,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             box.data.d64 != 2.5 ||
             StrScanToDouble(" 2.5", &box, false, false) ||
             StrScanToDouble("-nan", &box, false, true)) {
-            ERRR("sign/space scanning depends on the float words");
+            ERR("sign/space scanning depends on the float words");
         }
 
         databox setBox = {};
@@ -2845,7 +2845,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         const databox negBox = DATABOX_INFINITY_NEGATIVE;
         if (!isnan(setBox.data.d64) || !isnan(nanBox.data.d64) ||
             posBox.data.d64 != INFINITY || negBox.data.d64 != -INFINITY) {
-            ERRR("the NaN/infinity box constants are not NaN/infinity");
+            ERR("the NaN/infinity box constants are not NaN/infinity");
         }
 
         /* The PreVerified 128-bit scan matches the checking one on
@@ -5272,36 +5272,36 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         __int128_t v = 0;
 
         if (!StrBufToInt128(maxStr, strlen(maxStr), &v)) {
-            ERRR("INT128_MAX string must parse");
+            ERR("INT128_MAX string must parse");
         } else {
             const __int128_t expectMax =
                 (__int128_t)((((__uint128_t)1 << 127) - 1));
             if (v != expectMax) {
-                ERRR("INT128_MAX parsed to wrong value");
+                ERR("INT128_MAX parsed to wrong value");
             }
         }
 
         if (!StrBufToInt128(minStr, strlen(minStr), &v)) {
-            ERRR("INT128_MIN string must parse");
+            ERR("INT128_MIN string must parse");
         } else {
             const __int128_t expectMin =
                 -(__int128_t)((((__uint128_t)1 << 127) - 1)) - 1;
             if (v != expectMin) {
-                ERRR("INT128_MIN parsed to wrong value");
+                ERR("INT128_MIN parsed to wrong value");
             }
         }
 
         if (StrBufToInt128(maxPlus1, strlen(maxPlus1), &v)) {
-            ERRR("INT128_MAX+1 must be rejected");
+            ERR("INT128_MAX+1 must be rejected");
         }
         if (StrBufToInt128(minMinus1, strlen(minMinus1), &v)) {
-            ERRR("INT128_MIN-1 must be rejected");
+            ERR("INT128_MIN-1 must be rejected");
         }
 
         /* The originally observed silent corruption: -1.8e38 */
         const char *badNeg = "-180000000000000000000000000000000000000";
         if (StrBufToInt128(badNeg, strlen(badNeg), &v)) {
-            ERRR("-1.8e38 must be rejected (was silently wrapping)");
+            ERR("-1.8e38 must be rejected (was silently wrapping)");
         }
     }
 
@@ -5328,18 +5328,18 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         __uint128_t u = 0;
         const char *umax = "340282366920938463463374607431768211455";
         if (!StrBufToUInt128(umax, strlen(umax), &u) || u != ~(__uint128_t)0) {
-            ERRR("UINT128_MAX must parse exactly");
+            ERR("UINT128_MAX must parse exactly");
         }
         if (!StrBufToUInt128("0", 1, &u) || u != 0) {
-            ERRR("\"0\" must parse as 0");
+            ERR("\"0\" must parse as 0");
         }
 
         __int128_t s = 1;
         if (!StrBufToInt128("0", 1, &s) || s != 0) {
-            ERRR("\"0\" must parse as signed 0");
+            ERR("\"0\" must parse as signed 0");
         }
         if (!StrBufToInt128("-1", 2, &s) || s != -1) {
-            ERRR("\"-1\" must parse as -1");
+            ERR("\"-1\" must parse as -1");
         }
     }
 
@@ -5420,7 +5420,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         const char *bad = "340282366920938463463374607431768211456";
         if (StrScanScanReliableConvert128(bad, strlen(bad), &small, &big,
                                           &use)) {
-            ERRR("Convert128 accepted UINT128_MAX + 1");
+            ERR("Convert128 accepted UINT128_MAX + 1");
         }
         const uint8_t *sp = (const uint8_t *)&small;
         const uint8_t *bp = (const uint8_t *)&big;
@@ -5432,7 +5432,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             untouched = untouched && bp[b] == 0xA5;
         }
         if (!untouched) {
-            ERRR("Convert128 wrote output on failure");
+            ERR("Convert128 wrote output on failure");
         }
     }
 

@@ -65,7 +65,7 @@
  * matches the sha256ArmCrypto.c precedent and avoids dragging in
  * sysctl just to discover a static answer. */
 #define AES_GCM_ARM_CRYPTO_RUNTIME_OK() (true)
-#elif defined(__linux__)
+#elifdef __linux__
 #include <sys/auxv.h>
 #ifndef HWCAP_AES
 #define HWCAP_AES (1UL << 3)

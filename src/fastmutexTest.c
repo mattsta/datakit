@@ -139,7 +139,7 @@ int fastmutexTest(int argc, char *argv[]) {
         pthread_t th;
         pthread_create(&th, NULL, fmBlockedLocker, &b);
         if (!fmPollUntil(fmHasWaiter, &m)) {
-            ERRR("the blocked locker never queued");
+            ERR("the blocked locker never queued");
         }
         /* @sync: relaxed owner */
         const bool earlyAcquire =
@@ -150,7 +150,7 @@ int fastmutexTest(int argc, char *argv[]) {
         if (earlyAcquire ||
             !atomic_load_explicit(&b.acquired, memory_order_relaxed) ||
             fastMutexIsLocked(&m)) {
-            ERRR("the queued waiter did not get the lock exactly once");
+            ERR("the queued waiter did not get the lock exactly once");
         }
     }
 
@@ -163,7 +163,7 @@ int fastmutexTest(int argc, char *argv[]) {
         pthread_t th;
         pthread_create(&th, NULL, fmCondWaiterThread, &w);
         if (!fmPollUntil(fmCondHasWaiter, &c)) {
-            ERRR("the condition waiter never queued");
+            ERR("the condition waiter never queued");
         }
         fast_mutex_lock(&m);
         w.ready = true;
@@ -171,7 +171,7 @@ int fastmutexTest(int argc, char *argv[]) {
         fastMutexUnlock(&m);
         pthread_join(th, NULL);
         if (!w.sawReady) {
-            ERRR("the waiter did not wake holding the mutex with ready set");
+            ERR("the waiter did not wake holding the mutex with ready set");
         }
 
         /* A deadline already past: ETIMEDOUT, the mutex held again and
@@ -213,11 +213,11 @@ int fastmutexTest(int argc, char *argv[]) {
             pthread_t tc;
             pthread_create(&ta, NULL, fmTimedWaiterThread, &a);
             if (!fmPollUntil(fmCondHasWaiter, &c)) {
-                ERRR("the timed waiter never queued");
+                ERR("the timed waiter never queued");
             }
             pthread_create(&tb, NULL, fmCondWaiterThread, &b);
             if (!fmPollUntil(fmCondEntered, &b)) {
-                ERRR("the second waiter never started waiting");
+                ERR("the second waiter never started waiting");
             }
             fmSettle(&m);
             /* B is queued behind A; it counts only if A had not yet
@@ -230,7 +230,7 @@ int fastmutexTest(int argc, char *argv[]) {
             pthread_join(ta, NULL);
             pthread_create(&tc, NULL, fmCondWaiterThread, &cw);
             if (!fmPollUntil(fmCondEntered, &cw)) {
-                ERRR("the third waiter never started waiting");
+                ERR("the third waiter never started waiting");
             }
             fmSettle(&m);
             fast_mutex_lock(&m);
@@ -248,7 +248,7 @@ int fastmutexTest(int argc, char *argv[]) {
             }
         }
         if (!behind) {
-            ERRR("B never queued behind A before A's deadline");
+            ERR("B never queued behind A before A's deadline");
         }
         pthread_mutex_destroy(&c.m);
     }

@@ -4225,7 +4225,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         mdTestPoisonStack_();
         const uint32_t got = multidictGetSomeKeys(d, some, 16);
         if (got == 0) {
-            ERRR("GetSomeKeys returned nothing");
+            ERR("GetSomeKeys returned nothing");
         }
         for (uint32_t i = 0; i < got; i++) {
             const bool wide = some[i].type == DATABOX_SIGNED_128 ||
@@ -4294,7 +4294,7 @@ static int multidictTestDeleteIf_(void) {
     for (int phase = 0; phase < 2; phase++) {
         if (phase == 1 &&
             (!multidictExpand(d, 16384) || !multidictIsRehashing(d))) {
-            ERRR("could not start a rehash");
+            ERR("could not start a rehash");
         }
         for (int64_t k = phase; k < n; k += 4) {
             const databox key = databoxNewSigned(k);
@@ -4383,7 +4383,7 @@ static int multidictTestWide_(mdWideMode mode) {
         databox val = {};
         if (!multidictFind(d, (databox *)&key, &val) ||
             val.type != DATABOX_UNSIGNED_128 || val.data.ptr) {
-            ERRR("zeroed box did not get a type-only wide value");
+            ERR("zeroed box did not get a type-only wide value");
         }
     }
 
@@ -4394,7 +4394,7 @@ static int multidictTestWide_(mdWideMode mode) {
         mdTestPoisonStack_();
         if (!multidictGetRandomKey(d, (databox *)&key) ||
             mdWideFind_(p, n, (databox *)&key) == SIZE_MAX) {
-            ERRR("GetRandomKey returned an unknown key");
+            ERR("GetRandomKey returned an unknown key");
         }
     }
 
@@ -4409,7 +4409,7 @@ static int multidictTestWide_(mdWideMode mode) {
         multidict *restored =
             snap ? persistOpsMultidict.restore(snap, snapLen) : NULL;
         if (!restored) {
-            ERRR("persist snapshot round trip failed");
+            ERR("persist snapshot round trip failed");
         } else {
             err += mdWideVerify_(restored, p, n);
             persistOpsMultidict.free(restored);
@@ -4418,7 +4418,7 @@ static int multidictTestWide_(mdWideMode mode) {
         cleaner(multidictFree) multidict *merged =
             multidictNew(&multidictTypeExactKey, qdc, 0);
         if (multidictMerge(merged, d, MULTIDICT_MERGE_REPLACE) != n) {
-            ERRR("wide Merge count wrong");
+            ERR("wide Merge count wrong");
         }
         err += mdWideVerify_(merged, p, n);
     }
@@ -4464,14 +4464,14 @@ static int multidictTestWide_(mdWideMode mode) {
         memset(&val, 0xFF, sizeof(val));
         mdTestPoisonStack_();
         if (!multidictPopRandom(d, &key, &val)) {
-            ERRR("PopRandom failed");
+            ERR("PopRandom failed");
             break;
         }
 
         const size_t at = mdWideFind_(p, n, &key);
         if (at == SIZE_MAX || !mdWideMatches_(&val, &p[at].val) ||
             !mdWideOwned_(&key) || !mdWideOwned_(&val)) {
-            ERRR("PopRandom returned a wrong pair");
+            ERR("PopRandom returned a wrong pair");
         } else {
             p[at].live = false;
         }
@@ -4565,7 +4565,7 @@ static int multidictTestSlotIteratorWide_(void) {
     memset(&iter, 0xFF, sizeof(iter));
     memset(&first, 0xFF, sizeof(first));
     if (!qdc->getIter(&iter, slot) || !qdc->iterNext(&iter, &first)) {
-        ERRR("slot iterator produced nothing");
+        ERR("slot iterator produced nothing");
     } else {
         multidictSlotIterator copy = iter;
         multidictEntry second;
@@ -4576,12 +4576,12 @@ static int multidictTestSlotIteratorWide_(void) {
             first.val.data.i128 != (__int128_t *)iter.wide[1].b ||
             !first.key.big || first.key.allocated ||
             *first.key.data.u128 != k1 || *first.val.data.i128 != v1) {
-            ERRR("slot iterator entry does not use its slots");
+            ERR("slot iterator entry does not use its slots");
         }
 
         if (!more || second.key.data.u128 != (__uint128_t *)copy.wide[0].b ||
             *second.key.data.u128 != k2 || *second.val.data.i128 != v2) {
-            ERRR("copied slot iterator did not use its own slots");
+            ERR("copied slot iterator did not use its own slots");
         }
     }
 
@@ -4738,7 +4738,7 @@ static int multidictTestKeyCompare_(void) {
                 if (k == 0) {
                     first = h;
                 } else if (h != first) {
-                    ERRR("djb collision set does not collide");
+                    ERR("djb collision set does not collide");
                     break;
                 }
             }
@@ -4898,7 +4898,7 @@ static int multidictTestCaseOps_(void) {
         multidictAddXX(d, &other, &one) != MULTIDICT_ERR ||
         multidictReplace(d, &other, &one) != MULTIDICT_ERR ||
         !testOnlyEntryIs_(d, "Key", 3, &three)) {
-        ERRR("case conditional adds");
+        ERR("case conditional adds");
     }
 
     /* Exists, by box and by string, and FindByString */
@@ -4909,7 +4909,7 @@ static int multidictTestCaseOps_(void) {
         multidictExistsByString(d, "KEYS") ||
         !multidictFindByString(d, "kEy", &found) || !found ||
         memcmp(found, "payload", 7) != 0) {
-        ERRR("case exists / find by string");
+        ERR("case exists / find by string");
     }
 
     /* Increments create under the first spelling, then match any */
@@ -4924,7 +4924,7 @@ static int multidictTestCaseOps_(void) {
         multidictIncrByFloat(d, &counterLow, 0.5, &dval) !=
             MULTIDICT_OK_REPLACED ||
         dval != 7.5 || multidictCount(d) != 2) {
-        ERRR("case increments");
+        ERR("case increments");
     }
 
     /* Get-and-delete by another spelling */
@@ -4932,7 +4932,7 @@ static int multidictTestCaseOps_(void) {
     if (!multidictGetAndDelete(d, &KEY, &got) ||
         !testBoxIsBytes_(&got, "payload", 7) || multidictExists(d, &key) ||
         multidictCount(d) != 1) {
-        ERRR("case get-and-delete");
+        ERR("case get-and-delete");
     }
     databoxFreeData(&got);
     multidictDelete(d, &COUNTER);
@@ -4953,7 +4953,7 @@ static int multidictTestCaseOps_(void) {
         multidictAddMultiple(d, firsts, vals, 3) != 3 ||
         multidictAddMultiple(d, seconds, vals, 3) != 0 ||
         multidictCount(d) != 3) {
-        ERRR("case bulk add");
+        ERR("case bulk add");
     }
 
     /* Iteration, scan, random keys and pops report the stored spelling */
@@ -4962,7 +4962,7 @@ static int multidictTestCaseOps_(void) {
     multidictEntry e;
     while (multidictIteratorNext(&iter, &e)) {
         if (!testKeyIsOneOf_(&e.key, stored, 3)) {
-            ERRR("case iteration reported another spelling");
+            ERR("case iteration reported another spelling");
         }
     }
     multidictIteratorRelease(&iter);
@@ -5003,7 +5003,7 @@ static int multidictTestCaseOps_(void) {
         databox fv = {};
         if (multidictCount(copy) != 3 ||
             !multidictFind(copy, &seconds[0], &fv) || !testBoxIsInt_(&fv, 10)) {
-            ERRR("case copy");
+            ERR("case copy");
         }
 
         cleaner(multidictFree) multidict *src =
@@ -5016,13 +5016,13 @@ static int multidictTestCaseOps_(void) {
         if (multidictMerge(copy, src, MULTIDICT_MERGE_KEEP) != 1 ||
             multidictCount(copy) != 4 ||
             !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 10)) {
-            ERRR("case merge (keep)");
+            ERR("case merge (keep)");
         }
 
         if (multidictMerge(copy, src, MULTIDICT_MERGE_REPLACE) != 2 ||
             multidictCount(copy) != 4 ||
             !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 90)) {
-            ERRR("case merge (replace)");
+            ERR("case merge (replace)");
         }
 
         bool alphaKept = false;
@@ -5032,7 +5032,7 @@ static int multidictTestCaseOps_(void) {
         }
         multidictIteratorRelease(&iter);
         if (!alphaKept) {
-            ERRR("case merge replaced the stored spelling");
+            ERR("case merge replaced the stored spelling");
         }
     }
 
@@ -5041,7 +5041,7 @@ static int multidictTestCaseOps_(void) {
     multidictSetEvictionCallback(d, testRecordEvictionCb_, &bad);
     multidictSetMaxMemory(d, 1);
     if (multidictEvictToLimit(d) != 3 || multidictCount(d) != 0 || bad) {
-        ERRR("case eviction");
+        ERR("case eviction");
     }
     multidictSetMaxMemory(d, 0);
     multidictSetEvictionCallback(d, NULL, NULL);
@@ -5052,7 +5052,7 @@ static int multidictTestCaseOps_(void) {
     databox pv = {};
     if (!multidictPopRandom(d, &pk, &pv) || !testBoxIsBytes_(&pk, "BETA", 4) ||
         !testBoxIsInt_(&pv, 1) || multidictCount(d) != 0) {
-        ERRR("case pop random");
+        ERR("case pop random");
     }
     databoxFreeData(&pk);
     databoxFreeData(&pv);
@@ -5060,7 +5060,7 @@ static int multidictTestCaseOps_(void) {
     /* Bulk delete under other spellings */
     multidictAddMultiple(d, firsts, vals, 3);
     if (multidictDeleteMultiple(d, seconds, 3) != 3 || multidictCount(d) != 0) {
-        ERRR("case bulk delete");
+        ERR("case bulk delete");
     }
 
     /* Integer keys match exactly: 0x41 and 0x61 differ only in the case
@@ -5076,7 +5076,7 @@ static int multidictTestCaseOps_(void) {
         !testBoxIsInt_(&iv, 1) || !multidictFind(d, &inta, &iv) ||
         !testBoxIsInt_(&iv, 2) || !multidictDelete(d, &inta) ||
         !multidictFind(d, &intA, &iv) || multidictCount(d) != 2) {
-        ERRR("case dict integer keys are not exact");
+        ERR("case dict integer keys are not exact");
     }
     multidictEmpty(d);
 
@@ -5094,7 +5094,7 @@ static int multidictTestCaseOps_(void) {
         !testOnlyEntryIs_(d, lower, sizeof(lower), &two) ||
         !multidictDelete(d, &longUp) || multidictCount(d) != 0 ||
         multidictKeyBytes(d) != 0) {
-        ERRR("case dict long keys");
+        ERR("case dict long keys");
     }
 
     return err;
@@ -5142,14 +5142,14 @@ static int multidictTestBinaryKeys_(multidictType *type) {
     if (!multidictDelete(d, &gone) || multidictExists(d, &gone) ||
         !multidictFind(d, &kept, &v) || !testBoxIsInt_(&v, 1) ||
         multidictCount(d) != n - 1) {
-        ERRR("binary key delete");
+        ERR("binary key delete");
     }
 
     /* In a case dict the letter after the NUL still folds */
     if (type == &multidictTypeCaseKey) {
         const databox upper = databoxNewBytes("A\0C", 3);
         if (!multidictFind(d, &upper, &v) || !testBoxIsInt_(&v, 1)) {
-            ERRR("case fold past an embedded NUL");
+            ERR("case fold past an embedded NUL");
         }
     }
 
@@ -5179,7 +5179,7 @@ static int multidictTestExactDistinct_(void) {
         multidictAddXX(d, &absent, &KEY) != MULTIDICT_ERR ||
         !multidictDelete(d, &KEY) || multidictExists(d, &KEY) ||
         multidictCount(d) != 3) {
-        ERRR("exact dict matched across case");
+        ERR("exact dict matched across case");
     }
 
     for (int32_t i = 0; i < 4; i++) {
@@ -5241,7 +5241,7 @@ static int multidictTestCustomCompare_(void) {
             multidictCount(d) != 2 || !multidictFind(d, &plain, &v) ||
             !testBoxIsInt_(&v, 2) || !multidictDelete(d, &plain) ||
             multidictExists(d, &padded) || multidictCount(d) != 1) {
-            ERRR("custom keyCompare not honoured");
+            ERR("custom keyCompare not honoured");
         }
     }
 
@@ -5254,7 +5254,7 @@ static int multidictTestCustomCompare_(void) {
         if (multidictAdd(d, &a, &one) != MULTIDICT_OK_INSERTED ||
             multidictAdd(d, &b, &one) != MULTIDICT_OK_INSERTED ||
             multidictCount(d) != 2) {
-            ERRR("NULL keyCompare does not match exact bytes");
+            ERR("NULL keyCompare does not match exact bytes");
         }
     }
 
@@ -5326,7 +5326,7 @@ static int multidictTestPersistKeys_(void) {
     if (!exactSnap || flexCount((const flex *)exactSnap) != 6 || !ciSnap ||
         flexCount((const flex *)ciSnap) != 6 || !ciEmptySnap ||
         flexCount((const flex *)ciEmptySnap) != 2 || !customSnap) {
-        ERRR("multidict snapshot layout");
+        ERR("multidict snapshot layout");
         return err;
     }
 
@@ -5339,7 +5339,7 @@ static int multidictTestPersistKeys_(void) {
                         &multidictTypeExactKey, 2) ||
         !testRestoreIs_(ciSnap, ciLen, &multidictTypeCaseKey,
                         &multidictTypeCaseKey, 2)) {
-        ERRR("built-in key types did not round trip");
+        ERR("built-in key types did not round trip");
     }
 
     /* A custom type needs the caller's type; the trim type matches "Foo"
@@ -5351,7 +5351,7 @@ static int multidictTestPersistKeys_(void) {
     if (persistOpsMultidict.restore(customSnap, customLen) != NULL || !r ||
         multidictGetType(r) != &testTrimType_ || multidictCount(r) != 2 ||
         !multidictFind(r, &padded, &v)) {
-        ERRR("custom key type restore");
+        ERR("custom key type restore");
     }
     if (r) {
         persistOpsMultidict.free(r);
@@ -5367,7 +5367,7 @@ static int multidictTestPersistKeys_(void) {
         multidictPersistRestoreAs(customSnap, customLen,
                                   &multidictTypeExactKey) ||
         multidictPersistRestoreAs(ciSnap, ciLen, NULL)) {
-        ERRR("a key type mismatch was not refused");
+        ERR("a key type mismatch was not refused");
     }
 
     /* Pairs without the key record are refused */
@@ -5380,7 +5380,7 @@ static int multidictTestPersistKeys_(void) {
         if (persistOpsMultidict.restore(pairsOnly, flexBytes(pairsOnly)) ||
             multidictPersistRestoreAs(pairsOnly, flexBytes(pairsOnly),
                                       &multidictTypeExactKey)) {
-            ERRR("a snapshot without its key record restored");
+            ERR("a snapshot without its key record restored");
         }
     }
 
@@ -5658,7 +5658,7 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
 
     err += testCiVerify_(d, o, lru, steps);
     if (inFlight == 0) {
-        ERRR("differential never ran with a rehash in flight");
+        ERR("differential never ran with a rehash in flight");
     }
 
     return err;
@@ -5714,25 +5714,25 @@ static int multidictTestLruPromotion_(multidictType *type) {
      * outcome */
     databox k = TEST_RANK_KEY();
     if (!multidictExists(d, &k)) {
-        ERRR("exists missed the ranked key");
+        ERR("exists missed the ranked key");
     }
     TEST_RANK_STEP("exists", 1);
 
     if (!multidictExistsByString(d, fold ? "RANK" : "rank")) {
-        ERRR("exists by string missed the ranked key");
+        ERR("exists by string missed the ranked key");
     }
     TEST_RANK_STEP("exists by string", 1);
 
     k = TEST_RANK_KEY();
     if (multidictAddNX(d, &k, &ten) != MULTIDICT_ERR) {
-        ERRR("add-NX of a present key was not refused");
+        ERR("add-NX of a present key was not refused");
     }
     TEST_RANK_STEP("add-NX of a present key", 1);
 
     int64_t ires = 0;
     k = TEST_RANK_KEY();
     if (multidictIncrBy(d, &k, 1, &ires) != MULTIDICT_ERR) {
-        ERRR("an increment of text was not refused");
+        ERR("an increment of text was not refused");
     }
     TEST_RANK_STEP("refused increment", 1);
 
@@ -5740,7 +5740,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     const databox absent = databoxNewBytesString("absent-key");
     if (multidictExists(d, &absent) ||
         multidictIncrByFloat(d, &absent, NAN, NULL) != MULTIDICT_ERR) {
-        ERRR("an absent key was found or incremented by NaN");
+        ERR("an absent key was found or incremented by NaN");
     }
     TEST_RANK_STEP("a miss", 0);
 
@@ -5764,13 +5764,13 @@ static int multidictTestLruPromotion_(multidictType *type) {
     databox v = {};
     k = TEST_RANK_KEY();
     if (!multidictFind(d, &k, &v)) {
-        ERRR("find missed the ranked key");
+        ERR("find missed the ranked key");
     }
     TEST_RANK_STEP("find", 1);
 
     uint8_t *bytes = NULL;
     if (!multidictFindByString(d, fold ? "rANK" : "rank", &bytes)) {
-        ERRR("find by string missed the ranked key");
+        ERR("find by string missed the ranked key");
     }
     TEST_RANK_STEP("find by string", 1);
 
@@ -5780,19 +5780,19 @@ static int multidictTestLruPromotion_(multidictType *type) {
 
     k = TEST_RANK_KEY();
     if (multidictAdd(d, &k, &text) != MULTIDICT_OK_REPLACED) {
-        ERRR("add of a present key did not replace");
+        ERR("add of a present key did not replace");
     }
     TEST_RANK_STEP("add of a present key", 1);
 
     k = TEST_RANK_KEY();
     if (multidictAddXX(d, &k, &text) != MULTIDICT_OK_REPLACED) {
-        ERRR("add-XX did not replace");
+        ERR("add-XX did not replace");
     }
     TEST_RANK_STEP("add-XX", 1);
 
     k = TEST_RANK_KEY();
     if (multidictReplace(d, &k, &ten) != MULTIDICT_OK_REPLACED) {
-        ERRR("replace did not replace");
+        ERR("replace did not replace");
     }
     TEST_RANK_STEP("replace", 1);
 
@@ -5817,7 +5817,7 @@ static int multidictTestLruPromotion_(multidictType *type) {
     if (multidictGetLRULevel(d, &other) != 0 ||
         multidictAddNX(d, &fresh, &ten) != MULTIDICT_OK_INSERTED ||
         multidictGetLRULevel(d, &fresh) != 0 || !testLruTrackingExact_(d)) {
-        ERRR("LRU bystander or fresh key level");
+        ERR("LRU bystander or fresh key level");
     }
 
 #undef TEST_RANK_STEP
@@ -5966,7 +5966,7 @@ static int multidictTestAddNXMidRehash_(void) {
     }
 
     if (!multidictExpand(d, 8192) || !multidictIsRehashing(d)) {
-        ERRR("AddNX mid-rehash: expand did not start a rehash");
+        ERR("AddNX mid-rehash: expand did not start a rehash");
         return err;
     }
 
@@ -6047,7 +6047,7 @@ static int multidictTestRehashReads_(void) {
     multidictStats before;
     multidictGetStats(d, &before);
     if (!multidictExpand(d, before.slots * 8) || !multidictIsRehashing(d)) {
-        ERRR("rehash reads: expand did not start a rehash");
+        ERR("rehash reads: expand did not start a rehash");
         return err;
     }
 
@@ -6080,7 +6080,7 @@ static int multidictTestRehashReads_(void) {
     cleanerName(zfree, SeenBytes) uint8_t *seen = zcalloc(n, 1);
     mdRehashScan_ scan = {.seen = seen, .n = n, .bad = 0};
     if (!multidictIsRehashing(d)) {
-        ERRR("rehash reads: the rehash ended before the scan");
+        ERR("rehash reads: the rehash ended before the scan");
     }
     uint64_t cursor = 0;
     do {
@@ -6139,7 +6139,7 @@ static int multidictTestLRUToggle_(void) {
         !multidictHasLRU(d) ||
         multidictGetEvictPolicy(d) != MULTIDICT_EVICT_LRU ||
         !multidictEnableLRU(d, 4)) {
-        ERRR("LRU toggle: enabling an empty dict");
+        ERR("LRU toggle: enabling an empty dict");
     }
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
@@ -6150,7 +6150,7 @@ static int multidictTestLRUToggle_(void) {
     if (multidictHasLRU(d) ||
         multidictGetEvictPolicy(d) != MULTIDICT_EVICT_NONE ||
         multidictEnableLRU(d, 4) || multidictCount(d) != 50) {
-        ERRR("LRU toggle: disabling a populated dict");
+        ERR("LRU toggle: disabling a populated dict");
     }
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
@@ -6210,7 +6210,7 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
     multidictDetailedStats before = {};
     multidictGetDetailedStats(d, &before);
     if (!multidictResize(d) || !multidictIsRehashing(d) || multidictResize(d)) {
-        ERRR("resize after deletes did not start one rehash");
+        ERR("resize after deletes did not start one rehash");
         return err;
     }
     multidictDetailedStats during = {};
@@ -6307,7 +6307,7 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
     int err = 0;
     const int32_t seed = multidictRandomSeed();
     if (multidictRandomSeed() != seed) {
-        ERRR("the process seed changed between calls");
+        ERR("the process seed changed between calls");
     }
 
     static constexpr int32_t seeds[2] = {(int32_t)0x9E3779B9u, 0};
@@ -6357,7 +6357,7 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     if (stats.count != 0 || stats.loadFactor != 0 ||
         detail.basic.loadFactor != 0 || detail.avgChainLen != 0.0f ||
         detail.hasRehashTable || multidictPopRandom(d, &k, &v)) {
-        ERRR("an empty dict reported entries");
+        ERR("an empty dict reported entries");
     }
 
     /* Byte-based: a resize keeps the slots its bytes need at the target
@@ -6389,7 +6389,7 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     /* A resize is refused with resizing off (a class-wide switch) */
     multidictResizeDisable(d);
     if (multidictResize(d)) {
-        ERRR("a resize ran with resizing disabled");
+        ERR("a resize ran with resizing disabled");
     }
     multidictResizeEnable(d);
     return err;
@@ -7770,7 +7770,7 @@ int multidictTest(int argc, char *argv[]) {
             multidictExpand(sd, shrink ? 64 : 16384);
             multidictRehash(sd, 3);
             if (!multidictIsRehashing(sd)) {
-                ERRR("no rehash in flight to sample");
+                ERR("no rehash in flight to sample");
             }
             for (int r = 0; r < 30 && multidictIsRehashing(sd); r++) {
                 databox got[40];
@@ -8181,13 +8181,13 @@ int multidictTest(int argc, char *argv[]) {
         if (multidictAdd(dCase, &key2, &val2) != MULTIDICT_OK_REPLACED ||
             multidictCount(dCase) != 1 ||
             !testOnlyEntryIs_(dCase, "hello", 5, &val2)) {
-            ERRR("case replace did not keep 'hello'");
+            ERR("case replace did not keep 'hello'");
         }
 
         databox key3 = databoxNewBytesString("hElLo");
         if (!multidictDelete(dCase, &key3) || multidictCount(dCase) != 0 ||
             multidictExists(dCase, &key1) || multidictDelete(dCase, &key1)) {
-            ERRR("case delete failed");
+            ERR("case delete failed");
         }
     }
 
@@ -9040,20 +9040,20 @@ int multidictTest(int argc, char *argv[]) {
         databox val = databoxNewBytesString("nx-value");
         multidictResult r = multidictAddNX(d, &key, &val);
         if (r != MULTIDICT_OK_INSERTED) {
-            ERRR("AddNX should succeed for a new key");
+            ERR("AddNX should succeed for a new key");
         }
 
         /* AddNX again should fail */
         databox val2 = databoxNewBytesString("nx-value-2");
         r = multidictAddNX(d, &key, &val2);
         if (r != MULTIDICT_ERR) {
-            ERRR("AddNX should fail for an existing key");
+            ERR("AddNX should fail for an existing key");
         }
 
         /* Verify original value is preserved */
         databox found = {};
         if (!multidictFind(d, &key, &found)) {
-            ERRR("the key should exist after AddNX");
+            ERR("the key should exist after AddNX");
         }
     }
 
@@ -9062,7 +9062,7 @@ int multidictTest(int argc, char *argv[]) {
         databox val = databoxNewBytesString("xx-value");
         multidictResult r = multidictAddXX(d, &key, &val);
         if (r != MULTIDICT_ERR) {
-            ERRR("AddXX should fail for a non-existent key");
+            ERR("AddXX should fail for a non-existent key");
         }
 
         /* Add the key first */
@@ -9072,7 +9072,7 @@ int multidictTest(int argc, char *argv[]) {
         databox val2 = databoxNewBytesString("xx-value-updated");
         r = multidictAddXX(d, &key, &val2);
         if (r != MULTIDICT_OK_REPLACED) {
-            ERRR("AddXX should succeed for an existing key");
+            ERR("AddXX should succeed for an existing key");
         }
     }
 
@@ -9082,14 +9082,14 @@ int multidictTest(int argc, char *argv[]) {
 
         /* Should fail for non-existent */
         if (multidictReplace(d, &key, &val) != MULTIDICT_ERR) {
-            ERRR("Replace should fail for a non-existent key");
+            ERR("Replace should fail for a non-existent key");
         }
 
         /* Add key, then replace */
         MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
         databox val2 = databoxNewBytesString("replaced!");
         if (multidictReplace(d, &key, &val2) != MULTIDICT_OK_REPLACED) {
-            ERRR("Replace should succeed for an existing key");
+            ERR("Replace should succeed for an existing key");
         }
     }
 
@@ -9103,18 +9103,18 @@ int multidictTest(int argc, char *argv[]) {
 
         databox foundVal = {};
         if (!multidictGetAndDelete(d, &key, &foundVal)) {
-            ERRR("GetAndDelete should succeed");
+            ERR("GetAndDelete should succeed");
         }
 
         /* Key should no longer exist */
         if (multidictExists(d, &key)) {
-            ERRR("the key should be deleted after GetAndDelete");
+            ERR("the key should be deleted after GetAndDelete");
         }
 
         /* GetAndDelete on non-existent should return false */
         databox dummy = {};
         if (multidictGetAndDelete(d, &key, &dummy)) {
-            ERRR("GetAndDelete should fail for a non-existent key");
+            ERR("GetAndDelete should fail for a non-existent key");
         }
     }
 
@@ -9124,7 +9124,7 @@ int multidictTest(int argc, char *argv[]) {
         /* PopRandom on empty should fail */
         databox k = {}, v = {};
         if (multidictPopRandom(d, &k, &v)) {
-            ERRR("PopRandom should fail on an empty dict");
+            ERR("PopRandom should fail on an empty dict");
         }
 
         /* Add some entries */
@@ -9145,7 +9145,7 @@ int multidictTest(int argc, char *argv[]) {
         }
 
         if (multidictCount(d) != 0) {
-            ERRR("the dict should be empty after popping every entry");
+            ERR("the dict should be empty after popping every entry");
         }
 
         if (initialCount != 10) {
@@ -9164,7 +9164,7 @@ int multidictTest(int argc, char *argv[]) {
         int64_t result = 0;
         multidictResult r = multidictIncrBy(d, &key, 5, &result);
         if (r != MULTIDICT_OK_INSERTED) {
-            ERRR("IncrBy should insert on a new key");
+            ERR("IncrBy should insert on a new key");
         }
         if (result != 5) {
             ERR("IncrBy result should be 5, got %" PRId64, result);
@@ -9173,7 +9173,7 @@ int multidictTest(int argc, char *argv[]) {
         /* Increment again */
         r = multidictIncrBy(d, &key, 10, &result);
         if (r != MULTIDICT_OK_REPLACED) {
-            ERRR("IncrBy should replace on an existing key");
+            ERR("IncrBy should replace on an existing key");
         }
         if (result != 15) {
             ERR("IncrBy result should be 15, got %" PRId64, result);
@@ -9191,7 +9191,7 @@ int multidictTest(int argc, char *argv[]) {
         double result = 0.0;
         multidictResult r = multidictIncrByFloat(d, &key, 1.5, &result);
         if (r != MULTIDICT_OK_INSERTED) {
-            ERRR("IncrByFloat should insert on a new key");
+            ERR("IncrByFloat should insert on a new key");
         }
         if (result != 1.5) {
             ERR("IncrByFloat result should be 1.5, got %f", result);
@@ -9211,7 +9211,7 @@ int multidictTest(int argc, char *argv[]) {
         int64_t result = 0;
         multidictResult r = multidictIncrBy(d, &key, 1, &result);
         if (r != MULTIDICT_ERR) {
-            ERRR("IncrBy on a non-numeric value should fail");
+            ERR("IncrBy on a non-numeric value should fail");
         }
     }
 
@@ -9239,28 +9239,28 @@ int multidictTest(int argc, char *argv[]) {
         databox now = {};
         if (multidictIncrBy(d, &kMax, 1, &ir) != MULTIDICT_ERR || ir != 42 ||
             !multidictFind(d, &kMax, &now) || now.data.i64 != INT64_MAX) {
-            ERRR("INT64_MAX + 1 was not refused unchanged");
+            ERR("INT64_MAX + 1 was not refused unchanged");
         }
         if (multidictIncrBy(d, &kMin, -1, &ir) != MULTIDICT_ERR) {
-            ERRR("INT64_MIN - 1 was not refused");
+            ERR("INT64_MIN - 1 was not refused");
         }
         if (multidictIncrBy(d, &kBig, 1, &ir) != MULTIDICT_ERR) {
-            ERRR("IncrBy on UINT64_MAX was not refused");
+            ERR("IncrBy on UINT64_MAX was not refused");
         }
         if (multidictIncrBy(d, &kFloat, 1, &ir) != MULTIDICT_ERR) {
-            ERRR("IncrBy on a float value was not refused");
+            ERR("IncrBy on a float value was not refused");
         }
         if (multidictIncrByFloat(d, &kFloat, 0.25, &dr) !=
                 MULTIDICT_OK_REPLACED ||
             dr != 2.75) {
-            ERRR("IncrByFloat on a float value read it wrongly");
+            ERR("IncrByFloat on a float value read it wrongly");
         }
         if (multidictIncrByFloat(d, &kHuge, DBL_MAX, &dr) != MULTIDICT_ERR ||
             !multidictFind(d, &kHuge, &now) || now.data.d64 != DBL_MAX) {
-            ERRR("an infinite IncrByFloat result was not refused");
+            ERR("an infinite IncrByFloat result was not refused");
         }
         if (multidictIncrByFloat(d, &kHuge, NAN, &dr) != MULTIDICT_ERR) {
-            ERRR("a NaN IncrByFloat result was not refused");
+            ERR("a NaN IncrByFloat result was not refused");
         }
     }
 
@@ -9282,7 +9282,7 @@ int multidictTest(int argc, char *argv[]) {
 
         cleaner(multidictFree) multidict *copy = multidictCopy(d);
         if (!copy) {
-            ERRR("Copy should return non-NULL");
+            ERR("Copy should return non-NULL");
         } else {
             if (multidictCount(copy) != multidictCount(d)) {
                 ERR("Copy count mismatch: %" PRIu64 " vs %" PRIu64,
@@ -9399,7 +9399,7 @@ int multidictTest(int argc, char *argv[]) {
         mdTestRefuse = MD_TEST_REFUSE_ALL;
         multidict *copy = multidictCopy(src);
         if (copy) {
-            ERRR("a copy its class refuses returned a dict");
+            ERR("a copy its class refuses returned a dict");
             multidictFree(copy);
         }
 
@@ -9416,7 +9416,7 @@ int multidictTest(int argc, char *argv[]) {
          * refused, so the LRU tracks nothing */
         mdTestRefuse = MD_TEST_REFUSE_UNSIGNED;
         if (!multidictEnableLRU(dst, 4)) {
-            ERRR("LRU did not enable");
+            ERR("LRU did not enable");
         } else {
             const databox key = DATABOX_SIGNED(1);
             const databox val = DATABOX_SIGNED(2);
@@ -10581,7 +10581,7 @@ int multidictTest(int argc, char *argv[]) {
         }
         if (multidictIntHashFunction(12345) !=
             multidictIntHashFunction(12345)) {
-            ERRR("an integer hash is not deterministic");
+            ERR("an integer hash is not deterministic");
         }
         qsort(h32, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
         qsort(h64, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);

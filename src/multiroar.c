@@ -4142,7 +4142,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *B = multiroarBitNew();
         databox seven = databoxNewUnsigned(7);
         if (multiroarValueSet(V, 3, &seven) != MULTIROAR_VALUE_ADDED) {
-            ERRR("setup: the value was not added");
+            ERR("setup: the value was not added");
         }
         multiroarBitSet(B, 1);
         multiroarBitSet(B, 5);
@@ -4168,12 +4168,12 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarToArray(V, arr, 4) || multiroarJaccard(V, V) != 0.0 ||
             multiroarDice(V, B) != 0.0 || multiroarOverlap(B, V) != 0.0 ||
             multiroarHammingDistance(V, B)) {
-            ERRR("a bit reader answered for a value roar");
+            ERR("a bit reader answered for a value roar");
         }
         multiroarIteratorInit(V, &it);
         multiroarBitGetMany(V, probe, 3, got);
         if (multiroarIteratorNext(&it, &pos) || got[0] || got[1] || got[2]) {
-            ERRR("iterating or batch-reading a value roar found bits");
+            ERR("iterating or batch-reading a value roar found bits");
         }
 
         multiroarBitSetRange(V, 0, 50);
@@ -4202,7 +4202,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *n7 = multiroarNewOrN(2, both);
         cleaner(multiroarFree) multiroar *n8 = multiroarNewXorN(2, both);
         if (n1 || n2 || n3 || n4 || n5 || n6 || n7 || n8) {
-            ERRR("a set operation over a value roar gave a result");
+            ERR("a set operation over a value roar gave a result");
         }
 
         /* Each refused bit call reports the misuse exactly once (run again:
@@ -4303,8 +4303,8 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarValueSet(V, 100, &seven) != MULTIROAR_VALUE_REFUSED ||
             multiroarValueGet(V, 100, &out) ||
             multiroarValueRemoveGetRemoved(V, 100, &out)) {
-            ERRR("a value call on a bit roar or an unstorable value was "
-                 "taken");
+            ERR("a value call on a bit roar or an unstorable value was "
+                "taken");
         }
 
         /* Only the three calls on the bit roar are misuse; a value the
@@ -4324,7 +4324,7 @@ int multiroarTest(int argc, char *argv[]) {
             !multiroarEquals(V, Vcopy) || !multiroarEquals(B, Bcopy) ||
             multiroarEquals(V, other) || multiroarValueCount(V) != 1 ||
             multiroarBitCount(B) != 2) {
-            ERRR("a refused call changed a roar, or equality is off");
+            ERR("a refused call changed a roar, or equality is off");
         }
     }
 
@@ -4340,7 +4340,7 @@ int multiroarTest(int argc, char *argv[]) {
             !multiroarIsSubset(NULL, a) || multiroarIsSubset(a, NULL) ||
             !multiroarIsSubset(e, NULL) || !multiroarEquals(NULL, NULL) ||
             multiroarEquals(a, NULL)) {
-            ERRR("a comparison did not treat NULL as the empty set");
+            ERR("a comparison did not treat NULL as the empty set");
         }
 
         /* a AND {} = {}; a OR / XOR / AND NOT {} = a */
@@ -4351,12 +4351,12 @@ int multiroarTest(int argc, char *argv[]) {
         if (!andNull || !multiroarIsEmpty(andNull) ||
             !multiroarEquals(orNull, a) || !multiroarEquals(xorNull, a) ||
             !multiroarEquals(notNull, a)) {
-            ERRR("a set operation with NULL did not use the empty set");
+            ERR("a set operation with NULL did not use the empty set");
         }
         cleaner(multiroarFree) multiroar *inPlace = multiroarDuplicate(a);
         multiroarAnd(inPlace, NULL);
         if (!multiroarIsEmpty(inPlace)) {
-            ERRR("in-place AND with NULL kept bits");
+            ERR("in-place AND with NULL kept bits");
         }
 
         /* A NULL first set has nothing to copy: no result */
@@ -4365,7 +4365,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *n3 = multiroarNewXor(NULL, a);
         cleaner(multiroarFree) multiroar *n4 = multiroarNewAndNot(NULL, a);
         if (n1 || n2 || n3 || n4) {
-            ERRR("a NULL first set gave a result");
+            ERR("a NULL first set gave a result");
         }
 
         /* Two empty sets are identical (Jaccard, Dice 1); the overlap
@@ -4376,7 +4376,7 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarJaccard(e, a) != 0.0 || multiroarJaccard(a, NULL) != 0.0 ||
             multiroarDice(NULL, a) != 0.0 || multiroarOverlap(a, NULL) != 0.0 ||
             multiroarHammingDistance(NULL, a) != 0) {
-            ERRR("an empty-set or NULL metric is off");
+            ERR("an empty-set or NULL metric is off");
         }
 
         /* The raw value setter stores true and false as 1 and 0 */
@@ -4390,7 +4390,7 @@ int multiroarTest(int argc, char *argv[]) {
             !multiroarValueGet(v, 3, &got3) || got3.data.u != 1 ||
             !multiroarValueGet(v, 4, &got4) || got4.data.u != 0 ||
             got4.type != DATABOX_UNSIGNED_64) {
-            ERRR("true/false did not store as 1/0");
+            ERR("true/false did not store as 1/0");
         }
     }
 
@@ -4608,7 +4608,7 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarOverlap(a, b) !=
                 (double)nAnd / (double)(na < nb ? na : nb) ||
             multiroarDice(a, b) != (2.0 * nAnd) / (double)(na + nb)) {
-            ERRR("relations or similarity disagree with the oracle");
+            ERR("relations or similarity disagree with the oracle");
         }
 
         /* Uneven chunk counts both ways round, and an empty roar */
@@ -4628,7 +4628,7 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarJaccard(none, none) != 1.0 ||
             multiroarOverlap(a, none) != 0.0 || multiroarDice(a, none) != 0.0 ||
             multiroarDice(none, none) != 1.0) {
-            ERRR("similarity with uneven or empty roars");
+            ERR("similarity with uneven or empty roars");
         }
 
         /* Set-many into every chunk form: sorted runs of 6 positions per
@@ -4679,8 +4679,8 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *countOnly =
             multiroarFromArray(NULL, 3);
         if (!fromNothing || !multiroarIsEmpty(fromNothing) || countOnly) {
-            ERRR("an empty position list is not an empty roar, or a count "
-                 "without positions was accepted");
+            ERR("an empty position list is not an empty roar, or a count "
+                "without positions was accepted");
         }
     }
 
@@ -4694,13 +4694,13 @@ int multiroarTest(int argc, char *argv[]) {
         bool previouslySet = multiroarBitSet(r, 1700);
 
         if (previouslySet) {
-            ERRR("Detected previously set on new assignment!");
+            ERR("Detected previously set on new assignment!");
         }
 
         bool currentlySet = multiroarBitGet(r, 1700);
 
         if (!currentlySet) {
-            ERRR("Didn't find set bit after setting the bit!");
+            ERR("Didn't find set bit after setting the bit!");
         }
     }
 
@@ -4911,13 +4911,13 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify bits between boundaries are NOT set */
         if (multiroarBitGet(r, 100)) {
-            ERRR("Bit 100 should not be set!");
+            ERR("Bit 100 should not be set!");
         }
         if (multiroarBitGet(r, 8100)) {
-            ERRR("Bit 8100 should not be set!");
+            ERR("Bit 8100 should not be set!");
         }
         if (multiroarBitGet(r, 16000)) {
-            ERRR("Bit 16000 should not be set!");
+            ERR("Bit 16000 should not be set!");
         }
     }
 
@@ -5004,7 +5004,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify positions outside our set are not set */
         if (multiroarBitGet(r, 7500)) {
-            ERRR("Position 7500 should not be set!");
+            ERR("Position 7500 should not be set!");
         }
     }
 
@@ -5031,10 +5031,10 @@ int multiroarTest(int argc, char *argv[]) {
         /* Verify chunk 0 (sparse) */
         if (!multiroarBitGet(r, 100) || !multiroarBitGet(r, 200) ||
             !multiroarBitGet(r, 300)) {
-            ERRR("Sparse chunk bits not set!");
+            ERR("Sparse chunk bits not set!");
         }
         if (multiroarBitGet(r, 150)) {
-            ERRR("Unset bit in sparse chunk incorrectly set!");
+            ERR("Unset bit in sparse chunk incorrectly set!");
         }
 
         /* Verify chunk 1 */
@@ -5051,7 +5051,7 @@ int multiroarTest(int argc, char *argv[]) {
             }
         }
         if (multiroarBitGet(r, chunkBits * 2 + 1500)) {
-            ERRR("Unset bit in chunk 2 incorrectly set!");
+            ERR("Unset bit in chunk 2 incorrectly set!");
         }
     }
 
@@ -5105,17 +5105,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         bool first = multiroarBitSet(r, 12345);
         if (first) {
-            ERRR("First set should return false for previouslySet!");
+            ERR("First set should return false for previouslySet!");
         }
 
         bool second = multiroarBitSet(r, 12345);
         if (!second) {
-            ERRR("Second set should return true for previouslySet!");
+            ERR("Second set should return true for previouslySet!");
         }
 
         /* Verify bit is still set */
         if (!multiroarBitGet(r, 12345)) {
-            ERRR("Bit should remain set after double set!");
+            ERR("Bit should remain set after double set!");
         }
     }
 
@@ -5267,10 +5267,10 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify positions between are NOT set */
         if (multiroarBitGet(r, 50)) {
-            ERRR("Position 50 should not be set!");
+            ERR("Position 50 should not be set!");
         }
         if (multiroarBitGet(r, chunkBits + 100)) {
-            ERRR("Position in chunk 1 should not be set!");
+            ERR("Position in chunk 1 should not be set!");
         }
     }
 
@@ -5332,11 +5332,11 @@ int multiroarTest(int argc, char *argv[]) {
         /* Test in UNDER_FULL mode */
         bool prev = multiroarBitSet(r, 100);
         if (prev) {
-            ERRR("UNDER_FULL: first set should return false!");
+            ERR("UNDER_FULL: first set should return false!");
         }
         prev = multiroarBitSet(r, 100);
         if (!prev) {
-            ERRR("UNDER_FULL: second set should return true!");
+            ERR("UNDER_FULL: second set should return true!");
         }
 
         /* Fill to get into FULL_BITMAP mode */
@@ -5347,17 +5347,17 @@ int multiroarTest(int argc, char *argv[]) {
         /* Test in FULL_BITMAP mode with new position */
         prev = multiroarBitSet(r, 5000);
         if (prev) {
-            ERRR("FULL_BITMAP: first set of new pos should return false!");
+            ERR("FULL_BITMAP: first set of new pos should return false!");
         }
         prev = multiroarBitSet(r, 5000);
         if (!prev) {
-            ERRR("FULL_BITMAP: second set should return true!");
+            ERR("FULL_BITMAP: second set should return true!");
         }
 
         /* Test in FULL_BITMAP mode with existing position */
         prev = multiroarBitSet(r, 100); /* Was set earlier */
         if (!prev) {
-            ERRR("FULL_BITMAP: set of existing pos should return true!");
+            ERR("FULL_BITMAP: set of existing pos should return true!");
         }
     }
 
@@ -5383,7 +5383,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify nearby positions are NOT set */
         if (multiroarBitGet(r, SIZE_MAX - 2)) {
-            ERRR("Position SIZE_MAX-2 should not be set!");
+            ERR("Position SIZE_MAX-2 should not be set!");
         }
     }
 
@@ -5486,7 +5486,7 @@ int multiroarTest(int argc, char *argv[]) {
         /* Insert 629th position - triggers transition */
         multiroarBitSet(r, 628);
         if (!multiroarBitGet(r, 628)) {
-            ERRR("Transition position 628 not set!");
+            ERR("Transition position 628 not set!");
         }
 
         /* Verify all previous positions survived transition */
@@ -5582,16 +5582,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify bits in next chunk are NOT set */
         if (multiroarBitGet(r, chunkBits)) {
-            ERRR("Bit in next chunk should not be set!");
+            ERR("Bit in next chunk should not be set!");
         }
         if (multiroarBitGet(r, chunkBits + 100)) {
-            ERRR("Bit in next chunk should not be set!");
+            ERR("Bit in next chunk should not be set!");
         }
 
         /* Setting a bit in the ALL_1 chunk should return true (already set) */
         bool prev = multiroarBitSet(r, 4096);
         if (!prev) {
-            ERRR("ALL_1: setting existing bit should return true!");
+            ERR("ALL_1: setting existing bit should return true!");
         }
     }
 
@@ -5618,10 +5618,10 @@ int multiroarTest(int argc, char *argv[]) {
         /* Verify chunk 0 */
         if (!multiroarBitGet(r, 10) || !multiroarBitGet(r, 100) ||
             !multiroarBitGet(r, 500)) {
-            ERRR("Chunk 0 bits not set!");
+            ERR("Chunk 0 bits not set!");
         }
         if (multiroarBitGet(r, 50) || multiroarBitGet(r, 200)) {
-            ERRR("Chunk 0 has unexpected bits set!");
+            ERR("Chunk 0 has unexpected bits set!");
         }
 
         /* Verify chunk 1 */
@@ -5669,25 +5669,25 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Query various positions without setting anything */
         if (multiroarBitGet(r, 0)) {
-            ERRR("Empty roar: position 0 should not be set!");
+            ERR("Empty roar: position 0 should not be set!");
         }
         if (multiroarBitGet(r, 100)) {
-            ERRR("Empty roar: position 100 should not be set!");
+            ERR("Empty roar: position 100 should not be set!");
         }
         if (multiroarBitGet(r, 8192)) {
-            ERRR("Empty roar: position 8192 should not be set!");
+            ERR("Empty roar: position 8192 should not be set!");
         }
         if (multiroarBitGet(r, SIZE_MAX / 2)) {
-            ERRR("Empty roar: large position should not be set!");
+            ERR("Empty roar: large position should not be set!");
         }
 
         /* Set one position, verify others still not set */
         multiroarBitSet(r, 5000);
         if (!multiroarBitGet(r, 5000)) {
-            ERRR("Position 5000 should be set!");
+            ERR("Position 5000 should be set!");
         }
         if (multiroarBitGet(r, 4999) || multiroarBitGet(r, 5001)) {
-            ERRR("Adjacent positions should not be set!");
+            ERR("Adjacent positions should not be set!");
         }
     }
 
@@ -5814,7 +5814,7 @@ int multiroarTest(int argc, char *argv[]) {
         const uint64_t len = multiroarSerialize(r, buf, sizeof(buf));
         cleaner(multiroarFree) multiroar *back = multiroarDeserialize(buf, len);
         if (!back || !multiroarEquals(r, back)) {
-            ERRR("Range-built roar does not round trip");
+            ERR("Range-built roar does not round trip");
         }
 
         /* A range ending past UINT64_MAX stops below it, as every range
@@ -5828,7 +5828,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
         multiroarBitClearRange(top, 0, UINT64_MAX);
         if (!multiroarIsEmpty(top)) {
-            ERRR("Clearing everything left bits");
+            ERR("Clearing everything left bits");
         }
     }
 
@@ -6235,34 +6235,34 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r, 300);
 
         if (!multiroarBitGet(r, 100)) {
-            ERRR("bit 100 should be set");
+            ERR("bit 100 should be set");
         }
         if (!multiroarBitGet(r, 200)) {
-            ERRR("bit 200 should be set");
+            ERR("bit 200 should be set");
         }
         if (!multiroarBitGet(r, 300)) {
-            ERRR("bit 300 should be set");
+            ERR("bit 300 should be set");
         }
 
         /* Remove middle element */
         bool wasSet = multiroarRemove(r, 200);
         if (!wasSet) {
-            ERRR("wasSet should be true for bit 200");
+            ERR("wasSet should be true for bit 200");
         }
         if (multiroarBitGet(r, 200)) {
-            ERRR("bit 200 should be clear after remove");
+            ERR("bit 200 should be clear after remove");
         }
         if (!multiroarBitGet(r, 100)) {
-            ERRR("bit 100 should still be set");
+            ERR("bit 100 should still be set");
         }
         if (!multiroarBitGet(r, 300)) {
-            ERRR("bit 300 should still be set");
+            ERR("bit 300 should still be set");
         }
 
         /* Remove again - should return false */
         wasSet = multiroarRemove(r, 200);
         if (wasSet) {
-            ERRR("wasSet should be false for already-cleared bit");
+            ERR("wasSet should be false for already-cleared bit");
         }
     }
 
@@ -6274,22 +6274,22 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         if (!multiroarBitGet(r, 500)) {
-            ERRR("bit 500 should be set");
+            ERR("bit 500 should be set");
         }
         bool wasSet = multiroarRemove(r, 500);
         if (!wasSet) {
-            ERRR("wasSet should be true");
+            ERR("wasSet should be true");
         }
         if (multiroarBitGet(r, 500)) {
-            ERRR("bit 500 should be clear");
+            ERR("bit 500 should be clear");
         }
 
         /* Other bits should still be set */
         if (!multiroarBitGet(r, 499)) {
-            ERRR("bit 499 should still be set");
+            ERR("bit 499 should still be set");
         }
         if (!multiroarBitGet(r, 501)) {
-            ERRR("bit 501 should still be set");
+            ERR("bit 501 should still be set");
         }
     }
 
@@ -6299,16 +6299,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         bool wasSet = multiroarRemove(r, 100);
         if (!wasSet) {
-            ERRR("wasSet should be true");
+            ERR("wasSet should be true");
         }
         if (multiroarBitGet(r, 100)) {
-            ERRR("bit 100 should be clear");
+            ERR("bit 100 should be clear");
         }
 
         /* Chunk should be gone, but we can still add to it */
         multiroarBitSet(r, 100);
         if (!multiroarBitGet(r, 100)) {
-            ERRR("bit 100 should be set again");
+            ERR("bit 100 should be set again");
         }
     }
 
@@ -6320,33 +6320,33 @@ int multiroarTest(int argc, char *argv[]) {
 
         cleaner(multiroarFree) multiroar *dup = multiroarDuplicate(r);
         if (dup == NULL) {
-            ERRR("dup should not be NULL");
+            ERR("dup should not be NULL");
         }
         if (dup == r) {
-            ERRR("dup should be different pointer");
+            ERR("dup should be different pointer");
         }
 
         /* Verify all bits match */
         if (!multiroarBitGet(dup, 100)) {
-            ERRR("dup bit 100 should be set");
+            ERR("dup bit 100 should be set");
         }
         if (!multiroarBitGet(dup, 200)) {
-            ERRR("dup bit 200 should be set");
+            ERR("dup bit 200 should be set");
         }
         if (!multiroarBitGet(dup, 10000)) {
-            ERRR("dup bit 10000 should be set");
+            ERR("dup bit 10000 should be set");
         }
         if (multiroarBitGet(dup, 101)) {
-            ERRR("dup bit 101 should be clear");
+            ERR("dup bit 101 should be clear");
         }
 
         /* Modifications to original shouldn't affect dup */
         multiroarBitSet(r, 999);
         if (!multiroarBitGet(r, 999)) {
-            ERRR("original bit 999 should be set");
+            ERR("original bit 999 should be set");
         }
         if (multiroarBitGet(dup, 999)) {
-            ERRR("dup bit 999 should be clear");
+            ERR("dup bit 999 should be clear");
         }
     }
 
@@ -6363,16 +6363,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* a should have: 100, 200, 300 */
         if (!multiroarBitGet(a, 100)) {
-            ERRR("OR: bit 100 should be set");
+            ERR("OR: bit 100 should be set");
         }
         if (!multiroarBitGet(a, 200)) {
-            ERRR("OR: bit 200 should be set");
+            ERR("OR: bit 200 should be set");
         }
         if (!multiroarBitGet(a, 300)) {
-            ERRR("OR: bit 300 should be set");
+            ERR("OR: bit 300 should be set");
         }
         if (multiroarBitGet(a, 150)) {
-            ERRR("OR: bit 150 should be clear");
+            ERR("OR: bit 150 should be clear");
         }
     }
 
@@ -6391,16 +6391,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* a should have: 200, 300 (intersection) */
         if (multiroarBitGet(a, 100)) {
-            ERRR("AND: bit 100 should be clear");
+            ERR("AND: bit 100 should be clear");
         }
         if (!multiroarBitGet(a, 200)) {
-            ERRR("AND: bit 200 should be set");
+            ERR("AND: bit 200 should be set");
         }
         if (!multiroarBitGet(a, 300)) {
-            ERRR("AND: bit 300 should be set");
+            ERR("AND: bit 300 should be set");
         }
         if (multiroarBitGet(a, 400)) {
-            ERRR("AND: bit 400 should be clear");
+            ERR("AND: bit 400 should be clear");
         }
     }
 
@@ -6417,13 +6417,13 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* a should have: 100, 300 (symmetric difference) */
         if (!multiroarBitGet(a, 100)) {
-            ERRR("XOR: bit 100 should be set");
+            ERR("XOR: bit 100 should be set");
         }
         if (multiroarBitGet(a, 200)) {
-            ERRR("XOR: bit 200 should be clear");
+            ERR("XOR: bit 200 should be clear");
         }
         if (!multiroarBitGet(a, 300)) {
-            ERRR("XOR: bit 300 should be set");
+            ERR("XOR: bit 300 should be set");
         }
     }
 
@@ -6437,7 +6437,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarNot(inPlace);
         if (!multiroarEquals(r, before) || !multiroarEquals(notted, inPlace) ||
             multiroarBitGet(notted, 3) || !multiroarBitGet(notted, 4)) {
-            ERRR("NewNot is not Not applied to a copy");
+            ERR("NewNot is not Not applied to a copy");
         }
     }
 
@@ -6452,27 +6452,27 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* The set bits should now be clear, unset bits should be set */
         if (multiroarBitGet(r, 0)) {
-            ERRR("NOT: bit 0 should be clear");
+            ERR("NOT: bit 0 should be clear");
         }
         if (multiroarBitGet(r, 1)) {
-            ERRR("NOT: bit 1 should be clear");
+            ERR("NOT: bit 1 should be clear");
         }
         if (multiroarBitGet(r, 100)) {
-            ERRR("NOT: bit 100 should be clear");
+            ERR("NOT: bit 100 should be clear");
         }
         if (!multiroarBitGet(r, 2)) {
-            ERRR("NOT: bit 2 should be set");
+            ERR("NOT: bit 2 should be set");
         }
         if (!multiroarBitGet(r, 50)) {
-            ERRR("NOT: bit 50 should be set");
+            ERR("NOT: bit 50 should be set");
         }
         if (!multiroarBitGet(r, 8191)) {
-            ERRR("NOT: bit 8191 should be set");
+            ERR("NOT: bit 8191 should be set");
         }
 
         /* Bits outside the existing chunk are still 0 */
         if (multiroarBitGet(r, 8192)) {
-            ERRR("NOT: bit 8192 should be clear");
+            ERR("NOT: bit 8192 should be clear");
         }
     }
 
@@ -6485,28 +6485,28 @@ int multiroarTest(int argc, char *argv[]) {
 
         cleaner(multiroarFree) multiroar *result = multiroarNewOr(a, b);
         if (result == NULL) {
-            ERRR("NewOr result should not be NULL");
+            ERR("NewOr result should not be NULL");
         }
         if (result == a) {
-            ERRR("NewOr result should not be a");
+            ERR("NewOr result should not be a");
         }
         if (result == b) {
-            ERRR("NewOr result should not be b");
+            ERR("NewOr result should not be b");
         }
 
         if (!multiroarBitGet(result, 100)) {
-            ERRR("NewOr: bit 100 should be set");
+            ERR("NewOr: bit 100 should be set");
         }
         if (!multiroarBitGet(result, 200)) {
-            ERRR("NewOr: bit 200 should be set");
+            ERR("NewOr: bit 200 should be set");
         }
 
         /* Originals unchanged */
         if (multiroarBitGet(a, 200)) {
-            ERRR("NewOr: a bit 200 should be clear");
+            ERR("NewOr: a bit 200 should be clear");
         }
         if (multiroarBitGet(b, 100)) {
-            ERRR("NewOr: b bit 100 should be clear");
+            ERR("NewOr: b bit 100 should be clear");
         }
     }
 
@@ -6882,13 +6882,13 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Union: all 3 bits */
         if (!multiroarBitGet(result, 100)) {
-            ERRR("OrN: bit 100 should be set");
+            ERR("OrN: bit 100 should be set");
         }
         if (!multiroarBitGet(result, 200)) {
-            ERRR("OrN: bit 200 should be set");
+            ERR("OrN: bit 200 should be set");
         }
         if (!multiroarBitGet(result, 300)) {
-            ERRR("OrN: bit 300 should be set");
+            ERR("OrN: bit 300 should be set");
         }
 
         uint64_t count = multiroarBitCount(result);
@@ -6918,13 +6918,13 @@ int multiroarTest(int argc, char *argv[]) {
         /* 200: 1^1^0 = 0 */
         /* 300: 0^0^1 = 1 */
         if (!multiroarBitGet(result, 100)) {
-            ERRR("XorN: bit 100 should be set");
+            ERR("XorN: bit 100 should be set");
         }
         if (multiroarBitGet(result, 200)) {
-            ERRR("XorN: bit 200 should not be set");
+            ERR("XorN: bit 200 should not be set");
         }
         if (!multiroarBitGet(result, 300)) {
-            ERRR("XorN: bit 300 should be set");
+            ERR("XorN: bit 300 should be set");
         }
     }
 
@@ -7070,7 +7070,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* OR count should be > 0 */
         if (orCount == 0) {
-            ERRR("N=10 OR: count should be > 0");
+            ERR("N=10 OR: count should be > 0");
         }
 
         /* Test N-way AND - should be subset of any individual */
@@ -7828,10 +7828,10 @@ int multiroarTest(int argc, char *argv[]) {
         uint64_t position;
 
         if (multiroarMin(r, &position)) {
-            ERRR("Min should return false for empty bitmap");
+            ERR("Min should return false for empty bitmap");
         }
         if (multiroarMax(r, &position)) {
-            ERRR("Max should return false for empty bitmap");
+            ERR("Max should return false for empty bitmap");
         }
     }
 
@@ -7839,17 +7839,17 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         if (!multiroarIsEmpty(r)) {
-            ERRR("Newly created bitmap should be empty");
+            ERR("Newly created bitmap should be empty");
         }
 
         multiroarBitSet(r, 42);
         if (multiroarIsEmpty(r)) {
-            ERRR("Bitmap with bit set should not be empty");
+            ERR("Bitmap with bit set should not be empty");
         }
 
         multiroarRemove(r, 42);
         if (!multiroarIsEmpty(r)) {
-            ERRR("Bitmap after removing all bits should be empty");
+            ERR("Bitmap after removing all bits should be empty");
         }
     }
 
@@ -7991,19 +7991,19 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Both empty */
         if (multiroarIntersects(r1, r2)) {
-            ERRR("Empty bitmaps should not intersect");
+            ERR("Empty bitmaps should not intersect");
         }
 
         /* One empty */
         multiroarBitSet(r1, 100);
         if (multiroarIntersects(r1, r2)) {
-            ERRR("One empty bitmap should not intersect");
+            ERR("One empty bitmap should not intersect");
         }
 
         /* Disjoint */
         multiroarBitSet(r2, 200);
         if (multiroarIntersects(r1, r2)) {
-            ERRR("Disjoint bitmaps should not intersect");
+            ERR("Disjoint bitmaps should not intersect");
         }
     }
 
@@ -8018,7 +8018,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r2, 300);
 
         if (!multiroarIntersects(r1, r2)) {
-            ERRR("Overlapping bitmaps should intersect");
+            ERR("Overlapping bitmaps should intersect");
         }
     }
 
@@ -8031,14 +8031,14 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r2, 10000);
 
         if (multiroarIntersects(r1, r2)) {
-            ERRR("Bits in different chunks should not intersect");
+            ERR("Bits in different chunks should not intersect");
         }
 
         /* Same bit in different chunk */
         multiroarBitSet(r1, 10000);
 
         if (!multiroarIntersects(r1, r2)) {
-            ERRR("Same bit in same chunk should intersect");
+            ERR("Same bit in same chunk should intersect");
         }
     }
 
@@ -8048,18 +8048,18 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Empty set is subset of empty set */
         if (!multiroarIsSubset(r1, r2)) {
-            ERRR("Empty set should be subset of empty set");
+            ERR("Empty set should be subset of empty set");
         }
 
         /* Empty set is subset of any set */
         multiroarBitSet(r2, 100);
         if (!multiroarIsSubset(r1, r2)) {
-            ERRR("Empty set should be subset of non-empty set");
+            ERR("Empty set should be subset of non-empty set");
         }
 
         /* Non-empty set is not subset of empty set */
         if (multiroarIsSubset(r2, r1)) {
-            ERRR("Non-empty set should not be subset of empty set");
+            ERR("Non-empty set should not be subset of empty set");
         }
     }
 
@@ -8074,10 +8074,10 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Equal sets are subsets of each other */
         if (!multiroarIsSubset(r1, r2)) {
-            ERRR("Equal sets should be subsets of each other (r1 ⊆ r2)");
+            ERR("Equal sets should be subsets of each other (r1 ⊆ r2)");
         }
         if (!multiroarIsSubset(r2, r1)) {
-            ERRR("Equal sets should be subsets of each other (r2 ⊆ r1)");
+            ERR("Equal sets should be subsets of each other (r2 ⊆ r1)");
         }
     }
 
@@ -8091,12 +8091,12 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* r1 ⊂ r2 (proper subset) */
         if (!multiroarIsSubset(r1, r2)) {
-            ERRR("r1 should be subset of r2");
+            ERR("r1 should be subset of r2");
         }
 
         /* r2 ⊄ r1 (not a subset) */
         if (multiroarIsSubset(r2, r1)) {
-            ERRR("r2 should not be subset of r1");
+            ERR("r2 should not be subset of r1");
         }
     }
 
@@ -8111,10 +8111,10 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Disjoint sets are not subsets */
         if (multiroarIsSubset(r1, r2)) {
-            ERRR("Disjoint r1 should not be subset of r2");
+            ERR("Disjoint r1 should not be subset of r2");
         }
         if (multiroarIsSubset(r2, r1)) {
-            ERRR("Disjoint r2 should not be subset of r1");
+            ERR("Disjoint r2 should not be subset of r1");
         }
     }
 
@@ -8123,7 +8123,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         if (!multiroarEquals(r1, r2)) {
-            ERRR("Empty bitmaps should be equal");
+            ERR("Empty bitmaps should be equal");
         }
     }
 
@@ -8140,7 +8140,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r2, 10000);
 
         if (!multiroarEquals(r1, r2)) {
-            ERRR("Identical bitmaps should be equal");
+            ERR("Identical bitmaps should be equal");
         }
     }
 
@@ -8153,7 +8153,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r2, 200);
 
         if (multiroarEquals(r1, r2)) {
-            ERRR("Bitmaps with different sizes should not be equal");
+            ERR("Bitmaps with different sizes should not be equal");
         }
     }
 
@@ -8165,7 +8165,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r2, 200);
 
         if (multiroarEquals(r1, r2)) {
-            ERRR("Bitmaps with different positions should not be equal");
+            ERR("Bitmaps with different positions should not be equal");
         }
     }
 
@@ -8177,7 +8177,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r2, 10000);
 
         if (multiroarEquals(r1, r2)) {
-            ERRR("Bitmaps with bits in different chunks should not be equal");
+            ERR("Bitmaps with bits in different chunks should not be equal");
         }
     }
 
@@ -8232,7 +8232,7 @@ int multiroarTest(int argc, char *argv[]) {
                         actualMin, actualMax, min1, max1);
                 }
             } else if (hasMin || hasMax) {
-                ERRR("Min/Max should fail for an empty bitmap");
+                ERR("Min/Max should fail for an empty bitmap");
             }
 
             if (multiroarIsEmpty(r1) != (numBits1 == 0)) {
@@ -8264,10 +8264,10 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         if (multiroarRank(r, 0) != 0) {
-            ERRR("Rank at 0 for empty bitmap should be 0");
+            ERR("Rank at 0 for empty bitmap should be 0");
         }
         if (multiroarRank(r, 100) != 0) {
-            ERRR("Rank at 100 for empty bitmap should be 0");
+            ERR("Rank at 100 for empty bitmap should be 0");
         }
     }
 
@@ -8276,16 +8276,16 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r, 100);
 
         if (multiroarRank(r, 0) != 0) {
-            ERRR("Rank before bit should be 0");
+            ERR("Rank before bit should be 0");
         }
         if (multiroarRank(r, 100) != 0) {
-            ERRR("Rank at bit position should be 0 (excludes position)");
+            ERR("Rank at bit position should be 0 (excludes position)");
         }
         if (multiroarRank(r, 101) != 1) {
-            ERRR("Rank after bit should be 1");
+            ERR("Rank after bit should be 1");
         }
         if (multiroarRank(r, 1000) != 1) {
-            ERRR("Rank far after bit should be 1");
+            ERR("Rank far after bit should be 1");
         }
     }
 
@@ -8381,10 +8381,10 @@ int multiroarTest(int argc, char *argv[]) {
         uint64_t pos;
 
         if (multiroarSelect(r, 0, &pos)) {
-            ERRR("Select with k=0 should fail");
+            ERR("Select with k=0 should fail");
         }
         if (multiroarSelect(r, 1, &pos)) {
-            ERRR("Select on empty bitmap should fail");
+            ERR("Select on empty bitmap should fail");
         }
     }
 
@@ -8397,7 +8397,7 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Select 1st bit: expected 100, got %" PRIu64, pos);
         }
         if (multiroarSelect(r, 2, &pos)) {
-            ERRR("Select 2nd bit should fail (only 1 bit set)");
+            ERR("Select 2nd bit should fail (only 1 bit set)");
         }
     }
 
@@ -8419,7 +8419,7 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Select 3rd: expected 30, got %" PRIu64, pos);
         }
         if (multiroarSelect(r, 4, &pos)) {
-            ERRR("Select 4th should fail");
+            ERR("Select 4th should fail");
         }
     }
 
@@ -8441,7 +8441,7 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Select 1000th: expected 999, got %" PRIu64, pos);
         }
         if (multiroarSelect(r, 1001, &pos)) {
-            ERRR("Select 1001st should fail");
+            ERR("Select 1001st should fail");
         }
     }
 
@@ -8470,7 +8470,7 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Select 5th: expected 100000, got %" PRIu64, pos);
         }
         if (multiroarSelect(r, 6, &pos)) {
-            ERRR("Select 6th should fail");
+            ERR("Select 6th should fail");
         }
     }
 
@@ -8569,7 +8569,7 @@ int multiroarTest(int argc, char *argv[]) {
             /* Test Select beyond bounds */
             uint64_t pos;
             if (multiroarSelect(r, uniqueCount + 1, &pos)) {
-                ERRR("Select beyond bounds should fail");
+                ERR("Select beyond bounds should fail");
             }
 
             /* Verify rank/select invariant */
@@ -8686,7 +8686,7 @@ int multiroarTest(int argc, char *argv[]) {
                 count, start + count - 1, pos);
         }
         if (multiroarSelect(r, count + 1, &pos)) {
-            ERRR("Select beyond count should fail");
+            ERR("Select beyond count should fail");
         }
     }
 
@@ -8726,16 +8726,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Test rank */
         if (multiroarRank(r, 0) != 0) {
-            ERRR("Rank(0) should be 0");
+            ERR("Rank(0) should be 0");
         }
         if (multiroarRank(r, 42) != 0) {
-            ERRR("Rank(42) should be 0");
+            ERR("Rank(42) should be 0");
         }
         if (multiroarRank(r, 43) != 1) {
-            ERRR("Rank(43) should be 1");
+            ERR("Rank(43) should be 1");
         }
         if (multiroarRank(r, 1000) != 1) {
-            ERRR("Rank(1000) should be 1");
+            ERR("Rank(1000) should be 1");
         }
 
         /* Test select */
@@ -8744,10 +8744,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Select(1) should return 42, got %" PRIu64, pos);
         }
         if (multiroarSelect(r, 2, &pos)) {
-            ERRR("Select(2) should fail");
+            ERR("Select(2) should fail");
         }
         if (multiroarSelect(r, 0, &pos)) {
-            ERRR("Select(0) should fail");
+            ERR("Select(0) should fail");
         }
     }
 
@@ -8784,7 +8784,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         if (multiroarRangeCount(r, 0, 100) != 0) {
-            ERRR("RangeCount on empty bitmap should be 0");
+            ERR("RangeCount on empty bitmap should be 0");
         }
     }
 
@@ -8882,7 +8882,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitFlipRange(r, 40, 20);
 
         if (!multiroarBitGet(r, 50)) {
-            ERRR("Double flip should restore original state");
+            ERR("Double flip should restore original state");
         }
     }
 
@@ -8908,10 +8908,10 @@ int multiroarTest(int argc, char *argv[]) {
         }
         if (!multiroarBitGet(a, 10) || !multiroarBitGet(a, 30) ||
             !multiroarBitGet(a, 50)) {
-            ERRR("A - B should contain {10, 30, 50}");
+            ERR("A - B should contain {10, 30, 50}");
         }
         if (multiroarBitGet(a, 20) || multiroarBitGet(a, 40)) {
-            ERRR("A - B should not contain {20, 40}");
+            ERR("A - B should not contain {20, 40}");
         }
     }
 
@@ -8936,7 +8936,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify a is unchanged */
         if (multiroarBitCount(a) != 100) {
-            ERRR("Original A should be unchanged");
+            ERR("Original A should be unchanged");
         }
     }
 
@@ -8955,7 +8955,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarAndNot(a, b);
 
         if (multiroarBitCount(a) != beforeCount) {
-            ERRR("Disjoint A - B should equal A");
+            ERR("Disjoint A - B should equal A");
         }
     }
 
@@ -8971,7 +8971,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarAndNot(a, b);
 
         if (multiroarBitCount(a) != 0) {
-            ERRR("Complete overlap: A - A should be empty");
+            ERR("Complete overlap: A - A should be empty");
         }
     }
 
@@ -9057,7 +9057,7 @@ int multiroarTest(int argc, char *argv[]) {
 
             /* Should equal original */
             if (!multiroarEquals(r, r3)) {
-                ERRR("Double flip should restore original");
+                ERR("Double flip should restore original");
             }
         }
     }
@@ -9075,7 +9075,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t pos;
         if (multiroarIteratorNext(&iter, &pos)) {
-            ERRR("Empty bitmap should have no positions");
+            ERR("Empty bitmap should have no positions");
         }
     }
 
@@ -9092,7 +9092,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         if (multiroarIteratorNext(&iter, &pos)) {
-            ERRR("Should only have one position");
+            ERR("Should only have one position");
         }
     }
 
@@ -9116,7 +9116,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t pos;
         if (multiroarIteratorNext(&iter, &pos)) {
-            ERRR("Should have exactly 5 positions");
+            ERR("Should have exactly 5 positions");
         }
     }
 
@@ -9436,7 +9436,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify equality */
         if (!multiroarEquals(r1, r2)) {
-            ERRR("Round-trip bitmaps not equal");
+            ERR("Round-trip bitmaps not equal");
         }
     }
 
@@ -9738,17 +9738,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize empty roar");
+            ERR("Failed to serialize empty roar");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize empty roar");
+            ERR("Failed to deserialize empty roar");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
     }
 
@@ -9776,12 +9776,12 @@ int multiroarTest(int argc, char *argv[]) {
 
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size);
         if (multiroarSerialize(r, buf, size) != size) {
-            ERRR("exact-size serialize failed");
+            ERR("exact-size serialize failed");
         }
         cleaner(multiroarFree) multiroar *back =
             multiroarDeserialize(buf, size);
         if (!back || !multiroarEquals(r, back)) {
-            ERRR("round trip failed");
+            ERR("round trip failed");
         }
 
         /* The same chunk stream under other stamps */
@@ -9918,7 +9918,7 @@ int multiroarTest(int argc, char *argv[]) {
         const uint64_t len = multiroarSerialize(r, good, sizeof(good));
         cleaner(multiroarFree) multiroar *ok = multiroarDeserialize(good, len);
         if (!ok || !multiroarEquals(r, ok)) {
-            ERRR("The well-formed listing did not restore");
+            ERR("The well-formed listing did not restore");
         }
 
         /* The two positions are the last two bytes (varints 5 and 9) */
@@ -9930,7 +9930,7 @@ int multiroarTest(int argc, char *argv[]) {
         bad[len - 3] = 0; /* count 0 */
         multiroar *empty = multiroarDeserialize(bad, len - 2);
         if (dup || empty) {
-            ERRR("A malformed listing restored");
+            ERR("A malformed listing restored");
         }
         multiroarFree(dup);
         multiroarFree(empty);
@@ -9945,21 +9945,21 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize single bit");
+            ERR("Failed to serialize single bit");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize single bit");
+            ERR("Failed to deserialize single bit");
         }
 
         if (!multiroarBitGet(r2, 42)) {
-            ERRR("Bit 42 not set after deserialization");
+            ERR("Bit 42 not set after deserialization");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
     }
 
@@ -9976,17 +9976,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize sparse chunk");
+            ERR("Failed to serialize sparse chunk");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize sparse chunk");
+            ERR("Failed to deserialize sparse chunk");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
 
         /* Verify bitcount matches */
@@ -10009,17 +10009,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize dense chunk");
+            ERR("Failed to serialize dense chunk");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize dense chunk");
+            ERR("Failed to deserialize dense chunk");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
 
         if (multiroarBitCount(r) != multiroarBitCount(r2)) {
@@ -10044,17 +10044,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize inverted chunk");
+            ERR("Failed to serialize inverted chunk");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize inverted chunk");
+            ERR("Failed to deserialize inverted chunk");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
 
         if (multiroarBitCount(r) != multiroarBitCount(r2)) {
@@ -10076,17 +10076,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize full chunk");
+            ERR("Failed to serialize full chunk");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize full chunk");
+            ERR("Failed to deserialize full chunk");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
 
         if (multiroarBitCount(r) != multiroarBitCount(r2)) {
@@ -10119,17 +10119,17 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Failed to serialize multiple chunks");
+            ERR("Failed to serialize multiple chunks");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Failed to deserialize multiple chunks");
+            ERR("Failed to deserialize multiple chunks");
         }
 
         if (!multiroarEquals(r, r2)) {
-            ERRR("Deserialized roar doesn't match original");
+            ERR("Deserialized roar doesn't match original");
         }
 
         if (multiroarBitCount(r) != multiroarBitCount(r2)) {
@@ -10159,7 +10159,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r =
             multiroarDeserialize(buf, sizeof(buf));
         if (r != NULL) {
-            ERRR("Should fail with invalid magic");
+            ERR("Should fail with invalid magic");
         }
     }
 
@@ -10169,7 +10169,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r =
             multiroarDeserialize(buf, sizeof(buf));
         if (r != NULL) {
-            ERRR("Should fail with invalid version");
+            ERR("Should fail with invalid version");
         }
     }
 
@@ -10186,13 +10186,13 @@ int multiroarTest(int argc, char *argv[]) {
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
-            ERRR("Serialization failed");
+            ERR("Serialization failed");
         }
 
         cleaner(multiroarFree) multiroar *r2 =
             multiroarDeserialize(buf, written);
         if (!r2) {
-            ERRR("Deserialization failed");
+            ERR("Deserialization failed");
         }
 
         /* Verify using iterator */
@@ -10348,16 +10348,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify boundaries */
         if (multiroarBitGet(result, 2047)) {
-            ERRR("Bit 2047 should NOT be set");
+            ERR("Bit 2047 should NOT be set");
         }
         if (!multiroarBitGet(result, 2048)) {
-            ERRR("Bit 2048 should be set");
+            ERR("Bit 2048 should be set");
         }
         if (!multiroarBitGet(result, 4095)) {
-            ERRR("Bit 4095 should be set");
+            ERR("Bit 4095 should be set");
         }
         if (multiroarBitGet(result, 4096)) {
-            ERRR("Bit 4096 should NOT be set");
+            ERR("Bit 4096 should NOT be set");
         }
     }
 
@@ -10408,13 +10408,13 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify the cleared bits are not set */
         if (multiroarBitGet(result, 100)) {
-            ERRR("Bit 100 should NOT be set");
+            ERR("Bit 100 should NOT be set");
         }
         if (multiroarBitGet(result, 200)) {
-            ERRR("Bit 200 should NOT be set");
+            ERR("Bit 200 should NOT be set");
         }
         if (multiroarBitGet(result, 300)) {
-            ERRR("Bit 300 should NOT be set");
+            ERR("Bit 300 should NOT be set");
         }
     }
 
@@ -10436,7 +10436,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         if (!multiroarEquals(result, b)) {
-            ERRR("ALL_1 AND sparse should equal sparse");
+            ERR("ALL_1 AND sparse should equal sparse");
         }
     }
 
@@ -10499,16 +10499,16 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Verify boundaries */
         if (!multiroarBitGet(result, 1999)) {
-            ERRR("Bit 1999 should be set (in a only)");
+            ERR("Bit 1999 should be set (in a only)");
         }
         if (multiroarBitGet(result, 2000)) {
-            ERRR("Bit 2000 should NOT be set (in both)");
+            ERR("Bit 2000 should NOT be set (in both)");
         }
         if (multiroarBitGet(result, 2999)) {
-            ERRR("Bit 2999 should NOT be set (in both)");
+            ERR("Bit 2999 should NOT be set (in both)");
         }
         if (!multiroarBitGet(result, 3000)) {
-            ERRR("Bit 3000 should be set (in b only)");
+            ERR("Bit 3000 should be set (in b only)");
         }
     }
 
@@ -10531,10 +10531,10 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         if (multiroarBitGet(result, 4095)) {
-            ERRR("Bit 4095 should NOT be set");
+            ERR("Bit 4095 should NOT be set");
         }
         if (!multiroarBitGet(result, 4096)) {
-            ERRR("Bit 4096 should be set");
+            ERR("Bit 4096 should be set");
         }
     }
 
@@ -10781,15 +10781,15 @@ int multiroarTest(int argc, char *argv[]) {
         FILL_DENSE(b, 0, 0, 4000);    /* [0,4000) */
         FILL_DENSE(a, 0, 1000, 3000); /* [1000,3000) ⊆ b */
         if (!multiroarIsSubset(a, b)) {
-            ERRR("IsSubset: [1000,3000) should be subset of [0,4000)");
+            ERR("IsSubset: [1000,3000) should be subset of [0,4000)");
         }
         multiroarBitSet(a, 5000); /* now a has a bit outside b */
         if (multiroarIsSubset(a, b)) {
-            ERRR("IsSubset: should be false after adding bit 5000 not in b");
+            ERR("IsSubset: should be false after adding bit 5000 not in b");
         }
         cleaner(multiroarFree) multiroar *empty = multiroarBitNew();
         if (!multiroarIsSubset(empty, b)) {
-            ERRR("IsSubset: empty set must be a subset");
+            ERR("IsSubset: empty set must be a subset");
         }
     }
 
@@ -10805,7 +10805,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
         uint64_t pos = 0;
         if (multiroarMin(result, &pos)) {
-            ERRR("ANDNOT identical: empty result must have no min");
+            ERR("ANDNOT identical: empty result must have no min");
         }
     }
 

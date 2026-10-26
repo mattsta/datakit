@@ -1143,12 +1143,12 @@ int blake3Test(int argc, char *argv[]) {
         blake3DeriveKey(ctxA, sizeof(ctxA), ikm, sizeof(ikm), k1, sizeof(k1));
         blake3DeriveKey(ctxB, sizeof(ctxB), ikm, sizeof(ikm), k2, sizeof(k2));
         if (memcmp(k1, k2, 32) == 0) {
-            ERRR("Two different contexts must produce different keys");
+            ERR("Two different contexts must produce different keys");
         }
         uint8_t k1b[32];
         blake3DeriveKey(ctxA, sizeof(ctxA), ikm, sizeof(ikm), k1b, sizeof(k1b));
         if (memcmp(k1, k1b, 32) != 0) {
-            ERRR("Same context must produce same key (deterministic)");
+            ERR("Same context must produce same key (deterministic)");
         }
     }
 
@@ -1161,7 +1161,7 @@ int blake3Test(int argc, char *argv[]) {
         blake3DeriveKey(ctx, sizeof(ctx), ikm, sizeof(ikm), out128,
                         sizeof(out128));
         if (memcmp(out64, out128, 64) != 0) {
-            ERRR("XOF length-extension property violated");
+            ERR("XOF length-extension property violated");
         }
     }
 
@@ -1287,10 +1287,10 @@ int blake3Test(int argc, char *argv[]) {
         blake3HashKeyed(key2, msg, strlen(msg), d2);
         blake3HashKeyed(key1, msg, strlen(msg), d1_again);
         if (memcmp(d1, d2, BLAKE3_OUT_LEN) == 0) {
-            ERRR("different keys produced equal outputs");
+            ERR("different keys produced equal outputs");
         }
         if (memcmp(d1, d1_again, BLAKE3_OUT_LEN) != 0) {
-            ERRR("same key + same input produced different outputs");
+            ERR("same key + same input produced different outputs");
         }
     }
 
@@ -1344,8 +1344,8 @@ int blake3Test(int argc, char *argv[]) {
             }
         }
         if (!stack_had_data) {
-            ERRR("test setup invalid: cv_stack[0..32] is all zero pre-wipe; "
-                 "input did not advance past one chunk");
+            ERR("test setup invalid: cv_stack[0..32] is all zero pre-wipe; "
+                "input did not advance past one chunk");
         }
 
         /* Apply production wipe pattern (mirror of blake3HashKeyed /
@@ -1372,8 +1372,8 @@ int blake3Test(int argc, char *argv[]) {
             }
         }
         if (!scratch_intact) {
-            ERRR("cv_stack was wiped — scope reduction regression "
-                 "(perf-critical: full-struct wipe was ~670 ns/call)");
+            ERR("cv_stack was wiped — scope reduction regression "
+                "(perf-critical: full-struct wipe was ~670 ns/call)");
         }
     }
 
@@ -1405,7 +1405,7 @@ int blake3Test(int argc, char *argv[]) {
             }
         }
         if (!stack_had_data) {
-            ERRR("test setup invalid: cv_stack[0..32] is all zero pre-wipe");
+            ERR("test setup invalid: cv_stack[0..32] is all zero pre-wipe");
         }
 
         dkSecureZero(h->key, sizeof(h->key));
@@ -1429,7 +1429,7 @@ int blake3Test(int argc, char *argv[]) {
             }
         }
         if (!scratch_intact) {
-            ERRR("cv_stack was wiped — scope reduction regression");
+            ERR("cv_stack was wiped — scope reduction regression");
         }
     }
 
@@ -1478,8 +1478,8 @@ int blake3Test(int argc, char *argv[]) {
         blake3HasherFinalize(&hp, plain_out, BLAKE3_OUT_LEN);
 
         if (memcmp(keyed_out, plain_out, BLAKE3_OUT_LEN) == 0) {
-            ERRR("InitKeyed produced same digest as InitPlain — "
-                 "key_words wipe sequenced before hasher_init_internal");
+            ERR("InitKeyed produced same digest as InitPlain — "
+                "key_words wipe sequenced before hasher_init_internal");
         }
 
         /* DeriveKeyRaw parity check: derive twice from the same context,
@@ -1497,8 +1497,8 @@ int blake3Test(int argc, char *argv[]) {
         blake3HasherFinalize(&ha, derive_a, BLAKE3_OUT_LEN);
         blake3HasherFinalize(&hb, derive_b, BLAKE3_OUT_LEN);
         if (memcmp(derive_a, derive_b, BLAKE3_OUT_LEN) != 0) {
-            ERRR("DeriveKeyRaw produced different digests across calls — "
-                 "wipe sequenced before hasher_init_internal");
+            ERR("DeriveKeyRaw produced different digests across calls — "
+                "wipe sequenced before hasher_init_internal");
         }
     }
 
@@ -1820,11 +1820,11 @@ int blake3Test(int argc, char *argv[]) {
         blake3SetForceImpl(BLAKE3_IMPL_SCALAR);
         if (blake3GetForceImpl() != BLAKE3_IMPL_SCALAR ||
             blake3DispatcherActiveBackend() != BLAKE3_BACKEND_SCALAR) {
-            ERRR("forced scalar did not read back as scalar");
+            ERR("forced scalar did not read back as scalar");
         }
         blake3SetForceImpl(BLAKE3_IMPL_SIMD);
         if (blake3GetForceImpl() != BLAKE3_IMPL_SIMD) {
-            ERRR("forced SIMD did not read back");
+            ERR("forced SIMD did not read back");
         }
         blake3SetForceImpl(was);
 

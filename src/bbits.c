@@ -1084,7 +1084,7 @@ int bbitsTest(int argc, char *argv[]) {
             bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals, &mean,
                                       &variance, &stddev) ||
             keys || vals || dvals) {
-            ERRR("A zero count should be refused without allocating");
+            ERR("A zero count should be refused without allocating");
         }
 
         bbitsDodDodFree(&dd);

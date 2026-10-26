@@ -823,7 +823,7 @@ int stringPoolTest(int argc, char *argv[]) {
             stringPoolNewWithIds(STRING_POOL_IDS_PERMANENT);
         if (stringPoolIdsOf(reuse) != STRING_POOL_IDS_REUSE ||
             stringPoolIdsOf(permanent) != STRING_POOL_IDS_PERMANENT) {
-            ERRR("stringPoolIdsOf misreports the id behaviour");
+            ERR("stringPoolIdsOf misreports the id behaviour");
         }
     }
 
@@ -1450,7 +1450,7 @@ int stringPoolTest(int argc, char *argv[]) {
         }
         databox resolved;
         if (!stringPoolLookup(pool, id, &resolved)) {
-            ERRR("Lookup after reset failed");
+            ERR("Lookup after reset failed");
         }
     }
 

@@ -258,17 +258,17 @@ int flexPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         if (!ctx) {
-            ERRR("Failed to create persistCtx");
+            ERR("Failed to create persistCtx");
         }
 
         flexP *f = flexNewP(ctx);
         if (!f) {
             persistCtxFree(ctx);
-            ERRR("Failed to create flexP");
+            ERR("Failed to create flexP");
         }
 
         if (flexCountP(f) != 0) {
-            ERRR("New flex should be empty");
+            ERR("New flex should be empty");
         }
 
         flexCloseP(f);
@@ -295,7 +295,7 @@ int flexPTest(int argc, char *argv[]) {
             flexResetP(NULL) || flexNewP(NULL) || flexOpenP(NULL) ||
             flexGetP(NULL) || flexCountP(NULL) || flexBytesP(NULL) ||
             flexIndexP(NULL, 0) || flexSyncP(NULL) || flexCompactP(NULL)) {
-            ERRR("a call without its wrapper or value was not refused");
+            ERR("a call without its wrapper or value was not refused");
         }
         flexGetByTypeP(NULL, NULL, &got);
         flexGetStatsP(NULL, NULL);
@@ -315,7 +315,7 @@ int flexPTest(int argc, char *argv[]) {
                                other = intsetNewP(ctx));
         dkDiagSetPrintMode(priorPrint);
         if (second || other) {
-            ERRR("a held or other-type context took a wrapper");
+            ERR("a held or other-type context took a wrapper");
         }
         intsetCloseP(other);
         flexCloseP(second);
@@ -339,7 +339,7 @@ int flexPTest(int argc, char *argv[]) {
         }
 
         if (!verifyFlexMatchesTracker(f, &tracker)) {
-            ERRR("Flex/tracker mismatch");
+            ERR("Flex/tracker mismatch");
         }
 
         flexCloseP(f);
@@ -363,7 +363,7 @@ int flexPTest(int argc, char *argv[]) {
         }
 
         if (!verifyFlexMatchesTracker(f, &tracker)) {
-            ERRR("Flex/tracker mismatch");
+            ERR("Flex/tracker mismatch");
         }
 
         flexCloseP(f);
@@ -387,14 +387,14 @@ int flexPTest(int argc, char *argv[]) {
         }
         if (flexPushTailP(f, NULL) != PERSIST_LOG_REFUSED ||
             flexCountP(f) != 4) {
-            ERRR("a NULL push was not refused");
+            ERR("a NULL push was not refused");
         }
 
         /* The readers agree with the flex they wrap */
         if (flexBytesP(f) != flexBytes(flexGetP(f)) || flexBytesP(f) == 0 ||
             !flexSyncP(f) || flexBytesP(NULL) != 0 || flexGetP(NULL) ||
             flexSyncP(NULL)) {
-            ERRR("flexBytesP / flexGetP / flexSyncP disagree");
+            ERR("flexBytesP / flexGetP / flexSyncP disagree");
         }
 
         for (int pass = 0; pass < 2; pass++) {
@@ -414,7 +414,7 @@ int flexPTest(int argc, char *argv[]) {
                 ctx = persistCtxOpen(basePath, &config);
                 f = flexOpenP(ctx);
                 if (!f) {
-                    ERRR("recovery failed");
+                    ERR("recovery failed");
                     persistCtxFree(ctx);
                     break;
                 }
@@ -441,7 +441,7 @@ int flexPTest(int argc, char *argv[]) {
             persistCtxFree(ctx);
         }
         if (!ptestDamageLastWalEntry(basePath)) {
-            ERRR("could not damage the WAL");
+            ERR("could not damage the WAL");
         }
 
         {
@@ -452,12 +452,12 @@ int flexPTest(int argc, char *argv[]) {
                     f ? flexCountP(f) : (size_t)0);
             }
             if (!ptestExpectHealed(ctx, basePath)) {
-                ERRR("the damaged entry was not healed into the quarantine");
+                ERR("the damaged entry was not healed into the quarantine");
             }
             const databox later = DATABOX_SIGNED(99);
             if (f && (flexPushTailP(f, &later) == PERSIST_LOG_REFUSED ||
                       flexCountP(f) != 3)) {
-                ERRR("a push after the healed entry was refused");
+                ERR("a push after the healed entry was refused");
             }
             if (f) {
                 flexCloseP(f);
@@ -513,11 +513,11 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("Failed to recover flexP");
+                ERR("Failed to recover flexP");
             }
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {
-                ERRR("Flex/tracker mismatch");
+                ERR("Flex/tracker mismatch");
             }
 
             flexCloseP(f);
@@ -547,7 +547,7 @@ int flexPTest(int argc, char *argv[]) {
         }
 
         if (!verifyFlexMatchesTracker(f, &tracker)) {
-            ERRR("Flex/tracker mismatch");
+            ERR("Flex/tracker mismatch");
         }
 
         flexCloseP(f);
@@ -586,11 +586,11 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             }
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {
-                ERRR("Flex/tracker mismatch");
+                ERR("Flex/tracker mismatch");
             }
 
             flexCloseP(f);
@@ -618,7 +618,7 @@ int flexPTest(int argc, char *argv[]) {
         ptestBoxTrackerInit(&tracker); /* Clear tracker */
 
         if (flexCountP(f) != 0) {
-            ERRR("Count should be 0 after reset");
+            ERR("Count should be 0 after reset");
         }
 
         /* Push more values after reset */
@@ -629,7 +629,7 @@ int flexPTest(int argc, char *argv[]) {
         }
 
         if (!verifyFlexMatchesTracker(f, &tracker)) {
-            ERRR("Flex/tracker mismatch");
+            ERR("Flex/tracker mismatch");
         }
 
         flexCloseP(f);
@@ -670,11 +670,11 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("Recovery failed");
+                ERR("Recovery failed");
             }
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {
-                ERRR("Flex/tracker mismatch");
+                ERR("Flex/tracker mismatch");
             }
 
             flexCloseP(f);
@@ -728,11 +728,11 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("Final recovery failed");
+                ERR("Final recovery failed");
             }
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {
-                ERRR("Flex/tracker mismatch");
+                ERR("Flex/tracker mismatch");
             }
 
             flexCloseP(f);
@@ -769,7 +769,7 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("String recovery failed");
+                ERR("String recovery failed");
             }
 
             if (flexCountP(f) != PTEST_STRING_COUNT) {
@@ -811,11 +811,11 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("Large dataset recovery failed");
+                ERR("Large dataset recovery failed");
             }
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {
-                ERRR("Flex/tracker mismatch");
+                ERR("Flex/tracker mismatch");
             }
 
             flexCloseP(f);
@@ -842,11 +842,11 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!f) {
-                ERRR("Empty recovery failed");
+                ERR("Empty recovery failed");
             }
 
             if (flexCountP(f) != 0) {
-                ERRR("Empty flex should have count 0");
+                ERR("Empty flex should have count 0");
             }
 
             flexCloseP(f);
@@ -873,7 +873,7 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (flexCountP(f) != 1) {
-                ERRR("Should have 1 element");
+                ERR("Should have 1 element");
             }
 
             flexEntry *fe = flexIndexP(f, 0);
@@ -881,7 +881,7 @@ int flexPTest(int argc, char *argv[]) {
             flexGetByTypeP(f, fe, &actualBox);
 
             if (!ptestBoxesEqual(&actualBox, &testBox)) {
-                ERRR("Single element mismatch");
+                ERR("Single element mismatch");
             }
 
             flexCloseP(f);
@@ -956,12 +956,12 @@ int flexPTest(int argc, char *argv[]) {
 
         /* Force compaction */
         if (!flexCompactP(f)) {
-            ERRR("Compaction failed");
+            ERR("Compaction failed");
         }
 
         /* Verify after compaction (within same session) */
         if (!verifyFlexMatchesTracker(f, &tracker)) {
-            ERRR("Flex/tracker mismatch");
+            ERR("Flex/tracker mismatch");
         }
 
         flexCloseP(f);
@@ -1016,7 +1016,7 @@ int flexPTest(int argc, char *argv[]) {
         /* Access with negative index */
         flexEntry *fe = flexIndexP(f, -1);
         if (!fe) {
-            ERRR("Negative index access failed");
+            ERR("Negative index access failed");
         }
 
         databox lastBox;
@@ -1028,7 +1028,7 @@ int flexPTest(int argc, char *argv[]) {
 
         fe = flexIndexP(f, -10);
         if (!fe) {
-            ERRR("First element via negative index failed");
+            ERR("First element via negative index failed");
         }
 
         databox firstBox;
@@ -1068,7 +1068,7 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexOpenP(ctx);
 
             if (!verifyFlexMatchesTracker(f, &tracker)) {
-                ERRR("Flex/tracker mismatch");
+                ERR("Flex/tracker mismatch");
             }
 
             flexCloseP(f);

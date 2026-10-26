@@ -469,7 +469,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 100);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Insert some entries */
@@ -478,7 +478,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     multilruPtr h3 = mlruTestInsert(mlru, 0);
 
     if (h1 == 0 || h2 == 0 || h3 == 0) {
-        ERRR("Failed to insert entries");
+        ERR("Failed to insert entries");
     }
 
     /* Verify count */
@@ -499,7 +499,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify entries after recovery */
@@ -508,13 +508,13 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     }
 
     if (!multilruIsPopulatedP(mlru, h1)) {
-        ERRR("h1 should exist after recovery");
+        ERR("h1 should exist after recovery");
     }
     if (!multilruIsPopulatedP(mlru, h2)) {
-        ERRR("h2 should exist after recovery");
+        ERR("h2 should exist after recovery");
     }
     if (!multilruIsPopulatedP(mlru, h3)) {
-        ERRR("h3 should exist after recovery");
+        ERR("h3 should exist after recovery");
     }
 
     if (multilruGetLevelP(mlru, h1) != 1) {
@@ -525,7 +525,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     /* Delete an entry */
     PTEST_LOGGED(multilruDeleteP(mlru, h2));
     if (multilruIsPopulatedP(mlru, h2)) {
-        ERRR("h2 should be deleted");
+        ERR("h2 should be deleted");
     }
     if (multilruCountP(mlru) != 2) {
         ERR("Count should be 2, got %zu", multilruCountP(mlru));
@@ -538,7 +538,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify after second recovery */
@@ -547,7 +547,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
             multilruCountP(mlru));
     }
     if (multilruIsPopulatedP(mlru, h2)) {
-        ERRR("h2 should still be deleted after recovery");
+        ERR("h2 should still be deleted after recovery");
     }
 
     /* Cleanup */
@@ -588,7 +588,7 @@ static int test_multilruP_weighted(int argc, char *argv[]) {
     };
     multilruP *mlru = multilruNewWithConfigP(ctx, &config);
     if (!mlru) {
-        ERRR("Failed to create weighted multilruP");
+        ERR("Failed to create weighted multilruP");
     }
 
     /* Insert weighted entries */
@@ -626,7 +626,7 @@ static int test_multilruP_weighted(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen weighted multilruP");
+        ERR("Failed to reopen weighted multilruP");
     }
 
     /* Verify weights after recovery */
@@ -668,12 +668,12 @@ static int test_multilruP_compaction(int argc, char *argv[]) {
     config.compactAfterOps = 10;
     persistCtx *ctx = persistCtxNew(basePath, &config);
     if (!ctx) {
-        ERRR("Failed to create persistCtx");
+        ERR("Failed to create persistCtx");
     }
 
     multilruP *mlru = multilruNewP(ctx);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Insert many entries to trigger compaction */
@@ -685,7 +685,7 @@ static int test_multilruP_compaction(int argc, char *argv[]) {
     /* Force compaction */
     bool compacted = multilruCompactP(mlru);
     if (!compacted) {
-        ERRR("Compaction failed");
+        ERR("Compaction failed");
     }
 
     /* Verify all entries still exist */
@@ -729,7 +729,7 @@ static int test_multilruP_empty_recovery(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewP(ctx);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     multilruCloseP(mlru);
@@ -739,7 +739,7 @@ static int test_multilruP_empty_recovery(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen empty multilruP");
+        ERR("Failed to reopen empty multilruP");
     }
 
     /* Verify it's empty */
@@ -750,7 +750,7 @@ static int test_multilruP_empty_recovery(int argc, char *argv[]) {
     /* Verify we can still use it */
     multilruPtr h1 = mlruTestInsert(mlru, 0);
     if (h1 == 0) {
-        ERRR("Failed to insert into recovered empty cache");
+        ERR("Failed to insert into recovered empty cache");
     }
 
     if (multilruCountP(mlru) != 1) {
@@ -785,7 +785,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 5000);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Insert 2000 entries */
@@ -832,7 +832,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify count after recovery */
@@ -886,7 +886,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewP(ctx);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Insert 10 entries */
@@ -915,7 +915,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify gaps are preserved */
@@ -931,7 +931,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     /* Insert more entries - they should fill gaps or continue */
     multilruPtr newHandle = mlruTestInsert(mlru, 0);
     if (newHandle == 0) {
-        ERRR("Failed to insert new entry after recovery");
+        ERR("Failed to insert new entry after recovery");
     }
 
     /* Cleanup */
@@ -969,7 +969,7 @@ static int test_multilruP_mixed_operations(int argc, char *argv[]) {
     };
     multilruP *mlru = multilruNewWithConfigP(ctx, &mlruCfg);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Perform 500 random operations */
@@ -1030,7 +1030,7 @@ static int test_multilruP_mixed_operations(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify count matches */
@@ -1078,7 +1078,7 @@ static int test_multilruP_weight_extremes(int argc, char *argv[]) {
     };
     multilruP *mlru = multilruNewWithConfigP(ctx, &config);
     if (!mlru) {
-        ERRR("Failed to create weighted multilruP");
+        ERR("Failed to create weighted multilruP");
     }
 
     /* Test zero weight */
@@ -1116,7 +1116,7 @@ static int test_multilruP_weight_extremes(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify extreme weights after recovery */
@@ -1162,7 +1162,7 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 5, 10);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Insert 15 entries - should trigger evictions at maxCount=10 */
@@ -1188,7 +1188,7 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
         }
     }
     if (evictedCount == 0) {
-        ERRR("Some entries should have been evicted");
+        ERR("Some entries should have been evicted");
     }
 
     /* Force compaction to save snapshot with evictions */
@@ -1201,7 +1201,7 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify count is still within limit */
@@ -1239,7 +1239,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int argc,
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 5, 10);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Overfill so inserts auto-evict; each eviction must be WAL-logged
@@ -1271,7 +1271,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int argc,
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     if (multilruCountP(mlru) != countBefore) {
@@ -1311,7 +1311,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 7, 0);
     if (!mlru) {
-        ERRR("Failed to create multilruP");
+        ERR("Failed to create multilruP");
     }
 
     /* Insert entry and promote through all levels */
@@ -1338,7 +1338,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
     ctx = persistCtxNew(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     }
 
     /* Verify final level */
@@ -1415,7 +1415,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     multilruStats stats;
     multilruGetStats(multilruGetRawP(mlru), &stats);
     if (stats.demotions == 0) {
-        ERRR("The workload never demoted (test does not cover demotion)");
+        ERR("The workload never demoted (test does not cover demotion)");
     }
 
     /* A lower limit is evicted to at once, each step logged */
@@ -1440,7 +1440,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     ctx = persistCtxOpen(basePath, NULL);
     mlru = multilruOpenP(ctx);
     if (!mlru) {
-        ERRR("Failed to reopen multilruP");
+        ERR("Failed to reopen multilruP");
     } else {
         for (uint64_t h = 1; h < slots; h++) {
             const multilruPtr levelAfter = multilruIsPopulatedP(mlru, h)
@@ -1452,7 +1452,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
             }
         }
         if (multilruPeekNextHandle(multilruGetRawP(mlru)) != nextBefore) {
-            ERRR("The next handle changed across reopen");
+            ERR("The next handle changed across reopen");
         }
         if (multilruGetMaxCountP(mlru) != 5) {
             ERR("maxCount %" PRIu64 " after reopen, want 5",
@@ -1500,7 +1500,7 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
         multilruLevelCountP(mlru, 0) != multilruLevelCount(raw, 0) ||
         multilruLevelCountP(mlru, 0) != 3 ||
         multilruLevelWeightP(mlru, 0) != 90 || !multilruSyncP(mlru)) {
-        ERRR("a multilruP reader disagrees with the LRU");
+        ERR("a multilruP reader disagrees with the LRU");
     }
     persistCtxStats stats;
     multilruGetStatsP(mlru, &stats);
@@ -1513,14 +1513,14 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
     if (!multilruInsertP(mlru, &extra) || !extra ||
         multilruSetMaxWeightP(mlru, 1000) != PERSIST_LOG_DURABLE ||
         multilruGetMaxWeightP(mlru) != 1000 || multilruCountP(mlru) != 4) {
-        ERRR("InsertP or SetMaxWeightP misbehaved");
+        ERR("InsertP or SetMaxWeightP misbehaved");
     }
     PTEST_LOGGED(multilruDeleteP(mlru, extra));
     PTEST_LOGGED(multilruSetMaxWeightP(mlru, 100));
     if (multilruUpdateWeightP(mlru, h[2], 30) != PERSIST_LOG_UNCHANGED ||
         multilruIncreaseP(mlru, 9999) != PERSIST_LOG_UNCHANGED ||
         multilruDeleteP(mlru, 9999) != PERSIST_LOG_UNCHANGED) {
-        ERRR("a change to nothing was logged");
+        ERR("a change to nothing was logged");
     }
 
     /* 30 + 30 + 80 = 140 > 100: eviction runs now, not at the next insert */
@@ -1538,7 +1538,7 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
     mlru = multilruOpenP(ctx);
     if (!mlru || multilruCountP(mlru) != count ||
         multilruTotalWeightP(mlru) != weight) {
-        ERRR("the eviction did not survive reopen");
+        ERR("the eviction did not survive reopen");
     }
     multilruCloseP(mlru);
     persistCtxFree(ctx);
@@ -1639,7 +1639,7 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
     multilruCloseP(mlru);
     persistCtxFree(ctx);
     if (!ptestDamageLastWalEntry(basePath)) {
-        ERRR("could not damage the WAL");
+        ERR("could not damage the WAL");
     }
 
     ctx = persistCtxOpen(basePath, NULL);
@@ -1649,13 +1649,13 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
             mlru ? multilruCountP(mlru) : (size_t)0);
     }
     if (!ptestExpectHealed(ctx, basePath)) {
-        ERRR("the damaged entry was not healed into the quarantine");
+        ERR("the damaged entry was not healed into the quarantine");
     }
     multilruPtr handle = 0;
     if (mlru &&
         (multilruInsertP(mlru, &handle) == PERSIST_LOG_REFUSED || !handle ||
          multilruIncreaseP(mlru, h1) == PERSIST_LOG_REFUSED)) {
-        ERRR("a change after the healed entry was refused");
+        ERR("a change after the healed entry was refused");
     }
     multilruCloseP(mlru);
     persistCtxFree(ctx);
@@ -1742,7 +1742,7 @@ static int test_multilruP_refusals(int argc, char *argv[]) {
         multilruTotalWeightP(NULL) || multilruIsPopulatedP(NULL, a) ||
         multilruSyncP(NULL) || multilruCompactP(NULL) ||
         multilruGetMaxCountP(NULL) || multilruGetMaxWeightP(NULL)) {
-        ERRR("a call without its wrapper was not refused");
+        ERR("a call without its wrapper was not refused");
     }
     multilruGetStatsP(NULL, NULL);
     multilruCloseP(NULL);

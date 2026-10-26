@@ -178,7 +178,7 @@ int dkFormatTest(int argc, char *argv[]) {
             }
         }
         if (strcmp(dkFormatResultName((dkFormatResult)99), "unknown result")) {
-            ERRR("an unknown result is not named as such");
+            ERR("an unknown result is not named as such");
         }
     }
 
@@ -210,7 +210,7 @@ int dkFormatTest(int argc, char *argv[]) {
 
         const dkFormatStamp written = dkFormatStampFor(&spec, 1);
         if (written.id != 77 || written.version != 3 || written.features != 1) {
-            ERRR("StampFor did not stamp the written version");
+            ERR("StampFor did not stamp the written version");
         }
     }
 
@@ -262,7 +262,7 @@ int dkFormatTest(int argc, char *argv[]) {
         if (dkFormatPrefixRead(&spec, buf, n, &got, &gotLen) !=
                 DK_FORMAT_VERSION_TOO_NEW ||
             got.version != 9) {
-            ERRR("a newer version was not refused with its stamp");
+            ERR("a newer version was not refused with its stamp");
         }
     }
 
@@ -299,7 +299,7 @@ int dkFormatTest(int argc, char *argv[]) {
 
         if (dkFormatPrefixRead(&spec, NULL, 10, NULL, NULL) !=
             DK_FORMAT_MALFORMED) {
-            ERRR("a NULL buffer was read");
+            ERR("a NULL buffer was read");
         }
     }
 

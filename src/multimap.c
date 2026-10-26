@@ -1832,7 +1832,7 @@ int32_t multimapInsertReplacingSweep(void) {
                 &f, RP_WIDTH, e0, &middle, true, &keyAlloc, out);
         err += rpJudge("flex-long-key insert", 0, replaced, out, false, 0, 0);
         if (!keyAlloc) {
-            ERRR("flex-long-key: the long key was not externalized");
+            ERR("flex-long-key: the long key was not externalized");
         }
 
         const databox c1 = databoxNewUnsigned(8);
@@ -1844,7 +1844,7 @@ int32_t multimapInsertReplacingSweep(void) {
                 &f, RP_WIDTH, e1, &middle, true, &keyAllocReplace, out);
         err += rpJudge("flex-long-key replace", 0, replaced, out, true, 7, 7);
         if (keyAllocReplace) {
-            ERRR("flex-long-key: a replace minted a second key allocation");
+            ERR("flex-long-key: a replace minted a second key allocation");
             mdscfree(keyAllocReplace);
         }
 
@@ -1886,7 +1886,7 @@ int32_t multimapInsertReplacingSweep(void) {
             m, e0, &keyAlloc, out);
         err += rpJudge("full-mdsc insert", 0, replaced, out, false, 0, 0);
         if (!keyAlloc) {
-            ERRR("full-mdsc: the long key was not externalized");
+            ERR("full-mdsc: the long key was not externalized");
         }
 
         const databox c1 = databoxNewUnsigned(12);
@@ -1897,7 +1897,7 @@ int32_t multimapInsertReplacingSweep(void) {
             m, e1, &keyAllocReplace, out);
         err += rpJudge("full-mdsc replace", 0, replaced, out, true, 11, 11);
         if (keyAllocReplace) {
-            ERRR("full-mdsc: a replace minted a second key allocation");
+            ERR("full-mdsc: a replace minted a second key allocation");
             mdscfree(keyAllocReplace);
         }
 
@@ -2030,7 +2030,7 @@ int32_t multimapInsertReplacingSweep(void) {
         const databox *e0[2] = {&k0, &other};
         void *alloc0 = NULL;
         if (multimapFullInsertAllowExternalizeKeys(m, e0, &alloc0)) {
-            ERRR("set-externalize: a new (key, value) pair reported found");
+            ERR("set-externalize: a new (key, value) pair reported found");
         }
 
         multimapIterator it;
@@ -2070,7 +2070,7 @@ int32_t multimapInsertReplacingSweep(void) {
         const bool found = multimapInsertReplacing(&m, e, out);
         err += rpJudge("set duplicate", 5, false, out, false, 0, 0);
         if (!found) {
-            ERRR("set duplicate: the member was not found");
+            ERR("set duplicate: the member was not found");
         }
     }
 
@@ -4257,7 +4257,7 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
     multimapEntry me = {};
     databox gotVal = {};
     if (multimapInsertIfAbsentEntry(&set, offered, &me)) {
-        ERRR("if-absent: a set's present key was inserted again");
+        ERR("if-absent: a set's present key was inserted again");
     } else {
         flexGetByType(flexNext(*me.map, me.fe), &gotVal);
         if (gotVal.data.u != 0) {
@@ -8375,12 +8375,12 @@ int multimapTest(int argc, char *argv[]) {
 
         if (multimapCount(m) != 2 || !multimapExists(m, &nanKey) ||
             !multimapExists(m, &otherNan)) {
-            ERRR("NaN key is not one reachable entry");
+            ERR("NaN key is not one reachable entry");
         }
 
         if (!multimapDelete(&m, &otherNan) || multimapExists(m, &nanKey) ||
             multimapCount(m) != 1 || !multimapExists(m, &inf)) {
-            ERRR("NaN key could not be deleted cleanly");
+            ERR("NaN key could not be deleted cleanly");
         }
     }
 
@@ -8402,21 +8402,21 @@ int multimapTest(int argc, char *argv[]) {
         int64_t got = 42;
         if (multimapFieldIncrBy(&m, &kMax, 1, 1, &got) || got != 42 ||
             multimapFieldIncr(&m, &kMax, 1, 0) != INT64_MAX) {
-            ERRR("INT64_MAX + 1 was not refused unchanged");
+            ERR("INT64_MAX + 1 was not refused unchanged");
         }
         if (!multimapFieldIncrBy(&m, &kMax, 1, -2, &got) ||
             got != INT64_MAX - 2) {
-            ERRR("INT64_MAX - 2 did not apply");
+            ERR("INT64_MAX - 2 did not apply");
         }
         if (!multimapFieldIncrBy(&m, &kBool, 1, 1, &got) || got != 1 ||
             !multimapFieldIncrBy(&m, &kBool, 1, 1, &got) || got != 2 ||
             !multimapFieldIncrBy(&m, &kBool, 1, -2, &got) || got != 0) {
-            ERRR("boolean counter arithmetic is wrong");
+            ERR("boolean counter arithmetic is wrong");
         }
         if (multimapFieldIncrBy(&m, &kStr, 1, 1, NULL) ||
             multimapFieldIncrBy(&m, &kMissing, 1, 1, NULL) ||
             multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
-            ERRR("a non-counter field or missing key was not refused");
+            ERR("a non-counter field or missing key was not refused");
         }
     }
 
@@ -8467,10 +8467,10 @@ int multimapTest(int argc, char *argv[]) {
         databox got = {};
         databox *out[] = {&got};
         if (wrote || now != -1) {
-            ERRR("a set row was rewritten in place");
+            ERR("a set row was rewritten in place");
         }
         if (!mapWrote || !multimapLookup(map, &one, out) || got.data.i != 11) {
-            ERRR("a map's value column was not rewritten");
+            ERR("a map's value column was not rewritten");
         }
         for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
             const databox k = databoxNewSigned(rows[i][0]);
@@ -8509,13 +8509,13 @@ int multimapTest(int argc, char *argv[]) {
                                   &probe) ||
             probe.asked != 1 || now != 1 || !multimapLookup(m, &kBool, out) ||
             got.type != DATABOX_TRUE) {
-            ERRR("a declined boolean increment changed the field");
+            ERR("a declined boolean increment changed the field");
         }
         if (multimapFieldIncrByIf(&m, &kU, 1, 5, &now, mmProceedProbe,
                                   &probe) ||
             probe.asked != 2 || now != 9 || !multimapLookup(m, &kU, out) ||
             got.type != DATABOX_UNSIGNED_64 || got.data.u != 9) {
-            ERRR("a declined unsigned increment changed the field");
+            ERR("a declined unsigned increment changed the field");
         }
 
         /* Not asked: an increment by 0 (true, current), an overflow
@@ -8529,7 +8529,7 @@ int multimapTest(int argc, char *argv[]) {
             multimapFieldIncrByIf(&m, &kMissing, 1, 1, &now, mmProceedProbe,
                                   &probe) ||
             now != 0 || probe.asked != 2) {
-            ERRR("a no-change, overflow or missing key asked or misreported");
+            ERR("a no-change, overflow or missing key asked or misreported");
         }
 
         /* Allowed, and with no question at all */
@@ -8539,7 +8539,7 @@ int multimapTest(int argc, char *argv[]) {
             now != 14 || probe.asked != 3 ||
             !multimapFieldIncrByIf(&m, &kU, 1, 1, &now, NULL, NULL) ||
             now != 15 || !multimapLookup(m, &kU, out) || got.data.i != 15) {
-            ERRR("an allowed increment did not apply");
+            ERR("an allowed increment did not apply");
         }
     }
 
@@ -8685,7 +8685,7 @@ int multimapTest(int argc, char *argv[]) {
                                 flexNewFromDataboxPtrsExact(down, 4)) ||
             multimapNewFromDump(2, false, false, FLEX_CAP_LEVEL_2048,
                                 flexNewFromDataboxPtrsExact(down, 3))) {
-            ERRR("NewFromDump accepted unordered or partial rows");
+            ERR("NewFromDump accepted unordered or partial rows");
         }
     }
 

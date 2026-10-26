@@ -1774,7 +1774,7 @@ int databoxTest(int argc, char *argv[]) {
         if (!databoxIntegralRealAsInteger(&f7, &out) || out.data.u != 7 ||
             databoxIntegralRealAsInteger(&fHalf, &out) ||
             databoxIntegralRealAsInteger(&text, &out)) {
-            ERRR("floats or a non-real box were handled wrongly");
+            ERR("floats or a non-real box were handled wrongly");
         }
 
         /* The minimal-storage canonical form applies it to real boxes;
@@ -1786,8 +1786,8 @@ int databoxTest(int argc, char *argv[]) {
         const bool c5ok = c5->type == DATABOX_UNSIGNED_64 && c5->data.u == 5;
         const databox *c22 = databoxCanonical(&s22, &scratch);
         if (!c5ok || !DATABOX_IS_FLOAT(c22)) {
-            ERRR("the canonical form did not make a whole real an integer, "
-                 "or changed a numeral's spelling");
+            ERR("the canonical form did not make a whole real an integer, "
+                "or changed a numeral's spelling");
         }
     }
 
@@ -1848,7 +1848,7 @@ int databoxTest(int argc, char *argv[]) {
         if (embedded.type != DATABOX_BYTES_EMBED ||
             databoxRetainBytesSelf(&embedded, &cache) != -2 ||
             memcmp(&embedded, &embeddedBefore, sizeof(embedded)) != 0) {
-            ERRR("an embedded box was not left as it was");
+            ERR("an embedded box was not left as it was");
         }
 
         /* Bytes the source never frees are retained as owned BYTES; an
@@ -1994,7 +1994,7 @@ int databoxTest(int argc, char *argv[]) {
         databox c = databoxNewSigned(1000);
         if (!(databoxCompare(&a, &b) < 0 && databoxCompare(&b, &c) < 0 &&
               databoxCompare(&a, &c) < 0)) {
-            ERRR("Transitivity failed for signed integers");
+            ERR("Transitivity failed for signed integers");
         }
 
         /* Test with extreme values */
@@ -2003,7 +2003,7 @@ int databoxTest(int argc, char *argv[]) {
         c = databoxNewSigned(INT64_MAX);
         if (!(databoxCompare(&a, &b) < 0 && databoxCompare(&b, &c) < 0 &&
               databoxCompare(&a, &c) < 0)) {
-            ERRR("Transitivity failed at boundaries");
+            ERR("Transitivity failed at boundaries");
         }
 
         /* Test with strings */
@@ -2012,7 +2012,7 @@ int databoxTest(int argc, char *argv[]) {
         c = databoxNewBytesString("ccc");
         if (!(databoxCompare(&a, &b) < 0 && databoxCompare(&b, &c) < 0 &&
               databoxCompare(&a, &c) < 0)) {
-            ERRR("Transitivity failed for strings");
+            ERR("Transitivity failed for strings");
         }
 
         /* Test with floats */
@@ -2021,7 +2021,7 @@ int databoxTest(int argc, char *argv[]) {
         databox f3 = databoxNewReal(100.0f);
         if (!(databoxCompare(&f1, &f2) < 0 && databoxCompare(&f2, &f3) < 0 &&
               databoxCompare(&f1, &f3) < 0)) {
-            ERRR("Transitivity failed for floats");
+            ERR("Transitivity failed for floats");
         }
     }
 
@@ -2030,28 +2030,28 @@ int databoxTest(int argc, char *argv[]) {
         databox s = databoxNewSigned(100);
         databox u = databoxNewUnsigned(100);
         if (databoxCompare(&s, &u) != 0) {
-            ERRR("Same positive value differs between signed/unsigned");
+            ERR("Same positive value differs between signed/unsigned");
         }
 
         /* Zero */
         s = databoxNewSigned(0);
         u = databoxNewUnsigned(0);
         if (databoxCompare(&s, &u) != 0) {
-            ERRR("Zero differs between signed/unsigned");
+            ERR("Zero differs between signed/unsigned");
         }
 
         /* Negative signed should be less than any unsigned */
         s = databoxNewSigned(-1);
         u = databoxNewUnsigned(0);
         if (databoxCompare(&s, &u) >= 0) {
-            ERRR("Negative signed should be less than unsigned 0");
+            ERR("Negative signed should be less than unsigned 0");
         }
 
         /* Large unsigned values */
         s = databoxNewSigned(INT64_MAX);
         u = databoxNewUnsigned((uint64_t)INT64_MAX + 1);
         if (databoxCompare(&s, &u) >= 0) {
-            ERRR("INT64_MAX should be less than INT64_MAX+1 unsigned");
+            ERR("INT64_MAX should be less than INT64_MAX+1 unsigned");
         }
     }
 
@@ -2060,28 +2060,28 @@ int databoxTest(int argc, char *argv[]) {
         databox ibox = databoxNewSigned(100);
         databox fbox = databoxNewReal(100.0f);
         if (databoxCompare(&ibox, &fbox) != 0) {
-            ERRR("100 int should equal 100.0 float");
+            ERR("100 int should equal 100.0 float");
         }
 
         /* Integer less than float */
         ibox = databoxNewSigned(99);
         fbox = databoxNewReal(99.5f);
         if (databoxCompare(&ibox, &fbox) >= 0) {
-            ERRR("99 int should be less than 99.5 float");
+            ERR("99 int should be less than 99.5 float");
         }
 
         /* Integer greater than float */
         ibox = databoxNewSigned(100);
         fbox = databoxNewReal(99.5f);
         if (databoxCompare(&ibox, &fbox) <= 0) {
-            ERRR("100 int should be greater than 99.5 float");
+            ERR("100 int should be greater than 99.5 float");
         }
 
         /* Negative values */
         ibox = databoxNewSigned(-50);
         fbox = databoxNewReal(-50.0);
         if (databoxCompare(&ibox, &fbox) != 0) {
-            ERRR("-50 int should equal -50.0 double");
+            ERR("-50 int should equal -50.0 double");
         }
     }
 
@@ -2089,19 +2089,19 @@ int databoxTest(int argc, char *argv[]) {
         databox f = databoxNewReal(1.5f);
         databox d = databoxNewReal(1.5);
         if (databoxCompare(&f, &d) != 0) {
-            ERRR("1.5 float should equal 1.5 double");
+            ERR("1.5 float should equal 1.5 double");
         }
 
         f = databoxNewReal(1.0f);
         d = databoxNewReal(1.1);
         if (databoxCompare(&f, &d) >= 0) {
-            ERRR("1.0 float should be less than 1.1 double");
+            ERR("1.0 float should be less than 1.1 double");
         }
 
         f = databoxNewReal(-100.5f);
         d = databoxNewReal(-100.5);
         if (databoxCompare(&f, &d) != 0) {
-            ERRR("-100.5 float should equal -100.5 double");
+            ERR("-100.5 float should equal -100.5 double");
         }
     }
 
@@ -2111,21 +2111,21 @@ int databoxTest(int argc, char *argv[]) {
         databox s2 = databoxNewBytesString("2");
         /* "10" > "2" in natural sort because 10 > 2 numerically */
         if (databoxCompare(&s1, &s2) <= 0) {
-            ERRR("'10' should be greater than '2' in natural sort");
+            ERR("'10' should be greater than '2' in natural sort");
         }
 
         s1 = databoxNewBytesString("100");
         s2 = databoxNewBytesString("99");
         /* "100" > "99" in natural sort because 100 > 99 numerically */
         if (databoxCompare(&s1, &s2) <= 0) {
-            ERRR("'100' should be greater than '99' in natural sort");
+            ERR("'100' should be greater than '99' in natural sort");
         }
 
         /* Same prefix, different length (non-numeric) */
         s1 = databoxNewBytesString("abc");
         s2 = databoxNewBytesString("abcd");
         if (databoxCompare(&s1, &s2) >= 0) {
-            ERRR("'abc' should be less than 'abcd'");
+            ERR("'abc' should be less than 'abcd'");
         }
 
         /* Verify natural sort with mixed content */
@@ -2133,8 +2133,7 @@ int databoxTest(int argc, char *argv[]) {
         s2 = databoxNewBytesString("file10.txt");
         /* "file2.txt" < "file10.txt" because 2 < 10 */
         if (databoxCompare(&s1, &s2) >= 0) {
-            ERRR(
-                "'file2.txt' should be less than 'file10.txt' in natural sort");
+            ERR("'file2.txt' should be less than 'file10.txt' in natural sort");
         }
     }
 
@@ -2176,10 +2175,10 @@ int databoxTest(int argc, char *argv[]) {
 
         if (!databoxEqual(&zero, &negZero) || !databoxEqual(&negZero, &zero) ||
             !databoxEqual(&negZero, &intZero)) {
-            ERRR("-0.0, +0.0 and 0 are not equal");
+            ERR("-0.0, +0.0 and 0 are not equal");
         }
         if (!databoxEqual(&one, &one) || databoxEqual(&one, &intZero)) {
-            ERRR("integer equality is wrong");
+            ERR("integer equality is wrong");
         }
     }
 
@@ -2216,17 +2215,17 @@ int databoxTest(int argc, char *argv[]) {
                                "but %s vs %s = %d\n",
                                cases[i], cases[j], cases[j], cases[k], cases[i],
                                cases[k], ik);
-                        ERRR("natural-sort comparator is not transitive");
+                        ERR("natural-sort comparator is not transitive");
                     }
                     if (ij > 0 && jk > 0 && ik <= 0) {
                         printf("transitivity broken: %s > %s and %s > %s "
                                "but %s vs %s = %d\n",
                                cases[i], cases[j], cases[j], cases[k], cases[i],
                                cases[k], ik);
-                        ERRR("natural-sort comparator is not transitive");
+                        ERR("natural-sort comparator is not transitive");
                     }
                     if (ij == 0 && jk == 0 && ik != 0) {
-                        ERRR("natural-sort equality is not transitive");
+                        ERR("natural-sort equality is not transitive");
                     }
                 }
             }
@@ -2238,14 +2237,13 @@ int databoxTest(int argc, char *argv[]) {
                 const int ab = databoxCompare(&boxes[i], &boxes[j]);
                 const int ba = databoxCompare(&boxes[j], &boxes[i]);
                 if ((ab == 0) != (ba == 0)) {
-                    ERRR(
-                        "natural-sort antisymmetry violated (zero vs nonzero)");
+                    ERR("natural-sort antisymmetry violated (zero vs nonzero)");
                 }
                 if (ab > 0 && ba >= 0) {
-                    ERRR("natural-sort antisymmetry violated (both positive)");
+                    ERR("natural-sort antisymmetry violated (both positive)");
                 }
                 if (ab < 0 && ba <= 0) {
-                    ERRR("natural-sort antisymmetry violated (both negative)");
+                    ERR("natural-sort antisymmetry violated (both negative)");
                 }
             }
         }
@@ -2254,13 +2252,13 @@ int databoxTest(int argc, char *argv[]) {
         databox b = databoxNewBytesString("g_10_0");
         databox c = databoxNewBytesString("g_1_6");
         if (!(databoxCompare(&c, &a) < 0)) {
-            ERRR("'g_1_6' must be less than 'g_2_39' (1 < 2)");
+            ERR("'g_1_6' must be less than 'g_2_39' (1 < 2)");
         }
         if (!(databoxCompare(&a, &b) < 0)) {
-            ERRR("'g_2_39' must be less than 'g_10_0' (2 < 10)");
+            ERR("'g_2_39' must be less than 'g_10_0' (2 < 10)");
         }
         if (!(databoxCompare(&c, &b) < 0)) {
-            ERRR("'g_1_6' must be less than 'g_10_0' (1 < 10)");
+            ERR("'g_1_6' must be less than 'g_10_0' (1 < 10)");
         }
     }
 
@@ -2276,18 +2274,18 @@ int databoxTest(int argc, char *argv[]) {
             /* Equal is acceptable IF the comparator is consistent.
              * Verify ba is also zero. */
             if (ba != 0) {
-                ERRR("leading-zero compare asymmetric");
+                ERR("leading-zero compare asymmetric");
             }
         } else if ((ab > 0 && ba < 0) || (ab < 0 && ba > 0)) {
             /* Good: opposite signs. */
         } else {
-            ERRR("leading-zero compare has same sign in both directions");
+            ERR("leading-zero compare has same sign in both directions");
         }
         databox c = databoxNewBytesString("0001");
         const int ac = databoxCompare(&a, &c);
         const int ca = databoxCompare(&c, &a);
         if ((ac > 0 && ca >= 0) || (ac < 0 && ca <= 0)) {
-            ERRR("zero-run length compare violates antisymmetry");
+            ERR("zero-run length compare violates antisymmetry");
         }
     }
 
@@ -2330,7 +2328,7 @@ int databoxTest(int argc, char *argv[]) {
             if (databoxCompare(&boxes[i - 1], &boxes[i]) > 0) {
                 printf("sort produced non-monotonic: idx %zu '%s' > %zu '%s'\n",
                        i - 1, buf[i - 1], i, buf[i]);
-                ERRR("natural sort produces non-monotonic ordering");
+                ERR("natural sort produces non-monotonic ordering");
             }
         }
     }
@@ -2339,12 +2337,12 @@ int databoxTest(int argc, char *argv[]) {
         databox empty = databoxNewBytesString("");
         databox nonEmpty = databoxNewBytesString("a");
         if (databoxCompare(&empty, &nonEmpty) >= 0) {
-            ERRR("Empty string should be less than any non-empty string");
+            ERR("Empty string should be less than any non-empty string");
         }
 
         databox empty2 = databoxNewBytesString("");
         if (databoxCompare(&empty, &empty2) != 0) {
-            ERRR("Empty strings should be equal");
+            ERR("Empty strings should be equal");
         }
     }
 
@@ -2354,7 +2352,7 @@ int databoxTest(int argc, char *argv[]) {
         databox embed = databoxNewBytesAllowEmbed(shortStr, strlen(shortStr));
         databox noEmbed = databoxNewBytes(shortStr, strlen(shortStr));
         if (databoxCompare(&embed, &noEmbed) != 0) {
-            ERRR("Embedded and non-embedded same string should be equal");
+            ERR("Embedded and non-embedded same string should be equal");
         }
 
         /* Long string that won't be embedded */
@@ -2362,7 +2360,7 @@ int databoxTest(int argc, char *argv[]) {
         databox long1 = databoxNewBytesString(longStr);
         databox long2 = databoxNewBytesAllowEmbed(longStr, strlen(longStr));
         if (databoxCompare(&long1, &long2) != 0) {
-            ERRR("Long strings should compare equal regardless of type");
+            ERR("Long strings should compare equal regardless of type");
         }
     }
 
@@ -2693,7 +2691,7 @@ int databoxTest(int argc, char *argv[]) {
         /* Test void/error types */
         databox voidBox = databoxVoid();
         if (voidBox.type != DATABOX_VOID) {
-            ERRR("void type incorrect");
+            ERR("void type incorrect");
         }
 
         /* Test signed integers at boundaries */
@@ -2759,16 +2757,16 @@ int databoxTest(int argc, char *argv[]) {
         databox trueBox = databoxBool(true);
         databox falseBox = databoxBool(false);
         if (trueBox.type != DATABOX_TRUE) {
-            ERRR("True type incorrect");
+            ERR("True type incorrect");
         }
         if (falseBox.type != DATABOX_FALSE) {
-            ERRR("False type incorrect");
+            ERR("False type incorrect");
         }
 
         /* Test NULL */
         databox nullBox = databoxNull();
         if (nullBox.type != DATABOX_NULL) {
-            ERRR("Null type incorrect");
+            ERR("Null type incorrect");
         }
 
         printf("  verified all basic type creation\n");
@@ -2857,7 +2855,7 @@ int databoxTest(int argc, char *argv[]) {
                                      &heap[0],  &heap[1], &heap[2]};
         if (alignof(databoxBig) != 16 || sizeof(databoxBig) != 32 ||
             offsetof(databoxBig, extra) != 16) {
-            ERRR("databoxBig layout is not 32 bytes with a 16-aligned extra");
+            ERR("databoxBig layout is not 32 bytes with a 16-aligned extra");
         }
 
         /* Decode a 128-bit entry into each placement: the store through
@@ -3176,17 +3174,17 @@ int databoxTest(int argc, char *argv[]) {
 
         if (databoxCompare(&pLo, &pHi) >= 0 ||
             databoxCompare(&pHi, &pLo) <= 0) {
-            ERRR("PTR vs PTR must order by pointer value");
+            ERR("PTR vs PTR must order by pointer value");
         }
         if (databoxCompare(&pLo, &pLo) != 0) {
-            ERRR("PTR must compare equal to itself");
+            ERR("PTR must compare equal to itself");
         }
         if (databoxCompare(&pLo, &uSame) != 0 ||
             databoxCompare(&uSame, &pLo) != 0) {
-            ERRR("PTR must equal the UNSIGNED box flex decode returns");
+            ERR("PTR must equal the UNSIGNED box flex decode returns");
         }
         if (databoxCompare(&pLo, &sNeg) <= 0) {
-            ERRR("PTR (as unsigned) must order above negative signed");
+            ERR("PTR (as unsigned) must order above negative signed");
         }
     }
 
@@ -3288,7 +3286,7 @@ int databoxTest(int argc, char *argv[]) {
         const databox text = databoxNewBytes("twelve bytes", 12);
         if (DATABOX_SIZE((const databox *)&wide) != 16 ||
             DATABOX_SIZE(&small) != 8 || DATABOX_SIZE(&text) != 12) {
-            ERRR("DATABOX_SIZE misjudged a value");
+            ERR("DATABOX_SIZE misjudged a value");
         }
     }
 
@@ -3462,7 +3460,7 @@ int databoxTest(int argc, char *argv[]) {
         databox t2 = typeOnly;
         if (t.type != DATABOX_SIGNED_128 || t.data.ptr || t.allocated ||
             t.big || databoxAllocateIfNeeded(&t2) || t2.allocated) {
-            ERRR("type-only wide box gained a payload");
+            ERR("type-only wide box gained a payload");
         }
         databoxFreeData(&t);
 
@@ -3478,7 +3476,7 @@ int databoxTest(int argc, char *argv[]) {
         databoxCopyBytesFromBox(&narrowBytes, (const databox *)&narrow);
         if (narrowCopy.big || narrowCopy.data.i64 != -42 || narrowBytes.big ||
             narrowBytes.data.i64 != -42) {
-            ERRR("narrow copy of a databoxBig kept big = 1");
+            ERR("narrow copy of a databoxBig kept big = 1");
         }
 
         /* A wide value held inline is not freed, even when a poisoned
@@ -3490,7 +3488,7 @@ int databoxTest(int argc, char *argv[]) {
         if (inl.type != DATABOX_SIGNED_128 ||
             inl.data.i128 != (__int128_t *)inl.extra ||
             *inl.data.i128 != INT128_MIN + 7) {
-            ERRR("FreeData touched an inline wide payload");
+            ERR("FreeData touched an inline wide payload");
         }
     }
 
@@ -3508,7 +3506,7 @@ int databoxTest(int argc, char *argv[]) {
         if (dst.type != DATABOX_UNSIGNED_128 || !dst.big || dst.allocated ||
             dst.data.u128 != (__uint128_t *)dst.extra ||
             *dst.data.u128 != want) {
-            ERRR("re-homed copy of an owned wide box is wrong");
+            ERR("re-homed copy of an owned wide box is wrong");
         }
 
         /* From a box borrowing other storage, aliased in place. */
@@ -3523,7 +3521,7 @@ int databoxTest(int argc, char *argv[]) {
         outside = 0;
         if (self.data.u128 != (__uint128_t *)self.extra || !self.big ||
             self.allocated || *self.data.u128 != want - 5) {
-            ERRR("aliased re-home did not move the payload inline");
+            ERR("aliased re-home did not move the payload inline");
         }
 
         /* Narrow values copy as is, with big = 0 and nothing owned. */
@@ -3532,7 +3530,7 @@ int databoxTest(int argc, char *argv[]) {
         databoxBigCopyFrom(&dst, &neg);
         if (dst.type != DATABOX_SIGNED_64 || dst.data.i64 != -5 || dst.big ||
             dst.allocated) {
-            ERRR("narrow re-home is wrong");
+            ERR("narrow re-home is wrong");
         }
 
         /* Owned BYTES are borrowed, never adopted. */
@@ -3542,7 +3540,7 @@ int databoxTest(int argc, char *argv[]) {
         databoxBigCopyFrom(&dst, &bytes);
         if (dst.type != DATABOX_BYTES || dst.allocated || dst.big ||
             dst.data.ptr != bytes.data.ptr || dst.len != 21) {
-            ERRR("BYTES re-home adopted or lost the source bytes");
+            ERR("BYTES re-home adopted or lost the source bytes");
         }
         databoxFreeData(&bytes);
     }
@@ -3554,7 +3552,7 @@ int databoxTest(int argc, char *argv[]) {
         } skewed;
         if (sizeof(databoxWide) != 16 || alignof(databoxWide) != 16 ||
             ((uintptr_t)&skewed.slot % 16) != 0) {
-            ERRR("databoxWide is not 16 bytes at 16-byte alignment");
+            ERR("databoxWide is not 16 bytes at 16-byte alignment");
         }
 
         /* A box aimed at a slot carries the full value. */
@@ -3565,7 +3563,7 @@ int databoxTest(int argc, char *argv[]) {
         box.data.i128 = (__int128_t *)&slot;
         *box.data.i128 = INT128_MIN + 3;
         if (databoxIsWideDeferred(&box) || *box.data.i128 != INT128_MIN + 3) {
-            ERRR("a box aimed at a slot reads as deferred");
+            ERR("a box aimed at a slot reads as deferred");
         }
 
         /* Wide type with no payload is deferred, for either signedness. */
@@ -3666,7 +3664,7 @@ int databoxTest(int argc, char *argv[]) {
         /* A wide box with its payload still compares normally. */
         if (databoxCompare((const databox *)&full, &narrowU) <= 0 ||
             databoxCompare(&narrowS, (const databox *)&full) >= 0) {
-            ERRR("wide compare with a payload is wrong");
+            ERR("wide compare with a payload is wrong");
         }
     }
 
@@ -4184,8 +4182,8 @@ int databoxTest(int argc, char *argv[]) {
         if (databoxCanonicalNumeral(&real22, &untouched) ||
             memcmp(&untouched, &poisoned, sizeof(untouched)) != 0 ||
             real22Use->type != DATABOX_UNSIGNED_64 || real22Use->data.u != 22) {
-            ERRR("a whole real was parsed as a numeral or not made an "
-                 "integer");
+            ERR("a whole real was parsed as a numeral or not made an "
+                "integer");
         }
         static constexpr char twentyTwo[] = "22";
         const databox others[] = {
@@ -4306,7 +4304,7 @@ int databoxTest(int argc, char *argv[]) {
             memcmp(databoxBytes(&small), "abc", 3) != 0 || !big.allocated ||
             databoxBytes(&big) == (const uint8_t *)longText ||
             memcmp(databoxBytes(&big), longText, big.len) != 0) {
-            ERRR("RetainBytesSelfExact did not take its value");
+            ERR("RetainBytesSelfExact did not take its value");
         }
         databoxFreeData(&small);
         databoxFreeData(&big);
@@ -4323,7 +4321,7 @@ int databoxTest(int argc, char *argv[]) {
             databoxGetSizeMinimum(&flag) != 0 ||
             databoxGetSizeMinimum(&real) != 8 ||
             databoxGetSizeMinimum(&bytes) != 5) {
-            ERRR("GetSizeMinimum gave a wrong size");
+            ERR("GetSizeMinimum gave a wrong size");
         }
 
         /* A short slice of a base embeds its bytes; a long one keeps the
@@ -4335,7 +4333,7 @@ int databoxTest(int argc, char *argv[]) {
             memcmp(databoxBytes(&shortSlice), "abcd", 4) != 0 ||
             longSlice.type != DATABOX_BYTES_OFFSET || longSlice.len != 30 ||
             longSlice.data.bytes.offset != 3) {
-            ERRR("NewOffsetAllowEmbed built the wrong box");
+            ERR("NewOffsetAllowEmbed built the wrong box");
         }
 
         /* databoxFree releases the box and what it owns */
@@ -4416,7 +4414,7 @@ int databoxTest(int argc, char *argv[]) {
         }
 
         if (tally.narrow == 0 || tally.wide == 0 || tally.reals == 0) {
-            ERRR("the first-byte sweep reached no numeral");
+            ERR("the first-byte sweep reached no numeral");
         }
     }
 
@@ -4444,7 +4442,7 @@ int databoxTest(int argc, char *argv[]) {
         datakitConfigSet(&saved);
         if (dbFreeCalls_ != 1 || dbFreeRecorded_ != (const void *)&pair[1] ||
             pair[0].allocated || pair[0].data.ptr) {
-            ERRR("an owned wide payload next to its box was not freed");
+            ERR("an owned wide payload next to its box was not freed");
         }
 
         /* DATABOX_BIG_INIT over stale bits owns nothing: freeing the box
@@ -4459,7 +4457,7 @@ int databoxTest(int argc, char *argv[]) {
         datakitConfigSet(&saved);
         if (armed.allocated || dbFreeCalls_ != 0 ||
             armed.data.ptr != (void *)armed.extra) {
-            ERRR("DATABOX_BIG_INIT left the box claiming its inline value");
+            ERR("DATABOX_BIG_INIT left the box claiming its inline value");
         }
     }
 

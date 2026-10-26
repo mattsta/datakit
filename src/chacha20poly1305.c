@@ -1522,7 +1522,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                                        rfc_2_8_2_aad, sizeof(rfc_2_8_2_aad), ct,
                                        sizeof(ct), tag, pt);
         if (!ok) {
-            ERRR("2.8.2 Open returned false on its own seal output");
+            ERR("2.8.2 Open returned false on its own seal output");
         }
         if (!bytesEqual(pt, rfc_2_8_2_plaintext, sizeof(pt))) {
             err += reportMismatch("2.8.2 plaintext", pt, rfc_2_8_2_plaintext,
@@ -1548,7 +1548,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             chacha20poly1305Open(rfc_a5_key, rfc_a5_nonce, rfc_a5_aad,
                                  sizeof(rfc_a5_aad), ct, sizeof(ct), tag, pt);
         if (!ok) {
-            ERRR("A.5 Open returned false");
+            ERR("A.5 Open returned false");
         }
         if (!bytesEqual(pt, rfc_a5_plaintext, sizeof(pt))) {
             err += reportMismatch("A.5 plaintext", pt, rfc_a5_plaintext,
@@ -1639,10 +1639,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* buf now holds ciphertext.  Decrypt in place. */
         bool ok = chacha20poly1305Open(key, nonce, NULL, 0, buf, n, tag, buf);
         if (!ok) {
-            ERRR("in-place Open returned false");
+            ERR("in-place Open returned false");
         }
         if (memcmp(buf, ref, n) != 0) {
-            ERRR("in-place mismatch after Seal/Open");
+            ERR("in-place mismatch after Seal/Open");
         }
     }
 
@@ -1730,14 +1730,14 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         memcpy(bad_nonce, nonce, 12);
         bad_nonce[0] ^= 0x01;
         if (chacha20poly1305Open(key, bad_nonce, NULL, 0, ct, n, tag, out)) {
-            ERRR("bad nonce accepted");
+            ERR("bad nonce accepted");
         }
 
         uint8_t bad_key[32];
         memcpy(bad_key, key, 32);
         bad_key[31] ^= 0x80;
         if (chacha20poly1305Open(bad_key, nonce, NULL, 0, ct, n, tag, out)) {
-            ERRR("bad key accepted");
+            ERR("bad key accepted");
         }
     }
 
@@ -1758,7 +1758,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         bool ok =
             chacha20poly1305Open(key, nonce, NULL, 0, ct, n, bad_tag, out);
         if (ok) {
-            ERRR("bad-tag Open returned true");
+            ERR("bad-tag Open returned true");
         }
         for (size_t i = 0; i < n; i++) {
             if (out[i] != 0) {
@@ -1871,11 +1871,11 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t recovered[100];
         chacha20poly1305OpenStreamUpdate(&ctx, ct, sizeof(ct), recovered);
         if (chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-            ERRR("Tampered tag must be rejected");
+            ERR("Tampered tag must be rejected");
         }
         /* Ctx is poisoned; further Final calls also fail. */
         if (chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-            ERRR("Poisoned ctx must keep rejecting");
+            ERR("Poisoned ctx must keep rejecting");
         }
     }
 
@@ -1887,20 +1887,20 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t out[4];
         const uint8_t pt[4] = {1, 2, 3, 4};
         if (!chacha20poly1305SealStreamUpdate(&ctx, pt, 4, out)) {
-            ERRR("first update must succeed");
+            ERR("first update must succeed");
         }
         /* AAD now is out of order. */
         const uint64_t diagBefore = dkDiagCount();
         if (chacha20poly1305SealStreamAad(&ctx, pt, 4)) {
-            ERRR("AAD after update must be refused");
+            ERR("AAD after update must be refused");
         }
         /* Subsequent ops on poisoned ctx all fail. */
         if (chacha20poly1305SealStreamUpdate(&ctx, pt, 4, out)) {
-            ERRR("update on poisoned ctx must fail");
+            ERR("update on poisoned ctx must fail");
         }
         uint8_t tag[16];
         if (chacha20poly1305SealStreamFinal(&ctx, tag)) {
-            ERRR("final on poisoned ctx must fail");
+            ERR("final on poisoned ctx must fail");
         }
         /* Each out-of-order call is reported once */
         if (dkDiagCount() != diagBefore + 3) {
@@ -1959,7 +1959,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             const uint64_t diagBefore = dkDiagCount();
             if (chacha20poly1305Seal(key, nonce, NULL, 0u, in_small, over,
                                      ct_sentinel, tag)) {
-                ERRR("Seal must refuse plaintext_len past 256 GiB bound");
+                ERR("Seal must refuse plaintext_len past 256 GiB bound");
             }
             for (uint32_t i = 0; i < 32u; i++) {
                 if (ct_sentinel[i] != 0xAAu) {
@@ -1973,10 +1973,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             memset(pt_sentinel, 0xAA, sizeof(pt_sentinel));
             if (chacha20poly1305Open(key, nonce, NULL, 0u, in_small, over, tag,
                                      pt_sentinel)) {
-                ERRR("Open must refuse ciphertext_len past 256 GiB bound");
+                ERR("Open must refuse ciphertext_len past 256 GiB bound");
             }
             if (dkDiagCount() != diagBefore) {
-                ERRR("a bound rejection was refused as misuse instead");
+                ERR("a bound rejection was refused as misuse instead");
             }
             /* Open is documented to zero the plaintext buffer on
              * failure — verify the first 32 bytes were touched.  (The
@@ -2088,15 +2088,15 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         const uint64_t diagBefore = dkDiagCount();
         if (chacha20poly1305Open(key, nonce, NULL, 0u, NULL, 16u, tag,
                                  pt_buf)) {
-            ERRR("Open with NULL ciphertext (len>0) must return false");
+            ERR("Open with NULL ciphertext (len>0) must return false");
         }
         if (chacha20poly1305Open(key, nonce, NULL, 0u, ct_buf, 16u, tag,
                                  NULL)) {
-            ERRR("Open with NULL plaintext (len>0) must return false");
+            ERR("Open with NULL plaintext (len>0) must return false");
         }
         if (chacha20poly1305Seal(key, nonce, NULL, 0u, NULL, 16u, ct_buf,
                                  tag)) {
-            ERRR("Seal with NULL plaintext (len>0) must return false");
+            ERR("Seal with NULL plaintext (len>0) must return false");
         }
         /* Each misuse is reported once */
         dkDiagnostic d;
@@ -2116,7 +2116,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* A tag that does not verify is data, not misuse: nothing is
          * reported */
         if (dkDiagCount() != diagValid) {
-            ERRR("a failed tag check must not report");
+            ERR("a failed tag check must not report");
         }
     }
 
@@ -2143,7 +2143,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t in_buf[8] = {1, 2, 3, 4, 5, 6, 7, 8};
         if (chacha20poly1305OpenStreamUpdate(&ctx, in_buf, sizeof(in_buf),
                                              out_buf)) {
-            ERRR("Update on un-initialised ctx must return false");
+            ERR("Update on un-initialised ctx must return false");
         }
         const uint8_t *p = (const uint8_t *)&ctx;
         for (size_t i = 0; i < sizeof(ctx); i++) {
@@ -2162,7 +2162,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t nonce[12] = {0x22};
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
         if (chacha20poly1305OpenStreamUpdate(&ctx, NULL, 16u, out_buf)) {
-            ERRR("Update with NULL ciphertext (len>0) must return false");
+            ERR("Update with NULL ciphertext (len>0) must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2180,7 +2180,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         if ((uint64_t)SIZE_MAX > CHACHA20_POLY1305_MAX_PAYLOAD) {
             ctx.ct_total = CHACHA20_POLY1305_MAX_PAYLOAD;
             if (chacha20poly1305OpenStreamUpdate(&ctx, in_buf, 1u, out_buf)) {
-                ERRR("Open Update past MAX_PAYLOAD must return false");
+                ERR("Open Update past MAX_PAYLOAD must return false");
             }
             for (size_t i = 0; i < sizeof(ctx); i++) {
                 if (p[i] != 0) {
@@ -2196,7 +2196,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
          * fail again (and re-wipe, no-op since already zero). */
         if (chacha20poly1305OpenStreamUpdate(&ctx, in_buf, sizeof(in_buf),
                                              out_buf)) {
-            ERRR("Update on post-poison wiped ctx must remain failing");
+            ERR("Update on post-poison wiped ctx must remain failing");
         }
     }
 
@@ -2218,7 +2218,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         memset(&ctx, 0x5A, sizeof(ctx));
         if (chacha20poly1305SealStreamUpdate(&ctx, in_buf, sizeof(in_buf),
                                              out_buf)) {
-            ERRR("Seal Update on un-initialised ctx must return false");
+            ERR("Seal Update on un-initialised ctx must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2235,7 +2235,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t nonce[12] = {0x44};
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
         if (chacha20poly1305SealStreamUpdate(&ctx, NULL, 16u, out_buf)) {
-            ERRR("Seal Update with NULL plaintext (len>0) must return false");
+            ERR("Seal Update with NULL plaintext (len>0) must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2256,7 +2256,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             const size_t over_chunk = 1u;
             if (chacha20poly1305SealStreamUpdate(&ctx, in_buf, over_chunk,
                                                  out_buf)) {
-                ERRR("Seal Update past MAX_PAYLOAD must return false");
+                ERR("Seal Update past MAX_PAYLOAD must return false");
             }
             for (size_t i = 0; i < sizeof(ctx); i++) {
                 if (p[i] != 0) {
@@ -2273,10 +2273,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         uint8_t tag[16];
         if (chacha20poly1305SealStreamUpdate(&ctx, in_buf, sizeof(in_buf),
                                              out_buf)) {
-            ERRR("Seal Update on post-poison wiped ctx must remain failing");
+            ERR("Seal Update on post-poison wiped ctx must remain failing");
         }
         if (chacha20poly1305SealStreamFinal(&ctx, tag)) {
-            ERRR("Seal Final on post-poison wiped ctx must remain failing");
+            ERR("Seal Final on post-poison wiped ctx must remain failing");
         }
     }
 
@@ -2358,10 +2358,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* (1) Wrong-phase Aad on Seal side: Init → Update → Aad. */
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
         if (!chacha20poly1305SealStreamUpdate(&ctx, pt, sizeof(pt), out_buf)) {
-            ERRR("Seal Update during AAD->BODY transition must succeed");
+            ERR("Seal Update during AAD->BODY transition must succeed");
         }
         if (chacha20poly1305SealStreamAad(&ctx, aad, sizeof(aad))) {
-            ERRR("Seal Aad after Update must be refused");
+            ERR("Seal Aad after Update must be refused");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2375,7 +2375,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* (2) NULL-aad with non-zero len on Open side. */
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
         if (chacha20poly1305OpenStreamAad(&ctx, NULL, sizeof(aad))) {
-            ERRR("Open Aad with NULL aad (len>0) must return false");
+            ERR("Open Aad with NULL aad (len>0) must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2408,14 +2408,14 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
         /* Advance to BODY (zero-len Update transitions AAD -> BODY). */
         if (!chacha20poly1305SealStreamUpdate(&ctx, NULL, 0u, NULL)) {
-            ERRR("Seal Update len=0 must transition to BODY");
+            ERR("Seal Update len=0 must transition to BODY");
         }
         /* Force wrap state: counter == 0, keystream exhausted. */
         ctx.chacha_counter = 0u;
         ctx.keystream_used = 64u;
         if (chacha20poly1305SealStreamUpdate(&ctx, in_buf, sizeof(in_buf),
                                              out_buf)) {
-            ERRR("Seal Update on wrapped counter must return false");
+            ERR("Seal Update on wrapped counter must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2429,13 +2429,13 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* Open side. */
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
         if (!chacha20poly1305OpenStreamUpdate(&ctx, NULL, 0u, NULL)) {
-            ERRR("Open Update len=0 must transition to BODY");
+            ERR("Open Update len=0 must transition to BODY");
         }
         ctx.chacha_counter = 0u;
         ctx.keystream_used = 64u;
         if (chacha20poly1305OpenStreamUpdate(&ctx, in_buf, sizeof(in_buf),
                                              out_buf)) {
-            ERRR("Open Update on wrapped counter must return false");
+            ERR("Open Update on wrapped counter must return false");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2475,13 +2475,13 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         memset(&ctx, 0xA5, sizeof(ctx));
         chacha20poly1305SealStreamInit(&ctx, key, nonce);
         if (!chacha20poly1305SealStreamAad(&ctx, aad, sizeof(aad))) {
-            ERRR("Seal Aad failed");
+            ERR("Seal Aad failed");
         }
         if (!chacha20poly1305SealStreamUpdate(&ctx, pt, sizeof(pt), ct)) {
-            ERRR("Seal Update failed");
+            ERR("Seal Update failed");
         }
         if (!chacha20poly1305SealStreamFinal(&ctx, tag)) {
-            ERRR("Seal Final failed on legit stream");
+            ERR("Seal Final failed on legit stream");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2496,17 +2496,17 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         memset(&ctx, 0xA5, sizeof(ctx));
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
         if (!chacha20poly1305OpenStreamAad(&ctx, aad, sizeof(aad))) {
-            ERRR("Open Aad failed");
+            ERR("Open Aad failed");
         }
         if (!chacha20poly1305OpenStreamUpdate(&ctx, ct, sizeof(ct),
                                               recovered)) {
-            ERRR("Open Update failed");
+            ERR("Open Update failed");
         }
         if (!chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-            ERRR("Open Final failed on legit stream");
+            ERR("Open Final failed on legit stream");
         }
         if (memcmp(recovered, pt, sizeof(pt)) != 0) {
-            ERRR("Open recovered != original plaintext");
+            ERR("Open recovered != original plaintext");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
@@ -2523,14 +2523,14 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         ct[0] ^= 0xFFu;
         chacha20poly1305OpenStreamInit(&ctx, key, nonce);
         if (!chacha20poly1305OpenStreamAad(&ctx, aad, sizeof(aad))) {
-            ERRR("Open Aad (tamper) failed");
+            ERR("Open Aad (tamper) failed");
         }
         if (!chacha20poly1305OpenStreamUpdate(&ctx, ct, sizeof(ct),
                                               recovered)) {
-            ERRR("Open Update (tamper) failed");
+            ERR("Open Update (tamper) failed");
         }
         if (chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-            ERRR("Open Final must reject tampered ciphertext");
+            ERR("Open Final must reject tampered ciphertext");
         }
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {

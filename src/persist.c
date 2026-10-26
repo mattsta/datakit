@@ -6133,7 +6133,7 @@ int persistTest(int argc, char *argv[]) {
     TEST("create and destroy persist context") {
         persist *p = persistCreate(&persistOpsFlex, NULL);
         if (!p) {
-            ERRR("Failed to create persist context");
+            ERR("Failed to create persist context");
         }
         persistClose(p);
     }
@@ -6159,7 +6159,7 @@ int persistTest(int argc, char *argv[]) {
             ERR("Default syncMode should be EVERYSEC, got %d", config.syncMode);
         }
         if (!config.autoCompact) {
-            ERRR("Default autoCompact should be true");
+            ERR("Default autoCompact should be true");
         }
     }
 
@@ -6235,7 +6235,7 @@ int persistTest(int argc, char *argv[]) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
             if (persistSnapshot(p, f)) {
-                ERRR("Keyed snapshot without key must be refused");
+                ERR("Keyed snapshot without key must be refused");
             }
             persistClose(p);
         }
@@ -6250,7 +6250,7 @@ int persistTest(int argc, char *argv[]) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "corrupt-header-test", 19, FLEX_ENDPOINT_TAIL);
             if (!persistSnapshot(p, f)) {
-                ERRR("Snapshot setup failed");
+                ERR("Snapshot setup failed");
             }
 
             size_t storeLen = 0;
@@ -6263,14 +6263,14 @@ int persistTest(int argc, char *argv[]) {
             uint8_t saved = storeBytes[sizeof(persistSnapHeader) - 1];
             ((uint8_t *)storeBytes)[sizeof(persistSnapHeader) - 1] = saved ^ 1u;
             if (persistVerifySnapshot(p)) {
-                ERRR("Header-digest corruption must be rejected");
+                ERR("Header-digest corruption must be rejected");
             }
             if (persistRestore(p)) {
-                ERRR("Header-digest corruption must reject restore");
+                ERR("Header-digest corruption must reject restore");
             }
             ((uint8_t *)storeBytes)[sizeof(persistSnapHeader) - 1] = saved;
             if (!persistVerifySnapshot(p)) {
-                ERRR("Restoring the byte should re-pass verify");
+                ERR("Restoring the byte should re-pass verify");
             }
 
             persistClose(p);
@@ -6289,7 +6289,7 @@ int persistTest(int argc, char *argv[]) {
                 flexPushSigned(&f, (int64_t)i, FLEX_ENDPOINT_TAIL);
             }
             if (!persistSnapshot(p, f)) {
-                ERRR("Snapshot setup failed");
+                ERR("Snapshot setup failed");
             }
 
             size_t storeLen = 0;
@@ -6300,11 +6300,11 @@ int persistTest(int argc, char *argv[]) {
             uint8_t saved = storeBytes[target];
             ((uint8_t *)storeBytes)[target] = saved ^ 0x80u;
             if (persistVerifySnapshot(p)) {
-                ERRR("Payload corruption must be rejected");
+                ERR("Payload corruption must be rejected");
             }
             ((uint8_t *)storeBytes)[target] = saved;
             if (!persistVerifySnapshot(p)) {
-                ERRR("Restoring the byte should re-pass verify");
+                ERR("Restoring the byte should re-pass verify");
             }
 
             persistClose(p);
@@ -6330,7 +6330,7 @@ int persistTest(int argc, char *argv[]) {
             }
             /* The header records sequence 5; the WAL still holds 0..4 */
             if (!persistSnapshot(p, is)) {
-                ERRR("snapshot setup failed");
+                ERR("snapshot setup failed");
             }
 
             size_t storeLen = 0;
@@ -6339,12 +6339,12 @@ int persistTest(int argc, char *argv[]) {
             const size_t target = storeLen - 2;
             ((uint8_t *)storeBytes)[target] ^= 0x40u;
             if (persistRestore(p)) {
-                ERRR("a damaged snapshot body restored");
+                ERR("a damaged snapshot body restored");
             }
 
             cleaner(intsetFree) intset *rebuilt = intsetNew();
             if (!persistReplayWAL(p, &rebuilt)) {
-                ERRR("replay onto an empty set failed");
+                ERR("replay onto an empty set failed");
             }
             persistStats stats;
             persistGetStats(p, &stats);
@@ -6365,7 +6365,7 @@ int persistTest(int argc, char *argv[]) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "digest-bit-flip", 15, FLEX_ENDPOINT_TAIL);
             if (!persistSnapshot(p, f)) {
-                ERRR("Snapshot setup failed");
+                ERR("Snapshot setup failed");
             }
 
             size_t storeLen = 0;
@@ -6375,11 +6375,11 @@ int persistTest(int argc, char *argv[]) {
             uint8_t saved = storeBytes[storeLen - 1u];
             ((uint8_t *)storeBytes)[storeLen - 1u] = saved ^ 0xffu;
             if (persistVerifySnapshot(p)) {
-                ERRR("Digest corruption must be rejected");
+                ERR("Digest corruption must be rejected");
             }
             ((uint8_t *)storeBytes)[storeLen - 1u] = saved;
             if (!persistVerifySnapshot(p)) {
-                ERRR("Restoring the byte should re-pass verify");
+                ERR("Restoring the byte should re-pass verify");
             }
 
             persistClose(p);
@@ -6405,7 +6405,7 @@ int persistTest(int argc, char *argv[]) {
                                FLEX_ENDPOINT_TAIL);
             }
             if (!persistSnapshot(p, f)) {
-                ERRR("Baseline snapshot failed");
+                ERR("Baseline snapshot failed");
             }
 
             size_t storeLen = 0;
@@ -6434,7 +6434,7 @@ int persistTest(int argc, char *argv[]) {
             }
             /* Sanity: the un-flipped snapshot still verifies. */
             if (!persistVerifySnapshot(p)) {
-                ERRR("Post-sweep verify must still pass");
+                ERR("Post-sweep verify must still pass");
             }
 
             persistClose(p);
@@ -6455,11 +6455,11 @@ int persistTest(int argc, char *argv[]) {
 
             cleaner(flexFree) flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
-                ERRR("Initial snapshot failed");
+                ERR("Initial snapshot failed");
             }
             databox box = {.type = DATABOX_SIGNED_64, .data = {.i = 99}};
             if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1)) {
-                ERRR("LogOp failed");
+                ERR("LogOp failed");
             }
             persistSync(p);
 
@@ -6487,7 +6487,7 @@ int persistTest(int argc, char *argv[]) {
                     accepted_after_tamper);
             }
             if (!persistVerifyWAL(p)) {
-                ERRR("Post-sweep WAL verify must still pass");
+                ERR("Post-sweep WAL verify must still pass");
             }
 
             persistClose(p);
@@ -6505,7 +6505,7 @@ int persistTest(int argc, char *argv[]) {
 
             cleaner(flexFree) flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
-                ERRR("Initial snapshot failed");
+                ERR("Initial snapshot failed");
             }
 
             databox boxes[3] = {
@@ -6521,12 +6521,12 @@ int persistTest(int argc, char *argv[]) {
             persistSync(p);
 
             if (!persistVerifyWAL(p)) {
-                ERRR("WAL verify failed");
+                ERR("WAL verify failed");
             }
 
             flex *recovered = persistRecover(p);
             if (!recovered) {
-                ERRR("Recover returned NULL");
+                ERR("Recover returned NULL");
             }
             if (flexCount(recovered) != 3) {
                 ERR("Expected 3 entries replayed, got %zu",
@@ -6553,14 +6553,14 @@ int persistTest(int argc, char *argv[]) {
             const hmacKeyId currentKeyId = 42u;
             if (!hmacKeyringInstallUnsalted(ring, currentKeyId, &hmacAlgoBLAKE3,
                                             keyBytes, sizeof(keyBytes))) {
-                ERRR("Keyring install of current key failed");
+                ERR("Keyring install of current key failed");
             }
 
             const uint8_t *resolvedKey = NULL;
             size_t resolvedLen = 0;
             if (!hmacKeyringGetRaw(ring, currentKeyId, &resolvedKey,
                                    &resolvedLen, NULL)) {
-                ERRR("Keyring lookup of current key failed");
+                ERR("Keyring lookup of current key failed");
             }
 
             persistConfig config = persistDefaultConfig();
@@ -6573,14 +6573,14 @@ int persistTest(int argc, char *argv[]) {
             cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "keyring-end-to-end", 18, FLEX_ENDPOINT_TAIL);
             if (!persistSnapshot(p, f)) {
-                ERRR("Snapshot under keyring-supplied key failed");
+                ERR("Snapshot under keyring-supplied key failed");
             }
             if (!persistVerifySnapshot(p)) {
-                ERRR("Verify under same key failed");
+                ERR("Verify under same key failed");
             }
             flex *restored = persistRestore(p);
             if (!restored || flexCount(restored) != flexCount(f)) {
-                ERRR("Restore content mismatch");
+                ERR("Restore content mismatch");
             }
 
             /* Rotation: install a new key, switch persist to the new id,
@@ -6594,13 +6594,13 @@ int persistTest(int argc, char *argv[]) {
             const hmacKeyId nextKeyId = 43u;
             if (!hmacKeyringInstallUnsalted(ring, nextKeyId, &hmacAlgoBLAKE3,
                                             newKeyBytes, sizeof(newKeyBytes))) {
-                ERRR("Keyring install of next key failed");
+                ERR("Keyring install of next key failed");
             }
 
             /* Persist still bound to the OLD key — verify of existing
              * snapshot passes. */
             if (!persistVerifySnapshot(p)) {
-                ERRR("Verify under OLD key after install of NEW must pass");
+                ERR("Verify under OLD key after install of NEW must pass");
             }
 
             /* Switch to NEW key. Verify of existing snapshot now FAILS
@@ -6611,20 +6611,20 @@ int persistTest(int argc, char *argv[]) {
                               NULL);
             persistSetIntegrityKey(p, newResolved, newResolvedLen);
             if (persistVerifySnapshot(p)) {
-                ERRR("Verify with wrong key MUST fail (tamper-evidence)");
+                ERR("Verify with wrong key MUST fail (tamper-evidence)");
             }
 
             /* Take a NEW snapshot under the new key — should round-trip. */
             if (!persistSnapshot(p, f)) {
-                ERRR("Snapshot under new key failed");
+                ERR("Snapshot under new key failed");
             }
             if (!persistVerifySnapshot(p)) {
-                ERRR("Verify of new-key snapshot failed");
+                ERR("Verify of new-key snapshot failed");
             }
 
             /* Retire the old key — keyring drops to one entry. */
             if (!hmacKeyringRetire(ring, currentKeyId)) {
-                ERRR("Retire of old key failed");
+                ERR("Retire of old key failed");
             }
 
             flexFree(restored);
@@ -6643,7 +6643,7 @@ int persistTest(int argc, char *argv[]) {
             const hmacKeyId kid = 77u;
             if (!hmacKeyringInstallUnsalted(ring, kid, &hmacAlgoSHA256, k,
                                             sizeof(k))) {
-                ERRR("Keyring install failed");
+                ERR("Keyring install failed");
             }
 
             persistConfig config = persistDefaultConfig();
@@ -6658,15 +6658,15 @@ int persistTest(int argc, char *argv[]) {
              * resolves the raw bytes for Wrap and the prepared handle
              * for Verify in a single call. */
             if (!persistAttachKeyring(p, ring, kid)) {
-                ERRR("persistAttachKeyring failed");
+                ERR("persistAttachKeyring failed");
             }
 
             cleaner(flexFree) flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
-                ERRR("Snapshot under keyring binding failed");
+                ERR("Snapshot under keyring binding failed");
             }
             if (!persistVerifySnapshot(p)) {
-                ERRR("Verify under keyring binding failed");
+                ERR("Verify under keyring binding failed");
             }
 
             /* Write several WAL entries — each verify uses the
@@ -6689,12 +6689,12 @@ int persistTest(int argc, char *argv[]) {
             /* persistAttachKeyring on a missing id returns false and
              * does not mutate the existing binding. */
             if (persistAttachKeyring(p, ring, 999u)) {
-                ERRR("persistAttachKeyring must reject missing key id");
+                ERR("persistAttachKeyring must reject missing key id");
             }
             /* Subsequent verify must still work — the failed re-bind
              * did not clear the existing one. */
             if (!persistVerifySnapshot(p)) {
-                ERRR("Failed re-bind must not clear the existing binding");
+                ERR("Failed re-bind must not clear the existing binding");
             }
 
             flexFree(recovered);
@@ -6710,7 +6710,7 @@ int persistTest(int argc, char *argv[]) {
     TEST("memory store write and read") {
         persistStore *store = persistStoreMemory(0);
         if (!store) {
-            ERRR("Failed to create memory store");
+            ERR("Failed to create memory store");
         }
 
         const char *testData = "test data 12345";
@@ -6743,7 +6743,7 @@ int persistTest(int argc, char *argv[]) {
 
         /* SEEK_SET */
         if (store->seek(store->ctx, 5, SEEK_SET) != 5) {
-            ERRR("SEEK_SET failed");
+            ERR("SEEK_SET failed");
         }
 
         char c;
@@ -6754,12 +6754,12 @@ int persistTest(int argc, char *argv[]) {
 
         /* SEEK_CUR */
         if (store->seek(store->ctx, -3, SEEK_CUR) != 3) {
-            ERRR("SEEK_CUR failed");
+            ERR("SEEK_CUR failed");
         }
 
         /* SEEK_END */
         if (store->seek(store->ctx, -2, SEEK_END) != 8) {
-            ERRR("SEEK_END failed");
+            ERR("SEEK_END failed");
         }
 
         store->read(store->ctx, &c, 1);
@@ -6776,7 +6776,7 @@ int persistTest(int argc, char *argv[]) {
 
         store->write(store->ctx, "0123456789", 10);
         if (store->size(store->ctx) != 10) {
-            ERRR("Size should be 10");
+            ERR("Size should be 10");
         }
 
         store->seek(store->ctx, 5, SEEK_SET);
@@ -6806,13 +6806,13 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, store);
 
         if (!persistSnapshot(p, f)) {
-            ERRR("Snapshot failed");
+            ERR("Snapshot failed");
         }
 
         /* Restore */
         flex *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Restore failed");
+            ERR("Restore failed");
         }
 
         if (flexCount(restored) != flexCount(f)) {
@@ -6864,17 +6864,17 @@ int persistTest(int argc, char *argv[]) {
         /* Log operations */
         databox box1 = DATABOX_SIGNED(100);
         if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box1, 1)) {
-            ERRR("Log PUSH_TAIL failed");
+            ERR("Log PUSH_TAIL failed");
         }
 
         databox box2 = DATABOX_SIGNED(200);
         if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box2, 1)) {
-            ERRR("Log PUSH_TAIL 2 failed");
+            ERR("Log PUSH_TAIL 2 failed");
         }
 
         databox box3 = DATABOX_SIGNED(-50);
         if (!persistLogOp(p, PERSIST_OP_PUSH_HEAD, &box3, 1)) {
-            ERRR("Log PUSH_HEAD failed");
+            ERR("Log PUSH_HEAD failed");
         }
 
         /* Sync and check stats */
@@ -6892,7 +6892,7 @@ int persistTest(int argc, char *argv[]) {
             persistGetStats(NULL, &none);
             const persistStats zero = {};
             if (memcmp(&none, &zero, sizeof(none)) != 0) {
-                ERRR("persistGetStats(NULL) did not zero the struct");
+                ERR("persistGetStats(NULL) did not zero the struct");
             }
 
             persistGetStats(p, NULL); /* must not crash */
@@ -6901,7 +6901,7 @@ int persistTest(int argc, char *argv[]) {
         /* Recover and verify */
         flex *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("Recovery failed");
+            ERR("Recovery failed");
         }
 
         if (flexCount(recovered) != 3) {
@@ -6960,7 +6960,7 @@ int persistTest(int argc, char *argv[]) {
 
         /* Compact */
         if (!persistCompact(p, f)) {
-            ERRR("Compaction failed");
+            ERR("Compaction failed");
         }
 
         /* Verify WAL was truncated - new WAL should be small */
@@ -6972,7 +6972,7 @@ int persistTest(int argc, char *argv[]) {
         /* Recover should still work */
         flex *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("Recovery after compaction failed");
+            ERR("Recovery after compaction failed");
         }
 
         if (flexCount(recovered) != 4) {
@@ -6999,12 +6999,12 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, store);
 
         if (!persistSnapshot(p, is)) {
-            ERRR("Intset snapshot failed");
+            ERR("Intset snapshot failed");
         }
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Intset restore failed");
+            ERR("Intset restore failed");
         }
 
         if (intsetCount(restored) != intsetCount(is)) {
@@ -7013,13 +7013,13 @@ int persistTest(int argc, char *argv[]) {
         }
 
         if (!intsetFind(restored, 42)) {
-            ERRR("42 not found");
+            ERR("42 not found");
         }
         if (!intsetFind(restored, -100)) {
-            ERRR("-100 not found");
+            ERR("-100 not found");
         }
         if (!intsetFind(restored, 999999)) {
-            ERRR("999999 not found");
+            ERR("999999 not found");
         }
 
         intsetFree(restored);
@@ -7050,7 +7050,7 @@ int persistTest(int argc, char *argv[]) {
         /* Recover */
         intset *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("Intset recovery failed");
+            ERR("Intset recovery failed");
         }
 
         if (intsetCount(recovered) != 3) {
@@ -7059,7 +7059,7 @@ int persistTest(int argc, char *argv[]) {
 
         if (!intsetFind(recovered, 100) || !intsetFind(recovered, 150) ||
             !intsetFind(recovered, 200)) {
-            ERRR("Missing values after recovery");
+            ERR("Missing values after recovery");
         }
 
         intsetFree(recovered);
@@ -7088,12 +7088,12 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, store);
 
         if (!persistSnapshot(p, m)) {
-            ERRR("Multimap snapshot failed");
+            ERR("Multimap snapshot failed");
         }
 
         multimap *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Multimap restore failed");
+            ERR("Multimap restore failed");
         }
 
         if (multimapCount(restored) != multimapCount(m)) {
@@ -7105,14 +7105,14 @@ int persistTest(int argc, char *argv[]) {
         databox foundVal;
         databox *foundPtrs[] = {&foundVal};
         if (!multimapLookup(restored, &key1, foundPtrs)) {
-            ERRR("key1 not found");
+            ERR("key1 not found");
         }
         if (foundVal.data.i != 100) {
             ERR("key1 value should be 100, got %" PRIdMAX, foundVal.data.i);
         }
 
         if (!multimapLookup(restored, &key2, foundPtrs)) {
-            ERRR("key2 not found");
+            ERR("key2 not found");
         }
         if (foundVal.data.i != 200) {
             ERR("key2 value should be 200, got %" PRIdMAX, foundVal.data.i);
@@ -7136,7 +7136,7 @@ int persistTest(int argc, char *argv[]) {
         persistSnapshot(p, f);
 
         if (!persistVerifySnapshot(p)) {
-            ERRR("Valid snapshot should verify");
+            ERR("Valid snapshot should verify");
         }
 
         /* Corrupt the data */
@@ -7148,7 +7148,7 @@ int persistTest(int argc, char *argv[]) {
         }
 
         if (persistVerifySnapshot(p)) {
-            ERRR("Corrupted snapshot should fail verification");
+            ERR("Corrupted snapshot should fail verification");
         }
 
         persistClose(p);
@@ -7156,16 +7156,16 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("type and op name lookups") {
         if (strcmp(persistTypeName(PERSIST_TYPE_FLEX), "flex") != 0) {
-            ERRR("Wrong name for FLEX type");
+            ERR("Wrong name for FLEX type");
         }
         if (strcmp(persistTypeName(PERSIST_TYPE_INTSET), "intset") != 0) {
-            ERRR("Wrong name for INTSET type");
+            ERR("Wrong name for INTSET type");
         }
         if (strcmp(persistOpName(PERSIST_OP_INSERT), "INSERT") != 0) {
-            ERRR("Wrong name for INSERT op");
+            ERR("Wrong name for INSERT op");
         }
         if (strcmp(persistOpName(PERSIST_OP_PUSH_TAIL), "PUSH_TAIL") != 0) {
-            ERRR("Wrong name for PUSH_TAIL op");
+            ERR("Wrong name for PUSH_TAIL op");
         }
     }
 
@@ -7190,15 +7190,15 @@ int persistTest(int argc, char *argv[]) {
 
         flex *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Restore failed");
+            ERR("Restore failed");
         }
 
         /* Byte-for-byte comparison */
         if (flexBytes(f) != flexBytes(restored)) {
-            ERRR("Size mismatch");
+            ERR("Size mismatch");
         }
         if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERRR("Content mismatch");
+            ERR("Content mismatch");
         }
 
         flexFree(restored);
@@ -7227,7 +7227,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Restore failed");
+            ERR("Restore failed");
         }
 
         /* Verify all values */
@@ -7261,16 +7261,16 @@ int persistTest(int argc, char *argv[]) {
         persist *pm = persistCreate(&persistOpsMultimap, NULL);
         persistAttachSnapshot(pm, persistStoreMemory(0));
         if (!persistSnapshot(pm, m)) {
-            ERRR("multimap snapshot with a 128-bit value failed");
+            ERR("multimap snapshot with a 128-bit value failed");
         }
         cleaner(multimapFree) multimap *mr = persistRestore(pm);
         databoxBig got;
         DATABOX_BIG_INIT(&got);
         databox *gotPtrs[] = {(databox *)&got};
         if (!mr || !multimapLookup(mr, &key, gotPtrs)) {
-            ERRR("restored multimap lost the 128-bit row");
+            ERR("restored multimap lost the 128-bit row");
         } else if (got.type != DATABOX_SIGNED_128 || *got.data.i128 != wide) {
-            ERRR("restored multimap 128-bit value read back wrong");
+            ERR("restored multimap 128-bit value read back wrong");
         }
         persistClose(pm);
 
@@ -7287,7 +7287,7 @@ int persistTest(int argc, char *argv[]) {
         cleaner(multilistFree) multilist *mlr = persistOpsMultilist.restore(
             (const uint8_t *)mlSnap, flexBytes(mlSnap));
         if (!mlr || multilistCount(mlr) != 1) {
-            ERRR("restored multilist lost the 128-bit element");
+            ERR("restored multilist lost the 128-bit element");
         }
     }
 
@@ -7307,12 +7307,12 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, store);
 
         if (!persistSnapshot(p, ml)) {
-            ERRR("Multilist snapshot failed");
+            ERR("Multilist snapshot failed");
         }
 
         multilist *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Multilist restore failed");
+            ERR("Multilist restore failed");
         }
 
         if (multilistCount(restored) != multilistCount(ml)) {
@@ -7329,7 +7329,7 @@ int persistTest(int argc, char *argv[]) {
                     entry.box.data.i);
             }
         } else {
-            ERRR("Could not get first element");
+            ERR("Could not get first element");
         }
 
         if (multilistIndex(restored, state2, -1, &entry, true)) {
@@ -7338,7 +7338,7 @@ int persistTest(int argc, char *argv[]) {
                     entry.box.data.i);
             }
         } else {
-            ERRR("Could not get last element");
+            ERR("Could not get last element");
         }
 
         multilistFree(restored);
@@ -7370,7 +7370,7 @@ int persistTest(int argc, char *argv[]) {
         /* Recover */
         multilist *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("Multilist recovery failed");
+            ERR("Multilist recovery failed");
         }
 
         if (multilistCount(recovered) != 5) {
@@ -7465,17 +7465,17 @@ int persistTest(int argc, char *argv[]) {
         memcpy(tampered, f, bytes);
         /* A small flex has a 1-byte total and a 1-byte count. */
         if (tampered[1] != 4) {
-            ERRR("unexpected flex header layout");
+            ERR("unexpected flex header layout");
         } else {
             tampered[1] = 5;
             if (!flexValidateBuffer(tampered, bytes)) {
-                ERRR("the envelope check should accept the tampered count");
+                ERR("the envelope check should accept the tampered count");
             }
 
             cleaner(multilistFree) multilist *restored =
                 persistOpsMultilist.restore(tampered, bytes);
             if (restored) {
-                ERRR("restore accepted a snapshot whose count lies");
+                ERR("restore accepted a snapshot whose count lies");
             }
         }
     }
@@ -7569,7 +7569,7 @@ int persistTest(int argc, char *argv[]) {
 
         err += persistTestMlVerify(ml, ids, n, "live list");
         if (multilistBytes(ml) <= 3 * 128) {
-            ERRR("the WAL list never reached the Full tier");
+            ERR("the WAL list never reached the Full tier");
         }
 
         persistSync(p);
@@ -7577,7 +7577,7 @@ int persistTest(int argc, char *argv[]) {
         persistStats stats;
         persistGetStats(p, &stats);
         if (!recovered) {
-            ERRR("strict recovery refused the wide WAL");
+            ERR("strict recovery refused the wide WAL");
         } else if (stats.entriesSkipped != 0) {
             ERR("recovery skipped %" PRIu64 " rows", stats.entriesSkipped);
         }
@@ -7611,11 +7611,11 @@ int persistTest(int argc, char *argv[]) {
         }
         if (persistOpsMultiOrderedSet.estimateSize(mos) <= mosEmpty ||
             persistOpsMultiLRU.estimateSize(lru) <= lruEmpty) {
-            ERRR("a size hook did not grow with 300 elements");
+            ERR("a size hook did not grow with 300 elements");
         }
         if (persistOpsMultiOrderedSet.estimateSize(NULL) != 0 ||
             persistOpsMultiLRU.estimateSize(NULL) != 0) {
-            ERRR("a size hook sized a NULL structure");
+            ERR("a size hook sized a NULL structure");
         }
     }
 
@@ -7772,7 +7772,7 @@ int persistTest(int argc, char *argv[]) {
                         PERSIST_LOG_REFUSED ||
                     persistLogOp(p, PERSIST_OP_MERGE, NULL, 0) ==
                         PERSIST_LOG_REFUSED) {
-                    ERRR("hyperloglog: an empty member or union was refused");
+                    ERR("hyperloglog: an empty member or union was refused");
                 } else {
                     logged += 2;
                 }
@@ -7882,7 +7882,7 @@ int persistTest(int argc, char *argv[]) {
                 persistOpsMultilist.encodeOp(PERSIST_OP_REPLACE, args, 2, &len);
             if (!row || persistOpsMultilist.applyOp(&ml, PERSIST_OP_REPLACE,
                                                     row, len)) {
-                ERRR("REPLACE with a 128-bit index was not refused");
+                ERR("REPLACE with a 128-bit index was not refused");
             }
 
             err += persistTestMlVerify(ml, ids, n, "after refused REPLACE");
@@ -8041,12 +8041,12 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, store);
 
         if (!persistSnapshot(p, d)) {
-            ERRR("Multidict snapshot failed");
+            ERR("Multidict snapshot failed");
         }
 
         multidict *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Multidict restore failed");
+            ERR("Multidict restore failed");
         }
 
         if (multidictCount(restored) != multidictCount(d)) {
@@ -8103,10 +8103,10 @@ int persistTest(int argc, char *argv[]) {
 
         /* Both should be identical */
         if (flexBytes(r1) != flexBytes(r2)) {
-            ERRR("Idempotent replay size mismatch");
+            ERR("Idempotent replay size mismatch");
         }
         if (memcmp(r1, r2, flexBytes(r1)) != 0) {
-            ERRR("Idempotent replay content mismatch");
+            ERR("Idempotent replay content mismatch");
         }
 
         flexFree(r1);
@@ -8128,7 +8128,7 @@ int persistTest(int argc, char *argv[]) {
 
         flex *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Empty flex restore failed");
+            ERR("Empty flex restore failed");
         }
         if (flexCount(restored) != 0) {
             ERR("Empty flex should have 0 elements, got %zu",
@@ -8178,7 +8178,7 @@ int persistTest(int argc, char *argv[]) {
 
         flex *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Mixed types flex restore failed");
+            ERR("Mixed types flex restore failed");
         }
 
         if (flexCount(restored) != flexCount(f)) {
@@ -8191,7 +8191,7 @@ int persistTest(int argc, char *argv[]) {
             ERR("Size mismatch: %zu vs %zu", flexBytes(restored), flexBytes(f));
         }
         if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERRR("Content mismatch");
+            ERR("Content mismatch");
         }
 
         flexFree(restored);
@@ -8213,7 +8213,7 @@ int persistTest(int argc, char *argv[]) {
 
         flex *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Large flex restore failed");
+            ERR("Large flex restore failed");
         }
 
         if (flexCount(restored) != 10000) {
@@ -8222,7 +8222,7 @@ int persistTest(int argc, char *argv[]) {
 
         /* Verify byte-for-byte equality */
         if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERRR("Large flex content mismatch");
+            ERR("Large flex content mismatch");
         }
 
         flexFree(restored);
@@ -8258,7 +8258,7 @@ int persistTest(int argc, char *argv[]) {
         /* Recover and verify */
         flex *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("WAL recovery failed");
+            ERR("WAL recovery failed");
         }
 
         if (flexCount(recovered) != 5) {
@@ -8296,7 +8296,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Empty intset restore failed");
+            ERR("Empty intset restore failed");
         }
         if (intsetCount(restored) != 0) {
             ERR("Empty intset should have 0 elements, got %zu",
@@ -8325,7 +8325,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Small tier intset restore failed");
+            ERR("Small tier intset restore failed");
         }
 
         if (intsetCount(restored) != COUNT_ARRAY(smallValues)) {
@@ -8362,7 +8362,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Medium tier intset restore failed");
+            ERR("Medium tier intset restore failed");
         }
 
         if (intsetCount(restored) != COUNT_ARRAY(values)) {
@@ -8409,7 +8409,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Full tier intset restore failed");
+            ERR("Full tier intset restore failed");
         }
 
         if (intsetCount(restored) != COUNT_ARRAY(values)) {
@@ -8443,7 +8443,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Large intset restore failed");
+            ERR("Large intset restore failed");
         }
 
         if (intsetCount(restored) != 10000) {
@@ -8491,7 +8491,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("Intset WAL recovery failed");
+            ERR("Intset WAL recovery failed");
         }
 
         /* Should have: 10, 30, 40, 50 (not 20) */
@@ -8501,10 +8501,10 @@ int persistTest(int argc, char *argv[]) {
 
         if (!intsetFind(recovered, 10) || !intsetFind(recovered, 30) ||
             !intsetFind(recovered, 40) || !intsetFind(recovered, 50)) {
-            ERRR("Missing expected values");
+            ERR("Missing expected values");
         }
         if (intsetFind(recovered, 20)) {
-            ERRR("Deleted value 20 still present");
+            ERR("Deleted value 20 still present");
         }
 
         intsetFree(recovered);
@@ -8525,7 +8525,7 @@ int persistTest(int argc, char *argv[]) {
 
         multimap *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Empty multimap restore failed");
+            ERR("Empty multimap restore failed");
         }
         if (multimapCount(restored) != 0) {
             ERR("Empty multimap should have 0 elements, got %zu",
@@ -8599,7 +8599,7 @@ int persistTest(int argc, char *argv[]) {
 
         multimap *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Mixed key multimap restore failed");
+            ERR("Mixed key multimap restore failed");
         }
 
         if (multimapCount(restored) != 55) {
@@ -8645,7 +8645,7 @@ int persistTest(int argc, char *argv[]) {
 
         multimap *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Large multimap restore failed");
+            ERR("Large multimap restore failed");
         }
 
         if (multimapCount(restored) != 5000) {
@@ -8684,7 +8684,7 @@ int persistTest(int argc, char *argv[]) {
 
         multilist *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Empty multilist restore failed");
+            ERR("Empty multilist restore failed");
         }
         if (multilistCount(restored) != 0) {
             ERR("Empty multilist should have 0 elements, got %zu",
@@ -8729,7 +8729,7 @@ int persistTest(int argc, char *argv[]) {
 
         multilist *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Mixed multilist restore failed");
+            ERR("Mixed multilist restore failed");
         }
 
         size_t expectedCount =
@@ -8761,7 +8761,7 @@ int persistTest(int argc, char *argv[]) {
 
         multilist *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Large multilist restore failed");
+            ERR("Large multilist restore failed");
         }
 
         if (multilistCount(restored) != 10000) {
@@ -8801,7 +8801,7 @@ int persistTest(int argc, char *argv[]) {
 
         multidict *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Empty multidict restore failed");
+            ERR("Empty multidict restore failed");
         }
         if (multidictCount(restored) != 0) {
             ERR("Empty multidict should have 0 elements, got %" PRIu64,
@@ -8832,7 +8832,7 @@ int persistTest(int argc, char *argv[]) {
 
         multidict *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Large multidict restore failed");
+            ERR("Large multidict restore failed");
         }
 
         if (multidictCount(restored) != 1000) {
@@ -8906,7 +8906,7 @@ int persistTest(int argc, char *argv[]) {
             v.data.i != 3 || multidictExists(restored, &beta) ||
             !multidictFind(restored, (const databox *)&wide, (databox *)&wv) ||
             !DATABOX_IS_INTEGER(&wv) || wv.data.i != 2) {
-            ERRR("case multidict did not replay as a case dict");
+            ERR("case multidict did not replay as a case dict");
         }
 
         if (restored) {
@@ -8921,7 +8921,7 @@ int persistTest(int argc, char *argv[]) {
             }
             multidictIteratorRelease(&iter);
             if (!alphaKept) {
-                ERRR("case multidict replay lost the stored spelling");
+                ERR("case multidict replay lost the stored spelling");
             }
             testMultidictFreeWithClass(restored);
         }
@@ -8962,19 +8962,19 @@ int persistTest(int argc, char *argv[]) {
             multidict *r = persistRecover(p);
             databox v = {};
             if (!r || multidictCount(r) != 3) {
-                ERRR("multidict: recovered count is not 3");
+                ERR("multidict: recovered count is not 3");
             } else {
                 if (!multidictFind(r, &s22, &v) || !DATABOX_IS_BYTES(&v) ||
                     databoxCompare(&v, &s42) != 0) {
-                    ERRR("multidict: \"22\" -> \"42\" did not survive");
+                    ERR("multidict: \"22\" -> \"42\" did not survive");
                 }
                 if (!multidictFind(r, &i22, &v) || !DATABOX_IS_BYTES(&v) ||
                     databoxCompare(&v, &s007) != 0) {
-                    ERRR("multidict: 22 -> \"007\" did not survive");
+                    ERR("multidict: 22 -> \"007\" did not survive");
                 }
                 if (!multidictFind(r, &s1e3, &v) || !DATABOX_IS_BYTES(&v) ||
                     databoxCompare(&v, &s22) != 0) {
-                    ERRR("multidict: WAL \"1e3\" -> \"22\" did not replay");
+                    ERR("multidict: WAL \"1e3\" -> \"22\" did not replay");
                 }
             }
             if (r) {
@@ -9002,7 +9002,7 @@ int persistTest(int argc, char *argv[]) {
             multimap *r = persistRecover(p);
             if (!r || multimapCount(r) != 1 || !multimapExists(r, &s22) ||
                 multimapExists(r, &i22)) {
-                ERRR("multimap: WAL row \"22\" did not replay as a string");
+                ERR("multimap: WAL row \"22\" did not replay as a string");
             }
             if (r) {
                 multimapFree(r);
@@ -9034,7 +9034,7 @@ int persistTest(int argc, char *argv[]) {
             multilist *r = persistRecover(p);
             const databox *want[] = {&s22, &i22, &s007};
             if (!r || multilistCount(r) != COUNT_ARRAY(want)) {
-                ERRR("multilist: recovered count is not 3");
+                ERR("multilist: recovered count is not 3");
             } else {
                 for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
                     multilistEntry e = {};
@@ -9071,7 +9071,7 @@ int persistTest(int argc, char *argv[]) {
             if (!r || multiOrderedSetCount(r) != 1 ||
                 !multiOrderedSetExists(r, &s22) ||
                 multiOrderedSetExists(r, &i22)) {
-                ERRR("multiOrderedSet: member \"22\" did not survive");
+                ERR("multiOrderedSet: member \"22\" did not survive");
             }
             if (r) {
                 multiOrderedSetFree(r);
@@ -9125,7 +9125,7 @@ int persistTest(int argc, char *argv[]) {
 
         flex *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Fuzz flex restore failed");
+            ERR("Fuzz flex restore failed");
         }
 
         if (flexCount(restored) != flexCount(f)) {
@@ -9137,7 +9137,7 @@ int persistTest(int argc, char *argv[]) {
                 flexBytes(f));
         }
         if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERRR("Fuzz flex content mismatch");
+            ERR("Fuzz flex content mismatch");
         }
 
         flexFree(restored);
@@ -9188,7 +9188,7 @@ int persistTest(int argc, char *argv[]) {
 
         intset *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Fuzz intset restore failed");
+            ERR("Fuzz intset restore failed");
         }
 
         if (intsetCount(restored) != intsetCount(is)) {
@@ -9240,7 +9240,7 @@ int persistTest(int argc, char *argv[]) {
 
         multimap *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Fuzz multimap restore failed");
+            ERR("Fuzz multimap restore failed");
         }
 
         /* Note: counts should match - the multimap stores all entries */
@@ -9302,7 +9302,7 @@ int persistTest(int argc, char *argv[]) {
 
         multilist *restored = persistRestore(p);
         if (!restored) {
-            ERRR("Fuzz multilist restore failed");
+            ERR("Fuzz multilist restore failed");
         }
 
         if (multilistCount(restored) != multilistCount(ml)) {
@@ -9357,7 +9357,7 @@ int persistTest(int argc, char *argv[]) {
         /* Recover */
         flex *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("WAL stress recovery failed");
+            ERR("WAL stress recovery failed");
         }
 
         if (flexCount(recovered) != 200) {
@@ -9438,18 +9438,18 @@ int persistTest(int argc, char *argv[]) {
         /* Apply WAL to f for compaction */
         flex *withWal = persistRecover(p);
         if (!withWal) {
-            ERRR("Pre-compaction recovery failed");
+            ERR("Pre-compaction recovery failed");
         }
 
         /* Compact */
         if (!persistCompact(p, withWal)) {
-            ERRR("Compaction failed");
+            ERR("Compaction failed");
         }
 
         /* Restore from compacted snapshot */
         flex *afterCompact = persistRestore(p);
         if (!afterCompact) {
-            ERRR("Post-compaction restore failed");
+            ERR("Post-compaction restore failed");
         }
 
         if (flexCount(afterCompact) != 100) {
@@ -9510,7 +9510,7 @@ int persistTest(int argc, char *argv[]) {
          * one (no double-apply) and recover exactly 100. */
         multilist *recovered = persistRecover(p);
         if (!recovered) {
-            ERRR("Interleaved ops recovery failed");
+            ERR("Interleaved ops recovery failed");
         }
         if (multilistCount(recovered) != 100) {
             ERR("Snapshot-included ops double-applied: expected 100, got %zu",
@@ -9529,7 +9529,7 @@ int persistTest(int argc, char *argv[]) {
 
         multilist *recovered2 = persistRecover(p);
         if (!recovered2) {
-            ERRR("Post-snapshot WAL recovery failed");
+            ERR("Post-snapshot WAL recovery failed");
         }
         if (multilistCount(recovered2) != 110) {
             ERR("Post-snapshot ops not replayed: expected 110, got %zu",
@@ -9573,13 +9573,13 @@ int persistTest(int argc, char *argv[]) {
         s->sync(s->ctx);
 
         if (!s->rewriteBegin(s->ctx) || s->rewriteBegin(s->ctx)) {
-            ERRR("rewrite begin: not exactly one rewrite at a time");
+            ERR("rewrite begin: not exactly one rewrite at a time");
         }
         s->write(s->ctx, "garbage", 7);
         s->rewriteAbort(s->ctx);
         s->rewriteAbort(s->ctx); /* no rewrite: nothing to do */
         if (access(tmpPath, F_OK) == 0) {
-            ERRR("abort left the temp file");
+            ERR("abort left the temp file");
         }
         PERSIST_TEST_FILE_IS("old");
 
@@ -9587,7 +9587,7 @@ int persistTest(int argc, char *argv[]) {
         s->write(s->ctx, "new1", 4);
         persistTestFailDirFsync = true;
         if (s->rewriteCommit(s->ctx)) {
-            ERRR("a commit whose directory sync failed reported success");
+            ERR("a commit whose directory sync failed reported success");
         }
         s->rewriteAbort(s->ctx); /* as the engine does after a failure */
         s->seek(s->ctx, 0, SEEK_END);
@@ -9596,12 +9596,12 @@ int persistTest(int argc, char *argv[]) {
         PERSIST_TEST_FILE_IS("new1+more");
 
         if (s->rewriteCommit(s->ctx)) {
-            ERRR("commit without a rewrite reported success");
+            ERR("commit without a rewrite reported success");
         }
         s->rewriteBegin(s->ctx);
         s->write(s->ctx, "new2", 4);
         if (!s->rewriteCommit(s->ctx) || access(tmpPath, F_OK) == 0) {
-            ERRR("a clean commit failed or left its temp");
+            ERR("a clean commit failed or left its temp");
         }
         PERSIST_TEST_FILE_IS("new2");
 #undef PERSIST_TEST_FILE_IS
@@ -9725,7 +9725,7 @@ int persistTest(int argc, char *argv[]) {
                 intset *none = persistRestore(p);
                 if (none) {
                     intsetFree(none);
-                    ERRR("an empty snapshot store restored something");
+                    ERR("an empty snapshot store restored something");
                 }
             } else {
                 persistAttachSnapshot(p, fresh);
@@ -9825,7 +9825,7 @@ int persistTest(int argc, char *argv[]) {
             fclose(wal);
         }
         if (walLen <= 3 || walLen >= sizeof(before)) {
-            ERRR("could not damage the WAL");
+            ERR("could not damage the WAL");
         }
 
         {
@@ -9836,7 +9836,7 @@ int persistTest(int argc, char *argv[]) {
             const int64_t four = 4;
             if (got || persistLogOp(p, PERSIST_OP_INSERT, &four, 1) !=
                            PERSIST_LOG_REFUSED) {
-                ERRR("strict recovery passed a bad entry or then appended");
+                ERR("strict recovery passed a bad entry or then appended");
             }
             if (got) {
                 intsetFree(got);
@@ -9849,7 +9849,7 @@ int persistTest(int argc, char *argv[]) {
             fclose(wal);
         }
         if (afterLen != walLen || memcmp(before, after, walLen) != 0) {
-            ERRR("a failed strict recovery changed the WAL");
+            ERR("a failed strict recovery changed the WAL");
         }
 
         {
@@ -9861,12 +9861,12 @@ int persistTest(int argc, char *argv[]) {
             if (!got || intsetCount(got) != 2 ||
                 persistLogOp(p, PERSIST_OP_INSERT, &four, 1) !=
                     PERSIST_LOG_REFUSED) {
-                ERRR("lenient recovery did not keep {1, 2} and refuse appends");
+                ERR("lenient recovery did not keep {1, 2} and refuse appends");
             }
             if (got && (!persistCompact(p, got) ||
                         persistLogOp(p, PERSIST_OP_INSERT, &four, 1) ==
                             PERSIST_LOG_REFUSED)) {
-                ERRR("compaction did not resume appends");
+                ERR("compaction did not resume appends");
             }
             if (got) {
                 intsetFree(got);
@@ -9903,16 +9903,16 @@ int persistTest(int argc, char *argv[]) {
             PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         }
         if (!persistSnapshot(p, ml)) {
-            ERRR("File-backed snapshot failed");
+            ERR("File-backed snapshot failed");
         }
 
         /* The atomic publish must have renamed its temp over the live
          * file and left nothing torn behind. */
         if (access(tmpPath, F_OK) == 0) {
-            ERRR("Atomic publish left a temp snapshot file behind");
+            ERR("Atomic publish left a temp snapshot file behind");
         }
         if (access(snapPath, F_OK) != 0) {
-            ERRR("Published snapshot file is missing");
+            ERR("Published snapshot file is missing");
         }
 
         /* Recover: the snapshot holds all 50 ops and the un-truncated
@@ -9955,16 +9955,16 @@ int persistTest(int argc, char *argv[]) {
         flexPushByType(&rec, (const databox *)&wide, FLEX_ENDPOINT_TAIL);
         if (!persistOpsMultimap.applyOp(&m, PERSIST_OP_INSERT,
                                         (const uint8_t *)rec, flexBytes(rec))) {
-            ERRR("multimap INSERT replay refused a valid 128-bit row");
+            ERR("multimap INSERT replay refused a valid 128-bit row");
         }
         databoxBig got;
         DATABOX_BIG_INIT(&got);
         databox *gotPtrs[1] = {(databox *)&got};
         if (!multimapLookup(m, &key, gotPtrs)) {
-            ERRR("replayed 128-bit row not found");
+            ERR("replayed 128-bit row not found");
         } else if (got.type != DATABOX_SIGNED_128 ||
                    *got.data.i128 != -((__int128_t)1 << 100) - 7) {
-            ERRR("replayed 128-bit value read back wrong");
+            ERR("replayed 128-bit value read back wrong");
         }
     }
 
@@ -9980,11 +9980,11 @@ int persistTest(int argc, char *argv[]) {
         flexPushByType(&rec, (const databox *)&wideKey, FLEX_ENDPOINT_TAIL);
         if (!persistOpsMultimap.applyOp(&m, PERSIST_OP_DELETE,
                                         (const uint8_t *)rec, flexBytes(rec))) {
-            ERRR("multimap DELETE replay refused a 128-bit key");
+            ERR("multimap DELETE replay refused a 128-bit key");
         }
 
         if (multimapExists(m, (const databox *)&wideKey)) {
-            ERRR("replayed DELETE left the 128-bit key in place");
+            ERR("replayed DELETE left the 128-bit key in place");
         }
     }
 
@@ -10003,7 +10003,7 @@ int persistTest(int argc, char *argv[]) {
         persist *p = persistCreate(&persistOpsMultiOrderedSet, NULL);
         persistAttachSnapshot(p, persistStoreMemory(0));
         if (!persistSnapshot(p, mos)) {
-            ERRR("multiOrderedSet snapshot with 128-bit values failed");
+            ERR("multiOrderedSet snapshot with 128-bit values failed");
         }
 
         cleaner(multiOrderedSetFree) multiOrderedSet *restored =
@@ -10011,13 +10011,13 @@ int persistTest(int argc, char *argv[]) {
         databoxBig got;
         DATABOX_BIG_INIT(&got);
         if (!restored || multiOrderedSetCount(restored) != 2) {
-            ERRR("restored multiOrderedSet lost entries");
+            ERR("restored multiOrderedSet lost entries");
         } else if (!multiOrderedSetGetScore(restored,
                                             (const databox *)&wideMember,
                                             (databox *)&got) ||
                    got.type != DATABOX_SIGNED_128 ||
                    *got.data.i128 != -((__int128_t)1 << 100) - 7) {
-            ERRR("restored 128-bit score read back wrong");
+            ERR("restored 128-bit score read back wrong");
         }
 
         persistClose(p);
@@ -10025,31 +10025,31 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("restore: NULL input is rejected by all flex-backed ops") {
         if (persistOpsFlex.restore(NULL, 0) != NULL) {
-            ERRR("flex restore accepted NULL input");
+            ERR("flex restore accepted NULL input");
         }
         if (persistOpsFlex.restore(NULL, 1024) != NULL) {
-            ERRR("flex restore accepted NULL with nonzero len");
+            ERR("flex restore accepted NULL with nonzero len");
         }
         if (persistOpsMultimap.restore(NULL, 0) != NULL) {
-            ERRR("multimap restore accepted NULL input");
+            ERR("multimap restore accepted NULL input");
         }
         if (persistOpsMultilist.restore(NULL, 0) != NULL) {
-            ERRR("multilist restore accepted NULL input");
+            ERR("multilist restore accepted NULL input");
         }
         if (persistOpsMultidict.restore(NULL, 0) != NULL) {
-            ERRR("multidict restore accepted NULL input");
+            ERR("multidict restore accepted NULL input");
         }
         if (persistOpsIntset.restore(NULL, 0) != NULL) {
-            ERRR("intset restore accepted NULL input");
+            ERR("intset restore accepted NULL input");
         }
         if (persistOpsIntsetBig.restore(NULL, 0) != NULL) {
-            ERRR("intsetBig restore accepted NULL input");
+            ERR("intsetBig restore accepted NULL input");
         }
         if (persistOpsHyperloglog.restore(NULL, 0) != NULL) {
-            ERRR("hyperloglog restore accepted NULL input");
+            ERR("hyperloglog restore accepted NULL input");
         }
         if (persistOpsMultiroar.restore(NULL, 0) != NULL) {
-            ERRR("multiroar restore accepted NULL input");
+            ERR("multiroar restore accepted NULL input");
         }
     }
 
@@ -10136,16 +10136,16 @@ int persistTest(int argc, char *argv[]) {
          * touching the bytes past the end. */
         const uint8_t tiny[1] = {0xff};
         if (persistOpsFlex.restore(tiny, 0) != NULL) {
-            ERRR("flex restore accepted zero-length buffer");
+            ERR("flex restore accepted zero-length buffer");
         }
         if (persistOpsFlex.restore(tiny, 1) != NULL) {
-            ERRR("flex restore accepted 1-byte buffer");
+            ERR("flex restore accepted 1-byte buffer");
         }
         if (persistOpsMultilist.restore(tiny, 1) != NULL) {
-            ERRR("multilist restore accepted 1-byte buffer");
+            ERR("multilist restore accepted 1-byte buffer");
         }
         if (persistOpsMultidict.restore(tiny, 1) != NULL) {
-            ERRR("multidict restore accepted 1-byte buffer");
+            ERR("multidict restore accepted 1-byte buffer");
         }
     }
 
@@ -10160,17 +10160,17 @@ int persistTest(int argc, char *argv[]) {
         const size_t real = flexBytes(valid);
 
         if (persistOpsFlex.restore((uint8_t *)valid, real - 1) != NULL) {
-            ERRR("flex restore accepted buffer 1 byte shorter than "
-                 "header claims");
+            ERR("flex restore accepted buffer 1 byte shorter than "
+                "header claims");
         }
         if (persistOpsFlex.restore((uint8_t *)valid, real + 1) != NULL) {
-            ERRR("flex restore accepted buffer 1 byte longer than "
-                 "header claims");
+            ERR("flex restore accepted buffer 1 byte longer than "
+                "header claims");
         }
         /* Real length must round-trip cleanly. */
         flex *ok = persistOpsFlex.restore((uint8_t *)valid, real);
         if (!ok) {
-            ERRR("flex restore rejected a valid buffer");
+            ERR("flex restore rejected a valid buffer");
         } else {
             flexFree(ok);
         }
@@ -10187,14 +10187,14 @@ int persistTest(int argc, char *argv[]) {
         memcpy(buf, &overflowing, sizeof(uint64_t));
         memset(buf + 8, 0, 8);
         if (persistOpsIntset.restore(buf, sizeof(buf)) != NULL) {
-            ERRR("intset restore accepted count that overflows "
-                 "size_t when multiplied by sizeof(int64_t)");
+            ERR("intset restore accepted count that overflows "
+                "size_t when multiplied by sizeof(int64_t)");
         }
     }
 
     TEST("restore: hyperloglog rejects empty input but accepts valid") {
         if (persistOpsHyperloglog.restore(NULL, 0) != NULL) {
-            ERRR("hyperloglog restore accepted NULL");
+            ERR("hyperloglog restore accepted NULL");
         }
 
         /* Round-trip: build a real HLL, snapshot it, restore. */
@@ -10206,7 +10206,7 @@ int persistTest(int argc, char *argv[]) {
         assert(snap != NULL && snapLen > 0);
         hyperloglog *restored = persistOpsHyperloglog.restore(snap, snapLen);
         if (!restored) {
-            ERRR("hyperloglog restore rejected its own snapshot");
+            ERR("hyperloglog restore rejected its own snapshot");
         } else {
             persistOpsHyperloglog.free(restored);
         }
@@ -10215,12 +10215,12 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("restore: intsetBig rejects malformed and round-trips valid") {
         if (persistOpsIntsetBig.restore(NULL, 0) != NULL) {
-            ERRR("intsetBig restore accepted NULL");
+            ERR("intsetBig restore accepted NULL");
         }
         const uint8_t tooShort[4] = {1, 0, 0, 0};
         if (persistOpsIntsetBig.restore(tooShort, sizeof(tooShort)) != NULL) {
-            ERRR("intsetBig restore accepted buffer shorter than count "
-                 "header");
+            ERR("intsetBig restore accepted buffer shorter than count "
+                "header");
         }
 
         /* Round-trip: build a real intsetBig, snapshot, restore,
@@ -10242,7 +10242,7 @@ int persistTest(int argc, char *argv[]) {
         assert(snap != NULL && snapLen > 0);
         intsetBig *restored = persistOpsIntsetBig.restore(snap, snapLen);
         if (!restored) {
-            ERRR("intsetBig restore rejected its own snapshot");
+            ERR("intsetBig restore rejected its own snapshot");
         } else {
             if (intsetBigCountElements(restored) !=
                 intsetBigCountElements(isb)) {
@@ -10279,7 +10279,7 @@ int persistTest(int argc, char *argv[]) {
             snap ? persistOpsIntsetBig.restore(snap, snapLen) : NULL;
         if (!restored || intsetBigCountElements(restored) != 100 ||
             !intsetBigEqual(restored, isb)) {
-            ERRR("a 100-member intsetBig did not round-trip equal");
+            ERR("a 100-member intsetBig did not round-trip equal");
         }
 
         if (restored) {
@@ -10294,30 +10294,30 @@ int persistTest(int argc, char *argv[]) {
          * that begins without a snapshot. Verify the hook is wired
          * for the ops that intend to support that flow. */
         if (!persistOpsIntsetBig.newEmpty) {
-            ERRR("persistOpsIntsetBig.newEmpty is NULL");
+            ERR("persistOpsIntsetBig.newEmpty is NULL");
         }
         if (!persistOpsHyperloglog.newEmpty) {
-            ERRR("persistOpsHyperloglog.newEmpty is NULL");
+            ERR("persistOpsHyperloglog.newEmpty is NULL");
         }
         if (!persistOpsMultiroar.newEmpty) {
-            ERRR("persistOpsMultiroar.newEmpty is NULL");
+            ERR("persistOpsMultiroar.newEmpty is NULL");
         }
         if (!persistOpsMultimap.newEmpty) {
-            ERRR("persistOpsMultimap.newEmpty is NULL");
+            ERR("persistOpsMultimap.newEmpty is NULL");
         }
         if (!persistOpsMultilist.newEmpty) {
-            ERRR("persistOpsMultilist.newEmpty is NULL");
+            ERR("persistOpsMultilist.newEmpty is NULL");
         }
         /* Spot-check that newEmpty returns a usable object. */
         void *empty = persistOpsIntsetBig.newEmpty();
         if (!empty) {
-            ERRR("persistOpsIntsetBig.newEmpty returned NULL");
+            ERR("persistOpsIntsetBig.newEmpty returned NULL");
         } else {
             persistOpsIntsetBig.free(empty);
         }
         empty = persistOpsHyperloglog.newEmpty();
         if (!empty) {
-            ERRR("persistOpsHyperloglog.newEmpty returned NULL");
+            ERR("persistOpsHyperloglog.newEmpty returned NULL");
         } else {
             persistOpsHyperloglog.free(empty);
         }
@@ -10330,18 +10330,18 @@ int persistTest(int argc, char *argv[]) {
         persistGetConfig(p, &config);
         config.walBufferSize = 16;
         if (!persistSetConfig(p, &config)) {
-            ERRR("SetConfig refused a new buffer size");
+            ERR("SetConfig refused a new buffer size");
         }
         persistConfig back;
         persistGetConfig(p, &back);
         if (back.walBufferSize != 16) {
-            ERRR("GetConfig does not report the new buffer size");
+            ERR("GetConfig does not report the new buffer size");
         }
         persistTestPushRange(p, 5, 5);
         persistSync(p);
         const int64_t want[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
         if (!persistTestRecoversTo(p, want, 10)) {
-            ERRR("ops buffered before SetConfig were lost");
+            ERR("ops buffered before SetConfig were lost");
         }
     }
 
@@ -10364,7 +10364,7 @@ int persistTest(int argc, char *argv[]) {
         persistTestWalCount stop = {.stopAfter = 3, .ordered = true};
         persistIterateWAL(p, persistTestCountEntries, &stop);
         if (!persistVerifyWAL(p)) {
-            ERRR("VerifyWAL refused a sound WAL");
+            ERR("VerifyWAL refused a sound WAL");
         }
 
         /* Appends after the readers go to the end, not over entries */
@@ -10372,7 +10372,7 @@ int persistTest(int argc, char *argv[]) {
         persistSync(p);
         const int64_t want[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
         if (!persistTestRecoversTo(p, want, 10)) {
-            ERRR("an append after a WAL reader overwrote entries");
+            ERR("an append after a WAL reader overwrote entries");
         }
         persistTestWalCount after = {.stopAfter = SIZE_MAX, .ordered = true};
         persistIterateWAL(p, persistTestCountEntries, &after);
@@ -10397,22 +10397,22 @@ int persistTest(int argc, char *argv[]) {
         p->config.strictRecovery = true;
         void *strict = persistRecover(p);
         if (strict) {
-            ERRR("strict recovery accepted a torn WAL");
+            ERR("strict recovery accepted a torn WAL");
             flexFree(strict);
         }
         if (wal->size(wal->ctx) != size - 3) {
-            ERRR("strict recovery changed the WAL");
+            ERR("strict recovery changed the WAL");
         }
 
         p->config.strictRecovery = false;
         const int64_t four[] = {0, 1, 2, 3};
         if (!persistTestRecoversTo(p, four, 4)) {
-            ERRR("lenient recovery did not keep the complete entries");
+            ERR("lenient recovery did not keep the complete entries");
         }
         persistTestPushRange(p, 100, 3);
         const int64_t seven[] = {0, 1, 2, 3, 100, 101, 102};
         if (!persistTestRecoversTo(p, seven, 7)) {
-            ERRR("entries logged after a torn tail were not recovered");
+            ERR("entries logged after a torn tail were not recovered");
         }
     }
 
@@ -10566,7 +10566,7 @@ int persistTest(int argc, char *argv[]) {
             }
         }
         if (persistOpEncodeBoxesInto(NULL, 1, NULL, 0, &(size_t){})) {
-            ERRR("no boxes were not refused");
+            ERR("no boxes were not refused");
         }
     }
 
@@ -10651,7 +10651,7 @@ int persistTest(int argc, char *argv[]) {
         flexPushSigned(&second, 9, FLEX_ENDPOINT_TAIL);
         if (!persistSnapshot(p, first) ||
             persistStoreFaultyCalls(snap, PERSIST_FAULT_REWRITE_COMMIT) != 1) {
-            ERRR("the first snapshot did not publish through the rewrite");
+            ERR("the first snapshot did not publish through the rewrite");
         }
         static const struct {
             persistFaultOp op;
@@ -10675,7 +10675,7 @@ int persistTest(int argc, char *argv[]) {
         const int64_t wantSecond[] = {9};
         if (!persistSnapshot(p, second) ||
             !persistTestRecoversTo(p, wantSecond, 1)) {
-            ERRR("a working snapshot after the failures did not land");
+            ERR("a working snapshot after the failures did not land");
         }
     }
 
@@ -10827,7 +10827,7 @@ int persistTest(int argc, char *argv[]) {
         const int64_t seven = 7;
         if (persistLogOp(p, PERSIST_OP_INSERT, &seven, 1) ==
             PERSIST_LOG_REFUSED) {
-            ERRR("the WAL refused an append after the reads");
+            ERR("the WAL refused an append after the reads");
         }
         persistSync(p);
         cleaner(intsetFree) intset *all = persistRecover(p);
@@ -10889,7 +10889,7 @@ int persistTest(int argc, char *argv[]) {
             r.bytes != tail || r.entriesBefore != 1 || qLen != 32 + tail ||
             memcmp(rec, "DKPQ\x01\x00", 6) != 0 || n != tail ||
             memcmp(rec + 32, expected, tail) != 0) {
-            ERRR("a corrupt entry was not healed into one exact record");
+            ERR("a corrupt entry was not healed into one exact record");
         }
         persistStoreMemoryBuffer(wal, &walLen);
         const int64_t later = 99;
@@ -10904,7 +10904,7 @@ int persistTest(int argc, char *argv[]) {
         if (!again || intsetCount(again) != 2 || !intsetFind(again, 99) ||
             r.events != 1 || heard.calls != 1 ||
             heard.last.action != PERSIST_BAD_ENTRY_HEALED) {
-            ERRR("after healing: wrong members, or reported again");
+            ERR("after healing: wrong members, or reported again");
         }
     }
 
@@ -10935,7 +10935,7 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 0; i < 5; i++) {
             if (persistLogOp(p, PERSIST_OP_INSERT, &later, 1) !=
                 PERSIST_LOG_REFUSED) {
-                ERRR("a held WAL took an append");
+                ERR("a held WAL took an append");
             }
         }
         persistBadEntryReport r;
@@ -10984,8 +10984,8 @@ int persistTest(int argc, char *argv[]) {
         const int64_t eight = 8;
         if (!heldForKey || persistLogOp(k, PERSIST_OP_INSERT, &eight, 1) ==
                                PERSIST_LOG_REFUSED) {
-            ERRR("a wrong key was not held as a KEY problem, or the right "
-                 "key did not release it");
+            ERR("a wrong key was not held as a KEY problem, or the right "
+                "key did not release it");
         }
 
         /* READ: every arming point of a failing read; none heals */
@@ -11014,7 +11014,7 @@ int persistTest(int argc, char *argv[]) {
             }
         }
         if (!sawRead || healed) {
-            ERRR("a failing read was not held as a READ problem");
+            ERR("a failing read was not held as a READ problem");
         }
     }
 
@@ -11057,15 +11057,15 @@ int persistTest(int argc, char *argv[]) {
         const int64_t later = 99;
         if (persistLogOp(p, PERSIST_OP_INSERT, &later, 1) !=
             PERSIST_LOG_REFUSED) {
-            ERRR("an op was appended after a bad entry");
+            ERR("an op was appended after a bad entry");
         }
 
         if (!partial || !persistCompact(p, partial)) {
-            ERRR("compaction failed");
+            ERR("compaction failed");
         } else {
             if (persistLogOp(p, PERSIST_OP_INSERT, &later, 1) ==
                 PERSIST_LOG_REFUSED) {
-                ERRR("compaction did not resume logging");
+                ERR("compaction did not resume logging");
             }
             persistSync(p);
             cleaner(intsetFree) intset *again = persistRecover(p);
@@ -11127,7 +11127,7 @@ int persistTest(int argc, char *argv[]) {
         }
         persistStoreFaultyDisarm(snap);
         if (!persistSnapshot(p, f)) {
-            ERRR("the snapshot after the device recovered was refused");
+            ERR("the snapshot after the device recovered was refused");
         }
     }
 
@@ -11149,11 +11149,11 @@ int persistTest(int argc, char *argv[]) {
         persistStoreFaultyArm(snap, PERSIST_FAULT_WRITE, 1);
         const int64_t want[] = {0, 1, 2, 3};
         if (persistCompact(p, live) || !persistTestRecoversTo(p, want, 4)) {
-            ERRR("a failed compaction lost the WAL it could not fold in");
+            ERR("a failed compaction lost the WAL it could not fold in");
         }
         persistStoreFaultyDisarm(snap);
         if (!persistCompact(p, live) || !persistTestRecoversTo(p, want, 4)) {
-            ERRR("compaction after the device recovered lost data");
+            ERR("compaction after the device recovered lost data");
         }
     }
 
@@ -11176,7 +11176,7 @@ int persistTest(int argc, char *argv[]) {
         persistStoreFaultyDisarm(snap);
         const int64_t want[] = {7};
         if (!persistTestRecoversTo(p, want, 1)) {
-            ERRR("recovery after the device recovered failed");
+            ERR("recovery after the device recovered failed");
         }
     }
 
@@ -11187,14 +11187,14 @@ int persistTest(int argc, char *argv[]) {
         const databox v = DATABOX_SIGNED(1);
         if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
             PERSIST_LOG_DURABLE) {
-            ERRR("an ALWAYS op with a working sync was not durable");
+            ERR("an ALWAYS op with a working sync was not durable");
         }
 
         /* The store accessors name the attached stores */
         if (persistWALStore(p) != p->walStore ||
             persistSnapshotStore(p) != p->snapshotStore ||
             persistWALStore(NULL) || persistSnapshotStore(NULL)) {
-            ERRR("the store accessors disagree with the attached stores");
+            ERR("the store accessors disagree with the attached stores");
         }
 
         /* The device fills: logged, not durable, counted, never refused */
@@ -11203,7 +11203,7 @@ int persistTest(int argc, char *argv[]) {
         persistStats stats;
         if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
             PERSIST_LOG_NOT_DURABLE) {
-            ERRR("a failed sync was not reported as NOT_DURABLE");
+            ERR("a failed sync was not reported as NOT_DURABLE");
         }
         persistGetStats(p, &stats);
         if (stats.syncFailures != 1 || stats.lastSyncError != ENOSPC ||
@@ -11217,17 +11217,17 @@ int persistTest(int argc, char *argv[]) {
         p->walStore->sync = sync;
         if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
             PERSIST_LOG_DURABLE) {
-            ERRR("the sync after recovery was not durable");
+            ERR("the sync after recovery was not durable");
         }
         persistGetStats(p, &stats);
         if (stats.lastSyncError != 0 || stats.syncFailures != 1) {
-            ERRR("a successful sync did not clear lastSyncError");
+            ERR("a successful sync did not clear lastSyncError");
         }
 
         /* Every op logged, so every op recovers */
         const int64_t want[] = {1, 1, 1};
         if (!persistTestRecoversTo(p, want, 3)) {
-            ERRR("an op logged across the failed sync was lost");
+            ERR("an op logged across the failed sync was lost");
         }
 
         /* Without a sync policy the op is buffered */
@@ -11235,7 +11235,7 @@ int persistTest(int argc, char *argv[]) {
         persistSetConfig(p, &config);
         if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
             PERSIST_LOG_BUFFERED) {
-            ERRR("a SYNC_NONE op was not reported buffered");
+            ERR("a SYNC_NONE op was not reported buffered");
         }
     }
 
@@ -11246,7 +11246,7 @@ int persistTest(int argc, char *argv[]) {
         persistTestPushRange(p, 0, 50);
         persistSync(p);
         if (persistShouldCompact(p)) {
-            ERRR("compaction recommended with autoCompact off");
+            ERR("compaction recommended with autoCompact off");
         }
 
         /* The WAL is past the size limit */
@@ -11254,7 +11254,7 @@ int persistTest(int argc, char *argv[]) {
         config.walMaxSize = 64;
         persistSetConfig(p, &config);
         if (!persistShouldCompact(p)) {
-            ERRR("a WAL past walMaxSize did not recommend compaction");
+            ERR("a WAL past walMaxSize did not recommend compaction");
         }
 
         /* Under the size limit, past compactRatio times the snapshot */
@@ -11262,12 +11262,12 @@ int persistTest(int argc, char *argv[]) {
         config.compactRatio = 1.0;
         persistSetConfig(p, &config);
         if (!persistShouldCompact(p)) {
-            ERRR("a WAL past compactRatio did not recommend compaction");
+            ERR("a WAL past compactRatio did not recommend compaction");
         }
         config.compactRatio = 1e9;
         persistSetConfig(p, &config);
         if (persistShouldCompact(p)) {
-            ERRR("compaction recommended under both limits");
+            ERR("compaction recommended under both limits");
         }
 
         /* Compaction empties the WAL; nothing to recommend */
@@ -11276,7 +11276,7 @@ int persistTest(int argc, char *argv[]) {
         config.compactRatio = 1.0;
         persistSetConfig(p, &config);
         if (persistShouldCompact(p)) {
-            ERRR("compaction recommended right after compacting");
+            ERR("compaction recommended right after compacting");
         }
     }
 
@@ -11299,7 +11299,7 @@ int persistTest(int argc, char *argv[]) {
         stats.walSequence = 0;
         const persistStats zero = {};
         if (memcmp(&stats, &zero, sizeof(stats)) != 0) {
-            ERRR("ResetStats left a counter set");
+            ERR("ResetStats left a counter set");
         }
     }
 
@@ -11322,7 +11322,7 @@ int persistTest(int argc, char *argv[]) {
             if (!hmacKeyringInstallUnsalted(ring, 5u, &hmacAlgoSHA256, ringKey,
                                             sizeof(ringKey)) ||
                 !persistAttachKeyring(p, ring, 5u)) {
-                ERRR("keyring attach failed");
+                ERR("keyring attach failed");
             }
             persistSetIntegrityKey(p, direct, sizeof(direct));
             hmacKeyringFree(ring);
@@ -11334,12 +11334,12 @@ int persistTest(int argc, char *argv[]) {
         const int64_t want[] = {0, 1, 2};
         if (!persistTestRecoversTo(p, want, 3) || !persistVerifySnapshot(p) ||
             !persistVerifyWAL(p)) {
-            ERRR("data written under the direct key did not read back");
+            ERR("data written under the direct key did not read back");
         }
         persistSetIntegrityKey(p, NULL, 0);
         void *unkeyed = persistRecover(p);
         if (unkeyed || persistVerifySnapshot(p)) {
-            ERRR("a cleared key still verified keyed data");
+            ERR("a cleared key still verified keyed data");
             flexFree(unkeyed);
         }
     }
@@ -11363,7 +11363,7 @@ int persistTest(int argc, char *argv[]) {
         persistAttachWAL(p, persistStoreMemory(0));
         persistSetIntegrityKey(p, key, sizeof(key));
         if (!persistSetIntegrityPreparedKey(p, &right)) {
-            ERRR("SetIntegrityPreparedKey refused a key");
+            ERR("SetIntegrityPreparedKey refused a key");
         }
         cleaner(flexFree) flex *empty = flexNew();
         persistSnapshot(p, empty);
@@ -11371,7 +11371,7 @@ int persistTest(int argc, char *argv[]) {
         persistSync(p);
         const int64_t want[] = {0, 1, 2};
         if (!persistTestRecoversTo(p, want, 3)) {
-            ERRR("recovery under the matching prepared key failed");
+            ERR("recovery under the matching prepared key failed");
         }
 
         /* A prepared key from other bytes fails verification even with
@@ -11379,11 +11379,11 @@ int persistTest(int argc, char *argv[]) {
         persistSetIntegrityPreparedKey(p, &wrong);
         void *bad = persistRecover(p);
         if (bad) {
-            ERRR("recovery passed under a mismatched prepared key");
+            ERR("recovery passed under a mismatched prepared key");
             flexFree(bad);
         }
         if (persistSetIntegrityPreparedKey(NULL, &right)) {
-            ERRR("SetIntegrityPreparedKey accepted a NULL persist");
+            ERR("SetIntegrityPreparedKey accepted a NULL persist");
         }
     }
 
@@ -11468,7 +11468,7 @@ int persistTest(int argc, char *argv[]) {
         }
         const databox one = DATABOX_SIGNED(1);
         if (persistLogOp(q, PERSIST_OP_PUSH_TAIL, &one, 1)) {
-            ERRR("appended to a WAL this build does not read");
+            ERR("appended to a WAL this build does not read");
         }
         size_t after = 0;
         persistStoreMemoryBuffer(q->walStore, &after);
@@ -11480,7 +11480,7 @@ int persistTest(int argc, char *argv[]) {
         if (!persistInspectAttached(q, true, &info) || !info.wal ||
             info.format.version != 2 ||
             info.container.id != DK_FORMAT_ID_PERSIST_WAL) {
-            ERRR("WAL inspection disagrees with the header");
+            ERR("WAL inspection disagrees with the header");
         }
     }
 
@@ -11489,7 +11489,7 @@ int persistTest(int argc, char *argv[]) {
         unstated.formatVersion = 0;
         cleaner(persistClose) persist *none = persistCreate(&unstated, NULL);
         if (none) {
-            ERRR("a descriptor without a format version was accepted");
+            ERR("a descriptor without a format version was accepted");
         }
 
         /* A flex snapshot read as an intset is a different format */
@@ -11506,7 +11506,7 @@ int persistTest(int argc, char *argv[]) {
         if (wrong || persistLastError(q) != PERSIST_ERR_STRUCTURE_FORMAT ||
             persistLastFormat(q, &found) != DK_FORMAT_WRONG_ID ||
             found.id != PERSIST_TYPE_FLEX) {
-            ERRR("a flex snapshot was not refused as a different format");
+            ERR("a flex snapshot was not refused as a different format");
         }
     }
 

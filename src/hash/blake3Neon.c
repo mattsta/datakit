@@ -527,7 +527,7 @@ int blake3NeonTest(int argc, char *argv[]) {
         portable_compress_in_place(cv_ref, block, block_len, counter, flags);
         blake3NeonCompressInPlace(cv_simd, block, block_len, counter, flags);
         if (memcmp(cv_ref, cv_simd, sizeof(cv_ref)) != 0) {
-            ERRR("Stub/SIMD compress-in-place output != portable");
+            ERR("Stub/SIMD compress-in-place output != portable");
         }
     }
 
@@ -658,7 +658,7 @@ int blake3NeonTest(int argc, char *argv[]) {
         const size_t MB = 1024 * 1024;
         uint8_t *buf = (uint8_t *)malloc(MB);
         if (!buf) {
-            ERRR("alloc failed");
+            ERR("alloc failed");
             return err;
         }
         prng_fill(buf, MB);

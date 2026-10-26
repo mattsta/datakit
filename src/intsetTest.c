@@ -63,46 +63,46 @@ int intsetTest(int argc, char *argv[]) {
 
         intsetAdd(&is, 10, &success);
         if (!success) {
-            ERRR("Failed to add 10");
+            ERR("Failed to add 10");
         }
         intsetAdd(&is, 5, &success);
         if (!success) {
-            ERRR("Failed to add 5");
+            ERR("Failed to add 5");
         }
         intsetAdd(&is, 15, &success);
         if (!success) {
-            ERRR("Failed to add 15");
+            ERR("Failed to add 15");
         }
         intsetAdd(&is, 10, &success); /* Duplicate */
         if (success) {
-            ERRR("Wrongly added duplicate 10");
+            ERR("Wrongly added duplicate 10");
         }
 
         if (intsetCount(is) != 3) {
             ERR("Count should be 3, got %zu", intsetCount(is));
         }
         if (!intsetFind(is, 10)) {
-            ERRR("Should find 10");
+            ERR("Should find 10");
         }
         if (!intsetFind(is, 5)) {
-            ERRR("Should find 5");
+            ERR("Should find 5");
         }
         if (!intsetFind(is, 15)) {
-            ERRR("Should find 15");
+            ERR("Should find 15");
         }
         if (intsetFind(is, 20)) {
-            ERRR("Should not find 20");
+            ERR("Should not find 20");
         }
 
         int64_t val;
         if (!intsetGet(is, 0, &val) || val != 5) {
-            ERRR("Position 0 should be 5");
+            ERR("Position 0 should be 5");
         }
         if (!intsetGet(is, 1, &val) || val != 10) {
-            ERRR("Position 1 should be 10");
+            ERR("Position 1 should be 10");
         }
         if (!intsetGet(is, 2, &val) || val != 15) {
-            ERRR("Position 2 should be 15");
+            ERR("Position 2 should be 15");
         }
 
         intsetRepr(is);
@@ -119,27 +119,27 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Verify still small */
         if (INTSET_TYPE(is) != INTSET_TYPE_SMALL) {
-            ERRR("Should still be SMALL tier");
+            ERR("Should still be SMALL tier");
         }
 
         /* Add int32 value to trigger upgrade */
         intsetAdd(&is, 100000, &success);
         if (!success) {
-            ERRR("Failed to add 100000");
+            ERR("Failed to add 100000");
         }
 
         /* Should now be medium */
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should be MEDIUM tier after adding int32 value");
+            ERR("Should be MEDIUM tier after adding int32 value");
         }
         if (intsetCount(is) != 101) {
             ERR("Count should be 101, got %zu", intsetCount(is));
         }
         if (!intsetFind(is, 50)) {
-            ERRR("Should find 50");
+            ERR("Should find 50");
         }
         if (!intsetFind(is, 100000)) {
-            ERRR("Should find 100000");
+            ERR("Should find 100000");
         }
 
         intsetRepr(is);
@@ -153,30 +153,30 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, 100, NULL);
         intsetAdd(&is, 100000, NULL);
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should be MEDIUM tier");
+            ERR("Should be MEDIUM tier");
         }
 
         /* Add int64 value to trigger upgrade */
         intsetAdd(&is, INT64_MAX, &success);
         if (!success) {
-            ERRR("Failed to add INT64_MAX");
+            ERR("Failed to add INT64_MAX");
         }
 
         /* Should now be full */
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should be FULL tier after adding int64 value");
+            ERR("Should be FULL tier after adding int64 value");
         }
         if (intsetCount(is) != 3) {
             ERR("Count should be 3, got %zu", intsetCount(is));
         }
         if (!intsetFind(is, 100)) {
-            ERRR("Should find 100");
+            ERR("Should find 100");
         }
         if (!intsetFind(is, 100000)) {
-            ERRR("Should find 100000");
+            ERR("Should find 100000");
         }
         if (!intsetFind(is, INT64_MAX)) {
-            ERRR("Should find INT64_MAX");
+            ERR("Should find INT64_MAX");
         }
 
         intsetRepr(is);
@@ -209,7 +209,7 @@ int intsetTest(int argc, char *argv[]) {
         dkTierStats none;
         intsetStats(NULL, &none);
         if (none.tier || none.count || none.totalBytes) {
-            ERRR("NULL intset reports a tier, members or bytes");
+            ERR("NULL intset reports a tier, members or bytes");
         }
     }
 
@@ -312,7 +312,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, INT64_MAX, NULL);
         intsetStats(is, &s);
         if (s.tier != 3 || !intsetFind(is, INT64_MAX) || !intsetFind(is, -6)) {
-            ERRR("a 64-bit add after Compact did not grow the set back");
+            ERR("a 64-bit add after Compact did not grow the set back");
         }
     }
 
@@ -388,24 +388,24 @@ int intsetTest(int argc, char *argv[]) {
 
         intsetRemove(&is, 5, &success);
         if (!success) {
-            ERRR("Failed to remove 5");
+            ERR("Failed to remove 5");
         }
         if (intsetCount(is) != 9) {
             ERR("Count should be 9 after removal, got %zu", intsetCount(is));
         }
         if (intsetFind(is, 5)) {
-            ERRR("Should not find removed value 5");
+            ERR("Should not find removed value 5");
         }
         if (!intsetFind(is, 4)) {
-            ERRR("Should still find 4");
+            ERR("Should still find 4");
         }
         if (!intsetFind(is, 6)) {
-            ERRR("Should still find 6");
+            ERR("Should still find 6");
         }
 
         intsetRemove(&is, 5, &success); /* Already removed */
         if (success) {
-            ERRR("Should not succeed removing already-removed value");
+            ERR("Should not succeed removing already-removed value");
         }
         if (intsetCount(is) != 9) {
             ERR("Count should still be 9, got %zu", intsetCount(is));
@@ -435,13 +435,13 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Verify a few values */
         if (!intsetFind(is, 1500)) {
-            ERRR("Should find 1500");
+            ERR("Should find 1500");
         }
         if (!intsetFind(is, 41000)) {
-            ERRR("Should find 41000");
+            ERR("Should find 41000");
         }
         if (!intsetFind(is, INT64_MAX - 500)) {
-            ERRR("Should find INT64_MAX-500");
+            ERR("Should find INT64_MAX-500");
         }
 
         size_t bytes = intsetBytes(is);
@@ -457,24 +457,24 @@ int intsetTest(int argc, char *argv[]) {
         cleaner(intsetFree) intset *is = intsetNew();
 
         if (intsetCount(is) != 0) {
-            ERRR("Empty set should have count 0");
+            ERR("Empty set should have count 0");
         }
         if (intsetBytes(is) < sizeof(intsetSmall)) {
-            ERRR("Empty set should have some overhead bytes");
+            ERR("Empty set should have some overhead bytes");
         }
         if (intsetFind(is, 0)) {
-            ERRR("Empty set should not find any value");
+            ERR("Empty set should not find any value");
         }
 
         int64_t val;
         if (intsetGet(is, 0, &val)) {
-            ERRR("Empty set should not have position 0");
+            ERR("Empty set should not have position 0");
         }
 
         bool success;
         intsetRemove(&is, 5, &success);
         if (success) {
-            ERRR("Cannot remove from empty set");
+            ERR("Cannot remove from empty set");
         }
 
         intsetRepr(is);
@@ -487,30 +487,30 @@ int intsetTest(int argc, char *argv[]) {
         /* Add single element */
         intsetAdd(&is, 42, &success);
         if (!success) {
-            ERRR("Should add first element");
+            ERR("Should add first element");
         }
         if (intsetCount(is) != 1) {
-            ERRR("Count should be 1");
+            ERR("Count should be 1");
         }
         if (!intsetFind(is, 42)) {
-            ERRR("Should find 42");
+            ERR("Should find 42");
         }
 
         int64_t val;
         if (!intsetGet(is, 0, &val) || val != 42) {
-            ERRR("Position 0 should be 42");
+            ERR("Position 0 should be 42");
         }
 
         /* Remove the only element */
         intsetRemove(&is, 42, &success);
         if (!success) {
-            ERRR("Should remove element");
+            ERR("Should remove element");
         }
         if (intsetCount(is) != 0) {
-            ERRR("Count should be 0 after removal");
+            ERR("Count should be 0 after removal");
         }
         if (intsetFind(is, 42)) {
-            ERRR("Should not find removed element");
+            ERR("Should not find removed element");
         }
     }
 
@@ -521,58 +521,58 @@ int intsetTest(int argc, char *argv[]) {
         /* Test int16 boundaries */
         intsetAdd(&is, INT16_MIN, &success);
         if (!success) {
-            ERRR("Should add INT16_MIN");
+            ERR("Should add INT16_MIN");
         }
         intsetAdd(&is, INT16_MAX, &success);
         if (!success) {
-            ERRR("Should add INT16_MAX");
+            ERR("Should add INT16_MAX");
         }
 
         /* Test int32 boundaries (triggers upgrade) */
         intsetAdd(&is, INT32_MIN, &success);
         if (!success) {
-            ERRR("Should add INT32_MIN");
+            ERR("Should add INT32_MIN");
         }
         intsetAdd(&is, INT32_MAX, &success);
         if (!success) {
-            ERRR("Should add INT32_MAX");
+            ERR("Should add INT32_MAX");
         }
 
         /* Test int64 boundaries (triggers upgrade) */
         intsetAdd(&is, INT64_MIN, &success);
         if (!success) {
-            ERRR("Should add INT64_MIN");
+            ERR("Should add INT64_MIN");
         }
         intsetAdd(&is, INT64_MAX, &success);
         if (!success) {
-            ERRR("Should add INT64_MAX");
+            ERR("Should add INT64_MAX");
         }
 
         if (intsetCount(is) != 6) {
             ERR("Should have 6 boundary values, got %zu", intsetCount(is));
         }
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should be FULL tier");
+            ERR("Should be FULL tier");
         }
 
         /* Verify all boundaries are found */
         if (!intsetFind(is, INT16_MIN)) {
-            ERRR("Should find INT16_MIN");
+            ERR("Should find INT16_MIN");
         }
         if (!intsetFind(is, INT16_MAX)) {
-            ERRR("Should find INT16_MAX");
+            ERR("Should find INT16_MAX");
         }
         if (!intsetFind(is, INT32_MIN)) {
-            ERRR("Should find INT32_MIN");
+            ERR("Should find INT32_MIN");
         }
         if (!intsetFind(is, INT32_MAX)) {
-            ERRR("Should find INT32_MAX");
+            ERR("Should find INT32_MAX");
         }
         if (!intsetFind(is, INT64_MIN)) {
-            ERRR("Should find INT64_MIN");
+            ERR("Should find INT64_MIN");
         }
         if (!intsetFind(is, INT64_MAX)) {
-            ERRR("Should find INT64_MAX");
+            ERR("Should find INT64_MAX");
         }
 
         intsetRepr(is);
@@ -593,13 +593,13 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify sorted order (negative to positive) */
         int64_t val;
         if (!intsetGet(is, 0, &val) || val != -100) {
-            ERRR("First should be -100");
+            ERR("First should be -100");
         }
         if (!intsetGet(is, 100, &val) || val != 0) {
-            ERRR("Middle should be 0");
+            ERR("Middle should be 0");
         }
         if (!intsetGet(is, 200, &val) || val != 100) {
-            ERRR("Last should be 100");
+            ERR("Last should be 100");
         }
     }
 
@@ -628,13 +628,13 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify sorted access */
         int64_t val;
         if (!intsetGet(is, 0, &val) || val != 0) {
-            ERRR("First should be 0");
+            ERR("First should be 0");
         }
         if (!intsetGet(is, 500, &val) || val != 500) {
-            ERRR("Middle should be 500");
+            ERR("Middle should be 500");
         }
         if (!intsetGet(is, 999, &val) || val != 999) {
-            ERRR("Last should be 999");
+            ERR("Last should be 999");
         }
     }
 
@@ -653,10 +653,10 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify sorted order is maintained */
         int64_t val;
         if (!intsetGet(is, 0, &val) || val != 0) {
-            ERRR("First should be 0");
+            ERR("First should be 0");
         }
         if (!intsetGet(is, 999, &val) || val != 999) {
-            ERRR("Last should be 999");
+            ERR("Last should be 999");
         }
     }
 
@@ -678,13 +678,13 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Should be in FULL tier */
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should upgrade to FULL");
+            ERR("Should upgrade to FULL");
         }
 
         /* Verify count */
         size_t count = intsetCount(is);
         if (count == 0) {
-            ERRR("Should have elements");
+            ERR("Should have elements");
         }
         printf("  Added %zu values with alternating extremes\n", count);
     }
@@ -697,13 +697,13 @@ int intsetTest(int argc, char *argv[]) {
             intsetAdd(&is, i, NULL);
         }
         if (INTSET_TYPE(is) != INTSET_TYPE_SMALL) {
-            ERRR("Should still be SMALL");
+            ERR("Should still be SMALL");
         }
 
         /* Add one int32 to force upgrade */
         intsetAdd(&is, 100000, NULL);
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should upgrade to MEDIUM");
+            ERR("Should upgrade to MEDIUM");
         }
 
         /* Fill medium tier with int32 values */
@@ -714,7 +714,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Add one int64 to force upgrade */
         intsetAdd(&is, INT64_MAX, NULL);
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should upgrade to FULL");
+            ERR("Should upgrade to FULL");
         }
 
         if (intsetCount(is) != 201) {
@@ -739,7 +739,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify smallest is first */
         int64_t val;
         if (!intsetGet(is, 0, &val) || val != 1) {
-            ERRR("First should be 1");
+            ERR("First should be 1");
         }
     }
 
@@ -750,7 +750,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Add value */
         intsetAdd(&is, 42, &success);
         if (!success) {
-            ERRR("Should add first 42");
+            ERR("Should add first 42");
         }
 
         /* Try to add same value 1000 times */
@@ -779,7 +779,7 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Should still be small */
         if (INTSET_TYPE(is) != INTSET_TYPE_SMALL) {
-            ERRR("Should be SMALL with int16 values");
+            ERR("Should be SMALL with int16 values");
         }
 
         size_t bytesBeforeUpgrade = intsetBytes(is);
@@ -789,7 +789,7 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Should now be medium */
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should be MEDIUM after int32 value");
+            ERR("Should be MEDIUM after int32 value");
         }
 
         size_t bytesAfterUpgrade = intsetBytes(is);
@@ -799,10 +799,10 @@ int intsetTest(int argc, char *argv[]) {
 
         /* All values should still be findable */
         if (!intsetFind(is, 500)) {
-            ERRR("Should still find old int16 values");
+            ERR("Should still find old int16 values");
         }
         if (!intsetFind(is, INT16_MAX + 1)) {
-            ERRR("Should find new int32 value");
+            ERR("Should find new int32 value");
         }
     }
 
@@ -818,7 +818,7 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should be MEDIUM");
+            ERR("Should be MEDIUM");
         }
 
         /* Add first int64 value */
@@ -826,18 +826,18 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Should now be full */
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should be FULL after int64 value");
+            ERR("Should be FULL after int64 value");
         }
 
         /* Verify all widths are preserved */
         if (!intsetFind(is, 50)) {
-            ERRR("Should find int16 value");
+            ERR("Should find int16 value");
         }
         if (!intsetFind(is, 40050)) {
-            ERRR("Should find int32 value");
+            ERR("Should find int32 value");
         }
         if (!intsetFind(is, INT32_MAX + 1LL)) {
-            ERRR("Should find int64 value");
+            ERR("Should find int64 value");
         }
 
         intsetRepr(is);
@@ -960,7 +960,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, 42, NULL);
         r = intsetRandom(is);
         if (r != 42) {
-            ERRR("Random from single-element set should return that element");
+            ERR("Random from single-element set should return that element");
         }
 
         /* Multiple elements */
@@ -994,10 +994,10 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Empty set */
         if (intsetGet(is, 0, &val)) {
-            ERRR("Get from empty set should fail");
+            ERR("Get from empty set should fail");
         }
         if (intsetGet(is, 100, &val)) {
-            ERRR("Get beyond bounds should fail");
+            ERR("Get beyond bounds should fail");
         }
 
         /* Add 10 elements */
@@ -1007,18 +1007,18 @@ int intsetTest(int argc, char *argv[]) {
 
         /* Valid positions */
         if (!intsetGet(is, 0, &val)) {
-            ERRR("Should get position 0");
+            ERR("Should get position 0");
         }
         if (!intsetGet(is, 9, &val)) {
-            ERRR("Should get position 9");
+            ERR("Should get position 9");
         }
 
         /* Invalid positions */
         if (intsetGet(is, 10, &val)) {
-            ERRR("Should not get position 10");
+            ERR("Should not get position 10");
         }
         if (intsetGet(is, 1000, &val)) {
-            ERRR("Should not get position 1000");
+            ERR("Should not get position 1000");
         }
     }
 
@@ -1029,36 +1029,36 @@ int intsetTest(int argc, char *argv[]) {
         /* Add with NULL success pointer */
         intsetAdd(&is, 42, NULL);
         if (!intsetFind(is, 42)) {
-            ERRR("Should add even with NULL success");
+            ERR("Should add even with NULL success");
         }
 
         /* Remove with NULL success pointer */
         intsetRemove(&is, 42, NULL);
         if (intsetFind(is, 42)) {
-            ERRR("Should remove even with NULL success");
+            ERR("Should remove even with NULL success");
         }
 
         /* Get with NULL value pointer */
         intsetAdd(&is, 100, NULL);
         if (!intsetGet(is, 0, NULL)) {
-            ERRR("Should succeed with NULL value ptr");
+            ERR("Should succeed with NULL value ptr");
         }
 
         /* Operations on NULL intset */
         cleaner(intsetFree) intset *null_is = NULL;
         if (intsetCount(null_is) != 0) {
-            ERRR("NULL intset should have count 0");
+            ERR("NULL intset should have count 0");
         }
         if (intsetFind(null_is, 42)) {
-            ERRR("NULL intset should not find anything");
+            ERR("NULL intset should not find anything");
         }
 
         intsetAdd(&null_is, 42, &success);
         if (!success) {
-            ERRR("Should create new intset from NULL");
+            ERR("Should create new intset from NULL");
         }
         if (intsetCount(null_is) != 1) {
-            ERRR("Should have 1 element");
+            ERR("Should have 1 element");
         }
     }
 
@@ -1123,7 +1123,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, 80000, NULL);
 
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should be MEDIUM tier");
+            ERR("Should be MEDIUM tier");
         }
 
         /* Expected sorted order: 10, 30, 50, 70, 90, 20000, 40000, 60000, 80000
@@ -1170,7 +1170,7 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
-            ERRR("Should be MEDIUM tier (has int32 values)");
+            ERR("Should be MEDIUM tier (has int32 values)");
         }
 
         /* Verify sorted iteration */
@@ -1222,7 +1222,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, INT32_MAX + 3000LL, NULL);
 
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should be FULL tier");
+            ERR("Should be FULL tier");
         }
 
         /* Expected sorted order */
@@ -1283,7 +1283,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, INT32_MAX + 1LL, NULL);
 
         if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
-            ERRR("Should be FULL tier");
+            ERR("Should be FULL tier");
         }
 
         size_t count = intsetCount(is);
@@ -1434,7 +1434,7 @@ int intsetTest(int argc, char *argv[]) {
             blbOracle16(a16, 400, INT16_MAX) ||
             blbOracle16(a16, 400, (int16_t)(a16[0] - 1)) ||
             blbOracle16(a16, 400, (int16_t)(a16[399] + 1))) {
-            ERRR("blb16 edge mismatch");
+            ERR("blb16 edge mismatch");
         }
         static int64_t a64[400];
         for (int i = 0; i < 400; i++) {
@@ -1447,7 +1447,7 @@ int intsetTest(int argc, char *argv[]) {
         }
         if (blbOracle64(a64, 400, INT64_MIN) ||
             blbOracle64(a64, 400, INT64_MAX)) {
-            ERRR("blb64 extreme mismatch");
+            ERR("blb64 extreme mismatch");
         }
 
         /* Random sorted-unique arrays + arbitrary probes. */
@@ -1499,7 +1499,7 @@ int intsetTest(int argc, char *argv[]) {
                 yields);
         } else if (got[0] != -9000000000LL || got[1] != 5 ||
                    got[2] != INT64_MAX) {
-            ERRR("Merge order wrong with INT64_MAX present");
+            ERR("Merge order wrong with INT64_MAX present");
         }
 
         intsetFullFree(f);
@@ -1511,14 +1511,14 @@ int intsetTest(int argc, char *argv[]) {
         bool ok;
 
         if (intsetMin(is, &v) || intsetMax(is, &v)) {
-            ERRR("Min/Max must report false on empty set");
+            ERR("Min/Max must report false on empty set");
         }
 
         /* Small tier */
         intsetAdd(&is, 100, &ok);
         intsetAdd(&is, -50, &ok);
         if (!intsetMin(is, &v) || v != -50 || !intsetMax(is, &v) || v != 100) {
-            ERRR("Small-tier Min/Max wrong");
+            ERR("Small-tier Min/Max wrong");
         }
 
         /* Force Medium (int32 range), negative wide value is the min */
@@ -1526,7 +1526,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, 70000, &ok);
         if (!intsetMin(is, &v) || v != -100000 || !intsetMax(is, &v) ||
             v != 70000) {
-            ERRR("Medium-tier Min/Max wrong (negative wide value)");
+            ERR("Medium-tier Min/Max wrong (negative wide value)");
         }
 
         /* Force Full with the extreme boundaries */
@@ -1534,7 +1534,7 @@ int intsetTest(int argc, char *argv[]) {
         intsetAdd(&is, INT64_MAX, &ok);
         if (!intsetMin(is, &v) || v != INT64_MIN || !intsetMax(is, &v) ||
             v != INT64_MAX) {
-            ERRR("Full-tier Min/Max wrong at INT64 boundaries");
+            ERR("Full-tier Min/Max wrong at INT64 boundaries");
         }
     }
 

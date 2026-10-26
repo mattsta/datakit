@@ -833,7 +833,7 @@ int multiarrayLargeTest(int argc, char *argv[]) {
         /* GetTail rides the same path */
         const uint32_t *tail = multiarrayLargeGetTail(mar);
         if (!tail || *tail != 1020) {
-            ERRR("GetTail returned wrong element");
+            ERR("GetTail returned wrong element");
         }
 
         multiarrayLargeFree(mar);

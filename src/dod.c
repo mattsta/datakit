@@ -1963,7 +1963,7 @@ int dodTest(int argc, char *argv[]) {
         dodInit(&empty);
         dodCloseWrites(&empty);
         if (dodRead(&empty, 0) != 0 || empty.t[0] != 0 || empty.t[1] != 0) {
-            ERRR("empty writer did not stay empty");
+            ERR("empty writer did not stay empty");
         }
     }
 
@@ -2016,7 +2016,7 @@ int dodTest(int argc, char *argv[]) {
 
         /* Verify first two values via dodReaderCurrent */
         if (dodReaderCurrent(&r) != values[1]) {
-            ERRR("dodReaderCurrent returned wrong initial value!");
+            ERR("dodReaderCurrent returned wrong initial value!");
         }
 
         /* Read remaining values */
@@ -2031,7 +2031,7 @@ int dodTest(int argc, char *argv[]) {
 
         /* Test dodReaderRemaining */
         if (dodReaderRemaining(&r, loopers) != 0) {
-            ERRR("dodReaderRemaining should be 0 after reading all values!");
+            ERR("dodReaderRemaining should be 0 after reading all values!");
         }
 
         /* Test dodReaderNextN - encode and read again */

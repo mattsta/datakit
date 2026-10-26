@@ -733,7 +733,7 @@ int mflexTest(int argc, char *argv[]) {
         cleaner(mflexFree) mflex *m = mflexNew();
         cleaner(flexFree) flex *oracle = flexNew();
         if (!mflexIsEmpty(m)) {
-            ERRR("a new mflex is not empty");
+            ERR("a new mflex is not empty");
         }
         mflexPushUnsigned(&m, st, UINT64_MAX, FLEX_ENDPOINT_TAIL);
         mflexPushFloat16(&m, st, 0.5f, FLEX_ENDPOINT_TAIL);
@@ -743,7 +743,7 @@ int mflexTest(int argc, char *argv[]) {
         flexPushFloat(&oracle, 1.25f, FLEX_ENDPOINT_HEAD);
         if (mflexIsEmpty(m) || mflexCount(m) != 3 ||
             !flexEqual(mflexOpenReadOnly(m, st), oracle)) {
-            ERRR("typed mflex pushes differ from the flex pushes");
+            ERR("typed mflex pushes differ from the flex pushes");
         }
 
         /* The preferred buffer length rounds up to an allocation size */

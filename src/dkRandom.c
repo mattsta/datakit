@@ -372,7 +372,7 @@ int dkRandomTest(int argc, char *argv[]) {
         }
 
         if (dkRandomBounded(1) != 0) {
-            ERRR("dkRandomBounded(1) must return 0");
+            ERR("dkRandomBounded(1) must return 0");
         }
 
         /* bound 0 returns 0 without dividing, increments the tally and
@@ -381,13 +381,13 @@ int dkRandomTest(int argc, char *argv[]) {
         const uint64_t diagBefore = dkDiagCount();
 
         if (dkRandomBounded(0) != 0) {
-            ERRR("dkRandomBounded(0) must return 0");
+            ERR("dkRandomBounded(0) must return 0");
         }
 
         dkDiagnostic d;
         if (dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
             d.code != DK_DIAG_RANDOM_ZERO_BOUND) {
-            ERRR("dkRandomBounded(0) must report RANDOM_ZERO_BOUND once");
+            ERR("dkRandomBounded(0) must report RANDOM_ZERO_BOUND once");
         }
 
         const uint64_t zeroAfter = dkRandomZeroBoundTotal();
@@ -447,7 +447,7 @@ int dkRandomTest(int argc, char *argv[]) {
             uint64_t childWord = 0;
             uint64_t parentWord = 0;
             if (!dkRandomTestForkedNextWord(&childWord, &parentWord)) {
-                ERRR("the fork probe could not run (pipe/fork/read failed)");
+                ERR("the fork probe could not run (pipe/fork/read failed)");
             } else if (childWord == parentWord) {
                 ERR("%s: a forked child drew 0x%016" PRIx64 ", the same "
                     "word as the parent",

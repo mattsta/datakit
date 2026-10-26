@@ -7202,7 +7202,7 @@ static int32_t flexTestWideDecoders(void) {
         if (!narrowOk || reuse.type != DATABOX_UNSIGNED_128 || !reuse.big ||
             !reuse.allocated || reuse.data.u128 == (__uint128_t *)reuse.extra ||
             *reuse.data.u128 != wu) {
-            ERRR("reused copy box");
+            ERR("reused copy box");
         }
 
         databoxFreeData((databox *)&reuse);
@@ -7247,7 +7247,7 @@ static int32_t flexTestWideDecoders(void) {
              a.type == DATABOX_SIGNED_128 && *a.data.i128 == ws &&
              b.type == DATABOX_UNSIGNED_128 && *b.data.u128 == wu;
         if (!ok) {
-            ERRR("flexGetTwoDataboxesBig pair decode");
+            ERR("flexGetTwoDataboxesBig pair decode");
         }
 
         /* Refusals leave both boxes untouched. */
@@ -7284,7 +7284,7 @@ static int32_t flexTestWideDecoders(void) {
         if (!flexGetSingleDataboxBig(s1, flexBytes(s1), &o) ||
             o.type != DATABOX_SIGNED_64 || o.data.i64 != -77 || o.big ||
             o.allocated) {
-            ERRR("flexGetSingleDataboxBig narrow decode");
+            ERR("flexGetSingleDataboxBig narrow decode");
         }
     }
 
@@ -7305,7 +7305,7 @@ static int32_t flexTestWideDecoders(void) {
                         sv == -7 && flexGetUnsigned(flexIndex(g, 3), &uv) &&
                         uv == 7;
         if (!ok) {
-            ERRR("flexGetSigned / flexGetUnsigned on a wide value");
+            ERR("flexGetSigned / flexGetUnsigned on a wide value");
         }
 
         /* Out of the result's range, or not an integer at all (bytes, a
@@ -7872,7 +7872,7 @@ static int32_t flexTestUntrustedGetters(void) {
         ba.type != DATABOX_SIGNED_128 ||
         !flexGetTwoDataboxesBig(w2, flexBytes(wideTwo), &ba, &bb) ||
         ba.type != DATABOX_SIGNED_128 || bb.data.i64 != 1) {
-        ERRR("a valid buffer did not read back");
+        ERR("a valid buffer did not read back");
     }
     return err;
 }
@@ -7953,7 +7953,7 @@ static int32_t flexTestMathWide(void) {
     flexPushUnsigned(&huge, UINT64_MAX, FLEX_ENDPOINT_TAIL);
     flexPushUnsigned(&huge, UINT64_MAX, FLEX_ENDPOINT_TAIL);
     if (flexMultiplyUnsigned(huge, &u) || flexAddUnsigned(huge, &u)) {
-        ERRR("UINT64_MAX^2 or 2*UINT64_MAX fit a uint64");
+        ERR("UINT64_MAX^2 or 2*UINT64_MAX fit a uint64");
     }
 
     cleaner(flexFree) flex *edge = flexNew();
@@ -7961,7 +7961,7 @@ static int32_t flexTestMathWide(void) {
     flexPushSigned(&edge, 1, FLEX_ENDPOINT_TAIL);
     if (flexSubtractSigned(edge, &s) || !flexAddSigned(edge, &s) ||
         s != INT64_MIN + 1) {
-        ERRR("INT64_MIN - 1 fit, or INT64_MIN + 1 did not");
+        ERR("INT64_MIN - 1 fit, or INT64_MIN + 1 did not");
     }
     return err;
 }
@@ -8179,7 +8179,7 @@ static int32_t flexTestMergeMatrix(void) {
     flex *alias = self;
     if (flexMerge(NULL, &self) || flexMerge(&self, &none) ||
         flexMerge(&self, &alias)) {
-        ERRR("merge accepted NULL or itself");
+        ERR("merge accepted NULL or itself");
     }
     return err;
 }
@@ -8607,7 +8607,7 @@ static int32_t flexTestNeg64Wide(void) {
     if (!flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
             &m, 2, row, &mid, true, &replaced) ||
         replaced.type != DATABOX_SIGNED_128 || replaced.data.ptr) {
-        ERRR("replaced crafted value not reported type-only");
+        ERR("replaced crafted value not reported type-only");
     }
 
     return err;
@@ -8786,7 +8786,7 @@ static int32_t flexTestExactPath(void) {
         cleaner(flexFree) flex *f = flexNew();
         flexPushBytesExact(&f, bin, sizeof(bin), FLEX_ENDPOINT_TAIL);
         if (!flexTestEntryIsBytes(flexHead(f), bin, sizeof(bin))) {
-            ERRR("exact path changed a binary blob");
+            ERR("exact path changed a binary blob");
         }
     }
 
@@ -8802,13 +8802,13 @@ static int32_t flexTestExactPath(void) {
         flexGetByType(flexHead(f), &a);
         flexGetByType(flexNext(f, flexHead(f)), &b);
         if (a.type != DATABOX_SIGNED_64 || a.data.i != -5) {
-            ERRR("exact path changed -5");
+            ERR("exact path changed -5");
         }
         const double back =
             b.type == DATABOX_FLOAT_32 ? b.data.f32 : b.data.d64;
         if ((b.type != DATABOX_FLOAT_32 && b.type != DATABOX_DOUBLE_64) ||
             back != 1.5) {
-            ERRR("exact path changed 1.5");
+            ERR("exact path changed 1.5");
         }
     }
 
@@ -8819,7 +8819,7 @@ static int32_t flexTestExactPath(void) {
         databox a = {};
         flexGetByType(flexHead(f), &a);
         if (a.type != DATABOX_UNSIGNED_64 || a.data.u != 22) {
-            ERRR("auto path no longer converts \"22\"");
+            ERR("auto path no longer converts \"22\"");
         }
     }
 
@@ -8843,11 +8843,11 @@ static int32_t flexTestNegWideRange(void) {
         if (fe[0] != FLEX_NEG_128B ||
             varintBigExternalGet(fe + 1, VARINT_WIDTH_128B) !=
                 (__uint128_t)INT128_MAX) {
-            ERRR("INT128_MIN not stored as magnitude INT128_MAX");
+            ERR("INT128_MIN not stored as magnitude INT128_MAX");
         }
 
         if (!flexTestWideMiddleReads(f, want)) {
-            ERRR("INT128_MIN rejected or misread");
+            ERR("INT128_MIN rejected or misread");
         }
 
         databoxBig one;
@@ -8857,7 +8857,7 @@ static int32_t flexTestNegWideRange(void) {
         flexPushDataboxBig(&single, &box, FLEX_ENDPOINT_TAIL);
         if (!flexGetSingleDataboxBig(single, flexBytes(single), &one) ||
             !flexTestWideMatches((const databox *)&one, want)) {
-            ERRR("INT128_MIN single-databox decode");
+            ERR("INT128_MIN single-databox decode");
         }
 
         /* Stored 2^127, 2^127 + 1, ..., 2^128 - 1: |v| = 2^127 + 1 and
@@ -8884,13 +8884,13 @@ static int32_t flexTestNegWideRange(void) {
         varintExternalPutFixedWidthBig(fe + 1, (__uint128_t)INT128_MAX - 1,
                                        VARINT_WIDTH_128B);
         if (!flexTestWideMiddleReads(f, flexTestWideS(INT128_MIN + 1))) {
-            ERRR("NEG_128B magnitude INT128_MAX - 1 not INT128_MIN + 1");
+            ERR("NEG_128B magnitude INT128_MAX - 1 not INT128_MIN + 1");
         }
 
         varintExternalPutFixedWidthBig(fe + 1, (__uint128_t)INT128_MAX,
                                        VARINT_WIDTH_128B);
         if (!flexTestWideMiddleReads(f, want)) {
-            ERRR("restored INT128_MIN rejected or misread");
+            ERR("restored INT128_MIN rejected or misread");
         }
     }
 
@@ -8904,18 +8904,18 @@ static int32_t flexTestNegWideRange(void) {
         if (fe[0] != FLEX_NEG_96B ||
             varintBigExternalGet(fe + 1, VARINT_WIDTH_96B) !=
                 ((__uint128_t)1 << 96) - 1) {
-            ERRR("-2^96 not stored as NEG_96B magnitude 2^96 - 1");
+            ERR("-2^96 not stored as NEG_96B magnitude 2^96 - 1");
         }
 
         if (!flexTestWideMiddleReads(f, want)) {
-            ERRR("-2^96 rejected or misread");
+            ERR("-2^96 rejected or misread");
         }
 
         const flexTestWide below = flexTestWideS(min96 - 1);
         cleaner(flexFree) flex *g = flexNew();
         const flexEntry *const ge = flexTestPushWideMiddle(&g, below);
         if (ge[0] != FLEX_NEG_128B || !flexTestWideMiddleReads(g, below)) {
-            ERRR("-2^96 - 1 not stored as NEG_128B");
+            ERR("-2^96 - 1 not stored as NEG_128B");
         }
     }
 
@@ -9027,7 +9027,7 @@ static int32_t flexTestReplaceSign(void) {
         const bool incremented = flexIncrbySigned(&f, flexHead(f), 0, &got);
         flexGetByType(flexHead(f), &after);
         if (!incremented || got != 1 || after.type != DATABOX_TRUE) {
-            ERRR("boolean incremented by zero");
+            ERR("boolean incremented by zero");
         }
     }
 
@@ -9042,7 +9042,7 @@ static int32_t flexTestReplaceSign(void) {
         int64_t got = 1;
         if (!flexIncrbySigned(&f, flexNext(f, flexHead(f)), 0, &got) ||
             got != -7 || !flexTestReplaceReadsBack(f, flexTestWideS(-7))) {
-            ERRR("signed increment by zero");
+            ERR("signed increment by zero");
         }
     }
     {
@@ -9073,7 +9073,7 @@ static int32_t flexTestReplaceSign(void) {
             got != 5 ||
             flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), -6, NULL) ||
             !flexTestReplaceReadsBack(f, flexTestWideU(5))) {
-            ERRR("unsigned increment by zero or below zero");
+            ERR("unsigned increment by zero or below zero");
         }
     }
 
@@ -9161,7 +9161,7 @@ static int32_t flexTestReplaceSign(void) {
         if (flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 1, NULL) ||
             !flexIncrbySigned(&f, flexNext(f, flexHead(f)), -3, &v) ||
             v != -2 || !flexTestReplaceReadsBack(f, flexTestWideS(-2))) {
-            ERRR("boolean increment");
+            ERR("boolean increment");
         }
     }
 
@@ -9331,7 +9331,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         DATABOX_BIG_SIGNED_128(&w, wideS);
         flexPushDataboxBig(&wide, &w, FLEX_ENDPOINT_TAIL);
         if (!flexValidateBufferDeep(wide, flexBytes(wide))) {
-            ERRR("96/128-bit entries failed the deep gate");
+            ERR("96/128-bit entries failed the deep gate");
         }
 
         /* A plain box reports the type only and leaves the memory its
@@ -9364,7 +9364,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             out.type != DATABOX_SIGNED_64 || out.data.i != 77 ||
             !flexGetSingleDataboxBig(one, flexBytes(one), &outBig) ||
             outBig.type != DATABOX_SIGNED_128 || *outBig.data.i128 != wideS) {
-            ERRR("single unwrap of a 128-bit entry");
+            ERR("single unwrap of a 128-bit entry");
         }
 
         cleaner(flexFree) flex *pair = flexNew();
@@ -9374,7 +9374,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox b = databoxNewSigned(2);
         if (flexGetTwoDataboxes(pair, flexBytes(pair), &a, &b) ||
             a.data.i != 1 || b.data.i != 2) {
-            ERRR("pair unwrap of a 128-bit entry");
+            ERR("pair unwrap of a 128-bit entry");
         }
 
 #if FLEX_ENABLE_PTR_MDSC
@@ -9391,7 +9391,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexValidateBufferDeep(ptrs, flexBytes(ptrs)) ||
             flexGetSingleDatabox(ptrs, flexBytes(ptrs), &out) ||
             flexGetSingleDataboxBig(ptrs, flexBytes(ptrs), &outBig)) {
-            ERRR("an MDSC entry passed an untrusted gate");
+            ERR("an MDSC entry passed an untrusted gate");
         }
 
         /* Integers whose tag byte is flipped to an MDSC tag: the payload
@@ -10015,7 +10015,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         cleaner(flexFree) flex *empty = flexNew();
         if (flexFind(empty, "x", 1, 0) != NULL) {
-            ERRR("flexFind on an empty flex found an entry");
+            ERR("flexFind on an empty flex found an entry");
         }
     }
 
@@ -10325,7 +10325,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 &m, 3, row, &mid, true, vals);
         if (firstFound || vals[0].type != DATABOX_VOID ||
             vals[1].type != DATABOX_VOID) {
-            ERRR("new-key insert reported a replacement");
+            ERR("new-key insert reported a replacement");
         }
 
         vals[0] = databoxNewUnsigned(200);
@@ -10401,7 +10401,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexInsertFloatB16(&inserted, FLEX_ENTRY_HEAD(inserted), 7.0f);
 
         if (!flexEqual(pushed, inserted)) {
-            ERRR("push and insert encodings differ");
+            ERR("push and insert encodings differ");
         }
 
         databox got = {};
@@ -10421,24 +10421,24 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(flexFree) flex *a = flexNew();
         cleaner(flexFree) flex *b = flexNew();
         if (!flexEqual(a, b) || !flexEqual(a, a)) {
-            ERRR("empty flexes should be equal");
+            ERR("empty flexes should be equal");
         }
 
         if (flexEqual(a, NULL) || flexEqual(NULL, a) ||
             !flexEqual(NULL, NULL)) {
-            ERRR("NULL handling wrong");
+            ERR("NULL handling wrong");
         }
 
         flexPushBytes(&a, "abc", 3, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&a, -77, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&b, "abc", 3, FLEX_ENDPOINT_TAIL);
         if (flexEqual(a, b)) {
-            ERRR("differing counts compared equal");
+            ERR("differing counts compared equal");
         }
 
         flexPushSigned(&b, -77, FLEX_ENDPOINT_TAIL);
         if (!flexEqual(a, b)) {
-            ERRR("identical contents compared unequal");
+            ERR("identical contents compared unequal");
         }
 
         /* Same length, one byte different. */
@@ -10446,7 +10446,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushBytes(&c, "abd", 3, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&c, -77, FLEX_ENDPOINT_TAIL);
         if (flexBytes(c) != flexBytes(a) || flexEqual(a, c)) {
-            ERRR("same-size differing contents compared equal");
+            ERR("same-size differing contents compared equal");
         }
     }
 
@@ -10603,7 +10603,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = createList();
         fe = flexIndexDirect(f, 3);
         if (!flexGet(fe, &entry, &elen, &value)) {
-            ERRR("could not access index 3");
+            ERR("could not access index 3");
         } else if (entry) {
             if (elen) {
                 printf("%.*s", elen, entry);
@@ -10636,7 +10636,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = createList();
         fe = flexIndexDirect(f, -1);
         if (!flexGet(fe, &entry, &elen, &value)) {
-            ERRR("could not access index -1");
+            ERR("could not access index -1");
         } else if (entry) {
             if (elen) {
                 printf("%.*s", elen, entry);
@@ -10655,7 +10655,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = createList();
         fe = flexIndexDirect(f, -4);
         if (!flexGet(fe, &entry, &elen, &value)) {
-            ERRR("could not access index -4");
+            ERR("could not access index -4");
         } else if (entry) {
             if (elen) {
                 printf("%.*s", elen, entry);
@@ -10753,7 +10753,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         if (!flexGet(fe, &entry, &elen, &value)) {
             printf("No entry\n");
         } else {
-            ERRR("an out of range start found an entry");
+            ERR("an out of range start found an entry");
         }
 
         printf("\n");
@@ -11027,14 +11027,14 @@ int32_t flexTest(int32_t argc, char **argv) {
             memcmp(asBytes, asNever, flexBytes(asBytes)) != 0 ||
             flexBytes(sortedBytes) != flexBytes(sortedNever) ||
             memcmp(sortedBytes, sortedNever, flexBytes(sortedBytes)) != 0) {
-            ERRR("never-free bytes built a different flex");
+            ERR("never-free bytes built a different flex");
         }
         /* [gamma, gamma, alpha]: the replace overwrote beta */
         const databox findMe = {.type = DATABOX_BYTES_NEVER_FREE,
                                 .data.bytes.start = words[0],
                                 .len = strlen((char *)words[0])};
         if (!flexFindByType(asNever, flexHead(asNever), &findMe, 0)) {
-            ERRR("find by never-free bytes found nothing");
+            ERR("find by never-free bytes found nothing");
         }
     }
 
@@ -11919,20 +11919,20 @@ int32_t flexTest(int32_t argc, char **argv) {
         fe = flexIndex(f, 0);
         assert(fe == flexHead(f));
         if (!flexCompareBytes(fe, "hello", 5)) {
-            ERRR("not \"hello\"");
+            ERR("not \"hello\"");
         }
 
         if (flexCompareBytes(fe, "hella", 5)) {
-            ERRR("matched \"hella\"");
+            ERR("matched \"hella\"");
         }
 
         fe = flexIndex(f, 3);
         if (!flexCompareBytes(fe, "1024", 4)) {
-            ERRR("not \"1024\"");
+            ERR("not \"1024\"");
         }
 
         if (flexCompareBytes(fe, "1025", 4)) {
-            ERRR("matched \"1025\"");
+            ERR("matched \"1025\"");
         }
 
         flexFree(f);
@@ -11950,14 +11950,14 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(flexFree) flex *f4 = flexNew();
 
         if (flexMerge(&f4, &f4)) {
-            ERRR("allowed merging a flex into itself");
+            ERR("allowed merging a flex into itself");
         }
 
         /* Merge two empty flexes, get empty result back. */
         f4 = flexMerge(&f3, &f4);
         flexRepr(f4);
         if (flexCount(f4)) {
-            ERRR("merging two empty flexes created entries");
+            ERR("merging two empty flexes created entries");
         }
 
         f2 = flexMerge(&f, &f2);
@@ -12291,7 +12291,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(zfree) void *cBuf = zcalloc(1, cSize);
         cflex *c = (cflex *)cBuf;
         if (!flexConvertToCFlex(f, cBuf, cSize)) {
-            ERRR("failed to compress the contract-test flex");
+            ERR("failed to compress the contract-test flex");
         } else {
             /* (a) undersized declared buffer: must realloc and report the
              * new real allocation back through the length */
@@ -13316,7 +13316,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         fe = flexIndex(f, 50);
         flexDelete(&f, &fe);
         if (flexCount(f) != count - 1) {
-            ERRR("delete from middle failed");
+            ERR("delete from middle failed");
         }
 
         /* Verify element 49 is followed by 51 */
@@ -13324,12 +13324,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox box;
         flexGetByType(fe, &box);
         if (box.data.i != 49) {
-            ERRR("element before deleted is wrong");
+            ERR("element before deleted is wrong");
         }
         fe = flexNext(f, fe);
         flexGetByType(fe, &box);
         if (box.data.i != 51) {
-            ERRR("element after deleted is wrong");
+            ERR("element after deleted is wrong");
         }
 
         flexFree(f);
@@ -13354,12 +13354,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox box;
         flexGetByType(fe, &box);
         if (box.data.i != 19) {
-            ERRR("element before range is wrong");
+            ERR("element before range is wrong");
         }
         fe = flexNext(f, fe);
         flexGetByType(fe, &box);
         if (box.data.i != 30) {
-            ERRR("element after range is wrong");
+            ERR("element after range is wrong");
         }
 
         flexFree(f);
@@ -13388,11 +13388,11 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Search for out-of-range values */
         databox box = databoxNewSigned(-100);
         if (flexFindByTypeSortedWithMiddle(f, 1, &box, middle)) {
-            ERRR("found -100");
+            ERR("found -100");
         }
         box = databoxNewSigned(1000);
         if (flexFindByTypeSortedWithMiddle(f, 1, &box, middle)) {
-            ERRR("found 1000");
+            ERR("found 1000");
         }
 
         flexFree(f);

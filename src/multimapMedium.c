@@ -1122,8 +1122,8 @@ int multimapMediumTest(int argc, char *argv[]) {
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
         if (!replaced) {
-            ERRR("REPLACE on existing key in map[0] reported as new "
-                 "insert — duplicate likely created!");
+            ERR("REPLACE on existing key in map[0] reported as new "
+                "insert — duplicate likely created!");
         }
         if (multimapMediumCount(m) != startCount) {
             ERR("Count changed from %zu to %zu after REPLACE — duplicate "
@@ -1154,8 +1154,8 @@ int multimapMediumTest(int argc, char *argv[]) {
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
         if (!replaced) {
-            ERRR("REPLACE on existing key in map[1] reported as new "
-                 "insert");
+            ERR("REPLACE on existing key in map[1] reported as new "
+                "insert");
         }
         assert(multimapMediumCount(m) == 10);
 
@@ -1187,8 +1187,8 @@ int multimapMediumTest(int argc, char *argv[]) {
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
         if (!replaced) {
-            ERRR("REPLACE on boundary key (head of map[1]) reported as "
-                 "new insert — routing must treat == as match!");
+            ERR("REPLACE on boundary key (head of map[1]) reported as "
+                "new insert — routing must treat == as match!");
         }
         if (multimapMediumCount(m) != 10) {
             ERR("Boundary-key REPLACE changed count from 10 to %zu — "
@@ -1204,8 +1204,8 @@ int multimapMediumTest(int argc, char *argv[]) {
         assert(ok);
         if (foundVal.type != DATABOX_BYTES || foundVal.len != strlen(bigVal) ||
             memcmp(foundVal.data.bytes.start, bigVal, foundVal.len) != 0) {
-            ERRR("Lookup on boundary key returned stale value — "
-                 "binary search picked the wrong map!");
+            ERR("Lookup on boundary key returned stale value — "
+                "binary search picked the wrong map!");
         }
         multimapMediumFree(m);
     }
@@ -1447,12 +1447,12 @@ int multimapMediumTest(int argc, char *argv[]) {
         multimapMediumInsertFullWidth(m, dupRow);
         if (!multimapMediumExistsFullWidth(m, dupRow) ||
             multimapMediumCount(m) != 13) {
-            ERRR("full-width duplicate of a wide key not stored");
+            ERR("full-width duplicate of a wide key not stored");
         }
 
         /* A wide field can't be incremented: FieldIncr reports 0. */
         if (multimapMediumFieldIncr(m, &keyBox[2], 1, 1) != 0) {
-            ERRR("FieldIncr of a wide value returned non-zero");
+            ERR("FieldIncr of a wide value returned non-zero");
         }
 
         /* Trim every row at or below key 6, which lives in map[1]. */

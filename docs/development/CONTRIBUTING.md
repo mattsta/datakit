@@ -596,7 +596,7 @@ int myModuleTest(int argc, char *argv[]) {
     {
         myModule *m = myModuleNew();
         if (!m) {
-            ERRR("Failed to create module");
+            ERR("Failed to create module");
         }
 
         // Create
@@ -614,13 +614,13 @@ int myModuleTest(int argc, char *argv[]) {
         // Update
         bool updated = myModuleUpdate(m, "key", "newvalue");
         if (!updated) {
-            ERRR("Update failed");
+            ERR("Update failed");
         }
 
         // Delete
         bool deleted = myModuleDelete(m, "key");
         if (!deleted) {
-            ERRR("Delete failed");
+            ERR("Delete failed");
         }
 
         if (myModuleCount(m) != 0) {
@@ -637,7 +637,7 @@ int myModuleTest(int argc, char *argv[]) {
         // Test with NULL
         bool result = myModuleInsert(m, NULL, "value");
         if (result) {
-            ERRR("Should reject NULL key");
+            ERR("Should reject NULL key");
         }
 
         // Test with empty string

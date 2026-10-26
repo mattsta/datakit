@@ -172,21 +172,21 @@ void memboundZeroFast(void *dst, size_t bytes) {
         p += 64;
         bytes -= 64;
     }
-#elif defined(MEMBOUND_USE_AVX2)
+#elifdef MEMBOUND_USE_AVX2
     const __m256i zero256 = _mm256_setzero_si256();
     while (bytes >= 32) {
         _mm256_storeu_si256((__m256i *)p, zero256);
         p += 32;
         bytes -= 32;
     }
-#elif defined(MEMBOUND_USE_SSE2)
+#elifdef MEMBOUND_USE_SSE2
     const __m128i zero128 = _mm_setzero_si128();
     while (bytes >= 16) {
         _mm_storeu_si128((__m128i *)p, zero128);
         p += 16;
         bytes -= 16;
     }
-#elif defined(MEMBOUND_USE_NEON)
+#elifdef MEMBOUND_USE_NEON
     const uint8x16_t zero = vdupq_n_u8(0);
     while (bytes >= 16) {
         vst1q_u8(p, zero);
@@ -338,7 +338,7 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
         return memboundIndexBinarySearch(ranges + count - remainder, remainder,
                                          addr);
     }
-#elif defined(MEMBOUND_USE_SSE2)
+#elifdef MEMBOUND_USE_SSE2
     /* Process 2 extents at a time with SSE2
      * XOR with sign bit to convert unsigned comparison to signed space */
     const __m128i signBit = _mm_set1_epi64x((int64_t)0x8000000000000000ULL);
@@ -379,7 +379,7 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
     if (count % 2) {
         return memboundIndexBinarySearch(ranges + count - 1, 1, addr);
     }
-#elif defined(MEMBOUND_USE_NEON)
+#elifdef MEMBOUND_USE_NEON
     /* Process 2 extents at a time with NEON
      * Use unsigned comparison intrinsics (vcgeq_u64/vcltq_u64) for correct
      * handling of addresses with high bit set */
@@ -1315,7 +1315,7 @@ static bool memboundReleaseExtent(membound *m, memboundExtent *e) {
  * Reduces power consumption and improves SMT performance. */
 #if defined(__x86_64__) || defined(__i386__)
 #define MEMBOUND_SPIN_PAUSE() __builtin_ia32_pause()
-#elif defined(__aarch64__)
+#elifdef __aarch64__
 #define MEMBOUND_SPIN_PAUSE() __asm__ volatile("yield")
 #else
 #define MEMBOUND_SPIN_PAUSE() ((void)0)
@@ -5085,7 +5085,7 @@ int memboundTest(int argc, char *argv[]) {
         if (memboundIncreaseSize(m, capacity) ||
             memboundIncreaseSize(m, capacity / 2) ||
             memboundCapacity(m) != capacity) {
-            ERRR("an increase to no more than the capacity was accepted");
+            ERR("an increase to no more than the capacity was accepted");
         }
         memboundShutdown(m);
     }
@@ -5107,8 +5107,8 @@ int memboundTest(int argc, char *argv[]) {
             }
         }
         if (!exact) {
-            ERRR("memboundZeroFast wrote outside, or missed part of, its "
-                 "range");
+            ERR("memboundZeroFast wrote outside, or missed part of, its "
+                "range");
         }
     }
 
@@ -5646,11 +5646,11 @@ int memboundTest(int argc, char *argv[]) {
          * other blocks, never a or b */
         uint8_t *c = memboundAlloc(m, 256);
         if (!c || c == a || (c >= b && c < b + 512)) {
-            ERRR("a live block was handed out again");
+            ERR("a live block was handed out again");
         }
         for (size_t i = 0; i < 256; i++) {
             if (a[i] != 0xA5) {
-                ERRR("a live block was overwritten");
+                ERR("a live block was overwritten");
                 break;
             }
         }
@@ -5664,19 +5664,19 @@ int memboundTest(int argc, char *argv[]) {
                 memboundCurrentAllocationCount(m));
         }
         if (dkDiagCount() != diagBefore + 1) {
-            ERRR("a MICRO double free must report once");
+            ERR("a MICRO double free must report once");
         }
 
         /* NULL is not misuse: nothing is reported */
         const uint64_t diagNull = dkDiagCount();
         memboundFree(m, NULL);
         if (dkDiagCount() != diagNull) {
-            ERRR("freeing NULL must not report");
+            ERR("freeing NULL must not report");
         }
         memboundFree(m, a);
         memboundFree(m, b);
         if (memboundCurrentAllocationCount(m) != 0) {
-            ERRR("freeing the live blocks did not empty the pool");
+            ERR("freeing the live blocks did not empty the pool");
         }
         memboundFree(other, o);
         memboundShutdown(m);
@@ -6759,7 +6759,7 @@ int memboundTest(int argc, char *argv[]) {
         ptrs[n++] = memboundAlloc(m, 4096);
         if (memboundExtentCount(m) != 1 ||
             memboundTestExtentOf(m, ptrs[0]) != first) {
-            ERRR("medium allocation grew the pool while an extent had room");
+            ERR("medium allocation grew the pool while an extent had room");
         }
 
         /* Fill until the pool grows: the extent grown for medium is
@@ -6770,7 +6770,7 @@ int memboundTest(int argc, char *argv[]) {
         assert(memboundExtentCount(m) == 2 && n < 40);
         const void *grown = memboundTestExtentOf(m, ptrs[n - 1]);
         if (grown == first) {
-            ERRR("the allocation that grew the pool is not in the new extent");
+            ERR("the allocation that grew the pool is not in the new extent");
         }
         for (int i = 0; i < 4 && n < 40; i++) {
             ptrs[n] = memboundAlloc(m, 4096);
@@ -6787,7 +6787,7 @@ int memboundTest(int argc, char *argv[]) {
         }
         memboundFree(m, small);
         if (memboundCurrentAllocationCount(m) != 0) {
-            ERRR("allocations remain after freeing all");
+            ERR("allocations remain after freeing all");
         }
         memboundShutdown(m);
     }
@@ -6888,7 +6888,7 @@ int memboundTest(int argc, char *argv[]) {
         membound *fixed = memboundCreateFixed(1 << 14);
         assert(fixed != NULL);
         if (memboundMaxSize(fixed) != 0 || memboundMaxSize(NULL) != 0) {
-            ERRR("a fixed pool or NULL reports a max size");
+            ERR("a fixed pool or NULL reports a max size");
         }
         memboundShutdown(fixed);
 
@@ -7769,7 +7769,7 @@ int memboundTest(int argc, char *argv[]) {
         dkDiagnostic d;
         if (dkDiagCount() != diagBefore + 2 || !dkDiagLast(&d) ||
             d.code != DK_DIAG_MEMBOUND_INVALID_FREE) {
-            ERRR("COMPACT: two refused frees must report twice");
+            ERR("COMPACT: two refused frees must report twice");
         }
 
         memboundShutdown(m);
@@ -8059,7 +8059,7 @@ int memboundTest(int argc, char *argv[]) {
         /* A request past the largest extent still gets one that holds it */
         void *big = memboundAlloc(m, (size_t)3 << 20);
         if (!big || memboundUsableSize(m, big) < ((size_t)3 << 20)) {
-            ERRR("adaptive growth refused a request past the extent limit");
+            ERR("adaptive growth refused a request past the extent limit");
         }
         memboundFree(m, big);
         for (size_t i = 0; i < n; i++) {
@@ -8122,7 +8122,7 @@ int memboundTest(int argc, char *argv[]) {
             memboundFree(m, p[i]);
         }
         if (memboundCurrentAllocationCount(m) != 0) {
-            ERRR("allocations left after freeing every block");
+            ERR("allocations left after freeing every block");
         }
         memboundShutdown(m);
     }
@@ -8153,7 +8153,7 @@ int memboundTest(int argc, char *argv[]) {
         void *p = memboundAlloc(m, 1024);
         assert(p);
         if (memboundIncreaseSize(m, 1 << 20)) {
-            ERRR("a pool with allocations was resized");
+            ERR("a pool with allocations was resized");
         }
         memboundFree(m, p);
         if (!memboundIncreaseSize(m, 1 << 20) ||
@@ -8163,7 +8163,7 @@ int memboundTest(int argc, char *argv[]) {
         }
         void *big = memboundAlloc(m, 512 << 10);
         if (!big) {
-            ERRR("the grown pool refused a block it now holds");
+            ERR("the grown pool refused a block it now holds");
         }
         memboundFree(m, big);
         memboundShutdown(m);
@@ -8174,7 +8174,7 @@ int memboundTest(int argc, char *argv[]) {
         const size_t before = memboundExtentCount(m);
         if (!memboundIncreaseSize(m, 256 << 10) ||
             memboundExtentCount(m) != before + 1) {
-            ERRR("a dynamic pool's increase did not add an extent");
+            ERR("a dynamic pool's increase did not add an extent");
         }
         memboundShutdown(m);
     }
@@ -8191,7 +8191,7 @@ int memboundTest(int argc, char *argv[]) {
         membound *m = memboundCreateWithConfig(&cfg);
         assert(m);
         if (memboundAdaptiveGetStrategy(m) != MEMBOUND_STRATEGY_FIRST_FIT) {
-            ERRR("an empty pool is not fragmented");
+            ERR("an empty pool is not fragmented");
         }
         enum { NB = 48 };
         void *p[NB];
@@ -8292,7 +8292,7 @@ int memboundTest(int argc, char *argv[]) {
         if (memboundGoodSize(m, 1) != MEMBOUND_MIN_ATOM ||
             memboundGoodSize(m, MEMBOUND_MIN_ATOM + 1) !=
                 2 * MEMBOUND_MIN_ATOM) {
-            ERRR("GoodSize disagrees with the extent atom");
+            ERR("GoodSize disagrees with the extent atom");
         }
         memboundShutdown(m);
     }

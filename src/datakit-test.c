@@ -7650,7 +7650,7 @@ static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
     TEST("(NULL, 0) is the empty input everywhere bytes are taken") {
         static constexpr uint8_t none[1] = {};
         if (rapidhash(NULL, 0) != rapidhash(none, 0)) {
-            ERRR("rapidhash of (NULL, 0) differs from the empty input");
+            ERR("rapidhash of (NULL, 0) differs from the empty input");
         }
 
         uint8_t viaNull[SHA256_DIGEST_LEN];
@@ -7661,7 +7661,7 @@ static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
         sha256Final(&sctx, viaNull);
         sha256Hash(none, 0, viaEmpty);
         if (memcmp(viaNull, viaEmpty, sizeof(viaNull)) != 0) {
-            ERRR("sha256 of (NULL, 0) differs from the empty input");
+            ERR("sha256 of (NULL, 0) differs from the empty input");
         }
 
         uint8_t b3Null[32];
@@ -7673,18 +7673,18 @@ static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
         blake3HasherInit(&bh);
         blake3HasherFinalize(&bh, b3Empty, sizeof(b3Empty));
         if (memcmp(b3Null, b3Empty, sizeof(b3Null)) != 0) {
-            ERRR("blake3 of (NULL, 0) differs from the empty input");
+            ERR("blake3 of (NULL, 0) differs from the empty input");
         }
 
         cleaner(mdsfree) mds *s = mdsnewlen(NULL, 0);
         s = mdscatlen(s, NULL, 0);
         if (mdslen(s) != 0) {
-            ERRR("an mds built from (NULL, 0) is not empty");
+            ERR("an mds built from (NULL, 0) is not empty");
         }
 
         cleaner(hyperloglogFree) hyperloglog *h = hyperloglogNew();
         if (hyperloglogAdd(&h, NULL, 0) < 0) {
-            ERRR("hyperloglogAdd refused (NULL, 0)");
+            ERR("hyperloglogAdd refused (NULL, 0)");
         }
     }
 
@@ -11082,7 +11082,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         const size_t hdr_len =
             cmEncodeInnerHeader(buf, sizeof(buf), ORIGIN, SEQ, MTYPE);
         if (hdr_len == 0u) {
-            ERRR("encode returned 0");
+            ERR("encode returned 0");
             TEST_FINAL_RESULT;
         }
         if (hdr_len > sizeof(buf)) {
@@ -11094,13 +11094,13 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (!cmDecodeInnerHeader(buf, hdr_len, &protocol, &origin, &seq, &mtype,
                                  &consumed)) {
-            ERRR("round-trip decode failed");
+            ERR("round-trip decode failed");
             TEST_FINAL_RESULT;
         }
         if (protocol.id != DK_FORMAT_ID_CLUSTER_MAILBOX ||
             protocol.version != clusterMailboxProtocol.version ||
             protocol.features != 0) {
-            ERRR("the header does not carry this build's protocol stamp");
+            ERR("the header does not carry this build's protocol stamp");
         }
         if (origin != ORIGIN) {
             ERR("origin mismatch: got 0x%x", origin);
@@ -11121,7 +11121,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         const size_t hdr_len =
             cmEncodeInnerHeader(base, sizeof(base), ORIGIN, SEQ, MTYPE);
         if (hdr_len == 0u) {
-            ERRR("framing-tamper encode failed");
+            ERR("framing-tamper encode failed");
             TEST_FINAL_RESULT;
         }
         size_t total = 0;
@@ -11155,7 +11155,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstallUnsalted(ring, 1u, &hmacAlgoSHA256, key,
                                         sizeof(key))) {
-            ERRR("e2e: keyring install failed");
+            ERR("e2e: keyring install failed");
             hmacKeyringFree(ring);
             TEST_FINAL_RESULT;
         }
@@ -11170,7 +11170,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         if (!clusterMailboxSeal(prod, ORIGIN, 1u, MTYPE, payload,
                                 sizeof(payload), 1u, sealed, cap,
                                 &sealed_len)) {
-            ERRR("e2e: seal failed");
+            ERR("e2e: seal failed");
             clusterMailboxFree(prod);
             clusterMailboxFree(cons);
             hmacKeyringFree(ring);
@@ -11214,7 +11214,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (cmDecodeInnerHeader(buf, hdr_len - 1u, &protocol, &origin, &seq,
                                 &mtype, &consumed)) {
-            ERRR("truncated decode unexpectedly succeeded");
+            ERR("truncated decode unexpectedly succeeded");
         }
     }
 
@@ -11224,7 +11224,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         flexPushUnsigned(&f, SEQ, FLEX_ENDPOINT_TAIL);
         const size_t n = flexBytes(f);
         if (n == 0u) {
-            ERRR("wrong-count: synth flex empty");
+            ERR("wrong-count: synth flex empty");
             TEST_FINAL_RESULT;
         }
         uint8_t scratch[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
@@ -11239,7 +11239,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
                                 &consumed)) {
-            ERRR("wrong-count decode unexpectedly succeeded");
+            ERR("wrong-count decode unexpectedly succeeded");
         }
     }
 
@@ -11262,7 +11262,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
                                 &consumed)) {
-            ERRR("origin > UINT32_MAX decode unexpectedly succeeded");
+            ERR("origin > UINT32_MAX decode unexpectedly succeeded");
         }
     }
 
@@ -11285,7 +11285,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         size_t consumed = 0;
         if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
                                 &consumed)) {
-            ERRR("msg_type > UINT8_MAX decode unexpectedly succeeded");
+            ERR("msg_type > UINT8_MAX decode unexpectedly succeeded");
         }
     }
 
@@ -11303,7 +11303,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         uint8_t buf[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         const size_t n = clusterMailboxBuildRotateAnnounce(buf, KID);
         if (n == 0u) {
-            ERRR("rot build returned 0");
+            ERR("rot build returned 0");
             TEST_FINAL_RESULT;
         }
         if (n > CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN) {
@@ -11312,7 +11312,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         }
         hmacKeyId got = 0;
         if (!clusterMailboxParseRotateAnnounce(buf, n, &got)) {
-            ERRR("rot parse failed");
+            ERR("rot parse failed");
             TEST_FINAL_RESULT;
         }
         if (got != KID) {
@@ -11324,7 +11324,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         uint8_t base[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         const size_t n = clusterMailboxBuildRotateAnnounce(base, KID);
         if (n == 0u) {
-            ERRR("tamper rot build failed");
+            ERR("tamper rot build failed");
             TEST_FINAL_RESULT;
         }
         size_t total = 0;
@@ -11354,7 +11354,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         if (!hmacKeyringInstallUnsalted(ring, 1u, &hmacAlgoSHA256, key,
                                         sizeof(key))) {
-            ERRR("rot-e2e: keyring install failed");
+            ERR("rot-e2e: keyring install failed");
             hmacKeyringFree(ring);
             TEST_FINAL_RESULT;
         }
@@ -11365,7 +11365,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         uint8_t inner[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
         const size_t inner_len = clusterMailboxBuildRotateAnnounce(inner, KID);
         if (inner_len == 0u) {
-            ERRR("rot-e2e: build failed");
+            ERR("rot-e2e: build failed");
             clusterMailboxFree(prod);
             clusterMailboxFree(cons);
             hmacKeyringFree(ring);
@@ -11377,7 +11377,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         if (!clusterMailboxSeal(prod, 7u, 1u,
                                 CLUSTER_MAILBOX_MSG_KEY_ROTATE_ANNOUNCE, inner,
                                 inner_len, 1u, sealed, cap, &sealed_len)) {
-            ERRR("rot-e2e: seal failed");
+            ERR("rot-e2e: seal failed");
             clusterMailboxFree(prod);
             clusterMailboxFree(cons);
             hmacKeyringFree(ring);
@@ -11425,7 +11425,7 @@ int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
         }
         hmacKeyId got = 0;
         if (clusterMailboxParseRotateAnnounce(buf, n - 1u, &got)) {
-            ERRR("rot truncated parse unexpectedly succeeded");
+            ERR("rot truncated parse unexpectedly succeeded");
         }
     }
 

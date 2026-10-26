@@ -4212,10 +4212,10 @@ static int testRingLifecycle(void) {
     TEST("Ring creation with default config") {
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         if (!ring) {
-            ERRR("Failed to create ring");
+            ERR("Failed to create ring");
         } else {
             if (clusterRingNodeCount(ring) != 0) {
-                ERRR("Expected 0 nodes");
+                ERR("Expected 0 nodes");
             }
         }
     }
@@ -4242,7 +4242,7 @@ static int testRingLifecycle(void) {
         };
         cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
         if (!ring) {
-            ERRR("Failed to create ring with custom config");
+            ERR("Failed to create ring with custom config");
         }
     }
 
@@ -4276,7 +4276,7 @@ static int testNodeManagement(void) {
 
     cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
     if (!ring) {
-        ERRR("Failed to create ring");
+        ERR("Failed to create ring");
         return 1;
     }
 
@@ -4302,7 +4302,7 @@ static int testNodeManagement(void) {
         }
 
         if (clusterRingHealthyNodeCount(ring) != 1) {
-            ERRR("Expected 1 healthy node");
+            ERR("Expected 1 healthy node");
             err++;
         }
     }
@@ -4350,16 +4350,16 @@ static int testNodeManagement(void) {
     TEST("Get node by ID") {
         const clusterNode *node = clusterRingGetNode(ring, 3);
         if (!node) {
-            ERRR("Failed to get node 3");
+            ERR("Failed to get node 3");
             err++;
         } else if (clusterNodeGetId(node) != 3) {
-            ERRR("Wrong node ID");
+            ERR("Wrong node ID");
             err++;
         }
 
         node = clusterRingGetNode(ring, 999);
         if (node) {
-            ERRR("Should not find non-existent node");
+            ERR("Should not find non-existent node");
             err++;
         }
     }
@@ -4373,13 +4373,13 @@ static int testNodeManagement(void) {
         }
 
         if (clusterRingHealthyNodeCount(ring) != 4) {
-            ERRR("Expected 4 healthy nodes after marking one down");
+            ERR("Expected 4 healthy nodes after marking one down");
             err++;
         }
 
         const clusterNode *node = clusterRingGetNode(ring, 2);
         if (!node || clusterNodeGetState(node) != CLUSTER_NODE_DOWN) {
-            ERRR("Node state not updated");
+            ERR("Node state not updated");
             err++;
         }
     }
@@ -4392,13 +4392,13 @@ static int testNodeManagement(void) {
         }
 
         if (clusterRingNodeCount(ring) != 4) {
-            ERRR("Expected 4 nodes after removal");
+            ERR("Expected 4 nodes after removal");
             err++;
         }
 
         const clusterNode *node = clusterRingGetNode(ring, 5);
         if (node) {
-            ERRR("Node should be removed");
+            ERR("Node should be removed");
             err++;
         }
     }
@@ -4426,7 +4426,7 @@ static int testNodeManagement(void) {
             }
         }
         if (nodeIdToIndex(ring, 0xDEADBEEFULL) != -1) {
-            ERRR("nodeIdToIndex of unknown id must be -1");
+            ERR("nodeIdToIndex of unknown id must be -1");
             err++;
         }
     }
@@ -4462,17 +4462,17 @@ static int testPlacement(void) {
         }
 
         if (clusterPlacementReplicaCount(&p) == 0) {
-            ERRR("No replicas found");
+            ERR("No replicas found");
             err++;
         }
 
         if (!p.primary) {
-            ERRR("No primary node");
+            ERR("No primary node");
             err++;
         }
 
         if (p.healthyCount != clusterPlacementReplicaCount(&p)) {
-            ERRR("Expected all replicas healthy");
+            ERR("Expected all replicas healthy");
             err++;
         }
         clusterPlacementFree(&p);
@@ -4484,7 +4484,7 @@ static int testPlacement(void) {
         CR_OK(clusterRingLocate(ring, "consistent-key", 14, &p2));
 
         if (p1.primary->id != p2.primary->id) {
-            ERRR("Same key should map to same primary");
+            ERR("Same key should map to same primary");
             err++;
         }
         clusterPlacementFree(&p1);
@@ -4527,12 +4527,12 @@ static int testPlacement(void) {
         }
 
         if (clusterWriteSetTargetCount(&ws) == 0) {
-            ERRR("No write targets");
+            ERR("No write targets");
             err++;
         }
 
         if (ws.syncRequired > clusterWriteSetTargetCount(&ws)) {
-            ERRR("syncRequired > targetCount");
+            ERR("syncRequired > targetCount");
             err++;
         }
         clusterWriteSetFree(&ws);
@@ -4548,7 +4548,7 @@ static int testPlacement(void) {
         }
 
         if (clusterReadSetCandidateCount(&rs) == 0) {
-            ERRR("No read candidates");
+            ERR("No read candidates");
             err++;
         }
         clusterReadSetFree(&rs);
@@ -4566,7 +4566,7 @@ static int testPlacement(void) {
         }
 
         if (!selected) {
-            ERRR("No node selected");
+            ERR("No node selected");
             err++;
         }
         clusterPlacementFree(&p);
@@ -4666,7 +4666,7 @@ static int testKeyspaces(void) {
         }
 
         if (!ks) {
-            ERRR("Keyspace not returned");
+            ERR("Keyspace not returned");
             err++;
         }
     }
@@ -4675,13 +4675,13 @@ static int testKeyspaces(void) {
         const clusterKeySpace *ks =
             clusterRingGetKeySpace(ring, "user-sessions");
         if (!ks) {
-            ERRR("Failed to get keyspace");
+            ERR("Failed to get keyspace");
             err++;
         }
 
         ks = clusterRingGetKeySpace(ring, "non-existent");
         if (ks) {
-            ERRR("Should not find non-existent keyspace");
+            ERR("Should not find non-existent keyspace");
             err++;
         }
     }
@@ -4707,7 +4707,7 @@ static int testKeyspaces(void) {
         const clusterKeySpace *ks =
             clusterRingGetKeySpace(ring, "user-sessions");
         if (ks) {
-            ERRR("Keyspace should be removed");
+            ERR("Keyspace should be removed");
             err++;
         }
     }
@@ -4748,29 +4748,29 @@ static int testSerialization(void) {
     TEST("Serialization roundtrip") {
         size_t size = clusterRingSerializeSize(ring);
         if (size == 0) {
-            ERRR("SerializeSize returned 0");
+            ERR("SerializeSize returned 0");
             err++;
         }
 
         cleaner(zfree) void *buf = zmalloc(size);
         if (!buf) {
-            ERRR("Failed to allocate buffer");
+            ERR("Failed to allocate buffer");
             err++;
         } else {
             size_t written = clusterRingSerialize(ring, buf, size);
             if (written == 0) {
-                ERRR("Serialize returned 0");
+                ERR("Serialize returned 0");
                 err++;
             }
 
             clusterRing *restored = clusterRingDeserialize(buf, written);
             if (!restored) {
-                ERRR("Deserialize returned NULL");
+                ERR("Deserialize returned NULL");
                 err++;
             } else {
                 if (clusterRingNodeCount(restored) !=
                     clusterRingNodeCount(ring)) {
-                    ERRR("Node count mismatch after restore");
+                    ERR("Node count mismatch after restore");
                     err++;
                 }
 
@@ -4780,7 +4780,7 @@ static int testSerialization(void) {
                 CR_OK(clusterRingLocate(restored, "ser-test", 8, &p2));
 
                 if (p1.primary->id != p2.primary->id) {
-                    ERRR("Placement mismatch after restore");
+                    ERR("Placement mismatch after restore");
                     err++;
                 }
 
@@ -4818,7 +4818,7 @@ static int testSerialization(void) {
         clusterRing *restored =
             written ? clusterRingDeserialize(buf, written) : NULL;
         if (!restored) {
-            ERRR("a ring whose names spell numbers did not restore");
+            ERR("a ring whose names spell numbers did not restore");
         } else {
             for (uint64_t i = 1; i <= 3; i++) {
                 const clusterNode *n = clusterRingGetNode(restored, i);
@@ -4829,7 +4829,7 @@ static int testSerialization(void) {
             }
 
             if (!clusterRingGetKeySpace(restored, "123")) {
-                ERRR("keyspace \"123\" did not restore");
+                ERR("keyspace \"123\" did not restore");
             }
 
             clusterRingFree(restored);
@@ -4967,20 +4967,20 @@ static int testNodeFailure(void) {
 
         /* Primary should change */
         if (pAfter.primary->id == primaryBefore) {
-            ERRR("Primary should change after failure");
+            ERR("Primary should change after failure");
             err++;
         }
 
         /* Should still have replicas */
         if (clusterPlacementReplicaCount(&pAfter) == 0) {
-            ERRR("Should still have replicas");
+            ERR("Should still have replicas");
             err++;
         }
 
         /* Ring's healthy node count should be one less (the placement
          * healthyCount may be the same since we skip unhealthy nodes) */
         if (clusterRingHealthyNodeCount(ring) >= 5) {
-            ERRR("Ring healthy count should decrease");
+            ERR("Ring healthy count should decrease");
         }
         clusterPlacementFree(&pAfter);
     }
@@ -5040,32 +5040,32 @@ static int testStats(void) {
         clusterRingGetStats(ring, &stats);
 
         if (stats.nodeCount != 5) {
-            ERRR("Expected 5 nodes in stats");
+            ERR("Expected 5 nodes in stats");
             err++;
         }
 
         if (stats.healthyNodes != 5) {
-            ERRR("Expected 5 healthy nodes in stats");
+            ERR("Expected 5 healthy nodes in stats");
             err++;
         }
 
         if (stats.locateOps < 100) {
-            ERRR("Expected at least 100 locate ops");
+            ERR("Expected at least 100 locate ops");
             err++;
         }
 
         if (stats.writeOps < 100) {
-            ERRR("Expected at least 100 write ops");
+            ERR("Expected at least 100 write ops");
             err++;
         }
 
         if (stats.readOps < 100) {
-            ERRR("Expected at least 100 read ops");
+            ERR("Expected at least 100 read ops");
             err++;
         }
 
         if (stats.memoryBytes == 0) {
-            ERRR("Memory usage should be > 0");
+            ERR("Memory usage should be > 0");
             err++;
         }
     }
@@ -5082,7 +5082,7 @@ static int testStats(void) {
         }
 
         if (!allZero) {
-            ERRR("NULL ring should report all-zero stats");
+            ERR("NULL ring should report all-zero stats");
             err++;
         }
     }
@@ -5164,7 +5164,7 @@ static int testCallbacks(void) {
 
         /* Callback should be called on add */
         if (cbData.callCount < 1) {
-            ERRR("Callback should be called on add");
+            ERR("Callback should be called on add");
             err++;
         }
 
@@ -5174,18 +5174,18 @@ static int testCallbacks(void) {
         CR_OK(clusterRingSetNodeState(ring, 1, CLUSTER_NODE_DOWN));
 
         if (cbData.callCount <= prevCount) {
-            ERRR("Callback should be called on state change");
+            ERR("Callback should be called on state change");
             err++;
         }
 
         if (cbData.nodeId != 1) {
-            ERRR("Wrong node ID in callback");
+            ERR("Wrong node ID in callback");
             err++;
         }
 
         if (cbData.oldState != CLUSTER_NODE_UP ||
             cbData.newState != CLUSTER_NODE_DOWN) {
-            ERRR("Wrong states in callback");
+            ERR("Wrong states in callback");
             err++;
         }
     }
@@ -5645,7 +5645,7 @@ static int testFuzzSerializationRoundtrip(void) {
         uint8_t *again = againMem;
         const size_t len = clusterRingSerialize(src, buf, size);
         if (len == 0) {
-            ERRR("mutation: serialize failed");
+            ERR("mutation: serialize failed");
         }
 
         size_t truncAccepted = 0;
@@ -5827,7 +5827,7 @@ static int testFuzzSerializationRoundtrip(void) {
         if (r == CLUSTER_OK || clusterPlacementReplicaCount(&placed[1]) != 0 ||
             clusterPlacementReplicaCount(&placed[0]) == 0 ||
             clusterPlacementReplicaCount(&placed[2]) == 0) {
-            ERRR("bulk placement around a key with no bytes went wrong");
+            ERR("bulk placement around a key with no bytes went wrong");
         }
         for (int i = 0; i < 3; i++) {
             clusterPlacementFree(&placed[i]);
@@ -5896,7 +5896,7 @@ static int testFuzzSerializationRoundtrip(void) {
         cleaner(clusterRingFree) clusterRing *fromCut =
             clusterRingDeserialize(cut, flexBytes(cut));
         if (fromCut) {
-            ERRR("a header cut short deserialized");
+            ERR("a header cut short deserialized");
         }
     }
 
@@ -5952,7 +5952,7 @@ static int testFuzzSerializationRoundtrip(void) {
         clusterReadSet rs;
         if (clusterRingPlanWrite(ring, NULL, 1, NULL, &ws) != CLUSTER_ERR ||
             clusterRingPlanRead(ring, NULL, 1, NULL, &rs) != CLUSTER_ERR) {
-            ERRR("a NULL key was planned");
+            ERR("a NULL key was planned");
         }
         clusterWriteSetFree(&ws);
         clusterReadSetFree(&rs);
@@ -6346,7 +6346,7 @@ static int testFuzzLargeScale(void) {
         clusterPlacement placements[3];
         memset(placements, 0xA5, sizeof(placements));
         if (clusterRingLocateBulk(NULL, keys, 3, placements) != CLUSTER_ERR) {
-            ERRR("bulk placement without a ring was not refused");
+            ERR("bulk placement without a ring was not refused");
         }
         for (size_t i = 0; i < 3; i++) {
             if (placements[i].primary ||
@@ -6747,7 +6747,7 @@ static int testOptimizationEdgeCases(void) {
         clusterPlacement p;
         clusterResult result = clusterRingLocate(ring, "test-key", 8, &p);
         if (result != CLUSTER_OK) {
-            ERRR("64-node placement failed");
+            ERR("64-node placement failed");
             err++;
         } else {
             clusterPlacementFree(&p);
@@ -6768,7 +6768,7 @@ static int testOptimizationEdgeCases(void) {
         clusterPlacement p;
         clusterResult result = clusterRingLocate(ring, "test-key", 8, &p);
         if (result != CLUSTER_OK) {
-            ERRR("65-node placement failed");
+            ERR("65-node placement failed");
             err++;
         } else {
             clusterPlacementFree(&p);
@@ -6788,7 +6788,7 @@ static int testOptimizationEdgeCases(void) {
         clusterPlacement p;
         clusterResult result = clusterRingLocate(ring, "test-key", 8, &p);
         if (result != CLUSTER_OK) {
-            ERRR("512-node placement failed");
+            ERR("512-node placement failed");
             err++;
         } else {
             clusterPlacementFree(&p);
@@ -6808,7 +6808,7 @@ static int testOptimizationEdgeCases(void) {
         clusterPlacement p;
         clusterResult result = clusterRingLocate(ring, "test-key", 8, &p);
         if (result != CLUSTER_OK) {
-            ERRR("513-node placement failed");
+            ERR("513-node placement failed");
             err++;
         } else {
             clusterPlacementFree(&p);
@@ -6862,7 +6862,7 @@ static int testOptimizationEdgeCases(void) {
             }
         }
         if (!allPointersValid) {
-            ERRR("Vnode nodePtr not correctly set");
+            ERR("Vnode nodePtr not correctly set");
             err++;
         }
     }
@@ -6904,7 +6904,7 @@ static int testOptimizationEdgeCases(void) {
         uint32_t count =
             clusterLocateMaglev(ring, "boundary-test", 13, nodes, 5);
         if (count == 0) {
-            ERRR("Maglev boundary test returned no nodes");
+            ERR("Maglev boundary test returned no nodes");
             err++;
         }
     }
@@ -6972,7 +6972,7 @@ static int testOptimizationEdgeCases(void) {
         clusterPlacement p;
         clusterResult result = clusterRingLocate(ring, longKey, 499, &p);
         if (result != CLUSTER_OK) {
-            ERRR("Long key placement failed");
+            ERR("Long key placement failed");
             err++;
         } else {
             clusterPlacementFree(&p);
@@ -7279,11 +7279,11 @@ static int testAffinityOracleAndKeyTypes(void) {
                                                   .minSpread = 3,
                                                   .required = false};
                 if (!clusterCheckAffinity(ring, nodes, 3, &soft, 1)) {
-                    ERRR("a soft rule failed the check");
+                    ERR("a soft rule failed the check");
                 }
             }
             if (!clusterCheckAffinity(ring, nodes, 0, NULL, 0)) {
-                ERRR("no nodes trivially meet any rule");
+                ERR("no nodes trivially meet any rule");
             }
         }
     }
@@ -7369,7 +7369,7 @@ static int testAffinityOracleAndKeyTypes(void) {
         CR_OK(clusterRingLocateBox(ring, &keys[0], &viaBox));
         CR_OK(clusterRingLocate(ring, "a key", 5, &viaBytes));
         if (viaBox.hashValue != viaBytes.hashValue) {
-            ERRR("a string box hashed other than its bytes");
+            ERR("a string box hashed other than its bytes");
         }
         clusterPlacementFree(&viaBox);
         clusterPlacementFree(&viaBytes);
@@ -7380,7 +7380,7 @@ static int testAffinityOracleAndKeyTypes(void) {
         if (clusterRingLocateBox(ring, &noWide, &none) == CLUSTER_OK ||
             clusterRingLocateBox(ring, &offset, &none) == CLUSTER_OK ||
             clusterRingLocateBox(ring, NULL, &none) == CLUSTER_OK) {
-            ERRR("a box with no readable value was placed");
+            ERR("a box with no readable value was placed");
         }
         clusterPlacementFree(&none);
     }
@@ -7437,18 +7437,18 @@ int clusterRingTest(int argc, char *argv[]) {
         size_t snap_len = 0;
         uint8_t *snap = persistOpsClusterRing.snapshot(ring, &snap_len);
         if (snap == NULL || snap_len == 0) {
-            ERRR("persistOps snapshot returned empty");
+            ERR("persistOps snapshot returned empty");
         }
         if (persistOpsClusterRing.count(ring) != 5u) {
-            ERRR("persistOps count != 5");
+            ERR("persistOps count != 5");
         }
         if (persistOpsClusterRing.estimateSize(ring) != snap_len) {
-            ERRR("estimateSize must agree with snapshot length");
+            ERR("estimateSize must agree with snapshot length");
         }
         clusterRing *restored =
             (clusterRing *)persistOpsClusterRing.restore(snap, snap_len);
         if (restored == NULL) {
-            ERRR("persistOps restore returned NULL");
+            ERR("persistOps restore returned NULL");
         }
         if (clusterRingNodeCount(restored) != 5u) {
             ERR("Restored node count expected 5, got %u",
@@ -7483,7 +7483,7 @@ int clusterRingTest(int argc, char *argv[]) {
         if (clusterRingAddKeySpace(ring, &ksc, &ks) != CLUSTER_OK || !ks ||
             !persistOpsClusterRing.validate(ring) ||
             persistOpsClusterRing.validate(NULL)) {
-            ERRR("setup: a valid ring did not validate");
+            ERR("setup: a valid ring did not validate");
         }
 
 #define CR_CORRUPT(field, bad, what)                                           \
@@ -7517,19 +7517,19 @@ int clusterRingTest(int argc, char *argv[]) {
 
     TEST("persistOps newEmpty returns a fresh-empty ring") {
         if (persistOpsClusterRing.newEmpty == NULL) {
-            ERRR("persistOpsClusterRing.newEmpty must not be NULL");
+            ERR("persistOpsClusterRing.newEmpty must not be NULL");
         } else {
             clusterRing *empty =
                 (clusterRing *)persistOpsClusterRing.newEmpty();
             if (empty == NULL) {
-                ERRR("newEmpty() returned NULL");
+                ERR("newEmpty() returned NULL");
             } else {
                 if (clusterRingNodeCount(empty) != 0u) {
                     ERR("newEmpty ring must have 0 nodes, got %u",
                         clusterRingNodeCount(empty));
                 }
                 if (persistOpsClusterRing.count(empty) != 0u) {
-                    ERRR("newEmpty ring count via descriptor must be 0");
+                    ERR("newEmpty ring count via descriptor must be 0");
                 }
                 persistOpsClusterRing.free(empty);
             }
@@ -7586,7 +7586,7 @@ int clusterRingTest(int argc, char *argv[]) {
         CR_OK(clusterRingAddNode(ring, &nc));
         CR_OK(clusterRingSetNodeWeight(ring, 7, 0));
         if (clusterNodeGetWeight(clusterRingGetNode(ring, 7)) != 100) {
-            ERRR("weight 0 did not set the default weight");
+            ERR("weight 0 did not set the default weight");
         }
     }
 
@@ -7635,7 +7635,7 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         clusterPlacement bulk[10];
         if (clusterRingLocateBulk(ring, keys, 10, bulk) != CLUSTER_OK) {
-            ERRR("bulk placement failed");
+            ERR("bulk placement failed");
         }
         for (size_t i = 0; i < 10; i++) {
             clusterPlacement one;
@@ -7809,7 +7809,7 @@ int clusterRingTest(int argc, char *argv[]) {
             clusterPlacementFree(&q);
         }
         if (ketamaPrimary3 == 0) {
-            ERRR("ketama never chose node 3: the test proves nothing");
+            ERR("ketama never chose node 3: the test proves nothing");
         }
 
         /* The fill sum tracks every change exactly */
@@ -7831,7 +7831,7 @@ int clusterRingTest(int argc, char *argv[]) {
                 ring->fillNodes, sum, nodes);
         }
         if (clusterRingSetNodeUsedBytes(ring, 99, 1) != CLUSTER_ERR_NOT_FOUND) {
-            ERRR("usage set on a node not in the ring");
+            ERR("usage set on a node not in the ring");
         }
 
         /* The setting and the usage persist; below 100% is refused */
@@ -7841,14 +7841,14 @@ int clusterRingTest(int argc, char *argv[]) {
         if (!back || back->boundedLoadPercent != 150 ||
             clusterNodeGetUsedBytes(clusterRingGetNode(back, 3)) != 900 ||
             back->fillNodes != nodes) {
-            ERRR("bounded-load state did not round-trip");
+            ERR("bounded-load state did not round-trip");
         }
         clusterRingFree(back);
         zfree(snap);
         const clusterRingConfig low = {.boundedLoadPercent = 99};
         cleaner(clusterRingFree) clusterRing *refused = clusterRingNew(&low);
         if (refused) {
-            ERRR("a bound below 100 percent was accepted");
+            ERR("a bound below 100 percent was accepted");
         }
     }
 
@@ -7938,7 +7938,7 @@ int clusterRingTest(int argc, char *argv[]) {
                             persistOpsClusterRing.restore(snap, snapLen);
                         zfree(snap);
                         if (!back) {
-                            ERRR("restore refused the ring");
+                            ERR("restore refused the ring");
                             break;
                         }
                         clusterRingFree(ring);
@@ -8004,7 +8004,7 @@ int clusterRingTest(int argc, char *argv[]) {
         uint64_t max;
         clusterLatencySummary(lat, &avg, &p99, &max);
         if (avg || p99 || max) {
-            ERRR("an empty histogram reports latency");
+            ERR("an empty histogram reports latency");
         }
         for (uint64_t ns = 1000; ns >= 1; ns--) {
             clusterLatencyRecord(lat, ns);
@@ -8027,7 +8027,7 @@ int clusterRingTest(int argc, char *argv[]) {
         clusterRingStats stats;
         clusterRingGetStats(ring, &stats);
         if (stats.avgLocateNs || stats.p99LocateNs || stats.maxLocateNs) {
-            ERRR("latency before any placement");
+            ERR("latency before any placement");
         }
         for (uint32_t k = 0; k < 10 * CLUSTER_LATENCY_SAMPLE_EVERY; k++) {
             (void)clusterRingTestPrimary(ring, k);
@@ -8061,7 +8061,7 @@ int clusterRingTest(int argc, char *argv[]) {
                 CR_OK(clusterRingAddNode(ring, &nc));
             }
             if (clusterRingPollHealth(ring) != CLUSTER_ERR) {
-                ERRR("polled without a provider");
+                ERR("polled without a provider");
             }
 
             /* Without load reports the read goes to the first replica */
@@ -8070,7 +8070,7 @@ int clusterRingTest(int argc, char *argv[]) {
             const clusterNode *selected = NULL;
             CR_OK(clusterRingSelectReadNode(ring, &p, &selected));
             if (selected != p.primary) {
-                ERRR("unreported loads should keep preference order");
+                ERR("unreported loads should keep preference order");
             }
 
             /* Replacing the provider frees the replaced one's data once;
@@ -8106,7 +8106,7 @@ int clusterRingTest(int argc, char *argv[]) {
             CR_OK(clusterRingSelectReadNode(ring, &p, &selected));
             if (selected != least || clusterNodeGetLoad(selected)->cpuUsage !=
                                          second.cpu[least->id]) {
-                ERRR("read did not go to the least loaded replica");
+                ERR("read did not go to the least loaded replica");
             }
             clusterPlacementFree(&p);
 
@@ -8123,17 +8123,17 @@ int clusterRingTest(int argc, char *argv[]) {
             CR_OK(clusterRingPollHealth(ring));
             CR_OK(clusterRingPollHealth(ring));
             if (clusterNodeGetState(node) != CLUSTER_NODE_UP) {
-                ERRR("non-consecutive failures suspected the node");
+                ERR("non-consecutive failures suspected the node");
             }
             CR_OK(clusterRingPollHealth(ring));
             if (clusterNodeGetState(node) != CLUSTER_NODE_SUSPECT ||
                 clusterNodeGetHealth(node)->reachable) {
-                ERRR("three consecutive failures did not suspect the node");
+                ERR("three consecutive failures did not suspect the node");
             }
             second.reachable[victim] = true;
             CR_OK(clusterRingPollHealth(ring));
             if (clusterNodeGetState(node) != CLUSTER_NODE_UP) {
-                ERRR("a reachable report did not restore the node");
+                ERR("a reachable report did not restore the node");
             }
         }
         if (first.frees != 1 || second.frees != 1) {
@@ -8213,7 +8213,7 @@ int clusterRingTest(int argc, char *argv[]) {
                     const clusterRebalanceMove *move =
                         clusterRebalancePlanGetMove(plan, m);
                     if (change == 3 && move->sourceNodeId == 5) {
-                        ERRR("planned a copy from the down node");
+                        ERR("planned a copy from the down node");
                     }
                 }
             }
@@ -8246,7 +8246,7 @@ int clusterRingTest(int argc, char *argv[]) {
             const clusterRebalanceMove *move = clusterRebalancePlanGetMove(
                 clusterRingGetRebalancePlan(ring), m);
             if (move->sourceNodeId != 4) {
-                ERRR("a move from a node that lost nothing");
+                ERR("a move from a node that lost nothing");
             }
             fromRemoved += move->estimatedBytes;
         }
@@ -8265,7 +8265,7 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         if (clusterRingStartMove(ring, 0) != CLUSTER_ERR ||
             clusterRingCancelRebalance(ring) != CLUSTER_ERR) {
-            ERRR("moves without a plan");
+            ERR("moves without a plan");
         }
         cleaner(clusterRingFree) clusterRing *settled = clusterRingCopy(ring);
         const clusterNodeConfig nc = {.id = 5};
@@ -8286,7 +8286,7 @@ int clusterRingTest(int argc, char *argv[]) {
         if (clusterRingCompleteMove(ring, 0) != CLUSTER_ERR_INVALID_STATE ||
             clusterRingFailMove(ring, 0) != CLUSTER_ERR_INVALID_STATE ||
             clusterRingStartMove(ring, moves) != CLUSTER_ERR_NOT_FOUND) {
-            ERRR("transitions out of order were accepted");
+            ERR("transitions out of order were accepted");
         }
 
         /* Move 0 fails once, then every move starts and completes */
@@ -8294,7 +8294,7 @@ int clusterRingTest(int argc, char *argv[]) {
         CR_OK(clusterRingFailMove(ring, 0));
         clusterRebalancePlanGetInfo(plan, &info);
         if (info.failedCount != 1 || info.startedAtMs == 0) {
-            ERRR("failed move not counted");
+            ERR("failed move not counted");
         }
         for (uint32_t m = 0; m < moves; m++) {
             if (clusterRingStartMove(ring, m) != CLUSTER_OK ||
@@ -8314,7 +8314,7 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         if (clusterRingCancelRebalance(ring) != CLUSTER_OK ||
             clusterRingGetRebalancePlan(ring)) {
-            ERRR("cancel kept the plan");
+            ERR("cancel kept the plan");
         }
     }
 
@@ -8334,7 +8334,7 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *other = clusterRingNew(&seeded);
         if (clusterRingPlanRebalance(other, ketama) !=
             CLUSTER_ERR_INVALID_CONFIG) {
-            ERRR("planned across hash seeds");
+            ERR("planned across hash seeds");
         }
     }
 
@@ -8383,18 +8383,18 @@ int clusterRingTest(int argc, char *argv[]) {
                     clusterRingCopy(ring);
                 CR_OK(clusterRingLocate(copy, "k", 1, &p));
                 if (!p.primary || p.primary->id != plainPrimary) {
-                    ERRR("copy places differently");
+                    ERR("copy places differently");
                 }
                 clusterPlacementFree(&p);
                 if (clusterRingPlanRebalance(ring, copy) != CLUSTER_OK ||
                     clusterRebalancePlanGetMove(
                         clusterRingGetRebalancePlan(ring), 0)
                             ->targetNodeId != 5) {
-                    ERRR("custom plan not used");
+                    ERR("custom plan not used");
                 }
             }
             if (frees != 0) {
-                ERRR("freeing the copy freed the hooks' data");
+                ERR("freeing the copy freed the hooks' data");
             }
         }
         if (frees != 1) {
@@ -8437,7 +8437,7 @@ int clusterRingTest(int argc, char *argv[]) {
                                           .strategy = CLUSTER_STRATEGY_JUMP};
         clusterKeySpace *ks = NULL;
         if (clusterRingAddKeySpace(ring, &kc, &ks) != CLUSTER_OK) {
-            ERRR("jump keyspace refused");
+            ERR("jump keyspace refused");
         }
 
         clusterRingTestConcurrent ctx[4];
@@ -8556,7 +8556,7 @@ int clusterRingTest(int argc, char *argv[]) {
         clusterPlacementInit(&p);
         if (clusterRingLocate(ring, "key", 3, &p) != CLUSTER_OK ||
             clusterPlacementReplicaCount(&p) != 1) {
-            ERRR("a one-node ring did not place the key on its node");
+            ERR("a one-node ring did not place the key on its node");
         }
         clusterPlacementRepr(&p);
         clusterPlacementFree(&p);

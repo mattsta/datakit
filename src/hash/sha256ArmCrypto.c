@@ -30,7 +30,7 @@
  * shipping core, so we can shortcut runtime probing.  This avoids
  * dragging in sysctl just to discover a static answer. */
 #define SHA256_ARM_CRYPTO_RUNTIME_OK() (true)
-#elif defined(__linux__)
+#elifdef __linux__
 #include <sys/auxv.h>
 #ifndef HWCAP_SHA2
 #define HWCAP_SHA2 (1UL << 6)
@@ -913,7 +913,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
         /* Same input, same block count: both paths must agree, and using
          * both states keeps the optimizer from eliding either loop. */
         if (memcmp(state, portableState, sizeof(state)) != 0) {
-            ERRR("portable and crypto compress disagree on the bench input");
+            ERR("portable and crypto compress disagree on the bench input");
         }
     }
 

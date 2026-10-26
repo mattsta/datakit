@@ -1307,7 +1307,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         if (!multiOrderedSetFirst(mos, (databox *)&member, (databox *)&score) ||
             !mosWideScoreMatches_((databox *)&score, &sorted[0]) ||
             !mosWideMemberMatches_((databox *)&member, &sorted[0])) {
-            ERRR("First mismatch");
+            ERR("First mismatch");
         }
 
         DATABOX_BIG_INIT(&member);
@@ -1315,7 +1315,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         if (!multiOrderedSetLast(mos, (databox *)&member, (databox *)&score) ||
             !mosWideScoreMatches_((databox *)&score, &sorted[n - 1]) ||
             !mosWideMemberMatches_((databox *)&member, &sorted[n - 1])) {
-            ERRR("Last mismatch");
+            ERR("Last mismatch");
         }
 
         /* RandomMembers ignores poisoned destinations: a wide value comes
@@ -1328,7 +1328,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         const size_t picked =
             multiOrderedSetRandomMembers(mos, -8, rMembers, rScores);
         if (picked == 0) {
-            ERRR("RandomMembers returned nothing");
+            ERR("RandomMembers returned nothing");
         }
         for (size_t i = 0; i < picked; i++) {
             const databox *boxes[2] = {&rMembers[i], &rScores[i]};
@@ -2643,7 +2643,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         cleaner(multiOrderedSetFree) multiOrderedSet *copy =
             multiOrderedSetCopy(mos);
         if (COMPRESS_DEPTH(copy) != 1) {
-            ERRR("a copy lost the compress setting");
+            ERR("a copy lost the compress setting");
         }
     }
 
@@ -3237,7 +3237,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         int count = 0;
         while (multiOrderedSetIteratorNext(&iter, &gotMember, &gotScore)) {
             if (databoxCompare(&gotScore, &prevScore) < 0) {
-                ERRR("FUZZ FAIL: Sort order broken after delete/re-insert!");
+                ERR("FUZZ FAIL: Sort order broken after delete/re-insert!");
             }
             prevScore = gotScore;
             count++;
@@ -4276,7 +4276,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetFullAdd(m, &score, &mem);
         if (multiOrderedSetFullCount(m) != 1 ||
             !multiOrderedSetFullExists(m, &mem)) {
-            ERRR("TREE-pool set unusable after reset");
+            ERR("TREE-pool set unusable after reset");
         }
 
         multiOrderedSetFullFree(m);
@@ -4536,19 +4536,19 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             !multiOrderedSetIncrBy(&mos, &one, &mInt, &r) ||
             r.type != DATABOX_SIGNED_64 ||
             r.data.i64 != ((int64_t)1 << 53) + 1) {
-            ERRR("2^53 + 1 was not exact");
+            ERR("2^53 + 1 was not exact");
         }
 
         /* UINT64_MAX + 1 is refused and the score stays */
         if (!multiOrderedSetIncrBy(&mos, &maxU, &mBig, &r) ||
             multiOrderedSetIncrBy(&mos, &one, &mBig, &r)) {
-            ERRR("UINT64_MAX + 1 was not refused");
+            ERR("UINT64_MAX + 1 was not refused");
         }
 
         databox s = {};
         if (!multiOrderedSetGetScore(mos, &mBig, &s) ||
             s.type != DATABOX_UNSIGNED_64 || s.data.u64 != UINT64_MAX) {
-            ERRR("a refused IncrBy changed the score");
+            ERR("a refused IncrBy changed the score");
         }
 
         /* A real operand sums in double; inf and NaN are refused */
@@ -4557,7 +4557,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             multiOrderedSetIncrBy(&mos, &dmax, &mReal, &r) ||
             multiOrderedSetIncrBy(&mos, &nan, &mNew, &r) ||
             multiOrderedSetExists(mos, &mNew)) {
-            ERRR("real IncrBy did not follow the policy");
+            ERR("real IncrBy did not follow the policy");
         }
     }
 
@@ -4581,7 +4581,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         if (!printed[MOS_TYPE_SMALL] || !printed[MOS_TYPE_MEDIUM] ||
             !printed[MOS_TYPE_FULL]) {
-            ERRR("did not reach every tier to print it");
+            ERR("did not reach every tier to print it");
         }
     }
 

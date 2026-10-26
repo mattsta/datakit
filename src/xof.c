@@ -965,7 +965,7 @@ int xofTest(int argc, char *argv[]) {
         xofReaderInit(&r, bits);
         double first = xofReaderCurrent(&r);
         if (first != values[0]) {
-            ERRR("First value mismatch!");
+            ERR("First value mismatch!");
         }
 
         for (size_t i = 1; i < count; i++) {

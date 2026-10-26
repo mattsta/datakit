@@ -250,8 +250,7 @@ TEST_DESC(name, ...)          // Print formatted test description
 
 // Error reporting
 ERROR                         // Increment error counter
-ERR(format, ...)             // Print formatted error with location
-ERRR(message)                // Print simple error with location
+ERR(format, ...)             // Print an error with location (arguments optional)
 
 // Test completion
 TEST_FINAL_RESULT            // Print results and return error count
@@ -291,7 +290,7 @@ int myModuleTest(int argc, char *argv[]) {
     }
 
     if (another_failure) {
-        ERRR("This specific operation failed");
+        ERR("This specific operation failed");
     }
 
     TEST_FINAL_RESULT;  // Returns err count
@@ -321,7 +320,7 @@ int myModuleTest(int argc, char *argv[]) {
     {
         myModule *m = myModuleNew();
         if (!m) {
-            ERRR("Failed to create module");
+            ERR("Failed to create module");
         }
 
         // Test insertion
