@@ -211,6 +211,44 @@ if(DK_HAVE_GETENTROPY_SYS_RANDOM)
 endif()
 
 # ============================================================================
+# Secure zeroing: C23 memset_explicit, else the platform's equivalent
+# (dkSecureZero in ctmem.h uses the first found)
+# ============================================================================
+check_c_source_compiles("
+#include <string.h>
+int main(void) {
+    char buf[4];
+    memset_explicit(buf, 0, sizeof(buf));
+    return buf[0];
+}" DK_HAVE_MEMSET_EXPLICIT)
+
+set(CMAKE_REQUIRED_DEFINITIONS -D__STDC_WANT_LIB_EXT1__=1)
+check_c_source_compiles("
+#include <string.h>
+int main(void) {
+    char buf[4];
+    memset_s(buf, sizeof(buf), 0, sizeof(buf));
+    return buf[0];
+}" DK_HAVE_MEMSET_S)
+set(CMAKE_REQUIRED_DEFINITIONS)
+
+check_c_source_compiles("
+#include <string.h>
+int main(void) {
+    char buf[4];
+    explicit_bzero(buf, sizeof(buf));
+    return buf[0];
+}" DK_HAVE_EXPLICIT_BZERO)
+
+if(DK_HAVE_MEMSET_EXPLICIT)
+    add_definitions(-DDK_HAVE_MEMSET_EXPLICIT)
+elseif(DK_HAVE_MEMSET_S)
+    add_definitions(-DDK_HAVE_MEMSET_S -D__STDC_WANT_LIB_EXT1__=1)
+elseif(DK_HAVE_EXPLICIT_BZERO)
+    add_definitions(-DDK_HAVE_EXPLICIT_BZERO)
+endif()
+
+# ============================================================================
 # Extended Precision Float Detection (float128 / long double)
 # ============================================================================
 # Priority:

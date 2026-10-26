@@ -25,6 +25,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* Opaque the value so the compiler cannot reason about it after the
  * barrier. On non-GNU compilers we fall back to volatile-only semantics
@@ -83,12 +84,19 @@ static inline void dkSecureZero(void *p, size_t n) {
     if (p == NULL || n == 0) {
         return;
     }
+#if defined(DK_HAVE_MEMSET_EXPLICIT)
+    memset_explicit(p, 0, n);
+#elif defined(DK_HAVE_MEMSET_S)
+    memset_s(p, n, 0, n);
+#elif defined(DK_HAVE_EXPLICIT_BZERO)
+    explicit_bzero(p, n);
+#else
+    /* No libc secure zero (or built without datakit's CMake checks):
+     * volatile stores the compiler must keep, then a barrier */
     volatile uint8_t *vp = (volatile uint8_t *)p;
     while (n--) {
         *vp++ = 0;
     }
-    /* Compiler barrier to prevent DCE / reorder past this point. */
-#if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile("" ::: "memory");
 #endif
 }
