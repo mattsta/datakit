@@ -8053,6 +8053,7 @@ static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
     cleanerName(zfree, Bytes) uint8_t *padded = NULL;
     cleaner(aeadNonceLogFree) aeadNonceLog *src = NULL;
     cleaner(aeadNonceLogFree) aeadNonceLog *empty_src = NULL;
+    cleaner(aeadNonceLogFree) aeadNonceLog *dst = NULL;
 
     const size_t kCap = 4096u;
     const uint32_t kKeys[] = {7u, 13u, 29u, 31u};
@@ -8117,13 +8118,10 @@ static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
         failures++;
     }
 
-    aeadNonceLog *dst = aeadNonceLogFromBytes(snap, need);
+    dst = aeadNonceLogFromBytes(snap, need);
     if (dst == NULL || aeadNonceLogCapacity(dst) != kCap ||
         aeadNonceLogSize(dst) != kTotal) {
         printf("dkTestNonceLogPersistRoundTrip: fromBytes restore failed\n");
-        if (dst) {
-            aeadNonceLogFree(dst);
-        }
         failures++;
         goto done;
     }
@@ -8153,7 +8151,6 @@ static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
                "log\n");
         failures++;
     }
-    aeadNonceLogFree(dst);
 
     size_t snap2_len = 0;
     uint8_t *snap2 = persistOpsAeadNonceLog.snapshot(src, &snap2_len);
@@ -8225,14 +8222,12 @@ static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
             cleanerName(zfree, Bytes) uint8_t *ebuf = zmalloc(enseed);
             if (ebuf != NULL) {
                 if (aeadNonceLogToBytes(empty_src, ebuf, enseed) == enseed) {
-                    aeadNonceLog *e2 = aeadNonceLogFromBytes(ebuf, enseed);
+                    cleaner(aeadNonceLogFree) aeadNonceLog *e2 =
+                        aeadNonceLogFromBytes(ebuf, enseed);
                     if (e2 == NULL || aeadNonceLogSize(e2) != 0u) {
                         printf("dkTestNonceLogPersistRoundTrip: empty "
                                "round-trip failed\n");
                         failures++;
-                    }
-                    if (e2) {
-                        aeadNonceLogFree(e2);
                     }
                 }
             }
@@ -10666,6 +10661,12 @@ static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
  * frees with flexFree).  Snapshot entries: a 17-entry header (no ring
  * affinity rules here), then 15 per node; a node's state is its entry
  * 13. */
+/* Whether 'len' bytes of 'buf' deserialize to a ring (the ring is freed) */
+static bool dkTestClusterRingAccepts(const void *buf, size_t len) {
+    cleaner(clusterRingFree) clusterRing *r = clusterRingDeserialize(buf, len);
+    return r != NULL;
+}
+
 static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
                                            uint64_t value) {
     clusterRingConfig config = {
@@ -10703,22 +10704,18 @@ static int dkTestClusterRingMaliciousStateTest(int argc, char *argv[]) {
      * state's */
     cleaner(flexFree) flex *good =
         dkTestClusterRingSnapshotWith(1, SIZE_MAX, 0);
-    clusterRing *g = clusterRingDeserialize(good, flexBytes(good));
-    if (g == NULL) {
+    if (!dkTestClusterRingAccepts(good, flexBytes(good))) {
         printf("dkTestClusterRingMaliciousState: valid snapshot refused\n");
         failures++;
     }
-    clusterRingFree(g);
 
     cleaner(flexFree) flex *f =
         dkTestClusterRingSnapshotWith(1, 17 + 13, 0xDEADBEEFu);
 
     const size_t buflen = flexBytes(f);
-    clusterRing *r = clusterRingDeserialize((const void *)f, buflen);
-    if (r != NULL) {
+    if (dkTestClusterRingAccepts(f, buflen)) {
         printf("dkTestClusterRingMaliciousState: deserialize accepted "
                "state=0xDEADBEEF\n");
-        clusterRingFree(r);
         failures++;
     }
 
@@ -10751,17 +10748,16 @@ static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
      * be refused */
     cleaner(flexFree) flex *good =
         dkTestClusterRingSnapshotWith(2, SIZE_MAX, 0);
-    clusterRing *g = clusterRingDeserialize(good, flexBytes(good));
-    if (g == NULL) {
+    if (!dkTestClusterRingAccepts(good, flexBytes(good))) {
         printf("dkTestClusterRingDuplicateId: valid snapshot refused\n");
         failures++;
     }
-    clusterRingFree(g);
 
     cleaner(flexFree) flex *f = dkTestClusterRingSnapshotWith(2, 17 + 15, 41u);
 
     const size_t buflen = flexBytes(f);
-    clusterRing *r = clusterRingDeserialize((const void *)f, buflen);
+    cleaner(clusterRingFree) clusterRing *r =
+        clusterRingDeserialize((const void *)f, buflen);
     if (r != NULL) {
         printf("dkTestClusterRingDuplicateId: deserialize accepted duplicate "
                "ids\n");
@@ -10770,7 +10766,6 @@ static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
             printf("dkTestClusterRingDuplicateId: validate hook also "
                    "accepted dup-id ring\n");
         }
-        clusterRingFree(r);
         failures++;
     }
 
@@ -10818,31 +10813,28 @@ static int dkTestClusterRingTruncatedBufferTest(int argc, char *argv[]) {
         return 1;
     }
 
-    if (clusterRingDeserialize(snap, 0) != NULL) {
+    if (dkTestClusterRingAccepts(snap, 0)) {
         printf("dkTestClusterRingTruncatedBuffer: accepted 0-byte input\n");
         failures++;
     }
-    if (clusterRingDeserialize(snap, 1) != NULL) {
+    if (dkTestClusterRingAccepts(snap, 1)) {
         printf("dkTestClusterRingTruncatedBuffer: accepted 1-byte input\n");
         failures++;
     }
-    if (clusterRingDeserialize(snap, snap_len / 2) != NULL) {
+    if (dkTestClusterRingAccepts(snap, snap_len / 2)) {
         printf("dkTestClusterRingTruncatedBuffer: accepted half-truncated "
                "input\n");
         failures++;
     }
-    if (clusterRingDeserialize(snap, snap_len - 1) != NULL) {
+    if (dkTestClusterRingAccepts(snap, snap_len - 1)) {
         printf("dkTestClusterRingTruncatedBuffer: accepted snap_len-1 input\n");
         failures++;
     }
 
-    clusterRing *ok = clusterRingDeserialize(snap, snap_len);
-    if (ok == NULL) {
+    if (!dkTestClusterRingAccepts(snap, snap_len)) {
         printf("dkTestClusterRingTruncatedBuffer: full-length deserialize "
                "failed\n");
         failures++;
-    } else {
-        clusterRingFree(ok);
     }
 
     zfree(snap);

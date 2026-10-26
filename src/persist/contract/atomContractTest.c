@@ -203,6 +203,7 @@ static databox pcStringPoolValue(uint64_t seed, size_t i, char *buf,
  * id behaviour */
 static void *pcStringPoolBuild(const persistContractBuild *b) {
     const stringPoolIds ids = (stringPoolIds)(b->seed % 3);
+    /* @own: caller; free=stringPoolFree */
     stringPool *pool = stringPoolNewWithIds(ids);
     persistContractStart(b->log, pool);
 
@@ -270,6 +271,7 @@ const persistContractType persistContractStringPool = {
 static void *pcAtomPoolBuild(const persistContractBuild *b) {
     const atomPoolType type = (atomPoolType)(b->seed % 2);
     const atomPoolIds ids = (atomPoolIds)((b->seed / 2) % 3);
+    /* @own: caller; free=atomPoolFree */
     atomPool *pool = atomPoolNewWithIds(type, ids);
     persistContractStart(b->log, pool);
 

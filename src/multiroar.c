@@ -2718,6 +2718,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
                                    &stamp, &prefix) != DK_FORMAT_OK) {
         return NULL;
     }
+    /* @own: caller; free=multiroarFree */
     return multiroarDeserializeRaw((const uint8_t *)buf + prefix,
                                    bufSize - prefix);
 }

@@ -1540,6 +1540,7 @@ uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
 }
 
 hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense) {
+    /* @own: caller; free=hyperloglogFree */
     hyperloglog *result =
         dense ? hyperloglogNewDense() : hyperloglogNewSparse();
     /* Read through raw->registers — the RAW register array starts AFTER
@@ -1631,6 +1632,16 @@ hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n) {
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 defcleaner(hyperloglog *, hyperloglogFree);
+
+/* The merge benchmark's sketches, released together */
+enum { HLL_BENCH_COUNT = 100 };
+typedef hyperloglog *hllBenchSet[HLL_BENCH_COUNT];
+static void hllBenchSetFree(hyperloglog **set) {
+    for (size_t i = 0; i < HLL_BENCH_COUNT; i++) {
+        hyperloglogFree(set[i]);
+    }
+}
+defcleaner(hllBenchSet, hllBenchSetFree);
 
 /* Register-access cycles; the approximation test adds 10000x as many
  * elements (10M), still crossing every sparse/dense checkpoint */
@@ -1759,8 +1770,8 @@ int hyperloglogTest(int argc, char *argv[]) {
 approximationDone:
     /* Merging dense sketches of disjoint elements counts about their sum */
     TEST("merge correctness: a dense union counts both inputs") {
-        hyperloglog *h1 = hyperloglogNewDense();
-        hyperloglog *h2 = hyperloglogNewDense();
+        cleaner(hyperloglogFree) hyperloglog *h1 = hyperloglogNewDense();
+        cleaner(hyperloglogFree) hyperloglog *h2 = hyperloglogNewDense();
 
         /* Add different elements to each HLL */
         for (uint64_t i = 0; i < 10000; i++) {
@@ -1775,7 +1786,8 @@ approximationDone:
 
         /* Merge h2 into a new HLL that also has h1's data */
         const hyperloglog *pair[2] = {h1, h2};
-        hyperloglog *merged = hyperloglogNewUnion(pair, 2);
+        cleaner(hyperloglogFree) hyperloglog *merged =
+            hyperloglogNewUnion(pair, 2);
         uint64_t countMerged = hyperloglogCount(merged, NULL);
 
         /* Merged count should be approximately count1 + count2 */
@@ -1788,21 +1800,17 @@ approximationDone:
                 "] (h1=%" PRIu64 ", h2=%" PRIu64 ")",
                 countMerged, expectedMin, expectedMax, count1, count2);
         }
-
-        hyperloglogFree(h1);
-        hyperloglogFree(h2);
-        hyperloglogFree(merged);
     }
 
     /* Merge throughput (informational) */
     TEST("merge benchmark: chained dense unions") {
         /* Smoke size: the timing printed is informational (measure merges
          * under the perf preset, not in this correctness suite) */
-        const int numHlls = 100;
+        constexpr int numHlls = HLL_BENCH_COUNT;
         const int mergeIterations = 10;
 
         /* Create test HLLs with data */
-        hyperloglog *hlls[numHlls];
+        cleaner(hllBenchSetFree) hllBenchSet hlls = {};
         for (int i = 0; i < numHlls; i++) {
             hlls[i] = hyperloglogNewDense();
             for (uint64_t j = 0; j < 1000; j++) {
@@ -1816,14 +1824,18 @@ approximationDone:
 
         for (int iter = 0; iter < mergeIterations; iter++) {
             const hyperloglog *first[2] = {hlls[0], hlls[1]};
-            hyperloglog *result = hyperloglogNewUnion(first, 2);
+            cleaner(hyperloglogFree) hyperloglog *result =
+                hyperloglogNewUnion(first, 2);
             for (int i = 2; i < numHlls; i++) {
                 const hyperloglog *next[2] = {result, hlls[i]};
-                hyperloglog *newResult = hyperloglogNewUnion(next, 2);
-                hyperloglogFree(result);
-                result = newResult;
+                cleaner(hyperloglogFree) hyperloglog *grown =
+                    hyperloglogNewUnion(next, 2);
+                /* The union replaces 'result'; the old one is freed at the
+                 * end of this step */
+                hyperloglog *const older = result;
+                result = grown;
+                grown = older;
             }
-            hyperloglogFree(result);
         }
 
         uint64_t endTime = timeUtilMonotonicNs();
@@ -1835,11 +1847,6 @@ approximationDone:
         printf("[merge benchmark]: %.1f ns/merge, %.0f merges/sec "
                "(%d iterations x %d merges)\n",
                nsPerMerge, mergesPerSec, mergeIterations, numHlls - 1);
-
-        /* Cleanup */
-        for (int i = 0; i < numHlls; i++) {
-            hyperloglogFree(hlls[i]);
-        }
     }
 
     /* The SIMD register histogram matches the scalar one; timings are
@@ -1931,33 +1938,31 @@ approximationDone:
     TEST("a sketch with no known encoding counts 0, reported invalid") {
         /* An encoding byte that names no representation: the count is 0
          * and the sketch reported invalid, not a count of UINT64_MAX */
-        hyperloglog *unk = hyperloglogNewDense();
+        cleaner(hyperloglogFree) hyperloglog *unk = hyperloglogNewDense();
         const uint8_t saved = unk->encoding;
         unk->encoding = 3; /* the 2-bit field's one unused value */
         bool invalid = false;
         const uint64_t count = hyperloglogCount(unk, &invalid);
         /* A union over a corrupt sketch: no count, no sketch, and a
          * corrupt count is never cached */
-        hyperloglog *fine = hyperloglogNewDense();
+        cleaner(hyperloglogFree) hyperloglog *fine = hyperloglogNewDense();
         const hyperloglog *withBad[2] = {fine, unk};
         bool unionBad = false;
         const uint64_t unionOf = hyperloglogCountUnion(withBad, 2, &unionBad);
-        hyperloglog *unionSketch = hyperloglogNewUnion(withBad, 2);
+        cleaner(hyperloglogFree) hyperloglog *unionSketch =
+            hyperloglogNewUnion(withBad, 2);
         bool again = false;
         hyperloglogCount(unk, &again);
         unk->encoding = saved;
-        hyperloglogFree(fine);
         if (unionOf != 0 || !unionBad || unionSketch || !again) {
             ERR("corrupt sketch: union %" PRIu64
                 " (invalid %d), sketch %p, recount invalid %d",
                 unionOf, unionBad, (void *)unionSketch, again);
-            hyperloglogFree(unionSketch);
         }
         if (count != 0 || !invalid) {
             ERR("unknown encoding: count %" PRIu64 ", invalid %d", count,
                 invalid);
         }
-        hyperloglogFree(unk);
     }
 
     TEST("a dense merge into a sparse sketch holds the register max") {
@@ -1965,8 +1970,8 @@ approximationDone:
          * turns dense and holds the register-wise maximum, so its count
          * is exactly that of the dense sketch with the 10 elements
          * added */
-        hyperloglog *few = hyperloglogNewSparse();
-        hyperloglog *many = hyperloglogNewDense();
+        cleaner(hyperloglogFree) hyperloglog *few = hyperloglogNewSparse();
+        cleaner(hyperloglogFree) hyperloglog *many = hyperloglogNewDense();
         /* hashed by strlen: the bytes in the buffer, never snprintf's
          * would-have-written length */
         char elem[24];
@@ -1978,7 +1983,7 @@ approximationDone:
             snprintf(elem, sizeof(elem), "many-%d", i);
             hyperloglogAdd(&many, elem, strlen(elem));
         }
-        hyperloglog *oracle = hyperloglogCopy(many);
+        cleaner(hyperloglogFree) hyperloglog *oracle = hyperloglogCopy(many);
         for (int i = 0; i < 10; i++) {
             snprintf(elem, sizeof(elem), "few-%d", i);
             hyperloglogAdd(&oracle, elem, strlen(elem));
@@ -1993,9 +1998,6 @@ approximationDone:
                 " want %" PRIu64,
                 merged, isDense(few), got, want);
         }
-        hyperloglogFree(few);
-        hyperloglogFree(many);
-        hyperloglogFree(oracle);
     }
 
     TEST("batch adds report the changed registers, both encodings") {

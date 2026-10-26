@@ -4039,6 +4039,7 @@ static void multimapPersistFree(void *structure) {
 }
 
 static void *multimapPersistNewEmpty(void) {
+    /* @own: caller; free=multimapFree */
     return multimapSetNew(1);
 }
 

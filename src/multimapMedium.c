@@ -1067,6 +1067,7 @@ static multimapMedium *buildSplitMedium(size_t count, size_t splitAt) {
     assert(splitEntry == flexMiddle(f, 2));
     const uint32_t middle = (uint32_t)(splitEntry - f);
 
+    /* @own: caller; free=multimapMediumFree */
     return multimapMediumNewFromOneGrow(NULL, f, middle, 2, false);
 }
 

@@ -1345,10 +1345,12 @@ DK_STATIC void initLevels(multilru *mlru) {
  * ==================================================================== */
 
 multilru *multilruNew(void) {
+    /* @own: caller; free=multilruFree */
     return multilruNewWithLevelsCapacity(7, 0);
 }
 
 multilru *multilruNewWithLevels(size_t maxLevels) {
+    /* @own: caller; free=multilruFree */
     return multilruNewWithLevelsCapacity(maxLevels, 0);
 }
 

@@ -235,6 +235,7 @@ multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
 
     /* What Small or Medium holds: adopt it, then grow as a write would */
     if (bytes <= nodeBytes * 3) {
+        /* @own: caller; free=multilistFree */
         multilist *ml = multilistNewFromFlex(limit, depth, elements);
         multilistUpgradeIfNecessary(&ml, state, depth, limit);
         return ml;

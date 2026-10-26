@@ -879,6 +879,7 @@ static bool populateSet(void *userData, const databox *elements[]) {
 #include <inttypes.h>
 
 defcleanerName(uint64_t *, zfree, U64);
+defcleaner(multimap *, multimapFree);
 
 /* Fill the stack below the caller with 0xFF so a temporary that is read
  * before it is set up sees big = 1 and an all-ones pointer.  ASan is off
@@ -1638,7 +1639,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         assert(reverseLen == doUntil);
 
         /* test for uniqueness in reverse list */
-        multimap *duplicateHolder = multimapSetNew(1);
+        cleaner(multimapFree) multimap *duplicateHolder = multimapSetNew(1);
 
         multimapPredicate p = {.condition = MULTIMAP_CONDITION_ALL};
 
@@ -1651,7 +1652,6 @@ int multimapAtomTest(int argc, char *argv[]) {
             multimapAtomRepr(ma);
         }
 
-        multimapFree(duplicateHolder);
         multimapAtomFree(ma);
     }
 

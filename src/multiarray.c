@@ -1331,7 +1331,8 @@ int multiarrayTest(int argc, char *argv[]) {
                 ERR("tier %d: changing the copy changed the original", tier);
             }
         }
-        if (multiarrayCopy(NULL)) {
+        cleaner(multiarrayFree) multiarray *ofNull = multiarrayCopy(NULL);
+        if (ofNull) {
             ERR("a copy of NULL is not NULL");
         }
     }

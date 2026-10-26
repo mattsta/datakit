@@ -458,6 +458,7 @@ DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
             multimapSmallCount(small) > (small->elementsPerEntry * 2)) {
             /* Medium self-manages reference lookups, so we do not need an
              * independent multimapMediumNewFromOneGrowWithReference() */
+            /* @own: container; free=multimapMediumFree */
             multimapMedium *medium = multimapMediumNewFromOneGrow(
                 small, small->map, small->middle, small->elementsPerEntry,
                 small->mapIsSet);
@@ -572,6 +573,7 @@ DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
      * two whole rows to split, as an upgrade does */
     if (flexBytes(rows) > smallBytes &&
         flexCount(rows) > elementsPerEntry * 2) {
+        /* @own: container; free=multimapMediumFree */
         multimapMedium *medium = multimapMediumNewFromOneGrow(
             small, small->map, small->middle, elementsPerEntry, isSet);
         tagged = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);

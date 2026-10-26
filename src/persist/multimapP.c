@@ -40,6 +40,7 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
     mp->elementsPerEntry = elementsPerEntry;
 
     /* Create underlying multimap */
+    /* @own: container; free=multimapFree */
     mp->m = multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
     if (!mp->m) {
         return NULL;

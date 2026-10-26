@@ -214,6 +214,7 @@ intsetBig *intsetBigCopy(const intsetBig *const isb) {
     databox vptr;
     databox *elements[] = {(databox *)&bucket, &vptr};
     while (multimapIteratorNext(&iter, elements)) {
+        /* @own: container; free=intsetU32Free */
         vptr.data.ptr = intsetU32Copy(boxPtrToU32(vptr));
         multimapInsert(&result->i, (const databox **)elements);
     }
@@ -360,6 +361,7 @@ bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
     } else {
         /* Existing bucket not found, so create a new set and add it */
         found.type = DATABOX_PTR;
+        /* @own: container; free=intsetU32Free */
         found.data.ptr = intsetU32NewLen(1);
         added = intsetU32Add(boxPtrToU32(found), offset);
 
@@ -804,6 +806,7 @@ size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
             /* Allocate maximum intersect size possible */
             const size_t smallest =
                 eaaiCount < ebbiCount ? eaaiCount : ebbiCount;
+            /* @own: container; free=intsetU32Free */
             intsetU32 *tmpU32 = intsetU32NewLen(smallest);
 
             /* Run the intersection with storage directly into 'tmpU32' */
@@ -898,6 +901,7 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
             foundA = multimapIteratorNext(&ia, ea);
         } else if (compared > 0) {
             /* B < A: B's bucket not in result yet, add it using B's key */
+            /* @own: container; free=intsetU32Free */
             intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
                 a, &key[1], intsetU32Copy(ebbi), &ia);
             a->count += intsetU32Count(ebbi);
@@ -926,6 +930,7 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
     /* After main zipper loop, add any remaining elements from B */
     while (foundB) {
         intsetU32 *ebbi = val[1].data.ptr;
+        /* @own: container; free=intsetU32Free */
         intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
             a, &key[1], intsetU32Copy(ebbi), &ia);
         a->count += intsetU32Count(ebbi);
@@ -2951,13 +2956,12 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         databoxBig huge;
         DATABOX_BIG_UNSIGNED_128(&huge, INTSET_BIG_UINT128_MAX + 1);
         flexPushDataboxBigExact(&wide, &huge, FLEX_ENDPOINT_TAIL);
-        intsetBig *bad1 = intsetBigNewFromMembers(reversed);
-        intsetBig *bad2 = intsetBigNewFromMembers(wide);
+        cleaner(intsetBigFree) intsetBig *bad1 =
+            intsetBigNewFromMembers(reversed);
+        cleaner(intsetBigFree) intsetBig *bad2 = intsetBigNewFromMembers(wide);
         if (bad1 || bad2) {
             ERR("Disordered or out-of-range members were accepted");
         }
-        intsetBigFree(bad1);
-        intsetBigFree(bad2);
     }
 
     TEST("Repr: empty and holding narrow and wide members") {

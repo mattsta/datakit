@@ -4015,6 +4015,7 @@ static uint8_t *clusterRingPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *clusterRingPersistRestore(const uint8_t *data, size_t len) {
+    /* @own: caller; free=clusterRingFree */
     return clusterRingDeserialize(data, len);
 }
 
@@ -4763,7 +4764,8 @@ static int testSerialization(void) {
                 err++;
             }
 
-            clusterRing *restored = clusterRingDeserialize(buf, written);
+            cleaner(clusterRingFree) clusterRing *restored =
+                clusterRingDeserialize(buf, written);
             if (!restored) {
                 ERR("Deserialize returned NULL");
                 err++;
@@ -4786,7 +4788,6 @@ static int testSerialization(void) {
 
                 clusterPlacementFree(&p1);
                 clusterPlacementFree(&p2);
-                clusterRingFree(restored);
             }
         }
     }
@@ -4815,7 +4816,7 @@ static int testSerialization(void) {
         const size_t need = clusterRingSerializeSize(numeric);
         cleaner(zfree) void *buf = zmalloc(need ? need : 1);
         const size_t written = clusterRingSerialize(numeric, buf, need);
-        clusterRing *restored =
+        cleaner(clusterRingFree) clusterRing *restored =
             written ? clusterRingDeserialize(buf, written) : NULL;
         if (!restored) {
             ERR("a ring whose names spell numbers did not restore");
@@ -4831,8 +4832,6 @@ static int testSerialization(void) {
             if (!clusterRingGetKeySpace(restored, "123")) {
                 ERR("keyspace \"123\" did not restore");
             }
-
-            clusterRingFree(restored);
         }
     }
 
@@ -5650,10 +5649,10 @@ static int testFuzzSerializationRoundtrip(void) {
 
         size_t truncAccepted = 0;
         for (size_t cut = 0; cut < len; cut++) {
-            clusterRing *r = clusterRingDeserialize(buf, cut);
+            cleaner(clusterRingFree) clusterRing *r =
+                clusterRingDeserialize(buf, cut);
             if (r) {
                 truncAccepted++;
-                clusterRingFree(r);
             }
         }
         if (truncAccepted) {
@@ -5664,7 +5663,8 @@ static int testFuzzSerializationRoundtrip(void) {
         size_t accepted = 0;
         for (size_t at = 0; at < len; at++) {
             buf[at] ^= 0x04;
-            clusterRing *r = clusterRingDeserialize(buf, len);
+            cleaner(clusterRingFree) clusterRing *r =
+                clusterRingDeserialize(buf, len);
             buf[at] ^= 0x04;
             if (!r) {
                 continue;
@@ -5672,7 +5672,8 @@ static int testFuzzSerializationRoundtrip(void) {
             accepted++;
             bool ok = persistOpsClusterRing.validate(r);
             const size_t n1 = clusterRingSerialize(r, again, size * 2 + 64);
-            clusterRing *r2 = n1 ? clusterRingDeserialize(again, n1) : NULL;
+            cleaner(clusterRingFree) clusterRing *r2 =
+                n1 ? clusterRingDeserialize(again, n1) : NULL;
             const size_t n2 =
                 r2 ? clusterRingSerialize(r2, again + n1, size * 2 + 64 - n1)
                    : 0;
@@ -5689,8 +5690,6 @@ static int testFuzzSerializationRoundtrip(void) {
                     ERR("mutation: flip at %zu gave an inconsistent ring", at);
                 }
             }
-            clusterRingFree(r2);
-            clusterRingFree(r);
         }
         if (inconsistent) {
             ERR("mutation: %zu of %zu accepted flips inconsistent",
@@ -6014,7 +6013,8 @@ static int testFuzzSerializationRoundtrip(void) {
             }
 
             /* Deserialize */
-            clusterRing *restored = clusterRingDeserialize(buf, written);
+            cleaner(clusterRingFree) clusterRing *restored =
+                clusterRingDeserialize(buf, written);
             if (!restored) {
                 ERR("Trial %d: Deserialize returned NULL", trial);
                 err++;
@@ -6052,8 +6052,6 @@ static int testFuzzSerializationRoundtrip(void) {
                 clusterPlacementFree(&p1);
                 clusterPlacementFree(&p2);
             }
-
-            clusterRingFree(restored);
         }
     }
 

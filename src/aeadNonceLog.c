@@ -528,6 +528,7 @@ static uint8_t *anlPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *anlPersistRestore(const uint8_t *data, size_t len) {
+    /* @own: caller; free=aeadNonceLogFree */
     return aeadNonceLogFromBytes(data, len);
 }
 

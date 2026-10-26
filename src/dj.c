@@ -190,6 +190,7 @@ static_assert(DJ_MAP == 1, "MAP must be 1!");
  * DJ Implementation
  * ==================================================================== */
 void djInit(djState *state) {
+    /* @own: container; free=mdsfree */
     djInitWithBuffer(state, mdsemptylen(DEFAULT_LEN));
 
     /* Mark "preallocated length" as all free space. */
@@ -289,6 +290,7 @@ mds *djConsumeBuffer(djState *state, const bool reset) {
     djTrailingCommaCleanup(state);
 
     mds *hollaback = state->s;
+    /* @own: container; free=mdsfree */
     state->s = reset ? mdsemptylen(DEFAULT_LEN) : NULL;
     return hollaback;
 }

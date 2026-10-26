@@ -2426,6 +2426,7 @@ bool multidictEnableLRU(multidict *d, size_t levels) {
     }
 
     /* Create multilru with specified levels (allocation fails fast) */
+    /* @own: container; free=multilruFree */
     d->lru = multilruNewWithLevels(levels > 0 ? levels : 7);
 
     /* Create auxiliary keyToPtr dict (using same type as main dict) */

@@ -1203,8 +1203,11 @@ int atomPoolTest(int argc, char *argv[]) {
     }
 
     TEST("id behaviours: an unknown one is refused; each reports itself") {
-        if (atomPoolNewWithIds(ATOM_POOL_TREE, (atomPoolIds)7) ||
-            atomPoolNewWithIds((atomPoolType)7, ATOM_POOL_IDS_REUSE)) {
+        cleaner(atomPoolFree) atomPool *badIds =
+            atomPoolNewWithIds(ATOM_POOL_TREE, (atomPoolIds)7);
+        cleaner(atomPoolFree) atomPool *badType =
+            atomPoolNewWithIds((atomPoolType)7, ATOM_POOL_IDS_REUSE);
+        if (badIds || badType) {
             ERR("an unknown type or id behaviour was accepted");
         }
 
