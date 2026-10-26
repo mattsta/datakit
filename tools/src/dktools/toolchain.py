@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -138,10 +139,13 @@ class BuildConfig:
 
     compiler: Compiler
     preset: str
+    #: extra cmake cache entries, NAME=VALUE, after the preset's own
+    defines: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
-        return f"{self.compiler.name}-{self.preset}"
+        base = f"{self.compiler.name}-{self.preset}"
+        return "-".join([base, *self.defines]) if self.defines else base
 
     def binary_dir(self, source: Path) -> Path:
         return source / f"build-{self.label}"
@@ -154,7 +158,7 @@ class BuildConfig:
             cmd += ["--preset", configure_preset]
         else:
             cmd += ["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
-        return cmd + self.compiler.cmake_defines()
+        return cmd + self.compiler.cmake_defines() + [f"-D{d}" for d in self.defines]
 
     def build_command(
         self,
@@ -188,8 +192,15 @@ class BuildConfig:
             raise ToolError(f"{presets_file}: no configure preset {configure_preset!r}")
 
 
-def build_config(compiler: Compiler, preset: str | None) -> BuildConfig:
-    """Pair `compiler` with `preset` (None: the compiler's default)."""
+#: a cmake cache entry a caller may add: NAME=VALUE, both plain words
+DEFINE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.+-]+")
+
+
+def build_config(
+    compiler: Compiler, preset: str | None, defines: tuple[str, ...] = ()
+) -> BuildConfig:
+    """Pair `compiler` with `preset` (None: the compiler's default), plus
+    any extra cmake `defines` (NAME=VALUE)."""
     allowed = COMPILER_PRESETS[compiler.name]
     chosen = preset or allowed[0]
     if chosen not in allowed:
@@ -197,7 +208,10 @@ def build_config(compiler: Compiler, preset: str | None) -> BuildConfig:
             f"compiler {compiler.name} builds preset(s) {', '.join(allowed)}, "
             f"not {chosen!r}"
         )
-    return BuildConfig(compiler, chosen)
+    for define in defines:
+        if not DEFINE.fullmatch(define):
+            raise ToolError(f"--define {define!r}: not NAME=VALUE")
+    return BuildConfig(compiler, chosen, tuple(defines))
 
 
 def matrix(compilers: Sequence[Compiler], presets: Sequence[str]) -> list[BuildConfig]:

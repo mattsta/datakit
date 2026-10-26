@@ -95,6 +95,7 @@ class VerifyOptions:
     jobs: int | None = None
     staged: bool = False  # the tree is exactly the current index
     all_changed: bool = False  # HEAD plus every changed tracked path
+    defines: tuple[str, ...] = ()  # extra cmake cache entries, NAME=VALUE
 
 
 def parse_specs(specs: list[str]) -> list[tuple[str, Path | None]]:
@@ -284,7 +285,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         raise ToolError(f"-j must be at least 1 (got {opts.jobs})")
     source = check_source(opts)
     specs = parse_specs(opts.specs) if source == "paths" else []
-    config = toolchain.build_config(opts.compiler, opts.preset)
+    config = toolchain.build_config(opts.compiler, opts.preset, opts.defines)
     size = procs.sizing(opts.jobs)
 
     # Every input check that can refuse runs before ROOT/verify/NAME is

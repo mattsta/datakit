@@ -75,6 +75,15 @@ class Presets(unittest.TestCase):
         self.clang = toolchain.resolve_compiler("clang22", env={})
         self.gcc = toolchain.resolve_compiler("gcc15", env={})
 
+    def test_defines_follow_the_preset_and_name_the_build(self) -> None:
+        rel = toolchain.build_config(self.gcc, None, ("UseFloat128C23=ON",))
+        cmd = rel.configure_command(Path("tree"))
+        self.assertEqual(cmd[-1], "-DUseFloat128C23=ON")
+        self.assertEqual(rel.label, "gcc15-release-UseFloat128C23=ON")
+        for bad in ("NoValue", "A=b c", "-X=1", "A=$(x)"):
+            with self.assertRaises(ToolError):
+                toolchain.build_config(self.gcc, None, (bad,))
+
     def test_preset_commands(self) -> None:
         src = Path("tree")
         dev = toolchain.build_config(self.clang, None)

@@ -291,7 +291,7 @@ tree cannot make a change look good or bad:
 
 ```sh
 uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
-    [--compiler clang22|gcc15] [--preset dev|debug] [--target T]... \
+    [--compiler clang22|gcc15] [--preset dev|debug] [--target T]... [--define NAME=VALUE]... \
     [--root DIR] [-j N] (PATH[=FILE]... | --staged | --all-changed)
 ```
 
@@ -340,6 +340,9 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   therefore builds `deps/varint`'s test executables too; the `targets`
   line lists what was added. `--target` builds exactly the targets
   given (`--target all` builds everything).
+- `--define NAME=VALUE` (repeatable) adds a cmake cache entry after the
+  preset's, such as `--define UseFloat128C23=ON`; the config label
+  names it, so the build directory differs from the plain one.
 - A test whose executable was still not built (an explicit `--target`
   list that leaves it out) is reported on a `missing` line, apart from
   real failures, with a `hint` naming the targets to add.

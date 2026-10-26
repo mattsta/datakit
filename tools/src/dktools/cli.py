@@ -391,6 +391,14 @@ def main(argv: list[str] | None = None) -> int:
         help="build target, repeatable (default: the four preset targets)",
     )
     vf.add_argument(
+        "--define",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="extra cmake cache entry after the preset's, repeatable "
+        "(such as UseFloat128C23=ON)",
+    )
+    vf.add_argument(
         "--root",
         type=Path,
         default=None,
@@ -786,6 +794,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 jobs=args.jobs,
                 staged=args.staged,
                 all_changed=args.all_changed,
+                defines=tuple(args.define),
             ),
         )
 
