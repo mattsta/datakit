@@ -113,6 +113,9 @@ class VerifyOptions:
     # more compilers that only build the same tree (no tests): iterative
     # work tests on one compiler and compiles on the rest
     also_build: list[toolchain.Compiler] = field(default_factory=list)
+    # build everything that compiles past a failed compile (a sweep's
+    # first build then shows every error, not the first)
+    keep_going: bool = False
 
 
 def parse_specs(specs: list[str]) -> list[tuple[str, Path | None]]:
@@ -366,7 +369,9 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         plan = _plan_targets(bindir, work, opts)
         build = steps.run_logged(
             "build",
-            config.build_command(src, size.build, plan.targets, size.load),
+            config.build_command(
+                src, size.build, plan.targets, size.load, opts.keep_going
+            ),
             build.log,
             cwd=src,
             timeout=steps.BUILD_TIMEOUT,
@@ -391,7 +396,9 @@ def run(repo: Path, opts: VerifyOptions) -> int:
             if conf.ok:
                 built = steps.run_logged(
                     built.name,
-                    other.build_command(src, size.build, plan.targets, size.load),
+                    other.build_command(
+                        src, size.build, plan.targets, size.load, opts.keep_going
+                    ),
                     built.log,
                     cwd=src,
                     timeout=steps.BUILD_TIMEOUT,

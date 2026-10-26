@@ -166,15 +166,18 @@ class BuildConfig:
         jobs: int,
         targets: Sequence[str] | None,
         load: int | None = None,
+        keep_going: bool = False,
     ) -> list[str]:
         """``cmake --build`` argv; `targets` None builds all targets; with
         `load`, make starts no new job while the load average is at or
-        above it."""
+        above it; with `keep_going`, make builds everything it can past a
+        failed compile, so one build shows every error."""
         cmd = ["cmake", "--build", str(self.binary_dir(source)), "-j", str(jobs)]
         if targets:
             cmd += ["--target", *targets]
-        if load:
-            cmd += ["--", "-l", str(load)]
+        make_args = (["-l", str(load)] if load else []) + (["-k"] if keep_going else [])
+        if make_args:
+            cmd += ["--", *make_args]
         return cmd
 
     def check_presets_file(self, source: Path) -> None:

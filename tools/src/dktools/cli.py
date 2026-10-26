@@ -14,6 +14,7 @@ from . import (
     buildstore,
     commit,
     configure,
+    countof,
     coverage,
     dropinclude,
     formatting,
@@ -291,6 +292,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     cm.add_argument("--root", type=Path, default=None, help="scratch root")
 
+    co = sub.add_parser(
+        "countof",
+        help="rewrite hand-written element counts (sizeof(X) / sizeof(*X), "
+        "COUNT_ARRAY(X)) as countof(X) across the tracked sources or the given files",
+    )
+    co.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    co.add_argument("--dry-run", action="store_true", help="report, change no file")
+
     up = sub.add_parser(
         "unusednames",
         help="retire (void)name; silencers: unname unused parameters, "
@@ -438,6 +447,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=toolchain.COMPILERS,
         help="also build the same tree with this compiler (its default preset), "
         "no tests; repeatable. Iterative work: --compiler clang22 --also-build gcc15",
+    )
+    vf.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="build everything that compiles past a failed compile, so one "
+        "build shows every error (a sweep's first build)",
     )
     vf.add_argument(
         "--target",
@@ -859,6 +874,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 all_changed=args.all_changed,
                 defines=tuple(args.define),
                 also_build=[toolchain.from_args(c, args) for c in args.also_build],
+                keep_going=args.keep_going,
             ),
         )
 
@@ -1015,6 +1031,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "commit":
         return commit.run(args.repo, args.name, args.message, args.paths, args.root)
+
+    if args.command == "countof":
+        return countof.run(args.repo, tuple(args.paths), args.dry_run)
 
     if args.command == "unusednames":
         return unusednames.run(args.repo, tuple(args.paths), args.dry_run)

@@ -118,6 +118,15 @@ class Presets(unittest.TestCase):
         loaded = dev.build_command(src, 4, None, 8)
         self.assertEqual(loaded[-3:], ["--", "-l", "8"])
         self.assertNotIn("-l", dev.build_command(src, 4, None))
+        # keep going past a failed compile, alone or with the load limit
+        self.assertEqual(
+            dev.build_command(src, 4, None, keep_going=True)[-2:], ["--", "-k"]
+        )
+        self.assertEqual(
+            dev.build_command(src, 4, None, 8, keep_going=True)[-4:],
+            ["--", "-l", "8", "-k"],
+        )
+        self.assertNotIn("-k", dev.build_command(src, 4, None, 8))
 
     def test_unsupported_pairs(self) -> None:
         with self.assertRaises(ToolError):
