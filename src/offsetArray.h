@@ -186,7 +186,7 @@
 
 #define offsetArrayGetChecked_(arr, idx)                                       \
     (*({                                                                       \
-        typeof(arr) arrC_ = (arr);                                             \
+        auto arrC_ = (arr);                                                    \
         /* the type offsetArrayGet's (idx) - offset is computed in */          \
         const typeof((idx) - (arr)->offset) idxC_ = (idx);                     \
         offsetArrayBoundsCheck_(arrC_->obj != NULL, idxC_ >= arrC_->offset,    \

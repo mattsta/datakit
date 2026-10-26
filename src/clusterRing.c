@@ -7488,7 +7488,7 @@ int clusterRingTest(int argc, char *argv[]) {
 
 #define CR_CORRUPT(field, bad, what)                                           \
     do {                                                                       \
-        const typeof(field) saved_ = (field);                                  \
+        auto saved_ = (field);                                                 \
         (field) = (bad);                                                       \
         if (persistOpsClusterRing.validate(ring)) {                            \
             ERR("validate accepted %s", what);                                 \
