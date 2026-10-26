@@ -1,6 +1,6 @@
 #include "fastmutex.h"
 
-/* Adatped from:
+/* Adapted from:
  * https://github.com/jemalloc/jemalloc/pull/1516
  */
 
@@ -14,6 +14,10 @@ struct fastWaiter {
     fastWaiter *next;
     fastWaiter *tail;
 };
+
+/* A waiter's address shares the mutex word with the flag bits */
+static_assert(alignof(fastWaiter) > FAST_MUTEX_FLAGS,
+              "waiter addresses leave the flag bits clear");
 
 static void fast_waiter_init(fastWaiter *w) {
     pthread_mutex_init(&w->lock, NULL);
@@ -39,11 +43,11 @@ void fastMutexLockSlow(fastMutex *m) {
     while (true) {
         /* @sync: relaxed seed */
         uint64_t prev = atomic_load_explicit(&m->word, memory_order_relaxed);
-        if (((prev & 1) == 0) &&
+        if (!(prev & FAST_MUTEX_HELD) &&
             /* @sync: acquire fastmutex.lock */
-            atomic_compare_exchange_weak_explicit(&m->word, &prev, prev | 1,
-                                                  memory_order_acquire,
-                                                  memory_order_relaxed)) {
+            atomic_compare_exchange_weak_explicit(
+                &m->word, &prev, prev | FAST_MUTEX_HELD, memory_order_acquire,
+                memory_order_relaxed)) {
             return;
         }
 
@@ -59,27 +63,26 @@ void fastMutexLockSlow(fastMutex *m) {
 
         /* @sync: relaxed seed */
         prev = atomic_load_explicit(&m->word, memory_order_relaxed);
-        if ((prev & 1) == 0) {
+        if (!(prev & FAST_MUTEX_HELD)) {
             continue;
         }
 
-        if (prev & 2) {
+        if (prev & FAST_MUTEX_LIST_LOCK) {
             continue;
         }
 
-        uint64_t expected = (uint64_t)prev | 2;
-        /* Bit 1 is the waiter-list lock; the list nodes it guards were
-         * last written by the previous holder before its release store. */
+        uint64_t expected = prev | FAST_MUTEX_LIST_LOCK;
+        /* The list nodes the list lock guards were last written by the
+         * previous holder before its release store. */
         /* @sync: acquire fastmutex.queue */
         if (atomic_compare_exchange_weak_explicit(&m->word, &prev, expected,
                                                   memory_order_acquire,
                                                   memory_order_relaxed)) {
             // Locked for access
             fastWaiter waiter;
-            assert(((uintptr_t)&waiter & 0x3) == 0);
             fast_waiter_init(&waiter);
 
-            fastWaiter *w = (fastWaiter *)(prev & ~(uint64_t)3);
+            fastWaiter *w = (fastWaiter *)(prev & ~FAST_MUTEX_FLAGS);
             if (w) {
                 fastWaiter *last = w->tail;
                 last->next = &waiter;
@@ -89,9 +92,9 @@ void fastMutexLockSlow(fastMutex *m) {
                 waiter.tail = &waiter;
             }
 
-            /* Drops the list lock (bit 1); the mutex stays held (bit 0). */
+            /* Drops the list lock; the mutex stays held. */
             /* @sync: release fastmutex.queue */
-            atomic_store_explicit(&m->word, (uint64_t)w | 1,
+            atomic_store_explicit(&m->word, (uint64_t)w | FAST_MUTEX_HELD,
                                   memory_order_release);
             // sleep wait
             pthread_mutex_lock(&waiter.lock);
@@ -108,25 +111,24 @@ void fastMutexLockSlow(fastMutex *m) {
 void fastMutexUnlockSlow(fastMutex *m) {
     /* @sync: relaxed seed */
     uint64_t w = atomic_load_explicit(&m->word, memory_order_relaxed);
-    assert((w & 1) == 1);
+    assert(w & FAST_MUTEX_HELD);
     while (true) {
-        while (w & 0x2) {
+        while (w & FAST_MUTEX_LIST_LOCK) {
             /* @sync: relaxed seed */
             w = atomic_load_explicit(&m->word, memory_order_relaxed);
         }
 
-        assert((w & 0x2) == 0);
+        assert(!(w & FAST_MUTEX_LIST_LOCK));
         /* @sync: acquire fastmutex.queue */
-        if (atomic_compare_exchange_weak_explicit(&m->word, &w, w | 2,
-                                                  memory_order_acquire,
-                                                  memory_order_relaxed)) {
+        if (atomic_compare_exchange_weak_explicit(
+                &m->word, &w, w | FAST_MUTEX_LIST_LOCK, memory_order_acquire,
+                memory_order_relaxed)) {
             break;
         }
     }
 
-    assert((w & 1) == 1);
-    w = w | 2;
-    fastWaiter *waiter = (fastWaiter *)(w & ~(uint64_t)0x3);
+    assert(w & FAST_MUTEX_HELD);
+    fastWaiter *waiter = (fastWaiter *)(w & ~FAST_MUTEX_FLAGS);
     assert(waiter);
     fastWaiter *next_waiter = waiter->next;
     if (next_waiter) {
@@ -157,7 +159,6 @@ int fastMutexCondWait(fastCond *c, fastMutex *m) {
 int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts) {
     int ret = 0;
     fastWaiter waiter;
-    assert(((uintptr_t)&waiter & 0x3) == 0);
     fast_waiter_init(&waiter);
 
     pthread_mutex_lock(&c->m);
