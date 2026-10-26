@@ -388,11 +388,20 @@ DK_INLINE_ALWAYS void entryStore128(void *p, __uint128_t v) {
 
 /* --- 8-byte entries (28-bit addresses) --- */
 /* Layout: prev[0:27], next[28:55], level[56:61], pop[62], head[63] */
+static constexpr int MLRU_E8_LINK_BITS = 28;
+static constexpr uint64_t MLRU_E8_LINK = (UINT64_C(1) << MLRU_E8_LINK_BITS) - 1;
+DK_INLINE_ALWAYS uint64_t entry8Link_(const void *e, int shift) {
+    return (entryLoad64(e) >> shift) & MLRU_E8_LINK;
+}
+DK_INLINE_ALWAYS void entry8SetLink_(void *e, int shift, uint64_t v) {
+    entryStore64(e, (entryLoad64(e) & ~(MLRU_E8_LINK << shift)) |
+                        ((v & MLRU_E8_LINK) << shift));
+}
 DK_STATIC inline uint64_t entry8GetPrev(const void *e) {
-    return entryLoad64(e) & 0x0FFFFFFF;
+    return entry8Link_(e, 0);
 }
 DK_STATIC inline uint64_t entry8GetNext(const void *e) {
-    return (entryLoad64(e) >> 28) & 0x0FFFFFFF;
+    return entry8Link_(e, MLRU_E8_LINK_BITS);
 }
 /* 8-byte entries keep the flag byte in bits 56-63 */
 DK_INLINE_ALWAYS uint8_t entry8Flags_(const void *e) {
@@ -412,11 +421,10 @@ DK_STATIC inline bool entry8GetHead(const void *e) {
     return (entry8Flags_(e) & MLRU_FLAG_HEAD) != 0;
 }
 DK_STATIC inline void entry8SetPrev(void *e, uint64_t v) {
-    entryStore64(e, (entryLoad64(e) & ~0x0FFFFFFFULL) | (v & 0x0FFFFFFF));
+    entry8SetLink_(e, 0, v);
 }
 DK_STATIC inline void entry8SetNext(void *e, uint64_t v) {
-    entryStore64(e, (entryLoad64(e) & ~(0x0FFFFFFFULL << 28)) |
-                        ((v & 0x0FFFFFFF) << 28));
+    entry8SetLink_(e, MLRU_E8_LINK_BITS, v);
 }
 DK_STATIC inline void entry8SetLevel(void *e, uint8_t v) {
     entry8SetFlags_(e, MLRU_FLAG_LEVEL, v);
@@ -563,11 +571,22 @@ DK_STATIC inline void entry12SetHead(void *e, bool v) {
 
 /* --- 16-byte entries (60-bit addresses) --- */
 /* Layout: prev[0:59], next[60:119], level[120:125], pop[126], head[127] */
+static constexpr int MLRU_E16_LINK_BITS = 60;
+static constexpr uint64_t MLRU_E16_LINK =
+    (UINT64_C(1) << MLRU_E16_LINK_BITS) - 1;
+DK_INLINE_ALWAYS uint64_t entry16Link_(const void *e, int shift) {
+    return (uint64_t)(entryLoad128(e) >> shift) & MLRU_E16_LINK;
+}
+DK_INLINE_ALWAYS void entry16SetLink_(void *e, int shift, uint64_t v) {
+    const __uint128_t mask = (__uint128_t)MLRU_E16_LINK << shift;
+    entryStore128(e, (entryLoad128(e) & ~mask) |
+                         ((__uint128_t)(v & MLRU_E16_LINK) << shift));
+}
 DK_STATIC inline uint64_t entry16GetPrev(const void *e) {
-    return (uint64_t)(entryLoad128(e) & (((__uint128_t)1 << 60) - 1));
+    return entry16Link_(e, 0);
 }
 DK_STATIC inline uint64_t entry16GetNext(const void *e) {
-    return (uint64_t)((entryLoad128(e) >> 60) & (((__uint128_t)1 << 60) - 1));
+    return entry16Link_(e, MLRU_E16_LINK_BITS);
 }
 /* 16-byte entries keep the flag byte in bits 120-127 */
 DK_INLINE_ALWAYS uint8_t entry16Flags_(const void *e) {
@@ -588,14 +607,10 @@ DK_STATIC inline bool entry16GetHead(const void *e) {
     return (entry16Flags_(e) & MLRU_FLAG_HEAD) != 0;
 }
 DK_STATIC inline void entry16SetPrev(void *e, uint64_t v) {
-    const __uint128_t mask = ((__uint128_t)1 << 60) - 1;
-    entryStore128(e, (entryLoad128(e) & ~mask) | (v & mask));
+    entry16SetLink_(e, 0, v);
 }
 DK_STATIC inline void entry16SetNext(void *e, uint64_t v) {
-    const __uint128_t mask = (((__uint128_t)1 << 60) - 1) << 60;
-    entryStore128(e,
-                  (entryLoad128(e) & ~mask) |
-                      (((__uint128_t)v & (((__uint128_t)1 << 60) - 1)) << 60));
+    entry16SetLink_(e, MLRU_E16_LINK_BITS, v);
 }
 DK_STATIC inline void entry16SetLevel(void *e, uint8_t v) {
     entry16SetFlags_(e, MLRU_FLAG_LEVEL, v);
