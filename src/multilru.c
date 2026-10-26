@@ -224,6 +224,24 @@ DK_STATIC inline void *entryPtr(const multilru *mlru, uint64_t idx) {
  * Optimized accessors for each supported width.
  */
 
+/* The flag byte of 5-, 7- and 9-byte entries: the level in bits 0-5,
+ * populated in bit 6, head in bit 7 */
+static constexpr uint8_t MLRU_FLAG_LEVEL = 0b0011'1111;
+static constexpr uint8_t MLRU_FLAG_POPULATED = 0b0100'0000;
+static constexpr uint8_t MLRU_FLAG_HEAD = 0b1000'0000;
+
+DK_INLINE_ALWAYS uint8_t mlruFlagLevel_(const uint8_t *flags) {
+    return *flags & MLRU_FLAG_LEVEL;
+}
+DK_INLINE_ALWAYS bool mlruFlagIs_(const uint8_t *flags, uint8_t bit) {
+    return (*flags & bit) != 0;
+}
+/* Replace the 'field' bits of the flag byte with those of 'bits' */
+DK_INLINE_ALWAYS void mlruFlagSet_(uint8_t *flags, uint8_t field,
+                                   uint8_t bits) {
+    *flags = (uint8_t)((*flags & ~field) | (bits & field));
+}
+
 /* --- 5-byte entries (16-bit addresses) --- */
 DK_STATIC inline uint64_t entry5GetPrev(const void *e) {
     const uint8_t *p = e;
@@ -234,13 +252,13 @@ DK_STATIC inline uint64_t entry5GetNext(const void *e) {
     return (uint64_t)p[2] | ((uint64_t)p[3] << 8);
 }
 DK_STATIC inline uint8_t entry5GetLevel(const void *e) {
-    return ((const uint8_t *)e)[4] & 0x3F;
+    return mlruFlagLevel_((const uint8_t *)e + 4);
 }
 DK_STATIC inline bool entry5GetPopulated(const void *e) {
-    return (((const uint8_t *)e)[4] >> 6) & 1;
+    return mlruFlagIs_((const uint8_t *)e + 4, MLRU_FLAG_POPULATED);
 }
 DK_STATIC inline bool entry5GetHead(const void *e) {
-    return (((const uint8_t *)e)[4] >> 7) & 1;
+    return mlruFlagIs_((const uint8_t *)e + 4, MLRU_FLAG_HEAD);
 }
 DK_STATIC inline void entry5SetPrev(void *e, uint64_t v) {
     uint8_t *p = e;
@@ -253,16 +271,14 @@ DK_STATIC inline void entry5SetNext(void *e, uint64_t v) {
     p[3] = (v >> 8) & 0xFF;
 }
 DK_STATIC inline void entry5SetLevel(void *e, uint8_t v) {
-    uint8_t *p = e;
-    p[4] = (p[4] & 0xC0) | (v & 0x3F);
+    mlruFlagSet_((uint8_t *)e + 4, MLRU_FLAG_LEVEL, v);
 }
 DK_STATIC inline void entry5SetPopulated(void *e, bool v) {
-    uint8_t *p = e;
-    p[4] = (p[4] & 0xBF) | ((v ? 1 : 0) << 6);
+    mlruFlagSet_((uint8_t *)e + 4, MLRU_FLAG_POPULATED,
+                 v ? MLRU_FLAG_POPULATED : 0);
 }
 DK_STATIC inline void entry5SetHead(void *e, bool v) {
-    uint8_t *p = e;
-    p[4] = (p[4] & 0x7F) | ((v ? 1 : 0) << 7);
+    mlruFlagSet_((uint8_t *)e + 4, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
 }
 
 /* --- 6-byte entries (20-bit addresses) --- */
@@ -309,13 +325,13 @@ DK_STATIC inline uint64_t entry7GetNext(const void *e) {
     return (uint64_t)p[3] | ((uint64_t)p[4] << 8) | ((uint64_t)p[5] << 16);
 }
 DK_STATIC inline uint8_t entry7GetLevel(const void *e) {
-    return ((const uint8_t *)e)[6] & 0x3F;
+    return mlruFlagLevel_((const uint8_t *)e + 6);
 }
 DK_STATIC inline bool entry7GetPopulated(const void *e) {
-    return (((const uint8_t *)e)[6] >> 6) & 1;
+    return mlruFlagIs_((const uint8_t *)e + 6, MLRU_FLAG_POPULATED);
 }
 DK_STATIC inline bool entry7GetHead(const void *e) {
-    return (((const uint8_t *)e)[6] >> 7) & 1;
+    return mlruFlagIs_((const uint8_t *)e + 6, MLRU_FLAG_HEAD);
 }
 DK_STATIC inline void entry7SetPrev(void *e, uint64_t v) {
     uint8_t *p = e;
@@ -330,16 +346,14 @@ DK_STATIC inline void entry7SetNext(void *e, uint64_t v) {
     p[5] = (v >> 16) & 0xFF;
 }
 DK_STATIC inline void entry7SetLevel(void *e, uint8_t v) {
-    uint8_t *p = e;
-    p[6] = (p[6] & 0xC0) | (v & 0x3F);
+    mlruFlagSet_((uint8_t *)e + 6, MLRU_FLAG_LEVEL, v);
 }
 DK_STATIC inline void entry7SetPopulated(void *e, bool v) {
-    uint8_t *p = e;
-    p[6] = (p[6] & 0xBF) | ((v ? 1 : 0) << 6);
+    mlruFlagSet_((uint8_t *)e + 6, MLRU_FLAG_POPULATED,
+                 v ? MLRU_FLAG_POPULATED : 0);
 }
 DK_STATIC inline void entry7SetHead(void *e, bool v) {
-    uint8_t *p = e;
-    p[6] = (p[6] & 0x7F) | ((v ? 1 : 0) << 7);
+    mlruFlagSet_((uint8_t *)e + 6, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
 }
 
 /* Native-width loads and stores at any alignment.  Entries sit at
@@ -380,14 +394,22 @@ DK_STATIC inline uint64_t entry8GetPrev(const void *e) {
 DK_STATIC inline uint64_t entry8GetNext(const void *e) {
     return (entryLoad64(e) >> 28) & 0x0FFFFFFF;
 }
+/* 8-byte entries keep the flag byte in bits 56-63 */
+DK_INLINE_ALWAYS uint8_t entry8Flags_(const void *e) {
+    return (uint8_t)(entryLoad64(e) >> 56);
+}
+DK_INLINE_ALWAYS void entry8SetFlags_(void *e, uint8_t field, uint8_t bits) {
+    entryStore64(e, (entryLoad64(e) & ~((uint64_t)field << 56)) |
+                        ((uint64_t)(bits & field) << 56));
+}
 DK_STATIC inline uint8_t entry8GetLevel(const void *e) {
-    return (entryLoad64(e) >> 56) & 0x3F;
+    return entry8Flags_(e) & MLRU_FLAG_LEVEL;
 }
 DK_STATIC inline bool entry8GetPopulated(const void *e) {
-    return (entryLoad64(e) >> 62) & 1;
+    return (entry8Flags_(e) & MLRU_FLAG_POPULATED) != 0;
 }
 DK_STATIC inline bool entry8GetHead(const void *e) {
-    return (entryLoad64(e) >> 63) & 1;
+    return (entry8Flags_(e) & MLRU_FLAG_HEAD) != 0;
 }
 DK_STATIC inline void entry8SetPrev(void *e, uint64_t v) {
     entryStore64(e, (entryLoad64(e) & ~0x0FFFFFFFULL) | (v & 0x0FFFFFFF));
@@ -397,16 +419,13 @@ DK_STATIC inline void entry8SetNext(void *e, uint64_t v) {
                         ((v & 0x0FFFFFFF) << 28));
 }
 DK_STATIC inline void entry8SetLevel(void *e, uint8_t v) {
-    entryStore64(e, (entryLoad64(e) & ~(0x3FULL << 56)) |
-                        ((uint64_t)(v & 0x3F) << 56));
+    entry8SetFlags_(e, MLRU_FLAG_LEVEL, v);
 }
 DK_STATIC inline void entry8SetPopulated(void *e, bool v) {
-    entryStore64(e, (entryLoad64(e) & ~(1ULL << 62)) |
-                        ((uint64_t)(v ? 1 : 0) << 62));
+    entry8SetFlags_(e, MLRU_FLAG_POPULATED, v ? MLRU_FLAG_POPULATED : 0);
 }
 DK_STATIC inline void entry8SetHead(void *e, bool v) {
-    entryStore64(e, (entryLoad64(e) & ~(1ULL << 63)) |
-                        ((uint64_t)(v ? 1 : 0) << 63));
+    entry8SetFlags_(e, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
 }
 
 /* --- 9-byte entries (32-bit addresses) --- */
@@ -418,13 +437,13 @@ DK_STATIC inline uint64_t entry9GetNext(const void *e) {
     return entryLoad32((const uint8_t *)e + 4);
 }
 DK_STATIC inline uint8_t entry9GetLevel(const void *e) {
-    return ((const uint8_t *)e)[8] & 0x3F;
+    return mlruFlagLevel_((const uint8_t *)e + 8);
 }
 DK_STATIC inline bool entry9GetPopulated(const void *e) {
-    return (((const uint8_t *)e)[8] >> 6) & 1;
+    return mlruFlagIs_((const uint8_t *)e + 8, MLRU_FLAG_POPULATED);
 }
 DK_STATIC inline bool entry9GetHead(const void *e) {
-    return (((const uint8_t *)e)[8] >> 7) & 1;
+    return mlruFlagIs_((const uint8_t *)e + 8, MLRU_FLAG_HEAD);
 }
 DK_STATIC inline void entry9SetPrev(void *e, uint64_t v) {
     entryStore32(e, (uint32_t)v);
@@ -433,16 +452,14 @@ DK_STATIC inline void entry9SetNext(void *e, uint64_t v) {
     entryStore32((uint8_t *)e + 4, (uint32_t)v);
 }
 DK_STATIC inline void entry9SetLevel(void *e, uint8_t v) {
-    uint8_t *p = e;
-    p[8] = (p[8] & 0xC0) | (v & 0x3F);
+    mlruFlagSet_((uint8_t *)e + 8, MLRU_FLAG_LEVEL, v);
 }
 DK_STATIC inline void entry9SetPopulated(void *e, bool v) {
-    uint8_t *p = e;
-    p[8] = (p[8] & 0xBF) | ((v ? 1 : 0) << 6);
+    mlruFlagSet_((uint8_t *)e + 8, MLRU_FLAG_POPULATED,
+                 v ? MLRU_FLAG_POPULATED : 0);
 }
 DK_STATIC inline void entry9SetHead(void *e, bool v) {
-    uint8_t *p = e;
-    p[8] = (p[8] & 0x7F) | ((v ? 1 : 0) << 7);
+    mlruFlagSet_((uint8_t *)e + 8, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
 }
 
 /* --- 10-byte entries (36-bit addresses) --- */
@@ -552,14 +569,23 @@ DK_STATIC inline uint64_t entry16GetPrev(const void *e) {
 DK_STATIC inline uint64_t entry16GetNext(const void *e) {
     return (uint64_t)((entryLoad128(e) >> 60) & (((__uint128_t)1 << 60) - 1));
 }
+/* 16-byte entries keep the flag byte in bits 120-127 */
+DK_INLINE_ALWAYS uint8_t entry16Flags_(const void *e) {
+    return (uint8_t)(entryLoad128(e) >> 120);
+}
+DK_INLINE_ALWAYS void entry16SetFlags_(void *e, uint8_t field, uint8_t bits) {
+    const __uint128_t mask = (__uint128_t)field << 120;
+    entryStore128(e, (entryLoad128(e) & ~mask) |
+                         ((__uint128_t)(bits & field) << 120));
+}
 DK_STATIC inline uint8_t entry16GetLevel(const void *e) {
-    return (uint8_t)((entryLoad128(e) >> 120) & 0x3F);
+    return entry16Flags_(e) & MLRU_FLAG_LEVEL;
 }
 DK_STATIC inline bool entry16GetPopulated(const void *e) {
-    return (entryLoad128(e) >> 126) & 1;
+    return (entry16Flags_(e) & MLRU_FLAG_POPULATED) != 0;
 }
 DK_STATIC inline bool entry16GetHead(const void *e) {
-    return (entryLoad128(e) >> 127) & 1;
+    return (entry16Flags_(e) & MLRU_FLAG_HEAD) != 0;
 }
 DK_STATIC inline void entry16SetPrev(void *e, uint64_t v) {
     const __uint128_t mask = ((__uint128_t)1 << 60) - 1;
@@ -572,19 +598,13 @@ DK_STATIC inline void entry16SetNext(void *e, uint64_t v) {
                       (((__uint128_t)v & (((__uint128_t)1 << 60) - 1)) << 60));
 }
 DK_STATIC inline void entry16SetLevel(void *e, uint8_t v) {
-    const __uint128_t mask = (__uint128_t)0x3F << 120;
-    entryStore128(e, (entryLoad128(e) & ~mask) |
-                         (((__uint128_t)(v & 0x3F)) << 120));
+    entry16SetFlags_(e, MLRU_FLAG_LEVEL, v);
 }
 DK_STATIC inline void entry16SetPopulated(void *e, bool v) {
-    const __uint128_t mask = (__uint128_t)1 << 126;
-    entryStore128(e, (entryLoad128(e) & ~mask) |
-                         (((__uint128_t)(v ? 1 : 0)) << 126));
+    entry16SetFlags_(e, MLRU_FLAG_POPULATED, v ? MLRU_FLAG_POPULATED : 0);
 }
 DK_STATIC inline void entry16SetHead(void *e, bool v) {
-    const __uint128_t mask = (__uint128_t)1 << 127;
-    entryStore128(e, (entryLoad128(e) & ~mask) |
-                         (((__uint128_t)(v ? 1 : 0)) << 127));
+    entry16SetFlags_(e, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
 }
 
 /* ====================================================================
