@@ -442,10 +442,9 @@ if(EnableCoverage)
     endif()
 endif()
 
-# Legacy behavior: silently suppress UBSAN's alignment check on every
-# build (sanitizers on OR off).  That hid real alignment bugs from
-# operators who enabled UBSAN expecting full coverage.  Opt in via
-# DATAKIT_UBSAN_ALLOW_UNALIGNED for the legacy behavior.
+# DATAKIT_UBSAN_ALLOW_UNALIGNED turns UBSan's alignment check off on every
+# build (sanitizers on or off). It is off by default, so a UBSan build
+# reports misaligned accesses.
 if(DATAKIT_UBSAN_ALLOW_UNALIGNED)
     message(STATUS "datakit: UBSAN alignment check SUPPRESSED globally (legacy)")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
@@ -514,15 +513,9 @@ add_library(${PROJECT_NAME} OBJECT
 
     multiTimer.c
     timerWheel.c
-    timerWheelTest.c
-    ptrlibTest.c
-    bigmathTest.c
     timeUtil.c
 
     fastmutex.c
-    fastmutexTest.c
-
-    multiheapTest.c
 
     mds.c
     mdsc.c
@@ -530,11 +523,7 @@ add_library(${PROJECT_NAME} OBJECT
 
     dod.c
     xof.c
-    compressionBench.c
-    fenwickBench.c
     bbits.c
-    linearBloomTest.c
-    multiTimerTest.c
 
     flex.c
     flexEnvelope.c
@@ -562,7 +551,6 @@ add_library(${PROJECT_NAME} OBJECT
     rapidhash.c
     clusterMailbox.c
     clusterReplicator.c
-    perfRegression.c
     mflex.c
 
     OSRegulate.c
@@ -585,7 +573,6 @@ add_library(${PROJECT_NAME} OBJECT
     dkRandom.c
     dkDiag.c
     dkTierLimit.c
-    dkC23Test.c
     # quickcount.c
 
     # quickdictClassAtom.c
@@ -595,41 +582,30 @@ add_library(${PROJECT_NAME} OBJECT
     offsetArray.c
 
     # patternTrie.c
-    # Temporary (?) reductions due to not compiling on ARM.
     intersectInt.c
     intsetBig.c
     intset.c
     intsetSmall.c
     intsetMedium.c
     intsetFull.c
-    intsetTest.c
     intsetU32.c
 
-    # One simulation driving every tiered family through its tier changes
-    tierSimTest.c
-
-    # Fenwick & Segment tree implementations (2-tier template system)
-    # Note: Old fenwick.c, segment.c files moved to old/ directory
-    # Using new type-specific implementations added via add_subdirectory()
+    # The type-specific Fenwick and Segment trees build in fenwick/ and
+    # segment/ (add_subdirectory below).
 
     # multiFenwick wraps multiple Fenwick trees - separate system
     multiFenwick.c
-    multiFenwickTest.c
     # The same tree with flat O(1) cells (9 bytes per cell)
     multiFenwickFlat.c
-    multiFenwickFlatTest.c
     # The 2D tree over databox values
     multiFenwick2d.c
-    multiFenwick2dTest.c
 
     # multiSegment wraps multiple Segment trees - separate system
     # DISABLED: multiSegment.c
-    # DISABLED: multiSegmentTest.c
 
     hyperloglog.c
     databox.c
     databoxLinear.c
-    floatExtendedTest.c
     datakit.c
     ulid.c
     persist.c
@@ -644,29 +620,55 @@ add_library(${PROJECT_NAME} OBJECT
     persist/multiOrderedSetP.c
     persist/multilruP.c
     persist/multiroarP.c
-
-    # The persistence contract: harness and one registration per type
-    persist/contract/persistContractTest.c
-    persist/contract/flexContractTest.c
-    persist/contract/multimapContractTest.c
-    persist/contract/multiroarContractTest.c
-    persist/contract/intsetContractTest.c
-    persist/contract/intsetBigContractTest.c
-    persist/contract/hyperloglogContractTest.c
-    persist/contract/multiarrayContractTest.c
-    persist/contract/multilistContractTest.c
-    persist/contract/multidictContractTest.c
-    persist/contract/multiOrderedSetContractTest.c
-    persist/contract/multilruContractTest.c
-    persist/contract/hmacKeyringContractTest.c
-    persist/contract/clusterMailboxContractTest.c
-    persist/contract/clusterRingContractTest.c
-    persist/contract/aeadNonceLogContractTest.c
-    persist/contract/fenwickContractTest.c
-    persist/contract/multiFenwickContractTest.c
-    persist/contract/segmentContractTest.c
-    persist/contract/atomContractTest.c
 )
+
+# Test drivers, benchmarks and the persistence contract are written for
+# DATAKIT_TEST: the library carries them only in that mode, so a build
+# without it never compiles test code.
+if(DatakitTestMode)
+    target_sources(${PROJECT_NAME} PRIVATE
+        timerWheelTest.c
+        ptrlibTest.c
+        bigmathTest.c
+        fastmutexTest.c
+        multiheapTest.c
+        compressionBench.c
+        fenwickBench.c
+        linearBloomTest.c
+        multiTimerTest.c
+        perfRegression.c
+        dkC23Test.c
+        intsetTest.c
+        # One simulation driving every tiered family through its tier changes
+        tierSimTest.c
+        multiFenwickTest.c
+        multiFenwickFlatTest.c
+        multiFenwick2dTest.c
+        # DISABLED: multiSegmentTest.c
+        floatExtendedTest.c
+
+        # The persistence contract: harness and one registration per type
+        persist/contract/persistContractTest.c
+        persist/contract/flexContractTest.c
+        persist/contract/multimapContractTest.c
+        persist/contract/multiroarContractTest.c
+        persist/contract/intsetContractTest.c
+        persist/contract/intsetBigContractTest.c
+        persist/contract/hyperloglogContractTest.c
+        persist/contract/multiarrayContractTest.c
+        persist/contract/multilistContractTest.c
+        persist/contract/multidictContractTest.c
+        persist/contract/multiOrderedSetContractTest.c
+        persist/contract/multilruContractTest.c
+        persist/contract/hmacKeyringContractTest.c
+        persist/contract/clusterMailboxContractTest.c
+        persist/contract/clusterRingContractTest.c
+        persist/contract/aeadNonceLogContractTest.c
+        persist/contract/fenwickContractTest.c
+        persist/contract/multiFenwickContractTest.c
+        persist/contract/segmentContractTest.c
+        persist/contract/atomContractTest.c)
+endif()
 
 # Every function datakit defines with external linkage must have a prior
 # declaration (its header), or it is unreachable API; the rest are static.
@@ -737,6 +739,11 @@ endif()
 set_target_properties(${PROJECT_NAME}-library PROPERTIES VERSION ${DK_VERSION} SOVERSION ${DK_ABI_UPDATE})
 
 option(BuildTestBinary "Build test binary" On)
+
+if(BuildTestBinary AND NOT DatakitTestMode)
+    message(FATAL_ERROR "BuildTestBinary needs DatakitTestMode: the tests "
+                        "run code that only DATAKIT_TEST builds")
+endif()
 
 if(BuildTestBinary)
     # Enable native CPU optimizations for performance-critical code

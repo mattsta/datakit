@@ -54,6 +54,7 @@ defcleaner(mflexState *, mflexStateFree);
 
 #include <fcntl.h>
 #include <stdatomic.h>
+#include <stdio.h> /* rename */
 #include <sys/stat.h>
 #include <sys/time.h> /* gettimeofday */
 #include <unistd.h>

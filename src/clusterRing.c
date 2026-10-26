@@ -182,10 +182,10 @@ static inline void seenTrackerSet(seenTracker *st, uint32_t idx) {
  * node IDs to dense indices for bitmap operations.
  */
 
-/* O(1) nodeId -> nodeArray index via the existing nodeById dict (which already
- * maps id -> node*), reading the node's maintained arrayIndex. Called per
- * slot/vnode/replica in the routing hot paths, so the old O(nodeCount) scan
- * was effectively quadratic in node count. */
+#ifdef DATAKIT_TEST
+/* nodeId -> nodeArray index in O(1): the nodeById dict maps id -> node*,
+ * and the node keeps its arrayIndex. The tests check the reverse index
+ * with it (-1 for an unknown id). */
 static inline int32_t nodeIdToIndex(const clusterRing *ring, uint64_t nodeId) {
     databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
@@ -194,6 +194,7 @@ static inline int32_t nodeIdToIndex(const clusterRing *ring, uint64_t nodeId) {
     }
     return (int32_t)((const clusterNode *)valbox.data.ptr)->arrayIndex;
 }
+#endif
 
 /* ====================================================================
  * Heap-based Top-K Selection (for Rendezvous)
@@ -1245,8 +1246,8 @@ void clusterRingCompactNodeArray(clusterRing *ring) {
                 ring->nodeArray[writeIdx] = ring->nodeArray[readIdx];
                 ring->nodeArray[readIdx] = NULL;
             }
-            /* Keep arrayIndex consistent with the (possibly new) position so
-             * nodeIdToIndex stays O(1) and correct after compaction. */
+            /* arrayIndex follows the node to its new position: the routing
+             * seen-trackers and the per-node tallies index by it. */
             ring->nodeArray[writeIdx]->arrayIndex = writeIdx;
             writeIdx++;
         }
@@ -1299,7 +1300,7 @@ static clusterResult clusterRingAddNodeInternal(clusterRing *ring,
     }
     clusterNodeInit(node, config);
 
-    /* Add to array (record its index for O(1) nodeIdToIndex) */
+    /* Add to array, recording the node's position in arrayIndex */
     node->arrayIndex = ring->nodeCount;
     ring->nodeArray[ring->nodeCount++] = node;
 

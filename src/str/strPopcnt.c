@@ -212,7 +212,8 @@ uint64_t StrPopCntAligned(const void *data_, size_t len) {
 
 uint64_t StrPopCntExact(const void *data_, size_t len) {
     const uint8_t *restrict data = data_;
-    static constexpr size_t multiStepSize = sizeof(uint64_t) * 4;
+    [[maybe_unused]] static constexpr size_t multiStepSize =
+        sizeof(uint64_t) * 4;
 
     /* 'len' must be exactly divisible by 32 bytes or else we won't
      * process all bits. */

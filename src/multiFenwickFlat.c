@@ -130,7 +130,7 @@ multiFenwickFlat *multiFenwickFlatNewFromArray(const databox *values,
     multiFenwickFlatCellsGrow_(mfw, capacity); /* zero past the end */
     for (uint64_t i = 0; i < count; i++) {
         multiFenwickNum n;
-        multiFenwickCell cell;
+        multiFenwickCell cell = {};
         [[maybe_unused]] const bool ok = multiFenwickNumFrom_(&values[i], &n) &&
                                          multiFenwickCellEncode(n, &cell);
         assert(ok); /* one checked element always encodes */

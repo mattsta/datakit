@@ -42,12 +42,14 @@ extern void blake3PortableCompressXof(const uint32_t cv[8],
                                       uint8_t block_len, uint64_t counter,
                                       uint8_t flags, uint8_t out[64]);
 
-/* IV constant needed by the test driver even on non-x86 hosts; kept
- * outside the x86-only block so the stub build still type-checks. */
+/* The IV: the x86 kernels read it, and so does the test driver on every
+ * host. */
+#if defined(__x86_64__) || defined(DATAKIT_TEST)
 static constexpr uint32_t B3_IV[8] = {
     0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
     0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
 };
+#endif
 
 #if defined(__x86_64__)
 

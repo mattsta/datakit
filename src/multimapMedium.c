@@ -508,7 +508,10 @@ bool multimapMediumRandomValue(multimapMedium *m, const bool fromTail,
 
     size_t mapIdx;
     flexEntry *foundP = multimapMediumRowByPosition_(m, row, &mapIdx);
-    assert(foundP);
+    assert(foundP); /* row < rows always has a row */
+    if (!foundP) {
+        return false;
+    }
 
     flex **map = &m->map[mapIdx];
     me->map = map;

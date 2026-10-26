@@ -51,7 +51,8 @@ static int32_t resolvedPlaces = 0;
 /* ====================================================================
  * Common helpers (integer ceiling, integer powers)
  * ==================================================================== */
-/* Always inline hot path helper functions for performance */
+#ifdef DATAKIT_TEST
+/* Integer ceiling of v (the tests pin it) */
 DK_INLINE_ALWAYS int64_t int_ceil(double v) {
     double t = trunc(v);
     if (v - t > 0) {
@@ -60,6 +61,7 @@ DK_INLINE_ALWAYS int64_t int_ceil(double v) {
 
     return t;
 }
+#endif
 
 /* Decimal-scale estimate for v = frac * 2^exp (frac >= 1), replacing
  * ceil(log10(v)): returns floor(x) + 1 where x underestimates

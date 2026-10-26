@@ -309,6 +309,7 @@ size_t intsetU32Bytes(const intsetU32 *is) {
     return sizeof(intsetU32) + (sizeof(uint32_t) * is->capacity);
 }
 
+#ifdef DATAKIT_TEST
 void intsetU32Repr(const intsetU32 *is) {
     printf("[");
     for (uint32_t i = 0; i < is->count; i++) {
@@ -318,7 +319,6 @@ void intsetU32Repr(const intsetU32 *is) {
     printf("]\n");
 }
 
-#ifdef DATAKIT_TEST
 #include <sys/time.h>
 #include <time.h>
 static void ok(void) {

@@ -450,8 +450,10 @@ databox databoxNull(void) {
 }
 
 #define IS_BYTES(a) ((a)->type >= DATABOX_BYTES)
+#ifndef NDEBUG /* read by asserts */
 #define IS_INTEGER(a)                                                          \
     (DATABOX_IS_INTEGER(a) || (a)->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL)
+#endif
 
 /* True for a float or double box holding NaN. */
 static bool databoxIsNaN_(const databox *box) {

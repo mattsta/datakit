@@ -134,7 +134,9 @@ static const lruWidthTier WIDTH_TIERS[] = {
 };
 #define NUM_WIDTH_TIERS (countof(WIDTH_TIERS))
 
-/* Constants for each width tier (use WIDTH_TIERS array when possible) */
+#ifdef DATAKIT_TEST
+/* The tests' independent copy of each width tier's limit (code uses the
+ * WIDTH_TIERS array) */
 #define MAX_ENTRIES_W5 ((1ULL << 16) - 1)
 #define MAX_ENTRIES_W6 ((1ULL << 20) - 1)
 #define MAX_ENTRIES_W7 ((1ULL << 24) - 1)
@@ -144,6 +146,7 @@ static const lruWidthTier WIDTH_TIERS[] = {
 #define MAX_ENTRIES_W11 ((1ULL << 40) - 1)
 #define MAX_ENTRIES_W12 ((1ULL << 44) - 1)
 #define MAX_ENTRIES_W16 ((1ULL << 60) - 1)
+#endif
 
 /* ====================================================================
  * Per-Level Metadata
@@ -2062,6 +2065,7 @@ bool multilruHasWeights(const multilru *mlru) {
 /* ====================================================================
  * Testing
  * ==================================================================== */
+#ifdef DATAKIT_TEST
 ssize_t multilruTraverseSize(const multilru *mlru) {
     size_t count = 0;
 
@@ -2072,7 +2076,6 @@ ssize_t multilruTraverseSize(const multilru *mlru) {
     return count;
 }
 
-#ifdef DATAKIT_TEST
 #include "ctest.h"
 #include <stdio.h>
 void multilruRepr(const multilru *mlru) {

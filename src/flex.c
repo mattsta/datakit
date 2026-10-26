@@ -399,12 +399,14 @@ typedef uint_fast8_t flexData;
 /* Entry Layout:
  *   [LEN][DATA][LEN REVERSED] */
 #define FLEX_ENTRY_DATA(fed) ((flexData *)((fed)->fe + (fed)->encodingSize))
+#ifdef DATAKIT_TEST /* flexRepr's entry sizes */
 #define FLEX_ENTRY_META_SIZE(fed)                                              \
     (FLEX_ENCODING_SIZE_TOTAL_FORWARD((fed)->fe, (fed)->encodingSize))
 
 /* Total size is: meta (header + trailer) + length of data */
 #define FLEX_ENTRY_SIZE_TOTAL(fed)                                             \
     (size_t)(FLEX_ENTRY_META_SIZE(fed) + (fed)->len)
+#endif
 
 DK_INLINE_ALWAYS
 size_t flexDataSizeForFixedWidthEncoding(const flexEncoding encoding,
@@ -482,7 +484,9 @@ DK_INLINE_ALWAYS flexEntry *flexGetPreviousEntry(flexEntry *const fe) {
 #define FLEX_LENGTH_OF_ENCODING(fe)                                            \
     (FLEX_IS_STR((fe)[0]) ? varintSplitFullNoZeroGetLenQuick_(fe) : 1)
 
+#ifdef DATAKIT_TEST /* flexRepr */
 #define flexTailOffset_(f) (size_t)(flexTail(f) - (f))
+#endif
 
 #define FLEX_COUNT_START_(f) ((f) + FLEX_TOTAL_BYTES_WIDTH(f))
 #define FLEX_COUNT_WIDTH(f)                                                    \
@@ -1573,7 +1577,9 @@ DK_STATIC __int128_t flexLoadIntegerExact_(const flexEntryData *entry) {
                                            : (__int128_t)box.data.i64;
 }
 
-/* The wide loaders take wide entries only: the value lands in 'wide'. */
+#ifdef DATAKIT_TEST
+/* flexRepr's typed loaders.
+ * The wide loaders take wide entries only: the value lands in 'wide'. */
 DK_STATIC __int128_t flexLoadSignedBig(const flexEntryData *entry) {
     databox box;
     databoxWide wide;
@@ -1608,6 +1614,7 @@ DK_STATIC double flexLoadDouble(const flexEntryData *entry) {
     flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
     return box.data.d64;
 }
+#endif
 
 /* Create a new empty flex. */
 flex *flexNew(void) {

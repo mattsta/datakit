@@ -9,6 +9,7 @@
 #include "../dkDiag.h"
 
 #include <errno.h>
+#include <stdio.h> /* snprintf */
 #include <string.h>
 #include <sys/time.h>
 
