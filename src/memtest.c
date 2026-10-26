@@ -956,8 +956,8 @@ static int memtest_run_unit_tests(void) {
             for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
                 mem[i] = i * 0x9e3779b97f4a7c15ULL;
             }
-            mtProgressLog log = {0};
-            memtestResult result = {0};
+            mtProgressLog log = {};
+            memtestResult result = {};
             memtestWithProgress(mem, bytes, 2, preserving, mtProgressNote_,
                                 &log, &result);
             bool kept = true;

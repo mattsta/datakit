@@ -1753,7 +1753,7 @@ void persistSetBadEntryNotify(persist *p, persistBadEntryNotify *fn,
 
 bool persistLastBadEntry(const persist *p, persistBadEntryReport *out) {
     if (out) {
-        *out = (persistBadEntryReport){0};
+        *out = (persistBadEntryReport){};
     }
     if (!p || !p->badEntry.events) {
         return false;
@@ -3310,7 +3310,7 @@ static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
         enum { ISB_CHUNK_ = 32 };
         databoxBig values[ISB_CHUNK_];
         const databox *chunk[ISB_CHUNK_];
-        intsetBigIterator it = {0};
+        intsetBigIterator it = {};
         intsetBigIteratorInit(isb, &it);
         uint32_t n = 0;
         memset(&values[0], 0, sizeof(values[0]));
@@ -4130,8 +4130,8 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
     for (size_t i = 0; i < count - 2; i++) {
         config = flexNext(f, config);
     }
-    databox limit = {{0}};
-    databox depth = {{0}};
+    databox limit = {};
+    databox depth = {};
     flexGetByType(config, &limit);
     flexGetByType(flexNext(f, config), &depth);
     if (limit.type != DATABOX_UNSIGNED_64 ||
@@ -4238,7 +4238,7 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
                            &end, &endWide) &&
         databoxCompare(&end.box, want) == 0) {
         /* The popped value is an owned copy nobody needs. */
-        databox got = {{0}};
+        databox got = {};
         const bool popped = multilistPop(ml, state, &got, fromTail);
         databoxFreeData(&got);
         return popped;
@@ -4252,14 +4252,14 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
         return false;
     }
     mflexState *pair[2] = {state, tmp};
-    multilistIterator iter = {0};
+    multilistIterator iter = {};
     bool removed = false;
     if (fromTail) {
         multilistIteratorInitReverse(*ml, pair, &iter);
     } else {
         multilistIteratorInitForward(*ml, pair, &iter);
     }
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
     while (multilistNext(&iter, &entry)) {
         if (databoxCompare(&entry.box, want) == 0) {
             multilistDelEntry(&iter, &entry);
@@ -4334,7 +4334,7 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
             return true;
         }
         /* The popped value is an owned copy nobody needs. */
-        databox got = {{0}};
+        databox got = {};
         const bool popped = multilistPop(ml, state, &got, fromTail);
         databoxFreeData(&got);
         return popped;
@@ -4591,7 +4591,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     if (count < 2 || count % 2 != 0) {
         return NULL;
     }
-    databox tag = {{0}};
+    databox tag = {};
     flexGetByType(fe, &tag);
     if (tag.type != DATABOX_UNSIGNED_64 ||
         tag.data.u > MD_PERSIST_KEYS_CUSTOM) {
@@ -4599,7 +4599,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     }
     const mdPersistKeys keys = (mdPersistKeys)tag.data.u;
     fe = flexNext(f, fe);
-    databox seedBox = {{0}};
+    databox seedBox = {};
     flexGetByType(fe, &seedBox);
     if (seedBox.type != DATABOX_UNSIGNED_64 || seedBox.data.u > UINT32_MAX) {
         return NULL;
@@ -5065,7 +5065,7 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
 /* The next element of a snapshot as an unsigned integer up to 'max' */
 static bool mlruPersistNext_(const flex *f, flexEntry **fe, uint64_t max,
                              uint64_t *out) {
-    databox b = {{0}};
+    databox b = {};
     flexGetByType(*fe, &b);
     *fe = flexNext(f, *fe);
     if ((b.type != DATABOX_UNSIGNED_64 && b.type != DATABOX_SIGNED_64) ||
@@ -5722,7 +5722,7 @@ static size_t persistTestFlexPayload(uint8_t *out, size_t cap,
 static int persistTestDecoderMatrix(const persistOps *ops, void *start) {
     enum { SLOTS = 18, CAP = 96 };
     uint8_t payload[SLOTS][CAP];
-    size_t len[SLOTS] = {0};
+    size_t len[SLOTS] = {};
     size_t n = 0;
     len[n++] = 0;
     payload[n][0] = 0x00, len[n++] = 1;
@@ -6721,7 +6721,7 @@ int persistTest(int argc, char *argv[]) {
 
         store->seek(store->ctx, 0, SEEK_SET);
 
-        char buf[32] = {0};
+        char buf[32] = {};
         ssize_t readLen = store->read(store->ctx, buf, sizeof(buf));
         if (readLen != (ssize_t)strlen(testData)) {
             ERR("Read returned %zd, expected %zu", readLen, strlen(testData));
@@ -6890,7 +6890,7 @@ int persistTest(int argc, char *argv[]) {
             persistStats none;
             memset(&none, 0xA5, sizeof(none));
             persistGetStats(NULL, &none);
-            const persistStats zero = {0};
+            const persistStats zero = {};
             if (memcmp(&none, &zero, sizeof(none)) != 0) {
                 ERRR("persistGetStats(NULL) did not zero the struct");
             }
@@ -7555,7 +7555,7 @@ int persistTest(int argc, char *argv[]) {
         /* Operand-less POPs over wide values and strings */
         for (int k = 0; k < 7; k++) {
             const bool fromTail = k % 2 == 0;
-            databox got = {{0}};
+            databox got = {};
             multilistPop(&ml, s0, &got, fromTail);
             databoxFreeData(&got);
             PTEST_LOGGED(persistLogOp(
@@ -8897,7 +8897,7 @@ int persistTest(int argc, char *argv[]) {
         walStore->seek(walStore->ctx, 0, SEEK_SET);
         snapStore->seek(snapStore->ctx, 0, SEEK_SET);
         multidict *restored = persistRecover(p);
-        databox v = {{0}};
+        databox v = {};
         databoxBig wv;
         DATABOX_BIG_INIT(&wv);
         if (!restored || multidictGetType(restored) != &multidictTypeCaseKey ||
@@ -8960,7 +8960,7 @@ int persistTest(int argc, char *argv[]) {
             walStore->seek(walStore->ctx, 0, SEEK_SET);
             snapStore->seek(snapStore->ctx, 0, SEEK_SET);
             multidict *r = persistRecover(p);
-            databox v = {{0}};
+            databox v = {};
             if (!r || multidictCount(r) != 3) {
                 ERRR("multidict: recovered count is not 3");
             } else {
@@ -9037,7 +9037,7 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("multilist: recovered count is not 3");
             } else {
                 for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
-                    multilistEntry e = {0};
+                    multilistEntry e = {};
                     /* A string stays a string and a number a number; a
                      * number may come back in its minimal same-type
                      * form (a non-negative SIGNED reads as UNSIGNED). */
@@ -9286,7 +9286,7 @@ int persistTest(int argc, char *argv[]) {
             }
             case 4: { /* Pop (if not empty) */
                 if (multilistCount(ml) > 0) {
-                    databox got = {{0}};
+                    databox got = {};
                     multilistPop(&ml, state, &got, FLEX_ENDPOINT_TAIL);
                     databoxFreeData(&got);
                 }
@@ -9546,7 +9546,7 @@ int persistTest(int argc, char *argv[]) {
          * rename lands but whose directory fsync fails reports failure
          * and still leaves the store writing the live file; a clean
          * commit replaces the content */
-        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
         char path[PATH_MAX];
         char tmpPath[PATH_MAX];
         if (!dkTestTmpDirPath(&tmp, "rw.snap", path, sizeof(path)) ||
@@ -9788,7 +9788,7 @@ int persistTest(int argc, char *argv[]) {
          * Strict recovery fails and refuses appends, leaving the WAL byte
          * for byte as it was; lenient recovery keeps {1, 2} and refuses
          * appends too, until a compaction */
-        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
         char snapPath[PATH_MAX];
         char walPath[PATH_MAX];
         if (!dkTestTmpDirPath(&tmp, "strict.snap", snapPath,
@@ -9876,7 +9876,7 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("durability: atomic snapshot publish leaves no torn temp file") {
-        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
         char snapPath[PATH_MAX];
         char walPath[PATH_MAX];
         char tmpPath[PATH_MAX];
@@ -10226,7 +10226,7 @@ int persistTest(int argc, char *argv[]) {
         /* Round-trip: build a real intsetBig, snapshot, restore,
          * count must match. */
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
-        databoxBig dbig = {0};
+        databoxBig dbig = {};
         DATABOX_BIG_INIT(&dbig);
         dbig.type = DATABOX_SIGNED_64;
         dbig.data.i = -42;
@@ -10565,7 +10565,7 @@ int persistTest(int argc, char *argv[]) {
                 ERR("row %zu: the written body differs", r);
             }
         }
-        if (persistOpEncodeBoxesInto(NULL, 1, NULL, 0, &(size_t){0})) {
+        if (persistOpEncodeBoxesInto(NULL, 1, NULL, 0, &(size_t){})) {
             ERRR("no boxes were not refused");
         }
     }
@@ -10613,7 +10613,7 @@ int persistTest(int argc, char *argv[]) {
             bool same = got && multidictCount(got) == 29;
             for (int64_t k = 0; same && k < 30; k++) {
                 const databox key = DATABOX_SIGNED(k);
-                databox val = {{0}};
+                databox val = {};
                 const bool found = multidictFind(got, &key, &val);
                 if (k == 7) {
                     same = !found;
@@ -10853,7 +10853,7 @@ int persistTest(int argc, char *argv[]) {
         persistAttachWAL(p, wal);
         persistStore *q = persistStoreMemory(0);
         persistAttachQuarantine(p, q);
-        persistTestBadNotify heard = {0};
+        persistTestBadNotify heard = {};
         persistSetBadEntryNotify(p, persistTestBadNotifyFn, &heard);
         cleaner(intsetFree) intset *empty = intsetNew();
         persistSnapshot(p, empty);
@@ -10920,7 +10920,7 @@ int persistTest(int argc, char *argv[]) {
             persistCreate(&persistOpsIntset, &cfg);
         persistStore *wal = persistStoreMemory(0);
         persistAttachWAL(p, wal);
-        persistTestBadNotify heard = {0};
+        persistTestBadNotify heard = {};
         persistSetBadEntryNotify(p, persistTestBadNotifyFn, &heard);
         for (int64_t v = 1; v <= 2; v++) {
             PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
@@ -11297,7 +11297,7 @@ int persistTest(int argc, char *argv[]) {
             ERR("walSequence %" PRIu64 " after reset", stats.walSequence);
         }
         stats.walSequence = 0;
-        const persistStats zero = {0};
+        const persistStats zero = {};
         if (memcmp(&stats, &zero, sizeof(stats)) != 0) {
             ERRR("ResetStats left a counter set");
         }
@@ -11421,7 +11421,7 @@ int persistTest(int argc, char *argv[]) {
             if (got) {
                 flexFree(got);
             }
-            dkFormatStamp found = {0};
+            dkFormatStamp found = {};
             const dkFormatResult result = persistLastFormat(p, &found);
             if (accepted != (cases[c].err == PERSIST_ERR_NONE) ||
                 (!accepted && (persistLastError(p) != cases[c].err ||
@@ -11502,7 +11502,7 @@ int persistTest(int argc, char *argv[]) {
         store->write(store->ctx, bytes, len);
         persistAttachSnapshot(q, store);
         void *wrong = persistRestore(q);
-        dkFormatStamp found = {0};
+        dkFormatStamp found = {};
         if (wrong || persistLastError(q) != PERSIST_ERR_STRUCTURE_FORMAT ||
             persistLastFormat(q, &found) != DK_FORMAT_WRONG_ID ||
             found.id != PERSIST_TYPE_FLEX) {

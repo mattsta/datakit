@@ -34,7 +34,7 @@ int multiheapTest(int argc, char *argv[]) {
         assert(liveCopy.position == 12345 && liveCopy.extent == 500 &&
                liveCopy.generation == 7);
 
-        mhCursor restored = {0};
+        mhCursor restored = {};
         multiheapRestore(heap, 1, &restored);
         assert(memcmp(&restored, &save, sizeof(save)) == 0);
 
@@ -54,7 +54,7 @@ int multiheapTest(int argc, char *argv[]) {
         c.generation = 2;
         multiheapInsert(&heap, 42, &c);
 
-        mhCursor got = {0};
+        mhCursor got = {};
         multiheapRestore(heap, 42, &got);
         assert(got.extent == 1500 && got.generation == 2);
         assert(multimapCount((multimap *)heap) == 1);
@@ -72,7 +72,7 @@ int multiheapTest(int argc, char *argv[]) {
         }
 
         for (uint64_t ref = 0; ref < 300; ref++) {
-            mhCursor got = {0};
+            mhCursor got = {};
             multiheapRestore(heap, ref, &got);
             if (got.position != ref || got.extent != ref * 3 ||
                 got.generation != (ref ^ 0xff)) {
@@ -106,7 +106,7 @@ int multiheapTest(int argc, char *argv[]) {
 
         /* The KEY must still be the lookup key (the resize targets the
          * value entry, not the key entry), and neighbors are intact. */
-        mhCursor got = {0};
+        mhCursor got = {};
         multiheapRestore(heap, 4, &got);
         assert(got.position == 1);
         multiheapRestore(heap, 6, &got);

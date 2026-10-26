@@ -622,7 +622,7 @@ StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v) {
 
     int32_t exponent;
     int32_t places;
-    uint8_t generated[64] = {0};
+    uint8_t generated[64] = {};
 
     const uint64_t fractionAsInteger = fractionAndExponent(v, &exponent);
     ssize_t generatedLen =
@@ -910,12 +910,12 @@ int strDoubleFormatTest(int argc, char *argv[]) {
                 dexp >= -122 && dexp <= 122 && v >= -1e36 && v <= 1e36;
 
             int32_t placesB;
-            uint8_t genB[64] = {0};
+            uint8_t genB[64] = {};
             const size_t lenB = BniceDoubleHelper(dexp, dfrac, &placesB, genB);
 
             if (safe64) {
                 int32_t places64;
-                uint8_t gen64[64] = {0};
+                uint8_t gen64[64] = {};
                 const size_t len64 =
                     niceDoubleHelper(dexp, dfrac, &places64, gen64);
                 if (len64 != lenB || places64 != placesB ||
@@ -929,7 +929,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
 
             if (safe128) {
                 int32_t places128;
-                uint8_t gen128[64] = {0};
+                uint8_t gen128[64] = {};
                 const size_t len128 =
                     OniceDoubleHelper(dexp, dfrac, &places128, gen128);
                 if (len128 != lenB || places128 != placesB ||
@@ -966,7 +966,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
                 ERR("Accepted undersized buffer for worst case %zu", i);
             }
 
-            uint8_t exact[26] = {0};
+            uint8_t exact[26] = {};
             const size_t len =
                 StrDoubleFormatToBufNice(exact, sizeof(exact), v);
             if (!len) {
@@ -1001,7 +1001,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
             {"negative sign passthrough", -12.5, "-12.5"},
         };
         for (size_t i = 0; i < COUNT_ARRAY(vectors); i++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             const size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), vectors[i].value);
             if (len != strlen(vectors[i].expected) ||
@@ -1035,7 +1035,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
         };
 
         for (size_t i = 0; i < COUNT_ARRAY(tests); i++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), tests[i].value);
             assert(len == strlen(tests[i].expected));
@@ -1056,7 +1056,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
         };
 
         for (size_t i = 0; i < COUNT_ARRAY(edgeCases); i++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), edgeCases[i]);
             /* Just verify it produces output and doesn't crash */
@@ -1081,7 +1081,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
         };
 
         for (size_t i = 0; i < COUNT_ARRAY(boundaryTests); i++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), boundaryTests[i]);
             assert(len > 0);
@@ -1174,7 +1174,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
                            "0.0078125"};
         assert(COUNT_ARRAY(digits) == COUNT_ARRAY(results));
         for (size_t i = 0; i < COUNT_ARRAY(digits); i++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             uint32_t resultLen =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), digits[i]);
             printf("Got: %s (len %" PRIu32 ") (expecting: %s (len %zu))\n", buf,
@@ -1186,7 +1186,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
 
     TEST("nice float16 printing") {
         for (size_t i = 0; i <= UINT16_MAX; i++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             double tryThis = float16Decode(i);
             uint32_t resultLen =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), tryThis);
@@ -1207,7 +1207,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
     TEST_DESC("double formatting from random bit construction (100 dots; "
               "%'zu total tests)",
               testMax) {
-        uint32_t methods[4] = {0};
+        uint32_t methods[4] = {};
         /* Test random floats */
         for (size_t i = 0; i < testMax; i++) {
             const uint32_t randA = rand();
@@ -1215,7 +1215,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
             const uint64_t randBig = (uint64_t)randA << 32 | randB;
             double thisRandAttempt;
             memcpy(&thisRandAttempt, &randBig, sizeof(double));
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             //            printf("running against: %g\n", thisRandAttempt);
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), thisRandAttempt);
@@ -1246,7 +1246,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
     TEST_DESC(
         "double formatting from random doubles (100 dots; %'zu total tests)",
         testMax) {
-        uint32_t methods[4] = {0};
+        uint32_t methods[4] = {};
         /* Test random floats */
         for (size_t i = 0; i < testMax; i++) {
             const bool doNegative = rand() % 2 == 0;
@@ -1255,7 +1255,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
                 (doNegative ? -1 : 1) * ((double)rand() / (double)RAND_MAX) *
                 (doSmall ? ((double)1 / rand()) * (rand() % 2 == 0 ? 10e100 : 1)
                          : rand());
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             //            printf("running against: %g\n", thisRandAttempt);
             size_t len =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), thisRandAttempt);
@@ -1304,7 +1304,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
                 continue;
             }
 
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             const size_t len = StrDoubleFormatToBufNice(buf, sizeof(buf), v);
 
             /* Every corpus value must satisfy the roundtrip contract */

@@ -16,7 +16,7 @@
  * Marked unused: a TU may enable the generator but reference only some. */
 #define CTEST_INCLUDE_GEN(named)                                               \
     [[maybe_unused]] static char *gen##named(const char *prefix, int i) {      \
-        static char result[64] = {0};                                          \
+        static char result[64] = {};                                           \
         memset(result, 0, sizeof(result));                                     \
         snprintf(result, sizeof(result), "%s%d", prefix, i);                   \
         return result;                                                         \

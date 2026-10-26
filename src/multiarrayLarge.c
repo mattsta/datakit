@@ -38,9 +38,9 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     const uint16_t rowMax = medium->rowMax;
     const uint32_t nodes = medium->count;
 
-    multiarrayLarge tmp = {0};
+    multiarrayLarge tmp = {};
     multiarrayLargeNode *head = NULL;
-    multiarrayLargeResult worker = {0};
+    multiarrayLargeResult worker = {};
     for (uint16_t i = 0; i < medium->count; i++) {
         /* @own: container; free=multiarrayLargeFree */
         multiarrayLargeNode *node = zcalloc(1, sizeof(*node));
@@ -647,7 +647,7 @@ int multiarrayLargeTest(int argc, char *argv[]) {
         assert(mar->head == mar->tail);
 
         int count = 0;
-        s16 s = {0};
+        s16 s = {};
         multiarrayLargeNode *preHead = mar->head;
         multiarrayLargeNode *preTail = mar->tail;
         multiarrayLargeInsert(mar, count, &s);

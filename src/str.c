@@ -249,7 +249,7 @@ DK_INLINE_ALWAYS bool StrScanScanReliableConvert128_(
         (!requireDigitCheck || StrIsDigitsFast(buf + signLen, len - signLen));
 
     if (!wideInteger) {
-        databox narrow = {{0}};
+        databox narrow = {};
         if (!StrScanScanReliable(p_, len, &narrow)) {
             return false;
         }
@@ -1022,7 +1022,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(testValues) / sizeof(testValues[0]);
              i++) {
             uint32_t val = testValues[i];
-            char buf[10] = {0};
+            char buf[10] = {};
             StrUInt9DigitsToBuf(buf, val);
 
             /* Verify by parsing back */
@@ -1044,7 +1044,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
         /* Exhaustive test for smaller ranges */
         for (uint32_t val = 0; val < 100000; val++) {
-            char buf[10] = {0};
+            char buf[10] = {};
             StrUInt9DigitsToBuf(buf, val);
 
             uint64_t parsed = 0;
@@ -1062,7 +1062,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             rngState = rngState * 6364136223846793005ULL + 1;
             uint32_t val = (uint32_t)(rngState >> 32) % 1000000000;
 
-            char buf[10] = {0};
+            char buf[10] = {};
             StrUInt9DigitsToBuf(buf, val);
 
             uint64_t parsed = 0;
@@ -1084,7 +1084,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
         /* Test StrUInt4DigitsToBuf */
         for (uint32_t val = 0; val < 10000; val++) {
-            char buf[5] = {0};
+            char buf[5] = {};
             StrUInt4DigitsToBuf(buf, val);
 
             uint32_t parsed = 0;
@@ -1107,7 +1107,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(test8Values) / sizeof(test8Values[0]);
              i++) {
             uint32_t val = test8Values[i];
-            char buf[9] = {0};
+            char buf[9] = {};
             StrUInt8DigitsToBuf(buf, val);
 
             uint32_t parsed = 0;
@@ -1125,7 +1125,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
         /* Exhaustive test for StrUInt8DigitsToBuf on smaller range */
         for (uint32_t val = 0; val < 100000; val++) {
-            char buf[9] = {0};
+            char buf[9] = {};
             StrUInt8DigitsToBuf(buf, val);
 
             uint32_t parsed = 0;
@@ -1173,7 +1173,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         for (size_t c = 0; c < 2 * sizeof(cases) / sizeof(*cases); c++) {
             const size_t i = c / 2;
             const bool words = c % 2;
-            databox box = {{0}};
+            databox box = {};
             const StrScanFmt fmt = StrScanScan(
                 (const uint8_t *)cases[i].s, &box, cases[i].opt, words, false);
             if (fmt != cases[i].fmt) {
@@ -1317,7 +1317,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             "0x123456789abcdef0123p-40",
         };
         for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
-            databox box = {{0}};
+            databox box = {};
             const StrScanFmt fmt = StrScanScan((const uint8_t *)edges[i], &box,
                                                STRSCAN_OPT_TONUM, false, false);
             const double want = strtod(edges[i], NULL);
@@ -1354,7 +1354,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             at += (size_t)snprintf(s + at, sizeof(s) - at, "%c%d",
                                    hex ? 'p' : 'e',
                                    (int)(splitmix64(&rng) % span) - span / 2);
-            databox box = {{0}};
+            databox box = {};
             const StrScanFmt fmt = StrScanScan((const uint8_t *)s, &box,
                                                STRSCAN_OPT_TONUM, false, false);
             const double want = strtod(s, NULL);
@@ -1423,7 +1423,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             {"-1e-99999", 0, STRSCAN_NUM, 0, -0.0},
         };
         for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
-            databox box = {{0}};
+            databox box = {};
             const StrScanFmt fmt =
                 StrScanScan((const uint8_t *)cases[i].s, &box,
                             (StrScanOpt)cases[i].opt, false, false);
@@ -1441,7 +1441,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
 
         /* Float words, spaces, and TOINT */
-        databox box = {{0}};
+        databox box = {};
         if (StrScanScan((const uint8_t *)"-inf", &box, 0, true, false) !=
                 STRSCAN_NUM ||
             box.data.d64 != -INFINITY ||
@@ -1480,8 +1480,8 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                                      "-9223372036854775808"};
         for (size_t i = 0; i < sizeof(nums) / sizeof(*nums); i++) {
             const size_t n = strlen(nums[i]);
-            uint8_t le[64] = {0};
-            uint8_t be[64] = {0};
+            uint8_t le[64] = {};
+            uint8_t be[64] = {};
             for (size_t k = 0; k < n; k++) {
                 le[2 * k] = (uint8_t)nums[i][k];
                 be[2 * k + 1] = (uint8_t)nums[i][k];
@@ -1897,7 +1897,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing simple 0?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("0", 1, &result);
         assert(worked);
 
@@ -1912,7 +1912,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing simple 1?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("1", 1, &result);
         assert(worked);
 
@@ -1927,7 +1927,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing simple -1?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("-1", 2, &result);
         assert(worked);
 
@@ -1949,10 +1949,10 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                 fflush(stdout);
             }
 
-            char buf[10] = {0};
+            char buf[10] = {};
             StrUInt64ToBuf(buf, sizeof(buf), i);
 
-            databox result = {{0}};
+            databox result = {};
             bool worked = StrScanScanReliable(buf, strlen(buf), &result);
             assert(worked);
 
@@ -1969,7 +1969,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 #endif
 
     TEST("Reliable number parsing simple?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("299.5", 5, &result);
         assert(worked);
 
@@ -1984,7 +1984,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing simple end in zero?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("299.0", 5, &result);
         assert(worked);
 
@@ -2006,7 +2006,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing simple trailing zeroes fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("299.5000", 8, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2014,7 +2014,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing too long decimal fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("299.500010101010101", 18, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2022,7 +2022,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing too long decimal fails II?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked =
             StrScanScanReliable("2.22222222222222222222222222", 28, &result);
         if (worked) {
@@ -2032,8 +2032,8 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
 #if 0
     TEST("Reliable number parsing double extremes?") {
-        databox resultMin = {{0}};
-        databox resultMax = {{0}};
+        databox resultMin = {};
+        databox resultMax = {};
         const char *min = "0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014";
 
         const char *max = "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0";
@@ -2053,7 +2053,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 #endif
 
     TEST("Reliable number parsing bigger real ok?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("21542136560502.848", 18, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
@@ -2066,14 +2066,14 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger real ok III?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("0.4", 3, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
             assert(NULL);
         }
 
-        char restoredBuf[64] = {0};
+        char restoredBuf[64] = {};
         StrDoubleFormatToBufNice(restoredBuf, sizeof(restoredBuf), 0.4);
 
         assert(strlen("0.4") == strlen(restoredBuf));
@@ -2084,7 +2084,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger real ok IV?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("0.456789", 8, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
@@ -2096,7 +2096,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
     TEST("Reliable number parsing bigger real ok II?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("9543769205953.803", 17, &result);
         const double expected = 9543769205953.803;
 #if DK_HAS_FLOAT_EXTENDED
@@ -2134,7 +2134,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger real not ok?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("9543769205953.8029999999999999734",
                                           34, &result);
         if (worked) {
@@ -2144,7 +2144,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing smaller leading zeroes not ok?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("03", 2, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2153,7 +2153,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger leading zeroes not ok?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("0009543769205953", 16, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2162,7 +2162,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger leading dot not ok?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable(".0009543769205953", 17, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2171,7 +2171,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger integer fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("24032321013100332443", 20, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2180,7 +2180,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing bigger float fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("240323210131003243.3", 20, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2189,7 +2189,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing a dash fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("-", 1, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2198,7 +2198,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing a dot fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable(".", 1, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2207,7 +2207,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing integer?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("9223372036854775808", 19, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
@@ -2245,7 +2245,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             {"18446744073709551616", false, DATABOX_VOID, 0, 0},
         };
         for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
-            databox result = {{0}};
+            databox result = {};
             const bool worked =
                 StrScanScanReliable(rows[i].s, strlen(rows[i].s), &result);
             if (worked != rows[i].ok) {
@@ -2276,7 +2276,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing biggest integer?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("18446744073709551615", 20, &result);
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
@@ -2287,7 +2287,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing too big integer signed failed?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("-18446744073709551615", 21, &result);
         if (worked) {
             databoxReprSay("Expected failure, but got", &result);
@@ -2296,7 +2296,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Reliable number parsing biggerest integer fails?") {
-        databox result = {{0}};
+        databox result = {};
         bool worked = StrScanScanReliable("18446744073709551616", 20, &result);
         if (worked) {
             databoxReprSay("Expected success, but got", &result);
@@ -2318,7 +2318,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
             useBad[i] = '9';
 
-            databox result = {{0}};
+            databox result = {};
             bool worked = StrScanScanReliable(useBad, strlen(useBad), &result);
             if (worked) {
                 databoxReprSay("Expected failure, but got", &result);
@@ -2367,7 +2367,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                        "2147483649",           "1.234",
                        "789498543789543.13",   "21542136560502.847656"};
 
-        size_t len[COUNT_ARRAY(str)] = {0};
+        size_t len[COUNT_ARRAY(str)] = {};
         for (size_t i = 0; i < COUNT_ARRAY(str); i++) {
             len[i] = strlen(str[i]);
         }
@@ -2375,7 +2375,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         {
             for (size_t j = 0; j < looperDeDoBooster; j++) {
                 TIME_INIT;
-                databox result = {{0}};
+                databox result = {};
                 for (size_t i = 0; i < loopBooster; i++) {
                     PERF_TIMERS_STAT_START;
                     const size_t useStr = i % COUNT_ARRAY(str);
@@ -2808,7 +2808,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             ERR("LogEstFromDouble(1e30) = %d", (int)big);
         }
 
-        databox box = {{0}};
+        databox box = {};
         if (!StrScanToDouble("1.5", &box, false, false) ||
             box.data.d64 != 1.5 || StrScanToDouble("x", &box, false, false) ||
             StrScanToDouble("inf", &box, false, false) ||
@@ -2837,7 +2837,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             ERRR("sign/space scanning depends on the float words");
         }
 
-        databox setBox = {{0}};
+        databox setBox = {};
         DATABOX_SET_NAN(&setBox);
         const databox nanBox = DATABOX_NAN;
         const databox posBox = DATABOX_INFINITY_POSITIVE;
@@ -2881,7 +2881,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             0, 0, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
             0, 0, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0};
 
-        uint8_t positions[64] = {0};
+        uint8_t positions[64] = {};
         StrBitmapGetSetPositionsExact8(&pickles, sizeof(pickles), positions);
         assert(
             !memcmp(positions, positionsValidate, sizeof(positionsValidate)));
@@ -2898,7 +2898,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             42, 43, 44, 45, 48, 49, 50, 51, 52, 53, 56, 57, 58, 59, 60, 61,
             0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0};
 
-        uint8_t positions[64] = {0};
+        uint8_t positions[64] = {};
         StrBitmapGetUnsetPositionsExact8(&pickles, sizeof(pickles), positions);
         assert(
             !memcmp(positions, positionsValidate, sizeof(positionsValidate)));
@@ -3116,7 +3116,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     for (int i = 0; i < (int)sizeof(STRLEN_UTF8_STEP); i++) {
         TEST_DESC("lenutf8countbytes utf8 small (substr; offset by %d)", i) {
             const char foo[] = u8"abcdefhello " _TU8MIDDLES "fedcba";
-            uint8_t space[640] = {0};
+            uint8_t space[640] = {};
 
             memset(space, 'Q', sizeof(space));
 
@@ -5402,7 +5402,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                     ERR("Convert128 payload wrong for %s", cases[i].s);
                 }
             } else {
-                databox want = {{0}};
+                databox want = {};
                 StrScanScanReliable(cases[i].s, len, &want);
                 if (want.type != use->type || want.data.u64 != use->data.u64) {
                     ERR("Convert128 payload wrong for %s", cases[i].s);
@@ -5452,11 +5452,11 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         size_t accepted = 0;
         for (size_t i = 0; i < sizeof(inputs) / sizeof(*inputs); i++) {
             const size_t len = strlen(inputs[i]);
-            databox narrow = {{0}};
+            databox narrow = {};
             const bool want = StrScanScanReliable(inputs[i], len, &narrow);
 
-            databox small = {{0}};
-            databoxBig big = {{0}};
+            databox small = {};
+            databoxBig big = {};
             databoxBig *use = NULL;
             const bool got = StrScanScanReliableConvert128(inputs[i], len,
                                                            &small, &big, &use);

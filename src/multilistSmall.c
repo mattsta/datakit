@@ -206,7 +206,7 @@ void multilistSmallIteratorInit(multilistSmall *ml, multilistIterator *iter,
 bool multilistSmallIteratorInitAtIdx(multilistSmall *ml,
                                      multilistIterator *iter, mlOffsetId idx,
                                      bool forward) {
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
 
     if (multilistSmallIndex(ml, idx, &entry)) {
         multilistSmallIteratorInit(ml, iter, forward);
@@ -319,7 +319,7 @@ void multilistSmallRotate(multilistSmall *ml) {
     flexEntry *fe = flexTail(ml->fl);
 
     /* Get tail entry (a 96/128-bit value lands in 'wide') */
-    databox box = {{0}};
+    databox box = {};
     databoxWide wide;
     flexGetByTypeInto(fe, &box, &wide);
 

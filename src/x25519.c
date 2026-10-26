@@ -638,7 +638,7 @@ int x25519Test(int argc, char *argv[]) {
         for (uint32_t i = 0; i < 32; i++) {
             priv[i] = (uint8_t)i;
         }
-        uint8_t peer_zero[32] = {0};
+        uint8_t peer_zero[32] = {};
         uint8_t out[32];
         if (x25519(out, priv, peer_zero)) {
             ERRR("Low-order peer key must surface as false");

@@ -45,11 +45,11 @@ DK_INLINE_ALWAYS void multimapIteratorDecode_(const flexEntry *const fe,
  * heap payload the caller owns otherwise. */
 static inline void multimapRemovedCopy_(const flexEntry *const fe,
                                         databox *const box) {
-    databox found = {{0}};
+    databox found = {};
     flexGetByTypeInto(fe, &found, NULL);
     if (found.type == DATABOX_BYTES) {
         if (found.len <= sizeof(found.data.bytes.embed8)) {
-            databox embed = {{0}};
+            databox embed = {};
             memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
             embed.type = DATABOX_BYTES_EMBED;
             embed.len = found.len;
@@ -85,7 +85,7 @@ multimapRemovedOutFill_(const flex *map, const flexEntry *fe,
         if (take) {
             multimapRemovedCopy_(fe, &removedOut[i - 1]);
         } else {
-            removedOut[i - 1] = (databox){{0}};
+            removedOut[i - 1] = (databox){};
             flexGetByTypeInto(fe, &removedOut[i - 1], NULL);
         }
     }

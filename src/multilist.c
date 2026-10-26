@@ -643,7 +643,7 @@ static bool mlwIsWide(const mlwVal *v) {
 /* The values just past each 64/96/128-bit limit, both signs. */
 static mlwVal mlwBoundary(uint32_t which) {
     const __uint128_t one = 1;
-    mlwVal v = {0};
+    mlwVal v = {};
     switch (which % 9) {
     case 0:
         v.bits = one << 64;
@@ -684,7 +684,7 @@ static mlwVal mlwBoundary(uint32_t which) {
  * of 65..126 significant bits, 64-bit values (including the 64-bit
  * limits) and short and long strings, interleaved. */
 static mlwVal mlwGen(uint32_t i) {
-    mlwVal v = {0};
+    mlwVal v = {};
     const uint64_t mix = (uint64_t)(i + 1) * UINT64_C(0x9E3779B97F4A7C15);
     switch (i % 5) {
     case 0:
@@ -1109,7 +1109,7 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
             return false;
         }
 
-        databox box = {{0}};
+        databox box = {};
         flexGetByTypeInto(fe, &box, NULL);
         if (!mlrIs(&box, want[i])) {
             return false;
@@ -1265,7 +1265,7 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
         const uint32_t last_ = want_[n_ - 1];                                  \
         memmove(&want_[1], &want_[0], (n_ - 1) * sizeof(*want_));              \
         want_[0] = last_;                                                      \
-        databox got_ = {{0}};                                                  \
+        databox got_ = {};                                                     \
         bool popped_ = multilist##PFX##AdapterPop(ml_, s0, &got_, true) &&     \
                        mlrIs(&got_, want_[n_ - 1]);                            \
         databoxFreeData(&got_);                                                \
@@ -1431,11 +1431,11 @@ int multilistTest(int argc, char *argv[]) {
                                        total - 1};
                 for (size_t ai = 0; ai < sizeof(anchors) / sizeof(*anchors);
                      ai++) {
-                    multilistEntry anchor = {0};
+                    multilistEntry anchor = {};
                     assert(multilistIndexCheck(ml, s0, anchors[ai], &anchor));
 
                     for (int t = -total; t < total; t += 3) {
-                        multilistEntry got = {0};
+                        multilistEntry got = {};
                         const bool foundNear = multilistIndexNearGet(
                             ml, s0, t, &anchor, anchors[ai], &got);
                         assert(foundNear);
@@ -1450,7 +1450,7 @@ int multilistTest(int argc, char *argv[]) {
                     }
 
                     /* Out of range stays out of range */
-                    multilistEntry miss = {0};
+                    multilistEntry miss = {};
                     assert(!multilistIndexNearGet(ml, s0, total, &anchor,
                                                   anchors[ai], &miss));
                     assert(!multilistIndexNearGet(ml, s0, -total - 1, &anchor,
@@ -1633,7 +1633,7 @@ int multilistTest(int argc, char *argv[]) {
         TEST("pop empty") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            databox box = {{0}};
+            databox box = {};
             bool found = multilistPopHead(&ml, s0, &box);
             assert(!found);
             (void)found;
@@ -1646,7 +1646,7 @@ int multilistTest(int argc, char *argv[]) {
             multilistPushHead(ml, s0, populate, 32);
             uint8_t *data;
             uint32_t bytes;
-            databox box = {{0}};
+            databox box = {};
             multilistPopHead(&ml, s0, &box);
             bytes = box.len;
             data = box.data.bytes.start;
@@ -1668,14 +1668,14 @@ int multilistTest(int argc, char *argv[]) {
             const databox num = databoxNewSigned(55513);
             multilistPushByTypeHead(&ml, s0, &num);
             multilistPushHead(ml, s0, "55513", 5);
-            databox box = {{0}};
+            databox box = {};
             multilistPopHead(&ml, s0, &box);
             if (!DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
                 memcmp(databoxBytes(&box), "55513", 5) != 0) {
                 ERRR("numeral string did not pop as the same string");
             }
             databoxFreeData(&box);
-            box = (databox){{0}};
+            box = (databox){};
             multilistPopHead(&ml, s0, &box);
             if (!DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
                 ERRR("integer did not pop as 55513");
@@ -1693,7 +1693,7 @@ int multilistTest(int argc, char *argv[]) {
             for (int i = 0; i < 500; i++) {
                 uint8_t *data;
                 uint32_t bytes;
-                databox box = {{0}};
+                databox box = {};
                 bool found = multilistPopHead(&ml, s0, &box);
                 data = box.data.bytes.start;
                 bytes = box.len;
@@ -1719,7 +1719,7 @@ int multilistTest(int argc, char *argv[]) {
             for (int i = 0; i < 5000; i++) {
                 uint8_t *data;
                 uint32_t bytes;
-                databox box = {{0}};
+                databox box = {};
                 bool found = multilistPopHead(&ml, s0, &box);
                 data = box.data.bytes.start;
                 bytes = box.len;
@@ -1748,7 +1748,7 @@ int multilistTest(int argc, char *argv[]) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            multilistIterator iter = {0};
+            multilistIterator iter = {};
             multilistIteratorInitForwardReadOnly(ml, s, &iter);
             multilistEntry entry;
             int i = 499;
@@ -1776,7 +1776,7 @@ int multilistTest(int argc, char *argv[]) {
                 multilistPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            multilistIterator iter = {0};
+            multilistIterator iter = {};
             multilistIteratorInitReverseReadOnly(ml, s, &iter);
             multilistEntry entry;
             int i = 0;
@@ -1844,7 +1844,7 @@ int multilistTest(int argc, char *argv[]) {
                 multilistPushTail(ml, s0, "zoo", 3);
 
                 /* insert "bar" before "bob" while iterating over list. */
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistIteratorInitForwardReadOnly(ml, s, &iter);
                 multilistEntry entry;
                 while (multilistNext(&iter, &entry)) {
@@ -2265,7 +2265,7 @@ int multilistTest(int argc, char *argv[]) {
                 multilistRepr(ml);
 
                 /* lrem 0 bar */
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistIteratorInitForward(ml, s, &iter);
                 multilistEntry entry;
                 int i = 0;
@@ -2362,7 +2362,7 @@ int multilistTest(int argc, char *argv[]) {
                 multilistPushTail(ml, s0, "oop", 3);
 
                 multilistEntry entry;
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistIteratorInitReverse(ml, s, &iter);
                 int i = 0;
                 while (multilistNext(&iter, &entry)) {
@@ -2409,7 +2409,7 @@ int multilistTest(int argc, char *argv[]) {
                 }
 
                 multilistEntry entry;
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistIteratorInitAtIdxForwardReadOnly(ml, s, &iter, 437);
                 int i = 437;
                 while (multilistNext(&iter, &entry)) {
@@ -2720,7 +2720,7 @@ int multilistTest(int argc, char *argv[]) {
             } else if (oracleCount > 0) {
                 /* Pop (40%) */
                 int where = rand() % 2;
-                databox got = {{0}};
+                databox got = {};
 
                 if (where == 0) {
                     /* Pop head */
@@ -3074,7 +3074,7 @@ int multilistTest(int argc, char *argv[]) {
 
             /* Pop half and verify */
             for (size_t i = 0; i < targetCount / 2; i++) {
-                databox got = {{0}};
+                databox got = {};
                 if (!multilistPopTail(&ml, s0, &got)) {
                     ERR("fill %zu: pop failed at %zu", fill, i);
                 }
@@ -3301,7 +3301,7 @@ int multilistTest(int argc, char *argv[]) {
         /* Pop only from head until half remain */
         size_t remaining = buildCount;
         while (remaining > buildCount / 2) {
-            databox got = {{0}};
+            databox got = {};
             if (!multilistPopHead(&ml, s0, &got)) {
                 ERR("unbalanced delete pop failed at remaining=%zu", remaining);
             }
@@ -3767,7 +3767,7 @@ int multilistTest(int argc, char *argv[]) {
             /* Empty the list, keeping its tier: an iterator's deletes never
              * change tier (pops and range deletes shrink a drained list) */
             {
-                multilistIterator emptying = {0};
+                multilistIterator emptying = {};
                 multilistIteratorInitForward(ml, s, &emptying);
                 multilistEntry gone;
                 while (multilistNext(&emptying, &gone)) {
@@ -3796,7 +3796,7 @@ int multilistTest(int argc, char *argv[]) {
                 }
             }
 
-            databox got = {{0}};
+            databox got = {};
             if (multilistPopHead(&ml, s0, &got)) {
                 ERR("%s: the empty list popped something", name);
             }
@@ -3936,7 +3936,7 @@ int multilistTest(int argc, char *argv[]) {
                 count++;
             } else if (count > 0) {
                 /* Pop (20%) */
-                databox got = {{0}};
+                databox got = {};
                 if (rand() % 2) {
                     multilistPopHead(&ml, s0, &got);
                 } else {
@@ -4013,7 +4013,7 @@ int multilistTest(int argc, char *argv[]) {
                                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                                  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                                  orig);
-                        multilistEntry entry = {0};
+                        multilistEntry entry = {};
                         if (!multilistIndexGet(ml, s0, i, &entry) ||
                             entry.box.len != strlen(payload) ||
                             memcmp(entry.box.data.bytes.start, payload,
@@ -4102,7 +4102,7 @@ int multilistTest(int argc, char *argv[]) {
             } else if (roll < 96 && shadowCount > 0) {
                 /* pop head or tail */
                 const bool fromTail = (FUZZ_NEXT() & 1) != 0;
-                databox popped = {{0}};
+                databox popped = {};
                 if (!multilistPop(&ml, s0, &popped, fromTail)) {
                     ERR("op %d: pop(%d) failed with %d elements", op,
                         (int)fromTail, shadowCount);
@@ -4138,7 +4138,7 @@ int multilistTest(int argc, char *argv[]) {
                 }
                 for (int32_t i = 0; i < shadowCount && soakFailures == 0; i++) {
                     FUZZ_PAYLOAD(shadow[i]);
-                    multilistEntry entry = {0};
+                    multilistEntry entry = {};
                     if (!multilistIndexGet(dup, s0, i, &entry) ||
                         entry.box.len != strlen(payload) ||
                         memcmp(entry.box.data.bytes.start, payload,
@@ -4196,7 +4196,7 @@ int multilistTest(int argc, char *argv[]) {
                 }
                 for (int32_t i = 0; i < shadowCount && soakFailures == 0; i++) {
                     FUZZ_PAYLOAD(shadow[i]);
-                    multilistEntry entry = {0};
+                    multilistEntry entry = {};
                     if (!multilistIndexGet(ml, s0, i, &entry) ||
                         entry.box.len != strlen(payload) ||
                         memcmp(entry.box.data.bytes.start, payload,
@@ -4965,8 +4965,8 @@ int multilistTest(int argc, char *argv[]) {
                         break;
                     }
                     for (int64_t k = 0; k < 40; k++) {
-                        databox x = {{0}};
-                        databox y = {{0}};
+                        databox x = {};
+                        databox y = {};
                         const bool tail = k & 1;
                         const bool px = multilistPop(&orig, scratch, &x, tail);
                         const bool py =

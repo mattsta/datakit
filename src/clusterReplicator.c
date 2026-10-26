@@ -383,7 +383,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
 
-        replicatorTestCtx app_ctx = {0};
+        replicatorTestCtx app_ctx = {};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, testApply, &app_ctx);
@@ -480,7 +480,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         const hmacKeyId KID = 1u;
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        replicatorTestCtx app_ctx = {0};
+        replicatorTestCtx app_ctx = {};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, testApply, &app_ctx);
@@ -519,7 +519,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         const hmacKeyId KID = 1u;
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        replicatorTestCtx app_ctx = {0};
+        replicatorTestCtx app_ctx = {};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, testApply, &app_ctx);
@@ -577,14 +577,14 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
 
-        replicatorTestCtx app_ctx = {0};
+        replicatorTestCtx app_ctx = {};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table, 256u, testApply, &app_ctx);
 
         /* Forge via the underlying mailbox: an unknown persistType
          * byte must surface as apply-rejected. */
-        const uint8_t payload[4] = {0};
+        const uint8_t payload[4] = {};
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         const size_t cap = clusterMailboxSealedSize(mb, sizeof(payload));
         cleanerName(zfree, Wire) uint8_t *wire = zmalloc(cap);

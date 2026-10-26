@@ -405,7 +405,7 @@ DK_STATIC const databox *mdKeyForUpdate_(multidict *d, const databox *keybox,
         }
 
         /* The value is not read, so its type is enough */
-        databox unused = {{0}};
+        databox unused = {};
         if (d->shared->findValueByKey(d->shared, slot, keybox, &unused)) {
             return keybox; /* stored under these exact bytes */
         }
@@ -1018,7 +1018,7 @@ bool multidictExpand(multidict *d, uint64_t newSlots) {
     }
 
     /* Allocate the new hash table and initialize all pointers to NULL */
-    multidictHT n = {0};
+    multidictHT n = {};
     multidictResetHT(&n);
     n.size = _multidictNextPower(newSlots);
 
@@ -1243,7 +1243,7 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
 
     /* One insert, reporting the value a replace overwrote (only measured,
      * so its type and length are enough) */
-    databox oldVal = {{0}};
+    databox oldVal = {};
     const int64_t insertResult =
         d->shared->insertByType(d->shared, op.slot, keybox, valbox, &oldVal);
     const size_t oldValSize = insertResult == 0 ? mdBoxSize_(&oldVal) : 0;
@@ -1348,7 +1348,7 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
         hash = multidictHashOfKey_(d, keybox);
         knownHash = &hash;
         multidictSlot *old = *SLOT_BY_HASH_PTR_PTR(d, 0, hash);
-        databox unused = {{0}};
+        databox unused = {};
         if (old && d->shared->findValueByKey(d->shared, old, keybox, &unused)) {
             multidictLRUOnAccess(d, keybox);
             return MULTIDICT_ERR;
@@ -1456,7 +1456,7 @@ static bool multidictRemoveFromTable_(multidict *d, int htidx,
     }
 
     const size_t lenBefore = d->shared->sizeBytes(*slotPtr);
-    databox measured = {{0}};
+    databox measured = {};
     databox *val = removedVal ? removedVal : &measured;
     if (!d->shared->operationRemove(d->shared, slotPtr, keybox, val,
                                     take && removedVal)) {
@@ -1613,7 +1613,7 @@ bool multidictGetAndDelete(multidict *d, const databox *keybox,
 
     /* One removal that takes the value: an owned copy (a 96/128-bit value
      * in a heap payload, since the box starts zeroed) */
-    databox taken = {{0}};
+    databox taken = {};
     if (!multidictRemove_(d, keybox, &taken, true, NULL)) {
         return false; /* Key doesn't exist */
     }
@@ -1630,7 +1630,7 @@ bool multidictGetAndDeleteIf(multidict *d, const databox *keybox,
     }
 
     const mdRemoveAsk_ ask = {.gate = gate, .ctx = ctx};
-    databox taken = {{0}};
+    databox taken = {};
     if (!multidictRemove_(d, keybox, &taken, true, &ask)) {
         return false; /* absent, or the gate said no */
     }
@@ -1664,7 +1664,7 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
      * read from, and takes its value in the same search (no LRU use: the
      * entry is going). */
     databox ownedKey = databoxCopy(&key);
-    databox taken = {{0}};
+    databox taken = {};
     if (!multidictRemove_(d, &ownedKey, &taken, true, NULL)) {
         databoxFreeData(&ownedKey);
         return false;
@@ -1772,7 +1772,7 @@ bool multidictFind(multidict *d, const databox *keybox, databox *valbox) {
 
 bool multidictFindByString(multidict *d, const char *key, uint8_t **val) {
     const databox keybox = databoxNewBytesString(key);
-    databox valbox = {{0}};
+    databox valbox = {};
     if (!multidictFind(d, &keybox, &valbox) || valbox.type != DATABOX_BYTES) {
         return false;
     }
@@ -1790,12 +1790,12 @@ bool multidictFindByString(multidict *d, const char *key, uint8_t **val) {
 /* Check if a key exists without retrieving the value.  Naming an existing
  * key is one LRU use, so a hit promotes it once (multidict.h, "LRU use"). */
 bool multidictExistsNoTouch(multidict *d, const databox *keybox) {
-    databox unused = {{0}};
+    databox unused = {};
     return d && keybox && multidictFindNoTouch_(d, keybox, &unused);
 }
 
 bool multidictExists(multidict *d, const databox *keybox) {
-    databox unused = {{0}};
+    databox unused = {};
     return multidictFind(d, keybox, &unused);
 }
 
@@ -2493,7 +2493,7 @@ void multidictTouch(multidict *d, const databox *keybox) {
     }
 
     /* Look up the multilruPtr for this key */
-    databox ptrBox = {{0}};
+    databox ptrBox = {};
     if (!multidictFind(d->lruKeyToPtr, keybox, &ptrBox)) {
         return; /* Key not tracked */
     }
@@ -2510,7 +2510,7 @@ int multidictGetLRULevel(multidict *d, const databox *keybox) {
     }
 
     /* Look up the multilruPtr for this key */
-    databox ptrBox = {{0}};
+    databox ptrBox = {};
     if (!multidictFind(d->lruKeyToPtr, keybox, &ptrBox)) {
         return -1; /* Key not tracked */
     }
@@ -2561,7 +2561,7 @@ static void multidictLRUOnAccess(multidict *d, const databox *keybox) {
     }
 
     /* Look up ptr and promote */
-    databox ptrBox = {{0}};
+    databox ptrBox = {};
     if (multidictFind(d->lruKeyToPtr, keybox, &ptrBox)) {
         multilruPtr ptr = (multilruPtr)ptrBox.data.u64;
         multilruIncrease(d->lru, ptr);
@@ -2576,7 +2576,7 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
 
     /* Remove the key's handle from keyToPtr in one search, reading the
      * handle (a number, reported by value) as it goes */
-    databox ptrBox = {{0}};
+    databox ptrBox = {};
     if (!multidictRemove_(d->lruKeyToPtr, keybox, &ptrBox, false, NULL)) {
         return;
     }
@@ -2618,7 +2618,7 @@ static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
             continue;
         }
 
-        databox ptrBox = {{0}};
+        databox ptrBox = {};
         if (multidictFind(d->lruKeyToPtr, &entry.key, &ptrBox) &&
             ptrBox.data.u64 == ptr) {
             mdBoxRehome_(keybox, &entry.key, wide);
@@ -3894,7 +3894,7 @@ static bool mdWideMatches_(const databox *got, const mdWideVal *v) {
                databoxCompare(got, &want) == 0;
     }
 
-    mdWideVal n = {0};
+    mdWideVal n = {};
     switch (got->type) {
     case DATABOX_SIGNED_64:
         n.bits = (__uint128_t)(__int128_t)got->data.i64;
@@ -3954,7 +3954,7 @@ static uint64_t mdWideMix_(uint64_t x) {
  * 96/128-bit values of both signs derived from 'i' */
 static mdWideVal mdWideInt_(size_t i) {
     const __uint128_t one = 1;
-    mdWideVal v = {0};
+    mdWideVal v = {};
     switch (i) {
     case 0:
         v.bits = one << 64;
@@ -4300,7 +4300,7 @@ static int multidictTestDeleteIf_(void) {
             const databox key = databoxNewSigned(k);
             const int level = multidictGetLRULevel(d, &key);
             mdGateProbe_ probe = {.answer = false};
-            databox got = {{0}};
+            databox got = {};
             if (multidictGetAndDeleteIf(d, &key, &got, mdGateProbe, &probe) ||
                 probe.asked != 1 || probe.seen != k * 3 ||
                 !multidictExistsNoTouch(d, &key) || multidictCount(d) != live ||
@@ -4380,7 +4380,7 @@ static int multidictTestWide_(mdWideMode mode) {
     if (mode != MD_WIDE_NORMAL) {
         databoxBig key;
         mdWideBox_(&key, &p[0].key);
-        databox val = {{0}};
+        databox val = {};
         if (!multidictFind(d, (databox *)&key, &val) ||
             val.type != DATABOX_UNSIGNED_128 || val.data.ptr) {
             ERRR("zeroed box did not get a type-only wide value");
@@ -4791,7 +4791,7 @@ static int multidictTestKeyCompare_(void) {
 
     /* A locale that folds Latin-1 does not change the case compare */
     const char *prior = setlocale(LC_CTYPE, NULL);
-    char saved[64] = {0};
+    char saved[64] = {};
     if (prior) {
         snprintf(saved, sizeof(saved), "%s", prior);
     }
@@ -4928,7 +4928,7 @@ static int multidictTestCaseOps_(void) {
     }
 
     /* Get-and-delete by another spelling */
-    databox got = {{0}};
+    databox got = {};
     if (!multidictGetAndDelete(d, &KEY, &got) ||
         !testBoxIsBytes_(&got, "payload", 7) || multidictExists(d, &key) ||
         multidictCount(d) != 1) {
@@ -4974,7 +4974,7 @@ static int multidictTestCaseOps_(void) {
     } while (cursor != 0);
 
     for (int32_t i = 0; i < 20; i++) {
-        databox rk = {{0}};
+        databox rk = {};
         if (!multidictGetRandomKey(d, &rk) ||
             !testKeyIsOneOf_(&rk, stored, 3)) {
             bad++;
@@ -5000,7 +5000,7 @@ static int multidictTestCaseOps_(void) {
     /* Copy keeps the type; merge matches dst keys across spellings */
     {
         cleaner(multidictFree) multidict *copy = multidictCopy(d);
-        databox fv = {{0}};
+        databox fv = {};
         if (multidictCount(copy) != 3 ||
             !multidictFind(copy, &seconds[0], &fv) || !testBoxIsInt_(&fv, 10)) {
             ERRR("case copy");
@@ -5048,8 +5048,8 @@ static int multidictTestCaseOps_(void) {
 
     /* Pop random hands back the stored spelling */
     MULTIDICT_TEST_OK(multidictAdd(d, &firsts[1], &one));
-    databox pk = {{0}};
-    databox pv = {{0}};
+    databox pk = {};
+    databox pv = {};
     if (!multidictPopRandom(d, &pk, &pv) || !testBoxIsBytes_(&pk, "BETA", 4) ||
         !testBoxIsInt_(&pv, 1) || multidictCount(d) != 0) {
         ERRR("case pop random");
@@ -5068,7 +5068,7 @@ static int multidictTestCaseOps_(void) {
     const databox intA = DATABOX_UNSIGNED(0x41);
     const databox inta = DATABOX_UNSIGNED(0x61);
     databox bytesA = databoxNewBytesString("A");
-    databox iv = {{0}};
+    databox iv = {};
     if (multidictAdd(d, &intA, &one) != MULTIDICT_OK_INSERTED ||
         multidictAdd(d, &inta, &two) != MULTIDICT_OK_INSERTED ||
         multidictAdd(d, &bytesA, &three) != MULTIDICT_OK_INSERTED ||
@@ -5129,7 +5129,7 @@ static int multidictTestBinaryKeys_(multidictType *type) {
 
     for (size_t i = 0; i < n; i++) {
         const databox k = databoxNewBytes(keys[i].bytes, keys[i].len);
-        databox v = {{0}};
+        databox v = {};
         if (!multidictFind(d, &k, &v) || !testBoxIsInt_(&v, (int64_t)i)) {
             ERR("binary key %zu found the wrong entry", i);
         }
@@ -5138,7 +5138,7 @@ static int multidictTestBinaryKeys_(multidictType *type) {
     /* Deleting one leaves the rest */
     const databox gone = databoxNewBytes("a\0b", 3);
     const databox kept = databoxNewBytes("a\0c", 3);
-    databox v = {{0}};
+    databox v = {};
     if (!multidictDelete(d, &gone) || multidictExists(d, &gone) ||
         !multidictFind(d, &kept, &v) || !testBoxIsInt_(&v, 1) ||
         multidictCount(d) != n - 1) {
@@ -5174,7 +5174,7 @@ static int multidictTestExactDistinct_(void) {
 
     const databox KEY = databoxNewBytesString("KEY");
     const databox absent = databoxNewBytesString("KEy");
-    databox v = {{0}};
+    databox v = {};
     if (multidictCount(d) != 4 || multidictFind(d, &absent, &v) ||
         multidictAddXX(d, &absent, &KEY) != MULTIDICT_ERR ||
         !multidictDelete(d, &KEY) || multidictExists(d, &KEY) ||
@@ -5234,7 +5234,7 @@ static int multidictTestCustomCompare_(void) {
         const databox other = databoxNewBytesString("ab c");
         const databox one = DATABOX_SIGNED(1);
         const databox two = DATABOX_SIGNED(2);
-        databox v = {{0}};
+        databox v = {};
         if (multidictAdd(d, &padded, &one) != MULTIDICT_OK_INSERTED ||
             multidictAdd(d, &plain, &two) != MULTIDICT_OK_REPLACED ||
             multidictAdd(d, &other, &one) != MULTIDICT_OK_INSERTED ||
@@ -5280,7 +5280,7 @@ static bool testRestoreIs_(const uint8_t *snap, size_t len, multidictType *as,
     }
 
     const databox probe = databoxNewBytesString("fOO");
-    databox v = {{0}};
+    databox v = {};
     const bool found = multidictFind(r, &probe, &v);
     const bool ok = multidictGetType(r) == type && multidictCount(r) == count &&
                     found == (type == &multidictTypeCaseKey && count > 0);
@@ -5347,7 +5347,7 @@ static int multidictTestPersistKeys_(void) {
     multidict *r =
         multidictPersistRestoreAs(customSnap, customLen, &testTrimType_);
     const databox padded = databoxNewBytesString("Foo  ");
-    databox v = {{0}};
+    databox v = {};
     if (persistOpsMultidict.restore(customSnap, customLen) != NULL || !r ||
         multidictGetType(r) != &testTrimType_ || multidictCount(r) != 2 ||
         !multidictFind(r, &padded, &v)) {
@@ -5500,7 +5500,7 @@ static void testCiRemove_(testCiOracle *o, int32_t at) {
 static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
                          uint32_t step) {
     int bad = 0; /* entries the oracle does not hold as iterated */
-    bool seen[TEST_CI_BASES * 8] = {0};
+    bool seen[TEST_CI_BASES * 8] = {};
     uint64_t keyBytes = 0;
     for (uint32_t i = 0; i < o->count; i++) {
         keyBytes += o->e[i].len;
@@ -5613,7 +5613,7 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
             }
             ok = ok && result == (at >= 0 ? o->e[at].val : inc);
         } else if (op < 70) {
-            databox v = {{0}};
+            databox v = {};
             const bool found = multidictFind(d, &kb, &v);
             ok = found == (at >= 0) &&
                  (!found || testBoxIsInt_(&v, o->e[at].val));
@@ -5623,7 +5623,7 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
                 testCiRemove_(o, at);
             }
         } else if (op < 97) {
-            databox v = {{0}};
+            databox v = {};
             const bool got = multidictGetAndDelete(d, &kb, &v);
             ok = got == (at >= 0) && (!got || testBoxIsInt_(&v, o->e[at].val));
             if (got) {
@@ -5633,8 +5633,8 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
                 testCiRemove_(o, at);
             }
         } else {
-            databox pk = {{0}};
-            databox pv = {{0}};
+            databox pk = {};
+            databox pv = {};
             const bool popped = multidictPopRandom(d, &pk, &pv);
             const int32_t pat = popped ? testCiFindExact_(o, &pk) : -1;
             ok = popped == (o->count > 0) &&
@@ -5755,13 +5755,13 @@ static int multidictTestLruPromotion_(multidictType *type) {
         cursor = multidictScan(d, cursor, testIgnoreScanCb_, NULL);
     } while (cursor != 0);
     for (int32_t i = 0; i < 8; i++) {
-        databox rk = {{0}};
+        databox rk = {};
         multidictGetRandomKey(d, &rk);
     }
     TEST_RANK_STEP("iteration, scan and random keys", 0);
 
     /* Accesses: one level each */
-    databox v = {{0}};
+    databox v = {};
     k = TEST_RANK_KEY();
     if (!multidictFind(d, &k, &v)) {
         ERRR("find missed the ranked key");
@@ -5991,7 +5991,7 @@ static int multidictTestAddNXMidRehash_(void) {
 
     for (int64_t k = 0; k < present * 2; k++) {
         const databox key = databoxNewSigned(k);
-        databox val = {{0}};
+        databox val = {};
         const int64_t want = k < present ? k * 3 : -1;
         if (!multidictFind(d, &key, &val) || val.data.i != want) {
             ERR("AddNX mid-rehash: key %" PRId64 " holds %" PRId64
@@ -6065,7 +6065,7 @@ static int multidictTestRehashReads_(void) {
 
     databox some[32];
     const uint32_t got = multidictGetSomeKeys(d, some, 32);
-    databox rk = {{0}};
+    databox rk = {};
     if (!multidictIsRehashing(d) || got == 0 || got > 32 ||
         !multidictGetRandomKey(d, &rk) || rk.type != DATABOX_UNSIGNED_64 ||
         rk.data.u64 >= n) {
@@ -6096,8 +6096,8 @@ static int multidictTestRehashReads_(void) {
     /* Pops first, while the rehash is still young, then every key */
     memset(seen, 0, n);
     for (int i = 0; i < 10; i++) {
-        databox pk = {{0}};
-        databox pv = {{0}};
+        databox pk = {};
+        databox pv = {};
         if (!multidictPopRandom(d, &pk, &pv) ||
             pk.type != DATABOX_UNSIGNED_64 || pk.data.u64 >= n ||
             seen[pk.data.u64] || pv.data.u64 != pk.data.u64 * 3) {
@@ -6108,7 +6108,7 @@ static int multidictTestRehashReads_(void) {
     }
     for (uint64_t k = 0; k < n; k++) {
         const databox key = DATABOX_UNSIGNED(k);
-        databox val = {{0}};
+        databox val = {};
         const bool found = multidictFind(d, &key, &val);
         if (found == (bool)seen[k] || (found && val.data.u64 != k * 3)) {
             ERR("rehash reads: key %" PRIu64 " found %d", k, found);
@@ -6154,7 +6154,7 @@ static int multidictTestLRUToggle_(void) {
     }
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
-        databox val = {{0}};
+        databox val = {};
         if (!multidictFind(d, &key, &val) || val.data.u64 != k) {
             ERR("LRU toggle: key %" PRIu64 " lost", k);
             break;
@@ -6207,13 +6207,13 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
     while (multidictIsRehashing(d)) {
         multidictRehash(d, 100);
     }
-    multidictDetailedStats before = {0};
+    multidictDetailedStats before = {};
     multidictGetDetailedStats(d, &before);
     if (!multidictResize(d) || !multidictIsRehashing(d) || multidictResize(d)) {
         ERRR("resize after deletes did not start one rehash");
         return err;
     }
-    multidictDetailedStats during = {0};
+    multidictDetailedStats during = {};
     multidictGetDetailedStats(d, &during);
     if (!during.hasRehashTable ||
         during.rehashTable.slots >= during.basic.slots ||
@@ -6224,7 +6224,7 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
             during.basic.slots, during.rehashTable.slots);
     }
 
-    uint8_t seen[N] = {0};
+    uint8_t seen[N] = {};
     mdShrinkScan_ state = {.seen = seen, .n = N, .bad = 0};
     uint64_t cursor = 0;
     size_t calls = 0;
@@ -6261,7 +6261,7 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
     DATABOX_BIG_UNSIGNED_128(&wide5, 5);
     databoxBig wide70;
     DATABOX_BIG_UNSIGNED_128(&wide70, (__uint128_t)1 << 70);
-    databox float5 = {{0}};
+    databox float5 = {};
     DATABOX_SET_FLOAT(&float5, 5.0f);
     const databox five[5] = {databoxNewSigned(5), databoxNewUnsigned(5), float5,
                              DATABOX_DOUBLE(5.0), *(const databox *)&wide5};
@@ -6281,7 +6281,7 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
         for (size_t i = 1; i < groups[g].n; i++) {
             /* Found under its value, and adding it replaces (same value,
              * so the next box finds it unchanged) */
-            databox got = {{0}};
+            databox got = {};
             if (!multidictFind(d, &groups[g].boxes[i], &got) ||
                 got.data.i != groups[g].value ||
                 multidictAdd(d, &groups[g].boxes[i], &v) !=
@@ -6329,7 +6329,7 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
                     multidictCount(r) == 50;
         for (int64_t k = 0; same && k < 50; k++) {
             const databox key = databoxNewSigned(k);
-            databox got = {{0}};
+            databox got = {};
             same = multidictFind(r, &key, &got) && got.data.i == k * 7;
         }
         if (!same) {
@@ -6348,12 +6348,12 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     int err = 0;
     cleaner(multidictFree) multidict *d =
         multidictNew(&multidictTypeExactKey, qdc, 9);
-    multidictStats stats = {0};
+    multidictStats stats = {};
     multidictGetStats(d, &stats);
-    multidictDetailedStats detail = {0};
+    multidictDetailedStats detail = {};
     multidictGetDetailedStats(d, &detail);
-    databox k = {{0}};
-    databox v = {{0}};
+    databox k = {};
+    databox v = {};
     if (stats.count != 0 || stats.loadFactor != 0 ||
         detail.basic.loadFactor != 0 || detail.avgChainLen != 0.0f ||
         detail.hasRehashTable || multidictPopRandom(d, &k, &v)) {
@@ -7856,7 +7856,7 @@ int multidictTest(int argc, char *argv[]) {
              * used again, so its borrowed bytes are still valid */
             for (int pick = 0; pick < 2; pick++) {
                 picksRehashing += multidictIsRehashing(rd);
-                databox rk = {{0}};
+                databox rk = {};
                 const bool got = multidictGetRandomKey(rd, &rk);
                 const int32_t idx = got ? testKeyIndex_(&rk, "grk") : -1;
                 if (!got || idx < 0 || !alive[idx]) {
@@ -7902,7 +7902,7 @@ int multidictTest(int argc, char *argv[]) {
             assert(!alive[i]);
         }
 
-        databox rk = {{0}};
+        databox rk = {};
         assert(!multidictGetRandomKey(rd, &rk));
         databox pk, pv;
         assert(!multidictPopRandom(rd, &pk, &pv));
@@ -8168,7 +8168,7 @@ int multidictTest(int argc, char *argv[]) {
         static const char *spellings[] = {"hello", "HELLO", "HeLLo", "hellO"};
         for (size_t i = 0; i < sizeof(spellings) / sizeof(*spellings); i++) {
             databox key = databoxNewBytesString(spellings[i]);
-            databox found = {{0}};
+            databox found = {};
             if (!multidictFind(dCase, &key, &found) ||
                 !testBoxIsBytes_(&found, "world", 5)) {
                 ERR("case find of '%s' failed", spellings[i]);
@@ -8838,7 +8838,7 @@ int multidictTest(int argc, char *argv[]) {
                 snprintf(kbuf, sizeof(kbuf), "evict-rehash-key-%06d", j);
                 snprintf(vbuf, sizeof(vbuf), "evict-rehash-val-%06d", j);
                 databox key = databoxNewBytesString(kbuf);
-                databox val = {{0}};
+                databox val = {};
                 if (multidictFind(e, &key, &val)) {
                     found++;
                     assert(DATABOX_IS_BYTES(&val));
@@ -9051,7 +9051,7 @@ int multidictTest(int argc, char *argv[]) {
         }
 
         /* Verify original value is preserved */
-        databox found = {{0}};
+        databox found = {};
         if (!multidictFind(d, &key, &found)) {
             ERRR("the key should exist after AddNX");
         }
@@ -9101,7 +9101,7 @@ int multidictTest(int argc, char *argv[]) {
         databox val = databoxNewBytesString("gad-value");
         MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
-        databox foundVal = {{0}};
+        databox foundVal = {};
         if (!multidictGetAndDelete(d, &key, &foundVal)) {
             ERRR("GetAndDelete should succeed");
         }
@@ -9112,7 +9112,7 @@ int multidictTest(int argc, char *argv[]) {
         }
 
         /* GetAndDelete on non-existent should return false */
-        databox dummy = {{0}};
+        databox dummy = {};
         if (multidictGetAndDelete(d, &key, &dummy)) {
             ERRR("GetAndDelete should fail for a non-existent key");
         }
@@ -9122,7 +9122,7 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
 
         /* PopRandom on empty should fail */
-        databox k = {{0}}, v = {{0}};
+        databox k = {}, v = {};
         if (multidictPopRandom(d, &k, &v)) {
             ERRR("PopRandom should fail on an empty dict");
         }
@@ -9236,7 +9236,7 @@ int multidictTest(int argc, char *argv[]) {
 
         int64_t ir = 42;
         double dr = 42;
-        databox now = {{0}};
+        databox now = {};
         if (multidictIncrBy(d, &kMax, 1, &ir) != MULTIDICT_ERR || ir != 42 ||
             !multidictFind(d, &kMax, &now) || now.data.i64 != INT64_MAX) {
             ERRR("INT64_MAX + 1 was not refused unchanged");
@@ -9769,7 +9769,7 @@ int multidictTest(int argc, char *argv[]) {
          * the vetoed keys kept their level and rank: they are still the
          * coldest entries, in their original order */
         assert(testLruTrackingExact_(vd));
-        multilruPtr coldest[7] = {0};
+        multilruPtr coldest[7] = {};
         const size_t coldestGot = multilruCollectLowest(vd->lru, coldest, 7);
         assert(coldestGot == 7);
         (void)coldestGot;
@@ -9850,7 +9850,7 @@ int multidictTest(int argc, char *argv[]) {
          * spelling not stored, promote the stored entry */
         char key3Buf[32], key5Buf[32], key9Buf[32];
         databox key3 = testLruCaseKey_(key3Buf, sizeof(key3Buf), 3, 0);
-        databox found = {{0}};
+        databox found = {};
         const bool found3 = multidictFind(cd, &key3, &found);
         assert(found3 && DATABOX_IS_INTEGER(&found) && found.data.i == 7);
         (void)found3;
@@ -10285,7 +10285,7 @@ int multidictTest(int argc, char *argv[]) {
          * (the amortized design walks about 16 per insert; quadratic is
          * n^2 / 2).  Times are printed for reference. */
         static const int perfN[2] = {4000, 16000};
-        double perOp[2][2] = {{0}};
+        double perOp[2][2] = {};
         for (int size = 0; size < 2; size++) {
             for (int mode = 0; mode < 2; mode++) {
                 cleaner(multidictMmClassFree) multidictClass *perfCls =
@@ -10392,7 +10392,7 @@ int multidictTest(int argc, char *argv[]) {
             char keybuf[32];
             snprintf(keybuf, sizeof(keybuf), "rh%d", i);
             databox key = databoxNewBytesString(keybuf);
-            databox val = {{0}};
+            databox val = {};
             if (multidictFind(dByte, &key, &val)) {
                 foundCount++;
             }
@@ -10429,7 +10429,7 @@ int multidictTest(int argc, char *argv[]) {
                 char keybuf[32];
                 snprintf(keybuf, sizeof(keybuf), "fz%d", rand() % 500);
                 databox key = databoxNewBytesString(keybuf);
-                databox val = {{0}};
+                databox val = {};
                 multidictFind(dByte, &key, &val);
                 finds++;
             } else { /* 15% delete */
@@ -10616,7 +10616,7 @@ int multidictTest(int argc, char *argv[]) {
             databox k = {.type = DATABOX_BYTES_NEVER_FREE,
                          .data.bytes.start = names[i],
                          .len = strlen((char *)names[i])};
-            databox v = {{0}};
+            databox v = {};
             found += multidictFind(nd, &k, &v) && v.data.u == (uint64_t)i;
         }
         databox gone = {.type = DATABOX_BYTES_NEVER_FREE,

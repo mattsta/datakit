@@ -275,7 +275,7 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
      * can relocate the multiarrays, but 'upper' itself is not moved). */
     flexEntry *upMid = flexMiddle(upper, MOS_ELEMENTS_PER_ENTRY);
     uint32_t upperMiddle = upMid ? (uint32_t)(upMid - upper) : FLEX_EMPTY_SIZE;
-    databox upperRange = {{0}};
+    databox upperRange = {};
     rangeBoxRefresh(&upperRange, flexHead(upper));
 
     /* The upper half becomes the slot after the lower one */
@@ -391,7 +391,7 @@ static size_t mosFullDropMembers_(multiOrderedSetFull *m, const flex *map,
     size_t taken = 0;
     for (flexEntry *e = first; taken < rows && e; taken++) {
         flexEntry *memberEntry = flexNext(map, e);
-        databox member = {{0}};
+        databox member = {};
         databoxWide memberWide;
         if (!memberEntry || !readMember(m, memberEntry, &member, &memberWide)) {
             break;
@@ -698,7 +698,7 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
 
     /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
-    databox initialRange = {{0}};
+    databox initialRange = {};
     rangeBoxRefresh(&initialRange, NULL);
     mosFullInsertSlot_(m, 0, 0, initialMap, FLEX_EMPTY_SIZE, initialRange);
 
@@ -752,8 +752,8 @@ multiOrderedSetFullNewFromMedium(struct multiOrderedSetMedium *medium,
                 break;
             }
 
-            databox score = {{0}};
-            databox member = {{0}};
+            databox score = {};
+            databox member = {};
             databoxWide scoreWide, memberWide;
             flexGetByTypeInto(entry, &score, &scoreWide);
             flexGetByTypeInto(memberEntry, &member, &memberWide);
@@ -804,7 +804,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
 
         /* Rebuilt from the copy's own head, so the copy never shares a
          * payload (or borrowed bytes) with the original */
-        databox rangeCopy = {{0}};
+        databox rangeCopy = {};
         rangeBoxRefresh(&rangeCopy,
                         flexCount(mapCopy) > 0 ? flexHead(mapCopy) : NULL);
 
@@ -839,7 +839,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     databox oldId;
                     databoxWide oldIdWide;
                     flexGetByTypeInto(memberEntry, &oldId, &oldIdWide);
-                    databox member = {{0}};
+                    databox member = {};
                     if (atomPoolLookup(m->pool, oldId.data.u64, &member)) {
                         /* Intern in new pool and update entry.  A new id
                          * of another width reallocates the map: the entry
@@ -880,7 +880,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     flexGetByTypeInto(memberEntry, &idBox, &idBoxWide);
                     if (idBox.type == DATABOX_UNSIGNED_64) {
                         /* Re-intern to increment refcount */
-                        databox member = {{0}};
+                        databox member = {};
                         if (atomPoolLookup(copy->pool, idBox.data.u64,
                                            &member)) {
                             atomPoolIntern(copy->pool, &member);
@@ -1028,7 +1028,7 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
 
     /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
-    databox initialRange = {{0}};
+    databox initialRange = {};
     rangeBoxRefresh(&initialRange, NULL);
     mosFullInsertSlot_(m, 0, 0, initialMap, FLEX_EMPTY_SIZE, initialRange);
 
@@ -1071,7 +1071,7 @@ size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m) {
 void multiOrderedSetFullVerify(const multiOrderedSetFull *m) {
     assert(m->mapCount >= 1);
     uint64_t rows = 0;
-    databox prevLast = {{0}};
+    databox prevLast = {};
     databoxWide prevLastWide;
     bool havePrev = false;
     for (uint32_t i = 0; i < m->mapCount; i++) {
@@ -1451,7 +1451,7 @@ size_t multiOrderedSetFullPopMax(multiOrderedSetFull *m, size_t count,
             }
 
             /* In pool mode, convert pool ID back to member string */
-            databox member = {{0}};
+            databox member = {};
             databoxWide memberWide;
             if (!readMember(m, memberEntry, &member, &memberWide)) {
                 break;
@@ -1869,8 +1869,8 @@ void multiOrderedSetFullRepr(const multiOrderedSetFull *m) {
 static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
     int bad = 0;
     uint64_t sum = 0;
-    databoxBig prevLast = {{0}};
-    databoxBig prevLastMember = {{0}};
+    databoxBig prevLast = {};
+    databoxBig prevLastMember = {};
     bool havePrev = false;
     for (uint32_t i = 0; i < m->mapCount; i++) {
         flex *map = getSubMap(m, i);
@@ -2486,7 +2486,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 kind == 0   ? multiOrderedSetFullNew()
                 : kind == 1 ? multiOrderedSetFullNewWithOwnedPool()
                             : multiOrderedSetFullNewWithPool(shared);
-            bool present[MOS_COPY_N] = {0};
+            bool present[MOS_COPY_N] = {};
             for (int64_t i = 0; i < MOS_COPY_N; i++) {
                 const int64_t s = (i * 1237) % MOS_COPY_N;
                 char name[32];

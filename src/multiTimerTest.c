@@ -152,7 +152,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: register single timer") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
 
         multiTimerId id =
             multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
@@ -167,7 +167,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: register multiple timers") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
 
         multiTimerId ids[5];
         for (int32_t i = 0; i < 5; i++) {
@@ -432,7 +432,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: nextTimerEventStartUs returns correct time") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
 
         const uint64_t delayUs = 100000; /* 100ms */
         const int64_t before = (int64_t)timeUtilMonotonicUs();
@@ -457,7 +457,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: nextTimerEventOffsetFromNowUs") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
 
         uint64_t delayUs = 50000; /* 50ms */
         multiTimerRegister(t, delayUs, 0, testCountingCallback, &state);
@@ -612,7 +612,7 @@ int multiTimerTest(int argc, char *argv[]) {
         if (!multiTimerInit(&t)) {
             ERRR("Failed to init multiTimer");
         } else {
-            testCallbackState state = {0};
+            testCallbackState state = {};
             multiTimerId id =
                 multiTimerRegister(&t, 1000, 0, testCountingCallback, &state);
             if (id != 1) {
@@ -637,7 +637,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: unregister validates ids") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
 
         if (multiTimerUnregister(t, 0)) {
             ERRR("Unregister of id 0 should return false");
@@ -982,7 +982,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: registration performance") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
         const size_t numOps = 100000;
 
         PERF_TIMERS_SETUP;
@@ -998,7 +998,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: unregistration performance") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
         const size_t numOps = 10000;
 
         /* First register all timers */
@@ -1018,7 +1018,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: nextTimerEvent lookup performance") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
         const size_t numTimers = 10000;
         const size_t numLookups = 100000;
 
@@ -1173,7 +1173,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: high-scale million timer registration") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        testCallbackState state = {0};
+        testCallbackState state = {};
         const size_t numTimers = 1000000;
 
         printf("    Registering %zu timers...\n", numTimers);
@@ -1285,7 +1285,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
     TEST("multiTimer: memory efficiency analysis") {
         const size_t numTimers = 100000;
-        testCallbackState state = {0};
+        testCallbackState state = {};
 
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
 

@@ -453,7 +453,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_basic", basePath,
                           sizeof(basePath))) {
@@ -563,7 +563,7 @@ static int test_multilruP_weighted(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_weighted", basePath,
                           sizeof(basePath))) {
@@ -652,7 +652,7 @@ static int test_multilruP_compaction(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_compaction", basePath,
                           sizeof(basePath))) {
@@ -713,7 +713,7 @@ static int test_multilruP_empty_recovery(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_empty", basePath,
                           sizeof(basePath))) {
@@ -770,7 +770,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_large", basePath,
                           sizeof(basePath))) {
@@ -871,7 +871,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_gaps", basePath,
                           sizeof(basePath))) {
@@ -947,7 +947,7 @@ static int test_multilruP_mixed_operations(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_mixed", basePath,
                           sizeof(basePath))) {
@@ -1059,7 +1059,7 @@ static int test_multilruP_weight_extremes(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_weights", basePath,
                           sizeof(basePath))) {
@@ -1147,7 +1147,7 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_evict", basePath,
                           sizeof(basePath))) {
@@ -1224,7 +1224,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int argc,
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_evict_crash", basePath,
                           sizeof(basePath))) {
@@ -1296,7 +1296,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_levels", basePath,
                           sizeof(basePath))) {
@@ -1367,7 +1367,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_demotions", basePath,
                           sizeof(basePath))) {
@@ -1384,7 +1384,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     ptestCleanupFiles(basePath);
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multilruP *mlru = multilruNewWithLevelsP(ctx, 4, 8);
-    multilruPtr live[64] = {0};
+    multilruPtr live[64] = {};
     size_t liveCount = 0;
     uint64_t rng = 0x1234;
     for (int i = 0; i < 60; i++) {
@@ -1471,7 +1471,7 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_weightLimit", basePath,
                           sizeof(basePath))) {
@@ -1616,7 +1616,7 @@ static int test_multilruP_damagedWal(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_damagedWal", basePath,
                           sizeof(basePath))) {
@@ -1681,7 +1681,7 @@ static int test_multilruP_refusals(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilruPTest_refusals", basePath,
                           sizeof(basePath))) {

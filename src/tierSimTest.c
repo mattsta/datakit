@@ -172,7 +172,7 @@ static bool mosDel(void **c, int64_t k) {
 
 static bool mosGet(void *c, int64_t k, int64_t *v) {
     const databox b = databoxNewSigned(k);
-    databox score = {{0}};
+    databox score = {};
     if (!multiOrderedSetGetScore(c, &b, &score)) {
         return false;
     }
@@ -186,8 +186,8 @@ static void mosStats(void *c, dkTierStats *s) {
 
 static size_t mosWalk(mosIterator *it, int64_t *k, int64_t *v, size_t max) {
     size_t n = 0;
-    databox member = {{0}};
-    databox score = {{0}};
+    databox member = {};
+    databox score = {};
     while (n < max && multiOrderedSetIteratorNext(it, &member, &score)) {
         k[n] = simI64(&member);
         v[n] = simI64(&score);
@@ -880,7 +880,7 @@ static void mlPush(void **c, bool tail, int64_t v) {
 }
 
 static bool mlPop(void **c, bool tail, int64_t *v) {
-    databox got = {{0}};
+    databox got = {};
     if (!multilistPop((multilist **)c, mlState[0], &got, tail)) {
         return false;
     }

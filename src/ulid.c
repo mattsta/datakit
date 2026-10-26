@@ -105,7 +105,7 @@ bool ulidGenInit(ulidGen *g, ulidClockSource clock) {
         return false;
     }
 
-    *g = (ulidGen){0};
+    *g = (ulidGen){};
     g->clockSource = (uint32_t)clock;
     if (clock == ULID_CLOCK_MONOTONIC_OFFSET) {
         g->clockOffsetNs = timeUtilNs() - timeUtilMonotonicNs();
@@ -508,12 +508,12 @@ bool ulidDecodeSSE2(const char *str, ulid_t *out) {
     __m128i chars1 = _mm_loadu_si128((const __m128i *)str);
     __m128i vals1 = base36CharsToValues_SSE2(chars1);
 
-    uint8_t values[32] = {0};
+    uint8_t values[32] = {};
     _mm_storeu_si128((__m128i *)values, vals1);
 
     /* Remaining 9 characters (positions 16-24) */
     /* Load overlapping to get last 16 chars, then extract last 9 */
-    uint8_t paddedInput[16] = {0};
+    uint8_t paddedInput[16] = {};
     memcpy(paddedInput, str + 16, 9);
     __m128i chars2 = _mm_loadu_si128((const __m128i *)paddedInput);
     __m128i vals2 = base36CharsToValues_SSE2(chars2);
@@ -609,7 +609,7 @@ size_t ulidEncodeAVX2(const ulid_t *ulid, char *out, size_t outLen) {
     uint8_t temp[16];
     memcpy(temp, ulid->data, 16);
 
-    uint8_t digitValues[32] = {0}; /* Padded for AVX2 */
+    uint8_t digitValues[32] = {}; /* Padded for AVX2 */
     int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
 
     while (digitIdx >= 0) {
@@ -644,7 +644,7 @@ bool ulidDecodeAVX2(const char *str, ulid_t *out) {
     }
 
     /* Pad input for AVX2 load */
-    uint8_t paddedStr[32] = {0};
+    uint8_t paddedStr[32] = {};
     memcpy(paddedStr, str, ULID_ENCODED_LENGTH);
 
     /* Convert characters to values using AVX2 */
@@ -737,7 +737,7 @@ size_t ulidEncodeNEON(const ulid_t *ulid, char *out, size_t outLen) {
     uint8_t temp[16];
     memcpy(temp, ulid->data, 16);
 
-    uint8_t digitValues[32] = {0}; /* Padded for alignment */
+    uint8_t digitValues[32] = {}; /* Padded for alignment */
     int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
 
     while (digitIdx >= 0) {
@@ -780,11 +780,11 @@ bool ulidDecodeNEON(const char *str, ulid_t *out) {
     uint8x16_t chars1 = vld1q_u8((const uint8_t *)str);
     uint8x16_t vals1 = base36CharsToValues_NEON(chars1);
 
-    uint8_t values[32] = {0};
+    uint8_t values[32] = {};
     vst1q_u8(values, vals1);
 
     /* Load and convert remaining 9 characters (positions 16-24) */
-    uint8_t paddedInput[16] = {0};
+    uint8_t paddedInput[16] = {};
     memcpy(paddedInput, str + 16, 9);
     uint8x16_t chars2 = vld1q_u8(paddedInput);
     uint8x16_t vals2 = base36CharsToValues_NEON(chars2);
@@ -2517,13 +2517,13 @@ int ulidTest(int argc, char *argv[]) {
         static const uint8_t bad[] = {'!', '/', ':',  '@',  '[', '`',
                                       '{', ' ', 0x7f, 0x80, 0xff};
         static const size_t at[] = {0, 15, 16, 24};
-        ulid_t want = {{0}};
+        ulid_t want = {};
         if (!ulidDecodeScalar(good, &want)) {
             ERRR("the scalar decoder refused a valid string");
         }
         for (size_t c = 0; c < sizeof(codecs) / sizeof(*codecs); c++) {
             const codec *k = &codecs[c];
-            ulid_t got = {{0}};
+            ulid_t got = {};
             char text[ULID_ENCODED_LENGTH + 1];
             if (!k->dec(good, &got) || memcmp(&got, &want, sizeof(got)) ||
                 k->enc(&want, text, sizeof(text)) != ULID_ENCODED_LENGTH ||
@@ -2550,8 +2550,8 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         /* The 64- and 32-bit codecs, and the accessors, refuse the same */
-        ulid64_t id64 = {0};
-        ulid32_t id32 = {0};
+        ulid64_t id64 = {};
+        ulid32_t id32 = {};
         char t64[ULID64_ENCODED_LENGTH + 1];
         char t32[ULID32_ENCODED_LENGTH + 1];
         if (ulid64Decode("0000000000!00", &id64) ||
@@ -2616,7 +2616,7 @@ int ulidTest(int argc, char *argv[]) {
         g.lastEmittedNs = timeUtilNs() + 1000000000ULL;
         const ulidVariantConfig cfg = {.type = ULID_VARIANT_SNOWFLAKE,
                                        .machineId = 77};
-        ulid64_t prev = {0};
+        ulid64_t prev = {};
         for (int i = 0; i < 20000; i++) {
             ulid64_t id;
             ulid64GenerateWithConfig(&g, &id, &cfg);
@@ -2669,8 +2669,8 @@ int ulidTest(int argc, char *argv[]) {
         const ulid32_t b32 = {.data = 9};
         const ulid64_t a64 = {.data = 5};
         const ulid64_t b64 = {.data = 9};
-        ulid_t a128 = {{0}};
-        ulid_t b128 = {{0}};
+        ulid_t a128 = {};
+        ulid_t b128 = {};
         b128.data[0] = 1;
         if (ulid32Compare(&a32, &b32) >= 0 || ulid32Compare(&b32, &a32) <= 0 ||
             ulid32Compare(NULL, &a32) >= 0 || ulid32Compare(&a32, NULL) <= 0 ||
@@ -2838,7 +2838,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("generator: stack zero-init self-seeds and generates") {
-        ulidGen z = {0};
+        ulidGen z = {};
         ulid_t id;
         ulidGenerate(&z, &id);
 
@@ -3053,7 +3053,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("ulid encode/decode roundtrip (scalar)") {
         ulidSetEncodeImpl(ULID_ENCODE_SCALAR);
 
-        ulid_t orig, decoded = {0};
+        ulid_t orig, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample scalar encode/decode:\n");
@@ -3095,7 +3095,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("ulid encode/decode roundtrip (SWAR)") {
         ulidSetEncodeImpl(ULID_ENCODE_SWAR);
 
-        ulid_t orig, decoded = {0};
+        ulid_t orig, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample SWAR encode/decode:\n");
@@ -3127,7 +3127,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_SSE2
     TEST("ulid encode/decode roundtrip (SSE2)") {
-        ulid_t orig, decoded = {0};
+        ulid_t orig, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         for (int32_t test = 0; test < 1000; test++) {
@@ -3147,7 +3147,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_AVX2
     TEST("ulid encode/decode roundtrip (AVX2)") {
-        ulid_t orig, decoded = {0};
+        ulid_t orig, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         for (int32_t test = 0; test < 1000; test++) {
@@ -3167,7 +3167,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_NEON
     TEST("ulid encode/decode roundtrip (NEON)") {
-        ulid_t orig, decoded = {0};
+        ulid_t orig, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample NEON encode/decode:\n");
@@ -3199,7 +3199,7 @@ int ulidTest(int argc, char *argv[]) {
 #endif
 
     TEST("ulid cross-implementation compatibility") {
-        ulid_t orig, decoded = {0};
+        ulid_t orig, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample cross-impl verification:\n");
@@ -3282,7 +3282,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid lowercase decode support") {
-        ulid_t id, decoded = {0};
+        ulid_t id, decoded = {};
         char encoded[ULID_ENCODED_LENGTH + 1];
         char lowercase[ULID_ENCODED_LENGTH + 1];
 
@@ -3632,7 +3632,7 @@ int ulidTest(int argc, char *argv[]) {
      * Basic Functionality Tests - 64-bit Variants
      * ================================================================ */
     TEST("ulid64 encode/decode roundtrip (EPOCH2020)") {
-        ulid64_t orig, decoded = {0};
+        ulid64_t orig, decoded = {};
         char encoded[ULID64_ENCODED_LENGTH + 1];
 
         printf("    Sample EPOCH2020 IDs:\n");
@@ -3749,7 +3749,7 @@ int ulidTest(int argc, char *argv[]) {
             }
 
             /* Verify roundtrip */
-            ulid_t decoded = {0};
+            ulid_t decoded = {};
             if (!ulidDecode(encoded, &decoded)) {
                 ERR("Failed to decode DUALNS: %s", encoded);
             }
@@ -3799,7 +3799,7 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         /* Test 3: Round-trip via string encoding */
-        ulid_t decoded = {0};
+        ulid_t decoded = {};
         if (!ulidDecode(encoded, &decoded)) {
             ERR("Failed to decode DUALNS from __uint128_t: %s", encoded);
         }
@@ -3909,7 +3909,7 @@ int ulidTest(int argc, char *argv[]) {
 
             printf("      Encoded as Base36: %s\n", encoded);
 
-            ulid_t decoded = {0};
+            ulid_t decoded = {};
             if (!ulidDecode(encoded, &decoded)) {
                 ERR("Failed to decode DUALNS_INTERLEAVED: %s", encoded);
             }
@@ -4111,7 +4111,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid64 all variants roundtrip") {
-        ulid64_t orig, decoded = {0};
+        ulid64_t orig, decoded = {};
         char encoded[ULID64_ENCODED_LENGTH + 1];
 
         /* Test all 64-bit variants (DUALNS is 128-bit, tested separately) */
@@ -4145,7 +4145,7 @@ int ulidTest(int argc, char *argv[]) {
      * 32-bit Variant Tests
      * ================================================================ */
     TEST("ulid32 encode/decode roundtrip") {
-        ulid32_t orig, decoded = {0};
+        ulid32_t orig, decoded = {};
         char encoded[ULID32_ENCODED_LENGTH + 1];
 
         printf("    Sample 32-bit IDs:\n");
@@ -4562,7 +4562,7 @@ int ulidTest(int argc, char *argv[]) {
                 ERR("UINT64_MAX encodes as %s", s);
             }
 
-            ulid64_t got = {0};
+            ulid64_t got = {};
             if (!ulid64Decode(s, &got) || got.data != UINT64_MAX) {
                 ERR("ulid64 max %s did not decode", s);
             }
@@ -4601,7 +4601,7 @@ int ulidTest(int argc, char *argv[]) {
                 ERR("UINT32_MAX encodes as %s", s);
             }
 
-            ulid32_t got = {0};
+            ulid32_t got = {};
             if (!ulid32Decode(s, &got) || got.data != UINT32_MAX) {
                 ERR("ulid32 max %s did not decode", s);
             }
@@ -4658,7 +4658,7 @@ int ulidTest(int argc, char *argv[]) {
             allZ[ULID_ENCODED_LENGTH] = '\0';
 
             for (size_t d = 0; d < sizeof(decoders) / sizeof(*decoders); d++) {
-                ulid_t got = {0};
+                ulid_t got = {};
                 if (!decoders[d](s, &got) ||
                     memcmp(got.data, max.data, sizeof(max.data)) != 0) {
                     ERR("decoder %zu: max %s did not decode", d, s);

@@ -888,7 +888,7 @@ DKS_TYPE *DKS_COPY(DKS_TYPE *s, const char *t) {
  */
 #define DKS_INT64STR_MAX 21
 DKS_TYPE *DKS_FROMINT64(int64_t value) {
-    char buf[DKS_INT64STR_MAX] = {0};
+    char buf[DKS_INT64STR_MAX] = {};
     const int len = StrInt64ToBuf(buf, sizeof(buf), value);
 
     return DKS_NEWLEN(buf, len);
@@ -1822,7 +1822,7 @@ DKS_TYPE *DKS_FORMATIP(char *ip, int port) {
  * case of one or more "../" appearning at the start of "filename"
  * relative path. */
 DKS_TYPE *DKS_GETABSOLUTEPATH(char *filename) {
-    char cwd[1024] = {0};
+    char cwd[1024] = {};
     DKS_TYPE *abspath;
     DKS_TYPE *relpath = DKS_NEW(filename);
 

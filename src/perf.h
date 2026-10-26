@@ -110,7 +110,7 @@ typedef struct perfState {
 } perfState;
 
 /* local perf state */
-static perfState lps = {{{0}}};
+static perfState lps = {};
 
 static inline void perfStatAdd(perfStateStat *s, double sample) {
     s->samples++;
@@ -178,7 +178,7 @@ static inline char *perfFormatGrouped(double v, int decimals, char *out,
 
 #define PERF_TIMERS_SETUP                                                      \
     do {                                                                       \
-        lps = (perfState){0};                                                  \
+        lps = (perfState){};                                                   \
         lps.global.tsc.start = _perfTSC();                                     \
         lps.global.ns.start = perfNowNs();                                     \
         lps.global.us.start = lps.global.ns.start / 1000u;                     \

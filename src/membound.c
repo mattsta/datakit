@@ -4394,8 +4394,8 @@ static size_t memboundTestAtom(const membound *m) {
  * overlap. */
 static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
     int err = 0;
-    memboundTestLiveSet live = {0};
-    void *freed[32] = {0};
+    memboundTestLiveSet live = {};
+    void *freed[32] = {};
     size_t nFreed = 0;
     const size_t atom = memboundTestAtom(m);
     uint64_t r = seed;
@@ -4521,7 +4521,7 @@ static void *mtAllocFreeWorker(void *arg) {
         /* spin */
     }
 
-    void *ptrs[16] = {0};
+    void *ptrs[16] = {};
     int ptrCount = 0;
 
     for (int i = 0; i < ctx->iterations; i++) {
@@ -4817,7 +4817,7 @@ static int memboundTestMapFailRun(int kind, bool *fired) {
                   : kind == 3 ? memboundCreateMicro(1 << 15)
                               : memboundCreateCompact(1 << 16, true);
     if (m) {
-        void *ptrs[24] = {0};
+        void *ptrs[24] = {};
         size_t live = 0;
         for (int i = 0; i < 24; i++) {
             ptrs[i] = memboundAlloc(m, 6000);
@@ -5526,7 +5526,7 @@ int memboundTest(int argc, char *argv[]) {
         for (size_t i = 0; i < 4; i++) {
             assert(pools[i]);
             /* Grow the dynamic pools past their first extent */
-            void *ptrs[48] = {0};
+            void *ptrs[48] = {};
             for (size_t j = 0; j < 48; j++) {
                 ptrs[j] = memboundAlloc(pools[i], 4096);
             }
@@ -5701,7 +5701,7 @@ int memboundTest(int argc, char *argv[]) {
     }
 
     TEST("MICRO: Config-based creation") {
-        memboundConfig config = {0};
+        memboundConfig config = {};
         config.tier = MEMBOUND_TIER_MICRO;
         config.mode = MEMBOUND_MODE_FIXED;
         config.initialSize = 8192;
@@ -5718,7 +5718,7 @@ int memboundTest(int argc, char *argv[]) {
     }
 
     TEST("MICRO: Config with too-large size falls back to STANDARD") {
-        memboundConfig config = {0};
+        memboundConfig config = {};
         config.tier = MEMBOUND_TIER_MICRO;
         config.mode = MEMBOUND_MODE_FIXED;
         config.initialSize = MEMBOUND_MICRO_MAX_POOL + 4096;
@@ -5897,7 +5897,7 @@ int memboundTest(int argc, char *argv[]) {
     }
 
     TEST("COMPACT: Config-based creation") {
-        memboundConfig config = {0};
+        memboundConfig config = {};
         config.tier = MEMBOUND_TIER_COMPACT;
         config.mode = MEMBOUND_MODE_FIXED;
         config.initialSize = 1 << 20;
@@ -6754,7 +6754,7 @@ int memboundTest(int argc, char *argv[]) {
 
         /* Medium has no extent of its own: it shares the small class's
          * extent rather than map more memory */
-        void *ptrs[40] = {0};
+        void *ptrs[40] = {};
         size_t n = 0;
         ptrs[n++] = memboundAlloc(m, 4096);
         if (memboundExtentCount(m) != 1 ||
@@ -7179,7 +7179,7 @@ int memboundTest(int argc, char *argv[]) {
             const int64_t mappedBefore = memboundTestMapped();
             membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
             assert(m);
-            memboundTestLiveSet set = {0};
+            memboundTestLiveSet set = {};
             memboundSetRelocationCallback(m, memboundTestLiveRelocCb, &set);
 
             const size_t target = 40 + (size_t)(scenario % 5) * 40;
@@ -8128,7 +8128,7 @@ int memboundTest(int argc, char *argv[]) {
     }
 
     TEST("pressure notification fires once per level change") {
-        pressureSeen seen = {0};
+        pressureSeen seen = {};
         memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
                               .initialSize = 1 << 16,
                               .pressureCallback = pressureSeenCb,

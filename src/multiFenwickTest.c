@@ -884,7 +884,7 @@ int multiFenwickTest(int argc, char *argv[]) {
         memset(&wideU, 0, sizeof(wideU));
         DATABOX_BIG_SIGNED_128(&wideS, -((__int128_t)1 << 100));
         DATABOX_BIG_UNSIGNED_128(&wideU, ((__uint128_t)1 << 64) + 5);
-        databox deferred = {{0}};
+        databox deferred = {};
         deferred.type = DATABOX_SIGNED_128; /* no payload: data.ptr NULL */
         const databox *wides[3] = {(const databox *)&wideS,
                                    (const databox *)&wideU, &deferred};

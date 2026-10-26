@@ -371,7 +371,7 @@ multimapDumpAscendsWithReference_(const flex *rows,
     flexEntry *fe = flexHead(rows);
     for (size_t row = 0; row < count / elementsPerEntry; row++) {
         databox *cur = &key[row & 1];
-        *cur = (databox){{0}};
+        *cur = (databox){};
         flexGetByTypeIntoWithReference(fe, cur, &keyWide[row & 1],
                                        referenceContainer);
         if (row > 0 && databoxCompare(&key[(row - 1) & 1], cur) >= 0) {
@@ -1230,7 +1230,7 @@ DK_INLINE_ALWAYS void multimapRowBind_(databox *const row,
                                        databox **const elements,
                                        const size_t elementsPerEntry) {
     for (size_t i = 0; i < elementsPerEntry; i++) {
-        row[i] = (databox){{0}};
+        row[i] = (databox){};
         elements[i] = &row[i];
     }
 }
@@ -1277,7 +1277,7 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
     }
 
     /* Populate iterator metadata based on map type */
-    multimapIterator iter = {0};
+    multimapIterator iter = {};
     MULTIMAP_NORETURN(m, IteratorInit, &iter, forward);
 
     /* We materialize 16 physical databoxes for the most common cases
@@ -1419,8 +1419,8 @@ void multimapDifferenceKeys(multimap **restrict dst,
 #else
     assert(a->elementsPerEntry == 1);
     assert(a->elementsPerEntry == b->elementsPerEntry);
-    databox ea_ = {{0}};
-    databox eb_ = {{0}};
+    databox ea_ = {};
+    databox eb_ = {};
     databoxWide wa;
     databoxWide wb;
     databox *ea[1] = {&ea_};
@@ -1913,7 +1913,7 @@ int32_t multimapInsertReplacingSweep(void) {
         enum { splitRows = 200 };
         cleanerName(multimapFullFree, Sweep) multimapFull *m =
             multimapFullNew(2);
-        void *allocs[splitRows] = {0};
+        void *allocs[splitRows] = {};
         char val[100];
         memset(val, 'v', sizeof(val));
         uint64_t missed = 0;
@@ -1978,8 +1978,8 @@ int32_t multimapInsertReplacingSweep(void) {
             multimapFullSetNew(2, 2048);
         /* A wrongly minted second allocation stays referenced by the map,
          * so it is freed with the first ones, after the last lookup. */
-        void *allocs[setRows] = {0};
-        void *extraAllocs[setRows] = {0};
+        void *allocs[setRows] = {};
+        void *extraAllocs[setRows] = {};
         char val[64];
         memset(val, 's', sizeof(val));
         for (uint32_t pass = 0; pass < 2; pass++) {
@@ -3583,7 +3583,7 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
      * not to be read once the row is gone) */
     for (size_t i = 0; i < rows; i += 5) {
         const databox key = databoxNewUnsigned(i);
-        databox removed = {{0}};
+        databox removed = {};
         if (!multimapDeleteReporting(&m, &key, &removed) ||
             !DATABOX_IS_BYTES(&removed) || removed.len != i % 21) {
             ERR("%s: DeleteReporting of row %zu reported type %d length %zu",
@@ -3597,7 +3597,7 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
      * embedded, longer ones as heap copies */
     for (size_t i = 2; i < rows; i += 5) {
         const databox key = databoxNewUnsigned(i);
-        databox taken = {{0}};
+        databox taken = {};
         const size_t len = i % 21;
         const bool shortBytes = len <= sizeof(taken.data.bytes.embed8);
         if (!multimapDeleteTaking(&m, &key, &taken) || taken.len != len ||
@@ -3613,8 +3613,8 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
     }
 
     for (size_t k = 0; multimapCount(m); k++) {
-        databox kb = {{0}};
-        databox vb = {{0}};
+        databox kb = {};
+        databox vb = {};
         databox *e[2] = {&kb, &vb};
         if (!multimapDeleteRandomValue(&m, k % 2 == 0, e)) {
             ERR("%s: DeleteRandomValue failed", where);
@@ -3961,10 +3961,10 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
         insert(m, elements);
     }
 
-    uint32_t hits[rows] = {0};
+    uint32_t hits[rows] = {};
     for (uint64_t d = 0; d < draws; d++) {
-        databox k = {{0}};
-        databox v = {{0}};
+        databox k = {};
+        databox v = {};
         databox *boxes[2] = {&k, &v};
         multimapEntry me;
         if (!draw(m, false, boxes, &me)) {
@@ -4006,16 +4006,16 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
     }
 
     /* fromTail: the same row on every call, the container's last. */
-    databox lastKey = {{0}};
-    databox lastVal = {{0}};
+    databox lastKey = {};
+    databox lastVal = {};
     databox *lastBoxes[2] = {&lastKey, &lastVal};
     if (!position(m, rows - 1, lastBoxes) || lastKey.data.u != rows - 1) {
         ERR("%s: could not read the last row by position", where);
     }
 
     for (uint32_t d = 0; d < drawsPerRow; d++) {
-        databox k = {{0}};
-        databox v = {{0}};
+        databox k = {};
+        databox v = {};
         databox *boxes[2] = {&k, &v};
         multimapEntry me;
         if (!draw(m, true, boxes, &me) || k.data.u != lastKey.data.u) {
@@ -4037,8 +4037,8 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
 
     srandom(seed);
     for (uint32_t i = 0; i < streamLen; i++) {
-        databox k = {{0}};
-        databox v = {{0}};
+        databox k = {};
+        databox v = {};
         databox *boxes[2] = {&k, &v};
         multimapEntry me;
         draw(m, false, boxes, &me);
@@ -4112,8 +4112,8 @@ static int32_t multimapFullWidthEntrySweep_(void) {
                     at);
                 break;
             }
-            databox gotKey = {{0}};
-            databox gotVal = {{0}};
+            databox gotKey = {};
+            databox gotVal = {};
             flexGetByType(me.fe, &gotKey);
             flexGetByType(flexNext(*me.map, me.fe), &gotVal);
             if (!databoxEqual(&gotKey, &key) || !databoxEqual(&gotVal, &val)) {
@@ -4179,15 +4179,15 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
         const databox *row[2] = {&k, &v};
         /* Every other offer asks for the present row's entry, which must
          * be the stored row */
-        multimapEntry me = {0};
+        multimapEntry me = {};
         const bool inserted = i % 2 ? multimapInsertIfAbsentEntry(&m, row, &me)
                                     : multimapInsertIfAbsent(&m, row);
         if (inserted != !seen[key]) {
             ERR("if-absent: key %" PRIu64 " offer returned %d, expected %d",
                 key, inserted, !seen[key]);
         } else if (!inserted && i % 2) {
-            databox gotKey = {{0}};
-            databox gotVal = {{0}};
+            databox gotKey = {};
+            databox gotVal = {};
             flexGetByType(me.fe, &gotKey);
             flexGetByType(flexNext(*me.map, me.fe), &gotVal);
             if (gotKey.data.u != key || gotVal.data.u != firstValue[key]) {
@@ -4220,7 +4220,7 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
 
     for (uint64_t key = 0; key < keys; key++) {
         const databox k = databoxNewUnsigned(key);
-        databox got = {{0}};
+        databox got = {};
         databox *out[1] = {&got};
         const bool found = multimapLookup(m, &k, out);
         if (found != seen[key] || (found && (got.type != DATABOX_UNSIGNED_64 ||
@@ -4253,8 +4253,8 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
     multimapInsertFullWidth(&set, lower);
     const databox v9 = databoxNewUnsigned(9);
     const databox *offered[2] = {&k, &v9};
-    multimapEntry me = {0};
-    databox gotVal = {{0}};
+    multimapEntry me = {};
+    databox gotVal = {};
     if (multimapInsertIfAbsentEntry(&set, offered, &me)) {
         ERRR("if-absent: a set's present key was inserted again");
     } else {
@@ -4298,7 +4298,7 @@ static int32_t multimapDeleteEntrySweep_(void) {
             }
 
             const databox k = databoxNewSigned(i);
-            multimapEntry me = {0};
+            multimapEntry me = {};
             if (!multimapGetUnderlyingEntry(m, &k, &me)) {
                 ERR("delete-entry (%" PRId64 " rows, tier %d): key %" PRId64
                     " not found before its delete",
@@ -4312,7 +4312,7 @@ static int32_t multimapDeleteEntrySweep_(void) {
         int64_t kept = 0;
         for (int64_t i = 0; i < n; i++) {
             const databox k = databoxNewSigned(i);
-            databox got = {{0}};
+            databox got = {};
             databox *out[1] = {&got};
             const bool found = multimapLookup(m, &k, out);
             if (found != (i % 3 == 0) || (found && got.data.i != i * 10)) {
@@ -4376,7 +4376,7 @@ int multimapTest(int argc, char *argv[]) {
                 char buf[40];
                 snprintf(buf, sizeof(buf), "lookup-key-%05zu", i);
                 const databox key = databoxNewBytesString(buf);
-                databox got = {{0}};
+                databox got = {};
                 databox *out[1] = {&got};
                 if (!multimapLookupWithReference(m, &key, out, atoms) ||
                     got.data.u64 != i) {
@@ -4384,7 +4384,7 @@ int multimapTest(int argc, char *argv[]) {
                 }
             }
             const databox absent = databoxNewBytesString("lookup-key-absent");
-            databox got = {{0}};
+            databox got = {};
             databox *out[1] = {&got};
             if (missed || multimapLookupWithReference(m, &absent, out, atoms)) {
                 ERR("lookup by reference: %zu of %zu missed (size %zu)", missed,
@@ -4436,7 +4436,7 @@ int multimapTest(int argc, char *argv[]) {
             multimapType_(m) == MULTIMAP_TYPE_FULL && multimapCount(m) == NK;
         for (size_t i = 0; ok && i < NK; i++) {
             const databox k = databoxNewSigned(keys[i]);
-            databox got = {{0}};
+            databox got = {};
             databox *out[1] = {&got};
             ok = multimapLookup(m, &k, out) &&
                  databoxLen(&got) == sizeof(big) &&
@@ -4444,8 +4444,8 @@ int multimapTest(int argc, char *argv[]) {
         }
         multimapIterator it;
         multimapIteratorInit(m, &it, true);
-        databox kb = {{0}};
-        databox vb = {{0}};
+        databox kb = {};
+        databox vb = {};
         databox *rowOut[2] = {&kb, &vb};
         int64_t prev = INT64_MIN;
         size_t seen = 0;
@@ -4497,7 +4497,7 @@ int multimapTest(int argc, char *argv[]) {
         }
         for (size_t i = 0; ok && i < 3; i++) {
             const databox k = databoxNewSigned(below[i]);
-            databox got = {{0}};
+            databox got = {};
             databox *out[1] = {&got};
             ok = multimapLookup(m, &k, out) &&
                  ((const char *)databoxBytes(&got))[0] == (char)('z' - i);
@@ -4551,7 +4551,7 @@ int multimapTest(int argc, char *argv[]) {
                 char buf[40];
                 snprintf(buf, sizeof(buf), "replace-key-%05zu", i);
                 const databox key = databoxNewBytesString(buf);
-                databox got = {{0}};
+                databox got = {};
                 databox *out[1] = {&got};
                 const bool found =
                     multimapLookupWithReference(m, &key, out, atoms);
@@ -4649,7 +4649,7 @@ int multimapTest(int argc, char *argv[]) {
         exists = multimapExists(m, &key);
         assert(exists);
 
-        databox value = {{0}};
+        databox value = {};
         databox *values[1] = {&value};
         bool found = multimapLookup(m, &key, values);
         assert(found);
@@ -4680,7 +4680,7 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapCount(m) == 1);
 
         /* Verify initial value */
-        databox result = {{0}};
+        databox result = {};
         databox *results[1] = {&result};
         bool found = multimapLookup(m, &key1, results);
         assert(found);
@@ -4695,7 +4695,7 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapCount(m) == 1); /* Size must stay at 1, not grow to 2 */
 
         /* Verify value was updated */
-        result = (databox){{0}};
+        result = (databox){};
         found = multimapLookup(m, &key1, results);
         assert(found);
         assert(databoxEqual(&val2, &result)); /* Value must be 999, not 200 */
@@ -4751,7 +4751,7 @@ int multimapTest(int argc, char *argv[]) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "key%d", i);
             databox key = databoxNewBytesString(keyBuf);
-            databox result = {{0}};
+            databox result = {};
             databox *results[1] = {&result};
             bool found = multimapLookup(m, &key, results);
             assert(found);
@@ -4839,7 +4839,7 @@ int multimapTest(int argc, char *argv[]) {
                 char keyBuf[32];
                 snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
                 databox key = databoxNewBytesString(keyBuf);
-                databox result = {{0}};
+                databox result = {};
                 databox *results[1] = {&result};
                 const bool found = multimapLookup(m, &key, results);
                 assert(found);
@@ -4888,7 +4888,7 @@ int multimapTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
                 databox key = databoxNewBytesString(keyBuf);
 
-                multimapEntry me = {0};
+                multimapEntry me = {};
                 const bool found = multimapGetUnderlyingEntry(m, &key, &me);
                 assert(found);
                 (void)found;
@@ -4905,7 +4905,7 @@ int multimapTest(int argc, char *argv[]) {
                 char keyBuf[32];
                 snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
                 databox key = databoxNewBytesString(keyBuf);
-                databox result = {{0}};
+                databox result = {};
                 databox *results[1] = {&result};
                 const bool found = multimapLookup(m, &key, results);
                 assert(found);
@@ -4925,7 +4925,7 @@ int multimapTest(int argc, char *argv[]) {
                 snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
                 databox key = databoxNewBytesString(keyBuf);
 
-                multimapEntry me = {0};
+                multimapEntry me = {};
                 const bool found = multimapGetUnderlyingEntry(m, &key, &me);
                 assert(found);
                 (void)found;
@@ -4934,7 +4934,7 @@ int multimapTest(int argc, char *argv[]) {
                 multimapResizeEntry(&m, &me, resizeTo[L]);
                 multimapVerify(m);
 
-                databox result = {{0}};
+                databox result = {};
                 databox *results[1] = {&result};
                 const bool stillThere = multimapLookup(m, &key, results);
                 assert(stillThere);
@@ -4995,8 +4995,8 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
 
         /* LookupByPosition: full-width rows, forward and negative */
-        databox rk = {{0}};
-        databox rv = {{0}};
+        databox rk = {};
+        databox rv = {};
         databox *row[2] = {&rk, &rv};
         assert(multimapLookupByPosition(m, 0, row));
         assert(rv.data.i == 0);
@@ -5015,7 +5015,7 @@ int multimapTest(int argc, char *argv[]) {
         const databox *reps[1] = {&newVal};
         multimapEntryReplace(&m, &findKey, reps);
         multimapVerify(m);
-        databox got = {{0}};
+        databox got = {};
         databox *gotP[1] = {&got};
         assert(multimapLookup(m, &findKey, gotP));
         assert(got.data.i == -9137);
@@ -5067,8 +5067,8 @@ int multimapTest(int argc, char *argv[]) {
         bool sawMedium = false;
         bool sawFull = false;
 
-        databox rk = {{0}};
-        databox rv = {{0}};
+        databox rk = {};
+        databox rv = {};
         databox *row[2] = {&rk, &rv};
 
         while (inserted < 600) {
@@ -5204,8 +5204,8 @@ int multimapTest(int argc, char *argv[]) {
 
 #if 1
     TEST("speeds at different sizes") {
-        uint64_t secs[20] = {0};
-        size_t size[20] = {0};
+        uint64_t secs[20] = {};
+        size_t size[20] = {};
         int i = 0;
         for (size_t maxIdx = 0; maxIdx < flexOptimizationSizeLimits; maxIdx++) {
             flexCapSizeLimit maxSize = flexOptimizationSizeLimit[maxIdx];
@@ -5380,7 +5380,7 @@ int multimapTest(int argc, char *argv[]) {
                     char *val = genval("val", j * 100);
                     const databox keybox = databoxNewBytesString(key);
                     const databox valbox = databoxNewBytesString(val);
-                    databox value = {{0}};
+                    databox value = {};
                     databox *values[1] = {&value};
                     bool found = multimapLookup(m, &keybox, values);
 
@@ -5406,7 +5406,7 @@ int multimapTest(int argc, char *argv[]) {
                     char *val = genval("val", j * 100);
                     const databox keybox = databoxNewBytesString(key);
                     const databox valbox = databoxNewBytesString(val);
-                    databox value = {{0}};
+                    databox value = {};
                     databox *values[1] = {&value};
                     bool found = multimapLookup(m, &keybox, values);
 
@@ -5560,7 +5560,7 @@ int multimapTest(int argc, char *argv[]) {
                 ERR("Extreme key %" PRId64 " not found!", extremeKeys[i]);
             }
 
-            databox foundVal = {{0}};
+            databox foundVal = {};
             databox *values[1] = {&foundVal};
             bool found = multimapLookup(m, &key, values);
             if (!found) {
@@ -5889,7 +5889,7 @@ int multimapTest(int argc, char *argv[]) {
             char buf[40];
             snprintf(buf, sizeof(buf), "compact-key-%05zu", i);
             const databox key = databoxNewBytesString(buf);
-            databox got = {{0}};
+            databox got = {};
             databox *out[1] = {&got};
             wrong += !multimapLookupWithReference(m, &key, out, atoms) ||
                      got.data.u64 != i;
@@ -6046,8 +6046,8 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         /* Verify first element */
-        databox firstKey = {{0}};
-        databox firstVal = {{0}};
+        databox firstKey = {};
+        databox firstVal = {};
         databox *firstElements[2] = {&firstKey, &firstVal};
         bool gotFirst = multimapFirst(m, firstElements);
         if (!gotFirst || firstKey.data.i != 0) {
@@ -6056,8 +6056,8 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         /* Verify last element */
-        databox lastKey = {{0}};
-        databox lastVal = {{0}};
+        databox lastKey = {};
+        databox lastVal = {};
         databox *lastElements[2] = {&lastKey, &lastVal};
         bool gotLast = multimapLast(m, lastElements);
         if (!gotLast || lastKey.data.i != 1000) {
@@ -6083,8 +6083,8 @@ int multimapTest(int argc, char *argv[]) {
         /* Forward iteration */
         multimapIterator iter;
         multimapIteratorInit(m, &iter, true);
-        databox key = {{0}};
-        databox val = {{0}};
+        databox key = {};
+        databox val = {};
         databox *elements[2] = {&key, &val};
 
         int64_t expected = 0;
@@ -6322,7 +6322,7 @@ int multimapTest(int argc, char *argv[]) {
             /* Final comprehensive check */
             for (int32_t i = 0; i < numKeys; i++) {
                 databox key = databoxNewSigned(i);
-                databox gotVal = {{0}};
+                databox gotVal = {};
                 databox *vals[1] = {&gotVal};
                 bool found = multimapLookup(m, &key, vals);
                 if (!found || gotVal.data.i != i * 100) {
@@ -6613,7 +6613,7 @@ int multimapTest(int argc, char *argv[]) {
                 assert(NULL);
             }
 
-            databox gotVal = {{0}};
+            databox gotVal = {};
             databox *vals[1] = {&gotVal};
             bool found = multimapLookup(m, &key, vals);
             if (!found || gotVal.data.i != (int64_t)i) {
@@ -6877,8 +6877,8 @@ int multimapTest(int argc, char *argv[]) {
             /* Verify all entries can be found via iteration AND lookup */
             multimapIterator iter;
             multimapIteratorInit(m, &iter, true);
-            databox iterKey = {{0}};
-            databox iterVal = {{0}};
+            databox iterKey = {};
+            databox iterVal = {};
             databox *iterElements[2] = {&iterKey, &iterVal};
             int32_t count = 0;
             intmax_t prevKey = INTMAX_MIN;
@@ -7261,7 +7261,7 @@ int multimapTest(int argc, char *argv[]) {
         /* Verify values were updated */
         for (int i = 0; i < 10; i++) {
             databox key = databoxNewSigned(i);
-            databox result = {{0}};
+            databox result = {};
             databox *results[1] = {&result};
             bool found = multimapSmallLookup(s, &key, results);
             assert(found);
@@ -7307,7 +7307,7 @@ int multimapTest(int argc, char *argv[]) {
         /* Verify values were updated */
         for (int i = 0; i < 20; i++) {
             databox key = databoxNewSigned(i);
-            databox result = {{0}};
+            databox result = {};
             databox *results[1] = {&result};
             bool found = multimapMediumLookup(m, &key, results);
             assert(found);
@@ -7362,7 +7362,7 @@ int multimapTest(int argc, char *argv[]) {
         /* Verify values were updated */
         for (int i = 0; i < 100; i++) {
             databox key = databoxNewSigned(i);
-            databox result = {{0}};
+            databox result = {};
             databox *results[1] = {&result};
             bool found = multimapFullLookup(f, &key, results);
             assert(found);
@@ -8462,7 +8462,7 @@ int multimapTest(int argc, char *argv[]) {
                                mapWrote =
                                    multimapReplaceEntry(&map, &mapMe, &eleven));
         dkDiagSetPrintMode(priorPrint);
-        databox got = {{0}};
+        databox got = {};
         databox *out[] = {&got};
         if (wrote || now != -1) {
             ERRR("a set row was rewritten in place");
@@ -8501,7 +8501,7 @@ int multimapTest(int argc, char *argv[]) {
          * value is reported */
         mmProceedProbe_ probe = {.answer = false, .asked = 0};
         int64_t now = -1;
-        databox got = {{0}};
+        databox got = {};
         databox *out[] = {&got};
         if (multimapFieldIncrByIf(&m, &kBool, 1, 1, &now, mmProceedProbe,
                                   &probe) ||

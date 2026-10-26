@@ -375,7 +375,7 @@ int intsetU32Test(int argc, char **argv) {
         for (int i = 0; i < 200; i++) {
             intsetU32Assert(intsetU32Exists(is, intsetU32Random(is)));
         }
-        bool seen[300] = {0};
+        bool seen[300] = {};
         for (uint32_t n = 100; n > 0; n--) {
             intsetU32Assert(intsetU32RandomDelete(is, &deleted));
             intsetU32Assert(deleted % 3 == 0 && deleted < 300 &&

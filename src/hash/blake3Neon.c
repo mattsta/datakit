@@ -602,7 +602,7 @@ int blake3NeonTest(int argc, char *argv[]) {
              * ROOT. */
             uint32_t cv[8];
             memcpy(cv, REF_IV, sizeof(cv));
-            uint8_t block[64] = {0};
+            uint8_t block[64] = {};
             memcpy(block, in, len);
             uint8_t flags = (uint8_t)(0x01 | 0x02 | 0x08);
             uint8_t neon_out[64];

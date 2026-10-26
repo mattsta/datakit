@@ -37,7 +37,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("empty array state") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         if (!offsetArrayEmpty(&a)) {
             ERRR("New array should be empty");
         }
@@ -47,7 +47,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("first grow sets offset and highest") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
 
         if (offsetArrayEmpty(&a)) {
@@ -73,7 +73,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("grow upward") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGet(&a, 100) = 1000;
 
@@ -100,7 +100,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("grow downward preserves data") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGet(&a, 100) = 1000;
 
@@ -138,7 +138,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("grow to existing index is no-op") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGet(&a, 100) = 42;
 
@@ -156,7 +156,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("grow within range is no-op") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGrow(&a, 200);
         offsetArrayGet(&a, 150) = 1500;
@@ -183,7 +183,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("contains checks bounds") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGrow(&a, 200);
 
@@ -211,7 +211,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("direct access for iteration") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
 
         /* Create array from 100 to 104 */
         for (int i = 100; i <= 104; i++) {
@@ -241,7 +241,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("free resets to empty state") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGrow(&a, 200);
 
@@ -265,7 +265,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("can reuse array after free") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrow(&a, 100);
         offsetArrayGet(&a, 100) = 1;
         offsetArrayFree(&a);
@@ -289,7 +289,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("growZero initializes to zero on first grow") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrowZero(&a, 100);
 
         if (offsetArrayGet(&a, 100) != 0) {
@@ -301,7 +301,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("growZero zeros new upward elements") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrowZero(&a, 100);
         offsetArrayGet(&a, 100) = 1000; /* Set known value */
 
@@ -324,7 +324,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("growZero zeros new downward elements") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         offsetArrayGrowZero(&a, 100);
         offsetArrayGet(&a, 100) = 1000;
 
@@ -351,7 +351,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("struct storage") {
-        offsetArrayStruct a = {0};
+        offsetArrayStruct a = {};
 
         offsetArrayGrow(&a, 10);
         TestStruct *s = &offsetArrayGet(&a, 10);
@@ -383,7 +383,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("size_t index type") {
-        offsetArraySizeT a = {0};
+        offsetArraySizeT a = {};
 
         size_t idx1 = 1000000;
         size_t idx2 = 1000100;
@@ -414,7 +414,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("zero index") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
 
         offsetArrayGrow(&a, 0);
         offsetArrayGet(&a, 0) = 42;
@@ -448,7 +448,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("sequential upward growth") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
 
         for (int i = 1000; i < 2000; i++) {
             offsetArrayGrow(&a, i);
@@ -471,7 +471,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("sequential downward growth") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
 
         for (int i = 2000; i >= 1000; i--) {
             offsetArrayGrow(&a, i);
@@ -494,7 +494,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("alternating growth pattern") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
 
         /* Start in middle, alternate up and down */
         offsetArrayGrow(&a, 500);
@@ -535,7 +535,7 @@ int offsetArrayTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("checked access is the same lvalue as unchecked access") {
-        offsetArrayInt a = {0};
+        offsetArrayInt a = {};
         for (int i = 500; i >= 490; i--) {
             offsetArrayGrow(&a, i);
             offsetArrayGetChecked_(&a, i) = i * 3;
@@ -583,7 +583,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     }
 
     TEST("checked access on struct and size_t storage") {
-        offsetArrayStruct s = {0};
+        offsetArrayStruct s = {};
         offsetArrayGrow(&s, -5);
         offsetArrayGrow(&s, 5);
         TestStruct *p = &offsetArrayGetChecked_(&s, -5);
@@ -594,7 +594,7 @@ int offsetArrayTest(int argc, char *argv[]) {
         }
         offsetArrayFree(&s);
 
-        offsetArraySizeT z = {0};
+        offsetArraySizeT z = {};
         const size_t lo = 7;
         const size_t hi = 10;
         offsetArrayGrow(&z, hi);

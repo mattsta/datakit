@@ -708,7 +708,7 @@ int atomPoolTest(int argc, char *argv[]) {
             }
 
             /* Lookup by ID */
-            databox resolved = {0};
+            databox resolved = {};
             if (!atomPoolLookup(pool, id1, &resolved)) {
                 ERR("Lookup by ID failed for id %" PRIu64, id1);
                 goto cleanup_basic;
@@ -831,7 +831,7 @@ int atomPoolTest(int argc, char *argv[]) {
             }
 
             /* Verify entry still exists and is correct */
-            databox resolved = {0};
+            databox resolved = {};
             if (!atomPoolLookup(pool, id1, &resolved)) {
                 ERRR("Lookup failed after releases");
             }
@@ -867,7 +867,7 @@ int atomPoolTest(int argc, char *argv[]) {
             }
 
             /* Lookup should fail */
-            databox resolved = {0};
+            databox resolved = {};
             if (atomPoolLookup(pool, id1, &resolved)) {
                 ERRR("Lookup should fail for deleted entry");
             }
@@ -959,7 +959,7 @@ int atomPoolTest(int argc, char *argv[]) {
                 ERRR("Intern of empty string returned 0");
             }
 
-            databox emptyResolved = {0};
+            databox emptyResolved = {};
             if (!atomPoolLookup(pool, emptyId, &emptyResolved)) {
                 ERRR("Lookup of empty string failed");
             }
@@ -978,7 +978,7 @@ int atomPoolTest(int argc, char *argv[]) {
                 ERRR("Intern of long string returned 0");
             }
 
-            databox longResolved = {0};
+            databox longResolved = {};
             if (!atomPoolLookup(pool, longId, &longResolved)) {
                 ERRR("Lookup of long string failed");
             }
@@ -995,7 +995,7 @@ int atomPoolTest(int argc, char *argv[]) {
                 ERRR("Refcount of non-existent ID should be 0");
             }
 
-            databox invalidResolved = {0};
+            databox invalidResolved = {};
             if (atomPoolLookup(pool, 0, &invalidResolved)) {
                 ERRR("Lookup of ID 0 should fail");
             }
@@ -1078,7 +1078,7 @@ int atomPoolTest(int argc, char *argv[]) {
 
             /* Verify odd entries are deleted */
             for (size_t i = 1; i < N; i += 2) {
-                databox resolved = {0};
+                databox resolved = {};
                 if (atomPoolLookup(pool, ids[i], &resolved)) {
                     ERR("Odd entry %zu should be deleted", i);
                 }
@@ -1255,7 +1255,7 @@ int atomPoolTest(int argc, char *argv[]) {
          * atom must get the lowest id not in use (ids are 1-based), so
          * the two id sequences are identical */
         enum { LOW_IDS_ = 512 };
-        uint64_t sequence[2][2000] = {{0}};
+        uint64_t sequence[2][2000] = {};
         static char names[LOW_IDS_ + 1][32];
         for (int t = 0; t < 2; t++) {
             atomPool *pool =

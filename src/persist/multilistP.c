@@ -479,7 +479,7 @@ int multilistPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multilistPTest", basePath, sizeof(basePath))) {
         ERR("could not create a scratch directory: %s", strerror(errno));
@@ -615,15 +615,15 @@ int multilistPTest(int argc, char *argv[]) {
         const databox twenty = DATABOX_SIGNED(20);
         PTEST_LOGGED(multilistPushTailP(ml, &ten));
         PTEST_LOGGED(multilistPushTailP(ml, &twenty));
-        databox popped = {{0}};
+        databox popped = {};
         PTEST_EXPECT_REFUSED(
             ctx, multilistPushHeadP(ml, &ten), multilistPushTailP(ml, &ten),
             multilistPopHeadP(ml, &popped), multilistPopTailP(ml, &popped),
             multilistDelRangeP(ml, 0, 1),
             multilistReplaceAtIndexP(ml, 0, &twenty), multilistResetP(ml));
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
-        multilistEntry head = {0};
-        multilistEntry tail = {0};
+        multilistEntry head = {};
+        multilistEntry tail = {};
         if (multilistCountP(ml) != 2 ||
             !multilistIndexGetP(ml, state, 0, &head) ||
             !databoxEqual(&head.box, &ten) ||
@@ -768,7 +768,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         /* Pop from tail */
-        databox got = {{0}};
+        databox got = {};
         if (!multilistPopTailP(ml, &got)) {
             ERRR("Pop tail failed");
         }
@@ -815,14 +815,14 @@ int multilistPTest(int argc, char *argv[]) {
 
             /* Pop some */
             for (int i = 0; i < 5; i++) {
-                databox got = {{0}};
+                databox got = {};
                 databox expected;
                 PTEST_LOGGED(multilistPopTailP(ml, &got));
                 databoxFreeData(&got);
                 ptestBoxTrackerPopTail(&tracker, &expected);
             }
             for (int i = 0; i < 3; i++) {
-                databox got = {{0}};
+                databox got = {};
                 databox expected;
                 PTEST_LOGGED(multilistPopHeadP(ml, &got));
                 databoxFreeData(&got);
@@ -871,7 +871,7 @@ int multilistPTest(int argc, char *argv[]) {
             } else {
                 /* Pop if not empty */
                 if (tracker.count > 0) {
-                    databox got = {{0}};
+                    databox got = {};
                     databox expected;
                     if (i % 2 == 0) {
                         PTEST_LOGGED(multilistPopHeadP(ml, &got));
@@ -1252,7 +1252,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         for (int i = 0; i < 5; i++) {
-            databox got = {{0}};
+            databox got = {};
             PTEST_LOGGED(multilistPopTailP(ml, &got));
             databoxFreeData(&got);
         }
@@ -1311,7 +1311,7 @@ int multilistPTest(int argc, char *argv[]) {
             tracker.boxes[7] = *rep;
 
             /* Pop both ends: into a zeroed box, then a databoxBig. */
-            databox got = {{0}};
+            databox got = {};
             databox expected;
             if (!multilistPopTailP(ml, &got) ||
                 !ptestBoxTrackerPopTail(&tracker, &expected) ||
@@ -1473,7 +1473,7 @@ int multilistPTest(int argc, char *argv[]) {
                 tracker.count -= 2;
 
                 /* POP_TAIL into a zeroed box, POP_HEAD into a databoxBig. */
-                databox got = {{0}};
+                databox got = {};
                 databox expected;
                 if (!multilistPopTailP(ml, &got) ||
                     !ptestBoxTrackerPopTail(&tracker, &expected) ||
@@ -1567,8 +1567,8 @@ int multilistPTest(int argc, char *argv[]) {
             PTEST_LOGGED(multilistPushTailP(ml, &v));
         }
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
-        multilistEntry first = {0};
-        multilistEntry last = {0};
+        multilistEntry first = {};
+        multilistEntry last = {};
         const databox want0 = DATABOX_SIGNED(0);
         const databox want9 = DATABOX_SIGNED(99);
         if (!multilistSyncP(ml) || multilistCount(multilistGetP(ml)) != 10 ||
@@ -1648,7 +1648,7 @@ int multilistPTest(int argc, char *argv[]) {
         const int64_t want[3] = {1, 2, 4};
         bool same = ml && multilistCountP(ml) == 3;
         for (int i = 0; same && i < 3; i++) {
-            multilistEntry at = {0};
+            multilistEntry at = {};
             same = multilistIndexGetP(ml, state, i, &at) &&
                    at.box.data.i == want[i];
         }

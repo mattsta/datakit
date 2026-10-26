@@ -790,7 +790,7 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
      * XXH64) would otherwise get the verify to "succeed" against the
      * mailbox-bound key — but only because the keyed branch was
      * bypassed. Refusing here closes that downgrade. */
-    flexEnvelopeHeader peek = {0};
+    flexEnvelopeHeader peek = {};
     if (!flexEnvelopePeek(bytes, len, &peek)) {
         return CLUSTER_MAILBOX_ERR_VERIFY_FAILED;
     }
@@ -1920,7 +1920,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -1979,7 +1979,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
         uint8_t sealed[256];
@@ -2050,7 +2050,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         const flex *src = (const flex *)hdr;
         const databox text = databoxNewBytesString("x");
-        databoxBig asText = {0};
+        databoxBig asText = {};
         memcpy(&asText, &text, sizeof(text));
         const databoxBig u33 = DATABOX_BIG_UNSIGNED((uint64_t)1 << 33);
         const databoxBig u32 = DATABOX_BIG_UNSIGNED((uint64_t)1 << 32);
@@ -2158,7 +2158,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
         const uint8_t payload[] = "w";
@@ -2339,7 +2339,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                             sizeof(test_key))) {
                 ERR("Keyring install failed for algo=%u", (uint32_t)algo);
             }
-            cmTestCtx ctx = {0};
+            cmTestCtx ctx = {};
             clusterMailbox *mb =
                 clusterMailboxCreate(ring, algo, cmRecordApply, &ctx);
 
@@ -2378,7 +2378,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -2412,7 +2412,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -2445,7 +2445,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -2497,7 +2497,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -2604,7 +2604,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         if (clusterMailboxParseRotateAnnounce(buf, built - 1u, &got)) {
             ERRR("short-len parse must refuse");
         }
-        const uint8_t zeros[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN] = {0};
+        const uint8_t zeros[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN] = {};
         if (clusterMailboxParseRotateAnnounce(zeros, built, &got)) {
             ERRR("zero-id parse must refuse");
         }
@@ -2618,8 +2618,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, K2, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
 
-        cmTestCtx ctx_prod = {0};
-        cmTestCtx ctx_cons = {0};
+        cmTestCtx ctx_prod = {};
+        cmTestCtx ctx_cons = {};
         clusterMailbox *prod = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_prod);
         clusterMailbox *cons = clusterMailboxCreate(
@@ -2702,7 +2702,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -2776,7 +2776,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -2811,7 +2811,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb_sha = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
         clusterMailbox *mb_blake3 = clusterMailboxCreate(
@@ -2845,7 +2845,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
         const uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -2861,7 +2861,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         /* Reset state so we can re-test each flip. */
         clusterMailboxFree(mb);
         for (size_t pos = 0; pos < written; pos++) {
-            cmTestCtx local = {0};
+            cmTestCtx local = {};
             clusterMailbox *mb2 = clusterMailboxCreate(
                 ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &local);
             const uint8_t saved = buf[pos];
@@ -2928,7 +2928,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
         const uint8_t payload[] = "q";
@@ -2951,7 +2951,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb_a = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -2993,7 +2993,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
 
         /* "Restart": destroy the mailbox, build a new one, restore. */
         clusterMailboxFree(mb_a);
-        cmTestCtx ctx_b = {0};
+        cmTestCtx ctx_b = {};
         clusterMailbox *mb_b = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b);
         if (!clusterMailboxRestore(mb_b, snap, snap_size)) {
@@ -3039,7 +3039,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
 
         /* Empty / non-flex buffer. */
-        const uint8_t empty[1] = {0};
+        const uint8_t empty[1] = {};
         if (clusterMailboxRestore(mb, empty, 0)) {
             ERRR("Restore must reject empty buffer");
         }
@@ -3186,7 +3186,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -3225,7 +3225,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx_a = {0};
+        cmTestCtx ctx_a = {};
         clusterMailbox *mb_a = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_a);
 
@@ -3269,7 +3269,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         /* "Restart" — destroy and rebuild, then restore from the
          * envelope. Verify replay protection survives. */
         clusterMailboxFree(mb_a);
-        cmTestCtx ctx_b = {0};
+        cmTestCtx ctx_b = {};
         clusterMailbox *mb_b = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b);
 
@@ -3361,7 +3361,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -3459,7 +3459,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -3518,7 +3518,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
         const uint8_t payload[] = "m";
@@ -3673,7 +3673,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
         /* Restore into a fresh mailbox and confirm origin 50 is at
          * seq=5 and origin 60 is unknown. */
-        cmTestCtx ctx_b = {0};
+        cmTestCtx ctx_b = {};
         clusterMailbox *mb_b = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b);
         if (!clusterMailboxRestore(mb_b, snap, snap_written)) {
@@ -3697,7 +3697,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx_a = {0};
+        cmTestCtx ctx_a = {};
         clusterMailbox *mb_a = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_a,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -3741,7 +3741,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         /* "Restart": destroy + new mailbox, restore via the direct API
          * (persistOps.restore returns NULL by design — see header). */
         clusterMailboxFree(mb_a);
-        cmTestCtx ctx_b = {0};
+        cmTestCtx ctx_b = {};
         clusterMailbox *mb_b = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_b,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -3795,7 +3795,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
                                    sizeof(test_key));
-        cmTestCtx ctx = {0};
+        cmTestCtx ctx = {};
         clusterMailbox *mb = clusterMailboxCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
 
@@ -3926,7 +3926,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
          * bit 20 -> seq 10
          * bit 25 -> seq 5
          * bit 29 -> seq 1 */
-        cmTestCtx ctx_src = {0};
+        cmTestCtx ctx_src = {};
         clusterMailbox *mb_src = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_src,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -3950,7 +3950,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
          * the window has all 64 bits set; ingesting up to 80 shifts the
          * frame forward, but every shift inserts a new bit-0 set, so at
          * last_applied=80 all 64 bits remain set (covering seqs 17..80). */
-        cmTestCtx ctx_tgt = {0};
+        cmTestCtx ctx_tgt = {};
         clusterMailbox *mb_tgt = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_tgt,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4003,7 +4003,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
 
         /* Snapshot: ingest 1 and 10. last_applied=10, bits at
          * offsets 0 (seq 10) and 9 (seq 1). */
-        cmTestCtx ctx_src = {0};
+        cmTestCtx ctx_src = {};
         clusterMailbox *mb_src = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_src,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4017,7 +4017,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
 
         /* Target: ingest ONLY seq=50. last_applied=50, bits = bit 0
          * only. Crucially, the target has NEVER seen seqs 1 or 10. */
-        cmTestCtx ctx_tgt = {0};
+        cmTestCtx ctx_tgt = {};
         clusterMailbox *mb_tgt = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_tgt,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4067,7 +4067,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
          * past the first ingest). last_applied=100, bits = bit 0
          * (the bit for seq 1 falls off when ingesting 100, shift=99
          * which is >= 64). */
-        cmTestCtx ctx_src = {0};
+        cmTestCtx ctx_src = {};
         clusterMailbox *mb_src = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_src,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4081,7 +4081,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
 
         /* Target: ingest 50 and 60. last_applied=60, bits at
          * offsets 0 (seq 60) and 10 (seq 50). */
-        cmTestCtx ctx_tgt = {0};
+        cmTestCtx ctx_tgt = {};
         clusterMailbox *mb_tgt = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_tgt,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4115,7 +4115,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
 
         /* Snapshot: ingest 5, 10. last_applied=10, bits at offsets
          * 0 (seq 10) and 5 (seq 5). */
-        cmTestCtx ctx_src = {0};
+        cmTestCtx ctx_src = {};
         clusterMailbox *mb_src = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_src,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4129,7 +4129,7 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
 
         /* Target: ingest 3, 10. last_applied=10, bits at offsets
          * 0 (seq 10) and 7 (seq 3). */
-        cmTestCtx ctx_tgt = {0};
+        cmTestCtx ctx_tgt = {};
         clusterMailbox *mb_tgt = clusterMailboxCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx_tgt,
             CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
@@ -4160,8 +4160,8 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
                                    sizeof(key));
         for (int snapshotAhead = 0; snapshotAhead <= 1; snapshotAhead++) {
             /* low: 1..10; high: 40..100 (39 is in its window, unseen) */
-            cmTestCtx ctx_src = {0};
-            cmTestCtx ctx_tgt = {0};
+            cmTestCtx ctx_src = {};
+            cmTestCtx ctx_tgt = {};
             cleaner(clusterMailboxFree) clusterMailbox *mb_src =
                 clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256,
                                        cmRecordApply, &ctx_src,
@@ -4362,7 +4362,7 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
             ERRR("statsRace: mailbox create failed");
         }
 
-        cmStatsRaceCtx ctx = {0};
+        cmStatsRaceCtx ctx = {};
         ctx.mb = mb;
         ctx.key_id = KID;
         ctx.origin = ORIGIN;
@@ -4713,7 +4713,7 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
 
     TEST(
         "Seal/Ingest under concurrent Retire+Reinstall — no UAF, no torn key") {
-        cmRetireRaceCtx ctx = {0};
+        cmRetireRaceCtx ctx = {};
         ctx.key_id = KID;
         ctx.key_bytes = key;
         ctx.key_len = sizeof(key);

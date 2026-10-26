@@ -968,7 +968,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
             sha256ArmCryptoCompressBlocksMulti4(st, bptrs, nb);
 
             for (uint32_t lane = 0; lane < 4; lane++) {
-                uint8_t tail[SHA256_BLOCK_LEN] = {0};
+                uint8_t tail[SHA256_BLOCK_LEN] = {};
                 tail[0] = 0x80;
                 uint64_t bits = (uint64_t)nbytes * 8;
                 tail[SHA256_BLOCK_LEN - 8] = (uint8_t)(bits >> 56);

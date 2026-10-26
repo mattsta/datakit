@@ -65,7 +65,7 @@ void portableRandom_init(portableRandomState *r, pid_t pid) {
      * If all of a stir's OS sources fail, the stir keys from the time
      * and pid alone, and this key is then the only OS entropy in the
      * state.  The read costs one syscall per state. */
-    uint8_t key[DK_PR_KEYSIZE] = {0};
+    uint8_t key[DK_PR_KEYSIZE] = {};
     if (portableRandomDirect(key, sizeof(key)) > 0) {
         portableRandom_add(r, key, sizeof(key));
     }
@@ -726,8 +726,8 @@ int portableRandomTest(int argc, char *argv[]) {
          * must return 300, leave the guard untouched, not be all zero,
          * and differ from a second read (false-positive 2^-2400).  An
          * empty read returns 0. */
-        uint8_t a[300 + 16] = {0};
-        uint8_t b[300 + 16] = {0};
+        uint8_t a[300 + 16] = {};
+        uint8_t b[300 + 16] = {};
         const size_t len = 300;
 
         if (portableRandomUrandom(a, len) != (ssize_t)len ||

@@ -270,11 +270,11 @@ static bool hmacKeyringInstallInternal(
     if (prepared_size == 0) {
         return false;
     }
-    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf rawCopyBuf = {0};
+    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf rawCopyBuf = {};
     /* @own: container; free=zfree */
     rawCopyBuf.ptr = zmalloc(key_len);
     rawCopyBuf.len = key_len;
-    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf preparedBuf = {0};
+    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf preparedBuf = {};
     /* @own: container; free=zfree */
     preparedBuf.ptr = zmalloc(prepared_size);
     preparedBuf.len = prepared_size;
@@ -299,7 +299,7 @@ static bool hmacKeyringInstallInternal(
      * length and so will be cached too — this costs ~280 bytes per slot
      * and is never consumed unless the envelope-Open path explicitly asks
      * via hmacKeyringGetAesGcmKey. */
-    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf schedBuf = {0};
+    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf schedBuf = {};
     aesGcmKey *aead_sched = NULL;
     if (key_len == AES128_KEY_LEN || key_len == AES256_KEY_LEN) {
         /* @own: container; free=zfree */
@@ -349,9 +349,9 @@ static bool hmacKeyringInstallInternal(
     ring->count++;
 
     /* Ownership now lives in the slot — disarm the scope-exit wipes. */
-    rawCopyBuf = (hkrSecretBuf){0};
-    preparedBuf = (hkrSecretBuf){0};
-    schedBuf = (hkrSecretBuf){0};
+    rawCopyBuf = (hkrSecretBuf){};
+    preparedBuf = (hkrSecretBuf){};
+    schedBuf = (hkrSecretBuf){};
 
     pthread_rwlock_unlock(&ring->lock);
     return true;
@@ -379,7 +379,7 @@ bool hmacKeyringInstall(hmacKeyring *ring, hmacKeyId id,
 bool hmacKeyringInstallUnsalted(hmacKeyring *ring, hmacKeyId id,
                                 const hmacHashAlgo *algo,
                                 const uint8_t *key_bytes, size_t key_len) {
-    static const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
+    static const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
     return hmacKeyringInstallInternal(ring, id, algo, key_bytes, key_len,
                                       zero_salt, /*is_unsalted=*/true);
 }
@@ -1015,7 +1015,7 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
         return false;
     }
     const size_t records = (count - 1) / HMAC_KEYRING_ENTRIES_PER_SLOT;
-    hkrRestoreUndoLog undo = {0};
+    hkrRestoreUndoLog undo = {};
 
     /* The floor applies after every slot has installed (a rollback then
      * only retires installed ids) */
@@ -1508,7 +1508,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz ? sz : 1);
         size_t written = 0;
         hmacKeyring *dst = hmacKeyringCreate();
-        uint8_t got[sizeof(key)] = {0};
+        uint8_t got[sizeof(key)] = {};
         size_t gotLen = 0;
         if (!hmacKeyringSnapshot(ring, buf, sz, &written) ||
             !hmacKeyringRestore(dst, buf, written)) {
@@ -1713,7 +1713,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
     TEST("salted install refuses a NULL or all-zero salt, and reports it") {
         hmacKeyring *ring = hmacKeyringCreate();
         const uint8_t key[16] = {0xAA};
-        const uint8_t zero[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
+        const uint8_t zero[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
         const uint64_t diagBefore = dkDiagCount();
         if (hmacKeyringInstall(ring, 2u, &hmacAlgoSHA256, key, sizeof(key),
                                NULL) ||
@@ -1876,10 +1876,10 @@ int hmacKeyringTest(int argc, char *argv[]) {
         }
         /* Counter low byte should be 0, 1, 2; remaining bytes all zero
          * (no salt installed). */
-        const uint8_t expect0[12] = {0};
-        uint8_t expect1[12] = {0};
+        const uint8_t expect0[12] = {};
+        uint8_t expect1[12] = {};
         expect1[0] = 1u;
-        uint8_t expect2[12] = {0};
+        uint8_t expect2[12] = {};
         expect2[0] = 2u;
         if (memcmp(n0, expect0, 12) != 0) {
             ERRR("nonce0 layout");

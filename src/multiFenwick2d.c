@@ -14,7 +14,7 @@
 #define F2D_STORE_T multiFenwickCells
 #define F2D_PLAN_T multiFenwickCell
 #define F2D_NUM_T multiFenwickNum
-#define F2D_NUM_ZERO ((multiFenwickNum){0})
+#define F2D_NUM_ZERO ((multiFenwickNum){})
 #define F2D_NUM_ADD(a, b) multiFenwickNumAdd_(a, b)
 #define F2D_NUM_SUB(a, b) multiFenwickNumSub_(a, b)
 #define F2D_LOAD(s, idx) multiFenwickCellsGet(s, idx)
@@ -51,7 +51,7 @@ void multiFenwick2dFree(multiFenwick2d *t) {
 static multiFenwickNum multiFenwick2dElementOrZero_(const multiFenwick2d *t,
                                                     size_t row, size_t col) {
     if (!t || row >= t->rows || col >= t->cols) {
-        return (multiFenwickNum){0};
+        return (multiFenwickNum){};
     }
 
     return multiFenwick2dElement_(t, row, col);
@@ -127,12 +127,12 @@ bool multiFenwick2dGet(const multiFenwick2d *t, size_t row, size_t col,
 bool multiFenwick2dQuery(const multiFenwick2d *t, size_t row, size_t col,
                          databox *result) {
     return multiFenwick2dResult_(
-        t ? multiFenwick2dPrefix_(t, row, col) : (multiFenwickNum){0}, result);
+        t ? multiFenwick2dPrefix_(t, row, col) : (multiFenwickNum){}, result);
 }
 
 bool multiFenwick2dRangeQuery(const multiFenwick2d *t, size_t r1, size_t c1,
                               size_t r2, size_t c2, databox *result) {
-    multiFenwickNum sum = {0};
+    multiFenwickNum sum = {};
     if (t && t->rows > 0 && t->cols > 0) {
         r2 = r2 < t->rows ? r2 : t->rows - 1;
         c2 = c2 < t->cols ? c2 : t->cols - 1;

@@ -247,7 +247,7 @@ int flexPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "flexPTest", basePath, sizeof(basePath))) {
         ERR("could not create a scratch directory: %s", strerror(errno));
@@ -290,7 +290,7 @@ int flexPTest(int argc, char *argv[]) {
         }
 
         /* Missing arguments: refused or empty answers */
-        databox got = {{0}};
+        databox got = {};
         if (flexPushTailP(NULL, &one) || flexPushHeadP(f, NULL) ||
             flexResetP(NULL) || flexNewP(NULL) || flexOpenP(NULL) ||
             flexGetP(NULL) || flexCountP(NULL) || flexBytesP(NULL) ||
@@ -468,7 +468,7 @@ int flexPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxOpen(basePath, NULL);
             flexP *f = flexOpenP(ctx);
-            databox got = {{0}};
+            databox got = {};
             if (f && flexCountP(f) == 3) {
                 flexGetByTypeP(f, flexIndexP(f, -1), &got);
             }

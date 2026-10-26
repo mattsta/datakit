@@ -811,7 +811,7 @@ int OSRegulateTFOMode(void) {
         FILE *fp = fopen("/proc/sys/net/ipv4/tcp_fastopen", "r");
 
         if (fp) {
-            char buf[64] = {0};
+            char buf[64] = {};
             uint64_t mode = 0;
             /* An unparsable value reads as TFO off */
             if (fgets(buf, sizeof(buf), fp) != NULL &&
@@ -847,7 +847,7 @@ bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
         return osrBacklogFits_(NULL, tcpBacklogListenLength);
     }
 
-    char buf[64] = {0};
+    char buf[64] = {};
     const bool readOk = fgets(buf, sizeof(buf), fp) != NULL;
     fclose(fp);
     return osrBacklogFits_(readOk ? buf : NULL, tcpBacklogListenLength);
@@ -863,7 +863,7 @@ bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
 bool OSRegulateAdjustOpenFilesLimit(const size_t requestedFdCount,
                                     size_t *const limitActuallySet,
                                     char **statusMsg) {
-    static char statusmsg[1024] = {0};
+    static char statusmsg[1024] = {};
 
     /* Estimate of minimum FDs used internally before any user actions */
     static const rlim_t fdOverhead = 64;
@@ -1011,7 +1011,7 @@ bool OSRegulateResourceUsageGet(int64_t *selfMaxRSS, int64_t *childMaxRSS,
 #if DK_OS_LINUX
 bool OSRegulateLinuxOvercommitEnabled(void) {
     FILE *fp = fopen("/proc/sys/vm/overcommit_memory", "r");
-    char buf[64] = {0};
+    char buf[64] = {};
 
     if (!fp) {
         return false;
@@ -1035,7 +1035,7 @@ bool OSRegulateLinuxOvercommitEnabled(void) {
 
 bool OSRegulateLinuxTransparentHugePagesEnabled(void) {
     FILE *fp = fopen("/sys/kernel/mm/transparent_hugepage/enabled", "r");
-    char buf[1024] = {0};
+    char buf[1024] = {};
 
     if (!fp) {
         return false;
@@ -1077,7 +1077,7 @@ bool OSRegulateLinuxMemorySettingsAreOkay(void) {
  */
 size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
 #if DK_OS_LINUX /* /proc/<pid>/smaps */
-    char line[1024] = {0};
+    char line[1024] = {};
     size_t bytes = 0;
     int flen = strlen(field);
     FILE *fp;
@@ -1182,7 +1182,7 @@ size_t OSRegulateRSSGet(void) {
 size_t OSRegulateRSSGet(void) {
     /* mach_task_self() is this task's cached send right; unlike a
      * task_for_pid() lookup it takes no new port reference to release */
-    struct mach_task_basic_info info = {0};
+    struct mach_task_basic_info info = {};
     mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
     if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info,
                   &count) != KERN_SUCCESS) {
@@ -1214,7 +1214,7 @@ size_t OSRegulateTotalMemoryGet(void) {
 #if defined(__unix__) || defined(__unix) || defined(unix) ||                   \
     (defined(__APPLE__) && defined(__MACH__))
 #if defined(CTL_HW) && (defined(HW_MEMSIZE) || defined(HW_PHYSMEM64))
-    int mib[2] = {0};
+    int mib[2] = {};
     mib[0] = CTL_HW;
 #if defined(HW_MEMSIZE)
     mib[1] = HW_MEMSIZE; /* OSX. --------------------- */
@@ -1234,7 +1234,7 @@ size_t OSRegulateTotalMemoryGet(void) {
 
 #elif defined(CTL_HW) && (defined(HW_PHYSMEM) || defined(HW_REALMEM))
     /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and OSX. -------- */
-    int mib[2] = {0};
+    int mib[2] = {};
     mib[0] = CTL_HW;
 #if defined(HW_REALMEM)
     mib[1] = HW_REALMEM; /* FreeBSD. ----------------- */

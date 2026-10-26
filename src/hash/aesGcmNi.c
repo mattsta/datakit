@@ -283,7 +283,7 @@ ghashAbsorb(__m128i acc, __m128i h, const uint8_t *data, size_t len) {
         len -= 16;
     }
     if (len > 0) {
-        uint8_t tail[16] = {0};
+        uint8_t tail[16] = {};
         memcpy(tail, data, len);
         acc = ghashAbsorbBlock(acc, h, tail);
     }

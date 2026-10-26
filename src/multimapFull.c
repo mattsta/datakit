@@ -286,8 +286,8 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
 /* ====================================================================
  * Creation
  * ==================================================================== */
-static const multimapFull multimapFullNull = {0};
-static const databox rangeBoxNull = {{0}};
+static const multimapFull multimapFullNull = {};
+static const databox rangeBoxNull = {};
 
 multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFullFree */
@@ -753,7 +753,7 @@ size_t multimapFullBytesFull(const multimapFull *m) {
 }
 
 flex *multimapFullDump(const multimapFull *m) {
-    const flex *localMaps[64] = {0};
+    const flex *localMaps[64] = {};
     const flex **useMaps;
     cleanerName(zfree, MapPtrs) const flex **heapMaps = NULL;
 
@@ -2642,7 +2642,7 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
         return false;
     }
 
-    multimapEntry me = {0};
+    multimapEntry me = {};
     /* Boundary (position) search, NOT exact-match: "delete all <= X"
      * must work for any X, not only when X is an existing key. */
     multimapFullGetUnderlyingEntryGetEntry(m, &p->compareAgainst, &me);
@@ -2948,7 +2948,7 @@ static int32_t surrogateCopyCheck_(const char *where, const multimapFull *m,
                                    const bool *present, const size_t count) {
     int32_t err = 0;
     for (multimapFullIdx i = 1; i < m->count; i++) {
-        databox head = {{0}};
+        databox head = {};
         databoxWide headWide;
         multimapGetByTypeInto_(flexHead(getMap(m, i)), &head, &headWide, ma);
         if (databoxCompare(&head, getRangeBox(m, i - 1)) != 0) {
@@ -2965,12 +2965,12 @@ static int32_t surrogateCopyCheck_(const char *where, const multimapFull *m,
 
     databoxWide rowWide[2];
     uint32_t slot = 0;
-    databox prev = {{0}};
+    databox prev = {};
     size_t rows = 0;
     for (multimapFullIdx i = 0; i < m->count; i++) {
         const flex *map = getMap(m, i);
         for (flexEntry *fe = flexHead(map); fe; fe = flexNext(map, fe)) {
-            databox row = {{0}};
+            databox row = {};
             multimapGetByTypeInto_(fe, &row, &rowWide[slot], ma);
             slot ^= 1;
             if (rows && databoxCompare(&prev, &row) >= 0) {
@@ -2988,7 +2988,7 @@ static int32_t surrogateCopyCheck_(const char *where, const multimapFull *m,
     }
 
     for (size_t id = 0; id < count; id++) {
-        databox found = {{0}};
+        databox found = {};
         const bool exists =
             multimapFullExistsWithReference(m, &vals[id], &found, ma);
         if (exists != present[id]) {
@@ -3045,7 +3045,7 @@ int multimapFullTest(int argc, char *argv[]) {
             const size_t rows[] = {1, 3, 3, 3, 1};
             /* @own: container; free=multimapFullFree */
             flex *maps[5];
-            multimapFullMiddle middles[5] = {0};
+            multimapFullMiddle middles[5] = {};
             const databox val = databoxNewUnsigned(7);
             for (size_t i = 0; i < 5; i++) {
                 /* @own: container; free=multimapFullFree */
@@ -3240,7 +3240,7 @@ int multimapFullTest(int argc, char *argv[]) {
         /* Iteration must visit at least n distinct keys. */
         multimapIterator iter;
         multimapFullIteratorInit(m, &iter, true);
-        databox dk = {0}, dv0 = {0}, dv1 = {0}, dv2 = {0};
+        databox dk = {}, dv0 = {}, dv1 = {}, dv2 = {};
         databox *ele[4] = {&dk, &dv0, &dv1, &dv2};
         size_t walked = 0;
         while (multimapFullIteratorNext(&iter, ele)) {
@@ -3313,8 +3313,8 @@ int multimapFullTest(int argc, char *argv[]) {
 
     TEST("speeds at different sizes") {
         int32_t maxMax = 1 << 16;
-        uint64_t secs[20] = {0};
-        size_t size[20] = {0};
+        uint64_t secs[20] = {};
+        size_t size[20] = {};
         int i = 0;
         for (int32_t maxSize = 1; maxSize < maxMax; maxSize *= 2) {
             cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
@@ -3571,7 +3571,7 @@ int multimapFullTest(int argc, char *argv[]) {
         }
 
         /* Verify the new value is what comes back, not the old one. */
-        databox foundVal = {0};
+        databox foundVal = {};
         databox *out[1] = {&foundVal};
         const bool ok = multimapFullLookup(m, &keybox, out);
         assert(ok);
@@ -4102,7 +4102,7 @@ int multimapFullTest(int argc, char *argv[]) {
         const databox v11 = DATABOX_SIGNED(11);
         const databox *wrong[2] = {&k30, &v11};
         const databox *right[2] = {&k30, &v10};
-        databox found = {{0}};
+        databox found = {};
         if (multimapFullCount(m) != 40 || !multimapFullExists(m, &k30) ||
             multimapFullDeleteFullWidthWithFound(m, wrong, &found) ||
             !multimapFullDeleteFullWidthWithFound(m, right, &found) ||
@@ -4427,7 +4427,7 @@ int multimapFullTest(int argc, char *argv[]) {
             }
 
             if (i % 3 == 0) {
-                databox found = {{0}};
+                databox found = {};
                 if (!multimapFullDeleteWithReference(c, &vals[i], ma, &found) ||
                     found.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL ||
                     found.data.u != i) {

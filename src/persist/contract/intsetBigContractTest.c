@@ -13,7 +13,7 @@
 static void pcIntsetBigValue(uint64_t *rng, databoxBig *v) {
     const uint64_t r = splitmix64(rng);
     const int64_t pick = (int64_t)(splitmix64(rng) % 512) - 256;
-    *v = (databoxBig){0};
+    *v = (databoxBig){};
     switch (r % 6) {
     case 0:
         *v = DATABOX_BIG_SIGNED(pick * INT64_C(1000000000000));

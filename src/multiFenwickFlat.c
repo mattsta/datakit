@@ -53,7 +53,7 @@ static multiFenwickNum multiFenwickFlatPrefix_(const multiFenwickFlat *mfw,
         return (multiFenwickNum){.i = sum};
     }
 
-    multiFenwickNum acc = {0};
+    multiFenwickNum acc = {};
     for (uint64_t i = idx + 1; i > 0; i = multiFenwickPrev(i)) {
         acc = multiFenwickNumAdd_(acc, multiFenwickCellsGet(c, i - 1));
     }
@@ -246,13 +246,13 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
     const multiFenwickNum total =
         newCapacity > oldCapacity && oldCapacity > 0
             ? multiFenwickFlatCellGet_(cur, oldCapacity - 1)
-            : (multiFenwickNum){0};
+            : (multiFenwickNum){};
 
     /* A chain has at most one cell per bit of the capacity */
     multiFenwickCell planned[64];
     size_t steps = 0;
     for (uint64_t i = idx + 1; i <= newCapacity; i = multiFenwickParent(i)) {
-        multiFenwickNum base = {0};
+        multiFenwickNum base = {};
         if (i <= oldCapacity) {
             base = multiFenwickFlatCellGet_(cur, i - 1);
         } else if (oldCapacity > 0 && (i & (i - 1)) == 0) {
@@ -340,8 +340,8 @@ bool multiFenwickFlatRangeQuery(const multiFenwickFlat *mfw, size_t left,
     }
 
     const multiFenwickNum hi = multiFenwickFlatPrefix_(mfw, right);
-    const multiFenwickNum lo = left > 0 ? multiFenwickFlatPrefix_(mfw, left - 1)
-                                        : (multiFenwickNum){0};
+    const multiFenwickNum lo =
+        left > 0 ? multiFenwickFlatPrefix_(mfw, left - 1) : (multiFenwickNum){};
     if (!multiFenwickNumBox_(multiFenwickNumSub_(hi, lo), result)) {
         *result = DATABOX_BOX_VOID;
         return false;
@@ -380,7 +380,7 @@ bool multiFenwickFlatSet(multiFenwickFlat **mfw, size_t idx,
      * refused Set leaves a NULL '*mfw' NULL. */
     const multiFenwickNum current = *mfw && idx < (*mfw)->count
                                         ? multiFenwickFlatElement_(*mfw, idx)
-                                        : (multiFenwickNum){0};
+                                        : (multiFenwickNum){};
     return multiFenwickFlatApply_(mfw, idx, multiFenwickNumSub_(want, current));
 }
 
@@ -430,7 +430,7 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
             }
         }
     } else {
-        multiFenwickNum sum = {0};
+        multiFenwickNum sum = {};
         for (bit >>= 1; bit > 0; bit >>= 1) {
             const uint64_t next = pos + bit;
             if (next <= mfw->count) {

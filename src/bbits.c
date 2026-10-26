@@ -75,8 +75,8 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
         vw = &dd->val[dd->count - 1];
 
         /* Zero out new structs */
-        *kw = (dodWriter){0};
-        *vw = (dodWriter){0};
+        *kw = (dodWriter){};
+        *vw = (dodWriter){};
 
         /* The writers own these from here and grow them if they must */
         /* @own: container; free=zfree */
@@ -315,7 +315,7 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
         vw = &dx->val[dx->count - 1];
 
         /* Zero out new structs */
-        *kw = (dodWriter){0};
+        *kw = (dodWriter){};
         *vw = (xofWriter){.currentLeadingZeroes = -1,
                           .currentTrailingZeroes = -1};
 
@@ -496,7 +496,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test bbitsDodDod end-to-end write and read verification */
     TEST("bbitsDodDod write/read with value verification") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
         const size_t numElements = 100;
 
         /* Write key-value pairs */
@@ -552,7 +552,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test bbitsDodDod with larger dataset spanning multiple bitmap segments */
     TEST("bbitsDodDod with a large dataset (multiple segments)") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
         const size_t numElements = 5000;
 
         /* Write key-value pairs */
@@ -610,7 +610,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test bbitsDodXof end-to-end write and read verification */
     TEST("bbitsDodXof write/read with value verification") {
-        bbitsDodXof dx = {0};
+        bbitsDodXof dx = {};
         const size_t numElements = 100;
 
         /* Write key-double pairs */
@@ -667,7 +667,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test bbitsDodXof with larger dataset spanning multiple segments */
     TEST("bbitsDodXof with a large dataset (multiple segments)") {
-        bbitsDodXof dx = {0};
+        bbitsDodXof dx = {};
         const size_t numElements = 5000;
 
         /* Write key-double pairs */
@@ -725,7 +725,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test empty structure handling */
     TEST("empty structure handling") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
         ssize_t count = -1;
         uint64_t *keys = NULL;
         uint64_t *vals = NULL;
@@ -737,7 +737,7 @@ int bbitsTest(int argc, char *argv[]) {
                 "");
         }
 
-        bbitsDodXof dx = {0};
+        bbitsDodXof dx = {};
         double *dvals = NULL;
 
         result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals, NULL,
@@ -750,7 +750,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test offset reading */
     TEST("offset-based reading") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
         const size_t numElements = 50;
 
         /* Write data */
@@ -795,16 +795,16 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test free on empty structures */
     TEST("free on empty structures") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
         bbitsDodDodFree(&dd); /* Should not crash */
 
-        bbitsDodXof dx = {0};
+        bbitsDodXof dx = {};
         bbitsDodXofFree(&dx); /* Should not crash */
     }
 
     /* Test negative offset (from end) */
     TEST("a negative offset (from the end)") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
         const size_t numElements = 100;
 
         for (size_t i = 0; i < numElements; i++) {
@@ -848,7 +848,7 @@ int bbitsTest(int argc, char *argv[]) {
 
     /* Test statistics calculation */
     TEST("statistics calculation") {
-        bbitsDodDod dd = {0};
+        bbitsDodDod dd = {};
 
         /* Write known values: 10, 20, 30, 40, 50 - mean should be 30 */
         bbitsDodDodAppend(&dd, 1, 10);
@@ -891,8 +891,8 @@ int bbitsTest(int argc, char *argv[]) {
         /* Irregular values so the DoD stream spills into several segments */
 #define BBITS_CLAMP_VAL(i) (((uint64_t)(i) * 2654435761u) % 1000003)
         const size_t numElements = 5000;
-        bbitsDodDod dd = {0};
-        bbitsDodXof dx = {0};
+        bbitsDodDod dd = {};
+        bbitsDodXof dx = {};
         for (size_t i = 0; i < numElements; i++) {
             bbitsDodDodAppend(&dd, (dodVal)(i * 100),
                               (dodVal)BBITS_CLAMP_VAL(i));
@@ -1009,8 +1009,8 @@ int bbitsTest(int argc, char *argv[]) {
 #define BBITS_STAT_DOD(i) (((uint64_t)(i) * 2654435761u) % 1000003)
 #define BBITS_STAT_XOF(i) ((double)(i) * 0.123 - 77.0)
         const size_t numElements = 3000;
-        bbitsDodDod dd = {0};
-        bbitsDodXof dx = {0};
+        bbitsDodDod dd = {};
+        bbitsDodXof dx = {};
         for (size_t i = 0; i < numElements; i++) {
             bbitsDodDodAppend(&dd, (dodVal)i, (dodVal)BBITS_STAT_DOD(i));
             bbitsDodXofAppend(&dx, (dodVal)i, BBITS_STAT_XOF(i));

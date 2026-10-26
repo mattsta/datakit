@@ -1077,7 +1077,7 @@ static void countByMap(multimapMedium *m, size_t expectedKeys, size_t *outMap0,
     *outMap1 = 0;
     for (size_t i = 0; i < expectedKeys; i++) {
         const databox keybox = databoxNewUnsigned(i);
-        multimapEntry me = {0};
+        multimapEntry me = {};
         if (multimapMediumGetUnderlyingEntry(m, &keybox, &me)) {
             if (me.mapIdx == 0) {
                 (*outMap0)++;
@@ -1198,7 +1198,7 @@ int multimapMediumTest(int argc, char *argv[]) {
 
         /* Look up the boundary key and verify the new value (not the
          * stale "v") is returned. */
-        databox foundVal = {0};
+        databox foundVal = {};
         databox *out[1] = {&foundVal};
         const bool ok = multimapMediumLookup(m, &keybox, out);
         assert(ok);
@@ -1345,8 +1345,8 @@ int multimapMediumTest(int argc, char *argv[]) {
 
         multimapIterator iter;
         multimapMediumIteratorInit(m, &iter, false);
-        databox key = {{0}};
-        databox val = {{0}};
+        databox key = {};
+        databox val = {};
         databox *elements[2] = {&key, &val};
         uint64_t expect = 5;
         while (multimapMediumIteratorNext(&iter, elements)) {
@@ -1415,7 +1415,7 @@ int multimapMediumTest(int argc, char *argv[]) {
         for (size_t i = 0; i < 12; i++) {
             /* Rows 0-4 and the low key live in map[0]. */
             const size_t wantMap = (i < 5 || i == 10) ? 0 : 1;
-            multimapEntry me = {0};
+            multimapEntry me = {};
             if (!multimapMediumGetUnderlyingEntry(m, &keyBox[i], &me) ||
                 me.mapIdx != wantMap) {
                 ERR("row %zu: found in map %" PRIu32 ", expected map %zu", i,

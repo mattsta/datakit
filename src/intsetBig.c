@@ -443,7 +443,7 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
     uint32_t *scratch = NULL;
     uint32_t scratchCap = 0;
     uint32_t inBucket = 0;
-    databoxBig curKey = {0};
+    databoxBig curKey = {};
     bool curNegative = false;
     size_t total = 0;
 
@@ -611,7 +611,7 @@ bool intsetBigIteratorNextBox(intsetBigIterator *restrict isbIter,
     }
 
     /* else, we need to fetch a new map and start iterating again */
-    databox vptr = {{0}};
+    databox vptr = {};
     databox *elements[] = {(databox *)&isbIter->bucket.box, &vptr};
     if (multimapIteratorNext(&isbIter->iter, elements)) {
         /* reset initial conditions for value retrieval */
@@ -1147,7 +1147,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
 
         /* + 1 + 1 is for the two ±2^74 strings */
-        databoxBig testers[(62 + 64) + 1 + 1] = {{{0}}};
+        databoxBig testers[(62 + 64) + 1 + 1] = {};
 
         /* This is -(2^74 + 332197) and goes first because our
          * tests are sorted from smallest to largest inputs
@@ -1751,7 +1751,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         /* Verify sorted order in iteration */
-        databoxBig prev = {0};
+        databoxBig prev = {};
         bool first = true;
         intsetBigIteratorInit(isb, &iter);
         while (intsetBigIteratorNextBox(&iter, &val)) {
@@ -1768,7 +1768,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     TEST("fuzzer - random operations") {
         cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         /* Simple reference set for validation (limited range) */
-        bool refSet[10000] = {0};
+        bool refSet[10000] = {};
         const size_t refMax = 10000;
 
         /* Seed for reproducibility */
@@ -1882,7 +1882,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Verify iteration order is sorted */
         intsetBigIterator iter;
-        databoxBig val, prev = {0};
+        databoxBig val, prev = {};
         bool first = true;
         size_t count = 0;
 
@@ -2267,7 +2267,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
         /* Verify sorted iteration order */
         intsetBigIterator iter;
-        databoxBig val, prev = {0};
+        databoxBig val, prev = {};
         bool first = true;
         size_t count = 0;
 
@@ -2685,7 +2685,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
             /* Verify sorted order preserved */
             intsetBigIterator iter;
-            databoxBig val, prev = {0};
+            databoxBig val, prev = {};
             bool first = true;
 
             intsetBigIteratorInit(a, &iter);
@@ -2761,7 +2761,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         for (int i = 0; i < 5; i++) {
             /* Check iteration works and is sorted */
             intsetBigIterator iter;
-            databoxBig val, prev = {0};
+            databoxBig val, prev = {};
             bool first = true;
             size_t count = 0;
 
@@ -2924,12 +2924,12 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         }
 
         cleaner(flexFree) flex *walked = flexNew();
-        intsetBigIterator it = {0};
+        intsetBigIterator it = {};
         intsetBigIteratorInit(isb, &it);
-        databoxBig v = {0};
+        databoxBig v = {};
         while (intsetBigIteratorNextBox(&it, &v)) {
             flexPushDataboxBigExact(&walked, &v, FLEX_ENDPOINT_TAIL);
-            v = (databoxBig){0};
+            v = (databoxBig){};
         }
 
         cleaner(intsetBigFree) intsetBig *back =
@@ -2944,7 +2944,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
         intsetBigIteratorInit(isb, &it);
         while (intsetBigIteratorNextBox(&it, &v)) {
             flexPushDataboxBigExact(&reversed, &v, FLEX_ENDPOINT_HEAD);
-            v = (databoxBig){0};
+            v = (databoxBig){};
         }
         /* Out of range: past INTSET_BIG_UINT128_MAX */
         cleaner(flexFree) flex *wide = flexNew();

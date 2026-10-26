@@ -1969,8 +1969,8 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
      * entries (large multimap arity, wide flexAppendMultiple) spill to        \
      * a single heap allocation that frees itself at scope exit. */            \
     enum { COMMON_INSERT_MAX_CONTENTS_ = 8 };                                  \
-    int64_t commonFlexSelfOffsetStack_[COMMON_INSERT_MAX_CONTENTS_] = {0};     \
-    bool commonFlexSelfBoolStack_[2 * COMMON_INSERT_MAX_CONTENTS_] = {0};      \
+    int64_t commonFlexSelfOffsetStack_[COMMON_INSERT_MAX_CONTENTS_] = {};      \
+    bool commonFlexSelfBoolStack_[2 * COMMON_INSERT_MAX_CONTENTS_] = {};       \
     int64_t *commonFlexSelfOffset_ = commonFlexSelfOffsetStack_;               \
     bool *commonFlexSelfAfterFe_ = commonFlexSelfBoolStack_;                   \
     bool *commonFlexSelfAlias_ =                                               \
@@ -2573,7 +2573,7 @@ __attribute__((no_sanitize("float-cast-overflow"))) DK_STATIC bool
 insertContentsFromBox(databox *box, flexInsertContents *c,
                       const conversionOverride override, const size_t idx,
                       __int128_t *scratchBuf) {
-    static const flexInsertContents cNull = {0};
+    static const flexInsertContents cNull = {};
     *c = cNull;
 
     switch (box->type) {
@@ -2774,7 +2774,7 @@ void flexInsertByType(flex **const ff, flexEntry *const fe,
 void flexReplaceByType(flex **const ff, flexEntry *const fe,
                        const databox *box) {
     databox copyBox = *box;
-    flexInsertContents content = {0};
+    flexInsertContents content = {};
     __int128_t scratch;
     insertContentsFromBox(&copyBox, &content, CONVERSION_OVERRIDE_NONE, 0,
                           &scratch);
@@ -3603,7 +3603,7 @@ int flexFactorySelfTest(void) {
         databox in = databoxNewBytes("hello", 5);
         flex *f = flexNewFromDatabox(&in);
         FFT(f != NULL);
-        databox out = {0};
+        databox out = {};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         FFT(DATABOX_IS_BYTES(&out) && databoxLen(&out) == 5 &&
             memcmp(databoxBytes(&out), "hello", 5) == 0);
@@ -3614,7 +3614,7 @@ int flexFactorySelfTest(void) {
     {
         databox in = databoxNewBytes("22", 2);
         flex *f = flexNewFromDatabox(&in);
-        databox out = {0};
+        databox out = {};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         FFT((out.type == DATABOX_UNSIGNED_64 && out.data.u == 22) ||
             (out.type == DATABOX_SIGNED_64 && out.data.i == 22));
@@ -3625,7 +3625,7 @@ int flexFactorySelfTest(void) {
     {
         databox in = databoxNewSigned(-7);
         flex *f = flexNewFromDatabox(&in);
-        databox out = {0};
+        databox out = {};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         FFT(out.data.i == -7);
         flexFree(f);
@@ -3666,7 +3666,7 @@ int flexFactorySelfTest(void) {
         const databox *ptrs[3] = {&b0, &b1, &b2};
         flex *f = flexNewFromDataboxPtrs(ptrs, 3);
         FFT(f && flexCount(f) == 3);
-        databox out0 = {0};
+        databox out0 = {};
         flexEntry *fe = flexHead(f);
         flexGetByType(fe, &out0);
         FFT(DATABOX_IS_BYTES(&out0) && databoxLen(&out0) == 10 &&
@@ -3679,7 +3679,7 @@ int flexFactorySelfTest(void) {
     {
         databox boxes[2] = {databoxNewBytes("x", 1), databoxNewBytes("y", 1)};
         flex *f = flexNewFromDataboxes(boxes, 2);
-        databox out = {0};
+        databox out = {};
         FFT(!flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         flexFree(f);
     }
@@ -3687,7 +3687,7 @@ int flexFactorySelfTest(void) {
     /* defensive unwrap: a garbage buffer is rejected, not walked. */
     {
         uint8_t garbage[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-        databox out = {0};
+        databox out = {};
         FFT(!flexGetSingleDatabox(garbage, sizeof(garbage), &out));
     }
 
@@ -3697,7 +3697,7 @@ int flexFactorySelfTest(void) {
         databox val = databoxNewBytes("payload", 7);
         const databox *ptrs[2] = {&idx, &val};
         flex *f = flexNewFromDataboxPtrs(ptrs, 2);
-        databox a = {0}, b = {0};
+        databox a = {}, b = {};
         FFT(flexGetTwoDataboxes((const uint8_t *)f, flexBytes(f), &a, &b));
         FFT(a.data.u == 3 && DATABOX_IS_BYTES(&b) && databoxLen(&b) == 7 &&
             memcmp(databoxBytes(&b), "payload", 7) == 0);
@@ -3960,7 +3960,7 @@ DK_INLINE_ALWAYS flexEncoding flexDecode_(const flexEntry *const fe,
                                           databox *const box,
                                           databoxWide *const slot,
                                           const flexWideStore_ store) {
-    flexEntryData entry = {0};
+    flexEntryData entry = {};
     flexEntryDataPopulate(fe, &entry);
     if (FLEX_IS_STR(entry.encoding)) {
         box->data.bytes.start = FLEX_ENTRY_DATA(&entry);
@@ -4029,7 +4029,7 @@ void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
 
 void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
     /* get at fe, populate type in box, populate box, return found */
-    flexEntryData entry = {0};
+    flexEntryData entry = {};
     flexEntryDataPopulate(fe, &entry);
     if (FLEX_IS_STR(entry.encoding)) {
         /* @own: caller; free=databoxFreeData */
@@ -4070,7 +4070,7 @@ bool flexGetNextByType(flex *const f, flexEntry **const fe, databox *box) {
 void flexGetByTypeBig(const flexEntry *const fe, databoxBig *box) {
     /* Clear every header bit so the result never depends on the box's
      * prior state, then decode with 'extra' as the slot. */
-    *(databox *)box = (databox){{0}};
+    *(databox *)box = (databox){};
     flexDecode_(fe, (databox *)box, (databoxWide *)box->extra,
                 FLEX_WIDE_STORE_SLOT_);
 }
@@ -4141,7 +4141,7 @@ DK_INLINE_ALWAYS void flexDeleteKeepCursor_(flex **const ff, flexEntry **fe,
     assert(ff && *ff && fe && *fe);
 
     const size_t offset = *fe - *ff;
-    flexHeaderInfo headerInfo = {0};
+    flexHeaderInfo headerInfo = {};
     flexDelete___(ff, *fe, count, drain, &headerInfo, NULL);
     *fe = *ff + offset + headerInfo.headerDiff;
 }
@@ -4192,7 +4192,7 @@ void flexDeleteSortedValueWithMiddle(flex **const ff,
         }
     }
 
-    flexHeaderInfo headerInfo = {0};
+    flexHeaderInfo headerInfo = {};
     const size_t offsetMiddle = *middleEntry - *ff;
     flexDelete___(ff, fe, elementsPerEntry, false, &headerInfo, NULL);
     *middleEntry = *ff + offsetMiddle + headerInfo.headerDiff;
@@ -4347,7 +4347,7 @@ DK_STATIC bool flexEntryInteger_(const flexEntryData *entry, bool *neg,
         return false;
     }
 
-    databox box = {{0}};
+    databox box = {};
     flexGetByTypeInto(entry->fe, &box, NULL);
     if (box.type == DATABOX_SIGNED_64) {
         *neg = box.data.i64 < 0;
@@ -4611,7 +4611,7 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
     }
 
     while (true) {
-        flexEntryData entry = {0};
+        flexEntryData entry = {};
         flexEntryDataPopulate(fe, &entry);
 
         if (skipCount == 0) {
@@ -5067,7 +5067,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         /* If we aren't setting zero, we need to zero out the zero data. */
         /* TODO: fix flexInsert* common macros to not assume content[0] will
          *       be populated when we are doing an offset-replace */
-        content[0] = (flexInsertContents){0};
+        content[0] = (flexInsertContents){};
     }
 
     /* Now assemble remaining common insert contents */
@@ -5094,7 +5094,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         }
     }
 
-    flexHeaderInfo headerDiff = {0};
+    flexHeaderInfo headerDiff = {};
     const bool insertedKeyBeforeCurrentMiddle = fe < mid;
     const size_t offset = mid - *ff;
 
@@ -5595,7 +5595,7 @@ DK_STATIC bool flexEntryCompareBox__(const flexEntryData *entry,
         return false;
     }
 
-    databox got = {{0}};
+    databox got = {};
     databoxWide slot;
     flexGetByTypeInto(entry->fe, &got, &slot);
     const bool probeNumeric = DATABOX_IS_NUMERIC(probe) ||
@@ -5703,7 +5703,7 @@ DK_STATIC bool flexEntryCompareProbe__(const flexEntryData *entry,
         return false;
     }
 
-    databox got = {{0}};
+    databox got = {};
     databoxWide slot;
     flexGetByTypeInto(entry->fe, &got, &slot);
     const bool numeric = DATABOX_IS_NUMERIC(&got) ||
@@ -6384,7 +6384,7 @@ void flexRepr(const flex *f) {
     for (i = 0; fe != end; i++) {
         assert(i < flexCount(f));
 
-        flexEntryData entry = {0};
+        flexEntryData entry = {};
         flexEntryDataPopulate(fe, &entry);
 
         printf("{"
@@ -6545,7 +6545,7 @@ static flex *createList() {
 static flex *createIntList() {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    char buf[32] = {0};
+    char buf[32] = {};
 
     snprintf(buf, sizeof(buf), "100");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_TAIL);
@@ -6786,7 +6786,7 @@ static int32_t flexTestDeleteCursor(const size_t payloadLen,
 
             size_t i = 0;
             for (flexEntry *e = flexHeadIfAny(f); e; e = flexNext(f, e), i++) {
-                databox box = {{0}};
+                databox box = {};
                 flexGetByType(e, &box);
                 uint32_t id = UINT32_MAX;
                 if (box.type == DATABOX_BYTES && box.len == payloadLen) {
@@ -6817,7 +6817,7 @@ static int32_t flexTestDeleteCursor(const size_t payloadLen,
 
 static void verify(flex *f, flexEntryData *e) {
     int32_t len = flexCount(f);
-    flexEntryData _e = {0};
+    flexEntryData _e = {};
 
     for (int32_t i = 0; i < len; i++) {
         memset(&e[i], 0, sizeof(flexEntryData));
@@ -6953,7 +6953,7 @@ static int32_t flexTestWideDecoders(void) {
         flexPushDataboxBig(&f, &box, FLEX_ENDPOINT_TAIL);
     }
 
-    bool seen[256] = {0};
+    bool seen[256] = {};
     for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe)) {
         seen[fe[0]] = true;
     }
@@ -7043,8 +7043,8 @@ static int32_t flexTestWideDecoders(void) {
         size_t k = 0;
         for (flexEntry *fe = flexHeadIfAny(mixed); fe;
              fe = flexNext(mixed, fe), k++) {
-            databox viaGet = {{0}};
-            databox viaInto = {{0}};
+            databox viaGet = {};
+            databox viaInto = {};
             databoxWide slot;
             flexGetByType(fe, &viaGet);
             flexGetByTypeInto(fe, &viaInto, &slot);
@@ -7094,7 +7094,7 @@ static int32_t flexTestWideDecoders(void) {
         const bool deferredOk = databoxIsWideDeferred(&got) &&
                                 got.type == DATABOX_UNSIGNED_128 && !got.big;
 
-        databox gotBytes = {{0}};
+        databox gotBytes = {};
         flexGetByTypeIntoWithReference(bytesFE, &gotBytes, &slot, bytesAtoms);
         const bool bytesOk = databoxEqual(&gotBytes, &bytesVal);
 
@@ -7103,7 +7103,7 @@ static int32_t flexTestWideDecoders(void) {
                                         DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                                     .data.u = wideRef.data.u + 1000};
         flexPushByType(&refs, &unknownRef, FLEX_ENDPOINT_TAIL);
-        databox miss = {{0}};
+        databox miss = {};
         flexGetByTypeIntoWithReference(flexTail(refs), &miss, &slot, wideAtoms);
         const bool missOk = miss.type == DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
                             miss.data.u == unknownRef.data.u;
@@ -7143,7 +7143,7 @@ static int32_t flexTestWideDecoders(void) {
     for (flexEntry *fe = flexHeadIfAny(f); fe && i < n;
          fe = flexNext(f, fe), i++) {
         const bool wide = flexTestWideIsWide(vals[i]);
-        databox plain = {{0}};
+        databox plain = {};
         flexGetByTypeCopy(fe, &plain);
         const uint8_t *const p = plain.data.ptr;
         const bool inFlex =
@@ -7440,7 +7440,7 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
         }
 
         /* A plain box gets the type of a 96/128-bit entry and no write. */
-        databox plain = {{0}};
+        databox plain = {};
         flexGetByType(fe, &plain);
         if (plain.type != big.type) {
             FLEX_SWEEP_DECODE_FAIL_("plain and big decodes disagree");
@@ -7778,7 +7778,7 @@ static int32_t flexTestVoidEntries(void) {
             flexReplaceByType(&f, flexIndex(f, 1), &reserve);
         }
 
-        databox got = {{0}};
+        databox got = {};
         flexGetByType(flexIndex(f, 1), &got);
         if (got.type != DATABOX_BYTES || got.len != n) {
             ERR("%zu-byte void entry read back as type %d, %zu bytes", n,
@@ -7794,8 +7794,8 @@ static int32_t flexTestVoidEntries(void) {
         }
         memset(space, 0xAB, n); /* the caller fills it in place */
 
-        databox first = {{0}};
-        databox last = {{0}};
+        databox first = {};
+        databox last = {};
         flexGetByType(flexIndex(f, 0), &first);
         flexGetByType(flexIndex(f, sorted ? 3 : 2), &last);
         flexGetByType(flexIndex(f, 1), &got);
@@ -7832,8 +7832,8 @@ static int32_t flexTestUntrustedGetters(void) {
     const databox mark = DATABOX_SIGNED(0x5A5A);
     databox a = mark;
     databox b = mark;
-    databoxBig ba = {0};
-    databoxBig bb = {0};
+    databoxBig ba = {};
+    databoxBig bb = {};
 #define UG_REFUSE(call)                                                        \
     do {                                                                       \
         a = mark;                                                              \
@@ -7906,7 +7906,7 @@ static int32_t flexTestDeleteUpTo(void) {
             bool ok = flexCount(f) == (size_t)(N - firstKept);
             flexEntry *at = flexHeadIfAny(f);
             for (int64_t v = firstKept; ok && v < N; v++) {
-                databox got = {{0}};
+                databox got = {};
                 flexGetByType(at, &got);
                 ok = got.data.i64 == v;
                 at = flexNext(f, at);
@@ -8094,7 +8094,7 @@ static int32_t flexTestWideReferenceSorted(void) {
         flexTestWideBox(keys[i], true, &key);
         flexEntry *const found = flexFindByTypeSortedWithMiddleWithReference(
             f, 2, (const databox *)&key, middle, atoms);
-        databox val = {{0}};
+        databox val = {};
         if (found) {
             flexGetByType(flexNext(f, found), &val);
         }
@@ -8427,7 +8427,7 @@ static int32_t flexTestNeg64Wide(void) {
             ERR("magnitude %zu flexGetByTypeBig", i);
         }
 
-        databox plain = {{0}};
+        databox plain = {};
         flexGetByType(fe, &plain);
         if (plain.type != DATABOX_SIGNED_128 || plain.data.ptr) {
             ERR("magnitude %zu plain decode is not type-only", i);
@@ -8439,7 +8439,7 @@ static int32_t flexTestNeg64Wide(void) {
             ERR("magnitude %zu read as a 64-bit value", i);
         }
 
-        databox copy = {{0}};
+        databox copy = {};
         flexGetByTypeCopy(fe, &copy);
         if (!flexTestWideMatches(&copy, want) || !copy.allocated || !copy.big) {
             ERR("magnitude %zu flexGetByTypeCopy", i);
@@ -8459,7 +8459,7 @@ static int32_t flexTestNeg64Wide(void) {
             ERR("magnitude %zu took a 64-bit increment", i);
         }
 
-        databox one = {{0}};
+        databox one = {};
         databoxBig oneBig;
         memset(&oneBig, 0xFF, sizeof(oneBig));
         if (flexGetSingleDatabox(f, flexBytes(f), &one) ||
@@ -8481,8 +8481,8 @@ static int32_t flexTestNeg64Wide(void) {
         }
 
         flexPushSigned(&f, -1, FLEX_ENDPOINT_TAIL);
-        databox pa = {{0}};
-        databox pb = {{0}};
+        databox pa = {};
+        databox pb = {};
         databoxBig ba;
         databoxBig bb;
         if (flexGetTwoDataboxes(f, flexBytes(f), &pa, &pb) ||
@@ -8603,7 +8603,7 @@ static int32_t flexTestNeg64Wide(void) {
     const databox key = databoxNewSigned(1);
     const databox val = databoxNewSigned(7);
     const databox *row[2] = {&key, &val};
-    databox replaced = {{0}};
+    databox replaced = {};
     if (!flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
             &m, 2, row, &mid, true, &replaced) ||
         replaced.type != DATABOX_SIGNED_128 || replaced.data.ptr) {
@@ -8760,7 +8760,7 @@ static int32_t flexTestExactPath(void) {
         const char *s = strs[i];
         const size_t len = strlen(s);
         const databox box = databoxNewBytes(s, len);
-        databoxBig big = {0};
+        databoxBig big = {};
         memcpy(&big, &box, sizeof(box));
 
         cleaner(flexFree) flex *viaBytes = flexNew();
@@ -8797,8 +8797,8 @@ static int32_t flexTestExactPath(void) {
         const databox dbl = DATABOX_DOUBLE(1.5);
         flexPushByTypeExact(&f, &neg, FLEX_ENDPOINT_TAIL);
         flexPushByTypeExact(&f, &dbl, FLEX_ENDPOINT_TAIL);
-        databox a = {{0}};
-        databox b = {{0}};
+        databox a = {};
+        databox b = {};
         flexGetByType(flexHead(f), &a);
         flexGetByType(flexNext(f, flexHead(f)), &b);
         if (a.type != DATABOX_SIGNED_64 || a.data.i != -5) {
@@ -8816,7 +8816,7 @@ static int32_t flexTestExactPath(void) {
     {
         cleaner(flexFree) flex *f = flexNew();
         flexPushBytes(&f, "22", 2, FLEX_ENDPOINT_TAIL);
-        databox a = {{0}};
+        databox a = {};
         flexGetByType(flexHead(f), &a);
         if (a.type != DATABOX_UNSIGNED_64 || a.data.u != 22) {
             ERRR("auto path no longer converts \"22\"");
@@ -9023,7 +9023,7 @@ static int32_t flexTestReplaceSign(void) {
         const databox t = {.type = DATABOX_TRUE};
         flexPushByType(&f, &t, FLEX_ENDPOINT_TAIL);
         int64_t got = 99;
-        databox after = {{0}};
+        databox after = {};
         const bool incremented = flexIncrbySigned(&f, flexHead(f), 0, &got);
         flexGetByType(flexHead(f), &after);
         if (!incremented || got != 1 || after.type != DATABOX_TRUE) {
@@ -9385,7 +9385,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const databox *ptrRow[1] = {&ptrBox};
         cleaner(flexFree) flex *ptrs = flexNew();
         flexAppendMultipleExact(&ptrs, 1, ptrRow);
-        databox local = {{0}};
+        databox local = {};
         flexGetByType(flexHead(ptrs), &local);
         if (local.type != DATABOX_PTR_MDSC || local.data.ptr != s ||
             flexValidateBufferDeep(ptrs, flexBytes(ptrs)) ||
@@ -9630,7 +9630,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* The header's total-bytes field widens as the flex grows */
         cleaner(flexFree) flex *wide = flexNew();
         const size_t narrowWidth = flexBytesLength(wide);
-        char block[512] = {0};
+        char block[512] = {};
         for (int i = 0; i < 256; i++) {
             flexPushBytes(&wide, block, sizeof(block), FLEX_ENDPOINT_TAIL);
         }
@@ -9788,7 +9788,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 snprintf(spelled, sizeof(spelled), "%" PRId64, vals[i]);
             flexPushBytes(&rt, spelled, (size_t)sl, FLEX_ENDPOINT_TAIL);
             for (size_t j = 0; j < 2; j++) {
-                databox out = {0};
+                databox out = {};
                 flexGetByType(flexIndex(rt, (int32_t)j), &out);
                 bool same = false;
                 if (out.type == DATABOX_SIGNED_64) {
@@ -9906,7 +9906,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexPushByType(&pf, &bytes, FLEX_ENDPOINT_TAIL);
             size_t ways = 2;
             if (len <= sizeof(bytes.data.bytes.embed)) {
-                databox embed = {{0}};
+                databox embed = {};
                 embed.type = DATABOX_BYTES_EMBED;
                 embed.len = len;
                 memcpy(embed.data.bytes.embed, s, len);
@@ -9923,7 +9923,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
 
             for (size_t j = 0; j < ways; j++) {
-                databox got = {{0}};
+                databox got = {};
                 databoxWide slot;
                 flexGetByTypeInto(flexIndex(pf, (int32_t)j), &got, &slot);
                 bool same;
@@ -10065,7 +10065,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
         enum { PUSH_TYPE_CASES_ = COUNT_ARRAY(refs) + 2 };
         for (size_t i = 0; i < PUSH_TYPE_CASES_; i++) {
-            databox in = {{0}};
+            databox in = {};
             databoxType wantType = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
             if (i < COUNT_ARRAY(refs)) {
                 in.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
@@ -10094,7 +10094,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexInsertByType(&inserted, flexHead(inserted), &in);
 
             /* And the box read back from the push pushes back the same. */
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(flexHead(pushed), &got);
             cleaner(flexFree) flex *again = flexNew();
             flexPushByType(&again, &got, FLEX_ENDPOINT_HEAD);
@@ -10195,7 +10195,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                 /* The auto form really converts some of the strings */
                 if (!exact && row[i] && DATABOX_IS_BYTES(row[i])) {
-                    databox got = {{0}};
+                    databox got = {};
                     flexGetByType(flexHead(appended), &got);
                     converted += !DATABOX_IS_BYTES(&got);
                 }
@@ -10341,9 +10341,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         /* The flex holds the new values. */
-        uint64_t stored[3] = {0};
+        uint64_t stored[3] = {};
         for (int32_t i = 0; i < 3 && flexCount(m) == 3; i++) {
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(flexIndex(m, i), &got);
             stored[i] = got.type == DATABOX_UNSIGNED_64 ? got.data.u : 0;
         }
@@ -10404,7 +10404,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             ERRR("push and insert encodings differ");
         }
 
-        databox got = {{0}};
+        databox got = {};
         flexGetByType(flexHead(pushed), &got);
         if (got.type != DATABOX_FLOAT_32 || got.data.f32 != 7.0f) {
             ERR("head reads back type %d value %f", got.type,
@@ -10456,7 +10456,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         cleaner(flexFree) flex *self = flexNew();
         flexPushBytes(&self, "hello world", strlen("hello world"),
                       FLEX_ENDPOINT_TAIL);
-        databox got = {{0}};
+        databox got = {};
         flexGetByType(flexHead(self), &got);
         flexPushByType(&self, &got, FLEX_ENDPOINT_TAIL);
         for (int32_t i = 0; i < 2 && flexCount(self) == 2; i++) {
@@ -10867,8 +10867,8 @@ int32_t flexTest(int32_t argc, char **argv) {
     }
 
     TEST("strings longer than 255 bytes") {
-        char v1[257] = {0};
-        char v2[257] = {0};
+        char v1[257] = {};
+        char v2[257] = {};
         entry = NULL;
         elen = 0;
         memset(v1, 'x', 256);
@@ -10895,8 +10895,8 @@ int32_t flexTest(int32_t argc, char **argv) {
     }
 
     TEST("deleting next to the last entries") {
-        char v[3][257] = {{0}};
-        flexEntryData e[3] = {{0}};
+        char v[3][257] = {};
+        flexEntryData e[3] = {};
 
         for (size_t i = 0; i < (sizeof(v) / sizeof(v[0])); i++) {
             memset(v[i], 'a' + i, sizeof(v[0]));
@@ -10938,7 +10938,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const databox d5 = DATABOX_DOUBLE(5.0);
         const databox d25 = DATABOX_DOUBLE(2.5);
         const databox dNegZero = DATABOX_DOUBLE(-0.0);
-        databox f3 = {{0}};
+        databox f3 = {};
         DATABOX_SET_FLOAT(&f3, 3.0f);
         flexPushByType(&a, &d5, FLEX_ENDPOINT_TAIL);
         const databox *row[1] = {&f3};
@@ -10957,7 +10957,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             ERR("%zu elements, expected 7", flexCount(a));
         }
         for (int32_t i = 0; flexCount(a) == 7 && i < 7; i++) {
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(flexIndex(a, i), &got);
             const bool isInt = DATABOX_IS_INTEGER(&got);
             const double v = isInt ? (double)got.data.u
@@ -10985,7 +10985,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             ERR("(NULL, 0) pushes made %zu entries, expected 4", flexCount(e));
         }
         for (int32_t i = 0; i < 4 && flexCount(e) == 4; i++) {
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(flexIndex(e, i), &got);
             if ((got.type != DATABOX_BYTES &&
                  got.type != DATABOX_BYTES_EMBED) ||
@@ -11053,7 +11053,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
         flexEntry *pfe = flexHead(pf);
         for (size_t i = 0; i < N_TEXTS; i++) {
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(pfe, &got);
             if (got.type != DATABOX_PTR_MDSC || got.data.ptr != strs[i] ||
                 got.len != strlen(texts[i])) {
@@ -11240,11 +11240,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(found, &got);
             assert(databoxEqual(&keybox, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&valbox, &got2));
@@ -11274,11 +11274,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(found, &got);
             assert(databoxEqual(&keybox, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&valbox, &got2));
@@ -11306,11 +11306,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(found, &got);
             assert(databoxEqual(&keybox, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&valbox, &got2));
@@ -11331,11 +11331,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(found, &got);
             assert(databoxEqual(&keybox, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&valbox, &got2));
@@ -11351,11 +11351,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(found, &got);
             assert(databoxEqual(&keybox, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&valbox, &got2));
@@ -11371,11 +11371,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByType(found, &got);
             assert(databoxEqual(&keybox, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&valbox, &got2));
@@ -11396,7 +11396,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             found = flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
             assert(mid == flexMiddle(f, 2));
             if (found) {
-                databox got = {{0}};
+                databox got = {};
                 flexGetByType(found, &got);
                 assert(!found);
             }
@@ -11424,7 +11424,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexEntry *found =
                     flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
                 assert(found);
-                databox got = {{0}};
+                databox got = {};
                 flexGetByType(found, &got);
                 assert(databoxEqual(&keybox, &got));
             }
@@ -11441,7 +11441,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexEntry *found =
                     flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
                 assert(found);
-                databox got = {{0}};
+                databox got = {};
                 flexGetByType(found, &got);
                 assert(databoxEqual(&keybox, &got));
             }
@@ -11458,7 +11458,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexEntry *found =
                     flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
                 assert(found);
-                databox got = {{0}};
+                databox got = {};
                 flexGetByType(found, &got);
                 assert(databoxEqual(&keybox, &got));
             }
@@ -11480,7 +11480,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 found = flexFindByTypeSortedWithMiddle(f, 2, &keybox, mid);
                 assert(mid == flexMiddle(f, 2));
                 if (found) {
-                    databox got = {{0}};
+                    databox got = {};
                     flexGetByType(found, &got);
                     assert(!found);
                 }
@@ -11540,11 +11540,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 f, 2, &key, middle, a);
             assert(found);
 
-            databox got = {{0}};
+            databox got = {};
             flexGetByTypeWithReference(found, &got, a);
             assert(databoxEqual(&key, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&val, &got2));
@@ -11568,11 +11568,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 f, 2, &key, middle, a);
 
             assert(found);
-            databox got = {{0}};
+            databox got = {};
             flexGetByTypeWithReference(found, &got, a);
             assert(databoxEqual(&key, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&val, &got2));
@@ -11597,11 +11597,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 f, 2, &key, middle, a);
 
             assert(found);
-            databox got = {{0}};
+            databox got = {};
             flexGetByTypeWithReference(found, &got, a);
             assert(databoxEqual(&key, &got));
 
-            databox got2 = {{0}};
+            databox got2 = {};
             bool getNext = flexGetNextByType(f, &found, &got2);
             assert(getNext);
             assert(databoxEqual(&val, &got2));
@@ -11713,7 +11713,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                                     flexFindByTypeSortedWithMiddle(
                                         f, 1, &valbox, middleEntry);
                                 assert(found);
-                                databox got = {{0}};
+                                databox got = {};
                                 flexGetByType(found, &got);
                                 assert(databoxEqual(&valbox, &got));
                             }
@@ -11727,7 +11727,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                                 flexEntry *found =
                                     flexFindByTypeSorted(f, 1, &valbox);
                                 assert(found);
-                                databox got = {{0}};
+                                databox got = {};
                                 flexGetByType(found, &got);
                                 assert(databoxEqual(&valbox, &got));
                             }
@@ -11762,7 +11762,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                                                                middleEntry);
                         assert(middleEntry == flexMiddle(f, 1));
                         if (found) {
-                            databox got = {{0}};
+                            databox got = {};
                             flexGetByType(found, &got);
                             assert(!found);
                         }
@@ -11774,7 +11774,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                             databoxNewSigned(vals[rand() % totalVals]);
                         flexEntry *found = flexFindByTypeHead(f, &valbox, 0);
                         assert(found);
-                        databox got = {{0}};
+                        databox got = {};
                         flexGetByType(found, &got);
                         assert(databoxEqual(&valbox, &got));
                     }
@@ -12061,7 +12061,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("rotating a 4 element list 300 times") {
         f = createList();
         for (int i = 0; i < 300; i++) {
-            databox box = {{0}};
+            databox box = {};
             flexGetByType(flexIndex(f, -1), &box);
             flexPushByType(&f, &box, FLEX_ENDPOINT_HEAD);
             fe = flexIndex(f, -1);
@@ -12073,7 +12073,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("replacing an element with a bigger version of itself") {
         f = flexNew();
-        uint8_t thing[2048] = {0};
+        uint8_t thing[2048] = {};
         memset(thing, 3, sizeof(thing));
 
         databox box = databoxNewBytes(thing, 24);
@@ -12104,7 +12104,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("replacing an element with a smaller version of itself") {
         f = flexNew();
-        uint8_t thing[2048] = {0};
+        uint8_t thing[2048] = {};
         memset(thing, 3, sizeof(thing));
 
         databox box = databoxNewBytes(thing, 2048);
@@ -12198,7 +12198,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     }
 
     TEST("cflex -> flex -> cflex conversions") {
-        uint8_t randBytesBuf[8192] = {0};
+        uint8_t randBytesBuf[8192] = {};
         size_t compressRestoreSize = 1024 * 1024;
         cleaner(zfree) void *compressRestoreBuffer =
             zcalloc(1, compressRestoreSize);
@@ -12275,7 +12275,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * declared buffer must grow (with the length updated to the
          * real allocation), and an exactly-sized buffer must be used
          * as-is without writing past its end. */
-        uint8_t randBytesBuf[8192] = {0};
+        uint8_t randBytesBuf[8192] = {};
         f = flexNew();
         for (int i = 0; i < 48; i++) {
             flexPushByType(&f,
@@ -12420,7 +12420,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexBytes(f) >= widen);
         assert(flexCount(f) == (size_t)(1 + pushed));
 
-        databox got = {{0}};
+        databox got = {};
         flexGetByType(flexHead(f), &got);
         assert(got.len == padLen);
         assert(memcmp(got.data.bytes.start, pad, padLen) == 0);
@@ -12487,7 +12487,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexInsertFloat16(&f, flexHead(f), halfValue);
 
-        databox box = {{0}};
+        databox box = {};
         fe = flexHead(f);
         flexGetByType(fe, &box);
 
@@ -12507,7 +12507,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexInsertFloat16(&f, flexHead(f), halfValue);
 
-        databox box = {{0}};
+        databox box = {};
         fe = flexHead(f);
         flexGetByType(fe, &box);
 
@@ -12527,7 +12527,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexInsertFloatB16(&f, flexHead(f), halfValue);
 
-        databox box = {{0}};
+        databox box = {};
         fe = flexHead(f);
         flexGetByType(fe, &box);
 
@@ -12700,7 +12700,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                     uint8_t *str = NULL;
                     ssize_t len = -1;
-                    databox got = {{0}};
+                    databox got = {};
                     databoxWide slot;
                     flexGetByTypeInto(fe, &got, &slot);
 
@@ -13531,9 +13531,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexEntry *fe64 = flexIndex(f, 1);
         flexEntry *fe65 = flexIndex(f, 2);
 
-        databox box63 = {{0}};
-        databox box64 = {{0}};
-        databox box65 = {{0}};
+        databox box63 = {};
+        databox box64 = {};
+        databox box65 = {};
         flexGetByType(fe63, &box63);
         flexGetByType(fe64, &box64);
         flexGetByType(fe65, &box65);
@@ -13603,9 +13603,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexEntry *fe16447 = flexIndex(f, 1);
         flexEntry *fe16448 = flexIndex(f, 2);
 
-        databox box16446 = {{0}};
-        databox box16447 = {{0}};
-        databox box16448 = {{0}};
+        databox box16446 = {};
+        databox box16447 = {};
+        databox box16448 = {};
         flexGetByType(fe16446, &box16446);
         flexGetByType(fe16447, &box16447);
         flexGetByType(fe16448, &box16448);
@@ -13626,7 +13626,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexEntry *iter = flexHead(f);
         int count = 0;
         while (iter) {
-            databox box = {{0}};
+            databox box = {};
             flexGetByType(iter, &box);
             if (count == 0) {
                 assert(box.len == 16446);
@@ -13644,7 +13644,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         iter = flexTail(f);
         count = 0;
         while (iter) {
-            databox box = {{0}};
+            databox box = {};
             flexGetByType(iter, &box);
             if (count == 0) {
                 assert(box.len == 16448);
@@ -13668,7 +13668,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexCount(f) == 3);
 
         /* Verify order: 16447, 16446, 16448 */
-        databox b0 = {{0}}, b1 = {{0}}, b2 = {{0}};
+        databox b0 = {}, b1 = {}, b2 = {};
         flexGetByType(flexIndex(f, 0), &b0);
         flexGetByType(flexIndex(f, 1), &b1);
         flexGetByType(flexIndex(f, 2), &b2);
@@ -13707,13 +13707,13 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(newBytes > origBytes); /* Should grow due to encoding change */
 
         /* Verify replacement worked */
-        databox got = {{0}};
+        databox got = {};
         flexGetByType(flexIndex(f, 0), &got);
         assert(got.len == 65);
         assert(memcmp(got.data.bytes.start, str65, 65) == 0);
 
         /* Verify second entry wasn't corrupted */
-        databox marker = {{0}};
+        databox marker = {};
         flexGetByType(flexIndex(f, 1), &marker);
         assert(marker.data.i == 12345);
 
@@ -13783,7 +13783,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(found64 != NULL);
         assert(found65 != NULL);
 
-        databox gotVal = {{0}};
+        databox gotVal = {};
         flexEntry *valEntry = flexNext(f, found63);
         flexGetByType(valEntry, &gotVal);
         assert(gotVal.data.i == 63);
@@ -13832,7 +13832,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("flexValidateBuffer rejects NULL / undersize input") {
         assert(flexValidateBuffer(NULL, 0) == false);
         assert(flexValidateBuffer(NULL, 1024) == false);
-        const uint8_t empty[1] = {0};
+        const uint8_t empty[1] = {};
         assert(flexValidateBuffer(empty, 0) == false);
         assert(flexValidateBuffer(empty, 1) == false);
     }
@@ -13917,7 +13917,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * validator already enforces. */
         assert(flexValidateBufferDeep(NULL, 0) == false);
         assert(flexValidateBufferDeep(NULL, 1024) == false);
-        const uint8_t empty[1] = {0};
+        const uint8_t empty[1] = {};
         assert(flexValidateBufferDeep(empty, 1) == false);
         /* total-bytes-claim != buflen */
         cleaner(flexFree) flex *built = flexNew();

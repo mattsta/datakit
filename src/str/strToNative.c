@@ -422,7 +422,7 @@ bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value) {
 #include <errno.h> /* errno */
 bool StrBufToLongDouble(const void *_s, size_t slen, long double *ld) {
     const uint8_t *s = _s;
-    char buf[256] = {0};
+    char buf[256] = {};
     if (slen >= sizeof(buf)) {
         return false;
     }

@@ -246,7 +246,7 @@ int dkRandomTest(int argc, char *argv[]) {
         const uint64_t band = draws / 16;
         const uint64_t centre = draws / 2;
 
-        uint64_t setCount[DK_RANDOM_WORD_BITS] = {0};
+        uint64_t setCount[DK_RANDOM_WORD_BITS] = {};
         for (uint64_t d = 0; d < draws; d++) {
             const uint64_t v = dkRandom64();
             for (uint32_t b = 0; b < (uint32_t)DK_RANDOM_WORD_BITS; b++) {

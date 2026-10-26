@@ -649,7 +649,7 @@ static void computeAeadTag(const uint8_t otk[32], const uint8_t *aad,
     poly1305State st;
     poly1305Init(&st, otk);
 
-    static const uint8_t zeros[16] = {0};
+    static const uint8_t zeros[16] = {};
 
     if (aad_len > 0) {
         poly1305Update(&st, aad, aad_len);
@@ -903,7 +903,7 @@ static void streamCloseAad(chacha20poly1305StreamCtx *ctx) {
     }
     const size_t pad = (16u - (size_t)(ctx->aad_total % 16u)) % 16u;
     if (pad > 0) {
-        static const uint8_t zeros[16] = {0};
+        static const uint8_t zeros[16] = {};
         poly1305Update(streamPoly(ctx), zeros, pad);
     }
     ctx->phase = CHACHA20_POLY1305_STREAM_PHASE_BODY;
@@ -1132,7 +1132,7 @@ static bool streamFinalise(chacha20poly1305StreamCtx *ctx, uint8_t tag[16]) {
     }
     const size_t pad = (16u - (size_t)(ctx->ct_total % 16u)) % 16u;
     if (pad > 0) {
-        static const uint8_t zeros[16] = {0};
+        static const uint8_t zeros[16] = {};
         poly1305Update(streamPoly(ctx), zeros, pad);
     }
     uint8_t lens[16];
@@ -1947,10 +1947,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             /* Real (small) buffers, so the NULL-buffer misuse check
              * cannot be what refuses: the bound must, before either
              * buffer is read, and with no misuse reported */
-            uint8_t key[32] = {0};
-            uint8_t nonce[12] = {0};
-            uint8_t tag[16] = {0};
-            uint8_t in_small[32] = {0};
+            uint8_t key[32] = {};
+            uint8_t nonce[12] = {};
+            uint8_t tag[16] = {};
+            uint8_t in_small[32] = {};
             uint8_t ct_sentinel[32];
             memset(ct_sentinel, 0xAA, sizeof(ct_sentinel));
             const uint64_t diagBefore = dkDiagCount();
@@ -2074,9 +2074,9 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         /* Parity with aesGcmPortableOpen: NULL ciphertext or NULL
          * plaintext with non-zero len must return false instead of
          * dereferencing the NULL. */
-        uint8_t key[32] = {0};
-        uint8_t nonce[12] = {0};
-        uint8_t tag[16] = {0};
+        uint8_t key[32] = {};
+        uint8_t nonce[12] = {};
+        uint8_t tag[16] = {};
         uint8_t pt_buf[16];
         memset(pt_buf, 0xCC, sizeof(pt_buf));
         uint8_t ct_buf[16];

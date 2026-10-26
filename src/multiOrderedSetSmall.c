@@ -998,7 +998,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             iter.valid || multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {
             ERRR("an iterator started past the highest score");
         }
-        int64_t seen[4] = {0};
+        int64_t seen[4] = {};
         size_t n = 0;
         multiOrderedSetSmallIteratorInitAtScore(mos, &iter, &score40, true);
         while (n < 4 && multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {

@@ -49,7 +49,7 @@ defcleaner(multilist *, multilistFree);
 /* Make a container with the family's plain constructor and read the
  * limit it was given */
 static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
-    dkTierStats s = {0};
+    dkTierStats s = {};
     switch (family) {
     case DK_TIER_MULTIMAP: {
         cleaner(multimapFree) multimap *m = multimapNew(2);

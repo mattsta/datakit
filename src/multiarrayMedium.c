@@ -480,7 +480,7 @@ int multiarrayMediumTest(int argc, char *argv[]) {
     TEST("create") {
         multiarrayMedium *mar = multiarrayMediumNew(sizeof(s16), rowMax);
 
-        s16 s = {0};
+        s16 s = {};
         multiarrayMediumInsert(mar, 0, &s);
         assert(mar->node[0].data);
 

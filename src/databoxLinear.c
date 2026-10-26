@@ -380,7 +380,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         uint64_t values[] = {0, 1, 2, 127, 128, 255};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
             databox a = databoxNewUnsigned(values[i]);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != 1) {
@@ -388,7 +388,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                     values[i], len);
             }
 
-            databox b = {{0}};
+            databox b = {};
             if (!databoxLinearDecode(&dl, &b)) {
                 ERR("Failed to decode value %" PRIu64, values[i]);
             }
@@ -407,7 +407,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int bits = 8; bits <= 64; bits += 8) {
             uint64_t val = (bits == 64) ? UINT64_MAX : ((1ULL << bits) - 1);
             databox a = databoxNewUnsigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             int expectedLen = bits / 8;
@@ -416,7 +416,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                     expectedLen, len);
             }
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.u != val) {
                 ERR("Roundtrip failed for 2^%d-1", bits);
@@ -426,14 +426,14 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("unsigned integers - UINT64_MAX") {
         databox a = databoxNewUnsigned(UINT64_MAX);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
         if (len != 8) {
             ERR("UINT64_MAX should encode to 8 bytes, got %zd", len);
         }
 
-        databox b = {{0}};
+        databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.data.u != UINT64_MAX) {
             ERRR("UINT64_MAX roundtrip failed");
@@ -448,10 +448,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         int64_t values[] = {0, 1, -1, 127, -128, 128, -129};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
             databox a = databoxNewSigned(values[i]);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
 
             /* Positive values decode as unsigned */
@@ -474,14 +474,14 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("signed integers - INT64_MIN") {
         databox a = databoxNewSigned(INT64_MIN);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
         if (len != 8) {
             ERR("INT64_MIN should encode to 8 bytes, got %zd", len);
         }
 
-        databox b = {{0}};
+        databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.type != DATABOX_SIGNED_64) {
             ERRR("INT64_MIN should decode as SIGNED");
@@ -493,14 +493,14 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("signed integers - INT64_MAX") {
         databox a = databoxNewSigned(INT64_MAX);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
         if (len != 8) {
             ERR("INT64_MAX should encode to 8 bytes, got %zd", len);
         }
 
-        databox b = {{0}};
+        databox b = {};
         databoxLinearDecode(&dl, &b);
         /* INT64_MAX is positive, so it decodes as unsigned */
         if (b.data.u != (uint64_t)INT64_MAX) {
@@ -516,10 +516,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         float values[] = {0.0f, 1.0f, -1.0f, 0.5f, 3.14159f};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
             databox a = {.data.f32 = values[i], .type = DATABOX_FLOAT_32};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
 
             if (b.type != DATABOX_FLOAT_32) {
@@ -537,7 +537,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         float values[] = {0.0f, 1.0f, 2.0f, 0.5f, -1.0f};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
             databox a = {.data.f32 = values[i], .type = DATABOX_FLOAT_32};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != 2) {
@@ -546,7 +546,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                     (double)values[i], len);
             }
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.f32 != values[i]) {
                 ERR("Float16 roundtrip failed for %g", (double)values[i]);
@@ -562,10 +562,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         double values[] = {0.0, 1.0, -1.0, 3.141592653589793};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
             databox a = {.data.d64 = values[i], .type = DATABOX_DOUBLE_64};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
 
             /* Simple values downgrade to float32 or float16 */
@@ -589,14 +589,14 @@ int databoxLinearTest(int argc, char *argv[]) {
         /* This value cannot be represented as float32 */
         double val = 1.0000000000001;
         databox a = {.data.d64 = val, .type = DATABOX_DOUBLE_64};
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
         if (len != 8) {
             ERR("High-precision double should encode to 8 bytes, got %zd", len);
         }
 
-        databox b = {{0}};
+        databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.type != DATABOX_DOUBLE_64) {
             ERRR("High-precision double should remain DOUBLE_64");
@@ -614,7 +614,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         databoxType types[] = {DATABOX_TRUE, DATABOX_FALSE, DATABOX_NULL};
         for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
             databox a = {.type = types[i]};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != 0) {
@@ -622,7 +622,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                     len);
             }
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.type != types[i]) {
                 ERR("Type roundtrip failed for type %d", types[i]);
@@ -637,10 +637,10 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("DecodeParts function") {
         /* Encode a value, then decode using DecodeParts */
         databox a = databoxNewUnsigned(12345);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         databoxLinearEncode(&a, &dl);
 
-        databox b = {{0}};
+        databox b = {};
         bool ok = databoxLinearDecodeParts(dl.type, &dl.data, &b);
         if (!ok) {
             ERRR("DecodeParts failed");
@@ -656,10 +656,10 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("DATABOX_LINEAR_DECODE macro") {
         databox a = databoxNewSigned(-999);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
-        databox b = {{0}};
+        databox b = {};
         DATABOX_LINEAR_DECODE(&dl, &b, len + 1); /* +1 for type byte */
 
         if (b.data.i != -999) {
@@ -696,7 +696,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
             databox a = databoxNewUnsigned(cases[i].val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != cases[i].expectedBytes) {
@@ -719,10 +719,10 @@ int databoxLinearTest(int argc, char *argv[]) {
 
             for (int i = 0; i < count; i++) {
                 databox a = databoxNewUnsigned(vals[i]);
-                databoxLinear dl = {0};
+                databoxLinear dl = {};
                 databoxLinearEncode(&a, &dl);
 
-                databox b = {{0}};
+                databox b = {};
                 if (!databoxLinearDecode(&dl, &b)) {
                     ERR("Failed to decode at boundary 2^%d value %d", bits, i);
                 }
@@ -748,10 +748,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]);
              i++) {
             databox a = databoxNewSigned(boundaries[i]);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             if (!databoxLinearDecode(&dl, &b)) {
                 ERR("Failed to decode signed boundary %" PRId64, boundaries[i]);
             }
@@ -765,14 +765,14 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("signed - negative one encoding") {
         /* -1 is special: stored as 0 due to SIGNED_PREPARE optimization */
         databox a = databoxNewSigned(-1);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
         if (len != 1) {
             ERR("-1 should encode to 1 byte, got %zd", len);
         }
 
-        databox b = {{0}};
+        databox b = {};
         databoxLinearDecode(&dl, &b);
         if (b.data.i != -1) {
             ERR("-1 roundtrip failed: got %" PRIdMAX, b.data.i);
@@ -783,10 +783,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 64; i++) {
             uint64_t val = 1ULL << i;
             databox a = databoxNewUnsigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.u != val) {
                 ERR("2^%d roundtrip failed: expected %" PRIu64
@@ -800,10 +800,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 63; i++) {
             int64_t val = -(1LL << i);
             databox a = databoxNewSigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.i != val) {
                 ERR("-2^%d roundtrip failed: expected %" PRId64
@@ -832,10 +832,10 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < 10; i++) {
             databox a = {.data.f32 = specials[i], .type = DATABOX_FLOAT_32};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
 
             if (b.data.f32 != specials[i]) {
@@ -860,10 +860,10 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < 10; i++) {
             databox a = {.data.d64 = specials[i], .type = DATABOX_DOUBLE_64};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
 
             /* Value may have been downgraded to float */
@@ -886,10 +886,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 10000; i++) {
             uint64_t val = fuzzNext();
             databox a = databoxNewUnsigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             if (!databoxLinearDecode(&dl, &b)) {
                 ERR("Fuzz unsigned[%d]: decode failed for %" PRIu64, i, val);
                 break;
@@ -908,10 +908,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 10000; i++) {
             int64_t val = fuzzSigned();
             databox a = databoxNewSigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             if (!databoxLinearDecode(&dl, &b)) {
                 ERR("Fuzz signed[%d]: decode failed for %" PRId64, i, val);
                 break;
@@ -933,10 +933,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 10000; i++) {
             float val = fuzzFloat();
             databox a = {.data.f32 = val, .type = DATABOX_FLOAT_32};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             if (!databoxLinearDecode(&dl, &b)) {
                 ERR("Fuzz float[%d]: decode failed", i);
                 break;
@@ -955,10 +955,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 10000; i++) {
             double val = fuzzDouble();
             databox a = {.data.d64 = val, .type = DATABOX_DOUBLE_64};
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             if (!databoxLinearDecode(&dl, &b)) {
                 ERR("Fuzz double[%d]: decode failed", i);
                 break;
@@ -980,7 +980,7 @@ int databoxLinearTest(int argc, char *argv[]) {
             /* Values 0 to 2^24-1 (1-3 bytes) */
             uint64_t val = fuzzRange((1ULL << 24) - 1);
             databox a = databoxNewUnsigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             /* Verify minimal encoding */
@@ -990,7 +990,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                     i, val, expectedLen, len);
             }
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.u != val) {
                 ERR("Fuzz small[%d]: roundtrip failed", i);
@@ -1005,10 +1005,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 10000; i++) {
             int64_t val = -1 - (int64_t)fuzzRange((1ULL << 23) - 1);
             databox a = databoxNewSigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.i != val) {
                 ERR("Fuzz neg[%d]: expected %" PRId64 ", got %" PRIdMAX, i, val,
@@ -1028,7 +1028,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
             databox a = databoxNewUnsigned(vals[i]);
 
-            databoxLinear dl1 = {0}, dl2 = {0};
+            databoxLinear dl1 = {}, dl2 = {};
             ssize_t len1 = databoxLinearEncode(&a, &dl1);
             ssize_t len2 = databoxLinearEncode(&a, &dl2);
 
@@ -1046,10 +1046,10 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("roundtrip - decode twice gives same result") {
         databox a = databoxNewUnsigned(123456789);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         databoxLinearEncode(&a, &dl);
 
-        databox b1 = {{0}}, b2 = {{0}};
+        databox b1 = {}, b2 = {};
         databoxLinearDecode(&dl, &b1);
         databoxLinearDecode(&dl, &b2);
 
@@ -1066,15 +1066,15 @@ int databoxLinearTest(int argc, char *argv[]) {
             databox a = databoxNewUnsigned(val);
 
             /* Encode */
-            databoxLinear dl1 = {0};
+            databoxLinear dl1 = {};
             ssize_t len1 = databoxLinearEncode(&a, &dl1);
 
             /* Decode */
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl1, &b);
 
             /* Re-encode */
-            databoxLinear dl2 = {0};
+            databoxLinear dl2 = {};
             ssize_t len2 = databoxLinearEncode(&b, &dl2);
 
             /* Should produce identical encoding */
@@ -1103,10 +1103,10 @@ int databoxLinearTest(int argc, char *argv[]) {
         };
 
         for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&inputs[i], &dl);
 
-            databox b = {{0}};
+            databox b = {};
             bool ok = databoxLinearDecodeParts(dl.type, &dl.data, &b);
             if (!ok) {
                 ERR("DecodeParts failed for input[%zu]", i);
@@ -1126,10 +1126,10 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("PARTS_DECODE macro - fixed types") {
         databox a = databoxNewUnsigned(999);
-        databoxLinear dl = {0};
+        databoxLinear dl = {};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
-        databox b = {{0}};
+        databox b = {};
         DATABOX_LINEAR_PARTS_DECODE(dl.type, (const uint8_t *)&dl.data, len,
                                     &b);
 
@@ -1161,7 +1161,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
             /* Test max value for this width */
             databox a = databoxNewUnsigned(ranges[i].maxVal);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != ranges[i].width) {
@@ -1196,7 +1196,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
             databox a = databoxNewSigned(ranges[i].minVal);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != ranges[i].width) {
@@ -1213,10 +1213,10 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("sequential unsigned 0-1000") {
         for (uint64_t val = 0; val <= 1000; val++) {
             databox a = databoxNewUnsigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
             if (b.data.u != val) {
                 ERR("Sequential %" PRIu64 " failed", val);
@@ -1228,10 +1228,10 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("sequential signed -500 to +500") {
         for (int64_t val = -500; val <= 500; val++) {
             databox a = databoxNewSigned(val);
-            databoxLinear dl = {0};
+            databoxLinear dl = {};
             databoxLinearEncode(&a, &dl);
 
-            databox b = {{0}};
+            databox b = {};
             databoxLinearDecode(&dl, &b);
 
             int64_t result = (val >= 0) ? (int64_t)b.data.u : b.data.i;

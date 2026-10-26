@@ -928,7 +928,7 @@ static void djTestNumbers(djState *state, int from, int to) {
 
 /* Helper to run djString and get output for testing */
 static mds *djTestEscapeString(const void *data, size_t len) {
-    djState testState_ = {{0}};
+    djState testState_ = {};
     djState *testState = &testState_;
     djInit(testState);
     djString(testState, data, len, false);
@@ -975,7 +975,7 @@ int djTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("true") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -987,7 +987,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("false") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -999,7 +999,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("null") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1011,7 +1011,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("hello - direct") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1023,7 +1023,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("hello - escaped") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1035,7 +1035,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("hello plus garbage - escaped") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1047,7 +1047,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("hello plus garbage SIMD - escaped") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1084,7 +1084,7 @@ int djTest(int argc, char *argv[]) {
 
     /* "pickles" written with length 6 is "pickle" */
     TEST("simple map") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1100,7 +1100,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("simple two map") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1118,7 +1118,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("various map") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1144,7 +1144,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("various map nested") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1275,7 +1275,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("simple array") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1291,7 +1291,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("simple two array") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1309,7 +1309,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("various array") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1335,7 +1335,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("various nesting mechanics") {
-        djState testA_ = {{0}};
+        djState testA_ = {};
         djState *testA = &testA_;
         djInit(testA);
 
@@ -1595,7 +1595,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("djBox: every scalar as a value; no JSON form writes nothing") {
-        djState st = {{0}};
+        djState st = {};
         djInit(&st);
         djArrayOpen(&st);
 
@@ -1649,7 +1649,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("djBox: keys are strings; a refused value keeps the pairing") {
-        djState st = {{0}};
+        djState st = {};
         djInit(&st);
         djMapOpen(&st);
         const databox x = databoxNewBytesString("x");
@@ -1680,7 +1680,7 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("djNumericDirect and sets: bare values, quoted keys") {
-        djState st = {{0}};
+        djState st = {};
         djInit(&st);
         djArrayOpen(&st);
         djSetOpen(&st);
@@ -1700,7 +1700,7 @@ int djTest(int argc, char *argv[]) {
         }
 
         /* A lone separator is still a trailing comma */
-        djState lone = {{0}};
+        djState lone = {};
         djInit(&lone);
         djNumericDirect(&lone, "", 0);
         cleaner(mdsfree) mds *empty = djFinalize(&lone);
@@ -1711,15 +1711,15 @@ int djTest(int argc, char *argv[]) {
 
     TEST("djAppend: buffers move in order; matches one buffer written "
          "straight through") {
-        djState oracle = {{0}};
+        djState oracle = {};
         djInit(&oracle);
         djTestNumbers(&oracle, 0, 740);
 
-        djState dst = {{0}};
+        djState dst = {};
         djInit(&dst);
         djTestNumbers(&dst, 0, 10);
 
-        djState src1 = {{0}};
+        djState src1 = {};
         djInit(&src1);
         djTestNumbers(&src1, 10, 20);
         djAppend(&dst, &src1);
@@ -1731,10 +1731,10 @@ int djTest(int argc, char *argv[]) {
         djTestNumbers(&dst, 20, 700);
 
         /* A source that itself spans two buffers */
-        djState src2 = {{0}};
+        djState src2 = {};
         djInit(&src2);
         djTestNumbers(&src2, 700, 710);
-        djState src3 = {{0}};
+        djState src3 = {};
         djInit(&src3);
         djTestNumbers(&src3, 710, 720);
         djAppend(&src2, &src3);
@@ -1742,7 +1742,7 @@ int djTest(int argc, char *argv[]) {
         djAppend(&dst, &src2);
 
         /* An empty source adds nothing */
-        djState src4 = {{0}};
+        djState src4 = {};
         djInit(&src4);
         djAppend(&dst, &src4);
 
@@ -1777,7 +1777,7 @@ int djTest(int argc, char *argv[]) {
         djFree(&dst); /* zeroed by the finalize: a no-op */
 
         /* One buffer still comes back as an owned array */
-        djState one = {{0}};
+        djState one = {};
         djInit(&one);
         djTestNumbers(&one, 4, 5);
         mds **single = djFinalizeMulti(&one, &count);
@@ -1790,11 +1790,11 @@ int djTest(int argc, char *argv[]) {
     }
 
     TEST("djFree: frees every appended buffer and leaves a zeroed state") {
-        djState dst = {{0}};
+        djState dst = {};
         djInit(&dst);
         djTestNumbers(&dst, 0, 5);
         for (int i = 0; i < 6; i++) {
-            djState src = {{0}};
+            djState src = {};
             djInit(&src);
             djTestNumbers(&src, i * 100, i * 100 + 50);
             djAppend(&dst, &src);
@@ -1813,7 +1813,7 @@ int djTest(int argc, char *argv[]) {
          * inner level through the type-detecting close, and compare with
          * the text the levels imply. */
         const size_t depth = 300; /* even: the innermost level is an array */
-        djState st = {{0}};
+        djState st = {};
         djInit(&st);
         cleaner(mdsfree) mds *want = mdsempty();
         for (size_t i = 0; i < depth; i++) {
@@ -1844,7 +1844,7 @@ int djTest(int argc, char *argv[]) {
         djFree(&st); /* the finalize released the bitmap: a no-op */
 
         /* An unfinished deep state frees its bitmap too */
-        djState open = {{0}};
+        djState open = {};
         djInit(&open);
         for (size_t i = 0; i < depth; i++) {
             djArrayOpen(&open);

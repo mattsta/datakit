@@ -185,7 +185,7 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
      * Instead of lookup->result->delete, we just attempt
      * a direct delete. If the first delete works, we know we can
      * delete from the other map too. */
-    databox foundReference = {{0}};
+    databox foundReference = {};
     if (multimapDeleteWithReference(&ma->mapAtomReverse, reverseKey, ma,
                                     &foundReference)) {
         const bool deleted =
@@ -219,7 +219,7 @@ bool multimapAtomInsertIfNewConvert(multimapAtom *ma, databox *key) {
     /* The reference replaces the whole box, as in InsertConvert: a decode
      * straight into 'key' would keep the 'big' and 'allocated' bits of a
      * 96/128-bit or heap value it held. */
-    databox ref = {{0}};
+    databox ref = {};
     const bool existed = atomFindOrCreate_(ma, key, &ref);
     *key = ref;
     key->created = !existed;
@@ -227,7 +227,7 @@ bool multimapAtomInsertIfNewConvert(multimapAtom *ma, databox *key) {
 }
 
 bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key) {
-    databox ref = {{0}};
+    databox ref = {};
     const bool existed = atomFindOrCreate_(ma, key, &ref);
     if (existed) {
         /* Increase reference count automatically since is also a checkout */
@@ -245,7 +245,7 @@ bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key) {
 /* Lookup ATOM REFERENCE to USER DATA VALUE */
 bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
                         databox *key) {
-    databox count = {{0}};
+    databox count = {};
     databox *elements[2] = {key, &count};
 
     return multimapLookup(ma->mapAtomForward, ref, elements);
@@ -253,7 +253,7 @@ bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
 
 void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
                               multimapAtomResult *result) {
-    databox count = {{0}};
+    databox count = {};
     databox *elements[2] = {&result->val, &count};
 
     /* 'val' is a plain databox with no wide storage, so a 96/128-bit
@@ -268,7 +268,7 @@ void multimapAtomLookupConvert(const multimapAtom *ma, databox *box) {
     /* The reference is copied out first so the lookup key is never the
      * box being decoded into. */
     const databox ref = *box;
-    databox count = {{0}};
+    databox count = {};
     databox *elements[2] = {box, &count};
 
     /* A plain databox can't hold a 96/128-bit value: report it type-only
@@ -282,12 +282,12 @@ void multimapAtomLookupConvert(const multimapAtom *ma, databox *box) {
 void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box) {
     const databox ref = {.data = box->data, .type = box->type};
     databox *const out = (databox *)box;
-    databox count = {{0}};
+    databox count = {};
     databox *elements[2] = {out, &count};
 
     /* Reset every header bit, then aim the payload pointer at 'extra' so
      * a wide value has somewhere to land. */
-    *out = (databox){{0}};
+    *out = (databox){};
     DATABOX_BIG_INIT(box);
     if (multimapLookup(ma->mapAtomForward, &ref, elements)) {
         box->big = box->type == DATABOX_SIGNED_128 ||
@@ -307,7 +307,7 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
                                 databox *count) {
     /* Zeroed: the value is discarded, so a 96/128-bit one decodes
      * type-only instead of through a stale pointer. */
-    databox val = {{0}};
+    databox val = {};
     databox *elements[2] = {&val, count};
 
     multimapLookup(ma->mapAtomForward, key, elements);
@@ -349,7 +349,7 @@ void multimapAtomRetainById(multimapAtom *ma, const uint64_t id) {
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key) {
     /* A new atom is created with its one reference */
-    databox ref = {{0}};
+    databox ref = {};
     if (atomFindOrCreate_(ma, key, &ref)) {
         multimapAtomRetainByRef(ma, &ref);
     }
@@ -358,7 +358,7 @@ void multimapAtomRetain(multimapAtom *ma, const databox *key) {
 void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
     /* Zeroed: a reference id decodes narrow and leaves the flag bits as
      * they were, and this box is handed back to the caller whole. */
-    databox ref = {{0}};
+    databox ref = {};
     if (atomFindOrCreate_(ma, key, &ref)) {
         multimapAtomRetainByRef(ma, &ref);
     }
@@ -393,7 +393,7 @@ static void atomAfterDelete_(multimapAtom *ma, const uint64_t deletedId) {
     }
 
     if (deletedId + 1 == atomNextId_(ma)) {
-        databox last[3] = {{{0}}};
+        databox last[3] = {};
         if (multimapLastInto(ma->mapAtomForward, last, 3) &&
             last[0].data.u + 1 < MULTIMAP_ATOM_ID_LIMIT) {
             atomSetNextId_(ma, last[0].data.u + 1);
@@ -455,10 +455,10 @@ bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
     /* The reverse row found here is the one a last release deletes */
-    multimapEntry me = {0};
+    multimapEntry me = {};
     if (multimapGetUnderlyingEntryWithReference(ma->mapAtomReverse, key, &me,
                                                 ma)) {
-        databox foundRef = {{0}};
+        databox foundRef = {};
         flexGetByType(me.fe, &foundRef);
         return conformRefcountDecr(ma, &foundRef, &me);
     }
@@ -470,7 +470,7 @@ bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
 
 bool multimapAtomDelete(multimapAtom *ma, const databox *key) {
     /* One reverse search: the delete itself reports the atom's id */
-    databox foundReference = {{0}};
+    databox foundReference = {};
     if (!multimapDeleteWithReference(&ma->mapAtomReverse, key, ma,
                                      &foundReference)) {
         return false;
@@ -492,7 +492,7 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
      * searched by, and is deleted where it is once the reverse row is
      * gone (the reverse search resolves ids through the forward map, and
      * deleting the reverse row leaves the forward map as it was) */
-    multimapEntry me = {0};
+    multimapEntry me = {};
     if (!multimapGetUnderlyingEntry(ma->mapAtomForward, ref, &me)) {
         return false;
     }
@@ -503,7 +503,7 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
     flexGetByTypeInto(flexNext(*me.map, me.fe), &value, &valueWide);
     assert(value.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL);
 
-    databox found = {{0}};
+    databox found = {};
     const bool deleteReverse =
         multimapDeleteWithReference(&ma->mapAtomReverse, &value, ma, &found);
     assert(deleteReverse && found.data.u == ref->data.u);
@@ -587,7 +587,7 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
         databox *row[3] = {&boxes[used * 3], &boxes[used * 3 + 1],
                            &boxes[used * 3 + 2]};
         for (size_t i = 0; i < 3; i++) {
-            *row[i] = (databox){{0}};
+            *row[i] = (databox){};
         }
 
         const bool more =
@@ -899,7 +899,7 @@ static bool atomTestResolvesTo(const multimapAtom *ma, const databox *ref,
                                const databox *want) {
     databoxBig got;
     memset(&got, 0xFF, sizeof(got));
-    *(databox *)&got = (databox){{0}};
+    *(databox *)&got = (databox){};
     DATABOX_BIG_INIT(&got);
     atomTestPoisonStack();
     if (!multimapAtomLookup(ma, ref, (databox *)&got)) {
@@ -2017,7 +2017,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                         pass, i);
                 }
 
-                databox count = {{0}};
+                databox count = {};
                 atomTestPoisonStack();
                 multimapAtomLookupRefcount(ma, &ref, &count);
                 if (count.type != DATABOX_FALSE) {
@@ -2097,9 +2097,9 @@ int multimapAtomTest(int argc, char *argv[]) {
                 }
             }
 
-            uint64_t ids[pathValueCount] = {0};
+            uint64_t ids[pathValueCount] = {};
             for (size_t i = 0; i < pathValueCount; i++) {
-                databox ref = {{0}};
+                databox ref = {};
                 atomTestPoisonStack();
                 if (!multimapAtomLookupReference(ma, &vals[i], &ref) ||
                     ref.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
@@ -2218,7 +2218,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                     const databox refJ = {
                         .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                         .data.u = ids[j]};
-                    databox found = {{0}};
+                    databox found = {};
                     atomTestPoisonStack();
                     const bool bound =
                         multimapAtomLookupReference(ma, &vals[j], &found);
@@ -2240,7 +2240,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                 }
 
                 if (wantMin) {
-                    databox minRef = {{0}};
+                    databox minRef = {};
                     atomTestPoisonStack();
                     if (!multimapAtomLookupMin(ma, &minRef) ||
                         !atomTestResolvesTo(ma, &minRef, wantMin)) {
@@ -2263,7 +2263,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                 atomTestPoisonStack();
                 multimapAtomInsertWithExactAtomID(ma, exact, &rebound);
 
-                databox found = {{0}};
+                databox found = {};
                 atomTestPoisonStack();
                 if (multimapAtomLookupReference(ma, &vals[i], &found)) {
                     ERR("pass %d value %zu: still bound after rebind", pass, i);
@@ -2313,8 +2313,8 @@ int multimapAtomTest(int argc, char *argv[]) {
         }
 
         multimapAtomRetainById(ma, ids[1].data.u);
-        databox count = {{0}};
-        databox found = {{0}};
+        databox count = {};
+        databox found = {};
         multimapAtomLookupRefcount(ma, &ids[1], &count);
         if (multimapAtomCount(ma) != 3 ||
             !multimapAtomLookup(ma, &ids[0], &found) || found.data.i != 100 ||
@@ -2415,7 +2415,7 @@ int multimapAtomTest(int argc, char *argv[]) {
 
         const databox exactRef = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                                   .data.u = 5};
-        databox found = {{0}};
+        databox found = {};
         if (multimapCount(ma->mapAtomForward) != 2 ||
             !multimapAtomLookup(ma, &exactRef, &found) ||
             databoxCompare(&found, &exactKey) != 0 ||
@@ -2457,7 +2457,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                 break;
             }
 
-            databox ref = {{0}};
+            databox ref = {};
             if (!ok || multimapAtomCount(ma) != 0 ||
                 multimapCount(ma->mapAtomReverse) != 0 ||
                 multimapAtomLookupReference(ma, &aKey, &ref) ||
@@ -2495,14 +2495,14 @@ int multimapAtomTest(int argc, char *argv[]) {
             ERRR("releasing one of two references removed the atom");
         }
 
-        databox ref = {{0}};
+        databox ref = {};
         if (!multimapAtomRelease(ma, &goneKey) || multimapAtomCount(ma) != 1 ||
             multimapCount(ma->mapAtomReverse) != 1 ||
             multimapAtomLookupReference(ma, &goneKey, &ref)) {
             ERRR("the last release did not remove both rows");
         }
 
-        databox found = {{0}};
+        databox found = {};
         if (!multimapAtomLookup(ma, &keep, &found) || found.data.i != 10 ||
             !multimapAtomDelete(ma, &keepKey) || multimapAtomCount(ma) != 0 ||
             multimapCount(ma->mapAtomReverse) != 0) {
@@ -2556,8 +2556,8 @@ int multimapAtomTest(int argc, char *argv[]) {
                 const databox ref = {.data.u = refs[i],
                                      .type =
                                          DATABOX_CONTAINER_REFERENCE_EXTERNAL};
-                databox found = {{0}};
-                databox back = {{0}};
+                databox found = {};
+                databox back = {};
                 if (!multimapAtomLookupReference(ma, &k, &found) ||
                     found.data.u != refs[i] ||
                     !multimapAtomLookup(ma, &ref, &back) ||
@@ -2597,7 +2597,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                         ERR("%d atoms: release of %s kept it", n, name);
                     }
                 } else if (i % 4 == 0) {
-                    databox ref = {{0}};
+                    databox ref = {};
                     if (!multimapAtomLookupReference(ma, &k, &ref) ||
                         !multimapAtomDeleteById(ma, ref.data.u)) {
                         ERR("%d atoms: delete by id of %s failed", n, name);
@@ -2608,10 +2608,10 @@ int multimapAtomTest(int argc, char *argv[]) {
             for (int32_t i = 0; i < n; i++) {
                 snprintf(name, sizeof(name), "tiered-%06" PRId32, i);
                 const databox k = databoxNewBytesString(name);
-                databox ref = {{0}};
+                databox ref = {};
                 const bool want = i % 4 == 2;
                 const bool present = multimapAtomLookupReference(ma, &k, &ref);
-                databox back = {{0}};
+                databox back = {};
                 if (present != want ||
                     (present &&
                      (!multimapAtomLookup(ma, &ref, &back) ||
@@ -2679,14 +2679,14 @@ int multimapAtomTest(int argc, char *argv[]) {
         for (int32_t i = 0; i < atoms; i++) {
             snprintf(name, sizeof(name), "atom-value-%06" PRId32, i);
             const databox k = databoxNewBytesString(name);
-            databox ref = {{0}};
+            databox ref = {};
             const bool present = multimapAtomLookupReference(ma, &k, &ref);
             if (present != (i % 4 == 0)) {
                 ERR("%s present %d after the releases", name, present);
                 continue;
             }
 
-            databox back = {{0}};
+            databox back = {};
             if (present &&
                 (!multimapAtomLookup(ma, &ref, &back) ||
                  databoxLen(&back) != strlen(name) ||

@@ -29,7 +29,7 @@
  *   // Create a type for storing MyStruct indexed by int
  *   offsetArrayCreateTypes(MyData, MyStruct, int);
  *
- *   offsetArrayMyData arr = {0};  // Zero-init required!
+ *   offsetArrayMyData arr = {};  // Zero-init required!
  *
  *   offsetArrayGrow(&arr, 100);   // Prepare to use index 100
  *   offsetArrayGet(&arr, 100) = myValue;  // Store at index 100

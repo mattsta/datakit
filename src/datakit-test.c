@@ -897,7 +897,7 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
      *         descriptor, and a successor rewrites a longer stale pid
      *         exactly. */
     {
-        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
         char path[PATH_MAX];
         if (!dkTestTmpDirPath(&tmp, "pidfile", path, sizeof(path))) {
             REXPECT(false, "scratch directory for the pidfile");
@@ -950,7 +950,7 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
 
             char want[32];
             snprintf(want, sizeof(want), "%d\n", (int)owner);
-            char got[32] = {0};
+            char got[32] = {};
             cleaner(fdClose) int readBack = open(path, O_RDONLY | O_CLOEXEC);
             const ssize_t n =
                 readBack >= 0 ? read(readBack, got, sizeof(got) - 1) : -1;
@@ -985,7 +985,7 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
 
             char want[32];
             snprintf(want, sizeof(want), "%d\n", (int)successor);
-            char got[32] = {0};
+            char got[32] = {};
             cleaner(fdClose) int readBack = open(path, O_RDONLY | O_CLOEXEC);
             const ssize_t n =
                 readBack >= 0 ? read(readBack, got, sizeof(got) - 1) : -1;
@@ -1054,7 +1054,7 @@ static int dkTestPerfHeaderTest(int argc, char *argv[]) {
     PHEXPECT(strlen(tiny) == 3, "a short buffer is filled and terminated");
 
     /* Population mean 5 and stddev 2 */
-    perfStateStat st = {0};
+    perfStateStat st = {};
     static const double samples[] = {2, 4, 4, 4, 5, 5, 7, 9};
     for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
         perfStatAdd(&st, samples[i]);
@@ -2500,7 +2500,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
      * the cargo at once and LEAK leaves it to the caller; nothing is
      * counted as retired or deferred */
     {
-        ownedArena never = {0};
+        ownedArena never = {};
         dkOwnedCargo freed = {.id = 91, .released = false};
         dkOwnedCargo freedNull = {.id = 92, .released = false};
         dkOwnedCargo kept = {.id = 93, .released = false};
@@ -4103,13 +4103,13 @@ static int dkTestSharrowTest(int argc, char *argv[]) {
 
     /* One owner: the first release is final. */
     g_dkSharrowReleases = 0;
-    dkSharrowU32 a = {0};
+    dkSharrowU32 a = {};
     sharrowRelease(DkU32, &a);
     SHEXPECT(g_dkSharrowReleases == 1, "a lone owner's release is final");
 
     /* Two owners: a retain makes the next release non-final. */
     g_dkSharrowReleases = 0;
-    dkSharrowU32 b = {0};
+    dkSharrowU32 b = {};
     sharrowRetain(&b);
     SHEXPECT(sharrowCount(&b) == 1, "a retain counts one extra owner");
     sharrowRelease(DkU32, &b);
@@ -4120,8 +4120,8 @@ static int dkTestSharrowTest(int argc, char *argv[]) {
 
     /* Every other member type, and RetainCount. */
     g_dkSharrowReleases = 0;
-    dkSharrowI64 c = {0};
-    dkSharrowU64 d = {0};
+    dkSharrowI64 c = {};
+    dkSharrowU64 d = {};
     sharrowRetainCount(&d, 2);
     sharrowRelease(DkI64, &c);
     sharrowRelease(DkU64, &d);
@@ -4148,8 +4148,8 @@ static int dkTestSharrowTest(int argc, char *argv[]) {
 
     /* Custom: the count lives in another object. */
     g_dkSharrowReleases = 0;
-    dkSharrowU64 target = {0};
-    dkSharrowU32 holder = {0};
+    dkSharrowU64 target = {};
+    dkSharrowU32 holder = {};
     sharrowRetain(&holder);
     sharrowReleaseCustom(DkU64, &target, &holder);
     SHEXPECT(g_dkSharrowReleases == 0, "a custom release honours the holder");
@@ -4706,12 +4706,12 @@ static int dkTestAesNiTest(int argc, char *argv[]) {
 
     if (!ni_here) {
         aesGcmKey nk;
-        const uint8_t k128[16] = {0};
+        const uint8_t k128[16] = {};
         if (aesGcmNiInit(&nk, k128, 16)) {
             printf("dkTestAesNi: ARM stub aesGcmNiInit must return false\n");
             failures++;
         }
-        uint8_t nonce[12] = {0}, pt[16] = {0}, ct[16] = {0}, tag[16] = {0};
+        uint8_t nonce[12] = {}, pt[16] = {}, ct[16] = {}, tag[16] = {};
         if (aesGcmNiSeal(&nk, nonce, NULL, 0, pt, 16, ct, tag)) {
             printf("dkTestAesNi: ARM stub aesGcmNiSeal must return false\n");
             failures++;
@@ -4744,14 +4744,14 @@ static int dkTestAesNiTest(int argc, char *argv[]) {
             pt = pt_buf;
         }
 
-        uint8_t scalar_ct[128] = {0}, scalar_tag[16] = {0};
+        uint8_t scalar_ct[128] = {}, scalar_tag[16] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_SCALAR);
         aesGcmKey sk;
         aesGcmInit(&sk, key, v->key_len);
         aesGcmSeal(&sk, nonce, aad, v->aad_len, pt, v->pt_len,
                    v->pt_len > 0 ? scalar_ct : NULL, scalar_tag);
 
-        uint8_t ni_ct[128] = {0}, ni_tag[16] = {0};
+        uint8_t ni_ct[128] = {}, ni_tag[16] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_AESNI);
         aesGcmKey nk;
         aesGcmInit(&nk, key, v->key_len);
@@ -4782,7 +4782,7 @@ static int dkTestAesNiTest(int argc, char *argv[]) {
             }
         }
 
-        uint8_t rec_scalar[128] = {0}, rec_ni[128] = {0};
+        uint8_t rec_scalar[128] = {}, rec_ni[128] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_SCALAR);
         aesGcmInit(&sk, key, v->key_len);
         if (!aesGcmOpen(&sk, nonce, aad, v->aad_len,
@@ -4928,14 +4928,14 @@ static int dkTestAesArmCryptoTest(int argc, char *argv[]) {
             pt = pt_buf;
         }
 
-        uint8_t scalar_ct[128] = {0}, scalar_tag[16] = {0};
+        uint8_t scalar_ct[128] = {}, scalar_tag[16] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_SCALAR);
         aesGcmKey sk;
         aesGcmInit(&sk, key, v->key_len);
         aesGcmSeal(&sk, nonce, aad, v->aad_len, pt, v->pt_len,
                    v->pt_len > 0 ? scalar_ct : NULL, scalar_tag);
 
-        uint8_t arm_ct[128] = {0}, arm_tag[16] = {0};
+        uint8_t arm_ct[128] = {}, arm_tag[16] = {};
         aesGcmSetForceBackend(AES_GCM_FORCE_ARMCRYPTO);
         aesGcmKey ak;
         aesGcmInit(&ak, key, v->key_len);
@@ -5613,7 +5613,7 @@ static void a12Sha256HashWith(a12Sha256Compressor compress, const uint8_t *data,
     if (full) {
         compress(state, data, full);
     }
-    uint8_t pad[128] = {0};
+    uint8_t pad[128] = {};
     size_t rem = len - full * 64;
     memcpy(pad, data + full * 64, rem);
     pad[rem] = 0x80;
@@ -5765,7 +5765,7 @@ static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
             failures++;
             continue;
         }
-        uint8_t ct[128] = {0}, tag[16] = {0};
+        uint8_t ct[128] = {}, tag[16] = {};
         if (!aesGcmSeal(&k, nonce, aad, v->aad_len, pt, v->pt_len,
                         v->pt_len > 0 ? ct : NULL, tag)) {
             printf("dkTestAesGcmExtendedVectors V[%zu]: Seal failed\n", i);
@@ -5789,7 +5789,7 @@ static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
                 failures++;
             }
         }
-        uint8_t rec[128] = {0};
+        uint8_t rec[128] = {};
         if (!aesGcmOpen(&k, nonce, aad, v->aad_len, v->pt_len > 0 ? ct : NULL,
                         v->pt_len, tag, v->pt_len > 0 ? rec : NULL)) {
             printf("dkTestAesGcmExtendedVectors V[%zu]: Open failed\n", i);
@@ -5931,9 +5931,9 @@ static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
 
     /* Bound refusal. */
     {
-        uint8_t key[16] = {0};
-        uint8_t nonce[12] = {0};
-        uint8_t tag[16] = {0};
+        uint8_t key[16] = {};
+        uint8_t nonce[12] = {};
+        uint8_t tag[16] = {};
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
         if (aesGcmSeal(&k, nonce, NULL, 0, NULL,
@@ -6213,8 +6213,8 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int argc,
     }
 
     const uint8_t probe[] = {'e', '1', '-', 'p', 'r', 'o', 'b', 'e'};
-    uint8_t mac_src_a[64] = {0};
-    uint8_t mac_src_b[64] = {0};
+    uint8_t mac_src_a[64] = {};
+    uint8_t mac_src_b[64] = {};
     const hmacKey *src_a = hmacKeyringLookup(src, ID_A);
     const hmacKey *src_b = hmacKeyringLookup(src, ID_B);
     if (src_a == NULL || src_b == NULL) {
@@ -6251,8 +6251,8 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int argc,
                "failed\n");
         failures++;
     } else {
-        uint8_t mac_dst_a[64] = {0};
-        uint8_t mac_dst_b[64] = {0};
+        uint8_t mac_dst_a[64] = {};
+        uint8_t mac_dst_b[64] = {};
         hmacComputeWithKey(dst_a, probe, sizeof(probe), mac_dst_a);
         hmacComputeWithKey(dst_b, probe, sizeof(probe), mac_dst_b);
         if (memcmp(mac_src_a, mac_dst_a, hmacAlgoSHA256.digest_size) != 0) {
@@ -6849,7 +6849,7 @@ static int dkTestKeyringRequireSaltTest(int argc, char *argv[]) {
             printf("dkTestKeyringRequireSalt: salted install must succeed\n");
             failures++;
         } else {
-            uint8_t nonce[12] = {0};
+            uint8_t nonce[12] = {};
             if (!hmacKeyringNextAeadNonce(ring, 1u, nonce)) {
                 printf("dkTestKeyringRequireSalt: NextAeadNonce must succeed "
                        "on salted slot\n");
@@ -6907,7 +6907,7 @@ static int dkTestKeyringRequireSaltTest(int argc, char *argv[]) {
     {
         hmacKeyring *ring = hmacKeyringCreate();
         const uint8_t key[32] = {0xAB};
-        const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
+        const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
         if (hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
                                zero_salt)) {
             printf("dkTestKeyringRequireSalt: salted Install must REFUSE "
@@ -6941,7 +6941,7 @@ static int dkTestKeyringRequireSaltTest(int argc, char *argv[]) {
                 "dkTestKeyringRequireSalt: salted install (case 4) failed\n");
             failures++;
         }
-        const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
+        const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
         hmacKeyringSetAeadSalt(ring, 4u, zero_salt);
         uint8_t nonce[12];
         if (hmacKeyringNextAeadNonce(ring, 4u, nonce)) {
@@ -7648,7 +7648,7 @@ static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("(NULL, 0) is the empty input everywhere bytes are taken") {
-        static const uint8_t none[1] = {0};
+        static const uint8_t none[1] = {};
         if (rapidhash(NULL, 0) != rapidhash(none, 0)) {
             ERRR("rapidhash of (NULL, 0) differs from the empty input");
         }
@@ -8212,7 +8212,7 @@ static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
             failures++;
         }
     }
-    uint8_t junk[16] = {0};
+    uint8_t junk[16] = {};
     if (persistOpsAeadNonceLog.restore(junk, sizeof(junk)) != NULL) {
         printf("dkTestNonceLogPersistRoundTrip: junk accepted\n");
         failures++;
@@ -10007,7 +10007,7 @@ static int dkTestReplicatorRetryDropTest(int argc, char *argv[]) {
         const uint8_t key[32] = {0xE5};
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, 1u, &hmacAlgoSHA256, key, sizeof(key));
-        dkTestReplicatorRetryCtx ctx_a = {0};
+        dkTestReplicatorRetryCtx ctx_a = {};
         clusterReplicator *bad = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             bad_table, 256u, dkTestReplicatorRetryApply, &ctx_a);
@@ -10314,7 +10314,7 @@ s4:
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        dkTestMailboxReplCtx app_ctx = {0};
+        dkTestMailboxReplCtx app_ctx = {};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
             type_table4, 256u, dkTestMailboxReplApply, &app_ctx);
@@ -10365,7 +10365,7 @@ s5:
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        dkTestMailboxReplCtx app_ctx = {0};
+        dkTestMailboxReplCtx app_ctx = {};
         const clusterReplicatorConfig cfg = {
             .max_apply_retries = CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES,
             .disable_nonce_log = true,
@@ -11074,7 +11074,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
     const uint32_t ORIGIN = 0x12345678u;
     const uint64_t SEQ = 0xFEDCBA9876543210ULL;
     const uint8_t MTYPE = 5u;
-    dkFormatStamp protocol = {0};
+    dkFormatStamp protocol = {};
 
     TEST("inner-header: encode -> decode round-trip preserves all fields") {
         uint8_t buf[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
@@ -11803,7 +11803,7 @@ static int dkTestClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     memset((void *)type_table, 0, sizeof(type_table));
     type_table[PERSIST_TYPE_FLEX] = &persistOpsFlex;
 
-    dkTestClusterE2EApplyCtx app_ctx = {0};
+    dkTestClusterE2EApplyCtx app_ctx = {};
 
     const clusterMailboxCreateOptions mb_opts = {
         .ring = ring,
@@ -12166,8 +12166,8 @@ static int dkTestEnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
         payload_sizes[i] = 1 + (ENV_FUZZ_RNG_NEXT() % 4096u);
     }
 
-    uint64_t total_mut[8] = {0};
-    uint64_t reject_mut[8] = {0};
+    uint64_t total_mut[8] = {};
+    uint64_t reject_mut[8] = {};
 
     const size_t kMaxPayload = 4096;
     cleanerName(zfree, Bytes) uint8_t *plaintext =

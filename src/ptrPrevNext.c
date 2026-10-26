@@ -665,7 +665,7 @@ int ptrPrevNextTest(int argc, char *argv[]) {
         for (uint64_t seed = 1; seed <= 6 && !err; seed++) {
             uint64_t s = seed;
             ptrPrevNext *ppn = ptrPrevNextNew();
-            ppnSoakEntry e[SLOTS] = {{0}};
+            ppnSoakEntry e[SLOTS] = {};
             for (size_t op = 0; op < OPS && !err; op++) {
                 ppnSoakEntry *const pick = &e[ppnSoakRand_(&s) % SLOTS];
                 const size_t b = ppnSoakValue_(&s);

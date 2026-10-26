@@ -28,7 +28,7 @@ typedef struct multiTimerEvent {
 bool multiTimerInit(multiTimer *t) {
     /* Full zero first: multiTimer is documented as stack-initializable,
      * so no field may inherit stack garbage (nextTimerId especially). */
-    *t = (multiTimer){0};
+    *t = (multiTimer){};
 
     t->context = MULTI_TIMER_CONTEXT_USER;
     t->timersInclusiveOfTimerRuntime = false;
@@ -57,7 +57,7 @@ void multiTimerDeinit(multiTimer *t) {
         multimapFree(t->scheduled);
         multimapFree(t->pendingScheduling);
         multimapFree(t->stopEvents);
-        *t = (multiTimer){0};
+        *t = (multiTimer){};
     }
 }
 

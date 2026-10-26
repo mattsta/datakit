@@ -1833,7 +1833,7 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
         }
         case 2: {
             const databox s = databoxNewSigned(next);
-            databox prev = {{0}};
+            databox prev = {};
             if (!multiOrderedSetAddGetPrevious(&mos, &s, &m, &prev) ||
                 prev.data.i != scores[i]) {
                 ERR("update oracle: AddGetPrevious of %s gave %" PRId64
@@ -1844,7 +1844,7 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
         }
         default: {
             const databox delta = databoxNewSigned(move);
-            databox result = {{0}};
+            databox result = {};
             if (!multiOrderedSetIncrBy(&mos, &delta, &m, &result) ||
                 result.data.i != next) {
                 ERR("update oracle: IncrBy of %s gave %" PRId64
@@ -1871,8 +1871,8 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
     const databox scoreB = databoxNewSigned(-6);
     multiOrderedSetAdd(&mos, &scoreA, &asString);
     multiOrderedSetAdd(&mos, &scoreB, &asInteger);
-    databox gotA = {{0}};
-    databox gotB = {{0}};
+    databox gotA = {};
+    databox gotB = {};
     if (multiOrderedSetCount(mos) != n + 2 ||
         !multiOrderedSetGetScore(mos, &asString, &gotA) ||
         !multiOrderedSetGetScore(mos, &asInteger, &gotB) || gotA.data.i != -5 ||
@@ -1923,7 +1923,7 @@ static int mosRemoveIfTier_(int64_t n, multiOrderedSetType tier) {
         const databox member = databoxNewBytesString(buf);
         const int64_t rank = multiOrderedSetGetRank(mos, &member);
         mosProceedProbe_ probe = {.answer = false};
-        databox score = {{0}};
+        databox score = {};
         if (multiOrderedSetRemoveIf(&mos, &member, mosProceedProbe, &probe) ||
             probe.asked != 1 || multiOrderedSetCount(mos) != live ||
             !multiOrderedSetGetScore(mos, &member, &score) ||
@@ -2217,7 +2217,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
             /* A missing member joins at the delta: after the 6 members
              * scored 0..5 ("i00005" < "newbie" at the tie) */
-            databox result = {{0}};
+            databox result = {};
             const databox five = databoxNewSigned(5);
             const databox newbie = databoxNewBytesString("newbie");
             if (!multiOrderedSetIncrBy(&mos, &five, &newbie, &result) ||
@@ -3318,7 +3318,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         int sortErrors = 0;
         mosIterator iter;
         multiOrderedSetIteratorInit(mos, &iter, true);
-        databox prevScore = {0};
+        databox prevScore = {};
         databox gotMember, gotScore;
         bool first = true;
         while (multiOrderedSetIteratorNext(&iter, &gotMember, &gotScore)) {
@@ -4320,7 +4320,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 }
                 oracle[0] = 5000;
                 const databox five = DATABOX_SIGNED(5);
-                databox incr = {{0}};
+                databox incr = {};
                 if (!multiOrderedSetIncrBy(&s, &five, &m0, &incr) ||
                     incr.data.i64 != 5005) {
                     ERR("tier %zu: IncrBy gave %" PRId64, t, incr.data.i64);
@@ -4503,7 +4503,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 /* Union scores are doubles of the inputs, stored in their
                  * canonical form: an integral double that fits 64 bits
                  * reads back as an integer */
-                databox score = {{0}};
+                databox score = {};
                 const mosWideNum want = scores[i];
                 const double wantD = want.neg ? (double)(__int128_t)want.bits
                                               : (double)want.bits;
@@ -4529,7 +4529,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         const databox half = databoxNewReal(0.5);
         const databox dmax = databoxNewReal(DBL_MAX);
         const databox nan = databoxNewReal(NAN);
-        databox r = {{0}};
+        databox r = {};
 
         /* 2^53 + 1 is exact as an integer (a double would round it) */
         if (!multiOrderedSetIncrBy(&mos, &two53, &mInt, &r) ||
@@ -4545,7 +4545,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             ERRR("UINT64_MAX + 1 was not refused");
         }
 
-        databox s = {{0}};
+        databox s = {};
         if (!multiOrderedSetGetScore(mos, &mBig, &s) ||
             s.type != DATABOX_UNSIGNED_64 || s.data.u64 != UINT64_MAX) {
             ERRR("a refused IncrBy changed the score");

@@ -679,7 +679,7 @@ typedef struct aeadNonceLogConcCtx {
 
 static void *aeadNonceLogConcWorker(void *arg) {
     aeadNonceLogConcCtx *c = (aeadNonceLogConcCtx *)arg;
-    uint8_t nonce[12] = {0};
+    uint8_t nonce[12] = {};
     for (uint32_t i = 0; i < c->iters; i++) {
         nonceFromCounter(c->base + (uint64_t)i, nonce);
         if (aeadNonceLogObserve(c->log, c->key_id, nonce)) {
@@ -742,7 +742,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
 
     TEST("FromBytes refuses a valid header over a corrupt last entry") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
-        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {};
         nonceFromCounter(5u, nonce);
         aeadNonceLogObserve(log, 7u, nonce);
         nonceFromCounter(6u, nonce);
@@ -798,7 +798,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         /* Two records, so the header and every per-record field are
          * covered. */
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
-        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {};
         nonceFromCounter(0x1122334455667788u, nonce);
         nonce[8] = 0x99u;
         aeadNonceLogObserve(log, 7u, nonce);
@@ -954,7 +954,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
 
     TEST("first observation accepted; second rejected") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
-        uint8_t nonce[12] = {0};
+        uint8_t nonce[12] = {};
         nonceFromCounter(42u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
             ERRR("first observe should succeed");
@@ -969,7 +969,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
 
     TEST("different key_id is a different tuple") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
-        uint8_t nonce[12] = {0};
+        uint8_t nonce[12] = {};
         nonceFromCounter(7u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
             ERRR("k=1");
@@ -987,7 +987,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
 
     TEST("clearKey forgets all entries for one key only") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
-        uint8_t nonce[12] = {0};
+        uint8_t nonce[12] = {};
         for (uint64_t i = 0; i < 16; i++) {
             nonceFromCounter(i, nonce);
             aeadNonceLogObserve(log, 1u, nonce);
@@ -1014,7 +1014,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
     TEST("FIFO eviction kicks in past load threshold") {
         const size_t cap = 128u;
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(cap);
-        uint8_t nonce[12] = {0};
+        uint8_t nonce[12] = {};
         /* Fill past capacity — every observation should succeed (eviction
          * makes room) and size never exceeds cap. */
         for (uint64_t i = 0; i < cap * 4u; i++) {
@@ -1033,8 +1033,8 @@ int aeadNonceLogTest(int argc, char *argv[]) {
      * first (by ClearKey or by eviction) must leave the second findable,
      * or its reuse would be accepted */
     TEST("removal keeps the rest of a probe run reachable") {
-        uint8_t first[AEAD_NONCE_LOG_NONCE_LEN] = {0};
-        uint8_t second[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        uint8_t first[AEAD_NONCE_LOG_NONCE_LEN] = {};
+        uint8_t second[AEAD_NONCE_LOG_NONCE_LEN] = {};
         nonceFromCounter(1u, first);
         const uint64_t home = aeadNonceLogHash(1u, first) & 63u;
         uint64_t v = 2u;
@@ -1055,7 +1055,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         cleaner(aeadNonceLogFree) aeadNonceLog *full = aeadNonceLogCreate(64u);
         aeadNonceLogObserve(full, 1u, first);
         aeadNonceLogObserve(full, 2u, second);
-        uint8_t filler[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        uint8_t filler[AEAD_NONCE_LOG_NONCE_LEN] = {};
         for (uint64_t i = 0; i < 55u; i++) {
             nonceFromCounter(1000000u + i, filler);
             aeadNonceLogObserve(full, 3u, filler);
@@ -1182,7 +1182,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
 
     TEST("invalid inputs rejected") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
-        uint8_t nonce[12] = {0};
+        uint8_t nonce[12] = {};
         if (aeadNonceLogObserve(NULL, 1u, nonce)) {
             ERRR("NULL log accepted");
         }
@@ -1226,7 +1226,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
                 total_inserted);
         }
         /* Now every tuple must be detected as a duplicate. */
-        uint8_t nonce[12] = {0};
+        uint8_t nonce[12] = {};
         for (uint64_t i = 0; i < (uint64_t)kThreads * (uint64_t)kIters; i++) {
             nonceFromCounter(i, nonce);
             if (aeadNonceLogObserve(log, 1u, nonce)) {

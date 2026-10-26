@@ -216,7 +216,7 @@ int multiarraySmallTest(int argc, char *argv[]) {
         assert(s);
 
         int idx = 0;
-        s16 _s = {0};
+        s16 _s = {};
         multiarraySmallInsert(s, idx, &_s);
 
         multiarraySmallFree(s);
@@ -227,7 +227,7 @@ int multiarraySmallTest(int argc, char *argv[]) {
         assert(s);
 
         int count = 0;
-        s16 _s = {0};
+        s16 _s = {};
         for (int idx = 0; idx < globalMax; idx++) {
             _s.a = idx;
             _s.b = idx;
@@ -254,7 +254,7 @@ int multiarraySmallTest(int argc, char *argv[]) {
         assert(s);
 
         int count = 0;
-        s16 _s = {0};
+        s16 _s = {};
         for (int idx = 0; idx < globalMax; idx++) {
             _s.a = idx;
             _s.b = idx;
@@ -283,7 +283,7 @@ int multiarraySmallTest(int argc, char *argv[]) {
         assert(s);
 
         int count = 0;
-        s16 _s = {0};
+        s16 _s = {};
 
         /* Because we are inserting *after* we need to fake our
          * initial count so we have +1 added everywhere for the

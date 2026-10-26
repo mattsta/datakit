@@ -36,7 +36,7 @@ static void *pcNonceLogBuild(const persistContractBuild *b) {
             continue;
         }
         const uint64_t v = splitmix64(&rng) % space;
-        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {};
         memcpy(nonce, &v, sizeof(v));
         nonce[8] = (uint8_t)(v * 31);
         aeadNonceLogObserve(log, key, nonce);

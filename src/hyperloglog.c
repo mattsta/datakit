@@ -1182,7 +1182,7 @@ static DK_FN_PURE double hllTau(double x) {
 DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
     double m = HLL_REGISTERS;
     double E;
-    int32_t reghisto[HLL_Q + 2] = {0};
+    int32_t reghisto[HLL_Q + 2] = {};
 
     /* Compute register histogram */
     if (isDense(hdr)) {
@@ -1527,7 +1527,7 @@ static bool hyperloglogFoldAll_(hyperloglog *raw,
 
 uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
                                bool *invalid) {
-    hllStatic max = {0};
+    hllStatic max = {};
     hyperloglog *raw = toHLL(max);
     raw->encoding = HLL_RAW; /* Special internal-only encoding. */
 
@@ -1571,7 +1571,7 @@ bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src) {
      * non-zero registers back through the max-semantics setters (they
      * only raise, never lower, so the write-back composes with any
      * registers dst gained in between — the fold is a true max). */
-    hllStatic scratchBuf = {0};
+    hllStatic scratchBuf = {};
     hyperloglog *scratch = toHLL(scratchBuf);
     scratch->encoding = HLL_RAW;
 
@@ -1606,7 +1606,7 @@ bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src) {
 }
 
 hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n) {
-    hllStatic max = {0};
+    hllStatic max = {};
     hyperloglog *raw = toHLL(max);
     raw->encoding = HLL_RAW; /* Special internal-only encoding. */
 
@@ -1648,7 +1648,7 @@ int hyperloglogTest(int argc, char *argv[]) {
 
     cleaner(mdscfree) mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
     hyperloglogHeader *hdr = (hyperloglogHeader *)bitcounters, *hdr2;
-    uint8_t bytecounters[HLL_REGISTERS] = {0};
+    uint8_t bytecounters[HLL_REGISTERS] = {};
     int err = 0;
     cleaner(hyperloglogFree) hyperloglog *h = NULL;
 
@@ -1858,8 +1858,8 @@ approximationDone:
             testRegisters[i * 4] = (i % HLL_Q) + 1;
         }
 
-        int32_t reghistoSIMD[HLL_Q + 2] = {0};
-        int32_t reghistoScalar[HLL_Q + 2] = {0};
+        int32_t reghistoSIMD[HLL_Q + 2] = {};
+        int32_t reghistoScalar[HLL_Q + 2] = {};
 
         /* Benchmark SIMD version */
         uint64_t startSIMD = timeUtilMonotonicNs();

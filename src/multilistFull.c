@@ -672,7 +672,7 @@ multilistFull *multilistFullAppendValuesFromFlex(multilistFull *ml,
                                                  mflexState *state,
                                                  const flex *fl) {
     /* A 96/128-bit value lands in 'wide', reused for each element */
-    databox holder = {{0}};
+    databox holder = {};
     databoxWide wide;
     flexEntry *fe = flexHeadIfAny(fl);
 
@@ -1324,7 +1324,7 @@ bool multilistFullIteratorInitAtIdx(multilistFull *ml, mflexState *state[2],
                                     multilistIterator *iter,
                                     const mlOffsetId idx, const bool forward,
                                     const bool readOnly) {
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
 
     if (multilistFullIndexGet(ml, state[0], idx, &entry)) {
         iter->nodeIdx = entry.nodeIdx;
@@ -1741,7 +1741,7 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]) {
     flexEntry *fe = flexTail(fTail);
 
     /* Get tail entry (a 96/128-bit value lands in 'wide') */
-    databox box = {{0}};
+    databox box = {};
     databoxWide wide;
     flexGetByTypeInto(fe, &box, &wide);
 
@@ -1935,10 +1935,10 @@ static void mlInfo(multilistFull *ml) {
  * Returns physical count of elements found by iterating over the list. */
 static int itrprintr_(multilistFull *ml, mflexState *state[2], bool print,
                       bool forward) {
-    multilistIterator iter = {0};
+    multilistIterator iter = {};
 
     multilistFullIteratorInitReadOnly(ml, state, &iter, forward);
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
     uint32_t i = 0;
     while (multilistFullNext(&iter, &entry)) {
         if (i > ml->values) {
@@ -2485,7 +2485,7 @@ int multilistFullTest(int argc, char *argv[]) {
         TEST("pop empty") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
-            databox box = {{0}};
+            databox box = {};
             bool found = multilistFullPopHead(ml, s0, &box);
             assert(!found);
             (void)found;
@@ -2501,7 +2501,7 @@ int multilistFullTest(int argc, char *argv[]) {
             uint8_t *data;
             uint32_t bytes;
             mlInfo(ml);
-            databox box = {{0}};
+            databox box = {};
             if (multilistFullPopHead(ml, s0, &box) ==
                 MULTILIST_FULL_POP_EMPTY) {
                 ERRR("pop of a filled list found it empty");
@@ -2529,7 +2529,7 @@ int multilistFullTest(int argc, char *argv[]) {
             multilistFullPushByTypeHead(ml, s0, &num);
             multilistFullPushHead(ml, s0, "55513", 5);
             mlInfo(ml);
-            databox box = {{0}};
+            databox box = {};
             if (multilistFullPopHead(ml, s0, &box) ==
                     MULTILIST_FULL_POP_EMPTY ||
                 !DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
@@ -2537,7 +2537,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 ERRR("numeral string did not pop as the same string");
             }
             databoxFreeData(&box);
-            box = (databox){{0}};
+            box = (databox){};
             if (multilistFullPopHead(ml, s0, &box) ==
                     MULTILIST_FULL_POP_EMPTY ||
                 !DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
@@ -2559,7 +2559,7 @@ int multilistFullTest(int argc, char *argv[]) {
             for (int i = 0; i < 500; i++) {
                 uint8_t *data;
                 uint32_t bytes;
-                databox box = {{0}};
+                databox box = {};
                 bool found = multilistFullPopHead(ml, s0, &box);
                 data = box.data.bytes.start;
                 bytes = box.len;
@@ -2588,7 +2588,7 @@ int multilistFullTest(int argc, char *argv[]) {
             for (int i = 0; i < 5000; i++) {
                 uint8_t *data;
                 uint32_t bytes;
-                databox box = {{0}};
+                databox box = {};
                 bool found = multilistFullPopHead(ml, s0, &box);
                 data = box.data.bytes.start;
                 bytes = box.len;
@@ -2619,7 +2619,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 multilistFullPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            multilistIterator iter = {0};
+            multilistIterator iter = {};
             multilistFullIteratorInitForwardReadOnly(ml, s, &iter);
             multilistEntry entry;
             int i = 499, values = 0;
@@ -2649,7 +2649,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 multilistFullPushHead(ml, s0, genstr("hello", i), 32);
             }
 
-            multilistIterator iter = {0};
+            multilistIterator iter = {};
             multilistFullIteratorInitReverseReadOnly(ml, s, &iter);
             multilistEntry entry;
             int i = 0;
@@ -2728,7 +2728,7 @@ int multilistFullTest(int argc, char *argv[]) {
 
                 itrprintr(ml, s, false);
                 /* insert "bar" before "bob" while iterating over list. */
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistFullIteratorInitForwardReadOnly(ml, s, &iter);
                 multilistEntry entry;
                 while (multilistFullNext(&iter, &entry)) {
@@ -3188,7 +3188,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 }
 
                 /* lrem 0 bar */
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistFullIteratorInitForward(ml, s, &iter);
                 multilistEntry entry;
                 int i = 0;
@@ -3283,7 +3283,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 multilistFullPushTail(ml, s0, "oop", 3);
 
                 multilistEntry entry;
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistFullIteratorInitReverse(ml, s, &iter);
                 int i = 0;
                 while (multilistFullNext(&iter, &entry)) {
@@ -3330,7 +3330,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 }
 
                 multilistEntry entry;
-                multilistIterator iter = {0};
+                multilistIterator iter = {};
                 multilistFullIteratorInitAtIdxForwardReadOnly(ml, s, &iter,
                                                               437);
                 int i = 437;
@@ -3849,7 +3849,7 @@ int multilistFullTest(int argc, char *argv[]) {
                                              "Pop",    "Rotate",   "Replace",
                                              "Push"};
         for (uint32_t d = 1; d <= 2; d++) {
-            uint32_t opsRun[7] = {0};
+            uint32_t opsRun[7] = {};
             uint32_t entryNodeDrops = 0;
             uint32_t popNodeDrops = 0;
             uint32_t rangeNodeDrops = 0;
@@ -3984,7 +3984,7 @@ int multilistFullTest(int argc, char *argv[]) {
                     }
                     case 3: { /* Pop from either end */
                         const bool fromTail = MV_RAND() & 1;
-                        databox got = {{0}};
+                        databox got = {};
                         if (!multilistFullPop(ml, s0, &got, fromTail) ||
                             !mlfSplitIs(&got, want[fromTail ? n - 1 : 0])) {
                             why = "Pop returned the wrong element";
@@ -4247,7 +4247,7 @@ int multilistFullTest(int argc, char *argv[]) {
                             multilistFullPushByTypeTail(ml, s0, &box);
                         }
 
-                        databox got = {{0}};
+                        databox got = {};
                         while (multilistFullPopHead(ml, s0, &got)) {
                             databoxFreeData(&got);
                             memset(&got, 0, sizeof(got));
@@ -4287,7 +4287,7 @@ int multilistFullTest(int argc, char *argv[]) {
                         }
                     }
 
-                    databox head = {{0}};
+                    databox head = {};
                     if (!multilistFullPopHead(ml, s0, &head) ||
                         !mlfSplitIs(&head, want[0])) {
                         ERR("depth %u: the head popped wrong", d);
@@ -4373,7 +4373,7 @@ int multilistFullTest(int argc, char *argv[]) {
         multilistFullPushByTypeTail(ml, s0, &one);
         multilistFullAppendValuesFromFlex(ml, s0, none);
         multilistFullAppendValuesFlex(ml, s0, none);
-        databox got = {{0}};
+        databox got = {};
         if (built != 0 || multilistFullCount(ml) != 1 ||
             !multilistFullPop(ml, s0, &got, false) || got.data.i != 1) {
             ERR("built %zu values, then hold %zu, want 0 then 1", built,
@@ -4474,7 +4474,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 databoxFreeData((databox *)&got);
             }
 
-            databox head = {{0}};
+            databox head = {};
             if (!multilistFullPopHead(ml, s0, &head) ||
                 !mlfWideSame(&head, &want[0], NULL) || !head.allocated) {
                 ERR("depth %u: pop of the original head differs", d);

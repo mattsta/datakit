@@ -48,7 +48,7 @@ static void *pcMultimapAtomBuild(const persistContractBuild *b) {
             (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
         databoxBig value;
         pcAtomValue(b->seed, k, &value, buf, sizeof(buf));
-        databox ref = {{0}};
+        databox ref = {};
         const bool live =
             multimapAtomLookupReference(ma, (const databox *)&value, &ref);
         if (roll < 3 || !live) {
@@ -92,8 +92,8 @@ static void *pcMultimapAtomBuild(const persistContractBuild *b) {
 static bool pcMultimapAtomHoldsBytes(const void *structure,
                                      const databox *bytes) {
     const multimapAtom *ma = structure;
-    databox ref = {{0}};
-    databox got = {{0}};
+    databox ref = {};
+    databox got = {};
     return multimapAtomLookupReference(ma, bytes, &ref) &&
            multimapAtomLookup(ma, &ref, &got) &&
            persistContractSameBytes(&got, bytes);
@@ -121,7 +121,7 @@ static void *pcMultimapAtomDenseBuild(const persistContractBuild *b) {
             (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
         databoxBig value;
         pcAtomValue(b->seed, k, &value, buf, sizeof(buf));
-        databox ref = {{0}};
+        databox ref = {};
         const bool live = multimapAtomLookupReference(
             multimapAtomDenseBase(d), (const databox *)&value, &ref);
         if (roll < 3 || !live) {
@@ -253,7 +253,7 @@ static void *pcStringPoolBuild(const persistContractBuild *b) {
 static bool pcStringPoolHoldsBytes(const void *structure,
                                    const databox *bytes) {
     const stringPool *pool = structure;
-    databox got = {{0}};
+    databox got = {};
     const uint64_t id = stringPoolGetId(pool, bytes);
     return id && stringPoolLookup(pool, id, &got) &&
            persistContractSameBytes(&got, bytes);
@@ -319,7 +319,7 @@ static void *pcAtomPoolBuild(const persistContractBuild *b) {
 
 static bool pcAtomPoolHoldsBytes(const void *structure, const databox *bytes) {
     const atomPool *pool = structure;
-    databox got = {{0}};
+    databox got = {};
     const uint64_t id = atomPoolGetId(pool, bytes);
     return id && atomPoolLookup(pool, id, &got) &&
            persistContractSameBytes(&got, bytes);

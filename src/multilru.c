@@ -2585,7 +2585,7 @@ int multilruTest(int argc, char *argv[]) {
         }
 
         /* Get lowest 5 */
-        multilruPtr lowest[5] = {0};
+        multilruPtr lowest[5] = {};
         multilruGetNLowest(mlru, lowest, 5);
         for (int i = 0; i < 5; i++) {
             assert(lowest[i] != 0);
@@ -2593,7 +2593,7 @@ int multilruTest(int argc, char *argv[]) {
         }
 
         /* Get highest 5 */
-        multilruPtr highest[5] = {0};
+        multilruPtr highest[5] = {};
         multilruGetNHighest(mlru, highest, 5);
         for (int i = 0; i < 5; i++) {
             assert(highest[i] != 0);
@@ -2771,7 +2771,7 @@ int multilruTest(int argc, char *argv[]) {
 
     TEST("bit packing round-trip for all widths") {
         /* Test that entry accessors correctly read/write at max values */
-        uint8_t buf[16] = {0};
+        uint8_t buf[16] = {};
 
         /* Test 16-byte entries (60-bit addresses) */
         uint64_t maxIdx60 = (1ULL << 60) - 1;
@@ -3002,7 +3002,7 @@ int multilruTest(int argc, char *argv[]) {
         assert(!multilruRemoveMinimum(mlru, &ptr));
 
         /* GetNLowest from empty */
-        multilruPtr lowest[5] = {0};
+        multilruPtr lowest[5] = {};
         multilruGetNLowest(mlru, lowest, 5);
         for (int i = 0; i < 5; i++) {
             assert(lowest[i] == 0);
@@ -3036,7 +3036,7 @@ int multilruTest(int argc, char *argv[]) {
             multilruNewWithLevelsCapacity(7, 1000);
 
         /* Track inserted entries for validation */
-        multilruPtr entries[1000] = {0};
+        multilruPtr entries[1000] = {};
         size_t entryCount = 0;
 
         uint64_t seed[2] = {12345, 67890};
@@ -3308,7 +3308,7 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) <= 500);
 
         /* Test GetNLowest */
-        multilruPtr lowest[10] = {0};
+        multilruPtr lowest[10] = {};
         multilruGetNLowest(mlru, lowest, 10);
         for (int i = 0; i < 10 && lowest[i] != 0; i++) {
             assert(multilruGetLevel(mlru, lowest[i]) == 0);
@@ -3366,13 +3366,13 @@ int multilruTest(int argc, char *argv[]) {
         multilruPtr ptr;
         assert(!multilruRemoveMinimum(mlru, &ptr));
 
-        multilruPtr lowest[5] = {0};
+        multilruPtr lowest[5] = {};
         multilruGetNLowest(mlru, lowest, 5);
         for (int i = 0; i < 5; i++) {
             assert(lowest[i] == 0);
         }
 
-        multilruPtr highest[5] = {0};
+        multilruPtr highest[5] = {};
         multilruGetNHighest(mlru, highest, 5);
         for (int i = 0; i < 5; i++) {
             assert(highest[i] == 0);
@@ -3402,11 +3402,11 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruGetLevel(mlru, p) == 6); /* Max is 6 for 7 levels */
 
         /* GetNLowest/Highest should return the single entry */
-        multilruPtr lowest[5] = {0};
+        multilruPtr lowest[5] = {};
         multilruGetNLowest(mlru, lowest, 5);
         assert(lowest[0] == p);
 
-        multilruPtr highest[5] = {0};
+        multilruPtr highest[5] = {};
         multilruGetNHighest(mlru, highest, 5);
         assert(highest[0] == p);
 
@@ -3476,7 +3476,7 @@ int multilruTest(int argc, char *argv[]) {
         }
 
         /* Promote entries */
-        multilruPtr lowest[10] = {0};
+        multilruPtr lowest[10] = {};
         multilruGetNLowest(mlru, lowest, 10);
         for (int i = 0; i < 10; i++) {
             if (lowest[i] != 0) {
@@ -3511,7 +3511,7 @@ int multilruTest(int argc, char *argv[]) {
         cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Track live entries */
-        multilruPtr entries[2000] = {0};
+        multilruPtr entries[2000] = {};
         size_t entryCount = 0;
         const size_t maxEntries = 2000;
 
@@ -4477,7 +4477,7 @@ int multilruTest(int argc, char *argv[]) {
         /* Simulate cache accesses */
         size_t hits = 0;
         size_t misses = 0;
-        multilruPtr items[5000] = {0}; /* 0 means not in cache */
+        multilruPtr items[5000] = {}; /* 0 means not in cache */
 
         for (int i = 0; i < 50000; i++) {
             size_t item = accessSeq[i];

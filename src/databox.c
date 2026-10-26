@@ -390,7 +390,7 @@ void databoxFree(databox *box) {
  * .big) are contract state read by databoxFreeData and copy helpers, so
  * they must never carry stack garbage. */
 databox databoxNewBytes(const void *ptr, size_t len) {
-    databox box = {{0}};
+    databox box = {};
     box.type = DATABOX_BYTES;
     box.data.bytes.custart = ptr;
     box.len = len;
@@ -398,13 +398,13 @@ databox databoxNewBytes(const void *ptr, size_t len) {
 }
 
 databox databoxNewBytesAllowEmbed(const void *ptr, size_t len) {
-    databox box = {{0}};
+    databox box = {};
     databoxUpdateBytesAllowEmbed(&box, ptr, len);
     return box;
 }
 
 databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len) {
-    databox box = {{0}};
+    databox box = {};
     if (len <= sizeof(box.data.bytes.embed)) {
         box.type = DATABOX_BYTES_EMBED;
         box.len = len;
@@ -417,7 +417,7 @@ databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len) {
 }
 
 databox databoxNewOffsetAllowEmbed(const void *ptr, size_t offset, size_t len) {
-    databox box = {{0}};
+    databox box = {};
     databoxUpdateOffsetAllowEmbed(&box, ptr, offset, len);
     return box;
 }
@@ -427,7 +427,7 @@ databox databoxNewBytesString(const char *str) {
 }
 
 databox databoxNewReal(double value) {
-    databox box = {{0}};
+    databox box = {};
 
     if ((double)(float)value == value) {
         /* double fits in float! */
@@ -655,7 +655,7 @@ typedef struct databoxIntegerValue_ {
 
 DK_INLINE_ALWAYS databoxIntegerValue_
 databoxIntegerValueOf_(const databox *box) {
-    databoxIntegerValue_ v = {0};
+    databoxIntegerValue_ v = {};
     switch (box->type) {
     case DATABOX_SIGNED_64:
         v.negative = box->data.i < 0;
@@ -1081,7 +1081,7 @@ bool databoxCanonicalNumeral(const databox *in, databoxBig *out) {
 
     /* The 64-bit scanner decides every narrow form: integers, floats and
      * doubles. */
-    databox narrow = {{0}};
+    databox narrow = {};
     if (StrScanScanReliable(p, len, &narrow)) {
         memcpy(out, &narrow, sizeof(narrow));
         return true;
@@ -1392,11 +1392,11 @@ static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
     tally->strings++;
 
     bool shaped = false;
-    databoxBig expect = {{0}};
+    databoxBig expect = {};
     bool numeral = dbCanonIntegerOracle_(s, len, &shaped, &expect);
     if (shaped) {
         /* Each scanner must agree with the oracle over its own range. */
-        databox narrow = {{0}};
+        databox narrow = {};
         const bool narrowOk = StrScanScanReliable(s, len, &narrow);
         const bool oracleNarrow =
             numeral && (expect.type == DATABOX_SIGNED_64 ||
@@ -1408,8 +1408,8 @@ static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
         }
 
         if (len >= 20 && len <= 40) {
-            databox small = {{0}};
-            databoxBig big = {{0}};
+            databox small = {};
+            databoxBig big = {};
             databoxBig *use = NULL;
             const bool wideOk =
                 StrScanScanReliableConvert128(s, len, &small, &big, &use);
@@ -1423,7 +1423,7 @@ static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
             }
         }
     } else {
-        databox real = {{0}};
+        databox real = {};
         numeral = StrScanScanReliable(s, len, &real);
         if (numeral) {
             const double v =
@@ -1462,7 +1462,7 @@ static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
     }
 
     for (int embed = 0; embed < 2; embed++) {
-        databox in = {{0}};
+        databox in = {};
         if (embed) {
             if (len > sizeof(in.data.bytes.embed)) {
                 break;
@@ -1729,9 +1729,9 @@ int databoxTest(int argc, char *argv[]) {
         /* Whole numbers in [-2^63, 2^64) become SIGNED (negative) or
          * UNSIGNED; -0.0, fractions, infinities, NaN and values outside
          * stay reals; floats widen first */
-        databox f7 = {{0}};
+        databox f7 = {};
         DATABOX_SET_FLOAT(&f7, 7.0f);
-        databox fHalf = {{0}};
+        databox fHalf = {};
         DATABOX_SET_FLOAT(&fHalf, 7.5f);
         static const struct {
             double d;
@@ -1769,7 +1769,7 @@ int databoxTest(int argc, char *argv[]) {
                     (int)out.type);
             }
         }
-        databox out = {{0}};
+        databox out = {};
         const databox text = databoxNewBytesString("5");
         if (!databoxIntegralRealAsInteger(&f7, &out) || out.data.u != 7 ||
             databoxIntegralRealAsInteger(&fHalf, &out) ||
@@ -1798,7 +1798,7 @@ int databoxTest(int argc, char *argv[]) {
 
         /* Slot path: box BORROWS cache memory (allocated stays false),
          * so FreeData must not free the cache's buffer. */
-        databoxRetainCache cache = {{0}};
+        databoxRetainCache cache = {};
         /* @own: cache */
         cache.bytes[0] = zmalloc(128);
         uint8_t *const slot0 = cache.bytes[0];
@@ -1813,7 +1813,7 @@ int databoxTest(int argc, char *argv[]) {
         assert(memcmp(slot0, payload, payloadLen) == 0);
 
         /* Unpopulated-slot path: private allocation the box OWNS. */
-        databoxRetainCache empty = {{0}};
+        databoxRetainCache empty = {};
         databox owned = databoxNewBytes(payload, payloadLen);
         assert(databoxRetainBytesSelf(&owned, &empty) == -1);
         assert(owned.allocated);
@@ -1859,7 +1859,7 @@ int databoxTest(int argc, char *argv[]) {
         cleaner(mdscfree) mdsc *str = mdscnew(payload);
         databox viaMdsc = {
             .type = DATABOX_PTR_MDSC, .data.ptr = str, .len = mdsclen(str)};
-        databoxRetainCache none = {{0}};
+        databoxRetainCache none = {};
         const ssize_t neverAt = databoxRetainBytesSelf(&never, &none);
         const ssize_t mdscAt = databoxRetainBytesSelf(&viaMdsc, &none);
         const bool neverOk =
@@ -3559,7 +3559,7 @@ int databoxTest(int argc, char *argv[]) {
 
         /* A box aimed at a slot carries the full value. */
         databoxWide slot;
-        databox box = {{0}};
+        databox box = {};
         box.type = DATABOX_SIGNED_128;
         box.big = true;
         box.data.i128 = (__int128_t *)&slot;
@@ -3635,9 +3635,9 @@ int databoxTest(int argc, char *argv[]) {
     }
 
     TEST("databoxCompare: a deferred wide operand fails fast") {
-        databox deferredS = {{0}};
+        databox deferredS = {};
         deferredS.type = DATABOX_SIGNED_128;
-        databox deferredU = {{0}};
+        databox deferredU = {};
         deferredU.type = DATABOX_UNSIGNED_128;
         databoxBig full;
         DATABOX_BIG_UNSIGNED_128(&full, (__uint128_t)1 << 100);
@@ -3827,7 +3827,7 @@ int databoxTest(int argc, char *argv[]) {
     } while (0)
 #define DB_ORDER_ADD_FLOAT(f)                                                  \
     do {                                                                       \
-        databox f_ = {{0}};                                                    \
+        databox f_ = {};                                                       \
         DATABOX_SET_FLOAT(&f_, (f));                                           \
         DB_ORDER_ADD(f_);                                                      \
     } while (0)
@@ -3921,7 +3921,7 @@ int databoxTest(int argc, char *argv[]) {
         DB_ORDER_ADD(databoxNewPtr(NULL));
         DB_ORDER_ADD(databoxNewPtr((void *)(uintptr_t)5));
         DB_ORDER_ADD(databoxNewPtr((void *)pointee));
-        databox reference = {{0}};
+        databox reference = {};
         reference.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
         reference.data.u = 7;
         DB_ORDER_ADD(reference);
@@ -4121,9 +4121,9 @@ int databoxTest(int argc, char *argv[]) {
             const databox in = {.data.bytes.ccstart = rows[r].s,
                                 .type = DATABOX_BYTES,
                                 .len = len};
-            databoxBig out = {{0}};
+            databoxBig out = {};
             const bool got = databoxCanonicalNumeral(&in, &out);
-            databoxBig scratch = {{0}};
+            databoxBig scratch = {};
             const databox *const use = databoxCanonical(&in, &scratch);
             if (rows[r].type == DATABOX_BYTES) {
                 if (got || use != &in) {
@@ -4213,7 +4213,7 @@ int databoxTest(int argc, char *argv[]) {
 
     TEST("databoxCanonicalNumeral: differential over integer boundaries and "
          "near-numerals") {
-        dbCanonTally_ tally = {0};
+        dbCanonTally_ tally = {};
         char spelled[48];
 
         /* Each width's boundaries, one either side, with both signs: the
@@ -4346,7 +4346,7 @@ int databoxTest(int argc, char *argv[]) {
     }
 
     TEST("databoxCanonicalNumeral: real-shaped strings follow the scanner") {
-        dbCanonTally_ tally = {0};
+        dbCanonTally_ tally = {};
         uint64_t state = UINT64_C(0x9E3779B97F4A7C15);
         char s[64];
         for (int i = 0; i < 20000; i++) {
@@ -4404,7 +4404,7 @@ int databoxTest(int argc, char *argv[]) {
             "22",
             "18446744073709551616",
             "170141183460469231731687303715884105727"};
-        dbCanonTally_ tally = {0};
+        dbCanonTally_ tally = {};
         char s[64];
         for (uint32_t c = 0; c < 256; c++) {
             for (size_t t = 0; t < COUNT_ARRAY(tails); t++) {

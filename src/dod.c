@@ -1524,7 +1524,7 @@ int dodTest(int argc, char *argv[]) {
     TEST("basic bitstream set/get") {
         size_t usedBits = 0;
 
-        uint64_t bits[1024] = {0}; /* 64k bits */
+        uint64_t bits[1024] = {}; /* 64k bits */
 
         for (size_t i = 1; i < 64; i++) {
             varintBitstreamSet(bits, usedBits, i, i);
@@ -1541,7 +1541,7 @@ int dodTest(int argc, char *argv[]) {
     TEST("variable length bitstream set/get") {
         size_t usedBits = 0;
 
-        uint64_t bits[1024] = {0}; /* 64k bits */
+        uint64_t bits[1024] = {}; /* 64k bits */
         uint8_t lengths[64] = {
             2,  3,  5,  7,  9,  4,  6,  12, 11, 28, 14, 32, 15, 18, 8,  22,
             18, 19, 20, 21, 22, 23, 24, 7,  9,  6,  18, 10, 11, 12, 24, 9,

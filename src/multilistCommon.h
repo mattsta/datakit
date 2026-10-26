@@ -131,11 +131,11 @@ static inline void multilistIterOffsetAfterDelete_(multilistIterator *iter,
  * writes a wide value in band when got->big is set and to a heap payload
  * otherwise. */
 static inline void multilistPopCopy_(const flexEntry *fe, databox *got) {
-    databox found = {{0}};
+    databox found = {};
     flexGetByTypeInto(fe, &found, NULL);
     if (found.type == DATABOX_BYTES) {
         if (found.len <= sizeof(found.data.bytes.embed8)) {
-            databox embed = {{0}};
+            databox embed = {};
             memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
             embed.type = DATABOX_BYTES_EMBED;
             embed.len = found.len;

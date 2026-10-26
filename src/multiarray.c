@@ -102,7 +102,7 @@ size_t multiarrayBytes(const multiarray *m) {
 }
 
 void multiarrayStats(const multiarray *m, dkTierStats *out) {
-    *out = (dkTierStats){0}; /* native or NULL: no struct, no count */
+    *out = (dkTierStats){}; /* native or NULL: no struct, no count */
     switch (_multiarrayType(m)) {
     case MULTIARRAY_TYPE_SMALL: {
         const multiarraySmall *s = mars(m);
@@ -1480,7 +1480,7 @@ int multiarrayTest(int argc, char *argv[]) {
 
         int count = 0;
         int idx = 0;
-        s16 _s = {0};
+        s16 _s = {};
         multiarrayNativeInsert(s, s16, rowMax, count, idx, &_s);
 
         multiarrayNativeFree(s);
@@ -1593,7 +1593,7 @@ int multiarrayTest(int argc, char *argv[]) {
         assert(s);
 
         int idx = 0;
-        s16 _s = {0};
+        s16 _s = {};
         multiarrayInsert(&s, idx, &_s);
     }
 
@@ -1602,7 +1602,7 @@ int multiarrayTest(int argc, char *argv[]) {
             multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
-        s16 _s = {0};
+        s16 _s = {};
         for (int idx = 0; idx < globalMax; idx++) {
             _s.a = idx;
             _s.b = idx;
@@ -1620,7 +1620,7 @@ int multiarrayTest(int argc, char *argv[]) {
             multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
-        s16 _s = {0};
+        s16 _s = {};
         for (int idx = 0; idx < globalMax; idx++) {
             _s.a = idx;
             _s.b = idx;
@@ -1649,7 +1649,7 @@ int multiarrayTest(int argc, char *argv[]) {
             multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
-        s16 _s = {0};
+        s16 _s = {};
         multiarrayInsert(&s, 0, &_s);
         for (int idx = 0; idx < globalMax; idx++) {
             _s.a = idx;

@@ -277,7 +277,7 @@ persistLogResult multiroarValueRemoveP(multiroarP *r, uint64_t position,
     }
     /* Removed by the one search that finds the value, then logged; a
      * refused log stores the removed value again, which restores it */
-    databox was = {{0}};
+    databox was = {};
     if (!multiroarValueRemoveGetRemoved(r->r, position, &was)) {
         return PERSIST_LOG_UNCHANGED; /* nothing there: nothing to log */
     }
@@ -392,7 +392,7 @@ static int test_multiroarP_basic(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_basic", basePath,
                           sizeof(basePath))) {
@@ -521,7 +521,7 @@ static int test_multiroarP_recovery(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_recovery", basePath,
                           sizeof(basePath))) {
@@ -577,7 +577,7 @@ static int test_multiroarP_compaction(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_compaction", basePath,
                           sizeof(basePath))) {
@@ -636,7 +636,7 @@ static int test_multiroarP_fuzzing(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_fuzzing", basePath,
                           sizeof(basePath))) {
@@ -700,7 +700,7 @@ static int test_multiroarP_ranges(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_ranges", basePath,
                           sizeof(basePath))) {
@@ -775,7 +775,7 @@ static int test_multiroarP_values(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_values", basePath,
                           sizeof(basePath))) {
@@ -840,7 +840,7 @@ static int test_multiroarP_values(int argc, char *argv[]) {
         ERRR("recovery lost the width, dimensions or values");
     }
     for (uint64_t i = 0; i < 200; i++) {
-        databox got = {{0}};
+        databox got = {};
         const bool present = multiroarValueGetP(r, i * 9, &got);
         if (present != (i % 5 != 0) ||
             (present && got.data.u != ((i * 37) & 0xfff))) {
@@ -867,7 +867,7 @@ static int test_multiroarP_lifecycleRefusals(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_refusals", basePath,
                           sizeof(basePath))) {
@@ -951,7 +951,7 @@ static int test_multiroarP_damagedWal(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_damagedWal", basePath,
                           sizeof(basePath))) {
@@ -1013,7 +1013,7 @@ static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_kinds", basePath,
                           sizeof(basePath))) {
@@ -1066,7 +1066,7 @@ static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
     r = multiroarOpenP(ctx);
     static const uint64_t want[3] = {5, 1, 0};
     for (uint64_t i = 0; r && i < 3; i++) {
-        databox got = {{0}};
+        databox got = {};
         if (!multiroarValueGetP(r, 10 + i, &got) ||
             got.type != DATABOX_UNSIGNED_64 || got.data.u != want[i]) {
             ERR("position %" PRIu64 " did not recover as %" PRIu64, 10 + i,
@@ -1084,8 +1084,8 @@ static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
      * removal is refused */
     ctx = persistCtxNew(basePath, NULL);
     r = multiroarNewP(ctx);
-    persistCtxStats before = {0};
-    persistCtxStats after = {0};
+    persistCtxStats before = {};
+    persistCtxStats after = {};
     multiroarGetStatsP(r, &before);
     if (multiroarBitSetRangeP(r, 7, 0) != PERSIST_LOG_UNCHANGED ||
         multiroarBitClearRangeP(r, 7, 0) != PERSIST_LOG_UNCHANGED ||
@@ -1131,7 +1131,7 @@ static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char bitPath[PATH_MAX];
     char valuePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiroarPTest_refusedBits", bitPath,

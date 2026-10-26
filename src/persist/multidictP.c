@@ -360,7 +360,7 @@ int multidictPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multidictPTest", basePath, sizeof(basePath))) {
         ERR("could not create a scratch directory: %s", strerror(errno));
@@ -936,7 +936,7 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxOpen(basePath, NULL);
             multidictP *d = multidictOpenP(ctx);
-            databox v = {{0}};
+            databox v = {};
             if (!d ||
                 multidictGetType(multidictGetP(d)) != &multidictTypeCaseKey ||
                 multidictCountP(d) != 2 || !multidictFindP(d, &aLpHa, &v) ||
@@ -960,7 +960,7 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxOpen(basePath, NULL);
             multidictP *d = multidictOpenP(ctx);
-            databox v = {{0}};
+            databox v = {};
             if (!d ||
                 multidictGetType(multidictGetP(d)) != &multidictTypeCaseKey ||
                 multidictCountP(d) != 2 || !multidictExistsP(d, &GAMMA) ||
@@ -1010,7 +1010,7 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxOpen(basePath, NULL);
             multidictP *d = multidictOpenP(ctx);
-            databox v = {{0}};
+            databox v = {};
             if (!d ||
                 multidictGetType(multidictGetP(d)) != &multidictTypeExactKey ||
                 multidictCountP(d) != 2 || !multidictFindP(d, &upper, &v) ||
@@ -1069,8 +1069,8 @@ int multidictPTest(int argc, char *argv[]) {
             } else if (op < 80) {
                 same = mdpDelete(d, &key) == multidictDelete(plain, &key);
             } else if (op < 98) {
-                databox pv = {{0}};
-                databox nv = {{0}};
+                databox pv = {};
+                databox nv = {};
                 const bool pf = multidictFindP(d, &key, &pv);
                 const bool nf = multidictFind(plain, &key, &nv);
                 same = pf == nf && multidictExistsP(d, &key) == nf &&
@@ -1098,7 +1098,7 @@ int multidictPTest(int argc, char *argv[]) {
             multidictIteratorInit(plain, &iter);
             multidictEntry e;
             while (multidictIteratorNext(&iter, &e)) {
-                databox pv = {{0}};
+                databox pv = {};
                 if (!multidictFindP(d, &e.key, &pv) ||
                     !ptestBoxesEqual(&pv, &e.val)) {
                     ERRR("replayed multidictP entry differs from multidict");
@@ -1220,7 +1220,7 @@ int multidictPTest(int argc, char *argv[]) {
             multidictAddP(d, &key, &newer, &added),
             multidictAddP(d, &fresh, &newer, &added), multidictEmptyP(d));
 
-        databox got = {{0}};
+        databox got = {};
         if (!multidictFindP(d, &key, &got) ||
             databoxCompare(&got, &kept) != 0 || multidictCountP(d) != 2 ||
             multidictExistsP(d, &fresh) || added != MULTIDICT_ERR) {
@@ -1310,7 +1310,7 @@ int multidictPTest(int argc, char *argv[]) {
             ERR("lenient recovery kept %" PRIu64 " keys, want 1, 2",
                 d ? multidictCountP(d) : 0);
         }
-        databox got = {{0}};
+        databox got = {};
         if (!ptestExpectHealed(ctx, basePath)) {
             ERRR("the damaged entry was not healed into the quarantine");
         }

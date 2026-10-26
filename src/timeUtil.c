@@ -45,7 +45,7 @@ uint64_t TIME_INIT timeUtilMonotonicNs(void) {
      * We must convert using timebase info - even on macOS where
      * the ratio may be 1:1 on Apple Silicon but differs on Intel. */
     uint64_t machTime = mach_absolute_time();
-    static mach_timebase_info_data_t timebaseInfo = {0};
+    static mach_timebase_info_data_t timebaseInfo = {};
 
     if (timebaseInfo.denom == 0) {
         (void)mach_timebase_info(&timebaseInfo);
@@ -64,7 +64,7 @@ uint64_t TIME_INIT timeUtilMonotonicNs(void) {
      * (e.g. openbsd, old linux, old freebsd, etc) */
     /* Note: also CLOCK_MONOTONIC_COARSE exists, but "COARSE" means it has about
      * a 1ms resolution and isn't very useful to us for generic timing. */
-    struct timespec ts = {0};
+    struct timespec ts = {};
     clock_gettime(useClock, &ts);
     const uint64_t us = (uint64_t)ts.tv_sec * (uint64_t)1e9;
     return us + ts.tv_nsec;

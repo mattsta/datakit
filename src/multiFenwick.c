@@ -51,7 +51,7 @@ static bool multiFenwickCellGet_(const multiFenwick *mfw, uint64_t pos,
 /* Sum of elements [0, idx], for idx < count. */
 static bool multiFenwickPrefix_(const multiFenwick *mfw, uint64_t idx,
                                 multiFenwickNum *sum) {
-    multiFenwickNum acc = {0};
+    multiFenwickNum acc = {};
     for (uint64_t i = idx + 1; i > 0; i = multiFenwickPrev(i)) {
         multiFenwickNum cell;
         if (!multiFenwickCellGet_(mfw, i - 1, &cell)) {
@@ -269,7 +269,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     const uint64_t newCapacity =
         idx < oldCapacity ? oldCapacity
                           : multiFenwickCapacityFor_(oldCapacity, idx);
-    multiFenwickNum total = {0};
+    multiFenwickNum total = {};
     databox totalBox = DATABOX_UNSIGNED(0);
     if (newCapacity > oldCapacity && oldCapacity > 0) {
         if (!multiFenwickCellGet_(cur, oldCapacity - 1, &total)) {
@@ -285,7 +285,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     databox planned[64];
     size_t steps = 0;
     for (uint64_t i = idx + 1; i <= newCapacity; i = multiFenwickParent(i)) {
-        multiFenwickNum base = {0};
+        multiFenwickNum base = {};
         if (i <= oldCapacity) {
             if (!multiFenwickCellGet_(cur, i - 1, &base)) {
                 return false;
@@ -372,7 +372,7 @@ bool multiFenwickRangeQuery(const multiFenwick *mfw, size_t left, size_t right,
     }
 
     multiFenwickNum hi;
-    multiFenwickNum lo = {0};
+    multiFenwickNum lo = {};
     if (!mfw || left > right || right >= mfw->count ||
         !multiFenwickPrefix_(mfw, right, &hi) ||
         (left > 0 && !multiFenwickPrefix_(mfw, left - 1, &lo)) ||
@@ -412,7 +412,7 @@ bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value) {
 
     /* An absent tree or index is zero; Apply creates the tree, so a
      * refused Set leaves a NULL '*mfw' NULL. */
-    multiFenwickNum current = {0};
+    multiFenwickNum current = {};
     if (*mfw && idx < (*mfw)->count &&
         !multiFenwickElement_(*mfw, idx, &current)) {
         return false;
@@ -465,7 +465,7 @@ size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
     }
 
     uint64_t pos = 0;
-    multiFenwickNum sum = {0};
+    multiFenwickNum sum = {};
     for (bit >>= 1; bit > 0; bit >>= 1) {
         const uint64_t next = pos + bit;
         if (next > mfw->count) {

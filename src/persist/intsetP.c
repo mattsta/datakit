@@ -279,7 +279,7 @@ int intsetPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "intsetPTest", basePath, sizeof(basePath))) {
         ERR("could not create a scratch directory: %s", strerror(errno));

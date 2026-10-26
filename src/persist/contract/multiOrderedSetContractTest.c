@@ -19,7 +19,7 @@ static void pcMosMember(uint64_t seed, size_t i, databoxBig *member,
 /* A score: an integer, a double or (now and then) a 128-bit integer */
 static void pcMosScore(uint64_t *rng, databoxBig *score) {
     const uint64_t r = splitmix64(rng);
-    *score = (databoxBig){0};
+    *score = (databoxBig){};
     switch (r % 8) {
     case 0:
         score->type = DATABOX_DOUBLE_64;

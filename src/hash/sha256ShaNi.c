@@ -377,7 +377,7 @@ static void shaniHash(const uint8_t *data, size_t len,
         sha256ShaNiCompressBlocks(state, data, full);
     }
 
-    uint8_t pad[128] = {0};
+    uint8_t pad[128] = {};
     size_t rem = len - full * 64;
     memcpy(pad, data + full * 64, rem);
     pad[rem] = 0x80;

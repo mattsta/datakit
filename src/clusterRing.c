@@ -447,7 +447,7 @@ static void clusterNodeListAdd(clusterNodeList *list, const clusterNode *node) {
 
 static void clusterNodeListFree(clusterNodeList *list) {
     zfree(list->nodes);
-    *list = (clusterNodeList){0};
+    *list = (clusterNodeList){};
 }
 
 static const clusterNode *clusterNodeListGet(const clusterNodeList *list,
@@ -1996,7 +1996,7 @@ static uint32_t clusterSelectReplicas(const clusterNode *const *cand,
     bool *chosen = count > 64 ? chosenHeap : chosenStack;
     memset(chosen, 0, (count > 64 ? count : 64) * sizeof(bool));
 
-    uint32_t distinct[256] = {0}; /* per rule, distinct values chosen */
+    uint32_t distinct[256] = {}; /* per rule, distinct values chosen */
     const clusterNode *picked[256];
     uint32_t pickedCount = 0;
 
@@ -3055,7 +3055,7 @@ void clusterRebalancePlanGetInfo(const clusterRebalancePlan *plan,
     if (!info) {
         return;
     }
-    *info = (clusterRebalanceInfo){0};
+    *info = (clusterRebalanceInfo){};
     if (plan) {
         *info = (clusterRebalanceInfo){.moveCount = plan->moveCount,
                                        .completedCount = plan->completedCount,
@@ -3186,7 +3186,7 @@ void clusterRingSetHealthProvider(clusterRing *ring,
 
     const clusterHealthProvider old = ring->healthProvider;
     const bool hadProvider = ring->hasHealthProvider;
-    ring->healthProvider = provider ? *provider : (clusterHealthProvider){0};
+    ring->healthProvider = provider ? *provider : (clusterHealthProvider){};
     ring->hasHealthProvider = provider != NULL;
 
     /* The replaced provider's data goes unless the new one keeps it */
@@ -3783,7 +3783,7 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
 
     /* ---- Header section ---- */
     uint64_t v = 0;
-    clusterRingConfig config = {0};
+    clusterRingConfig config = {};
 
     /* [0] ring name */
     cleanerName(zfree, Chars) char *name = NULL;
@@ -3871,7 +3871,7 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
 
     /* ---- Nodes ---- */
     for (uint64_t i = 0; i < nodeCount; i++) {
-        clusterNodeConfig nodeCfg = {0};
+        clusterNodeConfig nodeCfg = {};
 
         /* [0] id */
         if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
@@ -3950,7 +3950,7 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
 
     /* ---- Keyspaces ---- */
     for (uint64_t i = 0; i < ksCount; i++) {
-        clusterKeySpaceConfig ksCfg = {0};
+        clusterKeySpaceConfig ksCfg = {};
 
         /* [0] name */
         cleanerName(zfree, Chars) char *ksName = NULL;
@@ -4855,7 +4855,7 @@ static int testDistribution(void) {
     }
 
     TEST("Distribution across nodes") {
-        uint32_t counts[11] = {0}; /* counts[nodeId] */
+        uint32_t counts[11] = {}; /* counts[nodeId] */
         const uint32_t numKeys = 10000;
 
         for (uint32_t i = 0; i < numKeys; i++) {
@@ -4900,7 +4900,7 @@ static int testDistribution(void) {
         CR_OK(clusterRingAddNode(ring, &config2));
         CR_OK(clusterRingAddNode(ring, &config3));
 
-        uint32_t counts[4] = {0};
+        uint32_t counts[4] = {};
         const uint32_t numKeys = 10000;
 
         for (uint32_t i = 0; i < numKeys; i++) {
@@ -5152,7 +5152,7 @@ static int testCallbacks(void) {
     int err = 0;
 
     cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
-    testCallbackData cbData = {0};
+    testCallbackData cbData = {};
     clusterRingSetNodeStateCallback(ring, testStateCallback, &cbData);
 
     TEST("State change callback") {
@@ -5264,7 +5264,7 @@ static int testIteration(void) {
     }
 
     TEST("Iterate all nodes") {
-        testIterData data = {0};
+        testIterData data = {};
         clusterRingIterateNodes(ring, testCountIter, &data);
 
         if (data.count != 5) {
@@ -5273,7 +5273,7 @@ static int testIteration(void) {
     }
 
     TEST("Iterate by state") {
-        testIterData upData = {0};
+        testIterData upData = {};
         clusterRingIterateNodesByState(ring, CLUSTER_NODE_UP, testCountIter,
                                        &upData);
 
@@ -5281,7 +5281,7 @@ static int testIteration(void) {
             ERR("Expected 3 UP nodes, got %d", upData.count);
         }
 
-        testIterData downData = {0};
+        testIterData downData = {};
         clusterRingIterateNodesByState(ring, CLUSTER_NODE_DOWN, testCountIter,
                                        &downData);
 
@@ -5291,7 +5291,7 @@ static int testIteration(void) {
     }
 
     TEST("Iterate by location") {
-        testIterData rack1Data = {0};
+        testIterData rack1Data = {};
         clusterRingIterateNodesByLocation(ring, CLUSTER_LEVEL_RACK, 1,
                                           testCountIter, &rack1Data);
 
@@ -5304,7 +5304,7 @@ static int testIteration(void) {
     }
 
     TEST("Early termination") {
-        testIterData data = {0};
+        testIterData data = {};
         clusterRingIterateNodes(ring, testStopAfter2, &data);
 
         if (data.count != 2) {
@@ -5870,7 +5870,7 @@ static int testFuzzSerializationRoundtrip(void) {
             cleaner(flexFree) flex *mutated = flexNew();
             flexEntry *fe = flexHead(good);
             for (size_t i = 0; i < total; i++, fe = flexNext(good, fe)) {
-                databox box = {{0}};
+                databox box = {};
                 flexGetByType(fe, &box);
                 if (i == cases[c].field) {
                     box = databoxNewUnsigned(cases[c].value);
@@ -5889,7 +5889,7 @@ static int testFuzzSerializationRoundtrip(void) {
         flexEntry *fe = flexHead(good);
         for (size_t i = 0; i + 1 < CLUSTER_RING_HEADER_ENTRY_COUNT;
              i++, fe = flexNext(good, fe)) {
-            databox box = {{0}};
+            databox box = {};
             flexGetByType(fe, &box);
             flexPushByType(&cut, &box, FLEX_ENDPOINT_TAIL);
         }
@@ -6471,7 +6471,7 @@ static int testFuzzEdgeCases(void) {
         CR_OK(clusterRingAddNode(ring, &config2));
 
         /* Heavy node should get most traffic */
-        uint32_t counts[3] = {0};
+        uint32_t counts[3] = {};
         for (int i = 0; i < 10000; i++) {
             char key[32];
             snprintf(key, sizeof(key), "weight-key-%d", i);
@@ -7997,7 +7997,7 @@ int clusterRingTest(int argc, char *argv[]) {
 
         /* 1..1000 (in reverse): mean 500, p99 the edge of the bucket
          * holding 990 (the 990th sample), capped at the maximum */
-        clusterLatency latency = {0};
+        clusterLatency latency = {};
         clusterLatency *lat = &latency;
         uint64_t avg;
         uint64_t p99;
@@ -8044,8 +8044,8 @@ int clusterRingTest(int argc, char *argv[]) {
     }
 
     TEST("a health provider drives node state and read selection") {
-        clusterRingTestHealth first = {0};
-        clusterRingTestHealth second = {0};
+        clusterRingTestHealth first = {};
+        clusterRingTestHealth second = {};
         for (uint64_t id = 1; id <= 8; id++) {
             second.reachable[id] = true;
             second.cpu[id] = 0.9f - 0.1f * (float)id;

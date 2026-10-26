@@ -101,7 +101,7 @@ static void test_heap(void) {
 
 static void *mt_local(void *arg) {
     (void)arg;
-    void *keep[64] = {0};
+    void *keep[64] = {};
     for (int i = 0; i < MT_ITERS; i++) {
         int slot = i % 64;
         if (keep[slot]) {

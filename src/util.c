@@ -218,8 +218,8 @@ bool getRandomHexCharsCounter(uint8_t seed[SHA1_DIGEST_LENGTH],
     }
 
     while (len) {
-        SHA1_CTX ctx = {{0}};
-        uint8_t digest[SHA1_DIGEST_LENGTH] = {0};
+        SHA1_CTX ctx = {};
+        uint8_t digest[SHA1_DIGEST_LENGTH] = {};
         uint32_t copylen = len > SHA1_DIGEST_LENGTH ? SHA1_DIGEST_LENGTH : len;
 
         SHA1Init(&ctx);
@@ -399,7 +399,7 @@ void dumpX86Calls(void *addr, size_t len) {
     Dl_info info;
     /* Hash table to best-effort avoid printing the same symbol
      * multiple times. */
-    uintptr_t ht[256] = {0};
+    uintptr_t ht[256] = {};
 
     if (len < 5) {
         return;
@@ -703,8 +703,8 @@ int utilTest(int argc, char **argv) {
          * hex using every digit across 64 x 32 characters */
         uint8_t r1[32];
         uint8_t r2[32];
-        uint8_t seenOne[32] = {0};
-        uint8_t seenZero[32] = {0};
+        uint8_t seenOne[32] = {};
+        uint8_t seenZero[32] = {};
         bool drawsDiffer = true;
         for (int draw = 0; draw < 64; draw++) {
             getRandomBytes(r1, sizeof(r1));

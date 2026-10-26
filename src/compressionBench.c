@@ -415,7 +415,7 @@ static void benchXof(BenchReport *r, const double *values, size_t count) {
      * through the writer ('w.d'), never through a copy of the pointer.
      * Preallocated (128 bits per value covers xof's 78-bit worst case) so
      * the timing measures encoding, not growth. */
-    cleaner(benchXofWriterFree) xofWriter w = {0};
+    cleaner(benchXofWriterFree) xofWriter w = {};
     /* @own: container; free=zfree */
     w.d = zcalloc(1, count * 16);
     w.totalBytes = count * 16;
@@ -739,7 +739,7 @@ static double benchListPushPop(const char *pattern, size_t count,
     }
 
     for (size_t i = 0; i < count; i++) {
-        databox got = {0};
+        databox got = {};
         multilistPopHead(&ml, state, &got);
         databoxFreeData(&got);
     }

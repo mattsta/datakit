@@ -3424,7 +3424,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("Wrap with key_id=42 failed");
         }
         /* Peek must surface the embedded key id. */
-        flexEnvelopeHeader hdr = {0};
+        flexEnvelopeHeader hdr = {};
         if (!flexEnvelopePeek(buf, written, &hdr)) {
             ERRR("Peek failed");
         }
@@ -3489,10 +3489,10 @@ int flexEnvelopeTest(int argc, char *argv[]) {
     }
 
     TEST("envelope: verify rejects unknown magic") {
-        uint8_t buf[32] = {0};
+        uint8_t buf[32] = {};
         buf[0] = 0xAB;
         buf[1] = 0xCD;
-        flexEnvelopeVerifyParams vp = {0};
+        flexEnvelopeVerifyParams vp = {};
         if (flexEnvelopeVerify(buf, sizeof(buf), &vp, NULL, NULL)) {
             ERRR("Verify accepted bad magic");
         }
@@ -3500,7 +3500,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
     TEST("envelope: verify rejects truncated framing") {
         uint8_t buf[2] = {FLEX_ENVELOPE_MAGIC_0, FLEX_ENVELOPE_MAGIC_1};
-        flexEnvelopeVerifyParams vp = {0};
+        flexEnvelopeVerifyParams vp = {};
         if (flexEnvelopeVerify(buf, sizeof(buf), &vp, NULL, NULL)) {
             ERRR("Verify accepted 2-byte buffer with only magic");
         }
@@ -3593,7 +3593,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             {0, false, 0, UINT64_MAX, false},
         };
         for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
-            uint8_t buf[64] = {0};
+            uint8_t buf[64] = {};
             size_t pos = 0;
             size_t w = 0;
             buf[pos++] = FLEX_ENVELOPE_MAGIC_0;
@@ -3615,7 +3615,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 pos += w;
                 len = pos + 8;
             }
-            flexEnvelopeHeader h = {0};
+            flexEnvelopeHeader h = {};
             const bool ok = flexEnvelopePeek(buf, len, &h);
             if (ok != cases[c].accept ||
                 (ok && (h.key_id != 7 || h.payload_len != 0 ||
@@ -3852,7 +3852,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             }
 
             /* Verify with NO key: must fail (unconditional invariant). */
-            flexEnvelopeVerifyParams vp_nokey = {0};
+            flexEnvelopeVerifyParams vp_nokey = {};
             if (flexEnvelopeVerify(buf, total, &vp_nokey, NULL, NULL)) {
                 ERR("Verify with NO key ACCEPTED for keyed algo %s",
                     flexEnvelopeAlgoName(algos[i]));
@@ -3993,7 +3993,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         const uint32_t iterationsPerBucket = 20000u; /* ~260k total inputs */
         uint64_t acceptedAsValid = 0;
-        uint32_t accepted_buckets[16] = {0};
+        uint32_t accepted_buckets[16] = {};
         for (uint32_t b = 0; b < numBuckets; b++) {
             const uint32_t bufLen = lenBuckets[b];
             cleanerName(zfree, Bytes) uint8_t *buf =
@@ -4034,7 +4034,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                     }
                 }
                 /* Peek must also never crash on random bytes. */
-                flexEnvelopeHeader peekOut = {0};
+                flexEnvelopeHeader peekOut = {};
                 (void)flexEnvelopePeek(buf, (size_t)bufLen, &peekOut);
             }
         }
@@ -4231,7 +4231,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                     memcpy(tampered, oneshot_buf, total);
                     /* Find offset of first payload byte (skip the
                      * framing header — easiest is to use peek). */
-                    flexEnvelopeHeader hdr = {0};
+                    flexEnvelopeHeader hdr = {};
                     flexEnvelopePeek(tampered, total, &hdr);
                     tampered[hdr.header_size + (plen / 2)] ^= 0xFF;
 
@@ -4502,8 +4502,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         uint8_t header[64];
         memset(header, 0xCDu, sizeof(header));
         size_t hw = 999u; /* sentinel */
-        uint8_t key[32] = {0};
-        uint8_t nonce[12] = {0};
+        uint8_t key[32] = {};
+        uint8_t nonce[12] = {};
         flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
             .key = key,
@@ -4548,7 +4548,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         pos += varintEncode(hdr + pos, 0u);   /* flags */
         pos += varintEncode(hdr + pos, 0u);   /* payload_len */
 
-        uint8_t key[32] = {0};
+        uint8_t key[32] = {};
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
         flexEnvelopeVerifyStream vctx;
         size_t consumed = 0;
@@ -5120,7 +5120,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             key[i] = (uint8_t)(i * 7u + 3u);
         }
         const uint8_t nonce[12] = {0x99, 0xAA};
-        const uint8_t pt[513] = {0};
+        const uint8_t pt[513] = {};
         const size_t plen = sizeof(pt);
         const size_t cap = flexEnvelopeWrappedSize(
             (uint64_t)plen, FLEX_ENV_ALGO_AEAD_AES256_GCM, 0);
@@ -5727,7 +5727,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
 
         flexEnvelopeVerifyParams vp = {.keyring = ring};
-        uint8_t plaintext[64] = {0};
+        uint8_t plaintext[64] = {};
         size_t pt_written = 0;
         if (!flexEnvelopeOpen(buf, written, &vp, plaintext, sizeof(plaintext),
                               &pt_written)) {

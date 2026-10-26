@@ -430,7 +430,7 @@ do_atof_calc:
         char text[48];
         snprintf(text, sizeof(text), "%s%" PRId64 "%se%" PRId32,
                  sign < 0 ? "-" : "", s, sticky ? "1" : "", e - sticky);
-        databox box = {{0}};
+        databox box = {};
         StrScanScan((const uint8_t *)text, &box, STRSCAN_OPT_TONUM, false,
                     false);
         result = box.data.d64;

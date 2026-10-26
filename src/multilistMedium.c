@@ -272,7 +272,7 @@ bool multilistMediumDelRange(multilistMedium *ml, const mlOffsetId start,
     assert(extent <= currentValues);
 
     /* get entry at index... */
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
     if (!multilistMediumIndex(ml, start, &entry)) {
         return false;
     }
@@ -346,7 +346,7 @@ bool multilistMediumDelRange(multilistMedium *ml, const mlOffsetId start,
 bool multilistMediumReplaceByTypeAtIndex(multilistMedium *ml, mlOffsetId index,
                                          const databox *box) {
     /* todo: need forward-back, cross-slot traversal */
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
     if (multilistMediumIndex(ml, index, &entry)) {
         flexReplaceByType(&ml->fl[entry.nodeIdx], entry.fe, box);
         return true;
@@ -377,7 +377,7 @@ void multilistMediumIteratorInit(multilistMedium *ml, multilistIterator *iter,
 bool multilistMediumIteratorInitAtIdx(multilistMedium *ml,
                                       multilistIterator *iter, mlOffsetId idx,
                                       bool forward) {
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
 
     if (multilistMediumIndex(ml, idx, &entry)) {
         /* Start exactly at the indexed element: Index() already
@@ -564,7 +564,7 @@ void multilistMediumRotate(multilistMedium *ml) {
     flexEntry *fe = flexTail(*tail);
 
     /* Get tail entry (a 96/128-bit value lands in 'wide') */
-    databox box = {{0}};
+    databox box = {};
     databoxWide wide;
     flexGetByTypeInto(fe, &box, &wide);
 

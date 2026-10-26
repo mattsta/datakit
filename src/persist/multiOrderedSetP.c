@@ -320,7 +320,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_basic", basePath,
                           sizeof(basePath))) {
@@ -460,7 +460,7 @@ static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_iteration", basePath,
                           sizeof(basePath))) {
@@ -542,7 +542,7 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_compaction", basePath,
                           sizeof(basePath))) {
@@ -608,7 +608,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_resetReuse", basePath,
                           sizeof(basePath))) {
@@ -680,7 +680,7 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_readers", basePath,
                           sizeof(basePath))) {
@@ -701,8 +701,8 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
             PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
         }
 
-        databox member = {{0}};
-        databox score = {{0}};
+        databox member = {};
+        databox score = {};
         const databox m0 = databoxNewBytesString("m0");
         const databox m3 = databoxNewBytesString("m3");
         const databox m5 = databoxNewBytesString("m5");
@@ -766,7 +766,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_open", basePath,
                           sizeof(basePath))) {
@@ -906,7 +906,7 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_refusedLog", basePath,
                           sizeof(basePath))) {
@@ -938,7 +938,7 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
                 multiOrderedSetAddP(mos, &high, &ghost, &updated),
                 multiOrderedSetResetP(mos));
 
-            databox score = {{0}};
+            databox score = {};
             if (multiOrderedSetRemoveP(mos, &ghost) != PERSIST_LOG_UNCHANGED ||
                 multiOrderedSetCountP(mos) != (size_t)sizes[s] ||
                 !multiOrderedSetGetScoreP(mos, &kept, &score) ||

@@ -477,7 +477,7 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
 
 #ifdef DATAKIT_TEST
 bool persistCtxTestRefuseLogsBegin(persistCtx *ctx, persistCtxTestRefusal *r) {
-    *r = (persistCtxTestRefusal){0};
+    *r = (persistCtxTestRefusal){};
     if (!ctx || !ctx->p) {
         return false;
     }
@@ -489,7 +489,7 @@ bool persistCtxTestRefuseLogsBegin(persistCtx *ctx, persistCtxTestRefusal *r) {
     persistStoreFaultyArm(r->failing, PERSIST_FAULT_WRITE, 0);
     if (!persistAttachWAL(ctx->p, r->failing)) {
         r->failing->close(r->failing->ctx);
-        *r = (persistCtxTestRefusal){0};
+        *r = (persistCtxTestRefusal){};
         return false;
     }
     return true;
@@ -501,7 +501,7 @@ void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r) {
         persistAttachWAL(ctx->p, r->original);
         r->failing->close(r->failing->ctx);
     }
-    *r = (persistCtxTestRefusal){0};
+    *r = (persistCtxTestRefusal){};
 }
 
 #include "../ctest.h"
@@ -530,7 +530,7 @@ int persistCtxTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
 
     TEST("persistCtx default config") {
         persistCtxConfig config = persistCtxDefaultConfig();

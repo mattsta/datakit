@@ -43,7 +43,7 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
             pcMultilistPush(&ml, state, b, (const databox *)&v, roll & 1);
         } else if (roll < 24) {
             const bool tail = roll == 23;
-            databox got = {{0}};
+            databox got = {};
             multilistPop(&ml, state, &got, tail);
             databoxFreeData(&got);
             persistContractRecord(
@@ -107,9 +107,9 @@ static bool pcMultilistHoldsBytes(const void *structure, const databox *bytes) {
     cleaner(mflexStateFree) mflexState *a = mflexStateCreate();
     cleaner(mflexStateFree) mflexState *c = mflexStateCreate();
     mflexState *pair[2] = {a, c};
-    multilistIterator iter = {0};
+    multilistIterator iter = {};
     multilistIteratorInitForwardReadOnly((multilist *)ml, pair, &iter);
-    multilistEntry entry = {0};
+    multilistEntry entry = {};
     bool found = false;
     while (!found && multilistNext(&iter, &entry)) {
         found = persistContractSameBytes(&entry.box, bytes);

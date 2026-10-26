@@ -194,7 +194,7 @@ static void aesEncryptBlock(const uint32_t *rk, uint8_t num_rounds,
 
 static void ghashMul(uint8_t out[16], const uint8_t x[16],
                      const uint8_t h[16]) {
-    uint8_t z[16] = {0};
+    uint8_t z[16] = {};
     uint8_t v[16];
     memcpy(v, h, 16);
     for (uint32_t i = 0; i < 128; i++) {
@@ -220,7 +220,7 @@ static void ghashMul(uint8_t out[16], const uint8_t x[16],
 static void ghashAbsorb(uint8_t acc[16], const uint8_t h[16],
                         const uint8_t *data, size_t len) {
     while (len > 0) {
-        uint8_t block[16] = {0};
+        uint8_t block[16] = {};
         const size_t n = (len < 16u) ? len : 16u;
         memcpy(block, data, n);
         for (uint32_t i = 0; i < 16; i++) {
@@ -247,7 +247,7 @@ static bool aesGcmPortableInit(aesGcmKey *out, const uint8_t *key,
     out->num_rounds = (key_len == AES128_KEY_LEN) ? 10u : 14u;
     aesKeyExpand(out->round_keys, key, out->key_size, out->num_rounds);
     /* H = AES_K(0^128). */
-    const uint8_t zero[16] = {0};
+    const uint8_t zero[16] = {};
     aesEncryptBlock(out->round_keys, out->num_rounds, zero, out->h);
     return true;
 }
@@ -310,7 +310,7 @@ static bool aesGcmPortableSeal(const aesGcmKey *k, const uint8_t nonce[12],
          plaintext_len);
 
     /* Tag = AES_K(J0) XOR GHASH(AAD || 0^v || CT || 0^u || lens). */
-    uint8_t S[16] = {0};
+    uint8_t S[16] = {};
     ghashAbsorb(S, k->h, aad, aad_len);
     ghashAbsorb(S, k->h, ciphertext, plaintext_len);
     uint8_t lens[16];
@@ -356,7 +356,7 @@ static bool aesGcmPortableOpen(const aesGcmKey *k, const uint8_t nonce[12],
     /* Compute expected tag FIRST so we can constant-time compare
      * before decrypting; if mismatched, zero the output buffer and
      * return false. */
-    uint8_t S[16] = {0};
+    uint8_t S[16] = {};
     ghashAbsorb(S, k->h, aad, aad_len);
     ghashAbsorb(S, k->h, ciphertext, ciphertext_len);
     uint8_t lens[16];
@@ -537,8 +537,8 @@ int aesGcmTest(int argc, char *argv[]) {
 
     /* NIST SP 800-38D Test Vector 1: AES-128 GCM, empty PT + AAD. */
     TEST("AES-128-GCM: NIST Test Vector 1 (empty PT, empty AAD)") {
-        uint8_t key[16] = {0};
-        uint8_t nonce[12] = {0};
+        uint8_t key[16] = {};
+        uint8_t nonce[12] = {};
         uint8_t tag[16];
         aesGcmKey k;
         if (!aesGcmInit(&k, key, 16)) {
@@ -554,9 +554,9 @@ int aesGcmTest(int argc, char *argv[]) {
 
     /* NIST Vector 2: 16-byte zero PT, empty AAD. */
     TEST("AES-128-GCM: NIST Test Vector 2 (16B zero PT)") {
-        uint8_t key[16] = {0};
-        uint8_t nonce[12] = {0};
-        uint8_t pt[16] = {0};
+        uint8_t key[16] = {};
+        uint8_t nonce[12] = {};
+        uint8_t pt[16] = {};
         uint8_t ct[16], tag[16];
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
@@ -642,8 +642,8 @@ int aesGcmTest(int argc, char *argv[]) {
 
     /* AES-256 GCM. */
     TEST("AES-256-GCM: NIST Test Vector 13 (AES-256 zero key, empty PT)") {
-        uint8_t key[32] = {0};
-        uint8_t nonce[12] = {0};
+        uint8_t key[32] = {};
+        uint8_t nonce[12] = {};
         uint8_t tag[16];
         aesGcmKey k;
         if (!aesGcmInit(&k, key, 32)) {
@@ -804,7 +804,7 @@ int aesGcmTest(int argc, char *argv[]) {
 
     TEST("aesGcmInit: bad key length refused") {
         aesGcmKey k;
-        const uint8_t key[24] = {0};
+        const uint8_t key[24] = {};
         if (aesGcmInit(&k, key, 24)) {
             ERRR("24-byte key (AES-192) must refuse");
         }
@@ -820,9 +820,9 @@ int aesGcmTest(int argc, char *argv[]) {
         if (!aesGcmInit(&k, key, sizeof(key))) {
             ERRR("a 16-byte key must initialise");
         }
-        const uint8_t nonce[12] = {0};
-        uint8_t tag[16] = {0};
-        uint8_t buf[16] = {0};
+        const uint8_t nonce[12] = {};
+        uint8_t tag[16] = {};
+        uint8_t buf[16] = {};
         const uint64_t diagBefore = dkDiagCount();
         if (aesGcmSeal(&k, nonce, NULL, 0, NULL, 16, buf, tag) ||
             aesGcmSeal(&k, nonce, NULL, 4, buf, 16, buf, tag) ||
@@ -860,9 +860,9 @@ int aesGcmTest(int argc, char *argv[]) {
                 ERRR("a 16-byte key must initialise");
             }
             const size_t over = (size_t)(AES_GCM_MAX_PAYLOAD + 1u);
-            const uint8_t nonce[12] = {0};
-            uint8_t tag[16] = {0};
-            uint8_t in[16] = {0};
+            const uint8_t nonce[12] = {};
+            uint8_t tag[16] = {};
+            uint8_t in[16] = {};
             const aesGcmForceBackend saved = aesGcmGetForceBackend();
             static const aesGcmForceBackend backends[] = {
                 AES_GCM_FORCE_SCALAR, AES_GCM_FORCE_AESNI,

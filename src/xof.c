@@ -390,7 +390,7 @@ static uint64_t xofTestRand(uint64_t *state) {
 static int xofCheckGrownWriter(const char *what, const uint64_t *bits,
                                const size_t n, const size_t initialBytes) {
     int err = 0;
-    cleaner(xofTestWriterFree) xofWriter w = {0};
+    cleaner(xofTestWriterFree) xofWriter w = {};
     if (initialBytes) {
         /* @own: container; free=zfree */
         w.d = zcalloc(1, initialBytes);
@@ -805,7 +805,7 @@ int xofTest(int argc, char *argv[]) {
             values[i] = xofDoubleFromBits(patterns[i]);
         }
 
-        xof bits[64] = {0};
+        xof bits[64] = {};
         size_t bitsUsed = 0;
         xofInit(bits, &bitsUsed, values[0]);
         int_fast32_t prevLZ = -1;
@@ -990,7 +990,7 @@ int xofTest(int argc, char *argv[]) {
     }
 
     TEST("xofReader - xofReaderInitFromWriter") {
-        xofWriter w = {0};
+        xofWriter w = {};
         /* @own: container; free=zfree */
         w.d = zcalloc(1000, sizeof(*w.d));
         w.totalBytes = 1000 * sizeof(*w.d);
@@ -1045,7 +1045,7 @@ int xofTest(int argc, char *argv[]) {
         const size_t count = sizeof(values) / sizeof(*values);
 
         for (int stale = 0; stale < 2; stale++) {
-            xofWriter w = {0};
+            xofWriter w = {};
             if (stale) {
                 /* Any leftover window must be ignored too */
                 w.currentLeadingZeroes = 0;
@@ -1108,7 +1108,7 @@ int xofTest(int argc, char *argv[]) {
     }
 
     TEST("xofReader - xofReaderRemaining") {
-        xofWriter w = {0};
+        xofWriter w = {};
         /* @own: container; free=zfree */
         w.d = zcalloc(1000, sizeof(*w.d));
         w.totalBytes = 1000 * sizeof(*w.d);

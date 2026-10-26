@@ -309,7 +309,7 @@ int dkDiagTest(int argc, char *argv[]) {
     }
 
     TEST("the hook sees each report with its context, then can be removed") {
-        dkDiagTestSeen seen = {0};
+        dkDiagTestSeen seen = {};
         const dkDiagHook hook = {.fn = dkDiagTestHook_, .ctx = &seen};
         dkDiagSetHook(&hook);
         DK_DIAG(DK_DIAG_PERSIST_CTX_WRONG_TYPE, "hooked");
@@ -337,7 +337,7 @@ int dkDiagTest(int argc, char *argv[]) {
     TEST("each thread has its own slot and count") {
         DK_DIAG(DK_DIAG_MULTIARRAY_NATIVE, "main thread");
         const uint64_t mine = dkDiagCount();
-        uint64_t theirs[2] = {0};
+        uint64_t theirs[2] = {};
         pthread_t t;
         if (pthread_create(&t, NULL, dkDiagTestThread_, theirs) != 0) {
             ERRR("pthread_create failed");

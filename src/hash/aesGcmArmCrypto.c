@@ -304,7 +304,7 @@ armGhashAbsorb(uint8x16_t acc, uint8x16_t h, const uint8_t *data, size_t len) {
         len -= 16;
     }
     if (len > 0) {
-        uint8_t tail[16] = {0};
+        uint8_t tail[16] = {};
         memcpy(tail, data, len);
         acc = armGhashAbsorbBlock(acc, h, tail);
     }

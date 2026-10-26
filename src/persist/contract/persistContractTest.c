@@ -173,7 +173,7 @@ static void pcLogFree(persistContractLog *log) {
     }
     zfree(log->entries);
     zfree(log->start);
-    *log = (persistContractLog){0};
+    *log = (persistContractLog){};
 }
 
 /* ====================================================================
@@ -184,7 +184,7 @@ void persistContractValue(uint64_t *rng, databoxBig *out, uint8_t *buf,
     static const char chars[] = "0123456789-.e abcxyz";
     const uint64_t r = splitmix64(rng);
     const uint64_t s = splitmix64(rng);
-    *out = (databoxBig){0};
+    *out = (databoxBig){};
     switch (r % 12) {
     case 0:
         *out = DATABOX_BIG_SIGNED((int64_t)(s % 256) - 128);
@@ -571,7 +571,7 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
 
 static pcRow pcRun(const persistContractType *t) {
     static const size_t sizes[] = {0, 1, 2, 37, 600, 6000};
-    pcRow row = {0};
+    pcRow row = {};
     for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
         for (uint64_t seed = 1; seed <= 3; seed++) {
             pcCase(&row, t, seed * 1000 + i, sizes[i], NULL, NULL, NULL);
@@ -617,7 +617,7 @@ int persistContractTest(int argc, char *argv[]) {
     /* Every type and op code names itself uniquely (an unassigned code is
      * "unknown"), so files and tools never print one name for two. */
     for (int kind = 0; kind < 2; kind++) {
-        const char *seen[256] = {0};
+        const char *seen[256] = {};
         for (unsigned v = 0; v < 256; v++) {
             const char *name = kind == 0 ? persistTypeName((persistType)v)
                                          : persistOpName((persistOp)v);

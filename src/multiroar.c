@@ -83,7 +83,7 @@ mrWrongMode_(const char *function, int line, const char *what) {
 #define BITMAP_SIZE_IN_BYTES (BITMAP_SIZE_IN_BITS / 8)
 
 [[maybe_unused]] static const uint64_t
-    _allZeroes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {0};
+    _allZeroes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {};
 [[maybe_unused]] static const uint64_t
     _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
         0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
@@ -346,7 +346,7 @@ _convertPositionPackedArrayToBitmap(multiroar *r, const databox *key,
     const uint8_t *packedArrayStart = GET_CHUNK_PACKED_START(value);
     const uint16_t currentElementCount = PACKED_COUNT_FROM_VALUE(value);
 
-    uint8_t newBitmap[BITMAP_SIZE_IN_BYTES + 1] = {0};
+    uint8_t newBitmap[BITMAP_SIZE_IN_BYTES + 1] = {};
 
     /* If converting Unset Positions, start with a fully set bitmap.
      * Use 0xFF to set all bits to 1 (not 0x01 which only sets 1 bit per byte)
@@ -452,7 +452,7 @@ DK_STATIC void convertBitmapToPositionList(multiroar *r,
                                            const databox *value,
                                            multimapEntry *me,
                                            bool trackSetPositions) {
-    uint8_t packedArray[BITMAP_SIZE_IN_BYTES + 16] = {0};
+    uint8_t packedArray[BITMAP_SIZE_IN_BYTES + 16] = {};
     uint8_t *packedArrayStart = packedArray + 1;
 
     if (trackSetPositions) {
@@ -543,7 +543,7 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
      * position list of one), and a present chunk's row comes back to be
      * changed in place */
     const databox key = databoxNewUnsigned(CHUNK(position));
-    uint8_t createSparse[8] = {0};
+    uint8_t createSparse[8] = {};
     createSparse[0] = CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS;
     createSparse[1] = 1; /* count of elements; actually a TaggedVarint */
     varintPacked13Set(createSparse + 2, 0, OFFSET(position));
@@ -552,7 +552,7 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
     const databox *inserting[] = {&key, &fresh};
     multimapEntry me;
     if (!multimapInsertIfAbsentEntry(&r->map, inserting, &me)) {
-        databox value = {{0}};
+        databox value = {};
         flexGetNextByType(*me.map, &me.fe, &value);
 
         switch (GET_CHUNK_TYPE(&value)) {
@@ -735,7 +735,7 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
     /* The row's key entry: a chunk this remove empties is deleted through
      * it, without a second search */
     flexEntry *const rowKey = me.fe;
-    databox value = {{0}};
+    databox value = {};
     flexGetNextByType(*me.map, &me.fe, &value);
 
     switch (GET_CHUNK_TYPE(&value)) {
@@ -916,7 +916,7 @@ multiroarValueSetResult multiroarValueSetGetPrevious(multiroar *r,
     const databox key = databoxNewUnsigned(position);
     const databox store = databoxNewUnsigned(v);
     const databox *elements[ELEMENTS_PER_ENTRY] = {&key, &store};
-    databox prev = {{0}};
+    databox prev = {};
     const bool previouslySet =
         multimapInsertReplacing(&r->map, elements, &prev);
     if (previouslySet && overwritten) {
@@ -981,7 +981,7 @@ bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value) {
     }
 
     const databox key = databoxNewUnsigned(position);
-    databox got = {{0}};
+    databox got = {};
     databox *lookup[1] = {&got};
     if (!multimapLookup(r->map, &key, lookup)) {
         return false;
@@ -1002,7 +1002,7 @@ bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
 
     /* One search: the delete reports the value it removed (by value) */
     const databox key = databoxNewUnsigned(position);
-    databox prev = {{0}};
+    databox prev = {};
     if (!multimapDeleteReporting(&r->map, &key, &prev)) {
         return false;
     }
@@ -1820,7 +1820,7 @@ DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
         } else {
             uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
             if (exists) {
-                databox value = {{0}};
+                databox value = {};
                 flexGetNextByType(*me.map, &me.fe, &value);
                 expandChunkToBitmap(&value, bitmap);
             } else {
@@ -2194,7 +2194,7 @@ void multiroarBitGetMany(const multiroar *r, const uint64_t *positions,
     uint64_t cachedChunk = 0;
     bool cachedFound = false;
     bool haveCache = false;
-    databox value = {{0}};
+    databox value = {};
 
     for (uint64_t i = 0; i < count; i++) {
         const uint64_t chunk = CHUNK(positions[i]);
@@ -2855,7 +2855,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 
             databox key = databoxNewUnsigned(chunkId);
 
-            databox value = {{0}};
+            databox value = {};
             value.data.bytes.start = chunk;
             value.len = 1;
             value.type = DATABOX_BYTES;
@@ -2912,7 +2912,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 
             databox key = databoxNewUnsigned(chunkId);
 
-            databox value = {{0}};
+            databox value = {};
             value.data.bytes.start = chunk;
             value.len = chunkSize;
             value.type = DATABOX_BYTES;
@@ -2939,7 +2939,7 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 
             databox key = databoxNewUnsigned(chunkId);
 
-            databox value = {{0}};
+            databox value = {};
             value.data.bytes.start = chunk;
             value.len = 1025;
             value.type = DATABOX_BYTES;
@@ -3210,7 +3210,7 @@ DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
          * Layout: [type:1] [count:1-2] [positions:N]
          * We need to write positions first to a temp location, then move them
          * to the correct offset based on count's varint length. */
-        uint8_t packed[BITMAP_SIZE_IN_BYTES + 16] = {0};
+        uint8_t packed[BITMAP_SIZE_IN_BYTES + 16] = {};
         packed[0] = CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS;
 
         /* Write positions to temporary location at offset 1 */
@@ -3235,7 +3235,7 @@ DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
     } else if (popcount > MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING) {
         /* Nearly full - convert to negative position list.
          * Same layout as sparse, but stores unset positions. */
-        uint8_t packed[BITMAP_SIZE_IN_BYTES + 16] = {0};
+        uint8_t packed[BITMAP_SIZE_IN_BYTES + 16] = {};
         packed[0] = CHUNK_TYPE_OVER_FULL_DIRECT_NOT_SET_POSITION_NUMBERS;
 
         /* Write positions to temporary location at offset 1 */
@@ -4286,7 +4286,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Value calls on a bit roar, and values a value roar cannot
          * store, are refused */
-        databox out = {{0}};
+        databox out = {};
         const databox negative = databoxNewSigned(-1);
         const databox tooWide = databoxNewUnsigned(256);
         const databox text = databoxNewBytesString("7");
@@ -4383,8 +4383,8 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *v = multiroarValueNew(4, 0, 0);
         databox yes = DATABOX_BOX_TRUE;
         databox no = DATABOX_BOX_FALSE;
-        databox got3 = {{0}};
-        databox got4 = {{0}};
+        databox got3 = {};
+        databox got4 = {};
         if (multiroarValueSet(v, 3, &yes) != MULTIROAR_VALUE_ADDED ||
             multiroarValueSet(v, 4, &no) != MULTIROAR_VALUE_ADDED ||
             !multiroarValueGet(v, 3, &got3) || got3.data.u != 1 ||
@@ -4720,7 +4720,7 @@ int multiroarTest(int argc, char *argv[]) {
         assert(multiroarValueSet(v, 7, &val) == MULTIROAR_VALUE_ADDED);
 
         /* Get round-trips exactly */
-        databox got = {{0}};
+        databox got = {};
         assert(multiroarValueGet(v, 7, &got));
         assert(got.type == DATABOX_UNSIGNED_64 && got.data.u == 4242);
 
@@ -4729,7 +4729,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Overwrite reports and returns the previous value */
         databox val2 = databoxNewUnsigned(65535); /* max for bitWidth 16 */
-        databox prev = {{0}};
+        databox prev = {};
         assert(multiroarValueSetGetPrevious(v, 7, &val2, &prev) ==
                MULTIROAR_VALUE_REPLACED);
         assert(prev.data.u == 4242);
@@ -4745,7 +4745,7 @@ int multiroarTest(int argc, char *argv[]) {
         assert(multiroarValueGet(v, 0, &got) && got.data.u == 12);
 
         /* Remove returns the removed value; second remove reports miss */
-        databox removed = {{0}};
+        databox removed = {};
         assert(multiroarValueRemoveGetRemoved(v, 7, &removed));
         assert(removed.data.u == 65535);
         assert(!multiroarValueGet(v, 7, NULL));
@@ -5733,7 +5733,7 @@ int multiroarTest(int argc, char *argv[]) {
          * chunks, mixed with single bits so chunks pass through every
          * form; every bit and the count checked as it goes */
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
+        uint64_t oracle[FUZZ_ORACLE_WORDS] = {};
         uint64_t rng = 0x5eed;
         for (int op = 0; op < 400; op++) {
             const uint64_t kind = splitmix64(&rng) % 5;
@@ -5834,7 +5834,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("FUZZ: random bit operations with oracle") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
+        uint64_t oracle[FUZZ_ORACLE_WORDS] = {};
 
         srand(12345);
         const uint64_t numOps = 10000;
@@ -5894,7 +5894,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("FUZZ: sequential then random access") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
+        uint64_t oracle[FUZZ_ORACLE_WORDS] = {};
 
         /* Sequential fill */
         for (uint64_t i = 0; i < 5000; i++) {
@@ -5971,7 +5971,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("FUZZ: chunk boundary stress") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
+        uint64_t oracle[FUZZ_ORACLE_WORDS] = {};
         const uint64_t chunkBits = 8192;
 
         srand(77777);
@@ -6173,7 +6173,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("FUZZ: stress 100K random operations") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
+        uint64_t oracle[FUZZ_ORACLE_WORDS] = {};
 
         srand(88888);
         const uint64_t numOps = 100000;
@@ -6514,8 +6514,8 @@ int multiroarTest(int argc, char *argv[]) {
         printf("  Testing set operations with oracle...\n");
 
 #define FUZZ_OP_SIZE 500
-        uint64_t oracleA[divCeil(FUZZ_OP_SIZE, 64)] = {0};
-        uint64_t oracleB[divCeil(FUZZ_OP_SIZE, 64)] = {0};
+        uint64_t oracleA[divCeil(FUZZ_OP_SIZE, 64)] = {};
+        uint64_t oracleB[divCeil(FUZZ_OP_SIZE, 64)] = {};
 
         cleaner(multiroarFree) multiroar *a = multiroarBitNew();
         cleaner(multiroarFree) multiroar *b = multiroarBitNew();
@@ -6599,7 +6599,7 @@ int multiroarTest(int argc, char *argv[]) {
         printf("  Testing remove operations...\n");
 
 #define FUZZ_REMOVE_SIZE 2000
-        uint64_t oracle[divCeil(FUZZ_REMOVE_SIZE, 64)] = {0};
+        uint64_t oracle[divCeil(FUZZ_REMOVE_SIZE, 64)] = {};
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* First add some bits */
@@ -8188,8 +8188,8 @@ int multiroarTest(int argc, char *argv[]) {
         for (int trial = 0; trial < 300; trial++) {
             cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
             cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
-            uint64_t o1[FUZZ_ORACLE_WORDS] = {0};
-            uint64_t o2[FUZZ_ORACLE_WORDS] = {0};
+            uint64_t o1[FUZZ_ORACLE_WORDS] = {};
+            uint64_t o2[FUZZ_ORACLE_WORDS] = {};
 
             const int numBits1 = rand() % 500;
             uint64_t min1 = UINT64_MAX;
@@ -9863,7 +9863,7 @@ int multiroarTest(int argc, char *argv[]) {
                         expect = values[later];
                     }
                 }
-                databox got = {{0}};
+                databox got = {};
                 if (!multiroarValueGet(back, positions[i], &got) ||
                     got.data.u != expect) {
                     ERR("shape %zu: position %" PRIu64 " lost its value", s,

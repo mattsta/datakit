@@ -141,7 +141,7 @@ static void benchPrint_(const char *name, size_t n, const benchRow *r) {
  * ==================================================================== */
 #define BENCH_TYPED(T, VT)                                                     \
     static benchRow benchTyped##T(size_t n) {                                  \
-        benchRow r = {0};                                                      \
+        benchRow r = {};                                                       \
         void *fw = NULL;                                                       \
         const double t0 = benchNow_();                                         \
         for (size_t i = 0; i < n; i++) {                                       \
@@ -180,7 +180,7 @@ BENCH_TYPED(I128, __int128_t)
  * ==================================================================== */
 #define BENCH_MULTI(NAME, T)                                                   \
     static benchRow benchMulti##NAME(size_t n, size_t doubleEvery) {           \
-        benchRow r = {0};                                                      \
+        benchRow r = {};                                                       \
         cleaner(zfree) void *valsMem = zcalloc(n, sizeof(databox));            \
         databox *vals = valsMem;                                               \
         for (size_t i = 0; i < n; i++) {                                       \
@@ -233,7 +233,7 @@ BENCH_MULTI(Flat, multiFenwickFlat)
  * ==================================================================== */
 #define BENCH_SEGMENT(T, VT)                                                   \
     static benchRow benchSegment##T(size_t n, segmentOp op) {                  \
-        benchRow r = {0};                                                      \
+        benchRow r = {};                                                       \
         void *seg = segment##T##New(op);                                       \
         const double t0 = benchNow_();                                         \
         for (size_t i = 0; i < n; i++) {                                       \
@@ -324,7 +324,7 @@ static benchRow benchGrowSegmentI64(size_t n) {
  * ==================================================================== */
 #define BENCH_2D_TYPED(T, VT)                                                  \
     static benchRow bench2d##T(size_t n) {                                     \
-        benchRow r = {0};                                                      \
+        benchRow r = {};                                                       \
         const size_t side = (size_t)sqrt((double)n);                           \
         fenwick2d##T *t = NULL;                                                \
         const double t0 = benchNow_();                                         \
@@ -360,7 +360,7 @@ BENCH_2D_TYPED(Double, double)
 
 /* 'doubleEvery' > 0 makes every that-many-th value a double */
 static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
-    benchRow r = {0};
+    benchRow r = {};
     const size_t side = (size_t)sqrt((double)n);
     multiFenwick2d *t = NULL;
     const double t0 = benchNow_();

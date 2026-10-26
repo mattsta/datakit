@@ -53,7 +53,7 @@ static void *pcMailboxBuild(const persistContractBuild *b) {
      * moving forward with gaps and stepping back inside and beyond the
      * replay window; one frame in 16 is apply-rejected */
     uint64_t rng = b->seed;
-    uint64_t next[70] = {0};
+    uint64_t next[70] = {};
     uint8_t frame[256];
     for (size_t i = 0; i < b->size; i++) {
         const size_t o = (size_t)(splitmix64(&rng) % 70);

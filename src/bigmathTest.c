@@ -701,7 +701,7 @@ int bigmathTest(int argc, char *argv[]) {
             mp_int_init_value(&A, vals[i]);
             mp_int_init(&B);
 
-            uint8_t buf[32] = {0};
+            uint8_t buf[32] = {};
             const mp_result lenRes = mp_int_binary_len(&A);
             if (lenRes <= 0 || (size_t)lenRes > sizeof(buf)) {
                 ERR("binary_len bogus for %" PRId64, vals[i]);

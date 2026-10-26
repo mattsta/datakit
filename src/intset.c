@@ -333,7 +333,7 @@ static void intsetRunAdd_(intsetIterator *it, const void *first, uint64_t count,
  * the values are runs of those arrays: the negative int64s, the negative
  * int32s, every int16, the non-negative int32s, the non-negative int64s */
 void intsetIteratorInit(intsetIterator *it, const intset *is) {
-    *it = (intsetIterator){0};
+    *it = (intsetIterator){};
     if (!is) {
         return;
     }
@@ -573,7 +573,7 @@ size_t intsetBytes(const intset *is) {
 }
 
 void intsetStats(const intset *is, dkTierStats *out) {
-    *out = (dkTierStats){0};
+    *out = (dkTierStats){};
     if (!is) {
         return;
     }

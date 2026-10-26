@@ -106,7 +106,7 @@ defcleanerName(char *, zfree, Chars);
 
 static inline uint64_t dataspeed_time_ns(void) {
 #if defined(__APPLE__)
-    static mach_timebase_info_data_t timebase = {0};
+    static mach_timebase_info_data_t timebase = {};
     if (timebase.denom == 0) {
         mach_timebase_info(&timebase);
     }
@@ -322,7 +322,7 @@ DK_FN_UNUSED static void dataspeedCacheFromSysfs_(dataspeedCacheInfo *cache,
             continue;
         }
 
-        char type[32] = {0};
+        char type[32] = {};
         if (!read(ctx, index, "type", type, sizeof(type))) {
             type[0] = '\0';
         }
@@ -433,7 +433,7 @@ static bool dataspeedSysctlReadInt_(void *ctx, const char *name,
     union {
         int64_t i64;
         int32_t i32;
-    } got = {0};
+    } got = {};
     size_t len = sizeof(got);
     if (sysctlbyname(name, &got, &len, NULL, 0) != 0) {
         return false;
@@ -1299,7 +1299,7 @@ static void dj_str(djState *dj, const char *key, const char *val) {
 }
 
 static mds *dataspeedReportToJSON(const dataspeedReport *report) {
-    djState dj = {0}; /* Must zero-init before djInit */
+    djState dj = {}; /* Must zero-init before djInit */
     djInit(&dj);
 
     djMapOpen(&dj);
@@ -1631,7 +1631,7 @@ int dataspeedParseTest(int argc, char *argv[]) {
             {3, "size", "36864K\n"}, {3, "coherency_line_size", "64\n"},
         };
         dataspeedSysfsLayout_ layout = DS_LAYOUT_(x86);
-        dataspeedCacheInfo got = {0};
+        dataspeedCacheInfo got = {};
         dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
         const dataspeedCacheInfo want = {.l1d_size = 48 * 1024,
                                          .l1i_size = 32 * 1024,
@@ -1651,7 +1651,7 @@ int dataspeedParseTest(int argc, char *argv[]) {
             {2, "size", "12M\n"},
         };
         dataspeedSysfsLayout_ layout = DS_LAYOUT_(armish);
-        dataspeedCacheInfo got = {0};
+        dataspeedCacheInfo got = {};
         dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
         const dataspeedCacheInfo want = {.l1d_size = 128 * 1024,
                                          .l1i_size = 192 * 1024,
@@ -1678,7 +1678,7 @@ int dataspeedParseTest(int argc, char *argv[]) {
             {5, "size", "8M\n"},
         };
         dataspeedSysfsLayout_ layout = DS_LAYOUT_(unified);
-        dataspeedCacheInfo got = {0};
+        dataspeedCacheInfo got = {};
         dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
         const dataspeedCacheInfo want = {
             .l1d_size = 16 * 1024, .l1i_size = 16 * 1024, .line_size = 32};
@@ -1688,7 +1688,7 @@ int dataspeedParseTest(int argc, char *argv[]) {
     TEST("sysfs: no cache entries at all") {
         static const dataspeedSysfsRow_ none[] = {{9, "level", "1\n"}};
         dataspeedSysfsLayout_ layout = DS_LAYOUT_(none);
-        dataspeedCacheInfo got = {0};
+        dataspeedCacheInfo got = {};
         dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
         const dataspeedCacheInfo want = {.line_size =
                                              DATASPEED_DEFAULT_LINE_SIZE};
@@ -1703,7 +1703,7 @@ int dataspeedParseTest(int argc, char *argv[]) {
             {"hw.cachelinesize", 128},
         };
         dataspeedSysctlLayout_ layout = DS_LAYOUT_(apple);
-        dataspeedCacheInfo got = {0};
+        dataspeedCacheInfo got = {};
         dataspeedCacheFromSysctl_(&got, dataspeedSysctlReadSample_, &layout);
         const dataspeedCacheInfo want = {.l1d_size = 65536,
                                          .l1i_size = 131072,
@@ -1720,7 +1720,7 @@ int dataspeedParseTest(int argc, char *argv[]) {
             {"hw.cachelinesize", INT64_C(1) << 40},
         };
         dataspeedSysctlLayout_ layout = DS_LAYOUT_(odd);
-        dataspeedCacheInfo got = {0};
+        dataspeedCacheInfo got = {};
         dataspeedCacheFromSysctl_(&got, dataspeedSysctlReadSample_, &layout);
         const dataspeedCacheInfo want = {
             .l3_size = 33554432, .line_size = DATASPEED_DEFAULT_LINE_SIZE};

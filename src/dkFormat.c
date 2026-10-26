@@ -257,7 +257,7 @@ int dkFormatTest(int argc, char *argv[]) {
         const dkFormatStamp newer = {77, 9, 0};
         uint8_t buf[64];
         const size_t n = dkFormatPrefixWrite(&newer, buf, sizeof(buf));
-        dkFormatStamp got = {0};
+        dkFormatStamp got = {};
         size_t gotLen = 0;
         if (dkFormatPrefixRead(&spec, buf, n, &got, &gotLen) !=
                 DK_FORMAT_VERSION_TOO_NEW ||

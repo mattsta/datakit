@@ -208,14 +208,14 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
                 break;
             }
 
-            databox score = {{0}};
-            databox member = {{0}};
+            databox score = {};
+            databox member = {};
             databoxWide scoreWide, memberWide;
             flexGetByTypeInto(entry, &score, &scoreWide);
             flexGetByTypeInto(memberEntry, &member, &memberWide);
 
             if (!upper && idx >= splitPoint) {
-                databox prev = {{0}};
+                databox prev = {};
                 databoxWide prevWide;
                 flexGetByTypeInto(prevScoreEntry, &prev, &prevWide);
                 upper = databoxCompare(&score, &prev) != 0;
@@ -1030,10 +1030,10 @@ static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
              !mosmIs_(&mb, &sb, order[n - 1]))
           : (multiOrderedSetMediumFirst(m, &mb, &sb) ||
              multiOrderedSetMediumLast(m, &mb, &sb))) {
-        databox fm = {{0}};
-        databox fs = {{0}};
-        databox lm = {{0}};
-        databox ls = {{0}};
+        databox fm = {};
+        databox fs = {};
+        databox lm = {};
+        databox ls = {};
         const bool hf = multiOrderedSetMediumFirst(m, &fm, &fs);
         const bool hl = multiOrderedSetMediumLast(m, &lm, &ls);
         ERR("step %d: first %d (score %" PRId64 "), last %d (score %" PRId64
@@ -1090,7 +1090,7 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
          * empty one map or the other again and again; after every step
          * every read agrees with the oracle */
         multiOrderedSetMedium *m = multiOrderedSetMediumNew();
-        bool present[MOSM_N] = {0};
+        bool present[MOSM_N] = {};
         uint64_t rng = 0x3d1u;
         for (int step = 0; step < 1500 && !err; step++) {
             const uint64_t op = splitmix64(&rng) % 10;
@@ -1230,12 +1230,12 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
         }
         const databox m3 = databoxNewBytesAllowEmbed("m3", 2);
         const databox wider = DATABOX_DOUBLE(3.5e12);
-        databox prev = {{0}};
+        databox prev = {};
         if (!multiOrderedSetMediumAddGetPrevious(mos, &wider, &m3, &prev) ||
             prev.data.i != (INT64_C(3) << 40)) {
             ERRR("the rewrite did not report m3's old score");
         }
-        databox got = {{0}};
+        databox got = {};
         if (!multiOrderedSetMediumGetScore(mos, &m3, &got) ||
             got.type != DATABOX_DOUBLE_64 || got.data.d64 != 3.5e12 ||
             multiOrderedSetMediumGetRank(mos, &m3) != 3) {

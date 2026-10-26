@@ -191,7 +191,7 @@ persistLogResult multimapDeleteP(multimapP *m, const databox *key) {
 
     /* The row found here is deleted where it is once logged (logging
      * leaves the map as it was): one search */
-    multimapEntry me = {0};
+    multimapEntry me = {};
     if (!multimapGetUnderlyingEntry(m->m, key, &me)) {
         return PERSIST_LOG_UNCHANGED;
     }
@@ -214,7 +214,7 @@ persistLogResult multimapDeleteFullWidthP(multimapP *m,
     }
     /* As multimapDeleteP: the row found here is deleted where it is once
      * logged, one search */
-    multimapEntry me = {0};
+    multimapEntry me = {};
     if (!multimapGetUnderlyingEntryFullWidth(m->m, elements, &me)) {
         return PERSIST_LOG_UNCHANGED;
     }
@@ -399,7 +399,7 @@ int multimapPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
     if (!dkTestTmpDirPath(&tmp, "multimapPTest", basePath, sizeof(basePath))) {
         ERR("could not create a scratch directory: %s", strerror(errno));
@@ -1250,7 +1250,7 @@ int multimapPTest(int argc, char *argv[]) {
                 ", not the current 1 and 9",
                 now1, now2);
         }
-        databox got = {{0}};
+        databox got = {};
         databox *out[] = {&got};
         if (multimapCountP(m) != 2 || multimapExistsP(m, &k3) ||
             !multimapExistsFullWidth(multimapGetP(m), row2)) {
@@ -1342,7 +1342,7 @@ int multimapPTest(int argc, char *argv[]) {
         const databox k4 = databoxNewSigned(4);
         const databox v9 = databoxNewSigned(900);
         const databox *row4[2] = {&k4, &v9};
-        databox got = {{0}};
+        databox got = {};
         databox *out[1] = {&got};
         ctx = persistCtxOpen(basePath, NULL);
         m = multimapOpenP(ctx);

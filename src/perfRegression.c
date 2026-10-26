@@ -667,7 +667,7 @@ static void benchMultidict(void) {
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
-        databox v = {{0}};
+        databox v = {};
         sink += multidictFind(d, &k, &v);
     }
     emitRow("multidict", "find", 0, n, monoNowSec() - t0);
@@ -783,7 +783,7 @@ static void benchMultiOrderedSet(void) {
     for (uint32_t i = 0; i < n; i++) {
         const databox delta = databoxNewSigned(3);
         const databox m = perfContainerKey(keys, i);
-        databox result = {{0}};
+        databox result = {};
         sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
     }
     emitRow("multiOrderedSet", "incrBy", 0, n, monoNowSec() - t0);
@@ -791,7 +791,7 @@ static void benchMultiOrderedSet(void) {
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox m = perfContainerKey(keys, i);
-        databox s = {{0}};
+        databox s = {};
         sink += multiOrderedSetGetScore(mos, &m, &s);
     }
     emitRow("multiOrderedSet", "getScore", 0, n, monoNowSec() - t0);
@@ -1039,7 +1039,7 @@ static void benchMultiOrderedSetLimits(void) {
         PERF_LIMIT_ROW(
             "multiOrderedSetLimits", "getScore", limit, 0, n,
             const databox k = perfContainerKey(keys, (i * 104729u) % n);
-            databox s = {{0}}; sink += multiOrderedSetGetScore(mos, &k, &s));
+            databox s = {}; sink += multiOrderedSetGetScore(mos, &k, &s));
         PERF_LIMIT_ROW("multiOrderedSetLimits", "getRank", limit, 0, n / 10,
                        const databox k =
                            perfContainerKey(keys, (i * 104729u) % n);
@@ -1083,7 +1083,7 @@ static void benchMultilistLimits(void) {
                            &ml, s, (int64_t)((i * 7919u) % (n - i)), 1));
         perfFillList(&ml, s);
         PERF_LIMIT_ROW(
-            "multilistLimits", "popHead", limit, 0, n, databox got = {{0}};
+            "multilistLimits", "popHead", limit, 0, n, databox got = {};
             sink += multilistPopHead(&ml, s, &got); databoxFreeData(&got));
     }
 
@@ -1124,7 +1124,7 @@ static void benchMultiroar(void) {
 static void benchMultidictP(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     persistCtx *ctx = perfPersistCtx(&tmp, "perfMultidictP");
     multidictP *dp = ctx ? multidictNewP(ctx) : NULL;
     if (!dp) {
@@ -1200,7 +1200,7 @@ static void benchPersistChecks(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
     const char *mod = "persistChecks";
-    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     uint64_t sink = 0;
     bool done = false;
 
@@ -1476,7 +1476,7 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
     for (uint32_t i = 0; i < n; i++) {
         const databox delta = databoxNewSigned(1);
         const databox m = perfContainerKey(keys, i % members);
-        databox result = {{0}};
+        databox result = {};
         sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
     }
     snprintf(name, sizeof(name), "%sIncrBy", tier);
@@ -1566,10 +1566,10 @@ static void benchMultilist(void) {
              sink += multilistIndexGet(ml, s, perfScatter(i), &e)
                          ? (uint64_t)e.box.data.i
                          : 0);
-    PERF_ROW("multilist", "popHead", n, databox got = {{0}};
+    PERF_ROW("multilist", "popHead", n, databox got = {};
              sink += multilistPopHead(&ml, s, &got); databoxFreeData(&got));
     perfFillList(&ml, s);
-    PERF_ROW("multilist", "popTail", n, databox got = {{0}};
+    PERF_ROW("multilist", "popTail", n, databox got = {};
              sink += multilistPopTail(&ml, s, &got); databoxFreeData(&got));
     perfFillList(&ml, s);
     PERF_ROW("multilist", "deleteScattered", n,
