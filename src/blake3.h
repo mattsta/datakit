@@ -21,6 +21,18 @@ extern "C" {
 #define BLAKE3_MAX_DEPTH 54
 #define BLAKE3_MAX_SIMD_DEGREE 1
 
+/* Domain-separation flags (BLAKE3 spec section 2.2), combined with | into
+ * a compression's flags byte; every backend uses these */
+typedef enum blake3Flag : uint8_t {
+    BLAKE3_FLAG_CHUNK_START = 1u << 0,
+    BLAKE3_FLAG_CHUNK_END = 1u << 1,
+    BLAKE3_FLAG_PARENT = 1u << 2,
+    BLAKE3_FLAG_ROOT = 1u << 3,
+    BLAKE3_FLAG_KEYED_HASH = 1u << 4,
+    BLAKE3_FLAG_DERIVE_KEY_CONTEXT = 1u << 5,
+    BLAKE3_FLAG_DERIVE_KEY_MATERIAL = 1u << 6,
+} blake3Flag;
+
 typedef struct blake3Hasher blake3Hasher;
 struct blake3Hasher {
     /* Largest members first to minimize padding. */

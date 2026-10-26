@@ -34,15 +34,6 @@
 
 /* ----- Constants ------------------------------------------------------- */
 
-/* Domain-separation flags (BLAKE3 spec §2.2). */
-#define BLAKE3_FLAG_CHUNK_START (1u << 0)
-#define BLAKE3_FLAG_CHUNK_END (1u << 1)
-#define BLAKE3_FLAG_PARENT (1u << 2)
-#define BLAKE3_FLAG_ROOT (1u << 3)
-#define BLAKE3_FLAG_KEYED_HASH (1u << 4)
-#define BLAKE3_FLAG_DERIVE_KEY_CONTEXT (1u << 5)
-#define BLAKE3_FLAG_DERIVE_KEY_MATERIAL (1u << 6)
-
 /* SHA-256 IV (sqrt of first 8 primes). */
 static constexpr uint32_t BLAKE3_IV[8] = {
     0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
