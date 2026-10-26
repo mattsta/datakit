@@ -291,9 +291,14 @@ tree cannot make a change look good or bad:
 
 ```sh
 uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
-    [--compiler clang22|gcc15] [--preset dev|debug] [--target T]... [--define NAME=VALUE]... \
+    [--compiler clang22|gcc15] [--preset dev|debug] [--also-build gcc15|clang22]... \
+    [--target T]... [--define NAME=VALUE]... \
     [--root DIR] [-j N] (PATH[=FILE]... | --staged | --all-changed)
 ```
+
+Iterative work: `--compiler clang22 --also-build gcc15` tests on clang 22
+and only builds on gcc 15. The two-compiler test run is `validate`, the
+gate before a milestone.
 
 - Each `PATH` takes its working-tree content (or its deletion, when it
   is gone from the working tree); `PATH=FILE` stages `FILE`'s content
@@ -324,6 +329,11 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
 - The result's `tree` line says what was taken, and a `changed` line
   follows for every path that differs from HEAD (`A`, `M`, `D` or `T`
   and the path), in every mode.
+- `--also-build COMPILER` (repeatable) configures and builds the same
+  tree and targets with another compiler at its default preset, after
+  the main build, without tests; an `also` line reports it and its
+  build and warnings join the gate. A `time` line gives each step's
+  wall time and the total.
 - With `--target` and no `--tests` / `--serial` the run is build-only
   (every other gate still runs). That is how the library is checked the
   way consumers compile it, with asserts off:
@@ -501,6 +511,25 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   the list of gaps to triage. Exits 0 when every test passed, 1
   otherwise (the report is still written once the build succeeded), 2
   on an input error.
+
+## commit — commit exactly what a passing verify built
+
+```sh
+uv run --project tools dktools commit NAME -F MESSAGE PATH... [--root DIR]
+```
+
+- Refuses (exit 1) unless `verify NAME` passed and each `PATH`'s
+  working-tree content, or its deletion, is byte-for-byte what that
+  verify exported and built. A file edited after the verify cannot slip
+  into the commit.
+- Refuses while the index holds anything staged, so the commit is
+  exactly the named `PATH`s; stages them (added, changed or deleted).
+- Runs the leakage gate on the staged diff; a hard hit unstages these
+  `PATH`s and commits nothing.
+- `MESSAGE` must carry the `What:`, `Why:` and `How:` paragraphs
+  (exit 2 otherwise).
+- The cycle is `verify NAME --compiler clang22 --also-build gcc15
+--tests REGEX PATH...`, then `commit NAME -F MESSAGE PATH...`.
 
 ## leakcheck — the leakage gate
 

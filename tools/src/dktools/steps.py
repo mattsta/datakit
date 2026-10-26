@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +50,7 @@ class Step:
     log: Path
     code: int | None = None  # None: not run
     timed_out: bool = False  # killed at its timeout; code is 124
+    seconds: float | None = None  # wall time, when it ran
 
     @property
     def ok(self) -> bool:
@@ -78,6 +80,7 @@ def run_logged(
     if env is not None:
         full_env = dict(os.environ)
         full_env.update(env)
+    start = time.monotonic()
     with log.open("wb") as out:
         out.write(("$ " + " ".join(cmd) + "\n").encode())
         try:
@@ -87,8 +90,26 @@ def run_logged(
             message = f"dktools: {name}: timed out after {timeout:g}s; killed"
             out.write(f"\n{message}\n".encode())
             print(message, file=sys.stderr, flush=True)
-            return Step(name, log, procs.TIMEOUT_CODE, timed_out=True)
-    return Step(name, log, code)
+            return Step(
+                name,
+                log,
+                procs.TIMEOUT_CODE,
+                timed_out=True,
+                seconds=time.monotonic() - start,
+            )
+    return Step(name, log, code, seconds=time.monotonic() - start)
+
+
+def duration(seconds: float | None) -> str:
+    """'42s', '3m12s' or '1h04m' for a step's wall time; '-' when unknown."""
+    if seconds is None:
+        return "-"
+    whole = round(seconds)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m{whole % 60:02d}s"
+    return f"{whole // 3600}h{whole % 3600 // 60:02d}m"
 
 
 def read_lines(path: Path) -> list[str]:

@@ -25,6 +25,14 @@ configured and built there with the chosen compiler and preset (see
 ``dktools.toolchain``).  The result lists every path that differs
 from HEAD, one ``changed`` line each.
 
+``--also-build COMPILER`` (repeatable) configures and builds the same
+exported tree and targets with another compiler at its default preset,
+after the main build and without running tests; its build and warning
+count join the gate on an ``also`` line. Iterative work tests on one
+compiler and compiles on the other (``--compiler clang22 --also-build
+gcc15``); the two-compiler test run is ``validate``, the milestone gate.
+A ``time`` line gives each step's wall time and the total.
+
 With ``--target`` and neither ``--tests`` nor ``--serial`` the run is
 build-only (every other gate still runs): a library build the tests
 cannot use, such as ``--define DatakitTestMode=OFF`` on a release-type
@@ -77,6 +85,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,6 +110,9 @@ class VerifyOptions:
     staged: bool = False  # the tree is exactly the current index
     all_changed: bool = False  # HEAD plus every changed tracked path
     defines: tuple[str, ...] = ()  # extra cmake cache entries, NAME=VALUE
+    # more compilers that only build the same tree (no tests): iterative
+    # work tests on one compiler and compiles on the rest
+    also_build: list[toolchain.Compiler] = field(default_factory=list)
 
 
 def parse_specs(specs: list[str]) -> list[tuple[str, Path | None]]:
@@ -281,6 +293,28 @@ def _missing_lines(
     ]
 
 
+@dataclass
+class _AlsoBuild:
+    """One --also-build compiler's configure and build of the tree."""
+
+    label: str
+    configure: Step
+    build: Step
+    warnings: int
+
+    @property
+    def ok(self) -> bool:
+        return self.configure.ok and self.build.ok and self.warnings == 0
+
+    def line(self) -> str:
+        if not self.configure.ok:
+            return (
+                f"{self.label} FAILED (configure {self.configure.describe_failure()})"
+            )
+        state = "ok" if self.build.ok else f"FAILED ({self.build.describe_failure()})"
+        return f"{self.label} build {state}, {self.warnings} warning lines"
+
+
 def run(repo: Path, opts: VerifyOptions) -> int:
     """Run the verification; return the exit code (ToolError: input)."""
     name = gitutil.check_name(opts.name)
@@ -304,6 +338,10 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     with tempfile.TemporaryDirectory(prefix="dktools-verify-") as tmp:
         tree, changes = build_source_tree(repo, Path(tmp) / "index", source, specs)
     config.compiler.check()
+    others = [toolchain.build_config(c, None, opts.defines) for c in opts.also_build]
+    for other in others:
+        other.compiler.check()
+    started = time.monotonic()
 
     root = gitutil.scratch_root(opts.root, repo).resolve()
     work = buildstore.fresh_build(repo, root, "verify", name, head, "verify")
@@ -335,6 +373,32 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         )
     warn = steps.count_warning_lines(build.log)
     notes = steps.count_linker_notes(build.log)
+
+    # the same tree and targets with each --also-build compiler, no tests
+    also: list[_AlsoBuild] = []
+    if build.ok and plan is not None:
+        for other in others:
+            other.check_presets_file(src)
+            label = other.label
+            conf = steps.run_logged(
+                f"{label} configure",
+                other.configure_command(src),
+                work / f"{label}-configure.log",
+                cwd=src,
+                timeout=steps.CONFIGURE_TIMEOUT,
+            )
+            built = Step(f"{label} build", work / f"{label}-build.log")
+            if conf.ok:
+                built = steps.run_logged(
+                    built.name,
+                    other.build_command(src, size.build, plan.targets, size.load),
+                    built.log,
+                    cwd=src,
+                    timeout=steps.BUILD_TIMEOUT,
+                )
+            also.append(
+                _AlsoBuild(label, conf, built, steps.count_warning_lines(built.log))
+            )
 
     ctest = Step("ctest", work / "ctest.log")
     serial = Step("ctest-serial", work / "ctest-serial.log")
@@ -413,6 +477,8 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and atomic.ok
         and output.ok
         and fmt.clean()
+        and len(also) == len(others)
+        and all(a.ok for a in also)
     )
 
     counts = f"{warn} warning lines, {notes} linker notes"
@@ -430,6 +496,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"  config    {config.label}",
         f"  targets   {plan.line() if plan else '-'}",
         f"  build     {build_line}",
+        *(f"  also      {a.line()}" for a in also),
         f"  ctest     {_ctest_line(ctest, ctest_result) if opts.tests else '-'}",
         f"  serial    {_ctest_line(serial, serial_result) if opts.serial else '-'}",
         f"  sanitizer {_sanitizer_line(sanitizer)}",
@@ -449,6 +516,12 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         lines += _missing_lines(missing, plan, bindir)
     for hit in sanitizer:
         lines.append(f"  report    {hit.describe()}")
+    timed = [configure, build, *(a.build for a in also), ctest, serial, alloc]
+    spent = ", ".join(
+        f"{s.name} {steps.duration(s.seconds)}" for s in timed if s.code is not None
+    )
+    total = steps.duration(time.monotonic() - started)
+    lines.append(f"  time      {spent}; total {total}")
     lines.append("  logs")
     for log in (
         configure.log,
@@ -461,6 +534,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         atomic.log,
         output.log,
         work / "format.log",
+        *(log for a in also for log in (a.configure.log, a.build.log)),
     ):
         if log.exists():
             lines.append(f"    {log}")

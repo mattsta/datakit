@@ -12,6 +12,7 @@ from . import (
     allocaudit,
     atomicaudit,
     buildstore,
+    commit,
     configure,
     coverage,
     dropinclude,
@@ -274,6 +275,22 @@ def main(argv: list[str] | None = None) -> int:
     di.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     di.add_argument("--dry-run", action="store_true", help="report, change no file")
 
+    cm = sub.add_parser(
+        "commit",
+        help="commit exactly the PATHs a passing verify NAME built, after the "
+        "leakage gate (exit 0 committed, 1 refused, 2 input error)",
+    )
+    cm.add_argument("name", help="the verify work-dir name")
+    cm.add_argument("paths", nargs="+", help="repo paths to commit")
+    cm.add_argument(
+        "-F",
+        dest="message",
+        type=Path,
+        required=True,
+        help="message file with What:, Why: and How: paragraphs",
+    )
+    cm.add_argument("--root", type=Path, default=None, help="scratch root")
+
     up = sub.add_parser(
         "unusednames",
         help="retire (void)name; silencers: unname unused parameters, "
@@ -413,6 +430,14 @@ def main(argv: list[str] | None = None) -> int:
         choices=tuple(toolchain.PRESETS),
         default=None,
         help="build preset (default: the compiler's first; gcc15 builds release)",
+    )
+    vf.add_argument(
+        "--also-build",
+        action="append",
+        default=[],
+        choices=toolchain.COMPILERS,
+        help="also build the same tree with this compiler (its default preset), "
+        "no tests; repeatable. Iterative work: --compiler clang22 --also-build gcc15",
     )
     vf.add_argument(
         "--target",
@@ -833,6 +858,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 staged=args.staged,
                 all_changed=args.all_changed,
                 defines=tuple(args.define),
+                also_build=[toolchain.from_args(c, args) for c in args.also_build],
             ),
         )
 
@@ -986,6 +1012,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "dropinclude":
         return dropinclude.run(args.repo, args.header, tuple(args.paths), args.dry_run)
+
+    if args.command == "commit":
+        return commit.run(args.repo, args.name, args.message, args.paths, args.root)
 
     if args.command == "unusednames":
         return unusednames.run(args.repo, tuple(args.paths), args.dry_run)

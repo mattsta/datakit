@@ -779,6 +779,38 @@ class VerifyRun(unittest.TestCase):
                 now = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
                 self.assertEqual(now, kept)
 
+    def gcc(self) -> toolchain.Compiler:
+        exe = sys.executable
+        return toolchain.Compiler("gcc15", exe, exe, None, None)
+
+    def test_also_build_compiles_the_same_tree_without_tests(self) -> None:
+        self.repo.write("src/a.c", "int changed;\n")
+        runner = FakeRunner({}, self.PASSING)
+        code, out = self.run_verify(runner, also_build=[self.gcc()])
+        self.assertEqual(code, 0, out)
+        names = [call[0] for call in runner.calls]
+        self.assertIn("gcc15-release configure", names)
+        self.assertIn("gcc15-release build", names)
+        self.assertEqual(names.count("ctest"), 1)  # tests on the main compiler only
+        self.assertIn("  also      gcc15-release build ok, 0 warning lines\n", out)
+        self.assertRegex(out, r"\n  time      .*total")
+
+    def test_also_build_failure_or_warning_fails_the_run(self) -> None:
+        self.repo.write("src/a.c", "int changed;\n")
+        for codes, outputs, line in (
+            ({"gcc15-release build": 2}, {}, "FAILED (exit 2)"),
+            (
+                {},
+                {"gcc15-release build": "a.c:1:1: warning: unused [-Wx]\n"},
+                "1 warning",
+            ),
+        ):
+            with self.subTest(line=line):
+                runner = FakeRunner(codes, {**self.PASSING, **outputs})
+                code, out = self.run_verify(runner, also_build=[self.gcc()])
+                self.assertEqual(code, 1, out)
+                self.assertIn(line, out)
+
     def test_named_targets_without_tests_build_only(self) -> None:
         self.repo.write("src/a.c", "int changed;\n")
         with self.assertRaisesRegex(ToolError, "--tests, --serial or --target"):
