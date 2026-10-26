@@ -1147,7 +1147,7 @@ DK_STATIC bool grow(multilru *mlru) {
         }
     }
 
-do_grow:;
+do_grow:
     const uint64_t actualNewCapacity = newCapacity;
     const size_t currentBytes = (size_t)mlru->entryWidth * oldCapacity;
 

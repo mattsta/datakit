@@ -860,7 +860,7 @@ static size_t v3_neon(const uint32_t *rare, const size_t lenRare,
         rare++;
     }
 
-FINISH_SCALAR:;
+FINISH_SCALAR:
     /* Handle remaining elements with scalar code */
     size_t freqRemain = (stopFreq + 8) - freq;
     size_t rareRemain = stopRare - rare;

@@ -753,7 +753,7 @@ int atomPoolTest(int argc, char *argv[]) {
                 ERR("Refcount after retain should be 2, got %" PRIu64, rc);
             }
 
-        cleanup_basic:; /* pool frees itself at scope exit */
+        cleanup_basic: /* pool frees itself at scope exit */
         }
 
         TEST("atomPool reset") {
@@ -1084,7 +1084,7 @@ int atomPoolTest(int argc, char *argv[]) {
                 }
             }
 
-        cleanup_many:; /* ids + pool free themselves at scope exit */
+        cleanup_many: /* ids + pool free themselves at scope exit */
         }
     }
 
