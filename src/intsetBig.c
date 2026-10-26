@@ -102,8 +102,7 @@ static bool databoxToBucketAndOffset(const databoxBig *restrict box,
         break;
     }
     default:
-        /* Wrong intput type! */
-        assert(NULL && "Wrong input?");
+        /* Not an integer: it has no bucket */
         return false;
     }
 
@@ -354,8 +353,15 @@ bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
     bool added;
     bool isNegative;
 
-    /* Create lookup/storage criteria and attempt to fetch a set */
-    if (setFromInput(isb, val, &offset, &isNegative, &lookup, &found)) {
+    /* The bucket key and offset; a value that is not an integer has none
+     * and is refused */
+    if (!bucketKeyFromInput(val, &offset, &isNegative, &lookup)) {
+        return false;
+    }
+
+    /* Fetch the bucket's set, or create it below */
+    databox *ptr[] = {&found};
+    if (multimapLookup(isb->i, (databox *)&lookup, ptr)) {
         orig = boxPtrToU32(found);
         added = intsetU32Add(boxPtrToU32(found), offset);
     } else {
@@ -1315,6 +1321,34 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
 
         if (intsetBigCountElements(isb) != 1) {
             ERR("Count should be 1 after duplicate add!");
+        }
+    }
+
+    TEST("a non-integer value is refused and changes nothing") {
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+        databoxBig val = DATABOX_BIG_UNSIGNED(12345);
+        if (!intsetBigAdd(isb, &val)) {
+            ERR("First add should succeed!");
+        }
+
+        const databoxBig notInteger = {.type = DATABOX_DOUBLE_64,
+                                       .data.d64 = 1.5};
+        if (intsetBigAdd(isb, &notInteger)) {
+            ERR("Adding a double should be refused!");
+        }
+
+        if (intsetBigExists(isb, &notInteger)) {
+            ERR("A double should never exist!");
+        }
+
+        if (intsetBigRemove(isb, &notInteger)) {
+            ERR("Removing a double should be refused!");
+        }
+
+        if (intsetBigCountElements(isb) != 1 ||
+            intsetBigCountBuckets(isb) != 1) {
+            ERR("A refused value changed the set: %zu elements, %zu buckets",
+                intsetBigCountElements(isb), intsetBigCountBuckets(isb));
         }
     }
 

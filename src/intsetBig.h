@@ -50,6 +50,8 @@ void intsetBigFree(intsetBig *isb);
  * intsetBig makes no guarantees).  For checking values from untrusted
  * sources before adding them. */
 bool intsetBigCanHold(const databoxBig *v);
+/* Add 'val'; false when it is already present or is not an integer (a
+ * refused value changes nothing). */
 bool intsetBigAdd(intsetBig *isb, const databoxBig *val);
 /* An intsetBig holding 'members' (a flex of integers) given in the order
  * the iterator walks them, as a snapshot writes them: built a bucket at a
