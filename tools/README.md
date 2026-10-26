@@ -763,6 +763,26 @@ uv run --project tools dktools enumconst [--dry-run] [FILE ...]
   constants or no initializer stay.
 - Prints each file's count. Exits 0, or 2 for a missing file.
 
+## c23probe — what the compilers do with C23 features
+
+```sh
+uv run --project tools dktools c23probe [--compiler NAME ...]
+```
+
+- Compiles a fixed set of small programs with each named compiler
+  (default: all) at `-std=gnu23 -O2` and prints a table: one row per
+  probe, one column per compiler. Rerun it after a toolchain update.
+- Attribute rows count the calls to `f` in `f(x) + f(x)`: `folds` means
+  the compiler optimizes on the attribute, `no fold` that it accepts it
+  but ignores it. `gnu::const` / `gnu::pure` are the baseline for
+  `[[unsequenced]]` / `[[reproducible]]`.
+- Construct rows (`nullptr`, `_BitInt`, `<stdcountof.h>`) say `yes`
+  when the compiler accepts them; library rows (`#embed`, `<stdbit.h>`,
+  `memalignment`, `printf %w64d`) build, run and compare the output.
+- `(warns)` marks a probe that built with a diagnostic; `no: ...` shows
+  the first diagnostic or the wrong output. Work files go under
+  `build/dktools/c23probe/`. Exits 0.
+
 ## unusednames — retire `(void)name;` silencers for the C23 forms
 
 ```sh
@@ -908,3 +928,23 @@ uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
 
 Use it for every before/after claim about a change: the benchmark lands
 in perfRegression with the change, and the comparison is reproducible.
+
+## objdiff — did a function's machine code change, or only move?
+
+```sh
+uv run --project tools dktools objdiff NAME SYMBOL [SYMBOL ...] [--root DIR]
+```
+
+- Disassembles each function (with clang 22's `llvm-objdump`) from the
+  two `datakit-test` binaries `dktools perfcompare NAME` built, since the
+  perf builds link with LTO and the object files hold bitcode.
+- Prints, per symbol, each build's start address with its offset in a
+  64-byte line (`@0x100382830+48`), the instruction counts, and
+  `identical` or `differs` plus a unified diff. Branch and call targets
+  keep only their `<symbol+offset>`, page addresses read `ADDR`.
+- Use it when a perfcompare row moves for code the change should not
+  have altered: identical code at a new offset is placement, not a
+  regression in the function.
+- Exits 0 when every symbol is identical, 1 when one differs, 2 when a
+  build or symbol is missing (a function inlined everywhere has no
+  symbol of its own).

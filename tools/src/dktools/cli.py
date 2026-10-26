@@ -12,6 +12,7 @@ from . import (
     allocaudit,
     atomicaudit,
     buildstore,
+    c23probe,
     commit,
     configure,
     countof,
@@ -24,6 +25,7 @@ from . import (
     gitutil,
     historyscrub,
     leakcheck,
+    objdiff,
     outputaudit,
     perfcompare,
     perfdiff,
@@ -387,6 +389,36 @@ def main(argv: list[str] | None = None) -> int:
         help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
     )
     toolchain.add_arguments(cf)
+
+    od = sub.add_parser(
+        "objdiff",
+        help="compare named functions' machine code between the two builds of "
+        "a perfcompare run (exit 0 identical, 1 differs, 2 missing)",
+    )
+    od.add_argument("name", help="the perfcompare work-dir name")
+    od.add_argument("symbols", nargs="+", help="function names")
+    od.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
+    )
+    toolchain.add_arguments(od)
+
+    cp = sub.add_parser(
+        "c23probe",
+        help="what each compiler and its libc do with C23 features: attributes "
+        "it optimizes on, constructs it accepts, library support (exit 0)",
+    )
+    cp.add_argument(
+        "--compiler",
+        action="append",
+        choices=toolchain.COMPILERS,
+        default=None,
+        help="named compiler, repeatable (default: all)",
+    )
+    toolchain.add_arguments(cp)
 
     tt = sub.add_parser(
         "testtime",
@@ -944,6 +976,21 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "configure":
         return configure.run(
             args.repo, toolchain.from_args(args.compiler, args), args.preset
+        )
+
+    if args.command == "objdiff":
+        clang = toolchain.from_args("clang22", args)
+        return objdiff.run(
+            gitutil.scratch_root(args.root, args.repo),
+            args.name,
+            args.symbols,
+            Path(clang.cc).parent,
+        )
+
+    if args.command == "c23probe":
+        names = args.compiler or list(toolchain.COMPILERS)
+        return c23probe.run(
+            args.repo, [toolchain.from_args(name, args) for name in names]
         )
 
     if args.command == "testtime":
