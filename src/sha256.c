@@ -289,22 +289,31 @@ static void hashToHex(const uint8_t *h, char out[65]) {
     out[64] = 0;
 }
 
+/* Report a digest mismatch and count it in the caller's *errCount (ERR
+ * counts into the 'err' in scope, here a local) */
 static void reportMismatch(const char *name, const uint8_t *got,
-                           const uint8_t *expected, int *err) {
+                           const uint8_t *expected, int *errCount) {
     char gotHex[65], expHex[65];
     hashToHex(got, gotHex);
     hashToHex(expected, expHex);
-    /* ERR macro (from ctest.h) increments `err` via the in-scope `err`
-     * captured by the TEST block.  We accept &err here for call-site
-     * symmetry even though the macro doesn't write through the pointer. */
-    (void)err;
+    int err = 0;
     ERR("vector '%s': got %s, expected %s", name, gotHex, expHex);
+    *errCount += err;
 }
 
-int sha256Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int sha256Test(int, char *[]) {
     int err = 0;
+
+    TEST("a reported mismatch counts as one error") {
+        /* prints one intentional "ERROR!" line for the probe */
+        const uint8_t zeros[SHA256_DIGEST_LEN] = {};
+        const uint8_t ones[SHA256_DIGEST_LEN] = {1};
+        int counted = 0;
+        reportMismatch("probe: an intentional mismatch", zeros, ones, &counted);
+        if (counted != 1) {
+            ERR("reportMismatch counted %d errors, want 1", counted);
+        }
+    }
 
     TEST("known vectors") {
         for (size_t i = 0; i < SHA256_TEST_VECTOR_COUNT; i++) {
