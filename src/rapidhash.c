@@ -616,7 +616,7 @@ void rapidhashStreamInit(rapidhashCtx *ctx, rapidhashVariant variant,
     memset(ctx, 0, sizeof(*ctx));
     memcpy(ctx->secret, secret, sizeof(ctx->secret));
     ctx->variant = (uint8_t)variant;
-    ctx->mode = (uint8_t)mode;
+    ctx->mode = mode;
     ctx->initial_seed = seed;
     ctx->bulk_fn = rapidStreamPickBulkFn(variant, mode);
     switch (variant) {

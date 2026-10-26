@@ -21,7 +21,7 @@
 
 #include <string.h>
 
-typedef enum multiFenwickCellKind {
+typedef enum multiFenwickCellKind : uint8_t {
     MFWC_SIGNED = 0,
     MFWC_UNSIGNED = 1,
     MFWC_DOUBLE = 2,
@@ -35,7 +35,7 @@ typedef struct multiFenwickCells {
 /* One encoded cell value, ready to store */
 typedef struct multiFenwickCell {
     uint64_t bits;
-    uint8_t kind;
+    multiFenwickCellKind kind;
 } multiFenwickCell;
 
 /* True while every cell is an int64 (read them with multiFenwickCellsInt) */

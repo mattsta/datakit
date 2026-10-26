@@ -2113,14 +2113,14 @@ bool flexEnvelopeWrapStreamInit(flexEnvelopeWrapStream *ctx,
     ctx->digest_len = (uint8_t)d->digest_len;
     ctx->payload_len_declared = payload_len;
     ctx->payload_bytes_seen = 0;
-    ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_OPEN;
+    ctx->phase = FLEX_ENV_STREAM_PHASE_OPEN;
     *header_written = pos;
     return true;
 }
 
 bool flexEnvelopeWrapStreamUpdate(flexEnvelopeWrapStream *ctx,
                                   const uint8_t *chunk, size_t len) {
-    if (!ctx || ctx->phase != (uint8_t)FLEX_ENV_STREAM_PHASE_OPEN) {
+    if (!ctx || ctx->phase != FLEX_ENV_STREAM_PHASE_OPEN) {
         return false;
     }
     if (len == 0) {
@@ -2133,17 +2133,17 @@ bool flexEnvelopeWrapStreamUpdate(flexEnvelopeWrapStream *ctx,
      * update is void — but a future hash backend could partial-absorb
      * and then fail. Symmetric handling closes that hazard. */
     if (!chunk) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         return false;
     }
     /* Bound check: caller must not exceed declared payload_len. */
     if (ctx->payload_bytes_seen > ctx->payload_len_declared ||
         (uint64_t)len > ctx->payload_len_declared - ctx->payload_bytes_seen) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         return false;
     }
     if (!streamHashUpdate(ctx->algo, &ctx->u, &ctx->hmac, chunk, len)) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         return false;
     }
     ctx->payload_bytes_seen += (uint64_t)len;
@@ -2163,29 +2163,28 @@ static void wrapStreamWipeSecrets(flexEnvelopeWrapStream *ctx) {
 bool flexEnvelopeWrapStreamFinal(flexEnvelopeWrapStream *ctx,
                                  uint8_t *digest_out, size_t digest_out_cap,
                                  size_t *digest_written) {
-    if (!ctx || ctx->phase != (uint8_t)FLEX_ENV_STREAM_PHASE_OPEN ||
-        !digest_written) {
+    if (!ctx || ctx->phase != FLEX_ENV_STREAM_PHASE_OPEN || !digest_written) {
         return false;
     }
     if (ctx->payload_bytes_seen != ctx->payload_len_declared) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         wrapStreamWipeSecrets(ctx);
         return false;
     }
     if (ctx->digest_len > digest_out_cap) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         wrapStreamWipeSecrets(ctx);
         return false;
     }
     if (ctx->digest_len > 0) {
         if (!digest_out) {
-            ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+            ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
             wrapStreamWipeSecrets(ctx);
             return false;
         }
         if (!streamHashFinal(ctx->algo, &ctx->u, &ctx->hmac, digest_out,
                              ctx->digest_len)) {
-            ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+            ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
             wrapStreamWipeSecrets(ctx);
             return false;
         }
@@ -2194,7 +2193,7 @@ bool flexEnvelopeWrapStreamFinal(flexEnvelopeWrapStream *ctx,
     /* The ctx contract is "consumed" after Final; treating it as
      * discarded is documented in flexEnvelope.h. */
     wrapStreamWipeSecrets(ctx);
-    ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_FINALIZED;
+    ctx->phase = FLEX_ENV_STREAM_PHASE_FINALIZED;
     return true;
 }
 
@@ -2293,7 +2292,7 @@ bool flexEnvelopeVerifyStreamInit(flexEnvelopeVerifyStream *ctx,
     ctx->raw_key = p->key;
     ctx->raw_key_len = p->key_len;
     ctx->wire_digest_seen = 0;
-    ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_OPEN;
+    ctx->phase = FLEX_ENV_STREAM_PHASE_OPEN;
 
     if (header_consumed) {
         *header_consumed = f.header_size;
@@ -2309,14 +2308,14 @@ bool flexEnvelopeVerifyStreamInit(flexEnvelopeVerifyStream *ctx,
 
 bool flexEnvelopeVerifyStreamUpdate(flexEnvelopeVerifyStream *ctx,
                                     const uint8_t *chunk, size_t len) {
-    if (!ctx || ctx->phase != (uint8_t)FLEX_ENV_STREAM_PHASE_OPEN) {
+    if (!ctx || ctx->phase != FLEX_ENV_STREAM_PHASE_OPEN) {
         return false;
     }
     if (len == 0) {
         return true;
     }
     if (!chunk) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         return false;
     }
     /* Split chunk into (payload-remaining, digest-remaining). ANY
@@ -2330,7 +2329,7 @@ bool flexEnvelopeVerifyStreamUpdate(flexEnvelopeVerifyStream *ctx,
         (uint64_t)len <= payload_remaining ? len : (size_t)payload_remaining;
     if (to_hash > 0) {
         if (!streamHashUpdate(ctx->algo, &ctx->u, &ctx->hmac, chunk, to_hash)) {
-            ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+            ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
             return false;
         }
         ctx->payload_bytes_seen += (uint64_t)to_hash;
@@ -2340,7 +2339,7 @@ bool flexEnvelopeVerifyStreamUpdate(flexEnvelopeVerifyStream *ctx,
         const size_t digest_remaining =
             (size_t)ctx->digest_len - (size_t)ctx->wire_digest_seen;
         if (remaining > digest_remaining) {
-            ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+            ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
             return false; /* caller overran */
         }
         memcpy(ctx->wire_digest + ctx->wire_digest_seen, chunk + to_hash,
@@ -2364,7 +2363,7 @@ static void verifyStreamWipeSecrets(flexEnvelopeVerifyStream *ctx) {
 }
 
 bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
-    if (!ctx || ctx->phase != (uint8_t)FLEX_ENV_STREAM_PHASE_OPEN) {
+    if (!ctx || ctx->phase != FLEX_ENV_STREAM_PHASE_OPEN) {
         return false;
     }
     /* Symmetric with every other failure path in the streaming verifier:
@@ -2376,19 +2375,19 @@ bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
      * — the caller-owned ctx must not retain HMAC inner state or the
      * BLAKE3 key past the session boundary. */
     if (ctx->payload_bytes_seen != ctx->payload_len_declared) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         verifyStreamWipeSecrets(ctx);
         return false;
     }
     if (ctx->wire_digest_seen != ctx->digest_len) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         verifyStreamWipeSecrets(ctx);
         return false;
     }
 
     const flexEnvelopeAlgoDesc *d = findAlgo(ctx->algo);
     if (!d) {
-        ctx->phase = (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+        ctx->phase = FLEX_ENV_STREAM_PHASE_POISONED;
         verifyStreamWipeSecrets(ctx);
         return false;
     }
@@ -2426,8 +2425,8 @@ bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
     }
 
     verifyStreamWipeSecrets(ctx);
-    ctx->phase = ok ? (uint8_t)FLEX_ENV_STREAM_PHASE_FINALIZED
-                    : (uint8_t)FLEX_ENV_STREAM_PHASE_POISONED;
+    ctx->phase =
+        ok ? FLEX_ENV_STREAM_PHASE_FINALIZED : FLEX_ENV_STREAM_PHASE_POISONED;
     return ok;
 }
 

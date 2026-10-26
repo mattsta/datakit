@@ -206,7 +206,7 @@ typedef enum rapidhashVariant {
     RAPIDHASH_VARIANT_NANO = 2   /* 3-lane,  48 B stride */
 } rapidhashVariant;
 
-typedef enum rapidhashMode {
+typedef enum rapidhashMode : uint8_t {
     RAPIDHASH_MODE_FAST = 0,
     RAPIDHASH_MODE_PROTECTED = 1
 } rapidhashMode;
@@ -234,10 +234,10 @@ struct rapidhashCtx {
      * residual i < 16; streaming reconstructs that read by splicing
      * this trailing window with the head of `buf`. */
     uint8_t bulk_tail[16];
-    uint16_t buf_len;     /* bytes currently in buf */
-    uint16_t stride;      /* 48 / 80 / 112 */
-    uint8_t variant;      /* rapidhashVariant */
-    uint8_t mode;         /* rapidhashMode */
+    uint16_t buf_len; /* bytes currently in buf */
+    uint16_t stride;  /* 48 / 80 / 112 */
+    uint8_t variant;  /* rapidhashVariant */
+    rapidhashMode mode;
     uint8_t bulk_engaged; /* a full stride was flushed */
 };
 

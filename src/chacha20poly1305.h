@@ -98,7 +98,7 @@ bool chacha20poly1305Open(const uint8_t key[CHACHA20_POLY1305_KEY_LEN],
  *   AEAD invocation (one-shot Seal/Open per chunk) so each piece is
  *   independently verified before it is consumed. */
 
-typedef enum chacha20poly1305StreamPhase {
+typedef enum chacha20poly1305StreamPhase : uint8_t {
     CHACHA20_POLY1305_STREAM_PHASE_UNINIT = 0,
     CHACHA20_POLY1305_STREAM_PHASE_AAD = 1,
     CHACHA20_POLY1305_STREAM_PHASE_BODY = 2,
@@ -124,7 +124,7 @@ typedef struct chacha20poly1305StreamCtx {
     uint64_t ct_total;
     uint32_t chacha_counter;
     uint32_t keystream_used;
-    uint8_t phase;
+    chacha20poly1305StreamPhase phase;
     uint8_t _pad[7];
 } chacha20poly1305StreamCtx;
 

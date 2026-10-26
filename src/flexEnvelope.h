@@ -632,10 +632,9 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
  * flexEnvelope.c locks the assumption. */
 #define FLEX_ENV_MAX_NONCE_LEN ((size_t)16)
 
-/* Streaming context lifecycle states. Stored in the ctx as uint8_t so
- * the surrounding struct stays packed; the enum gives the values names
- * everywhere they appear in source. */
-typedef enum flexEnvelopeStreamPhase {
+/* Streaming context lifecycle states, one byte wide so the contexts
+ * stay packed. */
+typedef enum flexEnvelopeStreamPhase : uint8_t {
     FLEX_ENV_STREAM_PHASE_UNINIT = 0, /* freshly memset; Init not yet called */
     FLEX_ENV_STREAM_PHASE_OPEN = 1, /* Init succeeded; Update calls accepted */
     FLEX_ENV_STREAM_PHASE_FINALIZED = 2, /* Final returned; no further ops */
@@ -663,7 +662,7 @@ typedef struct flexEnvelopeWrapStream {
     uint64_t payload_bytes_seen;
     uint16_t algo;
     uint8_t digest_len;
-    uint8_t phase; /* one of flexEnvelopeStreamPhase below */
+    flexEnvelopeStreamPhase phase;
     uint8_t _pad[4];
 } flexEnvelopeWrapStream;
 
@@ -691,7 +690,7 @@ typedef struct flexEnvelopeVerifyStream {
     uint32_t opts;
     uint16_t algo;
     uint8_t digest_len;
-    uint8_t phase; /* one of flexEnvelopeStreamPhase below */
+    flexEnvelopeStreamPhase phase;
     /* Wire digest, captured byte-by-byte from the trailing portion of
      * the stream. Sized for the largest current algorithm digest. */
     uint8_t wire_digest[FLEX_ENV_MAX_DIGEST_LEN];

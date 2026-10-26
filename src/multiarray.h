@@ -7,7 +7,7 @@
 #include "multiarrayMediumInternal.h"
 #include "multiarraySmall.h"
 
-typedef enum multiarrayType {
+typedef enum multiarrayType : uint8_t {
     MULTIARRAY_TYPE_NATIVE = 0, /* 8 bytes, fixed. */
     MULTIARRAY_TYPE_SMALL = 1,  /* 16 + 8 bytes, fixed. */
     MULTIARRAY_TYPE_MEDIUM = 2, /* 16 + (16 * N) bytes pointer array. */
@@ -246,7 +246,7 @@ typedef struct multiarrayIter {
     const void *prev; /* Large: the node behind it in the walk */
     uint32_t nodeIdx; /* Medium: the node being walked */
     int32_t offset;   /* the next element's index in its node */
-    uint8_t type;
+    multiarrayType type;
     bool forward;
 } multiarrayIter;
 

@@ -362,7 +362,7 @@ void multiarrayRotate(multiarray **m) {
 void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
                             bool forward) {
     *iter = (multiarrayIter){.tier = _MULTIARRAY_USE(m),
-                             .type = (uint8_t)_multiarrayType(m),
+                             .type = _multiarrayType(m),
                              .forward = forward};
     switch (_multiarrayType(m)) {
     case MULTIARRAY_TYPE_SMALL:
@@ -393,7 +393,7 @@ void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
 void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
                               multiarrayIdx idx, bool forward) {
     *iter = (multiarrayIter){.tier = _MULTIARRAY_USE(m),
-                             .type = (uint8_t)_multiarrayType(m),
+                             .type = _multiarrayType(m),
                              .forward = forward};
     if (_multiarrayType(m) == MULTIARRAY_TYPE_NATIVE) {
         MA_NATIVE_REFUSED_(m);
