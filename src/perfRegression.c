@@ -1178,6 +1178,12 @@ static void benchFenwick(void) {
     PERF_ROW("fenwick", "flatLowerBound", n,
              const databox t = DATABOX_SIGNED((int64_t)perfScatter(i) + 1);
              sink += multiFenwickFlatLowerBound(flat, &t));
+    PERF_ROW("fenwick", "query", n, databox sum = {};
+             sink += multiFenwickQuery(tree, perfScatter(i), &sum);
+             sink += sum.data.u);
+    PERF_ROW("fenwick", "flatQuery", n, databox sum = {};
+             sink += multiFenwickFlatQuery(flat, perfScatter(i), &sum);
+             sink += sum.data.u);
     perfContainerSink = sink;
 }
 

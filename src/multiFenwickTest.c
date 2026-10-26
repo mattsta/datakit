@@ -4,6 +4,7 @@
 #include "datakit.h"
 #include "fenwick/fenwickI64.h" /* Updated for new 2-tier system */
 #include "multiFenwickCommon.h"
+#include "multiFenwickFlat.h"
 #include "multilist.h"
 #include <float.h>
 #include <inttypes.h>
@@ -18,6 +19,7 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(databox *, zfree, DataboxArray);
 defcleaner(multiFenwick *, multiFenwickFree);
+defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
 defcleanerName(int64_t *, zfree, I64Array);
 
 /* Naive implementation for benchmark comparison */
@@ -2453,6 +2455,50 @@ int multiFenwickTest(int argc, char *argv[]) {
                                          "multiFenwick mixed (1K uint64)");
 
         printf("    Checksum: %" PRIu64 "\n", (uint64_t)checksum);
+    }
+
+    TEST("reads match the flat tree: every prefix, element and lower bound") {
+        /* An independent implementation over the same values (5000 cells
+         * span many list nodes, so each read walks between them); values
+         * are non-negative, so prefix sums rise and lower bounds exist */
+        enum { cells = 5000 };
+        uint64_t seed = 77;
+        cleanerName(zfree, DataboxArray) databox *values =
+            zcalloc(cells, sizeof(*values));
+        for (size_t i = 0; i < cells; i++) {
+            values[i] = DATABOX_SIGNED((int64_t)(randSeed(&seed) % 100));
+        }
+
+        cleaner(multiFenwickFree) multiFenwick *tree =
+            multiFenwickNewFromArray(values, cells);
+        cleaner(multiFenwickFlatFree) multiFenwickFlat *flat =
+            multiFenwickFlatNewFromArray(values, cells);
+        size_t mismatches = 0;
+        for (size_t i = 0; i < cells; i++) {
+            databox a = {};
+            databox b = {};
+            databox ea = {};
+            databox eb = {};
+            if (!multiFenwickQuery(tree, i, &a) ||
+                !multiFenwickFlatQuery(flat, i, &b) || a.data.i != b.data.i ||
+                !multiFenwickGet(tree, i, &ea) ||
+                !multiFenwickFlatGet(flat, i, &eb) || ea.data.i != eb.data.i) {
+                mismatches++;
+            }
+        }
+
+        for (int k = 0; k < 2000; k++) {
+            const databox t =
+                DATABOX_SIGNED((int64_t)(randSeed(&seed) % (cells * 50)));
+            if (multiFenwickLowerBound(tree, &t) !=
+                multiFenwickFlatLowerBound(flat, &t)) {
+                mismatches++;
+            }
+        }
+
+        if (mismatches) {
+            ERR("%zu reads differ from the flat tree", mismatches);
+        }
     }
 
     TEST("Repr: nil, empty and holding values") {

@@ -38,11 +38,33 @@ struct multiFenwick {
  * values multiFenwickNumFrom_ accepts; anything else (such as a deferred
  * 96/128-bit box with no payload) is still refused here, so it can never
  * reach the arithmetic. */
+/* A read's last located cell: the next lookup walks from it when it is
+ * nearer than either end of the list (multilistIndexNear), as a Fenwick
+ * walk's cells are.  Valid until the tree changes, so only a read keeps
+ * one; NULL looks up from the ends. */
+typedef struct multiFenwickCursor_ {
+    multilistEntry at;
+    uint64_t pos;
+    bool valid;
+} multiFenwickCursor_;
+
 static bool multiFenwickCellGet_(const multiFenwick *mfw, uint64_t pos,
+                                 multiFenwickCursor_ *cursor,
                                  multiFenwickNum *n) {
     multilistEntry entry;
-    if (!multilistIndex(mfw->tree, mfw->state, (mlOffsetId)pos, &entry, true)) {
+    const bool found =
+        cursor && cursor->valid
+            ? multilistIndexNear(mfw->tree, mfw->state, (mlOffsetId)pos,
+                                 &cursor->at, (mlOffsetId)cursor->pos, &entry,
+                                 true)
+            : multilistIndex(mfw->tree, mfw->state, (mlOffsetId)pos, &entry,
+                             true);
+    if (!found) {
         return false;
+    }
+
+    if (cursor) {
+        *cursor = (multiFenwickCursor_){.at = entry, .pos = pos, .valid = true};
     }
 
     return multiFenwickNumFrom_(&entry.box, n);
@@ -52,9 +74,10 @@ static bool multiFenwickCellGet_(const multiFenwick *mfw, uint64_t pos,
 static bool multiFenwickPrefix_(const multiFenwick *mfw, uint64_t idx,
                                 multiFenwickNum *sum) {
     multiFenwickNum acc = {};
+    multiFenwickCursor_ cursor = {};
     for (uint64_t i = idx + 1; i > 0; i = multiFenwickPrev(i)) {
         multiFenwickNum cell;
-        if (!multiFenwickCellGet_(mfw, i - 1, &cell)) {
+        if (!multiFenwickCellGet_(mfw, i - 1, &cursor, &cell)) {
             return false;
         }
 
@@ -73,14 +96,15 @@ static bool multiFenwickElement_(const multiFenwick *mfw, uint64_t idx,
                                  multiFenwickNum *value) {
     const uint64_t i = idx + 1;
     multiFenwickNum acc;
-    if (!multiFenwickCellGet_(mfw, i - 1, &acc)) {
+    multiFenwickCursor_ cursor = {};
+    if (!multiFenwickCellGet_(mfw, i - 1, &cursor, &acc)) {
         return false;
     }
 
     const uint64_t stop = multiFenwickPrev(i);
     for (uint64_t j = i - 1; j > stop; j = multiFenwickPrev(j)) {
         multiFenwickNum cell;
-        if (!multiFenwickCellGet_(mfw, j - 1, &cell)) {
+        if (!multiFenwickCellGet_(mfw, j - 1, &cursor, &cell)) {
             return false;
         }
 
@@ -183,8 +207,8 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
 
         multiFenwickNum child;
         multiFenwickNum sum;
-        if (!multiFenwickCellGet_(mfw, j - 1, &child) ||
-            !multiFenwickCellGet_(mfw, parent - 1, &sum)) {
+        if (!multiFenwickCellGet_(mfw, j - 1, NULL, &child) ||
+            !multiFenwickCellGet_(mfw, parent - 1, NULL, &sum)) {
             return NULL;
         }
 
@@ -272,7 +296,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     multiFenwickNum total = {};
     databox totalBox = DATABOX_UNSIGNED(0);
     if (newCapacity > oldCapacity && oldCapacity > 0) {
-        if (!multiFenwickCellGet_(cur, oldCapacity - 1, &total)) {
+        if (!multiFenwickCellGet_(cur, oldCapacity - 1, NULL, &total)) {
             return false;
         }
 
@@ -287,7 +311,7 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     for (uint64_t i = idx + 1; i <= newCapacity; i = multiFenwickParent(i)) {
         multiFenwickNum base = {};
         if (i <= oldCapacity) {
-            if (!multiFenwickCellGet_(cur, i - 1, &base)) {
+            if (!multiFenwickCellGet_(cur, i - 1, NULL, &base)) {
                 return false;
             }
         } else if (oldCapacity > 0 && stdc_has_single_bit(i)) {
@@ -461,6 +485,7 @@ size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
 
     uint64_t pos = 0;
     multiFenwickNum sum = {};
+    multiFenwickCursor_ cursor = {};
     for (uint64_t bit = stdc_bit_floor((uint64_t)mfw->count); bit > 0;
          bit >>= 1) {
         const uint64_t next = pos + bit;
@@ -469,7 +494,7 @@ size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
         }
 
         multiFenwickNum cell;
-        if (!multiFenwickCellGet_(mfw, next - 1, &cell)) {
+        if (!multiFenwickCellGet_(mfw, next - 1, &cursor, &cell)) {
             return SIZE_MAX;
         }
 
