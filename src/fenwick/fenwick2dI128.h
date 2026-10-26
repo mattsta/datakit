@@ -5,7 +5,6 @@
  * Declared only where the compiler has __int128 (__SIZEOF_INT128__).
  * Contract (growth, values, ranges): fenwick2d.h */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

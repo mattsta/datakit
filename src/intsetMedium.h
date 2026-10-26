@@ -2,7 +2,6 @@
 
 #include "intsetCommon.h"
 #include "intsetSmall.h"
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

@@ -141,7 +141,6 @@ extern int ptrlibTest(int argc, char *argv[]);
 #include <poll.h>   /* process-exit watch fd readiness */
 #include <sched.h>  /* sched_yield: the owned-arena soak's reader handshake */
 #include <signal.h> /* kill */
-#include <stdbool.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/resource.h>

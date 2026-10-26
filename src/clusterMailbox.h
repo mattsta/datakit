@@ -75,7 +75,6 @@ extern "C" {
 #include "flexEnvelope.h"
 #include "hmacKeyring.h"
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

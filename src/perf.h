@@ -28,7 +28,6 @@
 
 #include <inttypes.h>
 #include <math.h> /* sqrt */
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

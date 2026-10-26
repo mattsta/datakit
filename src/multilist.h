@@ -5,7 +5,6 @@
 #include "flex.h"
 #include "flexCapacityManagement.h"
 #include "multilistCommon.h"
-#include <stdbool.h>
 #include <stddef.h>
 
 /* TODO:

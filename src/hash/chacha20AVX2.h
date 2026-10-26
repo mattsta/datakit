@@ -17,7 +17,6 @@
  * false and Block8() aborts, so it is declared [[noreturn]] there
  * (callers must gate on the probe). */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

@@ -3,7 +3,6 @@
 /* Common types, enums, and macros for the tiered intset system */
 
 #include "intset.h" /* For intsetEnc enum */
-#include <stdbool.h>
 #include <stdint.h>
 
 /* Tier type identifiers (stored in lower 2 bits of pointer) */

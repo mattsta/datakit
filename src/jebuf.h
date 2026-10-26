@@ -1,6 +1,5 @@
 #pragma once
 
-#include <stdbool.h>
 #include <stddef.h>
 
 size_t jebufSizeAllocation(size_t currentBufSize);

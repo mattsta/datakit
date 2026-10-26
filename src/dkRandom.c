@@ -2,7 +2,6 @@
 
 #include <pthread.h>
 #include <stdatomic.h>
-#include <stdbool.h>
 #include <unistd.h>
 
 #include "datakit.h"

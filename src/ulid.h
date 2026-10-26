@@ -1,7 +1,6 @@
 #pragma once
 
 #include "datakit.h"
-#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 

@@ -18,7 +18,6 @@
 #include "hash/aesGcmArmCrypto.h"
 #include "hash/aesGcmNi.h"
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>

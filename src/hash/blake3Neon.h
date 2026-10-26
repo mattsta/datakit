@@ -12,7 +12,6 @@
  * compiled in. On non-NEON hosts the file still compiles but the
  * implementations are stubs. */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "blake3.h"

@@ -9,7 +9,6 @@
  * All buffers are caller-owned.  ciphertext may alias plaintext for
  * in-place encryption; plaintext may alias ciphertext on Open. */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

@@ -41,7 +41,6 @@
 
 #include "../ctmem.h" /* dkCtMemEq16, dkSecureZero */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>

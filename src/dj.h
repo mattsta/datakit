@@ -5,7 +5,6 @@
 #include "str.h"
 #include "strDoubleFormat.h"
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

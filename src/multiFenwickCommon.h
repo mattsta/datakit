@@ -4,7 +4,6 @@
 
 #include "databox.h"
 #include <math.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 /* Inline helper: isolate least significant bit (LSB)

@@ -2,7 +2,6 @@
 
 #include "intsetCommon.h"
 #include "intsetMedium.h"
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

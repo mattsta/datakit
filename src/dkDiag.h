@@ -29,7 +29,6 @@
  * Codes are append-only: a value is never reused or renumbered, so an
  * application may log and match them. */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 typedef enum dkDiagSeverity {

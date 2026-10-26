@@ -18,7 +18,6 @@
  * - ToNative* require the value to fit the native type: out-of-range
  *   asserts in debug and returns 0 in release. */
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 

@@ -22,7 +22,6 @@
  * matches the pattern used by hash/aesGcmArmCrypto.c and
  * hash/chacha20Neon.c. */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

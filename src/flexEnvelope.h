@@ -17,7 +17,6 @@
 #define XXH_STATIC_LINKING_ONLY
 #include "../deps/xxHash/xxhash.h"
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

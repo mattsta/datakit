@@ -13,7 +13,6 @@
  * file still compiles cleanly but the implementations are stubs that
  * fall back to the portable scalar path. */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "blake3.h"

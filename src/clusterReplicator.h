@@ -37,7 +37,6 @@ extern "C" {
 #include "clusterMailbox.h"
 #include "persist.h"
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdatomic.h> /* C11 */
-#include <stdbool.h>
 #include <stdint.h>
 
 /* Shared Communal Data Structure Sharing */

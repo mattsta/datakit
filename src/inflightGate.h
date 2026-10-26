@@ -68,7 +68,6 @@
 
 #include <pthread.h>
 #include <stdatomic.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 /* Verdicts, in one place: the enum, the count and the names all follow

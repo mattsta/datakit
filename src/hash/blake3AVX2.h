@@ -8,7 +8,6 @@
  * in parallel using 256-bit registers laid out as 16 transposed lanes
  * — one lane per state word, eight chunks across each lane. */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "blake3.h"

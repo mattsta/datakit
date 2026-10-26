@@ -20,7 +20,6 @@
 #pragma once
 
 #include "../persist.h"
-#include <stdbool.h>
 #include <stdint.h>
 
 /* ============================================================================

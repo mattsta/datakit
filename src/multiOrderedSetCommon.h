@@ -6,7 +6,6 @@
 #include "flexCapacityManagement.h"
 #include "str.h"  /* xorshift64star */
 #include <math.h> /* isfinite */
-#include <stdbool.h>
 #include <stdint.h>
 
 /* ====================================================================

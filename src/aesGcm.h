@@ -24,7 +24,6 @@ extern "C" {
 
 #include "chacha20poly1305.h" /* shared FLEX_ENV_MAX_NONCE_LEN etc */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

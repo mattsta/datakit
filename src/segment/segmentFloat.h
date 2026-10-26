@@ -8,7 +8,6 @@
  *   Full: (16 * 1024)+ elements (lazy propagation, unlimited)
  */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

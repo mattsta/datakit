@@ -13,7 +13,6 @@
  * zero output, which the API surfaces by returning false from x25519()
  * so the caller can reject the agreement). */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

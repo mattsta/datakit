@@ -8,7 +8,6 @@
  *   Full: (8 * 1024)+ elements (unlimited growth)
  */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

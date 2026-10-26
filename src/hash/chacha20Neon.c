@@ -27,7 +27,6 @@
 #include "../ctmem.h"
 
 #include <assert.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>

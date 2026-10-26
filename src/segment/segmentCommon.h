@@ -9,7 +9,6 @@
  * at 1.
  */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 /* Operation type for range queries */

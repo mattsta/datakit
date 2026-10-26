@@ -6,7 +6,6 @@
  * The old 3-tier runtime type checking macros have been removed.
  */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 /* Inline helper: isolate least significant bit (LSB)

@@ -4,7 +4,6 @@
  * with point updates and rectangle sums, 8 bytes per capacity cell.
  * Contract (growth, values, ranges): fenwick2d.h */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

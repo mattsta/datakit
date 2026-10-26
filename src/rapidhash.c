@@ -19,7 +19,6 @@
 
 #include "rapidhash.h"
 
-#include <stdbool.h>
 #include <string.h>
 
 /* ============================================================ *
