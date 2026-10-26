@@ -341,7 +341,7 @@ class Locals(unittest.TestCase):
         self.assertIn("    [[maybe_unused]] varintWidth used;\n", convert(src)[0])
         # a macro defined in another file counts the same, through 'macros'
         out, _, _ = unusednames.unname(
-            src.split("\n", 1)[1].encode(), macros=frozenset({b"PUT_"})
+            src.split("\n", 1)[1].encode(), macros={b"PUT_": frozenset({b"put"})}
         )
         self.assertIn(b"    [[maybe_unused]] varintWidth used;\n", out)
 
@@ -497,6 +497,35 @@ class Refuses(unittest.TestCase):
             "void f(void (*cb)(int)) {\n    (void)cb;\n}\n",
             unusednames.NO_DECLARATION,
         )
+
+    def test_a_name_a_called_macro_uses_by_itself(self) -> None:
+        # ERR (ctest.h) ends with err++ on whatever 'err' is in scope
+        src = (
+            "#define ERR(x, ...) do { report(x); err++; } while (0)\n"
+            "static void miss(const char *n, int *err) {\n"
+            "    (void)err;\n"
+            '    ERR("%s", n);\n'
+            "}\n"
+        )
+        self.assertRefused(src, unusednames.IMPLICIT)
+        # the same through a header's macro
+        body = src.split("\n", 1)[1]
+        out, count, refusals = unusednames.unname(
+            body.encode(), macros={b"ERR": frozenset({b"report", b"err", b"x"})}
+        )
+        self.assertEqual(
+            (count, [r.reason for r in refusals]), (0, [unusednames.IMPLICIT])
+        )
+
+    def test_a_macro_parameter_of_the_same_name_is_not_implicit(self) -> None:
+        src = (
+            "#define SHOW(err) report(err)\n"
+            "static void f(int err, int v) {\n"
+            "    (void)err;\n"
+            "    SHOW(v);\n"
+            "}\n"
+        )
+        self.assertIn("static void f(int, int v) {", convert(src)[0])
 
     def test_a_macro_body_is_left_alone(self) -> None:
         src = "#define SILENCE(x) (void)x;\nint v;\n"

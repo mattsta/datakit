@@ -30,7 +30,9 @@ Stores (``x = ...``, ``x += ...``, ``x++``) are not reads; names after
 code), and an #else the silencer leaves empty goes with it.
 
 Left as written and listed with the reason: a preprocessor line in the
-body that names it, a name with no parameter or local declaration the
+body that names it, a name a macro the body calls uses by itself (ctest.h's
+ERR ends with ``err++`` on whatever ``err`` is in scope; macros calling
+macros are followed), a name with no parameter or local declaration the
 tool reads (a function pointer, a global), a local never used after its
 declaration (often a discarded call, ``(void)g();``, which a person
 chooses), a local declared together
@@ -54,6 +56,7 @@ from .retoken import IDENT, sources
 
 NO_DECLARATION = "no parameter or local declaration this tool reads"
 SHARED_DECLARATION = "declared together with other names"
+IMPLICIT = "a macro the body calls uses the name by itself (as ERR uses err)"
 NEVER_USED = "a local never used: by hand ((void)call(); or [[maybe_unused]])"
 DIRECTIVE = "a preprocessor line in the body names it"
 NOT_A_STATEMENT = "not a statement of its own"
@@ -324,13 +327,13 @@ def _doc_comment(src: bytes, fn: _Function) -> bytes:
 
 
 def unname(
-    src: bytes, test_file: bool = False, macros: frozenset[bytes] = frozenset()
+    src: bytes, test_file: bool = False, macros: Macros | None = None
 ) -> tuple[bytes, int, list[Refusal]]:
     """'src' with each silencer retired (see the module docstring), how many
     names that covered, and the silencers left. 'test_file': the whole
     source is test code, where assertions always compile. 'macros': the
     function-like macros other files define ('src's own are added)."""
-    all_macros = macros | macro_names(src)
+    all_macros = {**(macros or {}), **macro_names(src)}
     mask = code_mask(src)
     functions = _functions(src, mask)
     conditionals = _conditionals(src)
@@ -373,6 +376,15 @@ def unname(
         params = {p.name: p for p in fn.params if p.name}
         spans = [(m.start(), m.end()) for m in found]
         guarded = _guarded(conditionals, fn.body_open, fn.body_close)
+        # names the macros this body calls reach in its scope by themselves
+        implicit = _implicit_uses(
+            {
+                t.group()
+                for t in IDENT.finditer(src, fn.body_open, fn.body_close)
+                if mask[t.start()]
+            },
+            all_macros,
+        )
         doc = _doc_comment(src, fn)
         done: set[bytes] = set()
         # code an NDEBUG or #if build may drop; assertions always compile in
@@ -389,6 +401,9 @@ def unname(
             word = rb"\b" + re.escape(name) + rb"\b"
             if re.search(word, directives):
                 refuse(m, DIRECTIVE)
+                continue
+            if name in implicit:
+                refuse(m, IMPLICIT)
                 continue
             decl = None
             if name not in params:
@@ -578,16 +593,50 @@ NOT_CALLS = frozenset(b"if while for switch return sizeof alignof typeof".split(
 
 #: function-like macros that only read their arguments
 READING_MACROS = frozenset((b"assert",))
-DEFINES_MACRO = re.compile(rb"(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)\(")
+#: a #define: name, the parameter list of a function-like macro, the body
+#: (continuation lines included)
+DEFINE = re.compile(
+    rb"(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(\(([^)]*)\))?((?:[^\n\\]|\\.)*)",
+    re.DOTALL,
+)
+NAME_TOKEN = re.compile(rb"[A-Za-z_]\w*")
+MACRO_KEYWORDS = frozenset((b"__VA_ARGS__", b"__VA_OPT__", b"defined"))
+
+Macros = dict[bytes, frozenset[bytes]]
 
 
-def macro_names(src: bytes) -> frozenset[bytes]:
-    """The function-like macros 'src' defines."""
-    return frozenset(DEFINES_MACRO.findall(src))
+def macro_names(src: bytes) -> Macros:
+    """Each macro 'src' defines -> the identifiers its body uses that are
+    not its own parameters (a name it reaches in the caller's scope)."""
+    out: Macros = {}
+    for m in DEFINE.finditer(src):
+        params = {p.strip() for p in (m.group(3) or b"").split(b",")}
+        body = set(NAME_TOKEN.findall(m.group(4))) - params - MACRO_KEYWORDS
+        body.discard(m.group(1))
+        out[m.group(1)] = frozenset(body)
+    return out
+
+
+def _implicit_uses(body_names: set[bytes], macros: Macros) -> set[bytes]:
+    """The names the macros called in a body use by themselves, following
+    macros that call macros."""
+    seen: set[bytes] = set()
+    todo = [n for n in body_names if n in macros]
+    found: set[bytes] = set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for used in macros[name]:
+            found.add(used)
+            if used in macros:
+                todo.append(used)
+    return found
 
 
 def _in_macro_call(
-    src: bytes, mask: bytearray, at: int, lo: int, macros: frozenset[bytes]
+    src: bytes, mask: bytearray, at: int, lo: int, macros: Macros
 ) -> bool:
     """Whether the innermost call around the name at 'at' is a
     function-like macro, which may store into it (a function only reads
@@ -684,7 +733,9 @@ def run(repo: Path, paths: tuple[str, ...], dry_run: bool) -> int:
     # ones it includes (each file's own are added by unname); more names
     # here only make the tool more careful
     headers = [h for top in ("src", "deps") for h in sorted((repo / top).rglob("*.h"))]
-    macros = frozenset().union(*(macro_names(h.read_bytes()) for h in headers))
+    macros: Macros = {}
+    for h in headers:
+        macros.update(macro_names(h.read_bytes()))
     total = 0
     refused = 0
     for path in targets:

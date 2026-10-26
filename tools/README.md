@@ -683,7 +683,9 @@ uv run --project tools dktools unusednames [--dry-run] [FILE ...]
   body (an `#if 0` branch is not code); an `#else` the silencer leaves
   empty goes with it.
 - Leaves a silencer and lists it with the reason when a preprocessor
-  line in the body names it, when the name has no parameter or local
+  line in the body names it, when a macro the body calls uses the name
+  by itself (`ERR` ends with `err++` on whatever `err` is in scope;
+  macros calling macros are followed), when the name has no parameter or local
   declaration the tool reads (a function pointer, a global), when a
   local is never used after its declaration (often a discarded call,
   `(void)g();`, which a person chooses), when the local is declared
