@@ -6,7 +6,9 @@ tracked C sources (``src/**/*.c`` and ``*.h``, the vendored
 an OLD inside a comment, a string or a character literal stays, while
 one inside a macro body (a preprocessor line) is code and changes.
 ``--comments`` renames it in comments too (prose naming the token);
-string and character literals never change.
+string and character literals never change.  ``--text`` replaces an
+exact text instead of a token (such as ``= {0}``), only where every
+byte of it is code.
 Prints each file's count; ``--dry-run`` changes nothing.
 
 Exits 0, or 2 for a bad token or path.
@@ -47,6 +49,27 @@ def retoken(
     return bytes(out), count
 
 
+def retext(src: bytes, old: bytes, new: bytes) -> tuple[bytes, int]:
+    """'src' with each occurrence of the exact text 'old' that is code
+    throughout (never in a comment or literal) made 'new'."""
+    mask = code_mask(src, directives_are_code=True)
+    out = bytearray()
+    last = 0
+    count = 0
+    at = src.find(old)
+    while at >= 0:
+        if all(mask[at : at + len(old)]):
+            out += src[last:at]
+            out += new
+            last = at + len(old)
+            count += 1
+            at = src.find(old, last)
+        else:
+            at = src.find(old, at + 1)
+    out += src[last:]
+    return bytes(out), count
+
+
 def sources(repo: Path) -> list[str]:
     """The tracked C sources retoken works on by default."""
     listed = gitutil.split_z(
@@ -62,10 +85,15 @@ def run(
     paths: tuple[str, ...],
     dry_run: bool,
     comments: bool = False,
+    text: bool = False,
 ) -> int:
-    for token in (old, new):
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
-            raise ToolError(f"{token!r} is not a C identifier")
+    if text:
+        if not old or comments:
+            raise ToolError("--text takes a non-empty OLD and no --comments")
+    else:
+        for token in (old, new):
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
+                raise ToolError(f"{token!r} is not a C identifier")
     targets = list(paths) or sources(repo)
     total = 0
     for path in targets:
@@ -73,7 +101,10 @@ def run(
         if not target.is_file():
             raise ToolError(f"{path}: no such file")
         src = target.read_bytes()
-        out, count = retoken(src, old.encode(), new.encode(), comments)
+        if text:
+            out, count = retext(src, old.encode(), new.encode())
+        else:
+            out, count = retoken(src, old.encode(), new.encode(), comments)
         if count:
             total += count
             print(f"  {path}: {count}")

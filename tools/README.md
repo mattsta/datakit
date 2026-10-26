@@ -612,6 +612,9 @@ uv run --project tools dktools retoken _Static_assert static_assert [--comments]
 - Macro bodies are code and change; string and character literals
   never do; comments change only with `--comments` (prose naming the
   token).
+- `--text` replaces an exact code text instead of a token
+  (`retoken --text '= {0}' '= {}'`), only where every byte of it is
+  code.
 - Prints each file's count. Exits 0, or 2 for a token that is not a C
   identifier or a missing file.
 

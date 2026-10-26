@@ -56,6 +56,19 @@ class Renames(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertIn("\nstatic_assert(1", out)
 
+    def test_text_changes_only_where_all_of_it_is_code(self) -> None:
+        src = (
+            b'int a = {0};\n/* b = {0} */\nconst char *s = "= {0}";\n'
+            b"#define Z(x) x = {0}\nint c = {0}, d = {0};\n"
+        )
+        out, count = retoken.retext(src, b"= {0}", b"= {}")
+        self.assertEqual(count, 4)
+        self.assertEqual(
+            out,
+            b'int a = {};\n/* b = {0} */\nconst char *s = "= {0}";\n'
+            b"#define Z(x) x = {}\nint c = {}, d = {};\n",
+        )
+
     def test_only_whole_tokens(self) -> None:
         src = "my_Static_assert(1); _Static_asserted(2);\n"
         self.assertEqual(rename(src), (src, 0))

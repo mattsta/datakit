@@ -282,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
     rt.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     rt.add_argument("--dry-run", action="store_true", help="report, change no file")
     rt.add_argument("--comments", action="store_true", help="rename in comments too")
+    rt.add_argument(
+        "--text",
+        action="store_true",
+        help="OLD is exact code text (such as '= {0}'), not a token",
+    )
 
     wc = sub.add_parser(
         "wrapcalls",
@@ -937,6 +942,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             tuple(args.paths),
             args.dry_run,
             args.comments,
+            args.text,
         )
 
     if args.command == "wrapcalls":
