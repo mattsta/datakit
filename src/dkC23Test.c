@@ -109,6 +109,10 @@ int dkC23Test(int, char *[]) {
         static_assert(countof(grid) == 3 && countof(grid[0]) == 5);
         static_assert(countof(recs) == 4);
         static_assert(countof("abc") == 4); /* the terminator counts */
+        /* a constexpr object's initializer may not define a type (C23
+         * 6.7.2): the fallback must not either */
+        static constexpr size_t constCount = countof(ints);
+        static_assert(constCount == 7);
         size_t seen = 0;
         for (size_t i = 0; i < countof(ints); i++) {
             seen += (size_t)ints[i] + 1;

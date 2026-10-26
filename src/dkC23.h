@@ -85,13 +85,12 @@ DK_STDBIT_(ull, unsigned long long, ULLONG_WIDTH)
 #include <stdcountof.h>
 #else
 #define countof(a) (sizeof(a) / sizeof((a)[0]) + DK_COUNTOF_ARRAY_(a))
+/* 0, or for a pointer a compile error ("negative array size": countof was
+ * handed a pointer). No type is defined, so countof stays usable in a
+ * constexpr initializer, which C23 forbids to define one. */
 #define DK_COUNTOF_ARRAY_(a)                                                   \
-    (0 * sizeof(struct {                                                       \
-         static_assert(                                                        \
-             !__builtin_types_compatible_p(typeof(a), typeof(&(a)[0])),        \
-             "countof needs an array, not a pointer");                         \
-         int dk_;                                                              \
-     }))
+    (0 * sizeof(char[1 - 2 * __builtin_types_compatible_p(typeof(a),           \
+                                                          typeof(&(a)[0]))]))
 #endif
 
 #ifdef DATAKIT_TEST
