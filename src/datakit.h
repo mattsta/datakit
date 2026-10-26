@@ -281,7 +281,7 @@ bool datakitConfigSet(datakitConfig *conf);
          ? datakitConfigMemory__.localUsableSize(ptr)                          \
          : (size_t)0)
 
-#if !defined(IKNOWWHATIMDOING) && defined(__GNUC__)
+#ifndef IKNOWWHATIMDOING
 void *calloc(size_t count, size_t size) __attribute__((deprecated));
 int posix_memalign(void **memptr, size_t alignment, size_t size)
     __attribute__((deprecated));

@@ -30,9 +30,7 @@
  * barrier. On non-GNU compilers we fall back to volatile-only semantics
  * (still correct, just slightly weaker against an aggressive PGO pass). */
 static inline uint8_t dkCtBarrierU8(uint8_t v) {
-#if defined(__GNUC__) || defined(__clang__)
     __asm__ volatile("" : "+r"(v) : : "memory");
-#endif
     return v;
 }
 

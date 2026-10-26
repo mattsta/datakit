@@ -199,12 +199,8 @@ size_t DKS_AVAIL(const DKS_TYPE *s);
 size_t DKS_BUFALLOCSIZE(const DKS_TYPE *s);
 
 DKS_TYPE *DKS_CATVPRINTF(DKS_TYPE *s, const char *fmt, va_list ap);
-#ifdef __GNUC__
 DKS_TYPE *DKS_CATPRINTF(DKS_TYPE *s, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
-#else
-DKS_TYPE *DKS_CATPRINTF(DKS_TYPE *s, const char *fmt, ...);
-#endif
 
 DKS_TYPE *DKS_CATFMT(DKS_TYPE *s, char const *fmt, ...);
 DKS_TYPE *DKS_TRIM(DKS_TYPE *s, const char *cset);

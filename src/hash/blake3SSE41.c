@@ -355,13 +355,8 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
 }
 
 bool blake3SSE41Available(void) {
-#if defined(__GNUC__) || defined(__clang__)
     __builtin_cpu_init();
     return __builtin_cpu_supports("sse4.1");
-#else
-    /* MSVC: assume yes on x86_64 (SSE4.1 is universal on modern x64). */
-    return true;
-#endif
 }
 
 #else /* !x86_64 */

@@ -47,21 +47,9 @@ static void clusterRingRebuildMaglev(clusterRing *ring);
  * Platform-Specific Optimization Hints
  * ==================================================================== */
 
-/* Prefetch hints - supported on most modern compilers */
-#if defined(__GNUC__) || defined(__clang__)
+/* Read prefetch with no temporal locality; branch hints are datakit.h's
+ * likely() / unlikely() */
 #define CLUSTER_PREFETCH(addr) __builtin_prefetch(addr, 0, 0)
-#else
-#define CLUSTER_PREFETCH(addr) ((void)0)
-#endif
-
-/* Branch prediction hints */
-#if defined(__GNUC__) || defined(__clang__)
-#define CLUSTER_LIKELY(x) __builtin_expect(!!(x), 1)
-#define CLUSTER_UNLIKELY(x) __builtin_expect(!!(x), 0)
-#else
-#define CLUSTER_LIKELY(x) (x)
-#define CLUSTER_UNLIKELY(x) (x)
-#endif
 
 /* A call whose arguments the caller has already checked, so it cannot
  * fail */
@@ -1665,7 +1653,7 @@ static uint32_t clusterKetamaWalk(const clusterRing *ring, const void *key,
                                   uint32_t maxNodes, double fillBound) {
     const clusterKetamaData *data = &ring->vnodes;
 
-    if (CLUSTER_UNLIKELY(data->vnodeCount == 0 || maxNodes == 0)) {
+    if (unlikely(data->vnodeCount == 0 || maxNodes == 0)) {
         return 0;
     }
 
@@ -1756,8 +1744,7 @@ static uint32_t clusterKetamaWalkFrom(const clusterRing *ring, uint32_t lo,
 
         /* The vnode points at its node, which knows its array slot */
         const clusterNode *node = vn->nodePtr;
-        if (CLUSTER_LIKELY(node != NULL) &&
-            !seenTrackerTest(&seen, node->arrayIndex)) {
+        if (likely(node != NULL) && !seenTrackerTest(&seen, node->arrayIndex)) {
             seenTrackerSet(&seen, node->arrayIndex);
             if (node->state == CLUSTER_NODE_UP) {
                 if (fillBound >= 0 && clusterNodeFill(node) > fillBound) {
@@ -1792,7 +1779,7 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
                            uint32_t maxNodes) {
     const clusterJumpData *data = &ring->jump;
 
-    if (CLUSTER_UNLIKELY(data->bucketCount == 0 || maxNodes == 0)) {
+    if (unlikely(data->bucketCount == 0 || maxNodes == 0)) {
         return 0;
     }
 
@@ -1800,7 +1787,7 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
 
     /* Get primary bucket */
     int32_t bucket = jumpConsistentHash(hash, (int32_t)data->bucketCount);
-    if (CLUSTER_UNLIKELY(bucket < 0 || (uint32_t)bucket >= data->bucketCount)) {
+    if (unlikely(bucket < 0 || (uint32_t)bucket >= data->bucketCount)) {
         return 0;
     }
 
@@ -1851,7 +1838,7 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
 uint32_t clusterLocateRendezvous(const clusterRing *ring, const void *key,
                                  uint32_t keyLen, const clusterNode **out,
                                  uint32_t maxNodes) {
-    if (CLUSTER_UNLIKELY(ring->healthyNodeCount == 0 || maxNodes == 0)) {
+    if (unlikely(ring->healthyNodeCount == 0 || maxNodes == 0)) {
         return 0;
     }
 
@@ -1860,7 +1847,7 @@ uint32_t clusterLocateRendezvous(const clusterRing *ring, const void *key,
 
     /* Use heap-based top-k selection: O(n log k) instead of O(n^2) sorting */
     cleanerName(zfree, HeapNodes) heapNode *heap = zcalloc(k, sizeof(heapNode));
-    if (CLUSTER_UNLIKELY(!heap)) {
+    if (unlikely(!heap)) {
         return 0;
     }
 
@@ -1877,7 +1864,7 @@ uint32_t clusterLocateRendezvous(const clusterRing *ring, const void *key,
             CLUSTER_PREFETCH(ring->nodeArray[i + 1]);
         }
 
-        if (CLUSTER_LIKELY(node != NULL) && node->state == CLUSTER_NODE_UP) {
+        if (likely(node != NULL) && node->state == CLUSTER_NODE_UP) {
             /* Combine key hash with node ID for HRW (Highest Random Weight) */
             uint8_t buf[256];
             memcpy(buf, key, copyLen);
@@ -1904,8 +1891,8 @@ uint32_t clusterLocateMaglev(const clusterRing *ring, const void *key,
     clusterRingSettleMaglev(ring);
     const clusterMaglevData *data = &ring->maglev;
 
-    if (CLUSTER_UNLIKELY(ring->healthyNodeCount == 0 || maxNodes == 0 ||
-                         !data->lookup)) {
+    if (unlikely(ring->healthyNodeCount == 0 || maxNodes == 0 ||
+                 !data->lookup)) {
         return 0;
     }
 
@@ -1933,8 +1920,7 @@ uint32_t clusterLocateMaglev(const clusterRing *ring, const void *key,
         }
 
         const clusterNode *node = data->lookup[lookupIdx];
-        if (CLUSTER_LIKELY(node != NULL) &&
-            !seenTrackerTest(&seen, node->arrayIndex)) {
+        if (likely(node != NULL) && !seenTrackerTest(&seen, node->arrayIndex)) {
             seenTrackerSet(&seen, node->arrayIndex);
             out[found++] = node;
         }
@@ -2212,7 +2198,7 @@ clusterRingLocateWith(const clusterRing *ring, clusterStrategyType strategy,
     /* @sync: relaxed counter */
     const uint64_t op =
         atomic_fetch_add_explicit(&stats->locateOps, 1, memory_order_relaxed);
-    if (CLUSTER_LIKELY(op % CLUSTER_LATENCY_SAMPLE_EVERY != 0)) {
+    if (likely(op % CLUSTER_LATENCY_SAMPLE_EVERY != 0)) {
         return clusterRingPlace(ring, strategy, key, keyLen, replicaCount,
                                 rules, ruleCount, out);
     }
@@ -2329,10 +2315,10 @@ clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
 clusterResult clusterRingLocateBulk(const clusterRing *ring,
                                     const databox *keys, uint32_t keyCount,
                                     clusterPlacement *placements) {
-    if (CLUSTER_UNLIKELY(!placements)) {
+    if (unlikely(!placements)) {
         return CLUSTER_ERR;
     }
-    if (CLUSTER_UNLIKELY(!ring || !keys || keyCount == 0)) {
+    if (unlikely(!ring || !keys || keyCount == 0)) {
         for (uint32_t i = 0; i < keyCount; i++) {
             clusterPlacementInit(&placements[i]);
         }
@@ -2351,7 +2337,7 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
 
         const clusterResult result =
             clusterRingLocateBox(ring, &keys[i], &placements[i]);
-        if (CLUSTER_UNLIKELY(result != CLUSTER_OK)) {
+        if (unlikely(result != CLUSTER_OK)) {
             finalResult = result;
         }
     }
