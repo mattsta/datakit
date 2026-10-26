@@ -1236,8 +1236,7 @@ void databoxRepr(const databox *const box) {
  * keeps the platform crash reporter out of it, and sends its stderr to
  * /dev/null so the expected message does not clutter the test log. */
 #define DATABOX_TEST_ABORT_STATUS 86
-[[noreturn]] static void databoxTestAbortHandler_(int sig) {
-    (void)sig;
+[[noreturn]] static void databoxTestAbortHandler_(int) {
     _exit(DATABOX_TEST_ABORT_STATUS);
 }
 
@@ -1718,9 +1717,7 @@ static void dbFreeRecord_(void *ptr) {
     dbFreeCalls_ += ptr != NULL;
 }
 
-int databoxTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int databoxTest(int, char *[]) {
     int err = 0;
 
     assert(sizeof(databox) == 16);

@@ -357,11 +357,8 @@ static intsetU32 *createSet(int bits, int size) {
     return is;
 }
 
-int intsetU32Test(int argc, char **argv) {
+int intsetU32Test(int, char **) {
     srandom(time(NULL));
-
-    (void)argc;
-    (void)argv;
 
     printf("Random picks are members; RandomDelete drains every member: ");
     {

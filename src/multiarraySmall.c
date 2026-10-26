@@ -119,10 +119,7 @@ typedef struct s16 {
     int64_t b;
 } s16;
 
-int multiarraySmallTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multiarraySmallTest(int, char *[]) {
     int err = 0;
 
     printf("Testing direct...\n");

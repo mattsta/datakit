@@ -553,10 +553,7 @@ mflex *mflexConvertFromFlexNoCompress(flex *f) {
         fflush(stdout);                                                        \
     } while (0)
 
-int mflexTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int mflexTest(int, char *[]) {
     int err = 0;
     int dotIncr = 0;
     static constexpr int step = 32;

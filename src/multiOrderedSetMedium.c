@@ -1080,9 +1080,7 @@ static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
     return err;
 }
 
-int multiOrderedSetMediumTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multiOrderedSetMediumTest(int, char *[]) {
     int err = 0;
 
     TEST("multiOrderedSetMedium — random ops against a sorted oracle") {

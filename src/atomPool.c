@@ -647,10 +647,7 @@ void atomPoolRepr(const atomPool *pool) {
            atomPoolBytes(pool));
 }
 
-int atomPoolTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int atomPoolTest(int, char *[]) {
     int err = 0;
 
     TEST("the default pool, backend types and their names") {

@@ -1,8 +1,7 @@
 /* Headers have one element: the string length. */
 #define _dksHeaderSize(type) (_dksHeaderElementSize(type))
 
-DK_STATIC dksType DKS_CONTAINERTYPE(const size_t len, const size_t free) {
-    (void)free;
+DK_STATIC dksType DKS_CONTAINERTYPE(const size_t len, const size_t) {
     if (len <= DKS_8_SHARED_MAX) {
         return DKS_8;
     }
@@ -60,8 +59,8 @@ DKS_TYPE *DKS_NEWLEN(const void *init, const size_t initlen) {
 
 /* Common operation: update len and free then null terminate the dks. */
 DK_STATIC void DKS__INFOUPDATELENFREE(dksInfo *info, const size_t len,
-                                      const size_t free, const bool terminate) {
-    (void)free;
+                                      [[maybe_unused]] const size_t free,
+                                      const bool terminate) {
     DKS_TYPE *buf = info->buf;
     info->len = len;
     dksType type = info->type;

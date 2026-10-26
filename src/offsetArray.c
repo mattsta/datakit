@@ -27,9 +27,7 @@ typedef struct {
 } TestStruct;
 offsetArrayCreateTypes(Struct, TestStruct, int);
 
-int offsetArrayTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int offsetArrayTest(int, char *[]) {
     int err = 0;
 
     /* ----------------------------------------------------------------

@@ -1354,9 +1354,7 @@ static const char *mlrWalk(multilistIterator *iter, uint32_t n, bool forward,
     return NULL;
 }
 
-int multilistTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multilistTest(int, char *[]) {
     uint32_t err = 0;
     cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
     cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();

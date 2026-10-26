@@ -811,10 +811,7 @@ void stringPoolRepr(const stringPool *pool) {
     }
 }
 
-int stringPoolTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int stringPoolTest(int, char *[]) {
     int err = 0;
 
     TEST("a pool reports the id behaviour it was made with") {

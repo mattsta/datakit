@@ -3012,9 +3012,7 @@ static int32_t multimapFullTestNextSize_(int32_t i) {
     return i < 256 ? i + 1 : i + i / 16;
 }
 
-int multimapFullTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multimapFullTest(int, char *[]) {
     int err = 0;
 
     TEST("16-byte rangeBoxes own wide boundary keys and reuse them in place") {

@@ -488,10 +488,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
-int bbitsTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int bbitsTest(int, char *[]) {
     int32_t err = 0;
 
     /* Test bbitsDodDod end-to-end write and read verification */

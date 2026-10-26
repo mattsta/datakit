@@ -1513,10 +1513,7 @@ static uint64_t dodTestRand(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-int dodTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int dodTest(int, char *[]) {
     int err = 0;
     const size_t loopers = 10000;
 

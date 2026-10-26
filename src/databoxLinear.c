@@ -366,10 +366,7 @@ static double fuzzDouble(void) {
     return d;
 }
 
-int databoxLinearTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int databoxLinearTest(int, char *[]) {
     int err = 0;
 
     /* ----------------------------------------------------------------

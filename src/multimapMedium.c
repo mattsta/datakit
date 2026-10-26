@@ -639,8 +639,7 @@ DK_INLINE_ALWAYS bool abstractDelete(
  * A Medium map keeps no range boxes, so 'referenceContainer' is unused. */
 void multimapMediumDeleteEntryWithReference(
     multimapMedium *m, multimapEntry *me,
-    const struct multimapAtom *referenceContainer) {
-    (void)referenceContainer;
+    [[maybe_unused]] const struct multimapAtom *referenceContainer) {
     const size_t mapIdx = me->mapIdx;
     assert(m->map[mapIdx] == *me->map);
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
@@ -1089,9 +1088,7 @@ static void countByMap(multimapMedium *m, size_t expectedKeys, size_t *outMap0,
     }
 }
 
-int multimapMediumTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multimapMediumTest(int, char *[]) {
     int err = 0;
 
     /* multimapMedium has a fixed 2-map layout: map[0] holds keys

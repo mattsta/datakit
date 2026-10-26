@@ -971,9 +971,7 @@ static mds *djBuildExpectedEscape(const uint8_t *data, size_t len) {
     return expected;
 }
 
-int djTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int djTest(int, char *[]) {
     int err = 0;
 
     TEST("true") {

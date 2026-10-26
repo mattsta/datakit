@@ -22,20 +22,15 @@ multilistSmall *multilistSmallCreate(void) {
  * them in its tagged pointer and decides when to move to Medium), so
  * the Small struct has no field for either: they are accepted for
  * signature parity with Full and ignored. */
-multilistSmall *multilistSmallNew(int fill, int compress) {
-    (void)fill;
-    (void)compress;
+multilistSmall *multilistSmallNew([[maybe_unused]] int fill,
+                                  [[maybe_unused]] int compress) {
     return multilistSmallCreate();
 }
 
-void multilistSmallSetCompressDepth(multilistSmall *ml, int depth) {
-    (void)ml;
-    (void)depth;
+void multilistSmallSetCompressDepth(multilistSmall *, int) {
 }
 
-void multilistSmallSetFill(multilistSmall *ml, int fill) {
-    (void)ml;
-    (void)fill;
+void multilistSmallSetFill(multilistSmall *, int) {
 }
 
 void multilistSmallSetOptions(multilistSmall *ml, int fill, int depth) {
@@ -232,8 +227,7 @@ void multilistSmallRewindTail(multilistSmall *ml, multilistIterator *iter) {
 /* Release an iterator.  The Full tier closes the node a writable
  * iterator holds open; a Small iterator reads the live flex directly and
  * holds nothing open, so there is nothing to close and nothing changes. */
-void multilistSmallReleaseIterator(multilistIterator *iter) {
-    (void)iter;
+void multilistSmallReleaseIterator(multilistIterator *) {
 }
 
 bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {

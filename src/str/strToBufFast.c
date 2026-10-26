@@ -325,10 +325,9 @@ DK_INLINE_ALWAYS uint64_t ldivPO16_(const uint64_t x) {
 
 /* Requires 20 byte 'out' */
 DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
-size_t StrUInt64ToBuf(void *out_, size_t dstLen, uint64_t x) {
+size_t StrUInt64ToBuf(void *out_, [[maybe_unused]] size_t dstLen, uint64_t x) {
     char *out = out_;
     const char *const outStart = out_;
-    (void)dstLen;
 
     assert(dstLen >= 20);
 

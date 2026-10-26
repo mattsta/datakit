@@ -1031,9 +1031,7 @@ void intsetBigRepr(const intsetBig *isb) {
     }
 }
 
-DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
     int err = 0;
 
     /* Create and free empty set */

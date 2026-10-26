@@ -385,10 +385,7 @@ void listRotate(list *l) {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
-int listTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int listTest(int, char *[]) {
     int32_t err = 0;
 
     /* Test listCreate and listRelease */

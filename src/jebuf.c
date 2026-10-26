@@ -296,10 +296,7 @@ static size_t jebufSizeAllocation64(const size_t currentBufSize) {
 #define TIME_FINISH(i, what)
 #endif
 
-int jebufTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int jebufTest(int, char *[]) {
     int err = 0;
 
     const size_t loopers = 70000000;

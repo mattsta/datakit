@@ -612,10 +612,7 @@ typedef struct s16 {
     int64_t b;
 } s16;
 
-int multiarrayLargeTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multiarrayLargeTest(int, char *[]) {
     int err = 0;
     static constexpr int rowMax = 512;
     static constexpr int globalMax =

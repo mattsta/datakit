@@ -672,9 +672,7 @@ void multiOrderedSetSmallRepr(const multiOrderedSetSmall *m) {
     printf("}\n");
 }
 
-int multiOrderedSetSmallTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multiOrderedSetSmallTest(int, char *[]) {
     int err = 0;
 
     TEST("multiOrderedSetSmall — create and free") {

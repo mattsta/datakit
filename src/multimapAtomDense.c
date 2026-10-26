@@ -554,9 +554,7 @@ static int denseSoak_(const uint64_t seed, const size_t ops) {
     return err;
 }
 
-int multimapAtomDenseTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multimapAtomDenseTest(int, char *[]) {
     int err = 0;
 
     TEST("delete by value frees its id; a replayed insert past the next id "

@@ -201,8 +201,7 @@ bool multimapSmallGetUnderlyingEntryFullWidth(multimapSmall *m,
  * A Small map keeps no range boxes, so 'referenceContainer' is unused. */
 void multimapSmallDeleteEntryWithReference(
     multimapSmall *m, multimapEntry *me,
-    const multimapAtom *referenceContainer) {
-    (void)referenceContainer;
+    [[maybe_unused]] const multimapAtom *referenceContainer) {
     flexEntry *middle = GET_MIDDLE(m);
     flexDeleteSortedValueWithMiddle(&m->map, m->elementsPerEntry, me->fe,
                                     &middle);

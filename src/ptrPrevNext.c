@@ -477,9 +477,7 @@ static size_t ppnSoakValue_(uint64_t *s) {
     }
 }
 
-int ptrPrevNextTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int ptrPrevNextTest(int, char *[]) {
     int err = 0;
 
     TEST("create") {

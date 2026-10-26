@@ -44,20 +44,15 @@ multilistMedium *multilistMediumCreate(void) {
  * them in its tagged pointer and decides when to move to Full), so the
  * Medium struct has no field for either: they are accepted for
  * signature parity with Full and ignored. */
-multilistMedium *multilistMediumNew(int fill, int compress) {
-    (void)fill;
-    (void)compress;
+multilistMedium *multilistMediumNew([[maybe_unused]] int fill,
+                                    [[maybe_unused]] int compress) {
     return multilistMediumCreate();
 }
 
-void multilistMediumSetCompressDepth(multilistMedium *ml, int depth) {
-    (void)ml;
-    (void)depth;
+void multilistMediumSetCompressDepth(multilistMedium *, int) {
 }
 
-void multilistMediumSetFill(multilistMedium *ml, int fill) {
-    (void)ml;
-    (void)fill;
+void multilistMediumSetFill(multilistMedium *, int) {
 }
 
 void multilistMediumSetOptions(multilistMedium *ml, int fill, int depth) {
@@ -409,8 +404,7 @@ void multilistMediumRewindTail(multilistMedium *ml, multilistIterator *iter) {
  * iterator holds open; a Medium iterator reads the live flexes directly
  * and holds nothing open, so there is nothing to close and nothing
  * changes. */
-void multilistMediumReleaseIterator(multilistIterator *iter) {
-    (void)iter;
+void multilistMediumReleaseIterator(multilistIterator *) {
 }
 
 bool multilistMediumNext(multilistIterator *iter, multilistEntry *entry) {

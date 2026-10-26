@@ -1167,10 +1167,7 @@ static int multiarrayDrainCheck_(multiarrayDrainBy by, uint64_t seed) {
     return err;
 }
 
-int multiarrayTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multiarrayTest(int, char *[]) {
     int err = 0;
 
     TEST("a drained array moves back down its tiers, never flapping") {

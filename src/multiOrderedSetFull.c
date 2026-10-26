@@ -735,13 +735,12 @@ multiOrderedSetFull *multiOrderedSetFullNewWithPoolType(atomPoolType type) {
 
 multiOrderedSetFull *
 multiOrderedSetFullNewFromMedium(struct multiOrderedSetMedium *medium,
-                                 flex *maps[2], uint32_t middles[2]) {
+                                 flex *maps[2],
+                                 [[maybe_unused]] uint32_t middles[2]) {
     multiOrderedSetFull *m = multiOrderedSetFullNew();
 
     /* Reset to clear the initial empty map and prepare for new data */
     multiOrderedSetFullReset(m);
-
-    (void)middles; /* Currently unused, reserved for future optimization */
 
     /* Iterate through both medium maps and add entries */
     for (int mapIdx = 0; mapIdx < 2; mapIdx++) {
@@ -1250,8 +1249,7 @@ typedef struct mosFullAsk_ {
     void *ctx;
 } mosFullAsk_;
 
-static bool mosFullAskGate_(void *ctx, const databox *score) {
-    (void)score;
+static bool mosFullAskGate_(void *ctx, const databox *) {
     const mosFullAsk_ *ask = ctx;
     return ask->proceed(ask->ctx);
 }
@@ -2140,9 +2138,7 @@ static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
     return err;
 }
 
-int multiOrderedSetFullTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int multiOrderedSetFullTest(int, char *[]) {
     int err = 0;
 
     TEST("multiOrderedSetFull — create and free") {

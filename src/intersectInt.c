@@ -2640,10 +2640,7 @@ static int32_t testConsistency(void) {
     return err;
 }
 
-int intersectIntTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int intersectIntTest(int, char *[]) {
     int32_t err = 0;
 
     TEST("scalar") {
