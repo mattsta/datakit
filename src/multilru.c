@@ -1,6 +1,7 @@
 #include "datakit.h"
 
 #include "cleaner.h"
+#include "conformLittleEndian.h"
 #include "fibbuf.h"
 #include "jebuf.h"
 #include "multilru.h"
@@ -45,65 +46,6 @@ defcleaner(multilru *, multilruFree);
  *
  * Where N = address bits for the width tier.
  */
-
-/* ====================================================================
- * Bit Packing Primitives
- * ====================================================================
- * These functions read/write arbitrary bit fields from byte arrays.
- * Used for widths that don't align to native integer boundaries.
- */
-
-/* Read up to 64 bits from a byte array starting at bitOffset */
-DK_INLINE_ALWAYS uint64_t readBitsLE(const uint8_t *data, uint32_t bitOffset,
-                                     uint8_t numBits) {
-    uint64_t result = 0;
-    uint32_t byteOffset = bitOffset / 8;
-    uint32_t bitShift = bitOffset % 8;
-
-    /* Read enough bytes to cover the bit range */
-    uint32_t bitsNeeded = bitShift + numBits;
-    uint32_t bytesNeeded = (bitsNeeded + 7) / 8;
-
-    /* Assemble bytes into result (little-endian) */
-    uint64_t raw = 0;
-    for (uint32_t i = 0; i < bytesNeeded && i < 8; i++) {
-        raw |= (uint64_t)data[byteOffset + i] << (i * 8);
-    }
-
-    /* Extract the bit field */
-    result = (raw >> bitShift) & ((1ULL << numBits) - 1);
-    return result;
-}
-
-/* Write up to 64 bits to a byte array starting at bitOffset */
-DK_INLINE_ALWAYS void writeBitsLE(uint8_t *data, uint32_t bitOffset,
-                                  uint8_t numBits, uint64_t value) {
-    uint32_t byteOffset = bitOffset / 8;
-    uint32_t bitShift = bitOffset % 8;
-
-    /* Mask the value to the correct number of bits */
-    uint64_t mask = (numBits == 64) ? ~0ULL : ((1ULL << numBits) - 1);
-    value &= mask;
-
-    /* Read-modify-write the affected bytes */
-    uint32_t bitsNeeded = bitShift + numBits;
-    uint32_t bytesNeeded = (bitsNeeded + 7) / 8;
-
-    /* Read current bytes */
-    uint64_t raw = 0;
-    for (uint32_t i = 0; i < bytesNeeded && i < 8; i++) {
-        raw |= (uint64_t)data[byteOffset + i] << (i * 8);
-    }
-
-    /* Clear the target bits and set new value */
-    uint64_t clearMask = mask << bitShift;
-    raw = (raw & ~clearMask) | (value << bitShift);
-
-    /* Write back the bytes */
-    for (uint32_t i = 0; i < bytesNeeded && i < 8; i++) {
-        data[byteOffset + i] = (raw >> (i * 8)) & 0xFF;
-    }
-}
 
 /* ====================================================================
  * Width Tier Definitions
@@ -245,691 +187,198 @@ DK_INLINE_ALWAYS void mlruFlagSet_(uint8_t *flags, uint8_t field,
     *flags = (uint8_t)((*flags & ~field) | (bits & field));
 }
 
-/* --- 5-byte entries (16-bit addresses) --- */
-DK_STATIC inline uint64_t entry5GetPrev(const void *e) {
-    const uint8_t *p = e;
-    return (uint64_t)p[0] | ((uint64_t)p[1] << 8);
-}
-DK_STATIC inline uint64_t entry5GetNext(const void *e) {
-    const uint8_t *p = e;
-    return (uint64_t)p[2] | ((uint64_t)p[3] << 8);
-}
-DK_STATIC inline uint8_t entry5GetLevel(const void *e) {
-    return mlruFlagLevel_((const uint8_t *)e + 4);
-}
-DK_STATIC inline bool entry5GetPopulated(const void *e) {
-    return mlruFlagIs_((const uint8_t *)e + 4, MLRU_FLAG_POPULATED);
-}
-DK_STATIC inline bool entry5GetHead(const void *e) {
-    return mlruFlagIs_((const uint8_t *)e + 4, MLRU_FLAG_HEAD);
-}
-DK_STATIC inline void entry5SetPrev(void *e, uint64_t v) {
-    uint8_t *p = e;
-    p[0] = v & 0xFF;
-    p[1] = (v >> 8) & 0xFF;
-}
-DK_STATIC inline void entry5SetNext(void *e, uint64_t v) {
-    uint8_t *p = e;
-    p[2] = v & 0xFF;
-    p[3] = (v >> 8) & 0xFF;
-}
-DK_STATIC inline void entry5SetLevel(void *e, uint8_t v) {
-    mlruFlagSet_((uint8_t *)e + 4, MLRU_FLAG_LEVEL, v);
-}
-DK_STATIC inline void entry5SetPopulated(void *e, bool v) {
-    mlruFlagSet_((uint8_t *)e + 4, MLRU_FLAG_POPULATED,
-                 v ? MLRU_FLAG_POPULATED : 0);
-}
-DK_STATIC inline void entry5SetHead(void *e, bool v) {
-    mlruFlagSet_((uint8_t *)e + 4, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
+/* Every width w keeps one layout: the first w - 1 bytes hold prev in bits
+ * [0, L) and next in bits [L, 2L), little-endian, with L = 4 * (w - 1);
+ * the last byte is the flag byte.  The link helpers take w as an
+ * argument and the dispatchers pass a constant per width (MLRU_BY_WIDTH_),
+ * so every width compiles to its own fixed-size loads, shifts and masks:
+ * one 64-bit value up to 9-byte entries, a 128-bit one above. */
+DK_INLINE_ALWAYS uint32_t mlruLinkBits_(uint32_t w) {
+    return 4 * (w - 1);
 }
 
-/* --- 6-byte entries (20-bit addresses) --- */
-/* Layout: prev[0:19], next[20:39], level[40:45], pop[46], head[47] */
-DK_STATIC inline uint64_t entry6GetPrev(const void *e) {
-    return readBitsLE(e, 0, 20);
-}
-DK_STATIC inline uint64_t entry6GetNext(const void *e) {
-    return readBitsLE(e, 20, 20);
-}
-DK_STATIC inline uint8_t entry6GetLevel(const void *e) {
-    return readBitsLE(e, 40, 6);
-}
-DK_STATIC inline bool entry6GetPopulated(const void *e) {
-    return readBitsLE(e, 46, 1);
-}
-DK_STATIC inline bool entry6GetHead(const void *e) {
-    return readBitsLE(e, 47, 1);
-}
-DK_STATIC inline void entry6SetPrev(void *e, uint64_t v) {
-    writeBitsLE(e, 0, 20, v);
-}
-DK_STATIC inline void entry6SetNext(void *e, uint64_t v) {
-    writeBitsLE(e, 20, 20, v);
-}
-DK_STATIC inline void entry6SetLevel(void *e, uint8_t v) {
-    writeBitsLE(e, 40, 6, v);
-}
-DK_STATIC inline void entry6SetPopulated(void *e, bool v) {
-    writeBitsLE(e, 46, 1, v);
-}
-DK_STATIC inline void entry6SetHead(void *e, bool v) {
-    writeBitsLE(e, 47, 1, v);
-}
-
-/* --- 7-byte entries (24-bit addresses) --- */
-/* Layout: prev[0:23], next[24:47], level[48:53], pop[54], head[55] */
-DK_STATIC inline uint64_t entry7GetPrev(const void *e) {
-    const uint8_t *p = e;
-    return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16);
-}
-DK_STATIC inline uint64_t entry7GetNext(const void *e) {
-    const uint8_t *p = e;
-    return (uint64_t)p[3] | ((uint64_t)p[4] << 8) | ((uint64_t)p[5] << 16);
-}
-DK_STATIC inline uint8_t entry7GetLevel(const void *e) {
-    return mlruFlagLevel_((const uint8_t *)e + 6);
-}
-DK_STATIC inline bool entry7GetPopulated(const void *e) {
-    return mlruFlagIs_((const uint8_t *)e + 6, MLRU_FLAG_POPULATED);
-}
-DK_STATIC inline bool entry7GetHead(const void *e) {
-    return mlruFlagIs_((const uint8_t *)e + 6, MLRU_FLAG_HEAD);
-}
-DK_STATIC inline void entry7SetPrev(void *e, uint64_t v) {
-    uint8_t *p = e;
-    p[0] = v & 0xFF;
-    p[1] = (v >> 8) & 0xFF;
-    p[2] = (v >> 16) & 0xFF;
-}
-DK_STATIC inline void entry7SetNext(void *e, uint64_t v) {
-    uint8_t *p = e;
-    p[3] = v & 0xFF;
-    p[4] = (v >> 8) & 0xFF;
-    p[5] = (v >> 16) & 0xFF;
-}
-DK_STATIC inline void entry7SetLevel(void *e, uint8_t v) {
-    mlruFlagSet_((uint8_t *)e + 6, MLRU_FLAG_LEVEL, v);
-}
-DK_STATIC inline void entry7SetPopulated(void *e, bool v) {
-    mlruFlagSet_((uint8_t *)e + 6, MLRU_FLAG_POPULATED,
-                 v ? MLRU_FLAG_POPULATED : 0);
-}
-DK_STATIC inline void entry7SetHead(void *e, bool v) {
-    mlruFlagSet_((uint8_t *)e + 6, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
-}
-
-/* Native-width loads and stores at any alignment.  Entries sit at
- * idx * entryWidth, so a 9-byte entry's 32-bit fields (and any field of
- * a width that does not divide the allocation's alignment) are
- * misaligned; memcpy of a constant size compiles to one load or store
- * where the target allows unaligned access, and is defined everywhere. */
-DK_INLINE_ALWAYS uint32_t entryLoad32(const void *p) {
-    uint32_t v;
-    memcpy(&v, p, sizeof(v));
+DK_INLINE_ALWAYS uint64_t mlruLinksLoad64_(const uint8_t *e, uint32_t w) {
+    uint64_t v = 0;
+    memcpy(&v, e, w - 1);
+    conformToLittleEndian64(v);
     return v;
 }
-DK_INLINE_ALWAYS void entryStore32(void *p, uint32_t v) {
-    memcpy(p, &v, sizeof(v));
+
+DK_INLINE_ALWAYS void mlruLinksStore64_(uint8_t *e, uint32_t w, uint64_t v) {
+    conformToLittleEndian64(v);
+    memcpy(e, &v, w - 1);
 }
-DK_INLINE_ALWAYS uint64_t entryLoad64(const void *p) {
-    uint64_t v;
-    memcpy(&v, p, sizeof(v));
+
+/* The byte reverse of a 128-bit value (big-endian hosts only) */
+DK_INLINE_ALWAYS __uint128_t mlruSwap128_(__uint128_t v) {
+    return ((__uint128_t)__builtin_bswap64((uint64_t)v) << 64) |
+           __builtin_bswap64((uint64_t)(v >> 64));
+}
+
+DK_INLINE_ALWAYS __uint128_t mlruLinksLoad128_(const uint8_t *e, uint32_t w) {
+    __uint128_t v = 0;
+    memcpy(&v, e, w - 1);
+    if (!endianIsLittle()) {
+        v = mlruSwap128_(v);
+    }
     return v;
 }
-DK_INLINE_ALWAYS void entryStore64(void *p, uint64_t v) {
-    memcpy(p, &v, sizeof(v));
-}
-DK_INLINE_ALWAYS __uint128_t entryLoad128(const void *p) {
-    __uint128_t v;
-    memcpy(&v, p, sizeof(v));
-    return v;
-}
-DK_INLINE_ALWAYS void entryStore128(void *p, __uint128_t v) {
-    memcpy(p, &v, sizeof(v));
+
+DK_INLINE_ALWAYS void mlruLinksStore128_(uint8_t *e, uint32_t w,
+                                         __uint128_t v) {
+    if (!endianIsLittle()) {
+        v = mlruSwap128_(v);
+    }
+    memcpy(e, &v, w - 1);
 }
 
-/* --- 8-byte entries (28-bit addresses) --- */
-/* Layout: prev[0:27], next[28:55], level[56:61], pop[62], head[63] */
-static constexpr int MLRU_E8_LINK_BITS = 28;
-static constexpr uint64_t MLRU_E8_LINK = (UINT64_C(1) << MLRU_E8_LINK_BITS) - 1;
-DK_INLINE_ALWAYS uint64_t entry8Link_(const void *e, int shift) {
-    return (entryLoad64(e) >> shift) & MLRU_E8_LINK;
-}
-DK_INLINE_ALWAYS void entry8SetLink_(void *e, int shift, uint64_t v) {
-    entryStore64(e, (entryLoad64(e) & ~(MLRU_E8_LINK << shift)) |
-                        ((v & MLRU_E8_LINK) << shift));
-}
-DK_STATIC inline uint64_t entry8GetPrev(const void *e) {
-    return entry8Link_(e, 0);
-}
-DK_STATIC inline uint64_t entry8GetNext(const void *e) {
-    return entry8Link_(e, MLRU_E8_LINK_BITS);
-}
-/* 8-byte entries keep the flag byte in bits 56-63 */
-DK_INLINE_ALWAYS uint8_t entry8Flags_(const void *e) {
-    return (uint8_t)(entryLoad64(e) >> 56);
-}
-DK_INLINE_ALWAYS void entry8SetFlags_(void *e, uint8_t field, uint8_t bits) {
-    entryStore64(e, (entryLoad64(e) & ~((uint64_t)field << 56)) |
-                        ((uint64_t)(bits & field) << 56));
-}
-DK_STATIC inline uint8_t entry8GetLevel(const void *e) {
-    return entry8Flags_(e) & MLRU_FLAG_LEVEL;
-}
-DK_STATIC inline bool entry8GetPopulated(const void *e) {
-    return (entry8Flags_(e) & MLRU_FLAG_POPULATED) != 0;
-}
-DK_STATIC inline bool entry8GetHead(const void *e) {
-    return (entry8Flags_(e) & MLRU_FLAG_HEAD) != 0;
-}
-DK_STATIC inline void entry8SetPrev(void *e, uint64_t v) {
-    entry8SetLink_(e, 0, v);
-}
-DK_STATIC inline void entry8SetNext(void *e, uint64_t v) {
-    entry8SetLink_(e, MLRU_E8_LINK_BITS, v);
-}
-DK_STATIC inline void entry8SetLevel(void *e, uint8_t v) {
-    entry8SetFlags_(e, MLRU_FLAG_LEVEL, v);
-}
-DK_STATIC inline void entry8SetPopulated(void *e, bool v) {
-    entry8SetFlags_(e, MLRU_FLAG_POPULATED, v ? MLRU_FLAG_POPULATED : 0);
-}
-DK_STATIC inline void entry8SetHead(void *e, bool v) {
-    entry8SetFlags_(e, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
+/* Link 'which' (0 prev, 1 next) of the w-byte entry at 'e' */
+DK_INLINE_ALWAYS uint64_t mlruLinkGet_(const uint8_t *e, uint32_t w,
+                                       uint32_t which) {
+    const uint32_t bits = mlruLinkBits_(w);
+    const uint64_t mask = (UINT64_C(1) << bits) - 1;
+    if (w <= 9) {
+        return (mlruLinksLoad64_(e, w) >> (which * bits)) & mask;
+    }
+
+    return (uint64_t)(mlruLinksLoad128_(e, w) >> (which * bits)) & mask;
 }
 
-/* --- 9-byte entries (32-bit addresses) --- */
-/* Layout: prev[0:31], next[32:63], level[64:69], pop[70], head[71] */
-DK_STATIC inline uint64_t entry9GetPrev(const void *e) {
-    return entryLoad32(e);
-}
-DK_STATIC inline uint64_t entry9GetNext(const void *e) {
-    return entryLoad32((const uint8_t *)e + 4);
-}
-DK_STATIC inline uint8_t entry9GetLevel(const void *e) {
-    return mlruFlagLevel_((const uint8_t *)e + 8);
-}
-DK_STATIC inline bool entry9GetPopulated(const void *e) {
-    return mlruFlagIs_((const uint8_t *)e + 8, MLRU_FLAG_POPULATED);
-}
-DK_STATIC inline bool entry9GetHead(const void *e) {
-    return mlruFlagIs_((const uint8_t *)e + 8, MLRU_FLAG_HEAD);
-}
-DK_STATIC inline void entry9SetPrev(void *e, uint64_t v) {
-    entryStore32(e, (uint32_t)v);
-}
-DK_STATIC inline void entry9SetNext(void *e, uint64_t v) {
-    entryStore32((uint8_t *)e + 4, (uint32_t)v);
-}
-DK_STATIC inline void entry9SetLevel(void *e, uint8_t v) {
-    mlruFlagSet_((uint8_t *)e + 8, MLRU_FLAG_LEVEL, v);
-}
-DK_STATIC inline void entry9SetPopulated(void *e, bool v) {
-    mlruFlagSet_((uint8_t *)e + 8, MLRU_FLAG_POPULATED,
-                 v ? MLRU_FLAG_POPULATED : 0);
-}
-DK_STATIC inline void entry9SetHead(void *e, bool v) {
-    mlruFlagSet_((uint8_t *)e + 8, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
+DK_INLINE_ALWAYS void mlruLinkSet_(uint8_t *e, uint32_t w, uint32_t which,
+                                   uint64_t value) {
+    const uint32_t bits = mlruLinkBits_(w);
+    const uint32_t shift = which * bits;
+    const uint64_t mask = (UINT64_C(1) << bits) - 1;
+    if (w <= 9) {
+        const uint64_t v = mlruLinksLoad64_(e, w);
+        mlruLinksStore64_(e, w,
+                          (v & ~(mask << shift)) | ((value & mask) << shift));
+        return;
+    }
+
+    const __uint128_t v = mlruLinksLoad128_(e, w);
+    const __uint128_t field = (__uint128_t)mask << shift;
+    mlruLinksStore128_(e, w,
+                       (v & ~field) | ((__uint128_t)(value & mask) << shift));
 }
 
-/* --- 10-byte entries (36-bit addresses) --- */
-/* Layout: prev[0:35], next[36:71], level[72:77], pop[78], head[79] */
-DK_STATIC inline uint64_t entry10GetPrev(const void *e) {
-    return readBitsLE(e, 0, 36);
-}
-DK_STATIC inline uint64_t entry10GetNext(const void *e) {
-    return readBitsLE(e, 36, 36);
-}
-DK_STATIC inline uint8_t entry10GetLevel(const void *e) {
-    return readBitsLE(e, 72, 6);
-}
-DK_STATIC inline bool entry10GetPopulated(const void *e) {
-    return readBitsLE(e, 78, 1);
-}
-DK_STATIC inline bool entry10GetHead(const void *e) {
-    return readBitsLE(e, 79, 1);
-}
-DK_STATIC inline void entry10SetPrev(void *e, uint64_t v) {
-    writeBitsLE(e, 0, 36, v);
-}
-DK_STATIC inline void entry10SetNext(void *e, uint64_t v) {
-    writeBitsLE(e, 36, 36, v);
-}
-DK_STATIC inline void entry10SetLevel(void *e, uint8_t v) {
-    writeBitsLE(e, 72, 6, v);
-}
-DK_STATIC inline void entry10SetPopulated(void *e, bool v) {
-    writeBitsLE(e, 78, 1, v);
-}
-DK_STATIC inline void entry10SetHead(void *e, bool v) {
-    writeBitsLE(e, 79, 1, v);
-}
-
-/* --- 11-byte entries (40-bit addresses) --- */
-/* Layout: prev[0:39], next[40:79], level[80:85], pop[86], head[87] */
-DK_STATIC inline uint64_t entry11GetPrev(const void *e) {
-    return readBitsLE(e, 0, 40);
-}
-DK_STATIC inline uint64_t entry11GetNext(const void *e) {
-    return readBitsLE(e, 40, 40);
-}
-DK_STATIC inline uint8_t entry11GetLevel(const void *e) {
-    return readBitsLE(e, 80, 6);
-}
-DK_STATIC inline bool entry11GetPopulated(const void *e) {
-    return readBitsLE(e, 86, 1);
-}
-DK_STATIC inline bool entry11GetHead(const void *e) {
-    return readBitsLE(e, 87, 1);
-}
-DK_STATIC inline void entry11SetPrev(void *e, uint64_t v) {
-    writeBitsLE(e, 0, 40, v);
-}
-DK_STATIC inline void entry11SetNext(void *e, uint64_t v) {
-    writeBitsLE(e, 40, 40, v);
-}
-DK_STATIC inline void entry11SetLevel(void *e, uint8_t v) {
-    writeBitsLE(e, 80, 6, v);
-}
-DK_STATIC inline void entry11SetPopulated(void *e, bool v) {
-    writeBitsLE(e, 86, 1, v);
-}
-DK_STATIC inline void entry11SetHead(void *e, bool v) {
-    writeBitsLE(e, 87, 1, v);
-}
-
-/* --- 12-byte entries (44-bit addresses) --- */
-/* Layout: prev[0:43], next[44:87], level[88:93], pop[94], head[95] */
-DK_STATIC inline uint64_t entry12GetPrev(const void *e) {
-    return readBitsLE(e, 0, 44);
-}
-DK_STATIC inline uint64_t entry12GetNext(const void *e) {
-    return readBitsLE(e, 44, 44);
-}
-DK_STATIC inline uint8_t entry12GetLevel(const void *e) {
-    return readBitsLE(e, 88, 6);
-}
-DK_STATIC inline bool entry12GetPopulated(const void *e) {
-    return readBitsLE(e, 94, 1);
-}
-DK_STATIC inline bool entry12GetHead(const void *e) {
-    return readBitsLE(e, 95, 1);
-}
-DK_STATIC inline void entry12SetPrev(void *e, uint64_t v) {
-    writeBitsLE(e, 0, 44, v);
-}
-DK_STATIC inline void entry12SetNext(void *e, uint64_t v) {
-    writeBitsLE(e, 44, 44, v);
-}
-DK_STATIC inline void entry12SetLevel(void *e, uint8_t v) {
-    writeBitsLE(e, 88, 6, v);
-}
-DK_STATIC inline void entry12SetPopulated(void *e, bool v) {
-    writeBitsLE(e, 94, 1, v);
-}
-DK_STATIC inline void entry12SetHead(void *e, bool v) {
-    writeBitsLE(e, 95, 1, v);
-}
-
-/* --- 16-byte entries (60-bit addresses) --- */
-/* Layout: prev[0:59], next[60:119], level[120:125], pop[126], head[127] */
-static constexpr int MLRU_E16_LINK_BITS = 60;
-static constexpr uint64_t MLRU_E16_LINK =
-    (UINT64_C(1) << MLRU_E16_LINK_BITS) - 1;
-DK_INLINE_ALWAYS uint64_t entry16Link_(const void *e, int shift) {
-    return (uint64_t)(entryLoad128(e) >> shift) & MLRU_E16_LINK;
-}
-DK_INLINE_ALWAYS void entry16SetLink_(void *e, int shift, uint64_t v) {
-    const __uint128_t mask = (__uint128_t)MLRU_E16_LINK << shift;
-    entryStore128(e, (entryLoad128(e) & ~mask) |
-                         ((__uint128_t)(v & MLRU_E16_LINK) << shift));
-}
-DK_STATIC inline uint64_t entry16GetPrev(const void *e) {
-    return entry16Link_(e, 0);
-}
-DK_STATIC inline uint64_t entry16GetNext(const void *e) {
-    return entry16Link_(e, MLRU_E16_LINK_BITS);
-}
-/* 16-byte entries keep the flag byte in bits 120-127 */
-DK_INLINE_ALWAYS uint8_t entry16Flags_(const void *e) {
-    return (uint8_t)(entryLoad128(e) >> 120);
-}
-DK_INLINE_ALWAYS void entry16SetFlags_(void *e, uint8_t field, uint8_t bits) {
-    const __uint128_t mask = (__uint128_t)field << 120;
-    entryStore128(e, (entryLoad128(e) & ~mask) |
-                         ((__uint128_t)(bits & field) << 120));
-}
-DK_STATIC inline uint8_t entry16GetLevel(const void *e) {
-    return entry16Flags_(e) & MLRU_FLAG_LEVEL;
-}
-DK_STATIC inline bool entry16GetPopulated(const void *e) {
-    return (entry16Flags_(e) & MLRU_FLAG_POPULATED) != 0;
-}
-DK_STATIC inline bool entry16GetHead(const void *e) {
-    return (entry16Flags_(e) & MLRU_FLAG_HEAD) != 0;
-}
-DK_STATIC inline void entry16SetPrev(void *e, uint64_t v) {
-    entry16SetLink_(e, 0, v);
-}
-DK_STATIC inline void entry16SetNext(void *e, uint64_t v) {
-    entry16SetLink_(e, MLRU_E16_LINK_BITS, v);
-}
-DK_STATIC inline void entry16SetLevel(void *e, uint8_t v) {
-    entry16SetFlags_(e, MLRU_FLAG_LEVEL, v);
-}
-DK_STATIC inline void entry16SetPopulated(void *e, bool v) {
-    entry16SetFlags_(e, MLRU_FLAG_POPULATED, v ? MLRU_FLAG_POPULATED : 0);
-}
-DK_STATIC inline void entry16SetHead(void *e, bool v) {
-    entry16SetFlags_(e, MLRU_FLAG_HEAD, v ? MLRU_FLAG_HEAD : 0);
-}
+/* Run the statements after 'width' with W, a constant, bound to it: one
+ * case per supported width, nothing for any other */
+#define MLRU_BY_WIDTH_(width, ...)                                             \
+    do {                                                                       \
+        switch (width) {                                                       \
+        case 5: {                                                              \
+            constexpr uint32_t W = 5;                                          \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 6: {                                                              \
+            constexpr uint32_t W = 6;                                          \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 7: {                                                              \
+            constexpr uint32_t W = 7;                                          \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 8: {                                                              \
+            constexpr uint32_t W = 8;                                          \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 9: {                                                              \
+            constexpr uint32_t W = 9;                                          \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 10: {                                                             \
+            constexpr uint32_t W = 10;                                         \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 11: {                                                             \
+            constexpr uint32_t W = 11;                                         \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 12: {                                                             \
+            constexpr uint32_t W = 12;                                         \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        case 16: {                                                             \
+            constexpr uint32_t W = 16;                                         \
+            __VA_ARGS__;                                                       \
+        } break;                                                               \
+        default:                                                               \
+            break;                                                             \
+        }                                                                      \
+    } while (0)
 
 /* ====================================================================
- * Unified Entry Accessors (dispatch by width)
+ * Entry Accessors (dispatch by width)
  * ====================================================================
- * These functions dispatch to the appropriate width-specific accessor.
- * Using a switch on entryWidth allows the compiler to optimize.
+ * The links dispatch on entryWidth so each width runs its constant-size
+ * code; the flag byte is the entry's last byte at every width, so the
+ * flag accessors need no dispatch.
  *
- * Every list operation runs through these dispatchers and the bit
- * primitives under them, so they are always inlined.  A plain inline hint
- * is not enough: this file is large enough that GCC's unit-growth budget
- * runs out first and leaves the hottest accessors as out-of-line calls.
+ * Every list operation runs through these accessors, so they are always
+ * inlined.  A plain inline hint is not enough: this file is large enough
+ * that GCC's unit-growth budget runs out first and leaves the hottest
+ * accessors as out-of-line calls.
  */
 
+DK_INLINE_ALWAYS uint64_t entryGetLink_(const multilru *mlru, uint64_t idx,
+                                        uint32_t which) {
+    const uint8_t *e = entryPtr(mlru, idx);
+    MLRU_BY_WIDTH_(mlru->entryWidth, return mlruLinkGet_(e, W, which));
+    return 0;
+}
+
+DK_INLINE_ALWAYS void entrySetLink_(multilru *mlru, uint64_t idx,
+                                    uint32_t which, uint64_t v) {
+    uint8_t *e = entryPtr(mlru, idx);
+    MLRU_BY_WIDTH_(mlru->entryWidth, mlruLinkSet_(e, W, which, v));
+}
+
+/* The entry's flag byte: its last byte, at every width */
+DK_INLINE_ALWAYS uint8_t *entryFlags_(const multilru *mlru, uint64_t idx) {
+    return (uint8_t *)entryPtr(mlru, idx) + mlru->entryWidth - 1;
+}
+
 DK_INLINE_ALWAYS uint64_t entryGetPrev(const multilru *mlru, uint64_t idx) {
-    const void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        return entry5GetPrev(e);
-    case 6:
-        return entry6GetPrev(e);
-    case 7:
-        return entry7GetPrev(e);
-    case 8:
-        return entry8GetPrev(e);
-    case 9:
-        return entry9GetPrev(e);
-    case 10:
-        return entry10GetPrev(e);
-    case 11:
-        return entry11GetPrev(e);
-    case 12:
-        return entry12GetPrev(e);
-    case 16:
-        return entry16GetPrev(e);
-    default:
-        return 0;
-    }
+    return entryGetLink_(mlru, idx, 0);
 }
 
 DK_INLINE_ALWAYS uint64_t entryGetNext(const multilru *mlru, uint64_t idx) {
-    const void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        return entry5GetNext(e);
-    case 6:
-        return entry6GetNext(e);
-    case 7:
-        return entry7GetNext(e);
-    case 8:
-        return entry8GetNext(e);
-    case 9:
-        return entry9GetNext(e);
-    case 10:
-        return entry10GetNext(e);
-    case 11:
-        return entry11GetNext(e);
-    case 12:
-        return entry12GetNext(e);
-    case 16:
-        return entry16GetNext(e);
-    default:
-        return 0;
-    }
+    return entryGetLink_(mlru, idx, 1);
 }
 
 DK_INLINE_ALWAYS uint8_t entryGetLevel(const multilru *mlru, uint64_t idx) {
-    const void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        return entry5GetLevel(e);
-    case 6:
-        return entry6GetLevel(e);
-    case 7:
-        return entry7GetLevel(e);
-    case 8:
-        return entry8GetLevel(e);
-    case 9:
-        return entry9GetLevel(e);
-    case 10:
-        return entry10GetLevel(e);
-    case 11:
-        return entry11GetLevel(e);
-    case 12:
-        return entry12GetLevel(e);
-    case 16:
-        return entry16GetLevel(e);
-    default:
-        return 0;
-    }
+    return mlruFlagLevel_(entryFlags_(mlru, idx));
 }
 
 DK_INLINE_ALWAYS bool entryGetPopulated(const multilru *mlru, uint64_t idx) {
-    const void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        return entry5GetPopulated(e);
-    case 6:
-        return entry6GetPopulated(e);
-    case 7:
-        return entry7GetPopulated(e);
-    case 8:
-        return entry8GetPopulated(e);
-    case 9:
-        return entry9GetPopulated(e);
-    case 10:
-        return entry10GetPopulated(e);
-    case 11:
-        return entry11GetPopulated(e);
-    case 12:
-        return entry12GetPopulated(e);
-    case 16:
-        return entry16GetPopulated(e);
-    default:
-        return false;
-    }
+    return mlruFlagIs_(entryFlags_(mlru, idx), MLRU_FLAG_POPULATED);
 }
 
 DK_INLINE_ALWAYS bool entryGetHead(const multilru *mlru, uint64_t idx) {
-    const void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        return entry5GetHead(e);
-    case 6:
-        return entry6GetHead(e);
-    case 7:
-        return entry7GetHead(e);
-    case 8:
-        return entry8GetHead(e);
-    case 9:
-        return entry9GetHead(e);
-    case 10:
-        return entry10GetHead(e);
-    case 11:
-        return entry11GetHead(e);
-    case 12:
-        return entry12GetHead(e);
-    case 16:
-        return entry16GetHead(e);
-    default:
-        return false;
-    }
+    return mlruFlagIs_(entryFlags_(mlru, idx), MLRU_FLAG_HEAD);
 }
 
 DK_INLINE_ALWAYS void entrySetPrev(multilru *mlru, uint64_t idx, uint64_t v) {
-    void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        entry5SetPrev(e, v);
-        break;
-    case 6:
-        entry6SetPrev(e, v);
-        break;
-    case 7:
-        entry7SetPrev(e, v);
-        break;
-    case 8:
-        entry8SetPrev(e, v);
-        break;
-    case 9:
-        entry9SetPrev(e, v);
-        break;
-    case 10:
-        entry10SetPrev(e, v);
-        break;
-    case 11:
-        entry11SetPrev(e, v);
-        break;
-    case 12:
-        entry12SetPrev(e, v);
-        break;
-    case 16:
-        entry16SetPrev(e, v);
-        break;
-    }
+    entrySetLink_(mlru, idx, 0, v);
 }
 
 DK_INLINE_ALWAYS void entrySetNext(multilru *mlru, uint64_t idx, uint64_t v) {
-    void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        entry5SetNext(e, v);
-        break;
-    case 6:
-        entry6SetNext(e, v);
-        break;
-    case 7:
-        entry7SetNext(e, v);
-        break;
-    case 8:
-        entry8SetNext(e, v);
-        break;
-    case 9:
-        entry9SetNext(e, v);
-        break;
-    case 10:
-        entry10SetNext(e, v);
-        break;
-    case 11:
-        entry11SetNext(e, v);
-        break;
-    case 12:
-        entry12SetNext(e, v);
-        break;
-    case 16:
-        entry16SetNext(e, v);
-        break;
-    }
+    entrySetLink_(mlru, idx, 1, v);
 }
 
 DK_INLINE_ALWAYS void entrySetLevel(multilru *mlru, uint64_t idx, uint8_t v) {
-    void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        entry5SetLevel(e, v);
-        break;
-    case 6:
-        entry6SetLevel(e, v);
-        break;
-    case 7:
-        entry7SetLevel(e, v);
-        break;
-    case 8:
-        entry8SetLevel(e, v);
-        break;
-    case 9:
-        entry9SetLevel(e, v);
-        break;
-    case 10:
-        entry10SetLevel(e, v);
-        break;
-    case 11:
-        entry11SetLevel(e, v);
-        break;
-    case 12:
-        entry12SetLevel(e, v);
-        break;
-    case 16:
-        entry16SetLevel(e, v);
-        break;
-    }
+    mlruFlagSet_(entryFlags_(mlru, idx), MLRU_FLAG_LEVEL, v);
 }
 
 DK_INLINE_ALWAYS void entrySetPopulated(multilru *mlru, uint64_t idx, bool v) {
-    void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        entry5SetPopulated(e, v);
-        break;
-    case 6:
-        entry6SetPopulated(e, v);
-        break;
-    case 7:
-        entry7SetPopulated(e, v);
-        break;
-    case 8:
-        entry8SetPopulated(e, v);
-        break;
-    case 9:
-        entry9SetPopulated(e, v);
-        break;
-    case 10:
-        entry10SetPopulated(e, v);
-        break;
-    case 11:
-        entry11SetPopulated(e, v);
-        break;
-    case 12:
-        entry12SetPopulated(e, v);
-        break;
-    case 16:
-        entry16SetPopulated(e, v);
-        break;
-    }
+    mlruFlagSet_(entryFlags_(mlru, idx), MLRU_FLAG_POPULATED,
+                 v ? MLRU_FLAG_POPULATED : 0);
 }
 
 DK_INLINE_ALWAYS void entrySetHead(multilru *mlru, uint64_t idx, bool v) {
-    void *e = entryPtr(mlru, idx);
-    switch (mlru->entryWidth) {
-    case 5:
-        entry5SetHead(e, v);
-        break;
-    case 6:
-        entry6SetHead(e, v);
-        break;
-    case 7:
-        entry7SetHead(e, v);
-        break;
-    case 8:
-        entry8SetHead(e, v);
-        break;
-    case 9:
-        entry9SetHead(e, v);
-        break;
-    case 10:
-        entry10SetHead(e, v);
-        break;
-    case 11:
-        entry11SetHead(e, v);
-        break;
-    case 12:
-        entry12SetHead(e, v);
-        break;
-    case 16:
-        entry16SetHead(e, v);
-        break;
-    }
+    mlruFlagSet_(entryFlags_(mlru, idx), MLRU_FLAG_HEAD,
+                 v ? MLRU_FLAG_HEAD : 0);
 }
 
 /* Convenience macros that forward to the new accessor functions */
@@ -1024,76 +473,15 @@ DK_STATIC uint64_t freeListPop(multilru *mlru) {
 DK_STATIC void entryReadByWidth(const void *entries, uint8_t width,
                                 uint64_t idx, uint64_t *prev, uint64_t *next,
                                 uint8_t *level, bool *populated, bool *isHead) {
-    const void *e = (const uint8_t *)entries + idx * width;
-    switch (width) {
-    case 5:
-        *prev = entry5GetPrev(e);
-        *next = entry5GetNext(e);
-        *level = entry5GetLevel(e);
-        *populated = entry5GetPopulated(e);
-        *isHead = entry5GetHead(e);
-        break;
-    case 6:
-        *prev = entry6GetPrev(e);
-        *next = entry6GetNext(e);
-        *level = entry6GetLevel(e);
-        *populated = entry6GetPopulated(e);
-        *isHead = entry6GetHead(e);
-        break;
-    case 7:
-        *prev = entry7GetPrev(e);
-        *next = entry7GetNext(e);
-        *level = entry7GetLevel(e);
-        *populated = entry7GetPopulated(e);
-        *isHead = entry7GetHead(e);
-        break;
-    case 8:
-        *prev = entry8GetPrev(e);
-        *next = entry8GetNext(e);
-        *level = entry8GetLevel(e);
-        *populated = entry8GetPopulated(e);
-        *isHead = entry8GetHead(e);
-        break;
-    case 9:
-        *prev = entry9GetPrev(e);
-        *next = entry9GetNext(e);
-        *level = entry9GetLevel(e);
-        *populated = entry9GetPopulated(e);
-        *isHead = entry9GetHead(e);
-        break;
-    case 10:
-        *prev = entry10GetPrev(e);
-        *next = entry10GetNext(e);
-        *level = entry10GetLevel(e);
-        *populated = entry10GetPopulated(e);
-        *isHead = entry10GetHead(e);
-        break;
-    case 11:
-        *prev = entry11GetPrev(e);
-        *next = entry11GetNext(e);
-        *level = entry11GetLevel(e);
-        *populated = entry11GetPopulated(e);
-        *isHead = entry11GetHead(e);
-        break;
-    case 12:
-        *prev = entry12GetPrev(e);
-        *next = entry12GetNext(e);
-        *level = entry12GetLevel(e);
-        *populated = entry12GetPopulated(e);
-        *isHead = entry12GetHead(e);
-        break;
-    case 16:
-        *prev = entry16GetPrev(e);
-        *next = entry16GetNext(e);
-        *level = entry16GetLevel(e);
-        *populated = entry16GetPopulated(e);
-        *isHead = entry16GetHead(e);
-        break;
-    default:
-        *prev = *next = 0;
-        *level = 0;
-        *populated = *isHead = false;
-    }
+    const uint8_t *e = (const uint8_t *)entries + idx * width;
+    *prev = *next = 0;
+    *level = 0;
+    *populated = *isHead = false;
+    MLRU_BY_WIDTH_(
+        width, *prev = mlruLinkGet_(e, W, 0); *next = mlruLinkGet_(e, W, 1);
+        const uint8_t *flags = e + W - 1; *level = mlruFlagLevel_(flags);
+        *populated = mlruFlagIs_(flags, MLRU_FLAG_POPULATED);
+        *isHead = mlruFlagIs_(flags, MLRU_FLAG_HEAD));
 }
 
 /* Upgrade entry width to support more entries */
@@ -2271,12 +1659,14 @@ static size_t mlruWidthWorkload_(multilru *mlru, uint64_t *trace) {
                     for (int fl = 0; fl < 4; fl++) {                           \
                         uint8_t buf[3 * (W)];                                  \
                         memset(buf, 0xa5, sizeof(buf));                        \
-                        void *e = buf + (W);                                   \
-                        entry##W##SetPrev(e, idxs[pi]);                        \
-                        entry##W##SetNext(e, idxs[ni]);                        \
-                        entry##W##SetLevel(e, lv);                             \
-                        entry##W##SetPopulated(e, fl & 1);                     \
-                        entry##W##SetHead(e, fl & 2);                          \
+                        uint8_t *e = buf + (W);                                \
+                        mlruLinkSet_(e, (W), 0, idxs[pi]);                     \
+                        mlruLinkSet_(e, (W), 1, idxs[ni]);                     \
+                        mlruFlagSet_(e + (W) - 1, MLRU_FLAG_LEVEL, lv);        \
+                        mlruFlagSet_(e + (W) - 1, MLRU_FLAG_POPULATED,         \
+                                     (fl & 1) ? MLRU_FLAG_POPULATED : 0);      \
+                        mlruFlagSet_(e + (W) - 1, MLRU_FLAG_HEAD,              \
+                                     (fl & 2) ? MLRU_FLAG_HEAD : 0);           \
                         uint64_t p = 0, nx = 0;                                \
                         uint8_t l = 0;                                         \
                         bool pop = false, head = false;                        \
@@ -2802,66 +2192,76 @@ int multilruTest(int, char *[]) {
         printf("maxEntriesForWidth (all widths): PASSED\n");
     }
 
-    TEST("bit packing round-trip for all widths") {
-        /* Test that entry accessors correctly read/write at max values */
-        uint8_t buf[16] = {};
+    TEST("entry layout at every width against a bit-by-bit oracle") {
+        /* The documented layout, built one bit at a time: prev in bits
+         * [0, L), next in [L, 2L), little-endian, L = 4 * (w - 1), the flag
+         * byte last.  Each field is written alone over a canary-filled
+         * buffer; the bytes must match the oracle, the other fields must
+         * read back unchanged, and nothing past the entry may change. */
+        static const uint32_t widths[] = {5, 6, 7, 8, 9, 10, 11, 12, 16};
+        uint64_t s = 0x9E3779B97F4A7C15u;
+        for (size_t wi = 0; wi < countof(widths); wi++) {
+            const uint32_t w = widths[wi];
+            const uint32_t L = 4 * (w - 1);
+            const uint64_t mask = (UINT64_C(1) << L) - 1;
+            for (int round = 0; round < 64; round++) {
+                s = s * 6364136223846793005u + 1442695040888963407u;
+                const uint64_t prev = round == 0 ? mask : (s >> 3) & mask;
+                const uint64_t next = round == 0 ? mask : (s >> 7) & mask;
+                const uint8_t level = round == 0 ? 63 : (uint8_t)(s & 63);
+                const bool populated = round == 0 || (s >> 9) & 1;
+                const bool head = round == 0 || (s >> 11) & 1;
 
-        /* Test 16-byte entries (60-bit addresses) */
-        uint64_t maxIdx60 = (1ULL << 60) - 1;
-        entry16SetPrev(buf, maxIdx60);
-        entry16SetNext(buf, maxIdx60);
-        entry16SetLevel(buf, 63);
-        entry16SetPopulated(buf, true);
-        entry16SetHead(buf, true);
-        assert(entry16GetPrev(buf) == maxIdx60);
-        assert(entry16GetNext(buf) == maxIdx60);
-        assert(entry16GetLevel(buf) == 63);
-        assert(entry16GetPopulated(buf) == true);
-        assert(entry16GetHead(buf) == true);
+                uint8_t want[20];
+                memset(want, 0xA5, sizeof(want));
+                memset(want, 0, w);
+                for (uint32_t b = 0; b < L; b++) {
+                    want[b / 8] |= (uint8_t)(((prev >> b) & 1) << (b % 8));
+                    want[(L + b) / 8] |=
+                        (uint8_t)(((next >> b) & 1) << ((L + b) % 8));
+                }
+                want[w - 1] = (uint8_t)(level | (populated ? 1 << 6 : 0) |
+                                        (head ? 1 << 7 : 0));
 
-        /* Test 5-byte entries (16-bit addresses) */
-        memset(buf, 0, sizeof(buf));
-        uint64_t maxIdx16 = (1ULL << 16) - 1;
-        entry5SetPrev(buf, maxIdx16);
-        entry5SetNext(buf, maxIdx16);
-        entry5SetLevel(buf, 63);
-        entry5SetPopulated(buf, true);
-        entry5SetHead(buf, true);
-        assert(entry5GetPrev(buf) == maxIdx16);
-        assert(entry5GetNext(buf) == maxIdx16);
-        assert(entry5GetLevel(buf) == 63);
-        assert(entry5GetPopulated(buf) == true);
-        assert(entry5GetHead(buf) == true);
+                uint8_t got[20];
+                memset(got, 0xA5, sizeof(got));
+                memset(got, 0, w);
+                mlruLinkSet_(got, w, 0, prev);
+                if (mlruLinkGet_(got, w, 1) != 0) {
+                    ERR("width %u: setting prev changed next", w);
+                }
+                mlruLinkSet_(got, w, 1, next);
+                mlruFlagSet_(got + w - 1, MLRU_FLAG_LEVEL, level);
+                mlruFlagSet_(got + w - 1, MLRU_FLAG_POPULATED,
+                             populated ? MLRU_FLAG_POPULATED : 0);
+                mlruFlagSet_(got + w - 1, MLRU_FLAG_HEAD,
+                             head ? MLRU_FLAG_HEAD : 0);
 
-        /* Test 6-byte entries (20-bit addresses) with bit packing */
-        memset(buf, 0, sizeof(buf));
-        uint64_t maxIdx20 = (1ULL << 20) - 1;
-        entry6SetPrev(buf, maxIdx20);
-        entry6SetNext(buf, maxIdx20);
-        entry6SetLevel(buf, 63);
-        entry6SetPopulated(buf, true);
-        entry6SetHead(buf, true);
-        assert(entry6GetPrev(buf) == maxIdx20);
-        assert(entry6GetNext(buf) == maxIdx20);
-        assert(entry6GetLevel(buf) == 63);
-        assert(entry6GetPopulated(buf) == true);
-        assert(entry6GetHead(buf) == true);
+                if (memcmp(got, want, sizeof(got)) != 0) {
+                    ERR("width %u round %d: bytes differ from the layout", w,
+                        round);
+                }
+                if (mlruLinkGet_(got, w, 0) != prev ||
+                    mlruLinkGet_(got, w, 1) != next ||
+                    mlruFlagLevel_(got + w - 1) != level ||
+                    mlruFlagIs_(got + w - 1, MLRU_FLAG_POPULATED) !=
+                        populated ||
+                    mlruFlagIs_(got + w - 1, MLRU_FLAG_HEAD) != head) {
+                    ERR("width %u round %d: a field reads back wrong", w,
+                        round);
+                }
 
-        /* Test 10-byte entries (36-bit addresses) with bit packing */
-        memset(buf, 0, sizeof(buf));
-        uint64_t maxIdx36 = (1ULL << 36) - 1;
-        entry10SetPrev(buf, maxIdx36);
-        entry10SetNext(buf, maxIdx36);
-        entry10SetLevel(buf, 63);
-        entry10SetPopulated(buf, true);
-        entry10SetHead(buf, true);
-        assert(entry10GetPrev(buf) == maxIdx36);
-        assert(entry10GetNext(buf) == maxIdx36);
-        assert(entry10GetLevel(buf) == 63);
-        assert(entry10GetPopulated(buf) == true);
-        assert(entry10GetHead(buf) == true);
-
-        printf("bit packing round-trip (all widths): PASSED\n");
+                /* Rewriting prev leaves next and the flags alone */
+                mlruLinkSet_(got, w, 0, ~prev & mask);
+                if (mlruLinkGet_(got, w, 0) != (~prev & mask) ||
+                    mlruLinkGet_(got, w, 1) != next ||
+                    got[w - 1] != want[w - 1]) {
+                    ERR("width %u round %d: rewriting prev moved another "
+                        "field",
+                        w, round);
+                }
+            }
+        }
     }
 
     TEST("runtime configuration") {
@@ -3705,7 +3105,7 @@ int multilruTest(int, char *[]) {
                         multilruPtr removed;
                         multilruRemoveMinimum(mlru, &removed);
                     } else {
-                        multilruPtr lowest[1];
+                        multilruPtr lowest[1] = {};
                         if (multilruCollectLowest(mlru, lowest, 1) == 1) {
                             multilruIncrease(mlru, lowest[0]);
                         }
