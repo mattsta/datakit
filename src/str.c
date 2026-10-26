@@ -1941,7 +1941,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 fflush(stdout);
             }
 
-            char buf[10] = {};
+            char buf[21] = {};
             StrUInt64ToBuf(buf, sizeof(buf), i);
 
             databox result = {};
@@ -2574,6 +2574,41 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     testStrBufToUInt64();
     testStrInt64ToBuf(StrInt64ToBufTable);
     testStrInt64ToBuf(StrInt64ToBuf);
+
+    TEST("ToBuf: one byte short of its bound refuses untouched; at the "
+         "bound, the widest value") {
+        /* 'fn' given bound - 1 bytes returns 0 and writes nothing; given
+         * 'bound' it writes 'text' */
+#define STR_TOBUF_BOUND_(fn, bound, value, text)                               \
+    do {                                                                       \
+        uint8_t b_[64];                                                        \
+        memset(b_, '#', sizeof(b_));                                           \
+        if (fn(b_, (bound) - 1, (value)) != 0) {                               \
+            ERR("%s accepted %d bytes", #fn, (bound) - 1);                     \
+        }                                                                      \
+        for (size_t i_ = 0; i_ < sizeof(b_); i_++) {                           \
+            if (b_[i_] != '#') {                                               \
+                ERR("%s wrote byte %zu of a refused buffer", #fn, i_);         \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+        const size_t n_ = fn(b_, (bound), (value));                            \
+        if (n_ != strlen(text) || memcmp(b_, (text), n_) != 0) {               \
+            ERR("%s at %d bytes: %zu digits, want %s", #fn, (bound), n_,       \
+                (text));                                                       \
+        }                                                                      \
+    } while (0)
+        STR_TOBUF_BOUND_(StrUInt32ToBuf, 10, UINT32_MAX, "4294967295");
+        STR_TOBUF_BOUND_(StrUInt64ToBuf, 20, UINT64_MAX,
+                         "18446744073709551615");
+        STR_TOBUF_BOUND_(StrInt64ToBuf, 21, INT64_MIN, "-9223372036854775808");
+        STR_TOBUF_BOUND_(StrUInt128ToBuf, 40, ~(__uint128_t)0,
+                         "340282366920938463463374607431768211455");
+        STR_TOBUF_BOUND_(StrInt128ToBuf, 41,
+                         (__int128_t)((__uint128_t)1 << 127),
+                         "-170141183460469231731687303715884105728");
+#undef STR_TOBUF_BOUND_
+    }
 
     TEST("benchmark multiply vs. shifting by 100") {
         /* Smoke size: both forms agree on every input */

@@ -163,7 +163,7 @@ DK_INLINE_ALWAYS char *itoaTenThousand_(char *out, const uint32_t x) {
      * little endian) zero bytes: count leading zero bits and
      * round down to 8.
      */
-    uint32_t zeros = __builtin_ctz(buf) & -8U;
+    uint32_t zeros = stdc_trailing_zeros(buf) & -8U;
     buf += ZERO_CHARS; /* BCD -> ASCII. */
     buf >>= zeros;     /* Shift away leading zero characters */
     memcpy(out, &buf, 4);
@@ -273,7 +273,7 @@ size_t StrUInt32ToBuf(void *out_, size_t dstLen, uint32_t x) {
     uint64_t buf = encodeTenThousands_(x_div_PO4, x_mod_PO4);
 
     if (likely(x < PO8)) {
-        const uint32_t zeros = __builtin_ctzll(buf) & -8U;
+        const uint32_t zeros = stdc_trailing_zeros(buf) & -8U;
         buf += ZERO_CHARS;
         buf >>= zeros;
 
@@ -323,13 +323,16 @@ DK_INLINE_ALWAYS uint64_t ldivPO16_(const uint64_t x) {
     return (wide * mul) >> 115;
 }
 
-/* Requires 20 byte 'out' */
+/* Writes whole 8-byte chunks, so it needs the widest value's 20 bytes
+ * whatever 'x' is */
 DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
-size_t StrUInt64ToBuf(void *out_, [[maybe_unused]] size_t dstLen, uint64_t x) {
+size_t StrUInt64ToBuf(void *out_, size_t dstLen, uint64_t x) {
     char *out = out_;
     const char *const outStart = out_;
 
-    assert(dstLen >= 20);
+    if (dstLen < 20) {
+        return 0;
+    }
 
     if (likely(x < PO2)) {
         return itoaHundred_(out, x) - outStart;
@@ -350,7 +353,7 @@ size_t StrUInt64ToBuf(void *out_, [[maybe_unused]] size_t dstLen, uint64_t x) {
         uint32_t zeros;
 
         buf8 = encodeTenThousands_(x_div_PO4, x_mod_PO4);
-        zeros = __builtin_ctzll(buf8) & -8U;
+        zeros = stdc_trailing_zeros(buf8) & -8U;
         buf8 += ZERO_CHARS;
         buf8 >>= zeros;
 
@@ -383,7 +386,7 @@ size_t StrUInt64ToBuf(void *out_, [[maybe_unused]] size_t dstLen, uint64_t x) {
         const uint64_t hi_hi = idiv_PO4(x_div_PO8);
         const uint32_t hi_lo = x_div_PO8 - hi_hi * PO4;
         uint64_t buf_hi = encodeTenThousands_(hi_hi, hi_lo);
-        const uint32_t zeros = __builtin_ctzll(buf_hi) & -8U;
+        const uint32_t zeros = stdc_trailing_zeros(buf_hi) & -8U;
         buf_hi += ZERO_CHARS;
         buf_hi >>= zeros;
 
@@ -406,11 +409,13 @@ size_t StrUInt64ToBuf(void *out_, [[maybe_unused]] size_t dstLen, uint64_t x) {
     return (out + 16) - outStart;
 }
 
-/* Requires 21 byte 'out' */
+/* The sign plus the unsigned form's 20 bytes, for every value */
 size_t StrInt64ToBuf(void *out_, size_t dstLen, int64_t x) {
     char *out = out_;
     bool negative = x < 0;
-    assert(dstLen > 0);
+    if (dstLen < 21) {
+        return 0;
+    }
 
     /* The main loop works with 64bit unsigned integers for simplicity, so
      * we convert the number here and remember if it is negative. */
@@ -469,7 +474,9 @@ int32_t StrDoubleToBuf(void *_buf, size_t len, double value) {
 /* Note: a full-width __uint128_t printed in base 10 is 40 characters */
 static constexpr uint64_t PO9 = 1'000'000'000ULL;
 size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
-    assert(bufLen >= 40);
+    if (bufLen < 40) {
+        return 0;
+    }
 
     uint8_t *buf = (uint8_t *)buf_;
 
@@ -522,10 +529,11 @@ size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
          * custom buffer to the actual buffer */
 
         StrUInt9DigitsToBuf(lastSplat, (uint32_t)n);
-        memcpy(buf + offset, lastSplat + 9 - digits, digits);
 
-        /* Update accounting so the final single memmove() can do its thing */
+        /* The leading digits go just in front of the groups already
+         * written, which start at 'offset' */
         offset -= digits;
+        memcpy(buf + offset, lastSplat + 9 - digits, digits);
     }
 
     /* The "populate string reverse because we don't know its final size"
@@ -546,7 +554,9 @@ size_t StrInt128ToBuf(void *buf_, size_t bufLen, __int128_t n) {
 
     /* The sign plus the unsigned form's 40, for every value, so a short
      * buffer fails on its first use rather than on its first negative */
-    assert(bufLen >= 41);
+    if (bufLen < 41) {
+        return 0;
+    }
 
     if (n < 0) {
         buf[0] = '-';

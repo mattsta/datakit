@@ -466,14 +466,14 @@ typedef __uint128_t StrBloomFilterBig;
 #define StrValTimes100(val) ((val) * 100)
 #endif
 
+/* The digits of 'value' (no terminator), returning their count.  Each
+ * needs room for its type's widest value, whatever 'value' is (they write
+ * whole chunks), and returns 0, writing nothing, when dstLen is smaller:
+ * 10 (StrUInt32ToBuf), 20 (StrUInt64ToBuf), 21 (StrInt64ToBuf),
+ * 40 (StrUInt128ToBuf), 41 (StrInt128ToBuf). */
 size_t StrInt64ToBuf(void *dst, size_t dstLen, int64_t svalue);
-/* The digits of 'value' (no terminator); 0 when dstLen < 10, whatever the
- * value's length */
 size_t StrUInt32ToBuf(void *dst, size_t dstLen, uint32_t value);
 size_t StrUInt64ToBuf(void *dst, size_t dstLen, uint64_t svalue);
-
-/* The digits of 'value' (no terminator).  dstLen must be at least 40 for
- * the unsigned form and 41 for the signed one, whatever the value. */
 size_t StrUInt128ToBuf(void *dst, size_t dstLen, __uint128_t value);
 size_t StrInt128ToBuf(void *dst, size_t dstLen, __int128_t svalue);
 

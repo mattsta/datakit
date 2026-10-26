@@ -74,7 +74,7 @@ DK_INLINE_ALWAYS int64_t int_ceil(double v) {
  * below the chord error. */
 DK_INLINE_ALWAYS int32_t estimateDecimalScale(const int32_t exp,
                                               const uint64_t frac) {
-    const int32_t b = 63 - (int32_t)__builtin_clzll(frac);
+    const int32_t b = (int32_t)stdc_bit_width(frac) - 1;
     const int32_t l2 = exp + b;
     const double m = (double)frac / (double)(1ULL << b);
     const double x = ((double)l2 + (m - 1.0)) * 0.30102999566398119521 - 1.0e-9;
@@ -760,10 +760,15 @@ exponentialOffset: {
         buf[bi++] = exp[0]; /* e */
         buf[bi++] = exp[1]; /* ± */
 
-        /* Convert exponent into string and write into 'buf'
-         * at proper offset. */
-        const uint_fast32_t digitsLen =
-            StrUInt64ToBuf(buf + bi, len - bi, abs(places - 1));
+        /* The exponent's digits (at most 3: |exp| <= 324), written
+         * exactly: the 26-byte bound leaves no room for a chunked
+         * writer's slack here */
+        uint32_t e = (uint32_t)abs(places - 1);
+        const uint_fast32_t digitsLen = e >= 100 ? 3 : e >= 10 ? 2 : 1;
+        for (uint_fast32_t k = digitsLen; k > 0; k--) {
+            buf[bi + k - 1] = (char)('0' + e % 10);
+            e /= 10;
+        }
 
         addBonus = digitsLen;
 
