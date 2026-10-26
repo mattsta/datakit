@@ -32,20 +32,24 @@ For every change:
 3. **Format:** `dktools format write`. It formats the files changed from
    HEAD plus untracked ones: clang-format for C, prettier for Markdown,
    ruff for Python.
-4. **Verify on clang 22**, naming only the tests the change touches:
+4. **Verify:** test on clang 22 and build on gcc 15 in one run, naming
+   only the tests the change touches:
 
    ```sh
-   uv run --project tools dktools verify NAME --tests '^(testA|testB)$' PATH...
+   uv run --project tools dktools verify NAME --compiler clang22 --also-build gcc15 \
+       --tests '^(testA|testB)$' PATH...
    ```
 
    Name every changed file (or use `--all-changed`, or stage and use
    `--staged`). verify builds HEAD plus exactly those files, so other
-   uncommitted work cannot affect the result.
+   uncommitted work cannot affect the result. gcc 15 compiles and links
+   the same tree without running tests; the two-compiler test run is
+   validate, at a milestone. Run one verify at a time.
 
-5. **Verify on gcc 15:** the same command with `--compiler gcc15` and a
-   different `NAME`. The two runs can run at the same time.
+5. **Watch the time.** The `time` line gives each step's wall time; keep
+   a cycle short by naming fewer tests or splitting the change.
 6. **Read the result block.** It passes only when every line is clean:
-   - `build ok, 0 warning lines`;
+   - `build ok, 0 warning lines`, and the `also` line the same;
    - `ctest ok`;
    - `sanitizer ok`;
    - `alloc`, `atomic`, `output` and `format` all `ok`.
@@ -74,13 +78,15 @@ For every change:
 9. **If the change reads then writes the same container and key**, run
    `dktools fusionscan PATH...` and fold any pair where one search can do
    the work of two.
-10. **Commit:**
-    - stage explicit paths (never `git add -A`, `.` or a directory);
-    - run `uv run --project tools dktools leakcheck --staged`;
-    - write the message to a file, then `git commit -F FILE`.
+10. **Commit** with the message in a file (a subject, then `What:`,
+    `Why:` and `How:` paragraphs):
 
-    The message is a subject, then `What:`, `Why:` and `How:`
-    paragraphs.
+    ```sh
+    uv run --project tools dktools commit NAME -F FILE PATH...
+    ```
+
+    It commits exactly those paths, only if verify `NAME` passed and each
+    path is byte-for-byte what it built, and only after the leakage gate.
 
 Changes to `tools/` itself also run the tools' own tests:
 
