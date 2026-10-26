@@ -403,10 +403,8 @@ static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
     return r;
 }
 
-int fenwickBenchTest(int argc, char *argv[]) {
+int fenwickBenchTest(int, char *[]) {
     int err = 0;
-    (void)argc;
-    (void)argv;
 
     const size_t sizes[] = {1000, 100000, 4000000};
     const size_t nSizes = sizeof(sizes) / sizeof(*sizes);

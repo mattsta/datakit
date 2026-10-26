@@ -32,10 +32,7 @@ static void hashFromString(const char *str, size_t len, uint64_t hash[2]) {
     hash[1] = XXH64(str, len, hash[0]);
 }
 
-int linearBloomTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int linearBloomTest(int, char *[]) {
     int32_t err = 0;
 
     /* ================================================================

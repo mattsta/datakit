@@ -242,10 +242,7 @@ static bool verifyFlexMatchesTracker(flexP *f, const ptestBoxTracker *tracker) {
     return true;
 }
 
-int flexPTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int flexPTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

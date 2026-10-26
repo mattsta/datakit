@@ -367,9 +367,7 @@ static bool testApply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
-int clusterReplicatorTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int clusterReplicatorTest(int, char *[]) {
     int err = 0;
 
     static const persistOps *type_table[256];

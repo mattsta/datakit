@@ -31,8 +31,7 @@ static hmacKeyring *pcMailboxRing(void) {
 }
 
 /* Applies a frame unless its first payload byte asks for a rejection */
-static bool pcMailboxApply(const clusterFrame *frame, void *ctx) {
-    (void)ctx;
+static bool pcMailboxApply(const clusterFrame *frame, void *) {
     return frame->payload_len == 0 || frame->payload[0] != 0;
 }
 

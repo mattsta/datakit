@@ -608,9 +608,7 @@ static double pcPer(uint64_t total, size_t n) {
 /* Every registered type, or with PERSIST_CONTRACT_ONLY=name in the
  * environment, just that one (extra datakit-test arguments name more
  * tests, so the choice is not an argument) */
-int persistContractTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int persistContractTest(int, char *[]) {
     const char *only = getenv("PERSIST_CONTRACT_ONLY");
     int err = 0;
 

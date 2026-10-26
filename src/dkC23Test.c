@@ -88,9 +88,7 @@ static uint64_t dkC23Ceil_(uint64_t x, unsigned int width) {
         }                                                                      \
     } while (0)
 
-int dkC23Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkC23Test(int, char *[]) {
     int err = 0;
 
     TEST("stdbit: every function at every width against bit-by-bit "

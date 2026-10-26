@@ -240,10 +240,8 @@ SGT_BULK(I128, __int128_t, 0)
 SGT_BULK(U128, __uint128_t, 0)
 #endif
 
-int segmentTypesTest(int argc, char *argv[]) {
+int segmentTypesTest(int, char *[]) {
     int err = 0;
-    (void)argc;
-    (void)argv;
 
 #define SGT_RUN(T)                                                             \
     TEST("differential: segment" #T                                            \

@@ -274,10 +274,7 @@ static bool intsetPHolds_(intset *is, const int64_t *values, size_t n) {
     return true;
 }
 
-int intsetPTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int intsetPTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

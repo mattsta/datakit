@@ -51,11 +51,8 @@ DEFINE_BLB_ORACLE(blbOracle32, int32_t)
 DEFINE_BLB_ORACLE(blbOracle64, int64_t)
 
 /* Run tests */
-int intsetTest(int argc, char *argv[]) {
+int intsetTest(int, char *[]) {
     int err = 0;
-
-    (void)argc;
-    (void)argv;
 
     TEST("basic small tier operations") {
         cleaner(intsetFree) intset *is = intsetNew();

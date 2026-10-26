@@ -368,10 +368,8 @@ FWT_BULK(U128, __uint128_t, 0)
 FWT_BULK(Float, float, 1)
 FWT_BULK(Double, double, 1)
 
-int fenwickTypesTest(int argc, char *argv[]) {
+int fenwickTypesTest(int, char *[]) {
     int err = 0;
-    (void)argc;
-    (void)argv;
 
 #define FWT_RUN(T)                                                             \
     TEST("differential: fenwick" #T " against a naive array") {                \

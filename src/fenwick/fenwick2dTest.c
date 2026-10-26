@@ -252,10 +252,8 @@ F2T_TYPE(I128, __int128_t, __uint128_t, -F2T_I128_MAX - 1, F2T_I128_MAX, 0,
 F2T_TYPE(U128, __uint128_t, __uint128_t, 0, F2T_U128_MAX, 0, F2T_INT_FITS)
 #endif
 
-int fenwick2dTest(int argc, char *argv[]) {
+int fenwick2dTest(int, char *[]) {
     int err = 0;
-    (void)argc;
-    (void)argv;
 
     TEST("differential: every fenwick2d type against a dense grid") {
         for (uint64_t seed = 1; seed <= 3; seed++) {

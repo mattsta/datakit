@@ -170,9 +170,8 @@ typedef struct mdpReplace_ {
 /* Inside the dict's one search, with the key found: log the replace,
  * then rewrite the value, or decline when the log is refused (nothing
  * changes and nothing was logged) */
-static bool mdpLogThenReplace_(void *ctx, const databox *current,
+static bool mdpLogThenReplace_(void *ctx, const databox *,
                                databox *replacement) {
-    (void)current;
     mdpReplace_ *r = ctx;
     r->logged = persistCtxLogOp(r->ctx, PERSIST_OP_REPLACE, r->args, 2);
     if (r->logged == PERSIST_LOG_REFUSED) {
@@ -355,10 +354,7 @@ static bool verifyMultidictMatchesTracker(multidictP *d,
     return true;
 }
 
-int multidictPTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multidictPTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

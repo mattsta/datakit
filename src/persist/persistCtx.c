@@ -511,24 +511,18 @@ void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r) {
 #include <unistd.h>
 
 /* Counts bad-entry notifications */
-static void persistCtxTestNotify(persist *p, const persistBadEntryReport *r,
+static void persistCtxTestNotify(persist *, const persistBadEntryReport *,
                                  void *ctx) {
-    (void)p;
-    (void)r;
     (*(int *)ctx)++;
 }
 
 /* A store sync that fails as a full device would */
-static bool persistCtxTestFailSync(void *ctx) {
-    (void)ctx;
+static bool persistCtxTestFailSync(void *) {
     errno = ENOSPC;
     return false;
 }
 
-int persistCtxTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int persistCtxTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
 

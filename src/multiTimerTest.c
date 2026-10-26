@@ -31,9 +31,8 @@ defcleanerName(testCallbackState *, zfree, States);
 defcleaner(multiTimer *, multiTimerFree);
 
 /* Simple callback that counts invocations */
-static bool testCountingCallback(multiTimer *t, multiTimerId id,
+static bool testCountingCallback(multiTimer *, multiTimerId id,
                                  void *clientData) {
-    (void)t;
     testCallbackState *state = clientData;
     state->callCount++;
     state->lastId = id;
@@ -41,9 +40,8 @@ static bool testCountingCallback(multiTimer *t, multiTimerId id,
 }
 
 /* Callback that creates a new timer during execution */
-static bool testNestedTimerCallback(multiTimer *t, multiTimerId id,
+static bool testNestedTimerCallback(multiTimer *t, multiTimerId,
                                     void *clientData) {
-    (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
 
@@ -79,9 +77,8 @@ typedef struct testUnregisterOtherState {
     int callCount;
 } testUnregisterOtherState;
 
-static bool testUnregisterOtherCallback(multiTimer *t, multiTimerId id,
+static bool testUnregisterOtherCallback(multiTimer *t, multiTimerId,
                                         void *clientData) {
-    (void)id;
     testUnregisterOtherState *state = clientData;
     state->callCount++;
     multiTimerUnregister(t, state->target);
@@ -89,9 +86,7 @@ static bool testUnregisterOtherCallback(multiTimer *t, multiTimerId id,
 }
 
 /* Callback that stops all timers */
-static bool testStopAllCallback(multiTimer *t, multiTimerId id,
-                                void *clientData) {
-    (void)id;
+static bool testStopAllCallback(multiTimer *t, multiTimerId, void *clientData) {
     testCallbackState *state = clientData;
     state->callCount++;
     multiTimerStopAll(t);
@@ -99,9 +94,8 @@ static bool testStopAllCallback(multiTimer *t, multiTimerId id,
 }
 
 /* Callback that tries to re-enter timer processing */
-static bool testReentrantProcessCallback(multiTimer *t, multiTimerId id,
+static bool testReentrantProcessCallback(multiTimer *t, multiTimerId,
                                          void *clientData) {
-    (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
     multiTimerProcessTimerEvents(t); /* must be a safe no-op */
@@ -113,10 +107,7 @@ static void sleepUs(uint64_t us) {
     usleep((useconds_t)us);
 }
 
-int multiTimerTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multiTimerTest(int, char *[]) {
     int32_t err = 0;
 
     /* ================================================================

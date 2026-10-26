@@ -474,10 +474,7 @@ static const databox *mlpDataValue(mlpData data, uint32_t i,
     }
 }
 
-int multilistPTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multilistPTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

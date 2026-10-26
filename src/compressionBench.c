@@ -968,10 +968,7 @@ static void runLz4Benchmarks(void) {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
-int compressionBenchTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int compressionBenchTest(int, char *[]) {
     int err = 0;
 
     printf("\n");

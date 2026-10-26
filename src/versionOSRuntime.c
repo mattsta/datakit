@@ -39,9 +39,7 @@ static void __attribute__((constructor)) versionOSRuntimeInit(void) {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
-int versionOSRuntimeTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int versionOSRuntimeTest(int, char *[]) {
     int err = 0;
 
     TEST("release strings parse to ordered version codes") {

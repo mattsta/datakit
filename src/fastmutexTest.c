@@ -123,9 +123,7 @@ static bool fmCondHasWaiter(void *arg) {
     return queued;
 }
 
-int fastmutexTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int fastmutexTest(int, char *[]) {
     int err = 0;
 
     TEST("fastMutex: a queued waiter is woken by the slow unlock") {

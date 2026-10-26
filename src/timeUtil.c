@@ -84,10 +84,7 @@ uint64_t timeUtilMonotonicMs(void) {
 
 #include <unistd.h> /* usleep */
 
-int timeUtilTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int timeUtilTest(int, char *[]) {
     int32_t err = 0;
 
     /* Test that time values are non-zero and reasonable */

@@ -157,10 +157,8 @@ static int mf2tDiff_(uint64_t seed, bool mixed) {
     return err;
 }
 
-int multiFenwick2dTest(int argc, char *argv[]) {
+int multiFenwick2dTest(int, char *[]) {
     int err = 0;
-    (void)argc;
-    (void)argv;
 
     TEST("differential: exact integer results against an int128 grid") {
         for (uint64_t seed = 1; seed <= 3; seed++) {

@@ -205,9 +205,7 @@ static bool dkRandomTestForkedNextWord(uint64_t *childWord,
     return true;
 }
 
-int dkRandomTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkRandomTest(int, char *[]) {
     int err = 0;
 
     TEST("dkRandom64 gives every bit both values") {

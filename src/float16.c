@@ -304,9 +304,7 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
     __attribute__((no_sanitize("undefined"))) __attribute__((optimize("O0")))
 #endif
 
-FLOAT16_TEST_ATTRS int float16Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+FLOAT16_TEST_ATTRS int float16Test(int, char *[]) {
     /* 10 million iterations provides reliable timing while keeping tests fast.
      * float16 only has 65536 values, so this covers each value ~150 times. */
     const size_t testers = 10'000'000;

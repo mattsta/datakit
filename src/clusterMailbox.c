@@ -1839,9 +1839,7 @@ static size_t cmTestSealInner(const flex *inner, const uint8_t *key,
     return written;
 }
 
-int clusterMailboxTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int clusterMailboxTest(int, char *[]) {
     int err = 0;
 
     const uint8_t test_key[32] = {
@@ -3863,9 +3861,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
  * 3. Snapshot strictly AHEAD: re-orient current's bits forward into
  * the snapshot frame and OR.
  * 4. Snapshot at exactly the same last_applied: pure OR of bitmaps. */
-int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestMailboxWindowOrientationTest(int, char *[]) {
     int err = 0;
 
     const uint8_t key[32] = {0x5d, 0x05, 0xd5, 0x5d, 0x05, 0xd5, 0x5d, 0x05,
@@ -4240,9 +4236,7 @@ typedef struct cmStatsRaceCtx {
     _Atomic uint64_t reader_iterations;
 } cmStatsRaceCtx;
 
-static bool cmStatsRaceApply(const clusterFrame *f, void *ctx) {
-    (void)f;
-    (void)ctx;
+static bool cmStatsRaceApply(const clusterFrame *, void *) {
     return true;
 }
 
@@ -4338,9 +4332,7 @@ static void *cmStatsRaceReader(void *vctx) {
     return NULL;
 }
 
-int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestMailboxStatsRaceTest(int, char *[]) {
     int err = 0;
 
     const uint8_t key[32] = {0xd6, 0xd6, 0xd6, 0xd6, 0xd6, 0xd6, 0xd6, 0xd6,
@@ -4434,9 +4426,7 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
  * allocation pipeline (zmalloc). If zmalloc ever stopped returning
  * 64B-aligned pointers for an aligned struct, this test would catch
  * it. */
-int dkTestMailboxStatsAlignmentTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestMailboxStatsAlignmentTest(int, char *[]) {
     int err = 0;
 
     TEST("mailbox stats counters land on their dedicated cache lines") {
@@ -4699,9 +4689,7 @@ static void *cmRetireRaceRotator(void *vctx) {
     return NULL;
 }
 
-int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTestKeyringGetRawCopyMigrationClusterTest(int, char *[]) {
     int err = 0;
 
     const uint8_t key[32] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,

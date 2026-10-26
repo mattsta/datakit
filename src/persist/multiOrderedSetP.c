@@ -315,10 +315,7 @@ void multiOrderedSetGetStatsP(const multiOrderedSetP *mos,
 #ifdef DATAKIT_TEST
 #include "persistTestCommon.h"
 
-static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_basic(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -455,10 +452,7 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_iteration(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -537,10 +531,7 @@ static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_compaction(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -603,10 +594,7 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_resetReuse(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -675,10 +663,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_readers(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -761,10 +746,7 @@ static size_t test_mosPReadFile(const char *path, uint8_t *buf, size_t cap) {
     return n;
 }
 
-static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_openRefusals(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];
@@ -901,10 +883,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
  * for its member index (the Full tier), a remove under a refusing WAL is
  * REFUSED with the member kept, an absent member's is UNCHANGED, logging
  * works again, and a reopen holds only the logged removal */
-static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+static int test_multiOrderedSetP_refusedLog(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

@@ -237,8 +237,7 @@ static size_t dkDiagTestCaptureStderr_(dkDiagPrintMode mode, char *buf,
 }
 
 #define DK_DIAG_TEST_ABORTED 87
-[[noreturn]] static void dkDiagTestAbortHandler_(int sig) {
-    (void)sig;
+[[noreturn]] static void dkDiagTestAbortHandler_(int) {
     _exit(DK_DIAG_TEST_ABORTED);
 }
 
@@ -248,9 +247,7 @@ static void dkDiagTestFatalHook_(const dkDiagnostic *d, void *ctx) {
     (void)!write(fd, &code, sizeof(code));
 }
 
-int dkDiagTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkDiagTest(int, char *[]) {
     int err = 0;
 
     /* The suite's own reports stay off stderr unless it captures them */

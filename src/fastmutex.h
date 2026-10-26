@@ -64,8 +64,7 @@ static inline void fastMutexInit(fastMutex *m) {
     atomic_store_explicit(&m->word, 0, memory_order_relaxed);
 }
 
-static inline int fastMutexCondInit(fastCond *c, void *unused) {
-    (void)unused;
+static inline int fastMutexCondInit(fastCond *c, void *) {
     int ret;
     ret = pthread_mutex_init(&c->m, NULL);
     if (ret) {

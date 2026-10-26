@@ -67,11 +67,8 @@ static uint64_t randSeed(uint64_t *seed) {
     return *seed;
 }
 
-int fenwickI64Test(int argc, char *argv[]) {
+int fenwickI64Test(int, char *[]) {
     int err = 0;
-
-    (void)argc;
-    (void)argv;
 
     /* =================================================================
      * CATEGORY 1: BASIC OPERATIONS (6 tests)

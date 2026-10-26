@@ -1909,9 +1909,8 @@ typedef struct persistIterateCtx {
     void *ctx;
 } persistIterateCtx;
 
-static bool persistIterateEntry(persist *p, uint64_t seq, persistOp op,
+static bool persistIterateEntry(persist *, uint64_t seq, persistOp op,
                                 const uint8_t *data, size_t len, void *ctx) {
-    (void)p;
     const persistIterateCtx *it = ctx;
     const persistWALEntry entry = {
         .sequence = seq, .op = op, .data = data, .len = len};
@@ -2487,8 +2486,7 @@ static int64_t persistMemTell(void *ctx) {
     return (int64_t)m->position;
 }
 
-static bool persistMemSync(void *ctx) {
-    (void)ctx;
+static bool persistMemSync(void *) {
     return true; /* Memory is always "synced" */
 }
 
@@ -3180,10 +3178,8 @@ static size_t intsetPersistEstimateSize(const void *structure) {
     return intsetBytes((intset *)structure);
 }
 
-static bool intsetPersistEncodeOpInto(persistOp op, const void *args,
-                                      size_t argc, uint8_t *dst, size_t cap,
-                                      size_t *len) {
-    (void)argc;
+static bool intsetPersistEncodeOpInto(persistOp op, const void *args, size_t,
+                                      uint8_t *dst, size_t cap, size_t *len) {
     *len = 0;
 
     switch (op) {
@@ -3387,9 +3383,8 @@ static bool intsetBigPersistApplyOp(void *structure, persistOp op,
     return true;
 }
 
-static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
-                                         size_t argc, size_t *len) {
-    (void)argc;
+static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args, size_t,
+                                         size_t *len) {
     *len = 0;
     if (op == PERSIST_OP_CLEAR) {
         return persistOpNoBody(len);
@@ -5673,10 +5668,9 @@ typedef struct persistTestBadNotify {
     persistBadEntryReport last;
 } persistTestBadNotify;
 
-static void persistTestBadNotifyFn(persist *p,
+static void persistTestBadNotifyFn(persist *,
                                    const persistBadEntryReport *report,
                                    void *ctx) {
-    (void)p;
     persistTestBadNotify *n = ctx;
     n->calls++;
     n->last = *report;
@@ -5966,11 +5960,8 @@ static int persistTestRestoreConsistent(const persistOps *ops,
 
 /* An encoder claiming a body one byte past the WAL entry limit; the size
  * check refuses it before anything reads the claimed bytes */
-static uint8_t *persistTestHugeEncode(persistOp op, const void *args,
-                                      size_t argc, size_t *len) {
-    (void)op;
-    (void)args;
-    (void)argc;
+static uint8_t *persistTestHugeEncode(persistOp, const void *, size_t,
+                                      size_t *len) {
     *len = PERSIST_WAL_ENTRY_MAX_BYTES;
     /* @own: caller; free=zfree */
     return zmalloc(1);
@@ -5978,14 +5969,8 @@ static uint8_t *persistTestHugeEncode(persistOp op, const void *args,
 
 /* The same claim from an encode-into encoder, which writes nothing (no
  * buffer it is given could hold the claimed body) */
-static bool persistTestHugeEncodeInto(persistOp op, const void *args,
-                                      size_t argc, uint8_t *dst, size_t cap,
-                                      size_t *len) {
-    (void)op;
-    (void)args;
-    (void)argc;
-    (void)dst;
-    (void)cap;
+static bool persistTestHugeEncodeInto(persistOp, const void *, size_t,
+                                      uint8_t *, size_t, size_t *len) {
     *len = PERSIST_WAL_ENTRY_MAX_BYTES;
     return true;
 }
@@ -6002,8 +5987,7 @@ static ssize_t persistTestBudgetWrite(void *ctx, const void *data, size_t len) {
 }
 
 /* A store sync that fails as a full device would */
-static bool persistTestFailSync(void *ctx) {
-    (void)ctx;
+static bool persistTestFailSync(void *) {
     errno = ENOSPC;
     return false;
 }
@@ -6122,9 +6106,7 @@ static bool persistTestMlApplyPop(multilist **ml, bool fromTail,
         (const uint8_t *)f, flexBytes(f));
 }
 
-int persistTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int persistTest(int, char *[]) {
     int err = 0;
 
     /* ================================================================

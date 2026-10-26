@@ -99,8 +99,7 @@ static void test_heap(void) {
 #define MT_THREADS 8
 #define MT_ITERS 20000
 
-static void *mt_local(void *arg) {
-    (void)arg;
+static void *mt_local(void *) {
     void *keep[64] = {};
     for (int i = 0; i < MT_ITERS; i++) {
         int slot = i % 64;
@@ -137,8 +136,7 @@ static void **xq;            /* producer fills, consumers free */
 static _Atomic int xq_head;  /* next slot to free */
 static _Atomic int xq_count; /* produced so far */
 
-static void *mt_producer(void *arg) {
-    (void)arg;
+static void *mt_producer(void *) {
     for (int i = 0; i < XQ; i++) {
         void *p = mi_malloc((size_t)((i * 53) % 2048) + 1);
         assert(p);
@@ -149,8 +147,7 @@ static void *mt_producer(void *arg) {
     return NULL;
 }
 
-static void *mt_consumer(void *arg) {
-    (void)arg;
+static void *mt_consumer(void *) {
     for (;;) {
         /* @sync: relaxed counter */
         int idx = atomic_fetch_add_explicit(&xq_head, 1, memory_order_relaxed);
@@ -197,8 +194,7 @@ static void test_mt_crossfree(void) {
 static void *hd_blocks[HD_BLOCKS];
 static _Atomic int hd_go;
 
-static void *hd_freer(void *arg) {
-    (void)arg;
+static void *hd_freer(void *) {
     /* @sync: acquire memshardTest.hdGo */
     while (!atomic_load_explicit(&hd_go, memory_order_acquire)) {
         /* spin until the blocks are published */

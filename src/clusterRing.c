@@ -2531,11 +2531,9 @@ static uint64_t getLocationValue(const clusterLocation *loc,
     }
 }
 
-bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,
+bool clusterCheckAffinity(const clusterRing *, const clusterNode **nodes,
                           uint32_t count, const clusterAffinityRule *rules,
                           uint8_t ruleCount) {
-    (void)ring;
-
     if (count == 0) {
         return true;
     }
@@ -2891,11 +2889,8 @@ static bool clusterNodesHoldId(const clusterNode **nodes, uint32_t count,
 
 static void clusterPlanCountHeld(void *ctx, uint64_t lo, uint64_t hi,
                                  const clusterNode **oldNodes,
-                                 uint32_t oldCount,
-                                 const clusterNode **newNodes,
-                                 uint32_t newCount) {
-    (void)newNodes;
-    (void)newCount;
+                                 uint32_t oldCount, const clusterNode **,
+                                 uint32_t) {
     clusterPlanContext *c = ctx;
     for (uint32_t i = 0; i < oldCount; i++) {
         c->held[oldNodes[i]->arrayIndex] += (unsigned __int128)(hi - lo) + 1;
@@ -5097,10 +5092,9 @@ typedef struct testCallbackData {
     int callCount;
 } testCallbackData;
 
-static void testStateCallback(clusterRing *ring, uint64_t nodeId,
+static void testStateCallback(clusterRing *, uint64_t nodeId,
                               clusterNodeState oldState,
                               clusterNodeState newState, void *userData) {
-    (void)ring;
     testCallbackData *data = (testCallbackData *)userData;
     data->nodeId = nodeId;
     data->oldState = oldState;
@@ -5233,15 +5227,13 @@ typedef struct testIterData {
     int count;
 } testIterData;
 
-static bool testCountIter(const clusterNode *node, void *userData) {
-    (void)node;
+static bool testCountIter(const clusterNode *, void *userData) {
     testIterData *data = (testIterData *)userData;
     data->count++;
     return true;
 }
 
-static bool testStopAfter2(const clusterNode *node, void *userData) {
-    (void)node;
+static bool testStopAfter2(const clusterNode *, void *userData) {
     testIterData *data = (testIterData *)userData;
     data->count++;
     return data->count < 2;
@@ -7116,11 +7108,9 @@ static uint32_t clusterRingTestCheckPlan(const clusterRing *from,
     return violations;
 }
 
-static void clusterRingTestCountPlan(clusterRing *ring,
-                                     const clusterRebalancePlan *plan,
+static void clusterRingTestCountPlan(clusterRing *,
+                                     const clusterRebalancePlan *,
                                      void *userData) {
-    (void)ring;
-    (void)plan;
     (*(uint32_t *)userData)++;
 }
 
@@ -7141,21 +7131,15 @@ static uint32_t clusterRingTestRankNodes(const clusterRing *ring,
     return found;
 }
 
-static uint32_t clusterRingTestAscending(const clusterRing *ring,
-                                         const void *key, uint32_t keyLen,
-                                         const clusterNode **out,
+static uint32_t clusterRingTestAscending(const clusterRing *ring, const void *,
+                                         uint32_t, const clusterNode **out,
                                          uint32_t maxNodes) {
-    (void)key;
-    (void)keyLen;
     return clusterRingTestRankNodes(ring, out, maxNodes, false);
 }
 
-static uint32_t clusterRingTestDescending(const clusterRing *ring,
-                                          const void *key, uint32_t keyLen,
-                                          const clusterNode **out,
+static uint32_t clusterRingTestDescending(const clusterRing *ring, const void *,
+                                          uint32_t, const clusterNode **out,
                                           uint32_t maxNodes) {
-    (void)key;
-    (void)keyLen;
     return clusterRingTestRankNodes(ring, out, maxNodes, true);
 }
 
@@ -7386,10 +7370,7 @@ static int testAffinityOracleAndKeyTypes(void) {
     return err;
 }
 
-int clusterRingTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int clusterRingTest(int, char *[]) {
     int err = 0;
 
     err += testAffinityOracleAndKeyTypes();

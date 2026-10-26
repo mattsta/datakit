@@ -790,10 +790,7 @@ exponentialOffset: {
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
 
-int strDoubleFormatTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int strDoubleFormatTest(int, char *[]) {
     int err = 0;
 
 /* 'assertEqual' tests are mostly copied from mochinum */

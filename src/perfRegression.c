@@ -1770,9 +1770,7 @@ static void benchMultimapAtom(void) {
     perfContainerSink = sink;
 }
 
-int perfRegressionTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int perfRegressionTest(int, char *[]) {
     int err = 0;
 
     /* The TEST() macro wrappers make this discoverable through the

@@ -476,9 +476,7 @@ static int testDataboxIntegration(void) {
  * Main test runner
  * ============================================================================
  */
-int floatExtendedTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int floatExtendedTest(int, char *[]) {
     int err = 0;
 
     printf("\n=== floatExtended Test Suite ===\n\n");

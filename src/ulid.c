@@ -2483,10 +2483,7 @@ static void ulidTestGenerateAt(ulid64_t *out, ulidVariantType type,
     *after = timeUtilMonotonicNs() + g.clockOffsetNs;
 }
 
-int ulidTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int ulidTest(int, char *[]) {
     int32_t err = 0;
 
     TEST("every codec refuses bad characters, NULL and short buffers") {

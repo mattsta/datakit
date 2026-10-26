@@ -86,9 +86,7 @@ static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
         }                                                                      \
     } while (0)
 
-int dkTierLimitTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkTierLimitTest(int, char *[]) {
     int err = 0;
 
     TEST("every family starts at the compiled default") {

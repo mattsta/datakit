@@ -159,8 +159,7 @@ static void mosDestroy(void *c) {
     multiOrderedSetFree(c);
 }
 
-static void mosPut(void **c, int64_t k, int64_t v) {
-    (void)v;
+static void mosPut(void **c, int64_t k, int64_t) {
     const databox b = databoxNewSigned(k);
     multiOrderedSetAdd((multiOrderedSet **)c, &b, &b);
 }
@@ -254,8 +253,7 @@ static void isDestroy(void *c) {
     intsetFree(c);
 }
 
-static void isPut(void **c, int64_t k, int64_t v) {
-    (void)v;
+static void isPut(void **c, int64_t k, int64_t) {
     intsetAdd((intset **)c, isEncode(k), NULL);
 }
 
@@ -1273,9 +1271,7 @@ static int32_t simRunSequence(const simSeqOps *ops, uint64_t seed) {
     return r->err;
 }
 
-int tierSimTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int tierSimTest(int, char *[]) {
     int err = 0;
 
     TEST("tier simulation: every family through every phase") {

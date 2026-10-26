@@ -28,10 +28,7 @@ defcleaner(void *, zfree);
  * declared here and in datakit-test.c rather than there */
 int ptrlibTest(int argc, char *argv[]);
 
-int ptrlibTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int ptrlibTest(int, char *[]) {
     int err = 0;
 
     /* A realistic 16-byte-aligned heap pointer for round-trips */

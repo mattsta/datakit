@@ -395,10 +395,7 @@ static bool verifyMultimapMatchesTracker(multimapP *m,
     return true;
 }
 
-int multimapPTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multimapPTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
     char basePath[PATH_MAX];

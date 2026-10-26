@@ -545,10 +545,7 @@ static uint64_t pow2Ceiling64_reference(uint64_t x) {
     return x;
 }
 
-int utilTest(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
-
+int utilTest(int, char **) {
     int err = 0;
 
     TEST("glob matching, human seconds, base names, counter hex") {

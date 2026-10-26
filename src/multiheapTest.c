@@ -14,10 +14,7 @@ typedef struct mhCursor {
     uint64_t generation;
 } mhCursor;
 
-int multiheapTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int multiheapTest(int, char *[]) {
     int err = 0;
 
     TEST("insert / read / restore round-trip") {

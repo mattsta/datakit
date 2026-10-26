@@ -137,7 +137,7 @@ __attribute__((noinline)) static databoxType mfwResultType(const databox *a,
     return databoxResultType(a, b);
 }
 
-int multiFenwickTest(int argc, char *argv[]) {
+int multiFenwickTest(int, char *[]) {
     int err = 0;
 
     TEST("helpers: databox arithmetic and conversion against exact oracles") {
@@ -311,9 +311,6 @@ int multiFenwickTest(int argc, char *argv[]) {
             ERR("num compare");
         }
     }
-
-    (void)argc;
-    (void)argv;
 
     /* =================================================================
      * CATEGORY 1: BASIC OPERATIONS - SIGNED INT64 (6 tests)

@@ -735,8 +735,7 @@ size_t memtestProcessMemory(int passes) {
 
 /* macOS: Process memory testing via Mach VM is unreliable due to guard pages
  * and other protected regions that can cause crashes. Return unsupported. */
-size_t memtestProcessMemory(int passes) {
-    (void)passes;
+size_t memtestProcessMemory(int) {
     return 0; /* Not reliably supported on macOS */
 }
 
@@ -787,8 +786,7 @@ size_t memtestProcessMemory(int passes) {
 
 #else
 
-size_t memtestProcessMemory(int passes) {
-    (void)passes;
+size_t memtestProcessMemory(int) {
     return 0; /* Not supported on this platform */
 }
 

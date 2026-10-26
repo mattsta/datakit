@@ -254,11 +254,8 @@ static double mfwfBenchI64_(void **fw, size_t n, size_t ops, bool update,
     return (double)lps.global.us.duration * 1e3 / (double)ops;
 }
 
-int multiFenwickFlatTest(int argc, char *argv[]) {
+int multiFenwickFlatTest(int, char *[]) {
     int err = 0;
-
-    (void)argc;
-    (void)argv;
 
     TEST("NULL and empty trees") {
         databox r = DATABOX_SIGNED(7);

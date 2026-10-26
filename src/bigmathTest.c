@@ -85,10 +85,7 @@ static bool bigmathTestReprIs(bigmath *b, const char *want) {
            got[wantLen] == '\n';
 }
 
-int bigmathTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int bigmathTest(int, char *[]) {
     int err = 0;
 
     TEST("native round trips and ordering") {

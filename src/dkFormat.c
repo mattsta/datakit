@@ -147,9 +147,7 @@ dkFormatResult dkFormatPrefixRead(const dkFormatSpec *spec, const uint8_t *buf,
 
 defcleanerName(uint8_t *, zfree, FormatBytes);
 
-int dkFormatTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int dkFormatTest(int, char *[]) {
     int err = 0;
 
     /* Reads versions 2 and 3, knows must-understand bit 0 and ignorable

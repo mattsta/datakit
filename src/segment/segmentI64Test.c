@@ -91,11 +91,8 @@ static uint64_t randSeed(uint64_t *seed) {
     return *seed;
 }
 
-int segmentI64Test(int argc, char *argv[]) {
+int segmentI64Test(int, char *[]) {
     int err = 0;
-
-    (void)argc;
-    (void)argv;
 
     /* =================================================================
      * BASIC OPERATIONS

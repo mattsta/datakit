@@ -40,36 +40,30 @@ typedef struct {
 
 /* Actual usable block size the allocator handed back for a request — captures
  * size-class rounding / min-atom waste (the memory side of the tradeoff). */
-static size_t sysU(void *c, void *p) {
-    (void)c;
+static size_t sysU(void *, void *p) {
 #if defined(__APPLE__)
     return malloc_size(p);
 #else
     return malloc_usable_size(p);
 #endif
 }
-static size_t miU(void *c, void *p) {
-    (void)c;
+static size_t miU(void *, void *p) {
     return mi_usable_size(p);
 }
 static size_t mbU(void *c, void *p) {
     return memboundUsableSize((membound *)c, p);
 }
 
-static void *sysA(void *c, size_t n) {
-    (void)c;
+static void *sysA(void *, size_t n) {
     return malloc(n);
 }
-static void sysF(void *c, void *p) {
-    (void)c;
+static void sysF(void *, void *p) {
     free(p);
 }
-static void *miA(void *c, size_t n) {
-    (void)c;
+static void *miA(void *, size_t n) {
     return mi_malloc(n);
 }
-static void miF(void *c, void *p) {
-    (void)c;
+static void miF(void *, void *p) {
     mi_free(p);
 }
 static void *mbA(void *c, size_t n) {
@@ -83,13 +77,11 @@ static void mbF(void *c, void *p) {
  * datakitUseMemshard(). Comparing this row across the two configs measures the
  * memshard-as-global-backend benefit, function-pointer indirection
  * included. */
-static void *zmA(void *c, size_t n) {
-    (void)c;
+static void *zmA(void *, size_t n) {
     /* @own: caller; free=zfree */
     return zmalloc(n);
 }
-static void zmF(void *c, void *p) {
-    (void)c;
+static void zmF(void *, void *p) {
     zfree(p);
 }
 
