@@ -5693,7 +5693,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("PERF: sparse lookup performance") {
         const uint64_t numPositions = 1000;
-        const uint64_t positionSpread = 1000000;
+        const uint64_t positionSpread = 1'000'000;
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Create sparse bitmap across many chunks */
@@ -7227,7 +7227,7 @@ int multiroarTest(int argc, char *argv[]) {
         /* Bits spread over one chunk, three chunks or 122 chunks, plus a
          * range, so chunks are sparse, bitmaps, inverted listings and
          * full */
-        static constexpr uint64_t spreads[] = {8192, 3 * 8192, 1000000};
+        static constexpr uint64_t spreads[] = {8192, 3 * 8192, 1'000'000};
         for (int trial = 0; trial < 100; trial++) {
             cleaner(multiroarFree) multiroar *r = multiroarBitNew();
             uint64_t expectedCount = 0;
@@ -7624,7 +7624,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Set bits at very large positions */
         uint64_t positions[] = {
-            1000000,        10000000,        100000000,       1000000000,
+            1'000'000,      10'000'000,      100'000'000,     1'000'000'000,
             10000000000ULL, 100000000000ULL, 1000000000000ULL};
 
         for (uint64_t i = 0; i < sizeof(positions) / sizeof(positions[0]);
@@ -7855,7 +7855,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("multiroarMin/Max - single bit at various positions") {
         uint64_t testPositions[] = {0,    1,    100,    8191,
-                                    8192, 8193, 100000, 1000000};
+                                    8192, 8193, 100000, 1'000'000};
 
         for (uint64_t i = 0;
              i < sizeof(testPositions) / sizeof(testPositions[0]); i++) {
@@ -7951,16 +7951,16 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set bits across multiple chunks */
-        multiroarBitSet(r, 100);     /* Chunk 0 */
-        multiroarBitSet(r, 10000);   /* Chunk 1 */
-        multiroarBitSet(r, 100000);  /* Chunk 12 */
-        multiroarBitSet(r, 1000000); /* Chunk 122 */
+        multiroarBitSet(r, 100);       /* Chunk 0 */
+        multiroarBitSet(r, 10000);     /* Chunk 1 */
+        multiroarBitSet(r, 100000);    /* Chunk 12 */
+        multiroarBitSet(r, 1'000'000); /* Chunk 122 */
 
         uint64_t minPos, maxPos;
         if (!multiroarMin(r, &minPos) || minPos != 100) {
             ERR("Min for multi-chunk: expected 100, got %" PRIu64 "", minPos);
         }
-        if (!multiroarMax(r, &maxPos) || maxPos != 1000000) {
+        if (!multiroarMax(r, &maxPos) || maxPos != 1'000'000) {
             ERR("Max for multi-chunk: expected 1000000, got %" PRIu64 "",
                 maxPos);
         }
@@ -8658,7 +8658,7 @@ int multiroarTest(int argc, char *argv[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set 10000 consecutive bits starting at position 1000000 */
-        uint64_t start = 1000000;
+        uint64_t start = 1'000'000;
         uint64_t count = 10000;
         for (uint64_t i = 0; i < count; i++) {
             multiroarBitSet(r, start + i);
@@ -10229,7 +10229,7 @@ int multiroarTest(int argc, char *argv[]) {
             /* Create random bitmap */
             int numBits = 10 + (rand() % 5000);
             for (int i = 0; i < numBits; i++) {
-                uint64_t pos = ((uint64_t)rand() * rand() * rand()) % 1000000;
+                uint64_t pos = ((uint64_t)rand() * rand() * rand()) % 1'000'000;
                 multiroarBitSet(r, pos);
             }
 

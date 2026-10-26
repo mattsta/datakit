@@ -1015,10 +1015,10 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
         /* Test all 9-digit boundary values */
         const uint32_t testValues[] = {
-            0,         1,         9,         10,        99,       100,
-            999,       1000,      9999,      10000,     99999,    100000,
-            999999,    1000000,   9999999,   10000000,  99999999, 100000000,
-            999999999, 123456789, 987654321, 111111111, 500000000};
+            0,         1,         9,         10,         99,       100,
+            999,       1000,      9999,      10000,      99999,    100000,
+            999999,    1'000'000, 9999999,   10'000'000, 99999999, 100'000'000,
+            999999999, 123456789, 987654321, 111111111,  500000000};
 
         for (size_t i = 0; i < sizeof(testValues) / sizeof(testValues[0]);
              i++) {
@@ -1061,7 +1061,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         uint64_t rngState = 0x12345678;
         for (int i = 0; i < 100000; i++) {
             rngState = rngState * 6364136223846793005ULL + 1;
-            uint32_t val = (uint32_t)(rngState >> 32) % 1000000000;
+            uint32_t val = (uint32_t)(rngState >> 32) % 1'000'000'000;
 
             char buf[10] = {};
             StrUInt9DigitsToBuf(buf, val);
@@ -1723,7 +1723,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Small integer convert") {
-        const size_t loopers = 10000000;
+        const size_t loopers = 10'000'000;
         const char *numeristr = "1234567891234567";
         uint64_t result = 0;
 
@@ -1775,7 +1775,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Medium integer convert") {
-        const size_t loopers = 10000000;
+        const size_t loopers = 10'000'000;
         const char *numeristr = "1234567891234567";
         uint64_t result = 0;
 
@@ -1803,7 +1803,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                         "38975438950934859043750894350934785943798543";
 
         for (size_t offset = 0; offset < 1 /* 8 */; offset++) {
-            size_t printBooster = 1000000;
+            size_t printBooster = 1'000'000;
             {
                 TIME_INIT;
                 for (size_t i = 0; i < printBooster; i++) {
@@ -1825,7 +1825,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
     TEST("Speed of __uint128_t printing") {
         uint8_t buf[40];
-        size_t printBooster = 1000000;
+        size_t printBooster = 1'000'000;
 #if 0
         const __uint128_t bigThing =
             (((__uint128_t)54210108624275221ULL) << 64) |
@@ -3012,7 +3012,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     TEST("lenutf8 ascii large") {
         const char *foo = "hellooooooooooooooooooooooooooooo foo";
         const size_t len = strlen(foo);
-        const int booster = 1000000;
+        const int booster = 1'000'000;
 
         cleanerName(zfree, Chars) char *tester =
             zmalloc(len * booster); /* 37 MB */
@@ -3045,7 +3045,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     TEST("lenutf8countbytes ascii large") {
         const char *foo = "hellooooooooooooooooooooooooooooo foo";
         const size_t len = strlen(foo);
-        const int booster = 1000000;
+        const int booster = 1'000'000;
 
         cleanerName(zfree, Chars) char *tester =
             zmalloc(len * booster); /* 37 MB */
@@ -3513,13 +3513,13 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
     TEST("Benchmark: StrUInt9DigitsToBuf") {
         printf("  Benchmarking integer-to-string conversion...\n");
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         uint8_t buf[16];
         uint64_t checksum = 0;
 
         TIME_INIT;
         for (size_t i = 0; i < iterations; i++) {
-            StrUInt9DigitsToBuf(buf, (uint32_t)(i % 1000000000));
+            StrUInt9DigitsToBuf(buf, (uint32_t)(i % 1'000'000'000));
             checksum += buf[0];
         }
         TIME_FINISH(iterations, "StrUInt9DigitsToBuf");
@@ -4306,7 +4306,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         const char *asciiHeavy = "The quick brown fox jumps over the lazy dog. "
                                  "The quick brown fox jumps over the lazy dog.";
         const size_t asciiLen = strlen(asciiHeavy);
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         const uint8_t *result;
 
         /* SIMD version */

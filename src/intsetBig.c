@@ -1927,13 +1927,13 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
                 val = INT64_MIN + (random() % 10000);
                 break;
             case 3: /* Beyond INT64 positive */
-                val = ((__int128_t)INT64_MAX) + (random() % 1000000);
+                val = ((__int128_t)INT64_MAX) + (random() % 1'000'000);
                 break;
             case 4: /* Beyond INT64 negative */
-                val = ((__int128_t)INT64_MIN) - (random() % 1000000);
+                val = ((__int128_t)INT64_MIN) - (random() % 1'000'000);
                 break;
             case 5: /* Large 128-bit */
-                val = ((__int128_t)1 << 70) + (random() % 1000000);
+                val = ((__int128_t)1 << 70) + (random() % 1'000'000);
                 if (random() % 2) {
                     val = -val;
                 }
@@ -2801,7 +2801,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
 
             /* Also add some very large 128-bit values */
             if (random() % 3 == 0) {
-                val = ((__uint128_t)1 << 70) + (random() % 1000000);
+                val = ((__uint128_t)1 << 70) + (random() % 1'000'000);
             }
 
             databoxBig box;

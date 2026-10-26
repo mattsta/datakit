@@ -474,7 +474,7 @@ int sha256ShaNiTest(int argc, char *argv[]) {
             buf[i] = (uint8_t)rand();
         }
 
-        const uint32_t iters = 1000000;
+        const uint32_t iters = 1'000'000;
         uint32_t mismatches = 0;
         for (uint32_t t = 0; t < iters; t++) {
             /* Bias toward small sizes (the interesting padding region) but

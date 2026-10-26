@@ -2155,7 +2155,7 @@ static size_t zipfian(uint64_t *seed, size_t n, double skew) {
         sum += 1.0 / pow((double)i, skew);
     }
 
-    double rnd = (double)(xoroshiro128plus(seed) % 1000000) / 1000000.0;
+    double rnd = (double)(xoroshiro128plus(seed) % 1'000'000) / 1'000'000.0;
     double cumulative = 0;
 
     for (size_t i = 1; i <= n; i++) {

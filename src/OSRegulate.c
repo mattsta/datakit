@@ -991,16 +991,16 @@ bool OSRegulateResourceUsageGet(int64_t *selfMaxRSS, int64_t *childMaxRSS,
 #endif
 
     *selfSystemCPU =
-        (float)self.ru_stime.tv_sec + (float)self.ru_stime.tv_usec / 1000000;
+        (float)self.ru_stime.tv_sec + (float)self.ru_stime.tv_usec / 1'000'000;
 
     *selfUserCPU =
-        (float)self.ru_utime.tv_sec + (float)self.ru_utime.tv_usec / 1000000;
+        (float)self.ru_utime.tv_sec + (float)self.ru_utime.tv_usec / 1'000'000;
 
     *childSystemCPU = (float)children.ru_stime.tv_sec +
-                      (float)children.ru_stime.tv_usec / 1000000;
+                      (float)children.ru_stime.tv_usec / 1'000'000;
 
     *childUserCPU = (float)children.ru_utime.tv_sec +
-                    (float)children.ru_utime.tv_usec / 1000000;
+                    (float)children.ru_utime.tv_usec / 1'000'000;
 
     return true;
 }

@@ -2479,7 +2479,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
         }                                                                      \
     } while (0)
 
-    g_dkOwnedNowUs = 1000000;
+    g_dkOwnedNowUs = 1'000'000;
     g_dkOwnedReleases = 0;
     g_dkOwnedHoldCalls = 0;
     g_dkOwnedViolationNotes = 0;
@@ -3972,7 +3972,7 @@ static int dkTestOwnedSeqGateTest(int argc, char *argv[]) {
      * the call; it is printed, not bounded. */
     const bool b2one = acq1 * 4u <= ref1 * 5u;
     const bool b2storm = acqR * 4u <= refR * 5u;
-    const bool b3 = seqR < 1000000u;
+    const bool b3 = seqR < 1'000'000u;
     printf("ownedSeqGate: B1 no-concurrency-term %s (converted storm/R=1 "
            "scaling %.2f <= 2x reference scaling %.2f)\n",
            b1 ? "ok" : "FAIL", seqScale, refScale);

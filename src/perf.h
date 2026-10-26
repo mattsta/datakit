@@ -44,7 +44,7 @@
 static inline uint64_t perfNowNs(void) {
     struct timespec ts;
     clock_gettime(PERF_CLOCK_ID, &ts);
-    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+    return (uint64_t)ts.tv_sec * UINT64_C(1'000'000'000) + (uint64_t)ts.tv_nsec;
 }
 
 /* Monotonic microseconds (the same clock). */

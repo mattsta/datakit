@@ -766,7 +766,7 @@ static void runMultilistBenchmarks(void) {
            "leaves N nodes at each end uncompressed, 0 = never compress)\n");
     const uint32_t depths[] = {0, 1, 2, 5};
     for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
-        benchListFootprint("log100", 1000000, depths[d]);
+        benchListFootprint("log100", 1'000'000, depths[d]);
     }
 
     benchListFootprint("loginLine", 100000, 0);
@@ -794,7 +794,7 @@ static void runMultilistBenchmarks(void) {
     const size_t count = 100000;
 #else
     enum { ROUNDS = 7 };
-    const size_t count = 1000000;
+    const size_t count = 1'000'000;
 #endif
     const uint32_t timedDepths[] = {0, 2, 1};
     const char *const patterns[] = {"int64", "log100"};
@@ -1031,8 +1031,8 @@ int compressionBenchTest(int argc, char *argv[]) {
            "             \n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
            "━━━━━━━━━━━━━━\n");
-    runIntegerBenchmarks(1000000, "LARGE");
-    runFloatBenchmarks(1000000, "LARGE");
+    runIntegerBenchmarks(1'000'000, "LARGE");
+    runFloatBenchmarks(1'000'000, "LARGE");
 
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
            "━━━━━━━━━━━━━━━━\n");
@@ -1040,8 +1040,8 @@ int compressionBenchTest(int argc, char *argv[]) {
            "             \n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
            "━━━━━━━━━━━━━━\n");
-    runIntegerBenchmarks(10000000, "XLARGE");
-    runFloatBenchmarks(10000000, "XLARGE");
+    runIntegerBenchmarks(10'000'000, "XLARGE");
+    runFloatBenchmarks(10'000'000, "XLARGE");
 
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
            "━━━━━━━━━━━━━━━━\n");

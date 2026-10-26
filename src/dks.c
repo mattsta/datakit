@@ -3818,7 +3818,7 @@ int DKS_TEST(int argc, char *argv[]) {
 }
 
 int DKS_BENCHMAIN(void) {
-    for (int j = 0; j < 1000000; j++) {
+    for (int j = 0; j < 1'000'000; j++) {
         DKS_TYPE *s = DKS_EMPTYLEN(0);
         for (int i = 0; i < 200; i++) {
             s = DKS_CATLEN(s, "abc", 3);

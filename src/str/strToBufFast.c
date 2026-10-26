@@ -10,7 +10,7 @@
 /* Powers of 10. */
 #define PO2 100ULL
 #define PO4 10000ULL
-#define PO8 100000000ULL
+#define PO8 100'000'000ULL
 #define PO10 10000000000ULL
 #define PO16 10000000000000000ULL
 
@@ -468,7 +468,7 @@ int32_t StrDoubleToBuf(void *_buf, size_t len, double value) {
  * 128 bit integer string printing
  * ==================================================================== */
 /* Note: a full-width __uint128_t printed in base 10 is 40 characters */
-#define PO9 1000000000ULL
+#define PO9 1'000'000'000ULL
 size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
     assert(bufLen >= 40);
 

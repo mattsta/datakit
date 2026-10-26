@@ -824,7 +824,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
     }
 
     TEST("sha256 arm crypto differential vs portable on 1M random inputs") {
-        const uint32_t iters = 1000000;
+        const uint32_t iters = 1'000'000;
         /* Linear-congruential PRNG so the suite is deterministic and
          * independent of rand() implementation churn. */
         uint64_t rng = 0xDEADBEEFCAFEBABEULL;

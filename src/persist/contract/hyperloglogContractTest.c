@@ -15,7 +15,7 @@
 /* Member bytes: numerals and words, since the exact bytes are hashed */
 static size_t pcHllMember(uint64_t *rng, char *buf, size_t bufLen) {
     const uint64_t r = splitmix64(rng);
-    const int n = r & 1 ? snprintf(buf, bufLen, "%" PRIu64, r % 1000000)
+    const int n = r & 1 ? snprintf(buf, bufLen, "%" PRIu64, r % 1'000'000)
                         : snprintf(buf, bufLen, "member-%" PRIu64, r % 50000);
     return (size_t)n;
 }

@@ -385,7 +385,7 @@ int offsetArrayTest(int argc, char *argv[]) {
     TEST("size_t index type") {
         offsetArraySizeT a = {};
 
-        size_t idx1 = 1000000;
+        size_t idx1 = 1'000'000;
         size_t idx2 = 1000100;
 
         offsetArrayGrow(&a, idx1);

@@ -237,7 +237,7 @@ static int testPow10(void) {
         }
 
         p = dk_pow10_extended(6);
-        if (p != 1000000.0) {
+        if (p != 1'000'000.0) {
             ERR("pow10(6) = %g, expected 1000000", p);
         }
     }
@@ -369,7 +369,7 @@ static int testPerformance(void) {
     int err = 0;
 
     TEST("Performance: int64-double comparison throughput") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         PERF_TIMERS_SETUP;
 
         volatile int64_t sum = 0;

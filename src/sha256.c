@@ -318,7 +318,7 @@ int sha256Test(int argc, char *argv[]) {
     }
 
     TEST("one million 'a's") {
-        const size_t n = 1000000;
+        const size_t n = 1'000'000;
         cleanerName(zfree, U8) uint8_t *buf = zmalloc(n);
         memset(buf, 'a', n);
         uint8_t out[SHA256_DIGEST_LEN];

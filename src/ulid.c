@@ -1219,7 +1219,7 @@ void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
 
     case ULID_VARIANT_MS: {
         /* 42-bit ms + 22-bit random */
-        uint64_t timestampMs = timestampNs / 1000000;
+        uint64_t timestampMs = timestampNs / 1'000'000;
         uint64_t ts = timestampMs & 0x3FFFFFFFFFFULL; /* 42 bits */
         uint64_t randomBits = random & 0x3FFFFF;      /* 22 bits */
         out->data = (ts << 22) | randomBits;
@@ -1251,7 +1251,7 @@ void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
 
     case ULID_VARIANT_SNOWFLAKE: {
         /* 41-bit ms + 10-bit machine + 13-bit sequence */
-        uint64_t timestampMs = timestampNs / 1000000;
+        uint64_t timestampMs = timestampNs / 1'000'000;
         uint64_t ts = timestampMs & 0x1FFFFFFFFFFULL; /* 41 bits */
 
         /* Handle sequence counter.  The ms never goes backwards (emission
@@ -1267,7 +1267,7 @@ void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
                 timestampMs++;
                 g->snowflakeLastMs = timestampMs;
                 g->snowflakeSeq = 0;
-                const uint64_t msStart = timestampMs * 1000000;
+                const uint64_t msStart = timestampMs * 1'000'000;
                 if (g->lastEmittedNs < msStart) {
                     g->lastEmittedNs = msStart;
                 }
@@ -1312,7 +1312,7 @@ void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
     switch (type) {
     case ULID_VARIANT_32MS: {
         /* 26-bit ms + 6-bit random */
-        uint64_t timestampMs = timestampNs / 1000000;
+        uint64_t timestampMs = timestampNs / 1'000'000;
         uint32_t ts = (uint32_t)(timestampMs & 0x3FFFFFF); /* 26 bits */
         uint32_t randomBits = (uint32_t)(random & 0x3F);   /* 6 bits */
         out->data = (ts << 6) | randomBits;
@@ -1321,7 +1321,7 @@ void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
 
     case ULID_VARIANT_32S: {
         /* 22-bit s + 10-bit random */
-        uint64_t timestampS = timestampNs / 1000000000;
+        uint64_t timestampS = timestampNs / 1'000'000'000;
         uint32_t ts = (uint32_t)(timestampS & 0x3FFFFF);  /* 22 bits */
         uint32_t randomBits = (uint32_t)(random & 0x3FF); /* 10 bits */
         out->data = (ts << 10) | randomBits;
@@ -1998,7 +1998,7 @@ uint64_t ulid64GetTimestampNs(const ulid64_t *id, ulidVariantType type) {
 
     case ULID_VARIANT_MS: {
         uint64_t timestampMs = id->data >> 22;
-        return timestampMs * 1000000;
+        return timestampMs * 1'000'000;
     }
 
     case ULID_VARIANT_DUALNS:
@@ -2015,7 +2015,7 @@ uint64_t ulid64GetTimestampNs(const ulid64_t *id, ulidVariantType type) {
 
     case ULID_VARIANT_SNOWFLAKE: {
         uint64_t timestampMs = id->data >> 23;
-        return timestampMs * 1000000;
+        return timestampMs * 1'000'000;
     }
 
     default:
@@ -2104,12 +2104,12 @@ uint64_t ulid32GetTimestampNs(const ulid32_t *id, ulidVariantType type) {
     switch (type) {
     case ULID_VARIANT_32MS: {
         uint32_t timestampMs = id->data >> 6;
-        return (uint64_t)timestampMs * 1000000;
+        return (uint64_t)timestampMs * 1'000'000;
     }
 
     case ULID_VARIANT_32S: {
         uint32_t timestampS = id->data >> 10;
-        return (uint64_t)timestampS * 1000000000;
+        return (uint64_t)timestampS * 1'000'000'000;
     }
 
     default:
@@ -2401,7 +2401,7 @@ uint64_t ulid64GetMaxTimestamp(ulidVariantType type) {
     case ULID_VARIANT_US:
         return (0x3FFFFFFFFFFFULL) * 1000; /* 46 bits in us */
     case ULID_VARIANT_MS:
-        return (0x3FFFFFFFFFFULL) * 1000000; /* 42 bits in ms */
+        return (0x3FFFFFFFFFFULL) * 1'000'000; /* 42 bits in ms */
     case ULID_VARIANT_DUALNS:
         return 0xFFFFFFFFFFFFFFFFULL; /* 64 bits */
     case ULID_VARIANT_NSCOUNT:
@@ -2409,7 +2409,7 @@ uint64_t ulid64GetMaxTimestamp(ulidVariantType type) {
     case ULID_VARIANT_HYBRID:
         return (0xFFFFFFFFFFFULL) * 1000; /* 44 bits in us */
     case ULID_VARIANT_SNOWFLAKE:
-        return (0x1FFFFFFFFFFULL) * 1000000; /* 41 bits in ms */
+        return (0x1FFFFFFFFFFULL) * 1'000'000; /* 41 bits in ms */
     default:
         return 0;
     }
@@ -2613,7 +2613,7 @@ int ulidTest(int argc, char *argv[]) {
          * in the same millisecond, so the 13-bit sequence runs out */
         ulidGen g;
         ulidGenInit(&g, ULID_CLOCK_REALTIME);
-        g.lastEmittedNs = timeUtilNs() + 1000000000ULL;
+        g.lastEmittedNs = timeUtilNs() + 1'000'000'000ULL;
         const ulidVariantConfig cfg = {.type = ULID_VARIANT_SNOWFLAKE,
                                        .machineId = 77};
         ulid64_t prev = {};
@@ -2632,7 +2632,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("32-bit variants, compares and config validation") {
         static const ulidVariantType v32[] = {ULID_VARIANT_32MS,
                                               ULID_VARIANT_32S};
-        static constexpr uint64_t prec[] = {1000000, 1000000000};
+        static constexpr uint64_t prec[] = {1'000'000, 1'000'000'000};
         for (size_t v = 0; v < 2; v++) {
             ulidGen g;
             ulidGenInit(&g, ULID_CLOCK_REALTIME);
@@ -2720,17 +2720,17 @@ int ulidTest(int argc, char *argv[]) {
             {ULID_VARIANT_EPOCH2024, ULID_EPOCH_2024_NS, 1},
             {ULID_VARIANT_NS, 0, 1},
             {ULID_VARIANT_US, 0, 1000},
-            {ULID_VARIANT_MS, 0, 1000000},
+            {ULID_VARIANT_MS, 0, 1'000'000},
             {ULID_VARIANT_NSCOUNT, 0, 1},
             {ULID_VARIANT_HYBRID, 0, 1},
-            {ULID_VARIANT_SNOWFLAKE, 0, 1000000},
+            {ULID_VARIANT_SNOWFLAKE, 0, 1'000'000},
         };
         for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); v++) {
             const ulidVariantType type = variants[v].type;
             const uint64_t lo = variants[v].lowNs;
             const uint64_t hi = ulid64GetMaxTimestamp(type);
             const uint64_t prec = variants[v].precisionNs;
-            const uint64_t points[2] = {lo + (hi - lo) / 2, hi - 10000000};
+            const uint64_t points[2] = {lo + (hi - lo) / 2, hi - 10'000'000};
             for (size_t p = 0; p < 2; p++) {
                 ulid64_t id;
                 uint64_t before = 0;
@@ -2824,7 +2824,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid32Copy(&t, &s);
         if (ulid32GetRandom(&s, ULID_VARIANT_32S) >> 10 ||
             ulid32Compare(&s, &t) != 0 ||
-            ulid32GetTimestampNs(&s, ULID_VARIANT_32S) % 1000000000 != 0) {
+            ulid32GetTimestampNs(&s, ULID_VARIANT_32S) % 1'000'000'000 != 0) {
             ERR("a 32S id's random or second-resolution timestamp is wrong");
         }
         ulid32Clear(&t);
@@ -2909,7 +2909,7 @@ int ulidTest(int argc, char *argv[]) {
 
         ulid_t first;
         ulidGenerate(&m, &first);
-        const uint64_t forced = ulidGetTimestampNs(&first) + 1000000000ULL;
+        const uint64_t forced = ulidGetTimestampNs(&first) + 1'000'000'000ULL;
         m.lastEmittedNs = forced;
 
         ulid_t second;
@@ -3441,7 +3441,7 @@ int ulidTest(int argc, char *argv[]) {
     printf("\n--- Performance Benchmarks ---\n\n");
 
     TEST("ulid generation performance") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid_t id;
 
         PERF_TIMERS_SETUP;
@@ -3452,7 +3452,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid encode performance (scalar)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
@@ -3466,7 +3466,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid decode performance (scalar)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
@@ -3480,7 +3480,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid encode performance (SWAR)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
@@ -3494,7 +3494,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid decode performance (SWAR)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
@@ -3509,7 +3509,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_SSE2
     TEST("ulid encode performance (SSE2)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
@@ -3523,7 +3523,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid decode performance (SSE2)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
@@ -3539,7 +3539,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_AVX2
     TEST("ulid encode performance (AVX2)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
@@ -3553,7 +3553,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid decode performance (AVX2)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
@@ -3569,7 +3569,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_NEON
     TEST("ulid encode performance (NEON)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
@@ -3583,7 +3583,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid decode performance (NEON)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
@@ -4191,7 +4191,7 @@ int ulidTest(int argc, char *argv[]) {
     printf("\n--- ULID Variants Performance Benchmarks ---\n\n");
 
     TEST("ulid64 generation performance (NS)") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid64_t id;
 
         PERF_TIMERS_SETUP;
@@ -4202,7 +4202,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid64 encode performance") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         ulid64_t id;
         char encoded[ULID64_ENCODED_LENGTH + 1];
         volatile size_t totalLen = 0;
@@ -4224,7 +4224,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid64 decode performance") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         char encoded[ULID64_ENCODED_LENGTH + 1];
         ulid64_t decoded;
 
@@ -4255,7 +4255,7 @@ int ulidTest(int argc, char *argv[]) {
                                0x123456789ABCDEFULL,
                                timeUtilNs(),
                                timeUtilNs() + 1000,
-                               timeUtilNs() - 1000000};
+                               timeUtilNs() - 1'000'000};
         uint64_t test_ts2[] = {0ULL,
                                0xFFFFFFFFFFFFFFFFULL,
                                1ULL,
@@ -4366,7 +4366,7 @@ int ulidTest(int argc, char *argv[]) {
      * DUALNS_INTERLEAVED SIMD Performance Benchmarks
      * ================================================================ */
     TEST("Bit interleaving performance - SCALAR vs SIMD") {
-        const size_t iterations = 1000000;
+        const size_t iterations = 1'000'000;
         printf("    Benchmarking bit interleaving implementations (%zu "
                "iterations):\n",
                iterations);

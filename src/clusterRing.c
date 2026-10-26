@@ -6544,8 +6544,8 @@ static int testBenchmarkLocate(void) {
 
         /* Report (not a failure condition, just informational) */
         printf("    Ketama: %d ops in %.2fms (%.1f ns/op, %.1fM ops/sec)\n",
-               iterations, durationNs / 1000000.0, nsPerOp,
-               1000000000.0 / nsPerOp / 1000000.0);
+               iterations, durationNs / 1'000'000.0, nsPerOp,
+               1'000'000'000.0 / nsPerOp / 1'000'000.0);
     }
 
     TEST("BENCH: Rendezvous locate throughput") {
@@ -6582,8 +6582,8 @@ static int testBenchmarkLocate(void) {
         double nsPerOp = (double)durationNs / iterations;
 
         printf("    Rendezvous: %d ops in %.2fms (%.1f ns/op, %.1fK ops/sec)\n",
-               iterations, durationNs / 1000000.0, nsPerOp,
-               1000000000.0 / nsPerOp / 1000.0);
+               iterations, durationNs / 1'000'000.0, nsPerOp,
+               1'000'000'000.0 / nsPerOp / 1000.0);
     }
 
     TEST("BENCH: Jump hash locate throughput") {
@@ -6620,8 +6620,8 @@ static int testBenchmarkLocate(void) {
         double nsPerOp = (double)durationNs / iterations;
 
         printf("    Jump: %d ops in %.2fms (%.1f ns/op, %.1fM ops/sec)\n",
-               iterations, durationNs / 1000000.0, nsPerOp,
-               1000000000.0 / nsPerOp / 1000000.0);
+               iterations, durationNs / 1'000'000.0, nsPerOp,
+               1'000'000'000.0 / nsPerOp / 1'000'000.0);
     }
 
     TEST("BENCH: Maglev locate throughput") {
@@ -6658,8 +6658,8 @@ static int testBenchmarkLocate(void) {
         double nsPerOp = (double)durationNs / iterations;
 
         printf("    Maglev: %d ops in %.2fms (%.1f ns/op, %.1fM ops/sec)\n",
-               iterations, durationNs / 1000000.0, nsPerOp,
-               1000000000.0 / nsPerOp / 1000000.0);
+               iterations, durationNs / 1'000'000.0, nsPerOp,
+               1'000'000'000.0 / nsPerOp / 1'000'000.0);
     }
 
     TEST("BENCH: Bulk locate vs single locate") {
@@ -6715,8 +6715,8 @@ static int testBenchmarkLocate(void) {
         }
         uint64_t bulkEnd = timeUtilMonotonicNs();
 
-        double singleTimeMs = (singleEnd - singleStart) / 1000000.0;
-        double bulkTimeMs = (bulkEnd - bulkStart) / 1000000.0;
+        double singleTimeMs = (singleEnd - singleStart) / 1'000'000.0;
+        double bulkTimeMs = (bulkEnd - bulkStart) / 1'000'000.0;
 
         printf("    Single: %.2fms, Bulk: %.2fms (%.1fx speedup)\n",
                singleTimeMs, bulkTimeMs,

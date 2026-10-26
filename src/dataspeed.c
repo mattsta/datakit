@@ -114,7 +114,7 @@ static inline uint64_t dataspeed_time_ns(void) {
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+    return (uint64_t)ts.tv_sec * 1'000'000'000ULL + ts.tv_nsec;
 #endif
 }
 
@@ -541,13 +541,13 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
         /* Fallback: estimate via actual computation throughput */
         volatile uint64_t dummy = 0;
         uint64_t start_ns = dataspeed_time_ns();
-        for (int i = 0; i < 100000000; i++) {
+        for (int i = 0; i < 100'000'000; i++) {
             dummy += i;
         }
         uint64_t elapsed_ns = dataspeed_time_ns() - start_ns;
         (void)dummy;
         /* Rough estimate: ~1 add per cycle */
-        info->cpu_freq_mhz = 100000000.0 / elapsed_ns * 1000.0;
+        info->cpu_freq_mhz = 100'000'000.0 / elapsed_ns * 1000.0;
     }
 #else
     /* On x86, RDTSC runs at a fixed rate close to base frequency */
@@ -556,7 +556,7 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
 
     /* Busy loop for ~10ms */
     volatile uint64_t dummy = 0;
-    uint64_t target_ns = start_ns + 10000000; /* 10ms */
+    uint64_t target_ns = start_ns + 10'000'000; /* 10ms */
     while (dataspeed_time_ns() < target_ns) {
         dummy++;
     }
@@ -796,7 +796,7 @@ static void benchmark_latency_at_size(size_t size_bytes,
     uint64_t elapsed = dataspeed_time_ns() - start;
 
     /* Scale to ~100ms */
-    iterations = (size_t)((double)iterations * 100000000.0 / elapsed);
+    iterations = (size_t)((double)iterations * 100'000'000.0 / elapsed);
     if (iterations < 10000) {
         iterations = 10000;
     }
@@ -994,7 +994,7 @@ void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
 
     printf("=== CPU Operations ===\n");
 
-    const size_t iterations = 100000000; /* 100M iterations */
+    const size_t iterations = 100'000'000; /* 100M iterations */
     uint64_t start, elapsed;
     uint64_t r1;
     double r3, r4, r5;
@@ -1060,7 +1060,7 @@ void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
     printf("  Float FMA:   %6.2f Gops/s\n", results->float_fma_gops);
 
     /* Function call overhead */
-    size_t call_iters = 10000000;
+    size_t call_iters = 10'000'000;
     TIMING_BARRIER();
     start = dataspeed_time_ns();
     TIMING_BARRIER();
@@ -1383,7 +1383,7 @@ void dataspeedPrintReportJSON(const dataspeedReport *report) {
 dataspeedConfig dataspeedDefaultConfig(void) {
     return (dataspeedConfig){
         .min_duration_ms = 100,
-        .max_iterations = 1000000,
+        .max_iterations = 1'000'000,
         .warmup_iterations = 10,
         .verbose = true,
         .include_latency = true,

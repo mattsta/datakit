@@ -2076,7 +2076,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             multimapAtom *ma = multimapAtomNew();
             const size_t fill = pass ? pathFillCount : 0;
             for (size_t f = 0; f < fill; f++) {
-                const databox filler = databoxNewSigned(1000000 + (int64_t)f);
+                const databox filler = databoxNewSigned(1'000'000 + (int64_t)f);
                 multimapAtomInsert(ma, &filler);
             }
 
@@ -2209,7 +2209,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                 }
 
                 const databox *wantMin = NULL;
-                const databox fillMin = databoxNewSigned(1000000);
+                const databox fillMin = databoxNewSigned(1'000'000);
                 if (fill) {
                     wantMin = &fillMin;
                 }
@@ -2387,7 +2387,7 @@ int multimapAtomTest(int argc, char *argv[]) {
 
         /* Last-in-first-out churn reuses one id */
         for (int i = 0; i < 10000; i++) {
-            databox x = databoxNewSigned(1000000 + i);
+            databox x = databoxNewSigned(1'000'000 + i);
             multimapAtomInsertConvert(ma, &x);
             if (x.data.u != 5) {
                 ERR("churn %d got id %" PRIu64 ", want 5", i,

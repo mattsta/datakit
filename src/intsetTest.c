@@ -859,7 +859,7 @@ int intsetTest(int argc, char *argv[]) {
                 oracle[i] = (rand() % (INT16_MAX - INT16_MIN + 1)) + INT16_MIN;
             } else if (category == 1) {
                 /* int32 range (outside int16) */
-                oracle[i] = (rand() % 1000000) + INT16_MAX + 1;
+                oracle[i] = (rand() % 1'000'000) + INT16_MAX + 1;
             } else {
                 /* int64 range (large values) */
                 oracle[i] = INT64_MAX - (rand() % 10000);
@@ -1438,7 +1438,7 @@ int intsetTest(int argc, char *argv[]) {
         }
         static int64_t a64[400];
         for (int i = 0; i < 400; i++) {
-            a64[i] = (int64_t)i * 1000000000LL - 200000000000LL;
+            a64[i] = (int64_t)i * 1'000'000'000LL - 200000000000LL;
         }
         for (int i = 0; i < 400; i++) {
             if (blbOracle64(a64, 400, a64[i])) {

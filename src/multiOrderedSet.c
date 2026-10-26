@@ -3623,7 +3623,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         TIME_INIT;
         for (size_t i = 0; i < 10000; i++) {
-            int64_t score = (int64_t)(xoroshiro128plus(seed) % 1000000);
+            int64_t score = (int64_t)(xoroshiro128plus(seed) % 1'000'000);
             databox scoreBox = databoxNewSigned(score);
             char buf[32];
             snprintf(buf, sizeof(buf), "stress%zu", i);

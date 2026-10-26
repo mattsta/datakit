@@ -1002,7 +1002,8 @@ static uint32_t mlwVerify(multilist *ml, mflexState *s[2], const mlwVal *want,
 static databox mlrBox(uint32_t id, char buf[MLR_LEN + 1]) {
     /* id % 1000000 keeps the id at six digits, so the string is exactly
      * MLR_LEN bytes and GCC can prove the buffer is large enough. */
-    snprintf(buf, MLR_LEN + 1, "rw-%06" PRIu32 "-xxxxxxxxxxxxxx", id % 1000000);
+    snprintf(buf, MLR_LEN + 1, "rw-%06" PRIu32 "-xxxxxxxxxxxxxx",
+             id % 1'000'000);
     return databoxNewBytes(buf, MLR_LEN);
 }
 

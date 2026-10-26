@@ -1057,7 +1057,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         aeadNonceLogObserve(full, 2u, second);
         uint8_t filler[AEAD_NONCE_LOG_NONCE_LEN] = {};
         for (uint64_t i = 0; i < 55u; i++) {
-            nonceFromCounter(1000000u + i, filler);
+            nonceFromCounter(1'000'000u + i, filler);
             aeadNonceLogObserve(full, 3u, filler);
         }
         if (aeadNonceLogSize(full) != 56u) {

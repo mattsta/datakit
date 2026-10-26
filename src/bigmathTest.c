@@ -161,7 +161,7 @@ int bigmathTest(int argc, char *argv[]) {
         for (int32_t t = 0; t < 5000; t++) {
             const uint64_t a = BM_NEXT();
             const uint64_t b = BM_NEXT();
-            const uint64_t d = (BM_NEXT() % 1000000) + 1;
+            const uint64_t d = (BM_NEXT() % 1'000'000) + 1;
 
             /* top = a * b (up to 128 bits), bottom = small divisor */
             const __uint128_t top = (__uint128_t)a * b;
@@ -289,7 +289,7 @@ int bigmathTest(int argc, char *argv[]) {
         uint64_t rng = 0x2468ACE013579BDFULL;
         for (int32_t t = 0; t < 3000; t++) {
             const int64_t a = (int64_t)(BM_NEXT() >> 1);
-            const int64_t d = (int64_t)((BM_NEXT() % 1000000) + 1);
+            const int64_t d = (int64_t)((BM_NEXT() % 1'000'000) + 1);
             const int64_t sa = (t & 1) ? -a : a;
             const int64_t sd = (t & 2) ? -d : d;
 
@@ -488,7 +488,7 @@ int bigmathTest(int argc, char *argv[]) {
     TEST("reset then reuse leaves no state bleed") {
         bigmath b;
         bigmathInitUnsigned(&b, 12345);
-        bigmathMultiplyValue(&b, 1000000, &b);
+        bigmathMultiplyValue(&b, 1'000'000, &b);
         bigmathReset(&b);
 
         bigmathInitUnsigned(&b, 7);
@@ -569,8 +569,8 @@ int bigmathTest(int argc, char *argv[]) {
     TEST("imath: FUZZ gcd/lcm/invmod identities") {
         uint64_t rng = 0x1F2E3D4C5B6A7988ULL;
         for (int32_t t = 0; t < 1000; t++) {
-            const uint64_t a = (BM_NEXT() % 1000000) + 1;
-            const uint64_t b = (BM_NEXT() % 1000000) + 1;
+            const uint64_t a = (BM_NEXT() % 1'000'000) + 1;
+            const uint64_t b = (BM_NEXT() % 1'000'000) + 1;
 
             /* Euclid oracle */
             uint64_t x = a;

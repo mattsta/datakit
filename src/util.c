@@ -98,9 +98,9 @@ uint64_t humanToBytes(const void *buf_, const size_t len, bool *err) {
  * ==================================================================== */
 void secondsToHuman(void *const buf, const size_t len, const double sec) {
     if (sec < 0.000001) {
-        snprintf(buf, len, "%.4f ns", sec * 1000000000);
+        snprintf(buf, len, "%.4f ns", sec * 1'000'000'000);
     } else if (sec < 0.001) {
-        snprintf(buf, len, "%.4f us", sec * 1000000);
+        snprintf(buf, len, "%.4f us", sec * 1'000'000);
     } else if (sec < 1) {
         snprintf(buf, len, "%.4f ms", sec * 1000);
     } else if (sec < 60) {
@@ -766,11 +766,11 @@ int utilTest(int argc, char **argv) {
             {"k", 1000},
             {"KB", 1000},
             {"kib", 1024},
-            {"m", 1000000},
-            {"mb", 1000000},
+            {"m", 1'000'000},
+            {"mb", 1'000'000},
             {"MiB", 1048576},
-            {"g", 1000000000},
-            {"gb", 1000000000},
+            {"g", 1'000'000'000},
+            {"gb", 1'000'000'000},
             {"gib", 1073741824},
             {"t", 1000000000000},
             {"TB", 1000000000000},

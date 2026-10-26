@@ -309,7 +309,7 @@ FLOAT16_TEST_ATTRS int float16Test(int argc, char *argv[]) {
     (void)argv;
     /* 10 million iterations provides reliable timing while keeping tests fast.
      * float16 only has 65536 values, so this covers each value ~150 times. */
-    const size_t testers = 10000000;
+    const size_t testers = 10'000'000;
     const float in = 3.333333333333333333333;
     const uint16_t created = 44444;
 

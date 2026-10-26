@@ -165,7 +165,7 @@ static bool testRegisterFarThenNearCallback(timerWheel *tw, timerWheelId id,
     (void)id;
     testFarNearState *s = clientData;
     s->self.callCount++;
-    timerWheelRegister(tw, 10000000, 0, testCountingCallback, &s->farTimer);
+    timerWheelRegister(tw, 10'000'000, 0, testCountingCallback, &s->farTimer);
     timerWheelRegister(tw, 2000, 0, testCountingCallback, &s->nearTimer);
     return false;
 }
@@ -173,7 +173,7 @@ static bool testRegisterFarThenNearCallback(timerWheel *tw, timerWheelId id,
 static bool testRegisterFarCallback(timerWheel *tw, timerWheelId id,
                                     void *clientData) {
     (void)id;
-    timerWheelRegister(tw, 10000000, 0, testCountingCallback, clientData);
+    timerWheelRegister(tw, 10'000'000, 0, testCountingCallback, clientData);
     return false;
 }
 
@@ -285,7 +285,7 @@ int timerWheelTest(int argc, char *argv[]) {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {};
         const timerWheelId a =
-            timerWheelRegister(tw, 1000000, 0, testCountingCallback, &state);
+            timerWheelRegister(tw, 1'000'000, 0, testCountingCallback, &state);
         timerWheelRegister(tw, 2000000, 0, testCountingCallback, &state);
         timerWheelStopAll(tw);
         timerWheelStats stats;
@@ -307,7 +307,7 @@ int timerWheelTest(int argc, char *argv[]) {
             timerWheelRegister(tw2, 1000, 0, testCountingCallback, &state);
         timerWheelAdvanceTime(tw2, 5000);
         timerWheelUnregister(tw2, fired);
-        timerWheelRegister(tw2, 1000000, 0, testCountingCallback, &state);
+        timerWheelRegister(tw2, 1'000'000, 0, testCountingCallback, &state);
         timerWheelGetStats(tw2, &stats);
         const size_t beforeStop = stats.totalCancellations;
         timerWheelStopAll(tw2);
@@ -334,8 +334,8 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("timerWheel: ResetStats zeroes the counters, not the state") {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         int counter = 0;
-        const timerWheelId a =
-            timerWheelRegister(tw, 1000000, 0, testCountingCallback, &counter);
+        const timerWheelId a = timerWheelRegister(
+            tw, 1'000'000, 0, testCountingCallback, &counter);
         timerWheelRegister(tw, 2000000, 0, testCountingCallback, &counter);
         timerWheelUnregister(tw, a);
         timerWheelStats stats;
@@ -1001,7 +1001,7 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
 
         /* Small delay to ensure timer is "overdue" */
-        struct timespec ts = {0, 1000000}; /* 1ms */
+        struct timespec ts = {0, 1'000'000}; /* 1ms */
         nanosleep(&ts, NULL);
 
         /* Offset should be negative or very small (timer is due) */
@@ -1185,7 +1185,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
-        if (offset > 1000000) {
+        if (offset > 1'000'000) {
             ERR("Query returned far timer (%" PRId64
                 "us) instead of near (~2000us)",
                 offset);
@@ -1346,8 +1346,8 @@ int timerWheelTest(int argc, char *argv[]) {
             timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
         timerWheelAdvanceTime(tw, 3000);
 
-        const timerWheelDurationUs day = 24ULL * 3600 * 1000000;
-        static const timerWheelDurationUs delays[3] = {0, 1000000, 0};
+        const timerWheelDurationUs day = 24ULL * 3600 * 1'000'000;
+        static const timerWheelDurationUs delays[3] = {0, 1'000'000, 0};
         timerWheelId ids[3][3];
         for (int store = 0; store < 3; store++) {
             for (int i = 0; i < 3; i++) {
@@ -1419,7 +1419,7 @@ int timerWheelTest(int argc, char *argv[]) {
         testCallbackState nearState = {.callCount = 0};
 
         /* Near timer: 1s -> wheel 1 */
-        timerWheelRegister(tw, 1000000, 0, testCountingCallback, &nearState);
+        timerWheelRegister(tw, 1'000'000, 0, testCountingCallback, &nearState);
 
         /* Far timer: registered from a callback, so it parks in the
          * pending queue (10s) until the next process pass */
@@ -1469,7 +1469,7 @@ int timerWheelTest(int argc, char *argv[]) {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0};
 
-        const uint64_t dayUs = 24ULL * 60 * 60 * 1000000;
+        const uint64_t dayUs = 24ULL * 60 * 60 * 1'000'000;
         const uint64_t before = timeUtilMonotonicUs();
         timerWheelRegister(tw, dayUs, 0, testCountingCallback, &state);
 
@@ -1484,7 +1484,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* Overflow plus a nearer wheel timer: min must win */
         timerWheelRegister(tw, 5000, 0, testCountingCallback, &state);
         timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
-        if (offset > 1000000) {
+        if (offset > 1'000'000) {
             ERR("Nearer wheel timer masked by overflow entry: %" PRId64 "us",
                 offset);
         }
@@ -1720,7 +1720,7 @@ int timerWheelTest(int argc, char *argv[]) {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testLaggingClockState s;
         memset(&s, 0, sizeof(s));
-        s.lagUs = 10000000;
+        s.lagUs = 10'000'000;
         s.nearDelayUs = 3000000;
         s.farDelayUs = 7000000;
         const uint64_t marginUs = 10000;
@@ -1763,7 +1763,7 @@ int timerWheelTest(int argc, char *argv[]) {
 
         /* 24h initial delay and repeat: lives in overflow (>18.6h),
          * fires, and must reschedule back into overflow */
-        const uint64_t dayUs = 24ULL * 60 * 60 * 1000000;
+        const uint64_t dayUs = 24ULL * 60 * 60 * 1'000'000;
         timerWheelRegister(tw, dayUs, dayUs, testCountingCallback, &state);
 
         timerWheelStats stats;
@@ -1772,7 +1772,7 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Expected 1 overflow timer, got %zu", stats.overflowCount);
         }
 
-        timerWheelAdvanceTime(tw, dayUs + 1000000);
+        timerWheelAdvanceTime(tw, dayUs + 1'000'000);
         if (state.callCount != 1) {
             ERR("Overflow timer did not fire, callCount=%d", state.callCount);
         }
@@ -1790,7 +1790,7 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("timerWheel: a cancelled overflow timer is not the next event") {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {};
-        const uint64_t hourUs = UINT64_C(60) * 60 * 1000000;
+        const uint64_t hourUs = UINT64_C(60) * 60 * 1'000'000;
 
         /* A cancelled overflow entry stays stored until processing pulls
          * it into range, which is hours away. */
@@ -1983,7 +1983,7 @@ int timerWheelTest(int argc, char *argv[]) {
         PERF_TIMERS_SETUP;
 
         for (size_t i = 0; i < numOps; i++) {
-            timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
+            timerWheelRegister(tw, 1'000'000 + i, 0, testCountingCallback,
                                &state);
         }
 
@@ -1998,7 +1998,7 @@ int timerWheelTest(int argc, char *argv[]) {
         const size_t numOps = 10000;
 
         for (size_t i = 0; i < numOps; i++) {
-            timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
+            timerWheelRegister(tw, 1'000'000 + i, 0, testCountingCallback,
                                &state);
         }
 
@@ -2052,7 +2052,7 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t twStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numOps; i++) {
-            timerWheelRegister(tw, 1000000 + (i % 100000), 0,
+            timerWheelRegister(tw, 1'000'000 + (i % 100000), 0,
                                testCountingCallback, &state);
         }
 
@@ -2069,7 +2069,7 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t mtStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numOps; i++) {
-            multiTimerRegister(mt, 1000000 + (i % 100000), 0,
+            multiTimerRegister(mt, 1'000'000 + (i % 100000), 0,
                                mtCountingCallback, &state);
         }
 
@@ -2143,7 +2143,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         uint64_t twEnd = timeUtilMonotonicNs();
-        double twMs = (double)(twEnd - twStart) / 1000000.0;
+        double twMs = (double)(twEnd - twStart) / 1'000'000.0;
 
         timerWheelStats twStats;
         timerWheelGetStats(tw, &twStats);
@@ -2163,7 +2163,7 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         uint64_t mtEnd = timeUtilMonotonicNs();
-        double mtMs = (double)(mtEnd - mtStart) / 1000000.0;
+        double mtMs = (double)(mtEnd - mtStart) / 1'000'000.0;
 
         printf("    timerWheel:  %.1f ms, %zu bytes\n", twMs,
                twStats.memoryBytes);
@@ -2182,7 +2182,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* timerWheel */
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         for (size_t i = 0; i < warmupTimers; i++) {
-            timerWheelRegister(tw, (i % 1000) * 1000 + 1000000, 0,
+            timerWheelRegister(tw, (i % 1000) * 1000 + 1'000'000, 0,
                                testCountingCallback, &state);
         }
 
@@ -2209,7 +2209,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* multiTimer */
         cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         for (size_t i = 0; i < warmupTimers; i++) {
-            multiTimerRegister(mt, (i % 1000) * 1000 + 1000000, 0,
+            multiTimerRegister(mt, (i % 1000) * 1000 + 1'000'000, 0,
                                mtCountingCallback, &state);
         }
 
@@ -2300,7 +2300,7 @@ int timerWheelTest(int argc, char *argv[]) {
         testCallbackState state = {};
 
         /* Register timer for > 18.6 hours (should go to overflow) */
-        uint64_t veryLongDelay = 24ULL * 60 * 60 * 1000000; /* 24 hours */
+        uint64_t veryLongDelay = 24ULL * 60 * 60 * 1'000'000; /* 24 hours */
         timerWheelRegister(tw, veryLongDelay, 0, testCountingCallback, &state);
 
         timerWheelStats stats;
@@ -2338,7 +2338,7 @@ int timerWheelTest(int argc, char *argv[]) {
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
-                timerWheelRegister(tw, 1000000 + (i % 100000), 0,
+                timerWheelRegister(tw, 1'000'000 + (i % 100000), 0,
                                    testCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
@@ -2353,7 +2353,7 @@ int timerWheelTest(int argc, char *argv[]) {
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
-                multiTimerRegister(mt, 1000000 + (i % 100000), 0,
+                multiTimerRegister(mt, 1'000'000 + (i % 100000), 0,
                                    mtCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
@@ -2383,7 +2383,7 @@ int timerWheelTest(int argc, char *argv[]) {
             /* timerWheel - register then unregister */
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < count; i++) {
-                timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
+                timerWheelRegister(tw, 1'000'000 + i, 0, testCountingCallback,
                                    &state);
             }
 
@@ -2402,7 +2402,7 @@ int timerWheelTest(int argc, char *argv[]) {
             /* multiTimer - register then unregister */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             for (size_t i = 0; i < count; i++) {
-                multiTimerRegister(mt, 1000000 + i, 0, mtCountingCallback,
+                multiTimerRegister(mt, 1'000'000 + i, 0, mtCountingCallback,
                                    &state);
             }
 
@@ -2492,7 +2492,7 @@ int timerWheelTest(int argc, char *argv[]) {
             /* timerWheel */
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < count; i++) {
-                timerWheelRegister(tw, 1000000 + (i * 100), 0,
+                timerWheelRegister(tw, 1'000'000 + (i * 100), 0,
                                    testCountingCallback, &state);
             }
 
@@ -2513,7 +2513,7 @@ int timerWheelTest(int argc, char *argv[]) {
             /* multiTimer */
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             for (size_t i = 0; i < count; i++) {
-                multiTimerRegister(mt, 1000000 + (i * 100), 0,
+                multiTimerRegister(mt, 1'000'000 + (i * 100), 0,
                                    mtCountingCallback, &state);
             }
 
@@ -2593,11 +2593,11 @@ int timerWheelTest(int argc, char *argv[]) {
             uint64_t minUs;
             uint64_t maxUs;
         } distributions[] = {
-            {"Uniform short", 1000, 10000},       /* 1-10ms */
-            {"Uniform medium", 100000, 1000000},  /* 100ms-1s */
-            {"Uniform long", 1000000, 60000000},  /* 1s-60s */
-            {"Clustered", 5000, 5100},            /* 5ms ± 50μs */
-            {"Wide spread", 1000, 3600000000ULL}, /* 1ms-1hr */
+            {"Uniform short", 1000, 10000},        /* 1-10ms */
+            {"Uniform medium", 100000, 1'000'000}, /* 100ms-1s */
+            {"Uniform long", 1'000'000, 60000000}, /* 1s-60s */
+            {"Clustered", 5000, 5100},             /* 5ms ± 50μs */
+            {"Wide spread", 1000, 3600000000ULL},  /* 1ms-1hr */
         };
         const size_t numDists =
             sizeof(distributions) / sizeof(distributions[0]);
@@ -2662,7 +2662,7 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 timerWheelId id = timerWheelRegister(
-                    tw, 1000000, 0, testCountingCallback, &state);
+                    tw, 1'000'000, 0, testCountingCallback, &state);
                 timerWheelUnregister(tw, id);
             }
             PERF_TIMERS_FINISH;
@@ -2678,7 +2678,7 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 multiTimerId id = multiTimerRegister(
-                    mt, 1000000, 0, mtCountingCallback, &state);
+                    mt, 1'000'000, 0, mtCountingCallback, &state);
                 multiTimerUnregister(mt, id);
             }
             PERF_TIMERS_FINISH;
@@ -2702,8 +2702,8 @@ int timerWheelTest(int argc, char *argv[]) {
         /* timerWheel steady-state */
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         for (size_t i = 0; i < baseTimers; i++) {
-            timerWheelRegister(tw, 1000000 + (i * 100), 0, testCountingCallback,
-                               &state);
+            timerWheelRegister(tw, 1'000'000 + (i * 100), 0,
+                               testCountingCallback, &state);
         }
 
         PERF_TIMERS_SETUP;
@@ -2730,7 +2730,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* multiTimer steady-state */
         cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         for (size_t i = 0; i < baseTimers; i++) {
-            multiTimerRegister(mt, 1000000 + (i * 100), 0, mtCountingCallback,
+            multiTimerRegister(mt, 1'000'000 + (i * 100), 0, mtCountingCallback,
                                &state);
         }
 

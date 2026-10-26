@@ -328,7 +328,7 @@ static void ok(void) {
 static int64_t usec(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (((int64_t)tv.tv_sec) * 1000000) + tv.tv_usec;
+    return (((int64_t)tv.tv_sec) * 1'000'000) + tv.tv_usec;
 }
 
 #define intsetU32Assert(_e)                                                    \

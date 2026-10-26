@@ -424,7 +424,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
         size_t count = 0;
         for (size_t step = 0; step < 4000; step++) {
             const size_t idx = mfwfRand_(&seed) % N;
-            const int64_t v = (int64_t)(mfwfRand_(&seed) % 2000001) - 1000000;
+            const int64_t v = (int64_t)(mfwfRand_(&seed) % 2000001) - 1'000'000;
             const databox box = DATABOX_SIGNED(v);
             const bool set = mfwfRand_(&seed) % 4 == 0;
             const bool ok = set ? multiFenwickFlatSet(&mfw, idx, &box)

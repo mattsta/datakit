@@ -1142,7 +1142,7 @@ int strDoubleFormatTest(int argc, char *argv[]) {
                            0.1,
                            0.01,
                            0.001,
-                           1000000.0,
+                           1'000'000.0,
                            0.5,
                            4503599627370496.0,
                            smallFloat,

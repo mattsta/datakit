@@ -20,7 +20,7 @@
 static uint64_t nowns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    return (uint64_t)ts.tv_sec * 1'000'000'000ull + (uint64_t)ts.tv_nsec;
 }
 
 /* Branchy binary search, mirroring intsetFullFind32's structure: returns the
@@ -70,7 +70,7 @@ static void run(const char *name, int64_t n) {
         a[i] = (uint32_t)(i * 2);
     }
 
-    const int64_t M = 10000000; /* probes */
+    const int64_t M = 10'000'000; /* probes */
     uint64_t seed = 0x9e3779b97f4a7c15ull;
     volatile int64_t sink = 0;
 

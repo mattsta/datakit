@@ -6397,7 +6397,7 @@ int multimapTest(int argc, char *argv[]) {
         for (int32_t i = 0; i < numKeys; i++) {
             /* Generate random key */
             int64_t keyVal =
-                (int64_t)(xoroshiro128plus(seed) % 1000000) - 500000;
+                (int64_t)(xoroshiro128plus(seed) % 1'000'000) - 500000;
 
             databox key = databoxNewSigned(keyVal);
             databox val = databoxNewSigned(i);
@@ -6578,7 +6578,7 @@ int multimapTest(int argc, char *argv[]) {
             INT64_MIN + 1,
             INT64_MIN + 2,
             -1000000000000LL,
-            -1000000LL,
+            -1'000'000LL,
             -1000,
             -100,
             -10,
@@ -6590,7 +6590,7 @@ int multimapTest(int argc, char *argv[]) {
             10,
             100,
             1000,
-            1000000LL,
+            1'000'000LL,
             1000000000000LL,
             INT64_MAX - 2,
             INT64_MAX - 1,

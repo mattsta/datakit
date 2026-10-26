@@ -6,7 +6,7 @@ uint64_t timeUtilNs(void) {
      * microseconds and is never needed on supported targets. */
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    return ((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec;
+    return ((uint64_t)ts.tv_sec * 1'000'000'000ULL) + (uint64_t)ts.tv_nsec;
 }
 
 uint64_t timeUtilUs(void) {
@@ -14,7 +14,7 @@ uint64_t timeUtilUs(void) {
     uint64_t ust;
 
     gettimeofday(&tv, NULL);
-    ust = ((uint64_t)tv.tv_sec) * 1000000;
+    ust = ((uint64_t)tv.tv_sec) * 1'000'000;
     ust += tv.tv_usec;
     return ust;
 }
@@ -76,7 +76,7 @@ uint64_t timeUtilMonotonicUs(void) {
 }
 
 uint64_t timeUtilMonotonicMs(void) {
-    return timeUtilMonotonicNs() / 1000000;
+    return timeUtilMonotonicNs() / 1'000'000;
 }
 
 #ifdef DATAKIT_TEST

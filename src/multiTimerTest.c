@@ -490,7 +490,7 @@ int multiTimerTest(int argc, char *argv[]) {
         /* The sleep lasts at least 1ms, so a microsecond clock advances at
          * least ~1000.  The ceiling only catches a wrong unit; how much
          * longer the sleep runs depends on machine load, not on the clock. */
-        if (elapsed < 500 || elapsed > 1000000) {
+        if (elapsed < 500 || elapsed > 1'000'000) {
             ERR("Elapsed time %" PRId64 "us unexpected for 1ms sleep", elapsed);
         }
     }
@@ -508,7 +508,7 @@ int multiTimerTest(int argc, char *argv[]) {
         /* The sleep lasts at least 1ms, so a nanosecond clock advances at
          * least ~1000000.  The ceiling only catches a wrong unit; how much
          * longer the sleep runs depends on machine load, not on the clock. */
-        if (elapsed < 500000 || elapsed > 1000000000) {
+        if (elapsed < 500000 || elapsed > 1'000'000'000) {
             ERR("Elapsed time %" PRId64 "ns unexpected for 1ms sleep", elapsed);
         }
     }
@@ -954,7 +954,7 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerProcessTimerEvents(t);
 
         for (size_t i = 0; i < 10; i++) {
-            multiTimerRegister(t, 1000000, 0, testCountingCallback, &state);
+            multiTimerRegister(t, 1'000'000, 0, testCountingCallback, &state);
         }
 
         const uint64_t start = timeUtilMonotonicNs();
@@ -988,7 +988,8 @@ int multiTimerTest(int argc, char *argv[]) {
         PERF_TIMERS_SETUP;
 
         for (size_t i = 0; i < numOps; i++) {
-            multiTimerRegister(t, 1000000 + i, 0, testCountingCallback, &state);
+            multiTimerRegister(t, 1'000'000 + i, 0, testCountingCallback,
+                               &state);
         }
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timer registrations");
@@ -1003,7 +1004,8 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* First register all timers */
         for (size_t i = 0; i < numOps; i++) {
-            multiTimerRegister(t, 1000000 + i, 0, testCountingCallback, &state);
+            multiTimerRegister(t, 1'000'000 + i, 0, testCountingCallback,
+                               &state);
         }
 
         PERF_TIMERS_SETUP;
@@ -1024,7 +1026,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* Register many timers */
         for (size_t i = 0; i < numTimers; i++) {
-            multiTimerRegister(t, 1000000 + i * 100, 0, testCountingCallback,
+            multiTimerRegister(t, 1'000'000 + i * 100, 0, testCountingCallback,
                                &state);
         }
 
@@ -1174,7 +1176,7 @@ int multiTimerTest(int argc, char *argv[]) {
     TEST("multiTimer: high-scale million timer registration") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {};
-        const size_t numTimers = 1000000;
+        const size_t numTimers = 1'000'000;
 
         printf("    Registering %zu timers...\n", numTimers);
 
@@ -1249,7 +1251,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* Warmup: register many timers spread across time */
         for (size_t i = 0; i < warmupTimers; i++) {
-            multiTimerRegister(t, (i % 1000) * 1000 + 1000000, 0,
+            multiTimerRegister(t, (i % 1000) * 1000 + 1'000'000, 0,
                                testCountingCallback, &state);
         }
 

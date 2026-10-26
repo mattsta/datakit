@@ -81,7 +81,7 @@ DK_FN_UNUSED static void ptestGenerateBox(databox *box, ptestDataType type,
         *box = DATABOX_SIGNED((int8_t)(seed % 256 - 128));
         break;
     case PTEST_TYPE_SIGNED_LARGE:
-        *box = DATABOX_SIGNED((int64_t)seed * 1000000LL + seed);
+        *box = DATABOX_SIGNED((int64_t)seed * 1'000'000LL + seed);
         break;
     case PTEST_TYPE_UNSIGNED:
         *box = DATABOX_UNSIGNED((uint64_t)seed * 12345ULL);
@@ -128,7 +128,7 @@ DK_FN_UNUSED static int64_t ptestGenerateInt(int seed, int variation) {
     case 1:
         return (int64_t)seed * -1; /* Negative */
     case 2:
-        return (int64_t)seed * 1000000LL; /* Large */
+        return (int64_t)seed * 1'000'000LL; /* Large */
     case 3:
         return INT64_MIN + seed; /* Near min */
     case 4:

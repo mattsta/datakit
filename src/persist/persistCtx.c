@@ -22,7 +22,7 @@ defcleanerName(char *, zfree, Chars);
 static uint64_t getTimeMicroseconds(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000000 + (uint64_t)tv.tv_usec;
+    return (uint64_t)tv.tv_sec * 1'000'000 + (uint64_t)tv.tv_usec;
 }
 
 /* ============================================================================
@@ -324,7 +324,7 @@ bool persistCtxSyncIfDue(persistCtx *ctx) {
     }
 
     const uint64_t now = getTimeMicroseconds();
-    if (now - ctx->lastSyncTime >= 1000000) {
+    if (now - ctx->lastSyncTime >= 1'000'000) {
         if (!persistSync(ctx->p)) {
             return false;
         }

@@ -30,8 +30,8 @@ int pthread_cond_timedwait_relative_np(pthread_cond_t *cond,
                                        const struct timespec *reltime);
 #endif
 
-#define MONOTONIC_COND_NS_PER_SEC 1000000000
-#define MONOTONIC_COND_US_PER_SEC 1000000u
+#define MONOTONIC_COND_NS_PER_SEC 1'000'000'000
+#define MONOTONIC_COND_US_PER_SEC 1'000'000u
 #define MONOTONIC_COND_MS_PER_SEC 1000u
 #define MONOTONIC_COND_NS_PER_US 1000u
 #define MONOTONIC_COND_US_PER_MS 1000u

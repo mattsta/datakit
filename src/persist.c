@@ -352,7 +352,7 @@ static bool persistCheckHeaderKeyId(persist *p, uint32_t headerKeyId) {
 static uint64_t persistGetMicroseconds(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000000 + (uint64_t)tv.tv_usec;
+    return (uint64_t)tv.tv_sec * 1'000'000 + (uint64_t)tv.tv_usec;
 }
 
 /* ============================================================================
@@ -1509,7 +1509,7 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         break;
     case PERSIST_SYNC_EVERYSEC: {
         const uint64_t now = persistGetMicroseconds();
-        if (now - p->lastSyncTime >= 1000000) { /* 1 second */
+        if (now - p->lastSyncTime >= 1'000'000) { /* 1 second */
             syncNow = true;
             /* A failed sync waits for the next second, not the next op */
             p->lastSyncTime = now;
@@ -9095,12 +9095,12 @@ int persistTest(int argc, char *argv[]) {
 
             switch (op) {
             case 0: { /* Push signed */
-                int64_t val = (int64_t)(seed % 1000000) - 500000;
+                int64_t val = (int64_t)(seed % 1'000'000) - 500000;
                 flexPushSigned(&f, val, FLEX_ENDPOINT_TAIL);
                 break;
             }
             case 1: { /* Push unsigned */
-                uint64_t val = seed % 1000000;
+                uint64_t val = seed % 1'000'000;
                 flexPushUnsigned(&f, val, FLEX_ENDPOINT_TAIL);
                 break;
             }

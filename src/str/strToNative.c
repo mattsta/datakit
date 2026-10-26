@@ -199,7 +199,7 @@ uint64_t StrBufToUInt64Fast(const void *buf_, size_t len) {
 
     /* For 8+ digits, use SWAR conversion */
     while (len >= 8) {
-        ret = ret * 100000000ULL + parse8DigitsSWAR(buf);
+        ret = ret * 100'000'000ULL + parse8DigitsSWAR(buf);
         buf += 8;
         len -= 8;
     }

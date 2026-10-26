@@ -10035,7 +10035,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             REFERENCE_MAX_48 + 1,
             REFERENCE_MAX_56,
             REFERENCE_MAX_56 + 1,
-            REFERENCE_MAX_56 + 1000000000ULL,
+            REFERENCE_MAX_56 + 1'000'000'000ULL,
             REFERENCE_MAX_64 - 1,
             REFERENCE_MAX_64,
         };
@@ -11449,7 +11449,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             for (int i = -200; i < 0; i++) {
                 char *k = genkey("key", i);
                 char *v = genval("überlowerVal",
-                                 i * ((rand() % 2 == 0) ? -10000 : -1000000));
+                                 i * ((rand() % 2 == 0) ? -10000 : -1'000'000));
                 const databox keybox = databoxNewBytes(k, strlen(k));
                 const databox valbox = databoxNewBytes(v, strlen(v));
                 const databox *boxes[2] = {&keybox, &valbox};

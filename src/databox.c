@@ -1916,8 +1916,8 @@ int databoxTest(int argc, char *argv[]) {
 
     TEST("comparison reflexivity - same value equals itself") {
         /* Test signed integers at boundaries */
-        int64_t signedVals[] = {INT64_MIN, INT64_MIN + 1, -1000000, -1, 0, 1,
-                                1000000,   INT64_MAX - 1, INT64_MAX};
+        int64_t signedVals[] = {INT64_MIN, INT64_MIN + 1, -1'000'000, -1, 0, 1,
+                                1'000'000, INT64_MAX - 1, INT64_MAX};
         for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]);
              i++) {
             databox a = databoxNewSigned(signedVals[i]);
@@ -1927,7 +1927,7 @@ int databoxTest(int argc, char *argv[]) {
         }
 
         /* Test unsigned integers */
-        uint64_t unsignedVals[] = {0, 1, 1000000, UINT64_MAX - 1, UINT64_MAX};
+        uint64_t unsignedVals[] = {0, 1, 1'000'000, UINT64_MAX - 1, UINT64_MAX};
         for (size_t i = 0; i < sizeof(unsignedVals) / sizeof(unsignedVals[0]);
              i++) {
             databox a = databoxNewUnsigned(unsignedVals[i]);
@@ -2646,10 +2646,19 @@ int databoxTest(int argc, char *argv[]) {
 
     TEST("large value ranges for binary search correctness") {
         /* Test with values spread across the int64 range */
-        int64_t testVals[] = {
-            INT64_MIN,    INT64_MIN / 2, -1000000000LL, -1000000LL, -1000LL,
-            -1LL,         0LL,           1LL,           1000LL,     1000000LL,
-            1000000000LL, INT64_MAX / 2, INT64_MAX};
+        int64_t testVals[] = {INT64_MIN,
+                              INT64_MIN / 2,
+                              -1'000'000'000LL,
+                              -1'000'000LL,
+                              -1000LL,
+                              -1LL,
+                              0LL,
+                              1LL,
+                              1000LL,
+                              1'000'000LL,
+                              1'000'000'000LL,
+                              INT64_MAX / 2,
+                              INT64_MAX};
         const int N = sizeof(testVals) / sizeof(testVals[0]);
 
         /* Create sorted array */

@@ -200,7 +200,7 @@ int linearBloomTest(int argc, char *argv[]) {
 
     TEST("linearBloom: performance benchmark (1+ second runs)") {
         linearBloom *bloom = linearBloomNew();
-        const size_t numOps = 10000000; /* 10M ops for 1+ second runtime */
+        const size_t numOps = 10'000'000; /* 10M ops for 1+ second runtime */
         uint64_t hash[2];
 
         PERF_TIMERS_SETUP;
@@ -613,15 +613,15 @@ int linearBloomTest(int argc, char *argv[]) {
 
         /* Add items that might produce similar hash patterns */
         for (size_t i = 0; i < 100; i++) {
-            hashFromInt(i * 1000000, hash);
+            hashFromInt(i * 1'000'000, hash);
             linearBloomHashSet(bloom, hash);
         }
 
         /* All should be found */
         for (size_t i = 0; i < 100; i++) {
-            hashFromInt(i * 1000000, hash);
+            hashFromInt(i * 1'000'000, hash);
             if (!linearBloomHashCheck(bloom, hash)) {
-                ERR("Item %" PRIu64 " not found", (uint64_t)(i * 1000000));
+                ERR("Item %" PRIu64 " not found", (uint64_t)(i * 1'000'000));
             }
         }
 
@@ -643,7 +643,7 @@ int linearBloomTest(int argc, char *argv[]) {
                (double)expectedBytes / (1024 * 1024));
         printf("    linearBloom bits: %" PRIu64 " (%.2f million)\n",
                (uint64_t)LINEARBLOOM_EXTENT_BITS,
-               (double)LINEARBLOOM_EXTENT_BITS / 1000000);
+               (double)LINEARBLOOM_EXTENT_BITS / 1'000'000);
         printf("    linearBloom hashes: %d\n", LINEARBLOOM_HASHES);
 
         /* Verify we can allocate and use the full extent */
@@ -672,7 +672,7 @@ int linearBloomTest(int argc, char *argv[]) {
                expectedBytes, (double)expectedBytes / (1024 * 1024));
         printf("    linearBloomCount entries: %d (%.2f million)\n",
                LINEARBLOOMCOUNT_EXTENT_ENTRIES,
-               (double)LINEARBLOOMCOUNT_EXTENT_ENTRIES / 1000000);
+               (double)LINEARBLOOMCOUNT_EXTENT_ENTRIES / 1'000'000);
         printf("    linearBloomCount bits per entry: %d\n", LINEAR_BLOOM_BITS);
         printf("    linearBloomCount hashes: %d\n", LINEARBLOOMCOUNT_HASHES);
 
@@ -1270,7 +1270,7 @@ int linearBloomTest(int argc, char *argv[]) {
 
     TEST("linearBloom: large-scale stress test (1M items)") {
         linearBloom *bloom = linearBloomNew();
-        const size_t numItems = 1000000;
+        const size_t numItems = 1'000'000;
         uint64_t hash[2];
 
         /* Insert 1M random items */
@@ -1805,7 +1805,7 @@ int linearBloomTest(int argc, char *argv[]) {
         /* Test another value: 5 * 0.7 = 3.5 */
         totalResult = 0;
         for (size_t trial = 0; trial < numTrials; trial++) {
-            linearBloomCountRNGInit(&rng, trial + 1000000);
+            linearBloomCountRNGInit(&rng, trial + 1'000'000);
             uint8_t rounded = linearBloomCountProbRound(3.5, &rng);
             totalResult += rounded;
         }

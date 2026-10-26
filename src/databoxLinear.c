@@ -349,7 +349,7 @@ static float fuzzFloat(void) {
     memcpy(&f, &bits, sizeof(f));
     /* Filter out NaN/Inf for now - test those separately */
     if (!isfinite(f)) {
-        return (float)(fuzzNext() % 1000000) / 1000.0f;
+        return (float)(fuzzNext() % 1'000'000) / 1000.0f;
     }
     return f;
 }
@@ -361,7 +361,7 @@ static double fuzzDouble(void) {
     memcpy(&d, &bits, sizeof(d));
     /* Filter out NaN/Inf for now */
     if (!isfinite(d)) {
-        return (double)(fuzzNext() % 1000000000) / 1000000.0;
+        return (double)(fuzzNext() % 1'000'000'000) / 1'000'000.0;
     }
     return d;
 }

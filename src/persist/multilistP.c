@@ -457,7 +457,7 @@ static const databox *mlpDataValue(mlpData data, uint32_t i,
                                                    : false;
     if (shortStr) {
         memset(storage, 0, sizeof(*storage));
-        const int n = snprintf(str, cap, "s%" PRIu32, i % 1000000);
+        const int n = snprintf(str, cap, "s%" PRIu32, i % 1'000'000);
         *(databox *)storage = databoxNewBytes(str, (size_t)n);
         return (const databox *)storage;
     }
