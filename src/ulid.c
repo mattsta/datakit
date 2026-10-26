@@ -1052,8 +1052,7 @@ bool ulid64Decode(const char *str, ulid64_t *out) {
             return false; /* Invalid character */
         }
 
-        if (__builtin_mul_overflow(value, 36, &value) ||
-            __builtin_add_overflow(value, digitValue, &value)) {
+        if (ckd_mul(&value, value, 36) || ckd_add(&value, value, digitValue)) {
             return false;
         }
     }
@@ -1105,8 +1104,7 @@ bool ulid32Decode(const char *str, ulid32_t *out) {
             return false;
         }
 
-        if (__builtin_mul_overflow(value, 36, &value) ||
-            __builtin_add_overflow(value, digitValue, &value)) {
+        if (ckd_mul(&value, value, 36) || ckd_add(&value, value, digitValue)) {
             return false;
         }
     }

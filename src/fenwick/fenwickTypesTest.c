@@ -99,8 +99,7 @@ static size_t fwtIndex_(uint64_t *s) {
                 count = idx + 1 > count ? idx + 1 : count;                     \
             } else {                                                           \
                 VT want;                                                       \
-                const bool fits =                                              \
-                    !__builtin_add_overflow(elem[idx], v, &want);              \
+                const bool fits = !ckd_add(&want, elem[idx], v);               \
                 const size_t countBefore = fenwick##T##Count(fw);              \
                 if (fenwick##T##Update(&fw, idx, v) != fits) {                 \
                     ERR(#T " op %zu: Update(%zu) %s", op, idx,                 \

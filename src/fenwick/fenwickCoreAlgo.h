@@ -9,8 +9,8 @@
  * tree[0, capacity), capacity a power of two at or above the count.
  *
  * Arithmetic: integer cells add and subtract with wrapping (through
- * __builtin_add_overflow / __builtin_sub_overflow, so never signed
- * overflow UB, at every width including 128 bits).  Fenwick sums are
+ * ckd_add / ckd_sub, so never signed overflow UB, at every width
+ * including 128 bits).  Fenwick sums are
  * linear, so every sum computed from the cells is the exact sum modulo
  * 2^bits: exact whenever the true sum fits the type.  Elements, the
  * stored values, never wrap: AlgoNewElement_ refuses an element outside
@@ -26,7 +26,7 @@ static inline FENWICK_VALUE_TYPE FENWICK_ALGO_(AlgoAdd_)(FENWICK_VALUE_TYPE a,
     return a + b;
 #else
     FENWICK_VALUE_TYPE r;
-    (void)__builtin_add_overflow(a, b, &r); /* wraps by design */
+    (void)ckd_add(&r, a, b); /* wraps by design */
     return r;
 #endif
 }
@@ -37,7 +37,7 @@ static inline FENWICK_VALUE_TYPE FENWICK_ALGO_(AlgoSub_)(FENWICK_VALUE_TYPE a,
     return a - b;
 #else
     FENWICK_VALUE_TYPE r;
-    (void)__builtin_sub_overflow(a, b, &r); /* wraps by design */
+    (void)ckd_sub(&r, a, b); /* wraps by design */
     return r;
 #endif
 }
@@ -141,7 +141,7 @@ FENWICK_ALGO_(AlgoNewElement_)(const FENWICK_VALUE_TYPE *tree, uint64_t count,
     *out = old + delta;
     return isfinite(delta) && isfinite(*out);
 #else
-    return !__builtin_add_overflow(old, delta, out);
+    return !ckd_add(out, old, delta);
 #endif
 }
 

@@ -111,8 +111,8 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
              *        which also fixes the performance problem because it forces
              *        types at compile time too, but the current situation is
              *        fine as long as all the types match.) */
-            if (__builtin_mul_overflow(x, UINT64_C(10), &x) ||
-                __builtin_add_overflow(x, pDeref & UINT64_C(0x0F), &x)) {
+            if (ckd_mul(&x, x, UINT64_C(10)) ||
+                ckd_add(&x, x, pDeref & UINT64_C(0x0F))) {
                 /* If multiply or add caused overflow, we can't
                  * continue.
                  *

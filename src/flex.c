@@ -4480,11 +4480,10 @@ DK_STATIC bool flexMathIntegers_(const flex *f, flexMathOp_ op, __int128_t lo,
         if (op == FLEX_MATH_SUBTRACT_ && first) {
             acc = v;
         } else if (op == FLEX_MATH_MULTIPLY_) {
-            if (__builtin_mul_overflow(acc, v, &acc)) {
+            if (ckd_mul(&acc, acc, v)) {
                 return false;
             }
-        } else if (__builtin_add_overflow(
-                       acc, op == FLEX_MATH_SUBTRACT_ ? -v : v, &acc)) {
+        } else if (ckd_add(&acc, acc, op == FLEX_MATH_SUBTRACT_ ? -v : v)) {
             return false;
         }
         if (acc < lo || acc > hi) {

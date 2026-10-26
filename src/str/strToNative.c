@@ -46,8 +46,7 @@ bool StrBufToInt64(const void *s, const size_t slen, int64_t *value) {
     for (; (plen < slen) && (p[0] >= '0' && p[0] <= '9'); plen++, p++) {
 #if 1
         /* Faster... */
-        if (__builtin_mul_overflow(v, 10ULL, &v) ||
-            __builtin_add_overflow(v, *p & 0x0FULL, &v)) {
+        if (ckd_mul(&v, v, 10ULL) || ckd_add(&v, v, *p & 0x0FULL)) {
             return false;
         }
 #else
@@ -120,8 +119,8 @@ bool StrBufToUInt64(const void *s, const size_t slen,
         /* A wrapped v*10+d can still be >= the previous v (2050000000000000000
          * becomes 2053255926290448384 on its twentieth digit), so a "got
          * smaller" test misses overflow: check each step exactly. */
-        if (__builtin_mul_overflow(v, UINT64_C(10), &v) ||
-            __builtin_add_overflow(v, (uint64_t)(p[0] - '0'), &v)) {
+        if (ckd_mul(&v, v, UINT64_C(10)) ||
+            ckd_add(&v, v, (uint64_t)(p[0] - '0'))) {
             return false;
         }
     }
@@ -226,8 +225,8 @@ bool StrBufToUInt64FastCheckNumeric(const void *restrict buf_, size_t len,
     for (size_t i = 0; i < len; i++, buf++) {
         const char thing = *buf;
         if (likely(thing >= '0' && thing <= '9')) {
-            if (__builtin_mul_overflow(*ret, UINT64_C(10), ret) ||
-                __builtin_add_overflow(*ret, (uint64_t)(thing - '0'), ret)) {
+            if (ckd_mul(ret, *ret, UINT64_C(10)) ||
+                ckd_add(ret, *ret, (uint64_t)(thing - '0'))) {
                 return false; /* above UINT64_MAX */
             }
         } else {
@@ -246,8 +245,8 @@ bool StrBufToUInt64FastCheckOverflow(const void *buf_, const size_t len,
     for (size_t i = 0; i < len; i++, buf++) {
         /* Exact overflow check: a wrapped ret*10+d is not always smaller
          * than the previous ret */
-        if (__builtin_mul_overflow(ret, UINT64_C(10), &ret) ||
-            __builtin_add_overflow(ret, (uint64_t)(*buf - '0'), &ret)) {
+        if (ckd_mul(&ret, ret, UINT64_C(10)) ||
+            ckd_add(&ret, ret, (uint64_t)(*buf - '0'))) {
             *value = UINT64_MAX;
             return false;
         }
@@ -298,8 +297,8 @@ static bool strBufToUInt128Digits_(const void *buf, const size_t bufLen,
             const uint64_t converted =
                 StrBufToUInt64Fast(&s[position], lengthOfExtraction);
             const uint64_t multiply = StrTenPow(lengthOfExtraction);
-            if (__builtin_mul_overflow(result, multiply, &result) ||
-                __builtin_add_overflow(result, converted, &result)) {
+            if (ckd_mul(&result, result, multiply) ||
+                ckd_add(&result, result, converted)) {
                 return false;
             }
             position += lengthOfExtraction;

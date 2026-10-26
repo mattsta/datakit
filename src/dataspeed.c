@@ -217,7 +217,7 @@ DK_FN_UNUSED static bool dataspeedParseCacheSize_(const char *s,
 
     size_t size = 0;
     /* The multiply also fails when count itself does not fit size_t */
-    if (*end != '\0' || __builtin_mul_overflow(count, scale, &size)) {
+    if (*end != '\0' || ckd_mul(&size, count, scale)) {
         return false;
     }
 

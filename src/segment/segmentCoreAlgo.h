@@ -13,8 +13,8 @@
  * at 1, tree[0] unused.  Leaves past the count hold the operation's
  * identity, so extending the count within the leaves only sets a leaf.
  *
- * Arithmetic: an integer SUM adds with wrapping (through
- * __builtin_add_overflow, never signed-overflow UB), so a sum is exact
+ * Arithmetic: an integer SUM adds with wrapping (through ckd_add, never
+ * signed-overflow UB), so a sum is exact
  * whenever it fits the type and modulo 2^bits otherwise. */
 
 #define SEGMENT_ALGO_(name) SEGMENT_NAME(SEGMENT_SUFFIX, name)
@@ -47,7 +47,7 @@ static inline SEGMENT_VALUE_TYPE SEGMENT_ALGO_(Combine_)(SEGMENT_VALUE_TYPE a,
         return a + b;
 #else
         SEGMENT_VALUE_TYPE r;
-        (void)__builtin_add_overflow(a, b, &r); /* wraps by design */
+        (void)ckd_add(&r, a, b); /* wraps by design */
         return r;
 #endif
     }

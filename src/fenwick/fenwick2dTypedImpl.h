@@ -24,7 +24,7 @@ static inline F2D_VALUE_T F2D_PUB_(Add_)(F2D_VALUE_T a, F2D_VALUE_T b) {
     return a + b;
 #else
     F2D_VALUE_T r;
-    (void)__builtin_add_overflow(a, b, &r); /* wraps by design */
+    (void)ckd_add(&r, a, b); /* wraps by design */
     return r;
 #endif
 }
@@ -34,7 +34,7 @@ static inline F2D_VALUE_T F2D_PUB_(Sub_)(F2D_VALUE_T a, F2D_VALUE_T b) {
     return a - b;
 #else
     F2D_VALUE_T r;
-    (void)__builtin_sub_overflow(a, b, &r); /* wraps by design */
+    (void)ckd_sub(&r, a, b); /* wraps by design */
     return r;
 #endif
 }
@@ -159,7 +159,7 @@ bool F2D_PUB_(Update)(F2D_T_ **t, size_t row, size_t col, F2D_VALUE_T delta) {
         return false;
     }
 #else
-    if (__builtin_add_overflow(old, delta, &element)) {
+    if (ckd_add(&element, old, delta)) {
         return false;
     }
 #endif

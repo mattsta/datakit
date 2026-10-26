@@ -1018,7 +1018,7 @@ bool multimapFieldIncrByIf(multimap **m, const databox *key,
 
     /* Increment policy: exact; refuse a result outside int64. */
     int64_t next;
-    if (__builtin_add_overflow(current, incrBy, &next) ||
+    if (ckd_add(&next, current, incrBy) ||
         (incrBy != 0 && proceed && !proceed(ctx))) {
         if (newValue) {
             *newValue = current;

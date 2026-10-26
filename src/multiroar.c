@@ -959,8 +959,7 @@ bool multiroarValueInBounds(const multiroar *r, uint64_t position) {
     uint64_t cols;
     uint64_t bound;
     multiroarValueDimensions(r, &rows, &cols);
-    return !rows || !cols || __builtin_mul_overflow(rows, cols, &bound) ||
-           position < bound;
+    return !rows || !cols || ckd_mul(&bound, rows, cols) || position < bound;
 }
 
 uint64_t multiroarValueCount(const multiroar *r) {
@@ -2758,7 +2757,7 @@ static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
         uint64_t value;
         n = readVarint(p, (uint64_t)(end - p), &gap);
         if (n == 0 || (i > 0 && gap == 0) ||
-            __builtin_add_overflow(position, gap, &position)) {
+            ckd_add(&position, position, gap)) {
             return NULL;
         }
         p += n;

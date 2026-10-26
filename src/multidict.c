@@ -1825,7 +1825,7 @@ static bool mdIncrUpdate_(void *ctx, const databox *current,
         return false;
     }
 
-    if (__builtin_add_overflow(value, x->increment, &x->result)) {
+    if (ckd_add(&x->result, value, x->increment)) {
         return false;
     }
 

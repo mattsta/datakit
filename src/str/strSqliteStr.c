@@ -687,8 +687,8 @@ int32_t StrAtoi64(const void *_zNum, int64_t *pNum, int32_t length, uint8_t enc,
         /* Saturate rather than wrap: past 19 digits the return code is 1
          * either way, but *pNum must then be the clamped bound below, not
          * a wrapped magnitude */
-        if (__builtin_mul_overflow(u, UINT64_C(10), &u) ||
-            __builtin_add_overflow(u, (uint64_t)(c - '0'), &u)) {
+        if (ckd_mul(&u, u, UINT64_C(10)) ||
+            ckd_add(&u, u, (uint64_t)(c - '0'))) {
             u = UINT64_MAX;
         }
     }
@@ -921,7 +921,7 @@ bool StrSubInt64(int64_t *pA, int64_t iB) {
 
 bool StrMulInt64(int64_t *pA, int64_t iB) {
     int64_t product;
-    if (__builtin_mul_overflow(*pA, iB, &product)) {
+    if (ckd_mul(&product, *pA, iB)) {
         return false;
     }
 

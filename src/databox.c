@@ -1330,9 +1330,8 @@ static bool dbCanonIntegerOracle_(const uint8_t *s, size_t len, bool *shaped,
 
     __uint128_t magnitude = 0;
     for (size_t i = start; i < len; i++) {
-        if (__builtin_mul_overflow(magnitude, (__uint128_t)10, &magnitude) ||
-            __builtin_add_overflow(magnitude, (__uint128_t)(s[i] - '0'),
-                                   &magnitude)) {
+        if (ckd_mul(&magnitude, magnitude, (__uint128_t)10) ||
+            ckd_add(&magnitude, magnitude, (__uint128_t)(s[i] - '0'))) {
             return false;
         }
     }

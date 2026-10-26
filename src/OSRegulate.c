@@ -1105,8 +1105,8 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
                 uint64_t kb = 0;
                 size_t lineBytes = 0;
                 if (!osrParseKernelU64_(line + flen, SIZE_MAX, &kb) ||
-                    __builtin_mul_overflow(kb, (size_t)1024, &lineBytes) ||
-                    __builtin_add_overflow(bytes, lineBytes, &bytes)) {
+                    ckd_mul(&lineBytes, kb, (size_t)1024) ||
+                    ckd_add(&bytes, bytes, lineBytes)) {
                     /* A malformed or impossible line: the sum is unknown */
                     fclose(fp);
                     return 0;

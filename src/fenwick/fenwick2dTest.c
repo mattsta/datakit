@@ -132,7 +132,7 @@ static size_t f2tIndex_(uint64_t *s) {
     }
 
 /* a + b into *out; false when it does not fit the type */
-#define F2T_INT_FITS(a, b, out) (!__builtin_add_overflow(a, b, out))
+#define F2T_INT_FITS(a, b, out) (!ckd_add(out, a, b))
 #define F2T_FLOAT_FITS(a, b, out) (*(out) = (a) + (b), true)
 
 /* Per-type edges: a NULL tree is empty; refusals change nothing and
