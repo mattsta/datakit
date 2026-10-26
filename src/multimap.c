@@ -858,9 +858,9 @@ static multimapElements multimapElementsPerEntry_(const multimap *m) {
  * resize; repopulate through a fresh lookup. */
 void multimapEntryResize(multimap **m, const databox *key, size_t newSize) {
     multimapEntry me;
-    const bool found = multimapGetUnderlyingEntry(*m, key, &me);
+    [[maybe_unused]] const bool found =
+        multimapGetUnderlyingEntry(*m, key, &me);
     assert(found);
-    (void)found;
 
     /* advance from the key entry to its first value field */
     me.fe = flexNext(*me.map, me.fe);
@@ -877,9 +877,9 @@ void multimapEntryReplace(multimap **m, const databox *key,
     const multimapElements epe = multimapElementsPerEntry_(*m);
     for (multimapElements i = 0; i + 1 < epe; i++) {
         multimapEntry me;
-        const bool found = multimapGetUnderlyingEntry(*m, key, &me);
+        [[maybe_unused]] const bool found =
+            multimapGetUnderlyingEntry(*m, key, &me);
         assert(found);
-        (void)found;
 
         for (multimapElements skip = 0; skip <= i; skip++) {
             me.fe = flexNext(*me.map, me.fe);
@@ -4653,13 +4653,11 @@ int multimapTest(int, char *[]) {
         databox *values[1] = {&value};
         bool found = multimapLookup(m, &key, values);
         assert(found);
-        (void)found;
         assert(databoxEqual(&val, &value));
 
         multimapDelete(&m, &key);
         exists = multimapExists(m, &key);
         assert(!exists);
-        (void)exists;
 
         assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
         multimapReport(m);
@@ -4684,7 +4682,6 @@ int multimapTest(int, char *[]) {
         databox *results[1] = {&result};
         bool found = multimapLookup(m, &key1, results);
         assert(found);
-        (void)found;
         assert(databoxEqual(&val1, &result));
 
         /* Insert same key with different value - should replace */
@@ -4706,7 +4703,6 @@ int multimapTest(int, char *[]) {
         const databox *elements3[2] = {&key2, &val3};
         replaced = multimapInsert(&m, elements3);
         assert(!replaced);
-        (void)replaced;
         assert(multimapCount(m) == 2); /* Now we have 2 entries */
     }
 
@@ -4725,7 +4721,6 @@ int multimapTest(int, char *[]) {
             const databox *elements[2] = {&key, &val};
             bool replaced = multimapInsert(&m, elements);
             assert(!replaced);
-            (void)replaced;
         }
         assert(multimapCount(m) == 1000);
 
@@ -4755,7 +4750,6 @@ int multimapTest(int, char *[]) {
             databox *results[1] = {&result};
             bool found = multimapLookup(m, &key, results);
             assert(found);
-            (void)found;
             databox expected = databoxNewSigned(i + 10000);
             if (!databoxEqual(&expected, &result)) {
                 ERR("Key %s has wrong value at iteration %d!", keyBuf, i);
@@ -4843,7 +4837,6 @@ int multimapTest(int, char *[]) {
                 databox *results[1] = {&result};
                 const bool found = multimapLookup(m, &key, results);
                 assert(found);
-                (void)found;
                 databox expected = databoxNewSigned(shadow[i]);
                 assert(databoxEqual(&expected, &result));
             }
@@ -4892,7 +4885,6 @@ int multimapTest(int, char *[]) {
                 multimapEntry me = {};
                 const bool found = multimapGetUnderlyingEntry(m, &key, &me);
                 assert(found);
-                (void)found;
 
                 /* advance from the key entry to its value entry */
                 me.fe = flexNext(*me.map, me.fe);
@@ -4910,7 +4902,6 @@ int multimapTest(int, char *[]) {
                 databox *results[1] = {&result};
                 const bool found = multimapLookup(m, &key, results);
                 assert(found);
-                (void)found;
                 assert(result.len == len);
                 assert(memcmp(result.data.bytes.start, buf, len) == 0);
             }
@@ -4929,7 +4920,6 @@ int multimapTest(int, char *[]) {
                 multimapEntry me = {};
                 const bool found = multimapGetUnderlyingEntry(m, &key, &me);
                 assert(found);
-                (void)found;
 
                 me.fe = flexNext(*me.map, me.fe);
                 multimapResizeEntry(&m, &me, resizeTo[L]);
@@ -4939,7 +4929,6 @@ int multimapTest(int, char *[]) {
                 databox *results[1] = {&result};
                 const bool stillThere = multimapLookup(m, &key, results);
                 assert(stillThere);
-                (void)stillThere;
                 assert(result.len == resizeTo[L]);
             }
         }
@@ -5205,8 +5194,8 @@ int multimapTest(int, char *[]) {
 
 #if 1
     TEST("speeds at different sizes") {
-        uint64_t secs[20] = {};
-        size_t size[20] = {};
+        [[maybe_unused]] uint64_t secs[20] = {};
+        [[maybe_unused]] size_t size[20] = {};
         int i = 0;
         for (size_t maxIdx = 0; maxIdx < flexOptimizationSizeLimits; maxIdx++) {
             flexCapSizeLimit maxSize = flexOptimizationSizeLimit[maxIdx];
@@ -5229,8 +5218,6 @@ int multimapTest(int, char *[]) {
                 TIME_FINISH(pairs, "insert");
                 secs[i] = lps.global.us.duration;
                 size[i] = multimapReportSizeOnly(m);
-                (void)secs;
-                (void)size;
                 i++;
             }
 
@@ -5995,7 +5982,7 @@ int multimapTest(int, char *[]) {
             multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
         multimapType prevType = multimapType_(m);
-        int32_t smallToMediumTransition = -1;
+        [[maybe_unused]] int32_t smallToMediumTransition = -1;
         int32_t mediumToFullTransition = -1;
 
         /* Insert until we've seen all transitions */
@@ -6019,7 +6006,6 @@ int multimapTest(int, char *[]) {
         }
 
         /* smallToMediumTransition is for debug info only */
-        (void)smallToMediumTransition;
 
         /* Verify all entries still exist after transitions */
         size_t count = multimapCount(m);
@@ -7164,7 +7150,6 @@ int multimapTest(int, char *[]) {
                 databox boundaryKey = databoxNewSigned(i);
                 bool deleted = multimapDelete(&m, &boundaryKey);
                 assert(deleted);
-                (void)deleted;
                 assert(!multimapExists(m, &boundaryKey));
                 multimapInsert(&m, elements);
                 assert(multimapExists(m, &boundaryKey));
@@ -7241,7 +7226,6 @@ int multimapTest(int, char *[]) {
             const databox *elements[2] = {&key, &val};
             bool replaced = multimapSmallInsert(s, elements);
             assert(!replaced); /* First insert is not replacement */
-            (void)replaced;
         }
         assert(multimapSmallCount(s) == 10);
 
@@ -7266,10 +7250,8 @@ int multimapTest(int, char *[]) {
             databox *results[1] = {&result};
             bool found = multimapSmallLookup(s, &key, results);
             assert(found);
-            (void)found;
             databox expected = databoxNewSigned(i * 1000);
             assert(databoxEqual(&expected, &result));
-            (void)expected;
         }
     }
 
@@ -7312,10 +7294,8 @@ int multimapTest(int, char *[]) {
             databox *results[1] = {&result};
             bool found = multimapMediumLookup(m, &key, results);
             assert(found);
-            (void)found;
             databox expected = databoxNewSigned(i * 1000);
             assert(databoxEqual(&expected, &result));
-            (void)expected;
         }
 
         multimapMediumFree(m);
@@ -7367,10 +7347,8 @@ int multimapTest(int, char *[]) {
             databox *results[1] = {&result};
             bool found = multimapFullLookup(f, &key, results);
             assert(found);
-            (void)found;
             databox expected = databoxNewSigned(i * 1000);
             assert(databoxEqual(&expected, &result));
-            (void)expected;
         }
 
         multimapFullFree(f);
@@ -7388,7 +7366,6 @@ int multimapTest(int, char *[]) {
             const databox *elements[2] = {&key, &val};
             bool replaced = multimapInsert(&m, elements);
             assert(!replaced);
-            (void)replaced;
         }
 
         /* Verify we're in Full representation */
@@ -7423,7 +7400,6 @@ int multimapTest(int, char *[]) {
             const databox *elements[2] = {&key, &val};
             bool replaced = multimapInsert(&m, elements);
             assert(!replaced);
-            (void)replaced;
         }
 
         /* Verify in Full and count is correct */

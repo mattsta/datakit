@@ -84,9 +84,9 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
     const databox refcount = {.type = DATABOX_FALSE};
     const databox *elements[3] = {&atomId, reverseKey, &refcount};
 
-    const bool replaced = multimapInsert(&ma->mapAtomForward, elements);
+    [[maybe_unused]] const bool replaced =
+        multimapInsert(&ma->mapAtomForward, elements);
     assert(!replaced);
-    (void)replaced;
 
     multimapInsertWithSurrogateKey(&ma->mapAtomReverse, &reverseKey, &atomId,
                                    ma);
@@ -114,9 +114,9 @@ static void atomCreateForward_(void *ctx) {
                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
     const databox refcount = {.type = DATABOX_FALSE}; /* one reference */
     const databox *elements[3] = {&atomId, c->key, &refcount};
-    const bool replaced = multimapInsert(&c->ma->mapAtomForward, elements);
+    [[maybe_unused]] const bool replaced =
+        multimapInsert(&c->ma->mapAtomForward, elements);
     assert(!replaced);
-    (void)replaced;
 
     /* Generated ids continue past every id in use */
     if (c->id >= atomNextId_(c->ma)) {
@@ -188,10 +188,9 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
     databox foundReference = {};
     if (multimapDeleteWithReference(&ma->mapAtomReverse, reverseKey, ma,
                                     &foundReference)) {
-        const bool deleted =
+        [[maybe_unused]] const bool deleted =
             multimapDelete(&ma->mapAtomForward, &foundReference);
         assert(deleted);
-        (void)deleted;
     }
 
     /* Also clear any prior binding of this exact ID to a DIFFERENT key.
@@ -409,9 +408,9 @@ static void atomDeleteKnown(multimapAtom *ma, multimapEntry *reverseEntry,
                             const databox *ref) {
     multimapDeleteEntryWithReference(&ma->mapAtomReverse, reverseEntry, ma);
 
-    const bool deleteForward = multimapDelete(&ma->mapAtomForward, ref);
+    [[maybe_unused]] const bool deleteForward =
+        multimapDelete(&ma->mapAtomForward, ref);
     assert(deleteForward);
-    (void)deleteForward;
 
     atomAfterDelete_(ma, ref->data.u);
 }
@@ -438,9 +437,9 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
         if (reverseEntry) {
             atomDeleteKnown(ma, reverseEntry, foundRef);
         } else {
-            const bool deleted = multimapAtomDeleteByRef(ma, foundRef);
+            [[maybe_unused]] const bool deleted =
+                multimapAtomDeleteByRef(ma, foundRef);
             assert(deleted);
-            (void)deleted;
         }
 
         return true;
@@ -476,10 +475,9 @@ bool multimapAtomDelete(multimapAtom *ma, const databox *key) {
         return false;
     }
 
-    const bool deleteForward =
+    [[maybe_unused]] const bool deleteForward =
         multimapDelete(&ma->mapAtomForward, &foundReference);
     assert(deleteForward);
-    (void)deleteForward;
 
     atomAfterDelete_(ma, foundReference.data.u);
     return true;
@@ -504,10 +502,9 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
     assert(value.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL);
 
     databox found = {};
-    const bool deleteReverse =
+    [[maybe_unused]] const bool deleteReverse =
         multimapDeleteWithReference(&ma->mapAtomReverse, &value, ma, &found);
     assert(deleteReverse && found.data.u == ref->data.u);
-    (void)deleteReverse;
 
     multimapDeleteEntry(&ma->mapAtomForward, &me);
     atomAfterDelete_(ma, ref->data.u);
@@ -1383,8 +1380,8 @@ int multimapAtomTest(int, char *[]) {
                         databoxReprSay("Deleting", &key);
                         databoxReprSay("\tWITH REFERENCE", &box);
 #endif
-                    const bool deleted = multimapAtomReleaseById(ma, &box);
-                    (void)deleted;
+                    [[maybe_unused]] const bool deleted =
+                        multimapAtomReleaseById(ma, &box);
 #if 0
                     if (key.data.i == 25) {
                         printf("%sDELETED!\n", deleted ? "" : "NOT ");
@@ -1676,7 +1673,6 @@ int multimapAtomTest(int, char *[]) {
             databox ref;
             bool found = multimapAtomLookupReference(ma, &key, &ref);
             assert(found);
-            (void)found;
         }
         int64_t lookupRefNs = timeUtilMonotonicNs() - startNs;
         printf("Lookup by key (reference): %zu lookups in %.3f ms (%.0f/sec)\n",
@@ -1690,7 +1686,6 @@ int multimapAtomTest(int, char *[]) {
             databox key;
             bool found = multimapAtomLookup(ma, &ref, &key);
             assert(found);
-            (void)found;
         }
         int64_t lookupIdNs = timeUtilMonotonicNs() - startNs;
         printf("Lookup by ID (key): %zu lookups in %.3f ms (%.0f/sec)\n",
@@ -1795,7 +1790,6 @@ int multimapAtomTest(int, char *[]) {
             databox ref;
             bool found = multimapAtomLookupReference(ma, &key, &ref);
             assert(found);
-            (void)found;
         }
         int64_t lookupNs = timeUtilMonotonicNs() - startNs;
         printf("String key lookups: %zu in %.3f ms (%.0f/sec)\n", numStrings,

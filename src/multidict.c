@@ -6393,16 +6393,12 @@ int multidictTest(int, char *[]) {
         databox val;
         assert(multidictFind(d, &key, &val) == false);
         assert(multidictDelete(d, &key) == false);
-        (void)key;
-        (void)val;
 
         databox randomKey;
         assert(multidictGetRandomKey(d, &randomKey) == false);
-        (void)randomKey;
 
         databox keys[5];
         assert(multidictGetSomeKeys(d, keys, 5) == 0);
-        (void)keys;
     }
 
     TEST("1.5 basic insert and find") {
@@ -6410,13 +6406,11 @@ int multidictTest(int, char *[]) {
         databox val = databoxNewBytesString("world");
         multidictResult result = multidictAdd(d, &key, &val);
         assert(result == MULTIDICT_OK_INSERTED);
-        (void)result;
         assert(multidictSize(d) == 1);
 
         databox found;
         assert(multidictFind(d, &key, &found) == true);
         assert(found.len == val.len);
-        (void)found;
     }
 
     TEST("1.6 update an existing key") {
@@ -6424,12 +6418,10 @@ int multidictTest(int, char *[]) {
         databox newVal = databoxNewBytesString("universe");
         multidictResult result = multidictAdd(d, &key, &newVal);
         assert(result == MULTIDICT_OK_REPLACED);
-        (void)result;
         assert(multidictSize(d) == 1); /* size unchanged */
 
         databox found;
         assert(multidictFind(d, &key, &found) == true);
-        (void)found;
     }
 
     TEST("1.7 delete a key") {
@@ -6439,9 +6431,7 @@ int multidictTest(int, char *[]) {
 
         databox found;
         assert(multidictFind(d, &key, &found) == false);
-        (void)found;
         assert(multidictDelete(d, &key) == false); /* already deleted */
-        (void)key;
     }
 
     TEST("1.8 multidictFindByString") {
@@ -6455,7 +6445,6 @@ int multidictTest(int, char *[]) {
         bool found = multidictFindByString(d, strkey, &foundVal);
         assert(found == true && foundVal != NULL);
         assert(memcmp(foundVal, "strval", 6) == 0);
-        (void)found;
 
         /* An absent key, and a value that is not a byte string, report
          * false and leave '*val' alone */
@@ -6495,8 +6484,6 @@ int multidictTest(int, char *[]) {
             databox key = databoxNewBytesString(keyBuf);
             databox found;
             assert(multidictFind(d, &key, &found) == true);
-            (void)key;
-            (void)found;
         }
         multidictEmpty(d);
     }
@@ -6516,7 +6503,6 @@ int multidictTest(int, char *[]) {
         databox found;
         assert(multidictFind(d, &key, &found) == true);
         assert(found.len == 256);
-        (void)found;
         multidictEmpty(d);
     }
 
@@ -6544,8 +6530,6 @@ int multidictTest(int, char *[]) {
             databox found;
             bool exists = multidictFind(d, &key, &found);
             assert(exists == true);
-            (void)exists;
-            (void)found;
         }
         multidictEmpty(d);
     }
@@ -8767,7 +8751,6 @@ int multidictTest(int, char *[]) {
                 databox val = databoxNewBytesString(vbuf);
                 const multidictResult added = multidictAdd(e, &key, &val);
                 assert(added == MULTIDICT_OK_INSERTED);
-                (void)added;
             }
 
             multidictExpand(e, (uint64_t)total * 4);
@@ -9659,7 +9642,6 @@ int multidictTest(int, char *[]) {
             multidictNew(&multidictTypeExactKey, vqdc, 11);
         const bool lruOn = multidictEnableLRU(vd, 4);
         assert(lruOn);
-        (void)lruOn;
         multidictSetEvictPolicy(vd, MULTIDICT_EVICT_LRU);
 
         /* Keys 0..149 stay at LRU level 0 in insertion order (0 is the
@@ -9726,7 +9708,6 @@ int multidictTest(int, char *[]) {
         multilruPtr coldest[7] = {};
         const size_t coldestGot = multilruCollectLowest(vd->lru, coldest, 7);
         assert(coldestGot == 7);
-        (void)coldestGot;
         for (int32_t n = 0; n < 7; n++) {
             databox ck;
             databoxWide ckWide;
@@ -9776,7 +9757,6 @@ int multidictTest(int, char *[]) {
             multidictNew(&multidictTypeCaseKey, cqdc, 13);
         const bool lruOn = multidictEnableLRU(cd, 4);
         assert(lruOn);
-        (void)lruOn;
         multidictSetEvictPolicy(cd, MULTIDICT_EVICT_LRU);
 
         /* Index i goes in under spelling i % 2, valued by its code
@@ -9789,7 +9769,6 @@ int multidictTest(int, char *[]) {
             databox val = databoxNewSigned(i * 2 + i % 2);
             const multidictResult added = multidictAdd(cd, &key, &val);
             assert(added == MULTIDICT_OK_INSERTED);
-            (void)added;
         }
         assert(multidictCount(cd) == entries);
 
@@ -9807,14 +9786,12 @@ int multidictTest(int, char *[]) {
         databox found = {};
         const bool found3 = multidictFind(cd, &key3, &found);
         assert(found3 && DATABOX_IS_INTEGER(&found) && found.data.i == 7);
-        (void)found3;
         databox key5 = testLruCaseKey_(key5Buf, sizeof(key5Buf), 5, 0);
         multidictTouch(cd, &key5);
         databox key9 = testLruCaseKey_(key9Buf, sizeof(key9Buf), 9, 0);
         databox val9 = databoxNewSigned(19);
         const multidictResult replaced9 = multidictAdd(cd, &key9, &val9);
         assert(replaced9 == MULTIDICT_OK_REPLACED);
-        (void)replaced9;
         assert(multidictCount(cd) == entries);
         assert(testLruTrackingExact_(cd));
 
@@ -9871,7 +9848,6 @@ int multidictTest(int, char *[]) {
             multidictNew(&testConstHashType_, hqdc, 17);
         const bool lruOn = multidictEnableLRU(hd, 4);
         assert(lruOn);
-        (void)lruOn;
         multidictSetEvictPolicy(hd, MULTIDICT_EVICT_LRU);
 
         /* Every key has the same hash, so all share one slot and one LRU
@@ -9928,7 +9904,6 @@ int multidictTest(int, char *[]) {
             multidictNew(&multidictTypeExactKey, wqdc, 19);
         const bool lruOn = multidictEnableLRU(wd, 4);
         assert(lruOn);
-        (void)lruOn;
         multidictSetEvictPolicy(wd, MULTIDICT_EVICT_LRU);
 
         /* Five keys, all at level 0 in insertion order, so every refill
@@ -9976,7 +9951,6 @@ int multidictTest(int, char *[]) {
         }
         const size_t got = multilruCollectLowest(wd->lru, window, 8);
         assert(got == 1);
-        (void)got;
         for (size_t n = 1; n < 8; n++) {
             assert(window[n] == SIZE_MAX);
         }
@@ -9984,7 +9958,6 @@ int multidictTest(int, char *[]) {
         databoxWide ckWide;
         const bool resolved = multidictLRUKeyOf(wd, window[0], &ck, &ckWide);
         assert(resolved);
-        (void)resolved;
         assert(testKeyIndex_(&ck, "lruveto-") == 0);
 
         /* A limit only key 0's eviction could meet: the refill finds
