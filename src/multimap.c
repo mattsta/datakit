@@ -3824,7 +3824,9 @@ int32_t multimapWidePersistSweep(void) {
                 const databox key = mwBox(&r->key);
                 const databox val = mwBox(&r->val);
                 const databox *e[2] = {&key, &val};
-                multimapInsertP(mp, e, NULL);
+                if (multimapInsertP(mp, e, NULL) == PERSIST_LOG_REFUSED) {
+                    ERR("%s: insert refused", where);
+                }
                 r->present = true;
                 if (k == n / 2 && !multimapCompactP(mp)) {
                     ERR("%s: compaction failed", where);

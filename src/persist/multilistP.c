@@ -529,7 +529,7 @@ int multilistPTest(int argc, char *argv[]) {
         /* Push 100 elements */
         for (int i = 0; i < 100; i++) {
             databox box = DATABOX_SIGNED((int64_t)i);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
         }
         if (multilistCountP(ml) != 100) {
             ERR("Should have 100 elements, got %zu", multilistCountP(ml));
@@ -543,7 +543,7 @@ int multilistPTest(int argc, char *argv[]) {
         /* Push 50 more elements AFTER compaction */
         for (int i = 100; i < 150; i++) {
             databox box = DATABOX_SIGNED((int64_t)i);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
         }
         if (multilistCountP(ml) != 150) {
             ERR("Should have 150 elements, got %zu", multilistCountP(ml));
@@ -613,8 +613,8 @@ int multilistPTest(int argc, char *argv[]) {
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         const databox ten = DATABOX_SIGNED(10);
         const databox twenty = DATABOX_SIGNED(20);
-        multilistPushTailP(ml, &ten);
-        multilistPushTailP(ml, &twenty);
+        PTEST_LOGGED(multilistPushTailP(ml, &ten));
+        PTEST_LOGGED(multilistPushTailP(ml, &twenty));
         databox popped = {{0}};
         PTEST_EXPECT_REFUSED(
             ctx, multilistPushHeadP(ml, &ten), multilistPushTailP(ml, &ten),
@@ -654,7 +654,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistIteratorInitP(NULL, states, &iter, true, true);
         multilistGetStatsP(NULL, NULL);
         multilistCloseP(NULL);
-        multilistResetP(ml);
+        PTEST_LOGGED(multilistResetP(ml));
         if (multilistPopTailP(ml, &popped) != PERSIST_LOG_UNCHANGED) {
             ERRR("an empty list's pop was logged");
         }
@@ -677,7 +677,7 @@ int multilistPTest(int argc, char *argv[]) {
         for (int type = 0; type < PTEST_TYPE_COUNT; type++) {
             databox box;
             ptestGenerateBox(&box, type, type);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
             ptestBoxTrackerPushTail(&tracker, &box);
         }
 
@@ -700,7 +700,7 @@ int multilistPTest(int argc, char *argv[]) {
         for (int type = 0; type < PTEST_TYPE_COUNT; type++) {
             databox box;
             ptestGenerateBox(&box, type, type);
-            multilistPushHeadP(ml, &box);
+            PTEST_LOGGED(multilistPushHeadP(ml, &box));
             ptestBoxTrackerPushHead(&tracker, &box);
         }
 
@@ -726,7 +726,7 @@ int multilistPTest(int argc, char *argv[]) {
                 for (int seed = 0; seed < 5; seed++) {
                     databox box;
                     ptestGenerateBox(&box, type, seed);
-                    multilistPushTailP(ml, &box);
+                    PTEST_LOGGED(multilistPushTailP(ml, &box));
                     ptestBoxTrackerPushTail(&tracker, &box);
                 }
             }
@@ -763,7 +763,7 @@ int multilistPTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 10; i++) {
             databox box = DATABOX_SIGNED(i);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
             ptestBoxTrackerPushTail(&tracker, &box);
         }
 
@@ -809,7 +809,7 @@ int multilistPTest(int argc, char *argv[]) {
 
             for (int i = 0; i < 20; i++) {
                 databox box = DATABOX_SIGNED(i * 100);
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -817,14 +817,14 @@ int multilistPTest(int argc, char *argv[]) {
             for (int i = 0; i < 5; i++) {
                 databox got = {{0}};
                 databox expected;
-                multilistPopTailP(ml, &got);
+                PTEST_LOGGED(multilistPopTailP(ml, &got));
                 databoxFreeData(&got);
                 ptestBoxTrackerPopTail(&tracker, &expected);
             }
             for (int i = 0; i < 3; i++) {
                 databox got = {{0}};
                 databox expected;
-                multilistPopHeadP(ml, &got);
+                PTEST_LOGGED(multilistPopHeadP(ml, &got));
                 databoxFreeData(&got);
                 ptestBoxTrackerPopHead(&tracker, &expected);
             }
@@ -863,10 +863,10 @@ int multilistPTest(int argc, char *argv[]) {
         for (int i = 0; i < 50; i++) {
             databox box = DATABOX_SIGNED(i);
             if (i % 3 == 0) {
-                multilistPushHeadP(ml, &box);
+                PTEST_LOGGED(multilistPushHeadP(ml, &box));
                 ptestBoxTrackerPushHead(&tracker, &box);
             } else if (i % 3 == 1) {
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             } else {
                 /* Pop if not empty */
@@ -874,10 +874,10 @@ int multilistPTest(int argc, char *argv[]) {
                     databox got = {{0}};
                     databox expected;
                     if (i % 2 == 0) {
-                        multilistPopHeadP(ml, &got);
+                        PTEST_LOGGED(multilistPopHeadP(ml, &got));
                         ptestBoxTrackerPopHead(&tracker, &expected);
                     } else {
-                        multilistPopTailP(ml, &got);
+                        PTEST_LOGGED(multilistPopTailP(ml, &got));
                         ptestBoxTrackerPopTail(&tracker, &expected);
                     }
                     databoxFreeData(&got);
@@ -903,10 +903,10 @@ int multilistPTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 20; i++) {
             databox box = DATABOX_SIGNED(i);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
         }
 
-        multilistResetP(ml);
+        PTEST_LOGGED(multilistResetP(ml));
         ptestBoxTrackerInit(&tracker);
 
         if (multilistCountP(ml) != 0) {
@@ -915,7 +915,7 @@ int multilistPTest(int argc, char *argv[]) {
 
         for (int i = 100; i < 110; i++) {
             databox box = DATABOX_SIGNED(i);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
             ptestBoxTrackerPushTail(&tracker, &box);
         }
 
@@ -939,14 +939,14 @@ int multilistPTest(int argc, char *argv[]) {
 
             for (int i = 0; i < 10; i++) {
                 databox box = DATABOX_SIGNED(i);
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
             }
 
-            multilistResetP(ml);
+            PTEST_LOGGED(multilistResetP(ml));
 
             for (int i = 100; i < 115; i++) {
                 databox box = DATABOX_SIGNED(i);
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -1000,7 +1000,7 @@ int multilistPTest(int argc, char *argv[]) {
 
             for (int i = 0; i < 10; i++) {
                 databox box = DATABOX_SIGNED(cycle * 1000 + i);
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -1041,7 +1041,7 @@ int multilistPTest(int argc, char *argv[]) {
             for (int i = 0; i < 200; i++) {
                 databox box;
                 ptestGenerateBox(&box, i % PTEST_TYPE_COUNT, i);
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -1104,7 +1104,7 @@ int multilistPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
-            multilistPushTailP(ml, &testBox);
+            PTEST_LOGGED(multilistPushTailP(ml, &testBox));
             multilistCloseP(ml);
             persistCtxFree(ctx);
         }
@@ -1160,7 +1160,7 @@ int multilistPTest(int argc, char *argv[]) {
 
             for (mlOffsetId i = 0; i < n; i++) {
                 databox box = DATABOX_SIGNED(i * 3);
-                multilistPushTailP(ml, &box);
+                PTEST_LOGGED(multilistPushTailP(ml, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -1248,12 +1248,12 @@ int multilistPTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 20; i++) {
             databox box = DATABOX_SIGNED(i);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
         }
 
         for (int i = 0; i < 5; i++) {
             databox got = {{0}};
-            multilistPopTailP(ml, &got);
+            PTEST_LOGGED(multilistPopTailP(ml, &got));
             databoxFreeData(&got);
         }
 
@@ -1292,10 +1292,10 @@ int multilistPTest(int argc, char *argv[]) {
             const databox *box =
                 mlpWideValue(i, &storage[i], strs[i], sizeof(strs[i]));
             if (i % 5 == 4) {
-                multilistPushHeadP(ml, box);
+                PTEST_LOGGED(multilistPushHeadP(ml, box));
                 ptestBoxTrackerPushHead(&tracker, box);
             } else {
-                multilistPushTailP(ml, box);
+                PTEST_LOGGED(multilistPushTailP(ml, box));
                 ptestBoxTrackerPushTail(&tracker, box);
             }
         }
@@ -1364,7 +1364,7 @@ int multilistPTest(int argc, char *argv[]) {
                 const databox *box =
                     mlpWideValue(4 * k + (k & 1), &storage[slot], strs[slot],
                                  sizeof(strs[slot]));
-                multilistPushTailP(ml, box);
+                PTEST_LOGGED(multilistPushTailP(ml, box));
                 ptestBoxTrackerPushTail(&tracker, box);
             }
 
@@ -1441,10 +1441,10 @@ int multilistPTest(int argc, char *argv[]) {
                     const databox *box = mlpDataValue(data, i, &storage[i],
                                                       strs[i], sizeof(strs[i]));
                     if (i % 5 == 4) {
-                        multilistPushHeadP(ml, box);
+                        PTEST_LOGGED(multilistPushHeadP(ml, box));
                         ptestBoxTrackerPushHead(&tracker, box);
                     } else {
-                        multilistPushTailP(ml, box);
+                        PTEST_LOGGED(multilistPushTailP(ml, box));
                         ptestBoxTrackerPushTail(&tracker, box);
                     }
                 }
@@ -1528,7 +1528,7 @@ int multilistPTest(int argc, char *argv[]) {
                     const databox *box =
                         mlpDataValue(data, slot, &storage[slot], strs[slot],
                                      sizeof(strs[slot]));
-                    multilistPushTailP(ml, box);
+                    PTEST_LOGGED(multilistPushTailP(ml, box));
                     ptestBoxTrackerPushTail(&tracker, box);
                 }
 
@@ -1564,7 +1564,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         for (int64_t i = 0; i < 10; i++) {
             const databox v = DATABOX_SIGNED(i * 11);
-            multilistPushTailP(ml, &v);
+            PTEST_LOGGED(multilistPushTailP(ml, &v));
         }
         cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
         multilistEntry first = {0};
@@ -1590,7 +1590,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_512, 2);
         for (int64_t i = 0; i < 300; i++) {
             const databox v = DATABOX_SIGNED(i);
-            multilistPushTailP(ml, &v);
+            PTEST_LOGGED(multilistPushTailP(ml, &v));
         }
         multilistCompactP(ml);
         multilistCloseP(ml);
@@ -1618,7 +1618,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
         for (int64_t v = 1; v <= 3; v++) {
             const databox box = databoxNewSigned(v);
-            multilistPushTailP(ml, &box);
+            PTEST_LOGGED(multilistPushTailP(ml, &box));
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);

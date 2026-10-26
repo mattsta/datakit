@@ -5624,7 +5624,8 @@ const persistOps persistOpsMultiLRU = {
 #include "dkTestTmp.h"
 #include "multiFenwick.h"
 #include "multiFenwickFlat.h"
-#include "str.h" /* splitmix64 */
+#include "persist/persistTestCommon.h" /* PTEST_LOGGED */
+#include "str.h"                       /* splitmix64 */
 
 /* Free a test multidict together with the default class it holds; the
  * class must outlive the dict because teardown runs class callbacks. */
@@ -6320,7 +6321,8 @@ int persistTest(int argc, char *argv[]) {
             for (int64_t v = 1; v <= 5; v++) {
                 bool added = false;
                 intsetAdd(&is, v * 1000, &added);
-                persistLogOp(p, PERSIST_OP_INSERT, &(int64_t){v * 1000}, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT,
+                                          &(int64_t){v * 1000}, 1));
             }
             /* The header records sequence 5; the WAL still holds 0..4 */
             if (!persistSnapshot(p, is)) {
@@ -6943,11 +6945,11 @@ int persistTest(int argc, char *argv[]) {
 
         /* Add via WAL */
         databox box = DATABOX_SIGNED(3);
-        persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         flexPushSigned(&f, 3, FLEX_ENDPOINT_TAIL);
 
         box = DATABOX_SIGNED(4);
-        persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         flexPushSigned(&f, 4, FLEX_ENDPOINT_TAIL);
 
         persistSync(p);
@@ -7033,11 +7035,11 @@ int persistTest(int argc, char *argv[]) {
 
         /* Log insert operations */
         int64_t v1 = 100;
-        persistLogOp(p, PERSIST_OP_INSERT, &v1, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v1, 1));
         int64_t v2 = 200;
-        persistLogOp(p, PERSIST_OP_INSERT, &v2, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v2, 1));
         int64_t v3 = 150;
-        persistLogOp(p, PERSIST_OP_INSERT, &v3, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v3, 1));
 
         persistSync(p);
 
@@ -7356,7 +7358,7 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 1; i <= 5; i++) {
             databox box = DATABOX_SIGNED(i * 100);
             multilistPushByTypeTail(&ml, state, &box);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         }
 
         persistSync(p);
@@ -7511,8 +7513,8 @@ int persistTest(int argc, char *argv[]) {
                 ids[n] = id;
             }
             n++;
-            persistLogOp(p, head ? PERSIST_OP_PUSH_HEAD : PERSIST_OP_PUSH_TAIL,
-                         box, 1);
+            PTEST_LOGGED(persistLogOp(
+                p, head ? PERSIST_OP_PUSH_HEAD : PERSIST_OP_PUSH_TAIL, box, 1));
         }
 
         /* REPLACE [index, wide value] */
@@ -7524,7 +7526,7 @@ int persistTest(int argc, char *argv[]) {
             const databox idxBox = DATABOX_SIGNED((int64_t)replaceAt[k]);
             const databox *args[2] = {&idxBox, box};
             multilistReplaceByTypeAtIndex(&ml, s0, replaceAt[k], box);
-            persistLogOp(p, PERSIST_OP_REPLACE, args, 2);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_REPLACE, args, 2));
             ids[replaceAt[k]] = id;
         }
 
@@ -7534,14 +7536,14 @@ int persistTest(int argc, char *argv[]) {
             const databox *box =
                 persistTestMlValue(id, &storage, buf, sizeof(buf));
             multilistPushByTypeTail(&ml, s0, box);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, box, 1));
             ids[n++] = id;
         }
 
         for (int r = 0; r < 3; r++) {
             const uint32_t moved = ids[n - 1];
             multilistRotate(ml, s);
-            persistLogOp(p, PERSIST_OP_ROTATE, NULL, 0);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_ROTATE, NULL, 0));
             memmove(&ids[1], &ids[0], (n - 1) * sizeof(*ids));
             ids[0] = moved;
         }
@@ -7552,9 +7554,9 @@ int persistTest(int argc, char *argv[]) {
             databox got = {{0}};
             multilistPop(&ml, s0, &got, fromTail);
             databoxFreeData(&got);
-            persistLogOp(p,
-                         fromTail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD,
-                         NULL, 0);
+            PTEST_LOGGED(persistLogOp(
+                p, fromTail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD, NULL,
+                0));
             if (!fromTail) {
                 memmove(&ids[0], &ids[1], (n - 1) * sizeof(*ids));
             }
@@ -8081,7 +8083,7 @@ int persistTest(int argc, char *argv[]) {
         /* Log operations */
         for (int i = 0; i < 10; i++) {
             databox box = DATABOX_SIGNED(i);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         }
         persistSync(p);
 
@@ -8239,13 +8241,13 @@ int persistTest(int argc, char *argv[]) {
 
         /* Log various operations */
         databox box1 = DATABOX_SIGNED(50);
-        persistLogOp(p, PERSIST_OP_PUSH_HEAD, &box1, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_HEAD, &box1, 1));
 
         databox box2 = DATABOX_SIGNED(300);
-        persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box2, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box2, 1));
 
         databox box3 = DATABOX_WITH_BYTES((uint8_t *)"test", 4);
-        persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box3, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box3, 1));
 
         persistSync(p);
 
@@ -8473,13 +8475,13 @@ int persistTest(int argc, char *argv[]) {
 
         /* Log inserts */
         int64_t v1 = 40;
-        persistLogOp(p, PERSIST_OP_INSERT, &v1, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v1, 1));
         int64_t v2 = 50;
-        persistLogOp(p, PERSIST_OP_INSERT, &v2, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v2, 1));
 
         /* Log delete */
         int64_t v3 = 20;
-        persistLogOp(p, PERSIST_OP_DELETE, &v3, 1);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_DELETE, &v3, 1));
 
         persistSync(p);
 
@@ -8881,11 +8883,11 @@ int persistTest(int argc, char *argv[]) {
         const databox *ins2[] = {&beta, &two};
         const databox *rep[] = {&alphaLow, &three};
         const databox *ins3[] = {(const databox *)&wide, &two};
-        persistLogOp(p, PERSIST_OP_INSERT, ins1, 2);
-        persistLogOp(p, PERSIST_OP_INSERT, ins2, 2);
-        persistLogOp(p, PERSIST_OP_DELETE, &betaLow, 1);
-        persistLogOp(p, PERSIST_OP_REPLACE, rep, 2);
-        persistLogOp(p, PERSIST_OP_INSERT, ins3, 2);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, ins1, 2));
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, ins2, 2));
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_DELETE, &betaLow, 1));
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_REPLACE, rep, 2));
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, ins3, 2));
         persistSync(p);
 
         walStore->seek(walStore->ctx, 0, SEEK_SET);
@@ -8948,7 +8950,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachWAL(p, walStore);
             persistSnapshot(p, d);
             const databox *ins[] = {&s1e3, &s22};
-            persistLogOp(p, PERSIST_OP_INSERT, ins, 2);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, ins, 2));
             persistSync(p);
 
             walStore->seek(walStore->ctx, 0, SEEK_SET);
@@ -8988,7 +8990,7 @@ int persistTest(int argc, char *argv[]) {
             persistSnapshot(p, m);
             const databox *row[] = {&s22, &s42};
             multimapInsert(&m, row);
-            persistLogOp(p, PERSIST_OP_INSERT, row, 2);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, row, 2));
             persistSync(p);
 
             walStore->seek(walStore->ctx, 0, SEEK_SET);
@@ -9020,7 +9022,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachWAL(p, walStore);
             persistSnapshot(p, ml);
             multilistPushByTypeTail(&ml, state, &s007);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &s007, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &s007, 1));
             persistSync(p);
 
             walStore->seek(walStore->ctx, 0, SEEK_SET);
@@ -9329,19 +9331,19 @@ int persistTest(int argc, char *argv[]) {
             switch (op) {
             case 0: {
                 databox box = DATABOX_SIGNED((int64_t)seed);
-                persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
                 break;
             }
             case 1: {
                 databox box = DATABOX_SIGNED(-(int64_t)seed);
-                persistLogOp(p, PERSIST_OP_PUSH_HEAD, &box, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_HEAD, &box, 1));
                 break;
             }
             case 2: {
                 char buf[16];
                 int len = snprintf(buf, sizeof(buf), "w%u", seed % 1000);
                 databox box = DATABOX_WITH_BYTES((uint8_t *)buf, len);
-                persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
                 break;
             }
             }
@@ -9425,7 +9427,7 @@ int persistTest(int argc, char *argv[]) {
         /* Add WAL entries */
         for (int i = 50; i < 100; i++) {
             databox box = DATABOX_SIGNED(i);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         }
         persistSync(p);
 
@@ -9490,7 +9492,7 @@ int persistTest(int argc, char *argv[]) {
             for (int i = 0; i < 20; i++) {
                 databox box = DATABOX_SIGNED(nextVal++);
                 multilistPushByTypeTail(&ml, state, &box);
-                persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
             }
             /* Snapshot the up-to-date structure: it includes every op
              * logged so far, and the WAL (never truncated here) still
@@ -9517,7 +9519,7 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox box = DATABOX_SIGNED(nextVal++);
             multilistPushByTypeTail(&ml, state, &box);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         }
         persistSync(p);
 
@@ -9625,7 +9627,7 @@ int persistTest(int argc, char *argv[]) {
         for (int64_t v = 1; v <= 3; v++) {
             bool added = false;
             intsetAdd(&live, v, &added);
-            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
         }
         const bool rebound = persistRebindKeyring(p, ring, 2u);
         const int64_t four = 4;
@@ -9666,7 +9668,7 @@ int persistTest(int argc, char *argv[]) {
         for (int64_t v = 1; v <= 3; v++) {
             bool added = false;
             intsetAdd(&liveQ, v, &added);
-            persistLogOp(q, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(q, PERSIST_OP_INSERT, &v, 1));
         }
         persistSync(q);
         persistRebindKeyring(q, ring, 2u);
@@ -9700,7 +9702,7 @@ int persistTest(int argc, char *argv[]) {
             for (int64_t v = 1; v <= 5; v++) {
                 bool added = false;
                 intsetAdd(&live, v, &added);
-                persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
                 if (v == 3) {
                     persistSnapshot(p, live);
                 }
@@ -9749,7 +9751,7 @@ int persistTest(int argc, char *argv[]) {
         cleaner(intsetFree) intset *empty = intsetNew();
         persistSnapshot(p, empty);
         for (int64_t v = 1; v <= 3; v++) {
-            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
         }
         persistStore *second = persistStoreMemory(0);
         persistStore *first = persistWALStore(p);
@@ -9800,7 +9802,7 @@ int persistTest(int argc, char *argv[]) {
             cleaner(intsetFree) intset *empty = intsetNew();
             persistSnapshot(p, empty);
             for (int64_t v = 1; v <= 3; v++) {
-                persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
             }
             persistSync(p);
             persistClose(p);
@@ -9894,7 +9896,7 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 0; i < 50; i++) {
             databox box = DATABOX_SIGNED(i);
             multilistPushByTypeTail(&ml, state, &box);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
         }
         if (!persistSnapshot(p, ml)) {
             ERRR("File-backed snapshot failed");
@@ -10499,9 +10501,9 @@ int persistTest(int argc, char *argv[]) {
             const databox *row1[2] = {&k1, &five};
             const databox *row2[2] = {&k2, &five};
             const databox *incr[3] = {&k1, &offset, &five};
-            persistLogOp(p, PERSIST_OP_INSERT, row1, 2);
-            persistLogOp(p, PERSIST_OP_NUM_INCR, incr, 3);
-            persistLogOp(p, PERSIST_OP_INSERT, row2, 2);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, row1, 2));
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_NUM_INCR, incr, 3));
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, row2, 2));
             persistSync(p);
 
             cleaner(multimapFree) multimap *got = persistRecover(p);
@@ -10590,16 +10592,16 @@ int persistTest(int argc, char *argv[]) {
                                         ? databoxNewBytes(text, sizeof(text))
                                         : DATABOX_SIGNED(k * 10);
                 const databox *pair[2] = {&key, &val};
-                persistLogOp(p, PERSIST_OP_INSERT, pair, 2);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, pair, 2));
             }
             for (int64_t k = 0; k < 30; k += 5) {
                 const databox key = DATABOX_SIGNED(k);
                 const databox val = DATABOX_SIGNED(-k);
                 const databox *pair[2] = {&key, &val};
-                persistLogOp(p, PERSIST_OP_REPLACE, pair, 2);
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_REPLACE, pair, 2));
             }
             const databox gone = DATABOX_SIGNED(7);
-            persistLogOp(p, PERSIST_OP_DELETE, &gone, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_DELETE, &gone, 1));
             persistSync(p);
 
             cleanerName(testMultidictFreeWithClass, Dict) multidict *got =
@@ -10741,7 +10743,7 @@ int persistTest(int argc, char *argv[]) {
         }
         persistSnapshot(p, is);
         for (int64_t v = 4; v <= 6; v++) {
-            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
         }
         persistSync(p);
         size_t walBytes = 0;
@@ -10852,7 +10854,7 @@ int persistTest(int argc, char *argv[]) {
         cleaner(intsetFree) intset *empty = intsetNew();
         persistSnapshot(p, empty);
         for (int64_t v = 1; v <= 3; v++) {
-            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
         }
         persistSync(p);
 
@@ -10917,7 +10919,7 @@ int persistTest(int argc, char *argv[]) {
         persistTestBadNotify heard = {0};
         persistSetBadEntryNotify(p, persistTestBadNotifyFn, &heard);
         for (int64_t v = 1; v <= 2; v++) {
-            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
         }
         persistSync(p);
         size_t walLen = 0;
@@ -10953,7 +10955,7 @@ int persistTest(int argc, char *argv[]) {
         persistStore *kwal = persistStoreFaulty(persistStoreMemory(0), false);
         persistAttachWAL(k, kwal);
         persistSetIntegrityKey(k, keyA, sizeof(keyA));
-        persistLogOp(k, PERSIST_OP_INSERT, &later, 1);
+        PTEST_LOGGED(persistLogOp(k, PERSIST_OP_INSERT, &later, 1));
         persistSync(k);
         persistSetIntegrityKey(k, keyB, sizeof(keyB));
         persistAttachWAL(k, kwal);
@@ -10993,7 +10995,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachWAL(f, fwal);
             persistAttachQuarantine(f, persistStoreMemory(0));
             for (int64_t v = 1; v <= 3; v++) {
-                persistLogOp(f, PERSIST_OP_INSERT, &v, 1);
+                PTEST_LOGGED(persistLogOp(f, PERSIST_OP_INSERT, &v, 1));
             }
             persistSync(f);
             persistAttachWAL(f, fwal);
@@ -11028,7 +11030,7 @@ int persistTest(int argc, char *argv[]) {
         cleaner(intsetFree) intset *empty = intsetNew();
         persistSnapshot(p, empty);
         for (int64_t v = 1; v <= 3; v++) {
-            persistLogOp(p, PERSIST_OP_INSERT, &v, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
         }
         persistSync(p);
 
@@ -11137,7 +11139,7 @@ int persistTest(int argc, char *argv[]) {
         persistSnapshot(p, live);
         for (int64_t v = 0; v < 4; v++) {
             const databox box = DATABOX_SIGNED(v);
-            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1));
             flexPushSigned(&live, v, FLEX_ENDPOINT_TAIL);
         }
         persistStoreFaultyArm(snap, PERSIST_FAULT_WRITE, 1);

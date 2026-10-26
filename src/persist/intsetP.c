@@ -317,7 +317,7 @@ int intsetPTest(int argc, char *argv[]) {
         for (size_t i = 0; i < PTEST_INT_EDGE_COUNT; i++) {
             int64_t val = PTEST_INT_EDGE_CASES[i];
             bool addedToIntset = false;
-            intsetAddP(is, val, &addedToIntset);
+            PTEST_LOGGED(intsetAddP(is, val, &addedToIntset));
             bool addedToTracker = ptestTrackerAdd(&tracker, val);
 
             if (addedToIntset != addedToTracker) {
@@ -349,7 +349,7 @@ int intsetPTest(int argc, char *argv[]) {
 
             for (size_t i = 0; i < PTEST_INT_EDGE_COUNT; i++) {
                 int64_t val = PTEST_INT_EDGE_CASES[i];
-                intsetAddP(is, val, NULL);
+                PTEST_LOGGED(intsetAddP(is, val, NULL));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -387,7 +387,7 @@ int intsetPTest(int argc, char *argv[]) {
         /* Add integers from all ranges */
         for (int i = 0; i < 256; i++) {
             int64_t val = ptestIntByRange(i);
-            intsetAddP(is, val, NULL);
+            PTEST_LOGGED(intsetAddP(is, val, NULL));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -412,7 +412,7 @@ int intsetPTest(int argc, char *argv[]) {
 
             for (int i = 0; i < 256; i++) {
                 int64_t val = ptestIntByRange(i);
-                intsetAddP(is, val, NULL);
+                PTEST_LOGGED(intsetAddP(is, val, NULL));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -448,7 +448,7 @@ int intsetPTest(int argc, char *argv[]) {
         /* Add same values multiple times */
         for (int round = 0; round < 3; round++) {
             for (int i = 0; i < 10; i++) {
-                intsetAddP(is, i * 100, NULL);
+                PTEST_LOGGED(intsetAddP(is, i * 100, NULL));
             }
         }
 
@@ -470,7 +470,7 @@ int intsetPTest(int argc, char *argv[]) {
         /* Add values */
         for (int i = 0; i < 50; i++) {
             int64_t val = i * 100;
-            intsetAddP(is, val, NULL);
+            PTEST_LOGGED(intsetAddP(is, val, NULL));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -478,7 +478,7 @@ int intsetPTest(int argc, char *argv[]) {
         for (int i = 0; i < 50; i += 2) {
             int64_t val = i * 100;
             bool removedFromIntset = false;
-            intsetRemoveP(is, val, &removedFromIntset);
+            PTEST_LOGGED(intsetRemoveP(is, val, &removedFromIntset));
             bool removedFromTracker = ptestTrackerRemove(&tracker, val);
 
             if (removedFromIntset != removedFromTracker) {
@@ -525,14 +525,14 @@ int intsetPTest(int argc, char *argv[]) {
             /* Add 100 values */
             for (int i = 0; i < 100; i++) {
                 int64_t val = (int64_t)i * 1000 - 50000;
-                intsetAddP(is, val, NULL);
+                PTEST_LOGGED(intsetAddP(is, val, NULL));
                 ptestTrackerAdd(&tracker, val);
             }
 
             /* Remove 30 values */
             for (int i = 10; i < 40; i++) {
                 int64_t val = (int64_t)i * 1000 - 50000;
-                intsetRemoveP(is, val, NULL);
+                PTEST_LOGGED(intsetRemoveP(is, val, NULL));
                 ptestTrackerRemove(&tracker, val);
             }
 
@@ -591,7 +591,7 @@ int intsetPTest(int argc, char *argv[]) {
             /* Add new values this cycle */
             for (int i = 0; i < 20; i++) {
                 int64_t val = cycle * 1000 + i;
-                intsetAddP(is, val, NULL);
+                PTEST_LOGGED(intsetAddP(is, val, NULL));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -599,7 +599,7 @@ int intsetPTest(int argc, char *argv[]) {
             if (cycle > 0) {
                 for (int i = 0; i < 5; i++) {
                     int64_t val = (cycle - 1) * 1000 + i * 2;
-                    intsetRemoveP(is, val, NULL);
+                    PTEST_LOGGED(intsetRemoveP(is, val, NULL));
                     ptestTrackerRemove(&tracker, val);
                 }
             }
@@ -647,7 +647,7 @@ int intsetPTest(int argc, char *argv[]) {
                 for (int i = 0; i < 100; i++) {
                     int val = ptestGetSeqValue(patterns[p], i, 100);
                     int64_t v = (int64_t)val * 7; /* Scale for variety */
-                    intsetAddP(is, v, NULL);
+                    PTEST_LOGGED(intsetAddP(is, v, NULL));
                     ptestTrackerAdd(&tracker, v);
                 }
 
@@ -692,11 +692,11 @@ int intsetPTest(int argc, char *argv[]) {
 
             switch (op) {
             case PTEST_OP_INSERT:
-                intsetAddP(is, val, NULL);
+                PTEST_LOGGED(intsetAddP(is, val, NULL));
                 ptestTrackerAdd(&tracker, val);
                 break;
             case PTEST_OP_DELETE:
-                intsetRemoveP(is, val, NULL);
+                PTEST_LOGGED(intsetRemoveP(is, val, NULL));
                 ptestTrackerRemove(&tracker, val);
                 break;
             case PTEST_OP_LOOKUP: {
@@ -733,7 +733,7 @@ int intsetPTest(int argc, char *argv[]) {
 
             for (int i = 0; i < 1000; i++) {
                 int64_t val = ptestGenerateInt(i, i);
-                intsetAddP(is, val, NULL);
+                PTEST_LOGGED(intsetAddP(is, val, NULL));
                 ptestTrackerAdd(&tracker, val);
             }
 
@@ -797,7 +797,7 @@ int intsetPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             intsetP *is = intsetNewP(ctx);
-            intsetAddP(is, testVal, NULL);
+            PTEST_LOGGED(intsetAddP(is, testVal, NULL));
             intsetCloseP(is);
             persistCtxFree(ctx);
         }
@@ -827,7 +827,7 @@ int intsetPTest(int argc, char *argv[]) {
         /* Add 100 values */
         for (int i = 0; i < 100; i++) {
             int64_t val = i * 10;
-            intsetAddP(is, val, NULL);
+            PTEST_LOGGED(intsetAddP(is, val, NULL));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -838,7 +838,7 @@ int intsetPTest(int argc, char *argv[]) {
         /* Remove all values */
         for (int i = 0; i < 100; i++) {
             int64_t val = i * 10;
-            intsetRemoveP(is, val, NULL);
+            PTEST_LOGGED(intsetRemoveP(is, val, NULL));
             ptestTrackerRemove(&tracker, val);
         }
 
@@ -858,10 +858,10 @@ int intsetPTest(int argc, char *argv[]) {
             intsetP *is = intsetNewP(ctx);
 
             for (int i = 0; i < 10; i++) {
-                intsetAddP(is, i, NULL);
+                PTEST_LOGGED(intsetAddP(is, i, NULL));
             }
             for (int i = 0; i < 10; i++) {
-                intsetRemoveP(is, i, NULL);
+                PTEST_LOGGED(intsetRemoveP(is, i, NULL));
             }
 
             intsetCloseP(is);
@@ -893,7 +893,7 @@ int intsetPTest(int argc, char *argv[]) {
         /* Add many values to trigger compaction */
         for (int i = 0; i < 500; i++) {
             int64_t val = ptestIntByRange(i);
-            intsetAddP(is, val, NULL);
+            PTEST_LOGGED(intsetAddP(is, val, NULL));
             ptestTrackerAdd(&tracker, val);
         }
 
@@ -925,10 +925,10 @@ int intsetPTest(int argc, char *argv[]) {
 
         /* Perform known number of operations */
         for (int i = 0; i < 25; i++) {
-            intsetAddP(is, i, NULL);
+            PTEST_LOGGED(intsetAddP(is, i, NULL));
         }
         for (int i = 0; i < 5; i++) {
-            intsetRemoveP(is, i, NULL);
+            PTEST_LOGGED(intsetRemoveP(is, i, NULL));
         }
 
         persistCtxStats stats;
@@ -954,10 +954,10 @@ int intsetPTest(int argc, char *argv[]) {
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         intsetP *is = intsetNewP(ctx);
         for (size_t i = 0; i < n; i++) {
-            intsetAddP(is, values[i], NULL);
+            PTEST_LOGGED(intsetAddP(is, values[i], NULL));
         }
-        intsetAddP(is, 123, NULL);
-        intsetRemoveP(is, 123, NULL);
+        PTEST_LOGGED(intsetAddP(is, 123, NULL));
+        PTEST_LOGGED(intsetRemoveP(is, 123, NULL));
         if (!intsetSyncP(is) || intsetBytesP(is) == 0 ||
             intsetCount(intsetGetRawP(is)) != n) {
             ERRR("Sync, bytes or raw count wrong");
@@ -999,7 +999,7 @@ int intsetPTest(int argc, char *argv[]) {
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         intsetP *is = intsetNewP(ctx);
         for (int64_t v = 10; v <= 30; v += 10) {
-            intsetAddP(is, v, NULL);
+            PTEST_LOGGED(intsetAddP(is, v, NULL));
         }
         intsetCloseP(is);
         persistCtxFree(ctx);
@@ -1043,7 +1043,7 @@ int intsetPTest(int argc, char *argv[]) {
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         intsetP *is = intsetNewP(ctx);
         for (size_t i = 0; i < COUNT_ARRAY(held); i++) {
-            intsetAddP(is, held[i], NULL);
+            PTEST_LOGGED(intsetAddP(is, held[i], NULL));
         }
 
         bool changed = true;

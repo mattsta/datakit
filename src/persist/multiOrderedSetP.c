@@ -349,11 +349,11 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
 
     databox score2 = databoxNewSigned(200);
     databox member2 = databoxNewBytesAllowEmbed("bob", 3);
-    multiOrderedSetAddP(mos, &score2, &member2, NULL);
+    PTEST_LOGGED(multiOrderedSetAddP(mos, &score2, &member2, NULL));
 
     databox score3 = databoxNewSigned(50);
     databox member3 = databoxNewBytesAllowEmbed("charlie", 7);
-    multiOrderedSetAddP(mos, &score3, &member3, NULL);
+    PTEST_LOGGED(multiOrderedSetAddP(mos, &score3, &member3, NULL));
     if (!multiOrderedSetAddP(mos, &score3, &member3, &updated) || !updated) {
         ERRR("re-adding charlie was not an update");
     }
@@ -483,7 +483,7 @@ static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
         databox score = databoxNewSigned(scores[i]);
         databox member =
             databoxNewBytesAllowEmbed(members[i], strlen(members[i]));
-        multiOrderedSetAddP(mos, &score, &member, NULL);
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
     }
 
     /* Close and reopen */
@@ -571,7 +571,7 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
         snprintf(memberBuf, sizeof(memberBuf), "member_%02" PRId64, i);
         databox member =
             databoxNewBytesAllowEmbed(memberBuf, strlen(memberBuf));
-        multiOrderedSetAddP(mos, &score, &member, NULL);
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
     }
 
     /* Attempt compaction */
@@ -626,10 +626,10 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
             snprintf(buf, sizeof(buf), "pre-%d", i);
             const databox score = databoxNewUnsigned((uint64_t)i);
             const databox member = databoxNewBytesString(buf);
-            multiOrderedSetAddP(mos, &score, &member, NULL);
+            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
         }
 
-        multiOrderedSetResetP(mos);
+        PTEST_LOGGED(multiOrderedSetResetP(mos));
         if (multiOrderedSetCountP(mos) != 0) {
             ERRR("Expected empty after reset");
         }
@@ -640,7 +640,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
             snprintf(buf, sizeof(buf), "post-%d", i);
             const databox score = databoxNewUnsigned((uint64_t)(i + 100));
             const databox member = databoxNewBytesString(buf);
-            multiOrderedSetAddP(mos, &score, &member, NULL);
+            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
         }
 
         multiOrderedSetCloseP(mos);
@@ -698,7 +698,7 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
             snprintf(name, sizeof(name), "m%d", i);
             const databox score = DATABOX_SIGNED(i * 10);
             const databox member = databoxNewBytesString(name);
-            multiOrderedSetAddP(mos, &score, &member, NULL);
+            PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
         }
 
         databox member = {{0}};
@@ -798,7 +798,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     for (int64_t i = 0; i < 20; i++) {
         const databox score = databoxNewSigned(i);
         const databox member = databoxNewSigned(i * 7);
-        multiOrderedSetAddP(mos, &score, &member, NULL);
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
     }
     multiOrderedSetCompactP(mos);
     multiOrderedSetCloseP(mos);
@@ -847,7 +847,7 @@ static int test_multiOrderedSetP_openRefusals(int argc, char *argv[]) {
     for (int64_t m = 10; m <= 30; m += 10) {
         const databox score = databoxNewSigned(m / 10);
         const databox member = databoxNewSigned(m);
-        multiOrderedSetAddP(mos, &score, &member, NULL);
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
     }
     multiOrderedSetCloseP(mos);
     persistCtxFree(ctx);
@@ -925,7 +925,7 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
                 snprintf(buf, sizeof(buf), "m%05d", i);
                 const databox score = databoxNewSigned(i);
                 const databox member = databoxNewBytesString(buf);
-                multiOrderedSetAddP(mos, &score, &member, NULL);
+                PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, NULL));
             }
             const databox kept = databoxNewBytesString("m00005");
             const databox ghost = databoxNewBytesString("absent");

@@ -538,7 +538,7 @@ static int test_multiroarP_recovery(int argc, char *argv[]) {
     multiroarP *r = multiroarNewP(ctx);
 
     for (uint64_t i = 0; i < 100; i++) {
-        multiroarBitSetP(r, i * 10, NULL);
+        PTEST_LOGGED(multiroarBitSetP(r, i * 10, NULL));
     }
 
     /* Simulate crash - don't call multiroarCloseP */
@@ -601,7 +601,7 @@ static int test_multiroarP_compaction(int argc, char *argv[]) {
 
     /* Add many bits */
     for (uint64_t i = 0; i < 50; i++) {
-        multiroarBitSetP(r, i, NULL);
+        PTEST_LOGGED(multiroarBitSetP(r, i, NULL));
     }
 
     /* Attempt compaction */
@@ -659,10 +659,10 @@ static int test_multiroarP_fuzzing(int argc, char *argv[]) {
 
         if (op % 2 == 0) {
             /* Insert */
-            multiroarBitSetP(r, pos, NULL);
+            PTEST_LOGGED(multiroarBitSetP(r, pos, NULL));
         } else {
             /* Delete */
-            multiroarRemoveP(r, pos, NULL);
+            PTEST_LOGGED(multiroarRemoveP(r, pos, NULL));
         }
     }
 
@@ -718,10 +718,10 @@ static int test_multiroarP_ranges(int argc, char *argv[]) {
     }
 
     /* [100, 400) set, [150, 200) cleared, 120 removed, 9000 set: 250 bits */
-    multiroarBitSetRangeP(r, 100, 300);
-    multiroarBitClearRangeP(r, 150, 50);
-    multiroarRemoveP(r, 120, NULL);
-    multiroarBitSetP(r, 9000, NULL);
+    PTEST_LOGGED(multiroarBitSetRangeP(r, 100, 300));
+    PTEST_LOGGED(multiroarBitClearRangeP(r, 150, 50));
+    PTEST_LOGGED(multiroarRemoveP(r, 120, NULL));
+    PTEST_LOGGED(multiroarBitSetP(r, 9000, NULL));
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
     if (!multiroarSyncP(r) || multiroarMemoryUsageP(r) == 0) {
@@ -969,7 +969,7 @@ static int test_multiroarP_damagedWal(int argc, char *argv[]) {
     persistCtx *ctx = persistCtxNew(basePath, NULL);
     multiroarP *r = multiroarNewP(ctx);
     for (uint64_t bit = 3; bit <= 7; bit += 2) {
-        multiroarBitSetP(r, bit, NULL);
+        PTEST_LOGGED(multiroarBitSetP(r, bit, NULL));
     }
     multiroarCloseP(r);
     persistCtxFree(ctx);
@@ -1147,9 +1147,9 @@ static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
 
     persistCtx *ctx = persistCtxNew(bitPath, NULL);
     multiroarP *r = multiroarNewP(ctx);
-    multiroarBitSetP(r, 5, NULL);
-    multiroarBitSetP(r, 70000, NULL);
-    multiroarBitSetRangeP(r, 200000, 20000);
+    PTEST_LOGGED(multiroarBitSetP(r, 5, NULL));
+    PTEST_LOGGED(multiroarBitSetP(r, 70000, NULL));
+    PTEST_LOGGED(multiroarBitSetRangeP(r, 200000, 20000));
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
 
@@ -1201,8 +1201,8 @@ static int test_multiroarP_refusedLogs(int argc, char *argv[]) {
     r = multiroarValueNewP(ctx, 8, 1000, 1);
     const databox v200 = databoxNewUnsigned(200);
     const databox v0 = databoxNewUnsigned(0);
-    multiroarValueSetP(r, 7, &v200);
-    multiroarValueSetP(r, 9, &v0);
+    PTEST_LOGGED(multiroarValueSetP(r, 7, &v200));
+    PTEST_LOGGED(multiroarValueSetP(r, 9, &v0));
     cleaner(multiroarFree) multiroar *wantValues =
         multiroarDuplicate(multiroarGetRawP(r));
 

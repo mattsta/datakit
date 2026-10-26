@@ -282,7 +282,7 @@ int flexPTest(int argc, char *argv[]) {
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         flexP *f = flexNewP(ctx);
         const databox one = DATABOX_SIGNED(1);
-        flexPushTailP(f, &one);
+        PTEST_LOGGED(flexPushTailP(f, &one));
         PTEST_EXPECT_REFUSED(ctx, flexPushTailP(f, &one),
                              flexPushHeadP(f, &one), flexResetP(f));
         if (flexCountP(f) != 1) {
@@ -334,7 +334,7 @@ int flexPTest(int argc, char *argv[]) {
         for (int type = 0; type < PTEST_TYPE_COUNT; type++) {
             databox box;
             ptestGenerateBox(&box, type, type);
-            flexPushTailP(f, &box);
+            PTEST_LOGGED(flexPushTailP(f, &box));
             ptestBoxTrackerPushTail(&tracker, &box);
         }
 
@@ -358,7 +358,7 @@ int flexPTest(int argc, char *argv[]) {
         for (int type = 0; type < PTEST_TYPE_COUNT; type++) {
             databox box;
             ptestGenerateBox(&box, type, type);
-            flexPushHeadP(f, &box);
+            PTEST_LOGGED(flexPushHeadP(f, &box));
             ptestBoxTrackerPushHead(&tracker, &box);
         }
 
@@ -435,7 +435,7 @@ int flexPTest(int argc, char *argv[]) {
             flexP *f = flexNewP(ctx);
             for (int64_t v = 1; v <= 3; v++) {
                 const databox box = DATABOX_SIGNED(v * 11);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
             }
             flexCloseP(f);
             persistCtxFree(ctx);
@@ -498,7 +498,7 @@ int flexPTest(int argc, char *argv[]) {
                 for (int seed = 0; seed < 5; seed++) {
                     databox box;
                     ptestGenerateBox(&box, type, seed);
-                    flexPushTailP(f, &box);
+                    PTEST_LOGGED(flexPushTailP(f, &box));
                     ptestBoxTrackerPushTail(&tracker, &box);
                 }
             }
@@ -538,10 +538,10 @@ int flexPTest(int argc, char *argv[]) {
         for (int i = 0; i < 50; i++) {
             databox box = DATABOX_SIGNED(i);
             if (i % 2 == 0) {
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             } else {
-                flexPushHeadP(f, &box);
+                PTEST_LOGGED(flexPushHeadP(f, &box));
                 ptestBoxTrackerPushHead(&tracker, &box);
             }
         }
@@ -568,10 +568,10 @@ int flexPTest(int argc, char *argv[]) {
             for (int i = 0; i < 50; i++) {
                 databox box = DATABOX_SIGNED(i * 100);
                 if (i % 2 == 0) {
-                    flexPushTailP(f, &box);
+                    PTEST_LOGGED(flexPushTailP(f, &box));
                     ptestBoxTrackerPushTail(&tracker, &box);
                 } else {
-                    flexPushHeadP(f, &box);
+                    PTEST_LOGGED(flexPushHeadP(f, &box));
                     ptestBoxTrackerPushHead(&tracker, &box);
                 }
             }
@@ -610,11 +610,11 @@ int flexPTest(int argc, char *argv[]) {
         /* Push some values */
         for (int i = 0; i < 20; i++) {
             databox box = DATABOX_SIGNED(i);
-            flexPushTailP(f, &box);
+            PTEST_LOGGED(flexPushTailP(f, &box));
         }
 
         /* Reset */
-        flexResetP(f);
+        PTEST_LOGGED(flexResetP(f));
         ptestBoxTrackerInit(&tracker); /* Clear tracker */
 
         if (flexCountP(f) != 0) {
@@ -624,7 +624,7 @@ int flexPTest(int argc, char *argv[]) {
         /* Push more values after reset */
         for (int i = 100; i < 110; i++) {
             databox box = DATABOX_SIGNED(i);
-            flexPushTailP(f, &box);
+            PTEST_LOGGED(flexPushTailP(f, &box));
             ptestBoxTrackerPushTail(&tracker, &box);
         }
 
@@ -649,14 +649,14 @@ int flexPTest(int argc, char *argv[]) {
 
             for (int i = 0; i < 10; i++) {
                 databox box = DATABOX_SIGNED(i);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
             }
 
-            flexResetP(f);
+            PTEST_LOGGED(flexResetP(f));
 
             for (int i = 100; i < 115; i++) {
                 databox box = DATABOX_SIGNED(i);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -714,7 +714,7 @@ int flexPTest(int argc, char *argv[]) {
             /* Add new values this cycle */
             for (int i = 0; i < 10; i++) {
                 databox box = DATABOX_SIGNED(cycle * 1000 + i);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -755,7 +755,7 @@ int flexPTest(int argc, char *argv[]) {
             for (int i = 0; i < (int)PTEST_STRING_COUNT; i++) {
                 databox box;
                 ptestGenerateStringBox(&box, i);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -797,7 +797,7 @@ int flexPTest(int argc, char *argv[]) {
             for (int i = 0; i < 500; i++) {
                 databox box;
                 ptestGenerateBox(&box, i % PTEST_TYPE_COUNT, i);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 
@@ -863,7 +863,7 @@ int flexPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             flexP *f = flexNewP(ctx);
-            flexPushTailP(f, &testBox);
+            PTEST_LOGGED(flexPushTailP(f, &testBox));
             flexCloseP(f);
             persistCtxFree(ctx);
         }
@@ -909,7 +909,7 @@ int flexPTest(int argc, char *argv[]) {
                 for (int i = 0; i < 100; i++) {
                     int val = ptestGetSeqValue(patterns[p], i, 100);
                     databox box = DATABOX_SIGNED(val);
-                    flexPushTailP(f, &box);
+                    PTEST_LOGGED(flexPushTailP(f, &box));
                     ptestBoxTrackerPushTail(&tracker, &box);
                 }
 
@@ -950,7 +950,7 @@ int flexPTest(int argc, char *argv[]) {
         /* Add many values */
         for (int i = 0; i < 300; i++) {
             databox box = DATABOX_SIGNED(i);
-            flexPushTailP(f, &box);
+            PTEST_LOGGED(flexPushTailP(f, &box));
             ptestBoxTrackerPushTail(&tracker, &box);
         }
 
@@ -983,11 +983,11 @@ int flexPTest(int argc, char *argv[]) {
         /* Perform known number of operations */
         for (int i = 0; i < 20; i++) {
             databox box = DATABOX_SIGNED(i);
-            flexPushTailP(f, &box);
+            PTEST_LOGGED(flexPushTailP(f, &box));
         }
         for (int i = 0; i < 5; i++) {
             databox box = DATABOX_SIGNED(i + 100);
-            flexPushHeadP(f, &box);
+            PTEST_LOGGED(flexPushHeadP(f, &box));
         }
 
         persistCtxStats stats;
@@ -1010,7 +1010,7 @@ int flexPTest(int argc, char *argv[]) {
         /* Push 10 values */
         for (int i = 0; i < 10; i++) {
             databox box = DATABOX_SIGNED(i);
-            flexPushTailP(f, &box);
+            PTEST_LOGGED(flexPushTailP(f, &box));
         }
 
         /* Access with negative index */
@@ -1055,7 +1055,7 @@ int flexPTest(int argc, char *argv[]) {
             /* Test all edge case integers */
             for (size_t i = 0; i < PTEST_INT_EDGE_COUNT; i++) {
                 databox box = DATABOX_SIGNED(PTEST_INT_EDGE_CASES[i]);
-                flexPushTailP(f, &box);
+                PTEST_LOGGED(flexPushTailP(f, &box));
                 ptestBoxTrackerPushTail(&tracker, &box);
             }
 

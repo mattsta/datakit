@@ -710,7 +710,7 @@ int persistCtxTest(int argc, char *argv[]) {
             persistCtx *ctx = persistCtxNew(path, NULL);
             flexP *first = flexNewP(ctx);
             const databox one = DATABOX_SIGNED(1);
-            flexPushTailP(first, &one);
+            PTEST_LOGGED(flexPushTailP(first, &one));
             /* Each refusal reports DK_DIAG_PERSIST_CTX_CLAIMED once */
             const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
             dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
@@ -786,7 +786,7 @@ int persistCtxTest(int argc, char *argv[]) {
                 f = flexNewP(ctx);
                 for (int64_t i = 0; i < 200; i++) {
                     const databox v = DATABOX_SIGNED(i);
-                    flexPushTailP(f, &v);
+                    PTEST_LOGGED(flexPushTailP(f, &v));
                 }
                 persistCtxGetStats(ctx, &stats);
                 if (stats.totalCompactions < 2 || stats.totalCompactions > 60 ||
@@ -823,7 +823,7 @@ int persistCtxTest(int argc, char *argv[]) {
             f = flexNewP(ctx);
             for (int64_t i = 0; i < 3; i++) {
                 const databox v = DATABOX_SIGNED(i);
-                flexPushTailP(f, &v);
+                PTEST_LOGGED(flexPushTailP(f, &v));
             }
             flexCloseP(f);
             persistCtxFree(ctx);
@@ -875,7 +875,7 @@ int persistCtxTest(int argc, char *argv[]) {
             /* @own: caller; free=flexCloseP */
             flexP *f = flexNewP(ctx);
             const databox one = DATABOX_SIGNED(1);
-            flexPushTailP(f, &one);
+            PTEST_LOGGED(flexPushTailP(f, &one));
 
             const uint64_t syncs = ctx->totalSyncs;
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs) {
@@ -913,7 +913,7 @@ int persistCtxTest(int argc, char *argv[]) {
             /* @own: caller; free=flexCloseP */
             flexP *f = flexNewP(ctx);
             const databox one = DATABOX_SIGNED(1);
-            flexPushTailP(f, &one);
+            PTEST_LOGGED(flexPushTailP(f, &one));
 
             /* The device fills for one op: the op is applied in memory
              * and in the WAL alike, reported and counted */
@@ -925,7 +925,7 @@ int persistCtxTest(int argc, char *argv[]) {
                 PERSIST_LOG_NOT_DURABLE) {
                 ERRR("a failed sync was not reported as NOT_DURABLE");
             }
-            flexPushTailP(f, &two);
+            PTEST_LOGGED(flexPushTailP(f, &two));
             wal->sync = sync;
 
             persistCtxStats stats;

@@ -593,7 +593,7 @@ int multidictPTest(int argc, char *argv[]) {
         }
 
         /* Empty the dict */
-        multidictEmptyP(d);
+        PTEST_LOGGED(multidictEmptyP(d));
 
         if (multidictCountP(d) != 0) {
             ERRR("Count should be 0 after empty");
@@ -632,7 +632,7 @@ int multidictPTest(int argc, char *argv[]) {
                 mdpAdd(d, &key, &val);
             }
 
-            multidictEmptyP(d);
+            PTEST_LOGGED(multidictEmptyP(d));
 
             for (int i = 50; i < 60; i++) {
                 databox key = DATABOX_SIGNED(i);
@@ -1076,7 +1076,7 @@ int multidictPTest(int argc, char *argv[]) {
                 same = pf == nf && multidictExistsP(d, &key) == nf &&
                        (!pf || ptestBoxesEqual(&pv, &nv));
             } else {
-                multidictEmptyP(d);
+                PTEST_LOGGED(multidictEmptyP(d));
                 multidictEmpty(plain);
             }
 
@@ -1209,8 +1209,8 @@ int multidictPTest(int argc, char *argv[]) {
             databoxNewBytesString("a value long enough to live on the heap");
         const databox other = databoxNewBytesString("other");
         const databox newer = DATABOX_SIGNED(99);
-        multidictAddP(d, &key, &kept, NULL);
-        multidictAddP(d, &other, &newer, NULL);
+        PTEST_LOGGED(multidictAddP(d, &key, &kept, NULL));
+        PTEST_LOGGED(multidictAddP(d, &other, &newer, NULL));
         const int level = multidictGetLRULevel(multidictGetP(d), &key);
 
         const databox fresh = databoxNewBytesString("fresh");
@@ -1292,7 +1292,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int64_t k = 1; k <= 3; k++) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k * 100);
-            multidictAddP(d, &key, &val, NULL);
+            PTEST_LOGGED(multidictAddP(d, &key, &val, NULL));
         }
         multidictCloseP(d);
         persistCtxFree(ctx);

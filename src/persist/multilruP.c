@@ -443,7 +443,7 @@ defcleaner(multilru *, multilruFree);
  * only follow handles */
 static multilruPtr mlruTestInsert(multilruP *mlru, uint64_t weight) {
     multilruPtr handle = 0;
-    multilruInsertWeightedP(mlru, weight, &handle);
+    (void)multilruInsertWeightedP(mlru, weight, &handle);
     return handle;
 }
 defcleanerName(uint8_t *, zfree, SnapBytes);
@@ -487,7 +487,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     }
 
     /* Promote h1 to level 1 */
-    multilruIncreaseP(mlru, h1);
+    PTEST_LOGGED(multilruIncreaseP(mlru, h1));
     if (multilruGetLevelP(mlru, h1) != 1) {
         ERR("h1 should be at level 1, got %zu", multilruGetLevelP(mlru, h1));
     }
@@ -523,7 +523,7 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     }
 
     /* Delete an entry */
-    multilruDeleteP(mlru, h2);
+    PTEST_LOGGED(multilruDeleteP(mlru, h2));
     if (multilruIsPopulatedP(mlru, h2)) {
         ERRR("h2 should be deleted");
     }
@@ -613,7 +613,7 @@ static int test_multilruP_weighted(int argc, char *argv[]) {
     }
 
     /* Update weight */
-    multilruUpdateWeightP(mlru, h1, 300);
+    PTEST_LOGGED(multilruUpdateWeightP(mlru, h1, 300));
     if (multilruGetWeightP(mlru, h1) != 300) {
         ERR("h1 weight should be 300 after update, got %" PRIu64,
             multilruGetWeightP(mlru, h1));
@@ -802,7 +802,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     /* Promote random entries to various levels */
     for (size_t i = 0; i < numEntries; i += 7) {
         for (int promo = 0; promo < 3; promo++) {
-            multilruIncreaseP(mlru, handles[i]);
+            PTEST_LOGGED(multilruIncreaseP(mlru, handles[i]));
         }
     }
 
@@ -811,7 +811,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
         zmalloc(100 * sizeof(multilruPtr));
     for (size_t i = 100; i < 200; i++) {
         deletedHandles[i - 100] = handles[i];
-        multilruDeleteP(mlru, handles[i]);
+        PTEST_LOGGED(multilruDeleteP(mlru, handles[i]));
         handles[i] = 0; /* Mark as deleted */
     }
 
@@ -897,7 +897,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
 
     /* Delete every other entry to create gaps */
     for (int i = 0; i < 10; i += 2) {
-        multilruDeleteP(mlru, handles[i]);
+        PTEST_LOGGED(multilruDeleteP(mlru, handles[i]));
     }
 
     /* Verify count */
@@ -994,17 +994,17 @@ static int test_multilruP_mixed_operations(int argc, char *argv[]) {
         } else if (choice < 60 && handleCount > 0) {
             /* DELETE (20%) */
             size_t idx = xorshift % handleCount;
-            multilruDeleteP(mlru, handles[idx]);
+            PTEST_LOGGED(multilruDeleteP(mlru, handles[idx]));
             handles[idx] = handles[--handleCount];
         } else if (choice < 80 && handleCount > 0) {
             /* PROMOTE (20%) */
             size_t idx = xorshift % handleCount;
-            multilruIncreaseP(mlru, handles[idx]);
+            PTEST_LOGGED(multilruIncreaseP(mlru, handles[idx]));
         } else if (choice < 95 && handleCount > 0) {
             /* UPDATE WEIGHT (15%) */
             size_t idx = xorshift % handleCount;
             uint64_t newWeight = (xorshift % 2000) + 1;
-            multilruUpdateWeightP(mlru, handles[idx], newWeight);
+            PTEST_LOGGED(multilruUpdateWeightP(mlru, handles[idx], newWeight));
         } else if (handleCount > 50) {
             /* REMOVE MINIMUM (5%) */
             multilruPtr evicted;
@@ -1097,13 +1097,13 @@ static int test_multilruP_weight_extremes(int argc, char *argv[]) {
 
     /* Test updating to extremes */
     multilruPtr h1 = mlruTestInsert(mlru, 500);
-    multilruUpdateWeightP(mlru, h1, 0);
+    PTEST_LOGGED(multilruUpdateWeightP(mlru, h1, 0));
     if (multilruGetWeightP(mlru, h1) != 0) {
         ERR("Updated weight should be 0, got %" PRIu64,
             multilruGetWeightP(mlru, h1));
     }
 
-    multilruUpdateWeightP(mlru, h1, UINT64_MAX);
+    PTEST_LOGGED(multilruUpdateWeightP(mlru, h1, UINT64_MAX));
     if (multilruGetWeightP(mlru, h1) != UINT64_MAX) {
         ERR("Updated weight should be UINT64_MAX, got %" PRIu64,
             multilruGetWeightP(mlru, h1));
@@ -1323,7 +1323,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
 
     /* Promote to each level */
     for (size_t targetLevel = 1; targetLevel <= 6; targetLevel++) {
-        multilruIncreaseP(mlru, h1);
+        PTEST_LOGGED(multilruIncreaseP(mlru, h1));
         size_t currentLevel = multilruGetLevelP(mlru, h1);
         if (currentLevel != targetLevel) {
             ERR("After promotion %zu, level should be %zu, got %zu",
@@ -1348,7 +1348,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
     }
 
     /* Try to promote beyond max level (should stay at 6) */
-    multilruIncreaseP(mlru, h1);
+    PTEST_LOGGED(multilruIncreaseP(mlru, h1));
     if (multilruGetLevelP(mlru, h1) != 6) {
         ERR("Entry should stay at level 6, got %zu",
             multilruGetLevelP(mlru, h1));
@@ -1394,7 +1394,8 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
         }
         for (int p = 0; p < 3 && liveCount; p++) {
             rng = rng * 6364136223846793005ULL + 1;
-            multilruIncreaseP(mlru, live[(rng >> 33) % liveCount]);
+            PTEST_LOGGED(
+                multilruIncreaseP(mlru, live[(rng >> 33) % liveCount]));
         }
     }
 
@@ -1403,12 +1404,12 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     for (size_t i = 0; i < liveCount; i++) {
         if (multilruIsPopulatedP(mlru, live[i]) &&
             multilruGetLevelP(mlru, live[i]) == 0) {
-            multilruIncreaseP(mlru, live[i]);
+            PTEST_LOGGED(multilruIncreaseP(mlru, live[i]));
         }
     }
     for (int i = 0; i < 4; i++) {
         multilruPtr victim;
-        multilruRemoveMinimumP(mlru, &victim);
+        PTEST_LOGGED(multilruRemoveMinimumP(mlru, &victim));
     }
 
     multilruStats stats;
@@ -1514,8 +1515,8 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
         multilruGetMaxWeightP(mlru) != 1000 || multilruCountP(mlru) != 4) {
         ERRR("InsertP or SetMaxWeightP misbehaved");
     }
-    multilruDeleteP(mlru, extra);
-    multilruSetMaxWeightP(mlru, 100);
+    PTEST_LOGGED(multilruDeleteP(mlru, extra));
+    PTEST_LOGGED(multilruSetMaxWeightP(mlru, 100));
     if (multilruUpdateWeightP(mlru, h[2], 30) != PERSIST_LOG_UNCHANGED ||
         multilruIncreaseP(mlru, 9999) != PERSIST_LOG_UNCHANGED ||
         multilruDeleteP(mlru, 9999) != PERSIST_LOG_UNCHANGED) {
@@ -1697,9 +1698,9 @@ static int test_multilruP_refusals(int argc, char *argv[]) {
     multilruP *mlru = multilruNewWithConfigP(ctx, &config);
     multilruPtr a = 0;
     multilruPtr b = 0;
-    multilruInsertWeightedP(mlru, 5, &a);
-    multilruInsertWeightedP(mlru, 7, &b);
-    multilruIncreaseP(mlru, b);
+    PTEST_LOGGED(multilruInsertWeightedP(mlru, 5, &a));
+    PTEST_LOGGED(multilruInsertWeightedP(mlru, 7, &b));
+    PTEST_LOGGED(multilruIncreaseP(mlru, b));
     const size_t levelA = multilruGetLevelP(mlru, a);
     const size_t levelB = multilruGetLevelP(mlru, b);
     const uint64_t maxCount = multilruGetMaxCountP(mlru);

@@ -418,7 +418,7 @@ int multimapPTest(int argc, char *argv[]) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k);
             const databox *row[] = {&key, &val};
-            multimapInsertP(m, row, NULL);
+            PTEST_LOGGED(multimapInsertP(m, row, NULL));
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
@@ -473,7 +473,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -498,7 +498,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -507,7 +507,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 1000);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -534,7 +534,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -574,14 +574,14 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
         /* Delete every other entry */
         for (int i = 0; i < 20; i += 2) {
             databox key = DATABOX_SIGNED(i);
-            multimapDeleteP(m, &key);
+            PTEST_LOGGED(multimapDeleteP(m, &key));
             ptestKVTrackerDelete(&tracker, &key);
         }
 
@@ -616,14 +616,14 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
             /* Delete entries 3, 7, 11 */
             for (int i = 3; i < 15; i += 4) {
                 databox key = DATABOX_SIGNED(i);
-                multimapDeleteP(m, &key);
+                PTEST_LOGGED(multimapDeleteP(m, &key));
                 ptestKVTrackerDelete(&tracker, &key);
             }
 
@@ -663,7 +663,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
         }
 
         if (multimapCountP(m) != 10) {
@@ -671,7 +671,7 @@ int multimapPTest(int argc, char *argv[]) {
         }
 
         /* Reset the multimap */
-        multimapResetP(m);
+        PTEST_LOGGED(multimapResetP(m));
 
         if (multimapCountP(m) != 0) {
             ERRR("Count should be 0 after reset");
@@ -682,7 +682,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 2);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -709,16 +709,16 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             }
 
-            multimapResetP(m);
+            PTEST_LOGGED(multimapResetP(m));
 
             for (int i = 50; i < 60; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 3);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -760,7 +760,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * round);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -769,13 +769,13 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 9999);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
             /* Delete one */
             databox key = DATABOX_SIGNED(round * 10 + 5);
-            multimapDeleteP(m, &key);
+            PTEST_LOGGED(multimapDeleteP(m, &key));
             ptestKVTrackerDelete(&tracker, &key);
         }
 
@@ -815,7 +815,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(cycle * 100 + i);
                 databox val = DATABOX_SIGNED(cycle * 1000 + i);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -844,7 +844,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 1000);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry, NULL);
+                PTEST_LOGGED(multimapInsertP(m, entry, NULL));
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -912,7 +912,7 @@ int multimapPTest(int argc, char *argv[]) {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multimapP *m = multimapNewP(ctx, 2);
             const databox *entry[] = {&expectedKey, &expectedVal};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
             multimapCloseP(m);
             persistCtxFree(ctx);
         }
@@ -957,13 +957,13 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
         }
 
         /* Delete a few */
         for (int i = 0; i < 5; i++) {
             databox key = DATABOX_SIGNED(i);
-            multimapDeleteP(m, &key);
+            PTEST_LOGGED(multimapDeleteP(m, &key));
         }
 
         persistCtxStats stats;
@@ -990,10 +990,10 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
         }
 
-        multimapResetP(m);
+        PTEST_LOGGED(multimapResetP(m));
         if (multimapCountP(m) != 0) {
             ERRR("Expected empty after reset");
         }
@@ -1004,7 +1004,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 7);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry, NULL);
+            PTEST_LOGGED(multimapInsertP(m, entry, NULL));
         }
 
         multimapCloseP(m);
@@ -1047,7 +1047,7 @@ int multimapPTest(int argc, char *argv[]) {
             const databox key = DATABOX_SIGNED(i);
             const databox counter = DATABOX_SIGNED(i);
             const databox *row[] = {&key, &counter, &label};
-            multimapInsertP(m, row, NULL);
+            PTEST_LOGGED(multimapInsertP(m, row, NULL));
         }
 
         const databox k3 = DATABOX_SIGNED(3);
@@ -1146,7 +1146,7 @@ int multimapPTest(int argc, char *argv[]) {
             const databox key = DATABOX_SIGNED(rows[i][0]);
             const databox val = DATABOX_SIGNED(rows[i][1]);
             const databox *row[] = {&key, &val};
-            multimapInsertP(m, row, NULL);
+            PTEST_LOGGED(multimapInsertP(m, row, NULL));
         }
         const databox one = DATABOX_SIGNED(1);
         const databox eleven = DATABOX_SIGNED(11);
@@ -1230,8 +1230,8 @@ int multimapPTest(int argc, char *argv[]) {
         const databox *row1[] = {&k1, &yes};
         const databox *row2[] = {&k2, &nine};
         const databox *row3[] = {&k3, &thirty};
-        multimapInsertP(m, row1, NULL);
-        multimapInsertP(m, row2, NULL);
+        PTEST_LOGGED(multimapInsertP(m, row1, NULL));
+        PTEST_LOGGED(multimapInsertP(m, row2, NULL));
 
         int64_t now1 = -1;
         int64_t now2 = -1;
@@ -1329,7 +1329,7 @@ int multimapPTest(int argc, char *argv[]) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k * 100);
             const databox *row[2] = {&key, &val};
-            multimapInsertP(m, row, NULL);
+            PTEST_LOGGED(multimapInsertP(m, row, NULL));
         }
         multimapCloseP(m);
         persistCtxFree(ctx);

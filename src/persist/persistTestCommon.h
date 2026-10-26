@@ -45,6 +45,14 @@
         }                                                                      \
     } while (0)
 
+/* A call the test needs logged: PERSIST_LOG_REFUSED fails the test */
+#define PTEST_LOGGED(call)                                                     \
+    do {                                                                       \
+        if ((call) == PERSIST_LOG_REFUSED) {                                   \
+            ERR("refused: %s", #call);                                         \
+        }                                                                      \
+    } while (0)
+
 /* ============================================================================
  * Test Data Generators
  * ============================================================================

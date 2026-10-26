@@ -888,7 +888,7 @@ void *persistRestore(persist *p);
  * effort: a failed flush or sync never undoes, blocks or aborts the op;
  * it reports NOT_DURABLE, counts in persistStats.syncFailures (with
  * lastSyncError), and the next sync tries again. */
-typedef enum persistLogResult {
+typedef enum [[nodiscard]] persistLogResult {
     PERSIST_LOG_REFUSED = 0,     /* not logged (encode or write failed, WAL
                                     refused, or the WAL holds a bad entry
                                     that is held: see "Bad WAL entries"):
