@@ -13,6 +13,7 @@ from . import (
     atomicaudit,
     buildstore,
     coverage,
+    dropinclude,
     formatting,
     fusionscan,
     gitutil,
@@ -261,6 +262,15 @@ def main(argv: list[str] | None = None) -> int:
         dest="every",
         help="every tracked and untracked (not ignored) file",
     )
+
+    di = sub.add_parser(
+        "dropinclude",
+        help="remove the #include <HEADER> lines from the tracked sources "
+        "or the given files",
+    )
+    di.add_argument("header", help="the header, such as stdbool.h")
+    di.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    di.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     rt = sub.add_parser(
         "retoken",
@@ -915,6 +925,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "format":
         return formatting.run(args.repo, args.action, args.paths, args.every)
+
+    if args.command == "dropinclude":
+        return dropinclude.run(args.repo, args.header, tuple(args.paths), args.dry_run)
 
     if args.command == "retoken":
         return retoken.run(

@@ -615,6 +615,19 @@ uv run --project tools dktools retoken _Static_assert static_assert [--comments]
 - Prints each file's count. Exits 0, or 2 for a token that is not a C
   identifier or a missing file.
 
+## dropinclude — remove a header the language made unnecessary
+
+```sh
+uv run --project tools dktools dropinclude stdbool.h [--dry-run] [FILE ...]
+```
+
+- Deletes each `#include <HEADER>` line (a trailing comment allowed)
+  from the tracked `src/**/*.c` and `*.h` (vendored `src/memshard`
+  excluded), or from the files given. Quoted includes and commented-out
+  lines stay.
+- Prints each file's count. Exits 0, or 2 for a bad header name or a
+  missing file.
+
 ## perfdiff — perf regression comparison
 
 Compares two `perfRegression` TSV outputs row by row, keyed on
