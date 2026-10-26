@@ -46,5 +46,5 @@ These changes are datakit's own and are not upstream. Carry them forward when re
 - varint
   - `varint_fallthrough` expands to `[[fallthrough]]` under C23 and to `__attribute__((fallthrough))` before it, on clang as well as GCC, so the switch fallthroughs in the encoding macros pass `-Wimplicit-fallthrough`.
 - xxHash
-  - `deps/xxHash/CMakeLists.txt` is datakit's own build file; upstream has no root CMake build. It builds the C library without the C++-only `-Wno-extra-semi`.
+  - `deps/xxHash/CMakeLists.txt` is datakit's own build file; upstream has no root CMake build. It builds the C library without the C++-only `-Wno-extra-semi`, as C23 with GNU extensions (`CMAKE_C_STANDARD 23`, so CMake 3.21 or later), the standard datakit compiles at, without `-pedantic` (which would flag those extensions).
   - Per the upgrade to 0.8.3, `xxhash.h` and `xxh_x86dispatch.{c,h}` are clang-formatted, and every other vendored file is byte-identical to upstream.

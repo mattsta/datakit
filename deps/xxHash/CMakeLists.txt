@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.10)
+# 3.21: the first CMake that knows C_STANDARD 23 (set below)
+cmake_minimum_required(VERSION 3.21)
 project(xxhash C)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -17,7 +18,12 @@ option(Build32Bit "Build 32-bit Library" OFF)
 
 # If you need debug, build with:
 # cmake -DCMAKE_BUILD_TYPE=Debug ..
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wextra -pedantic -std=c99 -Wno-missing-field-initializers")
+# C23 with GNU extensions (gnu23): the one standard datakit and every
+# first-party consumer compile at.  CMake emits the -std flag from it.
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wextra -Wno-missing-field-initializers")
 
 add_library(xxhash OBJECT
     xxhash.c)
