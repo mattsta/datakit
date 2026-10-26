@@ -706,6 +706,21 @@ uv run --project tools dktools countof [--dry-run] [FILE ...]
   a pointer's bytes.
 - Prints each file's count. Exits 0, or 2 for a missing file.
 
+## enumconst — one-constant enums as constexpr int
+
+```sh
+uv run --project tools dktools enumconst [--dry-run] [FILE ...]
+```
+
+- `enum { NAME = EXPR };`, the pre-C23 way to name an integer constant
+  expression, becomes `constexpr int NAME = EXPR;` inside a function or
+  macro body and `static constexpr int NAME = EXPR;` at file scope.
+  `int` keeps the enum constant's type, so no arithmetic changes.
+- Only code changes (macro bodies included; comments and literals
+  never). Enums with a tag, a typedef, a fixed underlying type, several
+  constants or no initializer stay.
+- Prints each file's count. Exits 0, or 2 for a missing file.
+
 ## unusednames — retire `(void)name;` silencers for the C23 forms
 
 ```sh

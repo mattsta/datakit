@@ -17,6 +17,7 @@ from . import (
     countof,
     coverage,
     dropinclude,
+    enumconst,
     formatting,
     fusionscan,
     gitutil,
@@ -299,6 +300,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     co.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     co.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    ec = sub.add_parser(
+        "enumconst",
+        help="rewrite one-constant enums (enum { N = EXPR };) as constexpr int "
+        "(C23) across the tracked sources or the given files",
+    )
+    ec.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    ec.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     up = sub.add_parser(
         "unusednames",
@@ -1034,6 +1043,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "countof":
         return countof.run(args.repo, tuple(args.paths), args.dry_run)
+
+    if args.command == "enumconst":
+        return enumconst.run(args.repo, tuple(args.paths), args.dry_run)
 
     if args.command == "unusednames":
         return unusednames.run(args.repo, tuple(args.paths), args.dry_run)
