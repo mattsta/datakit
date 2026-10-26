@@ -431,16 +431,24 @@ typedef enum hyperloglogEncoding {
     } while (0)
 
 /* Macros to access the sparse representation.
- * The macros parameter is expected to be an uint8_t pointer. */
-static constexpr int HLL_SPARSE_XZERO_BIT = 0x40;    /* 01xxxxxx */
-static constexpr int HLL_SPARSE_VAL_BIT = 0x80;      /* 1vvvvvxx */
-#define HLL_SPARSE_IS_ZERO(p) (((*(p)) & 0xc0) == 0) /* 00xxxxxx */
-#define HLL_SPARSE_IS_XZERO(p) (((*(p)) & 0xc0) == HLL_SPARSE_XZERO_BIT)
+ * The macros parameter is expected to be an uint8_t pointer.
+ * Opcodes: ZERO 00llllll, XZERO 01llllll llllllll, VAL 1vvvvvll. */
+static constexpr int HLL_SPARSE_OPCODE = 0b1100'0000;
+static constexpr int HLL_SPARSE_XZERO_BIT = 0b0100'0000;
+static constexpr int HLL_SPARSE_VAL_BIT = 0b1000'0000;
+static constexpr int HLL_SPARSE_ZERO_LEN_BITS = 0b0011'1111;  /* also XZERO */
+static constexpr int HLL_SPARSE_VAL_VALUE_BITS = 0b0001'1111; /* after >> 2 */
+static constexpr int HLL_SPARSE_VAL_LEN_BITS = 0b0000'0011;
+#define HLL_SPARSE_IS_ZERO(p) (((*(p)) & HLL_SPARSE_OPCODE) == 0)
+#define HLL_SPARSE_IS_XZERO(p)                                                 \
+    (((*(p)) & HLL_SPARSE_OPCODE) == HLL_SPARSE_XZERO_BIT)
 #define HLL_SPARSE_IS_VAL(p) ((*(p)) & HLL_SPARSE_VAL_BIT)
-#define HLL_SPARSE_ZERO_LEN(p) (((*(p)) & 0x3f) + 1)
-#define HLL_SPARSE_XZERO_LEN(p) (((((*(p)) & 0x3f) << 8) | (*((p) + 1))) + 1)
-#define HLL_SPARSE_VAL_VALUE(p) ((((*(p)) >> 2) & 0x1f) + 1)
-#define HLL_SPARSE_VAL_LEN(p) (((*(p)) & 0x3) + 1)
+#define HLL_SPARSE_ZERO_LEN(p) (((*(p)) & HLL_SPARSE_ZERO_LEN_BITS) + 1)
+#define HLL_SPARSE_XZERO_LEN(p)                                                \
+    (((((*(p)) & HLL_SPARSE_ZERO_LEN_BITS) << 8) | (*((p) + 1))) + 1)
+#define HLL_SPARSE_VAL_VALUE(p)                                                \
+    ((((*(p)) >> 2) & HLL_SPARSE_VAL_VALUE_BITS) + 1)
+#define HLL_SPARSE_VAL_LEN(p) (((*(p)) & HLL_SPARSE_VAL_LEN_BITS) + 1)
 static constexpr int HLL_SPARSE_VAL_MAX_VALUE = 32;
 static constexpr int HLL_SPARSE_VAL_MAX_LEN = 4;
 static constexpr int HLL_SPARSE_ZERO_MAX_LEN = 64;
