@@ -66,7 +66,7 @@ defcleanerName(uint16_t *, zfree, U16Buf);
  * ============================================================================
  */
 
-#define BENCH_MAX_RESULTS 16
+static constexpr int BENCH_MAX_RESULTS = 16;
 
 typedef struct {
     const char *name;

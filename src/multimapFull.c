@@ -31,7 +31,7 @@ defcleaner(flex *, flexFree);
 #include <stdio.h>
 #endif
 
-#define CACHE_FILL 65536
+static constexpr int CACHE_FILL = 65536;
 #define MAP_STORAGE_MAX (CACHE_FILL / (sizeof(flex *)))
 #define MIDDLE_STORAGE_MAX (CACHE_FILL / sizeof(multimapFullMiddle))
 #define RANGEBOX_STORAGE_MAX (CACHE_FILL / (sizeof(databox)))
@@ -480,7 +480,7 @@ DK_INLINE_ALWAYS bool mergeSimple(multimapFull *m, multimapFullIdx mapIdx,
 
 /* Bytes a refill leaves unused below maxSize: room for the flex header to
  * grow as its byte count does, so a refilled map is never over the limit */
-#define MULTIMAP_FULL_COMPACT_SLACK 8
+static constexpr int MULTIMAP_FULL_COMPACT_SLACK = 8;
 
 /* Fill every inner map, left to right, to its limit with the leading rows
  * of the map after it; a map whose rows all fit joins its neighbour.  The

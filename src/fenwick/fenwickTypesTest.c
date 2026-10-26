@@ -57,8 +57,8 @@ static size_t fwtIndex_(uint64_t *s) {
     return (size_t)(fwtRand_(s) % 300);
 }
 
-#define FWT_ELEMS 41000
-#define FWT_OPS 2500
+static constexpr int FWT_ELEMS = 41000;
+static constexpr int FWT_OPS = 2500;
 
 /* ====================================================================
  * Integer types

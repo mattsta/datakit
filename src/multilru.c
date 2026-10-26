@@ -2183,7 +2183,7 @@ static void testEvictionCallback(size_t ptr, void *) {
  * handle of every RemoveMinimum and then every surviving entry's level to
  * trace[], returning how many values it wrote.  Identical traces from two
  * caches mean the entry encoding round-trips at both widths. */
-#define MLRU_WIDTH_TRACE_MAX 8192
+static constexpr int MLRU_WIDTH_TRACE_MAX = 8192;
 static size_t mlruWidthWorkload_(multilru *mlru, uint64_t *trace) {
     constexpr int inserts = 1500;
     multilruPtr ptrs[inserts];

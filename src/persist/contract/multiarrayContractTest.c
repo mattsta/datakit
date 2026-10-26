@@ -12,8 +12,8 @@
 
 /* 12-byte elements and 8 per node, so builds reach Small, Medium and
  * Large */
-#define PC_MA_WIDTH 12
-#define PC_MA_ROWMAX 8
+static constexpr int PC_MA_WIDTH = 12;
+static constexpr int PC_MA_ROWMAX = 8;
 
 static void pcMultiarrayElement(uint64_t *rng, uint8_t out[PC_MA_WIDTH]) {
     const uint64_t a = splitmix64(rng);

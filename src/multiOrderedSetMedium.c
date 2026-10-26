@@ -994,7 +994,7 @@ void multiOrderedSetMediumRepr(const multiOrderedSetMedium *m) {
 }
 
 /* The differential's members: member s holds score s, s < MOSM_N */
-#define MOSM_N 120
+static constexpr int MOSM_N = 120;
 static bool mosmIs_(const databox *member, const databox *score, int64_t s) {
     char want[16];
     snprintf(want, sizeof(want), "m%03" PRId64, s);

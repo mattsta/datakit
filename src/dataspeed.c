@@ -27,22 +27,11 @@ defcleanerName(size_t *, zfree, Sizes);
 defcleanerName(char *, zfree, Chars);
 
 /* SIMD support */
-#if defined(__AVX512F__)
-#define DATASPEED_USE_AVX512 1
-#include <immintrin.h>
-#elifdef __AVX2__
-#define DATASPEED_USE_AVX2 1
-#include <immintrin.h>
-#elifdef __SSE2__
-#define DATASPEED_USE_SSE2 1
+#if defined(__AVX512F__) || defined(__AVX2__) || defined(__SSE2__)
 #include <immintrin.h>
 #endif
 
 #if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-macros"
-#define DATASPEED_USE_NEON 1
-#pragma GCC diagnostic pop
 #include <arm_neon.h>
 #endif
 
@@ -284,9 +273,9 @@ typedef bool (*dataspeedSysfsReadFn)(void *ctx, int32_t index, const char *attr,
 typedef bool (*dataspeedSysctlReadFn)(void *ctx, const char *name,
                                       int64_t *value);
 
-#define DATASPEED_SYSFS_MAX_INDEX 32
+static constexpr int DATASPEED_SYSFS_MAX_INDEX = 32;
 #define DATASPEED_MAX_LINE_SIZE (1 << 20)
-#define DATASPEED_DEFAULT_LINE_SIZE 64
+static constexpr int DATASPEED_DEFAULT_LINE_SIZE = 64;
 
 /* A sysfs "type" value, without its trailing newline */
 DK_FN_UNUSED static bool dataspeedSysfsTypeIs_(const char *type,
@@ -1107,7 +1096,7 @@ void dataspeedRunAll(dataspeedReport *report, bool verbose) {
  * ============================================================================
  */
 
-#define REPORT_WIDTH 70
+static constexpr int REPORT_WIDTH = 70;
 
 /* Box drawing characters (UTF-8) */
 #define BOX_TL "\xe2\x95\x94" /* ╔ */

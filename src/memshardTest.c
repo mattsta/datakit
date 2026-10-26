@@ -96,8 +96,8 @@ static void test_heap(void) {
 }
 
 /* ---- multithread: local churn ---- */
-#define MT_THREADS 8
-#define MT_ITERS 20000
+static constexpr int MT_THREADS = 8;
+static constexpr int MT_ITERS = 20000;
 
 static void *mt_local(void *) {
     void *keep[64] = {};
@@ -131,7 +131,7 @@ static void test_mt_local(void) {
 }
 
 /* ---- multithread: CROSS-THREAD free (the lock-free xthread path) ---- */
-#define XQ 4096
+static constexpr int XQ = 4096;
 static void **xq;            /* producer fills, consumers free */
 static _Atomic int xq_head;  /* next slot to free */
 static _Atomic int xq_count; /* produced so far */
@@ -189,8 +189,8 @@ static void test_mt_crossfree(void) {
  * delayed-free list (full pages use it).  The move must either wait the
  * freer out or be seen by it; a freer that pushed onto the freed heap is
  * a use-after-free ASan reports. */
-#define HD_ROUNDS 40
-#define HD_BLOCKS 2048
+static constexpr int HD_ROUNDS = 40;
+static constexpr int HD_BLOCKS = 2048;
 static void *hd_blocks[HD_BLOCKS];
 static _Atomic int hd_go;
 
@@ -234,8 +234,8 @@ static void test_mt_heap_delete_crossfree(void) {
  * pages move in and out of the full queue (a write to the page flags);
  * another thread reads mi_usable_size of the pinned blocks, which reads
  * the same flags (TSan reports a plain read racing that write). */
-#define US_PINNED 256
-#define US_ROUNDS 200
+static constexpr int US_PINNED = 256;
+static constexpr int US_ROUNDS = 200;
 static void *us_pinned[US_PINNED];
 static _Atomic int us_state; /* 1: pinned published, 2: owner done */
 

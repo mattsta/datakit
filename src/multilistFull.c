@@ -61,7 +61,7 @@ struct multilistFull {
  *     512 =  4096 byte array (8 * 512 nodes)
  *    1024 =  8192 byte array (8 * 1024 nodes)
  *    2048 = 16384 byte array (8 * 2048 nodes) */
-#define STORAGE_MAX 2048
+static constexpr int STORAGE_MAX = 2048;
 
 /* Note: We use 'uintptr_t' as the underlying type because
  *       the 'mflex' type is not complete and can't be dereferenced. */
@@ -947,7 +947,7 @@ DK_STATIC void multilistFullCoalesce_(multilistFull *ml, mflexState *state,
 
 /* Bytes a repacked node leaves unused below the node size, for the flex
  * header to grow as its byte count does */
-#define MULTILIST_FULL_COMPACT_SLACK 8
+static constexpr int MULTILIST_FULL_COMPACT_SLACK = 8;
 
 /* The most leading elements of 'fl' that fit in 'room' bytes; at least
  * one */
@@ -2102,7 +2102,7 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
 /* Split test elements: fixed-width strings, one per id.  The long run of
  * 'x' makes any node of two or more of them compress, so an interior
  * node that is not compressed is a real depth-rule failure. */
-#define MLF_SPLIT_LEN 48
+static constexpr int MLF_SPLIT_LEN = 48;
 static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
     /* "split-" then the id as six digits, written into a fixed template
      * so the string is always exactly MLF_SPLIT_LEN bytes. */

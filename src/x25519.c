@@ -406,7 +406,7 @@ void x25519Base(uint8_t out_public[32], const uint8_t priv[32]) {
  * The pre-reject is a constant-time OR-reduce of `dkCtMemEq` results
  * across all 12 entries.  The post-multiply zero check remains as a
  * defense-in-depth backstop. */
-#define X25519_SMALL_ORDER_COUNT 12
+static constexpr int X25519_SMALL_ORDER_COUNT = 12;
 static constexpr uint8_t x25519SmallOrderTable[X25519_SMALL_ORDER_COUNT][32] = {
     /* [0] 0 */
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

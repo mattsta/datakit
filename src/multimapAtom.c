@@ -537,7 +537,7 @@ size_t multimapAtomBytes(const multimapAtom *ma) {
 /* ====================================================================
  * Persistence (atomPersist.h)
  * ==================================================================== */
-#define ATOM_PERSIST_FLAG_PERMANENT_ 1u
+static constexpr unsigned ATOM_PERSIST_FLAG_PERMANENT_ = 1u;
 
 /* A stored count (0-based: 0 is one reference) as a number; FieldIncr
  * leaves it FALSE, TRUE or an integer */

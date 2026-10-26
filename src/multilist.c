@@ -627,7 +627,7 @@ typedef struct mlwVal {
     uint32_t strId;
 } mlwVal;
 
-#define MLW_MAX 1024
+static constexpr int MLW_MAX = 1024;
 
 static bool mlwIsWide(const mlwVal *v) {
     if (v->isStr) {
@@ -999,7 +999,7 @@ static uint32_t mlwVerify(multilist *ml, mflexState *s[2], const mlwVal *want,
 
 #define OK printf("\tOK\n")
 /* Tier Rewind test elements: fixed-width strings, one per id. */
-#define MLR_LEN 24
+static constexpr int MLR_LEN = 24;
 static databox mlrBox(uint32_t id, char buf[MLR_LEN + 1]) {
     /* id % 1000000 keeps the id at six digits, so the string is exactly
      * MLR_LEN bytes and GCC can prove the buffer is large enough. */

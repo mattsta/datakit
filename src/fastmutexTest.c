@@ -10,8 +10,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define FM_THREADS 8
-#define FM_ITERS 100000
+static constexpr int FM_THREADS = 8;
+static constexpr int FM_ITERS = 100000;
 
 typedef struct fmWorkerArg {
     fastMutex *m;

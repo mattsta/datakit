@@ -44,7 +44,7 @@ defcleaner(multimapSmall *, multimapSmallFree);
 #define MULTIMAP_TAG_(map, type) ((multimap *)_PTRLIB_TAG(map, type))
 
 /* Stack allocation threshold for iterator element arrays to avoid VLA blowup */
-#define MULTIMAP_STACK_THRESHOLD 8
+static constexpr int MULTIMAP_STACK_THRESHOLD = 8;
 
 #define mms(m) ((multimapSmall *)MULTIMAP_USE_(m))
 #define mmm(m) ((multimapMedium *)MULTIMAP_USE_(m))
@@ -1659,7 +1659,7 @@ defcleanerName(multimapFull *, multimapFullFree, Sweep);
 
 /* Replacing-insert sweep: every tuple is [key][counter][pointer]; the
  * pointers are synthetic tags and are never dereferenced. */
-#define RP_WIDTH 3
+static constexpr int RP_WIDTH = 3;
 #define RP_VALUES (RP_WIDTH - 1)
 #define RP_PTR_TAG(i) ((void *)(uintptr_t)(0x10000u + (uint64_t)(i) * 16u))
 

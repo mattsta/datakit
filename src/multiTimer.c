@@ -23,7 +23,7 @@ typedef struct multiTimerEvent {
     multiTimerDurationUs repeatIntervalMicroseconds;
 } multiTimerEvent;
 
-#define ELEMENTS_PER_EVENT 5
+static constexpr int ELEMENTS_PER_EVENT = 5;
 
 bool multiTimerInit(multiTimer *t) {
     /* Full zero first: multiTimer is documented as stack-initializable,

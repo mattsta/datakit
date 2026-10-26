@@ -258,7 +258,7 @@ static bool globByteEq(uint8_t a, uint8_t b, int nocase) {
 
 /* The nesting of stars past which a pattern is refused (each costs a stack
  * frame) */
-#define GLOB_MAX_NESTING 1000
+static constexpr int GLOB_MAX_NESTING = 1000;
 
 /* One step of the match.  Every element but '*' consumes exactly one byte
  * of the string, so it needs one; every read is inside its length.  A star
@@ -436,7 +436,7 @@ defcleanerName(uint8_t *, zfree, Bytes);
  * the set of bytes one position accepts), then matched by dynamic
  * programming over (element, position), with no recursion and no early
  * stop.  Small inputs only. */
-#define GLOB_ORACLE_MAX 16
+static constexpr int GLOB_ORACLE_MAX = 16;
 typedef struct globOracleElem {
     bool star;
     uint8_t accept[32]; /* bit per byte */

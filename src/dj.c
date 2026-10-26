@@ -22,7 +22,7 @@
 
 /* default buffer length when allocated */
 /* Note: NOT 512 because leave some room for mds overhead in allocation block */
-#define DEFAULT_LEN 500
+static constexpr int DEFAULT_LEN = 500;
 
 /* ====================================================================
  * Bitmap utilities
@@ -452,7 +452,7 @@ void djNULL(djState *state) {
  *       so we can't see the comma in the buffer—it's over in the tail of the
  *       mds—so we'd have to check two places? (if splatWritten == 0, check tail
  *       of mds?) */
-#define SPLATLEN 128
+static constexpr int SPLATLEN = 128;
 static_assert(
     SPLATLEN >= 16,
     "We need to reserve a minimum of 16 bytes at a time for SIMD operating!");

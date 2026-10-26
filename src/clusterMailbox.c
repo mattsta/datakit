@@ -1807,7 +1807,7 @@ static flex *cmTestReplaceEntry(const flex *src, size_t idx,
 
 /* 2^64, 2^127 + 1 and -2^100: the 96-bit and 128-bit unsigned encodings
  * and a negative one. */
-#define CM_TEST_WIDE_COUNT 3u
+static constexpr unsigned CM_TEST_WIDE_COUNT = 3u;
 static void cmTestWideValues(databoxBig wides[CM_TEST_WIDE_COUNT]) {
     DATABOX_BIG_UNSIGNED_128(&wides[0], (__uint128_t)1 << 64);
     DATABOX_BIG_UNSIGNED_128(&wides[1], ((__uint128_t)1 << 127) | 1u);
@@ -4516,11 +4516,11 @@ int dkTestMailboxStatsAlignmentTest(int, char *[]) {
 #define CM_RACE_TARGET_OK ((uint64_t)1000)
 #define CM_RACE_TARGET_ROTATIONS ((uint64_t)1000)
 #define CM_RACE_ROTATION_CAP ((uint64_t)2000000)
-#define CM_RACE_PAYLOAD_LEN 32u
-#define CM_RACE_PAYLOAD_BYTE 0x5Au
-#define CM_RACE_MSG_TYPE 3u
-#define CM_RACE_COPY_CAP 64u
-#define CM_RACE_COPY_SENTINEL 0xEEu
+static constexpr unsigned CM_RACE_PAYLOAD_LEN = 32u;
+static constexpr unsigned CM_RACE_PAYLOAD_BYTE = 0x5Au;
+static constexpr unsigned CM_RACE_MSG_TYPE = 3u;
+static constexpr unsigned CM_RACE_COPY_CAP = 64u;
+static constexpr unsigned CM_RACE_COPY_SENTINEL = 0xEEu;
 
 typedef struct cmRetireRaceCtx {
     clusterMailbox *mb;

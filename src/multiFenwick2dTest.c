@@ -25,7 +25,7 @@ static uint64_t mf2tRand_(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-#define MF2T_DIM 300
+static constexpr int MF2T_DIM = 300;
 
 static size_t mf2tIndex_(uint64_t *s) {
     return mf2tRand_(s) % 64 == 0

@@ -76,9 +76,9 @@ defcleanerName(uint8_t *, zfree, U8);
  * type information stored in the place we would need to reverse anyway.
  */
 
-#define UINT24_MAX 0xffffff
-#define UINT40_MAX 0xffffffffff
-#define UINT48_MAX 0xffffffffffff
+static constexpr int UINT24_MAX = 0xffffff;
+static constexpr int64_t UINT40_MAX = 0xffffffffff;
+static constexpr int64_t UINT48_MAX = 0xffffffffffff;
 
 /* Define:
  *   - MAX:
@@ -90,8 +90,8 @@ defcleanerName(uint8_t *, zfree, U8);
  *     - max recorded size of unused space; i.e. malloc'd but not in 'len'
  *     - maximum length of integer minus type bits for the storage class. */
 
-#define DKS_TYPE_BITS_2 2
-#define DKS_TYPE_BITS_3 3
+static constexpr int DKS_TYPE_BITS_2 = 2;
+static constexpr int DKS_TYPE_BITS_3 = 3;
 
 #define DKS_8_MAX ((uint8_t)UINT8_MAX)
 #define DKS_8_FULL_MAX (DKS_8_MAX)
@@ -121,9 +121,9 @@ defcleanerName(uint8_t *, zfree, U8);
  *   - mask for 2 bits
  *   - mask for 3 bits
  *   - mask to check if lowest bit is 0 or 1 */
-#define DKS_TYPE_2_MASK 0x03             /* 00000011 */
-#define DKS_TYPE_3_MASK 0x07             /* 00000111 */
-#define DKS_TYPE_DETERMINATION_MASK 0x01 /* 00000001 */
+static constexpr int DKS_TYPE_2_MASK = 0x03;             /* 00000011 */
+static constexpr int DKS_TYPE_3_MASK = 0x07;             /* 00000111 */
+static constexpr int DKS_TYPE_DETERMINATION_MASK = 0x01; /* 00000001 */
 typedef enum dksType {
     /* Types described using 2 bits (byte ends with 0) */
     DKS_8 = 0x00,  /* 00000000 */
@@ -886,7 +886,7 @@ DKS_TYPE *DKS_COPY(DKS_TYPE *s, const char *t) {
 /* New dks string from int64_t value. Much faster than:
  * DKS_CATPRINTF(DKS_EMPTY(),"%lld\n", value);
  */
-#define DKS_INT64STR_MAX 21
+static constexpr int DKS_INT64STR_MAX = 21;
 DKS_TYPE *DKS_FROMINT64(int64_t value) {
     char buf[DKS_INT64STR_MAX] = {};
     const int len = StrInt64ToBuf(buf, sizeof(buf), value);

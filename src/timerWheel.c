@@ -26,38 +26,38 @@ defcleaner(timerWheel *, timerWheelFree);
  * ==================================================================== */
 
 /* Wheel 0: Fine granularity (1ms resolution) */
-#define WHEEL0_BITS 8
+static constexpr int WHEEL0_BITS = 8;
 #define WHEEL0_SIZE (1 << WHEEL0_BITS) /* 256 slots */
 #define WHEEL0_MASK (WHEEL0_SIZE - 1)
-#define WHEEL0_RESOLUTION_US 1000ULL                        /* 1ms per slot */
+static constexpr uint64_t WHEEL0_RESOLUTION_US = 1000ULL;   /* 1ms per slot */
 #define WHEEL0_SPAN_US (WHEEL0_SIZE * WHEEL0_RESOLUTION_US) /* 256ms */
 
 /* Wheel 1: Medium granularity */
-#define WHEEL1_BITS 6
+static constexpr int WHEEL1_BITS = 6;
 #define WHEEL1_SIZE (1 << WHEEL1_BITS) /* 64 slots */
 #define WHEEL1_MASK (WHEEL1_SIZE - 1)
 #define WHEEL1_RESOLUTION_US WHEEL0_SPAN_US                 /* 256ms per slot */
 #define WHEEL1_SPAN_US (WHEEL1_SIZE * WHEEL1_RESOLUTION_US) /* ~16.4s */
 
 /* Wheel 2: Coarse granularity */
-#define WHEEL2_BITS 6
+static constexpr int WHEEL2_BITS = 6;
 #define WHEEL2_SIZE (1 << WHEEL2_BITS) /* 64 slots */
 #define WHEEL2_MASK (WHEEL2_SIZE - 1)
 #define WHEEL2_RESOLUTION_US WHEEL1_SPAN_US /* ~16.4s per slot */
 #define WHEEL2_SPAN_US (WHEEL2_SIZE * WHEEL2_RESOLUTION_US) /* ~17.5min */
 
 /* Wheel 3: Very coarse granularity */
-#define WHEEL3_BITS 6
+static constexpr int WHEEL3_BITS = 6;
 #define WHEEL3_SIZE (1 << WHEEL3_BITS) /* 64 slots */
 #define WHEEL3_MASK (WHEEL3_SIZE - 1)
 #define WHEEL3_RESOLUTION_US WHEEL2_SPAN_US /* ~17.5min per slot */
 #define WHEEL3_SPAN_US (WHEEL3_SIZE * WHEEL3_RESOLUTION_US) /* ~18.6h */
 
-#define NUM_WHEELS 4
-#define ELEMENTS_PER_TIMER 5
+static constexpr int NUM_WHEELS = 4;
+static constexpr int ELEMENTS_PER_TIMER = 5;
 
 /* getWheelLevel() result for delays beyond all wheel spans */
-#define WHEEL_LEVEL_OVERFLOW (-1)
+static constexpr int WHEEL_LEVEL_OVERFLOW = (-1);
 
 /* Total wheel coverage in microseconds (~18.6 hours) */
 #define MAX_WHEEL_COVERAGE_US WHEEL3_SPAN_US

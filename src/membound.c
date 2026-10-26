@@ -50,8 +50,8 @@
  * the throughput-vs-memory tradeoff is the caller's. DEFAULT 64 captures most
  * of the MT win (batch 16 -> 64 nearly halves shared-pool wall ns/op) at modest
  * per-thread reservation; see MEMBOUND.md. */
-#define MEMBOUND_TLS_BATCH_MAX 256
-#define MEMBOUND_TLS_BATCH_DEFAULT 64
+static constexpr int MEMBOUND_TLS_BATCH_MAX = 256;
+static constexpr int MEMBOUND_TLS_BATCH_DEFAULT = 64;
 
 /* A free refused for misuse, reported (the tier's counter, where it has
  * one, is the caller's).  Callers may hold the pool lock, so a dkDiag hook
@@ -1309,7 +1309,7 @@ static bool memboundReleaseExtent(membound *m, memboundExtent *e) {
  * Buddy allocator operations are fast (~50-200ns), so brief spinning
  * often avoids the overhead of a syscall. Too much spinning wastes CPU.
  * 32 iterations is ~100-200 cycles on modern CPUs. */
-#define MEMBOUND_SPIN_ITERATIONS 32
+static constexpr int MEMBOUND_SPIN_ITERATIONS = 32;
 
 /* CPU pause hint for spin-wait loops.
  * Reduces power consumption and improves SMT performance. */
@@ -1923,7 +1923,8 @@ bool memboundShutdownSafe(membound *m) {
  *     thread that allocated from the pool must have exited or called
  *     memboundFlushThreadCache(m). The shutting-down thread detaches its own
  *     cache automatically. */
-#define MEMBOUND_TLS_CLASSES 12 /* classes 0..11 (szAtom<<0 .. szAtom<<11) */
+static constexpr int MEMBOUND_TLS_CLASSES =
+    12; /* classes 0..11 (szAtom<<0 .. szAtom<<11) */
 
 typedef struct memboundTLSCache {
     const membound *owner;
@@ -4492,8 +4493,8 @@ static int memboundTestBadFreeRun(membound *m, uint64_t seed, int ops) {
  * Multi-threaded Test Infrastructure
  * ================================================================ */
 
-#define MT_NUM_THREADS 8
-#define MT_ITERATIONS_PER_THREAD 10000
+static constexpr int MT_NUM_THREADS = 8;
+static constexpr int MT_ITERATIONS_PER_THREAD = 10000;
 
 /* Shared state for multi-threaded tests */
 typedef struct {

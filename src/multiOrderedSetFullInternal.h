@@ -48,7 +48,8 @@ struct multiOrderedSetFull {
 };
 
 /* Flag bits */
-#define MOS_FLAG_POOL_OWNED 0x01 /* We own the pool and should free it */
+static constexpr int MOS_FLAG_POOL_OWNED =
+    0x01; /* We own the pool and should free it */
 
 /* Size limit for sub-maps before splitting */
-#define MOS_FULL_DEFAULT_MAX_MAP_SIZE 4096
+static constexpr int MOS_FULL_DEFAULT_MAX_MAP_SIZE = 4096;

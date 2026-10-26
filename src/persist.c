@@ -3803,7 +3803,7 @@ defcleaner(multimap *, multimapFree);
  * as the multimap was made */
 #define MULTIMAP_PERSIST_SET (UINT32_C(1) << 31)
 #define MULTIMAP_PERSIST_COMPRESS (UINT32_C(1) << 30)
-#define MULTIMAP_PERSIST_LIMIT_SHIFT 16
+static constexpr int MULTIMAP_PERSIST_LIMIT_SHIFT = 16;
 #define MULTIMAP_PERSIST_LIMIT_MASK                                            \
     (UINT32_C(0xF) << MULTIMAP_PERSIST_LIMIT_SHIFT)
 #define MULTIMAP_PERSIST_ELEMENTS_MASK UINT32_C(0xFFFF)
@@ -4990,7 +4990,7 @@ defcleaner(multilru *, multilruFree);
  *   freeCount recycled handles in the order inserts reuse them, so the
  *   restored LRU hands out the same handles the live one would (which a
  *   WAL replayed after the snapshot depends on) */
-#define MLRU_PERSIST_CONFIG 9 /* elements before the entries */
+static constexpr int MLRU_PERSIST_CONFIG = 9; /* elements before the entries */
 
 defcleanerName(multilruPtr *, zfree, MultilruPtrs);
 defcleanerName(bool *, zfree, MlruBools);

@@ -259,7 +259,7 @@ static constexpr uint64_t serverSparseMaxBytes = 4096;
 #define HLL_HDR_SIZE sizeof(hyperloglogHeader)
 #define HLL_DENSE_SIZE (HLL_HDR_SIZE + ((HLL_REGISTERS * HLL_BITS + 7) / 8))
 #define HLL_MAX_SIZE HLL_HDR_SIZE + HLL_REGISTERS
-#define HLL_MAX_ENCODING 1
+static constexpr int HLL_MAX_ENCODING = 1;
 #define HLL_ZERO_BOUND (UINT64_WIDTH - HLL_P)
 
 typedef uint8_t hllStatic[HLL_MAX_SIZE];
@@ -432,8 +432,8 @@ typedef enum hyperloglogEncoding {
 
 /* Macros to access the sparse representation.
  * The macros parameter is expected to be an uint8_t pointer. */
-#define HLL_SPARSE_XZERO_BIT 0x40                    /* 01xxxxxx */
-#define HLL_SPARSE_VAL_BIT 0x80                      /* 1vvvvvxx */
+static constexpr int HLL_SPARSE_XZERO_BIT = 0x40;    /* 01xxxxxx */
+static constexpr int HLL_SPARSE_VAL_BIT = 0x80;      /* 1vvvvvxx */
 #define HLL_SPARSE_IS_ZERO(p) (((*(p)) & 0xc0) == 0) /* 00xxxxxx */
 #define HLL_SPARSE_IS_XZERO(p) (((*(p)) & 0xc0) == HLL_SPARSE_XZERO_BIT)
 #define HLL_SPARSE_IS_VAL(p) ((*(p)) & HLL_SPARSE_VAL_BIT)
@@ -441,10 +441,10 @@ typedef enum hyperloglogEncoding {
 #define HLL_SPARSE_XZERO_LEN(p) (((((*(p)) & 0x3f) << 8) | (*((p) + 1))) + 1)
 #define HLL_SPARSE_VAL_VALUE(p) ((((*(p)) >> 2) & 0x1f) + 1)
 #define HLL_SPARSE_VAL_LEN(p) (((*(p)) & 0x3) + 1)
-#define HLL_SPARSE_VAL_MAX_VALUE 32
-#define HLL_SPARSE_VAL_MAX_LEN 4
-#define HLL_SPARSE_ZERO_MAX_LEN 64
-#define HLL_SPARSE_XZERO_MAX_LEN 16384
+static constexpr int HLL_SPARSE_VAL_MAX_VALUE = 32;
+static constexpr int HLL_SPARSE_VAL_MAX_LEN = 4;
+static constexpr int HLL_SPARSE_ZERO_MAX_LEN = 64;
+static constexpr int HLL_SPARSE_XZERO_MAX_LEN = 16384;
 #define HLL_SPARSE_VAL_SET(p, val, len)                                        \
     do {                                                                       \
         *(p) = (((val) - 1) << 2 | ((len) - 1)) | HLL_SPARSE_VAL_BIT;          \
@@ -1645,7 +1645,7 @@ defcleaner(hllBenchSet, hllBenchSetFree);
 
 /* Register-access cycles; the approximation test adds 10000x as many
  * elements (10M), still crossing every sparse/dense checkpoint */
-#define HLL_TEST_CYCLES 1000
+static constexpr int HLL_TEST_CYCLES = 1000;
 int hyperloglogTest(int, char *[]) {
     uint32_t sseed = time(NULL) ^ getpid();
     uint32_t shash = HYPERHASH(&sseed, sizeof(sseed), 0xadc83b19ULL);

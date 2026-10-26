@@ -1727,10 +1727,10 @@ flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count) {
  * with a small constant, against O(totalBytes^2) for a single growing
  * flex.  Small keeps the constant low; above one keeps tiny members from
  * paying an allocation each. */
-#define FLEX_BULK_PUSH_MEMBERS_PER_CHUNK 16
+static constexpr int FLEX_BULK_PUSH_MEMBERS_PER_CHUNK = 16;
 
 /* Chunk pointers held on the stack before spilling to one heap block. */
-#define FLEX_BULK_PUSH_CHUNK_STACK_SLOTS 32
+static constexpr int FLEX_BULK_PUSH_CHUNK_STACK_SLOTS = 32;
 
 void flexBulkPushBytesMembers(flex **const ff,
                               const flexBytesMember *const members,
@@ -6092,7 +6092,7 @@ bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
  * compressedBytes: length of compressedData */
 #include "../deps/lz4/lz4.h"
 
-#define CFLEX_MINIMUM_COMPRESS_BYTES 64
+static constexpr int CFLEX_MINIMUM_COMPRESS_BYTES = 64;
 
 size_t cflexBytesCompressed(const cflex *const c) {
     varintWidth size;
@@ -9163,9 +9163,9 @@ static int32_t flexTestReplaceSign(void) {
  * without them) exits differently and fails.  The child's stderr is
  * silenced, and turning SIGABRT into an exit keeps the platform crash
  * reporter out of it. */
-#define FLEX_TEST_DEFERRED_PATHS 4
-#define FLEX_TEST_ABORT_STATUS 86
-#define FLEX_TEST_BARE_ABORT_STATUS 87
+static constexpr int FLEX_TEST_DEFERRED_PATHS = 4;
+static constexpr int FLEX_TEST_ABORT_STATUS = 86;
+static constexpr int FLEX_TEST_BARE_ABORT_STATUS = 87;
 [[noreturn]] static void flexTestAbortHandler_(int) {
     _exit(FLEX_TEST_BARE_ABORT_STATUS);
 }

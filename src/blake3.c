@@ -456,9 +456,9 @@ static size_t chunk_bytes_consumed(const blake3Hasher *self) {
  *
  * Run the in-suite "blake3 dispatch crossover audit" test to verify
  * the SIMD/scalar boundary on a new deployment platform. */
-#define BLAKE3_BATCH_NEON_CHUNKS 4
-#define BLAKE3_BATCH_SSE41_CHUNKS 4
-#define BLAKE3_BATCH_AVX2_CHUNKS 8
+static constexpr int BLAKE3_BATCH_NEON_CHUNKS = 4;
+static constexpr int BLAKE3_BATCH_SSE41_CHUNKS = 4;
+static constexpr int BLAKE3_BATCH_AVX2_CHUNKS = 8;
 
 static_assert(BLAKE3_BATCH_NEON_CHUNKS == BLAKE3_NEON_COMPRESS4_LANES,
               "BLAKE3 NEON batch constant must match compressor lane count");

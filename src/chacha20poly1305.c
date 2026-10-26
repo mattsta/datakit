@@ -113,10 +113,10 @@ static inline uint32_t rotl32(uint32_t v, uint32_t n) {
     } while (0)
 
 /* ChaCha20 constants — "expand 32-byte k" per RFC 8439 §2.3. */
-#define CHACHA20_CONST_0 0x61707865u /* "expa" */
-#define CHACHA20_CONST_1 0x3320646eu /* "nd 3" */
-#define CHACHA20_CONST_2 0x79622d32u /* "2-by" */
-#define CHACHA20_CONST_3 0x6b206574u /* "te k" */
+static constexpr unsigned CHACHA20_CONST_0 = 0x61707865u; /* "expa" */
+static constexpr unsigned CHACHA20_CONST_1 = 0x3320646eu; /* "nd 3" */
+static constexpr unsigned CHACHA20_CONST_2 = 0x79622d32u; /* "2-by" */
+static constexpr unsigned CHACHA20_CONST_3 = 0x6b206574u; /* "te k" */
 
 /* Build the 16-word ChaCha20 state from key, counter, nonce.  Used by
  * the SIMD batched paths which take a pre-built state and produce

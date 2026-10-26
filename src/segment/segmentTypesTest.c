@@ -57,8 +57,8 @@ static size_t sgtIndex_(uint64_t *s) {
     return (size_t)(sgtRand_(s) % 300);
 }
 
-#define SGT_ELEMS 21000
-#define SGT_OPS 1500
+static constexpr int SGT_ELEMS = 21000;
+static constexpr int SGT_OPS = 1500;
 
 /* The fold the oracle expects: SUM in the unsigned type of the same
  * width (the sum modulo 2^bits), MIN and MAX directly. */

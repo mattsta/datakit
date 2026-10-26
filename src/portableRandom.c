@@ -25,7 +25,7 @@
  * algorithm they are actually different in portableRandom_add().
  */
 
-#define DK_PR_KEYSIZE 128
+static constexpr int DK_PR_KEYSIZE = 128;
 
 DK_INLINE_ALWAYS uint64_t portableRandom_byte(portableRandomState *r) {
     r->i++;
@@ -73,7 +73,7 @@ void portableRandom_init(portableRandomState *r, pid_t pid) {
 
 /* getentropy() rejects requests over 256 bytes, so full fills are
  * chunked at that size on every arm. */
-#define DK_PR_DIRECT_MAX_CHUNK_BYTES 256
+static constexpr int DK_PR_DIRECT_MAX_CHUNK_BYTES = 256;
 
 /* Read up to `len` bytes from /dev/urandom, retrying reads that a signal
  * interrupts.  Returns the bytes read, or -1 if nothing could be read.
@@ -299,7 +299,7 @@ uint64_t portableRandom64(portableRandomState *r) {
 /* Words generated per pid check and budget charge in
  * portableRandomFill64.  Far below the refuel budget, so a fill never
  * emits more than DK_PR_REFUEL_BYTES under one key. */
-#define DK_PR_FILL_CHUNK_WORDS 256
+static constexpr int DK_PR_FILL_CHUNK_WORDS = 256;
 
 void portableRandomFill64(portableRandomState *r, uint64_t *out, size_t count) {
     while (count > 0) {

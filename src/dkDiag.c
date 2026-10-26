@@ -236,7 +236,7 @@ static size_t dkDiagTestCaptureStderr_(dkDiagPrintMode mode, char *buf,
     return got;
 }
 
-#define DK_DIAG_TEST_ABORTED 87
+static constexpr int DK_DIAG_TEST_ABORTED = 87;
 [[noreturn]] static void dkDiagTestAbortHandler_(int) {
     _exit(DK_DIAG_TEST_ABORTED);
 }

@@ -1028,8 +1028,8 @@ bool databoxNumericHashKey(const databox *box, uint64_t *key) {
 
 /* Integer numerals beyond 64 bits are 20 to 40 bytes long: 2^64 has 20
  * digits, and INT128_MIN is a '-' and 39 digits. */
-#define DATABOX_CANONICAL_WIDE_MIN_LEN 20
-#define DATABOX_CANONICAL_WIDE_MAX_LEN 40
+static constexpr int DATABOX_CANONICAL_WIDE_MIN_LEN = 20;
+static constexpr int DATABOX_CANONICAL_WIDE_MAX_LEN = 40;
 
 bool databoxIntegralRealAsInteger(const databox *in, databox *out) {
     double d;
@@ -1235,7 +1235,7 @@ void databoxRepr(const databox *const box) {
  * aborted.  The child turns SIGABRT into a distinct exit status, which
  * keeps the platform crash reporter out of it, and sends its stderr to
  * /dev/null so the expected message does not clutter the test log. */
-#define DATABOX_TEST_ABORT_STATUS 86
+static constexpr int DATABOX_TEST_ABORT_STATUS = 86;
 [[noreturn]] static void databoxTestAbortHandler_(int) {
     _exit(DATABOX_TEST_ABORT_STATUS);
 }

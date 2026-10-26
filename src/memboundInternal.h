@@ -158,7 +158,7 @@
  * Since szAtom is always at least 8 and 32-bit integers are used,
  * it is not actually possible to reach this limit.
  * Value 30 allows allocations up to 1 billion atoms * atom_size. */
-#define MEMBOUND_LOGMAX 30
+static constexpr int MEMBOUND_LOGMAX = 30;
 
 /* Minimum allocation atom size (power of 2).
  *
@@ -169,14 +169,14 @@
  * 4. Most applications don't benefit from finer granularity
  *
  * For tiny allocations, consider using a slab allocator instead. */
-#define MEMBOUND_MIN_ATOM 256
+static constexpr int MEMBOUND_MIN_ATOM = 256;
 
 /* log2(MEMBOUND_MIN_ATOM).  Every STANDARD/ENTERPRISE extent's atom is
  * MEMBOUND_MIN_ATOM, a constant of the build, so code that runs without
  * the pool lock (the thread cache, memboundGoodSize) takes the atom from
  * here: an extent it read through m->primary could be swapped out and
  * destroyed by another thread meanwhile. */
-#define MEMBOUND_MIN_ATOM_SHIFT 8
+static constexpr int MEMBOUND_MIN_ATOM_SHIFT = 8;
 static_assert((1 << MEMBOUND_MIN_ATOM_SHIFT) == MEMBOUND_MIN_ATOM,
               "MEMBOUND_MIN_ATOM_SHIFT must be log2(MEMBOUND_MIN_ATOM)");
 
@@ -189,14 +189,14 @@ static_assert((1 << MEMBOUND_MIN_ATOM_SHIFT) == MEMBOUND_MIN_ATOM,
  * - 16-bit indices save 12 bytes per freelist entry vs 64-bit
  * - 64KB is sufficient for coroutine/fiber scratch space
  * - Larger pools should use COMPACT or STANDARD tier */
-#define MEMBOUND_MICRO_LOGMAX 8       /* 8 size classes */
-#define MEMBOUND_MICRO_MAX_POOL 65536 /* 64KB max pool size */
+static constexpr int MEMBOUND_MICRO_LOGMAX = 8;       /* 8 size classes */
+static constexpr int MEMBOUND_MICRO_MAX_POOL = 65536; /* 64KB max pool size */
 
 /* COMPACT tier constants:
  * - Uses 16 size classes (covers 256B to 8MB)
  * - No extent management, just embedded pool
  * - 32-bit indices (4B vs 8B per entry) */
-#define MEMBOUND_COMPACT_LOGMAX 16
+static constexpr int MEMBOUND_COMPACT_LOGMAX = 16;
 
 /* Extent lookup optimization thresholds
  *
@@ -206,8 +206,10 @@ static_assert((1 << MEMBOUND_MIN_ATOM_SHIFT) == MEMBOUND_MIN_ATOM,
  * SIMD_THRESHOLD: Above this, SIMD parallel lookup becomes worthwhile.
  *                 Below this, binary search on sorted array is faster
  *                 due to lower setup overhead. */
-#define MEMBOUND_EXTENT_INLINE_MAX 4     /* Inline array for <=4 extents */
-#define MEMBOUND_EXTENT_SIMD_THRESHOLD 8 /* Use SIMD for >=8 extents */
+static constexpr int MEMBOUND_EXTENT_INLINE_MAX =
+    4; /* Inline array for <=4 extents */
+static constexpr int MEMBOUND_EXTENT_SIMD_THRESHOLD =
+    8; /* Use SIMD for >=8 extents */
 
 /* Growth strategy defaults
  *
@@ -276,9 +278,12 @@ typedef struct memboundExtent {
 } memboundExtent;
 
 /* Extent flags */
-#define MEMBOUND_EXTENT_FLAG_PRIMARY 0x01   /* Is primary extent */
-#define MEMBOUND_EXTENT_FLAG_DEDICATED 0x02 /* Dedicated to size class */
-#define MEMBOUND_EXTENT_FLAG_DRAINING 0x04  /* Being drained for shrink */
+static constexpr int MEMBOUND_EXTENT_FLAG_PRIMARY =
+    0x01; /* Is primary extent */
+static constexpr int MEMBOUND_EXTENT_FLAG_DEDICATED =
+    0x02; /* Dedicated to size class */
+static constexpr int MEMBOUND_EXTENT_FLAG_DRAINING =
+    0x04; /* Being drained for shrink */
 
 /* Verify extent stays compact. */
 static_assert(sizeof(memboundExtent) <= 512,
@@ -340,8 +345,9 @@ typedef struct memboundGrowthConfig {
  */
 
 /* Size class thresholds for SIZE_CLASS strategy */
-#define MEMBOUND_SIZE_CLASS_SMALL 1024   /* <= 1KB = small */
-#define MEMBOUND_SIZE_CLASS_MEDIUM 65536 /* <= 64KB = medium, else large */
+static constexpr int MEMBOUND_SIZE_CLASS_SMALL = 1024; /* <= 1KB = small */
+static constexpr int MEMBOUND_SIZE_CLASS_MEDIUM =
+    65536; /* <= 64KB = medium, else large */
 
 /* Size class indices */
 typedef enum memboundSizeClass {
@@ -797,7 +803,7 @@ static inline size_t memboundNextPow2(size_t x) {
 void memboundZeroFast(void *dst, size_t bytes);
 
 /* Threshold for using SIMD zeroing vs memset */
-#define MEMBOUND_SIMD_ZERO_THRESHOLD 256
+static constexpr int MEMBOUND_SIMD_ZERO_THRESHOLD = 256;
 
 /* ====================================================================
  * Tier Detection and Helpers

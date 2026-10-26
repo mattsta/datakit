@@ -22,7 +22,7 @@ static uint64_t f2tRand_(uint64_t *state) {
 }
 
 /* The oracle grid, row-major */
-#define F2T_DIM 400
+static constexpr int F2T_DIM = 400;
 
 /* An index: mostly inside a 48-square, sometimes far out (growth) */
 static size_t f2tIndex_(uint64_t *s) {

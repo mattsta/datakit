@@ -606,8 +606,8 @@ static void benchMembound(const char *name, membound *pool, size_t bytes) {
 
 /* Container rows: one operation type per row over PERF_CONTAINER_N
  * distinct 16-byte keys, in a fixed order.  "op" = one call. */
-#define PERF_CONTAINER_N 100000u
-#define PERF_CONTAINER_KEY 16u
+static constexpr unsigned PERF_CONTAINER_N = 100000u;
+static constexpr unsigned PERF_CONTAINER_KEY = 16u;
 
 defcleanerName(char *, zfree, PerfKeys);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);

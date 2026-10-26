@@ -175,7 +175,7 @@ mrWrongMode_(const char *function, int line, const char *what) {
 /* 2 elements per entry because our layout is:
  *   - chunk number (unsigned integer)
  *   - chunk value (custom binary format) */
-#define ELEMENTS_PER_ENTRY 2
+static constexpr int ELEMENTS_PER_ENTRY = 2;
 
 typedef enum chunkType {
     CHUNK_TYPE_ALL_0 = 0, /* implicit; when all == 0, chunk doesn't exist. */
@@ -2970,7 +2970,6 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 /* SIMD-optimized bitmap operations */
 #if defined(__AVX2__)
 #include <immintrin.h>
-#define HAVE_SIMD_BITMAP_AVX2 1
 
 DK_STATIC void bitmap_and_simd(uint8_t *dst, const uint8_t *src,
                                uint64_t bytes) {
@@ -3953,7 +3952,7 @@ static void multiroarTestCompare(multiroar *r, uint64_t highest) {
 
 /* The chunk-form matrix test: MR_FORM_CHUNKS chunks per roar, each filled
  * in one storage form, checked against a plain bit array. */
-#define MR_FORM_CHUNKS 7
+static constexpr int MR_FORM_CHUNKS = 7;
 #define MR_FORM_BITS ((uint64_t)MR_FORM_CHUNKS * BITMAP_SIZE_IN_BITS)
 #define MR_FORM_WORDS (MR_FORM_BITS / 64)
 

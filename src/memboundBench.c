@@ -120,7 +120,7 @@ static void *batchRun(void *arg) {
 /* Number of trials per data point; we report the MIN (best-case throughput —
  * scheduling/IRQ noise only ever adds time, so the min is the cleanest signal
  * and is what makes the MT numbers stable enough to reason about). */
-#define BENCH_TRIALS 5
+static constexpr int BENCH_TRIALS = 5;
 
 static double benchST(const Alloc *al, size_t blk, size_t live, size_t rounds) {
     double best = 1e30;

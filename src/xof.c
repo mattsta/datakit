@@ -37,9 +37,9 @@ typedef enum xofType {
     XOF_TYPE_NEW = 0x03   /* 00000011 */
 } xofType;
 
-#define BITS_TYPE 2
-#define BITS_LEADING_ZEROS 6
-#define BITS_DATA 6
+static constexpr int BITS_TYPE = 2;
+static constexpr int BITS_LEADING_ZEROS = 6;
+static constexpr int BITS_DATA = 6;
 
 /* ====================================================================
  * Create

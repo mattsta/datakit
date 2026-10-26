@@ -135,13 +135,13 @@ const clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD = {
  * Constants
  * ==================================================================== */
 
-#define INITIAL_NODE_CAPACITY 16
-#define INITIAL_VNODE_CAPACITY 256
-#define INITIAL_KEYSPACE_CAPACITY 8
-#define DEFAULT_VNODE_MULTIPLIER 150
-#define MIN_VNODES_PER_NODE 10
-#define MAX_VNODES_PER_NODE 500
-#define MAGLEV_TABLE_SIZE 65537 /* Prime number */
+static constexpr int INITIAL_NODE_CAPACITY = 16;
+static constexpr int INITIAL_VNODE_CAPACITY = 256;
+static constexpr int INITIAL_KEYSPACE_CAPACITY = 8;
+static constexpr int DEFAULT_VNODE_MULTIPLIER = 150;
+static constexpr int MIN_VNODES_PER_NODE = 10;
+static constexpr int MAX_VNODES_PER_NODE = 500;
+static constexpr int MAGLEV_TABLE_SIZE = 65537; /* Prime number */
 
 /* ====================================================================
  * Seen-Node Tracking (Optimized Deduplication)
@@ -151,8 +151,8 @@ const clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD = {
  * For large counts, fall back to hash-based tracking.
  */
 
-#define SEEN_BITMAP_SMALL_MAX 64
-#define SEEN_BITMAP_MEDIUM_MAX 512
+static constexpr int SEEN_BITMAP_SMALL_MAX = 64;
+static constexpr int SEEN_BITMAP_MEDIUM_MAX = 512;
 
 typedef struct seenTracker {
     union {
@@ -6957,7 +6957,7 @@ static int testOptimizationEdgeCases(void) {
     return err;
 }
 
-#define CLUSTER_RING_TEST_KEYS 2000u
+static constexpr unsigned CLUSTER_RING_TEST_KEYS = 2000u;
 
 /* Primary node id for test key `k` ("c<k>") */
 static uint64_t clusterRingTestPrimary(const clusterRing *ring, uint32_t k) {

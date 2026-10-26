@@ -32,12 +32,12 @@ typedef union Bits {
 } Bits;
 
 #define shift 13
-#define shiftSign 16
+static constexpr int shiftSign = 16;
 
-#define infN 0x7F800000  // flt32 infinity
-#define maxN 0x477FE000  // max flt16 normal as a flt32
-#define minN 0x38800000  // min flt16 normal as a flt32
-#define signN 0x80000000 // flt32 sign bit
+static constexpr int infN = 0x7F800000;       // flt32 infinity
+static constexpr int maxN = 0x477FE000;       // max flt16 normal as a flt32
+static constexpr int minN = 0x38800000;       // min flt16 normal as a flt32
+static constexpr unsigned signN = 0x80000000; // flt32 sign bit
 
 #define infC (infN >> shift)
 #define nanN ((infC + 1) << shift) // minimum flt16 nan as a flt32
@@ -45,11 +45,11 @@ typedef union Bits {
 #define minC (minN >> shift)
 #define signC (signN >> shiftSign) // flt16 sign bit
 
-#define mulN 0x52000000 // (1 << 23) / minN
-#define mulC 0x33800000 // minN / (1 << (23 - shift))
+static constexpr int mulN = 0x52000000; // (1 << 23) / minN
+static constexpr int mulC = 0x33800000; // minN / (1 << (23 - shift))
 
-#define subC 0x003FF // max flt32 subnormal down shifted
-#define norC 0x00400 // min flt32 normal down shifted
+static constexpr int subC = 0x003FF; // max flt32 subnormal down shifted
+static constexpr int norC = 0x00400; // min flt32 normal down shifted
 
 #define maxD (infC - maxC - 1)
 #define minD (minC - subC - 1)

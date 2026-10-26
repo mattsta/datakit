@@ -1307,12 +1307,12 @@ static bool dkTestGateAwait(dkTestGateCtl *c, const bool *field,
 /* Budgets shared by the helper threads and the test body: one generous
  * enough that only a lost wake can expire it, one deliberately short
  * for the straggler case. */
-#define DK_TEST_GATE_GENEROUS_MS 30000
-#define DK_TEST_GATE_SHORT_MS 20
+static constexpr int DK_TEST_GATE_GENEROUS_MS = 30000;
+static constexpr int DK_TEST_GATE_SHORT_MS = 20;
 /* Rounds of the lost-wake race.  Each round is one thread create plus a
  * handshake, so this costs milliseconds of wall clock while giving the
  * window hundreds of independent chances to be hit. */
-#define DK_TEST_GATE_RACE_ROUNDS 256
+static constexpr int DK_TEST_GATE_RACE_ROUNDS = 256;
 
 static void *dkTestGateHolderMain(void *arg) {
     dkTestGateCtl *c = arg;
@@ -1352,8 +1352,8 @@ static void *dkTestGateWaiterMain(void *arg) {
  * the exiter thread leave it, waits for zero and frees it at once. The
  * exiter spins on a round counter so its Exit lands as close as possible
  * to the wait; the round count is capped by a wall-clock budget. */
-#define DK_TEST_GATE_FREE_ROUNDS 200000u
-#define DK_TEST_GATE_FREE_BUDGET_MS 3000u
+static constexpr unsigned DK_TEST_GATE_FREE_ROUNDS = 200000u;
+static constexpr unsigned DK_TEST_GATE_FREE_BUDGET_MS = 3000u;
 
 typedef struct dkTestGateFreeCtl {
     _Atomic(inflightGate *) cur;
@@ -1765,7 +1765,7 @@ static void dkSeqNoteViolation_(const ownedSeqDecl *, const void *) {
     atomic_fetch_add_explicit(&g_dkSeqViolationNotes, 1, memory_order_relaxed);
 }
 
-#define DK_SEQ_BYTES 64u
+static constexpr unsigned DK_SEQ_BYTES = 64u;
 /* N = 2, 20 payload bytes (not a whole number of words), no row */
 static const ownedSeqDecl dkSeqDeclOdd_ = {
     .name = "dk.seq.odd",
@@ -2100,10 +2100,10 @@ static int dkTestOwnedReadersOnly(void) {
  * objects and drains. A premature release shows as a bad field here, as
  * a heap-use-after-free under ASan, or as a race under ThreadSanitizer. */
 #define DK_OWNED_SOAK_MAGIC UINT64_C(0x50a4c0ffee50a4c0)
-#define DK_OWNED_SOAK_PUBLISHES 20000u
-#define DK_OWNED_SOAK_DRAIN_EVERY 64u
-#define DK_OWNED_SOAK_READERS 3
-#define DK_OWNED_CELL_RACE_PUBLISHES 20000u
+static constexpr unsigned DK_OWNED_SOAK_PUBLISHES = 20000u;
+static constexpr unsigned DK_OWNED_SOAK_DRAIN_EVERY = 64u;
+static constexpr int DK_OWNED_SOAK_READERS = 3;
+static constexpr unsigned DK_OWNED_CELL_RACE_PUBLISHES = 20000u;
 
 typedef struct dkOwnedSoakObj {
     uint64_t magic;
@@ -3555,11 +3555,12 @@ static int dkTestOwnedStateTest(int, char *[]) {
  * The result depends on the machine and its load, so it is run by name
  * rather than as part of the default test run.
  * ==================================================================== */
-#define DK_GATE_N 4096u
-#define DK_GATE_WALKS 400u
-#define DK_GATE_TRIALS 9u
-#define DK_GATE_STORM_R 8u
-#define DK_GATE_WRITER_PACE_NS 20000u /* about 50k appends/s */
+static constexpr unsigned DK_GATE_N = 4096u;
+static constexpr unsigned DK_GATE_WALKS = 400u;
+static constexpr unsigned DK_GATE_TRIALS = 9u;
+static constexpr unsigned DK_GATE_STORM_R = 8u;
+static constexpr unsigned DK_GATE_WRITER_PACE_NS =
+    20000u; /* about 50k appends/s */
 
 typedef struct dkGateRefSlot {
     _Atomic uint64_t seq;
@@ -3989,7 +3990,7 @@ typedef struct dkSharrowPtr {
     _Atomic uint64_t *checkedOut;
 } dkSharrowPtr;
 
-#define DK_SHARROW_OWNERS 4
+static constexpr int DK_SHARROW_OWNERS = 4;
 typedef struct dkSharrowShared {
     _Atomic uint32_t checkedOut;
     uint32_t marks[DK_SHARROW_OWNERS];
@@ -11518,10 +11519,10 @@ static int dkTestEnvelopeWrapPadPolicyTest(int, char *[]) {
  * End-to-end cluster replay-protection cross-integration test
  * (keyring + nonceLog + mailbox + replicator).
  * ==================================================================== */
-#define D4_VALID_INGESTS 1000
-#define D4_ENV_REPLAYS 50
-#define D4_FORGERIES 50
-#define D4_SEQ_REPLAYS 50
+static constexpr int D4_VALID_INGESTS = 1000;
+static constexpr int D4_ENV_REPLAYS = 50;
+static constexpr int D4_FORGERIES = 50;
+static constexpr int D4_SEQ_REPLAYS = 50;
 #define D4_TOTAL_FRAMES                                                        \
     (D4_VALID_INGESTS + D4_ENV_REPLAYS + D4_FORGERIES + D4_SEQ_REPLAYS)
 #define D4_ORIGIN_ID ((uint32_t)9001u)

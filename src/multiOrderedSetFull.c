@@ -226,7 +226,7 @@ static uint32_t findSubMap_(const multiOrderedSetFull *m, const databox *score,
  * costs O(1) or a walk over a few nodes, never the large tier's list walk
  * from its head, which routing (O(log sub-maps) Gets per call) and rank
  * (a Get per earlier sub-map) would pay on every call. */
-#define MOS_FULL_ARRAY_ROWS 1024
+static constexpr int MOS_FULL_ARRAY_ROWS = 1024;
 
 /* Insert one sub-map slot (its flex, middle offset and rangeBox) at 'at'
  * into the three parallel arrays, which hold 'count' slots each now.  The
@@ -488,7 +488,7 @@ static void coalesceAround_(multiOrderedSetFull *m, uint32_t mapIdx) {
 
 /* Bytes a refill leaves unused below maxMapSize, for the flex header to
  * grow as its byte count does */
-#define MOS_FULL_COMPACT_SLACK 8
+static constexpr int MOS_FULL_COMPACT_SLACK = 8;
 
 /* Fill every sub-map, left to right, to maxMapSize with the leading rows
  * of the one after it; a sub-map whose rows all fit (or an empty one)
@@ -1923,7 +1923,7 @@ static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
 }
 
 /* The copy test's members: member s holds score s */
-#define MOS_COPY_N 3000
+static constexpr int MOS_COPY_N = 3000;
 static void mosCopyName_(char *buf, size_t len, int64_t s) {
     snprintf(buf, len, "copied-member-%05" PRId64, s);
 }
@@ -2052,7 +2052,7 @@ static int mosCopyCheck_(const multiOrderedSetFull *m, const bool *present,
 
 /* A Full set spanning several sub-maps against a presence oracle over
  * scores 0..MOSF_N-1 (member "f<score>") */
-#define MOSF_N 2400
+static constexpr int MOSF_N = 2400;
 static void mosfName_(char *buf, size_t len, int64_t s) {
     snprintf(buf, len, "f%05" PRId64, s);
 }

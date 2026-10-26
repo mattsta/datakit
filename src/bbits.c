@@ -8,7 +8,7 @@
 defcleanerName(uint64_t *, zfree, U64);
 defcleanerName(double *, zfree, Doubles);
 
-#define BYTES_PER_BITMAP 4096
+static constexpr int BYTES_PER_BITMAP = 4096;
 
 /* Check if bits in bitmap will grow larger than our allocation size */
 #define TOO_BIG_(bits) ((bits) >= (BYTES_PER_BITMAP * 8))

@@ -56,8 +56,8 @@ struct stringPool {
 };
 
 /* Initial capacities */
-#define INITIAL_CAPACITY 16
-#define INITIAL_FREE_CAPACITY 16
+static constexpr int INITIAL_CAPACITY = 16;
+static constexpr int INITIAL_FREE_CAPACITY = 16;
 
 /* ====================================================================
  * Creation / Destruction

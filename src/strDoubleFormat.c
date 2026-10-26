@@ -32,9 +32,9 @@ StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v);
  * the cost is memory allocations and freeing during math operations.
  */
 
-#define I754_FLOAT_BIAS 1022
-#define I754_MIN_EXPONENT (-1022 - 52)  /* -1074 */
-#define I754_BIG_POWER 4503599627370496 /* 2^52 */
+static constexpr int I754_FLOAT_BIAS = 1022;
+#define I754_MIN_EXPONENT (-1022 - 52)                      /* -1074 */
+static constexpr int64_t I754_BIG_POWER = 4503599627370496; /* 2^52 */
 
 #ifdef DATAKIT_TEST
 static uint32_t resolvedMethod = 0;

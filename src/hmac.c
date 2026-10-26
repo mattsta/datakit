@@ -36,14 +36,14 @@ DK_FN_UNUSED static void freeLaneStorage4_cleanup(uint8_t *(*lanes)[4]) {
 
 /* RFC 2104 §2: inner pad byte 0x36 and outer pad byte 0x5c are XOR'd into
  * every byte of the (zero-padded) key to derive the inner and outer keys. */
-#define HMAC_IPAD 0x36
-#define HMAC_OPAD 0x5c
+static constexpr int HMAC_IPAD = 0x36;
+static constexpr int HMAC_OPAD = 0x5c;
 
 /* Cap for the in-storage scratch region holding ipad/opad keys. RFC 2104
  * does not bound the hash's block size in principle, but every real-world
  * hash we care about has block_size <= 256. The runtime check in hmacInit
  * will refuse anything larger rather than silently overflow. */
-#define HMAC_MAX_BLOCK 256
+static constexpr int HMAC_MAX_BLOCK = 256;
 
 size_t hmacCtxSize(const hmacHashAlgo *algo) {
     /* Layout: [inner ctx][outer ctx][scratch sized to 2 * block_size].

@@ -8,15 +8,15 @@
  * Integer to String conversions from acf
  * ==================================================================== */
 /* Powers of 10. */
-#define PO2 100ULL
-#define PO4 10000ULL
-#define PO8 100'000'000ULL
-#define PO10 10000000000ULL
-#define PO16 10000000000000000ULL
+static constexpr uint64_t PO2 = 100ULL;
+static constexpr uint64_t PO4 = 10000ULL;
+static constexpr uint64_t PO8 = 100'000'000ULL;
+static constexpr uint64_t PO10 = 10000000000ULL;
+static constexpr uint64_t PO16 = 10000000000000000ULL;
 
 /* 64 bits worth of '0' characters (i.e., 8 characters). */
 /* 0x30 is character '0' */
-#define ZERO_CHARS 0x3030303030303030ULL
+static constexpr uint64_t ZERO_CHARS = 0x3030303030303030ULL;
 
 /**
  * encode_* functions unpack (pairs of) numbers into BCD: each byte
@@ -467,7 +467,7 @@ int32_t StrDoubleToBuf(void *_buf, size_t len, double value) {
  * 128 bit integer string printing
  * ==================================================================== */
 /* Note: a full-width __uint128_t printed in base 10 is 40 characters */
-#define PO9 1'000'000'000ULL
+static constexpr uint64_t PO9 = 1'000'000'000ULL;
 size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
     assert(bufLen >= 40);
 

@@ -53,7 +53,7 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
 
-#define BENCH_MAX_OPS 200000
+static constexpr int BENCH_MAX_OPS = 200000;
 #define BENCH_BUDGET_NS 40000000.0 /* 40 ms per table cell */
 
 static uint64_t benchRand_(uint64_t *state) {

@@ -30,10 +30,10 @@ typedef enum ownedTotal_ {
     OWNED_T_COUNT_
 } ownedTotal_;
 
-#define OWNED_STRIPES 16u
+static constexpr unsigned OWNED_STRIPES = 16u;
 /* Covers the 128-byte lines of Apple silicon and the adjacent-line
  * prefetch pairs of x86-64. */
-#define OWNED_STRIPE_ALIGN 128
+static constexpr int OWNED_STRIPE_ALIGN = 128;
 
 typedef struct ownedStripe_ {
     alignas(OWNED_STRIPE_ALIGN) _Atomic uint64_t c[OWNED_T_COUNT_];
@@ -590,7 +590,7 @@ void ownedSlotInit(ownedSlot *s, const ownedSlotDecl *decl) {
  * Publish moves it to RETIRED with a CAS and releases only if that CAS
  * wins, so a Publish that meets plain RETIRED (a thread whose claim was
  * refused, or a claimant publishing again) releases nothing. */
-#define OWNED_SLOT_RETIRED_CLAIMED_ 4
+static constexpr int OWNED_SLOT_RETIRED_CLAIMED_ = 4;
 
 static ownedSlotState ownedSlotPublic_(int st) {
     return st == OWNED_SLOT_RETIRED_CLAIMED_ ? OWNED_SLOT_RETIRED

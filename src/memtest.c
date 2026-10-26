@@ -671,7 +671,7 @@ void memtestInteractive(size_t megabytes, int passes, memtestResult *result) {
  */
 
 #if defined(__linux__)
-#define MEMTEST_MAX_REGIONS 128
+static constexpr int MEMTEST_MAX_REGIONS = 128;
 
 size_t memtestProcessMemory(int passes) {
     FILE *fp = fopen("/proc/self/maps", "r");

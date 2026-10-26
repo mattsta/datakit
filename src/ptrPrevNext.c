@@ -1,15 +1,15 @@
 #include "ptrPrevNext.h"
 #include "../deps/varint/src/varintSplitFull16.h"
 
-#define SPATIAL_OFFSET 6
+static constexpr int SPATIAL_OFFSET = 6;
 
 /* The largest entry: three fields of at most 9 bytes, rounded up to the
  * next slot boundary */
-#define PTR_PREV_NEXT_MAX_SPAN 30
+static constexpr int PTR_PREV_NEXT_MAX_SPAN = 30;
 
 /* Free runs are listed by size in slots: class k (k < 5) holds runs of
  * exactly k + 1 slots, the last class every run of 6 slots or more */
-#define PTR_PREV_NEXT_CLASSES 6
+static constexpr int PTR_PREV_NEXT_CLASSES = 6;
 
 typedef struct ptrPrevNextFreeList {
     size_t *slots; /* first slot of each listed run (may be stale) */

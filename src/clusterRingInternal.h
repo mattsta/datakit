@@ -140,8 +140,8 @@ typedef struct clusterMaglevData {
  * timed into a log-linear histogram (CLUSTER_LATENCY_SUB buckets per power
  * of two, so a bucket spans at most 1/CLUSTER_LATENCY_SUB of its value).
  * Concurrent placements record with relaxed atomics. */
-#define CLUSTER_LATENCY_SAMPLE_EVERY 64u
-#define CLUSTER_LATENCY_SUB_BITS 2u
+static constexpr unsigned CLUSTER_LATENCY_SAMPLE_EVERY = 64u;
+static constexpr unsigned CLUSTER_LATENCY_SUB_BITS = 2u;
 #define CLUSTER_LATENCY_SUB (1u << CLUSTER_LATENCY_SUB_BITS)
 #define CLUSTER_LATENCY_BUCKETS (64u * CLUSTER_LATENCY_SUB)
 

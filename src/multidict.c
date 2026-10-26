@@ -89,9 +89,10 @@ typedef struct multidictHT {
  * This allows the multimap slots to accumulate some entries before
  * triggering a rehash, which matches the design where slots hold
  * multiple entries. Max value is 255 (fits in uint8_t). */
-#define MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR 200
-#define MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR 10
-#define MULTIDICT_MIN_SLOTS_FOR_SHRINK 8 /* Don't shrink below this */
+static constexpr int MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR = 200;
+static constexpr int MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR = 10;
+static constexpr int MULTIDICT_MIN_SLOTS_FOR_SHRINK =
+    8; /* Don't shrink below this */
 
 /* Byte-based expansion defaults */
 #define MULTIDICT_DEFAULT_TARGET_SLOT_BYTES (2ULL * 1024 * 1024) /* 2MB */
@@ -303,7 +304,7 @@ DK_INLINE_ALWAYS uint32_t multidictHashOfKey_(multidict *d,
  * entries stay at the cold end ahead of every untried one, so after a
  * refill the first 'skip' candidates are the ones already passed over.
  * Once 'skip' fills the window, the call picks random victims instead. */
-#define MD_LRU_CANDIDATES 64
+static constexpr int MD_LRU_CANDIDATES = 64;
 typedef struct mdLRUCandidates {
     multilruPtr ptr[MD_LRU_CANDIDATES];
     uint32_t count; /* candidates the last refill found */
@@ -500,7 +501,7 @@ DK_INLINE_ALWAYS void mdFoldAscii_(uint8_t *dst, const uint8_t *src,
 }
 
 /* Bytes folded per step of the case hash */
-#define MD_CASE_HASH_CHUNK 256
+static constexpr int MD_CASE_HASH_CHUNK = 256;
 
 /* An ASCII case-insensitive hash: multidictGenHashFunction, the seeded
  * hash of exact keys, over the key with exactly 'A'-'Z' folded to
@@ -2857,7 +2858,7 @@ void multidictIteratorRelease(multidictIterator *iter) {
 }
 
 /* Random slot probes multidictGetRandomKey makes before it walks */
-#define MD_RANDOM_KEY_PROBES 128
+static constexpr int MD_RANDOM_KEY_PROBES = 128;
 
 /* Live slot 'pos', counting ht[0] slots first and then ht[1] slots */
 DK_INLINE_ALWAYS multidictSlot *mdLiveSlot_(multidict *d, uint64_t pos) {
@@ -3693,7 +3694,7 @@ static int32_t testKeyIndex_(const databox *key, const char *prefix) {
 /* LRU veto test: while testLruVetoActive_ is set, vetoes the eviction of
  * every "lruveto-NNNNN" key whose index is a multiple of 10 below 100;
  * logs the index of each eviction it allows, in order */
-#define TEST_LRU_VETO_MAX 256
+static constexpr int TEST_LRU_VETO_MAX = 256;
 static bool testLruVetoActive_ = false;
 static int32_t testLruVetoes_ = 0;
 static int32_t testLruVetoBad_ = 0;
@@ -5369,8 +5370,8 @@ static int multidictTestPersistKeys_(void) {
  * the way the dict's type should, under growth, shrinking and rehashes
  * forced in flight.  Keys carry an index, letters that may change case,
  * and sometimes an embedded NUL, a Latin-1 byte or padding past 64 bytes. */
-#define TEST_CI_BASES 160
-#define TEST_CI_MAX_KEY 96
+static constexpr int TEST_CI_BASES = 160;
+static constexpr int TEST_CI_MAX_KEY = 96;
 typedef struct testCiEntry {
     uint8_t key[TEST_CI_MAX_KEY];
     uint32_t len;

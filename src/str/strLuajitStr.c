@@ -57,7 +57,7 @@
 
 /* Definitions for circular decimal digit buffer (base 100 = 2 digits/byte). */
 #define STRSCAN_DIG 1024
-#define STRSCAN_MAXDIG 800 /* 772 + extra are sufficient. */
+static constexpr int STRSCAN_MAXDIG = 800; /* 772 + extra are sufficient. */
 #define STRSCAN_DDIG (STRSCAN_DIG / 2)
 #define STRSCAN_DMASK (STRSCAN_DDIG - 1)
 

@@ -13,7 +13,7 @@
  * portableRandomFill64 call, so the pid check (a syscall on libcs that
  * do not cache the pid) and the refuel budget charge run once per block
  * rather than once per word, and a draw is a TLS read. */
-#define DK_RANDOM_BLOCK_WORDS 64
+static constexpr int DK_RANDOM_BLOCK_WORDS = 64;
 
 /* Count of dkRandomBounded(0) calls; relaxed, nothing orders against
  * it. */

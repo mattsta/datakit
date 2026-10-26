@@ -146,7 +146,7 @@ static inline double mosDataboxToDouble(const databox *box) {
  * ==================================================================== */
 
 /* Minimum entry count for promotion (must have 2 entries to split) */
-#define MOS_MIN_ENTRIES_FOR_PROMOTION 2
+static constexpr int MOS_MIN_ENTRIES_FOR_PROMOTION = 2;
 
 DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
     const uint32_t limit = COMPRESS_LIMIT(*m);
