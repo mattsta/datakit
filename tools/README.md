@@ -581,6 +581,19 @@ uv run --project tools dktools testtime ./build/dev/src/datakit-test multimap [-
 - Exits 0 when the test passes, 1 when it fails or is stopped, 2 on an
   input error (such as a missing binary).
 
+## configure — refresh a preset build's compile database
+
+```sh
+uv run --project tools dktools configure [dev] [--compiler clang22]
+```
+
+- Runs `cmake --preset PRESET` in the repository with the named
+  compiler, so `build/PRESET` and its `compile_commands.json` (the
+  database clangd reads, see `.clangd.sample`) follow the current CMake
+  files. Run it after a change of flags, standard or compiler.
+- Configures only. Exits 0 when cmake configured, 1 when it failed (its
+  output is printed), 2 for a preset the compiler does not build.
+
 ## wrapcalls — wrap the calls that drop a `[[nodiscard]]` result
 
 After marking a type `[[nodiscard]]`, a build lists every call that

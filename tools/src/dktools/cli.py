@@ -12,6 +12,7 @@ from . import (
     allocaudit,
     atomicaudit,
     buildstore,
+    configure,
     coverage,
     dropinclude,
     formatting,
@@ -304,6 +305,25 @@ def main(argv: list[str] | None = None) -> int:
         dest="paths",
         help="only sites in this repo-relative file (repeatable)",
     )
+
+    cf = sub.add_parser(
+        "configure",
+        help="(re)configure build/PRESET in place, refreshing the "
+        "compile_commands.json the editor reads",
+    )
+    cf.add_argument(
+        "preset",
+        nargs="?",
+        default="dev",
+        help="cmake preset to configure (default dev)",
+    )
+    cf.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    toolchain.add_arguments(cf)
 
     tt = sub.add_parser(
         "testtime",
@@ -840,6 +860,11 @@ def _dispatch(args: argparse.Namespace) -> int:
                 jobs=args.jobs,
                 reuse=args.reuse,
             ),
+        )
+
+    if args.command == "configure":
+        return configure.run(
+            args.repo, toolchain.from_args(args.compiler, args), args.preset
         )
 
     if args.command == "testtime":
