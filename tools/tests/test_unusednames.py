@@ -434,6 +434,26 @@ class Locals(unittest.TestCase):
         )
         self.assertIn("        const bool deleted = release(b);\n", out)
 
+    def test_each_declaration_of_a_reused_name_is_decided_on_its_own(self) -> None:
+        src = (
+            "int fTest(void) {\n"
+            "    {\n"
+            "        volatile int next = 0;\n"
+            "        next = g();\n"
+            "        (void)next;\n"
+            "    }\n"
+            "    {\n"
+            "        volatile int next = 0;\n"
+            "        next = h();\n"
+            "        (void)next;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        out, count, _ = convert(src)
+        self.assertEqual(count, 2)
+        self.assertEqual(out.count("[[maybe_unused]] volatile int next = 0;"), 2)
+
     def test_a_local_read_under_one_branch_is_maybe_unused(self) -> None:
         src = (
             "void f(void) {\n"

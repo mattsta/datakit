@@ -388,7 +388,7 @@ def unname(
             all_macros,
         )
         doc = _doc_comment(src, fn)
-        done: set[bytes] = set()
+        done: set[tuple[bytes, int]] = set()
         # code an NDEBUG or #if build may drop; assertions always compile in
         # test code (ctest.h refuses NDEBUG there)
         optional = list(guarded)
@@ -439,9 +439,12 @@ def unname(
                 refuse(m, NEVER_USED)
                 continue
             edits.append(_statement_removal(src, m))
-            if name in done:
+            # one decision per declaration (a parameter, or each local of
+            # the name: blocks redeclare names)
+            key = (name, -1 if decl is None else decl.declarator)
+            if key in done:
                 continue
-            done.add(name)
+            done.add(key)
             count += 1
             if any(
                 not _inside(at, optional)
