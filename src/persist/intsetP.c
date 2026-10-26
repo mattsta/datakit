@@ -946,9 +946,9 @@ int intsetPTest(int argc, char *argv[]) {
     TEST("intsetP every width survives recovery; readers agree") {
         /* Values in all three tier widths, both signs; after a sync and a
          * reopen the raw set holds exactly them */
-        static const int64_t values[] = {INT64_MIN, -5000000000, -70000,
-                                         -3,        0,           7,
-                                         40000,     9000000000,  INT64_MAX};
+        static constexpr int64_t values[] = {INT64_MIN, -5000000000, -70000,
+                                             -3,        0,           7,
+                                             40000,     9000000000,  INT64_MAX};
         const size_t n = sizeof(values) / sizeof(*values);
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
@@ -1038,7 +1038,7 @@ int intsetPTest(int argc, char *argv[]) {
     TEST("intsetP a refused log changes nothing (add, remove)") {
         /* 16-bit values, so the refused add of a 64-bit value would widen
          * the set */
-        static const int64_t held[] = {-3, 7, 300};
+        static constexpr int64_t held[] = {-3, 7, 300};
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         intsetP *is = intsetNewP(ctx);
@@ -1076,7 +1076,7 @@ int intsetPTest(int argc, char *argv[]) {
         persistCtxFree(ctx);
         ctx = persistCtxOpen(basePath, NULL);
         is = intsetOpenP(ctx);
-        static const int64_t logged[] = {-3, 7, 300, 40000};
+        static constexpr int64_t logged[] = {-3, 7, 300, 40000};
         if (!is ||
             !intsetPHolds_(intsetGetRawP(is), logged, COUNT_ARRAY(logged))) {
             ERRR("a reopen did not hold exactly the logged changes");

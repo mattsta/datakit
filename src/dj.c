@@ -43,7 +43,7 @@
  */
 #define BOOL_IDX_BITS_PER_SLOT (sizeof(DJ_BITMAP) * 8)
 static void boolIdxSet(djState *state, size_t offset, bool value) {
-    static const size_t bytesPerEntry = sizeof(*state->boolIdx.v);
+    static constexpr size_t bytesPerEntry = sizeof(*state->boolIdx.v);
     const size_t vOffset = offset / BOOL_IDX_BITS_PER_SLOT;
     const DJ_BITMAP mask = 1ULL << (offset % BOOL_IDX_BITS_PER_SLOT);
 
@@ -51,7 +51,7 @@ static void boolIdxSet(djState *state, size_t offset, bool value) {
         state->boolIdx.vBigExtent ? state->boolIdx.vBig : state->boolIdx.v;
 
     /* Extents count entries: the inline array, or vBig once allocated. */
-    static const size_t totalBytesInDefaultV =
+    static constexpr size_t totalBytesInDefaultV =
         bytesPerEntry * COUNT_ARRAY(state->boolIdx.v);
     const size_t extent = state->boolIdx.vBigExtent
                               ? state->boolIdx.vBigExtent
@@ -691,14 +691,14 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
 #define DJ_16_Z 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 void djString(djState *state, const void *data_, size_t len,
               const bool supportUTF8) {
-    static const uint8_t hexDigits[16] = {'0', '1', '2', '3', '4', '5',
-                                          '6', '7', '8', '9', 'A', 'B',
-                                          'C', 'D', 'E', 'F'};
+    static constexpr uint8_t hexDigits[16] = {'0', '1', '2', '3', '4', '5',
+                                              '6', '7', '8', '9', 'A', 'B',
+                                              'C', 'D', 'E', 'F'};
     /* Table of characters to use for escaping a single byte sequence.
      * If value is 'u', then value is written as hex digits formatted \u00XX */
     /* We shorten the table to save some cache pollution potentially at the cost
      * of a branch at every useage of escape_ */
-    static const uint8_t escape_[] = {
+    static constexpr uint8_t escape_[] = {
         'u',     'u', 'u', 'u', 'u', 'u', 'u', 'u', 'b', 't', 'n', 'u', 'f',
         'r',     'u',
         'u', // 00
@@ -1193,7 +1193,7 @@ int djTest(int argc, char *argv[]) {
 
         /* Stress bitmap by growing beyond its static allocation */
         /* (default is 2 static, so add 3 more to grow beyond) */
-        static const size_t maxNesting = sizeof(DJ_BITMAP) * 8 * (2 + 3);
+        static constexpr size_t maxNesting = sizeof(DJ_BITMAP) * 8 * (2 + 3);
 
         uint64_t rng = 0x2545F4914F6CDD1DULL;
         for (size_t i = 0; i < maxNesting; i++) {

@@ -1437,7 +1437,7 @@ size_t intersectIntAVX2(const uint32_t *set1, const size_t length1,
  * (zeros output).
  */
 /* clang-format off */
-static const uint8_t shuffle_mask_src[16 * 16] = {
+static constexpr uint8_t shuffle_mask_src[16 * 16] = {
     /* mask 0 (0000): no matches */
     0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
     /* mask 1 (0001): elem 0 */

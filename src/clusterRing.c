@@ -3891,9 +3891,9 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
 
         /* [3-10] location fields */
         uint64_t loc[8];
-        static const uint64_t locMax[8] = {UINT64_MAX, UINT32_MAX, UINT32_MAX,
-                                           UINT32_MAX, UINT32_MAX, UINT32_MAX,
-                                           UINT16_MAX, UINT8_MAX};
+        static constexpr uint64_t locMax[8] = {
+            UINT64_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+            UINT32_MAX, UINT32_MAX, UINT16_MAX, UINT8_MAX};
         for (size_t l = 0; l < 8; l++) {
             if (!crReadUnsignedRange(f, &fe, 0, locMax[l], &loc[l])) {
                 return NULL;

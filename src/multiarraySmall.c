@@ -126,7 +126,7 @@ int multiarraySmallTest(int argc, char *argv[]) {
     int err = 0;
 
     printf("Testing direct...\n");
-    static const int globalMax = 2048;
+    static constexpr int globalMax = 2048;
     TEST("create") {
         s16 *s = multiarraySmallDirectNew(s);
         assert(s);

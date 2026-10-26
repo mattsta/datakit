@@ -220,7 +220,7 @@ int dkFormatTest(int argc, char *argv[]) {
             {77, 3, 1},
             {77, 3, UINT64_MAX & ~(DK_FORMAT_MUST_UNDERSTAND & ~UINT64_C(1))},
         };
-        static const uint8_t payload[] = "payload bytes";
+        static constexpr uint8_t payload[] = "payload bytes";
         for (size_t s = 0; s < sizeof(stamps) / sizeof(*stamps); s++) {
             const size_t prefix = dkFormatPrefixSize(&stamps[s]);
             const size_t total = prefix + sizeof(payload);

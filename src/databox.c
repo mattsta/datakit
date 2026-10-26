@@ -1126,7 +1126,7 @@ defcleaner(mdsc *, mdscfree);
 const char *databoxReprStr(const databox *const box) {
     thread_local static char buf[256];
     thread_local static char bufBig[COUNT_ARRAY(buf)];
-    static const size_t bufLen = COUNT_ARRAY(buf);
+    static constexpr size_t bufLen = COUNT_ARRAY(buf);
 
     switch (box->type) {
     case DATABOX_VOID:
@@ -1792,7 +1792,7 @@ int databoxTest(int argc, char *argv[]) {
     }
 
     TEST("retain cache: borrow vs own vs embed ownership") {
-        static const char payload[] =
+        static constexpr char payload[] =
             "this payload is comfortably longer than the embed threshold";
         const size_t payloadLen = sizeof(payload) - 1;
 
@@ -3917,7 +3917,7 @@ int databoxTest(int argc, char *argv[]) {
         DB_ORDER_ADD_BITS64(UINT64_C(0x7FF0000000000001)); /* payload NaN */
         DB_ORDER_ADD_BITS64(UINT64_C(0xFFFFFFFFFFFFFFFF)); /* all-ones NaN */
 
-        static const char pointee[2] = "p";
+        static constexpr char pointee[2] = "p";
         DB_ORDER_ADD(databoxNewPtr(NULL));
         DB_ORDER_ADD(databoxNewPtr((void *)(uintptr_t)5));
         DB_ORDER_ADD(databoxNewPtr((void *)pointee));
@@ -4187,7 +4187,7 @@ int databoxTest(int argc, char *argv[]) {
             ERRR("a whole real was parsed as a numeral or not made an "
                  "integer");
         }
-        static const char twentyTwo[] = "22";
+        static constexpr char twentyTwo[] = "22";
         const databox others[] = {
             databoxNewSigned(22),
             databoxNewUnsigned(22),
@@ -4218,7 +4218,7 @@ int databoxTest(int argc, char *argv[]) {
 
         /* Each width's boundaries, one either side, with both signs: the
          * signed maximum and minimum and the unsigned maximum. */
-        static const uint32_t widths[] = {8, 16, 32, 64, 128};
+        static constexpr uint32_t widths[] = {8, 16, 32, 64, 128};
         for (size_t w = 0; w < COUNT_ARRAY(widths); w++) {
             const uint32_t bits = widths[w];
             const __uint128_t half = (__uint128_t)1 << (bits - 1);

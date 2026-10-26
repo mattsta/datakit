@@ -25,7 +25,7 @@
 
 /* Get expected sequence length from first byte (same table as strUTF8Valid.c)
  */
-static const uint8_t utf8SeqLenLUT[256] = {
+static constexpr uint8_t utf8SeqLenLUT[256] = {
     /* 0x00-0x7F: ASCII (1 byte) */
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x00-0x0F */
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x10-0x1F */

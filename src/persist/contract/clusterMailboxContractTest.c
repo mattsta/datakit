@@ -23,7 +23,7 @@ static hmacKeyring *pcMailboxRing(void) {
     if (ring == NULL) {
         /* @own: container; free=hmacKeyringFree */
         ring = hmacKeyringCreate();
-        static const char key[] = "persistContract mailbox test key";
+        static constexpr char key[] = "persistContract mailbox test key";
         hmacKeyringInstallUnsalted(ring, PC_MAILBOX_KEY_ID, &hmacAlgoSHA256,
                                    (const uint8_t *)key, sizeof(key) - 1);
     }

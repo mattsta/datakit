@@ -371,8 +371,8 @@ int linearBloomTest(int argc, char *argv[]) {
 
         /* Entries 21 and 42 straddle 64-bit words; 0 and 63 sit at the
          * ends of a word group */
-        static const uint64_t targets[] = {0,  1,  20, 21, 22,
-                                           41, 42, 43, 63, 64};
+        static constexpr uint64_t targets[] = {0,  1,  20, 21, 22,
+                                               41, 42, 43, 63, 64};
         for (size_t t = 0; t < sizeof(targets) / sizeof(*targets); t++) {
             const uint64_t at = targets[t];
             linearBloomCountReset(bloom);

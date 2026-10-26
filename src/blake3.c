@@ -44,13 +44,13 @@
 #define BLAKE3_FLAG_DERIVE_KEY_MATERIAL (1u << 6)
 
 /* SHA-256 IV (sqrt of first 8 primes). */
-static const uint32_t BLAKE3_IV[8] = {
+static constexpr uint32_t BLAKE3_IV[8] = {
     0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
     0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
 };
 
 /* Message-schedule permutation applied between rounds 1..7. */
-static const uint8_t BLAKE3_MSG_SCHEDULE[7][16] = {
+static constexpr uint8_t BLAKE3_MSG_SCHEDULE[7][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
     {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8},
     {3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1},
@@ -1024,7 +1024,7 @@ static void *blake3MtWorker(void *arg) {
 
 /* Lowercase hex of a single byte. */
 static void byte_to_hex(uint8_t b, char out[3]) {
-    static const char H[] = "0123456789abcdef";
+    static constexpr char H[] = "0123456789abcdef";
     out[0] = H[b >> 4];
     out[1] = H[b & 0x0F];
     out[2] = 0;
@@ -1210,11 +1210,11 @@ int blake3Test(int argc, char *argv[]) {
          * the rest, possibly all of it.  Every split, under the SIMD
          * dispatch, gives the forced-scalar one-shot digest (64 bytes
          * of output, so the root's XOF is compared too) */
-        static const size_t totals[] = {5 * 1024,      5 * 1024 + 1, 8 * 1024,
-                                        9 * 1024,      16 * 1024,    17 * 1024,
-                                        17 * 1024 + 63};
-        static const size_t splits[] = {1,    63,   64,   1023, 1024,
-                                        1025, 2048, 3072, 4096, 4 * 1024 + 1};
+        static constexpr size_t totals[] = {
+            5 * 1024,  5 * 1024 + 1, 8 * 1024,      9 * 1024,
+            16 * 1024, 17 * 1024,    17 * 1024 + 63};
+        static constexpr size_t splits[] = {
+            1, 63, 64, 1023, 1024, 1025, 2048, 3072, 4096, 4 * 1024 + 1};
         const size_t maxTotal = 17 * 1024 + 63;
         cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(maxTotal);
         fill_test_input(buf, maxTotal);
@@ -1834,8 +1834,8 @@ int blake3Test(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(seekInput); i++) {
             seekInput[i] = (uint8_t)(i * 7 + 3);
         }
-        static const size_t lens[] = {0, 3, 1024, 5000};
-        static const uint64_t seeks[] = {0, 1, 63, 64, 65, 127, 200};
+        static constexpr size_t lens[] = {0, 3, 1024, 5000};
+        static constexpr uint64_t seeks[] = {0, 1, 63, 64, 65, 127, 200};
         for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
             blake3Hasher h;
             blake3HasherInit(&h);
@@ -1891,7 +1891,7 @@ int blake3Test(int argc, char *argv[]) {
         }
 
         uint32_t cv[8];
-        static const uint32_t IV[8] = {
+        static constexpr uint32_t IV[8] = {
             0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
             0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
         };

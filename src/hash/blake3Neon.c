@@ -30,12 +30,12 @@
 /* Shared constants (kept private — same values as in blake3.c)        */
 /* ------------------------------------------------------------------ */
 
-static const uint32_t BLAKE3N_IV[8] = {
+static constexpr uint32_t BLAKE3N_IV[8] = {
     0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
     0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
 };
 
-static const uint8_t BLAKE3N_MSG_SCHEDULE[7][16] = {
+static constexpr uint8_t BLAKE3N_MSG_SCHEDULE[7][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
     {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8},
     {3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1},
@@ -56,8 +56,8 @@ static inline uint32x4_t rotr32_16(uint32x4_t x) {
 
 static inline uint32x4_t rotr32_8(uint32x4_t x) {
     /* rotr by 8 = byte permutation. */
-    static const uint8_t tbl[16] = {1, 2,  3,  0, 5,  6,  7,  4,
-                                    9, 10, 11, 8, 13, 14, 15, 12};
+    static constexpr uint8_t tbl[16] = {1, 2,  3,  0, 5,  6,  7,  4,
+                                        9, 10, 11, 8, 13, 14, 15, 12};
     uint8x16_t idx = vld1q_u8(tbl);
     return vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(x), idx));
 }
@@ -373,11 +373,11 @@ __attribute__((weak)) void blake3PortableCompressXof(
 
 /* Local scalar fallback: a direct copy of the spec compression logic.
  * Used iff the weak symbols above were not provided. */
-static const uint32_t REF_IV[8] = {
+static constexpr uint32_t REF_IV[8] = {
     0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
     0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
 };
-static const uint8_t REF_SCHED[7][16] = {
+static constexpr uint8_t REF_SCHED[7][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
     {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8},
     {3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1},

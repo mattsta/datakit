@@ -296,7 +296,7 @@ static bool multimapMediumAtOrPastLast_(const flex *map,
 }
 
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
-    static const size_t mapIdx = 1; /* always insert into highest map! */
+    static constexpr size_t mapIdx = 1; /* always insert into highest map! */
 
     /* The fast path is for a row at or past the last key; any other row
      * goes where an insert puts it, so the maps stay ordered */

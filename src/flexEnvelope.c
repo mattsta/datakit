@@ -2595,8 +2595,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             FLEX_ENV_ALGO_BLAKE3_KEYED, FLEX_ENV_ALGO_HMAC_SHA256,
             FLEX_ENV_ALGO_HMAC_BLAKE3,
         };
-        static const size_t sizes[] = {0, 1, 63, 64, 65, 1000, 4099};
-        static const size_t chunks[] = {1, 7, 64, 5000};
+        static constexpr size_t sizes[] = {0, 1, 63, 64, 65, 1000, 4099};
+        static constexpr size_t chunks[] = {1, 7, 64, 5000};
         uint8_t key[32];
         for (size_t i = 0; i < sizeof(key); i++) {
             key[i] = (uint8_t)(0xa5 ^ (i * 11));
@@ -3028,7 +3028,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
         /* No such key, and a key of the wrong length for the algorithm:
          * refused by every entry point before any nonce is used */
-        static const uint32_t badIds[] = {99, 8};
+        static constexpr uint32_t badIds[] = {99, 8};
         for (size_t i = 0; i < 2; i++) {
             const flexEnvelopeSealParams bad = {
                 .nonce = nonce,
@@ -4383,8 +4383,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * 7, into a 31-byte digest buffer, or into a NULL one is refused,
          * and so is every later Update or Final on that stream; the same
          * calls done right succeed */
-        static const uint8_t key[] = "stream misuse key";
-        static const uint8_t payload[8] = "payload";
+        static constexpr uint8_t key[] = "stream misuse key";
+        static constexpr uint8_t payload[8] = "payload";
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_HMAC_SHA256,
                                      .key = key,
                                      .key_len = sizeof(key)};

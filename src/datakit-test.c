@@ -246,7 +246,7 @@ static int dkTestSecureZeroTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
-    static const size_t sizes[] = {1, 7, 16, 32, 64, 256, 4096, 65536};
+    static constexpr size_t sizes[] = {1, 7, 16, 32, 64, 256, 4096, 65536};
     int failures = 0;
 
     for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
@@ -316,7 +316,7 @@ static int testCtMemEqStructuralTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
-    static const size_t kLens[] = {1u, 15u, 16u, 17u, 32u, 64u};
+    static constexpr size_t kLens[] = {1u, 15u, 16u, 17u, 32u, 64u};
     const size_t kNumLens = sizeof(kLens) / sizeof(kLens[0]);
     int failures = 0;
     size_t totalDiffChecks = 0;
@@ -478,9 +478,9 @@ static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
     /* Budgets: the generous one only bounds a wait an event is expected
      * to satisfy, so it costs nothing when the event lands.  The short
      * one is the deliberate expiry case. */
-    static const uint64_t kGenerousMs = 30000;
-    static const uint64_t kShortMs = 25;
-    static const int kChildExitCode = 7;
+    static constexpr uint64_t kGenerousMs = 30000;
+    static constexpr uint64_t kShortMs = 25;
+    static constexpr int kChildExitCode = 7;
 
     /* --- (1) child exits promptly: reaped within budget, status kept. */
     {
@@ -643,7 +643,7 @@ static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
      * target's short sleep only orders its exit after the waiter's
      * setup; the budget, not the sleep, bounds the test. */
     {
-        static const int kTargetExitCode = 5;
+        static constexpr int kTargetExitCode = 5;
         const pid_t waiter = fork();
         if (waiter == 0) {
             const pid_t target = fork();
@@ -722,8 +722,8 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
         }                                                                      \
     } while (0)
 
-    static const uint64_t kGenerousMs = 30000;
-    static const uint64_t kShortMs = 25;
+    static constexpr uint64_t kGenerousMs = 30000;
+    static constexpr uint64_t kShortMs = 25;
 
     /* --- (1) the child signals: READY, and the byte outranks the
      *         close that follows it. */
@@ -1055,7 +1055,7 @@ static int dkTestPerfHeaderTest(int argc, char *argv[]) {
 
     /* Population mean 5 and stddev 2 */
     perfStateStat st = {};
-    static const double samples[] = {2, 4, 4, 4, 5, 5, 7, 9};
+    static constexpr double samples[] = {2, 4, 4, 4, 5, 5, 7, 9};
     for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
         perfStatAdd(&st, samples[i]);
     }
@@ -1152,9 +1152,9 @@ static int dkTestWakeFdTest(int argc, char *argv[]) {
         }                                                                      \
     } while (0)
 
-    static const uint64_t kGenerousMs =
-        30000;                           /* bounds a wait an event satisfies */
-    static const uint64_t kShortMs = 20; /* the deliberate expiry case */
+    static constexpr uint64_t kGenerousMs =
+        30000; /* bounds a wait an event satisfies */
+    static constexpr uint64_t kShortMs = 20; /* the deliberate expiry case */
 
     int rd = -1;
     int wr = -1;
@@ -1246,7 +1246,7 @@ static int dkTestWakeFdTest(int argc, char *argv[]) {
             WEXPECT(OSRegulateWakeAwaitMs(hupRd, kGenerousMs),
                     "a wake sent before the hang-up is delivered");
 
-            static const int kAwaits = 3;
+            static constexpr int kAwaits = 3;
             const uint64_t startMs = timeUtilMonotonicMs();
             int woken = 0;
             for (int i = 0; i < kAwaits; i++) {
@@ -4810,7 +4810,7 @@ static int dkTestAesNiTest(int argc, char *argv[]) {
         }
     }
 
-    static const size_t sweep_sizes[] = {
+    static constexpr size_t sweep_sizes[] = {
         0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 4095, 4096, 4097};
     const size_t n_sweep = sizeof(sweep_sizes) / sizeof(sweep_sizes[0]);
     uint8_t key[32];
@@ -4970,7 +4970,7 @@ static int dkTestX25519SmallOrderRejectTest(int argc, char *argv[]) {
     (void)argv;
     int failures = 0;
 
-    static const uint8_t blacklist[12][32] = {
+    static constexpr uint8_t blacklist[12][32] = {
         {0},
         {1},
         {0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3,
@@ -5043,15 +5043,15 @@ static int dkTestX25519SmallOrderRejectTest(int argc, char *argv[]) {
         }
     }
 
-    static const uint8_t kat_scalar[32] = {
+    static constexpr uint8_t kat_scalar[32] = {
         0xa5, 0x46, 0xe3, 0x6b, 0xf0, 0x52, 0x7c, 0x9d, 0x3b, 0x16, 0x15,
         0x4b, 0x82, 0x46, 0x5e, 0xdd, 0x62, 0x14, 0x4c, 0x0a, 0xc1, 0xfc,
         0x5a, 0x18, 0x50, 0x6a, 0x22, 0x44, 0xba, 0x44, 0x9a, 0xc4};
-    static const uint8_t kat_u[32] = {
+    static constexpr uint8_t kat_u[32] = {
         0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb, 0x35, 0x94, 0xc1,
         0xa4, 0x24, 0xb1, 0x5f, 0x7c, 0x72, 0x66, 0x24, 0xec, 0x26, 0xb3,
         0x35, 0x3b, 0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c};
-    static const uint8_t kat_expect[32] = {
+    static constexpr uint8_t kat_expect[32] = {
         0xc3, 0xda, 0x55, 0x37, 0x9d, 0xe9, 0xc6, 0x90, 0x8e, 0x94, 0xea,
         0x4d, 0xf2, 0x8d, 0x08, 0x4f, 0x32, 0xec, 0xcf, 0x03, 0x49, 0x1c,
         0x71, 0xf7, 0x54, 0xb4, 0x07, 0x55, 0x77, 0xa2, 0x85, 0x52};
@@ -5499,11 +5499,11 @@ static int dkTestX25519Iter1000KATTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
-    static const uint8_t expect_iter1[32] = {
+    static constexpr uint8_t expect_iter1[32] = {
         0x42, 0x2c, 0x8e, 0x7a, 0x62, 0x27, 0xd7, 0xbc, 0xa1, 0x35, 0x0b,
         0x3e, 0x2b, 0xb7, 0x27, 0x9f, 0x78, 0x97, 0xb8, 0x7b, 0xb6, 0x85,
         0x4b, 0x78, 0x3c, 0x60, 0xe8, 0x03, 0x11, 0xae, 0x30, 0x79};
-    static const uint8_t expect_iter1000[32] = {
+    static constexpr uint8_t expect_iter1000[32] = {
         0x68, 0x4c, 0xf5, 0x9b, 0xa8, 0x33, 0x09, 0x55, 0x28, 0x00, 0xef,
         0x56, 0x6f, 0x2f, 0x4d, 0x3c, 0x1c, 0x38, 0x87, 0xc4, 0x93, 0x60,
         0xe3, 0x87, 0x5f, 0x2e, 0xb9, 0x4d, 0x99, 0x53, 0x2c, 0x51};
@@ -5586,9 +5586,9 @@ static int dkTestBlake3DeriveKeyVarInputTest(int argc, char *argv[]) {
     return 1;
 }
 
-static const uint32_t kA12Sha256H0[8] = {0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u,
-                                         0xa54ff53au, 0x510e527fu, 0x9b05688cu,
-                                         0x1f83d9abu, 0x5be0cd19u};
+static constexpr uint32_t kA12Sha256H0[8] = {
+    0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+    0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
 
 static void a12Sha256StoreBE32(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)(v >> 24);
@@ -5803,10 +5803,10 @@ static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
 
     /* 108-case sweep: 18 sizes x 2 keylens x 3 AADs. */
     {
-        static const size_t sweep_sizes[] = {0,   1,   7,   15,  16,   17,
-                                             31,  32,  33,  63,  64,   65,
-                                             127, 128, 255, 256, 1023, 4096};
-        static const size_t aad_lens[] = {0, 1, 20};
+        static constexpr size_t sweep_sizes[] = {
+            0,  1,  7,  15,  16,  17,  31,  32,   33,
+            63, 64, 65, 127, 128, 255, 256, 1023, 4096};
+        static constexpr size_t aad_lens[] = {0, 1, 20};
         const size_t n_sizes = sizeof(sweep_sizes) / sizeof(sweep_sizes[0]);
         const size_t n_aads = sizeof(aad_lens) / sizeof(aad_lens[0]);
 
@@ -5966,7 +5966,7 @@ static int dkTestBlake3DeriveKeyContextsTest(int argc, char *argv[]) {
     (void)argv;
     int failures = 0;
 
-    static const size_t ctx_lens[] = {0, 1, 32, 128, 1024};
+    static constexpr size_t ctx_lens[] = {0, 1, 32, 128, 1024};
     const size_t n_ctx = sizeof(ctx_lens) / sizeof(ctx_lens[0]);
 
     enum { CTX_MAX = 1024 };
@@ -7648,7 +7648,7 @@ static int dkTestEmptyNullInputTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("(NULL, 0) is the empty input everywhere bytes are taken") {
-        static const uint8_t none[1] = {};
+        static constexpr uint8_t none[1] = {};
         if (rapidhash(NULL, 0) != rapidhash(none, 0)) {
             ERRR("rapidhash of (NULL, 0) differs from the empty input");
         }
@@ -8484,18 +8484,18 @@ static int testNonceLogAllAeadAlgosTest(int argc, char *argv[]) {
 
     /* 32-byte key buffer covers the longest case (AES-256 + chacha20).
      * AES-128 reads the first 16 bytes only. */
-    static const uint8_t kKey32[32] = {
+    static constexpr uint8_t kKey32[32] = {
         0xC7, 0xD8, 0xE9, 0x0A, 0x1B, 0x2C, 0x3D, 0x4E, 0x5F, 0x60, 0x71,
         0x82, 0x93, 0xA4, 0xB5, 0xC6, 0xD7, 0xE8, 0xF9, 0x0A, 0x1B, 0x2C,
         0x3D, 0x4E, 0x5F, 0x60, 0x71, 0x82, 0x93, 0xA4, 0xB5, 0xC6,
     };
-    static const uint8_t kNonceA[CHACHA20_POLY1305_NONCE_LEN] = {
+    static constexpr uint8_t kNonceA[CHACHA20_POLY1305_NONCE_LEN] = {
         0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB,
     };
-    static const uint8_t kNonceB[CHACHA20_POLY1305_NONCE_LEN] = {
+    static constexpr uint8_t kNonceB[CHACHA20_POLY1305_NONCE_LEN] = {
         0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB,
     };
-    static const uint8_t kPlaintext[] = "nonce-log-aead-loop-payload";
+    static constexpr uint8_t kPlaintext[] = "nonce-log-aead-loop-payload";
     const size_t kPlaintextLen = sizeof(kPlaintext);
     const uint32_t kKeyId = 0xBEEFu;
 
@@ -11440,7 +11440,7 @@ static int dkTestEnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
     (void)argv;
     int failures = 0;
 
-    static const uint8_t payload[32] = {
+    static constexpr uint8_t payload[32] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
         0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
         0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
@@ -11564,7 +11564,7 @@ static int dkTestEnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
     (void)argv;
     int failures = 0;
 
-    static const uint8_t payload[16] = {
+    static constexpr uint8_t payload[16] = {
         0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
         0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
     };
@@ -11650,12 +11650,12 @@ static int dkTestEnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
         }
     }
     {
-        static const uint8_t key[32] = {
+        static constexpr uint8_t key[32] = {
             0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
             0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
             0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11,
         };
-        static const uint8_t nonce[12] = {
+        static constexpr uint8_t nonce[12] = {
             0xc0, 0xff, 0xee, 0x00, 0xde, 0xad,
             0xbe, 0xef, 0xfa, 0xce, 0x12, 0x34,
         };
@@ -12141,12 +12141,12 @@ static int dkTestEnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
     };
     const size_t kNumAlgos = sizeof(kAlgos) / sizeof(kAlgos[0]);
 
-    static const uint8_t kKey32[32] = {
+    static constexpr uint8_t kKey32[32] = {
         0x4f, 0xe5, 0x9b, 0x21, 0x3a, 0x8c, 0x7d, 0x52, 0xaa, 0xbe, 0xdc,
         0x11, 0x33, 0x77, 0x99, 0xcd, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
         0x70, 0x80, 0xfe, 0xed, 0xfa, 0xce, 0xc0, 0xff, 0xee, 0x42,
     };
-    static const uint8_t kNonce12[12] = {
+    static constexpr uint8_t kNonce12[12] = {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
     };
 
@@ -12481,7 +12481,7 @@ static int dkTestEnvelopeZeroCopyTest(int argc, char *argv[]) {
     (void)argv;
     int failures = 0;
 
-    static const uint8_t payload[96] = {
+    static constexpr uint8_t payload[96] = {
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
         0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
         0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33,
@@ -12491,7 +12491,7 @@ static int dkTestEnvelopeZeroCopyTest(int argc, char *argv[]) {
         0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60, 0x61, 0x62, 0x63,
         0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f,
     };
-    static const uint8_t hmac_key[32] = {
+    static constexpr uint8_t hmac_key[32] = {
         0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa,
         0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5,
         0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf,
@@ -12506,12 +12506,12 @@ static int dkTestEnvelopeZeroCopyTest(int argc, char *argv[]) {
         sizeof(payload), "hmac_sha256");
 
     {
-        static const uint8_t aead_key[CHACHA20_POLY1305_KEY_LEN] = {
+        static constexpr uint8_t aead_key[CHACHA20_POLY1305_KEY_LEN] = {
             0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca,
             0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5,
             0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf,
         };
-        static const uint8_t nonce[12] = {
+        static constexpr uint8_t nonce[12] = {
             0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5,
             0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb,
         };

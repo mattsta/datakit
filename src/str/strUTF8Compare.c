@@ -75,7 +75,7 @@ int StrUtf8CompareN(const void *s1, size_t len1, const void *s2, size_t len2,
  * ==================================================================== */
 
 /* Lookup table for ASCII lowercase conversion */
-static const uint8_t asciiLowerTable[256] = {
+static constexpr uint8_t asciiLowerTable[256] = {
     /* 0x00-0x1F: Control characters (unchanged) */
     0x00,
     0x01,

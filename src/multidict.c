@@ -3677,8 +3677,8 @@ static bool evictRehashCb_(void *privdata, const databox *key,
                            const databox *val) {
     (void)privdata;
     testEvictRehashSeen_++;
-    static const char keyPrefix[] = "evict-rehash-key-";
-    static const char valPrefix[] = "evict-rehash-val-";
+    static constexpr char keyPrefix[] = "evict-rehash-key-";
+    static constexpr char valPrefix[] = "evict-rehash-val-";
     const size_t prefixLen = sizeof(keyPrefix) - 1;
     if (!DATABOX_IS_BYTES(key) || !DATABOX_IS_BYTES(val) ||
         key->len != prefixLen + 6 || val->len != key->len) {
@@ -4688,8 +4688,8 @@ static int multidictTestKeyCompare_(void) {
 
     /* The case hash is the seeded exact hash of the folded bytes, for
      * keys that fit one fold chunk and for keys streamed in several */
-    static const uint32_t lens[] = {0,   1,   7,   63,  64,  255, 256,
-                                    257, 300, 511, 512, 513, 1000};
+    static constexpr uint32_t lens[] = {0,   1,   7,   63,  64,  255, 256,
+                                        257, 300, 511, 512, 513, 1000};
     for (size_t li = 0; li < sizeof(lens) / sizeof(*lens); li++) {
         uint8_t raw[1000];
         uint8_t folded[1000];
@@ -6310,7 +6310,7 @@ static int mdTestSeedRoundTrip_(multidictClass *qdc) {
         ERRR("the process seed changed between calls");
     }
 
-    static const int32_t seeds[2] = {(int32_t)0x9E3779B9u, 0};
+    static constexpr int32_t seeds[2] = {(int32_t)0x9E3779B9u, 0};
     for (size_t s = 0; s < 2; s++) {
         cleaner(multidictFree) multidict *d = multidictNew(
             &multidictTypeExactKey, qdc, s ? multidictRandomSeed() : seeds[0]);
@@ -6496,7 +6496,7 @@ int multidictTest(int argc, char *argv[]) {
         MULTIDICT_TEST_OK(multidictAdd(d, &key, &val));
 
         /* A present byte-string value: its bytes, borrowed from the dict */
-        static const char strkey[] = "strkey";
+        static constexpr char strkey[] = "strkey";
         uint8_t *foundVal = NULL;
         bool found = multidictFindByString(d, strkey, &foundVal);
         assert(found == true && foundVal != NULL);
@@ -10284,7 +10284,7 @@ int multidictTest(int argc, char *argv[]) {
          * neither load nor build flavour changes: linear in the entries
          * (the amortized design walks about 16 per insert; quadratic is
          * n^2 / 2).  Times are printed for reference. */
-        static const int perfN[2] = {4000, 16000};
+        static constexpr int perfN[2] = {4000, 16000};
         double perOp[2][2] = {};
         for (int size = 0; size < 2; size++) {
             for (int mode = 0; mode < 2; mode++) {

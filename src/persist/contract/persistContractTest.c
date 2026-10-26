@@ -181,7 +181,7 @@ static void pcLogFree(persistContractLog *log) {
  * ==================================================================== */
 void persistContractValue(uint64_t *rng, databoxBig *out, uint8_t *buf,
                           size_t bufLen) {
-    static const char chars[] = "0123456789-.e abcxyz";
+    static constexpr char chars[] = "0123456789-.e abcxyz";
     const uint64_t r = splitmix64(rng);
     const uint64_t s = splitmix64(rng);
     *out = (databoxBig){};
@@ -570,7 +570,7 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
 }
 
 static pcRow pcRun(const persistContractType *t) {
-    static const size_t sizes[] = {0, 1, 2, 37, 600, 6000};
+    static constexpr size_t sizes[] = {0, 1, 2, 37, 600, 6000};
     pcRow row = {};
     for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
         for (uint64_t seed = 1; seed <= 3; seed++) {

@@ -559,9 +559,9 @@ int mflexTest(int argc, char *argv[]) {
 
     int err = 0;
     int dotIncr = 0;
-    static const int step = 32;
+    static constexpr int step = 32;
 
-    static const size_t MANYDO = 8192;
+    static constexpr size_t MANYDO = 8192;
 
     cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 

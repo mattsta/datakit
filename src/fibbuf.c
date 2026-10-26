@@ -82,10 +82,10 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
 
 static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {
     /* Note: we start at fib(9) == 34 because 34 bytes is a sane buffer size. */
-    static const uint16_t fibbuf[] = {34,    55,    89,    144,  233,  377,
-                                      610,   987,   1597,  2584, 4181, 6765,
-                                      10946, 17711, 28657, 46368};
-    static const size_t num = COUNT(fibbuf);
+    static constexpr uint16_t fibbuf[] = {34,    55,    89,    144,  233,  377,
+                                          610,   987,   1597,  2584, 4181, 6765,
+                                          10946, 17711, 28657, 46368};
+    static constexpr size_t num = COUNT(fibbuf);
 
     const uint16_t *result = fibbuf;
     size_t n = num;
@@ -99,7 +99,7 @@ static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {
 
 static uint32_t fibbufNextBuffer32(const uint32_t currentBufSize) {
     /* Note: we start at fib(9) == 34 because 34 bytes is a sane buffer size. */
-    static const uint32_t fibbuf[] = {
+    static constexpr uint32_t fibbuf[] = {
         /*        34,         55,         89,        144,       233,       377,
         610,        987,        1597,      2584,      4181,      6765,
         10946,      17711,      28657,     46368,*/
@@ -107,7 +107,7 @@ static uint32_t fibbufNextBuffer32(const uint32_t currentBufSize) {
         1346269,   2178309,   3524578,    5702887,    9227465,   14930352,
         24157817,  39088169,  63245986,   102334155,  165580141, 267914296,
         433494437, 701408733, 1134903170, 1836311903, 2971215073};
-    static const size_t num = COUNT(fibbuf);
+    static constexpr size_t num = COUNT(fibbuf);
 
     const uint32_t *result = fibbuf;
     size_t n = num;
@@ -121,7 +121,7 @@ static uint32_t fibbufNextBuffer32(const uint32_t currentBufSize) {
 
 static uint64_t fibbufNextBuffer64(const uint64_t currentBufSize) {
     /* Note: we start at fib(9) == 34 because 34 bytes is a sane buffer size. */
-    static const uint64_t fibbuf[] =
+    static constexpr uint64_t fibbuf[] =
         {
             /*        34,           55,           89,           144, 233, 377,
             610,          987,          1597,         2584, 4181,         6765,
@@ -134,7 +134,7 @@ static uint64_t fibbufNextBuffer64(const uint64_t currentBufSize) {
             32951280099,  53316291173,  86267571272,  139583862445,
             225851433717, 365435296162, 591286729879, 956722026041,
             1548008755920}; /* stops at a 1.54 TB buffer size */
-    static const size_t num = COUNT(fibbuf);
+    static constexpr size_t num = COUNT(fibbuf);
 
     const uint64_t *result = fibbuf;
     size_t n = num;
@@ -171,7 +171,7 @@ int fibbufTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("the next allocation size: past the current, at the next buffer") {
-        static const size_t sizes[] = {1, 100, 46367, 46368, 1u << 20};
+        static constexpr size_t sizes[] = {1, 100, 46367, 46368, 1u << 20};
         for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
             const size_t buffer = fibbufNextSizeBuffer(sizes[i]);
             const size_t alloc = fibbufNextSizeAllocation(sizes[i]);

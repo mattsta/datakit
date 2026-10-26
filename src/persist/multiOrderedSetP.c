@@ -915,7 +915,7 @@ static int test_multiOrderedSetP_refusedLog(int argc, char *argv[]) {
     }
 
     TEST("multiOrderedSetP a refused log changes nothing (remove)") {
-        static const int sizes[] = {20, 1200};
+        static constexpr int sizes[] = {20, 1200};
         for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
             ptestCleanupFiles(basePath);
             persistCtx *ctx = persistCtxNew(basePath, NULL);

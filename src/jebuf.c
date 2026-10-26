@@ -89,7 +89,7 @@ while currentVal < 1024 * 1024 * 1024:
 #endif
 
 static size_t jebufSizeAllocation16(const size_t currentBufSize) {
-    static const uint16_t jebuf[] = {
+    static constexpr uint16_t jebuf[] = {
         8,      16,     32,     48,     64,     80,     96,     112,    128,
         160,    192,    224,    256,    320,    384,    448,    512,    640,
         768,    896,    1024,   1280,   1536,   1792,   2048,   2560,   3072,
@@ -97,7 +97,7 @@ static size_t jebufSizeAllocation16(const size_t currentBufSize) {
         16 KiB, 20 KiB, 24 KiB, 28 KiB, 32 KiB, 40 KiB, 48 KiB, 54 KiB,
     };
 
-    static const size_t num = COUNT(jebuf);
+    static constexpr size_t num = COUNT(jebuf);
 
     const uint16_t *result = jebuf;
     size_t n = num;
@@ -110,7 +110,7 @@ static size_t jebufSizeAllocation16(const size_t currentBufSize) {
 }
 
 static size_t jebufSizeAllocation32(const size_t currentBufSize) {
-    static const uint32_t jebuf[] = {
+    static constexpr uint32_t jebuf[] = {
         64 KiB,
         80 KiB,
         96 KiB,
@@ -187,7 +187,7 @@ static size_t jebufSizeAllocation32(const size_t currentBufSize) {
         3584 MiB,
     };
 
-    static const size_t num = COUNT(jebuf);
+    static constexpr size_t num = COUNT(jebuf);
 
     const uint32_t *result = jebuf;
     size_t n = num;
@@ -200,7 +200,7 @@ static size_t jebufSizeAllocation32(const size_t currentBufSize) {
 }
 
 static size_t jebufSizeAllocation64(const size_t currentBufSize) {
-    static const uint64_t jebuf[] = {
+    static constexpr uint64_t jebuf[] = {
         4096 MiB,
         /* Step size: 1024 MiB */
         5120 MiB,
@@ -266,7 +266,7 @@ static size_t jebufSizeAllocation64(const size_t currentBufSize) {
          * any larger requests will assert failure. */
     };
 
-    static const size_t num = COUNT(jebuf);
+    static constexpr size_t num = COUNT(jebuf);
 
     const uint64_t *result = jebuf;
     size_t n = num;

@@ -737,8 +737,8 @@ static const char *const mlwDataName[MLW_DATA_COUNT] = {"normal", "extended",
 /* Element 'i' of a list in data mode 'data'.  Normal and extended pick
  * the matching mlwGen classes, so every id stays unique. */
 static mlwVal mlwGenIn(mlwData data, uint32_t i) {
-    static const uint32_t normalClass[3] = {1, 2, 4};
-    static const uint32_t extendedClass[2] = {0, 3};
+    static constexpr uint32_t normalClass[3] = {1, 2, 4};
+    static constexpr uint32_t extendedClass[2] = {0, 3};
     switch (data) {
     case MLW_DATA_NORMAL:
         return mlwGen(5 * (i / 3) + normalClass[i % 3]);
@@ -4939,8 +4939,8 @@ int multilistTest(int argc, char *argv[]) {
         /* Sizes reaching Small, Medium and Full, with and without
          * compression: the rebuild dumps the same bytes, and the same
          * pops and pushes give the same results on both */
-        static const int64_t dumpSizes[] = {0, 5, 120, 400, 5000};
-        static const uint32_t compressDepths[] = {0, 2};
+        static constexpr int64_t dumpSizes[] = {0, 5, 120, 400, 5000};
+        static constexpr uint32_t compressDepths[] = {0, 2};
         cleaner(mflexStateFree) mflexState *scratch = mflexStateCreate();
         for (size_t d = 0; d < COUNT_ARRAY(compressDepths); d++) {
             const uint32_t compressDepth = compressDepths[d];

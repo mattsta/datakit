@@ -2277,7 +2277,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Each range on a fresh set of n members (score i, member "r%05d")
          * removes exactly the oracle's ranks: negative ranks from the end,
          * start and stop clamped to the set, empty when outside it */
-        static const int64_t ns[] = {5, 10, 14, 20, 40, 3000};
+        static constexpr int64_t ns[] = {5, 10, 14, 20, 40, 3000};
         unsigned tiersSeen = 0;
         static const struct {
             int64_t start;
@@ -2778,10 +2778,10 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* The three oracle sets weighted 1, 0.5, 3, combined by union and
          * by intersection with each aggregate; the union of each size
          * lands in its tier */
-        static const uint32_t sizes[] = {20, 300, 4000};
+        static constexpr uint32_t sizes[] = {20, 300, 4000};
         static const multiOrderedSetType tiers[] = {
             MOS_TYPE_SMALL, MOS_TYPE_MEDIUM, MOS_TYPE_FULL};
-        static const double weights[3] = {1.0, 0.5, 3.0};
+        static constexpr double weights[3] = {1.0, 0.5, 3.0};
         static const mosAggregate hows[] = {
             MOS_AGGREGATE_SUM, MOS_AGGREGATE_MIN, MOS_AGGREGATE_MAX};
         for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {
@@ -3832,9 +3832,9 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     } while (0)
 
     /* Test at various sizes like multimap does */
-    static const size_t testCounts[] = {
+    static constexpr size_t testCounts[] = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
-    static const size_t numTestCounts =
+    static constexpr size_t numTestCounts =
         sizeof(testCounts) / sizeof(testCounts[0]);
 
     TEST("(full width) insert / exists / lookup / delete / rank at various "
@@ -4284,7 +4284,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
     TEST("NX/XX/IncrBy, rank iterators and range removals agree with an "
          "oracle in every tier") {
-        static const size_t sizes[3] = {12, 400, 900};
+        static constexpr size_t sizes[3] = {12, 400, 900};
         static const multiOrderedSetType tiers[3] = {
             MOS_TYPE_SMALL, MOS_TYPE_MEDIUM, MOS_TYPE_FULL};
         for (size_t t = 0; t < 3; t++) {

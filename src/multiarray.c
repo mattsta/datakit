@@ -1472,8 +1472,8 @@ int multiarrayTest(int argc, char *argv[]) {
     printf("Testing direct...\n");
     /* Small up to rowMax, Medium up to rowMax * rowMax, Large beyond: three
      * times the Large threshold covers every tier and its transitions */
-    static const int rowMax = 64;
-    static const int globalMax = 3 * 64 * 64;
+    static constexpr int rowMax = 64;
+    static constexpr int globalMax = 3 * 64 * 64;
     TEST("create") {
         multiarray *s = multiarrayNativeNew(s16);
         assert(s);
@@ -1994,7 +1994,7 @@ int multiarrayTest(int argc, char *argv[]) {
          * build copies out the same elements, keeps its shape accessors,
          * head and tail, and later inserts and deletes leave it equal to
          * an insert-built twin */
-        static const size_t counts[] = {0, 5, 8, 9, 40, 63, 64, 65, 500};
+        static constexpr size_t counts[] = {0, 5, 8, 9, 40, 63, 64, 65, 500};
         const uint16_t perNode = 8;
         for (size_t c = 0; c < COUNT_ARRAY(counts); c++) {
             const size_t n = counts[c];

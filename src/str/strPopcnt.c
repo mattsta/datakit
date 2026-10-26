@@ -117,8 +117,8 @@ uint64_t StrPopCntAligned(const void *data_, size_t len) {
 
 #elif HAVE_AVX512_VPOPCNT
     /* AVX-512 VPOPCNT path for Ice Lake+ CPUs */
-    static const size_t avx512StepSize = 64; /* 512 bits = 64 bytes */
-    static const size_t multiStepSize = sizeof(uint64_t) * 4;
+    static constexpr size_t avx512StepSize = 64; /* 512 bits = 64 bytes */
+    static constexpr size_t multiStepSize = sizeof(uint64_t) * 4;
 
     uint64_t result = 0;
 
@@ -155,7 +155,7 @@ uint64_t StrPopCntAligned(const void *data_, size_t len) {
 
 #else
     /* Scalar fallback for non-ARM, non-AVX512 platforms */
-    static const size_t multiStepSize = sizeof(uint64_t) * 4;
+    static constexpr size_t multiStepSize = sizeof(uint64_t) * 4;
 
     /* Accumulator for pre and post alignment bytes */
     uint64_t singleAccum = 0;
@@ -212,7 +212,7 @@ uint64_t StrPopCntAligned(const void *data_, size_t len) {
 
 uint64_t StrPopCntExact(const void *data_, size_t len) {
     const uint8_t *restrict data = data_;
-    static const size_t multiStepSize = sizeof(uint64_t) * 4;
+    static constexpr size_t multiStepSize = sizeof(uint64_t) * 4;
 
     /* 'len' must be exactly divisible by 32 bytes or else we won't
      * process all bits. */
@@ -270,7 +270,7 @@ uint64_t StrPopCntExact(const void *data_, size_t len) {
      * _mm512_popcnt_epi64 computes popcount of each 64-bit lane in parallel,
      * then _mm512_reduce_add_epi64 sums all 8 lanes horizontally. */
     uint64_t result = 0;
-    static const size_t avx512StepSize = 64; /* 512 bits = 64 bytes */
+    static constexpr size_t avx512StepSize = 64; /* 512 bits = 64 bytes */
 
     /* Process 64 bytes at a time with AVX-512 */
     while (len >= avx512StepSize) {

@@ -152,7 +152,7 @@ int multiFenwickTest(int argc, char *argv[]) {
 
         /* Integers add and subtract exactly; the result's type follows
          * its value */
-        static const int64_t ints[] = {INT64_MIN, -3, 0, 5, INT64_MAX};
+        static constexpr int64_t ints[] = {INT64_MIN, -3, 0, 5, INT64_MAX};
         for (size_t i = 0; i < 5; i++) {
             for (size_t j = 0; j < 5; j++) {
                 const databox a = DATABOX_SIGNED(ints[i]);
@@ -248,8 +248,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             !mfwVoid(mfwConvert(&half, DATABOX_BYTES))) {
             ERRR("convert");
         }
-        static const double outside[] = {0x1p63, -0x1p64, 0x1p64, INFINITY,
-                                         NAN};
+        static constexpr double outside[] = {0x1p63, -0x1p64, 0x1p64, INFINITY,
+                                             NAN};
         for (size_t i = 0; i < 5; i++) {
             const databox sv = databoxFromDouble(outside[i], DATABOX_SIGNED_64);
             const databox uv = databoxFromDouble(i == 1 ? -1.0 : outside[i],

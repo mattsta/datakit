@@ -951,7 +951,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
          * has no first, last, random member or iterator position */
         cleaner(multiOrderedSetSmallFree) multiOrderedSetSmall *mos =
             multiOrderedSetSmallNew();
-        static const char names[] = "abcd";
+        static constexpr char names[] = "abcd";
         for (int i = 0; i < 4; i++) {
             const databox score = databoxNewSigned((i + 1) * 10);
             const databox member = databoxNewBytesAllowEmbed(&names[i], 1);

@@ -141,7 +141,7 @@ static const rapidhashTestVector rapidhashTestVectorsTable[] = {
 };
 /* clang-format on */
 
-static const size_t rapidhashTestVectorsCount =
+static constexpr size_t rapidhashTestVectorsCount =
     sizeof(rapidhashTestVectorsTable) / sizeof(rapidhashTestVectorsTable[0]);
 
 /* -------------------------------------------------------------------------
@@ -251,7 +251,7 @@ static const rapidhashTestVector rapidhashProtectedTestVectorsTable[] = {
 };
 /* clang-format on */
 
-static const size_t rapidhashProtectedTestVectorsCount =
+static constexpr size_t rapidhashProtectedTestVectorsCount =
     sizeof(rapidhashProtectedTestVectorsTable) /
     sizeof(rapidhashProtectedTestVectorsTable[0]);
 
@@ -285,6 +285,6 @@ static const rapidhashSecretTestVector rapidhashSecretTestVectorsTable[] = {
 };
 /* clang-format on */
 
-static const size_t rapidhashSecretTestVectorsCount =
+static constexpr size_t rapidhashSecretTestVectorsCount =
     sizeof(rapidhashSecretTestVectorsTable) /
     sizeof(rapidhashSecretTestVectorsTable[0]);

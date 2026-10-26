@@ -363,7 +363,7 @@ static void x25519ScalarMult(uint8_t out[32], const uint8_t scalar[32],
 }
 
 void x25519Base(uint8_t out_public[32], const uint8_t priv[32]) {
-    static const uint8_t base[32] = {9, 0};
+    static constexpr uint8_t base[32] = {9, 0};
     x25519ScalarMult(out_public, priv, base);
 }
 
@@ -407,7 +407,7 @@ void x25519Base(uint8_t out_public[32], const uint8_t priv[32]) {
  * across all 12 entries.  The post-multiply zero check remains as a
  * defense-in-depth backstop. */
 #define X25519_SMALL_ORDER_COUNT 12
-static const uint8_t x25519SmallOrderTable[X25519_SMALL_ORDER_COUNT][32] = {
+static constexpr uint8_t x25519SmallOrderTable[X25519_SMALL_ORDER_COUNT][32] = {
     /* [0] 0 */
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -529,7 +529,7 @@ static void hexDecode(const char *hex, uint8_t out[32]) {
 }
 
 static void hexEncode(const uint8_t in[32], char out[65]) {
-    static const char hex[] = "0123456789abcdef";
+    static constexpr char hex[] = "0123456789abcdef";
     for (uint32_t i = 0; i < 32; i++) {
         out[i * 2] = hex[in[i] >> 4];
         out[i * 2 + 1] = hex[in[i] & 0xf];

@@ -185,7 +185,7 @@ SGT_DIFF(U128, __uint128_t, __uint128_t, 0, ~(__uint128_t)0, 0)
 #define SGT_BULK(T, VT, IS_FLOAT)                                              \
     static int sgtBulk##T(segmentOp op, uint64_t seed) {                       \
         int err = 0;                                                           \
-        static const size_t sizes[] = {0, 1, 5, 1000, 20000};                  \
+        static constexpr size_t sizes[] = {0, 1, 5, 1000, 20000};              \
         for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {                      \
             const size_t n = sizes[s];                                         \
             cleaner(zfree) void *bufA = zcalloc(n + 1, sizeof(VT));            \

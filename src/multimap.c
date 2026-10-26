@@ -1820,7 +1820,7 @@ int32_t multimapInsertReplacingSweep(void) {
     TEST("replacing insert: flex layer with a key that becomes a pointer") {
         cleanerName(flexFree, Sweep) flex *f = flexNew();
         flexEntry *middle = NULL;
-        static const char longKey[] = "a-key-long-enough-to-externalize";
+        static constexpr char longKey[] = "a-key-long-enough-to-externalize";
         const databox k = databoxNewBytesString(longKey);
         const databox c0 = databoxNewUnsigned(7);
         const databox tag0 = databoxNewPtr(RP_PTR_TAG(7));
@@ -1874,7 +1874,8 @@ int32_t multimapInsertReplacingSweep(void) {
     TEST("replacing insert: multimapFull externalized (MDSC) key") {
         cleanerName(multimapFullFree, Sweep) multimapFull *m =
             multimapFullNew(RP_WIDTH);
-        static const char longKey[] = "another-key-long-enough-to-externalize";
+        static constexpr char longKey[] =
+            "another-key-long-enough-to-externalize";
         const databox k = databoxNewBytesString(longKey);
         const databox c0 = databoxNewUnsigned(11);
         const databox tag0 = databoxNewPtr(RP_PTR_TAG(11));
@@ -4354,7 +4355,7 @@ int multimapTest(int argc, char *argv[]) {
         /* Rows inserted under a surrogate atom reference (the stored key)
          * are found by the key's value through the atom table in the
          * Small, Medium and Full tiers; an absent key is not */
-        static const size_t sizes[] = {3, 100, 150, 200, 300, 2000};
+        static constexpr size_t sizes[] = {3, 100, 150, 200, 300, 2000};
         unsigned tiers = 0;
         for (size_t t = 0; t < sizeof(sizes) / sizeof(*sizes); t++) {
             cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
@@ -4416,8 +4417,8 @@ int multimapTest(int argc, char *argv[]) {
         for (int64_t k = 1000; k <= 20000; k += 1000) {
             keys[NK++] = k;
         }
-        static const int64_t later[] = {19500, 18500, 17999, 16001,
-                                        15500, 19999, 14500};
+        static constexpr int64_t later[] = {19500, 18500, 17999, 16001,
+                                            15500, 19999, 14500};
         for (size_t i = 0; i < sizeof(later) / sizeof(*later); i++) {
             keys[NK++] = later[i];
         }
@@ -4477,7 +4478,7 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
         const uint32_t mapsBefore = (uint32_t)mmf(m)->count;
-        static const int64_t below[] = {700, 600, 500};
+        static constexpr int64_t below[] = {700, 600, 500};
         for (size_t i = 0; i < 3; i++) {
             memset(big, 'z' - (int)i, sizeof(big));
             const databox k = databoxNewSigned(below[i]);
@@ -4515,7 +4516,7 @@ int multimapTest(int argc, char *argv[]) {
          * reference-aware replace (Full sub-maps grow past their limit and
          * rebalance through the references); every key still looks up its
          * current value and the map verifies */
-        static const size_t sizes[] = {6, 150, 1500};
+        static constexpr size_t sizes[] = {6, 150, 1500};
         static char bigValue[600];
         memset(bigValue, 'v', sizeof(bigValue));
         for (size_t t = 0; t < sizeof(sizes) / sizeof(*sizes); t++) {
@@ -4586,7 +4587,7 @@ int multimapTest(int argc, char *argv[]) {
             MULTIMAP_CONDITION_GREATER_THAN_EQUAL,
         };
         /* rows: condition; columns: value 4, 5, 6 against 5 */
-        static const bool want[6][3] = {
+        static constexpr bool want[6][3] = {
             {true, true, true},   {true, true, false},  {true, false, false},
             {false, true, false}, {false, false, true}, {false, true, true},
         };
@@ -4861,7 +4862,8 @@ int multimapTest(int argc, char *argv[]) {
         /* Byte values grown and shrunk across two orders of magnitude
          * realloc the flexes constantly and cross varint header widths;
          * every mutation must leave middles and rangeBoxes coherent. */
-        static const size_t lens[] = {1, 8, 63, 64, 65, 250, 1024, 5, 4096, 2};
+        static constexpr size_t lens[] = {1,   8,    63, 64,   65,
+                                          250, 1024, 5,  4096, 2};
         const size_t nLens = sizeof(lens) / sizeof(*lens);
         const int count = 256;
 
@@ -4918,7 +4920,7 @@ int multimapTest(int argc, char *argv[]) {
         /* ResizeEntry pass: length-only contract (content past the old
          * prefix is unspecified), exercising grow, shrink, and the
          * regularize/split path for oversized maps. */
-        static const size_t resizeTo[] = {9, 2048, 3};
+        static constexpr size_t resizeTo[] = {9, 2048, 3};
         for (size_t L = 0; L < sizeof(resizeTo) / sizeof(*resizeTo); L++) {
             for (int i = 0; i < count; i++) {
                 char keyBuf[32];
@@ -8255,8 +8257,8 @@ int multimapTest(int argc, char *argv[]) {
          * every tier; bounds below, at and between the first keys, in
          * the middle, at the top and above it.  With one element per
          * row the row before the first kept one can be the map's head. */
-        static const int32_t sizes[] = {6, 400, 4000};
-        static const int64_t bounds[] = {5, 10, 15, 20, 25, 1005, -1, -2};
+        static constexpr int32_t sizes[] = {6, 400, 4000};
+        static constexpr int64_t bounds[] = {5, 10, 15, 20, 25, 1005, -1, -2};
         for (uint32_t width = 1; width <= 3; width++) {
             for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
                 for (size_t b = 0; b < sizeof(bounds) / sizeof(*bounds); b++) {
@@ -8299,7 +8301,7 @@ int multimapTest(int argc, char *argv[]) {
         /* Two random sets of 0..n-1 per round, sizes reaching each tier:
          * intersection, difference, symmetric difference and union
          * (copy keys) hold exactly the oracle's members */
-        static const int32_t ns[] = {12, 300, 3000};
+        static constexpr int32_t ns[] = {12, 300, 3000};
         static bool inA[3000];
         static bool inB[3000];
         uint64_t rng = 0x5e7;
@@ -8425,7 +8427,7 @@ int multimapTest(int argc, char *argv[]) {
          * still rewrites, with no report. */
         cleaner(multimapFree) multimap *set = multimapSetNew(2);
         cleaner(multimapFree) multimap *map = multimapNew(2);
-        static const int64_t rows[][2] = {{1, 1}, {1, 5}, {2, 3}};
+        static constexpr int64_t rows[][2] = {{1, 1}, {1, 5}, {2, 3}};
         for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
             const databox k = databoxNewSigned(rows[i][0]);
             const databox v = databoxNewSigned(rows[i][1]);

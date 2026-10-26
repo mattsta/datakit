@@ -7,7 +7,7 @@
  * not a simple "+" operator because LogEst is stored as a logarithmic
  * value. */
 LogEst StrLogEstAdd(LogEst a, LogEst b) {
-    static const uint8_t x[] = {
+    static constexpr uint8_t x[] = {
         10, 10,                /* 0,1 */
         9,  9,                 /* 2,3 */
         8,  8,                 /* 4,5 */

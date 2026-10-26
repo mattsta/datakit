@@ -29,7 +29,7 @@
  * uses a precomputed 4 KiB T-table that combines SubBytes + ShiftRows +
  * MixColumns into one 32-bit lookup per byte. */
 
-static const uint8_t SBOX[256] = {
+static constexpr uint8_t SBOX[256] = {
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b,
     0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0,
     0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26,
@@ -53,10 +53,10 @@ static const uint8_t SBOX[256] = {
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f,
     0xb0, 0x54, 0xbb, 0x16};
 
-static const uint32_t RCON[11] = {0x00000000u, 0x01000000u, 0x02000000u,
-                                  0x04000000u, 0x08000000u, 0x10000000u,
-                                  0x20000000u, 0x40000000u, 0x80000000u,
-                                  0x1B000000u, 0x36000000u};
+static constexpr uint32_t RCON[11] = {0x00000000u, 0x01000000u, 0x02000000u,
+                                      0x04000000u, 0x08000000u, 0x10000000u,
+                                      0x20000000u, 0x40000000u, 0x80000000u,
+                                      0x1B000000u, 0x36000000u};
 
 static uint32_t loadBE32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -715,8 +715,8 @@ int aesGcmTest(int argc, char *argv[]) {
         const aesGcmForceBackend was = aesGcmGetForceBackend();
         static const aesGcmForceBackend backends[2] = {AES_GCM_FORCE_SCALAR,
                                                        AES_GCM_FORCE_AUTO};
-        static const size_t lens[] = {0, 1, 15, 16, 17, 63, 64, 65, 200};
-        static const size_t aadLens[] = {0, 7, 16, 33};
+        static constexpr size_t lens[] = {0, 1, 15, 16, 17, 63, 64, 65, 200};
+        static constexpr size_t aadLens[] = {0, 7, 16, 33};
         uint64_t rng = 0xae5;
         for (size_t kl = 16; kl <= 32; kl += 16) {
             for (size_t li = 0; li < sizeof(lens) / sizeof(*lens); li++) {

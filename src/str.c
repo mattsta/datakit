@@ -814,41 +814,41 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
     TEST("StrUnicodeIsLetter: letters of each script, and the non-letters "
          "beside them") {
-        static const uint32_t letters[] = {'A',
-                                           'z',
-                                           0x00C0 /* À */,
-                                           0x00E9 /* é */,
-                                           0x00F1 /* ñ */,
-                                           0x00DF /* ß */,
-                                           0x00FF /* ÿ */,
-                                           0x00AA /* ª */,
-                                           0x00B5 /* µ */,
-                                           0x0101,
-                                           0x0250 - 1,
-                                           0x0391 /* Α */,
-                                           0x03C9 /* ω */,
-                                           0x0416 /* Ж */,
-                                           0x05D0 /* א */,
-                                           0x0628 /* ب */,
-                                           0x4E2D /* 中 */,
-                                           0x3042 /* あ */,
-                                           0x30A2 /* ア */,
-                                           0xAC00 /* 가 */};
-        static const uint32_t others[] = {'0',
-                                          '9',
-                                          ' ',
-                                          '_',
-                                          0x00D7 /* × */,
-                                          0x00F7 /* ÷ */,
-                                          0x00B7 /* · */,
-                                          0x00BF /* ¿ */,
-                                          0x037E /* Greek ; */,
-                                          0x0387 /* · */,
-                                          0x03F6,
-                                          0x0482 /* ҂ */,
-                                          0x0483 /* combining */,
-                                          0x0660 /* Arabic 0 */,
-                                          0x3000 /* ideographic space */};
+        static constexpr uint32_t letters[] = {'A',
+                                               'z',
+                                               0x00C0 /* À */,
+                                               0x00E9 /* é */,
+                                               0x00F1 /* ñ */,
+                                               0x00DF /* ß */,
+                                               0x00FF /* ÿ */,
+                                               0x00AA /* ª */,
+                                               0x00B5 /* µ */,
+                                               0x0101,
+                                               0x0250 - 1,
+                                               0x0391 /* Α */,
+                                               0x03C9 /* ω */,
+                                               0x0416 /* Ж */,
+                                               0x05D0 /* א */,
+                                               0x0628 /* ب */,
+                                               0x4E2D /* 中 */,
+                                               0x3042 /* あ */,
+                                               0x30A2 /* ア */,
+                                               0xAC00 /* 가 */};
+        static constexpr uint32_t others[] = {'0',
+                                              '9',
+                                              ' ',
+                                              '_',
+                                              0x00D7 /* × */,
+                                              0x00F7 /* ÷ */,
+                                              0x00B7 /* · */,
+                                              0x00BF /* ¿ */,
+                                              0x037E /* Greek ; */,
+                                              0x0387 /* · */,
+                                              0x03F6,
+                                              0x0482 /* ҂ */,
+                                              0x0483 /* combining */,
+                                              0x0660 /* Arabic 0 */,
+                                              0x3000 /* ideographic space */};
         for (size_t i = 0; i < sizeof(letters) / sizeof(*letters); i++) {
             if (!StrUnicodeIsLetter(letters[i])) {
                 ERR("U+%04" PRIX32 " is a letter", letters[i]);
@@ -860,7 +860,8 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             }
         }
         /* The digits it knows */
-        static const uint32_t digits[] = {'5', 0xFF15, 0x0665, 0x06F5, 0x096B};
+        static constexpr uint32_t digits[] = {'5', 0xFF15, 0x0665, 0x06F5,
+                                              0x096B};
         for (size_t i = 0; i < sizeof(digits) / sizeof(*digits); i++) {
             if (!StrUnicodeIsDigit(digits[i]) ||
                 StrUnicodeIsLetter(digits[i])) {
@@ -1329,7 +1330,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
 
         /* Random decimals of up to 40 digits and random hex floats */
-        static const char hexd[] = "0123456789abcdef";
+        static constexpr char hexd[] = "0123456789abcdef";
         uint64_t rng = 0x5ca9;
         for (int n = 0; n < 4000; n++) {
             const bool hex = n & 1;
@@ -1573,7 +1574,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             ERRR("StrAtoi");
         }
 
-        static const char digits[] = "0123456789abcdefABCDEF";
+        static constexpr char digits[] = "0123456789abcdefABCDEF";
         for (size_t i = 0; digits[i]; i++) {
             const char one[2] = {digits[i], 0};
             if (StrHexToInt(digits[i]) != strtol(one, NULL, 16)) {
@@ -2725,16 +2726,16 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("number formatting, digit counts and double casts against libc") {
-        static const uint64_t edges[] = {0,
-                                         9,
-                                         10,
-                                         99,
-                                         100,
-                                         65535,
-                                         4294967295ULL,
-                                         4294967296ULL,
-                                         9999999999999999999ULL,
-                                         UINT64_MAX};
+        static constexpr uint64_t edges[] = {0,
+                                             9,
+                                             10,
+                                             99,
+                                             100,
+                                             65535,
+                                             4294967295ULL,
+                                             4294967296ULL,
+                                             9999999999999999999ULL,
+                                             UINT64_MAX};
         char buf[32];
         char want[32];
         for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
@@ -2849,7 +2850,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
         /* The PreVerified 128-bit scan matches the checking one on
          * canonical digits */
-        static const char int128Max[] =
+        static constexpr char int128Max[] =
             "170141183460469231731687303715884105727";
         static const char *const numbers[] = {"0", "18446744073709551616",
                                               int128Max};

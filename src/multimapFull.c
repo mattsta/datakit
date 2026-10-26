@@ -806,7 +806,7 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
      */
     const size_t howMany = m->count;
 
-    static const size_t stackAllocationDepth = 64;
+    static constexpr size_t stackAllocationDepth = 64;
     flex *maps_[stackAllocationDepth];
     flex **maps = maps_;
     cleanerName(zfree, Maps) flex **heapMapsSpill = NULL;

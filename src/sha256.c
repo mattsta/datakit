@@ -16,7 +16,7 @@
 /* ------------------------------------------------------------------------ */
 
 /* First 32 bits of fractional parts of cube roots of first 64 primes. */
-static const uint32_t K[64] = {
+static constexpr uint32_t K[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
     0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
     0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
@@ -30,8 +30,9 @@ static const uint32_t K[64] = {
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
 /* First 32 bits of fractional parts of square roots of first 8 primes. */
-static const uint32_t H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                               0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+static constexpr uint32_t H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
+                                   0xa54ff53a, 0x510e527f, 0x9b05688c,
+                                   0x1f83d9ab, 0x5be0cd19};
 
 /* ------------------------------------------------------------------------ */
 /* Inline helpers                                                           */
@@ -280,7 +281,7 @@ static int hashEqual(const uint8_t *a, const uint8_t *b) {
 }
 
 static void hashToHex(const uint8_t *h, char out[65]) {
-    static const char hex[] = "0123456789abcdef";
+    static constexpr char hex[] = "0123456789abcdef";
     for (uint32_t i = 0; i < SHA256_DIGEST_LEN; i++) {
         out[i * 2] = hex[h[i] >> 4];
         out[i * 2 + 1] = hex[h[i] & 0xf];
@@ -322,7 +323,7 @@ int sha256Test(int argc, char *argv[]) {
         memset(buf, 'a', n);
         uint8_t out[SHA256_DIGEST_LEN];
         sha256Hash(buf, n, out);
-        static const uint8_t expected[SHA256_DIGEST_LEN] = {
+        static constexpr uint8_t expected[SHA256_DIGEST_LEN] = {
             0xcd, 0xc7, 0x6e, 0x5c, 0x99, 0x14, 0xfb, 0x92, 0x81, 0xa1, 0xc7,
             0xe2, 0x84, 0xd7, 0x3e, 0x67, 0xf1, 0x80, 0x9a, 0x48, 0xa4, 0x97,
             0x20, 0x0e, 0x04, 0x6d, 0x39, 0xcc, 0xc7, 0x11, 0x2c, 0xd0};
@@ -332,8 +333,9 @@ int sha256Test(int argc, char *argv[]) {
     }
 
     TEST("boundary sizes") {
-        static const size_t sizes[] = {0,   1,   55,  56,  63,   64,   65,  119,
-                                       120, 127, 128, 129, 1023, 1024, 1025};
+        static constexpr size_t sizes[] = {0,   1,   55,   56,   63,
+                                           64,  65,  119,  120,  127,
+                                           128, 129, 1023, 1024, 1025};
         const size_t nSizes = sizeof(sizes) / sizeof(sizes[0]);
         const size_t maxSize = 1025;
         cleanerName(zfree, U8) uint8_t *buf = zmalloc(maxSize);

@@ -5343,7 +5343,7 @@ int multilruTest(int argc, char *argv[]) {
          * small cache in place (as growth does) puts every width,
          * including the 9-byte one whose fields are misaligned, through
          * the full workload; the width-5 run is the reference trace. */
-        static const uint8_t widths[] = {5, 6, 7, 8, 9, 10, 11, 12, 16};
+        static constexpr uint8_t widths[] = {5, 6, 7, 8, 9, 10, 11, 12, 16};
         cleanerName(zfree, U64s) uint64_t *reference =
             zcalloc(MLRU_WIDTH_TRACE_MAX, sizeof(uint64_t));
         cleanerName(zfree, U64s) uint64_t *trace =

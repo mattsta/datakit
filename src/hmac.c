@@ -502,7 +502,7 @@ static int digestEqual(const uint8_t *a, const uint8_t *b, size_t n) {
 }
 
 static void digestToHex(const uint8_t *h, size_t n, char *out) {
-    static const char hex[] = "0123456789abcdef";
+    static constexpr char hex[] = "0123456789abcdef";
     for (size_t i = 0; i < n; i++) {
         out[i * 2] = hex[h[i] >> 4];
         out[i * 2 + 1] = hex[h[i] & 0xf];

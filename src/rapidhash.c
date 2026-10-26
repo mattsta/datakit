@@ -25,7 +25,7 @@
  * Default secret                                                *
  * ============================================================ */
 
-static const uint64_t rapidhashDefaultSecret[RAPIDHASH_SECRET_LEN] = {
+static constexpr uint64_t rapidhashDefaultSecret[RAPIDHASH_SECRET_LEN] = {
     0x2d358dccaa6c78a5ULL, 0x8bb84b93962eacc9ULL, 0x4b33a62ed433d4a3ULL,
     0x4d5a2da51de1aa47ULL, 0xa0761d6478bd642fULL, 0xe7037ed1a0b428dbULL,
     0x90ed1765281c388cULL, 0xaaaaaaaaaaaaaaaaULL};
@@ -907,8 +907,8 @@ static int isPrime(uint64_t n) {
     if (n < 4) {
         return 1;
     }
-    static const uint64_t bases[] = {2,  3,  5,  7,  11, 13,
-                                     17, 19, 23, 29, 31, 37};
+    static constexpr uint64_t bases[] = {2,  3,  5,  7,  11, 13,
+                                         17, 19, 23, 29, 31, 37};
     /* Deterministic for 64-bit n via Miller-Rabin with these 12 bases. */
     for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
         if (bases[i] >= n) {
@@ -924,7 +924,7 @@ static int isPrime(uint64_t n) {
 void rapidhashMakeSecret(uint64_t seed, uint64_t secret[RAPIDHASH_SECRET_LEN]) {
     /* Byte palette: each byte has popcount 4 (so a 64-bit secret built
      * from 8 such bytes has popcount 32 — guarantees balanced bits). */
-    static const uint8_t palette[] = {
+    static constexpr uint8_t palette[] = {
         15,  23,  27,  29,  30,  39,  43,  45,  46,  51,  53,  54,  57,  58,
         60,  71,  75,  77,  78,  83,  85,  86,  89,  90,  92,  99,  101, 102,
         105, 106, 108, 113, 114, 116, 120, 135, 139, 141, 142, 147, 149, 150,

@@ -4,9 +4,9 @@
 #include "flex.h"
 
 /* Optimization levels for size-based filling */
-static const uint32_t flexOptimizationSizeLimit[] = {
+static constexpr uint32_t flexOptimizationSizeLimit[] = {
     0, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
-static const size_t flexOptimizationSizeLimits =
+static constexpr size_t flexOptimizationSizeLimits =
     sizeof(flexOptimizationSizeLimit) / sizeof(*flexOptimizationSizeLimit);
 
 typedef enum flexCapSizeLimit {

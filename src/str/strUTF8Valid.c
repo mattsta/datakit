@@ -29,7 +29,7 @@
 /* Character class lookup table for first byte classification.
  * Returns the expected total byte length (1-4) for valid start bytes,
  * or 0 for invalid start bytes (continuation bytes, 0xC0-0xC1, 0xF5-0xFF). */
-static const uint8_t utf8FirstByteLUT[256] = {
+static constexpr uint8_t utf8FirstByteLUT[256] = {
     /* 0x00-0x7F: ASCII (1 byte) */
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x00-0x0F */
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x10-0x1F */

@@ -456,7 +456,7 @@ bool OSRegulateProcessReapNow(pid_t pid, int *outStatus) {
  * a signal cutting a sleep short only brings the next attempt forward. */
 static bool osRegulateReapPollUntil(pid_t pid, const uint64_t startMs,
                                     const uint64_t budgetMs, int *outStatus) {
-    static const uint64_t maxStepMs = 50;
+    static constexpr uint64_t maxStepMs = 50;
     uint64_t stepMs = 1;
     for (;;) {
         if (OSRegulateProcessReapNow(pid, outStatus)) {

@@ -13,7 +13,7 @@
 /* A position near one of a few chunks (dense, so chunks move through
  * their sparse, dense and full forms) or anywhere in a wide space */
 static uint64_t pcMultiroarPosition(uint64_t *rng) {
-    static const uint64_t bases[] = {0, 8192, 3 * 8192, UINT64_C(1) << 40};
+    static constexpr uint64_t bases[] = {0, 8192, 3 * 8192, UINT64_C(1) << 40};
     const uint64_t r = splitmix64(rng);
     if (r % 8 == 0) {
         return splitmix64(rng) % (UINT64_C(1) << 44);

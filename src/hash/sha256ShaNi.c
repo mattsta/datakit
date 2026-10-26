@@ -19,7 +19,7 @@
 #include <immintrin.h>
 
 /* SHA-256 round constants (cube roots of the first 64 primes, low 32 bits). */
-static const uint32_t K_const[64] = {
+static constexpr uint32_t K_const[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
     0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
     0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
@@ -360,9 +360,9 @@ static inline void shaniStoreBE64(uint8_t *p, uint64_t v) {
     }
 }
 
-static const uint32_t SHANI_H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
-                                     0xa54ff53a, 0x510e527f, 0x9b05688c,
-                                     0x1f83d9ab, 0x5be0cd19};
+static constexpr uint32_t SHANI_H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
+                                         0xa54ff53a, 0x510e527f, 0x9b05688c,
+                                         0x1f83d9ab, 0x5be0cd19};
 
 /* Compute a full SHA-256 of `data[0..len)` using sha256ShaNiCompressBlocks.
  * Handles padding per FIPS 180-4: append 0x80, zero-pad, append 64-bit bit
@@ -397,7 +397,7 @@ static int shaniEqual(const uint8_t *a, const uint8_t *b) {
 }
 
 static void shaniToHex(const uint8_t *h, char out[65]) {
-    static const char hex[] = "0123456789abcdef";
+    static constexpr char hex[] = "0123456789abcdef";
     for (uint32_t i = 0; i < SHA256_DIGEST_LEN; i++) {
         out[i * 2] = hex[h[i] >> 4];
         out[i * 2 + 1] = hex[h[i] & 0xf];

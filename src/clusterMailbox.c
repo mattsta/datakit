@@ -1862,9 +1862,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
         clusterMailbox *rx =
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-        static const uint32_t origins[] = {1, 300, UINT32_MAX};
-        static const uint64_t seqs[] = {1, 70000, UINT64_MAX / 3};
-        static const size_t lens[] = {0, 1, 100, 127, 128, 300, 70000};
+        static constexpr uint32_t origins[] = {1, 300, UINT32_MAX};
+        static constexpr uint64_t seqs[] = {1, 70000, UINT64_MAX / 3};
+        static constexpr size_t lens[] = {0, 1, 100, 127, 128, 300, 70000};
         static uint8_t payload[70000];
         static uint8_t frame[70200];
         static uint8_t exact[70200];
@@ -2284,7 +2284,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
     TEST("unknown flags, AEAD on attach, bad sizes and NULL payloads are "
          "refused") {
         cleaner(hmacKeyringFree) hmacKeyring *ring = hmacKeyringCreate();
-        static const uint8_t k[32] = {7};
+        static constexpr uint8_t k[32] = {7};
         hmacKeyringInstallUnsalted(ring, 3u, &hmacAlgoSHA256, k, sizeof(k));
         cleaner(clusterMailboxFree) clusterMailbox *unknownFlag =
             clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL,
@@ -2301,7 +2301,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
          * algorithm, so sealing still works */
         uint8_t frame[256];
         size_t written = 0;
-        static const uint8_t one[1] = {1};
+        static constexpr uint8_t one[1] = {1};
         if (clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_AEAD_AES256_GCM,
                                         NULL, NULL) ||
             clusterMailboxAttachKeyring(mb, ring, FLEX_ENV_ALGO_XXH3_64, NULL,
@@ -3306,7 +3306,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
      * ignorable features are read */
     TEST("wrapped snapshot: format stamp gates the restore") {
         hmacKeyring *ring = hmacKeyringCreate();
-        static const uint8_t key[32] = {7};
+        static constexpr uint8_t key[32] = {7};
         const flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_HMAC_SHA256, .key = key, .key_len = 32};
         const flexEnvelopeVerifyParams vp = {.key = key, .key_len = 32};

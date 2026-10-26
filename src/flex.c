@@ -6166,7 +6166,7 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
     /* Copy flex header to cflex */
     memcpy(cBuffer, f, headerWidth);
 
-    static const uint_fast8_t EXPECT_LENGTH_BYTES = 2;
+    static constexpr uint_fast8_t EXPECT_LENGTH_BYTES = 2;
     /* +2 below to (optimistically) prepare for writing compressed length
      * in those two empty bytes.
      * If the compressed length requires > 2 bytes, we'll need to memmove
@@ -6564,7 +6564,7 @@ static flex *createIntList() {
 
 static uint64_t stress(flexEndpoint pos, int32_t num, int32_t maxsize,
                        int32_t dnum) {
-    static const char location[2][5] = {"TAIL", "HEAD"};
+    static constexpr char location[2][5] = {"TAIL", "HEAD"};
     uint64_t total = 0;
     for (int32_t i = 0; i < maxsize; i += dnum) {
         cleaner(flexFree) flex *f = flexNew();
@@ -6593,7 +6593,7 @@ static uint64_t stress(flexEndpoint pos, int32_t num, int32_t maxsize,
 
 static uint64_t stressReplaceInline(flexEndpoint pos, int32_t num,
                                     int32_t maxsize, int32_t dnum) {
-    static const char location[2][5] = {"TAIL", "HEAD"};
+    static constexpr char location[2][5] = {"TAIL", "HEAD"};
     uint64_t total = 0;
     for (int32_t i = 0; i < maxsize; i += dnum) {
         cleaner(flexFree) flex *f = flexNew();
@@ -7643,7 +7643,7 @@ int32_t flexValidateTotalitySweep(void) {
         /* Integers across the signed/unsigned width ladder plus the
          * immediates: the fixed-width payload table. */
         cleaner(flexFree) flex *nums = flexNew();
-        static const int64_t values[] = {
+        static constexpr int64_t values[] = {
             0, 1, -1, INT8_MAX, INT16_MIN, INT32_MAX, INT64_MIN, INT64_MAX};
         for (size_t i = 0; i < sizeof(values) / sizeof(*values); i++) {
             flexPushSigned(&nums, values[i], FLEX_ENDPOINT_TAIL);
@@ -7677,7 +7677,7 @@ int32_t flexValidateTotalitySweep(void) {
         flexPushFloat(&fixed, 3.14159f, FLEX_ENDPOINT_TAIL);
         flexPushDouble(&fixed, 2.718281828459045, FLEX_ENDPOINT_TAIL);
 
-        static const uint64_t refs[] = {
+        static constexpr uint64_t refs[] = {
             0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
         for (size_t i = 0; i < sizeof(refs) / sizeof(*refs); i++) {
             const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
@@ -7752,7 +7752,7 @@ static uint64_t flexTestWideRand(uint64_t *state) {
  * row inserts (a row value); checked both ways. */
 static int32_t flexTestVoidEntries(void) {
     int err = 0;
-    static const size_t sizes[] = {1, 7, 8, 9, 100, 300, 70000};
+    static constexpr size_t sizes[] = {1, 7, 8, 9, 100, 300, 70000};
     for (size_t s = 0; s < 2 * (sizeof(sizes) / sizeof(*sizes)); s++) {
         const bool sorted = s % 2 == 1;
         const size_t n = sizes[s / 2];
@@ -8782,7 +8782,7 @@ static int32_t flexTestExactPath(void) {
 
     /* Binary bytes with a NUL that spell no numeral, and bytes that do. */
     {
-        static const char bin[] = {'1', '2', '\0', '3'};
+        static constexpr char bin[] = {'1', '2', '\0', '3'};
         cleaner(flexFree) flex *f = flexNew();
         flexPushBytesExact(&f, bin, sizeof(bin), FLEX_ENDPOINT_TAIL);
         if (!flexTestEntryIsBytes(flexHead(f), bin, sizeof(bin))) {
@@ -9102,7 +9102,7 @@ static int32_t flexTestReplaceSign(void) {
             (__int128_t)UINT64_MAX - 1,
             (__int128_t)UINT64_MAX,
         };
-        static const int64_t deltas[] = {
+        static constexpr int64_t deltas[] = {
             0,         1,         -1,           2,  -2,  1000, -1000, INT64_MAX,
             INT64_MIN, 1LL << 32, -(1LL << 32), -6, -10,
         };
@@ -9591,8 +9591,8 @@ int32_t flexTest(int32_t argc, char **argv) {
          * merges them (spilling the chunk list to the heap past 31
          * chunks); every count must still give the loop's exact bytes,
          * with member lengths crossing the length-encoding widths */
-        static const size_t bulkCounts[] = {16, 17, 32, 33, 496, 497, 1100};
-        static const size_t memberLens[] = {0, 1, 7, 63, 64, 300, 4100};
+        static constexpr size_t bulkCounts[] = {16, 17, 32, 33, 496, 497, 1100};
+        static constexpr size_t memberLens[] = {0, 1, 7, 63, 64, 300, 4100};
         static char memberBytes[4100 + 8];
         for (size_t i = 0; i < sizeof(memberBytes); i++) {
             memberBytes[i] = (char)('a' + i % 26);
@@ -9653,7 +9653,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         /* Reverse finds land on the last match */
         cleaner(flexFree) flex *pal = flexNew();
-        static const uint64_t palValues[] = {1, 2, 3, 2, 1};
+        static constexpr uint64_t palValues[] = {1, 2, 3, 2, 1};
         for (size_t i = 0; i < 5; i++) {
             flexPushUnsigned(&pal, palValues[i], FLEX_ENDPOINT_TAIL);
         }
@@ -9675,8 +9675,8 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexEntry *midRef = byRef + FLEX_EMPTY_SIZE;
         flexEntry *midSet = setDirect + FLEX_EMPTY_SIZE;
         flexEntry *midSetRef = setByRef + FLEX_EMPTY_SIZE;
-        static const int64_t rows[][2] = {{5, 50}, {1, 10}, {3, 30},
-                                          {3, 31}, {9, 90}, {1, 10}};
+        static constexpr int64_t rows[][2] = {{5, 50}, {1, 10}, {3, 30},
+                                              {3, 31}, {9, 90}, {1, 10}};
         for (size_t i = 0; i < 6; i++) {
             const databox k = DATABOX_SIGNED(rows[i][0]);
             const databox v = DATABOX_SIGNED(rows[i][1]);
@@ -10061,7 +10061,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 #if FLEX_ENABLE_PTR_MDSC
         cleaner(mdscfree) mdsc *s = mdscnewlen("pushed pointer", 14);
 #endif
-        static const uint64_t refs[] = {
+        static constexpr uint64_t refs[] = {
             0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
         enum { PUSH_TYPE_CASES_ = COUNT_ARRAY(refs) + 2 };
         for (size_t i = 0; i < PUSH_TYPE_CASES_; i++) {
@@ -10123,7 +10123,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * whole, and three times over (past the auto form's 32-value
          * chunks), must give byte-identical flexes.  Containers that build
          * rows from components rely on this to batch their pushes. */
-        static const char longText[] =
+        static constexpr char longText[] =
             "a string long enough to need a two-byte length prefix, "
             "past sixty-four bytes";
         databoxBig s128;
@@ -10389,7 +10389,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("flexPushFloatB16 matches flexInsertFloatB16 at both ends") {
         /* 1.5 and -2.0 are exact in bfloat16; 3.14159 rounds. */
-        static const float values[] = {1.5f, -2.0f, 3.14159f, 0.0f};
+        static constexpr float values[] = {1.5f, -2.0f, 3.14159f, 0.0f};
         cleaner(flexFree) flex *pushed = flexNew();
         cleaner(flexFree) flex *inserted = flexNew();
         for (size_t i = 0; i < sizeof(values) / sizeof(*values); i++) {
@@ -12925,31 +12925,31 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("fuzz: float encoding round-trip") {
         f = flexNew();
 
-        static const float floatVals[] = {0.0f,
-                                          -0.0f,
-                                          1.0f,
-                                          -1.0f,
-                                          1.175494351e-38f,
-                                          3.402823466e+38f,
-                                          -3.402823466e+38f,
-                                          3.14159f,
-                                          -2.71828f,
-                                          1e-10f,
-                                          1e10f};
-        static const size_t floatCount = 11;
+        static constexpr float floatVals[] = {0.0f,
+                                              -0.0f,
+                                              1.0f,
+                                              -1.0f,
+                                              1.175494351e-38f,
+                                              3.402823466e+38f,
+                                              -3.402823466e+38f,
+                                              3.14159f,
+                                              -2.71828f,
+                                              1e-10f,
+                                              1e10f};
+        static constexpr size_t floatCount = 11;
 
-        static const double doubleVals[] = {0.0,
-                                            -0.0,
-                                            1.0,
-                                            -1.0,
-                                            2.2250738585072014e-308,
-                                            1.7976931348623157e+308,
-                                            -1.7976931348623157e+308,
-                                            3.14159265358979,
-                                            -2.71828182845904,
-                                            1e-100,
-                                            1e100};
-        static const size_t doubleCount = 11;
+        static constexpr double doubleVals[] = {0.0,
+                                                -0.0,
+                                                1.0,
+                                                -1.0,
+                                                2.2250738585072014e-308,
+                                                1.7976931348623157e+308,
+                                                -1.7976931348623157e+308,
+                                                3.14159265358979,
+                                                -2.71828182845904,
+                                                1e-100,
+                                                1e100};
+        static constexpr size_t doubleCount = 11;
 
         for (size_t i = 0; i < floatCount; i++) {
             flexPushFloat(&f, floatVals[i], FLEX_ENDPOINT_TAIL);
@@ -14207,8 +14207,8 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Out-of-range widths: 0 (VARINT_WIDTH_INVALID), 9..16 (beyond
          * the uint64_t loaders), and larger values.  Each is refused
          * without writing the output. */
-        static const uint32_t badWidths[] = {0,  9,  10, 11, 12, 13,
-                                             14, 15, 16, 17, 255};
+        static constexpr uint32_t badWidths[] = {0,  9,  10, 11, 12, 13,
+                                                 14, 15, 16, 17, 255};
         for (size_t i = 0; i < sizeof(badWidths) / sizeof(*badWidths); i++) {
             uint64_t out = UINT64_MAX;
             assert(!varintExternalTryGet(buf, (varintWidth)badWidths[i], &out));

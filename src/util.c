@@ -617,8 +617,8 @@ int utilTest(int argc, char **argv) {
 
         /* Random small patterns and strings against the oracle */
         {
-            static const char palpha[] = "ab*?[]^-\\A";
-            static const char salpha[] = "abAB-]^\\";
+            static constexpr char palpha[] = "ab*?[]^-\\A";
+            static constexpr char salpha[] = "abAB-]^\\";
             uint64_t rng = 0x61b;
             for (int iter = 0; iter < 20000; iter++) {
                 char p[GLOB_ORACLE_MAX];
@@ -647,7 +647,7 @@ int utilTest(int argc, char **argv) {
 
         /* Stars that cannot all match fail in polynomial time, not by
          * trying every way to split the string among them */
-        static const char hard[] = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+        static constexpr char hard[] = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
         char run[200];
         memset(run, 'a', sizeof(run));
         if (stringmatchlen(hard, (int)strlen(hard), run, (int)sizeof(run), 0)) {

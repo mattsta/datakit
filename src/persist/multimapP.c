@@ -1141,7 +1141,8 @@ int multimapPTest(int argc, char *argv[]) {
         persistCtx *ctx = persistCtxNew(basePath, NULL);
         multimapP *m =
             multimapNewConfigureP(ctx, 2, true, false, FLEX_CAP_LEVEL_2048);
-        static const int64_t rows[][2] = {{1, 10}, {1, 11}, {1, 12}, {2, 20}};
+        static constexpr int64_t rows[][2] = {
+            {1, 10}, {1, 11}, {1, 12}, {2, 20}};
         for (size_t i = 0; i < 4; i++) {
             const databox key = DATABOX_SIGNED(rows[i][0]);
             const databox val = DATABOX_SIGNED(rows[i][1]);
@@ -1176,7 +1177,7 @@ int multimapPTest(int argc, char *argv[]) {
             if (!multimapIsSet(multimapGetP(m))) {
                 ERRR("A set came back as a map");
             }
-            static const int64_t remain[][2] = {{1, 10}, {1, 12}, {2, 20}};
+            static constexpr int64_t remain[][2] = {{1, 10}, {1, 12}, {2, 20}};
             multimapIterator iter;
             multimapIteratorInitP(m, &iter, true);
             databox got[2];

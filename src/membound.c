@@ -198,7 +198,7 @@ void memboundZeroFast(void *dst, size_t bytes) {
     /* Handle remainder with 64-bit stores, then byte stores.  'dst' has
      * no alignment guarantee: a memcpy store (one instruction) rather
      * than a uint64_t store, which would be undefined when misaligned. */
-    static const uint64_t zeroWord = 0;
+    static constexpr uint64_t zeroWord = 0;
     while (bytes >= 8) {
         memcpy(p, &zeroWord, sizeof(zeroWord));
         p += 8;

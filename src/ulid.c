@@ -19,7 +19,7 @@
 /* ====================================================================
  * Base36 Character Set (0-9A-Z)
  * ==================================================================== */
-static const char BASE36_CHARS[36] = {
+static constexpr char BASE36_CHARS[36] = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B',
     'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
     'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
@@ -2432,7 +2432,7 @@ defcleanerName(ulid64_t *, zfree, Ulid64s);
 /* Add one to a fixed-width uppercase Base36 string, digit by digit.
  * Returns false if the carry runs off the front. */
 static bool ulidTestBase36Increment(char *s, size_t len) {
-    static const char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    static constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     for (size_t i = len; i-- > 0;) {
         const char *at = strchr(digits, s[i]);
         assert(at && *at);
@@ -2512,11 +2512,11 @@ int ulidTest(int argc, char *argv[]) {
             {ulidEncodeNEON, ulidDecodeNEON, "neon"},
 #endif
         };
-        static const char good[ULID_ENCODED_LENGTH + 1] =
+        static constexpr char good[ULID_ENCODED_LENGTH + 1] =
             "0123456789ABCDEFGHIJKLMNO";
-        static const uint8_t bad[] = {'!', '/', ':',  '@',  '[', '`',
-                                      '{', ' ', 0x7f, 0x80, 0xff};
-        static const size_t at[] = {0, 15, 16, 24};
+        static constexpr uint8_t bad[] = {'!', '/', ':',  '@',  '[', '`',
+                                          '{', ' ', 0x7f, 0x80, 0xff};
+        static constexpr size_t at[] = {0, 15, 16, 24};
         ulid_t want = {};
         if (!ulidDecodeScalar(good, &want)) {
             ERRR("the scalar decoder refused a valid string");
@@ -2632,7 +2632,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("32-bit variants, compares and config validation") {
         static const ulidVariantType v32[] = {ULID_VARIANT_32MS,
                                               ULID_VARIANT_32S};
-        static const uint64_t prec[] = {1000000, 1000000000};
+        static constexpr uint64_t prec[] = {1000000, 1000000000};
         for (size_t v = 0; v < 2; v++) {
             ulidGen g;
             ulidGenInit(&g, ULID_CLOCK_REALTIME);

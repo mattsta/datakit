@@ -63,7 +63,7 @@ uint64_t xoroshiro128plus(uint64_t s[2]) {
    non-overlapping subsequences for parallel computations. */
 
 void xoroshiro128plusNext(uint64_t s[2]) {
-    static const uint64_t JUMP[] = {0xbeac0467eba5facb, 0xd86b048b86aa9922};
+    static constexpr uint64_t JUMP[] = {0xbeac0467eba5facb, 0xd86b048b86aa9922};
 
     uint64_t s0 = 0;
     uint64_t s1 = 0;

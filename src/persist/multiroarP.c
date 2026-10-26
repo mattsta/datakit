@@ -1064,7 +1064,7 @@ static int test_multiroarP_valueKindsAndModes(int argc, char *argv[]) {
 
     ctx = persistCtxNew(basePath, NULL);
     r = multiroarOpenP(ctx);
-    static const uint64_t want[3] = {5, 1, 0};
+    static constexpr uint64_t want[3] = {5, 1, 0};
     for (uint64_t i = 0; r && i < 3; i++) {
         databox got = {};
         if (!multiroarValueGetP(r, 10 + i, &got) ||

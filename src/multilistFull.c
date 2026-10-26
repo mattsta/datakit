@@ -2110,7 +2110,7 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
 static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
     /* "split-" then the id as six digits, written into a fixed template
      * so the string is always exactly MLF_SPLIT_LEN bytes. */
-    static const char tmpl[] =
+    static constexpr char tmpl[] =
         "split-000000-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
     static_assert(sizeof(tmpl) == MLF_SPLIT_LEN + 1, "template length");
     memcpy(buf, tmpl, sizeof(tmpl));
@@ -2411,7 +2411,7 @@ int multilistFullTest(int argc, char *argv[]) {
             multilistFull *ml = multilistFullNew(1, depth[_i]);
             multilistFullPushTail(ml, s0, a, sizeof(a));
             multilistFullPushTail(ml, s0, b, sizeof(b));
-            static const char orders[3][2] = {
+            static constexpr char orders[3][2] = {
                 {'a', 'b'}, {'b', 'a'}, {'a', 'b'}};
             for (int r = 0; r < 3; r++) {
                 if (r > 0) {
@@ -4084,7 +4084,7 @@ int multilistFullTest(int argc, char *argv[]) {
          * an array oracle; pushes at both ends must then keep both. */
         enum { SD_MAX = 1024, SD_NEW = 400000 };
         static uint32_t want[SD_MAX];
-        static const uint32_t seqs[][7] = {
+        static constexpr uint32_t seqs[][7] = {
             {0, 1, 2, 0, UINT32_MAX},       {0, 2, 1, 3, 0, UINT32_MAX},
             {1, 1, 4, 1, 0, UINT32_MAX},    {2, 0, 6, 0, UINT32_MAX},
             {3, 2, 1, 0, 2, 5, UINT32_MAX},
@@ -4308,7 +4308,7 @@ int multilistFullTest(int argc, char *argv[]) {
          * and every node must match the depth rule exactly. */
         enum { CG_MAX_IN = 6, CG_MAX = 256 };
         static uint32_t want[CG_MAX];
-        static const uint32_t patterns[2][CG_MAX_IN] = {
+        static constexpr uint32_t patterns[2][CG_MAX_IN] = {
             {8, 8, 8, 8, 8, 8},
             {9, 1, 0, 14, 2, 1},
         };

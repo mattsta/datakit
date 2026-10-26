@@ -184,8 +184,8 @@ static size_t f2tIndex_(uint64_t *s) {
 #define F2T_BULK(T, VT, IS_FLOAT)                                              \
     static int f2tBulk##T(uint64_t seed) {                                     \
         int err = 0;                                                           \
-        static const size_t shapes[][2] = {{0, 0}, {1, 1},   {1, 9},           \
-                                           {7, 3}, {33, 65}, {64, 64}};        \
+        static constexpr size_t shapes[][2] = {{0, 0}, {1, 1},   {1, 9},       \
+                                               {7, 3}, {33, 65}, {64, 64}};    \
         for (size_t s = 0; s < COUNT_ARRAY(shapes); s++) {                     \
             const size_t rows = shapes[s][0];                                  \
             const size_t cols = shapes[s][1];                                  \

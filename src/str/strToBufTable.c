@@ -9,11 +9,12 @@
  *
  * https://www.facebook.com/notes/facebook-engineering/10151361643253920 */
 size_t StrUInt64ToBufTable(void *dst_, size_t dstLen, uint64_t value) {
-    static const char digits[201] = "0001020304050607080910111213141516171819"
-                                    "2021222324252627282930313233343536373839"
-                                    "4041424344454647484950515253545556575859"
-                                    "6061626364656667686970717273747576777879"
-                                    "8081828384858687888990919293949596979899";
+    static constexpr char digits[201] =
+        "0001020304050607080910111213141516171819"
+        "2021222324252627282930313233343536373839"
+        "4041424344454647484950515253545556575859"
+        "6061626364656667686970717273747576777879"
+        "8081828384858687888990919293949596979899";
     uint8_t *dst = dst_;
     const uint32_t length = StrDigitCountUInt64(value);
 
@@ -54,11 +55,12 @@ size_t StrUInt64ToBufTable(void *dst_, size_t dstLen, uint64_t value) {
  * Modified in order to handle signed integers since the original code was
  * designed for unsigned integers. */
 size_t StrInt64ToBufTable(void *dst_, size_t dstLen, int64_t svalue) {
-    static const char digits[201] = "0001020304050607080910111213141516171819"
-                                    "2021222324252627282930313233343536373839"
-                                    "4041424344454647484950515253545556575859"
-                                    "6061626364656667686970717273747576777879"
-                                    "8081828384858687888990919293949596979899";
+    static constexpr char digits[201] =
+        "0001020304050607080910111213141516171819"
+        "2021222324252627282930313233343536373839"
+        "4041424344454647484950515253545556575859"
+        "6061626364656667686970717273747576777879"
+        "8081828384858687888990919293949596979899";
     uint8_t *dst = dst_;
     int negative;
     uint64_t value;

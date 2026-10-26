@@ -1,8 +1,8 @@
 #include "../str.h"
 
 int64_t StrDoubleToInt64(double r) {
-    static const int64_t maxInt = INT64_MAX;
-    static const int64_t minInt = INT64_MIN;
+    static constexpr int64_t maxInt = INT64_MAX;
+    static constexpr int64_t minInt = INT64_MIN;
 
     if (r <= (double)minInt) {
         return minInt;

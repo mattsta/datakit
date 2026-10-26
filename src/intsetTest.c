@@ -1541,7 +1541,7 @@ int intsetTest(int argc, char *argv[]) {
     TEST("iterator and Get agree with a sorted oracle in every tier") {
         /* Values of every width and sign; the iterator yields exactly the
          * sorted distinct values and Get(i) is the i-th of them */
-        static const int64_t scale[] = {1, 100000, INT64_C(10000000000)};
+        static constexpr int64_t scale[] = {1, 100000, INT64_C(10000000000)};
         for (size_t tier = 0; tier < 3; tier++) {
             cleaner(intsetFree) intset *is = intsetNew();
             cleanerName(zfree, I64) int64_t *want =

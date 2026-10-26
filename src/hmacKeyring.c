@@ -379,7 +379,7 @@ bool hmacKeyringInstall(hmacKeyring *ring, hmacKeyId id,
 bool hmacKeyringInstallUnsalted(hmacKeyring *ring, hmacKeyId id,
                                 const hmacHashAlgo *algo,
                                 const uint8_t *key_bytes, size_t key_len) {
-    static const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
+    static constexpr uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
     return hmacKeyringInstallInternal(ring, id, algo, key_bytes, key_len,
                                       zero_salt, /*is_unsalted=*/true);
 }

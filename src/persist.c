@@ -5750,7 +5750,7 @@ static int persistTestDecoderMatrix(const persistOps *ops, void *start) {
     len[n] = persistTestFlexPayload(payload[n], CAP, two, 2);
     len[n] = len[n] ? len[n] - 1 : 0, n++;
     uint64_t rng = 0xdec0de ^ ops->type;
-    static const size_t randomLens[] = {3, 7, 33, 64, 95};
+    static constexpr size_t randomLens[] = {3, 7, 33, 64, 95};
     for (size_t r = 0; r < 5 && n < SLOTS; r++) {
         for (size_t k = 0; k < randomLens[r]; k++) {
             payload[n][k] = (uint8_t)splitmix64(&rng);
@@ -6181,7 +6181,7 @@ int persistTest(int argc, char *argv[]) {
 
         /* 32-byte test key — required size for BLAKE3_KEYED; any size
          * works for HMAC_*; ignored for unkeyed algorithms. */
-        static const uint8_t persistTestKey[32] = {
+        static constexpr uint8_t persistTestKey[32] = {
             0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
             0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
             0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
@@ -10949,8 +10949,8 @@ int persistTest(int argc, char *argv[]) {
         }
 
         /* KEY: HMAC entries written under one key, read under another */
-        static const uint8_t keyA[32] = {1};
-        static const uint8_t keyB[32] = {2};
+        static constexpr uint8_t keyA[32] = {1};
+        static constexpr uint8_t keyB[32] = {2};
         persistConfig kcfg = persistDefaultConfig();
         kcfg.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
         cleaner(persistClose) persist *k =
@@ -11309,7 +11309,7 @@ int persistTest(int argc, char *argv[]) {
          * read back under it, so verification uses no key left over from
          * the keyring (its prepared key would win, and dangle); clearing
          * the key then refuses keyed reads instead of using one */
-        static const uint8_t direct[] = "a direct key after the keyring";
+        static constexpr uint8_t direct[] = "a direct key after the keyring";
         persistConfig config = persistDefaultConfig();
         config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
         cleaner(persistClose) persist *p =
@@ -11345,8 +11345,8 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("a prepared HMAC key is the one verification uses") {
-        static const uint8_t key[] = "persist prepared-key test key";
-        static const uint8_t other[] = "a different key of the same size";
+        static constexpr uint8_t key[] = "persist prepared-key test key";
+        static constexpr uint8_t other[] = "a different key of the same size";
         uint8_t storage[2][1024];
         hmacKey right;
         hmacKey wrong;

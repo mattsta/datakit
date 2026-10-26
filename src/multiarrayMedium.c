@@ -473,8 +473,8 @@ int multiarrayMediumTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    static const int rowMax = 512;
-    static const int globalMax =
+    static constexpr int rowMax = 512;
+    static constexpr int globalMax =
         7280; /* max 512 16-byte entries per container */
 
     TEST("create") {

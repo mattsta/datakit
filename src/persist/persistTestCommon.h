@@ -292,7 +292,7 @@ DK_FN_UNUSED static int ptestGetSeqValue(ptestSequence seq, int index,
  */
 
 /* Edge case integer values for testing */
-static const int64_t PTEST_INT_EDGE_CASES[] = {
+static constexpr int64_t PTEST_INT_EDGE_CASES[] = {
     0, /* Zero */
     1,
     -1, /* Near zero */

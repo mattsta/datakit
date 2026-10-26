@@ -62,8 +62,8 @@ static inline uint32x4_t rotl32_8(uint32x4_t x) {
      * output byte to its input source: rotated left by 8 bits per
      * 32-bit lane means byte0 <- byte1, byte1 <- byte2, byte2 <- byte3,
      * byte3 <- byte0. */
-    static const uint8_t tbl[16] = {3,  0, 1, 2,  7,  4,  5,  6,
-                                    11, 8, 9, 10, 15, 12, 13, 14};
+    static constexpr uint8_t tbl[16] = {3,  0, 1, 2,  7,  4,  5,  6,
+                                        11, 8, 9, 10, 15, 12, 13, 14};
     uint8x16_t idx = vld1q_u8(tbl);
     return vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(x), idx));
 }

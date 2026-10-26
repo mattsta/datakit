@@ -148,7 +148,7 @@ typedef enum dksType {
 /* Direct lookup tables indexed by dksType enum value (0-7).
  * Eliminates branches and arithmetic in hot paths.
  * Type values: DKS_8=0, DKS_24=1, DKS_16=2, DKS_32=3, DKS_40=5, DKS_48=7 */
-static const uint8_t dksElementSize_[8] = {
+static constexpr uint8_t dksElementSize_[8] = {
     1, /* 0x00 = DKS_8  -> 1 byte element  */
     3, /* 0x01 = DKS_24 -> 3 byte element  */
     2, /* 0x02 = DKS_16 -> 2 byte element  */
@@ -159,7 +159,7 @@ static const uint8_t dksElementSize_[8] = {
     6, /* 0x07 = DKS_48 -> 6 byte element  */
 };
 
-static const uint8_t dksTypeBits_[8] = {
+static constexpr uint8_t dksTypeBits_[8] = {
     2, /* 0x00 = DKS_8  -> 2 type bits */
     3, /* 0x01 = DKS_24 -> 3 type bits */
     2, /* 0x02 = DKS_16 -> 2 type bits */
@@ -170,7 +170,7 @@ static const uint8_t dksTypeBits_[8] = {
     3, /* 0x07 = DKS_48 -> 3 type bits */
 };
 
-static const size_t dksMaxShared_[8] = {
+static constexpr size_t dksMaxShared_[8] = {
     DKS_8_SHARED_MAX,  /* 0x00 = DKS_8  */
     DKS_24_SHARED_MAX, /* 0x01 = DKS_24 */
     DKS_16_SHARED_MAX, /* 0x02 = DKS_16 */
@@ -3798,7 +3798,7 @@ int DKS_TEST(int argc, char *argv[]) {
         char path[] = "dksNewFromFileXXXXXX";
         const int fd = mkstemp(path);
         if (fd >= 0) {
-            static const uint8_t content[] = {'a', 0, 'b', 0xff, '\n'};
+            static constexpr uint8_t content[] = {'a', 0, 'b', 0xff, '\n'};
             const bool wrote =
                 write(fd, content, sizeof(content)) == (ssize_t)sizeof(content);
             close(fd);

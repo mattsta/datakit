@@ -103,7 +103,7 @@ static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t),
 
 /* This needs to be configurable later, but it's a holdover from when
  * integration was baked directly into the server config. */
-static const uint64_t serverSparseMaxBytes = 4096;
+static constexpr uint64_t serverSparseMaxBytes = 4096;
 
 /* This HyperLogLog implementation is based on the following ideas:
  *
@@ -1912,7 +1912,7 @@ approximationDone:
         /* tau(x) = (1 - x - sum_k (1 - x^(2^-k))^2 2^-k) / 3, summed here
          * with pow over 60 terms (past double precision): the estimator's
          * iterative form agrees to 1e-12, and is 0 at both ends */
-        static const double xs[] = {1e-6, 0.001, 0.25, 0.5, 0.75, 0.999};
+        static constexpr double xs[] = {1e-6, 0.001, 0.25, 0.5, 0.75, 0.999};
         bool agree = hllTau(0.0) == 0.0 && hllTau(1.0) == 0.0;
         for (size_t i = 0; i < sizeof(xs) / sizeof(*xs); i++) {
             double sum = 0.0;
@@ -2005,9 +2005,9 @@ approximationDone:
             cleaner(hyperloglogFree) hyperloglog *sk =
                 dense ? hyperloglogNewDense() : hyperloglogNewSparse();
             const void *const first[3] = {"alpha", "beta", "gamma"};
-            static const size_t firstLens[3] = {5, 4, 5};
+            static constexpr size_t firstLens[3] = {5, 4, 5};
             const void *const second[2] = {"alpha", "delta"};
-            static const size_t secondLens[2] = {5, 5};
+            static constexpr size_t secondLens[2] = {5, 5};
             const int64_t a = hyperloglogAddMany(&sk, first, firstLens, 3);
             const int64_t b = hyperloglogAddMany(&sk, second, secondLens, 2);
             const int64_t c = hyperloglogAddMany(&sk, second, secondLens, 0);

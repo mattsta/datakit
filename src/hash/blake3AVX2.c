@@ -44,7 +44,7 @@ extern void blake3PortableCompressXof(const uint32_t cv[8],
 
 /* IV constant needed by the test driver even on non-x86 hosts; kept
  * outside the x86-only block so the stub build still type-checks. */
-static const uint32_t B3_IV[8] = {
+static constexpr uint32_t B3_IV[8] = {
     0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
     0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
 };
@@ -59,7 +59,7 @@ static const uint32_t B3_IV[8] = {
 #define B3_FLAG_PARENT (1u << 2)
 #define B3_FLAG_ROOT (1u << 3)
 
-static const uint8_t B3_MSG_SCHEDULE[7][16] = {
+static constexpr uint8_t B3_MSG_SCHEDULE[7][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
     {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8},
     {3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1},

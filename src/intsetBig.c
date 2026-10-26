@@ -28,8 +28,8 @@ static_assert(INTSET_BIG_UINT128_MAX ==
                   ((((__uint128_t)1) << (64 + DIVISOR_WIDTH)) - 1),
               "Didn't update INTSET_BIG_MAX?");
 
-static const uint64_t divisor = (1ULL << DIVISOR_WIDTH);
-static const int64_t ndivisor = (1LL << DIVISOR_WIDTH);
+static constexpr uint64_t divisor = (1ULL << DIVISOR_WIDTH);
+static constexpr int64_t ndivisor = (1LL << DIVISOR_WIDTH);
 
 static_assert(
     DIVISOR_WIDTH <= 32,
@@ -40,8 +40,8 @@ static_assert(
  *  - bucketIndex * divisor
  * But we need to make sure the multiplication won't overflow the math
  * storage value or else we need to use [u]int128_t math instead. */
-static const uint64_t divisorOverflow = UINT64_MAX / divisor;
-static const int64_t ndivisorOverflow = INT64_MAX / ndivisor;
+static constexpr uint64_t divisorOverflow = UINT64_MAX / divisor;
+static constexpr int64_t ndivisorOverflow = INT64_MAX / ndivisor;
 
 /* The flex/multimap interface doesn't currently support 128 byte integers
  * as keys in maps */

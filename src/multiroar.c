@@ -4071,7 +4071,7 @@ static int mrCheckForms(const multiroar *r, const uint64_t *o,
     }
 
     /* Ranges inside a chunk, across chunk edges and over everything */
-    static const uint64_t ranges[][2] = {
+    static constexpr uint64_t ranges[][2] = {
         {0, MR_FORM_BITS}, {100, 200},     {8000, 8400},   {8192, 16384},
         {12000, 30000},    {24575, 24577}, {40000, 40000}, {50000, 57344},
     };
@@ -4156,7 +4156,7 @@ int multiroarTest(int argc, char *argv[]) {
         uint64_t pos = 99;
         multiroarIterator it;
         bool got[3] = {true, true, true};
-        static const uint64_t probe[3] = {3, 1, 5};
+        static constexpr uint64_t probe[3] = {3, 1, 5};
         uint64_t arr[4];
         if (multiroarBitSet(V, 3) || multiroarBitGet(V, 3) ||
             multiroarRemove(V, 3) || multiroarBitCount(V) ||
@@ -4398,7 +4398,7 @@ int multiroarTest(int argc, char *argv[]) {
         /* Lengths with and without a partial last word: no bit, every
          * single bit, and random fills; both scans agree with walking
          * the bits one at a time (UINT64_MAX for none) */
-        static const uint64_t lens[] = {1, 3, 7, 8, 9, 15, 16, 17, 23, 64};
+        static constexpr uint64_t lens[] = {1, 3, 7, 8, 9, 15, 16, 17, 23, 64};
         uint8_t bitmap[64];
         uint64_t rng = 0xb17;
         for (size_t l = 0; l < sizeof(lens) / sizeof(*lens); l++) {
@@ -4490,7 +4490,7 @@ int multiroarTest(int argc, char *argv[]) {
          * different form at each chunk number, so the set operations
          * meet every pairing of forms */
         enum { SPARSE = 60, BITMAP = 3000, DENSE = 8150, ALL = 8192 };
-        static const uint32_t forms[3][MR_FORM_CHUNKS] = {
+        static constexpr uint32_t forms[3][MR_FORM_CHUNKS] = {
             {SPARSE, BITMAP, DENSE, ALL, 0, 1, 5000},
             {ALL, DENSE, SPARSE, BITMAP, 10, 0, DENSE},
             {4000, 200, ALL, DENSE, 0, ALL, 30},
@@ -7227,7 +7227,7 @@ int multiroarTest(int argc, char *argv[]) {
         /* Bits spread over one chunk, three chunks or 122 chunks, plus a
          * range, so chunks are sparse, bitmaps, inverted listings and
          * full */
-        static const uint64_t spreads[] = {8192, 3 * 8192, 1000000};
+        static constexpr uint64_t spreads[] = {8192, 3 * 8192, 1000000};
         for (int trial = 0; trial < 100; trial++) {
             cleaner(multiroarFree) multiroar *r = multiroarBitNew();
             uint64_t expectedCount = 0;
