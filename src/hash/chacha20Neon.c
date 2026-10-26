@@ -203,8 +203,7 @@ bool chacha20NeonAvailable(void) {
 /* Soft stub: callers must gate on Available() and never reach here.
  * Asserting in debug builds catches regressions; production builds
  * silently produce zeros (the dispatcher will not invoke us). */
-void chacha20NeonBlock4(const uint32_t state[16], uint8_t out[256]) {
-    (void)state;
+void chacha20NeonBlock4(const uint32_t[16], uint8_t out[256]) {
     if (out != NULL) {
         memset(out, 0, 256);
     }

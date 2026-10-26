@@ -530,9 +530,7 @@ static void hexDec(const char *hex, uint8_t *out, size_t out_len) {
     }
 }
 
-int aesGcmTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int aesGcmTest(int, char *[]) {
     int err = 0;
 
     /* NIST SP 800-38D Test Vector 1: AES-128 GCM, empty PT + AAD. */

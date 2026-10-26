@@ -758,9 +758,7 @@ static void hashToHex(const uint8_t *h, char out[65]) {
     out[64] = 0;
 }
 
-int sha256ArmCryptoTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int sha256ArmCryptoTest(int, char *[]) {
     int err = 0;
 
     /* Stub-delegation guard.  On non-ARM-crypto builds

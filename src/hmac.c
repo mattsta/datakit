@@ -544,9 +544,7 @@ static void runBench(size_t payload, uint32_t iters) {
            payload, iters, mib, secs, secs > 0 ? mib / secs : 0.0);
 }
 
-int hmacTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int hmacTest(int, char *[]) {
     int err = 0;
 
     TEST("RFC 4231 HMAC-SHA-256 vectors") {

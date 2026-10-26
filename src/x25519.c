@@ -537,9 +537,7 @@ static void hexEncode(const uint8_t in[32], char out[65]) {
     out[64] = 0;
 }
 
-int x25519Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int x25519Test(int, char *[]) {
     int err = 0;
 
     /* RFC 7748 §5.2 test vectors. */

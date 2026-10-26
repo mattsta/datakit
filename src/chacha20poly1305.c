@@ -402,8 +402,8 @@ static void poly1305Init(poly1305State *st, const uint8_t key[32]) {
 /* Consume one full 16-byte block (or final short block with hibit=0).
  * `hibit_set` tells whether to add the 2^128 marker (always 1 except
  * for the very last short block). */
-static void poly1305Block(poly1305State *st, const uint8_t block[16],
-                          size_t block_len, bool hibit_set) {
+static void poly1305Block(poly1305State *st, const uint8_t block[16], size_t,
+                          bool hibit_set) {
     /* Build 5 x 26-bit input limbs from a (possibly short) block.  For a
      * short block we copy into a zero-padded scratch and add the hibit
      * marker at position `block_len` (8 bits) — but per RFC the marker
@@ -412,7 +412,6 @@ static void poly1305Block(poly1305State *st, const uint8_t block[16],
      * explicitly, then calls us with block_len=16, hibit_set=false.
      * Full blocks pass block_len=16, hibit_set=true => add 1<<24 to
      * limb 4. */
-    (void)block_len;
 
     uint32_t t0 = load32_le(block + 0);
     uint32_t t1 = load32_le(block + 4);
@@ -1468,9 +1467,7 @@ static void runBench(size_t payload, uint32_t iters) {
            payload, iters, seal_ns_op, seal_mbs, open_ns_op, open_mbs);
 }
 
-int chacha20poly1305Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int chacha20poly1305Test(int, char *[]) {
     int err = 0;
 
     TEST("RFC 8439 §2.4.2: ChaCha20 stream encryption") {

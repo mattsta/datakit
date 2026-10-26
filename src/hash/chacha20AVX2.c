@@ -196,10 +196,7 @@ bool chacha20AVX2Available(void) {
 /* Unreachable: the dispatcher selects AVX2 only after
  * chacha20AVX2Available(), and a keystream of zeros would leave the
  * plaintext in the clear, so a call aborts */
-[[noreturn]] void chacha20AVX2Block8(const uint32_t state[16],
-                                     uint8_t out[512]) {
-    (void)state;
-    (void)out;
+[[noreturn]] void chacha20AVX2Block8(const uint32_t[16], uint8_t[512]) {
     abort();
 }
 

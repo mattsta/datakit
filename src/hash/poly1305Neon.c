@@ -251,14 +251,8 @@ bool poly1305NeonAvailable(void) {
     return false;
 }
 
-void poly1305NeonBlock2x(uint64_t h[5], const uint32_t r[5],
-                         const uint32_t r2[5], const uint8_t *msg,
-                         size_t num_pairs) {
-    (void)h;
-    (void)r;
-    (void)r2;
-    (void)msg;
-    (void)num_pairs;
+void poly1305NeonBlock2x(uint64_t[5], const uint32_t[5], const uint32_t[5],
+                         const uint8_t *, size_t) {
     assert(!"poly1305NeonBlock2x invoked on non-aarch64 build — caller "
             "must check poly1305NeonAvailable() first");
 }

@@ -1413,9 +1413,7 @@ static flex *hkrTestReplaceEntry(const flex *src, size_t idx,
     return out;
 }
 
-int hmacKeyringTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int hmacKeyringTest(int, char *[]) {
     int err = 0;
 
     TEST("Restore of every truncation and byte flip: all or nothing") {

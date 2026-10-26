@@ -490,10 +490,7 @@ static int xofCheckGrownWriter(const char *what, const uint64_t *bits,
         }                                                                      \
     } while (0)
 
-int xofTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-
+int xofTest(int, char *[]) {
     int err = 0;
     const size_t loopers = 10000;
 

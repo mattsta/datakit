@@ -491,9 +491,7 @@ static double now_seconds(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-int blake3AVX2Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int blake3AVX2Test(int, char *[]) {
     int err = 0;
 
     /* Stub-delegation guard: a direct call to blake3AVX2CompressInPlace

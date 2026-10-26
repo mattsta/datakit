@@ -268,18 +268,10 @@ bool poly1305AVX2Available(void) {
 /* Unreachable: the dispatcher selects AVX2 only after
  * poly1305AVX2Available(), and returning would leave the MAC state
  * unabsorbed, so a call aborts */
-[[noreturn]] void poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5],
-                                      const uint32_t r2[5],
-                                      const uint32_t r3[5],
-                                      const uint32_t r4[5], const uint8_t *msg,
-                                      size_t num_groups) {
-    (void)h;
-    (void)r;
-    (void)r2;
-    (void)r3;
-    (void)r4;
-    (void)msg;
-    (void)num_groups;
+[[noreturn]] void poly1305AVX2Block4x(uint64_t[5], const uint32_t[5],
+                                      const uint32_t[5], const uint32_t[5],
+                                      const uint32_t[5], const uint8_t *,
+                                      size_t) {
     abort();
 }
 

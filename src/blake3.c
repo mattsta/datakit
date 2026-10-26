@@ -1060,9 +1060,7 @@ static void fill_test_input(uint8_t *buf, size_t n) {
     }
 }
 
-int blake3Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int blake3Test(int, char *[]) {
     int err = 0;
 
     /* Largest test vector input size. */

@@ -405,9 +405,7 @@ static void shaniToHex(const uint8_t *h, char out[65]) {
     out[64] = 0;
 }
 
-int sha256ShaNiTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int sha256ShaNiTest(int, char *[]) {
     int err = 0;
 
     /* Stub-delegation check — runs on every platform.

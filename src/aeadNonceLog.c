@@ -692,13 +692,10 @@ static void *aeadNonceLogConcWorker(void *arg) {
 
 /* Always-failing allocators for the OOM fault-injection test below. zmalloc
  * routes through localCalloc unless DK_MALLOC_REAL is set, so fail both. */
-static void *aeadOomFailMalloc(size_t n) {
-    (void)n;
+static void *aeadOomFailMalloc(size_t) {
     return NULL;
 }
-static void *aeadOomFailCalloc(size_t count, size_t n) {
-    (void)count;
-    (void)n;
+static void *aeadOomFailCalloc(size_t, size_t) {
     return NULL;
 }
 
@@ -736,9 +733,7 @@ static flex *anlTestReplaceEntry(const flex *src, size_t idx,
     return out;
 }
 
-int aeadNonceLogTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int aeadNonceLogTest(int, char *[]) {
     int err = 0;
 
     TEST("FromBytes refuses a valid header over a corrupt last entry") {

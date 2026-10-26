@@ -1020,9 +1020,7 @@ static uint64_t expectedFor(const rapidhashTestVector *v, int idx) {
     }
 }
 
-int rapidhashTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int rapidhashTest(int, char *[]) {
     int err = 0;
 
     /* Find the largest input we'll need so a single buffer covers

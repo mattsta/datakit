@@ -462,9 +462,7 @@ static double now_sec(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-int blake3SSE41Test(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+int blake3SSE41Test(int, char *[]) {
     int err = 0;
 
     /* Stub-delegation guard: ensure direct calls to
