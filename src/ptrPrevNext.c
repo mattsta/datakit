@@ -1,5 +1,6 @@
 #include "ptrPrevNext.h"
 #include "../deps/varint/src/varintSplitFull16.h"
+#include "dkBits.h"
 
 static constexpr int SPATIAL_OFFSET = 6;
 
@@ -173,16 +174,16 @@ static void ptrPrevNextEnsureTail_(ptrPrevNext *ppn) {
 }
 
 static bool ptrPrevNextSlotFree_(const memspace *ms, const size_t slot) {
-    return (ms->freeBits[slot >> 3] >> (slot & 7)) & 1;
+    return dkBitGet(ms->freeBits, slot);
 }
 
 static void ptrPrevNextSlotsMark_(memspace *ms, const size_t first,
                                   const size_t n, const bool free) {
     for (size_t s = first; s < first + n; s++) {
         if (free) {
-            ms->freeBits[s >> 3] |= (uint8_t)(1u << (s & 7));
+            dkBitSet(ms->freeBits, s);
         } else {
-            ms->freeBits[s >> 3] &= (uint8_t)~(1u << (s & 7));
+            dkBitClear(ms->freeBits, s);
         }
     }
 }

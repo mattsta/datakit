@@ -10,6 +10,7 @@
 #include "x25519.h"
 
 #include "ctmem.h" /* dkCtMemEq for constant-time small-order pre-reject. */
+#include "dkBits.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -299,7 +300,7 @@ static void x25519ScalarMult(uint8_t out[32], const uint8_t scalar[32],
     fe25519 A, AA, B, BB, E, C, D, DA, CB, t1, t2;
 
     for (int32_t pos = 254; pos >= 0; pos--) {
-        const uint64_t bit = (uint64_t)((k[pos / 8] >> (pos & 7)) & 1u);
+        const uint64_t bit = dkBitGet(k, (size_t)pos);
         swap ^= bit;
         feCswap(&x2, &x3, swap);
         feCswap(&z2, &z3, swap);

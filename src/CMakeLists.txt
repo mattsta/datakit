@@ -656,6 +656,7 @@ if(DatakitTestMode)
         perfRegression.c
         dkC23Test.c
         dkEndianTest.c
+        dkBitsTest.c
         intsetTest.c
         # One simulation driving every tiered family through its tier changes
         tierSimTest.c

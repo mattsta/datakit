@@ -26,6 +26,7 @@
 #include "databoxLinear.h"
 #include "dataspeed.h"
 #include "dj.h"
+#include "dkBits.h"
 #include "dkDiag.h"
 #include "dkEndian.h"
 #include "dkFormat.h"
@@ -12464,6 +12465,9 @@ static const TestEntry testRegistry[] = {
 
     /* Fixed-width integers to and from bytes in a stated order */
     T_A(dkEndian, "endian"),
+
+    /* Bit arrays in bytes or 64-bit words */
+    T_A(dkBits, "bits"),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),

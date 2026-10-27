@@ -11,6 +11,7 @@
 #include "../deps/xxHash/xxhash.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "dkBits.h"
 #include "flex.h"
 #include "persist.h"
 #include "timeUtil.h"
@@ -158,10 +159,10 @@ static inline bool seenTrackerTest(const seenTracker *st, uint32_t idx) {
     }
 
     if (st->capacity <= SEEN_BITMAP_MEDIUM_MAX) {
-        return (st->bits.medium[idx >> 6] & (1ULL << (idx & 63))) != 0;
+        return dkBitGet(st->bits.medium, idx);
     }
 
-    return (st->bits.large[idx >> 6] & (1ULL << (idx & 63))) != 0;
+    return dkBitGet(st->bits.large, idx);
 }
 
 /* Mark node index as seen (O(1)) */
@@ -169,9 +170,9 @@ static inline void seenTrackerSet(seenTracker *st, uint32_t idx) {
     if (st->capacity <= SEEN_BITMAP_SMALL_MAX) {
         st->bits.small |= (1ULL << idx);
     } else if (st->capacity <= SEEN_BITMAP_MEDIUM_MAX) {
-        st->bits.medium[idx >> 6] |= (1ULL << (idx & 63));
+        dkBitSet(st->bits.medium, idx);
     } else {
-        st->bits.large[idx >> 6] |= (1ULL << (idx & 63));
+        dkBitSet(st->bits.large, idx);
     }
 }
 

@@ -5,6 +5,7 @@
 #include "../deps/varint/src/varintTagged.h"
 
 #include "cleaner.h"
+#include "dkBits.h"
 #include "dkDiag.h"
 #include "str.h" /* optimized popcnt helpers */
 #include <inttypes.h>
@@ -3156,8 +3157,7 @@ DK_STATIC void expandChunkToBitmap(const databox *value, uint8_t *bitmap) {
         const uint8_t *packed = GET_CHUNK_PACKED_START(value);
         uint16_t count = PACKED_COUNT_FROM_VALUE(value);
         for (uint16_t i = 0; i < count; i++) {
-            uint16_t pos = varintPacked13Get(packed, i);
-            bitmap[pos / 8] |= (1 << (pos % 8));
+            dkBitSet(bitmap, varintPacked13Get(packed, i));
         }
         break;
     }
@@ -3169,8 +3169,7 @@ DK_STATIC void expandChunkToBitmap(const databox *value, uint8_t *bitmap) {
         const uint8_t *packed = GET_CHUNK_PACKED_START(value);
         uint16_t count = PACKED_COUNT_FROM_VALUE(value);
         for (uint16_t i = 0; i < count; i++) {
-            uint16_t pos = varintPacked13Get(packed, i);
-            bitmap[pos / 8] &= ~(1 << (pos % 8));
+            dkBitClear(bitmap, varintPacked13Get(packed, i));
         }
         break;
     }
@@ -3957,7 +3956,7 @@ static constexpr int MR_FORM_CHUNKS = 7;
 #define MR_FORM_WORDS (MR_FORM_BITS / 64)
 
 static bool mrOracleGet(const uint64_t *o, uint64_t p) {
-    return (o[p / 64] >> (p % 64)) & 1;
+    return dkBitGet(o, p);
 }
 
 /* Give chunk 'c' exactly 'count' set bits, in the roar and the oracle.
@@ -3976,7 +3975,7 @@ static void mrFillChunk(multiroar *r, uint64_t *o, uint64_t c, uint32_t count,
             const uint64_t p = base + splitmix64(rng) % BITMAP_SIZE_IN_BITS;
             if (mrOracleGet(o, p)) {
                 multiroarBitClear(r, p);
-                o[p / 64] &= ~(UINT64_C(1) << (p % 64));
+                dkBitClear(o, p);
                 clear--;
             }
         }
@@ -3987,7 +3986,7 @@ static void mrFillChunk(multiroar *r, uint64_t *o, uint64_t c, uint32_t count,
         const uint64_t p = base + splitmix64(rng) % BITMAP_SIZE_IN_BITS;
         if (!mrOracleGet(o, p)) {
             multiroarBitSet(r, p);
-            o[p / 64] |= UINT64_C(1) << (p % 64);
+            dkBitSet(o, p);
             left--;
         }
     }
@@ -4414,7 +4413,7 @@ int multiroarTest(int, char *[]) {
                 uint64_t first = UINT64_MAX;
                 uint64_t last = UINT64_MAX;
                 for (uint64_t bit = 0; bit < bytes * 8; bit++) {
-                    if (bitmap[bit / 8] >> (bit % 8) & 1) {
+                    if (dkBitGet(bitmap, bit)) {
                         first = first == UINT64_MAX ? bit : first;
                         last = bit;
                     }

@@ -325,6 +325,7 @@ bool StrScanToDouble(const void *str, databox *box, bool allowFloatWords,
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "ctest.h"
+#include "dkBits.h"
 
 #include <errno.h> /* the strtoull speed test checks errno */
 
@@ -2794,7 +2795,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         size_t nSet = 0;
         size_t nUnset = 0;
         for (uint64_t bit = 0; bit < 4096; bit++) {
-            if (words[bit / 64] >> (bit % 64) & 1) {
+            if (dkBitGet(words, bit)) {
                 setWant[nSet++] = bit;
             } else {
                 unsetWant[nUnset++] = bit;

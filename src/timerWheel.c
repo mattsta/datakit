@@ -10,6 +10,7 @@
 
 #include "cleaner.h"
 #include "databox.h"
+#include "dkBits.h"
 #include "dkDiag.h"
 #include "flex.h"
 #include "intset.h"
@@ -330,11 +331,11 @@ static void insertTimerIntoOverflow(timerWheel *tw, const timerWheelEntry *e) {
 }
 
 static inline void wheel0OccupancySet(timerWheel *tw, uint32_t idx) {
-    tw->wheel0Occupied[idx >> 6] |= 1ULL << (idx & 63);
+    dkBitSet(tw->wheel0Occupied, idx);
 }
 
 static inline void wheel0OccupancyClear(timerWheel *tw, uint32_t idx) {
-    tw->wheel0Occupied[idx >> 6] &= ~(1ULL << (idx & 63));
+    dkBitClear(tw->wheel0Occupied, idx);
 }
 
 /* Ring distance from `from` to the nearest occupied wheel0 slot

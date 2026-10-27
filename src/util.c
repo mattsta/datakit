@@ -429,6 +429,7 @@ void dumpX86Calls(void *addr, size_t len) {
 #include "asmUtils.h"
 #include "cleaner.h"
 #include "ctest.h"
+#include "dkBits.h"
 #include <assert.h>
 
 defcleanerName(uint8_t *, zfree, Bytes);
@@ -444,12 +445,12 @@ typedef struct globOracleElem {
 } globOracleElem;
 
 static void globOracleAdd(globOracleElem *e, int b, int nocase) {
-    e->accept[(uint8_t)b >> 3] |= (uint8_t)(1u << ((uint8_t)b & 7));
+    dkBitSet(e->accept, (uint8_t)b);
     if (nocase) {
         const int lo = StrTolower(b);
         const int up = (lo >= 'a' && lo <= 'z') ? lo - 'a' + 'A' : lo;
-        e->accept[(uint8_t)lo >> 3] |= (uint8_t)(1u << ((uint8_t)lo & 7));
-        e->accept[(uint8_t)up >> 3] |= (uint8_t)(1u << ((uint8_t)up & 7));
+        dkBitSet(e->accept, (uint8_t)lo);
+        dkBitSet(e->accept, (uint8_t)up);
     }
 }
 
@@ -487,7 +488,7 @@ static bool globOracle(const char *p, int pl, const char *s, int sl,
                         const int lo = nocase ? StrTolower(a) : a;
                         const int hi = nocase ? StrTolower(b) : b;
                         if (x >= lo && x <= hi) {
-                            e->accept[c >> 3] |= (uint8_t)(1u << (c & 7));
+                            dkBitSet(e->accept, (size_t)c);
                         }
                     }
                     i += 3;
@@ -521,8 +522,8 @@ static bool globOracle(const char *p, int pl, const char *s, int sl,
                 ok[i][j] = ok[i + 1][j] || (j < sl && ok[i][j + 1]);
             } else {
                 const uint8_t c = (uint8_t)s[j < sl ? j : 0];
-                ok[i][j] = j < sl && (el[i].accept[c >> 3] & (1u << (c & 7))) &&
-                           ok[i + 1][j + 1];
+                ok[i][j] =
+                    j < sl && dkBitGet(el[i].accept, c) && ok[i + 1][j + 1];
             }
         }
     }

@@ -6313,6 +6313,7 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 #define CTEST_INCLUDE_KEYGEN
 #define CTEST_INCLUDE_VALGEN
 #include "ctest.h"
+#include "dkBits.h"
 
 /* Note: including list.c source directly since we don't
  *       want to link it into the whole library. */
@@ -13404,12 +13405,8 @@ int32_t flexTest(int32_t argc, char **argv) {
          */
         const size_t keySpace = 10000;
         cleanerName(zfree, Bytes) uint8_t *exists =
-            zcalloc((keySpace + 7) / 8, 1);
+            zcalloc(dkBitBytes(keySpace), 1);
         size_t existCount = 0;
-
-#define FUZZ_BIT_SET(arr, idx) ((arr)[(idx) / 8] |= (1 << ((idx) % 8)))
-#define FUZZ_BIT_CLR(arr, idx) ((arr)[(idx) / 8] &= ~(1 << ((idx) % 8)))
-#define FUZZ_BIT_GET(arr, idx) (((arr)[(idx) / 8] >> ((idx) % 8)) & 1)
 
         srand(55555);
         size_t insertOps = 0, deleteOps = 0, findOps = 0;
@@ -13421,9 +13418,9 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             if (op < 5) {
                 /* Insert (50%) - only insert if not already present */
-                if (!FUZZ_BIT_GET(exists, key)) {
+                if (!dkBitGet(exists, key)) {
                     flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
-                    FUZZ_BIT_SET(exists, key);
+                    dkBitSet(exists, key);
                     existCount++;
                 }
                 insertOps++;
@@ -13431,7 +13428,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                 /* Find (30%) */
                 flexEntry *found =
                     flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
-                bool shouldExist = FUZZ_BIT_GET(exists, key);
+                bool shouldExist = dkBitGet(exists, key);
                 if (found && !shouldExist) {
                     ERR("found nonexistent %d", key);
                 }
@@ -13441,12 +13438,12 @@ int32_t flexTest(int32_t argc, char **argv) {
                 findOps++;
             } else {
                 /* Delete (20%) */
-                if (FUZZ_BIT_GET(exists, key)) {
+                if (dkBitGet(exists, key)) {
                     flexEntry *found =
                         flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
                     if (found) {
                         flexDeleteSortedValueWithMiddle(&f, 1, found, &middle);
-                        FUZZ_BIT_CLR(exists, key);
+                        dkBitClear(exists, key);
                         existCount--;
                     } else {
                         ERR("key %d marked as existing but not found for "
@@ -13465,10 +13462,6 @@ int32_t flexTest(int32_t argc, char **argv) {
                 }
             }
         }
-
-#undef FUZZ_BIT_SET
-#undef FUZZ_BIT_CLR
-#undef FUZZ_BIT_GET
 
         flexFree(f);
         printf("  (I=%zu D=%zu F=%zu final=%zu)\n", insertOps, deleteOps,

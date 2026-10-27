@@ -1539,6 +1539,7 @@ void multimapVerify(const multimap *m) {
 
 #define CTEST_INCLUDE_KVGEN
 #include "ctest.h"
+#include "dkBits.h"
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
@@ -6900,12 +6901,8 @@ int multimapTest(int, char *[]) {
         /* Use bitmap as lightweight oracle for existence */
         const size_t keySpace = 100'000;
         cleanerName(zfree, Bytes) uint8_t *exists =
-            zcalloc((keySpace + 7) / 8, 1);
+            zcalloc(dkBitBytes(keySpace), 1);
         size_t existCount = 0;
-
-#define BIT_SET(arr, idx) ((arr)[(idx) / 8] |= (1 << ((idx) % 8)))
-#define BIT_CLR(arr, idx) ((arr)[(idx) / 8] &= ~(1 << ((idx) % 8)))
-#define BIT_GET(arr, idx) (((arr)[(idx) / 8] >> ((idx) % 8)) & 1)
 
         uint64_t seed[2] = {0xABCDEF, 0x123456};
         int insertOps = 0, deleteOps = 0, lookupOps = 0;
@@ -6919,16 +6916,16 @@ int multimapTest(int, char *[]) {
                 /* Insert (50%) */
                 databox val = databoxNewSigned((int64_t)round);
                 const databox *elements[2] = {&key, &val};
-                if (!BIT_GET(exists, keyIdx)) {
+                if (!dkBitGet(exists, keyIdx)) {
                     multimapInsert(&m, elements);
-                    BIT_SET(exists, keyIdx);
+                    dkBitSet(exists, keyIdx);
                     existCount++;
                 }
                 insertOps++;
             } else if (op < 8) {
                 /* Lookup (30%) */
                 bool found = multimapExists(m, &key);
-                bool shouldExist = BIT_GET(exists, keyIdx);
+                bool shouldExist = dkBitGet(exists, keyIdx);
                 if (found != shouldExist) {
                     ERR("FUZZ FAIL: Lookup mismatch for key %zu! found=%d "
                         "should=%d",
@@ -6938,14 +6935,14 @@ int multimapTest(int, char *[]) {
                 lookupOps++;
             } else {
                 /* Delete (20%) */
-                if (BIT_GET(exists, keyIdx)) {
+                if (dkBitGet(exists, keyIdx)) {
                     bool deleted = multimapDelete(&m, &key);
                     if (!deleted) {
                         ERR("FUZZ FAIL: Delete of existing key %zu failed!",
                             keyIdx);
                         assert(false);
                     }
-                    BIT_CLR(exists, keyIdx);
+                    dkBitClear(exists, keyIdx);
                     existCount--;
                 }
                 deleteOps++;
@@ -6960,10 +6957,6 @@ int multimapTest(int, char *[]) {
                 }
             }
         }
-
-#undef BIT_SET
-#undef BIT_CLR
-#undef BIT_GET
 
         printf("    type=%d count=%zu ops(I/D/L)=%d/%d/%d: OK\n",
                multimapType_(m), existCount, insertOps, deleteOps, lookupOps);
