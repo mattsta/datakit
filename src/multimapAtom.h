@@ -125,6 +125,25 @@ bool multimapAtomDeleteById(multimapAtom *ma, const uint64_t id);
 size_t multimapAtomCount(const multimapAtom *ma);
 size_t multimapAtomBytes(const multimapAtom *ma);
 
+/* What sharing values through the table costs and saves.  Sizes are bytes
+ * as flex entries store them: a value's or an id's entry is what it adds
+ * to a flex.  'savedBytes' is inlineBytes - (tableBytes + referenceBytes):
+ * positive when the table holds its values for less than the references
+ * would take holding each value themselves, negative when it costs more
+ * (few references per value, or values about as small as an id). */
+typedef struct multimapAtomStats {
+    uint64_t atoms;          /* values in the table */
+    uint64_t references;     /* references held; one per atom when permanent */
+    uint64_t valueBytes;     /* each value's entry, once */
+    uint64_t tableBytes;     /* the table's maps (multimapAtomBytes) */
+    uint64_t inlineBytes;    /* each reference holding its value's entry */
+    uint64_t referenceBytes; /* each reference holding its id's entry */
+    int64_t savedBytes;      /* inlineBytes - (tableBytes + referenceBytes) */
+} multimapAtomStats;
+
+/* Fill 'stats' for 'ma': one pass over the atoms */
+void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats);
+
 #ifdef DATAKIT_TEST
 void multimapAtomRepr(const multimapAtom *ma);
 int multimapAtomTest(int argc, char *argv[]);

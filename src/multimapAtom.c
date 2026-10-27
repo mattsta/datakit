@@ -633,6 +633,47 @@ static bool atomPersistCountOf_(const databox *box, uint64_t *count) {
     }
 }
 
+/* The bytes 'box' adds to a flex as one exact entry */
+static uint64_t atomEntryBytes_(const databox *box) {
+    const databox *one[1] = {box};
+    return flexEncodeDataboxPtrsExact(nullptr, 0, one, 1) - FLEX_EMPTY_SIZE;
+}
+
+void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats) {
+    *stats = (multimapAtomStats){.tableBytes = multimapAtomBytes(ma)};
+    const bool permanent = multimapAtomIsPermanent(ma);
+
+    multimapIterator iter;
+    multimapIteratorInit(ma->mapAtomForward, &iter, true);
+    while (true) {
+        /* Zeroed: a narrow decode leaves the flag bits as they were */
+        databox id = {};
+        databox value = {};
+        databox count = {};
+        databox *row[3] = {&id, &value, &count};
+        databoxWide wide[3];
+        if (!multimapIteratorNextWithSlots(&iter, row, wide)) {
+            break;
+        }
+
+        uint64_t stored = 0;
+        atomPersistCountOf_(&count, &stored);
+        const uint64_t refs = permanent ? 1 : stored + 1;
+        const databox ref = {.data.u = id.data.u,
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        const uint64_t valueEntry = atomEntryBytes_(&value);
+
+        stats->atoms++;
+        stats->references += refs;
+        stats->valueBytes += valueEntry;
+        stats->inlineBytes += refs * valueEntry;
+        stats->referenceBytes += refs * atomEntryBytes_(&ref);
+    }
+
+    stats->savedBytes = (int64_t)stats->inlineBytes -
+                        (int64_t)(stats->tableBytes + stats->referenceBytes);
+}
+
 static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
                                              size_t *len) {
     const multimapAtom *ma = structure;
@@ -969,6 +1010,15 @@ static bool atomTestResolvesTo(const multimapAtom *ma, const databox *ref,
 static bool atomTestIsCleanRef(const databox *box, const uint64_t id) {
     return box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
            box->data.u == id && !box->big && !box->allocated;
+}
+
+defcleaner(flex *, flexFree);
+
+/* The bytes 'box' adds to a flex, measured by pushing it onto one */
+static uint64_t atomTestPushedBytes_(const databox *box) {
+    cleaner(flexFree) flex *f = flexNew();
+    flexPushByTypeExact(&f, box, FLEX_ENDPOINT_TAIL);
+    return flexBytes(f) - FLEX_EMPTY_SIZE;
 }
 
 /* The key of test atom 'i', written into 'buf' */
@@ -2788,6 +2838,73 @@ int multimapAtomTest(int, char *[]) {
             }
         }
 
+        multimapAtomFree(ma);
+    }
+
+    TEST("GetStats: references, entry bytes and the net saving") {
+        /* A 48-byte value held 5 times and a 1-byte value held once.  The
+         * oracle sizes each entry by pushing it onto a real flex, not
+         * through the encoder the report uses */
+        multimapAtom *ma = multimapAtomNew();
+        const char *longValue =
+            "a value long enough that sharing it pays off!!!!";
+        databox big = databoxNewBytesString(longValue);
+        databox tiny = databoxNewBytesString("x");
+        databox bigRef = big;
+        databox tinyRef = tiny;
+        multimapAtomInsertIfNewConvert(ma, &bigRef);
+        multimapAtomInsertIfNewConvert(ma, &tinyRef);
+        for (int r = 0; r < 4; r++) {
+            multimapAtomRetainById(ma, bigRef.data.u);
+        }
+
+        const uint64_t bigEntry = atomTestPushedBytes_(&big);
+        const uint64_t tinyEntry = atomTestPushedBytes_(&tiny);
+        const uint64_t bigRefEntry = atomTestPushedBytes_(&bigRef);
+        const uint64_t tinyRefEntry = atomTestPushedBytes_(&tinyRef);
+
+        multimapAtomStats s;
+        multimapAtomGetStats(ma, &s);
+        const uint64_t inlineWant = 5 * bigEntry + tinyEntry;
+        const uint64_t refWant = 5 * bigRefEntry + tinyRefEntry;
+        if (s.atoms != 2 || s.references != 6 ||
+            s.valueBytes != bigEntry + tinyEntry ||
+            s.tableBytes != multimapAtomBytes(ma) ||
+            s.inlineBytes != inlineWant || s.referenceBytes != refWant ||
+            s.savedBytes !=
+                (int64_t)inlineWant - (int64_t)(s.tableBytes + refWant)) {
+            ERR("stats: %" PRIu64 " atoms, %" PRIu64 " refs, values %" PRIu64
+                ", inline %" PRIu64 " (want %" PRIu64 "), refs %" PRIu64
+                " (want %" PRIu64 "), saved %" PRId64,
+                s.atoms, s.references, s.valueBytes, s.inlineBytes, inlineWant,
+                s.referenceBytes, refWant, s.savedBytes);
+        }
+
+        /* A lone 1-byte value costs more shared than inline */
+        multimapAtom *lone = multimapAtomNew();
+        databox x = databoxNewBytesString("x");
+        multimapAtomInsertIfNewConvert(lone, &x);
+        multimapAtomStats ls;
+        multimapAtomGetStats(lone, &ls);
+        if (ls.atoms != 1 || ls.references != 1 || ls.savedBytes >= 0) {
+            ERR("a lone tiny value reported a saving of %" PRId64,
+                ls.savedBytes);
+        }
+
+        /* A permanent table counts one reference per atom */
+        multimapAtom *perm = multimapAtomNewPermanent();
+        databox p = databoxNewBytesString(longValue);
+        multimapAtomInsertIfNewConvert(perm, &p);
+        multimapAtomRetainById(perm, p.data.u);
+        multimapAtomStats ps;
+        multimapAtomGetStats(perm, &ps);
+        if (ps.atoms != 1 || ps.references != 1) {
+            ERR("a permanent table counted %" PRIu64 " references",
+                ps.references);
+        }
+
+        multimapAtomFree(perm);
+        multimapAtomFree(lone);
         multimapAtomFree(ma);
     }
 

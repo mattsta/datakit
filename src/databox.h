@@ -580,6 +580,15 @@ int databoxCompare(const databox *a, const databox *b);
  * Aborts on a deferred 96/128-bit box (no payload). */
 bool databoxNumericHashKey(const databox *box, uint64_t *key);
 
+/* The bytes 'box' hashes by, so that boxes databoxCompare calls equal hash
+ * alike: a number by its databoxNumericHashKey key, written into
+ * '*scratch' (8 bytes), anything else by its own bytes (databoxGetBytes).
+ * '*buf' and '*len' are the span to hash.  False, with an empty span, for
+ * a box with no bytes: a deferred 96/128-bit box, or a type databoxGetBytes
+ * has no bytes for. */
+bool databoxHashBytes(const databox *box, uint64_t *scratch,
+                      const uint8_t **buf, size_t *len);
+
 /* Canonical numerals.
  *
  * datakit stores a byte string that spells a number as that number, in its

@@ -258,37 +258,14 @@ DK_INLINE_ALWAYS size_t mdBoxSize_(const databox *box) {
     return len;
 }
 
-/* The bytes a key hashes by.  A 96/128-bit key hashes by value: when it
- * fits 64 bits it hashes as the 64-bit box of the same value would (via
- * 'scratch'), so it finds the entry stored under its canonical form.
- * Returns false when the box has no bytes (*buf and *len are then a
- * zero-length span). */
-DK_INLINE_ALWAYS bool mdKeyHashBytes_(const databox *key, uint64_t *scratch,
-                                      uint8_t **buf, size_t *len) {
-    *buf = (uint8_t *)scratch;
-    *len = 0;
-
-    if (mdBoxIsWide_(key) && !key->data.ptr) {
-        return false; /* type-only: no value to hash */
-    }
-
-    /* A number hashes by its value, as the slots match it: 5, 5.0f, 5.0
-     * and a 128-bit 5 are one key (databoxNumericHashKey) */
-    if (databoxNumericHashKey(key, scratch)) {
-        *len = sizeof(*scratch);
-        return true;
-    }
-
-    return databoxGetBytes((databox *)key, buf, len);
-}
-
-/* Slot hash of 'keybox' */
+/* Slot hash of 'keybox': its databoxHashBytes, so the slots match keys as
+ * databoxCompare does (5, 5.0f, 5.0 and a 128-bit 5 are one key) */
 DK_INLINE_ALWAYS uint32_t multidictHashOfKey_(multidict *d,
                                               const databox *keybox) {
     uint64_t scratch;
-    uint8_t *key;
+    const uint8_t *key;
     size_t klen;
-    mdKeyHashBytes_(keybox, &scratch, &key, &klen);
+    databoxHashBytes(keybox, &scratch, &key, &klen);
     return multidictHashKey(d, key, klen);
 }
 

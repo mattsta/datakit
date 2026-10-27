@@ -1022,6 +1022,32 @@ bool databoxNumericHashKey(const databox *box, uint64_t *key) {
     return true;
 }
 
+bool databoxHashBytes(const databox *box, uint64_t *scratch,
+                      const uint8_t **buf, size_t *len) {
+    *buf = (const uint8_t *)scratch;
+    *len = 0;
+
+    if (databoxIsWideDeferred(box)) {
+        return false; /* type-only: no value to hash */
+    }
+
+    /* A number hashes by its value: 5, 5.0f, 5.0 and a 128-bit 5 are one
+     * key */
+    if (databoxNumericHashKey(box, scratch)) {
+        *len = sizeof(*scratch);
+        return true;
+    }
+
+    uint8_t *bytes;
+    if (!databoxGetBytes((databox *)box, &bytes, len)) {
+        *len = 0;
+        return false;
+    }
+
+    *buf = bytes;
+    return true;
+}
+
 /* Integer numerals beyond 64 bits are 20 to 40 bytes long: 2^64 has 20
  * digits, and INT128_MIN is a '-' and 39 digits. */
 static constexpr int DATABOX_CANONICAL_WIDE_MIN_LEN = 20;
@@ -4037,6 +4063,51 @@ int databoxTest(int, char *[]) {
                 key != UINT64_C(0xA5A5A5A5A5A5A5A5)) {
                 ERR("type %d got a numeric hash key", (int)notNumbers[i].type);
             }
+        }
+
+        /* databoxHashBytes: compare-equal numbers hash the same span */
+        for (size_t i = 0; i < n; i++) {
+            for (size_t j = 0; j < n; j++) {
+                if (got[i][j] != 0) {
+                    continue;
+                }
+
+                uint64_t si = 0;
+                uint64_t sj = 0;
+                const uint8_t *bi;
+                const uint8_t *bj;
+                size_t li;
+                size_t lj;
+                if (!databoxHashBytes((const databox *)&corpus[i], &si, &bi,
+                                      &li) ||
+                    !databoxHashBytes((const databox *)&corpus[j], &sj, &bj,
+                                      &lj) ||
+                    li != lj || memcmp(bi, bj, li) != 0) {
+                    ERR("%s hashes apart from an equal value",
+                        databoxReprStr((const databox *)&corpus[i]));
+                }
+            }
+        }
+
+        /* Bytes hash as their own bytes, embedded or not; a deferred wide
+         * box has nothing to hash */
+        const databox heap = databoxNewBytesString("hi");
+        const databox embedded = databoxNewBytesAllowEmbed("hi", 2);
+        uint64_t scratch = 0;
+        const uint8_t *span;
+        size_t spanLen;
+        if (!databoxHashBytes(&heap, &scratch, &span, &spanLen) ||
+            spanLen != 2 || memcmp(span, "hi", 2) != 0 ||
+            !databoxHashBytes(&embedded, &scratch, &span, &spanLen) ||
+            spanLen != 2 || memcmp(span, "hi", 2) != 0) {
+            ERR("a bytes value does not hash as its own bytes");
+        }
+
+        const databox deferred = {.type = DATABOX_UNSIGNED_128,
+                                  .data.ptr = nullptr};
+        if (databoxHashBytes(&deferred, &scratch, &span, &spanLen) ||
+            spanLen != 0) {
+            ERR("a deferred wide box had bytes to hash");
         }
 
         if (equalPairs < 40) {
