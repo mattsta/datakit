@@ -89,6 +89,16 @@ static inline uint32_t dkXorshift32Next(uint32_t *state) {
     return *state;
 }
 
+/* Vigna's splitmix64: advance '*state' by the golden-ratio step and return
+ * the mixed value; any seed, zero included.  str.h's splitmix64() is this
+ * stream as an exported function. */
+static inline uint64_t dkSplitmix64Next(uint64_t *state) {
+    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
+    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+}
+
 #ifdef DATAKIT_TEST
 int dkRandomTest(int argc, char *argv[]);
 #endif

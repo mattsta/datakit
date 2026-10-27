@@ -380,13 +380,6 @@ const persistOps persistOpsMultimapAtomDense = {
 #include "multimap.h" /* multimapTestAllocCountBegin/End */
 #include <inttypes.h>
 
-static uint64_t denseTestRand_(uint64_t *s) {
-    uint64_t z = (*s += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 static constexpr int DENSE_TEST_IDS_ = 2048;
 
 /* The oracle: which ids are live, the value each holds and its
@@ -414,7 +407,7 @@ static uint64_t denseOraclePick_(const denseOracle_ *o, uint64_t *rng) {
         return DENSE_TEST_IDS_;
     }
 
-    uint64_t id = denseTestRand_(rng) % DENSE_TEST_IDS_;
+    uint64_t id = dkSplitmix64Next(rng) % DENSE_TEST_IDS_;
     while (!o->live[id]) {
         id = (id + 1) % DENSE_TEST_IDS_;
     }
@@ -447,7 +440,7 @@ static int denseSoak_(const uint64_t seed, const size_t ops) {
     int64_t nextValue = 1;
     multimapAtomDense *d = multimapAtomDenseNew();
     for (size_t op = 0; op < ops && !err; op++) {
-        const uint64_t r = denseTestRand_(&rng) % 100;
+        const uint64_t r = dkSplitmix64Next(&rng) % 100;
         const uint64_t pick = denseOraclePick_(&o, &rng);
         char buf[32];
         if (r < 40 || pick == DENSE_TEST_IDS_) {

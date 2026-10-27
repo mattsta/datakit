@@ -17,20 +17,12 @@ defcleaner(void *, zfree);
 defcleaner(multiFenwick2d *, multiFenwick2dFree);
 defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
 
-/* splitmix64 */
-static uint64_t mf2tRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 static constexpr int MF2T_DIM = 300;
 
 static size_t mf2tIndex_(uint64_t *s) {
-    return mf2tRand_(s) % 64 == 0
-               ? 40 + (size_t)(mf2tRand_(s) % (MF2T_DIM - 40))
-               : (size_t)(mf2tRand_(s) % 40);
+    return dkSplitmix64Next(s) % 64 == 0
+               ? 40 + (size_t)(dkSplitmix64Next(s) % (MF2T_DIM - 40))
+               : (size_t)(dkSplitmix64Next(s) % 40);
 }
 
 /* The integer value of 'box' (SIGNED_64 or UNSIGNED_64) into *v */
@@ -86,11 +78,11 @@ static int mf2tDiff_(uint64_t seed, bool mixed) {
     for (size_t op = 0; op < 1500 && !err; op++) {
         const size_t r = mf2tIndex_(&seed);
         const size_t c = mf2tIndex_(&seed);
-        const int64_t iv = (int64_t)(mf2tRand_(&seed) % 2001) - 1000;
-        const bool asDouble = mixed && mf2tRand_(&seed) % 3 == 0;
+        const int64_t iv = (int64_t)(dkSplitmix64Next(&seed) % 2001) - 1000;
+        const bool asDouble = mixed && dkSplitmix64Next(&seed) % 3 == 0;
         const double dv = (double)iv / 4.0;
         const databox v = asDouble ? DATABOX_DOUBLE(dv) : DATABOX_SIGNED(iv);
-        const bool set = mf2tRand_(&seed) % 4 == 0;
+        const bool set = dkSplitmix64Next(&seed) % 4 == 0;
         const bool ok = set ? multiFenwick2dSet(&t, r, c, &v)
                             : multiFenwick2dUpdate(&t, r, c, &v);
         if (!ok) {
@@ -112,8 +104,8 @@ static int mf2tDiff_(uint64_t seed, bool mixed) {
         const bool whole = op % 128 == 127;
         const size_t r1 = whole ? 0 : mf2tIndex_(&seed);
         const size_t c1 = whole ? 0 : mf2tIndex_(&seed);
-        const size_t r2 = whole ? MF2T_DIM : r1 + mf2tRand_(&seed) % 40;
-        const size_t c2 = whole ? MF2T_DIM : c1 + mf2tRand_(&seed) % 40;
+        const size_t r2 = whole ? MF2T_DIM : r1 + dkSplitmix64Next(&seed) % 40;
+        const size_t c2 = whole ? MF2T_DIM : c1 + dkSplitmix64Next(&seed) % 40;
         double sum = 0;
         __int128_t isum = 0;
         for (size_t i = r1; i <= r2 && i < MF2T_DIM; i++) {
@@ -177,16 +169,17 @@ int multiFenwick2dTest(int, char *[]) {
         cleaner(multiFenwick2dFree) multiFenwick2d *t = nullptr;
         cleaner(multiFenwickFlatFree) multiFenwickFlat *f = nullptr;
         for (size_t op = 0; op < 2000 && !err; op++) {
-            const size_t r = (size_t)(mf2tRand_(&seed) % 500);
+            const size_t r = (size_t)(dkSplitmix64Next(&seed) % 500);
             const databox v =
-                mf2tRand_(&seed) % 2
-                    ? DATABOX_SIGNED((int64_t)(mf2tRand_(&seed) % 99) - 49)
-                    : DATABOX_UNSIGNED(mf2tRand_(&seed) >> 8);
+                dkSplitmix64Next(&seed) % 2
+                    ? DATABOX_SIGNED((int64_t)(dkSplitmix64Next(&seed) % 99) -
+                                     49)
+                    : DATABOX_UNSIGNED(dkSplitmix64Next(&seed) >> 8);
             const bool a = multiFenwick2dUpdate(&t, r, 0, &v);
             const bool b = multiFenwickFlatUpdate(&f, r, &v);
             databox x;
             databox y;
-            const size_t q = (size_t)(mf2tRand_(&seed) % 500);
+            const size_t q = (size_t)(dkSplitmix64Next(&seed) % 500);
             const bool qa = multiFenwick2dQuery(t, q, 0, &x);
             const bool qb = q < multiFenwickFlatCount(f)
                                 ? multiFenwickFlatQuery(f, q, &y)

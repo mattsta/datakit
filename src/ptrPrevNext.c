@@ -447,19 +447,11 @@ void ptrPrevNextRepr(ptrPrevNext *ppn) {
 
 #include "ctest.h"
 
-/* splitmix64 */
-static uint64_t ppnSoakRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 /* A value from every encoding class: zero, 14-bit, 22-bit, 30-bit and
  * the variable-width class up to SIZE_MAX. */
 static size_t ppnSoakValue_(uint64_t *s) {
-    const uint64_t r = ppnSoakRand_(s);
-    switch (ppnSoakRand_(s) % 6) {
+    const uint64_t r = dkSplitmix64Next(s);
+    switch (dkSplitmix64Next(s) % 6) {
     case 0:
         return 0;
     case 1:
@@ -663,7 +655,7 @@ int ptrPrevNextTest(int, char *[]) {
             ptrPrevNext *ppn = ptrPrevNextNew();
             ppnSoakEntry e[SLOTS] = {};
             for (size_t op = 0; op < OPS && !err; op++) {
-                ppnSoakEntry *const pick = &e[ppnSoakRand_(&s) % SLOTS];
+                ppnSoakEntry *const pick = &e[dkSplitmix64Next(&s) % SLOTS];
                 const size_t b = ppnSoakValue_(&s);
                 const size_t c = ppnSoakValue_(&s);
                 if (!pick->live) {
@@ -673,7 +665,7 @@ int ptrPrevNextTest(int, char *[]) {
                     pick->vals[0] = a;
                     pick->vals[1] = b;
                     pick->vals[2] = c;
-                } else if (ppnSoakRand_(&s) % 3 != 0) {
+                } else if (dkSplitmix64Next(&s) % 3 != 0) {
                     pick->ptr = ptrPrevNextUpdate(ppn, pick->ptr, b, c);
                     pick->vals[1] = b;
                     pick->vals[2] = c;
@@ -747,7 +739,7 @@ int ptrPrevNextTest(int, char *[]) {
             }
 
             for (size_t e = ENTRIES; e > 1; e--) {
-                const size_t k = (size_t)(ppnSoakRand_(&s) % e);
+                const size_t k = (size_t)(dkSplitmix64Next(&s) % e);
                 ptrPrevNextRelease(ppn, ptrs[k]);
                 ptrs[k] = ptrs[e - 1];
                 memcpy(vals[k], vals[e - 1], sizeof(vals[k]));

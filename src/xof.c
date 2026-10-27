@@ -374,14 +374,6 @@ static void xofTestWriterFree_cleanup(xofWriter *w) {
     zfree(w->d);
 }
 
-static uint64_t xofTestRand(uint64_t *state) {
-    /* splitmix64 */
-    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
-
 /* Write 'bits' (as doubles) through a writer that starts from NULL
  * (initialBytes 0) or a small zeroed preallocation, then read every value
  * back through every read path: xofReader (Next and NextN), xofGet() and
@@ -1087,7 +1079,7 @@ int xofTest(int, char *[]) {
         /* Random bit patterns: mostly NEW entries, up to 78 bits each */
         uint64_t rng = 0x452821e638d01377ULL;
         for (size_t i = 0; i < n; i++) {
-            bits[i] = xofTestRand(&rng);
+            bits[i] = dkSplitmix64Next(&rng);
         }
 
         err += xofCheckGrownWriter("random from NULL", bits, n, 0);

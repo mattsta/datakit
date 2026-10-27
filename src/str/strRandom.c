@@ -1,6 +1,7 @@
 #include "../str.h"
 
-#include "../dkC23.h" /* stdc_rotate_left */
+#include "../dkC23.h"    /* stdc_rotate_left */
+#include "../dkRandom.h" /* dkSplitmix64Next */
 
 /* ====================================================================
  * Randos
@@ -15,10 +16,7 @@
  * xorshift1024* (for massively parallel computations) generator. */
 
 uint64_t splitmix64(uint64_t *x) {
-    uint64_t z = (*x += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
+    return dkSplitmix64Next(x);
 }
 
 /*  Written in 2016 by David Blackman and Sebastiano Vigna (vigna@acm.org)

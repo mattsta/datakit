@@ -25,6 +25,7 @@
 #include "cleaner.h"
 #include "databox.h"
 #include "datakit.h"
+#include "dkRandom.h" /* dkSplitmix64Next */
 #include "dod.h"
 #include "flex.h"
 #include "float16.h"
@@ -682,11 +683,7 @@ static void benchMflexFootprint(const char *name, mflexBenchPattern pattern,
             mflexPushSigned(&m, state, (int64_t)i, FLEX_ENDPOINT_TAIL);
             break;
         case MFLEX_RANDOM: {
-            /* splitmix64 */
-            uint64_t z = (rng += 0x9e3779b97f4a7c15ULL);
-            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-            mflexPushSigned(&m, state, (int64_t)(z ^ (z >> 31)),
+            mflexPushSigned(&m, state, (int64_t)dkSplitmix64Next(&rng),
                             FLEX_ENDPOINT_TAIL);
             break;
         }

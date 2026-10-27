@@ -4999,26 +4999,16 @@ static int dkTestX25519SmallOrderRejectTest(int, char *[]) {
 /* ChaCha20 SIMD parity — backend-pinned RFC vectors + 1000 random
  * sizes 0..16384 + streaming bulk path + envelope round-trip. */
 static int a6FillPRNG(uint8_t *buf, size_t n, uint64_t *state) {
-    uint64_t s = *state;
     while (n >= 8) {
-        s += 0x9E3779B97F4A7C15ull;
-        uint64_t z = s;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-        z = z ^ (z >> 31);
+        const uint64_t z = dkSplitmix64Next(state);
         memcpy(buf, &z, 8);
         buf += 8;
         n -= 8;
     }
     if (n > 0) {
-        s += 0x9E3779B97F4A7C15ull;
-        uint64_t z = s;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-        z = z ^ (z >> 31);
+        const uint64_t z = dkSplitmix64Next(state);
         memcpy(buf, &z, n);
     }
-    *state = s;
     return 0;
 }
 
@@ -5529,13 +5519,6 @@ static void a12Sha256HashWith(a12Sha256Compressor compress, const uint8_t *data,
     }
 }
 
-static uint64_t a12Sha256SplitMix(uint64_t *st) {
-    uint64_t s = (*st += 0x9E3779B97F4A7C15ULL);
-    s = (s ^ (s >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    s = (s ^ (s >> 27)) * 0x94D049BB133111EBULL;
-    return s ^ (s >> 31);
-}
-
 static int dkTestSha256AllBackendParityTest(int, char *[]) {
     int failures = 0;
     const bool armOk = sha256ArmCryptoAvailable();
@@ -5547,9 +5530,9 @@ static int dkTestSha256AllBackendParityTest(int, char *[]) {
     }
     uint64_t rng = 0xA12DEADBEEFCAFEFULL;
     for (uint32_t it = 0; it < N_ITERS; it++) {
-        size_t len = (size_t)(a12Sha256SplitMix(&rng) % (MAX_SZ + 1));
+        size_t len = (size_t)(dkSplitmix64Next(&rng) % (MAX_SZ + 1));
         for (size_t off = 0; off < len; off += 8) {
-            uint64_t r = a12Sha256SplitMix(&rng);
+            uint64_t r = dkSplitmix64Next(&rng);
             size_t chunk = (len - off >= 8) ? 8 : (len - off);
             memcpy(buf + off, &r, chunk);
         }
@@ -7888,13 +7871,6 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
  * accepted. Also exercises validate hook + corruption rejection paths.
  * ============================================================================
  */
-static uint64_t d1Splitmix64(uint64_t *state) {
-    uint64_t z = (*state += 0x9E3779B97F4A7C15ull);
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    return z ^ (z >> 31);
-}
-
 static void d1NonceFromValue(uint64_t lo, uint32_t hi, uint8_t out[12]) {
     memcpy(out, &lo, 8);
     memcpy(out + 8, &hi, 4);
@@ -7934,8 +7910,8 @@ static int dkTestNonceLogPersistRoundTripTest(int, char *[]) {
     uint32_t key_ids[1000];
     for (size_t i = 0; i < kTotal; i++) {
         const uint32_t kid = kKeys[i % kKeyCount];
-        const uint64_t lo = d1Splitmix64(&seed);
-        const uint32_t hi = (uint32_t)(d1Splitmix64(&seed) & 0xFFFFFFFFu);
+        const uint64_t lo = dkSplitmix64Next(&seed);
+        const uint32_t hi = (uint32_t)(dkSplitmix64Next(&seed) & 0xFFFFFFFFu);
         d1NonceFromValue(lo, hi, nonces[i]);
         key_ids[i] = kid;
         if (!aeadNonceLogObserve(src, kid, nonces[i])) {

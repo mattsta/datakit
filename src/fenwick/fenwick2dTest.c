@@ -13,21 +13,14 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
 
-/* splitmix64 */
-static uint64_t f2tRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 /* The oracle grid, row-major */
 static constexpr int F2T_DIM = 400;
 
 /* An index: mostly inside a 48-square, sometimes far out (growth) */
 static size_t f2tIndex_(uint64_t *s) {
-    return f2tRand_(s) % 64 == 0 ? 48 + (size_t)(f2tRand_(s) % (F2T_DIM - 48))
-                                 : (size_t)(f2tRand_(s) % 48);
+    return dkSplitmix64Next(s) % 64 == 0
+               ? 48 + (size_t)(dkSplitmix64Next(s) % (F2T_DIM - 48))
+               : (size_t)(dkSplitmix64Next(s) % 48);
 }
 
 /* Differential run for one type.  Integer prefix sums are taken in the
@@ -46,15 +39,15 @@ static size_t f2tIndex_(uint64_t *s) {
         for (size_t op = 0; op < 1500 && !err; op++) {                         \
             const size_t r = f2tIndex_(&seed);                                 \
             const size_t c = f2tIndex_(&seed);                                 \
-            VT v = (VT)((int64_t)(f2tRand_(&seed) % 41) - 20);                 \
+            VT v = (VT)((int64_t)(dkSplitmix64Next(&seed) % 41) - 20);         \
             if ((VT) - 1 > 0) {                                                \
-                v = (VT)(f2tRand_(&seed) % 21);                                \
+                v = (VT)(dkSplitmix64Next(&seed) % 21);                        \
             }                                                                  \
-            if (!(IS_FLOAT) && f2tRand_(&seed) % 16 == 0) {                    \
-                v = f2tRand_(&seed) % 2 ? (VT)(VMAX) : (VT)(VMIN);             \
+            if (!(IS_FLOAT) && dkSplitmix64Next(&seed) % 16 == 0) {            \
+                v = dkSplitmix64Next(&seed) % 2 ? (VT)(VMAX) : (VT)(VMIN);     \
             }                                                                  \
             VT *cell = &grid[r * F2T_DIM + c];                                 \
-            if (f2tRand_(&seed) % 4 == 0) {                                    \
+            if (dkSplitmix64Next(&seed) % 4 == 0) {                            \
                 if (!fenwick2d##T##Set(&t, r, c, v)) {                         \
                     ERR(#T " op %zu: Set(%zu, %zu) refused", op, r, c);        \
                 }                                                              \
@@ -85,8 +78,10 @@ static size_t f2tIndex_(uint64_t *s) {
             const bool whole = op % 128 == 127;                                \
             const size_t r1 = whole ? 0 : f2tIndex_(&seed);                    \
             const size_t c1 = whole ? 0 : f2tIndex_(&seed);                    \
-            const size_t r2 = whole ? F2T_DIM : r1 + f2tRand_(&seed) % 40;     \
-            const size_t c2 = whole ? F2T_DIM : c1 + f2tRand_(&seed) % 40;     \
+            const size_t r2 =                                                  \
+                whole ? F2T_DIM : r1 + dkSplitmix64Next(&seed) % 40;           \
+            const size_t c2 =                                                  \
+                whole ? F2T_DIM : c1 + dkSplitmix64Next(&seed) % 40;           \
             UT sum = 0;                                                        \
             VT fsum = 0;                                                       \
             for (size_t i = r1; i <= r2 && i < F2T_DIM; i++) {                 \
@@ -197,7 +192,7 @@ static size_t f2tIndex_(uint64_t *s) {
             VT *copied = bufB;                                                 \
             fenwick2d##T *bySet = nullptr;                                     \
             for (size_t i = 0; i < n; i++) {                                   \
-                const uint64_t r = f2tRand_(&seed);                            \
+                const uint64_t r = dkSplitmix64Next(&seed);                    \
                 values[i] = IS_FLOAT ? (VT)((int64_t)(r % 21) - 10) : (VT)r;   \
                 (void)fenwick2d##T##Set(&bySet, i / cols, i % cols,            \
                                         values[i]);                            \

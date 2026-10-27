@@ -223,6 +223,20 @@ int dkRandomTest(int, char *[]) {
         }
     }
 
+    TEST("dkSplitmix64Next replays Vigna's splitmix64") {
+        /* From 0, the reference generator's first two outputs; the state
+         * advances by the golden-ratio step each time */
+        uint64_t state = 0;
+        const uint64_t first = dkSplitmix64Next(&state);
+        const uint64_t second = dkSplitmix64Next(&state);
+        if (first != UINT64_C(16294208416658607535) ||
+            second != UINT64_C(7960286522194355700) ||
+            state != 2 * UINT64_C(0x9E3779B97F4A7C15)) {
+            ERR("from 0: %" PRIu64 ", %" PRIu64 ", state %" PRIu64, first,
+                second, state);
+        }
+    }
+
     TEST("dkLcg64Next replays the MMIX LCG") {
         /* From 0 the first value is the increment; then each step matches
          * the recurrence computed in 128 bits and reduced mod 2^64 */

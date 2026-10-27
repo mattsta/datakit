@@ -56,13 +56,6 @@ defcleaner(void *, zfree);
 static constexpr int BENCH_MAX_OPS = 200'000;
 #define BENCH_BUDGET_NS 40000000.0 /* 40 ms per table cell */
 
-static uint64_t benchRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 /* Run 'body' (using 'seed') until the budget or the op cap; set 'nsPerOp' */
 #define BENCH_TIMED(nsPerOp, body)                                             \
     do {                                                                       \
@@ -142,18 +135,19 @@ static void benchPrint_(const char *name, size_t n, const benchRow *r) {
             fenwick##T##Update(&fw, i, (VT)(i % 7));                           \
         }                                                                      \
         r.build = ((double)timeUtilMonotonicNs() - t0) / (double)n;            \
-        BENCH_TIMED(r.update,                                                  \
-                    fenwick##T##Update(&fw, benchRand_(&seed) % n, (VT)1));    \
-        BENCH_TIMED(r.query,                                                   \
-                    BENCH_SINK(fenwick##T##Query(fw, benchRand_(&seed) % n))); \
-        BENCH_TIMED(r.get,                                                     \
-                    BENCH_SINK(fenwick##T##Get(fw, benchRand_(&seed) % n)));   \
+        BENCH_TIMED(r.update, fenwick##T##Update(                              \
+                                  &fw, dkSplitmix64Next(&seed) % n, (VT)1));   \
+        BENCH_TIMED(r.query, BENCH_SINK(fenwick##T##Query(                     \
+                                 fw, dkSplitmix64Next(&seed) % n)));           \
+        BENCH_TIMED(r.get, BENCH_SINK(fenwick##T##Get(                         \
+                               fw, dkSplitmix64Next(&seed) % n)));             \
         BENCH_TIMED(r.range, {                                                 \
-            const size_t a = benchRand_(&seed) % n;                            \
+            const size_t a = dkSplitmix64Next(&seed) % n;                      \
             BENCH_SINK(fenwick##T##RangeQuery(fw, a / 2, a));                  \
         });                                                                    \
-        BENCH_TIMED(r.lower, benchCheck_ += fenwick##T##LowerBound(            \
-                                 fw, (VT)(benchRand_(&seed) % (3 * n))));      \
+        BENCH_TIMED(r.lower,                                                   \
+                    benchCheck_ += fenwick##T##LowerBound(                     \
+                        fw, (VT)(dkSplitmix64Next(&seed) % (3 * n))));         \
         r.bytesPerElem = (double)fenwick##T##Bytes(fw) / (double)n;            \
         fenwick##T##Free(fw);                                                  \
         return r;                                                              \
@@ -190,26 +184,26 @@ BENCH_TYPED(I128, __int128_t)
         databox out;                                                           \
         uint64_t acc = 0;                                                      \
         BENCH_TIMED(r.update, {                                                \
-            const uint64_t k = benchRand_(&seed);                              \
+            const uint64_t k = dkSplitmix64Next(&seed);                        \
             T##Update(&fw, k % n,                                              \
                       doubleEvery && k % doubleEvery == 0 ? &half : &one);     \
         });                                                                    \
         BENCH_TIMED(r.query, {                                                 \
-            T##Query(fw, benchRand_(&seed) % n, &out);                         \
+            T##Query(fw, dkSplitmix64Next(&seed) % n, &out);                   \
             acc += out.data.u64;                                               \
         });                                                                    \
         BENCH_TIMED(r.get, {                                                   \
-            T##Get(fw, benchRand_(&seed) % n, &out);                           \
+            T##Get(fw, dkSplitmix64Next(&seed) % n, &out);                     \
             acc += out.data.u64;                                               \
         });                                                                    \
         BENCH_TIMED(r.range, {                                                 \
-            const size_t a = benchRand_(&seed) % n;                            \
+            const size_t a = dkSplitmix64Next(&seed) % n;                      \
             T##RangeQuery(fw, a / 2, a, &out);                                 \
             acc += out.data.u64;                                               \
         });                                                                    \
         BENCH_TIMED(r.lower, {                                                 \
             const databox target =                                             \
-                DATABOX_UNSIGNED(benchRand_(&seed) % (3 * n));                 \
+                DATABOX_UNSIGNED(dkSplitmix64Next(&seed) % (3 * n));           \
             acc += T##LowerBound(fw, &target);                                 \
         });                                                                    \
         r.bytesPerElem = (double)T##Bytes(fw) / (double)n;                     \
@@ -235,15 +229,15 @@ BENCH_MULTI(Flat, multiFenwickFlat)
         }                                                                      \
         r.build = ((double)timeUtilMonotonicNs() - t0) / (double)n;            \
         BENCH_TIMED(r.update, {                                                \
-            const size_t i = benchRand_(&seed) % n;                            \
+            const size_t i = dkSplitmix64Next(&seed) % n;                      \
             segment##T##Update(&seg, i, segment##T##Get(seg, i) + (VT)1);      \
         });                                                                    \
         BENCH_TIMED(r.query, BENCH_SINK(segment##T##Query(                     \
-                                 seg, 0, benchRand_(&seed) % n)));             \
-        BENCH_TIMED(r.get,                                                     \
-                    BENCH_SINK(segment##T##Get(seg, benchRand_(&seed) % n)));  \
+                                 seg, 0, dkSplitmix64Next(&seed) % n)));       \
+        BENCH_TIMED(r.get, BENCH_SINK(segment##T##Get(                         \
+                               seg, dkSplitmix64Next(&seed) % n)));            \
         BENCH_TIMED(r.range, {                                                 \
-            const size_t a = benchRand_(&seed) % n;                            \
+            const size_t a = dkSplitmix64Next(&seed) % n;                      \
             BENCH_SINK(segment##T##Query(seg, a / 2, a));                      \
         });                                                                    \
         r.lower = NAN;                                                         \
@@ -274,7 +268,7 @@ static benchRow benchGrowTypedI64(size_t n) {
     void *fw = nullptr;
     const double t0 = (double)timeUtilMonotonicNs();
     for (size_t i = 0; i < n; i++) {
-        fenwickI64Update(&fw, benchRand_(&seed) % n, 1);
+        fenwickI64Update(&fw, dkSplitmix64Next(&seed) % n, 1);
     }
     const benchRow r =
         benchGrowRow_(((double)timeUtilMonotonicNs() - t0) / (double)n,
@@ -290,7 +284,7 @@ static benchRow benchGrowTypedI64(size_t n) {
         const databox one = DATABOX_UNSIGNED(1);                               \
         const double t0 = (double)timeUtilMonotonicNs();                       \
         for (size_t i = 0; i < n; i++) {                                       \
-            T##Update(&fw, benchRand_(&seed) % n, &one);                       \
+            T##Update(&fw, dkSplitmix64Next(&seed) % n, &one);                 \
         }                                                                      \
         const benchRow r =                                                     \
             benchGrowRow_(((double)timeUtilMonotonicNs() - t0) / (double)n,    \
@@ -307,7 +301,7 @@ static benchRow benchGrowSegmentI64(size_t n) {
     void *seg = nullptr; /* a NULL tree becomes a SUM tree */
     const double t0 = (double)timeUtilMonotonicNs();
     for (size_t i = 0; i < n; i++) {
-        segmentI64Update(&seg, benchRand_(&seed) % n, 1);
+        segmentI64Update(&seg, dkSplitmix64Next(&seed) % n, 1);
     }
     const benchRow r =
         benchGrowRow_(((double)timeUtilMonotonicNs() - t0) / (double)n,
@@ -332,18 +326,18 @@ static benchRow benchGrowSegmentI64(size_t n) {
         }                                                                      \
         r.build =                                                              \
             ((double)timeUtilMonotonicNs() - t0) / (double)(side * side);      \
-        BENCH_TIMED(r.update,                                                  \
-                    fenwick2d##T##Update(&t, benchRand_(&seed) % side,         \
-                                         benchRand_(&seed) % side, (VT)1));    \
+        BENCH_TIMED(r.update, fenwick2d##T##Update(                            \
+                                  &t, dkSplitmix64Next(&seed) % side,          \
+                                  dkSplitmix64Next(&seed) % side, (VT)1));     \
         BENCH_TIMED(r.query, BENCH_SINK(fenwick2d##T##Query(                   \
-                                 t, benchRand_(&seed) % side,                  \
-                                 benchRand_(&seed) % side)));                  \
-        BENCH_TIMED(r.get,                                                     \
-                    BENCH_SINK(fenwick2d##T##Get(t, benchRand_(&seed) % side,  \
-                                                 benchRand_(&seed) % side)));  \
+                                 t, dkSplitmix64Next(&seed) % side,            \
+                                 dkSplitmix64Next(&seed) % side)));            \
+        BENCH_TIMED(r.get, BENCH_SINK(fenwick2d##T##Get(                       \
+                               t, dkSplitmix64Next(&seed) % side,              \
+                               dkSplitmix64Next(&seed) % side)));              \
         BENCH_TIMED(r.range, {                                                 \
-            const size_t a = benchRand_(&seed) % side;                         \
-            const size_t b = benchRand_(&seed) % side;                         \
+            const size_t a = dkSplitmix64Next(&seed) % side;                   \
+            const size_t b = dkSplitmix64Next(&seed) % side;                   \
             BENCH_SINK(fenwick2d##T##RangeQuery(t, a / 2, b / 2, a, b));       \
         });                                                                    \
         r.lower = NAN;                                                         \
@@ -376,21 +370,22 @@ static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
     const databox one = DATABOX_UNSIGNED(1);
     databox out;
     uint64_t acc = 0;
-    BENCH_TIMED(r.update, multiFenwick2dUpdate(&t, benchRand_(&seed) % side,
-                                               benchRand_(&seed) % side, &one));
+    BENCH_TIMED(r.update,
+                multiFenwick2dUpdate(&t, dkSplitmix64Next(&seed) % side,
+                                     dkSplitmix64Next(&seed) % side, &one));
     BENCH_TIMED(r.query, {
-        multiFenwick2dQuery(t, benchRand_(&seed) % side,
-                            benchRand_(&seed) % side, &out);
+        multiFenwick2dQuery(t, dkSplitmix64Next(&seed) % side,
+                            dkSplitmix64Next(&seed) % side, &out);
         acc += out.data.u64;
     });
     BENCH_TIMED(r.get, {
-        multiFenwick2dGet(t, benchRand_(&seed) % side, benchRand_(&seed) % side,
-                          &out);
+        multiFenwick2dGet(t, dkSplitmix64Next(&seed) % side,
+                          dkSplitmix64Next(&seed) % side, &out);
         acc += out.data.u64;
     });
     BENCH_TIMED(r.range, {
-        const size_t a = benchRand_(&seed) % side;
-        const size_t b = benchRand_(&seed) % side;
+        const size_t a = dkSplitmix64Next(&seed) % side;
+        const size_t b = dkSplitmix64Next(&seed) % side;
         multiFenwick2dRangeQuery(t, a / 2, b / 2, a, b, &out);
         acc += out.data.u64;
     });

@@ -1495,14 +1495,6 @@ static int dodCheckWriterStream(const char *what, const dodVal *vals,
     return err;
 }
 
-static uint64_t dodTestRand(uint64_t *state) {
-    /* splitmix64 */
-    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
-
 int dodTest(int, char *[]) {
     int err = 0;
     const size_t loopers = 10000;
@@ -1822,11 +1814,11 @@ int dodTest(int, char *[]) {
 
         for (size_t round = 0; round < 8; round++) {
             for (size_t i = 0; i < count; i++) {
-                const uint64_t pick = dodTestRand(&rng);
+                const uint64_t pick = dkSplitmix64Next(&rng);
                 const uint64_t prev = i ? (uint64_t)values[i - 1] : 0;
                 switch (pick % 5) {
                 case 0: /* any int64 */
-                    values[i] = (dodVal)dodTestRand(&rng);
+                    values[i] = (dodVal)dkSplitmix64Next(&rng);
                     break;
                 case 1: { /* an int64 end or its neighbour */
                     static const dodVal edge[] = {INT64_MIN, INT64_MIN + 1,
@@ -1841,7 +1833,7 @@ int dodTest(int, char *[]) {
                 case 3: { /* step of a random width, wrapping */
                     const uint32_t width = (uint32_t)((pick >> 8) % 64);
                     const uint64_t step =
-                        dodTestRand(&rng) & (~0ULL >> (63 - width));
+                        dkSplitmix64Next(&rng) & (~0ULL >> (63 - width));
                     values[i] =
                         (dodVal)((pick >> 16) & 1 ? prev + step : prev - step);
                     break;
@@ -1925,11 +1917,11 @@ int dodTest(int, char *[]) {
                 vals[0] = pairs[p].first;
                 vals[1] = pairs[p].second;
                 for (size_t i = 2; i < n; i++) {
-                    const uint64_t pick = dodTestRand(&rng);
+                    const uint64_t pick = dkSplitmix64Next(&rng);
                     const uint64_t prev = (uint64_t)vals[i - 1];
                     const uint64_t step = prev - (uint64_t)vals[i - 2];
                     /* Mostly regular steps, some jitter, some anything */
-                    vals[i] = pick % 4 == 0 ? (dodVal)dodTestRand(&rng)
+                    vals[i] = pick % 4 == 0 ? (dodVal)dkSplitmix64Next(&rng)
                               : pick % 4 == 1
                                   ? (dodVal)(prev + step + (pick >> 60))
                                   : (dodVal)(prev + step);
@@ -1960,7 +1952,7 @@ int dodTest(int, char *[]) {
         cleanerName(zfree, I64) dodVal *vals = zcalloc(n, sizeof(*vals));
         uint64_t rng = 0xa4093822299f31d0ULL;
         for (size_t i = 0; i < n; i++) {
-            vals[i] = (dodVal)dodTestRand(&rng);
+            vals[i] = (dodVal)dkSplitmix64Next(&rng);
         }
 
         err += dodCheckWriterStream("grown from 16 bytes", vals, n, -1, 16);

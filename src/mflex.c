@@ -789,11 +789,7 @@ int mflexTest(int, char *[]) {
             cleaner(mflexFree) mflex *m = mflexNew();
             uint64_t rng = 0x243f6a8885a308d3ULL + (uint64_t)pattern;
             for (int64_t i = 0; i < 4096; i++) {
-                /* splitmix64 */
-                uint64_t z = (rng += 0x9e3779b97f4a7c15ULL);
-                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-                z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-                z ^= z >> 31;
+                uint64_t z = dkSplitmix64Next(&rng);
                 if (pattern == 0) {
                     mflexPushSigned(&m, s, i, FLEX_ENDPOINT_TAIL);
                 } else if (pattern == 1) {

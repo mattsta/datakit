@@ -34,27 +34,19 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
 
-/* splitmix64 */
-static uint64_t sgtRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 /* Mostly small indexes; sometimes a jump past the end or across the
  * Small tier's limit */
 static size_t sgtIndex_(uint64_t *s) {
-    const uint64_t r = sgtRand_(s) % 128;
+    const uint64_t r = dkSplitmix64Next(s) % 128;
     if (r == 0) {
-        return 20000 + (size_t)(sgtRand_(s) % 64);
+        return 20000 + (size_t)(dkSplitmix64Next(s) % 64);
     }
 
     if (r < 4) {
-        return 1000 + (size_t)(sgtRand_(s) % 2000);
+        return 1000 + (size_t)(dkSplitmix64Next(s) % 2000);
     }
 
-    return (size_t)(sgtRand_(s) % 300);
+    return (size_t)(dkSplitmix64Next(s) % 300);
 }
 
 static constexpr int SGT_ELEMS = 21000;
@@ -78,23 +70,23 @@ static constexpr int SGT_OPS = 1500;
         for (size_t step = 0; step < SGT_OPS && !err; step++) {                \
             const size_t idx = sgtIndex_(&seed);                               \
             VT v;                                                              \
-            const uint64_t pick = sgtRand_(&seed) % 8;                         \
+            const uint64_t pick = dkSplitmix64Next(&seed) % 8;                 \
             if (IS_FLOAT || pick < 5) {                                        \
-                v = (VT)((int64_t)(sgtRand_(&seed) % 201) - 100);              \
+                v = (VT)((int64_t)(dkSplitmix64Next(&seed) % 201) - 100);      \
                 if ((VT) - 1 > 0) {                                            \
-                    v = (VT)(sgtRand_(&seed) % 101);                           \
+                    v = (VT)(dkSplitmix64Next(&seed) % 101);                   \
                 }                                                              \
             } else if (pick == 5) {                                            \
                 v = (VT)(VMAX);                                                \
             } else if (pick == 6) {                                            \
                 v = (VT)(VMIN);                                                \
             } else {                                                           \
-                v = (VT)sgtRand_(&seed);                                       \
+                v = (VT)dkSplitmix64Next(&seed);                               \
             }                                                                  \
                                                                                \
-            if (sgtRand_(&seed) % 8 == 0 && count > 0) {                       \
-                const size_t l = (size_t)(sgtRand_(&seed) % count);            \
-                const size_t r = l + (size_t)(sgtRand_(&seed) % 40);           \
+            if (dkSplitmix64Next(&seed) % 8 == 0 && count > 0) {               \
+                const size_t l = (size_t)(dkSplitmix64Next(&seed) % count);    \
+                const size_t r = l + (size_t)(dkSplitmix64Next(&seed) % 40);   \
                 segment##T##RangeUpdate(seg, l, r, v);                         \
                 for (size_t i = l; i <= r && i < count; i++) {                 \
                     elem[i] = v;                                               \
@@ -112,10 +104,11 @@ static constexpr int SGT_OPS = 1500;
                                                                                \
             for (int k = 0; k < 3 && !err; k++) {                              \
                 const size_t span = count < 1024 ? count : 1024;               \
-                const size_t r = k == 0 && step % 256 == 255                   \
-                                     ? count - 1                               \
-                                     : (size_t)(sgtRand_(&seed) % span);       \
-                const size_t l = (size_t)(sgtRand_(&seed) % (r + 1));          \
+                const size_t r =                                               \
+                    k == 0 && step % 256 == 255                                \
+                        ? count - 1                                            \
+                        : (size_t)(dkSplitmix64Next(&seed) % span);            \
+                const size_t l = (size_t)(dkSplitmix64Next(&seed) % (r + 1));  \
                 VT want = identity;                                            \
                 UT sum = 0;                                                    \
                 for (size_t i = l; i <= r; i++) {                              \
@@ -194,7 +187,7 @@ SGT_DIFF(U128, __uint128_t, __uint128_t, 0, ~(__uint128_t)0, 0)
             VT *copied = bufB;                                                 \
             void *byUpdate = segment##T##New(op);                              \
             for (size_t i = 0; i < n; i++) {                                   \
-                const uint64_t r = sgtRand_(&seed);                            \
+                const uint64_t r = dkSplitmix64Next(&seed);                    \
                 values[i] = IS_FLOAT ? (VT)((double)(int64_t)r / 1e9) : (VT)r; \
                 segment##T##Update(&byUpdate, i, values[i]);                   \
             }                                                                  \
@@ -207,8 +200,8 @@ SGT_DIFF(U128, __uint128_t, __uint128_t, 0, ~(__uint128_t)0, 0)
             }                                                                  \
                                                                                \
             for (size_t q = 0; n && q < 64; q++) {                             \
-                const size_t a = (size_t)(sgtRand_(&seed) % n);                \
-                const size_t z = (size_t)(sgtRand_(&seed) % n);                \
+                const size_t a = (size_t)(dkSplitmix64Next(&seed) % n);        \
+                const size_t z = (size_t)(dkSplitmix64Next(&seed) % n);        \
                 const size_t left = a < z ? a : z;                             \
                 const size_t right = a < z ? z : a;                            \
                 const VT x = segment##T##Query(seg, left, right);              \

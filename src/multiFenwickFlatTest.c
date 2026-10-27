@@ -18,14 +18,6 @@ defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
 defcleaner(multiFenwick *, multiFenwickFree);
 defcleanerName(databox *, zfree, DataboxArray);
 
-/* splitmix64 */
-static uint64_t mfwfRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 /* Same type and the same value bits (doubles compare bitwise, so -0.0 and
  * 0.0 differ, as a stored value would) */
 static bool mfwfSameBox_(const databox *a, const databox *b) {
@@ -50,32 +42,33 @@ static bool mfwfSameBox_(const databox *a, const databox *b) {
 /* A random value or delta: mostly small integers, plus integer limits,
  * floats, doubles, and values the trees must refuse. */
 static databox mfwfRandValue_(uint64_t *seed, bool integersOnly) {
-    const uint64_t r = mfwfRand_(seed);
+    const uint64_t r = dkSplitmix64Next(seed);
     const uint64_t pick = r % (integersOnly ? 5 : 12);
     switch (pick) {
     case 0:
     case 1:
-        return DATABOX_SIGNED((int64_t)(mfwfRand_(seed) % 2001) - 1000);
+        return DATABOX_SIGNED((int64_t)(dkSplitmix64Next(seed) % 2001) - 1000);
     case 2:
-        return DATABOX_UNSIGNED(mfwfRand_(seed) % 5000);
+        return DATABOX_UNSIGNED(dkSplitmix64Next(seed) % 5000);
     case 3:
-        return DATABOX_SIGNED(mfwfRand_(seed) % 2 ? INT64_MIN : INT64_MAX);
+        return DATABOX_SIGNED(dkSplitmix64Next(seed) % 2 ? INT64_MIN
+                                                         : INT64_MAX);
     case 4:
-        return DATABOX_UNSIGNED(mfwfRand_(seed) % 2 ? UINT64_MAX
-                                                    : UINT64_MAX / 3);
+        return DATABOX_UNSIGNED(dkSplitmix64Next(seed) % 2 ? UINT64_MAX
+                                                           : UINT64_MAX / 3);
     case 5:
     case 6:
-        return DATABOX_DOUBLE(((double)(mfwfRand_(seed) % 20001) - 10000.0) /
-                              8.0);
+        return DATABOX_DOUBLE(
+            ((double)(dkSplitmix64Next(seed) % 20001) - 10000.0) / 8.0);
     case 7: {
         databox f;
-        DATABOX_SET_FLOAT(&f, (float)(mfwfRand_(seed) % 100) / 4.0f);
+        DATABOX_SET_FLOAT(&f, (float)(dkSplitmix64Next(seed) % 100) / 4.0f);
         return f;
     }
     case 8:
-        return DATABOX_DOUBLE(mfwfRand_(seed) % 2 ? 1e300 : -DBL_MAX);
+        return DATABOX_DOUBLE(dkSplitmix64Next(seed) % 2 ? 1e300 : -DBL_MAX);
     case 9:
-        return DATABOX_DOUBLE(mfwfRand_(seed) % 2 ? NAN : INFINITY);
+        return DATABOX_DOUBLE(dkSplitmix64Next(seed) % 2 ? NAN : INFINITY);
     case 10:
         return DATABOX_BOX_VOID;
     default:
@@ -122,9 +115,9 @@ static int mfwfDifferential_(uint64_t seed, size_t ops, size_t maxIdx,
     multiFenwick *orig = nullptr;
 
     for (size_t step = 0; step < ops; step++) {
-        const uint64_t op = mfwfRand_(&seed) % 10;
-        size_t idx = mfwfRand_(&seed) % (maxIdx + 1);
-        if (mfwfRand_(&seed) % 64 == 0) {
+        const uint64_t op = dkSplitmix64Next(&seed) % 10;
+        size_t idx = dkSplitmix64Next(&seed) % (maxIdx + 1);
+        if (dkSplitmix64Next(&seed) % 64 == 0) {
             idx = (size_t)MULTIFENWICK_INDEX_MAX + 1; /* refused */
         }
 
@@ -156,7 +149,7 @@ static int mfwfDifferential_(uint64_t seed, size_t ops, size_t maxIdx,
             okB = multiFenwickQuery(orig, idx, &b);
             break;
         case 7: {
-            const size_t left = mfwfRand_(&seed) % (maxIdx + 1);
+            const size_t left = dkSplitmix64Next(&seed) % (maxIdx + 1);
             okA = multiFenwickFlatRangeQuery(flat, left, idx, &a);
             okB = multiFenwickRangeQuery(orig, left, idx, &b);
             break;
@@ -166,7 +159,7 @@ static int mfwfDifferential_(uint64_t seed, size_t ops, size_t maxIdx,
             posB = multiFenwickLowerBound(orig, &v);
             break;
         default:
-            if (mfwfRand_(&seed) % 16 == 0) {
+            if (dkSplitmix64Next(&seed) % 16 == 0) {
                 multiFenwickFlatClear(flat);
                 multiFenwickClear(orig);
             }
@@ -201,7 +194,7 @@ static double mfwfBenchFlat_(multiFenwickFlat **flat, size_t n, size_t ops,
     const databox one = DATABOX_SIGNED(1);
     PERF_TIMERS_SETUP;
     for (size_t i = 0; i < ops; i++) {
-        const size_t idx = mfwfRand_(&seed) % n;
+        const size_t idx = dkSplitmix64Next(&seed) % n;
         if (update) {
             multiFenwickFlatUpdate(flat, idx, &one);
         } else {
@@ -222,7 +215,7 @@ static double mfwfBenchOrig_(multiFenwick **orig, size_t n, size_t ops,
     const databox one = DATABOX_SIGNED(1);
     PERF_TIMERS_SETUP;
     for (size_t i = 0; i < ops; i++) {
-        const size_t idx = mfwfRand_(&seed) % n;
+        const size_t idx = dkSplitmix64Next(&seed) % n;
         if (update) {
             multiFenwickUpdate(orig, idx, &one);
         } else {
@@ -242,7 +235,7 @@ static double mfwfBenchI64_(void **fw, size_t n, size_t ops, bool update,
     int64_t sum = 0;
     PERF_TIMERS_SETUP;
     for (size_t i = 0; i < ops; i++) {
-        const size_t idx = mfwfRand_(&seed) % n;
+        const size_t idx = dkSplitmix64Next(&seed) % n;
         if (update) {
             fenwickI64Update(fw, idx, 1);
         } else {
@@ -420,10 +413,11 @@ int multiFenwickFlatTest(int, char *[]) {
         uint64_t seed = 77;
         size_t count = 0;
         for (size_t step = 0; step < 4000; step++) {
-            const size_t idx = mfwfRand_(&seed) % N;
-            const int64_t v = (int64_t)(mfwfRand_(&seed) % 2000001) - 1'000'000;
+            const size_t idx = dkSplitmix64Next(&seed) % N;
+            const int64_t v =
+                (int64_t)(dkSplitmix64Next(&seed) % 2000001) - 1'000'000;
             const databox box = DATABOX_SIGNED(v);
-            const bool set = mfwfRand_(&seed) % 4 == 0;
+            const bool set = dkSplitmix64Next(&seed) % 4 == 0;
             const bool ok = set ? multiFenwickFlatSet(&mfw, idx, &box)
                                 : multiFenwickFlatUpdate(&mfw, idx, &box);
             if (!ok) {
@@ -434,7 +428,7 @@ int multiFenwickFlatTest(int, char *[]) {
             oracle[idx] = set ? v : oracle[idx] + v;
             count = idx + 1 > count ? idx + 1 : count;
 
-            const size_t q = mfwfRand_(&seed) % count;
+            const size_t q = dkSplitmix64Next(&seed) % count;
             __int128_t want = 0;
             for (size_t i = 0; i <= q; i++) {
                 want += oracle[i];
@@ -516,7 +510,8 @@ int multiFenwickFlatTest(int, char *[]) {
             uint64_t seed = 12345;
             void *fw = fenwickI64New();
             for (size_t i = 0; i < n; i++) {
-                const int64_t v = (int64_t)(mfwfRand_(&seed) % 1000) - 500;
+                const int64_t v =
+                    (int64_t)(dkSplitmix64Next(&seed) % 1000) - 500;
                 vals[i] = DATABOX_SIGNED(v);
                 fenwickI64Update(&fw, i, v);
             }

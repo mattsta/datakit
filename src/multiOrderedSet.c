@@ -1036,10 +1036,7 @@ static bool mosWideOwned_(const databox *got) {
 static uint64_t mosWideRng_ = UINT64_C(0x9E3779B97F4A7C15);
 
 static uint64_t mosWideMix_(uint64_t x) {
-    x += UINT64_C(0x9E3779B97F4A7C15);
-    x = (x ^ (x >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return x ^ (x >> 31);
+    return dkSplitmix64Next(&x);
 }
 
 /* Value 'i' of a fixed sequence: the wide set W (INT128 extremes, 2^64,
