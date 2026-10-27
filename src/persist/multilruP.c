@@ -691,8 +691,39 @@ static int test_multilruP_compaction(int, char *[]) {
         }
     }
 
-    /* Cleanup */
+    /* Writes after the snapshot go to the WAL alone */
+    multilruPtr later[5];
+    for (int i = 0; i < 5; i++) {
+        later[i] = mlruTestInsert(mlru, 0);
+    }
+
     multilruCloseP(mlru);
+    persistCtxFree(ctx);
+
+    /* A reopen is the snapshot plus only the WAL written after it */
+    ctx = persistCtxOpen(basePath, &config);
+    mlru = ctx ? multilruOpenP(ctx) : nullptr;
+    if (!mlru) {
+        ERR("reopen after compaction failed");
+    } else {
+        if (multilruCountP(mlru) != 25) {
+            ERR("reopen after compaction holds %zu entries, want 25",
+                multilruCountP(mlru));
+        }
+        for (int i = 0; i < 20; i++) {
+            if (!multilruIsPopulatedP(mlru, handles[i])) {
+                ERR("handle %d not populated after reopen", i);
+            }
+        }
+        for (int i = 0; i < 5; i++) {
+            if (!multilruIsPopulatedP(mlru, later[i])) {
+                ERR("post-compaction handle %d not populated after reopen", i);
+            }
+        }
+        multilruCloseP(mlru);
+    }
+
+    /* Cleanup */
     persistCtxFree(ctx);
     ptestCleanupFiles(basePath);
 

@@ -586,8 +586,40 @@ static int test_multiOrderedSetP_compaction(int, char *[]) {
         }
     }
 
-    /* Cleanup */
+    /* Writes after the snapshot go to the WAL alone */
+    for (int64_t i = 50; i < 55; i++) {
+        databox score = databoxNewSigned(i * 10);
+        snprintf(memberBuf, sizeof(memberBuf), "member_%02" PRId64, i);
+        databox member =
+            databoxNewBytesAllowEmbed(memberBuf, strlen(memberBuf));
+        PTEST_LOGGED(multiOrderedSetAddP(mos, &score, &member, nullptr));
+    }
+
     multiOrderedSetCloseP(mos);
+    persistCtxFree(ctx);
+
+    /* A reopen is the snapshot plus only the WAL written after it */
+    ctx = persistCtxOpen(basePath, nullptr);
+    mos = ctx ? multiOrderedSetOpenP(ctx) : nullptr;
+    if (!mos) {
+        ERR("reopen after compaction failed");
+    } else {
+        if (multiOrderedSetCountP(mos) != 55) {
+            ERR("reopen after compaction holds %zu members, want 55",
+                multiOrderedSetCountP(mos));
+        }
+        for (int64_t i = 0; i < 55; i++) {
+            snprintf(memberBuf, sizeof(memberBuf), "member_%02" PRId64, i);
+            databox member =
+                databoxNewBytesAllowEmbed(memberBuf, strlen(memberBuf));
+            if (!multiOrderedSetExistsP(mos, &member)) {
+                ERR("member_%02" PRId64 " missing after reopen", i);
+            }
+        }
+        multiOrderedSetCloseP(mos);
+    }
+
+    /* Cleanup */
     persistCtxFree(ctx);
     ptestCleanupFiles(basePath);
 
