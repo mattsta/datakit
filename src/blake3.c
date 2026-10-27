@@ -175,6 +175,23 @@ void blake3PortableCompressXof(const uint32_t cv[8],
     compress_xof(cv, block, block_len, counter, flags, out);
 }
 
+void blake3PortableCompressBatch(size_t n, const uint32_t *const cv_inputs[],
+                                 const uint8_t *const blocks[],
+                                 const uint8_t block_lens[],
+                                 const uint64_t counters[],
+                                 const uint8_t flag_set[],
+                                 uint8_t out_cvs[][32]) {
+    for (size_t i = 0; i < n; i++) {
+        uint32_t cv[8];
+        memcpy(cv, cv_inputs[i], sizeof(cv));
+        compress_in_place(cv, blocks[i], block_lens[i], counters[i],
+                          flag_set[i]);
+        for (size_t w = 0; w < 8; w++) {
+            dkStoreLe32(out_cvs[i] + 4 * w, cv[w]);
+        }
+    }
+}
+
 /* ----- Chunk / output state ------------------------------------------- */
 
 /* Lightweight output snapshot used during finalize. Captures everything
@@ -1079,6 +1096,50 @@ int blake3Test(int, char *[]) {
                             BLAKE3_OUT_LEN);
             check_against_hex(one_shot, BLAKE3_OUT_LEN, v->derive_key_hex,
                               "blake3DeriveKey", v->input_len, &err);
+        }
+    }
+
+    TEST("blake3PortableCompressBatch: each CV is one compress, little "
+         "endian") {
+        constexpr size_t n = 5;
+        uint32_t cvs[n][8];
+        uint8_t blocks[n][BLAKE3_BLOCK_LEN];
+        const uint32_t *cvPtrs[n];
+        const uint8_t *blockPtrs[n];
+        const uint8_t lens[n] = {64, 1, 0, 63, 64};
+        const uint64_t counters[n] = {0, 1, UINT32_MAX, 1ULL << 40, 7};
+        const uint8_t flags[n] = {0, 1, 2, 3, 11};
+        uint64_t lcg = 0xB1A4E3;
+        for (size_t i = 0; i < n; i++) {
+            for (size_t w = 0; w < 8; w++) {
+                cvs[i][w] = (uint32_t)(dkLcg64Next(&lcg) >> 32);
+            }
+
+            for (size_t b = 0; b < BLAKE3_BLOCK_LEN; b++) {
+                blocks[i][b] = (uint8_t)(dkLcg64Next(&lcg) >> 56);
+            }
+
+            cvPtrs[i] = cvs[i];
+            blockPtrs[i] = blocks[i];
+        }
+
+        uint8_t out[n][32];
+        blake3PortableCompressBatch(n, cvPtrs, blockPtrs, lens, counters, flags,
+                                    out);
+        for (size_t i = 0; i < n; i++) {
+            uint32_t cv[8];
+            memcpy(cv, cvs[i], sizeof(cv));
+            blake3PortableCompressInPlace(cv, blocks[i], lens[i], counters[i],
+                                          flags[i]);
+            uint8_t want[32];
+            for (size_t w = 0; w < 8; w++) {
+                want[4 * w + 0] = (uint8_t)cv[w];
+                want[4 * w + 1] = (uint8_t)(cv[w] >> 8);
+                want[4 * w + 2] = (uint8_t)(cv[w] >> 16);
+                want[4 * w + 3] = (uint8_t)(cv[w] >> 24);
+            }
+
+            TEST_BYTES(err, out[i], want, sizeof(want), "batch pair %zu", i);
         }
     }
 

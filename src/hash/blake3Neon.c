@@ -329,18 +329,8 @@ void blake3NeonCompress4(const uint32_t *const cv_inputs[4],
                          uint8_t out_cvs[4][32]) {
     /* Serialize the 4-way batch into 4 portable compresses.  Same
      * output, just no SIMD speedup. */
-    for (int i = 0; i < 4; i++) {
-        uint32_t cv[8];
-        memcpy(cv, cv_inputs[i], sizeof(cv));
-        blake3PortableCompressInPlace(cv, blocks[i], block_lens[i], counters[i],
-                                      flag_set[i]);
-        for (int j = 0; j < 8; j++) {
-            out_cvs[i][j * 4 + 0] = (uint8_t)(cv[j]);
-            out_cvs[i][j * 4 + 1] = (uint8_t)(cv[j] >> 8);
-            out_cvs[i][j * 4 + 2] = (uint8_t)(cv[j] >> 16);
-            out_cvs[i][j * 4 + 3] = (uint8_t)(cv[j] >> 24);
-        }
-    }
+    blake3PortableCompressBatch(4, cv_inputs, blocks, block_lens, counters,
+                                flag_set, out_cvs);
 }
 
 #endif /* NEON */

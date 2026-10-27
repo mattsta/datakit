@@ -140,6 +140,17 @@ void blake3PortableCompressXof(const uint32_t cv[8],
                                uint8_t block_len, uint64_t counter,
                                uint8_t flags, uint8_t out[64]);
 
+/* The 'n' compresses a batched SIMD compress does, one at a time through
+ * the portable path: pair i's CV as 32 little-endian bytes in
+ * out_cvs[i].  The batch entry points of a backend this build lacks
+ * answer with it. */
+void blake3PortableCompressBatch(size_t n, const uint32_t *const cv_inputs[],
+                                 const uint8_t *const blocks[],
+                                 const uint8_t block_lens[],
+                                 const uint64_t counters[],
+                                 const uint8_t flag_set[],
+                                 uint8_t out_cvs[][32]);
+
 #ifdef DATAKIT_TEST
 int blake3Test(int argc, char *argv[]);
 #endif

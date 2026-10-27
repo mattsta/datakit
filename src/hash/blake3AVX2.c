@@ -423,13 +423,8 @@ void blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
                          const uint8_t block_lens[8],
                          const uint64_t counters[8], const uint8_t flag_set[8],
                          uint8_t out_cvs[8][32]) {
-    for (int j = 0; j < 8; j++) {
-        uint32_t cv[8];
-        memcpy(cv, cv_inputs[j], sizeof(cv));
-        blake3PortableCompressInPlace(cv, blocks[j], block_lens[j], counters[j],
-                                      flag_set[j]);
-        memcpy(out_cvs[j], cv, 32);
-    }
+    blake3PortableCompressBatch(8, cv_inputs, blocks, block_lens, counters,
+                                flag_set, out_cvs);
 }
 
 #endif /* x86_64 */
