@@ -18,6 +18,7 @@
 #include "hash/chacha20AVX2.h"
 #include "hash/chacha20Neon.h"
 #include "hash/poly1305AVX2.h"
+#include "hash/poly1305Limbs.h"
 #include "hash/poly1305Neon.h"
 
 #include <stddef.h>
@@ -386,66 +387,14 @@ static void poly1305Block(poly1305State *st, const uint8_t block[16], size_t,
      * Full blocks pass block_len=16, hibit_set=true => add 1<<24 to
      * limb 4. */
 
-    uint32_t t0 = dkLoadLe32(block + 0);
-    uint32_t t1 = dkLoadLe32(block + 4);
-    uint32_t t2 = dkLoadLe32(block + 8);
-    uint32_t t3 = dkLoadLe32(block + 12);
+    /* h = (h + m) * r mod 2^130 - 5 */
+    uint64_t h[5];
+    poly1305LimbsLoad(block, hibit_set ? POLY1305_HIBIT : 0, h);
+    for (size_t i = 0; i < 5; i++) {
+        h[i] += st->h[i];
+    }
 
-    /* h += m */
-    uint64_t h0 = st->h[0] + (t0 & 0x3ffffffu);
-    uint64_t h1 = st->h[1] + (((t0 >> 26) | (t1 << 6)) & 0x3ffffffu);
-    uint64_t h2 = st->h[2] + (((t1 >> 20) | (t2 << 12)) & 0x3ffffffu);
-    uint64_t h3 = st->h[3] + (((t2 >> 14) | (t3 << 18)) & 0x3ffffffu);
-    uint64_t h4 = st->h[4] + (t3 >> 8) + (hibit_set ? (1u << 24) : 0u);
-
-    uint64_t r0 = st->r[0];
-    uint64_t r1 = st->r[1];
-    uint64_t r2 = st->r[2];
-    uint64_t r3 = st->r[3];
-    uint64_t r4 = st->r[4];
-
-    /* Precompute 5*r1..5*r4 (used by the wrap-around terms). */
-    uint64_t s1 = r1 * 5;
-    uint64_t s2 = r2 * 5;
-    uint64_t s3 = r3 * 5;
-    uint64_t s4 = r4 * 5;
-
-    /* h *= r (mod 2^130 - 5).  Each d_i is a 64-bit product accumulator;
-     * with limbs ~26 bits and r limbs ~26 bits, products are ~52 bits;
-     * summing 5 of them stays under 2^55 — fits comfortably. */
-    uint64_t d0 = h0 * r0 + h1 * s4 + h2 * s3 + h3 * s2 + h4 * s1;
-    uint64_t d1 = h0 * r1 + h1 * r0 + h2 * s4 + h3 * s3 + h4 * s2;
-    uint64_t d2 = h0 * r2 + h1 * r1 + h2 * r0 + h3 * s4 + h4 * s3;
-    uint64_t d3 = h0 * r3 + h1 * r2 + h2 * r1 + h3 * r0 + h4 * s4;
-    uint64_t d4 = h0 * r4 + h1 * r3 + h2 * r2 + h3 * r1 + h4 * r0;
-
-    /* Carry-reduce. */
-    uint64_t c;
-    c = d0 >> 26;
-    h0 = d0 & 0x3ffffffu;
-    d1 += c;
-    c = d1 >> 26;
-    h1 = d1 & 0x3ffffffu;
-    d2 += c;
-    c = d2 >> 26;
-    h2 = d2 & 0x3ffffffu;
-    d3 += c;
-    c = d3 >> 26;
-    h3 = d3 & 0x3ffffffu;
-    d4 += c;
-    c = d4 >> 26;
-    h4 = d4 & 0x3ffffffu;
-    /* Top overflow folds back as *5 to limb 0 (mod 2^130 - 5). */
-    h0 += c * 5;
-    c = h0 >> 26;
-    h0 &= 0x3ffffffu;
-    h1 += c;
-
-    st->h[0] = h0;
-    st->h[1] = h1;
-    st->h[2] = h2;
-    st->h[3] = h3;
-    st->h[4] = h4;
+    poly1305LimbsMulMod(h, st->r, st->h);
 }
 
 static void poly1305Update(poly1305State *st, const uint8_t *data, size_t len) {
@@ -777,9 +726,24 @@ static inline poly1305State *streamPoly(chacha20poly1305StreamCtx *ctx) {
     return (poly1305State *)ctx;
 }
 
-/* Initialise common state for both Seal and Open streams. */
-static void streamInitCommon(chacha20poly1305StreamCtx *ctx,
-                             const uint8_t key[32], const uint8_t nonce[12]) {
+/* A Seal or Open stream's start, both being the same state; 'caller'
+ * names the public function in the misuse diagnostic */
+static void streamInit(const char *caller, chacha20poly1305StreamCtx *ctx,
+                       const uint8_t key[32], const uint8_t nonce[12]) {
+    if (ctx == nullptr || key == nullptr || nonce == nullptr) {
+        /* No return value says so: the diagnostic is the only signal */
+        aeadMisuse_(caller, __LINE__,
+                    "stream init with no context, key or nonce");
+        if (ctx != nullptr) {
+            /* Wipe the ctx (any prior key/nonce from a previous Init)
+             * before leaving in the rejection state; mirrors
+             * streamFinalise's contract that every failure path
+             * produces a bytewise-zero ctx. */
+            dkSecureZero(ctx, sizeof(*ctx));
+        }
+        return;
+    }
+
     memset(ctx, 0, sizeof(*ctx));
     memcpy(ctx->key, key, 32);
     memcpy(ctx->nonce, nonce, 12);
@@ -797,37 +761,13 @@ static void streamInitCommon(chacha20poly1305StreamCtx *ctx,
 void chacha20poly1305SealStreamInit(chacha20poly1305StreamCtx *ctx,
                                     const uint8_t key[32],
                                     const uint8_t nonce[12]) {
-    if (ctx == nullptr || key == nullptr || nonce == nullptr) {
-        /* No return value says so: the diagnostic is the only signal */
-        AEAD_MISUSE_("stream init with no context, key or nonce");
-        if (ctx != nullptr) {
-            /* Wipe the ctx (any prior key/nonce from a previous Init)
-             * before leaving in the rejection state; mirrors
-             * streamFinalise's contract that every failure path
-             * produces a bytewise-zero ctx. */
-            dkSecureZero(ctx, sizeof(*ctx));
-        }
-        return;
-    }
-    streamInitCommon(ctx, key, nonce);
+    streamInit(__func__, ctx, key, nonce);
 }
 
 void chacha20poly1305OpenStreamInit(chacha20poly1305StreamCtx *ctx,
                                     const uint8_t key[32],
                                     const uint8_t nonce[12]) {
-    if (ctx == nullptr || key == nullptr || nonce == nullptr) {
-        /* No return value says so: the diagnostic is the only signal */
-        AEAD_MISUSE_("stream init with no context, key or nonce");
-        if (ctx != nullptr) {
-            /* Wipe the ctx (any prior key/nonce from a previous Init)
-             * before leaving in the rejection state; mirrors
-             * streamFinalise's contract that every failure path
-             * produces a bytewise-zero ctx. */
-            dkSecureZero(ctx, sizeof(*ctx));
-        }
-        return;
-    }
-    streamInitCommon(ctx, key, nonce);
+    streamInit(__func__, ctx, key, nonce);
 }
 
 /* Common AAD feed: legal during AAD phase only.  Returns false (and

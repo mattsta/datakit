@@ -32,6 +32,7 @@
  * is enforced by dkTestPoly1305SimdParity. */
 
 #include "poly1305AVX2.h"
+#include "poly1305Limbs.h"
 
 #include <assert.h>
 #include <stddef.h>
@@ -39,56 +40,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Scalar reference for r^k precompute, shared between SIMD and scalar
- * paths to keep arithmetic bit-identical. */
-static inline void poly1305_mul_scalar(const uint32_t a[5], const uint32_t b[5],
-                                       uint32_t out[5]) {
-    uint64_t a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4];
-    uint64_t b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3], b4 = b[4];
-
-    uint64_t s1 = b1 * 5;
-    uint64_t s2 = b2 * 5;
-    uint64_t s3 = b3 * 5;
-    uint64_t s4 = b4 * 5;
-
-    uint64_t d0 = a0 * b0 + a1 * s4 + a2 * s3 + a3 * s2 + a4 * s1;
-    uint64_t d1 = a0 * b1 + a1 * b0 + a2 * s4 + a3 * s3 + a4 * s2;
-    uint64_t d2 = a0 * b2 + a1 * b1 + a2 * b0 + a3 * s4 + a4 * s3;
-    uint64_t d3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0 + a4 * s4;
-    uint64_t d4 = a0 * b4 + a1 * b3 + a2 * b2 + a3 * b1 + a4 * b0;
-
-    uint64_t c;
-    c = d0 >> 26;
-    uint64_t h0 = d0 & 0x3ffffffu;
-    d1 += c;
-    c = d1 >> 26;
-    uint64_t h1 = d1 & 0x3ffffffu;
-    d2 += c;
-    c = d2 >> 26;
-    uint64_t h2 = d2 & 0x3ffffffu;
-    d3 += c;
-    c = d3 >> 26;
-    uint64_t h3 = d3 & 0x3ffffffu;
-    d4 += c;
-    c = d4 >> 26;
-    uint64_t h4 = d4 & 0x3ffffffu;
-    h0 += c * 5;
-    c = h0 >> 26;
-    h0 &= 0x3ffffffu;
-    h1 += c;
-
-    out[0] = (uint32_t)h0;
-    out[1] = (uint32_t)h1;
-    out[2] = (uint32_t)h2;
-    out[3] = (uint32_t)h3;
-    out[4] = (uint32_t)h4;
-}
-
+/* r^2, r^3, r^4 through the scalar MAC's own multiply, so both paths use
+ * the same powers */
 void poly1305AVX2PrecomputePowers(const uint32_t r[5], uint32_t r2[5],
                                   uint32_t r3[5], uint32_t r4[5]) {
-    poly1305_mul_scalar(r, r, r2);
-    poly1305_mul_scalar(r2, r, r3);
-    poly1305_mul_scalar(r3, r, r4);
+    poly1305LimbsMulMod32(r, r, r2);
+    poly1305LimbsMulMod32(r2, r, r3);
+    poly1305LimbsMulMod32(r3, r, r4);
 }
 
 #if POLY1305_AVX2_BUILD
@@ -98,26 +56,6 @@ void poly1305AVX2PrecomputePowers(const uint32_t r[5], uint32_t r2[5],
 bool poly1305AVX2Available(void) {
     __builtin_cpu_init();
     return __builtin_cpu_supports("avx2") != 0;
-}
-
-/* Load a 16-byte Poly1305 block as 5x 26-bit limbs and append the
- * 1<<24 hibit marker.  Identical to the scalar load path. */
-[[gnu::target("avx2"), gnu::always_inline]] static inline void
-poly1305_load_block_avx2(const uint8_t *m, uint64_t out[5]) {
-    uint32_t t0 = (uint32_t)m[0] | ((uint32_t)m[1] << 8) |
-                  ((uint32_t)m[2] << 16) | ((uint32_t)m[3] << 24);
-    uint32_t t1 = (uint32_t)m[4] | ((uint32_t)m[5] << 8) |
-                  ((uint32_t)m[6] << 16) | ((uint32_t)m[7] << 24);
-    uint32_t t2 = (uint32_t)m[8] | ((uint32_t)m[9] << 8) |
-                  ((uint32_t)m[10] << 16) | ((uint32_t)m[11] << 24);
-    uint32_t t3 = (uint32_t)m[12] | ((uint32_t)m[13] << 8) |
-                  ((uint32_t)m[14] << 16) | ((uint32_t)m[15] << 24);
-
-    out[0] = t0 & 0x3ffffffu;
-    out[1] = ((t0 >> 26) | (t1 << 6)) & 0x3ffffffu;
-    out[2] = ((t1 >> 20) | (t2 << 12)) & 0x3ffffffu;
-    out[3] = ((t2 >> 14) | (t3 << 18)) & 0x3ffffffu;
-    out[4] = (t3 >> 8) + (1u << 24);
 }
 
 /* Horizontal sum of 4 uint64 lanes in a __m256i. */
@@ -167,10 +105,10 @@ poly1305AVX2Block4x(uint64_t h[5], const uint32_t r[5], const uint32_t r2[5],
     for (size_t i = 0; i < num_groups; i++) {
         /* Block 0: a = h + m_0; Blocks 1..3: a = m_k. */
         uint64_t m0[5], m1[5], m2[5], m3[5];
-        poly1305_load_block_avx2(msg + 64 * i + 0, m0);
-        poly1305_load_block_avx2(msg + 64 * i + 16, m1);
-        poly1305_load_block_avx2(msg + 64 * i + 32, m2);
-        poly1305_load_block_avx2(msg + 64 * i + 48, m3);
+        poly1305LimbsLoad(msg + 64 * i + 0, POLY1305_HIBIT, m0);
+        poly1305LimbsLoad(msg + 64 * i + 16, POLY1305_HIBIT, m1);
+        poly1305LimbsLoad(msg + 64 * i + 32, POLY1305_HIBIT, m2);
+        poly1305LimbsLoad(msg + 64 * i + 48, POLY1305_HIBIT, m3);
 
         uint64_t a0_0 = h0 + m0[0];
         uint64_t a1_0 = h1 + m0[1];
