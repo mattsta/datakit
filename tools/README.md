@@ -372,9 +372,9 @@ gate before a milestone.
   list that leaves it out) is reported on a `missing` line, apart from
   real failures, with a `hint` naming the targets to add.
 - `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check`, `spell` and `idioms` then run on the exported
-  tree with the tree's own dktools (the `alloc`, `atomic`, `output`,
-  `spell` and `idioms` lines).
+  `outputaudit check`, `spell`, `idioms` and `testchecks` then run on
+  the exported tree with the tree's own dktools (the `alloc`, `atomic`,
+  `output`, `spell`, `idioms` and `checks` lines).
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,
   allocaudit, failing test names, log paths), also kept in
@@ -447,8 +447,8 @@ uv run --project tools dktools validate [--rev REV] \
   set per configuration.
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
   output, `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check`, `spell` and `idioms` on the exported tree, and
-  the leakage
+  `outputaudit check`, `spell`, `idioms` and `testchecks` on the
+  exported tree, and the leakage
   gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
 - Writes `ROOT/validate/<hash>-<configs>/summary.md` (`<configs>` joins
@@ -703,6 +703,32 @@ uv run --project tools dktools idioms [FILE ...]
   the tracked `src/**/*.c` and `*.h`. Exits 0 clean, 1 for hits or
   stale allow lines.
 
+## testchecks — TEST blocks that check nothing
+
+```sh
+uv run --project tools dktools testchecks [FILE ...]
+```
+
+- Lists each `TEST(...) { ... }` / `TEST_DESC(...) { ... }` block whose
+  code names no check: none of `ERR`, `ERROR`, `TEST_BYTES`,
+  `TEST_HEX`, `assert` or the failure count `err`, and no macro (in a
+  scanned file or any header under src) whose body names one, directly
+  or through another such macro. Such a block passes whatever the code
+  under test does; only a crash could fail it.
+- Blocks that measure are skipped: those named for it (the word perf,
+  performance, speed, bench, benchmark, throughput, timing, latency,
+  comparison, analysis, workload or head-to-head) and those that
+  report a perf.h timing (`TIME_FINISH`). Comments and literals never
+  count as a check.
+- A block whose whole contract is that it runs (a printer, a free of
+  NULL) is excepted by a `PATH :: NAME :: REASON` line in
+  `tools/testchecks-allow.txt`, NAME as listed; a line without a reason
+  is an input error (exit 2), and a line whose block is no longer
+  listed fails the gate.
+- Runs in `verify` and `validate` (the `checks` line). Files default
+  to the tracked `src/**/*.c` and `*.h`. Exits 0 clean, 1 for listed
+  blocks or stale allow lines.
+
 ## spell — misspellings in the sources, docs and tools
 
 ```sh
@@ -788,6 +814,31 @@ uv run --project tools dktools dupfuncs [--min-tokens N] [FILE ...]
 - Preprocessor lines are not code here, so functions a macro defines are
   not seen. Files default to the tracked `src/**/*.c` and `*.h`. Exits
   0 (the report is advice), or 2 for a missing file.
+
+## irdups — functions that compile to the same code
+
+```sh
+uv run --project tools dktools irdups [--preset PRESET] [--min-instructions N] [-j N] [FILE ...]
+```
+
+- Compiles each source in `build/PRESET/compile_commands.json`
+  (default `dev`; `dktools configure` makes it) to LLVM IR at
+  `-O1 -fno-inline`, with the database's command for the file (the
+  test target's when there is one) minus its output, optimisation,
+  debug and sanitizer flags.
+- Normalises each function body (metadata, attribute groups and value
+  names go; locals and labels are numbered by first use; string
+  constants lose their numbering; callee and global names stay) and
+  lists bodies of at least `--min-instructions` instructions (default 20) found under two or more function names, largest first. A header's
+  static inline compiled into many units has one name and is not listed;
+  a group whose names differ only in a type token (`I16`, `U64`,
+  `Float`, ...) is marked "one type template" (instantiations of one
+  source, counted apart). Code behind another target's `#if` (x86 SIMD
+  on an arm64 host) is not compiled, so not compared.
+- Finds what `dupfuncs --shape` cannot: copies that differ in spelling
+  the optimizer erases (loop form, temporaries, macro versus function).
+  Exits 0 (the report is advice), 2 for a missing database or a file it
+  lacks.
 
 ## testbytes — byte comparisons in tests as `TEST_BYTES`
 

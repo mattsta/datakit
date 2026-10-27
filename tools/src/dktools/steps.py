@@ -40,6 +40,9 @@ OUTPUTAUDIT_TIMEOUT = 10 * 60
 SPELL_TIMEOUT = 10 * 60
 #: The idiom gate is lexical, one pass over the sources.
 IDIOMS_TIMEOUT = 10 * 60
+#: The test-check gate is lexical too: one pass, plus every header's
+#: macros.
+TESTCHECKS_TIMEOUT = 10 * 60
 #: ``ctest --timeout``: the limit for each test that sets no TIMEOUT
 #: property of its own (ctest's conventional default), so one hung
 #: test fails alone instead of running into CTEST_TIMEOUT.
@@ -532,11 +535,10 @@ def tests_with_reports(hits: Iterable[SanitizerHit]) -> list[str]:
 # -- allocation audit -------------------------------------------------
 
 
-def allocaudit_command(uv: str, tree: Path) -> list[str]:
-    """The allocOwnership gate, run with the tree's own dktools.
-
-    The tree's copy matters: its CONSTRUCTORS registry must match the
-    sources being audited."""
+def tree_dktools(uv: str, tree: Path, *args: str) -> list[str]:
+    """`dktools ARGS` on 'tree' with the tree's own dktools (uv project
+    tree/tools), the form every tree gate runs in: a gate's rules and
+    lists must match the sources it reads."""
     return [
         uv,
         "run",
@@ -546,27 +548,20 @@ def allocaudit_command(uv: str, tree: Path) -> list[str]:
         "dktools",
         "--repo",
         str(tree),
-        "allocaudit",
-        "check",
-        "--constructors",
+        *args,
     ]
+
+
+def allocaudit_command(uv: str, tree: Path) -> list[str]:
+    """The allocOwnership gate (the tree's CONSTRUCTORS registry must
+    match the sources being audited)."""
+    return tree_dktools(uv, tree, "allocaudit", "check", "--constructors")
 
 
 def atomicaudit_command(uv: str, tree: Path) -> list[str]:
-    """The atomicOrdering gate, run with the tree's own dktools (its tag
-    grammar must match the sources being audited)."""
-    return [
-        uv,
-        "run",
-        "--frozen",
-        "--project",
-        str(tree / "tools"),
-        "dktools",
-        "--repo",
-        str(tree),
-        "atomicaudit",
-        "check",
-    ]
+    """The atomicOrdering gate (its tag grammar must match the sources
+    being audited)."""
+    return tree_dktools(uv, tree, "atomicaudit", "check")
 
 
 def run_tree_gate(
@@ -590,51 +585,26 @@ def run_tree_gate(
 
 def idioms_command(uv: str, tree: Path) -> list[str]:
     """The idiom gate (hand-written forms of shared helpers, with the
-    tree's allow list), run with the tree's own dktools."""
-    return [
-        uv,
-        "run",
-        "--frozen",
-        "--project",
-        str(tree / "tools"),
-        "dktools",
-        "--repo",
-        str(tree),
-        "idioms",
-    ]
+    tree's allow list)."""
+    return tree_dktools(uv, tree, "idioms")
+
+
+def testchecks_command(uv: str, tree: Path) -> list[str]:
+    """The test-check gate (TEST blocks that check nothing, with the
+    tree's allow list)."""
+    return tree_dktools(uv, tree, "testchecks")
 
 
 def spell_command(uv: str, tree: Path) -> list[str]:
     """The spelling gate (codespell over the sources, docs and tools, with
-    the tree's accepted-words file), run with the tree's own dktools."""
-    return [
-        uv,
-        "run",
-        "--frozen",
-        "--project",
-        str(tree / "tools"),
-        "dktools",
-        "--repo",
-        str(tree),
-        "spell",
-    ]
+    the tree's accepted-words file)."""
+    return tree_dktools(uv, tree, "spell")
 
 
 def outputaudit_command(uv: str, tree: Path) -> list[str]:
     """The libraryOutput gate (no library code writes to stdout/stderr
-    unasked), run with the tree's own dktools."""
-    return [
-        uv,
-        "run",
-        "--frozen",
-        "--project",
-        str(tree / "tools"),
-        "dktools",
-        "--repo",
-        str(tree),
-        "outputaudit",
-        "check",
-    ]
+    unasked)."""
+    return tree_dktools(uv, tree, "outputaudit", "check")
 
 
 def last_line(log: Path) -> str:

@@ -27,6 +27,7 @@ from . import (
     gitutil,
     historyscrub,
     idioms,
+    irdups,
     leakcheck,
     objdiff,
     outputaudit,
@@ -37,6 +38,7 @@ from . import (
     spell,
     stdattr,
     testbytes,
+    testchecks,
     testtime,
     toolchain,
     tune,
@@ -334,12 +336,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     df.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
 
+    ird = sub.add_parser(
+        "irdups",
+        help="list functions that compile to the same LLVM IR under two or "
+        "more names (candidates for one shared helper)",
+    )
+    ird.add_argument("--preset", default="dev", help="build/PRESET's compile database")
+    ird.add_argument(
+        "--min-instructions", type=int, default=20, help="smallest body reported"
+    )
+    ird.add_argument("-j", "--jobs", type=int, help="parallel compiles")
+    ird.add_argument("paths", nargs="*", help="repo-relative sources (default: all)")
+
     idm = sub.add_parser(
         "idioms",
         help="find hand-written forms of what a shared helper does "
         "(exit 0, 1 for hits not in tools/idioms-allow.txt or stale allow lines)",
     )
     idm.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    tc = sub.add_parser(
+        "testchecks",
+        help="list TEST blocks that check nothing (exit 0, 1 when any is listed)",
+    )
+    tc.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
 
     tb = sub.add_parser(
         "testbytes",
@@ -1179,11 +1199,19 @@ def _dispatch(args: argparse.Namespace) -> int:
             args.repo, args.name, args.keep, args.arity, tuple(args.paths), args.dry_run
         )
 
+    if args.command == "irdups":
+        return irdups.run(
+            args.repo, tuple(args.paths), args.preset, args.min_instructions, args.jobs
+        )
+
     if args.command == "dupfuncs":
         return dupfuncs.run(args.repo, tuple(args.paths), args.min_tokens, args.shape)
 
     if args.command == "idioms":
         return idioms.run(args.repo, tuple(args.paths))
+
+    if args.command == "testchecks":
+        return testchecks.run(args.repo, tuple(args.paths))
 
     if args.command == "testbytes":
         return testbytes.run(args.repo, tuple(args.paths), args.dry_run)
