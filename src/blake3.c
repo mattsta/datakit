@@ -462,32 +462,44 @@ static_assert(BLAKE3_BATCH_SSE41_CHUNKS == BLAKE3_SSE41_COMPRESS4_LANES,
 static_assert(BLAKE3_BATCH_AVX2_CHUNKS == BLAKE3_AVX2_COMPRESS8_LANES,
               "BLAKE3 AVX2 batch constant must match compressor lane count");
 
-/* SIMD batch path: hash 4 full chunks in parallel via blake3NeonCompress4,
- * then push the 4 resulting chunk CVs onto the merkle stack.  Caller
- * guarantees the precondition: NEON available, buf empty, no in-flight
- * chunk, and input_len > BLAKE3_BATCH_NEON_CHUNKS * BLAKE3_CHUNK_LEN.
- *
- * Inner CV reload uses memcpy because BLAKE3 stores CVs in LE byte
- * order and the host (aarch64 / x86_64) is also LE — the previous
- * byte-by-byte reconstruction was a meaningful per-call cost. */
-static void process_4_chunks_simd(blake3Hasher *self, const uint8_t **in_ptr,
-                                  size_t *in_len) {
-    while (*in_len >= BLAKE3_BATCH_NEON_CHUNKS * BLAKE3_CHUNK_LEN) {
-        uint32_t cvs[4][8];
-        for (int i = 0; i < 4; i++) {
-            memcpy(cvs[i], self->key, sizeof(cvs[i]));
-        }
+/* A backend's batched compress: lane i compresses blocks[i] under
+ * cv_inputs[i] and writes its CV as 32 little-endian bytes in out_cvs[i]
+ * (blake3NeonCompress4, blake3SSE41Compress4, blake3AVX2Compress8) */
+typedef void blake3BatchCompressFn(const uint32_t *const cv_inputs[],
+                                   const uint8_t *const blocks[],
+                                   const uint8_t block_lens[],
+                                   const uint64_t counters[],
+                                   const uint8_t flag_set[],
+                                   uint8_t out_cvs[][32]);
+
+/* SIMD batch path: hash 'lanes' full chunks at a time through 'compress',
+ * then push the chunk CVs onto the merkle stack, while whole batches
+ * remain.  Caller guarantees the precondition: the backend is available,
+ * buf is empty and no chunk is in flight.  Always inlined, so each call
+ * site specializes on its constant lane count and compressor. */
+DK_INLINE_ALWAYS void process_chunks_batch(blake3Hasher *self,
+                                           const uint8_t **in_ptr,
+                                           size_t *in_len, size_t lanes,
+                                           blake3BatchCompressFn *compress) {
+    assert(lanes <= BLAKE3_BATCH_AVX2_CHUNKS);
+    while (*in_len >= lanes * BLAKE3_CHUNK_LEN) {
+        uint32_t cvs[BLAKE3_BATCH_AVX2_CHUNKS][8];
+        const uint32_t *cv_in[BLAKE3_BATCH_AVX2_CHUNKS];
+        uint64_t counters[BLAKE3_BATCH_AVX2_CHUNKS];
+        uint8_t block_lens[BLAKE3_BATCH_AVX2_CHUNKS];
+        uint8_t flag_set[BLAKE3_BATCH_AVX2_CHUNKS];
+        const uint8_t *blocks[BLAKE3_BATCH_AVX2_CHUNKS];
+        uint8_t out[BLAKE3_BATCH_AVX2_CHUNKS][32];
         const uint64_t base = self->chunk_counter;
-        const uint64_t counters[4] = {base, base + 1, base + 2, base + 3};
+        for (size_t i = 0; i < lanes; i++) {
+            memcpy(cvs[i], self->key, sizeof(cvs[i]));
+            cv_in[i] = cvs[i];
+            counters[i] = base + i;
+            block_lens[i] = BLAKE3_BLOCK_LEN;
+        }
 
         const uint8_t *in = *in_ptr;
-        for (int blk = 0; blk < 16; blk++) {
-            const uint8_t *blocks[4] = {
-                in + 0 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 1 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 2 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 3 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-            };
+        for (size_t blk = 0; blk < 16; blk++) {
             uint8_t flags = self->flags;
             if (blk == 0) {
                 flags |= BLAKE3_FLAG_CHUNK_START;
@@ -495,154 +507,28 @@ static void process_4_chunks_simd(blake3Hasher *self, const uint8_t **in_ptr,
             if (blk == 15) {
                 flags |= BLAKE3_FLAG_CHUNK_END;
             }
-            const uint8_t flag_set[4] = {flags, flags, flags, flags};
-            const uint8_t block_lens[4] = {64, 64, 64, 64};
-            uint8_t out_bytes[4][32];
-            const uint32_t *cv_in[4] = {cvs[0], cvs[1], cvs[2], cvs[3]};
-            blake3NeonCompress4(cv_in, blocks, block_lens, counters, flag_set,
-                                out_bytes);
-            /* LE host: just memcpy.  This replaced a per-byte loop that
-             * was a measurable fraction of total inner-loop cost. */
-            for (int i = 0; i < 4; i++) {
-                memcpy(cvs[i], out_bytes[i], sizeof(cvs[i]));
+            for (size_t i = 0; i < lanes; i++) {
+                blocks[i] = in + i * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN;
+                flag_set[i] = flags;
             }
+
+            compress(cv_in, blocks, block_lens, counters, flag_set, out);
             if (blk == 15) {
-                for (int i = 0; i < 4; i++) {
-                    uint8_t cv_bytes[32];
-                    memcpy(cv_bytes, out_bytes[i], 32);
-                    hasher_push_chunk_cv(self, cv_bytes, base + i + 1);
+                for (size_t i = 0; i < lanes; i++) {
+                    hasher_push_chunk_cv(self, out[i], base + i + 1);
+                }
+            } else {
+                for (size_t i = 0; i < lanes; i++) {
+                    for (size_t w = 0; w < 8; w++) {
+                        cvs[i][w] = dkLoadLe32(out[i] + 4 * w);
+                    }
                 }
             }
         }
 
-        self->chunk_counter = base + 4;
-        *in_ptr += 4 * BLAKE3_CHUNK_LEN;
-        *in_len -= 4 * BLAKE3_CHUNK_LEN;
-    }
-}
-
-/* SIMD batch path: hash 4 full chunks in parallel via blake3SSE41Compress4.
- * Identical structure to the NEON path; the only difference is the
- * underlying compressor. Selected on x86 hosts that lack AVX2 but have
- * SSE4.1. */
-static void process_4_chunks_simd_sse41(blake3Hasher *self,
-                                        const uint8_t **in_ptr,
-                                        size_t *in_len) {
-    while (*in_len >= BLAKE3_BATCH_SSE41_CHUNKS * BLAKE3_CHUNK_LEN) {
-        uint32_t cvs[4][8];
-        for (int i = 0; i < 4; i++) {
-            memcpy(cvs[i], self->key, sizeof(cvs[i]));
-        }
-        const uint64_t base = self->chunk_counter;
-        const uint64_t counters[4] = {base, base + 1, base + 2, base + 3};
-
-        const uint8_t *in = *in_ptr;
-        for (int blk = 0; blk < 16; blk++) {
-            const uint8_t *blocks[4] = {
-                in + 0 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 1 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 2 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 3 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-            };
-            uint8_t flags = self->flags;
-            if (blk == 0) {
-                flags |= BLAKE3_FLAG_CHUNK_START;
-            }
-            if (blk == 15) {
-                flags |= BLAKE3_FLAG_CHUNK_END;
-            }
-            const uint8_t flag_set[4] = {flags, flags, flags, flags};
-            const uint8_t block_lens[4] = {64, 64, 64, 64};
-            uint8_t out_bytes[4][32];
-            const uint32_t *cv_in[4] = {cvs[0], cvs[1], cvs[2], cvs[3]};
-            blake3SSE41Compress4(cv_in, blocks, block_lens, counters, flag_set,
-                                 out_bytes);
-            /* LE host: just memcpy.  Matches the NEON 4-batch shape. */
-            for (int i = 0; i < 4; i++) {
-                memcpy(cvs[i], out_bytes[i], sizeof(cvs[i]));
-            }
-            if (blk == 15) {
-                for (int i = 0; i < 4; i++) {
-                    uint8_t cv_bytes[32];
-                    memcpy(cv_bytes, out_bytes[i], 32);
-                    hasher_push_chunk_cv(self, cv_bytes, base + i + 1);
-                }
-            }
-        }
-
-        self->chunk_counter = base + 4;
-        *in_ptr += 4 * BLAKE3_CHUNK_LEN;
-        *in_len -= 4 * BLAKE3_CHUNK_LEN;
-    }
-}
-
-/* SIMD batch path: hash 8 full chunks in parallel via blake3AVX2Compress8,
- * then push the 8 resulting chunk CVs onto the merkle stack.  Caller
- * guarantees the precondition: AVX2 available, buf empty, no in-flight
- * chunk, and input_len >= BLAKE3_BATCH_AVX2_CHUNKS *
- * BLAKE3_CHUNK_LEN.
- *
- * Direct 8-wide analog of process_4_chunks_simd; the structure is
- * identical except for the lane count.  blake3AVX2Compress8's calling
- * convention matches blake3NeonCompress4 exactly (parallel-arrays of
- * cv pointers, block pointers, lens, counters, flag_set, with a
- * per-lane 32-byte output CV). */
-static void process_8_chunks_simd_avx2(blake3Hasher *self,
-                                       const uint8_t **in_ptr, size_t *in_len) {
-    while (*in_len >= BLAKE3_BATCH_AVX2_CHUNKS * BLAKE3_CHUNK_LEN) {
-        uint32_t cvs[8][8];
-        for (int i = 0; i < 8; i++) {
-            memcpy(cvs[i], self->key, sizeof(cvs[i]));
-        }
-        const uint64_t base = self->chunk_counter;
-        const uint64_t counters[8] = {
-            base + 0, base + 1, base + 2, base + 3,
-            base + 4, base + 5, base + 6, base + 7,
-        };
-
-        const uint8_t *in = *in_ptr;
-        for (int blk = 0; blk < 16; blk++) {
-            const uint8_t *blocks[8] = {
-                in + 0 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 1 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 2 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 3 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 4 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 5 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 6 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-                in + 7 * BLAKE3_CHUNK_LEN + blk * BLAKE3_BLOCK_LEN,
-            };
-            uint8_t flags = self->flags;
-            if (blk == 0) {
-                flags |= BLAKE3_FLAG_CHUNK_START;
-            }
-            if (blk == 15) {
-                flags |= BLAKE3_FLAG_CHUNK_END;
-            }
-            const uint8_t flag_set[8] = {flags, flags, flags, flags,
-                                         flags, flags, flags, flags};
-            const uint8_t block_lens[8] = {64, 64, 64, 64, 64, 64, 64, 64};
-            uint8_t out_bytes[8][32];
-            const uint32_t *cv_in[8] = {cvs[0], cvs[1], cvs[2], cvs[3],
-                                        cvs[4], cvs[5], cvs[6], cvs[7]};
-            blake3AVX2Compress8(cv_in, blocks, block_lens, counters, flag_set,
-                                out_bytes);
-            /* LE host: just memcpy. */
-            for (int i = 0; i < 8; i++) {
-                memcpy(cvs[i], out_bytes[i], sizeof(cvs[i]));
-            }
-            if (blk == 15) {
-                for (int i = 0; i < 8; i++) {
-                    uint8_t cv_bytes[32];
-                    memcpy(cv_bytes, out_bytes[i], 32);
-                    hasher_push_chunk_cv(self, cv_bytes, base + i + 1);
-                }
-            }
-        }
-
-        self->chunk_counter = base + 8;
-        *in_ptr += 8 * BLAKE3_CHUNK_LEN;
-        *in_len -= 8 * BLAKE3_CHUNK_LEN;
+        self->chunk_counter = base + lanes;
+        *in_ptr += lanes * BLAKE3_CHUNK_LEN;
+        *in_len -= lanes * BLAKE3_CHUNK_LEN;
     }
 }
 
@@ -719,24 +605,30 @@ blake3Backend blake3DispatcherActiveBackend(void) {
 /* Run whichever batch backend simd_batch_ready selected.  Falls
  * through silently when called with BATCH_NONE (single-place no-op
  * keeps the call sites in blake3HasherUpdate uncluttered). */
-static inline void run_simd_batch(blake3Hasher *self, batchBackend b,
-                                  const uint8_t **in_ptr, size_t *in_len) {
+static void run_simd_batch(blake3Hasher *self, batchBackend b,
+                           const uint8_t **in_ptr, size_t *in_len) {
     if (b == BATCH_AVX2_8) {
-        process_8_chunks_simd_avx2(self, in_ptr, in_len);
+        process_chunks_batch(self, in_ptr, in_len, BLAKE3_BATCH_AVX2_CHUNKS,
+                             blake3AVX2Compress8);
         /* After AVX2 drains all 8-batches, the remainder may still be
          * large enough for a narrower 4-batch.  Try NEON (mostly a
          * no-op on x86) then SSE4.1 before falling back to scalar. */
         if (blake3NeonAvailable() &&
             *in_len >= BLAKE3_BATCH_NEON_CHUNKS * BLAKE3_CHUNK_LEN) {
-            process_4_chunks_simd(self, in_ptr, in_len);
+            process_chunks_batch(self, in_ptr, in_len, BLAKE3_BATCH_NEON_CHUNKS,
+                                 blake3NeonCompress4);
         } else if (blake3SSE41Available() &&
                    *in_len >= BLAKE3_BATCH_SSE41_CHUNKS * BLAKE3_CHUNK_LEN) {
-            process_4_chunks_simd_sse41(self, in_ptr, in_len);
+            process_chunks_batch(self, in_ptr, in_len,
+                                 BLAKE3_BATCH_SSE41_CHUNKS,
+                                 blake3SSE41Compress4);
         }
     } else if (b == BATCH_NEON_4) {
-        process_4_chunks_simd(self, in_ptr, in_len);
+        process_chunks_batch(self, in_ptr, in_len, BLAKE3_BATCH_NEON_CHUNKS,
+                             blake3NeonCompress4);
     } else if (b == BATCH_SSE41_4) {
-        process_4_chunks_simd_sse41(self, in_ptr, in_len);
+        process_chunks_batch(self, in_ptr, in_len, BLAKE3_BATCH_SSE41_CHUNKS,
+                             blake3SSE41Compress4);
     }
 }
 
