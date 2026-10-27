@@ -466,30 +466,70 @@ integer reference wherever a repeated byte string would otherwise go.
 ```c
 struct multimapAtom {
     multimap *mapAtomForward; /* {ID, Key, Refcount} sorted by ID */
-    multimap *mapAtomReverse; /* the reverse index (multimapAtomIndex) */
-    uint64_t highest;         /* next ID; bit 63: permanent, bit 62: hashed */
+    union {                   /* the reverse index (multimapAtomIndex) */
+        multimap *mapAtomReverse;   /* ORDERED, HASHED */
+        multidict *dictAtomReverse; /* DICT */
+    };
+    uint64_t highest;         /* next ID; bit 63: permanent, 61-62: index */
     atomResolved_ *resolving; /* set only during one retain or release */
 };
 ```
 
-Both inner multimaps are created with `FLEX_CAP_LEVEL_512`. IDs stay below
-`MULTIMAP_ATOM_ID_LIMIT` (2^62).
+The inner multimaps are created with `FLEX_CAP_LEVEL_512`. IDs stay below
+`MULTIMAP_ATOM_ID_LIMIT` (2^61).
 
-`mapAtomReverse` finds a key's ID. It is one of two kinds, chosen at creation
-and read back by `multimapAtomGetIndex()`:
+The reverse index finds a key's ID. It is one of three kinds, chosen at
+creation (`multimapAtomNewIndexed()`) and read back by
+`multimapAtomGetIndex()`:
 
 - `MULTIMAP_ATOM_INDEX_HASHED` (the default for `multimapAtomNew()`,
   `multimapAtomNewPermanent()` and `multimapAtomInit()`): a set of
-  `{hash of the key, ID}` rows sorted by hash. A find is an integer search for
+  `{hash of the key, ID}` rows sorted by hash. A find is one keyed search for
   the hash, then one forward lookup per candidate (normally one).
 - `MULTIMAP_ATOM_INDEX_ORDERED`: rows holding only the ID, inserted through
   `multimapInsertWithSurrogateKey()` so they sort by the _resolved_ key. Every
   comparison in a find resolves an ID through the forward map (about
-  log² n), but each atom costs about 5 bytes less.
+  log² n). The smallest index.
+- `MULTIMAP_ATOM_INDEX_DICT`: a `multidict` from each key to its ID. A find is
+  one hash and one slot search, with no forward lookup, but every key is
+  stored a second time and the dict adds a slot table and a slot allocation
+  per few atoms. Any change that starts a dict rehash finishes it before
+  returning, so lookups never modify the table (`multidictFind` would
+  otherwise step the rehash), at the cost of an occasional whole rehash
+  inside an add.
 
-Equality is `databoxCompare()`'s under both kinds (5, 5.0 and a 128-bit 5 are
-one key). A snapshot records the kind but never the hashes; restore rebuilds
-the index.
+Equality is `databoxCompare()`'s under every kind (5, 5.0 and a 128-bit 5 are
+one key). A snapshot records the kind but never the index; restore rebuilds
+it.
+
+### Choosing an index
+
+Measured 2026-10-27 on Apple silicon, clang 22 `perf` preset, 100k atoms of
+16-byte keys (`perfRegression` module `multimapAtom`; ns per operation,
+medians of 5 runs). Heap bytes come from the `multimapAtom` test "index kinds:
+heap bytes per atom", which meters the allocator over 20k atoms.
+
+| per atom                    | ORDERED | HASHED | DICT  |
+| --------------------------- | ------- | ------ | ----- |
+| find, scattered order       | 1750    | 722    | 150   |
+| intern a present key        | 1280    | 550    | 92    |
+| intern a new key            | 1995    | 1315   | 650   |
+| retain by key               | 1375    | 620    | 337   |
+| release by key              | 1415    | 640    | 366   |
+| delete by ID                | 2120    | 1040   | 628   |
+| read an ID back, scattered  | 262     | 265    | 256   |
+| heap bytes, 11-byte strings | 24.8    | 31.0   | 54.2  |
+| heap bytes, 48-byte strings | 74.0    | 79.6   | 145.9 |
+| heap bytes, integers        | 15.7    | 22.1   | 37.2  |
+
+- HASHED (default): about half ORDERED's time on every key operation for 6 to
+  7 more bytes per atom.
+- ORDERED: the least memory. For large tables of rarely searched keys, where
+  references are mostly read back by ID (the same cost under every kind).
+- DICT: 4 to 8 times faster than HASHED on finds, at about twice the memory.
+  The key is stored twice, so the cost grows with key length: it suits tables
+  of short keys searched far more often than they are added, and not tables
+  kept to share long values.
 
 ### API
 
