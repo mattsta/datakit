@@ -1777,6 +1777,28 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     }
     emitRow(module, "lookupById", 0, n, timeUtilMonotonicSec() - t0);
 
+    /* The same reads and finds in scattered order, as holders of ids
+     * spread through a program make them (the rows above walk ids and
+     * values in insertion order, which keeps the maps' recent nodes
+     * cached) */
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox ref = {.data.u = ids[perfScatter(i)],
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        databox value = {};
+        sink += multimapAtomLookup(ma, &ref, &value);
+        sink += databoxLen(&value);
+    }
+    emitRow(module, "lookupByIdScattered", 0, n, timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, perfScatter(i));
+        databox ref = {};
+        sink += multimapAtomLookupReference(ma, &k, &ref);
+    }
+    emitRow(module, "findScattered", 0, n, timeUtilMonotonicSec() - t0);
+
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
