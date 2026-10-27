@@ -461,6 +461,15 @@ void multidictEmpty(multidict *d);
 void multidictPrintStats(multidict *d);
 void multidictResizeEnable(multidict *d);
 void multidictResizeDisable(multidict *d);
+/* The count-based load factors, as entries per 100 slots: the table grows
+ * once it holds 'expandPercent' (50 to 65535) and shrinks below
+ * 'shrinkPercent' (at most 255, and at most a quarter of expandPercent);
+ * false, changing nothing, for others.  Every resize leaves the load at
+ * about half expandPercent.  A higher expandPercent keeps fewer, fuller
+ * slots: less memory per entry (each slot is an allocation and a table
+ * pointer), slightly longer slot searches. */
+bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
+                             uint32_t shrinkPercent);
 bool multidictRehash(multidict *d, int32_t n);
 int64_t multidictRehashMilliseconds(multidict *d, int64_t ms);
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed);

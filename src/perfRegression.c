@@ -632,6 +632,11 @@ static databox perfContainerKey(const char *keys, uint32_t i) {
                            PERF_CONTAINER_KEY);
 }
 
+/* i in [0, PERF_CONTAINER_N) visited in a fixed scattered order */
+static uint32_t perfScatter(uint32_t i) {
+    return (i * 7919u) % PERF_CONTAINER_N;
+}
+
 /* Sink for results the timed loops produce, so none is optimised out */
 static volatile uint64_t perfContainerSink;
 
@@ -754,6 +759,65 @@ static void benchMultidict(void) {
         sink += multidictFind(wide, &k, &v);
     }
     emitRow("multidict", "findLargeSlots", 0, n, timeUtilMonotonicSec() - t0);
+
+    perfContainerSink = sink;
+}
+
+/* multidict at each count-based load factor (run by name): adds (the
+ * bytes column is the dict's live heap after them, metered at the
+ * allocator), finds in order and scattered, and deletes */
+static void benchMultidictLoad(void) {
+    static const uint32_t loads[] = {200, 400, 800, 1600, 3200};
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    char row[48];
+    for (size_t l = 0; l < countof(loads); l++) {
+        const bool metered = ctestHeapMeterStart();
+        cleaner(multidictDefaultClassFree) multidictClass *qdc =
+            multidictDefaultClassNew();
+        cleaner(multidictFree) multidict *d =
+            multidictNew(&multidictTypeExactKey, qdc, 7);
+        multidictSetLoadFactors(d, loads[l], 10);
+        double t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            const databox v = databoxNewSigned(i);
+            sink += multidictAdd(d, &k, &v);
+        }
+        const double addSecs = timeUtilMonotonicSec() - t0;
+        while (multidictRehash(d, 1024)) {
+        }
+        const int64_t heap = metered ? ctestHeapMeterStop() : 0;
+        snprintf(row, sizeof(row), "add%" PRIu32, loads[l]);
+        emitRow("multidictLoad", row, heap > 0 ? (size_t)heap : 0, n, addSecs);
+
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            databox v = {};
+            sink += multidictFind(d, &k, &v);
+        }
+        snprintf(row, sizeof(row), "find%" PRIu32, loads[l]);
+        emitRow("multidictLoad", row, 0, n, timeUtilMonotonicSec() - t0);
+
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            databox v = {};
+            sink += multidictFind(d, &k, &v);
+        }
+        snprintf(row, sizeof(row), "findScattered%" PRIu32, loads[l]);
+        emitRow("multidictLoad", row, 0, n, timeUtilMonotonicSec() - t0);
+
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, perfScatter(i));
+            sink += multidictDelete(d, &k);
+        }
+        snprintf(row, sizeof(row), "delete%" PRIu32, loads[l]);
+        emitRow("multidictLoad", row, 0, n, timeUtilMonotonicSec() - t0);
+    }
 
     perfContainerSink = sink;
 }
@@ -961,11 +1025,6 @@ static persistCtx *perfPersistCtx(dkTestTmpDir *tmp, const char *name) {
         }                                                                      \
         emitRow(module, row, 0, (n), timeUtilMonotonicSec() - rowStart_);      \
     } while (0)
-
-/* i in [0, PERF_CONTAINER_N) visited in a fixed scattered order */
-static uint32_t perfScatter(uint32_t i) {
-    return (i * 7919u) % PERF_CONTAINER_N;
-}
 
 /* ---- Size-limit sweeps ("<family>Limits" modules, run only by name;
  * `dktools tune` reads them back) ----
@@ -2057,6 +2116,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multidictP")) {
             benchMultidictP();
+        }
+
+        if (perfNamed("multidictLoad")) {
+            benchMultidictLoad();
         }
 
         if (perfNamed("persistChecks")) {

@@ -98,14 +98,13 @@ static constexpr int MULTIDICT_MIN_SLOTS_FOR_SHRINK =
 #define MULTIDICT_DEFAULT_TARGET_SLOT_BYTES (2ULL * 1024 * 1024) /* 2MB */
 #define MULTIDICT_DEFAULT_MAX_SLOT_BYTES (8ULL * 1024 * 1024)    /* 8MB */
 
-/* 'multidict' struct layout:
- *   - ht[2] = 56 bytes * 2 = 112 bytes
- *   - *type = 8 bytes
- *   - *sharedClass = 8 bytes
- *   - rehashidx = 4 bytes
- *   - iterators = 4 bytes
- *   - bitfield = 4 bytes
- *   - TOTAL: 140 bytes of fields, padded to 144. */
+/* 'multidict' struct layout: the fields every operation reads fill the
+ * first 128 bytes (two cache lines):
+ *   - ht[2] = 48 bytes * 2 = 96 bytes
+ *   - *type, *shared = 16 bytes
+ *   - rehashidx, iterators, seed = 12 bytes
+ *   - expandLoadFactor (2), shrinkLoadFactor (1), flags (1) = 4 bytes
+ * The self-management, byte-expansion and LRU fields follow. */
 struct multidict {
     multidictHT ht[2];
     multidictType *type;
@@ -114,8 +113,7 @@ struct multidict {
                            rehashing */
     uint32_t iterators; /* number of iterators currently running */
     uint32_t seed;      /* seed for hash functions */
-    uint8_t
-        expandLoadFactor; /* expand when (count*100/slots) > this (max 255) */
+    uint16_t expandLoadFactor;      /* expand when (count*100/slots) >= this */
     uint8_t shrinkLoadFactor;       /* shrink when (count*100/slots) < this */
     uint8_t compress : 1;           /* BOOL. allow compression? */
     uint8_t rehashing : 1;          /* BOOL. true if currently rehashing. */
@@ -143,6 +141,8 @@ struct multidict {
         *lruKeyToPtr; /* Aux dict: key -> multilruPtr (as uint64) */
     multidictEvictPolicy evictPolicy; /* Eviction policy when LRU enabled */
 };
+static_assert(offsetof(struct multidict, maxMemory) == 128,
+              "the fields every operation reads fill two cache lines");
 
 /* ====================================================================
  * Repetitive Helpers
@@ -662,6 +662,15 @@ DK_STATIC uint32_t multidictLoadFactor_(const multidict *d) {
 }
 
 /* Expand the hash table if load factor exceeds threshold */
+/* Slots for 'count' entries at half the growth point's load (at least 1):
+ * a resize lands there, so the table grows again only after its entries
+ * double.  At the default 200% it is one slot per entry. */
+DK_INLINE_ALWAYS uint64_t multidictSlotsForLoad_(const multidict *d,
+                                                 const uint64_t count) {
+    const uint64_t slots = count * 200 / d->expandLoadFactor;
+    return slots > 0 ? slots : 1;
+}
+
 DK_STATIC bool multidictExpandIfNeeded_(multidict *d) {
     DBG_PRINT("multidictExpandIfNeeded_ ENTER\n");
     DBG_DICT_STATE(d, "  state on entry");
@@ -789,12 +798,14 @@ DK_STATIC bool multidictExpandIfNeeded_(multidict *d) {
         return false;
     }
 
-    /* Count-based expansion (legacy mode, used when byte-based is disabled) */
+    /* Count-based expansion (used when byte-based is disabled) */
     if (countLoadFactor >= d->expandLoadFactor) {
-        /* Expand to next fibonacci size */
+        /* The next fibonacci size, or more: enough slots to leave the
+         * load at half the growth point */
         uint64_t newSize = fibbufNextSizeBuffer(HTSIZE(d, 0));
-        if (newSize < HTCOUNT(d, 0)) {
-            newSize = fibbufNextSizeBuffer(HTCOUNT(d, 0)); /* Handle overflow */
+        const uint64_t forLoad = multidictSlotsForLoad_(d, HTCOUNT(d, 0));
+        if (newSize < forLoad) {
+            newSize = fibbufNextSizeBuffer(forLoad);
         }
         DBG_PRINT("multidictExpandIfNeeded_: COUNT-BASED EXPAND to %" PRIu64
                   "\n",
@@ -828,10 +839,10 @@ DK_STATIC bool multidictShrinkIfNeeded_(multidict *d) {
     /* Check load factor against shrink threshold */
     uint32_t loadFactor = multidictLoadFactor_(d);
     if (loadFactor < d->shrinkLoadFactor) {
-        /* Calculate new size: smallest power of 2 that maintains good load */
-        uint64_t count = HTCOUNT(d, 0);
-        uint64_t newSize = count > 0 ? count : 1;
-        newSize = _multidictNextPower(newSize);
+        /* The smallest power of 2 leaving the load at half the growth
+         * point */
+        uint64_t newSize =
+            _multidictNextPower(multidictSlotsForLoad_(d, HTCOUNT(d, 0)));
 
         /* Ensure we don't shrink below minimum */
         if (newSize < MULTIDICT_MIN_SLOTS_FOR_SHRINK) {
@@ -963,12 +974,11 @@ bool multidictResize(multidict *d) {
     }
 
     /* Fit the table to its contents the way the automatic shrink does:
-     * one slot per entry (rounded up to a power of two by the expand),
-     * never below the shrink minimum; in byte-based mode also no fewer
-     * slots than the bytes need at the target average.  (This sized from
-     * the average slot instead of the total bytes, so it nearly always
-     * asked for 0 slots and collapsed the table to its minimum.) */
-    uint64_t want = HTCOUNT(d, 0) > 0 ? HTCOUNT(d, 0) : 1;
+     * the load at half the growth point (one slot per entry at the
+     * default; rounded up to a power of two by the expand), never below
+     * the shrink minimum; in byte-based mode also no fewer slots than the
+     * bytes need at the target average */
+    uint64_t want = multidictSlotsForLoad_(d, HTCOUNT(d, 0));
     if (d->useByteBasedExpand && d->targetSlotBytes > 0) {
         const uint64_t forBytes = HTBYTES(d, 0) / d->targetSlotBytes + 1;
         if (forBytes > want) {
@@ -3144,6 +3154,21 @@ void multidictResizeDisable(multidict *d) {
     d->autoResize = false;
     d->shared->disableResize =
         true; /* Also update class for backwards compat */
+}
+
+bool multidictSetLoadFactors(multidict *d, const uint32_t expandPercent,
+                             const uint32_t shrinkPercent) {
+    /* Every resize leaves the load at about half the growth point, which
+     * must stay above the shrink point; below 50% the slot table would
+     * outweigh the entries */
+    if (!d || expandPercent < 50 || expandPercent > UINT16_MAX ||
+        shrinkPercent > UINT8_MAX || shrinkPercent * 4 > expandPercent) {
+        return false;
+    }
+
+    d->expandLoadFactor = (uint16_t)expandPercent;
+    d->shrinkLoadFactor = (uint8_t)shrinkPercent;
+    return true;
 }
 
 /* ====================================================================
@@ -8428,6 +8453,57 @@ int multidictTest(int, char *[]) {
         if (!stats.isRehashing && totalBytes != stats.usedBytes + table) {
             ERR("total %" PRIu64 " is not slots %" PRIu64 " + table %" PRIu64,
                 totalBytes, stats.usedBytes, table);
+        }
+    }
+
+    TEST("12.5a multidictSetLoadFactors: fewer slots, every key kept") {
+        cleaner(multidictMmClassFree) multidictClass *qdcLoad =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dense =
+            multidictNew(&multidictTypeExactKey, qdcLoad, 31);
+        cleaner(multidictFree) multidict *sparse =
+            multidictNew(&multidictTypeExactKey, qdcLoad, 31);
+
+        /* Refused: a growth point under half an entry per slot or past
+         * the field, a shrink point past its field or above a quarter */
+        if (multidictSetLoadFactors(dense, 40, 10) ||
+            multidictSetLoadFactors(dense, 70000, 10) ||
+            multidictSetLoadFactors(dense, 2000, 300) ||
+            multidictSetLoadFactors(dense, 400, 101) ||
+            multidictSetLoadFactors(nullptr, 400, 10) ||
+            !multidictSetLoadFactors(dense, 1600, 10)) {
+            ERR("load factor bounds wrong");
+        }
+
+        for (int j = 0; j < 4000; j++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "load-key-%d", j);
+            const databox key = databoxNewBytesString(keyBuf);
+            const databox val = databoxNewSigned(j);
+            MULTIDICT_TEST_OK(multidictAdd(dense, &key, &val));
+            MULTIDICT_TEST_OK(multidictAdd(sparse, &key, &val));
+        }
+
+        while (multidictRehash(dense, 1024) || multidictRehash(sparse, 1024)) {
+        }
+
+        /* At 1600% each slot holds up to 16 entries, at the default 2 */
+        if (multidictSlotCount(dense) * 4 > multidictSlotCount(sparse) ||
+            multidictLoadFactor(dense) > 1600) {
+            ERR("1600%%: %" PRIu64 " slots (load %u), default: %" PRIu64,
+                multidictSlotCount(dense), multidictLoadFactor(dense),
+                multidictSlotCount(sparse));
+        }
+
+        for (int j = 0; j < 4000; j++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "load-key-%d", j);
+            const databox key = databoxNewBytesString(keyBuf);
+            databox val = {};
+            if (!multidictFind(dense, &key, &val) || val.data.i64 != j) {
+                ERR("1600%%: %s lost", keyBuf);
+                break;
+            }
         }
     }
 
