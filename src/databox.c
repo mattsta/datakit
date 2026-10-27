@@ -2882,21 +2882,14 @@ int databoxTest(int, char *[]) {
     }
 
     TEST("FUZZ: random signed comparison with oracle") {
-        srand(12345);
+        /* Replayable full-width draws: every bit, the sign included */
+        uint64_t rng = 12345;
         const int numTests = 10000;
         int mismatches = 0;
 
         for (int i = 0; i < numTests; i++) {
-            int64_t a = ((int64_t)rand() << 32) | rand();
-            int64_t b = ((int64_t)rand() << 32) | rand();
-
-            /* Random sign flip */
-            if (rand() % 2) {
-                a = -a;
-            }
-            if (rand() % 2) {
-                b = -b;
-            }
+            const int64_t a = (int64_t)dkSplitmix64Next(&rng);
+            const int64_t b = (int64_t)dkSplitmix64Next(&rng);
 
             databox boxA = databoxNewSigned(a);
             databox boxB = databoxNewSigned(b);
@@ -2930,13 +2923,14 @@ int databoxTest(int, char *[]) {
     }
 
     TEST("FUZZ: random unsigned comparison with oracle") {
-        srand(23456);
+        /* Replayable full-width draws: half of them at or above 2^63 */
+        uint64_t rng = 23456;
         const int numTests = 10000;
         int mismatches = 0;
 
         for (int i = 0; i < numTests; i++) {
-            uint64_t a = ((uint64_t)rand() << 32) | rand();
-            uint64_t b = ((uint64_t)rand() << 32) | rand();
+            const uint64_t a = dkSplitmix64Next(&rng);
+            const uint64_t b = dkSplitmix64Next(&rng);
 
             databox boxA = databoxNewUnsigned(a);
             databox boxB = databoxNewUnsigned(b);
@@ -3084,6 +3078,7 @@ int databoxTest(int, char *[]) {
 
     TEST("FUZZ: stress test - 100K random comparisons") {
         srand(99999);
+        uint64_t rng = 99999; /* replayable full-width integers */
         const int numTests = 100'000;
         int errors = 0;
 
@@ -3095,22 +3090,16 @@ int databoxTest(int, char *[]) {
             switch (type) {
             case 0: {
                 /* Signed */
-                int64_t a = ((int64_t)rand() << 32) | rand();
-                int64_t b = ((int64_t)rand() << 32) | rand();
-                if (rand() % 2) {
-                    a = -a;
-                }
-                if (rand() % 2) {
-                    b = -b;
-                }
+                const int64_t a = (int64_t)dkSplitmix64Next(&rng);
+                const int64_t b = (int64_t)dkSplitmix64Next(&rng);
                 boxA = databoxNewSigned(a);
                 boxB = databoxNewSigned(b);
                 break;
             }
             case 1: {
                 /* Unsigned */
-                uint64_t a = ((uint64_t)rand() << 32) | rand();
-                uint64_t b = ((uint64_t)rand() << 32) | rand();
+                const uint64_t a = dkSplitmix64Next(&rng);
+                const uint64_t b = dkSplitmix64Next(&rng);
                 boxA = databoxNewUnsigned(a);
                 boxB = databoxNewUnsigned(b);
                 break;

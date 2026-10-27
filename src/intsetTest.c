@@ -1330,6 +1330,7 @@ int intsetTest(int, char *[]) {
             zcalloc(NUM_VALUES, sizeof(int64_t));
 
         /* Generate values across all three width categories */
+        uint64_t rng = 0x1A75E7; /* replayable full-width int64 draws */
         for (int i = 0; i < NUM_VALUES; i++) {
             int category = rand() % 3;
             int64_t val;
@@ -1343,11 +1344,8 @@ int intsetTest(int, char *[]) {
                     val = -val;
                 }
                 break;
-            case 2: /* int64 range */
-                val = ((int64_t)rand() << 32) | rand();
-                if (rand() % 2) {
-                    val = -val;
-                }
+            case 2: /* int64 range, both extremes reachable */
+                val = (int64_t)dkSplitmix64Next(&rng);
                 break;
             default:
                 val = rand();
