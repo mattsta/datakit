@@ -67,8 +67,16 @@ OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
                                                         const char **errMsg);
 void OSRegulateDaemonizeSignalReady(void);
 
+/* Have the kernel send this process 'sig' when its parent exits: true
+ * once set (Linux PR_SET_PDEATHSIG); false where the platform has no such
+ * request, which then polls OSRegulateParentStillExists. */
 bool OSRegulateRequestSignalChildWhenParentExits(int sig);
-bool OSRegulateParentStillExisits(void);
+
+/* Whether this process has not been reparented to init (pid 1), which
+ * is where an orphan goes once its parent exits.  A process started under
+ * init, or reparented to a Linux subreaper (PR_SET_CHILD_SUBREAPER)
+ * rather than init, reads true. */
+bool OSRegulateParentStillExists(void);
 
 /* Waiting for a process to exit.  waitpid() has no timeout, so these
  * wait on a pollable exit notification instead: kqueue

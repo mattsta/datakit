@@ -361,7 +361,7 @@ bool OSRegulateRequestSignalChildWhenParentExits([[maybe_unused]] int sig) {
 #endif
 }
 
-bool OSRegulateParentStillExisits(void) {
+bool OSRegulateParentStillExists(void) {
     /* If parent is '1' we got reparented!
      * Obviously doesn't apply to daemons directly attached to init. */
     return !(getppid() == 1);
@@ -1027,7 +1027,7 @@ bool OSRegulateLinuxOvercommitEnabled(void) {
         return false; /* unparsable, as unreadable */
     }
 
-    /* Ovecommit of 0 or 1 is enabled, 2 is disabled. */
+    /* Overcommit of 0 or 1 is enabled, 2 is disabled. */
     return overcommitSetting <= 1;
 }
 
@@ -1195,8 +1195,8 @@ size_t OSRegulateRSSGet(void) {
 #endif
 
 /* Returns the size of physical memory (RAM) in bytes.
- * It looks ugly, but this is the cleanest way to achive cross platform results.
- * Cleaned up from:
+ * It looks ugly, but this is the cleanest way to achieve cross platform
+ * results. Cleaned up from:
  *
  * http://nadeausoftware.com/articles/2012/09/c_c_tip_how_get_physical_memory_size_system
  *
@@ -1529,6 +1529,19 @@ int OSRegulateTest(int, char *[]) {
     TEST("this process has a resident set") {
         if (OSRegulateRSSGet() == 0) {
             ERR("OSRegulateRSSGet returned 0 for a running process");
+        }
+    }
+
+    TEST("OSRegulateParentStillExists: a child of a live parent sees it") {
+        /* The parent waits, so it is alive for the child's whole run */
+        const pid_t child = fork();
+        if (child == 0) {
+            _exit(OSRegulateParentStillExists() ? 0 : 1);
+        }
+        int status = 0;
+        if (child < 0 || waitpid(child, &status, 0) != child ||
+            !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            ERR("the child did not see its waiting parent (status %d)", status);
         }
     }
 

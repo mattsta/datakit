@@ -190,10 +190,11 @@ bool OSRegulateRequestSignalChildWhenParentExits(int sig);
 /* Check if parent process still exists
  * Returns: true if parent is not init (PID 1), false if reparented
  *
- * Note the spelling: "Exisits". This is a getppid() poll, so it only
- * notices parent death the next time you call it.
+ * This is a getppid() poll, so it only notices parent death the next
+ * time you call it.  A process reparented to a Linux subreaper rather
+ * than init reads true.
  */
-bool OSRegulateParentStillExisits(void);
+bool OSRegulateParentStillExists(void);
 
 /* Example: Child monitors parent */
 if (OSRegulateRequestSignalChildWhenParentExits(SIGTERM)) {
@@ -209,7 +210,7 @@ if (OSRegulateRequestSignalChildWhenParentExits(SIGTERM)) {
         close(watch);
     } else {
         /* Last resort: poll */
-        while (running && OSRegulateParentStillExisits()) {
+        while (running && OSRegulateParentStillExists()) {
             // ... do work ...
         }
     }
@@ -223,7 +224,7 @@ if (OSRegulateRequestSignalChildWhenParentExits(SIGTERM)) {
 | Linux     | `prctl(PR_SET_PDEATHSIG)` - kernel signal     | `OSRegulateRequestSignalChildWhenParentExits` |
 | Linux     | pidfd - pollable descriptor                   | `OSRegulateProcessExitWatchFd`                |
 | macOS/BSD | kqueue `EVFILT_PROC` / `NOTE_EXIT` - pollable | `OSRegulateProcessExitWatchFd`                |
-| Fallback  | `getppid()` poll                              | `OSRegulateParentStillExisits`                |
+| Fallback  | `getppid()` poll                              | `OSRegulateParentStillExists`                 |
 
 `OSRegulateRequestSignalChildWhenParentExits()` returns false on every non-Linux
 platform, which is the signal to reach for the exit watch fd instead.
@@ -717,7 +718,7 @@ int main(int argc, char **argv) {
 
     /* Main loop */
     while (running) {
-        if (!OSRegulateParentStillExisits()) {
+        if (!OSRegulateParentStillExists()) {
             printf("Parent died, shutting down\n");
             break;
         }
