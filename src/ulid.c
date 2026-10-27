@@ -1412,114 +1412,51 @@ static inline void deinterleaveBits64(__uint128_t interleaved, uint64_t *ts1,
 }
 
 /* ====================================================================
- * SIMD-Optimized Bit Interleaving (SSE2)
+ * Bit Interleaving by Masks (any 64-bit machine)
  * ==================================================================== */
-#if defined(__SSE2__)
-#include <emmintrin.h>
-
-/* SSE2-optimized bit interleaving using pdep/pext emulation
- * Uses parallel bit deposit technique with SIMD */
-static inline __uint128_t interleaveBits64SSE2(uint64_t ts1, uint64_t ts2) {
-    /* Split into low and high 32-bit parts for proper interleaving */
-    uint32_t ts1_lo = (uint32_t)ts1;
-    uint32_t ts1_hi = (uint32_t)(ts1 >> 32);
-    uint32_t ts2_lo = (uint32_t)ts2;
-    uint32_t ts2_hi = (uint32_t)(ts2 >> 32);
-
-    /* Magic masks for 32-bit interleaving */
-    const uint64_t m1 = 0x5555555555555555ULL;
-    const uint64_t m2 = 0x3333333333333333ULL;
-    const uint64_t m3 = 0x0F0F0F0F0F0F0F0FULL;
-    const uint64_t m4 = 0x00FF00FF00FF00FFULL;
-    const uint64_t m5 = 0x0000FFFF0000FFFFULL;
-
-    /* Interleave low 32 bits */
-    uint64_t x_lo = ts1_lo;
-    x_lo = (x_lo | (x_lo << 16)) & m5;
-    x_lo = (x_lo | (x_lo << 8)) & m4;
-    x_lo = (x_lo | (x_lo << 4)) & m3;
-    x_lo = (x_lo | (x_lo << 2)) & m2;
-    x_lo = (x_lo | (x_lo << 1)) & m1;
-
-    uint64_t y_lo = ts2_lo;
-    y_lo = (y_lo | (y_lo << 16)) & m5;
-    y_lo = (y_lo | (y_lo << 8)) & m4;
-    y_lo = (y_lo | (y_lo << 4)) & m3;
-    y_lo = (y_lo | (y_lo << 2)) & m2;
-    y_lo = (y_lo | (y_lo << 1)) & m1;
-
-    uint64_t result_lo = x_lo | (y_lo << 1);
-
-    /* Interleave high 32 bits */
-    uint64_t x_hi = ts1_hi;
-    x_hi = (x_hi | (x_hi << 16)) & m5;
-    x_hi = (x_hi | (x_hi << 8)) & m4;
-    x_hi = (x_hi | (x_hi << 4)) & m3;
-    x_hi = (x_hi | (x_hi << 2)) & m2;
-    x_hi = (x_hi | (x_hi << 1)) & m1;
-
-    uint64_t y_hi = ts2_hi;
-    y_hi = (y_hi | (y_hi << 16)) & m5;
-    y_hi = (y_hi | (y_hi << 8)) & m4;
-    y_hi = (y_hi | (y_hi << 4)) & m3;
-    y_hi = (y_hi | (y_hi << 2)) & m2;
-    y_hi = (y_hi | (y_hi << 1)) & m1;
-
-    uint64_t result_hi = x_hi | (y_hi << 1);
-
-    /* Combine into 128-bit result */
-    __uint128_t result = ((__uint128_t)result_hi << 64) | result_lo;
-    return result;
+/* The 32 bits of 'x' spread to the even bit positions of a word (bit i
+ * to bit 2i): five shift-and-mask steps, each halving the gap moved */
+static inline uint64_t ulidSpreadBits32(uint32_t x) {
+    uint64_t v = x;
+    v = (v | (v << 16)) & UINT64_C(0x0000FFFF0000FFFF);
+    v = (v | (v << 8)) & UINT64_C(0x00FF00FF00FF00FF);
+    v = (v | (v << 4)) & UINT64_C(0x0F0F0F0F0F0F0F0F);
+    v = (v | (v << 2)) & UINT64_C(0x3333333333333333);
+    v = (v | (v << 1)) & UINT64_C(0x5555555555555555);
+    return v;
 }
 
-/* SSE2-optimized bit deinterleaving */
-static inline void deinterleaveBits64SSE2(__uint128_t interleaved,
-                                          uint64_t *ts1, uint64_t *ts2) {
-    const uint64_t m1 = 0x5555555555555555ULL;
-    const uint64_t m2 = 0x3333333333333333ULL;
-    const uint64_t m3 = 0x0F0F0F0F0F0F0F0FULL;
-    const uint64_t m4 = 0x00FF00FF00FF00FFULL;
-    const uint64_t m5 = 0x0000FFFF0000FFFFULL;
-
-    /* Extract low 64 bits and high 64 bits */
-    uint64_t interleaved_lo = (uint64_t)interleaved;
-    uint64_t interleaved_hi = (uint64_t)(interleaved >> 64);
-
-    /* Deinterleave low 64 bits */
-    uint64_t x_lo = interleaved_lo & m1;
-    x_lo = (x_lo | (x_lo >> 1)) & m2;
-    x_lo = (x_lo | (x_lo >> 2)) & m3;
-    x_lo = (x_lo | (x_lo >> 4)) & m4;
-    x_lo = (x_lo | (x_lo >> 8)) & m5;
-    x_lo = (x_lo | (x_lo >> 16));
-
-    uint64_t y_lo = (interleaved_lo >> 1) & m1;
-    y_lo = (y_lo | (y_lo >> 1)) & m2;
-    y_lo = (y_lo | (y_lo >> 2)) & m3;
-    y_lo = (y_lo | (y_lo >> 4)) & m4;
-    y_lo = (y_lo | (y_lo >> 8)) & m5;
-    y_lo = (y_lo | (y_lo >> 16));
-
-    /* Deinterleave high 64 bits */
-    uint64_t x_hi = interleaved_hi & m1;
-    x_hi = (x_hi | (x_hi >> 1)) & m2;
-    x_hi = (x_hi | (x_hi >> 2)) & m3;
-    x_hi = (x_hi | (x_hi >> 4)) & m4;
-    x_hi = (x_hi | (x_hi >> 8)) & m5;
-    x_hi = (x_hi | (x_hi >> 16));
-
-    uint64_t y_hi = (interleaved_hi >> 1) & m1;
-    y_hi = (y_hi | (y_hi >> 1)) & m2;
-    y_hi = (y_hi | (y_hi >> 2)) & m3;
-    y_hi = (y_hi | (y_hi >> 4)) & m4;
-    y_hi = (y_hi | (y_hi >> 8)) & m5;
-    y_hi = (y_hi | (y_hi >> 16));
-
-    /* Combine into final results */
-    *ts1 = ((uint64_t)x_hi << 32) | (uint32_t)x_lo;
-    *ts2 = ((uint64_t)y_hi << 32) | (uint32_t)y_lo;
+/* The even bits of 'v' gathered into 32 bits (bit 2i to bit i): the
+ * inverse of ulidSpreadBits32 */
+static inline uint32_t ulidGatherEvenBits64(uint64_t v) {
+    v &= UINT64_C(0x5555555555555555);
+    v = (v | (v >> 1)) & UINT64_C(0x3333333333333333);
+    v = (v | (v >> 2)) & UINT64_C(0x0F0F0F0F0F0F0F0F);
+    v = (v | (v >> 4)) & UINT64_C(0x00FF00FF00FF00FF);
+    v = (v | (v >> 8)) & UINT64_C(0x0000FFFF0000FFFF);
+    v = (v | (v >> 16));
+    return (uint32_t)v;
 }
-#endif
+
+/* interleaveBits64's layout by spreading each 32-bit half */
+static inline __uint128_t interleaveBits64Masks(uint64_t ts1, uint64_t ts2) {
+    const uint64_t lo =
+        ulidSpreadBits32((uint32_t)ts1) | ulidSpreadBits32((uint32_t)ts2) << 1;
+    const uint64_t hi = ulidSpreadBits32((uint32_t)(ts1 >> 32)) |
+                        ulidSpreadBits32((uint32_t)(ts2 >> 32)) << 1;
+    return ((__uint128_t)hi << 64) | lo;
+}
+
+/* deinterleaveBits64 by gathering the even (ts1) and odd (ts2) bits of
+ * each 64-bit half */
+static inline void deinterleaveBits64Masks(__uint128_t interleaved,
+                                           uint64_t *ts1, uint64_t *ts2) {
+    const uint64_t lo = (uint64_t)interleaved;
+    const uint64_t hi = (uint64_t)(interleaved >> 64);
+    *ts1 = (uint64_t)ulidGatherEvenBits64(hi) << 32 | ulidGatherEvenBits64(lo);
+    *ts2 = (uint64_t)ulidGatherEvenBits64(hi >> 1) << 32 |
+           ulidGatherEvenBits64(lo >> 1);
+}
 
 /* ====================================================================
  * SIMD-Optimized Bit Interleaving (AVX2 with BMI2)
@@ -1565,128 +1502,31 @@ static inline void deinterleaveBits64AVX2(__uint128_t interleaved,
 #endif
 
 /* ====================================================================
- * SIMD-Optimized Bit Interleaving (ARM NEON)
- * ==================================================================== */
-#ifdef __ARM_NEON
-#include <arm_neon.h>
-
-/* NEON-optimized bit interleaving */
-static inline __uint128_t interleaveBits64NEON(uint64_t ts1, uint64_t ts2) {
-    /* Split into low and high 32-bit parts for proper interleaving */
-    uint32_t ts1_lo = (uint32_t)ts1;
-    uint32_t ts1_hi = (uint32_t)(ts1 >> 32);
-    uint32_t ts2_lo = (uint32_t)ts2;
-    uint32_t ts2_hi = (uint32_t)(ts2 >> 32);
-
-    /* Magic masks for 32-bit interleaving */
-    const uint64_t m1 = 0x5555555555555555ULL;
-    const uint64_t m2 = 0x3333333333333333ULL;
-    const uint64_t m3 = 0x0F0F0F0F0F0F0F0FULL;
-    const uint64_t m4 = 0x00FF00FF00FF00FFULL;
-    const uint64_t m5 = 0x0000FFFF0000FFFFULL;
-
-    /* Interleave low 32 bits */
-    uint64_t x_lo = ts1_lo;
-    x_lo = (x_lo | (x_lo << 16)) & m5;
-    x_lo = (x_lo | (x_lo << 8)) & m4;
-    x_lo = (x_lo | (x_lo << 4)) & m3;
-    x_lo = (x_lo | (x_lo << 2)) & m2;
-    x_lo = (x_lo | (x_lo << 1)) & m1;
-
-    uint64_t y_lo = ts2_lo;
-    y_lo = (y_lo | (y_lo << 16)) & m5;
-    y_lo = (y_lo | (y_lo << 8)) & m4;
-    y_lo = (y_lo | (y_lo << 4)) & m3;
-    y_lo = (y_lo | (y_lo << 2)) & m2;
-    y_lo = (y_lo | (y_lo << 1)) & m1;
-
-    uint64_t result_lo = x_lo | (y_lo << 1);
-
-    /* Interleave high 32 bits */
-    uint64_t x_hi = ts1_hi;
-    x_hi = (x_hi | (x_hi << 16)) & m5;
-    x_hi = (x_hi | (x_hi << 8)) & m4;
-    x_hi = (x_hi | (x_hi << 4)) & m3;
-    x_hi = (x_hi | (x_hi << 2)) & m2;
-    x_hi = (x_hi | (x_hi << 1)) & m1;
-
-    uint64_t y_hi = ts2_hi;
-    y_hi = (y_hi | (y_hi << 16)) & m5;
-    y_hi = (y_hi | (y_hi << 8)) & m4;
-    y_hi = (y_hi | (y_hi << 4)) & m3;
-    y_hi = (y_hi | (y_hi << 2)) & m2;
-    y_hi = (y_hi | (y_hi << 1)) & m1;
-
-    uint64_t result_hi = x_hi | (y_hi << 1);
-
-    /* Combine into 128-bit result */
-    __uint128_t result = ((__uint128_t)result_hi << 64) | result_lo;
-    return result;
-}
-
-/* NEON-optimized bit deinterleaving */
-static inline void deinterleaveBits64NEON(__uint128_t interleaved,
-                                          uint64_t *ts1, uint64_t *ts2) {
-    const uint64_t m1 = 0x5555555555555555ULL;
-    const uint64_t m2 = 0x3333333333333333ULL;
-    const uint64_t m3 = 0x0F0F0F0F0F0F0F0FULL;
-    const uint64_t m4 = 0x00FF00FF00FF00FFULL;
-    const uint64_t m5 = 0x0000FFFF0000FFFFULL;
-
-    /* Extract low 64 bits and high 64 bits */
-    uint64_t interleaved_lo = (uint64_t)interleaved;
-    uint64_t interleaved_hi = (uint64_t)(interleaved >> 64);
-
-    /* Deinterleave low 64 bits */
-    uint64_t x_lo = interleaved_lo & m1;
-    x_lo = (x_lo | (x_lo >> 1)) & m2;
-    x_lo = (x_lo | (x_lo >> 2)) & m3;
-    x_lo = (x_lo | (x_lo >> 4)) & m4;
-    x_lo = (x_lo | (x_lo >> 8)) & m5;
-    x_lo = (x_lo | (x_lo >> 16));
-
-    uint64_t y_lo = (interleaved_lo >> 1) & m1;
-    y_lo = (y_lo | (y_lo >> 1)) & m2;
-    y_lo = (y_lo | (y_lo >> 2)) & m3;
-    y_lo = (y_lo | (y_lo >> 4)) & m4;
-    y_lo = (y_lo | (y_lo >> 8)) & m5;
-    y_lo = (y_lo | (y_lo >> 16));
-
-    /* Deinterleave high 64 bits */
-    uint64_t x_hi = interleaved_hi & m1;
-    x_hi = (x_hi | (x_hi >> 1)) & m2;
-    x_hi = (x_hi | (x_hi >> 2)) & m3;
-    x_hi = (x_hi | (x_hi >> 4)) & m4;
-    x_hi = (x_hi | (x_hi >> 8)) & m5;
-    x_hi = (x_hi | (x_hi >> 16));
-
-    uint64_t y_hi = (interleaved_hi >> 1) & m1;
-    y_hi = (y_hi | (y_hi >> 1)) & m2;
-    y_hi = (y_hi | (y_hi >> 2)) & m3;
-    y_hi = (y_hi | (y_hi >> 4)) & m4;
-    y_hi = (y_hi | (y_hi >> 8)) & m5;
-    y_hi = (y_hi | (y_hi >> 16));
-
-    /* Combine into final results */
-    *ts1 = ((uint64_t)x_hi << 32) | (uint32_t)x_lo;
-    *ts2 = ((uint64_t)y_hi << 32) | (uint32_t)y_lo;
-}
-#endif
-
-/* ====================================================================
  * Dispatch Functions - Select Best Implementation
  * ==================================================================== */
 
 /* Implementation selection for interleaving */
 typedef enum interleaveImpl {
-    INTERLEAVE_SCALAR = 0,
-    INTERLEAVE_SSE2,
-    INTERLEAVE_AVX2,
-    INTERLEAVE_NEON,
+    INTERLEAVE_SCALAR = 0, /* bit by bit: the reference */
+    INTERLEAVE_MASKS,      /* shift-and-mask spreading, any machine */
+    INTERLEAVE_AVX2,       /* BMI2 pdep/pext */
     INTERLEAVE_AUTO
 } interleaveImpl;
 
 static interleaveImpl g_interleaveImpl = INTERLEAVE_AUTO;
+
+/* 'impl', with AUTO as the fastest this build has */
+static inline interleaveImpl interleaveImplResolve(interleaveImpl impl) {
+    if (impl != INTERLEAVE_AUTO) {
+        return impl;
+    }
+
+#if defined(__AVX2__) && defined(__BMI2__)
+    return INTERLEAVE_AVX2;
+#else
+    return INTERLEAVE_MASKS;
+#endif
+}
 
 #ifdef DATAKIT_TEST
 /* Set implementation (for benchmarking) */
@@ -1694,41 +1534,21 @@ static void setInterleaveImpl(interleaveImpl impl) {
     g_interleaveImpl = impl;
 }
 
-/* Get current implementation */
+/* The implementation in use, AUTO resolved */
 static interleaveImpl getInterleaveImpl(void) {
-    return g_interleaveImpl;
+    return interleaveImplResolve(g_interleaveImpl);
 }
 #endif
 
 /* Dispatch wrapper for interleave */
 static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
-    interleaveImpl impl = g_interleaveImpl;
-
-    if (impl == INTERLEAVE_AUTO) {
-#if defined(__AVX2__) && defined(__BMI2__)
-        impl = INTERLEAVE_AVX2;
-#elifdef __SSE2__
-        impl = INTERLEAVE_SSE2;
-#elifdef __ARM_NEON
-        impl = INTERLEAVE_NEON;
-#else
-        impl = INTERLEAVE_SCALAR;
-#endif
-    }
-
-    switch (impl) {
+    switch (interleaveImplResolve(g_interleaveImpl)) {
 #if defined(__AVX2__) && defined(__BMI2__)
     case INTERLEAVE_AVX2:
         return interleaveBits64AVX2(ts1, ts2);
 #endif
-#if defined(__SSE2__)
-    case INTERLEAVE_SSE2:
-        return interleaveBits64SSE2(ts1, ts2);
-#endif
-#ifdef __ARM_NEON
-    case INTERLEAVE_NEON:
-        return interleaveBits64NEON(ts1, ts2);
-#endif
+    case INTERLEAVE_MASKS:
+        return interleaveBits64Masks(ts1, ts2);
     case INTERLEAVE_SCALAR:
     default:
         return interleaveBits64(ts1, ts2);
@@ -1738,36 +1558,15 @@ static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
 /* Dispatch wrapper for deinterleave */
 static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
                                               uint64_t *ts1, uint64_t *ts2) {
-    interleaveImpl impl = g_interleaveImpl;
-
-    if (impl == INTERLEAVE_AUTO) {
-#if defined(__AVX2__) && defined(__BMI2__)
-        impl = INTERLEAVE_AVX2;
-#elifdef __SSE2__
-        impl = INTERLEAVE_SSE2;
-#elifdef __ARM_NEON
-        impl = INTERLEAVE_NEON;
-#else
-        impl = INTERLEAVE_SCALAR;
-#endif
-    }
-
-    switch (impl) {
+    switch (interleaveImplResolve(g_interleaveImpl)) {
 #if defined(__AVX2__) && defined(__BMI2__)
     case INTERLEAVE_AVX2:
         deinterleaveBits64AVX2(interleaved, ts1, ts2);
         break;
 #endif
-#if defined(__SSE2__)
-    case INTERLEAVE_SSE2:
-        deinterleaveBits64SSE2(interleaved, ts1, ts2);
+    case INTERLEAVE_MASKS:
+        deinterleaveBits64Masks(interleaved, ts1, ts2);
         break;
-#endif
-#ifdef __ARM_NEON
-    case INTERLEAVE_NEON:
-        deinterleaveBits64NEON(interleaved, ts1, ts2);
-        break;
-#endif
     case INTERLEAVE_SCALAR:
     default:
         deinterleaveBits64(interleaved, ts1, ts2);
@@ -2373,6 +2172,64 @@ static void ulidTestGenerateAt(ulid64_t *out, ulidVariantType type,
     ulid64Generate(&g, out, type);
     *after = timeUtilMonotonicNs() + g.clockOffsetNs;
 }
+
+typedef __uint128_t ulidInterleaveFn(uint64_t ts1, uint64_t ts2);
+typedef void ulidDeinterleaveFn(__uint128_t interleaved, uint64_t *ts1,
+                                uint64_t *ts2);
+
+/* 'name''s interleave against the bit-by-bit reference and its
+ * deinterleave as the inverse, over the 'n' pairs (a[i], b[i]); returns
+ * the failures */
+static int32_t ulidInterleaveCheck_(const char *name, ulidInterleaveFn *inter,
+                                    ulidDeinterleaveFn *deinter,
+                                    const uint64_t *a, const uint64_t *b,
+                                    size_t n) {
+    int32_t err = 0;
+    for (size_t i = 0; i < n; i++) {
+        const __uint128_t got = inter(a[i], b[i]);
+        if (got != interleaveBits64(a[i], b[i])) {
+            ERR("%s: pair %zu interleaves unlike the reference", name, i);
+        }
+
+        uint64_t x;
+        uint64_t y;
+        deinter(got, &x, &y);
+        if (x != a[i] || y != b[i]) {
+            ERR("%s: pair %zu came back (%" PRIu64 ",%" PRIu64
+                "), want (%" PRIu64 ",%" PRIu64 ")",
+                name, i, x, y, a[i], b[i]);
+        }
+    }
+
+    return err;
+}
+
+/* Times 'inter' then 'deinter' (called directly, so inlined as the
+ * dispatch inlines them) over 'iterations' calls each */
+#define ULID_INTERLEAVE_BENCH(name, inter, deinter, iterations, ts1, ts2)      \
+    do {                                                                       \
+        [[maybe_unused]] volatile __uint128_t sink_ = 0;                       \
+        [[maybe_unused]] volatile uint64_t sink1_ = 0;                         \
+        [[maybe_unused]] volatile uint64_t sink2_ = 0;                         \
+        printf("\n      " name " interleave:\n");                              \
+        PERF_TIMERS_SETUP;                                                     \
+        for (size_t i_ = 0; i_ < (iterations); i_++) {                         \
+            sink_ = inter((ts1) + i_, (ts2) + i_);                             \
+        }                                                                      \
+        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, name " interleave ops");  \
+        printf("      " name " deinterleave:\n");                              \
+        const __uint128_t from_ = inter(ts1, ts2);                             \
+        PERF_TIMERS_SETUP;                                                     \
+        for (size_t i_ = 0; i_ < (iterations); i_++) {                         \
+            uint64_t a_;                                                       \
+            uint64_t b_;                                                       \
+            deinter(from_ + i_, &a_, &b_);                                     \
+            sink1_ = a_;                                                       \
+            sink2_ = b_;                                                       \
+        }                                                                      \
+        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations,                           \
+                                         name " deinterleave ops");            \
+    } while (0)
 
 int ulidTest(int, char *[]) {
     int32_t err = 0;
@@ -4167,214 +4024,59 @@ int ulidTest(int, char *[]) {
                                timeUtilNs() + 2000,
                                timeUtilNs() - 2'000'000};
 
-        /* Test scalar implementation */
-        printf("      Testing SCALAR implementation:\n");
-        for (size_t i = 0; i < num_tests; i++) {
-            __uint128_t interleaved =
-                interleaveBits64(test_ts1[i], test_ts2[i]);
-            uint64_t extracted_ts1, extracted_ts2;
-            deinterleaveBits64(interleaved, &extracted_ts1, &extracted_ts2);
-
-            if (extracted_ts1 != test_ts1[i] || extracted_ts2 != test_ts2[i]) {
-                ERR("SCALAR roundtrip failed for test %zu: "
-                    "(%" PRIu64 ",%" PRIu64 ") != (%" PRIu64 ",%" PRIu64 ")",
-                    i, extracted_ts1, extracted_ts2, test_ts1[i], test_ts2[i]);
-            }
+        /* Then each single bit on either side, then replayable random
+         * pairs: every output bit position is reached from both inputs */
+        constexpr size_t pairs = 10 + 2 * 64 + 256;
+        uint64_t a[pairs];
+        uint64_t b[pairs];
+        size_t n = 0;
+        for (; n < num_tests; n++) {
+            a[n] = test_ts1[n];
+            b[n] = test_ts2[n];
         }
-        printf("        SCALAR: All %zu tests passed ✓\n", num_tests);
 
-#if defined(__SSE2__)
-        /* Test SSE2 implementation */
-        printf("      Testing SSE2 implementation:\n");
-        for (size_t i = 0; i < num_tests; i++) {
-            __uint128_t interleaved_scalar =
-                interleaveBits64(test_ts1[i], test_ts2[i]);
-            __uint128_t interleaved_sse2 =
-                interleaveBits64SSE2(test_ts1[i], test_ts2[i]);
-
-            if (interleaved_scalar != interleaved_sse2) {
-                ERR("SSE2 interleave mismatch for test %zu", i);
-            }
-
-            uint64_t extracted_ts1, extracted_ts2;
-            deinterleaveBits64SSE2(interleaved_sse2, &extracted_ts1,
-                                   &extracted_ts2);
-
-            if (extracted_ts1 != test_ts1[i] || extracted_ts2 != test_ts2[i]) {
-                ERR("SSE2 roundtrip failed for test %zu: "
-                    "(%" PRIu64 ",%" PRIu64 ") != (%" PRIu64 ",%" PRIu64 ")",
-                    i, extracted_ts1, extracted_ts2, test_ts1[i], test_ts2[i]);
-            }
+        for (uint32_t bit = 0; bit < 64; bit++) {
+            a[n] = UINT64_C(1) << bit;
+            b[n++] = 0;
+            a[n] = 0;
+            b[n++] = UINT64_C(1) << bit;
         }
-        printf("        SSE2: All %zu tests passed ✓\n", num_tests);
-#endif
 
+        uint64_t lcg = 0x5EED;
+        while (n < pairs) {
+            a[n] = dkLcg64Next(&lcg);
+            b[n++] = dkLcg64Next(&lcg);
+        }
+
+        err += ulidInterleaveCheck_("SCALAR", interleaveBits64,
+                                    deinterleaveBits64, a, b, pairs);
+        err += ulidInterleaveCheck_("MASKS", interleaveBits64Masks,
+                                    deinterleaveBits64Masks, a, b, pairs);
 #if defined(__AVX2__) && defined(__BMI2__)
-        /* Test AVX2 implementation */
-        printf("      Testing AVX2 implementation:\n");
-        for (size_t i = 0; i < num_tests; i++) {
-            __uint128_t interleaved_scalar =
-                interleaveBits64(test_ts1[i], test_ts2[i]);
-            __uint128_t interleaved_avx2 =
-                interleaveBits64AVX2(test_ts1[i], test_ts2[i]);
-
-            if (interleaved_scalar != interleaved_avx2) {
-                ERR("AVX2 interleave mismatch for test %zu", i);
-            }
-
-            uint64_t extracted_ts1, extracted_ts2;
-            deinterleaveBits64AVX2(interleaved_avx2, &extracted_ts1,
-                                   &extracted_ts2);
-
-            if (extracted_ts1 != test_ts1[i] || extracted_ts2 != test_ts2[i]) {
-                ERR("AVX2 roundtrip failed for test %zu: "
-                    "(%" PRIu64 ",%" PRIu64 ") != (%" PRIu64 ",%" PRIu64 ")",
-                    i, extracted_ts1, extracted_ts2, test_ts1[i], test_ts2[i]);
-            }
-        }
-        printf("        AVX2: All %zu tests passed ✓\n", num_tests);
-#endif
-
-#ifdef __ARM_NEON
-        /* Test NEON implementation */
-        printf("      Testing NEON implementation:\n");
-        for (size_t i = 0; i < num_tests; i++) {
-            __uint128_t interleaved_scalar =
-                interleaveBits64(test_ts1[i], test_ts2[i]);
-            __uint128_t interleaved_neon =
-                interleaveBits64NEON(test_ts1[i], test_ts2[i]);
-
-            if (interleaved_scalar != interleaved_neon) {
-                ERR("NEON interleave mismatch for test %zu", i);
-            }
-
-            uint64_t extracted_ts1, extracted_ts2;
-            deinterleaveBits64NEON(interleaved_neon, &extracted_ts1,
-                                   &extracted_ts2);
-
-            if (extracted_ts1 != test_ts1[i] || extracted_ts2 != test_ts2[i]) {
-                ERR("NEON roundtrip failed for test %zu: "
-                    "(%" PRIu64 ",%" PRIu64 ") != (%" PRIu64 ",%" PRIu64 ")",
-                    i, extracted_ts1, extracted_ts2, test_ts1[i], test_ts2[i]);
-            }
-        }
-        printf("        NEON: All %zu tests passed ✓\n", num_tests);
+        err += ulidInterleaveCheck_("AVX2", interleaveBits64AVX2,
+                                    deinterleaveBits64AVX2, a, b, pairs);
 #endif
     }
 
     /* ================================================================
-     * DUALNS_INTERLEAVED SIMD Performance Benchmarks
+     * DUALNS_INTERLEAVED Performance Benchmarks
      * ================================================================ */
-    TEST("Bit interleaving performance - SCALAR vs SIMD") {
+    TEST("Bit interleaving performance - each implementation") {
         const size_t iterations = 1'000'000;
         printf("    Benchmarking bit interleaving implementations (%zu "
                "iterations):\n",
                iterations);
 
-        /* Prepare test data */
-        uint64_t ts1 = timeUtilNs();
-        uint64_t ts2 = timeUtilNs();
-        volatile __uint128_t interleaved_vol = 0;
-        volatile uint64_t result_ts1_vol = 0, result_ts2_vol = 0;
-
-        /* Benchmark SCALAR interleave */
-        printf("\n      SCALAR interleave:\n");
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            __uint128_t interleaved_scalar = interleaveBits64(ts1 + i, ts2 + i);
-            interleaved_vol = interleaved_scalar;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "SCALAR interleave ops");
-
-        /* Benchmark SCALAR deinterleave */
-        printf("      SCALAR deinterleave:\n");
-        __uint128_t interleaved = interleaveBits64(ts1, ts2);
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            uint64_t result_ts1, result_ts2;
-            deinterleaveBits64(interleaved, &result_ts1, &result_ts2);
-            result_ts1_vol = result_ts1;
-            result_ts2_vol = result_ts2;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "SCALAR deinterleave ops");
-
-#if defined(__SSE2__)
-        /* Benchmark SSE2 interleave */
-        printf("\n      SSE2 interleave:\n");
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            __uint128_t interleaved_sse2 =
-                interleaveBits64SSE2(ts1 + i, ts2 + i);
-            interleaved_vol = interleaved_sse2;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "SSE2 interleave ops");
-
-        /* Benchmark SSE2 deinterleave */
-        printf("      SSE2 deinterleave:\n");
-        interleaved = interleaveBits64SSE2(ts1, ts2);
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            uint64_t result_ts1, result_ts2;
-            deinterleaveBits64SSE2(interleaved, &result_ts1, &result_ts2);
-            result_ts1_vol = result_ts1;
-            result_ts2_vol = result_ts2;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "SSE2 deinterleave ops");
-#endif
-
+        const uint64_t ts1 = timeUtilNs();
+        const uint64_t ts2 = timeUtilNs();
+        ULID_INTERLEAVE_BENCH("SCALAR", interleaveBits64, deinterleaveBits64,
+                              iterations, ts1, ts2);
+        ULID_INTERLEAVE_BENCH("MASKS", interleaveBits64Masks,
+                              deinterleaveBits64Masks, iterations, ts1, ts2);
 #if defined(__AVX2__) && defined(__BMI2__)
-        /* Benchmark AVX2 interleave */
-        printf("\n      AVX2 interleave:\n");
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            __uint128_t interleaved_avx2 =
-                interleaveBits64AVX2(ts1 + i, ts2 + i);
-            interleaved_vol = interleaved_avx2;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "AVX2 interleave ops");
-
-        /* Benchmark AVX2 deinterleave */
-        printf("      AVX2 deinterleave:\n");
-        interleaved = interleaveBits64AVX2(ts1, ts2);
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            uint64_t result_ts1, result_ts2;
-            deinterleaveBits64AVX2(interleaved, &result_ts1, &result_ts2);
-            result_ts1_vol = result_ts1;
-            result_ts2_vol = result_ts2;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "AVX2 deinterleave ops");
+        ULID_INTERLEAVE_BENCH("AVX2", interleaveBits64AVX2,
+                              deinterleaveBits64AVX2, iterations, ts1, ts2);
 #endif
-
-#ifdef __ARM_NEON
-        /* Benchmark NEON interleave */
-        printf("\n      NEON interleave:\n");
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            __uint128_t interleaved_neon =
-                interleaveBits64NEON(ts1 + i, ts2 + i);
-            interleaved_vol = interleaved_neon;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "NEON interleave ops");
-
-        /* Benchmark NEON deinterleave */
-        printf("      NEON deinterleave:\n");
-        interleaved = interleaveBits64NEON(ts1, ts2);
-        PERF_TIMERS_SETUP;
-        for (size_t i = 0; i < iterations; i++) {
-            uint64_t result_ts1, result_ts2;
-            deinterleaveBits64NEON(interleaved, &result_ts1, &result_ts2);
-            result_ts1_vol = result_ts1;
-            result_ts2_vol = result_ts2;
-        }
-        PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "NEON deinterleave ops");
-#endif
-
-        /* Prevent optimization */
-        if (result_ts1_vol == 0 && result_ts2_vol == 0 &&
-            interleaved_vol == 0) {
-            printf("Unexpected result\n");
-        }
     }
 
     TEST("DUALNS_INTERLEAVED end-to-end performance - SCALAR vs AUTO") {
@@ -4424,27 +4126,18 @@ int ulidTest(int, char *[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "AUTO extractions");
 
         /* Display which implementation was auto-selected */
-        interleaveImpl selected = getInterleaveImpl();
-        const char *impl_name = "UNKNOWN";
-        if (selected == INTERLEAVE_SCALAR) {
-            impl_name = "SCALAR";
+        static const char *const implNames[] = {
+            [INTERLEAVE_SCALAR] = "SCALAR",
+            [INTERLEAVE_MASKS] = "MASKS",
+            [INTERLEAVE_AVX2] = "AVX2",
+        };
+        const interleaveImpl selected = getInterleaveImpl();
+        if ((size_t)selected >= countof(implNames)) {
+            ERR("AUTO resolved to no implementation (%d)", (int)selected);
+        } else {
+            printf("\n      Auto-selected implementation: %s\n",
+                   implNames[selected]);
         }
-#if defined(__SSE2__)
-        else if (selected == INTERLEAVE_SSE2) {
-            impl_name = "SSE2";
-        }
-#endif
-#if defined(__AVX2__) && defined(__BMI2__)
-        else if (selected == INTERLEAVE_AVX2) {
-            impl_name = "AVX2";
-        }
-#endif
-#ifdef __ARM_NEON
-        else if (selected == INTERLEAVE_NEON) {
-            impl_name = "NEON";
-        }
-#endif
-        printf("\n      Auto-selected implementation: %s\n", impl_name);
 
         /* Prevent optimization */
         if (ts1 == 0 && ts2 == 0) {
