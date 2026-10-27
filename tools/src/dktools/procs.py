@@ -128,7 +128,23 @@ def sizing(
         raise ToolError(f"-j must be at least 1 (got {jobs})")
     build = jobs or _env_jobs(env, "DKTOOLS_JOBS") or max(1, cores // 2)
     test = _env_jobs(env, "DKTOOLS_TEST_JOBS") or max(1, build // 2)
-    return Sizing(build=build, test=test, load=max(1, cores))
+    return Sizing(build=build, test=test, load=_env_load(env, cores))
+
+
+def _env_load(env: Mapping[str, str], cores: int) -> int:
+    """DKTOOLS_LOAD, the load ceiling (0: none, for a machine another
+    workload keeps above it, where ctest --test-load would never start a
+    test), else the performance cores"""
+    text = env.get("DKTOOLS_LOAD")
+    if not text:
+        return max(1, cores)
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise ToolError(f"DKTOOLS_LOAD={text!r} is not a load average") from exc
+    if value < 0:
+        raise ToolError(f"DKTOOLS_LOAD must be 0 or more (got {value})")
+    return value
 
 
 _lowered = False

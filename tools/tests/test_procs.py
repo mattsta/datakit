@@ -238,6 +238,12 @@ class Sizing(unittest.TestCase):
         self.assertEqual(procs.sizing(env=env, cores=8), procs.Sizing(3, 1, 8))
         # -j wins over DKTOOLS_JOBS
         self.assertEqual(procs.sizing(2, env=env, cores=8).build, 2)
+        # DKTOOLS_LOAD sets the ceiling; 0 removes it
+        self.assertEqual(procs.sizing(env={"DKTOOLS_LOAD": "20"}, cores=8).load, 20)
+        self.assertEqual(procs.sizing(env={"DKTOOLS_LOAD": "0"}, cores=8).load, 0)
+        for bad in ("x", "-1"):
+            with self.subTest(bad=bad), self.assertRaises(ToolError):
+                procs.sizing(env={"DKTOOLS_LOAD": bad}, cores=8)
 
     def test_bad_sizes_refuse(self) -> None:
         for env in (
