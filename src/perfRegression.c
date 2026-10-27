@@ -1691,13 +1691,15 @@ static void benchMultilru(const uint32_t n) {
     perfContainerSink = sink;
 }
 
-/* A reusing atom table of PERF_CONTAINER_N string atoms: interning new
- * and present values, retains and releases by value (the last release
- * deletes), and deletes by id */
-static void benchMultimapAtom(void) {
-    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+/* A reusing atom table of PERF_CONTAINER_N string atoms with the reverse
+ * index 'index', its rows under 'module': interning new and present
+ * values, retains and releases by value (the last release deletes), the
+ * count update alone, and a snapshot and restore */
+static void benchAtomTable(const char *module, const multimapAtomIndex index,
+                           const char *keys) {
     const uint32_t n = PERF_CONTAINER_N;
-    cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+    cleaner(multimapAtomFree) multimapAtom *ma =
+        multimapAtomNewIndexed(index, false);
     uint64_t sink = 0;
 
     double t0 = timeUtilMonotonicSec();
@@ -1705,21 +1707,21 @@ static void benchMultimapAtom(void) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvert(ma, &k);
     }
-    emitRow("multimapAtom", "internNew", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "internNew", 0, n, timeUtilMonotonicSec() - t0);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvert(ma, &k);
     }
-    emitRow("multimapAtom", "internPresent", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "internPresent", 0, n, timeUtilMonotonicSec() - t0);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvertAndRetain(ma, &k);
     }
-    emitRow("multimapAtom", "retain", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "retain", 0, n, timeUtilMonotonicSec() - t0);
 
     /* The count update alone, by reference: the part of a retain after the
      * value is found (then undone by reference, untimed) */
@@ -1734,7 +1736,7 @@ static void benchMultimapAtom(void) {
     for (uint32_t i = 0; i < n; i++) {
         multimapAtomRetainById(ma, ids[i]);
     }
-    emitRow("multimapAtom", "retainById", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "retainById", 0, n, timeUtilMonotonicSec() - t0);
     for (uint32_t i = 0; i < n; i++) {
         const databox ref = {.data.u = ids[i],
                              .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
@@ -1746,14 +1748,14 @@ static void benchMultimapAtom(void) {
         const databox k = perfContainerKey(keys, i);
         sink += multimapAtomRelease(ma, &k);
     }
-    emitRow("multimapAtom", "release", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "release", 0, n, timeUtilMonotonicSec() - t0);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         sink += multimapAtomRelease(ma, &k);
     }
-    emitRow("multimapAtom", "releaseLast", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "releaseLast", 0, n, timeUtilMonotonicSec() - t0);
 
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
@@ -1765,13 +1767,32 @@ static void benchMultimapAtom(void) {
     t0 = timeUtilMonotonicSec();
     cleanerName(zfree, U8Buf) uint8_t *snap =
         persistOpsMultimapAtom.snapshot(ma, &snapLen);
-    emitRow("multimapAtom", "snapshot", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "snapshot", 0, n, timeUtilMonotonicSec() - t0);
 
     t0 = timeUtilMonotonicSec();
     cleaner(multimapAtomFree) multimapAtom *restored =
         persistOpsMultimapAtom.restore(snap, snapLen);
-    emitRow("multimapAtom", "restore", 0, n, timeUtilMonotonicSec() - t0);
+    emitRow(module, "restore", 0, n, timeUtilMonotonicSec() - t0);
     sink += multimapAtomCount(restored);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        sink += multimapAtomDeleteById(ma, i);
+    }
+    emitRow(module, "deleteById", 0, n, timeUtilMonotonicSec() - t0);
+    perfContainerSink = sink;
+}
+
+/* The atom table under each reverse index, then the lowest-first table,
+ * the string pool and deletes by id */
+static void benchMultimapAtom(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_ORDERED, keys);
+    benchAtomTable("multimapAtomHashed", MULTIMAP_ATOM_INDEX_HASHED, keys);
+
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    double t0;
 
     /* Interning into a lowest-first table: new values, then present ones */
     cleaner(multimapAtomDenseFree) multimapAtomDense *interned =
@@ -1827,12 +1848,6 @@ static void benchMultimapAtom(void) {
         persistOpsStringPool.restore(poolSnap, poolLen);
     emitRow("stringPool", "restore", 0, n, timeUtilMonotonicSec() - t0);
     sink += stringPoolCount(poolRestored);
-
-    t0 = timeUtilMonotonicSec();
-    for (uint32_t i = 0; i < n; i++) {
-        sink += multimapAtomDeleteById(ma, i);
-    }
-    emitRow("multimapAtom", "deleteById", 0, n, timeUtilMonotonicSec() - t0);
 
     perfContainerSink = sink;
 }

@@ -1,6 +1,7 @@
 #include "multimapAtom.h"
 #include "atomPersist.h"
 #include "cleaner.h"
+#include "rapidhash.h"
 
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleanerName(void *, zfree, Void);
@@ -15,11 +16,11 @@ typedef struct atomResolved_ {
 } atomResolved_;
 
 struct multimapAtom {
-    multimap *mapAtomForward; /* ID -> String, sorted by ID */
-    multimap *mapAtomReverse; /* IDs sorted by string value */
-    /* The next generated id, with the table's id behaviour in the top bit
-     * (set: permanent), so the behaviour costs no bytes.  Ids stay below
-     * MULTIMAP_ATOM_ID_LIMIT. */
+    multimap *mapAtomForward; /* {id, value, count} sorted by id */
+    multimap *mapAtomReverse; /* the reverse index (multimapAtomIndex) */
+    /* The next generated id, with the table's id behaviour (bit 63 set:
+     * permanent) and reverse index (bit 62 set: hashed) above it, so
+     * neither costs a byte.  Ids stay below MULTIMAP_ATOM_ID_LIMIT. */
     uint64_t highest;
     /* Set only for the length of one retain or release (a mutating call,
      * so no reader runs alongside): the id lookups record into it.  NULL
@@ -27,49 +28,90 @@ struct multimapAtom {
     atomResolved_ *resolving;
 };
 
-#define ATOM_PERMANENT_BIT_ MULTIMAP_ATOM_ID_LIMIT
+#define ATOM_PERMANENT_BIT_ ((uint64_t)1 << 63)
+#define ATOM_HASHED_BIT_ ((uint64_t)1 << 62)
+#define ATOM_SETTING_BITS_ (ATOM_PERMANENT_BIT_ | ATOM_HASHED_BIT_)
+static_assert(ATOM_HASHED_BIT_ == MULTIMAP_ATOM_ID_LIMIT,
+              "the settings sit just above every id");
 
 static inline uint64_t atomNextId_(const multimapAtom *ma) {
-    return ma->highest & ~ATOM_PERMANENT_BIT_;
+    return ma->highest & ~ATOM_SETTING_BITS_;
 }
 
 static inline void atomSetNextId_(multimapAtom *ma, const uint64_t id) {
     assert(id < MULTIMAP_ATOM_ID_LIMIT);
-    ma->highest = (ma->highest & ATOM_PERMANENT_BIT_) | id;
+    ma->highest = (ma->highest & ATOM_SETTING_BITS_) | id;
 }
 
 bool multimapAtomIsPermanent(const multimapAtom *ma) {
     return (ma->highest & ATOM_PERMANENT_BIT_) != 0;
 }
 
+static inline bool atomHashed_(const multimapAtom *ma) {
+    return (ma->highest & ATOM_HASHED_BIT_) != 0;
+}
+
+multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma) {
+    return atomHashed_(ma) ? MULTIMAP_ATOM_INDEX_HASHED
+                           : MULTIMAP_ATOM_INDEX_ORDERED;
+}
+
+#ifdef DATAKIT_TEST
+/* The index multimapAtomNew and NewPermanent make, and the mask a hash
+ * passes through: the suite runs once per index, and once with 2-bit
+ * hashes so most values collide */
+static multimapAtomIndex atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_ORDERED;
+static uint32_t atomTestHashMask_ = UINT32_MAX;
+#endif
+
 /* ====================================================================
  * Create
  * ==================================================================== */
-void multimapAtomInit(multimapAtom *ma) {
-    /* 3-map of: {ID, Key, Refcount} */
+static void atomInitIndexed_(multimapAtom *ma, const multimapAtomIndex index,
+                             const bool permanent) {
+    /* {id, value, count} by id */
     /* @own: container; free=multimapAtomFree */
     ma->mapAtomForward = multimapNewLimit(3, FLEX_CAP_LEVEL_512);
 
-    /* 1-map of ID, but SORTED BY 'KEY'.  Basically, a self-sorting list. */
+    /* ORDERED: {id} by value (resolved through the forward map); HASHED:
+     * the set of {hash, id} */
     /* @own: container; free=multimapAtomFree */
-    ma->mapAtomReverse = multimapNewLimit(1, FLEX_CAP_LEVEL_512);
+    ma->mapAtomReverse =
+        index == MULTIMAP_ATOM_INDEX_HASHED
+            ? multimapNewConfigure(2, true, false, FLEX_CAP_LEVEL_512)
+            : multimapNewLimit(1, FLEX_CAP_LEVEL_512);
 
-    ma->highest = 0;
+    ma->highest = (permanent ? ATOM_PERMANENT_BIT_ : 0) |
+                  (index == MULTIMAP_ATOM_INDEX_HASHED ? ATOM_HASHED_BIT_ : 0);
     ma->resolving = nullptr;
 }
 
-multimapAtom *multimapAtomNew(void) {
+void multimapAtomInit(multimapAtom *ma) {
+    atomInitIndexed_(ma, MULTIMAP_ATOM_INDEX_ORDERED, false);
+}
+
+multimapAtom *multimapAtomNewIndexed(const multimapAtomIndex index,
+                                     const bool permanent) {
     /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = zcalloc(1, sizeof(*ma));
-    multimapAtomInit(ma);
+    atomInitIndexed_(ma, index, permanent);
     return ma;
 }
 
+static multimapAtomIndex atomDefaultIndex_(void) {
+#ifdef DATAKIT_TEST
+    return atomTestDefaultIndex_;
+#else
+    return MULTIMAP_ATOM_INDEX_ORDERED;
+#endif
+}
+
+multimapAtom *multimapAtomNew(void) {
+    return multimapAtomNewIndexed(atomDefaultIndex_(), false);
+}
+
 multimapAtom *multimapAtomNewPermanent(void) {
-    /* @own: caller; free=multimapAtomFree */
-    multimapAtom *ma = multimapAtomNew();
-    ma->highest |= ATOM_PERMANENT_BIT_;
-    return ma;
+    return multimapAtomNewIndexed(atomDefaultIndex_(), true);
 }
 
 /* ====================================================================
@@ -81,6 +123,223 @@ void multimapAtomFree(multimapAtom *ma) {
         multimapFree(ma->mapAtomReverse);
         zfree(ma);
     }
+}
+
+/* ====================================================================
+ * Reverse index (value -> id)
+ * ====================================================================
+ * Every use of mapAtomReverse goes through the atomIndex*_ helpers,
+ * which serve both kinds (multimapAtomIndex). */
+
+static databox atomRefBox_(const uint64_t id) {
+    return (databox){.data.u = id,
+                     .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+}
+
+/* A HASHED row's hash of 'value': databoxHashBytes, so values
+ * databoxCompare calls equal share it */
+static databox atomHashBox_(const databox *value) {
+    uint64_t scratch;
+    const uint8_t *bytes;
+    size_t len;
+    databoxHashBytes(value, &scratch, &bytes, &len);
+    uint32_t h = (uint32_t)rapidhash(bytes, len);
+#ifdef DATAKIT_TEST
+    h &= atomTestHashMask_;
+#endif
+    return DATABOX_UNSIGNED(h);
+}
+
+/* multimapLookup of the forward row of 'ref' into 'elements' (value,
+ * count).  While a retain or release searches, the same one search
+ * records the row it found in 'resolving', decoding the elements the
+ * way multimapLookup does. */
+static bool atomForwardLookup_(const multimapAtom *ma, const databox *ref,
+                               databox *elements[2]) {
+    if (!ma->resolving) {
+        return multimapLookup(ma->mapAtomForward, ref, elements);
+    }
+
+    multimapEntry row;
+    if (!multimapGetUnderlyingEntry(ma->mapAtomForward, ref, &row)) {
+        return false;
+    }
+
+    flexEntry *fe = row.fe;
+    for (size_t i = 0; i < 2; i++) {
+        fe = flexNext(*row.map, fe);
+        flexGetByType(fe, elements[i]);
+    }
+
+    *ma->resolving =
+        (atomResolved_){.row = row, .id = ref->data.u, .found = true};
+    return true;
+}
+
+/* Whether the atom 'ref' holds 'value' (databoxCompare equality, wide
+ * values whole): a HASHED candidate's check */
+static bool atomHolds_(const multimapAtom *ma, const databox *ref,
+                       const databox *value) {
+    databoxBig held;
+    databox *const out = (databox *)&held;
+    *out = (databox){};
+    DATABOX_BIG_INIT(&held);
+    databox count = {};
+    databox *elements[2] = {out, &count};
+    if (!atomForwardLookup_(ma, ref, elements)) {
+        return false;
+    }
+
+    held.big =
+        held.type == DATABOX_SIGNED_128 || held.type == DATABOX_UNSIGNED_128;
+    return databoxCompare(out, value) == 0;
+}
+
+/* HASHED: the atom holding 'value' among the rows with 'hash'.  The walk
+ * starts at or before the first of them: a positioned search lands on
+ * any row with an equal key, so it is aimed at hash - 1, whose rows all
+ * come first (and when there are none it lands on the first row at or
+ * past it); hash 0 starts at the beginning.  Rows below 'hash' are
+ * skipped. */
+static bool atomHashedFind_(const multimapAtom *ma, const databox *value,
+                            const databox *hash, databox *ref) {
+    multimapIterator iter;
+    if (hash->data.u64 == 0) {
+        multimapIteratorInit(ma->mapAtomReverse, &iter, true);
+    } else {
+        const databox before = DATABOX_UNSIGNED(hash->data.u64 - 1);
+        if (!multimapIteratorInitAt(ma->mapAtomReverse, &iter, true, &before)) {
+            return false;
+        }
+    }
+
+    databox row[2];
+    while (multimapIteratorNextInto(&iter, row, 2)) {
+        const int order = databoxCompare(&row[0], hash);
+        if (order > 0) {
+            return false; /* past every row with the hash */
+        }
+
+        if (order < 0) {
+            continue;
+        }
+
+        const databox candidate = atomRefBox_(row[1].data.u);
+        if (atomHolds_(ma, &candidate, value)) {
+            *ref = candidate;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* The id of 'value', into 'ref' */
+static bool atomIndexFind_(const multimapAtom *ma, const databox *value,
+                           databox *ref) {
+    if (atomHashed_(ma)) {
+        const databox hash = atomHashBox_(value);
+        return atomHashedFind_(ma, value, &hash, ref);
+    }
+
+    return multimapExistsWithReference(ma->mapAtomReverse, value, ref, ma);
+}
+
+/* Add the index row binding 'value' to 'ref' (the forward row is in) */
+static void atomIndexInsert_(multimapAtom *ma, const databox *value,
+                             const databox *ref) {
+    if (atomHashed_(ma)) {
+        const databox hash = atomHashBox_(value);
+        const databox id = DATABOX_UNSIGNED(ref->data.u);
+        const databox *row[2] = {&hash, &id};
+        multimapInsertFullWidth(&ma->mapAtomReverse, row);
+        return;
+    }
+
+    const databox *row[1] = {value};
+    multimapInsertWithSurrogateKey(&ma->mapAtomReverse, row, ref, ma);
+}
+
+/* Remove the HASHED row {hash of 'value', id of 'ref'} */
+static bool atomHashedDeleteRow_(multimapAtom *ma, const databox *value,
+                                 const databox *ref) {
+    const databox hash = atomHashBox_(value);
+    const databox id = DATABOX_UNSIGNED(ref->data.u);
+    const databox *row[2] = {&hash, &id};
+    return multimapDeleteFullWidth(&ma->mapAtomReverse, row);
+}
+
+/* Remove the index row of 'value', reporting its id in 'foundRef' */
+static bool atomIndexDeleteValue_(multimapAtom *ma, const databox *value,
+                                  databox *foundRef) {
+    if (atomHashed_(ma)) {
+        if (!atomIndexFind_(ma, value, foundRef)) {
+            return false;
+        }
+
+        [[maybe_unused]] const bool deleted =
+            atomHashedDeleteRow_(ma, value, foundRef);
+        assert(deleted);
+        return true;
+    }
+
+    return multimapDeleteWithReference(&ma->mapAtomReverse, value, ma,
+                                       foundRef);
+}
+
+/* Remove the index row of the atom 'ref', which holds 'value' */
+static void atomIndexDeleteHeld_(multimapAtom *ma, const databox *value,
+                                 const databox *ref) {
+    if (atomHashed_(ma)) {
+        [[maybe_unused]] const bool deleted =
+            atomHashedDeleteRow_(ma, value, ref);
+        assert(deleted);
+        return;
+    }
+
+    databox found = {};
+    [[maybe_unused]] const bool deleted =
+        multimapDeleteWithReference(&ma->mapAtomReverse, value, ma, &found);
+    assert(deleted && found.data.u == ref->data.u);
+}
+
+/* HASHED: the atom with the least value, by scanning the forward rows */
+static bool atomHashedMin_(const multimapAtom *ma, databox *minRef) {
+    multimapIterator iter;
+    multimapIteratorInit(ma->mapAtomForward, &iter, true);
+    databox best = {};
+    databoxWide bestWide;
+    uint64_t bestId = 0;
+    bool found = false;
+    while (true) {
+        /* Zeroed: a narrow decode leaves the flag bits as they were */
+        databox id = {};
+        databox value = {};
+        databox count = {};
+        databox *row[3] = {&id, &value, &count};
+        databoxWide wide[3];
+        if (!multimapIteratorNextWithSlots(&iter, row, wide)) {
+            break;
+        }
+
+        if (!found || databoxCompare(&value, &best) < 0) {
+            best = value;
+            if (value.big) {
+                /* the slot is reused by the next row */
+                bestWide = wide[1];
+                best.data.ptr = &bestWide;
+            }
+
+            bestId = id.data.u;
+            found = true;
+        }
+    }
+
+    if (found) {
+        *minRef = atomRefBox_(bestId);
+    }
+
+    return found;
 }
 
 /* ====================================================================
@@ -102,8 +361,7 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
         multimapInsert(&ma->mapAtomForward, elements);
     assert(!replaced);
 
-    multimapInsertWithSurrogateKey(&ma->mapAtomReverse, &reverseKey, &atomId,
-                                   ma);
+    atomIndexInsert_(ma, reverseKey, &atomId);
 
     assert(multimapCount(ma->mapAtomForward) ==
            multimapCount(ma->mapAtomReverse));
@@ -146,6 +404,21 @@ static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
     atomCreate_ create = {.ma = ma, .key = key, .id = id};
     const databox atomId = {.data.u = create.id,
                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+    if (atomHashed_(ma)) {
+        /* One hash search; a new atom's rows go in after it */
+        const databox hash = atomHashBox_(key);
+        if (atomHashedFind_(ma, key, &hash, ref)) {
+            return true;
+        }
+
+        atomCreateForward_(&create);
+        const databox idBox = DATABOX_UNSIGNED(id);
+        const databox *row[2] = {&hash, &idBox};
+        multimapInsertFullWidth(&ma->mapAtomReverse, row);
+        *ref = atomId;
+        return false;
+    }
+
     const databox *reverseRow[1] = {key};
     if (!multimapInsertWithSurrogateKeyIfAbsent(&ma->mapAtomReverse, reverseRow,
                                                 &atomId, ma, ref,
@@ -246,8 +519,7 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
      * a direct delete. If the first delete works, we know we can
      * delete from the other map too. */
     databox foundReference = {};
-    if (multimapDeleteWithReference(&ma->mapAtomReverse, reverseKey, ma,
-                                    &foundReference)) {
+    if (atomIndexDeleteValue_(ma, reverseKey, &foundReference)) {
         [[maybe_unused]] const bool deleted =
             multimapDelete(&ma->mapAtomForward, &foundReference);
         assert(deleted);
@@ -260,8 +532,7 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
     multimapAtomDeleteByRef(ma, &atomId);
 
     multimapInsert(&ma->mapAtomForward, elements);
-    multimapInsertWithSurrogateKey(&ma->mapAtomReverse, &reverseKey, &atomId,
-                                   ma);
+    atomIndexInsert_(ma, reverseKey, &atomId);
 
     /* After the deletes above, which restart ids when they empty the table */
     if (atomRef >= atomNextId_(ma) && atomRef + 1 < MULTIMAP_ATOM_ID_LIMIT) {
@@ -319,32 +590,6 @@ void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
     result->refcount = count.data.u;
 }
 
-/* multimapLookup of the forward row of 'ref' into 'elements' (value,
- * count).  While a retain or release searches, the same one search
- * records the row it found in 'resolving', decoding the elements the
- * way multimapLookup does. */
-static bool atomForwardLookup_(const multimapAtom *ma, const databox *ref,
-                               databox *elements[2]) {
-    if (!ma->resolving) {
-        return multimapLookup(ma->mapAtomForward, ref, elements);
-    }
-
-    multimapEntry row;
-    if (!multimapGetUnderlyingEntry(ma->mapAtomForward, ref, &row)) {
-        return false;
-    }
-
-    flexEntry *fe = row.fe;
-    for (size_t i = 0; i < 2; i++) {
-        fe = flexNext(*row.map, fe);
-        flexGetByType(fe, elements[i]);
-    }
-
-    *ma->resolving =
-        (atomResolved_){.row = row, .id = ref->data.u, .found = true};
-    return true;
-}
-
 void multimapAtomLookupConvert(const multimapAtom *ma, databox *box) {
     /* The reference is copied out first so the lookup key is never the
      * box being decoded into. */
@@ -381,7 +626,7 @@ void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box) {
 /* Lookup USER DATA VALUE to ATOM REFERENCE */
 bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
                                  databox *atomRef) {
-    return multimapExistsWithReference(ma->mapAtomReverse, key, atomRef, ma);
+    return atomIndexFind_(ma, key, atomRef);
 }
 
 void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
@@ -398,7 +643,11 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
  * Further Query / Act
  * ==================================================================== */
 bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef) {
-    /* mapAtomReverse is a 1-map, so we only need 1 element */
+    if (atomHashed_(ma)) {
+        return atomHashedMin_(ma, minRef);
+    }
+
+    /* ORDERED: the first reverse row, a 1-map */
     return multimapFirstInto(ma->mapAtomReverse, minRef, 1);
 }
 
@@ -520,19 +769,30 @@ bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
 }
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
-    /* The reverse row found here is the one a last release deletes, and
-     * the forward row its search resolved the id through takes the
-     * count update */
-    multimapEntry me = {};
+    /* The forward row the search resolved the id through takes the count
+     * update.  ORDERED: the reverse row found here is the one a last
+     * release deletes where it is.  HASHED: a last release removes the
+     * {hash, id} row by its value. */
     atomResolved_ resolved = {};
-    ma->resolving = &resolved;
-    const bool found = multimapGetUnderlyingEntryWithReference(
-        ma->mapAtomReverse, key, &me, ma);
-    ma->resolving = nullptr;
-    if (found) {
+    if (atomHashed_(ma)) {
         databox foundRef = {};
-        flexGetByType(me.fe, &foundRef);
-        return conformRefcountDecr(ma, &foundRef, &me, &resolved);
+        ma->resolving = &resolved;
+        const bool found = atomIndexFind_(ma, key, &foundRef);
+        ma->resolving = nullptr;
+        if (found) {
+            return conformRefcountDecr(ma, &foundRef, nullptr, &resolved);
+        }
+    } else {
+        multimapEntry me = {};
+        ma->resolving = &resolved;
+        const bool found = multimapGetUnderlyingEntryWithReference(
+            ma->mapAtomReverse, key, &me, ma);
+        ma->resolving = nullptr;
+        if (found) {
+            databox foundRef = {};
+            flexGetByType(me.fe, &foundRef);
+            return conformRefcountDecr(ma, &foundRef, &me, &resolved);
+        }
     }
 
     /* else, releasing something we don't have is an error */
@@ -541,10 +801,9 @@ bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
 }
 
 bool multimapAtomDelete(multimapAtom *ma, const databox *key) {
-    /* One reverse search: the delete itself reports the atom's id */
+    /* One index search: the delete itself reports the atom's id */
     databox foundReference = {};
-    if (!multimapDeleteWithReference(&ma->mapAtomReverse, key, ma,
-                                     &foundReference)) {
+    if (!atomIndexDeleteValue_(ma, key, &foundReference)) {
         return false;
     }
 
@@ -574,11 +833,7 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
     flexGetByTypeInto(flexNext(*me.map, me.fe), &value, &valueWide);
     assert(value.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL);
 
-    databox found = {};
-    [[maybe_unused]] const bool deleteReverse =
-        multimapDeleteWithReference(&ma->mapAtomReverse, &value, ma, &found);
-    assert(deleteReverse && found.data.u == ref->data.u);
-
+    atomIndexDeleteHeld_(ma, &value, ref);
     multimapDeleteEntry(&ma->mapAtomForward, &me);
     atomAfterDelete_(ma, ref->data.u);
     return true;
@@ -611,6 +866,8 @@ size_t multimapAtomBytes(const multimapAtom *ma) {
  * Persistence (atomPersist.h)
  * ==================================================================== */
 static constexpr unsigned ATOM_PERSIST_FLAG_PERMANENT_ = 1u;
+/* The reverse index is hashed; the hashes are rebuilt, never stored */
+static constexpr unsigned ATOM_PERSIST_FLAG_HASHED_ = 2u;
 
 /* A stored count (0-based: 0 is one reference) as a number; FieldIncr
  * leaves it FALSE, TRUE or an integer */
@@ -680,7 +937,8 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
     /* @own: caller; free=zfree */
     flex *f = flexNew();
     const databox flags = DATABOX_UNSIGNED(
-        multimapAtomIsPermanent(ma) ? ATOM_PERSIST_FLAG_PERMANENT_ : 0);
+        (multimapAtomIsPermanent(ma) ? ATOM_PERSIST_FLAG_PERMANENT_ : 0) |
+        (atomHashed_(ma) ? ATOM_PERSIST_FLAG_HASHED_ : 0));
     const databox next = DATABOX_UNSIGNED(atomNextId_(ma));
     const databox *header[2] = {&flags, &next};
     flexAppendMultipleExact(&f, 2, header);
@@ -754,6 +1012,80 @@ static int atomPersistCompareValues_(const void *a, const void *b) {
                           *(const databox *const *)b);
 }
 
+/* ORDERED: the ids in value order as the reverse map; NULL when a value is
+ * bound twice */
+static multimap *atomPersistOrderedIndex_(const multimapAtom *ma,
+                                          const databoxBig *values,
+                                          databoxBig **byValue,
+                                          const uint64_t *ids, size_t atoms) {
+    qsort(byValue, atoms, sizeof(*byValue), atomPersistCompareValues_);
+    /* The reverse map's builder takes the rows */
+    /* @own: container; free=multimapFree */
+    flex *rows = flexNew();
+    for (size_t r = 0; r < atoms; r++) {
+        const databox ref = atomRefBox_(ids[byValue[r] - values]);
+        flexPushByType(&rows, &ref, FLEX_ENDPOINT_TAIL);
+    }
+
+    /* @own: caller; free=multimapFree */
+    return multimapNewFromDumpWithReference(1, FLEX_CAP_LEVEL_512, rows, ma);
+}
+
+/* One HASHED row before it is placed: a value's hash, its id, and which
+ * value it is (for the duplicate check) */
+typedef struct atomHashedRow_ {
+    uint64_t id;
+    uint32_t hash;
+    uint32_t value;
+} atomHashedRow_;
+
+static int atomHashedRowCompare_(const void *a, const void *b) {
+    const atomHashedRow_ *x = a;
+    const atomHashedRow_ *y = b;
+    if (x->hash != y->hash) {
+        return x->hash < y->hash ? -1 : 1;
+    }
+
+    return (x->id > y->id) - (x->id < y->id);
+}
+
+/* HASHED: the {hash, id} set; NULL when a value is bound twice (equal
+ * values share a hash, so only rows within one hash are compared) */
+static multimap *atomPersistHashedIndex_(const databoxBig *values,
+                                         const uint64_t *ids, size_t atoms) {
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(atoms ? atoms : 1, sizeof(atomHashedRow_));
+    atomHashedRow_ *rows = storage;
+    for (size_t r = 0; r < atoms; r++) {
+        rows[r] = (atomHashedRow_){
+            .id = ids[r],
+            .hash = (uint32_t)atomHashBox_((const databox *)&values[r]).data.u,
+            .value = (uint32_t)r};
+    }
+
+    qsort(rows, atoms, sizeof(*rows), atomHashedRowCompare_);
+    for (size_t r = 1; r < atoms; r++) {
+        for (size_t k = r; k > 0 && rows[k - 1].hash == rows[r].hash; k--) {
+            if (databoxCompare((const databox *)&values[rows[k - 1].value],
+                               (const databox *)&values[rows[r].value]) == 0) {
+                return nullptr;
+            }
+        }
+    }
+
+    /* @own: container; free=multimapFree */
+    flex *f = flexNew();
+    for (size_t r = 0; r < atoms; r++) {
+        const databox hash = DATABOX_UNSIGNED(rows[r].hash);
+        const databox id = DATABOX_UNSIGNED(rows[r].id);
+        const databox *row[2] = {&hash, &id};
+        flexAppendMultipleExact(&f, 2, row);
+    }
+
+    /* @own: caller; free=multimapFree */
+    return multimapNewFromDump(2, true, false, FLEX_CAP_LEVEL_512, f);
+}
+
 static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
         return nullptr;
@@ -766,14 +1098,16 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     uint64_t next;
     if (n < 2 || (n - 2) % 3 || !flexReadUnsigned(f, &fe, &flags) ||
         !flexReadUnsigned(f, &fe, &next) ||
-        (flags & ~(uint64_t)ATOM_PERSIST_FLAG_PERMANENT_) ||
+        (flags & ~(uint64_t)(ATOM_PERSIST_FLAG_PERMANENT_ |
+                             ATOM_PERSIST_FLAG_HASHED_)) ||
         next >= MULTIMAP_ATOM_ID_LIMIT) {
         return nullptr;
     }
 
-    cleaner(multimapAtomFree) multimapAtom *ma =
-        (flags & ATOM_PERSIST_FLAG_PERMANENT_) ? multimapAtomNewPermanent()
-                                               : multimapAtomNew();
+    cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNewIndexed(
+        (flags & ATOM_PERSIST_FLAG_HASHED_) ? MULTIMAP_ATOM_INDEX_HASHED
+                                            : MULTIMAP_ATOM_INDEX_ORDERED,
+        (flags & ATOM_PERSIST_FLAG_PERMANENT_) != 0);
     const bool permanent = multimapAtomIsPermanent(ma);
     const size_t atoms = (n - 2) / 3;
 
@@ -817,21 +1151,13 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
         byValue[r] = &values[r];
     }
 
-    /* The ids in value order; the reverse map's builder refuses a value
-     * bound twice */
-    qsort(byValue, atoms, sizeof(*byValue), atomPersistCompareValues_);
-    /* The reverse map's builder takes the rows */
+    /* The index built straight from the rows (both builders refuse a
+     * value bound to two ids) */
     /* @own: container; free=multimapFree */
-    flex *rows = flexNew();
-    for (size_t r = 0; r < atoms; r++) {
-        const databox ref = {.data.u = ids[byValue[r] - values],
-                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
-        flexPushByType(&rows, &ref, FLEX_ENDPOINT_TAIL);
-    }
-
-    /* @own: container; free=multimapAtomFree */
     multimap *reverse =
-        multimapNewFromDumpWithReference(1, FLEX_CAP_LEVEL_512, rows, ma);
+        atomHashed_(ma)
+            ? atomPersistHashedIndex_(values, ids, atoms)
+            : atomPersistOrderedIndex_(ma, values, byValue, ids, atoms);
     if (!reverse) {
         return nullptr;
     }
@@ -975,6 +1301,11 @@ static bool populateSet(void *userData, const databox *elements[]) {
     return true;
 }
 
+/* populateSet for a HASHED index's {hash, id} rows: the id */
+static bool populateSetHashedIds(void *userData, const databox *elements[]) {
+    return populateSet(userData, &elements[1]);
+}
+
 #include "ctest.h"
 #include "multimapFull.h"
 #include "timeUtil.h"
@@ -1064,7 +1395,8 @@ static atomTestRefs atomTestStored_(const multimapAtom *ma, char *buf,
     }
 }
 
-int multimapAtomTest(int, char *[]) {
+/* The suite, run once per index configuration by multimapAtomTest */
+static int atomTestSuite_(void) {
     int err = 0;
 
     uint32_t seed = time(nullptr);
@@ -1508,16 +1840,14 @@ int multimapAtomTest(int, char *[]) {
                     const databox key = box;
 
                     databox count;
-                    assert(multimapExistsWithReference(ma->mapAtomReverse, &key,
-                                                       &count, ma));
+                    assert(multimapAtomLookupReference(ma, &key, &count));
 
                     /* Quick sanity check to make sure it does exist and isn't
                      * created if we do a re-insert of known-existing value. */
                     multimapAtomInsertIfNewConvert(ma, &box);
                     assert(box.created == false);
 
-                    assert(multimapExistsWithReference(ma->mapAtomReverse, &key,
-                                                       &count, ma));
+                    assert(multimapAtomLookupReference(ma, &key, &count));
 
                     const bool found =
                         multimapAtomLookupReference(ma, &key, &box);
@@ -1558,8 +1888,7 @@ int multimapAtomTest(int, char *[]) {
 #endif
 
                 databox count;
-                assert(multimapExistsWithReference(ma->mapAtomReverse, &key,
-                                                   &count, ma));
+                assert(multimapAtomLookupReference(ma, &key, &count));
 
                 /* If box was NOT created, that means it ALREADY existed, so we
                  * need to REFCOUNT it again so it only gets deleted after ALL
@@ -1789,7 +2118,9 @@ int multimapAtomTest(int, char *[]) {
 
         multimapPredicate p = {.condition = MULTIMAP_CONDITION_ALL};
 
-        multimapProcessUntil(ma->mapAtomReverse, &p, true, populateSet,
+        multimapProcessUntil(ma->mapAtomReverse, &p, true,
+                             atomHashed_(ma) ? populateSetHashedIds
+                                             : populateSet,
                              &duplicateHolder);
 
         const size_t setSize = multimapCount(duplicateHolder);
@@ -3018,6 +3349,217 @@ int multimapAtomTest(int, char *[]) {
         multimapAtomFree(ma);
     }
 
+    return err;
+}
+
+/* Test value 'i' of a mix where cross-type equality matters: bytes, a
+ * signed integer, the same integer as a double (equal to the integer
+ * form of i - 1 when i is odd), and a 128-bit value */
+static databox atomTestMixedValue_(char *buf, size_t cap, int32_t i,
+                                   databoxBig *wide) {
+    switch (i % 4) {
+    case 0:
+        return atomTestKey_(buf, cap, i);
+    case 1:
+        return databoxNewSigned(i / 2);
+    case 2:
+        return DATABOX_DOUBLE((double)(i / 2));
+    default:
+        DATABOX_BIG_UNSIGNED_128(wide, ((__uint128_t)1 << 100) + (uint64_t)i);
+        return *(const databox *)wide;
+    }
+}
+
+int multimapAtomTest(int, char *[]) {
+    int err = 0;
+
+    /* The whole suite once per reverse index; the colliding-hash walk is
+     * the differential stream's to drive (with 2-bit hashes the suite's
+     * large tables would walk thousands of rows per find) */
+    static const struct {
+        multimapAtomIndex index;
+        const char *name;
+    } passes[] = {
+        {MULTIMAP_ATOM_INDEX_ORDERED, "ordered"},
+        {MULTIMAP_ATOM_INDEX_HASHED, "hashed"},
+    };
+    for (size_t p = 0; p < countof(passes); p++) {
+        printf("\n=== multimapAtom suite: %s index ===\n\n", passes[p].name);
+        atomTestDefaultIndex_ = passes[p].index;
+        err += atomTestSuite_();
+    }
+
+    atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_ORDERED;
+
+    for (size_t p = 0; p < 2; p++) {
+        atomTestHashMask_ = p ? 0x3 : UINT32_MAX;
+        TEST_DESC("ordered and hashed indexes agree on one op stream (%s)",
+                  p ? "2-bit hashes" : "full hashes") {
+            /* Interning (new and present), retains and releases by key,
+             * and deletes, over values of four types; every result, id
+             * and count must match, and both survive a snapshot round
+             * trip with the same lookups */
+            typedef enum atomTestDiffOp {
+                ATOM_TEST_DIFF_INTERN = 0,
+                ATOM_TEST_DIFF_RETAIN,
+                ATOM_TEST_DIFF_RELEASE,
+                ATOM_TEST_DIFF_DELETE,
+                ATOM_TEST_DIFF_EXACT_ID,
+                ATOM_TEST_DIFF_COUNT
+            } atomTestDiffOp;
+
+            constexpr int32_t values = 600;
+            multimapAtom *ordered =
+                multimapAtomNewIndexed(MULTIMAP_ATOM_INDEX_ORDERED, false);
+            multimapAtom *hashed =
+                multimapAtomNewIndexed(MULTIMAP_ATOM_INDEX_HASHED, false);
+            uint64_t rng = 0xD1FF;
+            char name[32];
+            for (int32_t op = 0; op < 8000; op++) {
+                const int32_t i = (int32_t)dkSplitmix64Bounded(&rng, values);
+                const atomTestDiffOp kind = (atomTestDiffOp)dkSplitmix64Bounded(
+                    &rng, ATOM_TEST_DIFF_COUNT);
+                databoxBig wide;
+                const databox value =
+                    atomTestMixedValue_(name, sizeof(name), i, &wide);
+                databox refO = {};
+                databox refH = {};
+                const bool presentO =
+                    multimapAtomLookupReference(ordered, &value, &refO);
+                const bool presentH =
+                    multimapAtomLookupReference(hashed, &value, &refH);
+                if (presentO != presentH ||
+                    (presentO && refO.data.u != refH.data.u)) {
+                    ERR("op %" PRId32 ": value %" PRId32 " present %d/%d, id "
+                        "%" PRIu64 "/%" PRIu64,
+                        op, i, presentO, presentH, refO.data.u64,
+                        refH.data.u64);
+                    break;
+                }
+
+                bool resultO = false;
+                bool resultH = false;
+                switch (kind) {
+                case ATOM_TEST_DIFF_INTERN: {
+                    databox o = value;
+                    databox h = value;
+                    resultO = multimapAtomInsertIfNewConvert(ordered, &o);
+                    resultH = multimapAtomInsertIfNewConvert(hashed, &h);
+                    if (o.data.u != h.data.u) {
+                        ERR("op %" PRId32 ": interned as %" PRIu64
+                            " and %" PRIu64,
+                            op, o.data.u64, h.data.u64);
+                    }
+                    break;
+                }
+                case ATOM_TEST_DIFF_RETAIN:
+                    multimapAtomRetain(ordered, &value);
+                    multimapAtomRetain(hashed, &value);
+                    break;
+                case ATOM_TEST_DIFF_RELEASE:
+                    if (presentO) {
+                        resultO = multimapAtomRelease(ordered, &value);
+                        resultH = multimapAtomRelease(hashed, &value);
+                    }
+                    break;
+                case ATOM_TEST_DIFF_DELETE:
+                    resultO = multimapAtomDelete(ordered, &value);
+                    resultH = multimapAtomDelete(hashed, &value);
+                    break;
+                case ATOM_TEST_DIFF_EXACT_ID:
+                    /* Rebinding: replaces any earlier binding of the id or
+                     * of the value */
+                    multimapAtomInsertWithExactAtomID(
+                        ordered, 2000 + (uint64_t)(i % 40), &value);
+                    multimapAtomInsertWithExactAtomID(
+                        hashed, 2000 + (uint64_t)(i % 40), &value);
+                    break;
+                case ATOM_TEST_DIFF_COUNT:
+                    break;
+                }
+
+                if (resultO != resultH ||
+                    multimapAtomCount(ordered) != multimapAtomCount(hashed)) {
+                    ERR("op %" PRId32 " (kind %d): results %d/%d, counts "
+                        "%zu/%zu",
+                        op, (int)kind, resultO, resultH,
+                        multimapAtomCount(ordered), multimapAtomCount(hashed));
+                    break;
+                }
+            }
+
+            /* Every value resolves alike, before and after a snapshot */
+            for (int round = 0; round < 2; round++) {
+                for (int32_t i = 0; i < values; i++) {
+                    databoxBig wide;
+                    const databox value =
+                        atomTestMixedValue_(name, sizeof(name), i, &wide);
+                    databox refO = {};
+                    databox refH = {};
+                    const bool o =
+                        multimapAtomLookupReference(ordered, &value, &refO);
+                    const bool h =
+                        multimapAtomLookupReference(hashed, &value, &refH);
+                    if (o != h || (o && refO.data.u != refH.data.u)) {
+                        ERR("round %d: value %" PRId32 " resolves apart", round,
+                            i);
+                        break;
+                    }
+                }
+
+                /* The least value: one read ordered, a scan hashed */
+                databox minO = {};
+                databox minH = {};
+                const bool mo = multimapAtomLookupMin(ordered, &minO);
+                const bool mh = multimapAtomLookupMin(hashed, &minH);
+                if (mo != mh || (mo && minO.data.u64 != minH.data.u64)) {
+                    ERR("round %d: least value is atom %" PRIu64
+                        " ordered, %" PRIu64 " hashed",
+                        round, minO.data.u64, minH.data.u64);
+                }
+
+                if (round == 0) {
+                    multimapAtomStats so;
+                    multimapAtomStats sh;
+                    multimapAtomGetStats(ordered, &so);
+                    multimapAtomGetStats(hashed, &sh);
+                    if (so.atoms) {
+                        printf(
+                            "    %" PRIu64 " atoms: %.1f table bytes per atom "
+                            "ordered, %.1f hashed\n",
+                            so.atoms, (double)so.tableBytes / (double)so.atoms,
+                            (double)sh.tableBytes / (double)sh.atoms);
+                    }
+                }
+
+                if (round == 0) {
+                    size_t lenO = 0;
+                    size_t lenH = 0;
+                    cleanerName(zfree, Void) void *snapO =
+                        persistOpsMultimapAtom.snapshot(ordered, &lenO);
+                    cleanerName(zfree, Void) void *snapH =
+                        persistOpsMultimapAtom.snapshot(hashed, &lenH);
+                    multimapAtomFree(ordered);
+                    multimapAtomFree(hashed);
+                    ordered = persistOpsMultimapAtom.restore(snapO, lenO);
+                    hashed = persistOpsMultimapAtom.restore(snapH, lenH);
+                    if (!ordered || !hashed ||
+                        multimapAtomGetIndex(hashed) !=
+                            MULTIMAP_ATOM_INDEX_HASHED ||
+                        multimapAtomGetIndex(ordered) !=
+                            MULTIMAP_ATOM_INDEX_ORDERED) {
+                        ERR("a snapshot did not restore with its index");
+                        break;
+                    }
+                }
+            }
+
+            multimapAtomFree(ordered);
+            multimapAtomFree(hashed);
+        }
+    }
+
+    atomTestHashMask_ = UINT32_MAX;
     TEST_FINAL_RESULT;
 }
 #endif
