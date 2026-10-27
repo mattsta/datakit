@@ -11,6 +11,7 @@
 
 #include "ctmem.h" /* dkCtMemEq for constant-time small-order pre-reject. */
 #include "dkBits.h"
+#include "dkEndian.h" /* dkLoadLe64, dkStoreLe64 */
 
 #include <stdint.h>
 #include <string.h>
@@ -30,10 +31,7 @@ typedef struct fe25519 {
 static void feDecode(fe25519 *out, const uint8_t in[32]) {
     uint64_t t[4];
     for (uint32_t i = 0; i < 4; i++) {
-        t[i] = 0;
-        for (uint32_t j = 0; j < 8; j++) {
-            t[i] |= ((uint64_t)in[i * 8 + j]) << (j * 8);
-        }
+        t[i] = dkLoadLe64(in + 8 * i);
     }
     /* Strip the high bit of the most-significant byte per RFC 7748
      * §5: the u-coordinate is encoded modulo 2^255. */
@@ -99,9 +97,7 @@ static void feEncode(uint8_t out[32], const fe25519 *in) {
     uint64_t w3 = (t.l[3] >> 39) | (t.l[4] << 12);
     uint64_t words[4] = {w0, w1, w2, w3};
     for (uint32_t i = 0; i < 4; i++) {
-        for (uint32_t j = 0; j < 8; j++) {
-            out[i * 8 + j] = (uint8_t)(words[i] >> (j * 8));
-        }
+        dkStoreLe64(out + 8 * i, words[i]);
     }
 }
 

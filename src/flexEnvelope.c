@@ -7,6 +7,7 @@
 #include "aesGcm.h"
 #include "ctmem.h"
 #include "datakit.h"
+#include "dkEndian.h" /* dkStoreLe64 */
 #include "dkFormat.h"
 #include "flex.h"
 #include "hmacKeyring.h"
@@ -56,28 +57,20 @@ typedef struct flexEnvelopeAlgoDesc {
 
 static void hashXXH64(const uint8_t *data, size_t data_len, const uint8_t *,
                       size_t, uint8_t *out) {
-    const uint64_t h = XXH64(data, data_len, 0);
-    /* Write little-endian for cross-platform stability. */
-    for (uint32_t i = 0; i < 8u; i++) {
-        out[i] = (uint8_t)(h >> (i * 8u));
-    }
+    /* Little-endian for cross-platform stability, as every digest here */
+    dkStoreLe64(out, XXH64(data, data_len, 0));
 }
 
 static void hashXXH3_64(const uint8_t *data, size_t data_len, const uint8_t *,
                         size_t, uint8_t *out) {
-    const uint64_t h = XXH3_64bits(data, data_len);
-    for (uint32_t i = 0; i < 8u; i++) {
-        out[i] = (uint8_t)(h >> (i * 8u));
-    }
+    dkStoreLe64(out, XXH3_64bits(data, data_len));
 }
 
 static void hashXXH3_128(const uint8_t *data, size_t data_len, const uint8_t *,
                          size_t, uint8_t *out) {
     const XXH128_hash_t h = XXH3_128bits(data, data_len);
-    for (uint32_t i = 0; i < 8u; i++) {
-        out[i] = (uint8_t)(h.low64 >> (i * 8u));
-        out[8u + i] = (uint8_t)(h.high64 >> (i * 8u));
-    }
+    dkStoreLe64(out, h.low64);
+    dkStoreLe64(out + 8, h.high64);
 }
 
 /* rapidhash V3 — 64-bit non-cryptographic.  Main variant, FAST mode, no
@@ -86,10 +79,7 @@ static void hashXXH3_128(const uint8_t *data, size_t data_len, const uint8_t *,
  * other 64-bit checksum entries. */
 static void hashRapidhash(const uint8_t *data, size_t data_len, const uint8_t *,
                           size_t, uint8_t *out) {
-    const uint64_t h = rapidhash(data, data_len);
-    for (uint32_t i = 0; i < 8u; i++) {
-        out[i] = (uint8_t)(h >> (i * 8u));
-    }
+    dkStoreLe64(out, rapidhash(data, data_len));
 }
 
 /* BLAKE3 native keyed-hash adapter. Requires a 32-byte key (the BLAKE3
@@ -1906,36 +1896,22 @@ static bool streamHashFinal(flexEnvelopeAlgo algo, void *u_state, hmacCtx *hmac,
     switch ((flexEnvelopeAlgo)algo) {
     case FLEX_ENV_ALGO_NONE:
         return digest_len == 0;
-    case FLEX_ENV_ALGO_XXH64: {
-        const uint64_t h = XXH64_digest((XXH64_state_t *)u_state);
-        for (size_t i = 0; i < 8; i++) {
-            digest_out[i] = (uint8_t)(h >> (i * 8));
-        }
+    case FLEX_ENV_ALGO_XXH64:
+        dkStoreLe64(digest_out, XXH64_digest((XXH64_state_t *)u_state));
         return true;
-    }
-    case FLEX_ENV_ALGO_RAPIDHASH: {
+    case FLEX_ENV_ALGO_RAPIDHASH:
         if (digest_len != 8) {
             return false;
         }
-        const uint64_t h = rapidhashStreamFinal((rapidhashCtx *)u_state);
-        for (size_t i = 0; i < 8; i++) {
-            digest_out[i] = (uint8_t)(h >> (i * 8));
-        }
+        dkStoreLe64(digest_out, rapidhashStreamFinal((rapidhashCtx *)u_state));
         return true;
-    }
-    case FLEX_ENV_ALGO_XXH3_64: {
-        const uint64_t h = XXH3_64bits_digest((XXH3_state_t *)u_state);
-        for (size_t i = 0; i < 8; i++) {
-            digest_out[i] = (uint8_t)(h >> (i * 8));
-        }
+    case FLEX_ENV_ALGO_XXH3_64:
+        dkStoreLe64(digest_out, XXH3_64bits_digest((XXH3_state_t *)u_state));
         return true;
-    }
     case FLEX_ENV_ALGO_XXH3_128: {
         const XXH128_hash_t h = XXH3_128bits_digest((XXH3_state_t *)u_state);
-        for (size_t i = 0; i < 8; i++) {
-            digest_out[i] = (uint8_t)(h.low64 >> (i * 8));
-            digest_out[8 + i] = (uint8_t)(h.high64 >> (i * 8));
-        }
+        dkStoreLe64(digest_out, h.low64);
+        dkStoreLe64(digest_out + 8, h.high64);
         return true;
     }
     case FLEX_ENV_ALGO_BLAKE3_KEYED:
