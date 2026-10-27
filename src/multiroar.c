@@ -3504,34 +3504,27 @@ void multiroarNot(multiroar *r) {
 /* Create new roars from operations */
 /* The New* forms copy 'a' and apply the in-place form; a value-mode operand
  * gives no result (a copy of a value roar is not a set result) */
-multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
+static multiroar *mrNewFromOp_(const multiroar *a, const multiroar *b,
+                               void (*op)(multiroar *, multiroar *)) {
     if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
         return nullptr;
     }
     /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
-    multiroarAnd(result, (multiroar *)b);
+    op(result, (multiroar *)b);
     return result;
+}
+
+multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
+    return mrNewFromOp_(a, b, multiroarAnd);
 }
 
 multiroar *multiroarNewOr(const multiroar *a, const multiroar *b) {
-    if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
-        return nullptr;
-    }
-    /* @own: caller; free=multiroarFree */
-    multiroar *result = multiroarDuplicate(a);
-    multiroarOr(result, (multiroar *)b);
-    return result;
+    return mrNewFromOp_(a, b, multiroarOr);
 }
 
 multiroar *multiroarNewXor(const multiroar *a, const multiroar *b) {
-    if (MR_BIT_OP_REFUSED_(a) || MR_BIT_OP_REFUSED_(b)) {
-        return nullptr;
-    }
-    /* @own: caller; free=multiroarFree */
-    multiroar *result = multiroarDuplicate(a);
-    multiroarXor(result, (multiroar *)b);
-    return result;
+    return mrNewFromOp_(a, b, multiroarXor);
 }
 
 multiroar *multiroarNewNot(const multiroar *r) {
@@ -3809,8 +3802,10 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
     }
 }
 
-/* N-way operations returning new multiroar */
-multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
+/* N-way operations returning new multiroar: a copy of roars[0] with the
+ * in-place N-way form applied across the rest */
+static multiroar *mrNewFromOpN_(uint64_t n, multiroar **roars,
+                                void (*opN)(uint64_t, multiroar **)) {
     if (roars && mrAnyValueMode_(n, roars)) {
         return nullptr;
     }
@@ -3831,64 +3826,22 @@ multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
             tempRoars[i] = roars[i];
         }
 
-        multiroarAndN(n, tempRoars);
+        opN(n, tempRoars);
     }
 
     return result;
+}
+
+multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
+    return mrNewFromOpN_(n, roars, multiroarAndN);
 }
 
 multiroar *multiroarNewOrN(uint64_t n, multiroar **roars) {
-    if (roars && mrAnyValueMode_(n, roars)) {
-        return nullptr;
-    }
-    if (n == 0 || !roars || !roars[0]) {
-        /* @own: caller; free=multiroarFree */
-        return multiroarBitNew();
-    }
-
-    /* @own: caller; free=multiroarFree */
-    multiroar *result = multiroarDuplicate(roars[0]);
-
-    if (n > 1) {
-        /* Create temp array starting from result */
-        cleanerName(zfree, RoarPtrs) multiroar **tempRoars =
-            zmalloc(n * sizeof(multiroar *));
-        tempRoars[0] = result;
-        for (uint64_t i = 1; i < n; i++) {
-            tempRoars[i] = roars[i];
-        }
-
-        multiroarOrN(n, tempRoars);
-    }
-
-    return result;
+    return mrNewFromOpN_(n, roars, multiroarOrN);
 }
 
 multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
-    if (roars && mrAnyValueMode_(n, roars)) {
-        return nullptr;
-    }
-    if (n == 0 || !roars || !roars[0]) {
-        /* @own: caller; free=multiroarFree */
-        return multiroarBitNew();
-    }
-
-    /* @own: caller; free=multiroarFree */
-    multiroar *result = multiroarDuplicate(roars[0]);
-
-    if (n > 1) {
-        /* Create temp array starting from result */
-        cleanerName(zfree, RoarPtrs) multiroar **tempRoars =
-            zmalloc(n * sizeof(multiroar *));
-        tempRoars[0] = result;
-        for (uint64_t i = 1; i < n; i++) {
-            tempRoars[i] = roars[i];
-        }
-
-        multiroarXorN(n, tempRoars);
-    }
-
-    return result;
+    return mrNewFromOpN_(n, roars, multiroarXorN);
 }
 
 /* ====================================================================
