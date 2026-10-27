@@ -195,19 +195,7 @@ bool getRandomHexCharsCounterInit(uint8_t seed[], uint8_t seedLen) {
      * the same seed with a progressive counter. For the goals of this
      * function we just need non-colliding strings, there are no
      * cryptographic security needs. */
-    FILE *fp = fopen("/dev/urandom", "r");
-    if (!fp) {
-        return false;
-    }
-
-    bool readSuccess = true;
-    if (fread(seed, seedLen, 1, fp) != 1) {
-        readSuccess = false;
-    }
-
-    fclose(fp);
-
-    return readSuccess;
+    return portableRandomDirectFull(seed, seedLen);
 }
 
 bool getRandomHexCharsCounter(uint8_t seed[SHA1_DIGEST_LENGTH],
