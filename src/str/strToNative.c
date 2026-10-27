@@ -256,7 +256,12 @@ bool StrBufToUInt64FastCheckOverflow(const void *buf_, const size_t len,
     return true;
 }
 
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
+/* The digits converted per 64-bit step: up to 18 (10^18 < 2^63 always
+ * fits), fewer for the last step */
+static inline size_t strDigitChunk_(size_t remaining) {
+    return remaining < 18 ? remaining : 18;
+}
+
 /* Unchecked 128-bit magnitude: bufLen bytes the caller has verified are all
  * digits.  Fails on an empty buffer or a value above UINT128_MAX.
  * Adapted from https://github.com/apache/orc/blob/master/c%2B%2B/src/Int128.cc
@@ -278,11 +283,10 @@ static bool strBufToUInt128Digits_(const void *buf, const size_t bufLen,
      * Digits are extracted forward (from leading digit to trailing digit). */
 
     /* We break these out into two cases because in the bufLen==39 case, the
-     * overflow multiplication checks are noticably slower than direct math. */
-#if 1
+     * overflow multiplication checks are noticeably slower than direct math. */
     if (likely(bufLen < 39)) {
         while (position < bufLen) {
-            const size_t lengthOfExtraction = MIN(18, (bufLen - position));
+            const size_t lengthOfExtraction = strDigitChunk_(bufLen - position);
             const uint64_t converted =
                 StrBufToUInt64Fast(&s[position], lengthOfExtraction);
             const uint64_t multiply = StrTenPow(lengthOfExtraction);
@@ -293,7 +297,7 @@ static bool strBufToUInt128Digits_(const void *buf, const size_t bufLen,
     } else if (bufLen == 39) {
         /* else, bufLen is exactly 39, so we need to run overflow checking */
         while (position < bufLen) {
-            const size_t lengthOfExtraction = MIN(18, (bufLen - position));
+            const size_t lengthOfExtraction = strDigitChunk_(bufLen - position);
             const uint64_t converted =
                 StrBufToUInt64Fast(&s[position], lengthOfExtraction);
             const uint64_t multiply = StrTenPow(lengthOfExtraction);
@@ -303,17 +307,6 @@ static bool strBufToUInt128Digits_(const void *buf, const size_t bufLen,
             }
             position += lengthOfExtraction;
         }
-#else
-
-    /* TODO: perf test combinations of:
-     *  - one while loop with the length conditions in-lined
-     *  - moving __builtins to:
-     *    - save 'result' before
-     *    - result *= multiply;
-     *    - result == converted;
-     *    - if (result < previousValue) { return false; }
-     */
-#endif
     } else {
         /* else, bufLen > 39 */
         /* Maximum length of 2^128 is 39 decimal digits */
