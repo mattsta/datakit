@@ -910,6 +910,16 @@ static void check_against_hex(const uint8_t *digest, size_t digest_len,
     *err_p += err;
 }
 
+void blake3TestDrawInput(uint64_t *state, uint32_t cv[8],
+                         uint8_t block[BLAKE3_BLOCK_LEN], uint64_t *counter,
+                         uint8_t *blockLen, uint8_t *flags) {
+    ctestReplayBytes(cv, 8 * sizeof(uint32_t), state);
+    ctestReplayBytes(block, BLAKE3_BLOCK_LEN, state);
+    *counter = dkSplitmix64Next(state);
+    *blockLen = (uint8_t)(dkSplitmix64Bounded(state, BLAKE3_BLOCK_LEN) + 1);
+    *flags = (uint8_t)(dkSplitmix64Next(state) & 0x7F);
+}
+
 int blake3TestBackendAgainstPortable(const char *name,
                                      blake3CompressInPlaceFn *inPlace,
                                      blake3CompressXofFn *xof, size_t lanes,
@@ -927,17 +937,12 @@ int blake3TestBackendAgainstPortable(const char *name,
         uint64_t counters[maxLanes];
         uint8_t flags[maxLanes];
         for (size_t l = 0; l < lanes; l++) {
-            for (size_t w = 0; w < 8; w++) {
-                cvs[l][w] = (uint32_t)dkSplitmix64Next(&rng);
-            }
-            for (size_t b = 0; b < BLAKE3_BLOCK_LEN; b++) {
-                blocks[l][b] = (uint8_t)dkSplitmix64Next(&rng);
-            }
+            blake3TestDrawInput(&rng, cvs[l], blocks[l], &counters[l], &lens[l],
+                                &flags[l]);
+            /* Every length 0..64 across the trials, in place of the draw */
+            lens[l] = (uint8_t)((trial + l) % (BLAKE3_BLOCK_LEN + 1));
             cvPtrs[l] = cvs[l];
             blockPtrs[l] = blocks[l];
-            lens[l] = (uint8_t)((trial + l) % (BLAKE3_BLOCK_LEN + 1));
-            counters[l] = dkSplitmix64Next(&rng);
-            flags[l] = (uint8_t)(dkSplitmix64Next(&rng) & 0x7F);
         }
 
         /* In place and XOF, on lane 0's input */

@@ -571,6 +571,41 @@ int dkRandomTest(int, char *[]) {
         }
     }
 
+    TEST("ctestReplayBytes lays splitmix64 draws out little-endian") {
+        /* From seed 0 the first draw is splitmix64's published first
+         * output; its bytes come low first, and a 3-byte tail takes the
+         * low bytes of the next draw */
+        uint8_t got[11];
+        uint64_t state = 0;
+        ctestReplayBytes(got, sizeof(got), &state);
+
+        uint64_t ref = 0;
+        const uint64_t first = dkSplitmix64Next(&ref);
+        const uint64_t second = dkSplitmix64Next(&ref);
+        uint8_t want[11];
+        for (size_t i = 0; i < 8; i++) {
+            want[i] = (uint8_t)(first >> (8 * i));
+        }
+        for (size_t i = 0; i < 3; i++) {
+            want[8 + i] = (uint8_t)(second >> (8 * i));
+        }
+
+        TEST_BYTES(err, got, want, sizeof(want), "11 bytes from seed 0");
+        if (first != UINT64_C(16294208416658607535)) {
+            ERR("reference first draw %" PRIu64, first);
+        }
+
+        if (state != ref) {
+            ERR("11 bytes took other than two draws");
+        }
+
+        const uint64_t before = state;
+        ctestReplayBytes(got, 0, &state);
+        if (state != before) {
+            ERR("an empty fill drew");
+        }
+    }
+
     TEST("ctestRandomBytes fills exactly 'len' bytes, 64 KiB then copies") {
         constexpr size_t fresh = 64 * 1024;
         constexpr size_t guard = 16;

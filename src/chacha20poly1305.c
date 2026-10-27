@@ -1280,15 +1280,6 @@ static constexpr uint8_t rfc_a5_plaintext[265] = {
     0x70, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x2e, 0x2f, 0xe2, 0x80,
     0x9d};
 
-/* Filling helper: deterministic pseudo-random fill from a 32-bit seed. */
-static void fillPseudoRandom(uint8_t *buf, size_t n, uint32_t seed) {
-    uint32_t s = seed ? seed : 1;
-    for (size_t i = 0; i < n; i++) {
-        s = s * 1664525u + 1013904223u;
-        buf[i] = (uint8_t)(s >> 24);
-    }
-}
-
 /* Pthread worker for the concurrency test. */
 typedef struct mtArgs {
     /* Field order: largest -> smallest. */
@@ -1306,10 +1297,10 @@ static void *mtWorker(void *p) {
         uint8_t pt[260], ct[260], out[260];
 
         uint32_t seed = (a->thread_id << 16) ^ i ^ 0xdeadbeefu;
-        fillPseudoRandom(key, sizeof(key), seed + 1);
-        fillPseudoRandom(nonce, sizeof(nonce), seed + 2);
-        fillPseudoRandom(aad, sizeof(aad), seed + 3);
-        fillPseudoRandom(pt, pt_len, seed + 4);
+        ctestReplaySeeded(key, sizeof(key), seed + 1);
+        ctestReplaySeeded(nonce, sizeof(nonce), seed + 2);
+        ctestReplaySeeded(aad, sizeof(aad), seed + 3);
+        ctestReplaySeeded(pt, pt_len, seed + 4);
 
         (void)chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, pt_len, ct,
                                    tag);
@@ -1424,8 +1415,8 @@ int chacha20poly1305Test(int, char *[]) {
         static constexpr size_t sizes[] = {0,   1,   63,   64,   65,
                                            127, 128, 1024, 16384};
         uint8_t key[32], nonce[12], tag[16];
-        fillPseudoRandom(key, sizeof(key), 0xC0FFEE);
-        fillPseudoRandom(nonce, sizeof(nonce), 0xDEADBEEF);
+        ctestReplaySeeded(key, sizeof(key), 0xC0FFEE);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0xDEADBEEF);
 
         for (size_t si = 0; si < countof(sizes); si++) {
             size_t n = sizes[si];
@@ -1436,7 +1427,7 @@ int chacha20poly1305Test(int, char *[]) {
             cleanerName(zfree, Bytes) uint8_t *out =
                 (n > 0) ? zmalloc(n) : nullptr;
             if (n > 0) {
-                fillPseudoRandom(pt, n, (uint32_t)(0x100 + n));
+                ctestReplaySeeded(pt, n, (uint32_t)(0x100 + n));
             }
             (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, n, ct, tag);
             bool ok =
@@ -1455,8 +1446,8 @@ int chacha20poly1305Test(int, char *[]) {
                                            127, 128, 1024, 16384};
         static constexpr size_t aad_sizes[] = {0, 1, 15, 16, 17, 64, 257};
         uint8_t key[32], nonce[12], tag[16];
-        fillPseudoRandom(key, sizeof(key), 0xCAFEBABE);
-        fillPseudoRandom(nonce, sizeof(nonce), 0xFACEFEED);
+        ctestReplaySeeded(key, sizeof(key), 0xCAFEBABE);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0xFACEFEED);
 
         for (size_t si = 0; si < countof(sizes); si++) {
             for (size_t ai = 0; ai < countof(aad_sizes); ai++) {
@@ -1471,10 +1462,10 @@ int chacha20poly1305Test(int, char *[]) {
                 cleanerName(zfree, Bytes) uint8_t *aad =
                     (alen > 0) ? zmalloc(alen) : nullptr;
                 if (n > 0) {
-                    fillPseudoRandom(pt, n, (uint32_t)(0x200 + n + alen));
+                    ctestReplaySeeded(pt, n, (uint32_t)(0x200 + n + alen));
                 }
                 if (alen > 0) {
-                    fillPseudoRandom(aad, alen, (uint32_t)(0x300 + alen));
+                    ctestReplaySeeded(aad, alen, (uint32_t)(0x300 + alen));
                 }
                 (void)chacha20poly1305Seal(key, nonce, aad, alen, pt, n, ct,
                                            tag);
@@ -1492,12 +1483,12 @@ int chacha20poly1305Test(int, char *[]) {
 
     TEST("In-place encryption (ciphertext aliases plaintext)") {
         uint8_t key[32], nonce[12], tag[16];
-        fillPseudoRandom(key, sizeof(key), 0x11111111);
-        fillPseudoRandom(nonce, sizeof(nonce), 0x22222222);
+        ctestReplaySeeded(key, sizeof(key), 0x11111111);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0x22222222);
         const size_t n = 1500;
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(n);
         cleanerName(zfree, Bytes) uint8_t *ref = zmalloc(n);
-        fillPseudoRandom(buf, n, 0x33333333);
+        ctestReplaySeeded(buf, n, 0x33333333);
         memcpy(ref, buf, n);
 
         (void)chacha20poly1305Seal(key, nonce, nullptr, 0, buf, n, buf, tag);
@@ -1514,10 +1505,10 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32], nonce[12], aad[8], tag[16], saved_tag[16];
         const size_t n = 96;
         uint8_t pt[96], ct[96], out[96];
-        fillPseudoRandom(key, sizeof(key), 0x44);
-        fillPseudoRandom(nonce, sizeof(nonce), 0x55);
-        fillPseudoRandom(aad, sizeof(aad), 0x66);
-        fillPseudoRandom(pt, n, 0x77);
+        ctestReplaySeeded(key, sizeof(key), 0x44);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0x55);
+        ctestReplaySeeded(aad, sizeof(aad), 0x66);
+        ctestReplaySeeded(pt, n, 0x77);
         (void)chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, n, ct,
                                    tag);
         memcpy(saved_tag, tag, 16);
@@ -1539,10 +1530,10 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32], nonce[12], aad[8], tag[16];
         const size_t n = 64;
         uint8_t pt[64], ct[64], out[64];
-        fillPseudoRandom(key, sizeof(key), 0xAA);
-        fillPseudoRandom(nonce, sizeof(nonce), 0xBB);
-        fillPseudoRandom(aad, sizeof(aad), 0xCC);
-        fillPseudoRandom(pt, n, 0xDD);
+        ctestReplaySeeded(key, sizeof(key), 0xAA);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0xBB);
+        ctestReplaySeeded(aad, sizeof(aad), 0xCC);
+        ctestReplaySeeded(pt, n, 0xDD);
         (void)chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, n, ct,
                                    tag);
 
@@ -1562,10 +1553,10 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32], nonce[12], aad[32], tag[16];
         const size_t n = 100;
         uint8_t pt[100], ct[100], out[100];
-        fillPseudoRandom(key, sizeof(key), 0xE1);
-        fillPseudoRandom(nonce, sizeof(nonce), 0xE2);
-        fillPseudoRandom(aad, sizeof(aad), 0xE3);
-        fillPseudoRandom(pt, n, 0xE4);
+        ctestReplaySeeded(key, sizeof(key), 0xE1);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0xE2);
+        ctestReplaySeeded(aad, sizeof(aad), 0xE3);
+        ctestReplaySeeded(pt, n, 0xE4);
         (void)chacha20poly1305Seal(key, nonce, aad, sizeof(aad), pt, n, ct,
                                    tag);
 
@@ -1585,9 +1576,9 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32], nonce[12], tag[16];
         const size_t n = 80;
         uint8_t pt[80], ct[80], out[80];
-        fillPseudoRandom(key, sizeof(key), 0xF1);
-        fillPseudoRandom(nonce, sizeof(nonce), 0xF2);
-        fillPseudoRandom(pt, n, 0xF3);
+        ctestReplaySeeded(key, sizeof(key), 0xF1);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0xF2);
+        ctestReplaySeeded(pt, n, 0xF3);
         (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, n, ct, tag);
 
         uint8_t bad_nonce[12];
@@ -1609,9 +1600,9 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t key[32], nonce[12], tag[16];
         const size_t n = 200;
         uint8_t pt[200], ct[200], out[200];
-        fillPseudoRandom(key, sizeof(key), 0x77);
-        fillPseudoRandom(nonce, sizeof(nonce), 0x88);
-        fillPseudoRandom(pt, n, 0x99);
+        ctestReplaySeeded(key, sizeof(key), 0x77);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0x88);
+        ctestReplaySeeded(pt, n, 0x99);
         (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, n, ct, tag);
 
         memset(out, 0xab, sizeof(out));
@@ -1876,8 +1867,8 @@ int chacha20poly1305Test(int, char *[]) {
         const size_t n_sizes = countof(sizes);
 
         uint8_t key[32], nonce[12];
-        fillPseudoRandom(key, sizeof(key), 0xBEEFCAFE);
-        fillPseudoRandom(nonce, sizeof(nonce), 0x0DD0F00D);
+        ctestReplaySeeded(key, sizeof(key), 0xBEEFCAFE);
+        ctestReplaySeeded(nonce, sizeof(nonce), 0x0DD0F00D);
 
         chacha20ForceBackend saved = chacha20GetForceBackend();
         for (size_t i = 0; i < n_sizes; i++) {
@@ -1889,7 +1880,7 @@ int chacha20poly1305Test(int, char *[]) {
             cleanerName(zfree, Bytes) uint8_t *out_scalar =
                 (n > 0) ? zmalloc(n) : nullptr;
             if (n > 0) {
-                fillPseudoRandom(in, n, (uint32_t)(0xABCD + n));
+                ctestReplaySeeded(in, n, (uint32_t)(0xABCD + n));
             }
             /* Scalar baseline. */
             chacha20SetForceBackend(CHACHA20_FORCE_SCALAR);

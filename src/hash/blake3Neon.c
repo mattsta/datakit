@@ -444,23 +444,8 @@ static void portable_compress_xof(const uint32_t cv[8], const uint8_t block[64],
     assert(memcmp(ref, out, sizeof(ref)) == 0);
 }
 
-/* A replayable stream for random test data */
+/* The tests' replayable stream */
 static uint64_t prng_state = 0x9E3779B97F4A7C15ull;
-static inline uint64_t prng_next(void) {
-    return dkXorshift64StarNext(&prng_state);
-}
-static void prng_fill(uint8_t *p, size_t n) {
-    while (n >= 8) {
-        uint64_t v = prng_next();
-        memcpy(p, &v, 8);
-        p += 8;
-        n -= 8;
-    }
-    if (n) {
-        uint64_t v = prng_next();
-        memcpy(p, &v, n);
-    }
-}
 
 int blake3NeonTest(int, char *[]) {
     int err = 0;
@@ -483,11 +468,10 @@ int blake3NeonTest(int, char *[]) {
         for (uint32_t t = 0; t < iters; t++) {
             uint32_t cv[8];
             uint8_t block[BLAKE3_BLOCK_LEN];
-            prng_fill((uint8_t *)cv, sizeof(cv));
-            prng_fill(block, sizeof(block));
-            uint64_t counter = prng_next();
-            uint8_t block_len = (uint8_t)((prng_next() % BLAKE3_BLOCK_LEN) + 1);
-            uint8_t flags = (uint8_t)(prng_next() & 0x7F);
+            uint64_t counter;
+            uint8_t block_len, flags;
+            blake3TestDrawInput(&prng_state, cv, block, &counter, &block_len,
+                                &flags);
 
             uint32_t cv_ref[8], cv_neon[8];
             memcpy(cv_ref, cv, sizeof(cv));
@@ -510,11 +494,10 @@ int blake3NeonTest(int, char *[]) {
         for (uint32_t t = 0; t < iters; t++) {
             uint32_t cv[8];
             uint8_t block[BLAKE3_BLOCK_LEN];
-            prng_fill((uint8_t *)cv, sizeof(cv));
-            prng_fill(block, sizeof(block));
-            uint64_t counter = prng_next();
-            uint8_t block_len = (uint8_t)((prng_next() % BLAKE3_BLOCK_LEN) + 1);
-            uint8_t flags = (uint8_t)(prng_next() & 0x7F);
+            uint64_t counter;
+            uint8_t block_len, flags;
+            blake3TestDrawInput(&prng_state, cv, block, &counter, &block_len,
+                                &flags);
 
             uint8_t out_ref[64], out_neon[64];
             portable_compress_xof(cv, block, block_len, counter, flags,
@@ -535,7 +518,7 @@ int blake3NeonTest(int, char *[]) {
          * spec compliance — checked against the official portable. */
         for (size_t len = 0; len <= 64; len++) {
             uint8_t in[64];
-            prng_fill(in, len);
+            ctestReplayBytes(in, len, &prng_state);
             uint8_t pub[BLAKE3_OUT_LEN];
             blake3Hash(in, len, pub);
 
@@ -566,11 +549,8 @@ int blake3NeonTest(int, char *[]) {
             uint8_t flags[4];
 
             for (uint32_t i = 0; i < 4; i++) {
-                prng_fill((uint8_t *)cvs[i], sizeof(cvs[i]));
-                prng_fill(blocks[i], BLAKE3_BLOCK_LEN);
-                counters[i] = prng_next();
-                block_lens[i] = (uint8_t)((prng_next() % BLAKE3_BLOCK_LEN) + 1);
-                flags[i] = (uint8_t)(prng_next() & 0x7F);
+                blake3TestDrawInput(&prng_state, cvs[i], blocks[i],
+                                    &counters[i], &block_lens[i], &flags[i]);
             }
 
             const uint32_t *cv_ptrs[4] = {cvs[0], cvs[1], cvs[2], cvs[3]};
@@ -599,7 +579,7 @@ int blake3NeonTest(int, char *[]) {
     TEST("blake3 neon performance bench") {
         const size_t MB = 1024 * 1024;
         cleanerName(zfree, U8) uint8_t *buf = zmalloc(MB);
-        prng_fill(buf, MB);
+        ctestReplayBytes(buf, MB, &prng_state);
 
         /* Public one-shot hasher. It dispatches to the NEON paths on this
          * hardware, so it is the end-to-end figure, not a portable one. */

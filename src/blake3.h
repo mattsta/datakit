@@ -182,6 +182,13 @@ int blake3TestBackendAgainstPortable(const char *name,
                                      blake3CompressInPlaceFn *inPlace,
                                      blake3CompressXofFn *xof, size_t lanes,
                                      blake3BatchCompressFn *batch);
+
+/* One compress input drawn from the replayable stream at '*state': a
+ * chaining value, a block, a counter, a block length of 1..64 and flags
+ * below 0x80.  The backend tests' shared source of inputs. */
+void blake3TestDrawInput(uint64_t *state, uint32_t cv[8],
+                         uint8_t block[BLAKE3_BLOCK_LEN], uint64_t *counter,
+                         uint8_t *blockLen, uint8_t *flags);
 #endif
 
 #ifdef __cplusplus

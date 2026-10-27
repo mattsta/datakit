@@ -9,7 +9,8 @@
 #error "DATAKIT_TEST code needs assertions: NDEBUG must not be defined"
 #endif
 
-#include "dkRandom.h" /* dkLcg64Next: the tests' replayable stream */
+#include "dkEndian.h" /* dkStoreLe64: replayed bytes in one order */
+#include "dkRandom.h" /* dkSplitmix64Next: the tests' replayable stream */
 #include <stdio.h>
 #include <string.h> /* strchr */
 
@@ -33,6 +34,33 @@
         memcpy(b + have, b, n);
         have += n;
     }
+}
+
+/* The 'len' bytes at 'buf' filled from the replayable splitmix64 stream
+ * at '*state', eight little-endian bytes per draw (a partial last draw
+ * gives its low bytes), so the same seed gives the same bytes on every
+ * platform.  A test drawing in turn keeps one state; a fill of its own
+ * is ctestReplaySeeded. */
+[[maybe_unused]] static void ctestReplayBytes(void *buf, size_t len,
+                                              uint64_t *state) {
+    uint8_t *b = buf;
+    while (len >= sizeof(uint64_t)) {
+        dkStoreLe64(b, dkSplitmix64Next(state));
+        b += sizeof(uint64_t);
+        len -= sizeof(uint64_t);
+    }
+
+    if (len) {
+        uint8_t last[sizeof(uint64_t)];
+        dkStoreLe64(last, dkSplitmix64Next(state));
+        memcpy(b, last, len);
+    }
+}
+
+/* ctestReplayBytes from a stream of its own, seeded with 'seed' */
+[[maybe_unused]] static void ctestReplaySeeded(void *buf, size_t len,
+                                               uint64_t seed) {
+    ctestReplayBytes(buf, len, &seed);
 }
 
 /* Fill 8 KiB of the stack below the caller with 0xFF, so a decoder that

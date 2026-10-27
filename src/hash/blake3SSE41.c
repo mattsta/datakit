@@ -404,27 +404,6 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 
-/* A replayable stream for random test data */
-static uint64_t rng_state = 0xDEADBEEFCAFEBABEull;
-static uint64_t xrand(void) {
-    return dkXorshift64StarNext(&rng_state);
-}
-static void rng_seed(uint64_t s) {
-    rng_state = s ? s : 1;
-}
-static void rng_fill(uint8_t *p, size_t n) {
-    while (n >= 8) {
-        uint64_t v = xrand();
-        memcpy(p, &v, 8);
-        p += 8;
-        n -= 8;
-    }
-    if (n) {
-        uint64_t v = xrand();
-        memcpy(p, &v, n);
-    }
-}
-
 int blake3SSE41Test(int, char *[]) {
     int err = 0;
 
@@ -445,19 +424,15 @@ int blake3SSE41Test(int, char *[]) {
 
     /* Test 1: single-block compress matches portable on random inputs. */
     TEST("blake3SSE41 single-block matches portable") {
-        rng_seed(0x1234567890ABCDEFull);
+        uint64_t rng = 0x1234567890ABCDEFull;
         for (int iter = 0; iter < 1024; iter++) {
             uint32_t cv_a[8], cv_b[8];
             uint8_t block[BLAKE3_BLOCK_LEN];
-            for (int i = 0; i < 8; i++) {
-                uint64_t v = xrand();
-                cv_a[i] = (uint32_t)v;
-            }
+            uint64_t counter;
+            uint8_t block_len, flags;
+            blake3TestDrawInput(&rng, cv_a, block, &counter, &block_len,
+                                &flags);
             memcpy(cv_b, cv_a, sizeof(cv_a));
-            rng_fill(block, sizeof(block));
-            uint8_t block_len = (uint8_t)((xrand() % BLAKE3_BLOCK_LEN) + 1);
-            uint64_t counter = xrand();
-            uint8_t flags = (uint8_t)(xrand() & 0x7F);
 
             blake3PortableCompressInPlace(cv_a, block, block_len, counter,
                                           flags);
@@ -471,18 +446,14 @@ int blake3SSE41Test(int, char *[]) {
 
     /* Test 2: XOF compress matches portable on random inputs. */
     TEST("blake3SSE41 XOF matches portable") {
-        rng_seed(0xFEDCBA0987654321ull);
+        uint64_t rng = 0xFEDCBA0987654321ull;
         for (int iter = 0; iter < 1024; iter++) {
             uint32_t cv[8];
             uint8_t block[BLAKE3_BLOCK_LEN];
             uint8_t out_a[64], out_b[64];
-            for (int i = 0; i < 8; i++) {
-                cv[i] = (uint32_t)xrand();
-            }
-            rng_fill(block, sizeof(block));
-            uint8_t block_len = (uint8_t)((xrand() % BLAKE3_BLOCK_LEN) + 1);
-            uint64_t counter = xrand();
-            uint8_t flags = (uint8_t)(xrand() & 0x7F);
+            uint64_t counter;
+            uint8_t block_len, flags;
+            blake3TestDrawInput(&rng, cv, block, &counter, &block_len, &flags);
 
             blake3PortableCompressXof(cv, block, block_len, counter, flags,
                                       out_a);
@@ -506,7 +477,7 @@ int blake3SSE41Test(int, char *[]) {
      * chunk (1024 bytes); the Merkle-tree path is exercised by
      * blake3Test's cross-impl differential fuzz in blake3.c. */
     TEST("blake3SSE41 differential hash equivalence (<=1024 bytes)") {
-        rng_seed(0xABCD1234FEED5678ull);
+        uint64_t rng = 0xABCD1234FEED5678ull;
         uint8_t buf[BLAKE3_CHUNK_LEN];
         const uint32_t IV[8] = {
             0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
@@ -517,8 +488,8 @@ int blake3SSE41Test(int, char *[]) {
         const uint8_t FLAG_ROOT = 1u << 3;
 
         for (int iter = 0; iter < 100'000; iter++) {
-            size_t n = (size_t)(xrand() % (BLAKE3_CHUNK_LEN + 1));
-            rng_fill(buf, n);
+            const size_t n = dkSplitmix64Bounded(&rng, BLAKE3_CHUNK_LEN + 1);
+            ctestReplayBytes(buf, n, &rng);
 
             uint8_t expected[BLAKE3_OUT_LEN];
             blake3Hash(buf, n, expected);
@@ -563,8 +534,7 @@ int blake3SSE41Test(int, char *[]) {
     TEST("blake3SSE41 perf benchmark (1 MiB)") {
         const size_t N = 1024 * 1024;
         cleanerName(zfree, U8) uint8_t *data = (uint8_t *)zmalloc(N);
-        rng_seed(0x9999AAAABBBBCCCCull);
-        rng_fill(data, N);
+        ctestReplaySeeded(data, N, 0x9999AAAABBBBCCCCull);
 
         const uint32_t IV[8] = {
             0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
