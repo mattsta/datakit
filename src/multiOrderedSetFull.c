@@ -3063,7 +3063,7 @@ int multiOrderedSetFullTest(int, char *[]) {
          * must handle. */
         uint64_t s = 0x9e3779b97f4a7c15ULL;
         for (int i = 0; i < 1000; i++) {
-            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&s);
             int key = (int)(s >> 40) % 4096;
             databox score = databoxNewSigned(key % 50);
             char buf[24];

@@ -4967,7 +4967,7 @@ static int dkTestX25519SmallOrderRejectTest(int, char *[]) {
     for (uint32_t t = 0; t < 100; t++) {
         uint8_t peer[32];
         for (uint32_t i = 0; i < 32; i++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             peer[i] = (uint8_t)(rng >> 56);
         }
         uint8_t out[32];
@@ -6648,7 +6648,7 @@ static int dkTestBlake3Avx2DispatchTest(int, char *[]) {
     }
     uint64_t s = 0xB1A75D15B17C0DE5ULL;
     for (size_t i = 0; i < N; i++) {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&s);
         buf[i] = (uint8_t)(s >> 24);
     }
 
@@ -7764,7 +7764,7 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
     }
     uint64_t s = 0xB2A2BEEFC0FFEE42ULL;
     for (size_t i = 0; i < N; i++) {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&s);
         buf[i] = (uint8_t)(s >> 24);
     }
 
@@ -7826,18 +7826,18 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
             uint8_t flag_set[4];
             for (uint32_t i = 0; i < 4; i++) {
                 for (uint32_t k = 0; k < 8; k++) {
-                    r = r * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&r);
                     cvs[i][k] = (uint32_t)(r >> 32);
                 }
                 for (uint32_t k = 0; k < BLAKE3_BLOCK_LEN; k++) {
-                    r = r * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&r);
                     blocks[i][k] = (uint8_t)(r >> 24);
                 }
-                r = r * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&r);
                 counters[i] = r;
-                r = r * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&r);
                 block_lens[i] = (uint8_t)((r >> 24) % BLAKE3_BLOCK_LEN + 1);
-                r = r * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&r);
                 flag_set[i] = (uint8_t)((r >> 24) & 0x7F);
             }
 

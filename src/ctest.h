@@ -9,6 +9,7 @@
 #error "DATAKIT_TEST code needs assertions: NDEBUG must not be defined"
 #endif
 
+#include "dkRandom.h" /* dkLcg64Next: the tests' replayable stream */
 #include <stdio.h>
 #include <string.h> /* strchr */
 

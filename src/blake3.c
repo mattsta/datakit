@@ -1916,7 +1916,7 @@ int blake3Test(int, char *[]) {
 
         uint64_t s = 0xC0FFEEUL;
         for (int n = 0; n < N; n++) {
-            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&s);
             uint8_t block[BLAKE3_BLOCK_LEN];
             for (int i = 0; i < BLAKE3_BLOCK_LEN; i++) {
                 block[i] = (uint8_t)(s >> (i % 8 * 8) ^ (i * 31));

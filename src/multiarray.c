@@ -904,7 +904,7 @@ static int multiarrayOracleSoak_(uint32_t lo, uint32_t hi, uint16_t rowMax,
     const uint32_t ops = 1500;
     for (uint32_t op = 0; op < ops && !err; op++) {
         inTier += _multiarrayType(m) == tier;
-        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&seed);
         const uint32_t r = (uint32_t)(seed >> 33);
         const char *what;
         if (n < lo || (n < hi && r % 3 == 0)) {
@@ -1108,7 +1108,7 @@ static int multiarrayDrainCheck_(multiarrayDrainBy by, uint64_t seed) {
     uint32_t n = fill;
     bool sawMedium = false;
     while (n && !err) {
-        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&seed);
         const uint32_t r = (uint32_t)(seed >> 33);
         const multiarrayType before = _multiarrayType(m);
         uint32_t at = r % n;

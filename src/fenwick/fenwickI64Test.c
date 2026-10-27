@@ -63,7 +63,7 @@ static int64_t naiveQuery(const naiveArray *arr, size_t idx) {
 }
 
 static uint64_t randSeed(uint64_t *seed) {
-    *seed = (*seed * 6364136223846793005ULL) + 1442695040888963407ULL;
+    dkLcg64Next(seed);
     return *seed;
 }
 

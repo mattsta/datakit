@@ -1078,7 +1078,7 @@ int aeadNonceLogTest(int, char *[]) {
         size_t modelCount = 0;
         uint64_t rng = 0xA5A5A5A5u;
         for (size_t step = 0; step < 20000u && !err; step++) {
-            rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+            dkLcg64Next(&rng);
             const uint32_t key = 1u + (uint32_t)((rng >> 33) % 3u);
             const uint64_t val = (rng >> 40) % 120u;
             if ((rng >> 20) % 64u == 0) {

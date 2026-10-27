@@ -59,6 +59,19 @@ uint64_t dkRandomBounded(uint64_t bound);
  * error path increments it. */
 uint64_t dkRandomZeroBoundTotal(void);
 
+/* A replayable stream: the 64-bit LCG with Knuth's MMIX constants (the
+ * multiplier and increment PCG builds on).  For tests and benchmarks that
+ * need the same values from the same seed, which dkRandom64 cannot give.
+ * Advances '*state' and returns the new state; its low bits cycle
+ * quickly, so small ranges should come from the high bits (>> 33 and the
+ * like).  Reproducible data only: never for anything that must be
+ * unpredictable. */
+static inline uint64_t dkLcg64Next(uint64_t *state) {
+    *state =
+        *state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+    return *state;
+}
+
 #ifdef DATAKIT_TEST
 int dkRandomTest(int argc, char *argv[]);
 #endif

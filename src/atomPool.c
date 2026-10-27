@@ -1264,9 +1264,7 @@ int atomPoolTest(int, char *[]) {
             uint64_t lastReleased = 0;
             uint64_t rng = 0x5EED;
             for (size_t op = 0; op < 2000; op++) {
-                rng =
-                    rng * UINT64_C(6364136223846793005) + 1442695040888963407u;
-                const uint64_t r = rng >> 33;
+                const uint64_t r = dkLcg64Next(&rng) >> 33;
                 if (r % 3 != 0 || liveCount == 0) {
                     if (liveCount == LOW_IDS_) {
                         continue;

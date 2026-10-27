@@ -208,6 +208,25 @@ static bool dkRandomTestForkedNextWord(uint64_t *childWord,
 int dkRandomTest(int, char *[]) {
     int err = 0;
 
+    TEST("dkLcg64Next replays the MMIX LCG") {
+        /* From 0 the first value is the increment; then each step matches
+         * the recurrence computed in 128 bits and reduced mod 2^64 */
+        uint64_t state = 0;
+        if (dkLcg64Next(&state) != UINT64_C(1442695040888963407) ||
+            state != UINT64_C(1442695040888963407)) {
+            ERR("first value from 0 is %" PRIu64, state);
+        }
+        for (int i = 0; i < 1000; i++) {
+            const uint64_t want =
+                (uint64_t)((unsigned __int128)state * 6364136223846793005u +
+                           1442695040888963407u);
+            if (dkLcg64Next(&state) != want || state != want) {
+                ERR("step %d: %" PRIu64 ", want %" PRIu64, i, state, want);
+                break;
+            }
+        }
+    }
+
     TEST("dkRandom64 gives every bit both values") {
         /* Every bit of dkRandom64 must be seen both set and clear in 128
          * draws (false-positive bound 2*64*2^-128). */

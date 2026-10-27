@@ -87,7 +87,7 @@ static int64_t naiveRangeMax(const naiveArray *arr, size_t left, size_t right) {
 }
 
 static uint64_t randSeed(uint64_t *seed) {
-    *seed = (*seed * 6364136223846793005ULL) + 1442695040888963407ULL;
+    dkLcg64Next(seed);
     return *seed;
 }
 

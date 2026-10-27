@@ -620,7 +620,7 @@ int utilTest(int, char **) {
             for (int iter = 0; iter < 20000; iter++) {
                 char p[GLOB_ORACLE_MAX];
                 char s[GLOB_ORACLE_MAX];
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 const int pl = (int)((rng >> 33) % 9);
                 const int sl = (int)((rng >> 45) % 9);
                 const int nocase = (int)((rng >> 60) & 1);

@@ -1195,7 +1195,7 @@ int djTest(int, char *[]) {
 
         uint64_t rng = 0x2545F4914F6CDD1DULL;
         for (size_t i = 0; i < maxNesting; i++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             const bool map = (rng >> 40) % 2 == 0;
             if (map) {
                 djMapOpen(testA);

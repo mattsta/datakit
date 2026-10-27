@@ -3753,8 +3753,7 @@ int multilistFullTest(int, char *[]) {
                 }
 
                 for (uint32_t i = 0; i < CR_INSERTS && !failed; i++) {
-                    seed =
-                        seed * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&seed);
                     const uint32_t g = (uint32_t)((seed >> 33) % n);
                     const bool after = (seed >> 13) & 1;
                     const uint32_t id = CR_INS + round * CR_INSERTS + i;
@@ -3842,8 +3841,7 @@ int multilistFullTest(int, char *[]) {
             uint32_t nextId = MV_NEW;
             bool failed = false;
             uint64_t seed = 0xD1B54A32D192ED03ULL * d;
-#define MV_RAND()                                                              \
-    ((seed = seed * 6364136223846793005ULL + 1442695040888963407ULL) >> 33)
+#define MV_RAND() (dkLcg64Next(&seed) >> 33)
             for (uint32_t round = 0; round < MV_ROUNDS && !failed; round++) {
                 char buf[MLF_SPLIT_LEN + 1];
                 multilistFull *ml = multilistFullNew(FLEX_CAP_LEVEL_512, d);

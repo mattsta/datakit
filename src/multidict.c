@@ -5843,7 +5843,7 @@ static int multidictTestCountersUnderUpdates_(void) {
         char keyBuf[32];
         snprintf(keyBuf, sizeof(keyBuf), "k%" PRId64, i % 1500);
         const databox key = databoxNewBytesString(keyBuf);
-        rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&rng);
         switch ((rng >> 33) % 8) {
         case 0: {
             const databox val = databoxNewSigned(i);

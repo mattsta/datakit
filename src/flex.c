@@ -14158,11 +14158,11 @@ int32_t flexTest(int32_t argc, char **argv) {
         };
         uint64_t rng = 0x5DEECE66DULL;
         for (int row = 0; row < 500; row++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             const size_t n = row == 0 ? 0 : (size_t)((rng >> 40) % 11);
             const databox *ptrs[10];
             for (size_t i = 0; i < n; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 ptrs[i] = &kinds[(rng >> 33) % countof(kinds)];
             }
             cleaner(flexFree) flex *made = flexNewFromDataboxPtrsExact(ptrs, n);

@@ -733,7 +733,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         for (int iter = 0; iter < 3000 && !err; iter++) {
             uint8_t s[64];
             size_t L = 0;
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             const size_t count = (size_t)((rng >> 33) % 12);
             for (size_t k = 0; k < count; k++) {
                 rng = rng * 6364136223846793005ULL + 1;
@@ -2706,7 +2706,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         uint64_t words[64];
         uint64_t rng = 0xb17ab17aULL;
         for (size_t i = 0; i < 64; i++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             words[i] = rng & (rng >> 7);
         }
         uint64_t setWant[4096];

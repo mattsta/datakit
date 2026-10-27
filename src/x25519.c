@@ -661,11 +661,11 @@ int x25519Test(int, char *[]) {
         for (uint32_t t = 0; t < 32; t++) {
             uint8_t a_priv[32], b_priv[32];
             for (uint32_t i = 0; i < 32; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 a_priv[i] = (uint8_t)(rng >> 56);
             }
             for (uint32_t i = 0; i < 32; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 b_priv[i] = (uint8_t)(rng >> 56);
             }
             uint8_t a_pub[32], b_pub[32];
@@ -720,7 +720,7 @@ int x25519Test(int, char *[]) {
         for (uint32_t t = 0; t < 100; t++) {
             uint8_t peer[32];
             for (uint32_t i = 0; i < 32; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 peer[i] = (uint8_t)(rng >> 56);
             }
             uint8_t out[32];
@@ -742,11 +742,11 @@ int x25519Test(int, char *[]) {
         for (uint32_t t = 0; t < 256u; t++) {
             uint8_t a_priv[32], b_priv[32];
             for (uint32_t i = 0; i < 32; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 a_priv[i] = (uint8_t)(rng >> 56);
             }
             for (uint32_t i = 0; i < 32; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 b_priv[i] = (uint8_t)(rng >> 56);
             }
             uint8_t a_pub[32], b_pub[32];

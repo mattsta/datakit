@@ -4176,7 +4176,7 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
     uint64_t distinct = 0;
     uint64_t state = 0x9E3779B97F4A7C15ULL;
     for (uint64_t i = 0; i < (uint64_t)keys * offers; i++) {
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&state);
         const uint64_t key = (state >> 33) % keys;
         const uint64_t value = i * 7 + 1;
         const databox k = databoxNewUnsigned(key);
@@ -8288,7 +8288,7 @@ int multimapTest(int, char *[]) {
                 cleaner(multimapFree) multimap *a = multimapSetNew(1);
                 cleaner(multimapFree) multimap *b = multimapSetNew(1);
                 for (int32_t i = 0; i < n; i++) {
-                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&rng);
                     inA[i] = (rng >> 40) % 3 == 0;
                     inB[i] = (rng >> 50) % 3 == 0;
                     const databox key = databoxNewSigned(i);

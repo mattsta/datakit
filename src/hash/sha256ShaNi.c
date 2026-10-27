@@ -509,13 +509,13 @@ int sha256ShaNiTest(int, char *[]) {
         }
 
         for (uint32_t t = 0; t < iters; t++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             size_t nb = 1 + (size_t)((rng >> 33) % max_blocks);
             size_t nbytes = nb * 64u;
 
             for (uint32_t lane = 0; lane < 4; lane++) {
                 for (size_t i = 0; i < nbytes; i++) {
-                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&rng);
                     bufs[lane][i] = (uint8_t)(rng >> 56);
                 }
             }

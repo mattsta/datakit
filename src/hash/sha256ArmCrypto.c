@@ -830,10 +830,10 @@ int sha256ArmCryptoTest(int, char *[]) {
         cleanerName(zfree, U8) uint8_t *buf = zmalloc(4096);
 
         for (uint32_t t = 0; t < iters; t++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             size_t n = (size_t)((rng >> 33) % 4097); /* 0..4096 */
             for (size_t i = 0; i < n; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 buf[i] = (uint8_t)(rng >> 56);
             }
 
@@ -929,13 +929,13 @@ int sha256ArmCryptoTest(int, char *[]) {
         }
 
         for (uint32_t t = 0; t < iters; t++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             size_t nb = 1 + (size_t)((rng >> 33) % max_blocks);
             size_t nbytes = nb * SHA256_BLOCK_LEN;
 
             for (uint32_t lane = 0; lane < 4; lane++) {
                 for (size_t i = 0; i < nbytes; i++) {
-                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&rng);
                     bufs[lane][i] = (uint8_t)(rng >> 56);
                 }
             }
@@ -1023,18 +1023,18 @@ int sha256ArmCryptoTest(int, char *[]) {
         uint8_t blocks[4][6 * SHA256_BLOCK_LEN];
         uint32_t wrong = 0;
         for (uint32_t t = 0; t < 300; t++) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             const size_t nb = 1 + (size_t)((rng >> 33) % 6);
             uint32_t v1[4][8];
             uint32_t v2[4][8];
             uint32_t ref[4][8];
             for (uint32_t lane = 0; lane < 4; lane++) {
                 for (size_t i = 0; i < nb * SHA256_BLOCK_LEN; i++) {
-                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&rng);
                     blocks[lane][i] = (uint8_t)(rng >> 56);
                 }
                 for (uint32_t w = 0; w < 8; w++) {
-                    rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                    dkLcg64Next(&rng);
                     v1[lane][w] = (uint32_t)(rng >> 32);
                 }
             }

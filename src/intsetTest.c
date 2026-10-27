@@ -1450,12 +1450,12 @@ int intsetTest(int, char *[]) {
         /* Random sorted-unique arrays + arbitrary probes. */
         uint64_t seed = 0x1234567ULL;
         for (int iter = 0; iter < 4000; iter++) {
-            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&seed);
             int n = (int)(seed % 600);
             int32_t prev = INT32_MIN;
             int built = 0;
             for (int i = 0; i < n; i++) {
-                seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&seed);
                 const int32_t step = (int32_t)(seed % 9) + 1;
                 if (prev > INT32_MAX - step) {
                     break;
@@ -1463,7 +1463,7 @@ int intsetTest(int, char *[]) {
                 prev += step;
                 a32[built++] = prev;
             }
-            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&seed);
             const int32_t probe = (int32_t)(uint32_t)(seed >> 16);
             if (blbOracle32(a32, (uint64_t)built, probe)) {
                 ERR("blb32 random mismatch n=%d probe=%d", built, probe);
@@ -1546,7 +1546,7 @@ int intsetTest(int, char *[]) {
             size_t n = 0;
             uint64_t rng = 0x1d5e7 + tier;
             for (int i = 0; i < 600; i++) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 const size_t width = (rng >> 33) % (tier + 1);
                 const int64_t v =
                     ((int64_t)((rng >> 40) % 4000) - 2000) * scale[width];

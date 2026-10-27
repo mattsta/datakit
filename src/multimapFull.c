@@ -3665,7 +3665,7 @@ int multimapFullTest(int, char *[]) {
         /* Fisher-Yates with fixed seed for reproducibility. */
         uint64_t rng = 0xdeadbeefcafebabeULL;
         for (size_t i = howMany - 1; i > 0; i--) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             const size_t j = (size_t)(rng >> 32) % (i + 1);
             const size_t tmp = order[i];
             order[i] = order[j];
@@ -3790,7 +3790,7 @@ int multimapFullTest(int, char *[]) {
         }
         uint64_t rng = 0xA5A5A5A5DEADBEEFULL;
         for (size_t i = howMany - 1; i > 0; i--) {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&rng);
             const size_t j = (size_t)(rng >> 32) % (i + 1);
             const size_t tmp = order[i];
             order[i] = order[j];
@@ -3863,7 +3863,7 @@ int multimapFullTest(int, char *[]) {
             }
             uint64_t rng = 0x9E3779B97F4A7C15ULL + r * 0xBF58476D1CE4E5B9ULL;
             for (size_t i = keysPerRound - 1; i > 0; i--) {
-                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                dkLcg64Next(&rng);
                 const size_t j = (size_t)(rng >> 32) % (i + 1);
                 const size_t tmp = order[i];
                 order[i] = order[j];

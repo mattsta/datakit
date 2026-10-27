@@ -69,8 +69,7 @@ static bool naiveQueryDatabox(const naiveDataboxArray *arr, size_t idx,
 }
 
 static uint64_t randSeed(uint64_t *seed) {
-    *seed = (*seed * 6364136223846793005ULL) + 1442695040888963407ULL;
-    return *seed;
+    return dkLcg64Next(seed);
 }
 
 /* 'box' is the 64-bit integer 'want'.  Flex stores integers canonically,

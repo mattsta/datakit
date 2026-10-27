@@ -9138,7 +9138,7 @@ int persistTest(int, char *[]) {
         size_t addedCount = 0;
 
         for (int iter = 0; iter < 1000; iter++) {
-            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            dkLcg64Next(&seed);
 
             int64_t val;
             int range = seed % 4;

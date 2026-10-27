@@ -83,7 +83,7 @@ static uint64_t dkC23Ceil_(uint64_t x, unsigned int width) {
         }                                                                      \
         uint64_t s = 0x9E3779B97F4A7C15u;                                      \
         for (int i = 0; i < 2000; i++) {                                       \
-            s = s * 6364136223846793005u + 1442695040888963407u;               \
+            dkLcg64Next(&s);                                                   \
             DKC23_CHECK(T, width, s >> (i % 64));                              \
         }                                                                      \
     } while (0)

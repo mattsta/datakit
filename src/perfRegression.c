@@ -128,7 +128,7 @@ static double monoNowSec(void) {
 static void fillDeterministic(uint8_t *buf, size_t len, uint64_t seed) {
     uint64_t s = seed | 1u;
     for (size_t i = 0; i < len; i++) {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        dkLcg64Next(&s);
         buf[i] = (uint8_t)(s >> 56);
     }
 }

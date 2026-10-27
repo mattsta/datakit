@@ -2205,7 +2205,7 @@ int multilruTest(int, char *[]) {
             const uint32_t L = 4 * (w - 1);
             const uint64_t mask = (UINT64_C(1) << L) - 1;
             for (int round = 0; round < 64; round++) {
-                s = s * 6364136223846793005u + 1442695040888963407u;
+                dkLcg64Next(&s);
                 const uint64_t prev = round == 0 ? mask : (s >> 3) & mask;
                 const uint64_t next = round == 0 ? mask : (s >> 7) & mask;
                 const uint8_t level = round == 0 ? 63 : (uint8_t)(s & 63);

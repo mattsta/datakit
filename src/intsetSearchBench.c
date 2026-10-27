@@ -79,7 +79,7 @@ static void run(const char *name, int64_t n) {
 
     uint64_t t0 = nowns();
     for (int64_t i = 0; i < M; i++) {
-        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+        dkLcg64Next(&seed);
         const uint32_t v = (uint32_t)((seed >> 33) % (uint64_t)(n * 2));
         sink += branchyFind(a, n, v);
     }
@@ -87,7 +87,7 @@ static void run(const char *name, int64_t n) {
 
     t0 = nowns();
     for (int64_t i = 0; i < M; i++) {
-        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+        dkLcg64Next(&seed);
         const uint32_t v = (uint32_t)((seed >> 33) % (uint64_t)(n * 2));
         sink += branchlessFind(a, n, v);
     }
