@@ -56,6 +56,14 @@ static_assert(alignof(aesGcmKey) >= 16 && sizeof(aesGcmKey) % 16 == 0,
  * 32 (AES-256).  Returns false on any other length. */
 bool aesGcmInit(aesGcmKey *out, const uint8_t *key, size_t key_len);
 
+/* The AES key schedule (FIPS-197 5.2) in byte order: 11 round keys of 16
+ * bytes for a 16-byte key, 15 for a 32-byte key (the caller checked the
+ * length).  A backend whose instructions take round keys as byte vectors
+ * fills them from here, so every backend expands keys one way. */
+static constexpr size_t AES_GCM_ROUND_KEY_BYTES = 240;
+void aesGcmKeyScheduleBytes(const uint8_t *key, size_t key_len,
+                            uint8_t out[AES_GCM_ROUND_KEY_BYTES]);
+
 /* Encrypt + authenticate.  Returns false if `plaintext_len` exceeds
  * AES_GCM_MAX_PAYLOAD.  `ciphertext` may alias `plaintext`. */
 bool aesGcmSeal(const aesGcmKey *k, const uint8_t nonce[AES_GCM_NONCE_LEN],

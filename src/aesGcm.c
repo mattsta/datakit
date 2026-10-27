@@ -88,6 +88,18 @@ static void aesKeyExpand(uint32_t round_keys[60], const uint8_t *key,
     }
 }
 
+void aesGcmKeyScheduleBytes(const uint8_t *key, size_t key_len,
+                            uint8_t out[AES_GCM_ROUND_KEY_BYTES]) {
+    const uint8_t rounds = key_len == AES128_KEY_LEN ? 10u : 14u;
+    uint32_t words[AES_GCM_ROUND_KEY_BYTES / 4];
+    aesKeyExpand(words, key, (uint8_t)key_len, rounds);
+    for (size_t i = 0; i < 4u * (rounds + 1u); i++) {
+        dkStoreBe32(out + 4 * i, words[i]);
+    }
+
+    dkSecureZero(words, sizeof(words));
+}
+
 /* Field multiply by x in GF(2^8) with the AES reduction polynomial. */
 static uint8_t xtime(uint8_t b) {
     return (uint8_t)((b << 1) ^ (((b >> 7) & 1u) * 0x1Bu));
@@ -518,6 +530,41 @@ int aesGcmTest(int, char *[]) {
     int err = 0;
 
     /* NIST SP 800-38D Test Vector 1: AES-128 GCM, empty PT + AAD. */
+    TEST("aesGcmKeyScheduleBytes: FIPS-197 Appendix A key expansions") {
+        static const struct {
+            const char *key;
+            const char *round1; /* round key 1 (w4..w7) */
+            const char *last;   /* the final round key */
+        } vectors[] = {
+            {"2b7e151628aed2a6abf7158809cf4f3c",
+             "a0fafe1788542cb123a339392a6c7605",
+             "d014f9a8c9ee2589e13f0cc8b6630ca6"},
+            {"603deb1015ca71be2b73aef0857d7781"
+             "1f352c073b6108d72d9810a30914dff4",
+             "1f352c073b6108d72d9810a30914dff4",
+             "fe4890d1e6188d0b046df344706c631e"},
+        };
+        for (size_t v = 0; v < countof(vectors); v++) {
+            uint8_t key[32];
+            uint8_t round1[16];
+            uint8_t last[16];
+            const size_t keyLen = strlen(vectors[v].key) / 2;
+            TEST_HEX(err, vectors[v].key, key, keyLen);
+            TEST_HEX(err, vectors[v].round1, round1, 16);
+            TEST_HEX(err, vectors[v].last, last, 16);
+
+            uint8_t schedule[AES_GCM_ROUND_KEY_BYTES];
+            aesGcmKeyScheduleBytes(key, keyLen, schedule);
+            const size_t rounds = keyLen == AES128_KEY_LEN ? 10 : 14;
+            TEST_BYTES(err, schedule, key, keyLen,
+                       "vector %zu: the schedule starts with the key", v);
+            TEST_BYTES(err, schedule + 16, round1, 16,
+                       "vector %zu: round key 1", v);
+            TEST_BYTES(err, schedule + 16 * rounds, last, 16,
+                       "vector %zu: round key %zu", v, rounds);
+        }
+    }
+
     TEST("AES-128-GCM: NIST Test Vector 1 (empty PT, empty AAD)") {
         uint8_t key[16] = {};
         uint8_t nonce[12] = {};
