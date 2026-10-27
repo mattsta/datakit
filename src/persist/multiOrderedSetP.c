@@ -32,36 +32,23 @@ multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
     /* @own: container; free=multiOrderedSetFree */
     mos->mos = multiOrderedSetNew();
 
-    /* Initialize persistence context for multiOrderedSet type, and save
-     * the initial snapshot (empty set) */
-    if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet) ||
-        !persistCtxSaveSnapshot(ctx, mos->mos, &persistOpsMultiOrderedSet)) {
+    /* The empty set is the initial snapshot */
+    if (!persistCtxStartNew(ctx, mos->mos, &persistOpsMultiOrderedSet)) {
         multiOrderedSetFree(mos->mos);
         return nullptr;
     }
 
-    persistCtxClaim(ctx);
     multiOrderedSetP *out = mos;
     mos = nullptr;
     return out;
 }
 
 multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for multiOrderedSet type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL */
     /* An empty set restores as an empty set: NULL means no snapshot, or one
      * that cannot be read, which must not open as an empty set (its next
      * compaction would replace the files) */
     multiOrderedSet *recovered =
-        persistCtxRecover(ctx, &persistOpsMultiOrderedSet);
+        persistCtxStartRecovered(ctx, &persistOpsMultiOrderedSet);
     if (!recovered) {
         return nullptr;
     }
@@ -70,8 +57,6 @@ multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
     multiOrderedSetP *mos = zcalloc(1, sizeof(*mos));
     mos->ctx = ctx;
     mos->mos = recovered;
-
-    persistCtxClaim(ctx);
     return mos;
 }
 
@@ -81,10 +66,7 @@ void multiOrderedSetCloseP(multiOrderedSetP *mos) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (mos->ctx) {
-        persistCtxSync(mos->ctx);
-        persistCtxRelease(mos->ctx);
-    }
+    persistCtxFinish(mos->ctx);
 
     /* Free underlying multiOrderedSet */
     if (mos->mos) {

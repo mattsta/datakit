@@ -26,43 +26,20 @@ intsetP *intsetNewP(persistCtx *ctx) {
     cleanerName(zfree, IntsetP) intsetP *is = zcalloc(1, sizeof(*is));
     is->ctx = ctx;
 
-    /* Create underlying intset */
     /* @own: container; free=intsetFree */
     is->is = intsetNew();
-    if (!is->is) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for intset type */
-    if (!persistCtxInitForType(ctx, &persistOpsIntset)) {
+    if (!persistCtxStartNew(ctx, is->is, &persistOpsIntset)) {
         intsetFree(is->is);
         return nullptr;
     }
 
-    /* Save initial snapshot */
-    if (!persistCtxSaveSnapshot(ctx, is->is, &persistOpsIntset)) {
-        intsetFree(is->is);
-        return nullptr;
-    }
-
-    persistCtxClaim(ctx);
     intsetP *out = is;
     is = nullptr;
     return out;
 }
 
 intsetP *intsetOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for intset type */
-    if (!persistCtxInitForType(ctx, &persistOpsIntset)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL */
-    intset *recovered = persistCtxRecover(ctx, &persistOpsIntset);
+    intset *recovered = persistCtxStartRecovered(ctx, &persistOpsIntset);
     if (!recovered) {
         return nullptr;
     }
@@ -71,8 +48,6 @@ intsetP *intsetOpenP(persistCtx *ctx) {
     intsetP *is = zcalloc(1, sizeof(*is));
     is->ctx = ctx;
     is->is = recovered;
-
-    persistCtxClaim(ctx);
     return is;
 }
 
@@ -82,10 +57,7 @@ void intsetCloseP(intsetP *is) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (is->ctx) {
-        persistCtxSync(is->ctx);
-        persistCtxRelease(is->ctx);
-    }
+    persistCtxFinish(is->ctx);
 
     /* Free underlying intset */
     if (is->is) {

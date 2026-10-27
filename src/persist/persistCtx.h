@@ -103,6 +103,21 @@ typedef struct persistCtx {
 bool persistCtxClaim(persistCtx *ctx);
 void persistCtxRelease(persistCtx *ctx);
 
+/* A wrapper's lifecycle, one call per step:
+ *   persistCtxStartNew: bind the context to 'ops', save 'structure' as its
+ *     first snapshot and hold the context.  False, with nothing held and
+ *     'structure' still the caller's, when the context is held, bound to
+ *     another type, or the snapshot cannot be written.
+ *   persistCtxStartRecovered: bind, recover the structure from snapshot
+ *     plus WAL, and hold the context; nullptr (nothing held) on the same
+ *     refusals or a failed recovery.
+ *   persistCtxFinish: the close: sync, then let the context go (a null
+ *     context is a no-op). */
+bool persistCtxStartNew(persistCtx *ctx, void *structure,
+                        const persistOps *ops);
+void *persistCtxStartRecovered(persistCtx *ctx, const persistOps *ops);
+void persistCtxFinish(persistCtx *ctx);
+
 /* Bad WAL entries (persist.h, "Bad WAL entries"): a context heals damaged
  * WAL bytes into <basePath>.quarantine (created only when needed) and holds
  * entries it cannot heal.  The last one met, and a callback for each new

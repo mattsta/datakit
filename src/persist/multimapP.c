@@ -41,54 +41,37 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
         return nullptr;
     }
 
-    /* Initialize persistence for multimap type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultimap)) {
+    if (!persistCtxStartNew(ctx, mp->m, &persistOpsMultimap)) {
         multimapFree(mp->m);
         return nullptr;
     }
 
-    /* Take initial snapshot */
-    if (!persistCtxSaveSnapshot(ctx, mp->m, &persistOpsMultimap)) {
-        multimapFree(mp->m);
-        return nullptr;
-    }
-
-    persistCtxClaim(ctx);
     multimapP *out = mp;
     mp = nullptr;
     return out;
 }
 
 multimapP *multimapOpenP(persistCtx *ctx) {
-    if (!ctx) {
+    /* Only existing files open */
+    if (!ctx || !persistCtxExists(ctx->basePath)) {
         return nullptr;
     }
 
-    /* Check if files exist; bind the context (refused for another type, or
-     * while a wrapper holds it) */
-    if (!persistCtxExists(ctx->basePath) ||
-        !persistCtxInitForType(ctx, &persistOpsMultimap)) {
+    multimap *recovered = persistCtxStartRecovered(ctx, &persistOpsMultimap);
+    if (!recovered) {
         return nullptr;
     }
 
-    cleanerName(zfree, MultimapP) multimapP *mp = zcalloc(1, sizeof(*mp));
+    /* @own: caller; free=multimapCloseP */
+    multimapP *mp = zcalloc(1, sizeof(*mp));
     mp->ctx = ctx;
-
-    /* Recover from snapshot + WAL */
-    mp->m = persistCtxRecover(ctx, &persistOpsMultimap);
-    if (!mp->m) {
-        return nullptr;
-    }
+    mp->m = recovered;
 
     /* Get elementsPerEntry from recovered multimap */
     multimapIterator iter;
     multimapIteratorInit(mp->m, &iter, true);
     mp->elementsPerEntry = iter.elementsPerEntry;
-
-    persistCtxClaim(ctx);
-    multimapP *out = mp;
-    mp = nullptr;
-    return out;
+    return mp;
 }
 
 void multimapCloseP(multimapP *m) {
@@ -97,10 +80,7 @@ void multimapCloseP(multimapP *m) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (m->ctx && m->ctx->p) {
-        persistSync(m->ctx->p);
-    }
-    persistCtxRelease(m->ctx);
+    persistCtxFinish(m->ctx);
 
     /* Free underlying multimap */
     if (m->m) {

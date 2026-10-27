@@ -31,19 +31,11 @@ static multiroarP *multiroarStartP(persistCtx *ctx, multiroar *roar) {
     r->ctx = ctx;
     r->r = roar;
 
-    /* Initialize persistence context for multiroar type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultiroar)) {
+    if (!persistCtxStartNew(ctx, r->r, &persistOpsMultiroar)) {
         multiroarFree(r->r);
         return nullptr;
     }
 
-    /* Save initial snapshot */
-    if (!persistCtxSaveSnapshot(ctx, r->r, &persistOpsMultiroar)) {
-        multiroarFree(r->r);
-        return nullptr;
-    }
-
-    persistCtxClaim(ctx);
     multiroarP *out = r;
     r = nullptr;
     return out;
@@ -62,17 +54,7 @@ multiroarP *multiroarValueNewP(persistCtx *ctx, uint8_t bitWidth, uint64_t rows,
 }
 
 multiroarP *multiroarOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for multiroar type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultiroar)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL */
-    multiroar *recovered = persistCtxRecover(ctx, &persistOpsMultiroar);
+    multiroar *recovered = persistCtxStartRecovered(ctx, &persistOpsMultiroar);
     if (!recovered) {
         return nullptr;
     }
@@ -81,8 +63,6 @@ multiroarP *multiroarOpenP(persistCtx *ctx) {
     multiroarP *r = zcalloc(1, sizeof(*r));
     r->ctx = ctx;
     r->r = recovered;
-
-    persistCtxClaim(ctx);
     return r;
 }
 
@@ -92,10 +72,7 @@ void multiroarCloseP(multiroarP *r) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (r->ctx) {
-        persistCtxSync(r->ctx);
-        persistCtxRelease(r->ctx);
-    }
+    persistCtxFinish(r->ctx);
 
     /* Free underlying multiroar */
     if (r->r) {

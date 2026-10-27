@@ -131,13 +131,11 @@ static multilruP *multilruPNew_(persistCtx *ctx, const multilruConfig *config) {
     }
     multilruSetAutoEvict(mlru->mlru, false);
 
-    if (!persistCtxInitForType(ctx, &persistOpsMultiLRU) ||
-        !persistCtxSaveSnapshot(ctx, mlru->mlru, &persistOpsMultiLRU)) {
+    if (!persistCtxStartNew(ctx, mlru->mlru, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
         return nullptr;
     }
 
-    persistCtxClaim(ctx);
     multilruP *out = mlru;
     mlru = nullptr;
     return out;
@@ -170,18 +168,9 @@ multilruP *multilruNewWithConfigP(persistCtx *ctx,
 }
 
 multilruP *multilruOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for multilru type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultiLRU)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL; every wrapper saves a starting
-     * snapshot, so nothing recoverable means nothing to open */
-    multilru *recovered = persistCtxRecover(ctx, &persistOpsMultiLRU);
+    /* Every wrapper saves a starting snapshot, so nothing recoverable
+     * means nothing to open */
+    multilru *recovered = persistCtxStartRecovered(ctx, &persistOpsMultiLRU);
     if (!recovered) {
         return nullptr;
     }
@@ -191,7 +180,6 @@ multilruP *multilruOpenP(persistCtx *ctx) {
     multilruP *mlru = zcalloc(1, sizeof(*mlru));
     mlru->ctx = ctx;
     mlru->mlru = recovered;
-    persistCtxClaim(ctx);
     return mlru;
 }
 
@@ -201,10 +189,7 @@ void multilruCloseP(multilruP *mlru) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (mlru->ctx) {
-        persistCtxSync(mlru->ctx);
-        persistCtxRelease(mlru->ctx);
-    }
+    persistCtxFinish(mlru->ctx);
 
     /* Free underlying multilru */
     if (mlru->mlru) {

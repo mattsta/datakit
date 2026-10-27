@@ -26,43 +26,20 @@ flexP *flexNewP(persistCtx *ctx) {
     cleanerName(zfree, FlexP) flexP *f = zcalloc(1, sizeof(*f));
     f->ctx = ctx;
 
-    /* Create underlying flex */
     /* @own: container; free=flexFree */
     f->f = flexNew();
-    if (!f->f) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for flex type */
-    if (!persistCtxInitForType(ctx, &persistOpsFlex)) {
+    if (!persistCtxStartNew(ctx, f->f, &persistOpsFlex)) {
         flexFree(f->f);
         return nullptr;
     }
 
-    /* Save initial snapshot */
-    if (!persistCtxSaveSnapshot(ctx, f->f, &persistOpsFlex)) {
-        flexFree(f->f);
-        return nullptr;
-    }
-
-    persistCtxClaim(ctx);
     flexP *out = f;
     f = nullptr;
     return out;
 }
 
 flexP *flexOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for flex type */
-    if (!persistCtxInitForType(ctx, &persistOpsFlex)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL */
-    flex *recovered = persistCtxRecover(ctx, &persistOpsFlex);
+    flex *recovered = persistCtxStartRecovered(ctx, &persistOpsFlex);
     if (!recovered) {
         return nullptr;
     }
@@ -71,8 +48,6 @@ flexP *flexOpenP(persistCtx *ctx) {
     flexP *f = zcalloc(1, sizeof(*f));
     f->ctx = ctx;
     f->f = recovered;
-
-    persistCtxClaim(ctx);
     return f;
 }
 
@@ -82,10 +57,7 @@ void flexCloseP(flexP *f) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (f->ctx) {
-        persistCtxSync(f->ctx);
-        persistCtxRelease(f->ctx);
-    }
+    persistCtxFinish(f->ctx);
 
     /* Free underlying flex */
     if (f->f) {

@@ -43,10 +43,8 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
         return nullptr;
     }
 
-    /* Initialize persistence context for multidict type, and save the
-     * initial snapshot, which records the key type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultidict) ||
-        !persistCtxSaveSnapshot(ctx, dict, &persistOpsMultidict)) {
+    /* The initial snapshot records the key type */
+    if (!persistCtxStartNew(ctx, dict, &persistOpsMultidict)) {
         return nullptr;
     }
 
@@ -56,24 +54,13 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
     dict = nullptr;
     qdc = nullptr;
 
-    persistCtxClaim(ctx);
     multidictP *out = d;
     d = nullptr;
     return out;
 }
 
 multidictP *multidictOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for multidict type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultidict)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL */
-    multidict *recovered = persistCtxRecover(ctx, &persistOpsMultidict);
+    multidict *recovered = persistCtxStartRecovered(ctx, &persistOpsMultidict);
     if (!recovered) {
         return nullptr;
     }
@@ -83,13 +70,12 @@ multidictP *multidictOpenP(persistCtx *ctx) {
     if (!d) {
         /* The recovered dict owns its own default class */
         persistOpsMultidict.free(recovered);
+        persistCtxRelease(ctx);
         return nullptr;
     }
 
     d->ctx = ctx;
     d->d = recovered;
-
-    persistCtxClaim(ctx);
     return d;
 }
 
@@ -99,10 +85,7 @@ void multidictCloseP(multidictP *d) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (d->ctx) {
-        persistCtxSync(d->ctx);
-        persistCtxRelease(d->ctx);
-    }
+    persistCtxFinish(d->ctx);
 
     /* Free underlying multidict; it privately owns a default class
      * (created by NewP or by restore). The class must outlive the dict

@@ -229,6 +229,36 @@ void persistCtxRelease(persistCtx *ctx) {
     }
 }
 
+bool persistCtxStartNew(persistCtx *ctx, void *structure,
+                        const persistOps *ops) {
+    if (!ctx || !structure || !persistCtxInitForType(ctx, ops) ||
+        !persistCtxSaveSnapshot(ctx, structure, ops)) {
+        return false;
+    }
+
+    return persistCtxClaim(ctx);
+}
+
+void *persistCtxStartRecovered(persistCtx *ctx, const persistOps *ops) {
+    if (!ctx || !persistCtxInitForType(ctx, ops)) {
+        return nullptr;
+    }
+
+    void *recovered = persistCtxRecover(ctx, ops);
+    if (recovered) {
+        persistCtxClaim(ctx);
+    }
+
+    return recovered;
+}
+
+void persistCtxFinish(persistCtx *ctx) {
+    if (ctx) {
+        persistCtxSync(ctx);
+        persistCtxRelease(ctx);
+    }
+}
+
 bool persistCtxLastBadEntry(const persistCtx *ctx, persistBadEntryReport *out) {
     return persistLastBadEntry(ctx ? ctx->p : nullptr, out);
 }
@@ -798,11 +828,29 @@ int persistCtxTest(int, char *[]) {
             DK_DIAG_EXPECT_REPORTS("a held context", 1,
                                    DK_DIAG_PERSIST_CTX_CLAIMED,
                                    claimed = persistCtxClaim(ctx));
+
+            /* A second wrapper is refused before it touches the files:
+             * the holder's snapshot and count stay */
+            flexP *second = nullptr;
+            DK_DIAG_EXPECT_REPORTS("a second wrapper", 1,
+                                   DK_DIAG_PERSIST_CTX_CLAIMED,
+                                   second = flexNewP(ctx));
             dkDiagSetPrintMode(priorPrint);
-            if (claimed) {
+            if (claimed || second || flexCountP(f) != 200) {
                 ERR("a held context was claimed again");
             }
+
+            /* The close syncs (counted in the stats) and frees the context
+             * for the next wrapper */
+            persistCtxGetStats(ctx, &stats);
+            const uint64_t syncsBefore = stats.totalSyncs;
             flexCloseP(f);
+            persistCtxGetStats(ctx, &stats);
+            if (stats.totalSyncs != syncsBefore + 1 || !persistCtxClaim(ctx)) {
+                ERR("a close synced %" PRIu64 " times or kept the context",
+                    stats.totalSyncs - syncsBefore);
+            }
+            persistCtxRelease(ctx);
             persistCtxFree(ctx);
 
             /* The notifier set on a context hears of a damaged entry its

@@ -53,38 +53,19 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
         return nullptr;
     }
 
-    /* Initialize persistence context for multilist type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultilist)) {
+    if (!persistCtxStartNew(ctx, ml->ml, &persistOpsMultilist)) {
         multilistFree(ml->ml);
         mflexStateFree(ml->state);
         return nullptr;
     }
 
-    /* Save initial snapshot */
-    if (!persistCtxSaveSnapshot(ctx, ml->ml, &persistOpsMultilist)) {
-        multilistFree(ml->ml);
-        mflexStateFree(ml->state);
-        return nullptr;
-    }
-
-    persistCtxClaim(ctx);
     multilistP *out = ml;
     ml = nullptr;
     return out;
 }
 
 multilistP *multilistOpenP(persistCtx *ctx) {
-    if (!ctx) {
-        return nullptr;
-    }
-
-    /* Initialize persistence context for multilist type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultilist)) {
-        return nullptr;
-    }
-
-    /* Recover from snapshot + WAL */
-    multilist *recovered = persistCtxRecover(ctx, &persistOpsMultilist);
+    multilist *recovered = persistCtxStartRecovered(ctx, &persistOpsMultilist);
     if (!recovered) {
         return nullptr;
     }
@@ -98,10 +79,10 @@ multilistP *multilistOpenP(persistCtx *ctx) {
     ml->state = mflexStateCreate();
     if (!ml->state) {
         multilistFree(ml->ml);
+        persistCtxRelease(ctx);
         return nullptr;
     }
 
-    persistCtxClaim(ctx);
     multilistP *out = ml;
     ml = nullptr;
     return out;
@@ -113,10 +94,7 @@ void multilistCloseP(multilistP *ml) {
     }
 
     /* Sync before closing; the context is free for another wrapper */
-    if (ml->ctx) {
-        persistCtxSync(ml->ctx);
-        persistCtxRelease(ml->ctx);
-    }
+    persistCtxFinish(ml->ctx);
 
     /* Free underlying multilist */
     if (ml->ml) {
