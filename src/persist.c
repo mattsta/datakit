@@ -3133,17 +3133,13 @@ static void *intsetPersistRestore(const uint8_t *data, size_t len) {
     uint64_t count;
     memcpy(&count, data, sizeof(uint64_t));
 
-    /* Refuse counts when could overflow size_t when
-     * multiplied by sizeof(int64_t). Without this, a hostile or
-     * corrupted input could pass len-check via integer wrap then
-     * cause out-of-bounds reads inside the values loop. */
-    if (count > (SIZE_MAX - sizeof(uint64_t)) / sizeof(int64_t)) {
-        return nullptr;
-    }
-
-    /* Exactly the values the count names */
-    size_t expectedLen = sizeof(uint64_t) + (count * sizeof(int64_t));
-    if (len != expectedLen) {
+    /* Exactly the values the count names; a count whose size does not
+     * fit is refused (a wrapped size could pass the length check and
+     * send the values loop out of bounds) */
+    size_t expectedLen;
+    if (ckd_mul(&expectedLen, count, sizeof(int64_t)) ||
+        ckd_add(&expectedLen, expectedLen, sizeof(uint64_t)) ||
+        len != expectedLen) {
         return nullptr;
     }
 

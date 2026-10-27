@@ -2117,12 +2117,12 @@ void multidictGetLoadMetrics(multidict *d, multidictLoadMetrics *metrics) {
 
     /* Calculate byte-based load factor as percentage of target */
     if (d->targetSlotBytes > 0 && metrics->avgSlotBytes > 0) {
-        /* Prevent overflow: if avgSlotBytes is huge, cap at 65535% */
-        if (metrics->avgSlotBytes > (UINT64_MAX / 100)) {
+        /* The percentage, saturating at UINT32_MAX */
+        uint64_t scaled;
+        if (ckd_mul(&scaled, metrics->avgSlotBytes, 100)) {
             metrics->byteLoadFactor = UINT32_MAX;
         } else {
-            uint64_t factor =
-                (metrics->avgSlotBytes * 100) / d->targetSlotBytes;
+            const uint64_t factor = scaled / d->targetSlotBytes;
             metrics->byteLoadFactor =
                 (factor > UINT32_MAX) ? UINT32_MAX : (uint32_t)factor;
         }

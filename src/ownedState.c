@@ -249,10 +249,11 @@ void ownedArenaRetire(ownedArena *arena, void *cargo, ownedReleaseFn release,
  * not a wrapped and early one. A zero product reports a row as soon as
  * it is past grace with readers present. */
 static uint64_t ownedArenaGraceHorizonUs_(const ownedArenaDecl *decl) {
-    if (decl->graceUs != 0 && decl->holdMultiple > UINT64_MAX / decl->graceUs) {
+    uint64_t horizon;
+    if (ckd_mul(&horizon, decl->holdMultiple, decl->graceUs)) {
         return UINT64_MAX;
     }
-    return decl->holdMultiple * decl->graceUs;
+    return horizon;
 }
 
 /* Every release callback runs here, under the arena lock, so a Retire on
