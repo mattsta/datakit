@@ -731,4 +731,11 @@ void databoxReprSay(const char *msg, const databox *box);
 
 #ifdef DATAKIT_TEST
 int databoxTest(int argc, char *argv[]);
+
+/* Whether a value taken out of a container (a pop, a get-and-delete, a
+ * replaced or previous value) owns its payload as the take contract
+ * says: a 96/128-bit value in its own heap block (big and allocated), a
+ * bytes value in its own copy (allocated, not big), and every other
+ * value inline (not big).  Release it with databoxFreeData. */
+bool databoxTestTakenOwnsPayload(const databox *got);
 #endif

@@ -3909,18 +3909,6 @@ static bool mdWideMatches_(const databox *got, const mdWideVal *v) {
 }
 
 /* Self-contained: a wide value owns a heap payload, BYTES a heap copy */
-static bool mdWideOwned_(const databox *got) {
-    switch (got->type) {
-    case DATABOX_SIGNED_128:
-    case DATABOX_UNSIGNED_128:
-        return got->big && got->allocated && got->data.u128;
-    case DATABOX_BYTES:
-        return !got->big && got->allocated;
-    default:
-        return !got->big;
-    }
-}
-
 static size_t mdWideBytes_(const mdWideVal *v) {
     return v->isBytes ? strlen(v->str) : mdWideIsWide_(v) ? 16 : 8;
 }
@@ -4411,7 +4399,8 @@ static int multidictTestWide_(mdWideMode mode) {
         if (!multidictGetAndDelete(d, (databox *)&key, &val)) {
             ERR("GetAndDelete of pair %zu failed", i);
         } else {
-            if (!mdWideMatches_(&val, &p[i].val) || !mdWideOwned_(&val)) {
+            if (!mdWideMatches_(&val, &p[i].val) ||
+                !databoxTestTakenOwnsPayload(&val)) {
                 ERR("GetAndDelete value of pair %zu wrong", i);
             }
             databoxFreeData(&val);
@@ -4433,7 +4422,8 @@ static int multidictTestWide_(mdWideMode mode) {
 
         const size_t at = mdWideFind_(p, n, &key);
         if (at == SIZE_MAX || !mdWideMatches_(&val, &p[at].val) ||
-            !mdWideOwned_(&key) || !mdWideOwned_(&val)) {
+            !databoxTestTakenOwnsPayload(&key) ||
+            !databoxTestTakenOwnsPayload(&val)) {
             ERR("PopRandom returned a wrong pair");
         } else {
             p[at].live = false;

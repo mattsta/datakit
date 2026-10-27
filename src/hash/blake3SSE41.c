@@ -80,7 +80,8 @@ SSE41_TARGET static inline __m128i rotr_8(__m128i x) {
 /* --- Vector G mix ------------------------------------------------------- *
  * Apply the BLAKE3 G function across all four lanes simultaneously. m1
  * and m2 are the per-lane message words for the first/second halves of
- * G. Operates over rows {0, 1, 2, 3} of the packed state. */
+ * G. Operates over rows {0, 1, 2, 3} of the packed state, or (the
+ * batch layout, a chunk per lane) over four words of four states. */
 SSE41_TARGET static inline void g_vec(__m128i *r0, __m128i *r1, __m128i *r2,
                                       __m128i *r3, __m128i m1, __m128i m2) {
     *r0 = _mm_add_epi32(_mm_add_epi32(*r0, *r1), m1);
@@ -258,18 +259,6 @@ void blake3SSE41CompressXof(const uint32_t cv[8],
  * still ~3-4x scalar by replacing per-block sequential rounds with
  * lane-parallel rounds. */
 
-SSE41_TARGET static inline void g4_sse(__m128i *a, __m128i *b, __m128i *c,
-                                       __m128i *d, __m128i mx, __m128i my) {
-    *a = _mm_add_epi32(_mm_add_epi32(*a, *b), mx);
-    *d = rotr_16(_mm_xor_si128(*d, *a));
-    *c = _mm_add_epi32(*c, *d);
-    *b = rotr_12(_mm_xor_si128(*b, *c));
-    *a = _mm_add_epi32(_mm_add_epi32(*a, *b), my);
-    *d = rotr_8(_mm_xor_si128(*d, *a));
-    *c = _mm_add_epi32(*c, *d);
-    *b = rotr_7(_mm_xor_si128(*b, *c));
-}
-
 SSE41_TARGET
 void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
                           const uint8_t *const blocks[4],
@@ -318,15 +307,15 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
     for (uint32_t r = 0; r < 7; r++) {
         const uint8_t *s = SSE41_MSG_SCHEDULE[r];
         /* Column step. */
-        g4_sse(&v[0], &v[4], &v[8], &v[12], m[s[0]], m[s[1]]);
-        g4_sse(&v[1], &v[5], &v[9], &v[13], m[s[2]], m[s[3]]);
-        g4_sse(&v[2], &v[6], &v[10], &v[14], m[s[4]], m[s[5]]);
-        g4_sse(&v[3], &v[7], &v[11], &v[15], m[s[6]], m[s[7]]);
+        g_vec(&v[0], &v[4], &v[8], &v[12], m[s[0]], m[s[1]]);
+        g_vec(&v[1], &v[5], &v[9], &v[13], m[s[2]], m[s[3]]);
+        g_vec(&v[2], &v[6], &v[10], &v[14], m[s[4]], m[s[5]]);
+        g_vec(&v[3], &v[7], &v[11], &v[15], m[s[6]], m[s[7]]);
         /* Diagonal step. */
-        g4_sse(&v[0], &v[5], &v[10], &v[15], m[s[8]], m[s[9]]);
-        g4_sse(&v[1], &v[6], &v[11], &v[12], m[s[10]], m[s[11]]);
-        g4_sse(&v[2], &v[7], &v[8], &v[13], m[s[12]], m[s[13]]);
-        g4_sse(&v[3], &v[4], &v[9], &v[14], m[s[14]], m[s[15]]);
+        g_vec(&v[0], &v[5], &v[10], &v[15], m[s[8]], m[s[9]]);
+        g_vec(&v[1], &v[6], &v[11], &v[12], m[s[10]], m[s[11]]);
+        g_vec(&v[2], &v[7], &v[8], &v[13], m[s[12]], m[s[13]]);
+        g_vec(&v[3], &v[4], &v[9], &v[14], m[s[14]], m[s[15]]);
     }
 
     /* Output CV: state[i] ^ state[i+8] for i in 0..7; then de-transpose

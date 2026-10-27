@@ -1012,18 +1012,6 @@ static int mosWidePairCmp_(const void *a, const void *b) {
 
 /* A removed value is self-contained: a wide one owns a heap payload and
  * BYTES own a heap copy (or are embedded). */
-static bool mosWideOwned_(const databox *got) {
-    switch (got->type) {
-    case DATABOX_SIGNED_128:
-    case DATABOX_UNSIGNED_128:
-        return got->big && got->allocated && got->data.u128;
-    case DATABOX_BYTES:
-        return !got->big && got->allocated;
-    default:
-        return !got->big;
-    }
-}
-
 static uint64_t mosWideRng_ = UINT64_C(0x9E3779B97F4A7C15);
 
 static uint64_t mosWideMix_(uint64_t x) {
@@ -1459,7 +1447,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
             ERR("AddGetPrevious did not find member %zu", i);
         } else {
             if (!mosWideScoreMatches_((databox *)&prev, &pairs[i]) ||
-                !mosWideOwned_((databox *)&prev)) {
+                !databoxTestTakenOwnsPayload((databox *)&prev)) {
                 ERR("AddGetPrevious previous score wrong for %zu", i);
             }
             databoxFreeData((databox *)&prev);
@@ -1489,7 +1477,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
                 ERR("RemoveGetScore did not find member %zu", i);
             } else {
                 if (!mosWideScoreMatches_(&score, &sorted[at]) ||
-                    !mosWideOwned_(&score)) {
+                    !databoxTestTakenOwnsPayload(&score)) {
                     ERR("RemoveGetScore wrong for %zu", i);
                 }
                 databoxFreeData(&score);
@@ -1527,7 +1515,8 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
                 side == 0 ? &sorted[j] : &sorted[live - 1 - j];
             if (!mosWideScoreMatches_(&scores[j], p) ||
                 !mosWideMemberMatches_(&members[j], p) ||
-                !mosWideOwned_(&scores[j]) || !mosWideOwned_(&members[j])) {
+                !databoxTestTakenOwnsPayload(&scores[j]) ||
+                !databoxTestTakenOwnsPayload(&members[j])) {
                 ERR("pop %d entry %zu wrong", side, j);
             }
             databoxFreeData(&scores[j]);

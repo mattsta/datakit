@@ -77,7 +77,8 @@ static inline uint32x4_t rotr32_8(uint32x4_t x) {
 /* Single-block compression (vectorized within the state)              */
 /* ------------------------------------------------------------------ */
 
-/* Apply one G-step quartet across 4 lanes in parallel.
+/* Apply one G-step quartet across 4 lanes in parallel: four G's of one
+ * state (single-block layout) or one G of four states (batch layout).
  *   v0' = v0 + v1 + mx
  *   v3' = rotr(v3 ^ v0', 16)
  *   v2' = v2 + v3'
@@ -197,19 +198,8 @@ void blake3NeonCompressXof(const uint32_t cv[8],
 /* 4-way batched compression                                           */
 /* ------------------------------------------------------------------ */
 
-/* Transposed layout: vector i holds state word i across 4 chunks.
- * Each G operation broadcasts over the 4 lanes (one chunk per lane). */
-static inline void g4(uint32x4_t *a, uint32x4_t *b, uint32x4_t *c,
-                      uint32x4_t *d, uint32x4_t mx, uint32x4_t my) {
-    *a = vaddq_u32(vaddq_u32(*a, *b), mx);
-    *d = rotr32_16(veorq_u32(*d, *a));
-    *c = vaddq_u32(*c, *d);
-    *b = ROTR32_12(veorq_u32(*b, *c));
-    *a = vaddq_u32(vaddq_u32(*a, *b), my);
-    *d = rotr32_8(veorq_u32(*d, *a));
-    *c = vaddq_u32(*c, *d);
-    *b = ROTR32_7(veorq_u32(*b, *c));
-}
+/* Transposed layout: vector i holds state word i across 4 chunks, so
+ * g_quartet on four of them runs one G per chunk, a chunk per lane. */
 
 void blake3NeonCompress4(const uint32_t *const cv_inputs[4],
                          const uint8_t *const blocks[4],
@@ -266,15 +256,15 @@ void blake3NeonCompress4(const uint32_t *const cv_inputs[4],
     for (uint32_t r = 0; r < 7; r++) {
         const uint8_t *s = BLAKE3N_MSG_SCHEDULE[r];
         /* Column step. */
-        g4(&v[0], &v[4], &v[8], &v[12], m[s[0]], m[s[1]]);
-        g4(&v[1], &v[5], &v[9], &v[13], m[s[2]], m[s[3]]);
-        g4(&v[2], &v[6], &v[10], &v[14], m[s[4]], m[s[5]]);
-        g4(&v[3], &v[7], &v[11], &v[15], m[s[6]], m[s[7]]);
+        g_quartet(&v[0], &v[4], &v[8], &v[12], m[s[0]], m[s[1]]);
+        g_quartet(&v[1], &v[5], &v[9], &v[13], m[s[2]], m[s[3]]);
+        g_quartet(&v[2], &v[6], &v[10], &v[14], m[s[4]], m[s[5]]);
+        g_quartet(&v[3], &v[7], &v[11], &v[15], m[s[6]], m[s[7]]);
         /* Diagonal step. */
-        g4(&v[0], &v[5], &v[10], &v[15], m[s[8]], m[s[9]]);
-        g4(&v[1], &v[6], &v[11], &v[12], m[s[10]], m[s[11]]);
-        g4(&v[2], &v[7], &v[8], &v[13], m[s[12]], m[s[13]]);
-        g4(&v[3], &v[4], &v[9], &v[14], m[s[14]], m[s[15]]);
+        g_quartet(&v[0], &v[5], &v[10], &v[15], m[s[8]], m[s[9]]);
+        g_quartet(&v[1], &v[6], &v[11], &v[12], m[s[10]], m[s[11]]);
+        g_quartet(&v[2], &v[7], &v[8], &v[13], m[s[12]], m[s[13]]);
+        g_quartet(&v[3], &v[4], &v[9], &v[14], m[s[14]], m[s[15]]);
     }
 
     /* Output CV: state[0..7] ^ state[8..15], then transpose back per

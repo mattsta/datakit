@@ -1703,6 +1703,18 @@ static void dbFreeRecord_(void *ptr) {
     dbFreeCalls_ += ptr != nullptr;
 }
 
+bool databoxTestTakenOwnsPayload(const databox *got) {
+    switch (got->type) {
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        return got->big && got->allocated && got->data.u128;
+    case DATABOX_BYTES:
+        return !got->big && got->allocated;
+    default:
+        return !got->big;
+    }
+}
+
 int databoxTest(int, char *[]) {
     int err = 0;
 
