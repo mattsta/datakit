@@ -7467,9 +7467,8 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
         sha256Update(&sctx, nullptr, 0);
         sha256Final(&sctx, viaNull);
         sha256Hash(none, 0, viaEmpty);
-        if (memcmp(viaNull, viaEmpty, sizeof(viaNull)) != 0) {
-            ERR("sha256 of (NULL, 0) differs from the empty input");
-        }
+        TEST_BYTES(err, viaNull, viaEmpty, sizeof(viaNull),
+                   "sha256 of (NULL, 0) differs from the empty input");
 
         uint8_t b3Null[32];
         uint8_t b3Empty[32];
@@ -7479,9 +7478,8 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
         blake3HasherFinalize(&bh, b3Null, sizeof(b3Null));
         blake3HasherInit(&bh);
         blake3HasherFinalize(&bh, b3Empty, sizeof(b3Empty));
-        if (memcmp(b3Null, b3Empty, sizeof(b3Null)) != 0) {
-            ERR("blake3 of (NULL, 0) differs from the empty input");
-        }
+        TEST_BYTES(err, b3Null, b3Empty, sizeof(b3Null),
+                   "blake3 of (NULL, 0) differs from the empty input");
 
         cleaner(mdsfree) mds *s = mdsnewlen(nullptr, 0);
         s = mdscatlen(s, nullptr, 0);

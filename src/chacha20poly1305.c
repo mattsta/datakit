@@ -1567,9 +1567,7 @@ int chacha20poly1305Test(int, char *[]) {
         if (!ok) {
             ERR("in-place Open returned false");
         }
-        if (memcmp(buf, ref, n) != 0) {
-            ERR("in-place mismatch after Seal/Open");
-        }
+        TEST_BYTES(err, buf, ref, n, "in-place mismatch after Seal/Open");
     }
 
     TEST("Tamper detection: flip each ciphertext byte") {
@@ -1749,12 +1747,10 @@ int chacha20poly1305Test(int, char *[]) {
                     ERR("stream seal final failed at pl=%zu chunk=%zu", pl,
                         chunk);
                 }
-                if (memcmp(one_ct, stream_ct, pl) != 0) {
-                    ERR("stream ct mismatch pl=%zu chunk=%zu", pl, chunk);
-                }
-                if (memcmp(one_tag, stream_tag, 16) != 0) {
-                    ERR("stream tag mismatch pl=%zu chunk=%zu", pl, chunk);
-                }
+                TEST_BYTES(err, one_ct, stream_ct, pl,
+                           "stream ct mismatch pl=%zu chunk=%zu", pl, chunk);
+                TEST_BYTES(err, one_tag, stream_tag, 16,
+                           "stream tag mismatch pl=%zu chunk=%zu", pl, chunk);
                 /* Stream Open round-trip from the streaming output. */
                 chacha20poly1305OpenStreamInit(&ctx, key, nonce);
                 if (aad_len > 0) {
@@ -2433,9 +2429,8 @@ int chacha20poly1305Test(int, char *[]) {
         if (!chacha20poly1305OpenStreamFinal(&ctx, tag)) {
             ERR("Open Final failed on legit stream");
         }
-        if (memcmp(recovered, pt, sizeof(pt)) != 0) {
-            ERR("Open recovered != original plaintext");
-        }
+        TEST_BYTES(err, recovered, pt, sizeof(pt),
+                   "Open recovered != original plaintext");
         for (size_t i = 0; i < sizeof(ctx); i++) {
             if (p[i] != 0) {
                 ERR("Open Final success left nonzero byte at offset %zu "

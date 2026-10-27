@@ -95,13 +95,13 @@ int timeUtilTest(int, char *[]) {
 
         /* Times should be non-zero (we're past 1970) */
         if (us == 0) {
-            ERR("timeUtilUs returned 0%s", "");
+            ERR("timeUtilUs returned 0");
         }
         if (ms == 0) {
-            ERR("timeUtilMs returned 0%s", "");
+            ERR("timeUtilMs returned 0");
         }
         if (s == 0) {
-            ERR("timeUtilS returned 0%s", "");
+            ERR("timeUtilS returned 0");
         }
 
         /* Sanity check: should be after year 2020 (1577836800 seconds) */

@@ -1057,9 +1057,8 @@ int databoxLinearTest(int, char *[]) {
             if (dl1.type != dl2.type) {
                 ERR("Double encode type mismatch for %" PRIu64, vals[i]);
             }
-            if (memcmp(&dl1.data, &dl2.data, len1) != 0) {
-                ERR("Double encode data mismatch for %" PRIu64, vals[i]);
-            }
+            TEST_BYTES(err, &dl1.data, &dl2.data, len1,
+                       "Double encode data mismatch for %" PRIu64, vals[i]);
         }
     }
 

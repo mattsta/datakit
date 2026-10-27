@@ -882,9 +882,8 @@ static int multiarrayOracleCheck_(const multiarray *m, const s16 *oracle,
     if (n) {
         cleanerName(zfree, S16) s16 *copy = zcalloc(n, sizeof(*copy));
         multiarrayCopyTo(m, copy);
-        if (memcmp(copy, oracle, n * sizeof(*copy)) != 0) {
-            ERR("after %s: CopyTo differs from the oracle", after);
-        }
+        TEST_BYTES(err, copy, oracle, n * sizeof(*copy),
+                   "after %s: CopyTo differs from the oracle", after);
     }
 
     return err;

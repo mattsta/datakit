@@ -797,9 +797,8 @@ int hmacTest(int, char *[]) {
             }
             hmacFinal(&prepCtx, prep_out);
 
-            if (memcmp(plain_out, prep_out, sizeof(plain_out)) != 0) {
-                ERR("Mismatch at len=%zu", n);
-            }
+            TEST_BYTES(err, plain_out, prep_out, sizeof(plain_out),
+                       "Mismatch at len=%zu", n);
         }
 
         /* Multiple Updates with the same prepared init must still match
@@ -819,9 +818,8 @@ int hmacTest(int, char *[]) {
         memcpy(joined + sizeof(a) - 1u, b, sizeof(b) - 1u);
         hmacUpdate(&single, joined, (sizeof(a) - 1u) + (sizeof(b) - 1u));
         hmacFinal(&single, one_shot);
-        if (memcmp(one_shot, split, sizeof(one_shot)) != 0) {
-            ERR("Chunked vs concatenated streaming update mismatch");
-        }
+        TEST_BYTES(err, one_shot, split, sizeof(one_shot),
+                   "Chunked vs concatenated streaming update mismatch");
     }
 
     TEST("prepared-key API: perf bench (small messages where it matters)") {
@@ -936,9 +934,8 @@ int hmacTest(int, char *[]) {
         }
         hmacComputeBatch4(preps, data, lens, got);
         for (uint32_t i = 0; i < 4u; i++) {
-            if (memcmp(exp[i], got[i], 32) != 0) {
-                ERR("mixed-algo fallback lane %u mismatch", i);
-            }
+            TEST_BYTES(err, exp[i], got[i], 32,
+                       "mixed-algo fallback lane %u mismatch", i);
         }
     }
 
@@ -986,9 +983,8 @@ int hmacTest(int, char *[]) {
                secs_batch > 0 ? secs_serial / secs_batch : 0.0);
 
         /* Sanity: lane 0 of both must match. */
-        if (memcmp(serial_out[0], batch_out[0], 32) != 0) {
-            ERR("perf bench: serial vs batch lane 0 mismatch");
-        }
+        TEST_BYTES(err, serial_out[0], batch_out[0], 32,
+                   "perf bench: serial vs batch lane 0 mismatch");
     }
 
     TEST_FINAL_RESULT;

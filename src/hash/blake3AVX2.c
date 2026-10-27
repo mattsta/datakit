@@ -494,9 +494,8 @@ int blake3AVX2Test(int, char *[]) {
                                       0xDEADBEEFCAFEull, 0x0Bu);
         blake3AVX2CompressInPlace(cv_simd, block, BLAKE3_BLOCK_LEN,
                                   0xDEADBEEFCAFEull, 0x0Bu);
-        if (memcmp(cv_ref, cv_simd, sizeof(cv_ref)) != 0) {
-            ERR("Stub/SIMD compress-in-place output != portable");
-        }
+        TEST_BYTES(err, cv_ref, cv_simd, sizeof(cv_ref),
+                   "Stub/SIMD compress-in-place output != portable");
     }
 
     if (!blake3AVX2Available()) {
@@ -519,9 +518,8 @@ int blake3AVX2Test(int, char *[]) {
                                       0xDEADBEEFCAFEull, 0x0B);
         blake3AVX2CompressInPlace(cv_a, block, BLAKE3_BLOCK_LEN,
                                   0xDEADBEEFCAFEull, 0x0B);
-        if (memcmp(cv_p, cv_a, sizeof(cv_p)) != 0) {
-            ERR("AVX2 CompressInPlace mismatch on fixed input");
-        }
+        TEST_BYTES(err, cv_p, cv_a, sizeof(cv_p),
+                   "AVX2 CompressInPlace mismatch on fixed input");
 
         uint8_t xof_p[64], xof_a[64];
         uint32_t cv0[8];
@@ -532,9 +530,8 @@ int blake3AVX2Test(int, char *[]) {
                                   xof_p);
         blake3AVX2CompressXof(cv0, block, BLAKE3_BLOCK_LEN, 0x1ull, 0x09,
                               xof_a);
-        if (memcmp(xof_p, xof_a, 64) != 0) {
-            ERR("AVX2 CompressXof mismatch on fixed input");
-        }
+        TEST_BYTES(err, xof_p, xof_a, 64,
+                   "AVX2 CompressXof mismatch on fixed input");
     }
 
     /* 2. 100K random inputs differential test. */

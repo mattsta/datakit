@@ -6865,9 +6865,8 @@ int persistTest(int, char *[]) {
             memset(&none, 0xA5, sizeof(none));
             persistGetStats(nullptr, &none);
             const persistStats zero = {};
-            if (memcmp(&none, &zero, sizeof(none)) != 0) {
-                ERR("persistGetStats(NULL) did not zero the struct");
-            }
+            TEST_BYTES(err, &none, &zero, sizeof(none),
+                       "persistGetStats(NULL) did not zero the struct");
 
             persistGetStats(p, nullptr); /* must not crash */
         }
@@ -7171,9 +7170,7 @@ int persistTest(int, char *[]) {
         if (flexBytes(f) != flexBytes(restored)) {
             ERR("Size mismatch");
         }
-        if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERR("Content mismatch");
-        }
+        TEST_BYTES(err, f, restored, flexBytes(f), "Content mismatch");
 
         flexFree(restored);
         persistClose(p);
@@ -8079,9 +8076,8 @@ int persistTest(int, char *[]) {
         if (flexBytes(r1) != flexBytes(r2)) {
             ERR("Idempotent replay size mismatch");
         }
-        if (memcmp(r1, r2, flexBytes(r1)) != 0) {
-            ERR("Idempotent replay content mismatch");
-        }
+        TEST_BYTES(err, r1, r2, flexBytes(r1),
+                   "Idempotent replay content mismatch");
 
         flexFree(r1);
         flexFree(r2);
@@ -8164,9 +8160,7 @@ int persistTest(int, char *[]) {
         if (flexBytes(restored) != flexBytes(f)) {
             ERR("Size mismatch: %zu vs %zu", flexBytes(restored), flexBytes(f));
         }
-        if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERR("Content mismatch");
-        }
+        TEST_BYTES(err, f, restored, flexBytes(f), "Content mismatch");
 
         flexFree(restored);
         persistClose(p);
@@ -8195,9 +8189,8 @@ int persistTest(int, char *[]) {
         }
 
         /* Verify byte-for-byte equality */
-        if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERR("Large flex content mismatch");
-        }
+        TEST_BYTES(err, f, restored, flexBytes(f),
+                   "Large flex content mismatch");
 
         flexFree(restored);
         persistClose(p);
@@ -9109,9 +9102,8 @@ int persistTest(int, char *[]) {
             ERR("Fuzz flex size: %zu vs %zu", flexBytes(restored),
                 flexBytes(f));
         }
-        if (memcmp(f, restored, flexBytes(f)) != 0) {
-            ERR("Fuzz flex content mismatch");
-        }
+        TEST_BYTES(err, f, restored, flexBytes(f),
+                   "Fuzz flex content mismatch");
 
         flexFree(restored);
         persistClose(p);
@@ -11275,9 +11267,8 @@ int persistTest(int, char *[]) {
         }
         stats.walSequence = 0;
         const persistStats zero = {};
-        if (memcmp(&stats, &zero, sizeof(stats)) != 0) {
-            ERR("ResetStats left a counter set");
-        }
+        TEST_BYTES(err, &stats, &zero, sizeof(stats),
+                   "ResetStats left a counter set");
     }
 
     TEST("a direct key replaces an attached keyring's prepared key too") {

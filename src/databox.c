@@ -1483,9 +1483,8 @@ static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
             ERR("databoxCanonicalNumeral('%.*s', embed %d) returned %d", shown,
                 s, embed, (int)got);
         } else if (!got) {
-            if (memcmp(&out, &poison, sizeof(out)) != 0) {
-                ERR("rejected '%.*s' but wrote 'out'", shown, s);
-            }
+            TEST_BYTES(err, &out, &poison, sizeof(out),
+                       "rejected '%.*s' but wrote 'out'", shown, s);
         } else {
             const bool wide = out.type == DATABOX_SIGNED_128 ||
                               out.type == DATABOX_UNSIGNED_128;

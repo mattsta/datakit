@@ -519,7 +519,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
                                                 &mean, &variance, &stddev);
         if (!result) {
-            ERR("bbitsDodDodGetOffsetCount failed%s", "");
+            ERR("bbitsDodDodGetOffsetCount failed");
         }
 
         if (count != (ssize_t)numElements) {
@@ -577,7 +577,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
                                                 nullptr, nullptr, nullptr);
         if (!result) {
-            ERR("bbitsDodDodGetOffsetCount failed%s", "");
+            ERR("bbitsDodDodGetOffsetCount failed");
         }
 
         if (count != (ssize_t)numElements) {
@@ -633,7 +633,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &vals,
                                                 &mean, &variance, &stddev);
         if (!result) {
-            ERR("bbitsDodXofGetOffsetCount failed%s", "");
+            ERR("bbitsDodXofGetOffsetCount failed");
         }
 
         if (count != (ssize_t)numElements) {
@@ -692,7 +692,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &vals,
                                                 nullptr, nullptr, nullptr);
         if (!result) {
-            ERR("bbitsDodXofGetOffsetCount failed%s", "");
+            ERR("bbitsDodXofGetOffsetCount failed");
         }
 
         if (count != (ssize_t)numElements) {
@@ -763,7 +763,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodDodGetOffsetCount(&dd, 20, &count, &keys, &vals,
                                                 nullptr, nullptr, nullptr);
         if (!result) {
-            ERR("bbitsDodDodGetOffsetCount with offset failed%s", "");
+            ERR("bbitsDodDodGetOffsetCount with offset failed");
         }
 
         /* Verify we got elements starting at offset 20 */
@@ -816,7 +816,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodDodGetOffsetCount(&dd, -10, &count, &keys, &vals,
                                                 nullptr, nullptr, nullptr);
         if (!result) {
-            ERR("bbitsDodDodGetOffsetCount with negative offset failed%s", "");
+            ERR("bbitsDodDodGetOffsetCount with negative offset failed");
         }
 
         /* Verify we got last 10 elements */
@@ -862,7 +862,7 @@ int bbitsTest(int, char *[]) {
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
                                                 &mean, &variance, &stddev);
         if (!result) {
-            ERR("bbitsDodDodGetOffsetCount for stats failed%s", "");
+            ERR("bbitsDodDodGetOffsetCount for stats failed");
         }
 
         /* Expected mean = (10+20+30+40+50)/5 = 30 */

@@ -516,9 +516,8 @@ int sha256ShaNiTest(int, char *[]) {
         sha256ShaNiCompressBlocks(stAcc, buf, nb);
         double secsAcc = timeUtilMonotonicSec() - t0;
 
-        if (memcmp(stRef, stAcc, sizeof(stRef)) != 0) {
-            ERR("portable and SHA-NI compress disagree on the bench input");
-        }
+        TEST_BYTES(err, stRef, stAcc, sizeof(stRef),
+                   "portable and SHA-NI compress disagree on the bench input");
 
         double mib = (double)bufSize / (1024.0 * 1024.0);
         double mibsRef = secsRef > 0 ? mib / secsRef : 0;

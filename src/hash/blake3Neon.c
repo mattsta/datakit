@@ -503,9 +503,8 @@ int blake3NeonTest(int, char *[]) {
         memcpy(cv_simd, cv, sizeof(cv));
         portable_compress_in_place(cv_ref, block, block_len, counter, flags);
         blake3NeonCompressInPlace(cv_simd, block, block_len, counter, flags);
-        if (memcmp(cv_ref, cv_simd, sizeof(cv_ref)) != 0) {
-            ERR("Stub/SIMD compress-in-place output != portable");
-        }
+        TEST_BYTES(err, cv_ref, cv_simd, sizeof(cv_ref),
+                   "Stub/SIMD compress-in-place output != portable");
     }
 
     if (!blake3NeonAvailable()) {

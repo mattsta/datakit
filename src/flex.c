@@ -12906,9 +12906,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                     i);
             } else if (testLens[i] > 0) {
                 const uint8_t *data = (const uint8_t *)box.data.bytes.start;
-                if (memcmp(data, buf, testLens[i]) != 0) {
-                    ERR("data mismatch at index %zu", i);
-                }
+                TEST_BYTES(err, data, buf, testLens[i],
+                           "data mismatch at index %zu", i);
             }
             fe = flexNext(f, fe);
         }

@@ -2237,10 +2237,9 @@ int multilruTest(int, char *[]) {
                 mlruFlagSet_(got + w - 1, MLRU_FLAG_HEAD,
                              head ? MLRU_FLAG_HEAD : 0);
 
-                if (memcmp(got, want, sizeof(got)) != 0) {
-                    ERR("width %u round %d: bytes differ from the layout", w,
-                        round);
-                }
+                TEST_BYTES(err, got, want, sizeof(got),
+                           "width %u round %d: bytes differ from the layout", w,
+                           round);
                 if (mlruLinkGet_(got, w, 0) != prev ||
                     mlruLinkGet_(got, w, 1) != next ||
                     mlruFlagLevel_(got + w - 1) != level ||

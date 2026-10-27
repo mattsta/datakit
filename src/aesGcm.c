@@ -529,9 +529,7 @@ int aesGcmTest(int, char *[]) {
         aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 0, nullptr, tag);
         uint8_t exp_tag[16];
         TEST_HEX(err, "58e2fccefa7e3061367f1d57a4e7455a", exp_tag, 16);
-        if (memcmp(tag, exp_tag, 16) != 0) {
-            ERR("tag mismatch");
-        }
+        TEST_BYTES(err, tag, exp_tag, 16, "tag mismatch");
     }
 
     /* NIST Vector 2: 16-byte zero PT, empty AAD. */
@@ -546,12 +544,8 @@ int aesGcmTest(int, char *[]) {
         uint8_t exp_ct[16], exp_tag[16];
         TEST_HEX(err, "0388dace60b6a392f328c2b971b2fe78", exp_ct, 16);
         TEST_HEX(err, "ab6e47d42cec13bdf53a67b21257bddf", exp_tag, 16);
-        if (memcmp(ct, exp_ct, 16) != 0) {
-            ERR("CT mismatch");
-        }
-        if (memcmp(tag, exp_tag, 16) != 0) {
-            ERR("tag mismatch");
-        }
+        TEST_BYTES(err, ct, exp_ct, 16, "CT mismatch");
+        TEST_BYTES(err, tag, exp_tag, 16, "tag mismatch");
     }
 
     /* NIST Vector 3: AES-128 GCM with real key + nonce + 64-byte PT. */
@@ -574,20 +568,14 @@ int aesGcmTest(int, char *[]) {
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
         aesGcmSeal(&k, nonce, nullptr, 0, pt, 64, ct, tag);
-        if (memcmp(ct, exp_ct, 64) != 0) {
-            ERR("CT mismatch");
-        }
-        if (memcmp(tag, exp_tag, 16) != 0) {
-            ERR("tag mismatch");
-        }
+        TEST_BYTES(err, ct, exp_ct, 64, "CT mismatch");
+        TEST_BYTES(err, tag, exp_tag, 16, "tag mismatch");
         /* Round-trip Open. */
         uint8_t recovered[64];
         if (!aesGcmOpen(&k, nonce, nullptr, 0, ct, 64, tag, recovered)) {
             ERR("Open failed");
         }
-        if (memcmp(recovered, pt, 64) != 0) {
-            ERR("Open plaintext mismatch");
-        }
+        TEST_BYTES(err, recovered, pt, 64, "Open plaintext mismatch");
     }
 
     /* NIST Vector 4: AES-128 GCM with AAD. */
@@ -611,19 +599,13 @@ int aesGcmTest(int, char *[]) {
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
         aesGcmSeal(&k, nonce, aad, 20, pt, 60, ct, tag);
-        if (memcmp(ct, exp_ct, 60) != 0) {
-            ERR("CT mismatch");
-        }
-        if (memcmp(tag, exp_tag, 16) != 0) {
-            ERR("tag mismatch");
-        }
+        TEST_BYTES(err, ct, exp_ct, 60, "CT mismatch");
+        TEST_BYTES(err, tag, exp_tag, 16, "tag mismatch");
         uint8_t rec[60];
         if (!aesGcmOpen(&k, nonce, aad, 20, ct, 60, tag, rec)) {
             ERR("Open");
         }
-        if (memcmp(rec, pt, 60) != 0) {
-            ERR("Open PT mismatch");
-        }
+        TEST_BYTES(err, rec, pt, 60, "Open PT mismatch");
     }
 
     /* AES-256 GCM. */
@@ -638,9 +620,7 @@ int aesGcmTest(int, char *[]) {
         aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 0, nullptr, tag);
         uint8_t exp_tag[16];
         TEST_HEX(err, "530f8afbc74536b9a963b4f1c4cb738b", exp_tag, 16);
-        if (memcmp(tag, exp_tag, 16) != 0) {
-            ERR("tag mismatch");
-        }
+        TEST_BYTES(err, tag, exp_tag, 16, "tag mismatch");
     }
 
     TEST("AES-256-GCM: round-trip with AAD, varied PT sizes") {

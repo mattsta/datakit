@@ -835,9 +835,8 @@ int sha256ArmCryptoTest(int, char *[]) {
 
         /* Same input, same block count: both paths must agree, and using
          * both states keeps the optimizer from eliding either loop. */
-        if (memcmp(state, portableState, sizeof(state)) != 0) {
-            ERR("portable and crypto compress disagree on the bench input");
-        }
+        TEST_BYTES(err, state, portableState, sizeof(state),
+                   "portable and crypto compress disagree on the bench input");
     }
 
     TEST("multi-buffer 4-lane matches portable on random inputs") {

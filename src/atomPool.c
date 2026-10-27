@@ -1339,9 +1339,8 @@ int atomPoolTest(int, char *[]) {
             atomPoolFree(pool);
         }
 
-        if (memcmp(sequence[0], sequence[1], sizeof(sequence[0])) != 0) {
-            ERR("the two backends handed out different ids");
-        }
+        TEST_BYTES(err, sequence[0], sequence[1], sizeof(sequence[0]),
+                   "the two backends handed out different ids");
     }
 
     TEST("Repr: both backends, empty and holding atoms") {

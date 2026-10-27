@@ -6680,7 +6680,7 @@ int multimapTest(int, char *[]) {
         databox noKey1 = databoxNewSigned(999999);
         databox noKey2 = databoxNewBytesString("nonexistent_key");
         if (multimapExists(m, &noKey1) || multimapExists(m, &noKey2)) {
-            ERR("FUZZ FAIL: Non-existent key found! %s", "");
+            ERR("FUZZ FAIL: Non-existent key found!");
             assert(false);
         }
 

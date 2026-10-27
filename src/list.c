@@ -392,7 +392,7 @@ int listTest(int, char *[]) {
     TEST("listCreate and listRelease") {
         cleaner(listRelease) list *l = listCreate();
         if (l == nullptr) {
-            ERR("listCreate returned NULL%s", "");
+            ERR("listCreate returned NULL");
         }
 
         if (listLength(l) != 0) {
@@ -400,11 +400,11 @@ int listTest(int, char *[]) {
         }
 
         if (listFirst(l) != nullptr) {
-            ERR("New list head should be NULL%s", "");
+            ERR("New list head should be NULL");
         }
 
         if (listLast(l) != nullptr) {
-            ERR("New list tail should be NULL%s", "");
+            ERR("New list tail should be NULL");
         }
     }
 
@@ -494,11 +494,11 @@ int listTest(int, char *[]) {
 
         /* Verify linkage */
         if (listFirst(l)->next != listLast(l)) {
-            ERR("Head->next should point to tail%s", "");
+            ERR("Head->next should point to tail");
         }
 
         if (listLast(l)->prev != listFirst(l)) {
-            ERR("Tail->prev should point to head%s", "");
+            ERR("Tail->prev should point to head");
         }
     }
 
@@ -513,7 +513,7 @@ int listTest(int, char *[]) {
 
         listIter *iter = listGetIterator(l, true);
         if (iter == nullptr) {
-            ERR("listGetIterator returned NULL%s", "");
+            ERR("listGetIterator returned NULL");
         }
 
         listNode *node;
@@ -545,7 +545,7 @@ int listTest(int, char *[]) {
 
         listIter *iter = listGetIterator(l, false);
         if (iter == nullptr) {
-            ERR("listGetIterator returned NULL%s", "");
+            ERR("listGetIterator returned NULL");
         }
 
         listNode *node;
@@ -603,7 +603,7 @@ int listTest(int, char *[]) {
 
         list *copy = listDup(orig);
         if (copy == nullptr) {
-            ERR("listDup returned NULL%s", "");
+            ERR("listDup returned NULL");
         }
 
         if (listLength(copy) != listLength(orig)) {
@@ -619,7 +619,7 @@ int listTest(int, char *[]) {
         while ((origNode = listNext(origIter)) != nullptr) {
             copyNode = listNext(copyIter);
             if (copyNode == nullptr) {
-                ERR("Copy has fewer nodes than original%s", "");
+                ERR("Copy has fewer nodes than original");
                 break;
             }
 
@@ -647,7 +647,7 @@ int listTest(int, char *[]) {
         /* Search for existing value (by pointer) */
         listNode *found = listSearchKey(l, &values[2]);
         if (found == nullptr) {
-            ERR("listSearchKey didn't find existing key%s", "");
+            ERR("listSearchKey didn't find existing key");
         } else if (*(int32_t *)listNodeValue(found) != 300) {
             ERR("listSearchKey found wrong value: %d",
                 *(int32_t *)listNodeValue(found));
@@ -657,7 +657,7 @@ int listTest(int, char *[]) {
         int32_t notInList = 300; /* Same value but different pointer */
         found = listSearchKey(l, &notInList);
         if (found != nullptr) {
-            ERR("listSearchKey should not find different pointer%s", "");
+            ERR("listSearchKey should not find different pointer");
         }
     }
 
@@ -673,44 +673,44 @@ int listTest(int, char *[]) {
         /* Positive indices */
         listNode *node = listIndex(l, 0);
         if (node == nullptr || *(int32_t *)listNodeValue(node) != 10) {
-            ERR("listIndex(0) should return 10%s", "");
+            ERR("listIndex(0) should return 10");
         }
 
         node = listIndex(l, 2);
         if (node == nullptr || *(int32_t *)listNodeValue(node) != 30) {
-            ERR("listIndex(2) should return 30%s", "");
+            ERR("listIndex(2) should return 30");
         }
 
         node = listIndex(l, 4);
         if (node == nullptr || *(int32_t *)listNodeValue(node) != 50) {
-            ERR("listIndex(4) should return 50%s", "");
+            ERR("listIndex(4) should return 50");
         }
 
         /* Negative indices */
         node = listIndex(l, -1);
         if (node == nullptr || *(int32_t *)listNodeValue(node) != 50) {
-            ERR("listIndex(-1) should return 50%s", "");
+            ERR("listIndex(-1) should return 50");
         }
 
         node = listIndex(l, -3);
         if (node == nullptr || *(int32_t *)listNodeValue(node) != 30) {
-            ERR("listIndex(-3) should return 30%s", "");
+            ERR("listIndex(-3) should return 30");
         }
 
         node = listIndex(l, -5);
         if (node == nullptr || *(int32_t *)listNodeValue(node) != 10) {
-            ERR("listIndex(-5) should return 10%s", "");
+            ERR("listIndex(-5) should return 10");
         }
 
         /* Out of bounds */
         node = listIndex(l, 5);
         if (node != nullptr) {
-            ERR("listIndex(5) should return NULL for 5-element list%s", "");
+            ERR("listIndex(5) should return NULL for 5-element list");
         }
 
         node = listIndex(l, -6);
         if (node != nullptr) {
-            ERR("listIndex(-6) should return NULL for 5-element list%s", "");
+            ERR("listIndex(-6) should return NULL for 5-element list");
         }
     }
 
@@ -759,7 +759,7 @@ int listTest(int, char *[]) {
         /* Rotate empty list should not crash */
         listRotate(l);
         if (listLength(l) != 0) {
-            ERR("Empty list rotation changed length%s", "");
+            ERR("Empty list rotation changed length");
         }
 
         /* Single element */
@@ -768,11 +768,11 @@ int listTest(int, char *[]) {
         listRotate(l);
 
         if (listLength(l) != 1) {
-            ERR("Single element rotation changed length%s", "");
+            ERR("Single element rotation changed length");
         }
 
         if (*(int32_t *)listNodeValue(listFirst(l)) != 42) {
-            ERR("Single element rotation changed value%s", "");
+            ERR("Single element rotation changed value");
         }
     }
 

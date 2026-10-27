@@ -1093,9 +1093,8 @@ int blake3Test(int, char *[]) {
         }
         uint8_t k1b[32];
         blake3DeriveKey(ctxA, sizeof(ctxA), ikm, sizeof(ikm), k1b, sizeof(k1b));
-        if (memcmp(k1, k1b, 32) != 0) {
-            ERR("Same context must produce same key (deterministic)");
-        }
+        TEST_BYTES(err, k1, k1b, 32,
+                   "Same context must produce same key (deterministic)");
     }
 
     TEST("blake3DeriveKey: arbitrary output length is XOF stream") {
@@ -1106,9 +1105,8 @@ int blake3Test(int, char *[]) {
                         sizeof(out64));
         blake3DeriveKey(ctx, sizeof(ctx), ikm, sizeof(ikm), out128,
                         sizeof(out128));
-        if (memcmp(out64, out128, 64) != 0) {
-            ERR("XOF length-extension property violated");
-        }
+        TEST_BYTES(err, out64, out128, 64,
+                   "XOF length-extension property violated");
     }
 
     TEST("blake3 streaming equals one-shot") {
@@ -1142,9 +1140,8 @@ int blake3Test(int, char *[]) {
                 }
                 uint8_t streamed[BLAKE3_OUT_LEN];
                 blake3HasherFinalize(&h, streamed, BLAKE3_OUT_LEN);
-                if (memcmp(one_shot, streamed, BLAKE3_OUT_LEN) != 0) {
-                    ERR("streaming mismatch at size=%zu step=%zu", sz, step);
-                }
+                TEST_BYTES(err, one_shot, streamed, BLAKE3_OUT_LEN,
+                           "streaming mismatch at size=%zu step=%zu", sz, step);
             }
         }
     }
@@ -1185,11 +1182,10 @@ int blake3Test(int, char *[]) {
                     blake3HasherUpdate(&h, buf + p, totals[t] - p);
                     uint8_t got[64];
                     blake3HasherFinalize(&h, got, sizeof(got));
-                    if (memcmp(got, want, sizeof(want)) != 0) {
-                        ERR("total %zu split at %zu (mode %d): digest "
-                            "differs from scalar",
-                            totals[t], p, mode);
-                    }
+                    TEST_BYTES(err, got, want, sizeof(want),
+                               "total %zu split at %zu (mode %d): digest "
+                               "differs from scalar",
+                               totals[t], p, mode);
                 }
             }
         }
@@ -1212,9 +1208,9 @@ int blake3Test(int, char *[]) {
                 blake3HasherUpdate(&h, buf + j, 1);
             }
             blake3HasherFinalize(&h, b, BLAKE3_OUT_LEN);
-            if (memcmp(a, b, BLAKE3_OUT_LEN) != 0) {
-                ERR("boundary size %zu: streaming != one-shot", boundaries[i]);
-            }
+            TEST_BYTES(err, a, b, BLAKE3_OUT_LEN,
+                       "boundary size %zu: streaming != one-shot",
+                       boundaries[i]);
         }
     }
 
@@ -1234,9 +1230,8 @@ int blake3Test(int, char *[]) {
         if (memcmp(d1, d2, BLAKE3_OUT_LEN) == 0) {
             ERR("different keys produced equal outputs");
         }
-        if (memcmp(d1, d1_again, BLAKE3_OUT_LEN) != 0) {
-            ERR("same key + same input produced different outputs");
-        }
+        TEST_BYTES(err, d1, d1_again, BLAKE3_OUT_LEN,
+                   "same key + same input produced different outputs");
     }
 
     TEST("blake3 keyed-hash wipe scrubs secret fields only") {
@@ -1441,10 +1436,9 @@ int blake3Test(int, char *[]) {
         blake3HasherUpdate(&hb, probe_input, sizeof(probe_input));
         blake3HasherFinalize(&ha, derive_a, BLAKE3_OUT_LEN);
         blake3HasherFinalize(&hb, derive_b, BLAKE3_OUT_LEN);
-        if (memcmp(derive_a, derive_b, BLAKE3_OUT_LEN) != 0) {
-            ERR("DeriveKeyRaw produced different digests across calls — "
-                "wipe sequenced before hasher_init_internal");
-        }
+        TEST_BYTES(err, derive_a, derive_b, BLAKE3_OUT_LEN,
+                   "DeriveKeyRaw produced different digests across calls — "
+                   "wipe sequenced before hasher_init_internal");
     }
 
     TEST("blake3 XOF extension is consistent with single-block finalize") {
@@ -1461,16 +1455,14 @@ int blake3Test(int, char *[]) {
             uint8_t long_out[131];
             blake3HasherFinalize(&h, short_out, BLAKE3_OUT_LEN);
             blake3HasherFinalize(&h, long_out, sizeof(long_out));
-            if (memcmp(short_out, long_out, BLAKE3_OUT_LEN) != 0) {
-                ERR("XOF prefix mismatch at size=%zu", sizes[s]);
-            }
+            TEST_BYTES(err, short_out, long_out, BLAKE3_OUT_LEN,
+                       "XOF prefix mismatch at size=%zu", sizes[s]);
             /* Seek path: bytes [32..64) of long_out must equal a
              * seek-32 finalize of length 32. */
             uint8_t seeked[32];
             blake3HasherFinalizeSeek(&h, 32, seeked, 32);
-            if (memcmp(seeked, long_out + 32, 32) != 0) {
-                ERR("XOF seek mismatch at size=%zu", sizes[s]);
-            }
+            TEST_BYTES(err, seeked, long_out + 32, 32,
+                       "XOF seek mismatch at size=%zu", sizes[s]);
         }
     }
 
@@ -1727,9 +1719,8 @@ int blake3Test(int, char *[]) {
 
             /* Correctness cross-check — both paths must produce the
              * same digest for the same input. */
-            if (memcmp(out_scalar, out_simd, 32) != 0) {
-                ERR("scalar/SIMD digest disagree at chunks=%zu", chunks[s]);
-            }
+            TEST_BYTES(err, out_scalar, out_simd, 32,
+                       "scalar/SIMD digest disagree at chunks=%zu", chunks[s]);
 
             double speedup = scalar_ns / simd_ns;
             const char *winner = (simd_ns < scalar_ns * 0.97)   ? "SIMD"
@@ -1773,10 +1764,9 @@ int blake3Test(int, char *[]) {
             for (size_t s = 0; s < countof(seeks); s++) {
                 uint8_t part[90];
                 blake3HasherFinalizeSeek(&h, seeks[s], part, sizeof(part));
-                if (memcmp(part, full + seeks[s], sizeof(part)) != 0) {
-                    ERR("input %zu: output at %" PRIu64 " differs", lens[l],
-                        seeks[s]);
-                }
+                TEST_BYTES(err, part, full + seeks[s], sizeof(part),
+                           "input %zu: output at %" PRIu64 " differs", lens[l],
+                           seeks[s]);
             }
         }
     }

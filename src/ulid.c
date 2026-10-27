@@ -3657,9 +3657,8 @@ int ulidTest(int, char *[]) {
                 ERR("Failed to decode DUALNS: %s", encoded);
             }
 
-            if (memcmp(&id, &decoded, sizeof(ulid_t)) != 0) {
-                ERR("DUALNS roundtrip failed%s", "");
-            }
+            TEST_BYTES(err, &id, &decoded, sizeof(ulid_t),
+                       "DUALNS roundtrip failed");
         }
     }
 
@@ -3707,9 +3706,8 @@ int ulidTest(int, char *[]) {
             ERR("Failed to decode DUALNS from __uint128_t: %s", encoded);
         }
 
-        if (memcmp(&id_from_u128, &decoded, sizeof(ulid_t)) != 0) {
-            ERR("DUALNS __uint128_t string roundtrip failed%s", "");
-        }
+        TEST_BYTES(err, &id_from_u128, &decoded, sizeof(ulid_t),
+                   "DUALNS __uint128_t string roundtrip failed");
 
         /* Test 4: Extract as __uint128_t and verify */
         __uint128_t val128_extracted = ulidToDualNsU128(&decoded);
@@ -3763,7 +3761,7 @@ int ulidTest(int, char *[]) {
             __uint128_t reinterleaved =
                 interleaveBits64Dispatch(ts1_orig, ts2_orig);
             if (reinterleaved != interleaved) {
-                ERR("Bit interleaving roundtrip failed%s", "");
+                ERR("Bit interleaving roundtrip failed");
             }
             printf("      Bit interleaving roundtrip: ts -> interleave -> "
                    "deinterleave -> ts ✓\n");
@@ -3817,14 +3815,13 @@ int ulidTest(int, char *[]) {
                 ERR("Failed to decode DUALNS_INTERLEAVED: %s", encoded);
             }
 
-            if (memcmp(&id_from_u128, &decoded, sizeof(ulid_t)) != 0) {
-                ERR("DUALNS_INTERLEAVED string roundtrip failed%s", "");
-            }
+            TEST_BYTES(err, &id_from_u128, &decoded, sizeof(ulid_t),
+                       "DUALNS_INTERLEAVED string roundtrip failed");
 
             /* Test 6: Extract from decoded and verify */
             __uint128_t extracted_u128 = ulidToDualNsInterleavedU128(&decoded);
             if (extracted_u128 != interleaved) {
-                ERR("Extracted __uint128_t doesn't match original%s", "");
+                ERR("Extracted __uint128_t doesn't match original");
             }
 
             printf("      Full roundtrip: __uint128_t -> ulid_t -> string -> "

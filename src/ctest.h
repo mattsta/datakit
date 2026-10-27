@@ -79,7 +79,8 @@ CTEST_INCLUDE_GEN(val)
     } while (0)
 
 /* A line of `label` then the `n` bytes at `p` in hex */
-static inline void ctestPrintHex_(const char *label, const void *p, size_t n) {
+[[maybe_unused]] [[gnu::cold]] static void
+ctestPrintHex_(const char *label, const void *p, size_t n) {
     printf("%s", label);
     for (size_t i = 0; i < n; i++) {
         printf("%02x", ((const unsigned char *)p)[i]);
@@ -87,10 +88,39 @@ static inline void ctestPrintHex_(const char *label, const void *p, size_t n) {
     printf("\n");
 }
 
+/* Ends a TEST_BYTES report of `n` unequal bytes: where they first
+ * differ, then both sides in hex: all of them up to 64 bytes, else the
+ * 64 from the 16-byte line holding the first difference */
+[[maybe_unused]] [[gnu::cold, gnu::noinline]] static void
+ctestReportBytes_(const void *got, const void *want, size_t n) {
+    const unsigned char *g = got;
+    const unsigned char *w = want;
+    size_t first = 0;
+    while (first < n && g[first] == w[first]) {
+        first++;
+    }
+
+    constexpr size_t window = 64;
+    size_t start = 0;
+    size_t shown = n;
+    if (n > window) {
+        start = first / 16 * 16;
+        shown = n - start < window ? n - start : window;
+    }
+
+    printf(": %zu bytes, first difference at offset %zu\n", n, first);
+    if (shown != n) {
+        printf("  bytes [%zu, %zu):\n", start, start + shown);
+    }
+
+    ctestPrintHex_("  got:  ", g + start, shown);
+    ctestPrintHex_("  want: ", w + start, shown);
+}
+
 /* The `n` bytes at `got` must equal those at `want`; a mismatch is
  * reported, described by the printf format and arguments that follow,
- * with both sides in hex, and adds one to `failures` (the test's
- * counter: err or failures) */
+ * with the first differing offset and both sides in hex, and adds one
+ * to `failures` (the test's counter: err or failures) */
 #define TEST_BYTES(failures, got, want, n, ...)                                \
     do {                                                                       \
         const void *got_ = (got);                                              \
@@ -100,9 +130,7 @@ static inline void ctestPrintHex_(const char *label, const void *p, size_t n) {
             currentFilename();                                                 \
             printf("ERROR! ");                                                 \
             printf(__VA_ARGS__);                                               \
-            printf(": %zu bytes differ\n", n_);                                \
-            ctestPrintHex_("  got:  ", got_, n_);                              \
-            ctestPrintHex_("  want: ", want_, n_);                             \
+            ctestReportBytes_(got_, want_, n_);                                \
             fflush(stdout);                                                    \
             (failures)++;                                                      \
         }                                                                      \

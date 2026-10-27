@@ -3199,28 +3199,26 @@ int flexEnvelopeTest(int, char *[]) {
                 want[i] = (uint8_t)(kats[k].xxh64 >> (i * 8u));
             }
             hashXXH64(input, len, nullptr, 0, got);
-            if (memcmp(got, want, 8) != 0) {
-                ERR("xxh64 envelope digest bytes mismatch at length %zu", len);
-            }
+            TEST_BYTES(err, got, want, 8,
+                       "xxh64 envelope digest bytes mismatch at length %zu",
+                       len);
 
             for (uint32_t i = 0; i < 8u; i++) {
                 want[i] = (uint8_t)(kats[k].xxh3_64 >> (i * 8u));
             }
             hashXXH3_64(input, len, nullptr, 0, got);
-            if (memcmp(got, want, 8) != 0) {
-                ERR("xxh3_64 envelope digest bytes mismatch at length %zu",
-                    len);
-            }
+            TEST_BYTES(err, got, want, 8,
+                       "xxh3_64 envelope digest bytes mismatch at length %zu",
+                       len);
 
             for (uint32_t i = 0; i < 8u; i++) {
                 want[i] = (uint8_t)(kats[k].xxh3_128Low >> (i * 8u));
                 want[8u + i] = (uint8_t)(kats[k].xxh3_128High >> (i * 8u));
             }
             hashXXH3_128(input, len, nullptr, 0, got);
-            if (memcmp(got, want, 16) != 0) {
-                ERR("xxh3_128 envelope digest bytes mismatch at length %zu",
-                    len);
-            }
+            TEST_BYTES(err, got, want, 16,
+                       "xxh3_128 envelope digest bytes mismatch at length %zu",
+                       len);
         }
     }
 
@@ -4119,11 +4117,10 @@ int flexEnvelopeTest(int, char *[]) {
                             header_written, plen, digest_written, total,
                             flexEnvelopeAlgoName(algo));
                     }
-                    if (memcmp(stream_buf, oneshot_buf, total) != 0) {
-                        ERR("stream wrap output diverged from one-shot "
-                            "(algo=%s plen=%zu cs=%zu)",
-                            flexEnvelopeAlgoName(algo), plen, cs);
-                    }
+                    TEST_BYTES(err, stream_buf, oneshot_buf, total,
+                               "stream wrap output diverged from one-shot "
+                               "(algo=%s plen=%zu cs=%zu)",
+                               flexEnvelopeAlgoName(algo), plen, cs);
                 }
 
                 /* Streaming verify equivalence. */
@@ -5467,16 +5464,14 @@ int flexEnvelopeTest(int, char *[]) {
                 ERR("wrap-stream Final failed for algo=%u", (uint32_t)algo);
                 continue;
             }
-            if (memcmp(wctx.hmac_storage, hmac_zero, sizeof(hmac_zero)) != 0) {
-                ERR("wrap-stream Final left hmac_storage non-zero for "
-                    "algo=%u (pre-fill 0xA5 not scrubbed)",
-                    (uint32_t)algo);
-            }
-            if (memcmp(&wctx.u, u_zero, sizeof(u_zero)) != 0) {
-                ERR("wrap-stream Final left u union non-zero for algo=%u "
-                    "(pre-fill 0xA5 not scrubbed)",
-                    (uint32_t)algo);
-            }
+            TEST_BYTES(err, wctx.hmac_storage, hmac_zero, sizeof(hmac_zero),
+                       "wrap-stream Final left hmac_storage non-zero for "
+                       "algo=%u (pre-fill 0xA5 not scrubbed)",
+                       (uint32_t)algo);
+            TEST_BYTES(err, &wctx.u, u_zero, sizeof(u_zero),
+                       "wrap-stream Final left u union non-zero for algo=%u "
+                       "(pre-fill 0xA5 not scrubbed)",
+                       (uint32_t)algo);
         }
     }
 
@@ -5544,16 +5539,14 @@ int flexEnvelopeTest(int, char *[]) {
                 ERR("verify-stream Final failed for algo=%u", (uint32_t)algo);
                 continue;
             }
-            if (memcmp(vctx.hmac_storage, hmac_zero, sizeof(hmac_zero)) != 0) {
-                ERR("verify-stream Final left hmac_storage non-zero for "
-                    "algo=%u (pre-fill 0xA5 not scrubbed)",
-                    (uint32_t)algo);
-            }
-            if (memcmp(&vctx.u, u_zero, sizeof(u_zero)) != 0) {
-                ERR("verify-stream Final left u union non-zero for algo=%u "
-                    "(pre-fill 0xA5 not scrubbed)",
-                    (uint32_t)algo);
-            }
+            TEST_BYTES(err, vctx.hmac_storage, hmac_zero, sizeof(hmac_zero),
+                       "verify-stream Final left hmac_storage non-zero for "
+                       "algo=%u (pre-fill 0xA5 not scrubbed)",
+                       (uint32_t)algo);
+            TEST_BYTES(err, &vctx.u, u_zero, sizeof(u_zero),
+                       "verify-stream Final left u union non-zero for algo=%u "
+                       "(pre-fill 0xA5 not scrubbed)",
+                       (uint32_t)algo);
             if (vctx.raw_key != nullptr || vctx.raw_key_len != 0) {
                 ERR("verify-stream Final left raw_key non-NULL for algo=%u",
                     (uint32_t)algo);

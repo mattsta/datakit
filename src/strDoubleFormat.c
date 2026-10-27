@@ -865,10 +865,9 @@ int strDoubleFormatTest(int, char *[]) {
             const uint64_t dfrac = fractionAndExponent(v, &dexp);
             const double rebuilt = ldexp((double)dfrac, dexp);
             const double mag = fabs(v);
-            if (memcmp(&rebuilt, &mag, sizeof(mag)) != 0) {
-                ERR("decode broken for %.17g (frac %" PRIu64 " exp %d)", v,
-                    dfrac, dexp);
-            }
+            TEST_BYTES(err, &rebuilt, &mag, sizeof(mag),
+                       "decode broken for %.17g (frac %" PRIu64 " exp %d)", v,
+                       dfrac, dexp);
         }
 #undef FE_NEXT
     }
@@ -973,10 +972,9 @@ int strDoubleFormatTest(int, char *[]) {
                 ERR("Rejected minimum-size buffer for worst case %zu", i);
             } else {
                 const double back = strtod((const char *)exact, nullptr);
-                if (memcmp(&back, &v, sizeof(back)) != 0) {
-                    ERR("Worst-case %zu did not roundtrip: %.*s", i, (int)len,
-                        exact);
-                }
+                TEST_BYTES(err, &back, &v, sizeof(back),
+                           "Worst-case %zu did not roundtrip: %.*s", i,
+                           (int)len, exact);
             }
         }
     }
@@ -1228,10 +1226,9 @@ int strDoubleFormatTest(int, char *[]) {
              * must recover the exact bits */
             if (len && isfinite(thisRandAttempt)) {
                 const double back = strtod((const char *)buf, nullptr);
-                if (memcmp(&back, &thisRandAttempt, sizeof(back)) != 0) {
-                    ERR("Roundtrip failed: %.*s (bits %016" PRIx64 ")",
-                        (int)len, buf, randBig);
-                }
+                TEST_BYTES(err, &back, &thisRandAttempt, sizeof(back),
+                           "Roundtrip failed: %.*s (bits %016" PRIx64 ")",
+                           (int)len, buf, randBig);
             }
             if (i % (testMax / 100) == 0) {
                 printf(".");
@@ -1268,10 +1265,9 @@ int strDoubleFormatTest(int, char *[]) {
              * must recover the exact bits */
             if (len && isfinite(thisRandAttempt)) {
                 const double back = strtod((const char *)buf, nullptr);
-                if (memcmp(&back, &thisRandAttempt, sizeof(back)) != 0) {
-                    ERR("Roundtrip failed: %.*s (value %.17g)", (int)len, buf,
-                        thisRandAttempt);
-                }
+                TEST_BYTES(err, &back, &thisRandAttempt, sizeof(back),
+                           "Roundtrip failed: %.*s (value %.17g)", (int)len,
+                           buf, thisRandAttempt);
             }
             if (i % (testMax / 100) == 0) {
                 printf(".");

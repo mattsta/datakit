@@ -1667,9 +1667,8 @@ int hmacKeyringTest(int, char *[]) {
         uint8_t expected[32], observed[32];
         hmacCompute(&hmacAlgoSHA256, key, sizeof(key), "abc", 3, expected);
         hmacComputeWithKey(handle, "abc", 3, observed);
-        if (memcmp(expected, observed, sizeof(expected)) != 0) {
-            ERR("Prepared key disagreed with fresh hmacCompute");
-        }
+        TEST_BYTES(err, expected, observed, sizeof(expected),
+                   "Prepared key disagreed with fresh hmacCompute");
         if (!hmacKeyringRetire(ring, 7u)) {
             ERR("Retire of id=7 should succeed");
         }
@@ -1873,15 +1872,9 @@ int hmacKeyringTest(int, char *[]) {
         expect1[0] = 1u;
         uint8_t expect2[12] = {};
         expect2[0] = 2u;
-        if (memcmp(n0, expect0, 12) != 0) {
-            ERR("nonce0 layout");
-        }
-        if (memcmp(n1, expect1, 12) != 0) {
-            ERR("nonce1 layout");
-        }
-        if (memcmp(n2, expect2, 12) != 0) {
-            ERR("nonce2 layout");
-        }
+        TEST_BYTES(err, n0, expect0, 12, "nonce0 layout");
+        TEST_BYTES(err, n1, expect1, 12, "nonce1 layout");
+        TEST_BYTES(err, n2, expect2, 12, "nonce2 layout");
         uint64_t peek = 0;
         if (!hmacKeyringPeekAeadCounter(ring, 7u, &peek)) {
             ERR("Peek should succeed");
@@ -2340,9 +2333,7 @@ int hmacKeyringTest(int, char *[]) {
         uint8_t exp[32], got[32];
         hmacCompute(&hmacAlgoSHA256, key_a, sizeof(key_a), "x", 1, exp);
         hmacComputeWithKey(prep, "x", 1, got);
-        if (memcmp(exp, got, 32) != 0) {
-            ERR("restored id=11 MAC mismatch");
-        }
+        TEST_BYTES(err, exp, got, 32, "restored id=11 MAC mismatch");
 
         /* Counter + salt survived. */
         uint64_t ctr = 0;
@@ -2697,9 +2688,8 @@ int hmacKeyringTest(int, char *[]) {
             ERR("GetRawCopy wrote %zu bytes, expected %zu", copied,
                 sizeof(key));
         }
-        if (memcmp(buf, key, sizeof(key)) != 0) {
-            ERR("GetRawCopy bytes did not match installed bytes");
-        }
+        TEST_BYTES(err, buf, key, sizeof(key),
+                   "GetRawCopy bytes did not match installed bytes");
         if (algo != &hmacAlgoSHA256) {
             ERR("GetRawCopy algo pointer did not match");
         }
@@ -2748,9 +2738,8 @@ int hmacKeyringTest(int, char *[]) {
         if (!hmacKeyringRetire(ring, 17u)) {
             ERR("Retire after copy must succeed");
         }
-        if (memcmp(buf, key, sizeof(key)) != 0) {
-            ERR("local copy was disturbed by Retire — independence broken");
-        }
+        TEST_BYTES(err, buf, key, sizeof(key),
+                   "local copy was disturbed by Retire — independence broken");
         size_t after_retire_len = 999u;
         if (hmacKeyringGetRawCopy(ring, 17u, buf, sizeof(buf),
                                   &after_retire_len, nullptr)) {
@@ -2795,9 +2784,8 @@ int hmacKeyringTest(int, char *[]) {
         if (!hmacKeyringGetAesGcmKeyCopy(ring, 23u, &local)) {
             ERR("GetAesGcmKeyCopy of installed AES-class id must succeed");
         }
-        if (memcmp(&local, borrowed, sizeof(local)) != 0) {
-            ERR("Copy did not match borrowed schedule bytes");
-        }
+        TEST_BYTES(err, &local, borrowed, sizeof(local),
+                   "Copy did not match borrowed schedule bytes");
         if (local.key_size != AES256_KEY_LEN) {
             ERR("Copy reported key_size %u, expected %u",
                 (unsigned)local.key_size, (unsigned)AES256_KEY_LEN);
@@ -2842,9 +2830,8 @@ int hmacKeyringTest(int, char *[]) {
         if (!aesGcmInit(&reference, key, sizeof(key))) {
             ERR("aesGcmInit of reference must succeed");
         }
-        if (memcmp(&local, &reference, sizeof(local)) != 0) {
-            ERR("local copy was disturbed by Retire — independence broken");
-        }
+        TEST_BYTES(err, &local, &reference, sizeof(local),
+                   "local copy was disturbed by Retire — independence broken");
         if (hmacKeyringGetAesGcmKeyCopy(ring, 23u, &miss)) {
             ERR("post-Retire GetAesGcmKeyCopy must reject");
         }

@@ -47,24 +47,24 @@ int linearBloomTest(int, char *[]) {
 
         /* Item should not be in empty bloom filter */
         if (linearBloomHashCheck(bloom, hash)) {
-            ERR("Item found in empty bloom filter%s", "");
+            ERR("Item found in empty bloom filter");
         }
 
         /* Set the item */
         bool wasPresent = linearBloomHashSet(bloom, hash);
         if (wasPresent) {
-            ERR("linearBloomHashSet returned true for new item%s", "");
+            ERR("linearBloomHashSet returned true for new item");
         }
 
         /* Item should now be found */
         if (!linearBloomHashCheck(bloom, hash)) {
-            ERR("Item not found after set%s", "");
+            ERR("Item not found after set");
         }
 
         /* Setting same item again should return true (already present) */
         wasPresent = linearBloomHashSet(bloom, hash);
         if (!wasPresent) {
-            ERR("linearBloomHashSet returned false for existing item%s", "");
+            ERR("linearBloomHashSet returned false for existing item");
         }
 
         linearBloomFree(bloom);
@@ -148,7 +148,7 @@ int linearBloomTest(int, char *[]) {
         /* Items should be found */
         hashFromInt(500, hash);
         if (!linearBloomHashCheck(bloom, hash)) {
-            ERR("Item not found before reset%s", "");
+            ERR("Item not found before reset");
         }
 
         /* Reset the bloom filter */
@@ -157,7 +157,7 @@ int linearBloomTest(int, char *[]) {
         /* Items should NOT be found after reset */
         hashFromInt(500, hash);
         if (linearBloomHashCheck(bloom, hash)) {
-            ERR("Item found after reset (should not be)%s", "");
+            ERR("Item found after reset (should not be)");
         }
 
         linearBloomFree(bloom);
@@ -525,7 +525,7 @@ int linearBloomTest(int, char *[]) {
         /* Items should have count > 0 */
         hashFromInt(500, hash);
         if (linearBloomCountHashCheck(bloom, hash) == 0) {
-            ERR("Item has count 0 before reset%s", "");
+            ERR("Item has count 0 before reset");
         }
 
         /* Reset */
@@ -534,7 +534,7 @@ int linearBloomTest(int, char *[]) {
         /* All items should have count 0 */
         hashFromInt(500, hash);
         if (linearBloomCountHashCheck(bloom, hash) != 0) {
-            ERR("Item has non-zero count after reset%s", "");
+            ERR("Item has non-zero count after reset");
         }
 
         linearBloomCountFree(bloom);
@@ -681,7 +681,7 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountHashSet(bloom, hash);
 
         if (linearBloomCountHashCheck(bloom, hash) == 0) {
-            ERR("Failed to access entry near end of counting bloom%s", "");
+            ERR("Failed to access entry near end of counting bloom");
         }
 
         linearBloomCountFree(bloom);
@@ -827,9 +827,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountHalfScalar(reference);
 
         /* Verify they match byte-by-byte */
-        if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("SWAR half differs from scalar reference!%s", "");
-        }
+        TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "SWAR half differs from scalar reference!");
 
         /* Verify values are actually halved */
         for (size_t i = 0; i < 1000; i++) {
@@ -951,9 +950,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountHalfScalar(reference);
 
         /* Verify they match */
-        if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("NEON half differs from scalar reference!%s", "");
-        }
+        TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "NEON half differs from scalar reference!");
 
         linearBloomCountFree(bloom);
         linearBloomCountFree(reference);
@@ -975,9 +973,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountHalfSSE2(bloom);
         linearBloomCountHalfScalar(reference);
 
-        if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("SSE2 half differs from scalar reference!%s", "");
-        }
+        TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "SSE2 half differs from scalar reference!");
 
         linearBloomCountFree(bloom);
         linearBloomCountFree(reference);
@@ -999,9 +996,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountHalfAVX2(bloom);
         linearBloomCountHalfScalar(reference);
 
-        if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("AVX2 half differs from scalar reference!%s", "");
-        }
+        TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "AVX2 half differs from scalar reference!");
 
         linearBloomCountFree(bloom);
         linearBloomCountFree(reference);
@@ -1195,9 +1191,8 @@ int linearBloomTest(int, char *[]) {
             linearBloomCountHalfScalar(reference);
 
             /* Verify they match after each half */
-            if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-                ERR("Mismatch after half round %d!", round + 1);
-            }
+            TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                       "Mismatch after half round %d!", round + 1);
         }
 
         /* After 10 halves, most values should be 0 */
@@ -1416,9 +1411,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountHalf(bloom);
         linearBloomCountHalfScalar(reference);
 
-        if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("Full filter: SWAR half differs from scalar!%s", "");
-        }
+        TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "Full filter: SWAR half differs from scalar!");
 
         linearBloomCountFree(bloom);
         linearBloomCountFree(reference);
@@ -1707,20 +1701,18 @@ int linearBloomTest(int, char *[]) {
         linearBloomCount *copy = linearBloomCountNew();
         memcpy(copy, bloom, LINEARBLOOMCOUNT_EXTENT_BYTES);
         linearBloomCountDecayByFactor(bloom, 1.0, 0);
-        if (memcmp(bloom, copy, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("Factor 1.0 should not change values%s", "");
-        }
+        TEST_BYTES(err, bloom, copy, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "Factor 1.0 should not change values");
 
         linearBloomCountDecayByFactor(bloom, 1.5, 0);
-        if (memcmp(bloom, copy, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("Factor > 1.0 should not change values%s", "");
-        }
+        TEST_BYTES(err, bloom, copy, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "Factor > 1.0 should not change values");
 
         /* Factor <= 0.0 should reset to zero */
         linearBloomCountDecayByFactor(bloom, 0.0, 0);
         hashFromInt(0, hash);
         if (linearBloomCountHashCheck(bloom, hash) != 0) {
-            ERR("Factor 0.0 should reset all values to zero%s", "");
+            ERR("Factor 0.0 should reset all values to zero");
         }
 
         /* Verify completely zeroed */
@@ -1757,9 +1749,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountDecayByFactor(bloom2, 0.5, 0);
 
         /* They should match exactly (factor=0.5 delegates to Half) */
-        if (memcmp(bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("Factor 0.5 should produce same result as Half%s", "");
-        }
+        TEST_BYTES(err, bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "Factor 0.5 should produce same result as Half");
 
         linearBloomCountFree(bloom1);
         linearBloomCountFree(bloom2);
@@ -2070,9 +2061,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountDecayByFactor(bloom2, 0.6, 42);
 
         /* Should be identical */
-        if (memcmp(bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("Same seed should produce identical results%s", "");
-        }
+        TEST_BYTES(err, bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "Same seed should produce identical results");
 
         linearBloomCountFree(bloom1);
         linearBloomCountFree(bloom2);
@@ -2097,7 +2087,7 @@ int linearBloomTest(int, char *[]) {
         /* Should differ (with high probability for 10000 entries with 50% round
          * chance) */
         if (memcmp(bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES) == 0) {
-            ERR("Different seeds should produce different results%s", "");
+            ERR("Different seeds should produce different results");
         }
 
         /* But sums should be similar (statistical equivalence) */
@@ -2145,9 +2135,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountQuarterScalar(reference);
 
         /* Verify they match byte-by-byte */
-        if (memcmp(bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("SWAR quarter differs from scalar reference!%s", "");
-        }
+        TEST_BYTES(err, bloom, reference, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "SWAR quarter differs from scalar reference!");
 
         linearBloomCountFree(bloom);
         linearBloomCountFree(reference);
@@ -2242,10 +2231,8 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountQuarter(bloom2);
 
         /* Should be identical (DecayByFactor delegates to Quarter) */
-        if (memcmp(bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES) != 0) {
-            ERR("DecayByFactor(0.25) should produce same result as Quarter%s",
-                "");
-        }
+        TEST_BYTES(err, bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES,
+                   "DecayByFactor(0.25) should produce same result as Quarter");
 
         linearBloomCountFree(bloom1);
         linearBloomCountFree(bloom2);

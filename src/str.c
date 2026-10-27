@@ -1639,9 +1639,8 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         for (size_t i = 0; i < countof(all); i++) {
             char want[3];
             snprintf(want, sizeof(want), "%02x", (unsigned int)i);
-            if (memcmp(hex + 2 * i, want, 2) != 0) {
-                ERR("StrBytesToHex of 0x%02zx gave %.2s", i, hex + 2 * i);
-            }
+            TEST_BYTES(err, hex + 2 * i, want, 2,
+                       "StrBytesToHex of 0x%02zx gave %.2s", i, hex + 2 * i);
         }
         if (strlen(hex) != 2 * countof(all)) {
             ERR("StrBytesToHex wrote %zu digits", strlen(hex));
