@@ -679,7 +679,7 @@ multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
 
     /* Full nodes of rowMax entries (the last holds the rest) in a Medium,
      * which becomes Large at rowMax nodes, as inserts would make it */
-    const size_t nodes = (count + rowMax - 1) / rowMax;
+    const size_t nodes = dkDivCeil(count, rowMax);
     /* @own: caller; free=multiarrayMediumFree */
     multiarrayMedium *med = zcalloc(1, sizeof(*med));
     /* @own: container; free=multiarrayMediumFree */
@@ -786,7 +786,7 @@ void multiarrayCompact(multiarray **m) {
         s->count = (uint16_t)count;
         packed = _MULTIARRAY_TAG(s, MULTIARRAY_TYPE_SMALL);
     } else {
-        const size_t nodes = (count + rowMax - 1) / rowMax;
+        const size_t nodes = dkDivCeil(count, rowMax);
         /* @own: caller; free=multiarrayMediumFree */
         multiarrayMedium *med = zcalloc(1, sizeof(*med));
         /* @own: container; free=multiarrayMediumFree */
@@ -1254,7 +1254,7 @@ int multiarrayTest(int, char *[]) {
             multiarrayCopyTo(m, got);
             dkTierStats s;
             multiarrayStats(m, &s);
-            const size_t nodes = (count + rowMax - 1) / rowMax;
+            const size_t nodes = dkDivCeil(count, rowMax);
             const multiarrayType tier = count <= rowMax ? MULTIARRAY_TYPE_SMALL
                                         : nodes >= rowMax
                                             ? MULTIARRAY_TYPE_LARGE

@@ -320,7 +320,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
     const size_t total = flexCount(rows) / elementsPerEntry;
     size_t perMap = (total * splitSize) / bytes;
     perMap = perMap ? perMap : 1;
-    const size_t maps = (total + perMap - 1) / perMap;
+    const size_t maps = dkDivCeil(total, perMap);
     cleanerName(zfree, Void) void *storage =
         zcalloc(maps, sizeof(flex *) + sizeof(multimapFullMiddle));
     flex **map = storage;
@@ -420,7 +420,7 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
      * multimapNewFromDump cuts them, with range boxes resolved */
     size_t perMap = (total * splitSize) / bytes;
     perMap = perMap ? perMap : 1;
-    const size_t maps = (total + perMap - 1) / perMap;
+    const size_t maps = dkDivCeil(total, perMap);
     cleanerName(zfree, Void) void *storage =
         zcalloc(maps, sizeof(flex *) + sizeof(multimapFullMiddle));
     flex **map = storage;

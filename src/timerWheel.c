@@ -1106,8 +1106,7 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
          * jump straight to `now` instead of ticking 1ms at a time.
          * Slot indices are the tick-count odometer (see struct). */
         if (tw->currentTimeUs < now) {
-            const uint64_t ticks =
-                (now + WHEEL0_RESOLUTION_US - 1) / WHEEL0_RESOLUTION_US;
+            const uint64_t ticks = dkDivCeil(now, WHEEL0_RESOLUTION_US);
             tw->currentTimeUs = ticks * WHEEL0_RESOLUTION_US;
             tw->slotIndex[0] = ticks & WHEEL0_MASK;
             tw->slotIndex[1] = (ticks >> WHEEL0_BITS) & WHEEL1_MASK;
@@ -1130,8 +1129,7 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
              * wrap boundary (cascade point), or `now` - whichever is
              * nearest - instead of ticking through the empty span. */
             const uint64_t remainingTicks =
-                (now - tw->currentTimeUs + WHEEL0_RESOLUTION_US - 1) /
-                WHEEL0_RESOLUTION_US;
+                dkDivCeil(now - tw->currentTimeUs, WHEEL0_RESOLUTION_US);
             const uint32_t tillWrap = WHEEL0_SIZE - slot0Idx;
             const uint32_t tillOccupied = wheel0OccupiedDistance(tw, slot0Idx);
 

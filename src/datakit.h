@@ -70,6 +70,7 @@
 #include <limits.h>    /* UINT_MAX, etc */
 #include <stdckdint.h> /* ckd_add, ckd_sub, ckd_mul: checked arithmetic */
 
+#include "dkBits.h" /* dkDivCeil */
 #include "dkC23.h"  /* <stdbit.h>, or its subset where libc lacks it */
 #include <stddef.h> /* ptrdiff_t, size_t */
 #include <stdint.h>
@@ -112,9 +113,8 @@
 #define DK_SIZECHECK(thing, size)                                              \
     static_assert(sizeof(thing) == (size), #thing " changed from " #size "?")
 
-#define DK_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 /* Bytes that hold 'value' (0 for 0), for any unsigned width up to 64 */
-#define DK_BYTESUSED(value) DK_DIV_CEIL(stdc_bit_width((uint64_t)(value)), 8u)
+#define DK_BYTESUSED(value) dkDivCeil(stdc_bit_width((uint64_t)(value)), 8u)
 
 /* ====================================================================
  * Testing helpers

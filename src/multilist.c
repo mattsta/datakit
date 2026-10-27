@@ -247,7 +247,7 @@ multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
     const size_t count = flexCount(elements);
     size_t perChunk = (count * 2 * nodeBytes) / bytes;
     perChunk = perChunk ? perChunk : 1;
-    const size_t chunks = (count + perChunk - 1) / perChunk;
+    const size_t chunks = dkDivCeil(count, perChunk);
     cleanerName(zfree, Flexes) flex **chunk = zcalloc(chunks, sizeof(flex *));
     for (size_t i = chunks - 1; i > 0; i--) {
         const size_t end =
