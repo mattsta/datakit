@@ -231,13 +231,14 @@ static bool atomHolds_(const multimapAtom *ma, const databox *ref,
     return databoxCompare(out, value) == 0;
 }
 
-/* HASHED: the atom holding 'value' among the rows with 'hash'.  The walk
- * starts at or before the first of them: a positioned search lands on
+/* HASHED: the atom holding 'value' among the rows with 'hash', walked by
+ * an iterator that crosses maps.  The walk starts at or before the first
+ * of them: a positioned search lands on
  * any row with an equal key, so it is aimed at hash - 1, whose rows all
  * come first (and when there are none it lands on the first row at or
  * past it); hash 0 starts at the beginning.  Rows below 'hash' are
  * skipped. */
-static bool atomHashedFind_(const multimapAtom *ma, const databox *value,
+static bool atomHashedWalk_(const multimapAtom *ma, const databox *value,
                             const databox *hash, databox *ref) {
     multimapIterator iter;
     if (hash->data.u64 == 0) {
@@ -268,6 +269,41 @@ static bool atomHashedFind_(const multimapAtom *ma, const databox *value,
     }
 
     return false;
+}
+
+/* HASHED: the atom holding 'value', its rows found by one keyed search
+ * (a set's first row with the key 'hash') and read in place along that
+ * map.  Rows with the hash that run on past the map's end go to
+ * atomHashedWalk_, which crosses maps. */
+static bool atomHashedFind_(const multimapAtom *ma, const databox *value,
+                            const databox *hash, databox *ref) {
+    multimapEntry row;
+    if (!multimapGetUnderlyingEntry(ma->mapAtomReverse, hash, &row)) {
+        return false;
+    }
+
+    flexEntry *fe = row.fe;
+    while (true) {
+        flexEntry *idEntry = flexNext(*row.map, fe);
+        databox id = {};
+        flexGetByType(idEntry, &id);
+        const databox candidate = atomRefBox_(id.data.u);
+        if (atomHolds_(ma, &candidate, value)) {
+            *ref = candidate;
+            return true;
+        }
+
+        fe = flexNext(*row.map, idEntry);
+        if (!fe) {
+            return atomHashedWalk_(ma, value, hash, ref);
+        }
+
+        databox next = {};
+        flexGetByType(fe, &next);
+        if (next.data.u != hash->data.u) {
+            return false;
+        }
+    }
 }
 
 /* DICT: the id of 'value'.  No forward lookup: the dict holds the value
