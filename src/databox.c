@@ -1227,6 +1227,7 @@ void databoxRepr(const databox *const box) {
 
 #define CTEST_INCLUDE_KEYGEN
 #include "ctest.h"
+#include "endianIsLittle.h"
 #include "perf.h"
 
 #include <signal.h>
@@ -1723,6 +1724,25 @@ int databoxTest(int, char *[]) {
     int err = 0;
 
     assert(sizeof(databox) == 16);
+
+    TEST("box header layout: type in bits 0-7, flags, length from bit 16") {
+        /* The header word after the 8 value bytes, as the bit-fields
+         * lay it out (little-endian hosts) */
+        databox b = {};
+        b.type = DATABOX_SIGNED_64;
+        b.allocated = 1;
+        b.big = 1;
+        b.len = UINT64_C(0x123456789AB);
+        uint64_t header;
+        memcpy(&header, (const uint8_t *)&b + 8, sizeof(header));
+        const uint64_t want = (uint64_t)DATABOX_SIGNED_64 | (UINT64_C(1) << 8) |
+                              (UINT64_C(1) << 10) |
+                              (UINT64_C(0x123456789AB) << 16);
+        if (endianIsLittle() && header != want) {
+            ERR("header word 0x%016" PRIx64 ", want 0x%016" PRIx64, header,
+                want);
+        }
+    }
 
     TEST("an integral real is the integer it equals, at every boundary") {
         /* Whole numbers in [-2^63, 2^64) become SIGNED (negative) or

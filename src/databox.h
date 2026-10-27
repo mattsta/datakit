@@ -6,7 +6,8 @@
 #define DATABOX_ENABLE_PTR_MDSC 1
 #endif
 
-typedef enum databoxType {
+/* One byte: the box header stores it in an 8-bit field */
+typedef enum databoxType : uint8_t {
     /** Fixed-length types **/
     /* Invalid databox is all zeroes */
     DATABOX_VOID = 0, /* void also counts as UNDEFINED */
@@ -154,7 +155,7 @@ static_assert(sizeof(databoxUnion) == 8, "databox value too big!");
 /* Macro-ize common databox metadata because we must share _exactly_ the same
  * layout and fields between 'databox' and 'databoxBig' */
 #define databoxInternals_                                                      \
-    uint64_t type : 8;      /* databoxtype; valid types start at offset 1 */   \
+    databoxType type : 8;   /* valid types start at offset 1 */                \
     uint64_t allocated : 1; /* bool; true if need to free data.bytes.start */  \
     uint64_t created : 1;   /* bool; if retrieved+created, true. */            \
     uint64_t big : 1;       /* bool; true if actually a databoxBig */          \
@@ -167,6 +168,7 @@ typedef struct databox {
     databoxInternals_;
 } databox;
 static_assert(sizeof(databox) == 16, "databox struct too big!");
+static_assert(sizeof(databoxType) == 1, "a box type is one byte");
 
 /* 'databoxBig' is 32 bytes total and 16-byte aligned.
  *
