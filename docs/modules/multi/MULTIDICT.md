@@ -205,7 +205,7 @@ typedef struct multidictStats {
     uint64_t keyBytes;   /* Keys: a 64-bit number or real counts 8, a
                             96/128-bit one 16, bytes their length */
     uint64_t valBytes;   /* Values, counted as keys are */
-    uint64_t totalBytes; /* Total memory usage */
+    uint64_t totalBytes; /* usedBytes plus the slot pointer tables */
     bool isRehashing;
 } multidictStats;
 
@@ -1117,7 +1117,7 @@ entries on average, so `k` below is small but never guaranteed to be 1.
   comment in `multidict.c` suggests: on top of the two hash tables it carries
   memory-limit, eviction-callback, byte-expansion, and LRU fields
 - Two `multidictHT` structs, each holding a table pointer plus `size`,
-  `oversize`, `count`, `usedBytes`, `keyBytes`, `valBytes`, and `totalBytes`
+  `oversize`, `count`, `usedBytes`, `keyBytes`, and `valBytes`
 - 8 bytes x slot_count (pointer array), per live table
 - Variable (slot contents via multidictClass)
 - When LRU tracking is enabled: a `multilru`, a pointer-to-key side array,

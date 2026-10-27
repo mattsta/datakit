@@ -72,7 +72,7 @@ static int dbg_op_count = 0;
 
 /* This is our hash table structure.
  * Every multidictionary has two multidictHT because of incremental rehashing.
- * 'multidictHT' is a 56 byte struct (8+4+4+8+8+8+8+8=56) */
+ * 'multidictHT' is a 48 byte struct (8+4+4+8+8+8+8=48) */
 typedef struct multidictHT {
     multidictSlot **table; /* table[i] is pointer to hash slot 'i'. */
     uint32_t size;         /* length of *table allocations above
@@ -82,7 +82,6 @@ typedef struct multidictHT {
     uint64_t usedBytes;    /* sum of all uncompressed slot sizes (overhead) */
     uint64_t keyBytes;     /* total bytes of all keys stored */
     uint64_t valBytes;     /* total bytes of all values stored */
-    uint64_t totalBytes;   /* usedBytes + keyBytes + valBytes (convenience) */
 } multidictHT;
 
 /* Load factor defaults (percentage): expand at 200%, shrink at 10%
@@ -156,7 +155,9 @@ struct multidict {
 #define HTBYTES(d, htidx) (HT((d), (htidx))->usedBytes)
 #define HTKEYBYTES(d, htidx) (HT((d), (htidx))->keyBytes)
 #define HTVALBYTES(d, htidx) (HT((d), (htidx))->valBytes)
-#define HTTOTALBYTES(d, htidx) (HT((d), (htidx))->totalBytes)
+/* A table's bytes: its slots and the slot pointer array */
+#define HTTOTALBYTES(d, htidx)                                                 \
+    (HTBYTES(d, htidx) + (uint64_t)HTSIZE(d, htidx) * sizeof(multidictSlot *))
 #define SLOT(d, htidx, slot) (HT(d, htidx)->table[slot])
 #define SLOT_IDX(d, htidx, hash) ((hash) & (HTMASK(d, htidx)))
 #define SLOT_BY_HASH_PTR(d, htidx, hash)                                       \
@@ -268,12 +269,6 @@ DK_INLINE_ALWAYS uint32_t multidictHashOfKey_(multidict *d,
     databoxHashBytes(keybox, &scratch, &key, &klen);
     return multidictHashKey(d, key, klen);
 }
-
-/* Helper to recalculate totalBytes from components */
-#define HT_UPDATE_TOTAL(ht)                                                    \
-    do {                                                                       \
-        (ht)->totalBytes = (ht)->usedBytes + (ht)->keyBytes + (ht)->valBytes;  \
-    } while (0)
 
 /* The cold end of the LRU as one multidictEvictToLimit call walks it.
  * Victims are picked without being removed from tracking: an entry
@@ -1140,10 +1135,6 @@ bool multidictRehash(multidict *d, int32_t n) {
 
         current = nullptr;
 
-        /* Update totalBytes for both HTs after processing this slot */
-        HT_UPDATE_TOTAL(HT(d, 0));
-        HT_UPDATE_TOTAL(HT(d, 1));
-
         /* Set slot to NULL for easier debugging/tracking/introspection. */
         SLOT(d, 0, d->rehashidx) = nullptr;
 
@@ -1254,9 +1245,6 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
         result = MULTIDICT_ERR;
     }
 
-    /* Update convenience total */
-    HT_UPDATE_TOTAL(op.ht);
-
     /* LRU tracking: register new key (only on insert, not replace) */
     if (result == MULTIDICT_OK_INSERTED) {
         multidictLRUOnInsert(d, keybox);
@@ -1357,7 +1345,6 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
     op.ht->count++;
     op.ht->keyBytes += mdBoxSize_(keybox);
     op.ht->valBytes += mdBoxSize_(valbox);
-    HT_UPDATE_TOTAL(op.ht);
     multidictLRUOnInsert(d, keybox);
 
     /* Grown after the insert, not before: a refused offer adds nothing */
@@ -1451,7 +1438,6 @@ static bool multidictRemoveFromTable_(multidict *d, int htidx,
     ht->usedBytes -= lenBefore - d->shared->sizeBytes(*slotPtr);
     ht->keyBytes -= keySize;
     ht->valBytes -= mdBoxSize_(val);
-    HT_UPDATE_TOTAL(ht);
     return true;
 }
 
@@ -1577,7 +1563,6 @@ DK_STATIC multidictUpdateResult multidictUpdate_(multidict *d,
             ht->usedBytes =
                 ht->usedBytes - before + d->shared->sizeBytes(*slot);
             ht->valBytes = ht->valBytes - u.oldSize + u.newSize;
-            HT_UPDATE_TOTAL(ht);
         }
     }
 
@@ -8196,10 +8181,16 @@ int multidictTest(int, char *[]) {
         cleaner(multidictFree) multidict *dBytes =
             multidictNew(&multidictTypeExactKey, qdcBytes, 99999);
 
-        /* Fresh dict should have zero tracked bytes */
+        /* Fresh dict: no slot or content bytes, only its slot table */
         assert(dBytes->ht[0].keyBytes == 0);
         assert(dBytes->ht[0].valBytes == 0);
-        assert(dBytes->ht[0].totalBytes == 0);
+        assert(dBytes->ht[0].usedBytes == 0);
+        if (multidictBytes(dBytes) !=
+            HTSIZE(dBytes, 0) * sizeof(multidictSlot *)) {
+            ERR("a fresh dict reports %" PRIu64 " bytes for %" PRIu32
+                " empty slots",
+                multidictBytes(dBytes), HTSIZE(dBytes, 0));
+        }
     }
 
     TEST("11.2 bytes increase on insert") {
@@ -8427,8 +8418,53 @@ int multidictTest(int, char *[]) {
         assert(totalBytes > 0);
         assert(keyBytes > 0);
         assert(valBytes > 0);
-        /* Total should be >= key + val (includes slot overhead) */
-        assert(totalBytes >= keyBytes + valBytes);
+
+        /* The total is the slots plus the slot pointer table, each byte
+         * counted once (keyBytes and valBytes describe the content the
+         * slots already hold) */
+        multidictStats stats;
+        multidictGetStats(d, &stats);
+        const uint64_t table = stats.slots * sizeof(multidictSlot *);
+        if (!stats.isRehashing && totalBytes != stats.usedBytes + table) {
+            ERR("total %" PRIu64 " is not slots %" PRIu64 " + table %" PRIu64,
+                totalBytes, stats.usedBytes, table);
+        }
+    }
+
+    TEST("12.5b multidictBytes never exceeds the heap the dict holds") {
+        /* Measured through the allocator: the dict, its slot table and
+         * every slot, at their usable sizes */
+        if (ctestHeapMeterStart()) {
+            cleaner(multidictMmClassFree) multidictClass *qdcHeap =
+                multidictMmClassNew();
+            cleaner(multidictFree) multidict *heapDict =
+                multidictNew(&multidictTypeExactKey, qdcHeap, 4242);
+            for (int j = 0; j < 5000; j++) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "heap-key-%d", j);
+                const databox key = databoxNewBytesString(keyBuf);
+                const databox val = databoxNewSigned(j);
+                MULTIDICT_TEST_OK(multidictAdd(heapDict, &key, &val));
+            }
+
+            while (multidictRehash(heapDict, 1024)) {
+            }
+
+            /* Live now: the class, the dict, its table and its slots */
+            const int64_t heap = ctestHeapMeterStop();
+            const uint64_t reported = multidictBytes(heapDict);
+            multidictStats stats;
+            multidictGetStats(heapDict, &stats);
+            printf("  5000 entries: %" PRId64 " heap bytes, %" PRIu64
+                   " reported, %" PRIu64 " in slots\n",
+                   heap, reported, stats.usedBytes);
+            if (heap <= 0 || reported > (uint64_t)heap ||
+                reported < stats.usedBytes) {
+                ERR("reported %" PRIu64 " bytes against %" PRId64
+                    " heap and %" PRIu64 " in slots",
+                    reported, heap, stats.usedBytes);
+            }
+        }
     }
 
     TEST("12.6 stats consistency through operations") {

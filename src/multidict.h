@@ -28,7 +28,9 @@ typedef struct multidictStats {
                             counts 8, a 96/128-bit one 16, bytes their
                             length) */
     uint64_t valBytes;   /* Bytes of the values, counted as keys are */
-    uint64_t totalBytes; /* Total memory usage */
+    uint64_t totalBytes; /* usedBytes plus the slot pointer tables (what
+                            multidictBytes reports; allocator slack and
+                            the dict struct are not counted) */
     bool isRehashing;    /* Whether rehashing is in progress */
 } multidictStats;
 
