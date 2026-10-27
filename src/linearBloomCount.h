@@ -1,6 +1,7 @@
 #pragma once
 
 #include "datakit.h"
+#include "dkBits.h" /* dkDivCeil */
 #include <math.h>
 
 typedef uint64_t linearBloomCount;
@@ -40,16 +41,14 @@ typedef uint64_t linearBloomCount;
  * there, and decay never takes a counter below 0. */
 #define LINEARBLOOMCOUNT_COUNTER_MAX ((1u << LINEAR_BLOOM_BITS) - 1)
 
-/* Define divCeil BEFORE using it */
-#define divCeil(a, b) (((a) + (b) - 1) / (b))
-
 /* See comment for this in linearBloom.h */
 #define LINEARBLOOMCOUNT_EXTENT_BYTES                                          \
-    (divCeil(divCeil(LINEARBLOOMCOUNT_EXTENT_ENTRIES * LINEAR_BLOOM_BITS, 8),  \
-             sizeof(linearBloomCount)) *                                       \
+    (dkDivCeil(                                                                \
+         dkDivCeil(LINEARBLOOMCOUNT_EXTENT_ENTRIES * LINEAR_BLOOM_BITS, 8),    \
+         sizeof(linearBloomCount)) *                                           \
      sizeof(linearBloomCount))
 DK_INLINE_ALWAYS linearBloomCount *linearBloomCountNew(void) {
-    /* We need to use 'divCeil' here because regular division would give us
+    /* We need to use 'dkDivCeil' here because regular division would give us
      * a floor and that could break some very end-of-array math if our
      * bit length isn't evenly divisible by 8 */
     /* @own: caller; free=linearBloomCountFree */

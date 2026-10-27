@@ -135,15 +135,13 @@ mrWrongMode_(const char *function, int line, const char *what) {
 /* 13 bits because log2(8192) == 13 */
 #define DIRECT_STORAGE_BITS 13
 
-#define divCeil(a, b) (((a) + (b) - 1) / (b))
-
 /* This MAX_ENTRIES calculation makes sure we don't store more elements in
  * our explicit lists than would be used by just using a bitmap directly. */
 #define MAX_ENTRIES_PER_DIRECT_LISTING                                         \
     ((BITMAP_SIZE_IN_BITS / DIRECT_STORAGE_BITS) - 1)
 
 /* Unused but kept for potential future use */
-/* #define BYTES_FOR_PACKED_ARRAY_COUNT(count) divCeil(count, 8) */
+/* #define BYTES_FOR_PACKED_ARRAY_COUNT(count) dkDivCeil(count, 8) */
 
 #define MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING                             \
     (BITMAP_SIZE_IN_BITS - MAX_ENTRIES_PER_DIRECT_LISTING)
@@ -463,7 +461,7 @@ DK_STATIC void convertBitmapToPositionList(multiroar *r,
     const int64_t packedArrayCount = _bitmapToPositions(
         GET_CHUNK_BITMAP_START(value), packedArrayStart, trackSetPositions);
 
-    const uint64_t moveArrayBytes = divCeil(packedArrayCount * 13, 8);
+    const uint64_t moveArrayBytes = dkDivCeil(packedArrayCount * 13, 8);
     memmove(packedArray + 3, packedArray + 1, moveArrayBytes);
 
     varintTaggedPut64(packedArray + 1, packedArrayCount);
@@ -3211,7 +3209,7 @@ DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
 
         /* Write positions to temporary location at offset 1 */
         uint16_t count = bitmapToSetPositions(bitmap, packed + 1);
-        const uint64_t positionsBytes = divCeil(count * 13, 8);
+        const uint64_t positionsBytes = dkDivCeil(count * 13, 8);
 
         /* Determine varint length for count and move positions to correct spot
          */
@@ -3236,7 +3234,7 @@ DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
 
         /* Write positions to temporary location at offset 1 */
         uint16_t count = bitmapToNegativePositions(bitmap, packed + 1);
-        const uint64_t positionsBytes = divCeil(count * 13, 8);
+        const uint64_t positionsBytes = dkDivCeil(count * 13, 8);
 
         /* Determine varint length for count and move positions to correct spot
          */
@@ -3903,7 +3901,7 @@ multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
 #include "timeUtil.h"
 
 static void multiroarRepr(multiroar *r, uint64_t highest) {
-    for (uint64_t i = 0; i < divCeil(highest, BITMAP_SIZE_IN_BITS); i++) {
+    for (uint64_t i = 0; i < dkDivCeil(highest, BITMAP_SIZE_IN_BITS); i++) {
         databox value;
         const databox chunkKey = databoxNewUnsigned(i);
         if (multimapLookupInto(r->map, &chunkKey, &value, 1)) {
@@ -3936,7 +3934,7 @@ static void multiroarTestCompare(multiroar *r, uint64_t highest) {
     }
 
     /* add positional lookup bitmap overhead */
-    asPositional += divCeil(divCeil(highest, BITMAP_SIZE_IN_BITS), 8);
+    asPositional += dkDivCeil(dkDivCeil(highest, BITMAP_SIZE_IN_BITS), 8);
 
     printf("With positional encoding, it would use %" PRIu64
            " bytes and be a savings "
@@ -6499,8 +6497,8 @@ int multiroarTest(int, char *[]) {
         printf("  Testing set operations with oracle...\n");
 
 #define FUZZ_OP_SIZE 500
-        uint64_t oracleA[divCeil(FUZZ_OP_SIZE, 64)] = {};
-        uint64_t oracleB[divCeil(FUZZ_OP_SIZE, 64)] = {};
+        uint64_t oracleA[dkDivCeil(FUZZ_OP_SIZE, 64)] = {};
+        uint64_t oracleB[dkDivCeil(FUZZ_OP_SIZE, 64)] = {};
 
         cleaner(multiroarFree) multiroar *a = multiroarBitNew();
         cleaner(multiroarFree) multiroar *b = multiroarBitNew();
@@ -6584,7 +6582,7 @@ int multiroarTest(int, char *[]) {
         printf("  Testing remove operations...\n");
 
 #define FUZZ_REMOVE_SIZE 2000
-        uint64_t oracle[divCeil(FUZZ_REMOVE_SIZE, 64)] = {};
+        uint64_t oracle[dkDivCeil(FUZZ_REMOVE_SIZE, 64)] = {};
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* First add some bits */

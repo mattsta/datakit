@@ -1,7 +1,8 @@
 #pragma once
 
 #include "datakit.h"
-#include "str.h" /* StrPopCntExact */
+#include "dkBits.h" /* dkDivCeil */
+#include "str.h"    /* StrPopCntExact */
 
 typedef uint_fast32_t linearBloom;
 
@@ -21,14 +22,12 @@ typedef uint_fast32_t linearBloom;
 #define LINEARBLOOM_EXTENT_BITS (1ULL << 23)
 #endif
 
-#define divCeil(a, b) (((a) + (b) - 1) / (b))
-
 /* This is a bit of a mess because we need a:
  *  - CEILING ROUND from bits to whole bytes
  *  - then a CEILING ROUND from bytes to our storage width
  *  - then turn our storage width count back into a byte count with multiply */
 #define LINEARBLOOM_EXTENT_BYTES                                               \
-    (divCeil(divCeil(LINEARBLOOM_EXTENT_BITS, 8), sizeof(linearBloom)) *       \
+    (dkDivCeil(dkDivCeil(LINEARBLOOM_EXTENT_BITS, 8), sizeof(linearBloom)) *   \
      sizeof(linearBloom))
 
 /* hash2 is forced odd: a zero (or even, given the power-of-two-ish
@@ -38,7 +37,7 @@ typedef uint_fast32_t linearBloom;
     ((hash1) + (iteration) * ((hash2) | 1))
 
 DK_INLINE_ALWAYS linearBloom *linearBloomNew(void) {
-    /* We need to use 'divCeil' here because regular division would give us
+    /* We need to use 'dkDivCeil' here because regular division would give us
      * a floor and that could break some very end-of-array math if our
      * bit length isn't evenly divisible by 8 */
     /* @own: caller; free=linearBloomFree */

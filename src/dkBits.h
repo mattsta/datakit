@@ -40,6 +40,12 @@ static inline void dkBitClearU64_(uint64_t *a, size_t i) {
     _Generic((a), uint8_t *: dkBitClearU8_, uint64_t *: dkBitClearU64_)((a),   \
                                                                         (i))
 
+/* `a` / `b` rounded up: the units of `b` that hold `a` (bits in bytes,
+ * bits in words, items in chunks).  No overflow near the type's top, as
+ * (a + b - 1) / b would have, and a constant expression when both are.
+ * Each argument is evaluated twice. */
+#define dkDivCeil(a, b) ((a) / (b) + ((a) % (b) != 0))
+
 /* The bytes / 64-bit words that hold `bits` bits (no overflow near
  * SIZE_MAX) */
 static inline size_t dkBitBytes(size_t bits) {

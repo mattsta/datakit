@@ -2,7 +2,8 @@
 
 #include "cleaner.h"
 #include "datakit.h"
-#include <math.h> /* sqrt */
+#include "dkBits.h" /* dkDivCeil */
+#include <math.h>   /* sqrt */
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint64_t *, zfree, U64);
@@ -22,7 +23,6 @@ static constexpr int BYTES_PER_BITMAP = 4096;
 /* ====================================================================
  * Dod - Dod
  * ==================================================================== */
-#define DOD_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
                        const dodVal newVal) {
     /* Always use last elements of arrays */
@@ -46,8 +46,8 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
             /* conform allocation size of unused space
              * Note: Add 8 bytes padding because varintBitstreamGet may read
              * up to 8 bytes ahead when bits span word boundaries */
-            const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8) + 8;
-            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8) + 8;
+            const size_t kwCeil = dkDivCeil(kw->usedBits, 8) + 8;
+            const size_t vwCeil = dkDivCeil(vw->usedBits, 8) + 8;
             if (kwCeil < kw->totalBytes) {
                 /* @own: container; free=zfree */
                 kw->d = zrealloc(kw->d, kwCeil);
@@ -286,8 +286,8 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
             /* conform allocation size of unused space
              * Note: Add 8 bytes padding because varintBitstreamGet may read
              * up to 8 bytes ahead when bits span word boundaries */
-            const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8) + 8;
-            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8) + 8;
+            const size_t kwCeil = dkDivCeil(kw->usedBits, 8) + 8;
+            const size_t vwCeil = dkDivCeil(vw->usedBits, 8) + 8;
             if (kwCeil < kw->totalBytes) {
                 /* @own: container; free=zfree */
                 kw->d = zrealloc(kw->d, kwCeil);
