@@ -32,6 +32,7 @@ from . import (
     perfdiff,
     procs,
     retoken,
+    spell,
     stdattr,
     testtime,
     toolchain,
@@ -364,6 +365,21 @@ def main(argv: list[str] | None = None) -> int:
         "--text",
         action="store_true",
         help="OLD is exact code text (such as '= {0}'), not a token",
+    )
+
+    sp = sub.add_parser(
+        "spell",
+        help="misspellings in the tracked sources, docs and tools, by "
+        "codespell (report only; exit 0 none, 1 some flagged)",
+    )
+    sp.add_argument(
+        "paths", nargs="*", help="repo-relative files (default: the tracked set)"
+    )
+    sp.add_argument(
+        "--write",
+        action="store_true",
+        help="apply each fix with exactly one suggestion (read the findings "
+        "first; review the diff)",
     )
 
     wc = sub.add_parser(
@@ -1155,6 +1171,9 @@ def _dispatch(args: argparse.Namespace) -> int:
             args.comments,
             args.text,
         )
+
+    if args.command == "spell":
+        return spell.run(args.repo, tuple(args.paths), args.write)
 
     if args.command == "wrapcalls":
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.macro):

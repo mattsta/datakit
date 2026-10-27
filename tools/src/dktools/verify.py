@@ -43,8 +43,8 @@ preset, which compiles the library with ``NDEBUG`` as consumers do.
 timing-sensitive tests in ``validate.DEFAULT_SERIAL``, and those are
 excluded from the parallel run.  Both are whole-name regexes, and a
 regex that matches no test is a failure.  ``allocaudit check --constructors``,
-``atomicaudit check`` and ``outputaudit check`` run on the tree with the tree's
-own dktools.
+``atomicaudit check``, ``outputaudit check`` and ``spell`` run on the tree with
+the tree's own dktools.
 
 Formatting is part of the run (``dktools.formatting``): before the tree
 is written, the working-tree files it takes are formatted in place
@@ -471,6 +471,9 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         src,
         steps.OUTPUTAUDIT_TIMEOUT,
     )
+    spelling = steps.run_tree_gate(
+        "spell", steps.spell_command, work / "spell.log", src, steps.SPELL_TIMEOUT
+    )
 
     failed = ctest_result.failed + serial_result.failed
     passed = (
@@ -483,6 +486,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and alloc.ok
         and atomic.ok
         and output.ok
+        and spelling.ok
         and fmt.clean()
         and len(also) == len(others)
         and all(a.ok for a in also)
@@ -510,6 +514,8 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"  alloc     {'ok' if alloc.ok else 'FAILED'} ({steps.last_line(alloc.log)})",
         f"  atomic    {'ok' if atomic.ok else 'FAILED'} ({steps.last_line(atomic.log)})",
         f"  output    {'ok' if output.ok else 'FAILED'} ({steps.last_line(output.log)})",
+        f"  spell     {'ok' if spelling.ok else 'FAILED'} "
+        f"({steps.last_line(spelling.log)})",
         f"  format    {formatting.gate_line(fmt)}",
         *(f"  formatted {line}" for line in formatted),
     ]
@@ -540,6 +546,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         alloc.log,
         atomic.log,
         output.log,
+        spelling.log,
         work / "format.log",
         *(log for a in also for log in (a.configure.log, a.build.log)),
     ):

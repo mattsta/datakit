@@ -368,8 +368,10 @@ gate before a milestone.
 - A test whose executable was still not built (an explicit `--target`
   list that leaves it out) is reported on a `missing` line, apart from
   real failures, with a `hint` naming the targets to add.
-- `allocaudit check --constructors` then runs on the exported tree
-  with the tree's own dktools.
+- `allocaudit check --constructors`, `atomicaudit check`,
+  `outputaudit check` and `spell` then run on the exported tree with
+  the tree's own dktools (the `alloc`, `atomic`, `output` and `spell`
+  lines).
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,
   allocaudit, failing test names, log paths), also kept in
@@ -441,8 +443,9 @@ uv run --project tools dktools validate [--rev REV] \
   summary's "Skipped tests" section names the tier and every skipped
   set per configuration.
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
-  output, `allocaudit check --constructors` on the exported tree, and
-  the leakage gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
+  output, `allocaudit check --constructors`, `atomicaudit check`,
+  `outputaudit check` and `spell` on the exported tree, and the leakage
+  gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
 - Writes `ROOT/validate/<hash>-<configs>/summary.md` (`<configs>` joins
   the matrix's labels, e.g. `clang22-dev+clang22-debug+gcc15-release`, so a
@@ -674,6 +677,31 @@ uv run --project tools dktools retoken _Static_assert static_assert [--comments]
   code.
 - Prints each file's count. Exits 0, or 2 for a token that is not a C
   identifier or a missing file.
+
+## spell — misspellings in the sources, docs and tools
+
+```sh
+uv run --project tools dktools spell [--write] [FILE ...]
+```
+
+- Runs codespell (a locked tools dependency) over the tracked
+  `src/**/*.c` and `*.h` (vendored `src/memshard` excluded), every
+  `CMakeLists.txt`, `docs/**/*.md`, the root README and the tools'
+  sources, tests and README, or over the files given. Prints each
+  finding as `path:line: wrong ==> right`.
+- Words that are right here although codespell flags them
+  (identifiers such as `aCount`, test strings, constant bytes such as
+  ChaCha's `"nd 3"`) go one per line, lowercase, in
+  `tools/spell-words.txt`.
+- `--write` applies codespell's fix wherever it has exactly one
+  suggestion and reports what remains. Read every finding first (a
+  flagged word can be an identifier other code spells the same way) and
+  review the diff.
+- Exits 0 when nothing is (or remains) flagged, 1 when something is, 2
+  for a missing file or a codespell failure.
+- `verify` and `validate` run it over the exported tree as a gate (the
+  `spell` line); in a tree that is not a git checkout the same patterns
+  are matched by walking the directories.
 
 ## dropinclude — remove a header the language made unnecessary
 

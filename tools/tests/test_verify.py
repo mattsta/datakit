@@ -488,8 +488,10 @@ class VerifyRun(unittest.TestCase):
                 "allocaudit",
                 "atomicaudit",
                 "outputaudit",
+                "spell",
             ],
         )
+        self.assertIn("  spell     ok (", out)
         script = runner.command("test-commands")[-2:]
         self.assertEqual(script, ["-P", str(steps.CTEST_COMMANDS_SCRIPT)])
         self.assertTrue(steps.CTEST_COMMANDS_SCRIPT.is_file())
@@ -517,6 +519,7 @@ class VerifyRun(unittest.TestCase):
             "alloc": ({"allocaudit": 1}, {"ctest": CTEST_PASS}),
             "atomic": ({"atomicaudit": 1}, {"ctest": CTEST_PASS}),
             "output": ({"outputaudit": 1}, {"ctest": CTEST_PASS}),
+            "spell": ({"spell": 1}, {"ctest": CTEST_PASS}),
             "configure": ({"configure": 1}, {}),
         }
         for label, (codes, outputs) in cases.items():
@@ -545,6 +548,7 @@ class VerifyRun(unittest.TestCase):
             "allocaudit": "alloc     FAILED (dktools: allocaudit: timed out after",
             "atomicaudit": "atomic    FAILED (dktools: atomicaudit: timed out after",
             "outputaudit": "output    FAILED (dktools: outputaudit: timed out after",
+            "spell": "spell     FAILED (dktools: spell: timed out after",
         }
         for step, needle in cases.items():
             with self.subTest(step=step):

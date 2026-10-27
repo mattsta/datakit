@@ -28,7 +28,7 @@ why, and how to run it.
 
 After the matrix it scans the test logs for UBSan ("runtime error:"),
 ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors``,
-``atomicaudit check`` and ``outputaudit check`` on the exported tree, checks
+``atomicaudit check``, ``outputaudit check`` and ``spell`` on the exported tree, checks
 that every file of the tree is formatted (``dktools.formatting``; it rewrites
 nothing: ``dktools format write`` does), and runs the leakage gate
 over the added lines of
@@ -259,6 +259,7 @@ def render(
     alloc: Step,
     atomic: Step,
     output: Step,
+    spelling: Step,
     leak: tuple[str, list[leakcheck.Hit]] | None,
     passed: bool,
     fmt: tuple[formatting.Report, Path],
@@ -360,6 +361,9 @@ def render(
     md += ["", "## Library output", ""]
     md.append(f"{_step_cell(output)}: {steps.last_line(output.log)}")
 
+    md += ["", "## Spelling", ""]
+    md.append(f"{_step_cell(spelling)}: {steps.last_line(spelling.log)}")
+
     md += ["", "## Formatting", ""]
     md.append(formatting.gate_line(fmt[0]))
     md += [f"- {line}" for line in fmt[0].lines("would change")]
@@ -389,6 +393,7 @@ def render(
     md.append(f"- {alloc.log}")
     md.append(f"- {atomic.log}")
     md.append(f"- {output.log}")
+    md.append(f"- {spelling.log}")
     md.append(f"- {fmt[1]}")
     return "\n".join(md) + "\n"
 
@@ -460,6 +465,9 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         src,
         steps.OUTPUTAUDIT_TIMEOUT,
     )
+    spelling = steps.run_tree_gate(
+        "spell", steps.spell_command, work / "spell.log", src, steps.SPELL_TIMEOUT
+    )
 
     leak = None
     leak_ok = True
@@ -474,6 +482,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         and alloc.ok
         and atomic.ok
         and output.ok
+        and spelling.ok
         and leak_ok
         and fmt.clean()
     )
@@ -485,6 +494,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         alloc,
         atomic,
         output,
+        spelling,
         leak,
         passed,
         (fmt, work / "format.log"),
