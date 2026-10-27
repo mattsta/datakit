@@ -84,11 +84,10 @@ defcleaner(aeadNonceLog *, aeadNonceLogFree);
 /* Round up to next power of two, with a floor at AEAD_NONCE_LOG_MIN_CAP
  * (the caller has checked req <= AEAD_NONCE_LOG_MAX_CAP). */
 static size_t aeadNonceLogRoundCap(size_t req) {
-    size_t c = AEAD_NONCE_LOG_MIN_CAP;
-    while (c < req) {
-        c <<= 1u;
-    }
-    return c;
+    static_assert((AEAD_NONCE_LOG_MIN_CAP & (AEAD_NONCE_LOG_MIN_CAP - 1)) == 0,
+                  "the floor is itself a power of two");
+    const size_t c = stdc_bit_ceil(req);
+    return c < AEAD_NONCE_LOG_MIN_CAP ? AEAD_NONCE_LOG_MIN_CAP : c;
 }
 
 /* Most entries the table holds: at this load the oldest is evicted
@@ -473,7 +472,7 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
     flexEntry *fe = flexHead(f);
     uint64_t cap = 0;
     if (!anlReadU64(fe, &cap) || cap < AEAD_NONCE_LOG_MIN_CAP ||
-        cap > AEAD_NONCE_LOG_MAX_CAP || (cap & (cap - 1u)) != 0u ||
+        cap > AEAD_NONCE_LOG_MAX_CAP || !stdc_has_single_bit(cap) ||
         records > aeadNonceLogLoadLimit((size_t)cap)) {
         return nullptr;
     }
@@ -555,8 +554,8 @@ static bool anlPersistValidate(const void *structure) {
     }
     /* Capacity: a power of two in [MIN, MAX], within the load limit */
     if (log->cap < AEAD_NONCE_LOG_MIN_CAP ||
-        log->cap > AEAD_NONCE_LOG_MAX_CAP ||
-        (log->cap & (log->cap - 1u)) != 0u || log->mask != log->cap - 1u ||
+        log->cap > AEAD_NONCE_LOG_MAX_CAP || !stdc_has_single_bit(log->cap) ||
+        log->mask != log->cap - 1u ||
         log->count > aeadNonceLogLoadLimit(log->cap)) {
         return false;
     }

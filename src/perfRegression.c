@@ -18,6 +18,7 @@
 #include "ctest.h"
 #include "datakit.h"
 #include "dkTestTmp.h"
+#include "fenwick/fenwickI64.h"
 #include "flexEnvelope.h"
 #include "hash/sha256ArmCrypto.h"
 #include "hmac.h"
@@ -1154,6 +1155,8 @@ static void benchNumeric(void) {
 defcleanerName(databox *, zfree, Boxes);
 defcleaner(multiFenwick *, multiFenwickFree);
 defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
+defcleanerName(int64_t *, zfree, I64s);
+defcleanerName(void *, fenwickI64Free, FenwickI64);
 
 /* fenwick: the search both Fenwick trees answer from their prefix sums
  * (a tree of ones, so the target t lands at index t - 1) */
@@ -1168,7 +1171,16 @@ static void benchFenwick(void) {
         multiFenwickNewFromArray(values, n);
     cleaner(multiFenwickFlatFree) multiFenwickFlat *flat =
         multiFenwickFlatNewFromArray(values, n);
+    cleanerName(zfree, I64s) int64_t *ones = zcalloc(n, sizeof(int64_t));
+    for (uint32_t i = 0; i < n; i++) {
+        ones[i] = 1;
+    }
+
+    cleanerName(fenwickI64Free, FenwickI64) void *typed =
+        fenwickI64NewFromArray(ones, n);
     uint64_t sink = 0;
+    PERF_ROW("fenwick", "typedLowerBound", n,
+             sink += fenwickI64LowerBound(typed, (int64_t)perfScatter(i) + 1));
     PERF_ROW("fenwick", "lowerBound", n,
              const databox t = DATABOX_SIGNED((int64_t)perfScatter(i) + 1);
              sink += multiFenwickLowerBound(tree, &t));

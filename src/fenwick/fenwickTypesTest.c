@@ -34,27 +34,19 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
 
-/* splitmix64 */
-static uint64_t fwtRand_(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
-}
-
 /* An index: mostly small, sometimes far past the end (sparse growth), and
  * now and then across the Small tier's limit. */
 static size_t fwtIndex_(uint64_t *s) {
-    const uint64_t r = fwtRand_(s) % 64;
+    const uint64_t r = dkSplitmix64Next(s) % 64;
     if (r == 0) {
-        return 40000 + (size_t)(fwtRand_(s) % 64);
+        return 40000 + (size_t)(dkSplitmix64Next(s) % 64);
     }
 
     if (r < 4) {
-        return 1000 + (size_t)(fwtRand_(s) % 2000);
+        return 1000 + (size_t)(dkSplitmix64Next(s) % 2000);
     }
 
-    return (size_t)(fwtRand_(s) % 300);
+    return (size_t)(dkSplitmix64Next(s) % 300);
 }
 
 static constexpr int FWT_ELEMS = 41000;
@@ -74,24 +66,24 @@ static constexpr int FWT_OPS = 2500;
         void *fw = nullptr;                                                    \
         for (size_t op = 0; op < FWT_OPS && !err; op++) {                      \
             const size_t idx = fwtIndex_(&seed);                               \
-            const uint64_t pick = fwtRand_(&seed) % 10;                        \
+            const uint64_t pick = dkSplitmix64Next(&seed) % 10;                \
             VT v;                                                              \
             if (pick < 6) {                                                    \
-                v = (VT)((int64_t)(fwtRand_(&seed) % 101) - 50);               \
+                v = (VT)((int64_t)(dkSplitmix64Next(&seed) % 101) - 50);       \
                 if ((VT) - 1 > 0) {                                            \
-                    v = (VT)(fwtRand_(&seed) % 51);                            \
+                    v = (VT)(dkSplitmix64Next(&seed) % 51);                    \
                 }                                                              \
             } else if (pick == 6) {                                            \
-                v = (VT)(VMAX - (VT)(fwtRand_(&seed) % 3));                    \
+                v = (VT)(VMAX - (VT)(dkSplitmix64Next(&seed) % 3));            \
             } else if (pick == 7) {                                            \
-                v = (VT)(VMIN + (VT)(fwtRand_(&seed) % 3));                    \
+                v = (VT)(VMIN + (VT)(dkSplitmix64Next(&seed) % 3));            \
             } else if (pick == 8) {                                            \
-                v = (VT)fwtRand_(&seed);                                       \
+                v = (VT)dkSplitmix64Next(&seed);                               \
             } else {                                                           \
                 v = 0;                                                         \
             }                                                                  \
                                                                                \
-            if (fwtRand_(&seed) % 4 == 0) {                                    \
+            if (dkSplitmix64Next(&seed) % 4 == 0) {                            \
                 if (!fenwick##T##Set(&fw, idx, v)) {                           \
                     ERR(#T " op %zu: Set(%zu) refused", op, idx);              \
                 }                                                              \
@@ -123,10 +115,11 @@ static constexpr int FWT_OPS = 2500;
              * are O(q), so they stay low except every 256th op) */            \
             for (int k = 0; k < 4 && count > 0 && !err; k++) {                 \
                 const size_t span = count < 1024 ? count : 1024;               \
-                const size_t q = k == 0 && op % 256 == 255                     \
-                                     ? count - 1                               \
-                                     : (size_t)(fwtRand_(&seed) % span);       \
-                const size_t l = (size_t)(fwtRand_(&seed) % (q + 1));          \
+                const size_t q =                                               \
+                    k == 0 && op % 256 == 255                                  \
+                        ? count - 1                                            \
+                        : (size_t)(dkSplitmix64Next(&seed) % span);            \
+                const size_t l = (size_t)(dkSplitmix64Next(&seed) % (q + 1));  \
                 UT pre = 0;                                                    \
                 UT preL = 0;                                                   \
                 for (size_t i = 0; i <= q; i++) {                              \
@@ -169,34 +162,42 @@ static constexpr int FWT_OPS = 2500;
     }
 
 /* LowerBound over non-negative elements: the smallest index whose prefix
- * sum reaches the target, or SIZE_MAX when none does. */
+ * sum reaches the target, or SIZE_MAX when none does.  The sizes sit on
+ * and beside powers of two, where the search's first step changes. */
 #define FWT_LOWER_BOUND(T, VT)                                                 \
     static int fwtLowerBound##T(uint64_t seed) {                               \
         int err = 0;                                                           \
-        constexpr int N = 200;                                                 \
+        static constexpr size_t sizes[] = {1,   2,   3,   63,  64,  65, 127,   \
+                                           128, 129, 200, 255, 256, 257};      \
+        constexpr size_t N = 257;                                              \
         VT elem[N];                                                            \
-        void *fw = nullptr;                                                    \
-        for (size_t i = 0; i < N; i++) {                                       \
-            elem[i] = (VT)(fwtRand_(&seed) % 4);                               \
-            fenwick##T##Update(&fw, i, elem[i]);                               \
-        }                                                                      \
-        for (int t = 0; t < 200 && !err; t++) {                                \
-            const VT target = (VT)(fwtRand_(&seed) % 340);                     \
-            size_t want = SIZE_MAX;                                            \
-            VT pre = 0;                                                        \
-            for (size_t i = 0; i < N; i++) {                                   \
-                pre += elem[i];                                                \
-                if (pre >= target) {                                           \
-                    want = i;                                                  \
-                    break;                                                     \
+        for (size_t s = 0; s < countof(sizes) && !err; s++) {                  \
+            const size_t n = sizes[s];                                         \
+            void *fw = nullptr;                                                \
+            for (size_t i = 0; i < n; i++) {                                   \
+                elem[i] = (VT)(dkSplitmix64Next(&seed) % 4);                   \
+                fenwick##T##Update(&fw, i, elem[i]);                           \
+            }                                                                  \
+            for (int t = 0; t < 200 && !err; t++) {                            \
+                const VT target =                                              \
+                    (VT)(dkSplitmix64Next(&seed) % (3 * n + 40));              \
+                size_t want = SIZE_MAX;                                        \
+                VT pre = 0;                                                    \
+                for (size_t i = 0; i < n; i++) {                               \
+                    pre += elem[i];                                            \
+                    if (pre >= target) {                                       \
+                        want = i;                                              \
+                        break;                                                 \
+                    }                                                          \
+                }                                                              \
+                const size_t got = fenwick##T##LowerBound(fw, target);         \
+                if (got != want) {                                             \
+                    ERR(#T " LowerBound of %zu elements: got %zu, want %zu",   \
+                        n, got, want);                                         \
                 }                                                              \
             }                                                                  \
-            const size_t got = fenwick##T##LowerBound(fw, target);             \
-            if (got != want) {                                                 \
-                ERR(#T " LowerBound: got %zu, want %zu", got, want);           \
-            }                                                                  \
+            fenwick##T##Free(fw);                                              \
         }                                                                      \
-        fenwick##T##Free(fw);                                                  \
         return err;                                                            \
     }
 
@@ -235,8 +236,8 @@ FWT_LOWER_BOUND(U128, __uint128_t)
         void *fw = nullptr;                                                    \
         for (size_t op = 0; op < FWT_OPS && !err; op++) {                      \
             const size_t idx = fwtIndex_(&seed) % 300;                         \
-            const VT v = (VT)((int64_t)(fwtRand_(&seed) % 129) - 64);          \
-            if (fwtRand_(&seed) % 4 == 0) {                                    \
+            const VT v = (VT)((int64_t)(dkSplitmix64Next(&seed) % 129) - 64);  \
+            if (dkSplitmix64Next(&seed) % 4 == 0) {                            \
                 if (!fenwick##T##Set(&fw, idx, v)) {                           \
                     ERR(#T " op %zu: Set refused", op);                        \
                 }                                                              \
@@ -249,8 +250,8 @@ FWT_LOWER_BOUND(U128, __uint128_t)
             }                                                                  \
             count = idx + 1 > count ? idx + 1 : count;                         \
                                                                                \
-            const size_t q = (size_t)(fwtRand_(&seed) % count);                \
-            const size_t l = (size_t)(fwtRand_(&seed) % (q + 1));              \
+            const size_t q = (size_t)(dkSplitmix64Next(&seed) % count);        \
+            const size_t l = (size_t)(dkSplitmix64Next(&seed) % (q + 1));      \
             VT pre = 0;                                                        \
             VT preL = 0;                                                       \
             for (size_t i = 0; i <= q; i++) {                                  \
@@ -326,7 +327,7 @@ FWT_LOWER_BOUND(Double, double)
             VT *copied = bufB;                                                 \
             void *bySet = nullptr;                                             \
             for (size_t i = 0; i < n; i++) {                                   \
-                const uint64_t r = fwtRand_(&seed);                            \
+                const uint64_t r = dkSplitmix64Next(&seed);                    \
                 /* floats: |sum| <= 400000, well inside float's 2^24 */        \
                 values[i] = FLOATING ? (VT)((int64_t)(r % 21) - 10) : (VT)r;   \
                 (void)fenwick##T##Set(&bySet, i, values[i]);                   \

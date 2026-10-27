@@ -154,12 +154,8 @@ FENWICK_ALGO_(AlgoLowerBound_)(const FENWICK_VALUE_TYPE *tree, uint64_t count,
         return UINT64_MAX;
     }
 
-    uint64_t bitMask = 1;
-    while (bitMask <= count) {
-        bitMask <<= 1;
-    }
-
-    bitMask >>= 1;
+    /* the highest power of two within the count: the first step down */
+    uint64_t bitMask = stdc_bit_floor(count);
     uint64_t pos = 0;
     FENWICK_VALUE_TYPE sum = 0;
     for (; bitMask > 0; bitMask >>= 1) {
