@@ -850,7 +850,7 @@ int strDoubleFormatTest(int, char *[]) {
         /* frac * 2^exp must equal |v| bit-for-bit: frac <= 2^53 is
          * exactly representable, so ldexp is a lossless oracle */
         uint64_t rng = 0xA5A5A5A55A5A5A5AULL;
-#define FE_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+#define FE_NEXT() dkXorshift64Next(&rng)
         const double pinned[] = {1.0,  2.0,    0.5, DBL_MIN,  DBL_MAX, 5e-324,
                                  1e17, 1e-300, 0.1, 6.25e-310 /* denormal */};
         for (size_t t = 0; t < 20000 + countof(pinned); t++) {
@@ -884,7 +884,7 @@ int strDoubleFormatTest(int, char *[]) {
          * catches a wrong power table or bump-loop overflow instantly,
          * without waiting for a roundtrip sweep to trip over it. */
         uint64_t rng = 0xDEADBEEFCAFEF00DULL;
-#define ARM_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+#define ARM_NEXT() dkXorshift64Next(&rng)
         int32_t armChecked64 = 0;
         int32_t armChecked128 = 0;
         for (size_t t = 0; t < 20000; t++) {
@@ -1291,7 +1291,7 @@ int strDoubleFormatTest(int, char *[]) {
         /* Deterministic per-dispatch-path corpora so scale/estimate
          * changes are measurable in isolation from wall-clock noise */
         uint64_t rng = 0x9E3779B97F4A7C15ULL;
-#define SDF_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+#define SDF_NEXT() dkXorshift64Next(&rng)
         constexpr int SDF_CORPUS = 4096;
         static double corpus64[SDF_CORPUS];
         static double corpus128[SDF_CORPUS];

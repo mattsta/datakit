@@ -1589,16 +1589,6 @@ static int dbCanonMutations_(const char *n, dbCanonTally_ *tally) {
     return err;
 }
 
-/* xorshift64: a deterministic generator for the real-shaped corpus. */
-static uint64_t dbCanonNext_(uint64_t *state) {
-    uint64_t x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *state = x;
-    return x;
-}
-
 /* Exact-value oracle for the numeric order, built from bit patterns rather
  * than floating-point arithmetic.  A finite value is (-1)^negative *
  * mantissa * 2^exponent, zero is never negative, and the ranks place -inf
@@ -4365,7 +4355,7 @@ int databoxTest(int, char *[]) {
         char s[64];
         for (int i = 0; i < 20000; i++) {
             size_t at = 0;
-            const uint64_t r = dbCanonNext_(&state);
+            const uint64_t r = dkXorshift64Next(&state);
             if (r & 1) {
                 s[at++] = '-';
             }
@@ -4375,16 +4365,16 @@ int databoxTest(int, char *[]) {
             if (intDigits == 0) {
                 s[at++] = '0';
             } else {
-                s[at++] = (char)('1' + dbCanonNext_(&state) % 9);
+                s[at++] = (char)('1' + dkXorshift64Next(&state) % 9);
                 for (uint32_t k = 1; k < intDigits; k++) {
-                    s[at++] = (char)('0' + dbCanonNext_(&state) % 10);
+                    s[at++] = (char)('0' + dkXorshift64Next(&state) % 10);
                 }
             }
 
             s[at++] = '.';
             const uint32_t fracDigits = 1 + (uint32_t)((r >> 8) % 17);
             for (uint32_t k = 0; k < fracDigits; k++) {
-                s[at++] = (char)('0' + dbCanonNext_(&state) % 10);
+                s[at++] = (char)('0' + dkXorshift64Next(&state) % 10);
             }
 
             err += dbCanonCheck_(s, at, false, &tally);

@@ -2260,19 +2260,10 @@ static databox *mwArm(databoxBig *b) {
     return (databox *)b;
 }
 
-static uint64_t mwRand(uint64_t *s) {
-    uint64_t x = *s;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *s = x;
-    return x;
-}
-
 /* A random 96- or 128-bit value of either sign. */
 static mwInt mwRandWide(uint64_t *rng) {
-    const uint64_t hi = mwRand(rng);
-    const uint64_t lo = mwRand(rng);
+    const uint64_t hi = dkXorshift64Next(rng);
+    const uint64_t lo = dkXorshift64Next(rng);
     const unsigned width = (hi & 2) ? 95 : 127;
     __uint128_t mag =
         (((__uint128_t)hi << 64) | lo) & ((((__uint128_t)1) << width) - 1);
@@ -2340,7 +2331,7 @@ static void mwShuffle(size_t *order, const size_t n, uint64_t *rng) {
     }
 
     for (size_t i = n; i > 1; i--) {
-        const size_t j = mwRand(rng) % i;
+        const size_t j = dkXorshift64Next(rng) % i;
         const size_t t = order[i - 1];
         order[i - 1] = order[j];
         order[j] = t;
@@ -3249,8 +3240,8 @@ static const char *const mxModeName[] = {"normal", "extended", "mixed"};
 
 /* A random 64-bit integer of either sign. */
 static mwInt mxRandNarrow(uint64_t *rng) {
-    const uint64_t r = mwRand(rng);
-    if (mwRand(rng) & 1) {
+    const uint64_t r = dkXorshift64Next(rng);
+    if (dkXorshift64Next(rng) & 1) {
         return mwSmall((int64_t)(r | ((uint64_t)1 << 63)));
     }
 
@@ -3675,7 +3666,7 @@ static int32_t mxDrainOrders(const char *where, const flexCapSizeLimit limit,
 
             while (multimapCount(m)) {
                 const int64_t pos =
-                    (int64_t)(mwRand(&order) % multimapCount(m));
+                    (int64_t)(dkXorshift64Next(&order) % multimapCount(m));
                 if (!multimapDeleteByPosition(&m, pos)) {
                     ERR("%s drain order %" PRIu64 ": DeleteByPosition(%" PRId64
                         ") failed with %zu rows left",
@@ -7940,7 +7931,7 @@ int multimapTest(int, char *[]) {
          * quickly; tier coverage is asserted so this can't silently
          * regress into single-tier testing. */
         uint64_t rng = 0x243F6A8885A308D3ULL;
-#define SOAK_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+#define SOAK_NEXT() dkXorshift64Next(&rng)
         enum { SHADOW_MAX = 4200, KEY_RANGE = 4000, FILL = 3000 };
         static int64_t shKey[SHADOW_MAX];
         static int64_t shVal[SHADOW_MAX];

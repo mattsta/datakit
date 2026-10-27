@@ -208,6 +208,21 @@ static bool dkRandomTestForkedNextWord(uint64_t *childWord,
 int dkRandomTest(int, char *[]) {
     int err = 0;
 
+    TEST("dkXorshift64Next / dkXorshift32Next replay Marsaglia's xorshift") {
+        /* From 1, worked by hand: 1 ^ 1<<13 = 8193; ^ >>7 = 8257;
+         * ^ <<17 = 1082269761.  32-bit: 8193; ^ >>17 = 8193; ^ <<5 =
+         * 270369. */
+        uint64_t s64 = 1;
+        uint32_t s32 = 1;
+        if (dkXorshift64Next(&s64) != UINT64_C(1082269761) ||
+            s64 != UINT64_C(1082269761)) {
+            ERR("xorshift64 from 1 gave %" PRIu64, s64);
+        }
+        if (dkXorshift32Next(&s32) != 270369u || s32 != 270369u) {
+            ERR("xorshift32 from 1 gave %" PRIu32, s32);
+        }
+    }
+
     TEST("dkLcg64Next replays the MMIX LCG") {
         /* From 0 the first value is the increment; then each step matches
          * the recurrence computed in 128 bits and reduced mod 2^64 */

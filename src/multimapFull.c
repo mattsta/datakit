@@ -4196,9 +4196,7 @@ int multimapFullTest(int, char *[]) {
         for (size_t i = 0; i < fwRows; i++) {
             /* A random 96- or 128-bit magnitude above 2^80 whose low 16
              * bits are the row index, so every key is distinct. */
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
+            dkXorshift64Next(&s);
             const unsigned width = (s & 2) ? 95 : 127;
             const __uint128_t mask = ((__uint128_t)1 << width) - 1;
             __uint128_t mag = ((__uint128_t)s << 64) & mask;

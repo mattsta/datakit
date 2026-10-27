@@ -958,10 +958,7 @@ static int test_multilruP_mixed_operations(int, char *[]) {
 
     for (int op = 0; op < 500; op++) {
         /* Simple xorshift PRNG */
-        xorshift ^= xorshift << 13;
-        xorshift ^= xorshift >> 7;
-        xorshift ^= xorshift << 17;
-        int choice = xorshift % 100;
+        int choice = dkXorshift64Next(&xorshift) % 100;
 
         if (choice < 40 && handleCount < 100) {
             /* INSERT (40%) */

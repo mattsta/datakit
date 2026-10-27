@@ -3746,9 +3746,7 @@ static void *dkGateWriterMain_(void *arg) {
             continue;
         }
         next += DK_GATE_WRITER_PACE_NS;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
+        dkXorshift64Next(&x);
         if (w->converted) {
             dkGateSeqAppend_(x);
         } else {
@@ -11695,10 +11693,7 @@ static int dkTestClusterE2EReplayProtectionTest(int, char *[]) {
     uint32_t prng = 0xD41D7E57u;
     uint64_t valid_success = 0;
     for (size_t i = 0; i < D4_VALID_INGESTS; i++) {
-        prng ^= prng << 13;
-        prng ^= prng >> 17;
-        prng ^= prng << 5;
-        const int kidx = (int)(prng % 3u);
+        const int kidx = (int)(dkXorshift32Next(&prng) % 3u);
         const hmacKeyId kid = KIDS[kidx];
         const uint64_t seq = (uint64_t)(i + 1u);
 
@@ -11947,13 +11942,6 @@ cleanup_after_phase1:
  * Structure-aware envelope fuzz per algorithm.
  * Every single-bit mutation across the wire MUST be rejected.
  * ==================================================================== */
-/* The next value of a 32-bit xorshift generator */
-static uint32_t envFuzzRngNext_(uint32_t *rng) {
-    *rng ^= *rng << 13;
-    *rng ^= *rng >> 17;
-    *rng ^= *rng << 5;
-    return *rng;
-}
 
 static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     int failures = 0;
@@ -11995,7 +11983,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     payload_sizes[8] = 1024;
     payload_sizes[9] = 4096;
     for (size_t i = 10; i < kNumPayloadSizes; i++) {
-        payload_sizes[i] = 1 + (envFuzzRngNext_(&rng) % 4096u);
+        payload_sizes[i] = 1 + (dkXorshift32Next(&rng) % 4096u);
     }
 
     uint64_t total_mut[8] = {};

@@ -225,16 +225,6 @@ static bool testOracleCallback(timerWheel *, timerWheelId, void *) {
     return true;
 }
 
-/* xorshift64 for reproducible differential workloads */
-static uint64_t testOracleRand(uint64_t *state) {
-    uint64_t x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *state = x;
-    return x;
-}
-
 /* Equivalent callbacks for multiTimer comparison */
 static bool mtCountingCallback(multiTimer *, multiTimerId id,
                                void *clientData) {
@@ -1834,59 +1824,60 @@ int timerWheelTest(int, char *[]) {
             const bool fineSteps = (round & 1) != 0;
 
             for (int step = 0; step < steps; step++) {
-                const uint64_t r = testOracleRand(&rng) % 100;
+                const uint64_t r = dkXorshift64Next(&rng) % 100;
                 if (r < 40) {
                     uint64_t delay;
-                    switch (testOracleRand(&rng) % 5) {
+                    switch (dkXorshift64Next(&rng) % 5) {
                     case 0:
-                        delay = testOracleRand(&rng) % 3000;
+                        delay = dkXorshift64Next(&rng) % 3000;
                         break;
                     case 1:
-                        delay = testOracleRand(&rng) % 300'000;
+                        delay = dkXorshift64Next(&rng) % 300'000;
                         break;
                     case 2:
-                        delay = 200'000 + testOracleRand(&rng) % 20000000;
+                        delay = 200'000 + dkXorshift64Next(&rng) % 20000000;
                         break;
                     case 3:
-                        delay = testOracleRand(&rng) % UINT64_C(1200000000);
+                        delay = dkXorshift64Next(&rng) % UINT64_C(1200000000);
                         break;
                     default:
                         /* Beyond the wheels' ~18.6h coverage */
                         delay = UINT64_C(70000000000) +
-                                testOracleRand(&rng) % UINT64_C(10000000000);
+                                dkXorshift64Next(&rng) % UINT64_C(10000000000);
                         break;
                     }
                     const uint64_t repeat =
-                        (testOracleRand(&rng) & 63) == 0
-                            ? 50000 + testOracleRand(&rng) % 500'000
+                        (dkXorshift64Next(&rng) & 63) == 0
+                            ? 50000 + dkXorshift64Next(&rng) % 500'000
                             : 0;
                     const timerWheelId id = timerWheelRegister(
                         tw, delay, repeat, testOracleCallback, nullptr);
                     if (nids < countof(ids)) {
                         ids[nids++] = id;
                     } else {
-                        ids[testOracleRand(&rng) % nids] = id;
+                        ids[dkXorshift64Next(&rng) % nids] = id;
                     }
                 } else if (r < 55 && nids) {
-                    timerWheelUnregister(tw, ids[testOracleRand(&rng) % nids]);
+                    timerWheelUnregister(tw,
+                                         ids[dkXorshift64Next(&rng) % nids]);
                 } else {
                     uint64_t advance;
                     if (fineSteps) {
-                        advance = testOracleRand(&rng) % 1000;
+                        advance = dkXorshift64Next(&rng) % 1000;
                     } else {
-                        switch (testOracleRand(&rng) % 4) {
+                        switch (dkXorshift64Next(&rng) % 4) {
                         case 0:
-                            advance = testOracleRand(&rng) % 1000;
+                            advance = dkXorshift64Next(&rng) % 1000;
                             break;
                         case 1:
-                            advance = testOracleRand(&rng) % 300'000;
+                            advance = dkXorshift64Next(&rng) % 300'000;
                             break;
                         case 2:
-                            advance = testOracleRand(&rng) % 3000000;
+                            advance = dkXorshift64Next(&rng) % 3000000;
                             break;
                         default:
                             advance =
-                                testOracleRand(&rng) % UINT64_C(400000000);
+                                dkXorshift64Next(&rng) % UINT64_C(400000000);
                             break;
                         }
                     }
@@ -2536,11 +2527,11 @@ int timerWheelTest(int, char *[]) {
         for (size_t s = 0; s < countof(shapes); s++) {
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < shapes[s].nearCount; i++) {
-                const uint64_t d = 1000 + testOracleRand(&rng) % 254000;
+                const uint64_t d = 1000 + dkXorshift64Next(&rng) % 254000;
                 timerWheelRegister(tw, d, d, testOracleCallback, nullptr);
             }
             for (size_t i = 0; i < shapes[s].idleCount; i++) {
-                const uint64_t d = 20000000 + testOracleRand(&rng) % 20000000;
+                const uint64_t d = 20000000 + dkXorshift64Next(&rng) % 20000000;
                 timerWheelRegister(tw, d, d, testOracleCallback, nullptr);
             }
 

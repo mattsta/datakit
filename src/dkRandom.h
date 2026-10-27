@@ -72,6 +72,23 @@ static inline uint64_t dkLcg64Next(uint64_t *state) {
     return *state;
 }
 
+/* Marsaglia's xorshift generators (shifts 13, 7, 17 on 64 bits; 13, 17, 5
+ * on 32), the other replayable streams tests use: advance '*state' and
+ * return it.  A zero state stays zero, so seed with anything else. */
+static inline uint64_t dkXorshift64Next(uint64_t *state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    return *state;
+}
+
+static inline uint32_t dkXorshift32Next(uint32_t *state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    return *state;
+}
+
 #ifdef DATAKIT_TEST
 int dkRandomTest(int argc, char *argv[]);
 #endif

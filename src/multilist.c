@@ -4036,7 +4036,7 @@ int multilistTest(int, char *[]) {
          * across Small/Medium/Full; tier coverage is asserted so the
          * harness can never silently regress into single-tier testing. */
         uint64_t rng = 0x9E3779B97F4A7C15ULL;
-#define FUZZ_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+#define FUZZ_NEXT() dkXorshift64Next(&rng)
         constexpr int SHADOW_MAX = 512;
         static int64_t shadow[SHADOW_MAX];
         int32_t shadowCount = 0;

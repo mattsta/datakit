@@ -16,7 +16,7 @@
 #include <sys/types.h>
 
 /* Deterministic xorshift so failures reproduce */
-#define BM_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+#define BM_NEXT() dkXorshift64Next(&rng)
 
 /* Build a bigmath from a full 128-bit oracle value: hi << 64 | lo */
 static void bigmathFromU128(bigmath *b, const __uint128_t v) {
