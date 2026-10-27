@@ -494,26 +494,9 @@ const hmacHashAlgo hmacAlgoBLAKE3 = {
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/hmacTestVectors.h"
-#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdlib.h>
-
-static int digestEqual(const uint8_t *a, const uint8_t *b, size_t n) {
-    return memcmp(a, b, n) == 0;
-}
-
-/* Reports the mismatch and returns its failure count (1) for the caller to
- * add to its own */
-static int reportMismatch(const char *name, const uint8_t *got,
-                          const uint8_t *expected, size_t n) {
-    char gotHex[129], expHex[129];
-    StrBytesToHex(got, n, gotHex);
-    StrBytesToHex(expected, n, expHex);
-    int err = 0;
-    ERR("vector '%s': got %s, expected %s", name, gotHex, expHex);
-    return err;
-}
 
 static void runBench(size_t payload, uint32_t iters) {
     cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(payload);
@@ -542,9 +525,7 @@ int hmacTest(int, char *[]) {
             uint8_t out[32];
             hmacCompute(&hmacAlgoSHA256, v->key, v->key_len, v->data,
                         v->data_len, out);
-            if (!digestEqual(out, v->expected, 32)) {
-                err += reportMismatch(v->name, out, v->expected, 32);
-            }
+            TEST_BYTES(err, out, v->expected, 32, "vector '%s'", v->name);
         }
     }
 
@@ -584,12 +565,8 @@ int hmacTest(int, char *[]) {
             }
             hmacFinal(&ctx, streamed);
 
-            if (!digestEqual(oneShot, streamed, 32)) {
-                char nameBuf[64];
-                snprintf(nameBuf, sizeof(nameBuf), "random trial %u n=%zu",
-                         trial, n);
-                err += reportMismatch(nameBuf, streamed, oneShot, 32);
-            }
+            TEST_BYTES(err, streamed, oneShot, 32, "random trial %u n=%zu",
+                       trial, n);
         }
     }
 
@@ -612,9 +589,8 @@ int hmacTest(int, char *[]) {
             }
             hmacFinal(&ctx, incremental);
 
-            if (!digestEqual(oneShot, incremental, 32)) {
-                err += reportMismatch(v->name, incremental, oneShot, 32);
-            }
+            TEST_BYTES(err, incremental, oneShot, 32, "incremental '%s'",
+                       v->name);
         }
     }
 
@@ -697,7 +673,7 @@ int hmacTest(int, char *[]) {
                     sizeof(data) - 1, out_a);
         hmacCompute(&hmacAlgoSHA256, key_b, sizeof(key_b), data,
                     sizeof(data) - 1, out_b);
-        if (digestEqual(out_a, out_b, 32)) {
+        if (memcmp(out_a, out_b, 32) == 0) {
             ERR("HMAC outputs equal under different keys (avalanche failure)");
         }
     }
@@ -712,9 +688,7 @@ int hmacTest(int, char *[]) {
                     out_first);
         hmacCompute(&hmacAlgoSHA256, key, sizeof(key), data, sizeof(data) - 1,
                     out_second);
-        if (!digestEqual(out_first, out_second, 32)) {
-            ERR("HMAC nondeterministic across identical calls");
-        }
+        TEST_BYTES(err, out_second, out_first, 32, "HMAC of identical calls");
     }
 
     TEST("performance bench") {
@@ -742,9 +716,8 @@ int hmacTest(int, char *[]) {
                            v->key, v->key_len);
             hmacComputeWithKey(&prep, v->data, v->data_len, fromPrepared);
 
-            if (!digestEqual(fromCompute, fromPrepared, 32)) {
-                err += reportMismatch(v->name, fromPrepared, fromCompute, 32);
-            }
+            TEST_BYTES(err, fromPrepared, fromCompute, 32, "prepared '%s'",
+                       v->name);
         }
     }
 
@@ -771,10 +744,8 @@ int hmacTest(int, char *[]) {
             hmacCompute(&hmacAlgoSHA256, key, sizeof(key), msg, sizeof(msg),
                         expected);
             hmacComputeWithKey(&prep, msg, sizeof(msg), got);
-            if (!digestEqual(expected, got, 32)) {
-                char nameBuf[64];
-                snprintf(nameBuf, sizeof(nameBuf), "trial %u", trial);
-                err += reportMismatch(nameBuf, got, expected, 32);
+            if (memcmp(expected, got, 32) != 0) {
+                TEST_BYTES(err, got, expected, 32, "trial %u", trial);
                 break;
             }
         }
@@ -935,13 +906,9 @@ int hmacTest(int, char *[]) {
             }
             hmacComputeBatch4(preps, data, lens, got);
             for (uint32_t i = 0; i < 4u; i++) {
-                if (memcmp(expected[i], got[i], 32) != 0) {
-                    char eh[65], gh[65];
-                    StrBytesToHex(expected[i], 32, eh);
-                    StrBytesToHex(got[i], 32, gh);
-                    ERR("case %zu lane %u (len=%zu): batch %s, serial %s", c, i,
-                        lens[i], gh, eh);
-                }
+                TEST_BYTES(err, got[i], expected[i], 32,
+                           "batch vs serial, case %zu lane %u (len=%zu)", c, i,
+                           lens[i]);
             }
         }
     }

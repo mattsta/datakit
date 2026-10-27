@@ -333,7 +333,6 @@ void sha256ShaNiCompressBlocksMulti4(uint32_t states[4][8],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
-#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdio.h>
@@ -346,10 +345,6 @@ defcleanerName(uint8_t *, zfree, U8);
 static void shaniHash(const uint8_t *data, size_t len,
                       uint8_t out[SHA256_DIGEST_LEN]) {
     sha256HashWith(sha256ShaNiCompressBlocks, data, len, out);
-}
-
-static int shaniEqual(const uint8_t *a, const uint8_t *b) {
-    return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
 }
 
 int sha256ShaNiTest(int, char *[]) {
@@ -372,12 +367,8 @@ int sha256ShaNiTest(int, char *[]) {
             uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
             sha256Hash(s, n, ref);
             shaniHash((const uint8_t *)s, n, got);
-            if (!shaniEqual(ref, got)) {
-                char rh[65], gh[65];
-                StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
-                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
-                ERR("stub vector[%zu] '%s': got %s, ref %s", i, s, gh, rh);
-            }
+            TEST_BYTES(err, got, ref, SHA256_DIGEST_LEN,
+                       "stub vector[%zu] '%s'", i, s);
         }
     }
 
@@ -399,12 +390,8 @@ int sha256ShaNiTest(int, char *[]) {
             uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
             sha256Hash(s, n, ref);
             shaniHash((const uint8_t *)s, n, got);
-            if (!shaniEqual(ref, got)) {
-                char rh[65], gh[65];
-                StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
-                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
-                ERR("vector[%zu] '%s': got %s, ref %s", i, s, gh, rh);
-            }
+            TEST_BYTES(err, got, ref, SHA256_DIGEST_LEN, "vector[%zu] '%s'", i,
+                       s);
         }
     }
 
@@ -431,13 +418,9 @@ int sha256ShaNiTest(int, char *[]) {
             uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
             sha256Hash(buf, n, ref);
             shaniHash(buf, n, got);
-            if (!shaniEqual(ref, got)) {
-                if (mismatches++ < 4) {
-                    char rh[65], gh[65];
-                    StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
-                    StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
-                    ERR("trial %u n=%zu: got %s, ref %s", t, n, gh, rh);
-                }
+            if (memcmp(ref, got, SHA256_DIGEST_LEN) != 0 && mismatches++ < 4) {
+                TEST_BYTES(err, got, ref, SHA256_DIGEST_LEN, "trial %u n=%zu",
+                           t, n);
             }
         }
         if (mismatches) {

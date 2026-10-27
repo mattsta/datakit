@@ -260,29 +260,12 @@ void sha256HashWith(sha256CompressBlocksFn *compress, const void *data_,
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/sha256TestVectors.h"
-#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdlib.h>
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
-
-static int hashEqual(const uint8_t *a, const uint8_t *b) {
-    return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
-}
-
-/* Report a digest mismatch and count it in the caller's *errCount (ERR
- * counts into the 'err' in scope, here a local) */
-static void reportMismatch(const char *name, const uint8_t *got,
-                           const uint8_t *expected, int *errCount) {
-    char gotHex[65], expHex[65];
-    StrBytesToHex(got, SHA256_DIGEST_LEN, gotHex);
-    StrBytesToHex(expected, SHA256_DIGEST_LEN, expHex);
-    int err = 0;
-    ERR("vector '%s': got %s, expected %s", name, gotHex, expHex);
-    *errCount += err;
-}
 
 int sha256Test(int, char *[]) {
     int err = 0;
@@ -292,9 +275,11 @@ int sha256Test(int, char *[]) {
         const uint8_t zeros[SHA256_DIGEST_LEN] = {};
         const uint8_t ones[SHA256_DIGEST_LEN] = {1};
         int counted = 0;
-        reportMismatch("probe: an intentional mismatch", zeros, ones, &counted);
+        TEST_BYTES(counted, zeros, ones, SHA256_DIGEST_LEN,
+                   "probe %d: an intentional mismatch", 1);
+        TEST_BYTES(counted, ones, ones, SHA256_DIGEST_LEN, "probe: equal");
         if (counted != 1) {
-            ERR("reportMismatch counted %d errors, want 1", counted);
+            ERR("TEST_BYTES counted %d failures, want 1", counted);
         }
     }
 
@@ -320,9 +305,8 @@ int sha256Test(int, char *[]) {
             const sha256TestVector *v = &sha256TestVectorsTable[i];
             uint8_t out[SHA256_DIGEST_LEN];
             sha256Hash(v->input, v->input_len, out);
-            if (!hashEqual(out, v->expected)) {
-                reportMismatch(v->name, out, v->expected, &err);
-            }
+            TEST_BYTES(err, out, v->expected, SHA256_DIGEST_LEN, "vector '%s'",
+                       v->name);
         }
     }
 
@@ -336,9 +320,7 @@ int sha256Test(int, char *[]) {
             0xcd, 0xc7, 0x6e, 0x5c, 0x99, 0x14, 0xfb, 0x92, 0x81, 0xa1, 0xc7,
             0xe2, 0x84, 0xd7, 0x3e, 0x67, 0xf1, 0x80, 0x9a, 0x48, 0xa4, 0x97,
             0x20, 0x0e, 0x04, 0x6d, 0x39, 0xcc, 0xc7, 0x11, 0x2c, 0xd0};
-        if (!hashEqual(out, expected)) {
-            reportMismatch("1M 'a's", out, expected, &err);
-        }
+        TEST_BYTES(err, out, expected, SHA256_DIGEST_LEN, "1M 'a's");
     }
 
     TEST("boundary sizes") {
@@ -373,11 +355,8 @@ int sha256Test(int, char *[]) {
             }
             sha256Final(&ctx, streamed);
 
-            if (!hashEqual(oneShot, streamed)) {
-                char nameBuf[64];
-                snprintf(nameBuf, sizeof(nameBuf), "stream@%zu", n);
-                reportMismatch(nameBuf, streamed, oneShot, &err);
-            }
+            TEST_BYTES(err, streamed, oneShot, SHA256_DIGEST_LEN, "stream@%zu",
+                       n);
         }
     }
 
@@ -408,12 +387,8 @@ int sha256Test(int, char *[]) {
             }
             sha256Final(&ctx, streamed);
 
-            if (!hashEqual(oneShot, streamed)) {
-                char nameBuf[64];
-                snprintf(nameBuf, sizeof(nameBuf), "random trial %u n=%zu",
-                         trial, n);
-                reportMismatch(nameBuf, streamed, oneShot, &err);
-            }
+            TEST_BYTES(err, streamed, oneShot, SHA256_DIGEST_LEN,
+                       "random trial %u n=%zu", trial, n);
         }
     }
 

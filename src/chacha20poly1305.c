@@ -1177,28 +1177,6 @@ bool chacha20poly1305OpenStreamFinal(chacha20poly1305StreamCtx *ctx,
 defcleanerName(uint8_t *, zfree, Bytes);
 defcleanerName(uint32_t *, zfree, Words);
 
-static int bytesEqual(const uint8_t *a, const uint8_t *b, size_t n) {
-    return memcmp(a, b, n) == 0;
-}
-
-static void printHexLine(const char *label, const uint8_t *p, size_t n) {
-    printf("%s", label);
-    for (size_t i = 0; i < n; i++) {
-        printf("%02x", p[i]);
-    }
-    printf("\n");
-}
-
-static int reportMismatch(const char *name, const uint8_t *got,
-                          const uint8_t *expected, size_t n) {
-    int err = 0;
-    ERR("'%s' mismatch (%zu bytes)", name, n);
-    printHexLine("  got: ", got, n);
-    printHexLine("  exp: ", expected, n);
-    fflush(stdout);
-    return err;
-}
-
 /* ---- RFC 8439 §2.4.2 ChaCha20 encryption test vector ---------------- */
 
 static constexpr uint8_t rfc_2_4_2_key[32] = {
@@ -1444,10 +1422,8 @@ int chacha20poly1305Test(int, char *[]) {
         uint8_t ct[114];
         chacha20XorStream(rfc_2_4_2_key, 1, rfc_2_4_2_nonce,
                           rfc_2_4_2_plaintext, ct, sizeof(ct));
-        if (!bytesEqual(ct, rfc_2_4_2_ciphertext, sizeof(ct))) {
-            err += reportMismatch("2.4.2 ciphertext", ct, rfc_2_4_2_ciphertext,
-                                  sizeof(ct));
-        }
+        TEST_BYTES(err, ct, rfc_2_4_2_ciphertext, sizeof(ct),
+                   "2.4.2 ciphertext");
     }
 
     TEST("RFC 8439 §2.5.2: Poly1305 MAC") {
@@ -1456,17 +1432,13 @@ int chacha20poly1305Test(int, char *[]) {
         poly1305Update(&st, rfc_2_5_2_msg, sizeof(rfc_2_5_2_msg));
         uint8_t tag[16];
         poly1305Final(&st, tag);
-        if (!bytesEqual(tag, rfc_2_5_2_tag, 16)) {
-            err += reportMismatch("2.5.2 tag", tag, rfc_2_5_2_tag, 16);
-        }
+        TEST_BYTES(err, tag, rfc_2_5_2_tag, 16, "2.5.2 tag");
     }
 
     TEST("RFC 8439 §2.6.2: Poly1305 key generation from ChaCha20") {
         uint8_t otk[32];
         deriveOnetimeKey(rfc_2_6_2_key, rfc_2_6_2_nonce, otk);
-        if (!bytesEqual(otk, rfc_2_6_2_expected_otk, 32)) {
-            err += reportMismatch("2.6.2 otk", otk, rfc_2_6_2_expected_otk, 32);
-        }
+        TEST_BYTES(err, otk, rfc_2_6_2_expected_otk, 32, "2.6.2 otk");
     }
 
     TEST("RFC 8439 §2.8.2: AEAD seal vector") {
@@ -1475,13 +1447,9 @@ int chacha20poly1305Test(int, char *[]) {
                                    rfc_2_8_2_aad, sizeof(rfc_2_8_2_aad),
                                    rfc_2_8_2_plaintext,
                                    sizeof(rfc_2_8_2_plaintext), ct, tag);
-        if (!bytesEqual(ct, rfc_2_8_2_ciphertext, sizeof(ct))) {
-            err += reportMismatch("2.8.2 ciphertext", ct, rfc_2_8_2_ciphertext,
-                                  sizeof(ct));
-        }
-        if (!bytesEqual(tag, rfc_2_8_2_tag, 16)) {
-            err += reportMismatch("2.8.2 tag", tag, rfc_2_8_2_tag, 16);
-        }
+        TEST_BYTES(err, ct, rfc_2_8_2_ciphertext, sizeof(ct),
+                   "2.8.2 ciphertext");
+        TEST_BYTES(err, tag, rfc_2_8_2_tag, 16, "2.8.2 tag");
 
         /* Open round-trip on the same vector. */
         uint8_t pt[114];
@@ -1491,10 +1459,7 @@ int chacha20poly1305Test(int, char *[]) {
         if (!ok) {
             ERR("2.8.2 Open returned false on its own seal output");
         }
-        if (!bytesEqual(pt, rfc_2_8_2_plaintext, sizeof(pt))) {
-            err += reportMismatch("2.8.2 plaintext", pt, rfc_2_8_2_plaintext,
-                                  sizeof(pt));
-        }
+        TEST_BYTES(err, pt, rfc_2_8_2_plaintext, sizeof(pt), "2.8.2 plaintext");
     }
 
     TEST("RFC 8439 Appendix A.5: AEAD vector") {
@@ -1502,13 +1467,8 @@ int chacha20poly1305Test(int, char *[]) {
         (void)chacha20poly1305Seal(rfc_a5_key, rfc_a5_nonce, rfc_a5_aad,
                                    sizeof(rfc_a5_aad), rfc_a5_plaintext,
                                    sizeof(rfc_a5_plaintext), ct, tag);
-        if (!bytesEqual(ct, rfc_a5_ciphertext, sizeof(ct))) {
-            err += reportMismatch("A.5 ciphertext", ct, rfc_a5_ciphertext,
-                                  sizeof(ct));
-        }
-        if (!bytesEqual(tag, rfc_a5_tag, 16)) {
-            err += reportMismatch("A.5 tag", tag, rfc_a5_tag, 16);
-        }
+        TEST_BYTES(err, ct, rfc_a5_ciphertext, sizeof(ct), "A.5 ciphertext");
+        TEST_BYTES(err, tag, rfc_a5_tag, 16, "A.5 tag");
 
         uint8_t pt[265];
         bool ok =
@@ -1517,10 +1477,7 @@ int chacha20poly1305Test(int, char *[]) {
         if (!ok) {
             ERR("A.5 Open returned false");
         }
-        if (!bytesEqual(pt, rfc_a5_plaintext, sizeof(pt))) {
-            err += reportMismatch("A.5 plaintext", pt, rfc_a5_plaintext,
-                                  sizeof(pt));
-        }
+        TEST_BYTES(err, pt, rfc_a5_plaintext, sizeof(pt), "A.5 plaintext");
     }
 
     TEST("Round-trip (no AAD) across size spread") {

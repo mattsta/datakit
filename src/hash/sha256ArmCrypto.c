@@ -688,7 +688,6 @@ void sha256ArmCryptoCompressBlocksMulti4(uint32_t states[4][8],
 #include "ctest.h"
 #include "datakit.h"
 #include "dkEndian.h" /* dkStoreBe32, dkStoreBe64 */
-#include "str.h"      /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdio.h>
@@ -702,10 +701,6 @@ defcleanerName(uint8_t *, zfree, U8);
 static void sha256ArmCryptoHash(const void *data, size_t len,
                                 uint8_t out[SHA256_DIGEST_LEN]) {
     sha256HashWith(sha256ArmCryptoCompressBlocks, data, len, out);
-}
-
-static int hashEqual(const uint8_t *a, const uint8_t *b) {
-    return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
 }
 
 int sha256ArmCryptoTest(int, char *[]) {
@@ -726,12 +721,8 @@ int sha256ArmCryptoTest(int, char *[]) {
             uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
             sha256Hash(s, n, ref);
             sha256ArmCryptoHash((const uint8_t *)s, n, got);
-            if (!hashEqual(ref, got)) {
-                char rh[65], gh[65];
-                StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
-                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
-                ERR("stub vector[%zu] '%s': got %s, ref %s", i, s, gh, rh);
-            }
+            TEST_BYTES(err, got, ref, SHA256_DIGEST_LEN,
+                       "stub vector[%zu] '%s'", i, s);
         }
     }
 
@@ -761,13 +752,8 @@ int sha256ArmCryptoTest(int, char *[]) {
             uint8_t got[SHA256_DIGEST_LEN];
             sha256Hash(cases[i].input, cases[i].len, expected);
             sha256ArmCryptoHash(cases[i].input, cases[i].len, got);
-            if (!hashEqual(got, expected)) {
-                char gh[65], eh[65];
-                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
-                StrBytesToHex(expected, SHA256_DIGEST_LEN, eh);
-                ERR("vector len=%zu: got %s, expected %s", cases[i].len, gh,
-                    eh);
-            }
+            TEST_BYTES(err, got, expected, SHA256_DIGEST_LEN, "vector len=%zu",
+                       cases[i].len);
         }
     }
 
@@ -791,15 +777,10 @@ int sha256ArmCryptoTest(int, char *[]) {
             uint8_t crypto[SHA256_DIGEST_LEN];
             sha256Hash(buf, n, portable);
             sha256ArmCryptoHash(buf, n, crypto);
-            if (!hashEqual(portable, crypto)) {
-                mismatches++;
-                if (mismatches <= 3) {
-                    char gh[65], eh[65];
-                    StrBytesToHex(crypto, SHA256_DIGEST_LEN, gh);
-                    StrBytesToHex(portable, SHA256_DIGEST_LEN, eh);
-                    ERR("mismatch at iter %u (n=%zu): got %s, expected %s", t,
-                        n, gh, eh);
-                }
+            if (memcmp(portable, crypto, SHA256_DIGEST_LEN) != 0 &&
+                ++mismatches <= 3) {
+                TEST_BYTES(err, crypto, portable, SHA256_DIGEST_LEN,
+                           "iter %u (n=%zu)", t, n);
             }
         }
 
@@ -913,16 +894,10 @@ int sha256ArmCryptoTest(int, char *[]) {
                     dkStoreBe32(got + i * 4, st[lane][i]);
                 }
 
-                if (!hashEqual(got, ref[lane])) {
-                    mismatches++;
-                    if (mismatches <= 3) {
-                        char gh[65], eh[65];
-                        StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
-                        StrBytesToHex(ref[lane], SHA256_DIGEST_LEN, eh);
-                        ERR("multi4 mismatch iter=%u lane=%u nb=%zu: "
-                            "got %s, ref %s",
-                            t, lane, nb, gh, eh);
-                    }
+                if (memcmp(got, ref[lane], SHA256_DIGEST_LEN) != 0 &&
+                    ++mismatches <= 3) {
+                    TEST_BYTES(err, got, ref[lane], SHA256_DIGEST_LEN,
+                               "multi4 iter=%u lane=%u nb=%zu", t, lane, nb);
                 }
             }
         }

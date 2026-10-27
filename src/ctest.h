@@ -78,6 +78,36 @@ CTEST_INCLUDE_GEN(val)
         }                                                                      \
     } while (0)
 
+/* A line of `label` then the `n` bytes at `p` in hex */
+static inline void ctestPrintHex_(const char *label, const void *p, size_t n) {
+    printf("%s", label);
+    for (size_t i = 0; i < n; i++) {
+        printf("%02x", ((const unsigned char *)p)[i]);
+    }
+    printf("\n");
+}
+
+/* The `n` bytes at `got` must equal those at `want`; a mismatch is
+ * reported, described by the printf format and arguments that follow,
+ * with both sides in hex, and adds one to `failures` (the test's
+ * counter: err or failures) */
+#define TEST_BYTES(failures, got, want, n, ...)                                \
+    do {                                                                       \
+        const void *got_ = (got);                                              \
+        const void *want_ = (want);                                            \
+        const size_t n_ = (n);                                                 \
+        if (memcmp(got_, want_, n_) != 0) {                                    \
+            currentFilename();                                                 \
+            printf("ERROR! ");                                                 \
+            printf(__VA_ARGS__);                                               \
+            printf(": %zu bytes differ\n", n_);                                \
+            ctestPrintHex_("  got:  ", got_, n_);                              \
+            ctestPrintHex_("  want: ", want_, n_);                             \
+            fflush(stdout);                                                    \
+            (failures)++;                                                      \
+        }                                                                      \
+    } while (0)
+
 #define TEST(name)                                                             \
     printf("test — %s\n", name);                                               \
     fflush(stdout);
