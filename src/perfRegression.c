@@ -733,6 +733,28 @@ static void benchMultidict(void) {
     }
     emitRow("multidict", "addNX", 0, n, timeUtilMonotonicSec() - t0);
 
+    /* Byte-based growth with 4 KiB slots (about 150 of these rows each,
+     * where the default holds about 2): what a slot search costs once
+     * slots are long */
+    cleaner(multidictFree) multidict *wide =
+        multidictNew(&multidictTypeExactKey, qdc, 7);
+    multidictEnableByteBasedExpansion(wide, 4096, 16384);
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += multidictAdd(wide, &k, &v);
+    }
+    emitRow("multidict", "addLargeSlots", 0, n, timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        databox v = {};
+        sink += multidictFind(wide, &k, &v);
+    }
+    emitRow("multidict", "findLargeSlots", 0, n, timeUtilMonotonicSec() - t0);
+
     perfContainerSink = sink;
 }
 
@@ -1743,6 +1765,18 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
         sink += multimapAtomReleaseById(ma, &ref);
     }
 
+    /* A reference read back to its value: what every holder of an id pays
+     * to use it (the forward map alone, the same under every index) */
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox ref = {.data.u = ids[i],
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        databox value = {};
+        sink += multimapAtomLookup(ma, &ref, &value);
+        sink += databoxLen(&value);
+    }
+    emitRow(module, "lookupById", 0, n, timeUtilMonotonicSec() - t0);
+
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
@@ -1784,11 +1818,12 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
 }
 
 /* The atom table under each reverse index (the default, hashed, then
- * ordered), then the lowest-first table and the string pool */
+ * ordered and dict), then the lowest-first table and the string pool */
 static void benchMultimapAtom(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
     benchAtomTable("multimapAtomOrdered", MULTIMAP_ATOM_INDEX_ORDERED, keys);
+    benchAtomTable("multimapAtomDict", MULTIMAP_ATOM_INDEX_DICT, keys);
 
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;

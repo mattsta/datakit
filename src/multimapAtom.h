@@ -2,10 +2,10 @@
 
 /* multimapAtom: a reference-counted atom table (interning).  Each distinct
  * value is stored once and named by a small integer id, handed out as a
- * DATABOX_CONTAINER_REFERENCE_EXTERNAL box (a "ref").  Two multimaps hold
- * it: forward {id -> value, refcount} sorted by id, and a reverse index
- * from value to id (multimapAtomIndex below: ids sorted by value, or
- * value hashes with ids).
+ * DATABOX_CONTAINER_REFERENCE_EXTERNAL box (a "ref").  Two maps hold it:
+ * forward {id -> value, refcount}, a multimap sorted by id, and a reverse
+ * index from value to id (multimapAtomIndex below: ids sorted by value,
+ * value hashes with ids, or a multidict).
  *
  * REFERENCES
  * - An Insert creates the atom with one reference.  Retain adds one;
@@ -43,23 +43,29 @@
 
 typedef struct multimapAtom multimapAtom;
 
-/* Ids are below this (the counter's top two bits record the id behaviour
- * and the reverse index) */
-#define MULTIMAP_ATOM_ID_LIMIT ((uint64_t)1 << 62)
+/* Ids are below this (the counter's top three bits record the id
+ * behaviour and the reverse index) */
+#define MULTIMAP_ATOM_ID_LIMIT ((uint64_t)1 << 61)
 
-/* How the table finds a value's id (chosen at creation; neither adds a
- * pointer):
+/* How the table finds a value's id (chosen at creation; the kind costs no
+ * byte):
  * - ORDERED: the reverse rows are ids sorted by value.  A find compares
  *   about log n rows, each through a forward-map lookup of its id (about
- *   log^2 n).  The smaller index.
+ *   log^2 n).  The smallest index.
  * - HASHED: the reverse rows are {hash of the value, id}, sorted by hash.
  *   A find is an integer search for the hash, then one forward lookup per
  *   candidate (normally one): about log n.  About 5 more bytes per atom.
- * Equality is databoxCompare's in both (5, 5.0 and a 128-bit 5 are one
- * value), and the hash never reaches a snapshot: restore rebuilds it. */
+ * - DICT: a multidict from each value to its id.  A find is one hash and
+ *   one slot search, with no forward lookup, but every value is stored a
+ *   second time (in the dict) and the dict adds its slot table: the
+ *   largest index, for tables of short values that are found far more
+ *   often than they are added.
+ * Equality is databoxCompare's in all three (5, 5.0 and a 128-bit 5 are
+ * one value), and no index reaches a snapshot: restore rebuilds it. */
 typedef enum multimapAtomIndex {
     MULTIMAP_ATOM_INDEX_ORDERED = 0,
     MULTIMAP_ATOM_INDEX_HASHED = 1,
+    MULTIMAP_ATOM_INDEX_DICT = 2,
 } multimapAtomIndex;
 
 typedef struct multimapAtomResult {
