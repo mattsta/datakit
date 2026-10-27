@@ -326,6 +326,11 @@ def main(argv: list[str] | None = None) -> int:
         "(candidates for one shared helper)",
     )
     df.add_argument("--min-tokens", type=int, default=40, help="smallest body reported")
+    df.add_argument(
+        "--shape",
+        action="store_true",
+        help="list near-copies (renamed names, other constants) instead",
+    )
     df.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
 
     tb = sub.add_parser(
@@ -1167,7 +1172,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
 
     if args.command == "dupfuncs":
-        return dupfuncs.run(args.repo, tuple(args.paths), args.min_tokens)
+        return dupfuncs.run(args.repo, tuple(args.paths), args.min_tokens, args.shape)
 
     if args.command == "testbytes":
         return testbytes.run(args.repo, tuple(args.paths), args.dry_run)

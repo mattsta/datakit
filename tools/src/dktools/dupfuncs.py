@@ -9,6 +9,12 @@ body of at least ``--min-tokens`` tokens (default 40) that appears at
 two or more definitions is listed with each place it is defined, the
 largest first: each group is a candidate for one shared helper.
 
+With ``--shape`` it lists near-copies instead: bodies that are the same
+once every identifier other than a keyword or standard type is numbered
+by first appearance and every literal is reduced to its kind, so copies
+with renamed variables, other constants or other callees group.  Groups
+whose members are all one exact body stay in the plain list only.
+
 Preprocessor lines are not code here, so a function a macro defines is
 not seen.  Files default to the tracked ``src/**/*.c`` and ``*.h``.
 Exits 0 (the report is advice), 2 for a missing file.
@@ -35,6 +41,101 @@ _TOKEN = re.compile(
     re.VERBOSE,
 )
 _NAME_BEFORE = re.compile(rb"([A-Za-z_]\w*)\s*$")
+_IDENT = re.compile(rb"[A-Za-z_]\w*")
+
+# Words a shape keeps as written: C keywords and the standard type names,
+# so two bodies match by shape only when their control flow and types do
+_KEPT_WORDS = frozenset(
+    w.encode()
+    for w in [
+        "alignas",
+        "alignof",
+        "auto",
+        "bool",
+        "break",
+        "case",
+        "char",
+        "const",
+        "constexpr",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "extern",
+        "false",
+        "float",
+        "for",
+        "goto",
+        "if",
+        "inline",
+        "int",
+        "long",
+        "nullptr",
+        "register",
+        "restrict",
+        "return",
+        "short",
+        "signed",
+        "sizeof",
+        "static",
+        "static_assert",
+        "struct",
+        "switch",
+        "thread_local",
+        "true",
+        "typedef",
+        "typeof",
+        "typeof_unqual",
+        "union",
+        "unsigned",
+        "void",
+        "volatile",
+        "while",
+        "_Generic",
+        "_Atomic",
+        "_BitInt",
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "intptr_t",
+        "uintptr_t",
+        "size_t",
+        "ssize_t",
+        "ptrdiff_t",
+        "__int128_t",
+        "__uint128_t",
+    ]
+)
+
+
+def shape(tokens: tuple[bytes, ...]) -> tuple[bytes, ...]:
+    """'tokens' with each other identifier as ID<n> (numbered by first
+    appearance) and each literal as NUM, STR or CHR: bodies that differ
+    only in names and constants share a shape."""
+    names: dict[bytes, bytes] = {}
+    out: list[bytes] = []
+    for t in tokens:
+        first = t[:1]
+        if _IDENT.fullmatch(t) and t not in _KEPT_WORDS:
+            out.append(names.setdefault(t, b"ID%d" % len(names)))
+        elif first.isdigit() or (first == b"." and len(t) > 1):
+            out.append(b"NUM")
+        elif first == b'"':
+            out.append(b"STR")
+        elif first == b"'":
+            out.append(b"CHR")
+        else:
+            out.append(t)
+    return tuple(out)
+
+
 _NOT_FUNCTIONS = frozenset(
     {b"if", b"for", b"while", b"switch", b"return", b"sizeof", b"alignof"}
 )
@@ -121,35 +222,44 @@ def _head(src: bytes, mask: bytearray, brace: int) -> tuple[int, bytes] | None:
 
 
 def duplicates(
-    files: dict[str, bytes], min_tokens: int
+    files: dict[str, bytes], min_tokens: int, by_shape: bool = False
 ) -> list[tuple[int, list[Definition]]]:
-    """Groups of two or more definitions with the same body of at least
-    'min_tokens' tokens, largest body first: (token count, places)."""
-    groups: dict[tuple[bytes, ...], list[Definition]] = {}
+    """Groups of two or more definitions of at least 'min_tokens' tokens,
+    largest body first: (token count, places).  Exact copies by default;
+    with 'by_shape', groups that share a shape (see shape()) but are not
+    all one exact body, so no group is in both lists."""
+    groups: dict[tuple[bytes, ...], list[tuple[Definition, tuple[bytes, ...]]]] = {}
     for path, src in files.items():
         for offset, name, tokens in definitions(src):
             if len(tokens) < min_tokens:
                 continue
             line = src.count(b"\n", 0, offset) + 1
-            groups.setdefault(tokens, []).append(Definition(path, line, name.decode()))
-    found = [(len(t), places) for t, places in groups.items() if len(places) > 1]
+            key = shape(tokens) if by_shape else tokens
+            groups.setdefault(key, []).append(
+                (Definition(path, line, name.decode()), tokens)
+            )
+    found = [
+        (len(key), [d for d, _ in members])
+        for key, members in groups.items()
+        if len(members) > 1 and (not by_shape or len({t for _, t in members}) > 1)
+    ]
     found.sort(key=lambda g: (-g[0], g[1][0].path, g[1][0].line))
     return found
 
 
-def run(repo: Path, paths: tuple[str, ...], min_tokens: int) -> int:
+def run(repo: Path, paths: tuple[str, ...], min_tokens: int, by_shape: bool) -> int:
     files: dict[str, bytes] = {}
     for path in list(paths) or sources(repo):
         target = repo / path
         if not target.is_file():
             raise ToolError(f"{path}: no such file")
         files[path] = target.read_bytes()
-    groups = duplicates(files, min_tokens)
+    groups = duplicates(files, min_tokens, by_shape)
+    kind = "same shape, renamed" if by_shape else "copies"
     for count, places in groups:
-        print(f"{count} tokens, {len(places)} copies:")
+        print(f"{count} tokens, {len(places)} {kind}:")
         for d in places:
             print(f"  {d.path}:{d.line}: {d.name}")
-    print(
-        f"dupfuncs: {len(groups)} bodies of {min_tokens}+ tokens defined twice or more"
-    )
+    what = "share a shape" if by_shape else "are defined twice or more"
+    print(f"dupfuncs: {len(groups)} bodies of {min_tokens}+ tokens {what}")
     return 0

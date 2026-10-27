@@ -71,6 +71,51 @@ class Duplicates(unittest.TestCase):
         self.assertEqual(len(dupfuncs.duplicates(files, min_tokens=3)), 2)
 
 
+RENAMED = (
+    b"{\n    int acc = 7;\n    for (int k = 0; k < len; k++) {\n"
+    b"        acc += xs[k];\n    }\n    return acc;\n}\n"
+)
+
+
+class Shape(unittest.TestCase):
+    def test_renamed_names_and_constants_share_a_shape(self) -> None:
+        files = {
+            "a.c": b"static int sum(const int *v, int n) " + BODY,
+            "b.c": b"static long tot(const int *xs, int len) " + RENAMED,
+        }
+        self.assertEqual(dupfuncs.duplicates(files, min_tokens=10), [])
+        groups = dupfuncs.duplicates(files, min_tokens=10, by_shape=True)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual([p.name for p in groups[0][1]], ["sum", "tot"])
+
+    def test_another_operator_or_arity_is_another_shape(self) -> None:
+        other_op = BODY.replace(b"total += v[i]", b"total -= v[i]")
+        other_arity = BODY.replace(b"return total;", b"return f(total, 1);")
+        for variant in (other_op, other_arity):
+            with self.subTest(variant=variant):
+                files = {
+                    "a.c": b"int sum(const int *v, int n) " + BODY,
+                    "b.c": b"int add(const int *v, int n) " + variant,
+                }
+                self.assertEqual(
+                    dupfuncs.duplicates(files, min_tokens=10, by_shape=True), []
+                )
+
+    def test_exact_copies_stay_in_the_exact_list_only(self) -> None:
+        files = {
+            "a.c": b"int sum(const int *v, int n) " + BODY,
+            "b.c": b"int add(const int *v, int n) " + BODY,
+        }
+        self.assertEqual(len(dupfuncs.duplicates(files, min_tokens=10)), 1)
+        self.assertEqual(dupfuncs.duplicates(files, min_tokens=10, by_shape=True), [])
+
+    def test_keywords_and_types_are_kept(self) -> None:
+        self.assertEqual(
+            dupfuncs.shape((b"uint64_t", b"x", b"=", b"y", b"+", b"0x10", b";")),
+            (b"uint64_t", b"ID0", b"=", b"ID1", b"+", b"NUM", b";"),
+        )
+
+
 class Run(unittest.TestCase):
     def test_report_and_missing_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,11 +123,11 @@ class Run(unittest.TestCase):
             (repo / "a.c").write_bytes(b"int sum(const int *v, int n) " + BODY)
             (repo / "b.c").write_bytes(b"int add(const int *v, int n) " + BODY)
             with contextlib.redirect_stdout(io.StringIO()) as out:
-                self.assertEqual(dupfuncs.run(repo, ("a.c", "b.c"), 10), 0)
+                self.assertEqual(dupfuncs.run(repo, ("a.c", "b.c"), 10, False), 0)
             self.assertIn("2 copies:", out.getvalue())
             self.assertIn("a.c:1: sum", out.getvalue())
             with self.assertRaises(ToolError):
-                dupfuncs.run(repo, ("nope.c",), 10)
+                dupfuncs.run(repo, ("nope.c",), 10, False)
 
 
 if __name__ == "__main__":
