@@ -230,6 +230,7 @@ void F2D_PUB_(Clear)(F2D_T_ *t) {
 #include "../cleaner.h"
 #include "../flex.h"
 #include "../persist.h"
+#include "fenwickPersist.h" /* the persistOps declarations defined below */
 
 defcleanerName(F2D_VALUE_T *, zfree, F2dValues);
 

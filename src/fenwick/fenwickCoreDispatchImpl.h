@@ -232,6 +232,7 @@ void FENWICK_D_FN_(Clear)(void *fw) {
 #include "../flex.h"
 #include "../persist.h"
 #include "fenwickCoreAlgo.h"
+#include "fenwickPersist.h" /* the persistOps declarations defined below */
 
 defcleanerName(FENWICK_VALUE_TYPE *, zfree, FenwickValues);
 

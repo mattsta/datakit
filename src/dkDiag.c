@@ -122,9 +122,9 @@ static void dkDiagPrint_(const dkDiagnostic *d) {
             d->function, base ? base + 1 : d->file, d->line, d->message);
 }
 
-static void dkDiagRecord_(dkDiagSeverity severity, dkDiagCode code,
-                          const char *function, const char *file, int line,
-                          const char *fmt, va_list ap) {
+[[gnu::format(printf, 6, 0)]] static void
+dkDiagRecord_(dkDiagSeverity severity, dkDiagCode code, const char *function,
+              const char *file, int line, const char *fmt, va_list ap) {
     /* Built on the stack, then stored: the hook gets this copy, so a
      * report made inside the hook (which overwrites the slot) cannot
      * change the diagnostic the hook is reading */

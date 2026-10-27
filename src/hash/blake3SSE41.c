@@ -23,23 +23,12 @@
  * SSSE3 to implement rotr32 by 16 and 8 as a single PSHUFB) is enabled
  * here since SSSE3 is a subset of SSE4.1.
  *
- * On non-x86 builds, the entry points fall back to a weakly-declared
- * portable compressor exported from blake3.c. */
+ * On non-x86 builds, the entry points fall back to blake3.c's portable
+ * compressor (declared in blake3.h). */
 
 #include "blake3SSE41.h"
 
 #include <string.h>
-
-/* Portable reference compress functions exported by blake3.c — used
- * for differential validation and as the non-SIMD fallback. */
-extern void blake3PortableCompressInPlace(uint32_t cv[8],
-                                          const uint8_t block[BLAKE3_BLOCK_LEN],
-                                          uint8_t block_len, uint64_t counter,
-                                          uint8_t flags);
-extern void blake3PortableCompressXof(const uint32_t cv[8],
-                                      const uint8_t block[BLAKE3_BLOCK_LEN],
-                                      uint8_t block_len, uint64_t counter,
-                                      uint8_t flags, uint8_t out[64]);
 
 #if defined(__x86_64__)
 

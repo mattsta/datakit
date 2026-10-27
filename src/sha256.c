@@ -92,14 +92,6 @@ static inline void storeBE64(uint8_t *p, uint64_t v) {
 #include "hash/sha256ArmCrypto.h"
 #include "hash/sha256ShaNi.h"
 
-/* Forward declaration; the bulk compress dispatch below picks between
- * this and any hardware-accelerated implementation available.  The
- * function is publicly exported (see sha256.h) so the SIMD-variant
- * stubs on platforms that lack their target ISA can delegate here
- * rather than silently no-op. */
-void sha256PortableCompressBlocks(uint32_t state[8], const uint8_t *blocks,
-                                  size_t num_blocks);
-
 /* Bulk compress dispatch.  Inline at the call site (no static function
  * pointer) so concurrent first-callers can't race on a lazy
  * initialization write.  The Available() probes return constants on

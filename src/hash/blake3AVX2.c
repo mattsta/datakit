@@ -29,19 +29,6 @@
 #include <stdint.h>
 #include <string.h>
 
-/* The portable reference compressor — declared here so we don't pull
- * blake3.c's static linkage into this TU. The build system is
- * expected to expose this symbol from blake3.c (or a thin wrapper);
- * the assumption is documented in the header. */
-extern void blake3PortableCompressInPlace(uint32_t cv[8],
-                                          const uint8_t block[BLAKE3_BLOCK_LEN],
-                                          uint8_t block_len, uint64_t counter,
-                                          uint8_t flags);
-extern void blake3PortableCompressXof(const uint32_t cv[8],
-                                      const uint8_t block[BLAKE3_BLOCK_LEN],
-                                      uint8_t block_len, uint64_t counter,
-                                      uint8_t flags, uint8_t out[64]);
-
 /* The IV: the x86 kernels read it, and so does the test driver on every
  * host. */
 #if defined(__x86_64__) || defined(DATAKIT_TEST)

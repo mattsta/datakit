@@ -277,6 +277,10 @@ bool datakitConfigSet(datakitConfig *conf);
  * replacement (dktools allocaudit also reports any call) */
 #define DK_LIBC_ALLOCATOR_                                                     \
     [[deprecated("datakit allocates through zmalloc/zcalloc/zrealloc/zfree")]]
+/* Redeclaring libc's functions is the point here: gcc's
+ * -Wredundant-decls is quiet for these lines only */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
 DK_LIBC_ALLOCATOR_ void *calloc(size_t count, size_t size);
 DK_LIBC_ALLOCATOR_ int posix_memalign(void **memptr, size_t alignment,
                                       size_t size);
@@ -288,6 +292,7 @@ DK_LIBC_ALLOCATOR_ void *realloc(void *ptr, size_t size);
  * without checking for the 'strdup' macro first.. */
 DK_LIBC_ALLOCATOR_ char *strdup(const char *s);
 #endif
+#pragma GCC diagnostic pop
 #endif
 
 #define zmemalign(ptr, align, size)                                            \

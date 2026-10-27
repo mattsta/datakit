@@ -1,6 +1,7 @@
 #pragma once
 
 #include "datakit.h"
+#include "str.h" /* StrPopCntExact */
 
 typedef uint_fast32_t linearBloom;
 
@@ -116,7 +117,6 @@ linearBloomHashCheckEarlyExit(const linearBloom *restrict const bloom,
 /* Fraction of bits set, 0.0 to 1.0: the operator signal for
  * false-positive drift (FP rate ≈ utilization^LINEARBLOOM_HASHES).
  * Past ~0.5 the filter is due for replacement. */
-uint64_t StrPopCntExact(const void *_data, size_t len);
 DK_INLINE_ALWAYS double linearBloomUtilization(const linearBloom *bloom) {
     const uint64_t set = StrPopCntExact(bloom, LINEARBLOOM_EXTENT_BYTES);
     return (double)set / (double)LINEARBLOOM_EXTENT_BITS;

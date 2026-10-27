@@ -13,12 +13,6 @@
 
 #include "strDoubleFormat.h"
 
-/* Disable unsigned overflow sanitizer for intentional wraparound in digit math.
- * The overflow checks in the digit generation loops are part of the algorithm.
- */
-DK_FN_NO_SANITIZE_UNSIGNED_WRAP size_t
-StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v);
-
 /* This is a C port of an Erlang port of Scheme code from 1996.
  * See mochinum for the origin story and where the original code came from.
  * One big change: Scheme and Erlang have built-in bignums,
@@ -584,6 +578,8 @@ static size_t niceDoubleDispatch(const double v, int32_t exp /* 11 bits */,
 /* ====================================================================
  * Public Interface
  * ==================================================================== */
+/* The unsigned-overflow sanitizer is off: the digit generation wraps on
+ * purpose, and its overflow checks are part of the algorithm */
 DK_FN_NO_SANITIZE_UNSIGNED_WRAP size_t
 StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v) {
     uint8_t *const buf = buf_;

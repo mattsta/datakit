@@ -1094,7 +1094,7 @@ static void report_hline(const char *left, const char *right) {
 }
 
 /* Print a content row with proper alignment */
-static void report_row(const char *fmt, ...) {
+[[gnu::format(printf, 1, 2)]] static void report_row(const char *fmt, ...) {
     char content[256];
     va_list args;
     va_start(args, fmt);

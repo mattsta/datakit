@@ -184,6 +184,7 @@ void SEGMENT_D_FN_(RangeUpdate)(void *seg, size_t left, size_t right,
 #include "../cleaner.h"
 #include "../flex.h"
 #include "../persist.h"
+#include "segmentPersist.h" /* the persistOps declarations defined below */
 
 defcleanerName(SEGMENT_VALUE_TYPE *, zfree, SegmentValues);
 

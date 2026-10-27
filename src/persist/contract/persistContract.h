@@ -70,6 +70,60 @@ typedef struct persistContractType {
     bool (*holdsBytes)(const void *structure, const databox *bytes);
 } persistContractType;
 
+/* Every registered type, each defined in its own *ContractTest.c */
+extern const persistContractType persistContractFlex;
+extern const persistContractType persistContractMultimap;
+extern const persistContractType persistContractMultiroar;
+extern const persistContractType persistContractIntset;
+extern const persistContractType persistContractIntsetBig;
+extern const persistContractType persistContractHyperloglog;
+extern const persistContractType persistContractMultiarray;
+extern const persistContractType persistContractMultilist;
+extern const persistContractType persistContractMultidict;
+extern const persistContractType persistContractMultiOrderedSet;
+extern const persistContractType persistContractMultiLRU;
+extern const persistContractType persistContractHmacKeyring;
+extern const persistContractType persistContractClusterMailbox;
+extern const persistContractType persistContractClusterRing;
+extern const persistContractType persistContractAeadNonceLog;
+extern const persistContractType persistContractFenwickI16;
+extern const persistContractType persistContractFenwickI32;
+extern const persistContractType persistContractFenwickI64;
+extern const persistContractType persistContractFenwickI128;
+extern const persistContractType persistContractFenwickU16;
+extern const persistContractType persistContractFenwickU32;
+extern const persistContractType persistContractFenwickU64;
+extern const persistContractType persistContractFenwickU128;
+extern const persistContractType persistContractFenwickFloat;
+extern const persistContractType persistContractFenwickDouble;
+extern const persistContractType persistContractFenwick2dI16;
+extern const persistContractType persistContractFenwick2dI32;
+extern const persistContractType persistContractFenwick2dI64;
+extern const persistContractType persistContractFenwick2dI128;
+extern const persistContractType persistContractFenwick2dU16;
+extern const persistContractType persistContractFenwick2dU32;
+extern const persistContractType persistContractFenwick2dU64;
+extern const persistContractType persistContractFenwick2dU128;
+extern const persistContractType persistContractFenwick2dFloat;
+extern const persistContractType persistContractFenwick2dDouble;
+extern const persistContractType persistContractMultiFenwick;
+extern const persistContractType persistContractMultiFenwickFlat;
+extern const persistContractType persistContractMultiFenwick2d;
+extern const persistContractType persistContractSegmentI16;
+extern const persistContractType persistContractSegmentI32;
+extern const persistContractType persistContractSegmentI64;
+extern const persistContractType persistContractSegmentI128;
+extern const persistContractType persistContractSegmentU16;
+extern const persistContractType persistContractSegmentU32;
+extern const persistContractType persistContractSegmentU64;
+extern const persistContractType persistContractSegmentU128;
+extern const persistContractType persistContractSegmentFloat;
+extern const persistContractType persistContractSegmentDouble;
+extern const persistContractType persistContractMultimapAtom;
+extern const persistContractType persistContractMultimapAtomDense;
+extern const persistContractType persistContractStringPool;
+extern const persistContractType persistContractAtomPool;
+
 /* A seeded value of any databox kind a container stores: small and full
  * range signed/unsigned, 128-bit signed/unsigned, double, float, true,
  * false, null and bytes (some of them digit strings).  Bytes point into

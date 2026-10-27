@@ -13,11 +13,6 @@
 
 defcleanerName(multimapP *, zfree, MultimapP);
 
-/* Forward declaration for internal use */
-extern bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops);
-extern bool persistCtxSaveSnapshot(persistCtx *ctx, void *structure,
-                                   const persistOps *ops);
-
 /* ============================================================================
  * Lifecycle
  * ============================================================================

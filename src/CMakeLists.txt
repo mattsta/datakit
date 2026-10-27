@@ -360,6 +360,13 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wsuggest-attribute=noreturn")
 endif()
 
+# A global defined with no declaration in scope (the header that declares
+# it must be included where it is defined, so the two cannot drift), a
+# declaration repeated, any alloca, and every printf-style function marked
+# with gnu::format with format strings checked as literals
+set(CMAKE_C_FLAGS
+    "${CMAKE_C_FLAGS} -Wmissing-variable-declarations -Wredundant-decls -Walloca -Wformat=2")
+
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     # Clang-specific warnings
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")

@@ -359,16 +359,6 @@ void blake3NeonCompress4(const uint32_t *const cv_inputs[4],
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 
-/* ----- Portable reference primitives (weak forward decls) ----------- */
-/* If blake3.c exposes these wrappers, the linker resolves them.
- * Otherwise the test falls back to a local re-implementation. */
-[[gnu::weak]] void blake3PortableCompressInPlace(
-    uint32_t cv[8], const uint8_t block[BLAKE3_BLOCK_LEN], uint8_t block_len,
-    uint64_t counter, uint8_t flags);
-[[gnu::weak]] void blake3PortableCompressXof(
-    const uint32_t cv[8], const uint8_t block[BLAKE3_BLOCK_LEN],
-    uint8_t block_len, uint64_t counter, uint8_t flags, uint8_t out[64]);
-
 /* Local scalar fallback: a direct copy of the spec compression logic.
  * Used iff the weak symbols above were not provided. */
 static constexpr uint32_t REF_IV[8] = {
@@ -444,24 +434,24 @@ static void ref_compress_xof(const uint32_t cv[8], const uint8_t block[64],
     }
 }
 
-/* Resolve which scalar implementation to compare against. */
+/* The library's portable compressor, which the NEON results are compared
+ * against, checked itself against this file's independent reference */
 static void portable_compress_in_place(uint32_t cv[8], const uint8_t block[64],
                                        uint8_t block_len, uint64_t counter,
                                        uint8_t flags) {
-    if (blake3PortableCompressInPlace) {
-        blake3PortableCompressInPlace(cv, block, block_len, counter, flags);
-    } else {
-        ref_compress_in_place(cv, block, block_len, counter, flags);
-    }
+    uint32_t ref[8];
+    memcpy(ref, cv, sizeof(ref));
+    ref_compress_in_place(ref, block, block_len, counter, flags);
+    blake3PortableCompressInPlace(cv, block, block_len, counter, flags);
+    assert(memcmp(ref, cv, sizeof(ref)) == 0);
 }
 static void portable_compress_xof(const uint32_t cv[8], const uint8_t block[64],
                                   uint8_t block_len, uint64_t counter,
                                   uint8_t flags, uint8_t out[64]) {
-    if (blake3PortableCompressXof) {
-        blake3PortableCompressXof(cv, block, block_len, counter, flags, out);
-    } else {
-        ref_compress_xof(cv, block, block_len, counter, flags, out);
-    }
+    uint8_t ref[64];
+    ref_compress_xof(cv, block, block_len, counter, flags, ref);
+    blake3PortableCompressXof(cv, block, block_len, counter, flags, out);
+    assert(memcmp(ref, out, sizeof(ref)) == 0);
 }
 
 /* Lightweight xorshift64* for deterministic random data. */
