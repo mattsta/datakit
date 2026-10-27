@@ -1,7 +1,8 @@
 #pragma once
 
 #include "datakit.h"
-#include "dkBits.h" /* dkDivCeil */
+#include "dkBits.h"   /* dkDivCeil */
+#include "dkRandom.h" /* dkXorshift64StarNext */
 #include <math.h>
 
 typedef uint64_t linearBloomCount;
@@ -377,12 +378,7 @@ DK_INLINE_ALWAYS void linearBloomCountRNGInit(linearBloomCountRNG *rng,
 }
 
 DK_INLINE_ALWAYS uint64_t linearBloomCountRNGNext(linearBloomCountRNG *rng) {
-    uint64_t x = rng->state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    rng->state = x;
-    return x * 0x2545f4914f6cdd1dULL;
+    return dkXorshift64StarNext(&rng->state);
 }
 
 /* Returns a random double in [0, 1) */

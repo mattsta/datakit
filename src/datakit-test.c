@@ -9529,9 +9529,7 @@ static int testMailboxRestoreWrappedStructAwareFuzzTest(int, char *[]) {
  * ==================================================================== */
 static void dkTestNonceLogMkNonce(uint64_t v, uint8_t out[12]) {
     memset(out, 0, 12);
-    for (size_t i = 0; i < 8; i++) {
-        out[i] = (uint8_t)((v >> (i * 8u)) & 0xFFu);
-    }
+    dkStoreLe64(out, v);
 }
 
 static int dkTestNonceLogEvictionPerfTest(int, char *[]) {
@@ -11961,7 +11959,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
                 if (max_tail_bytes == 0) {
                     max_tail_bytes = 1;
                 }
-                stride = (tail_bytes + max_tail_bytes - 1) / max_tail_bytes;
+                stride = dkDivCeil(tail_bytes, max_tail_bytes);
                 if (stride == 0) {
                     stride = 1;
                 }

@@ -33,6 +33,7 @@
 #include "ctmem.h" /* dkCtMemEq for nonce compare */
 #include "databox.h"
 #include "datakit.h"
+#include "dkEndian.h" /* dkStoreLe64 */
 #include "dkRandom.h" /* dkSplitmix64Mix */
 #include "flex.h"
 #include "persist.h"
@@ -634,9 +635,7 @@ const persistOps persistOpsAeadNonceLog = {
 static void nonceFromCounter(uint64_t v,
                              uint8_t out[AEAD_NONCE_LOG_NONCE_LEN]) {
     memset(out, 0, AEAD_NONCE_LOG_NONCE_LEN);
-    for (size_t i = 0; i < 8; i++) {
-        out[i] = (uint8_t)((v >> (i * 8u)) & 0xFFu);
-    }
+    dkStoreLe64(out, v);
 }
 
 typedef struct aeadNonceLogConcCtx {

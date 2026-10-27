@@ -698,11 +698,14 @@ int linearBloomTest(int, char *[]) {
             zcalloc(numItems, sizeof(uint64_t));
         uint64_t hash[2];
 
-        srand(12345);
+        /* Replayable full-width draws; members keep bit 63 clear and the
+         * non-members below set it, so the two sets never meet */
+        uint64_t rng = 12345;
+        constexpr uint64_t top = UINT64_C(1) << 63;
 
         /* Insert random items */
         for (size_t i = 0; i < numItems; i++) {
-            inserted[i] = ((uint64_t)rand() << 32) | rand();
+            inserted[i] = dkSplitmix64Next(&rng) & ~top;
             hashFromInt(inserted[i], hash);
             linearBloomHashSet(bloom, hash);
         }
@@ -723,8 +726,7 @@ int linearBloomTest(int, char *[]) {
         /* Count false positives on random non-inserted items */
         size_t falsePositives = 0;
         for (size_t i = 0; i < numItems; i++) {
-            uint64_t notInserted =
-                ((uint64_t)rand() << 32) | rand() | 0x8000000000000000ULL;
+            const uint64_t notInserted = dkSplitmix64Next(&rng) | top;
             hashFromInt(notInserted, hash);
             if (linearBloomHashCheck(bloom, hash)) {
                 falsePositives++;
@@ -1264,11 +1266,11 @@ int linearBloomTest(int, char *[]) {
         uint64_t hash[2];
 
         /* Insert 1M random items */
-        srand(11111);
+        uint64_t rng = 11111; /* replayable full-width draws */
         cleanerName(zfree, U64) uint64_t *items =
             zcalloc(numItems, sizeof(uint64_t));
         for (size_t i = 0; i < numItems; i++) {
-            items[i] = ((uint64_t)rand() << 32) | rand();
+            items[i] = dkSplitmix64Next(&rng);
             hashFromInt(items[i], hash);
             linearBloomHashSet(bloom, hash);
         }

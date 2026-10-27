@@ -1699,7 +1699,7 @@ int hyperloglogTest(int, char *[]) {
         h = hyperloglogNew();
         double relerr = 1.04 / sqrt(HLL_REGISTERS);
         uint64_t checkpoint = 1;
-        uint64_t seed = (uint64_t)rand() | (uint64_t)rand() << 32;
+        const uint64_t seed = UINT64_C(0x6A09E667F3BCC908); /* full width */
         uint64_t ele;
         /* Checkpoints 1, 10, ... 10^6: past the sparse-to-dense switch and the
          * linear-counting range (about 2.5 x HLL_REGISTERS), well into the
