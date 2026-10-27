@@ -57,7 +57,7 @@ size_t StrUtf8TruncateBytes(const void *str, size_t len, size_t maxBytes) {
     /* Check if we're already at a valid boundary */
     /* A valid boundary is at the start of a codepoint (not a continuation byte)
      */
-    if ((s[maxBytes] & 0xC0) != 0x80) {
+    if (!StrUtf8IsContinuation(s[maxBytes])) {
         /* Next byte is a start byte or ASCII, so maxBytes is valid */
         return maxBytes;
     }
@@ -65,7 +65,7 @@ size_t StrUtf8TruncateBytes(const void *str, size_t len, size_t maxBytes) {
     /* We're in the middle of a multi-byte sequence.
      * Back up to find the start of this sequence. */
     size_t pos = maxBytes;
-    while (pos > 0 && (s[pos] & 0xC0) == 0x80) {
+    while (pos > 0 && StrUtf8IsContinuation(s[pos])) {
         pos--;
     }
 

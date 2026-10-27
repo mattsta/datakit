@@ -207,6 +207,12 @@ size_t StrUtf8ValidCountBytes(const void *_str, size_t len,
  * above every codepoint (U+10FFFF), so no decoded character equals it */
 static constexpr uint32_t STR_UTF8_INVALID = 0xFFFFFFFF;
 
+/* Whether byte 'b' continues a UTF-8 sequence (10xxxxxx) rather than
+ * starting a character */
+static inline bool StrUtf8IsContinuation(uint8_t b) {
+    return (b & 0xC0) == 0x80;
+}
+
 /* Decode a UTF-8 sequence to a Unicode codepoint.
  * Returns codepoint and advances *str, or STR_UTF8_INVALID (not
  * advancing) on error. */

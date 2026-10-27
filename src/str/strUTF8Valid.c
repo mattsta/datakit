@@ -57,9 +57,6 @@ static constexpr uint8_t utf8FirstByteLUT[256] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 /* 0xF5-0xFF */
 };
 
-/* Check if byte is a valid continuation byte (10xxxxxx = 0x80-0xBF) */
-#define IS_CONTINUATION(b) (((b) & 0xC0) == 0x80)
-
 /* ====================================================================
  * Scalar Implementation (baseline for comparison and fallback)
  * ==================================================================== */
@@ -81,7 +78,7 @@ DK_INLINE_ALWAYS size_t utf8ValidateSequence(const uint8_t *s,
 
     /* Validate continuation bytes */
     for (size_t i = 1; i < expectedLen; i++) {
-        if (!IS_CONTINUATION(s[i])) {
+        if (!StrUtf8IsContinuation(s[i])) {
             return 0;
         }
     }
@@ -160,7 +157,7 @@ bool StrUtf8ValidCStrScalar(const char *str) {
 
         /* Check continuation bytes exist and are valid */
         for (size_t i = 1; i < expectedLen; i++) {
-            if (s[i] == '\0' || !IS_CONTINUATION(s[i])) {
+            if (s[i] == '\0' || !StrUtf8IsContinuation(s[i])) {
                 return false;
             }
         }
@@ -282,7 +279,7 @@ bool StrUtf8ValidCStr(const char *str) {
 
         /* Check continuation bytes exist and are valid */
         for (size_t i = 1; i < expectedLen; i++) {
-            if (s[i] == '\0' || !IS_CONTINUATION(s[i])) {
+            if (s[i] == '\0' || !StrUtf8IsContinuation(s[i])) {
                 return false;
             }
         }
@@ -536,14 +533,14 @@ uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining) {
 
     switch (expectedLen) {
     case 2:
-        if (!IS_CONTINUATION(s[1])) {
+        if (!StrUtf8IsContinuation(s[1])) {
             return STR_UTF8_INVALID;
         }
         cp = ((uint32_t)(b0 & 0x1F) << 6) | (s[1] & 0x3F);
         break;
 
     case 3:
-        if (!IS_CONTINUATION(s[1]) || !IS_CONTINUATION(s[2])) {
+        if (!StrUtf8IsContinuation(s[1]) || !StrUtf8IsContinuation(s[2])) {
             return STR_UTF8_INVALID;
         }
         /* Check overlong and surrogate */
@@ -558,8 +555,8 @@ uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining) {
         break;
 
     case 4:
-        if (!IS_CONTINUATION(s[1]) || !IS_CONTINUATION(s[2]) ||
-            !IS_CONTINUATION(s[3])) {
+        if (!StrUtf8IsContinuation(s[1]) || !StrUtf8IsContinuation(s[2]) ||
+            !StrUtf8IsContinuation(s[3])) {
             return STR_UTF8_INVALID;
         }
         /* Check overlong and max codepoint */

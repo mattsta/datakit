@@ -336,15 +336,6 @@ bool StrScanToDouble(const void *str, databox *box, bool allowFloatWords,
 defcleanerName(char *, zfree, Chars);
 defcleanerName(uint8_t *, zfree, U8);
 
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
-
 DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
     char buf[32];
     int64_t v;
@@ -722,6 +713,14 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             StrDigitCountInt64(INT64_MAX) != 19 ||
             StrDigitCountInt64(-1) != 2 || StrDigitCountInt64(0) != 1) {
             ERR("digit count wrong at 0, a maximum or a signed extreme");
+        }
+    }
+
+    TEST("StrUtf8IsContinuation: exactly the bytes 0x80..0xBF") {
+        for (uint32_t b = 0; b < 256; b++) {
+            if (StrUtf8IsContinuation((uint8_t)b) != (b >= 0x80 && b <= 0xBF)) {
+                ERR("byte 0x%02" PRIx32 " misclassified", b);
+            }
         }
     }
 

@@ -17,12 +17,6 @@
  * Shared Definitions
  * ==================================================================== */
 
-/* Check if byte is a UTF-8 start byte (not a continuation byte) */
-#define IS_START_BYTE(b) (((b) & 0xC0) != 0x80)
-
-/* Check if byte is a continuation byte (10xxxxxx) */
-#define IS_CONTINUATION(b) (((b) & 0xC0) == 0x80)
-
 /* Get expected sequence length from first byte (same table as strUTF8Valid.c)
  */
 static constexpr uint8_t utf8SeqLenLUT[256] = {
@@ -79,7 +73,7 @@ DK_INLINE_ALWAYS size_t utf8RetreatOne(const uint8_t *start,
 
     /* Skip continuation bytes (max 3 for UTF-8) */
     size_t backCount = 1;
-    while (p > start && IS_CONTINUATION(*p) && backCount < 4) {
+    while (p > start && StrUtf8IsContinuation(*p) && backCount < 4) {
         p--;
         backCount++;
     }
