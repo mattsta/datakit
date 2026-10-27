@@ -49,6 +49,8 @@ class Rewrite(unittest.TestCase):
         cases = [
             # an else branch
             b'if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n} else {\n}\n',
+            # the second link of an else-if chain
+            b'if (x) {\n} else if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n}\n',
             # two statements in the body
             b'if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n    break;\n}\n',
             # a different comparison
@@ -58,6 +60,38 @@ class Rewrite(unittest.TestCase):
             # inside a comment and a string
             b'/* if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n} */\n',
             b'const char *s = "if (memcmp(a, b, 4) != 0) { ERR(x); }";\n',
+        ]
+        for src in cases:
+            with self.subTest(src=src):
+                self.assertEqual(testbytes.rewrite(src), (src, 0))
+
+    def test_printf_and_counter_lose_the_newline(self) -> None:
+        src = (
+            b"    if (memcmp(k, want, 32) != 0) {\n"
+            b'        printf("kat: iter %d "\n'
+            b'               "mismatch\\n", i);\n'
+            b"        failures++;\n"
+            b"    }\n"
+        )
+        out, count = testbytes.rewrite(src)
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            out,
+            b"    TEST_BYTES(failures, k, want, 32, "
+            b'"kat: iter %d "\n               "mismatch", i);\n',
+        )
+
+    def test_printf_shapes_left_alone(self) -> None:
+        cases = [
+            # no counter
+            b'if (memcmp(a, b, 4) != 0) {\n    printf("x\\n");\n}\n',
+            # format without the newline TEST_BYTES supplies
+            b'if (memcmp(a, b, 4) != 0) {\n    printf("x");\n    n++;\n}\n',
+            # a jump after the count
+            b'if (memcmp(a, b, 4) != 0) {\n    printf("x\\n");\n    n++;\n'
+            b"    goto done;\n}\n",
+            # a counter that is not a plain name
+            b'if (memcmp(a, b, 4) != 0) {\n    printf("x\\n");\n    (*n)++;\n}\n',
         ]
         for src in cases:
             with self.subTest(src=src):

@@ -757,10 +757,13 @@ uv run --project tools dktools testbytes [--dry-run] [FILE ...]
 
 - Each `if (memcmp(GOT, WANT, N) != 0) { ERR(FORMAT, ...); }` becomes
   `TEST_BYTES(err, GOT, WANT, N, FORMAT, ...);` (src/ctest.h), which
-  counts the failure as ERR does and prints both sides in hex.
-- Only that shape: another condition, a second statement in the body or
-  an `else` leaves the check as written, as do comments, literals and
-  preprocessor lines.
+  counts the failure as ERR does and shows where the bytes differ.
+- Each `if (memcmp(GOT, WANT, N) != 0) { printf(FORMAT "\n", ...); C++; }`
+  becomes `TEST_BYTES(C, GOT, WANT, N, FORMAT, ...);`. The format must
+  end in the newline, which TEST_BYTES supplies.
+- Only those shapes: another condition, any other statement in the body
+  or an `else` before or after it leaves the check as written, as do
+  comments, literals and preprocessor lines.
 - Files default to the tracked `src/**/*.c` and `*.h`. Prints each
   file's count. Exits 0, or 2 for a missing file.
 
