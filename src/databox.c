@@ -4458,7 +4458,7 @@ int databoxTest(int, char *[]) {
 
     printf("\n=== All databox fuzz tests completed! ===\n\n");
 
-    TEST("Repr: every kind of box prints without faults") {
+    TEST("Repr: every kind of box prints its type and value") {
         databoxBig wide;
         DATABOX_BIG_UNSIGNED_128(&wide, ((__uint128_t)1 << 100) + 7);
         const databox boxes[] = {
@@ -4475,7 +4475,26 @@ int databoxTest(int, char *[]) {
             {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = 9},
             *(const databox *)&wide,
         };
+        const char *const want[countof(boxes)] = {
+            "{SIGNED: -5}",
+            "{UNSIGNED: 7}",
+            "{DOUBLE: 1.500000}",
+            "{FLOAT: 0.500000}",
+            "{BYTES: text}",
+            "{BYTES EMBED: hi}",
+            "{TRUE}",
+            "{FALSE}",
+            "{NULL}",
+            "{VOID}",
+            "{EXTERNAL REF: 9}",
+            "{UNSIGNED128: 1267650600228229401496703205383}", /* 2^100 + 7 */
+        };
         for (size_t i = 0; i < countof(boxes); i++) {
+            const char *got = databoxReprStr(&boxes[i]);
+            if (strcmp(got, want[i]) != 0) {
+                ERR("box %zu reads \"%s\", want \"%s\"", i, got, want[i]);
+            }
+
             databoxRepr(&boxes[i]);
             databoxReprSay("box:", &boxes[i]);
         }

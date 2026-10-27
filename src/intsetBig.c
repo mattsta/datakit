@@ -1049,7 +1049,14 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
 
     /* Create and free empty set */
     TEST("create and free") {
-        [[maybe_unused]] cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+        /* A new set is empty */
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+        if (intsetBigCountElements(isb) != 0 ||
+            intsetBigCountBuckets(isb) != 0 ||
+            intsetBigExists(isb, &DATABOX_BIG_UNSIGNED(0))) {
+            ERR("a new set holds %zu elements in %zu buckets",
+                intsetBigCountElements(isb), intsetBigCountBuckets(isb));
+        }
     }
 
     /* Add small (bucket 0) to new set */

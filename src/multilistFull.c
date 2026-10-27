@@ -3154,8 +3154,27 @@ int multilistFullTest(int, char *[]) {
             multilistFullPushTail(ml, s0, "95", 2);
             multilistFullReplaceAtIndex(ml, s0, 1, "foo", 3);
             multilistFullReplaceAtIndex(ml, s0, -1, "bar", 3);
+
+            /* The dump is the flex of pushing each element in order, as
+             * the list stores it: exact bytes, "99" never converted to a
+             * number (a container's default path) */
+            static const char *const want[] = {
+                "99", "foo", "xxxxxxxxxxxxxxxxxxxx", "96", "bar"};
+            cleaner(flexFree) flex *wantFlex = flexNew();
+            for (size_t w = 0; w < countof(want); w++) {
+                flexPushBytesExact(&wantFlex, want[w], strlen(want[w]),
+                                   FLEX_ENDPOINT_TAIL);
+            }
+
+            cleaner(flexFree) flex *got = multilistFullDump(ml, s0);
+            if (flexBytes(got) != flexBytes(wantFlex)) {
+                ERR("the list dumps to %zu bytes, want %zu", flexBytes(got),
+                    flexBytes(wantFlex));
+            } else {
+                TEST_BYTES(err, got, wantFlex, flexBytes(wantFlex),
+                           "the list after two replaces");
+            }
             multilistFullFree(ml);
-            OK;
         }
 
         mflexStateReset(s0);

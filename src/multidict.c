@@ -6872,24 +6872,42 @@ int multidictTest(int, char *[]) {
         }
     }
 
+    /* A rehash moves every entry and loses none: the size holds and an
+     * accepted expand ends with at least the slots it asked for */
     TEST("4.3 rehash with single steps") {
-        multidictExpand(d, 16384);
+        const uint64_t size = multidictSize(d);
+        const bool expanded = multidictExpand(d, 16384);
         int steps = 0;
         while (multidictIsRehashing(d)) {
             multidictRehash(d, 1);
             steps++;
         }
+
         printf("  Completed in %d single steps\n", steps);
+        if (multidictSize(d) != size ||
+            (expanded && multidictSlots(d) < 16384)) {
+            ERR("after the rehash: %" PRIu64 " entries (was %" PRIu64
+                "), %" PRIu64 " slots",
+                multidictSize(d), size, multidictSlots(d));
+        }
     }
 
     TEST("4.4 multidictRehashMilliseconds") {
-        multidictExpand(d, 32768);
+        const uint64_t size = multidictSize(d);
+        const bool expanded = multidictExpand(d, 32768);
         int64_t rehashed = multidictRehashMilliseconds(d, 5);
         printf("  Rehashed %" PRId64 " entries in ~5ms\n", rehashed);
 
         /* Complete remaining */
         while (multidictIsRehashing(d)) {
             multidictRehash(d, 1000);
+        }
+
+        if (rehashed < 0 || multidictSize(d) != size ||
+            (expanded && multidictSlots(d) < 32768)) {
+            ERR("after the rehash: %" PRId64 " moved in the timed step, "
+                "%" PRIu64 " entries (was %" PRIu64 "), %" PRIu64 " slots",
+                rehashed, multidictSize(d), size, multidictSlots(d));
         }
     }
 

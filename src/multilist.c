@@ -1310,6 +1310,48 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
         }                                                                      \
     } while (0)
 
+/* Whether 'ml' holds exactly the elements of the flex 'want', in order.
+ * multilistDump's flex is by definition the flex of pushing each element
+ * in order, so an oracle built with flex pushes compares byte for byte. */
+static bool mltHolds(const multilist *ml, mflexState *state, const flex *want) {
+    cleaner(flexFree) flex *got = multilistDump(ml, state);
+    const bool same = flexBytes(got) == flexBytes(want) &&
+                      memcmp(got, want, flexBytes(want)) == 0;
+    if (!same) {
+        /* Both sides, entry by entry with their encodings */
+        printf("list holds:\n");
+        flexRepr(got);
+        printf("oracle holds:\n");
+        flexRepr(want);
+    }
+
+    return same;
+}
+
+/* ERR unless 'ml' holds the oracle flex 'want' (see mltHolds) */
+#define MLT_HOLDS(ml, want)                                                    \
+    do {                                                                       \
+        if (!mltHolds(ml, s0, want)) {                                         \
+            ERR("%s (%zu elements) differs from its oracle (%zu)", #ml,        \
+                multilistCount(ml), flexCount(want));                          \
+        }                                                                      \
+    } while (0)
+
+/* Append 'len' bytes at 'data' to the oracle as the list stores the
+ * tests' pushed and inserted bytes: exactly, never converted to a
+ * number (a container's default path) */
+static void mltWant(flex **f, const void *data, size_t len) {
+    flexPushBytesExact(f, data, len, FLEX_ENDPOINT_TAIL);
+}
+
+/* Append genstr(prefix, i) as 32 bytes, as the tests' lists hold them,
+ * for i from 'first' up to 'last' */
+static void mltPushGen(flex **f, const char *prefix, int first, int last) {
+    for (int i = first; i <= last; i++) {
+        mltWant(f, genstr(prefix, i), 32);
+    }
+}
+
 /* The flex an entry's element lives in, on each tier. */
 static const flex *mloFlex(const multilist *ml, const multilistEntry *entry) {
     switch (_multilistType(ml)) {
@@ -1424,8 +1466,10 @@ int multilistTest(int, char *[]) {
         int64_t start = timeUtilMs();
 
         TEST("create list") {
-            [[maybe_unused]] cleaner(multilistFree) multilist *ml =
+            cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
+            cleaner(flexFree) flex *want = flexNew();
+            MLT_HOLDS(ml, want);
         }
 
         TEST("add to tail of empty list") {
@@ -1433,7 +1477,9 @@ int multilistTest(int, char *[]) {
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeTail(&ml, s0, &pushBox);
-            /* 1 for head and 1 for tail because 1 node = head = tail */
+            cleaner(flexFree) flex *want = flexNew();
+            flexPushByType(&want, &pushBox, FLEX_ENDPOINT_TAIL);
+            MLT_HOLDS(ml, want);
         }
 
         TEST("add to head of empty list") {
@@ -1441,7 +1487,9 @@ int multilistTest(int, char *[]) {
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeHead(&ml, s0, &pushBox);
-            /* 1 for head and 1 for tail because 1 node = head = tail */
+            cleaner(flexFree) flex *want = flexNew();
+            flexPushByType(&want, &pushBox, FLEX_ENDPOINT_TAIL);
+            MLT_HOLDS(ml, want);
         }
 
         TEST("IndexNear: anchored lookup matches Index across all tiers") {
@@ -1631,6 +1679,8 @@ int multilistTest(int, char *[]) {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             multilistRotate(ml, s);
+            cleaner(flexFree) flex *want = flexNew();
+            MLT_HOLDS(ml, want);
         }
 
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
@@ -1641,8 +1691,9 @@ int multilistTest(int, char *[]) {
 
                 multilistRotate(ml, s);
 
-                /* Ignore compression verify because flex is
-                 * too small to compress. */
+                cleaner(flexFree) flex *want = flexNew();
+                mltWant(&want, "hello", 6);
+                MLT_HOLDS(ml, want);
             }
         }
 
@@ -1844,39 +1895,51 @@ int multilistTest(int, char *[]) {
             }
         }
 
-        TEST("insert before with 0 elements") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistEntry entry;
-            multilistIndexGet(ml, s0, 0, &entry);
-            printf("WHAT? %p, %p, %d\n", entry.ml, entry.fe, entry.offset);
-            multilistInsertBefore(&ml, s, &entry, "abc", 4);
+        /* An empty list's IndexGet aims at the empty head, so either
+         * insert adds the first element */
+        for (int after = 0; after < 2; after++) {
+            TEST_DESC("insert %s with 0 elements", after ? "after" : "before") {
+                cleaner(multilistFree) multilist *ml =
+                    multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
+                multilistEntry entry = {};
+                multilistIndexGet(ml, s0, 0, &entry);
+                if (after) {
+                    multilistInsertAfter(&ml, s, &entry, "abc", 4);
+                } else {
+                    multilistInsertBefore(&ml, s, &entry, "abc", 4);
+                }
+
+                cleaner(flexFree) flex *want = flexNew();
+                mltWant(&want, "abc", 4);
+                MLT_HOLDS(ml, want);
+            }
         }
 
-        TEST("insert after with 0 elements") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistEntry entry;
-            multilistIndexGet(ml, s0, 0, &entry);
-            multilistInsertAfter(&ml, s, &entry, "abc", 4);
-        }
+        for (int after = 0; after < 2; after++) {
+            TEST_DESC("insert %s 1 element", after ? "after" : "before") {
+                cleaner(multilistFree) multilist *ml =
+                    multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
+                multilistPushHead(ml, s0, "hello", 6);
+                multilistEntry entry = {};
+                multilistIndexGet(ml, s0, 0, &entry);
+                if (after) {
+                    multilistInsertAfter(&ml, s, &entry, "abc", 4);
+                } else {
+                    multilistInsertBefore(&ml, s, &entry, "abc", 4);
+                }
 
-        TEST("insert after 1 element") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistPushHead(ml, s0, "hello", 6);
-            multilistEntry entry;
-            multilistIndexGet(ml, s0, 0, &entry);
-            multilistInsertAfter(&ml, s, &entry, "abc", 4);
-        }
+                cleaner(flexFree) flex *want = flexNew();
+                if (!after) {
+                    mltWant(&want, "abc", 4);
+                }
 
-        TEST("insert before 1 element") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistPushHead(ml, s0, "hello", 6);
-            multilistEntry entry;
-            multilistIndexGet(ml, s0, 0, &entry);
-            multilistInsertAfter(&ml, s, &entry, "abc", 4);
+                mltWant(&want, "hello", 6);
+                if (after) {
+                    mltWant(&want, "abc", 4);
+                }
+
+                MLT_HOLDS(ml, want);
+            }
         }
 
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
@@ -1976,8 +2039,15 @@ int multilistTest(int, char *[]) {
                     multilistInsertBefore(&ml, s, &entry, genstr("abc", i), 32);
                 }
 
-                if (f == 32) {
+                /* Each insert lands at 250, ahead of the ones before it */
+                cleaner(flexFree) flex *want = flexNew();
+                mltPushGen(&want, "hello", 0, 249);
+                for (int i = 249; i >= 0; i--) {
+                    mltPushGen(&want, "abc", i, i);
                 }
+
+                mltPushGen(&want, "hello", 250, 499);
+                MLT_HOLDS(ml, want);
             }
         }
 
@@ -2007,30 +2077,22 @@ int multilistTest(int, char *[]) {
             }
         }
 
-        TEST("duplicate empty list") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            [[maybe_unused]] cleaner(multilistFree) multilist *copy =
-                multilistCopy(ml);
-        }
+        /* A copy holds what the original holds, and the original is
+         * untouched */
+        for (int n = 0; n <= 500; n = n ? n * 500 : 1) {
+            TEST_DESC("duplicate list of %d", n) {
+                cleaner(multilistFree) multilist *ml =
+                    multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
+                for (int i = 0; i < n; i++) {
+                    multilistPushTail(ml, s0, genstr("hello", i), 32);
+                }
 
-        TEST("duplicate list of 1 element") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistPushHead(ml, s0, genstr("hello", 3), 32);
-            [[maybe_unused]] cleaner(multilistFree) multilist *copy =
-                multilistCopy(ml);
-        }
-
-        TEST("duplicate list of 500") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 500; i++) {
-                multilistPushHead(ml, s0, genstr("hello", i), 32);
+                cleaner(multilistFree) multilist *copy = multilistCopy(ml);
+                cleaner(flexFree) flex *want = flexNew();
+                mltPushGen(&want, "hello", 0, n - 1);
+                MLT_HOLDS(ml, want);
+                MLT_HOLDS(copy, want);
             }
-
-            [[maybe_unused]] cleaner(multilistFree) multilist *copy =
-                multilistCopy(ml);
         }
 
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
@@ -2117,80 +2179,49 @@ int multilistTest(int, char *[]) {
             }
         }
 
-        TEST("delete range empty list") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistDelRange(&ml, s0, 5, 20);
-        }
+        /* Delete ranges against the documented contract: a negative
+         * start counts from the tail, the count clamps to the end, and a
+         * count <= 0, an empty list or a start outside deletes nothing */
+        static const struct {
+            int32_t n;
+            int64_t start;
+            int64_t count;
+        } delRanges[] = {
+            {0, 5, 20},   {32, 0, 32},    {32, 0, 128},     {500, 200, 100},
+            {500, -1, 1}, {500, -1, 128}, {500, -100, 100}, {50, -10, 5},
+            {50, 50, 1},  {50, -51, 1},   {50, 3, 0},       {50, 3, -2},
+        };
+        for (size_t r = 0; r < countof(delRanges); r++) {
+            const int32_t n = delRanges[r].n;
+            const int64_t at = delRanges[r].start;
+            const int64_t count = delRanges[r].count;
+            TEST_DESC("delete range start %" PRId64 " count %" PRId64
+                      " of %" PRId32,
+                      at, count, n) {
+                cleaner(multilistFree) multilist *ml =
+                    multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
+                for (int32_t i = 0; i < n; i++) {
+                    multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
+                }
 
-        TEST("delete range of entire node in list of one node") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 32; i++) {
-                multilistPushHead(ml, s0, genstr("hello", i), 32);
+                const int64_t from = at < 0 ? n + at : at;
+                const bool deletes = count > 0 && from >= 0 && from < n;
+                const int64_t to =
+                    deletes ? (from + count < n ? from + count : n) : from;
+                cleaner(flexFree) flex *want = flexNew();
+                if (deletes) {
+                    mltPushGen(&want, "hello", 1, (int)from);
+                    mltPushGen(&want, "hello", (int)to + 1, n);
+                } else {
+                    mltPushGen(&want, "hello", 1, n);
+                }
+
+                if (multilistDelRange(&ml, s0, at, count) != deletes) {
+                    ERR("DelRange returned %s", deletes ? "false" : "true");
+                }
+
+                MLT_HOLDS(ml, want);
             }
-
-            multilistDelRange(&ml, s0, 0, 32);
-        }
-
-        TEST("delete range of entire node with overflow values") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 32; i++) {
-                multilistPushHead(ml, s0, genstr("hello", i), 32);
-            }
-
-            multilistDelRange(&ml, s0, 0, 128);
-        }
-
-        TEST("delete middle 100 of 500 list") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 500; i++) {
-                multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
-            }
-
-            multilistDelRange(&ml, s0, 200, 100);
-        }
-
-        TEST("delete negative 1 from 500 list") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 500; i++) {
-                multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
-            }
-
-            multilistDelRange(&ml, s0, -1, 1);
-        }
-
-        TEST("delete negative 1 from 500 list with overflow values") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 500; i++) {
-                multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
-            }
-
-            multilistDelRange(&ml, s0, -1, 128);
-        }
-
-        TEST("delete negative 100 from 500 list") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 500; i++) {
-                multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
-            }
-
-            multilistDelRange(&ml, s0, -100, 100);
-        }
-
-        TEST("delete -10 values 5 from 50 list") {
-            cleaner(multilistFree) multilist *ml =
-                multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            for (int i = 0; i < 50; i++) {
-                multilistPushTail(ml, s0, genstr("hello", i + 1), 32);
-            }
-
-            multilistDelRange(&ml, s0, -10, 5);
         }
 
         TEST("numbers only list read") {
@@ -2290,7 +2321,14 @@ int multilistTest(int, char *[]) {
             multilistPushTail(ml, s0, "95", 2);
             multilistReplaceAtIndex(&ml, s0, 1, "foo", 3);
             multilistReplaceAtIndex(&ml, s0, -1, "bar", 3);
-            OK;
+
+            cleaner(flexFree) flex *want = flexNew();
+            mltWant(&want, "99", 2);
+            mltWant(&want, "foo", 3);
+            mltWant(&want, "xxxxxxxxxxxxxxxxxxxx", 20);
+            mltWant(&want, "96", 2);
+            mltWant(&want, "bar", 3);
+            MLT_HOLDS(ml, want);
         }
 
         mflexStateReset(s0);
@@ -2643,13 +2681,11 @@ int multilistTest(int, char *[]) {
                                   FLEX_ENDPOINT_TAIL);
                 }
 
-                [[maybe_unused]] cleaner(multilistFree) multilist *ml =
+                /* The list takes 'fl'; it must hold what 'fl' held */
+                cleaner(flexFree) flex *want = flexDuplicate(fl);
+                cleaner(multilistFree) multilist *ml =
                     multilistNewFromFlex(f, depth[_i], fl);
-
-                if (f == 1) {
-                } else if (f == 32) {
-                } else if (f == 66) {
-                }
+                MLT_HOLDS(ml, want);
             }
         }
 

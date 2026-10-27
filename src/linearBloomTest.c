@@ -660,6 +660,15 @@ int linearBloomTest(int, char *[]) {
             linearBloomHashSet(bloom, hash);
         }
 
+        /* Every member set anywhere in the extent reads back */
+        for (size_t i = 0; i < countof(positions); i++) {
+            uint64_t hash[2] = {positions[i], positions[i] * 31};
+            if (!linearBloomHashCheck(bloom, hash)) {
+                ERR("the member for position %" PRIu64 " is missing",
+                    positions[i]);
+            }
+        }
+
         linearBloomFree(bloom);
     }
 

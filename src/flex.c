@@ -6552,6 +6552,82 @@ static flex *createList() {
     return f;
 }
 
+/* The entries of 'f' as words joined by single spaces: bytes as they
+ * are, integers in decimal, reals with %g, and true, false and null by
+ * name.  The text FLEX_IS compares; lives until the thread's next call. */
+static const char *flexTestWords(const flex *f) {
+    thread_local static char out[4096];
+    size_t used = 0;
+    out[0] = '\0';
+    for (flexEntry *fe = flexHead(f); fe; fe = flexNext(f, fe)) {
+        databox box = {};
+        flexGetByType(fe, &box);
+        char *const at = out + used;
+        const size_t room = sizeof(out) - used;
+        const char *const sep = used ? " " : "";
+        int n;
+        switch (box.type) {
+        case DATABOX_SIGNED_64:
+            n = snprintf(at, room, "%s%" PRId64, sep, box.data.i64);
+            break;
+        case DATABOX_UNSIGNED_64:
+            n = snprintf(at, room, "%s%" PRIu64, sep, box.data.u64);
+            break;
+        case DATABOX_FLOAT_32:
+            n = snprintf(at, room, "%s%g", sep, (double)box.data.f32);
+            break;
+        case DATABOX_DOUBLE_64:
+            n = snprintf(at, room, "%s%g", sep, box.data.d64);
+            break;
+        case DATABOX_TRUE:
+            n = snprintf(at, room, "%strue", sep);
+            break;
+        case DATABOX_FALSE:
+            n = snprintf(at, room, "%sfalse", sep);
+            break;
+        case DATABOX_NULL:
+            n = snprintf(at, room, "%snull", sep);
+            break;
+        default:
+            n = box.type >= DATABOX_BYTES
+                    ? snprintf(at, room, "%s%.*s", sep, (int)box.len,
+                               (const char *)databoxCBytes(&box))
+                    : snprintf(at, room, "%s%s", sep, databoxReprStr(&box));
+            break;
+        }
+
+        if (n < 0 || (size_t)n >= room) {
+            break; /* full: the comparison fails on the cut text */
+        }
+
+        used += (size_t)n;
+    }
+
+    return out;
+}
+
+/* ERR unless 'f' holds exactly the words 'want' (see flexTestWords) */
+#define FLEX_IS(f, want)                                                       \
+    do {                                                                       \
+        const char *got_ = flexTestWords(f);                                   \
+        if (strcmp(got_, (want)) != 0) {                                       \
+            ERR("flex holds \"%s\", want \"%s\"", got_, (want));               \
+        }                                                                      \
+    } while (0)
+
+/* Whether a flexGet result (bytes, or an integer when 'str' is NULL)
+ * reads as the word 'want' */
+static bool flexTestGotIs(const uint8_t *str, uint32_t len, int64_t val,
+                          const char *want) {
+    if (str) {
+        return len == strlen(want) && memcmp(str, want, len) == 0;
+    }
+
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%" PRId64, val);
+    return strcmp(buf, want) == 0;
+}
+
 static flex *createIntList() {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
@@ -6572,56 +6648,44 @@ static flex *createIntList() {
     return f;
 }
 
+/* For flexes of 0, dnum, 2 * dnum, ... below maxsize "quux" entries: 'num'
+ * times either push "quux" at 'pos' then delete the head, or (replace)
+ * replace the entry at 'pos' with "quux" (from dnum entries up: an empty
+ * flex has no entry to replace).  Every entry is "quux", so each flex
+ * must end byte-identical to how it started; *changedAt is set to the
+ * entry count of the first one that does not.  Returns the total
+ * microseconds of the timed loops. */
 static uint64_t stress(flexEndpoint pos, int32_t num, int32_t maxsize,
-                       int32_t dnum) {
+                       int32_t dnum, bool replace, int32_t *changedAt) {
     static constexpr char location[2][5] = {"TAIL", "HEAD"};
     uint64_t total = 0;
-    for (int32_t i = 0; i < maxsize; i += dnum) {
+    for (int32_t i = replace ? dnum : 0; i < maxsize; i += dnum) {
         cleaner(flexFree) flex *f = flexNew();
         for (int32_t j = 0; j < i; j++) {
             flexPushBytes(&f, "quux", 4, FLEX_ENDPOINT_TAIL);
         }
 
-        /* Do num times a push+pop from pos */
-        int64_t start = timeUtilUs();
+        cleaner(flexFree) flex *before = flexDuplicate(f);
+        const int64_t start = timeUtilUs();
         for (int32_t k = 0; k < num; k++) {
-            /* Push to tail, delete from head. */
-            flexPushBytes(&f, "quux", 4, pos);
-            flexDeleteHead(&f);
+            if (replace) {
+                flexReplaceBytes(&f, flexHeadOrTail(f, pos), "quux", 4);
+            } else {
+                flexPushBytes(&f, "quux", 4, pos);
+                flexDeleteHead(&f);
+            }
         }
 
-        int64_t end = timeUtilUs();
+        const int64_t end = timeUtilUs();
+        if (*changedAt < 0 && (flexBytes(f) != flexBytes(before) ||
+                               memcmp(f, before, flexBytes(f)) != 0)) {
+            *changedAt = i;
+        }
 
-        printf("Entry count: %8d, bytes: %8zu, %dx push+pop (%s): %6" PRId64
+        printf("Entry count: %8d, bytes: %8zu, %dx %s (%s): %6" PRId64
                " usec\n",
-               i, flexTotalBytes_(f), num, location[pos + 1], end - start);
-        total += end - start;
-    }
-
-    return total;
-}
-
-static uint64_t stressReplaceInline(flexEndpoint pos, int32_t num,
-                                    int32_t maxsize, int32_t dnum) {
-    static constexpr char location[2][5] = {"TAIL", "HEAD"};
-    uint64_t total = 0;
-    for (int32_t i = 0; i < maxsize; i += dnum) {
-        cleaner(flexFree) flex *f = flexNew();
-        for (int32_t j = 0; j < i; j++) {
-            flexPushBytes(&f, "quux", 4, FLEX_ENDPOINT_TAIL);
-        }
-
-        /* Do num times a push+pop from pos */
-        int64_t start = timeUtilUs();
-        for (int32_t k = 0; k < num; k++) {
-            flexReplaceBytes(&f, flexHeadOrTail(f, pos), "quux", 4);
-        }
-
-        int64_t end = timeUtilUs();
-
-        printf("Entry count: %8d, bytes: %8zu, %dx push+pop (%s): %6" PRId64
-               " usec\n",
-               i, flexTotalBytes_(f), num, location[pos + 1], end - start);
+               i, flexTotalBytes_(f), num, replace ? "replace" : "push+pop",
+               location[pos + 1], end - start);
         total += end - start;
     }
 
@@ -10659,67 +10723,30 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    TEST("iterate the list from 0 to the end") {
-        f = createList();
-        fe = flexIndex(f, 0);
-        while (flexGet(fe, &entry, &elen, &value)) {
-            printf("Entry: ");
-            if (entry) {
-                if (elen) {
-                    printf("%.*s", elen, entry);
+    for (int32_t start = 0; start < 3; start++) {
+        TEST_DESC("iterate the list from %" PRId32 " to the end", start) {
+            const char *const want[] = {"hello", "foo", "quux", "1024"};
+            const int32_t n = (int32_t)countof(want);
+            f = createList();
+            fe = flexIndex(f, start);
+            int32_t at = start;
+            while (flexGet(fe, &entry, &elen, &value)) {
+                if (at >= n || !flexTestGotIs(entry, elen, value, want[at])) {
+                    ERR("entry %" PRId32 " of the walk from %" PRId32
+                        " is wrong",
+                        at, start);
                 }
-            } else {
-                printf("%" PRIi64 "", value);
+
+                at++;
+                fe = flexNext(f, fe);
             }
 
-            fe = flexNext(f, fe);
-            printf("\n");
-        }
-
-        printf("\n");
-        flexFree(f);
-    }
-
-    TEST("iterate the list from 1 to the end") {
-        f = createList();
-        fe = flexIndex(f, 1);
-        while (flexGet(fe, &entry, &elen, &value)) {
-            printf("Entry: ");
-            if (entry) {
-                if (elen) {
-                    printf("%.*s", elen, entry);
-                }
-            } else {
-                printf("%" PRIi64 "", value);
+            if (at != n) {
+                ERR("the walk from %" PRId32 " ended at %" PRId32, start, at);
             }
 
-            fe = flexNext(f, fe);
-            printf("\n");
+            flexFree(f);
         }
-
-        printf("\n");
-        flexFree(f);
-    }
-
-    TEST("iterate the list from 2 to the end") {
-        f = createList();
-        fe = flexIndex(f, 2);
-        while (flexGet(fe, &entry, &elen, &value)) {
-            printf("Entry: ");
-            if (entry) {
-                if (elen) {
-                    printf("%.*s", elen, entry);
-                }
-            } else {
-                printf("%" PRIi64 "", value);
-            }
-
-            fe = flexNext(f, fe);
-            printf("\n");
-        }
-
-        printf("\n");
-        flexFree(f);
     }
 
     TEST("iterate starting out of range") {
@@ -10783,35 +10810,35 @@ int32_t flexTest(int32_t argc, char **argv) {
     TEST("delete the inclusive range 0,0") {
         f = createList();
         flexDeleteRange(&f, 0, 1);
-        flexRepr(f);
+        FLEX_IS(f, "foo quux 1024");
         flexFree(f);
     }
 
     TEST("delete the inclusive range 0,1") {
         f = createList();
         flexDeleteRange(&f, 0, 2);
-        flexRepr(f);
+        FLEX_IS(f, "quux 1024");
         flexFree(f);
     }
 
     TEST("delete the inclusive range 1,2") {
         f = createList();
         flexDeleteRange(&f, 1, 2);
-        flexRepr(f);
+        FLEX_IS(f, "hello 1024");
         flexFree(f);
     }
 
     TEST("delete with the start index out of range") {
         f = createList();
         flexDeleteRange(&f, 5, 1);
-        flexRepr(f);
+        FLEX_IS(f, "hello foo quux 1024");
         flexFree(f);
     }
 
     TEST("delete with a count past the end") {
         f = createList();
         flexDeleteRange(&f, 1, 5);
-        flexRepr(f);
+        FLEX_IS(f, "hello");
         flexFree(f);
     }
 
@@ -10837,7 +10864,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
         printf("\n");
-        flexRepr(f);
+        FLEX_IS(f, "hello quux 1024");
         flexFree(f);
     }
 
@@ -11065,7 +11092,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexPushSigned(&f, (1LL << 62) - 1, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&f, -(1LL << 62), FLEX_ENDPOINT_TAIL);
 
-        flexRepr(f);
+        /* Every boundary value reads back as pushed */
+        FLEX_IS(f, "-128 127 255 255 -256 -32768 32767 65535 65535 -65536 "
+                   "-2147483648 2147483647 4294967295 4294967295 -4294967296 "
+                   "-9223372036854775808 9223372036854775807 "
+                   "18446744073709551615 4611686018427387903 "
+                   "-4611686018427387904");
         flexFree(f);
     }
 
@@ -11774,19 +11806,17 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = createList();
         flex *f2 = createList();
 
-        printf("Initial list...\n");
-        flexRepr(f);
+        FLEX_IS(f, "hello foo quux 1024");
 
         static const char *attempt = "abcdefhij";
         flexReplaceBytes(&f, flexHead(f), attempt, strlen(attempt));
-        printf("Replaced head...\n");
-        flexRepr(f);
+        FLEX_IS(f, "abcdefhij foo quux 1024");
 
         static const char *attempt2 = "zabooooooooooooo";
         flexReplaceBytes(&f, flexTail(f), attempt2, strlen(attempt2));
-        printf("Replaced tail...\n");
-        flexRepr(f);
+        FLEX_IS(f, "abcdefhij foo quux zabooooooooooooo");
 
+        /* A long string replaces a short one in the middle of the list */
         static const char *attempt3 =
             "William Shakespeare was an English poet, playwright, and actor, "
             "widely regarded as the greatest writer in the English language "
@@ -11794,17 +11824,18 @@ int32_t flexTest(int32_t argc, char **argv) {
             "England's national poet, and the \"Bard of Avon\". Wikipedia";
         flexReplaceBytes(&f, flexPrev(f, flexTail(f)), attempt3,
                          strlen(attempt3));
-        printf("Replaced previous to tail...\n");
-        flexRepr(f);
+        char want[512];
+        snprintf(want, sizeof(want), "abcdefhij foo %s zabooooooooooooo",
+                 attempt3);
+        FLEX_IS(f, want);
 
         flexReplaceBytes(&f, flexTail(f), attempt, strlen(attempt));
-        printf("Replaced tail...\n");
-        flexRepr(f);
+        snprintf(want, sizeof(want), "abcdefhij foo %s abcdefhij", attempt3);
+        FLEX_IS(f, want);
 
         flexReplaceBytes(&f, flexPrev(f, flexTail(f)), attempt2,
                          strlen(attempt2));
-        printf("Replaced previous to tail...\n");
-        flexRepr(f);
+        FLEX_IS(f, "abcdefhij foo zabooooooooooooo abcdefhij");
 
         flexFree(f);
         flexFree(f2);
@@ -11832,7 +11863,12 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexAppendMultipleExact(&f, 10, fields);
 
-        flexRepr(f);
+        /* Ten entries, the last an empty string (the trailing space) */
+        FLEX_IS(f, "100 200 300 400 500 0 600 700 800 ");
+        if (flexCount(f) != 10) {
+            ERR("%zu entries, want 10", flexCount(f));
+        }
+
         flexFree(f);
     }
 
@@ -11842,42 +11878,37 @@ int32_t flexTest(int32_t argc, char **argv) {
         const databox F = databoxBool(false);
         const databox n = databoxNull();
         flexPushByType(&f, &t, FLEX_ENDPOINT_TAIL);
-        flexRepr(f);
+        FLEX_IS(f, "hello foo quux 1024 true");
 
         flexPushByType(&f, &F, FLEX_ENDPOINT_TAIL);
-        flexRepr(f);
+        FLEX_IS(f, "hello foo quux 1024 true false");
 
         flexPushByType(&f, &n, FLEX_ENDPOINT_TAIL);
-        flexRepr(f);
+        FLEX_IS(f, "hello foo quux 1024 true false null");
 
         flexPushByType(&f, &t, FLEX_ENDPOINT_HEAD);
-        flexRepr(f);
+        FLEX_IS(f, "true hello foo quux 1024 true false null");
 
         flexPushByType(&f, &F, FLEX_ENDPOINT_HEAD);
-        flexRepr(f);
+        FLEX_IS(f, "false true hello foo quux 1024 true false null");
 
         flexPushByType(&f, &n, FLEX_ENDPOINT_HEAD);
-        flexRepr(f);
+        FLEX_IS(f, "null false true hello foo quux 1024 true false null");
 
-        /* Random cleanups */
-        for (int i = 0; i < 300; i++) {
+        /* Draining in random order leaves exactly an empty flex */
+        cleaner(flexFree) flex *empty = flexNew();
+        for (int i = 0; i < 900; i++) {
             cleaner(flexFree) flex *f2 = flexDuplicate(f);
-            cleaner(flexFree) flex *f3 = flexDuplicate(f);
-            cleaner(flexFree) flex *f4 = flexDuplicate(f);
-
             while (flexCount(f2)) {
                 int32_t idx = rand() % flexCount(f2);
                 flexDeleteOffsetCountDrain(&f2, idx, 1);
             }
 
-            while (flexCount(f3)) {
-                int32_t idx = rand() % flexCount(f3);
-                flexDeleteOffsetCountDrain(&f3, idx, 1);
-            }
-
-            while (flexCount(f4)) {
-                int32_t idx = rand() % flexCount(f4);
-                flexDeleteOffsetCountDrain(&f4, idx, 1);
+            if (flexBytes(f2) != flexBytes(empty) ||
+                memcmp(f2, empty, flexBytes(empty)) != 0) {
+                ERR("drain %d left %zu bytes, not an empty flex", i,
+                    flexBytes(f2));
+                break;
             }
         }
 
@@ -12041,8 +12072,13 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexPushByType(&f, &box, FLEX_ENDPOINT_HEAD);
             fe = flexIndex(f, -1);
             flexDelete(&f, &fe);
+            if (i == 0) {
+                FLEX_IS(f, "1024 hello foo quux");
+            }
         }
 
+        /* 300 is a multiple of 4: back where it started */
+        FLEX_IS(f, "hello foo quux 1024");
         flexFree(f);
     }
 
@@ -12748,25 +12784,29 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
     }
 
-    TEST("stress with variable flex sizes (insert + delete)") {
-        /* 500 push+pop pairs every 512 entries up to 16 k, which takes
-         * both header fields through their 1-, 2- and 3-byte widths: a
-         * smoke-size run of what was a throughput benchmark */
-        float headTotal = stress(FLEX_ENDPOINT_HEAD, 500, 16384, 512);
-        float tailTotal = stress(FLEX_ENDPOINT_TAIL, 500, 16384, 512);
+    /* 500 push+pop pairs (or replaces) every 512 entries up to 16 k,
+     * which takes both header fields through their 1-, 2- and 3-byte
+     * widths: a smoke-size run of what was a throughput benchmark */
+    for (int replace = 0; replace < 2; replace++) {
+        TEST_DESC("stress with variable flex sizes (%s)",
+                  replace ? "insert replace" : "insert + delete") {
+            for (int end = 0; end < 2; end++) {
+                const flexEndpoint pos =
+                    end ? FLEX_ENDPOINT_TAIL : FLEX_ENDPOINT_HEAD;
+                int32_t changedAt = -1;
+                const float total =
+                    stress(pos, 500, 16384, 512, replace, &changedAt);
+                if (changedAt >= 0) {
+                    ERR("%s at the %s changed a flex of %" PRId32
+                        " equal entries",
+                        replace ? "a replace" : "a push+pop",
+                        end ? "tail" : "head", changedAt);
+                }
 
-        printf("  (%f sec head, %f sec tail)\n", headTotal / 1e6,
-               tailTotal / 1e6);
-    }
-
-    TEST("stress with variable flex sizes (insert replace)") {
-        float headTotal =
-            stressReplaceInline(FLEX_ENDPOINT_HEAD, 500, 16384, 512);
-        float tailTotal =
-            stressReplaceInline(FLEX_ENDPOINT_TAIL, 500, 16384, 512);
-
-        printf("  (%f sec head, %f sec tail)\n", headTotal / 1e6,
-               tailTotal / 1e6);
+                printf("  (%f sec at the %s)\n", total / 1e6,
+                       end ? "tail" : "head");
+            }
+        }
     }
 
     /* ================================================================

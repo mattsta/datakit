@@ -39,7 +39,7 @@
  *
  * Goal: allow efficient storage of user bytes by converting to native types
  * when possible (integers, reals), while ALSO allowing 100% reliable round-trip
- * printing of values created. Re-converting the native type to a string agan
+ * printing of values created. Re-converting the native type to a string again
  * must be EXACTLY the same value the user provided to generate the native
  * representation.
  *
@@ -2103,28 +2103,22 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
     }
 
-    TEST("Reliable number parsing simple trailing zeroes fails?") {
-        databox result = {};
-        bool worked = StrScanScanReliable("299.5000", 8, &result);
-        if (worked) {
-            databoxReprSay("Expected failure, but got", &result);
-        }
-    }
-
-    TEST("Reliable number parsing too long decimal fails?") {
-        databox result = {};
-        bool worked = StrScanScanReliable("299.500010101010101", 18, &result);
-        if (worked) {
-            databoxReprSay("Expected failure, but got", &result);
-        }
-    }
-
-    TEST("Reliable number parsing too long decimal fails II?") {
-        databox result = {};
-        bool worked =
-            StrScanScanReliable("2.22222222222222222222222222", 28, &result);
-        if (worked) {
-            databoxReprSay("Expected failure, but got", &result);
+    /* Text that would not print back byte for byte is refused, and the
+     * box is left untouched: trailing zeroes, and decimals longer than a
+     * double holds */
+    static const char *const unreliable[] = {
+        "299.5000",
+        "299.50001010101010",
+        "2.22222222222222222222222222",
+    };
+    for (size_t u = 0; u < countof(unreliable); u++) {
+        TEST_DESC("Reliable number parsing refuses %s", unreliable[u]) {
+            databox result = {};
+            if (StrScanScanReliable(unreliable[u], strlen(unreliable[u]),
+                                    &result) ||
+                result.type != DATABOX_VOID) {
+                ERR("accepted as %s", databoxReprStr(&result));
+            }
         }
     }
 

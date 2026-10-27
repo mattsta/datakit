@@ -1941,6 +1941,8 @@ int multiFenwickTest(int, char *[]) {
     TEST("stress: random sparse updates") {
         cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         uint64_t seed = 12345;
+        /* The oracle: the value Set left at each index */
+        int64_t values[10000] = {};
 
         /* Random indices with gaps */
         for (int rep = 0; rep < 1000; rep++) {
@@ -1949,13 +1951,25 @@ int multiFenwickTest(int, char *[]) {
 
             databox dval = DATABOX_SIGNED(val);
             multiFenwickSet(&mfw, idx, &dval);
+            values[idx] = val;
         }
 
-        /* Verify tree is consistent (no crashes on queries) */
-        for (size_t i = 0; i < multiFenwickCount(mfw); i += 100) {
+        /* Every prefix sum (inclusive) matches the oracle's */
+        if (multiFenwickCount(mfw) > countof(values)) {
+            ERR("%zu elements from indices below %zu", multiFenwickCount(mfw),
+                countof(values));
+        }
+
+        int64_t prefix = 0;
+        for (size_t i = 0; i < multiFenwickCount(mfw) && i < countof(values);
+             i++) {
+            prefix += values[i];
             databox sum;
-            multiFenwickQuery(mfw, i, &sum);
-            /* Just make sure it doesn't crash */
+            if (!multiFenwickQuery(mfw, i, &sum) || sum.data.i64 != prefix) {
+                ERR("prefix sum through %zu is %" PRId64 ", want %" PRId64, i,
+                    sum.data.i64, prefix);
+                break;
+            }
         }
     }
 

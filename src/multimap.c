@@ -4616,6 +4616,10 @@ int multimapTest(int, char *[]) {
         cleaner(multimapFree) multimap *m =
             multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
         multimapReport(m);
+        if (multimapType_(m) != MULTIMAP_TYPE_SMALL || multimapCount(m) != 0) {
+            ERR("a new map is not an empty Small map (%zu rows)",
+                multimapCount(m));
+        }
     }
 
     TEST("small: insert / lookup / exists / delete / type check...") {
@@ -6212,6 +6216,11 @@ int multimapTest(int, char *[]) {
         cleanerName(zfree, Int32) int32_t *inserted =
             zcalloc(10000, sizeof(int32_t));
         size_t insertedCount = 0;
+        /* The oracle: rows per key.  A full-width insert compares the
+         * whole row, so each insert (a new value every step) adds a row,
+         * and a delete removes one of the key's rows. */
+        uint32_t rows[10000] = {};
+        size_t rowCount = 0;
 
         /* Random mix of operations */
         for (int32_t i = 0; i < 5000; i++) {
@@ -6226,17 +6235,32 @@ int multimapTest(int, char *[]) {
                 const databox *elements[2] = {&k, &v};
                 multimapInsertFullWidth(&m, elements);
                 inserted[insertedCount++] = key;
+                rows[key]++;
+                rowCount++;
             } else if (op < 9 && insertedCount > 0) {
-                /* Delete random existing */
+                /* Delete a row of a key inserted at some point */
                 size_t idx = seed % insertedCount;
-                databox k = databoxNewSigned(inserted[idx]);
-                multimapDelete(&m, &k);
+                const int32_t gone = inserted[idx];
+                databox k = databoxNewSigned(gone);
+                if (multimapDelete(&m, &k) != (rows[gone] > 0)) {
+                    ERR("step %" PRId32 ": deleting key %" PRId32
+                        " disagrees with the oracle",
+                        i, gone);
+                }
+
+                if (rows[gone] > 0) {
+                    rows[gone]--;
+                    rowCount--;
+                }
             } else if (insertedCount > 0) {
-                /* Verify random existing */
+                /* Look up a key inserted at some point */
                 size_t idx = seed % insertedCount;
                 databox k = databoxNewSigned(inserted[idx]);
-                /* Key might have been deleted, so don't assert on exists */
-                multimapExists(m, &k);
+                if (multimapExists(m, &k) != (rows[inserted[idx]] > 0)) {
+                    ERR("step %" PRId32 ": key %" PRId32
+                        " exists disagrees with the oracle",
+                        i, inserted[idx]);
+                }
             }
 
             /* Periodic verification */
@@ -6246,6 +6270,9 @@ int multimapTest(int, char *[]) {
         }
 
         multimapVerify(m);
+        if (multimapCount(m) != rowCount) {
+            ERR("%zu rows, the oracle holds %zu", multimapCount(m), rowCount);
+        }
     }
 
     /* ================================================================

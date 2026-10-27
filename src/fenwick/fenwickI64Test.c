@@ -253,24 +253,6 @@ int fenwickI64Test(int, char *[]) {
      * CATEGORY 2: TIER TRANSITIONS (2 tests - 2-TIER SYSTEM)
      * ================================================================= */
 
-    TEST("tier upgrade: debug tier type values") {
-        void *fw = fenwickI64New();
-
-        /* Debug: Check tier type constants */
-        printf("    DEBUG: SMALL=%d, FULL=%d\n", FENWICK_I64_TYPE_SMALL,
-               FENWICK_I64_TYPE_FULL);
-
-        fenwickI64Update(&fw, 0, 1);
-        printf("    After insert at 0: type=%d, count=%zu\n",
-               FENWICK_I64_TYPE(fw), fenwickI64Count(fw));
-
-        fenwickI64Update(&fw, 20000, 1);
-        printf("    After insert at 20000: type=%d, count=%zu\n",
-               FENWICK_I64_TYPE(fw), fenwickI64Count(fw));
-
-        fenwickI64Free(fw);
-    }
-
     TEST("tier upgrade: small to full at threshold (2-TIER)") {
         void *fw = fenwickI64New();
 

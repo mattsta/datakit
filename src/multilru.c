@@ -1685,6 +1685,21 @@ static int multilruTestEntryLayouts(void) {
     return bad;
 }
 
+/* ERR unless 'mlru' holds 'n' entries and its 'levels' level counts add
+ * up to them: an access pattern moves entries between levels and never
+ * loses or duplicates one */
+#define MLRU_HOLDS_ACROSS_LEVELS(mlru, levels, n)                              \
+    do {                                                                       \
+        size_t sum_ = 0;                                                       \
+        for (size_t l_ = 0; l_ < (levels); l_++) {                             \
+            sum_ += multilruLevelCount(mlru, l_);                              \
+        }                                                                      \
+        if (multilruCount(mlru) != (n) || sum_ != (n)) {                       \
+            ERR("%zu entries, %zu across the levels, want %zu",                \
+                multilruCount(mlru), sum_, (size_t)(n));                       \
+        }                                                                      \
+    } while (0)
+
 int multilruTest(int, char *[]) {
     int err = 0;
 
@@ -2750,25 +2765,39 @@ int multilruTest(int, char *[]) {
     TEST("API completeness - all configuration functions") {
         cleaner(multilruFree) multilru *mlru = multilruNew();
 
-        /* Test SetPolicy */
-        multilruSetPolicy(mlru, MLRU_POLICY_COUNT);
-        multilruSetPolicy(mlru, MLRU_POLICY_SIZE);
-        multilruSetPolicy(mlru, MLRU_POLICY_HYBRID);
+        /* Every setting reads back as set */
+        static const multilruPolicy policies[] = {
+            MLRU_POLICY_COUNT, MLRU_POLICY_SIZE, MLRU_POLICY_HYBRID};
+        for (size_t i = 0; i < countof(policies); i++) {
+            multilruSetPolicy(mlru, policies[i]);
+            if (multilruGetPolicy(mlru) != policies[i]) {
+                ERR("policy %d read back as %d", (int)policies[i],
+                    (int)multilruGetPolicy(mlru));
+            }
+        }
 
-        /* Test SetEvictStrategy */
-        multilruSetEvictStrategy(mlru, MLRU_EVICT_LRU);
-        multilruSetEvictStrategy(mlru, MLRU_EVICT_SIZE_WEIGHTED);
-        multilruSetEvictStrategy(mlru, MLRU_EVICT_SIZE_LRU);
+        static const multilruEvictStrategy strategies[] = {
+            MLRU_EVICT_LRU, MLRU_EVICT_SIZE_WEIGHTED, MLRU_EVICT_SIZE_LRU};
+        for (size_t i = 0; i < countof(strategies); i++) {
+            multilruSetEvictStrategy(mlru, strategies[i]);
+            if (multilruGetEvictStrategy(mlru) != strategies[i]) {
+                ERR("strategy %d read back as %d", (int)strategies[i],
+                    (int)multilruGetEvictStrategy(mlru));
+            }
+        }
 
-        /* Test SetMaxCount */
-        multilruSetMaxCount(mlru, 100);
-        multilruSetMaxCount(mlru, 0);
-
-        /* Test SetMaxWeight */
-        multilruSetMaxWeight(mlru, 10000);
-        multilruSetMaxWeight(mlru, 0);
-
-        printf("API completeness - all configuration functions: PASSED\n");
+        static const uint64_t limits[] = {100, 10000, 0};
+        for (size_t i = 0; i < countof(limits); i++) {
+            multilruSetMaxCount(mlru, limits[i]);
+            multilruSetMaxWeight(mlru, limits[i]);
+            if (multilruGetMaxCount(mlru) != limits[i] ||
+                multilruGetMaxWeight(mlru) != limits[i]) {
+                ERR("limit %" PRIu64 " read back as count %" PRIu64
+                    ", weight %" PRIu64,
+                    limits[i], multilruGetMaxCount(mlru),
+                    multilruGetMaxWeight(mlru));
+            }
+        }
     }
 
     TEST("boundary conditions - empty cache") {
@@ -3595,7 +3624,7 @@ int multilruTest(int, char *[]) {
         }
         printf("\n");
 
-        printf("access patterns - sequential: PASSED\n");
+        MLRU_HOLDS_ACROSS_LEVELS(mlru, 7, 10000);
     }
 
     TEST("access patterns - random uniform") {
@@ -3627,7 +3656,7 @@ int multilruTest(int, char *[]) {
         }
         printf("\n");
 
-        printf("access patterns - random uniform: PASSED\n");
+        MLRU_HOLDS_ACROSS_LEVELS(mlru, 7, 10000);
     }
 
     TEST("access patterns - zipfian (hot/cold)") {
@@ -3702,7 +3731,7 @@ int multilruTest(int, char *[]) {
         }
         printf("\n");
 
-        printf("access patterns - working set: PASSED\n");
+        MLRU_HOLDS_ACROSS_LEVELS(mlru, 7, 10000);
     }
 
     TEST("access patterns - scan resistance") {

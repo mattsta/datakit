@@ -3179,8 +3179,10 @@ int multimapFullTest(int, char *[]) {
     }
 
     TEST("create") {
-        [[maybe_unused]] cleaner(multimapFullFree) multimapFull *m =
-            multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
+        if (multimapFullCount(m) != 0) {
+            ERR("a new map holds %zu rows", multimapFullCount(m));
+        }
     }
 
     TEST("binary-search-vs-iteration agreement on mixed-length numeric keys") {
@@ -3300,6 +3302,20 @@ int multimapFullTest(int, char *[]) {
         multimapFullRepr(m);
 #endif
         strictConsistencyCheck(m);
+
+        /* Gap 1 reached every key; the larger gaps replaced rows of keys
+         * already present */
+        if (multimapFullCount(m) != howMany) {
+            ERR("%zu rows, want %zu", multimapFullCount(m), howMany);
+        }
+
+        for (size_t i = 0; i < howMany; i++) {
+            const databox keybox = databoxNewUnsigned(i);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("key %zu is missing", i);
+                break;
+            }
+        }
     }
 
     TEST("speeds at different sizes") {

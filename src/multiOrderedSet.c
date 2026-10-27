@@ -3370,6 +3370,10 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         printf("      Large int64 count=%zu sort_errors=%d: %s\n",
                multiOrderedSetCount(mos), sortErrors,
                sortErrors == 0 ? "OK" : "FAIL");
+        if (sortErrors || multiOrderedSetCount(mos) != numValues) {
+            ERR("%d scores out of order, %zu members (want %zu)", sortErrors,
+                multiOrderedSetCount(mos), numValues);
+        }
     }
 
     TEST("PRECISION: Mixed score types (int64, uint64, double)") {

@@ -459,14 +459,21 @@ static int testDataboxIntegration(void) {
         databox floatBox = {.type = DATABOX_DOUBLE_64,
                             .data.d64 = (double)INT64_MAX};
 
+        /* Exact comparison: (double)INT64_MAX rounds up to 2^63, one
+         * above INT64_MAX, while (double)INT64_MIN is -2^63 exactly */
         int cmp = databoxCompare(&intBox, &floatBox);
         printf("  INT64_MAX vs (double)INT64_MAX: %d\n", cmp);
-        /* Result depends on precision, just verify it's deterministic */
+        if (cmp >= 0 || databoxCompare(&floatBox, &intBox) <= 0) {
+            ERR("INT64_MAX must order below 2^63 (got %d)", cmp);
+        }
 
         intBox.data.i = INT64_MIN;
         floatBox.data.d64 = (double)INT64_MIN;
         cmp = databoxCompare(&intBox, &floatBox);
         printf("  INT64_MIN vs (double)INT64_MIN: %d\n", cmp);
+        if (cmp != 0 || databoxCompare(&floatBox, &intBox) != 0) {
+            ERR("INT64_MIN must equal -2^63 (got %d)", cmp);
+        }
     }
 
     return err;

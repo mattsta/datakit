@@ -559,11 +559,16 @@ int multiTimerTest(int, char *[]) {
     TEST("multiTimer: unregister non-existent timer (no crash)") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
 
-        /* Unregister timer ID that doesn't exist */
-        multiTimerUnregister(t, 9999);
+        /* Unregistering an id that was never registered is refused and
+         * leaves the timer empty and working */
+        if (multiTimerUnregister(t, 9999)) {
+            ERR("unregistering an unknown id succeeded");
+        }
 
-        /* Should not crash, process should work */
         multiTimerProcessTimerEvents(t);
+        if (multiTimerCount(t) != 0) {
+            ERR("an empty timer counts %zu timers", multiTimerCount(t));
+        }
     }
 
     TEST("multiTimer: callback returns false stops repeating") {

@@ -4626,8 +4626,11 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("create") {
-        [[maybe_unused]] cleaner(multiroarFree) multiroar *r =
-            multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        if (multiroarBitCount(r) != 0 || multiroarBitGet(r, 0) ||
+            multiroarBitGet(r, UINT64_MAX - 1)) {
+            ERR("a new bitmap has %" PRIu64 " bits set", multiroarBitCount(r));
+        }
     }
 
     TEST("set and get") {

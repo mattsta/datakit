@@ -906,6 +906,10 @@ int multimapAtomTest(int, char *[]) {
 
     TEST("create / free") {
         multimapAtom *ma = multimapAtomNew();
+        if (multimapAtomCount(ma) != 0) {
+            ERR("a new atom map holds %zu atoms", multimapAtomCount(ma));
+        }
+
         multimapAtomFree(ma);
     }
 

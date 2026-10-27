@@ -614,6 +614,7 @@ int mflexTest(int, char *[]) {
 
     TEST("remove entries") {
         cleaner(mflexFree) mflex *m = mflexNew();
+        const size_t emptyBytes = mflexBytesUncompressed(m);
 
         for (int j = 0; j < 5; j++) {
             const size_t howMany = MANYDO;
@@ -624,13 +625,24 @@ int mflexTest(int, char *[]) {
             }
 
             DOT_CLEAR;
+            if (mflexCount(m) != howMany) {
+                ERR("round %d holds %zu entries, want %zu", j, mflexCount(m),
+                    howMany);
+            }
 
-            while (mflexCount(m)) {
+            size_t deleted = 0;
+            while (mflexCount(m) && deleted <= howMany) {
                 mflexDeleteOffsetCount(&m, state, -1, 1);
+                deleted++;
                 DOT(step);
             }
 
             DOT_CLEAR;
+            if (deleted != howMany || mflexBytesUncompressed(m) != emptyBytes) {
+                ERR("round %d took %zu deletes (want %zu) and left %zu "
+                    "bytes (empty is %zu)",
+                    j, deleted, howMany, mflexBytesUncompressed(m), emptyBytes);
+            }
         }
     }
 

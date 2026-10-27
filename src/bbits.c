@@ -792,11 +792,29 @@ int bbitsTest(int, char *[]) {
 
     /* Test free on empty structures */
     TEST("free on empty structures") {
+        /* Freeing nothing, or an empty structure, is a no-op, and an
+         * empty structure answers a read with nothing */
+        bbitsDodDodFree(nullptr);
+        bbitsDodXofFree(nullptr);
+
         bbitsDodDod dd = {};
-        bbitsDodDodFree(&dd); /* Should not crash */
+        bbitsDodDodFree(&dd);
+        ssize_t count = 1;
+        uint64_t *keys = nullptr;
+        uint64_t *vals = nullptr;
+        if (bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals, nullptr,
+                                      nullptr, nullptr)) {
+            ERR("an empty dod-dod returned data");
+        }
 
         bbitsDodXof dx = {};
-        bbitsDodXofFree(&dx); /* Should not crash */
+        bbitsDodXofFree(&dx);
+        double *reals = nullptr;
+        count = 1;
+        if (bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &reals, nullptr,
+                                      nullptr, nullptr)) {
+            ERR("an empty dod-xof returned data");
+        }
     }
 
     /* Test negative offset (from end) */
