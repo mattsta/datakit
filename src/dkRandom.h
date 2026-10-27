@@ -89,14 +89,20 @@ static inline uint32_t dkXorshift32Next(uint32_t *state) {
     return *state;
 }
 
+/* splitmix64's finalizer: a bijection on 64 bits that spreads every input
+ * bit over the result (a hash mixer for integer keys as well as the
+ * generator's output stage) */
+static inline uint64_t dkSplitmix64Mix(uint64_t z) {
+    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+}
+
 /* Vigna's splitmix64: advance '*state' by the golden-ratio step and return
  * the mixed value; any seed, zero included.  str.h's splitmix64() is this
  * stream as an exported function. */
 static inline uint64_t dkSplitmix64Next(uint64_t *state) {
-    uint64_t z = (*state += UINT64_C(0x9E3779B97F4A7C15));
-    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return z ^ (z >> 31);
+    return dkSplitmix64Mix(*state += UINT64_C(0x9E3779B97F4A7C15));
 }
 
 #ifdef DATAKIT_TEST

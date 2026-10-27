@@ -1,5 +1,6 @@
 #include "databox.h"
 #include "dkDiag.h"
+#include "dkRandom.h" /* dkSplitmix64Mix */
 #include "floatExtended.h"
 #include "str.h"
 
@@ -948,13 +949,6 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
 #endif
 }
 
-/* splitmix64's finalizer: spreads every input bit over the result. */
-DK_INLINE_ALWAYS uint64_t databoxHashMix_(uint64_t x) {
-    x = (x ^ (x >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)) * UINT64_C(0x94D049BB133111EB);
-    return x ^ (x >> 31);
-}
-
 /* Distinct inputs for the three mixed classes: positive and negative
  * integers outside the int64 range, and reals that are not integers. */
 #define DATABOX_HASH_TAG_POSITIVE UINT64_C(0x9E3779B97F4A7C15)
@@ -974,9 +968,9 @@ DK_INLINE_ALWAYS uint64_t databoxIntegerKey_(const databoxIntegerValue_ v) {
 
     const uint64_t tag =
         v.negative ? DATABOX_HASH_TAG_NEGATIVE : DATABOX_HASH_TAG_POSITIVE;
-    return databoxHashMix_(
+    return dkSplitmix64Mix(
         (uint64_t)v.magnitude ^
-        databoxHashMix_((uint64_t)(v.magnitude >> 64) ^ tag));
+        dkSplitmix64Mix((uint64_t)(v.magnitude >> 64) ^ tag));
 }
 
 bool databoxNumericHashKey(const databox *box, uint64_t *key) {
@@ -998,7 +992,7 @@ bool databoxNumericHashKey(const databox *box, uint64_t *key) {
     const double d = databoxRealOf_(box);
     if (d != d) {
         /* Every NaN is one value. */
-        *key = databoxHashMix_(UINT64_C(0x7FF8000000000000) ^
+        *key = dkSplitmix64Mix(UINT64_C(0x7FF8000000000000) ^
                                DATABOX_HASH_TAG_REAL);
         return true;
     }
@@ -1024,7 +1018,7 @@ bool databoxNumericHashKey(const databox *box, uint64_t *key) {
      * double bits. */
     uint64_t bits;
     memcpy(&bits, &d, sizeof(bits));
-    *key = databoxHashMix_(bits ^ DATABOX_HASH_TAG_REAL);
+    *key = dkSplitmix64Mix(bits ^ DATABOX_HASH_TAG_REAL);
     return true;
 }
 

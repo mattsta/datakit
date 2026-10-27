@@ -33,6 +33,7 @@
 #include "ctmem.h" /* dkCtMemEq for nonce compare */
 #include "databox.h"
 #include "datakit.h"
+#include "dkRandom.h" /* dkSplitmix64Mix */
 #include "flex.h"
 #include "persist.h"
 
@@ -96,25 +97,15 @@ static size_t aeadNonceLogLoadLimit(size_t cap) {
     return cap - (cap >> 3u);
 }
 
-/* splitmix64 mix. Non-cryptographic but fine for hash-bucket
- * distribution. */
-static uint64_t aeadNonceLogMix64(uint64_t x) {
-    x ^= x >> 30;
-    x *= 0xBF58476D1CE4E5B9ull;
-    x ^= x >> 27;
-    x *= 0x94D049BB133111EBull;
-    x ^= x >> 31;
-    return x;
-}
-
-/* Hash the (key_id || nonce) tuple. */
+/* Hash the (key_id || nonce) tuple with splitmix64's finalizer:
+ * non-cryptographic, but it spreads the bits over the buckets. */
 static uint64_t aeadNonceLogHash(uint32_t key_id, const uint8_t *nonce) {
     uint64_t lo, hi;
     memcpy(&lo, nonce, 8);
     uint32_t hi32 = 0;
     memcpy(&hi32, nonce + 8, 4);
     hi = ((uint64_t)hi32 << 32) | (uint64_t)key_id;
-    return aeadNonceLogMix64(lo ^ aeadNonceLogMix64(hi));
+    return dkSplitmix64Mix(lo ^ dkSplitmix64Mix(hi));
 }
 
 /* The occupied slot `s` holds (key_id, nonce), whose hash is `h` */
