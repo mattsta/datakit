@@ -7690,16 +7690,13 @@ int multiroarTest(int, char *[]) {
             multiroarBitSet(sparse, i * 100);
         }
 
-        struct timespec start, end;
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        uint64_t start = timeUtilMonotonicNs();
         for (int i = 0; i < iterations; i++) {
             [[maybe_unused]] volatile uint64_t count =
                 multiroarBitCount(sparse);
         }
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        double sparseNs =
-            (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
-        sparseNs /= iterations;
+        const double sparseNs =
+            (double)(timeUtilMonotonicNs() - start) / iterations;
 
         /* Dense */
         cleaner(multiroarFree) multiroar *dense = multiroarBitNew();
@@ -7707,14 +7704,12 @@ int multiroarTest(int, char *[]) {
             multiroarBitSet(dense, i);
         }
 
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        start = timeUtilMonotonicNs();
         for (int i = 0; i < iterations; i++) {
             [[maybe_unused]] volatile uint64_t count = multiroarBitCount(dense);
         }
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        double denseNs =
-            (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
-        denseNs /= iterations;
+        const double denseNs =
+            (double)(timeUtilMonotonicNs() - start) / iterations;
 
         printf("  Sparse: %.1f ns/op, Dense: %.1f ns/op\n", sparseNs, denseNs);
     }
@@ -7769,21 +7764,18 @@ int multiroarTest(int, char *[]) {
         }
 
         /* N-way AND performance */
-        struct timespec start, end;
         const int iterations = 1000;
 
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        uint64_t start = timeUtilMonotonicNs();
         for (int i = 0; i < iterations; i++) {
             cleaner(multiroarFree) multiroar *result =
                 multiroarNewAndN(n, roars);
         }
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        double nwayNs =
-            (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
-        nwayNs /= iterations;
+        const double nwayNs =
+            (double)(timeUtilMonotonicNs() - start) / iterations;
 
         /* Chained binary AND performance */
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        start = timeUtilMonotonicNs();
         for (int i = 0; i < iterations; i++) {
             cleaner(multiroarFree) multiroar *result =
                 multiroarDuplicate(roars[0]);
@@ -7791,10 +7783,8 @@ int multiroarTest(int, char *[]) {
                 multiroarAnd(result, roars[j]);
             }
         }
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        double chainedNs =
-            (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
-        chainedNs /= iterations;
+        const double chainedNs =
+            (double)(timeUtilMonotonicNs() - start) / iterations;
 
         printf("  N=10 AND: N-way=%.0f ns, Chained=%.0f ns, Ratio=%.2fx\n",
                nwayNs, chainedNs, chainedNs / nwayNs);

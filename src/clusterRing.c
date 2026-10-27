@@ -298,10 +298,6 @@ uint64_t clusterGetTimeNs(void) {
     return timeUtilMonotonicNs();
 }
 
-static uint64_t clusterGetTimeMs(void) {
-    return timeUtilMonotonicMs();
-}
-
 /* Latency histogram bucket of `ns`: values below CLUSTER_LATENCY_SUB have
  * their own bucket; above, each power of two splits into
  * CLUSTER_LATENCY_SUB equal buckets */
@@ -519,7 +515,7 @@ static void clusterNodeInit(clusterNode *node,
     node->capacityBytes = config->capacityBytes;
     node->usedBytes = 0;
     node->state = config->initialState;
-    node->stateChangedAt = clusterGetTimeMs();
+    node->stateChangedAt = timeUtilMonotonicMs();
     node->failureCount = 0;
     node->vnodeCount = 0;
     node->vnodeStartIndex = 0;
@@ -680,7 +676,7 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
 
     /* Initialize version tracking */
     ring->version = 1;
-    ring->lastModified = clusterGetTimeMs();
+    ring->lastModified = timeUtilMonotonicMs();
 
     clusterRing *out = ring;
     ring = nullptr;
@@ -1338,7 +1334,7 @@ static clusterResult clusterRingAddNodeInternal(clusterRing *ring,
 
     /* Update version */
     ring->version++;
-    ring->lastModified = clusterGetTimeMs();
+    ring->lastModified = timeUtilMonotonicMs();
 
     /* Invoke state callback if set */
     if (ring->stateCallback) {
@@ -1397,7 +1393,7 @@ clusterResult clusterRingRemoveNode(clusterRing *ring, uint64_t nodeId) {
     const clusterNodeState oldState = node->state;
     clusterRingRefreshHealthy(ring);
     ring->version++;
-    ring->lastModified = clusterGetTimeMs();
+    ring->lastModified = timeUtilMonotonicMs();
 
     if (ring->stateCallback) {
         ring->stateCallback(ring, nodeId, oldState, CLUSTER_NODE_DOWN,
@@ -1459,7 +1455,7 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
     clusterBoundedAccount(ring, node, -1);
     node->state = state;
     clusterBoundedAccount(ring, node, 1);
-    node->stateChangedAt = clusterGetTimeMs();
+    node->stateChangedAt = timeUtilMonotonicMs();
 
     /* Rebuild the state that lists healthy nodes */
     clusterRingRefreshHealthy(ring);
@@ -1471,7 +1467,7 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
     }
 
     ring->version++;
-    ring->lastModified = clusterGetTimeMs();
+    ring->lastModified = timeUtilMonotonicMs();
 
     return CLUSTER_OK;
 }
@@ -1494,7 +1490,7 @@ clusterResult clusterRingSetNodeUsedBytes(clusterRing *ring, uint64_t nodeId,
     clusterBoundedAccount(ring, node, 1);
 
     ring->version++;
-    ring->lastModified = clusterGetTimeMs();
+    ring->lastModified = timeUtilMonotonicMs();
     return CLUSTER_OK;
 }
 
@@ -1536,7 +1532,7 @@ clusterResult clusterRingSetNodeWeight(clusterRing *ring, uint64_t nodeId,
     }
 
     ring->version++;
-    ring->lastModified = clusterGetTimeMs();
+    ring->lastModified = timeUtilMonotonicMs();
 
     return CLUSTER_OK;
 }
@@ -2963,7 +2959,7 @@ clusterResult clusterRingPlanRebalance(clusterRing *ring,
 
     cleaner(clusterRebalancePlanFree) clusterRebalancePlan *plan =
         zcalloc(1, sizeof(*plan));
-    plan->createdAt = clusterGetTimeMs();
+    plan->createdAt = timeUtilMonotonicMs();
 
     const clusterStrategy *custom = ring->customStrategy;
     if (ring->strategyType == CLUSTER_STRATEGY_KETAMA) {
@@ -3042,7 +3038,7 @@ clusterResult clusterRingStartMove(clusterRing *ring, uint32_t moveIndex) {
 
     move->state = CLUSTER_MOVE_IN_PROGRESS;
     if (!ring->rebalancePlan->startedAt) {
-        ring->rebalancePlan->startedAt = clusterGetTimeMs();
+        ring->rebalancePlan->startedAt = timeUtilMonotonicMs();
     }
     return CLUSTER_OK;
 }
@@ -3186,7 +3182,7 @@ clusterResult clusterRingUpdateNodeHealth(clusterRing *ring, uint64_t nodeId,
 
     clusterNode *node = (clusterNode *)valbox.data.ptr;
     node->lastHealth = *health;
-    node->lastHealthCheck = clusterGetTimeMs();
+    node->lastHealthCheck = timeUtilMonotonicMs();
 
     /* Consecutive unreachable reports suspect an UP node; a reachable one
      * clears the count and restores a SUSPECT node */
@@ -3221,7 +3217,7 @@ clusterResult clusterRingUpdateNodeLoad(clusterRing *ring, uint64_t nodeId,
 
     clusterNode *node = (clusterNode *)valbox.data.ptr;
     node->lastLoad = *load;
-    node->lastLoadCheck = clusterGetTimeMs();
+    node->lastLoadCheck = timeUtilMonotonicMs();
     node->loadReported = true;
 
     return CLUSTER_OK;

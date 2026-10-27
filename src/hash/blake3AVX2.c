@@ -458,6 +458,7 @@ void blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc/zfree */
+#include "timeUtil.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -465,18 +466,12 @@ defcleanerName(uint8_t *, zfree, U8);
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 /* Deterministic xorshift64 — keeps the test reproducible across runs
  * without dragging libc rand state into it. */
 static uint64_t xs_state = 0x9E3779B97F4A7C15ull;
 static uint64_t xs64(void) {
-    uint64_t x = xs_state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    xs_state = x;
-    return x;
+    return dkXorshift64Next(&xs_state);
 }
 
 static void fill_random(uint8_t *p, size_t n) {
@@ -489,12 +484,6 @@ static void fill_random(uint8_t *p, size_t n) {
     while (i < n) {
         p[i++] = (uint8_t)(xs64() & 0xff);
     }
-}
-
-static double now_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
 int blake3AVX2Test(int, char *[]) {
@@ -657,25 +646,25 @@ int blake3AVX2Test(int, char *[]) {
         }
 
         /* Portable. */
-        double t0 = now_seconds();
+        double t0 = timeUtilMonotonicSec();
         uint32_t cv_p[8];
         memcpy(cv_p, cv, sizeof(cv));
         for (size_t b = 0; b < n_blocks; b++) {
             blake3PortableCompressInPlace(cv_p, buf + b * BLAKE3_BLOCK_LEN,
                                           BLAKE3_BLOCK_LEN, b, 0);
         }
-        double t1 = now_seconds();
+        double t1 = timeUtilMonotonicSec();
         double mib_per_s_p = 1.0 / (t1 - t0);
 
         /* AVX2 single-block. */
         uint32_t cv_a[8];
         memcpy(cv_a, cv, sizeof(cv));
-        t0 = now_seconds();
+        t0 = timeUtilMonotonicSec();
         for (size_t b = 0; b < n_blocks; b++) {
             blake3AVX2CompressInPlace(cv_a, buf + b * BLAKE3_BLOCK_LEN,
                                       BLAKE3_BLOCK_LEN, b, 0);
         }
-        t1 = now_seconds();
+        t1 = timeUtilMonotonicSec();
         double mib_per_s_a = 1.0 / (t1 - t0);
 
         /* AVX2 8-way batch. We hash the same 1 MiB by feeding the
@@ -699,7 +688,7 @@ int blake3AVX2Test(int, char *[]) {
         }
         uint8_t batch_out[8][32];
 
-        t0 = now_seconds();
+        t0 = timeUtilMonotonicSec();
         for (size_t b = 0; b < n_blocks; b += 8) {
             for (int j = 0; j < 8; j++) {
                 batch_blk_ptrs[j] = buf + (b + j) * BLAKE3_BLOCK_LEN;
@@ -708,7 +697,7 @@ int blake3AVX2Test(int, char *[]) {
             blake3AVX2Compress8(batch_cv_ptrs, batch_blk_ptrs, batch_block_lens,
                                 batch_counters, batch_flags, batch_out);
         }
-        t1 = now_seconds();
+        t1 = timeUtilMonotonicSec();
         double mib_per_s_b = 1.0 / (t1 - t0);
 
         printf("  blake3 portable:    %.1f MiB/s\n", mib_per_s_p);

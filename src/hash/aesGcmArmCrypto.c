@@ -40,6 +40,7 @@
 #include "aesGcmArmCrypto.h"
 
 #include "../ctmem.h" /* dkCtMemEq16, dkSecureZero */
+#include "../dkC23.h" /* stdc_rotate_right */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -122,7 +123,7 @@ static constexpr uint8_t kSbox[256] = {
     0xb0, 0x54, 0xbb, 0x16};
 
 static uint32_t kRotWord(uint32_t w) {
-    return (w >> 8) | (w << 24);
+    return stdc_rotate_right(w, 8u);
 }
 
 static uint32_t kSubWord(uint32_t w) {

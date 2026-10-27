@@ -89,16 +89,9 @@ typedef struct [[gnu::packed]] hyperloglogHeader {
 static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t),
               "Header got too big?");
 
-/* Big ugly compile-time endian check macro so we can properly
- * complain to the user if we are on an untested platform. */
-#if (defined(__BYTE_ORDER) && __BYTE_ORDER == __LITTLE_ENDIAN) ||              \
-    defined(__LITTLE_ENDIAN__) || defined(__ARMEL__) ||                        \
-    defined(__THUMBEL__) || defined(__AARCH64EL__) || defined(_MIPSEL) ||      \
-    defined(__MIPSEL) || defined(__MIPSEL__)
-/* OK */
-#else
-#warning "Didn't detect a little endian system. "
-"Persisting and reading persisted HLLs may not work reliably."
+/* Persisted HLLs are written in host byte order, tested little-endian only */
+#if __STDC_ENDIAN_NATIVE__ != __STDC_ENDIAN_LITTLE__
+#warning "not a little-endian system: persisted HLLs may not read back"
 #endif
 
 /* This needs to be configurable later, but it's a holdover from when

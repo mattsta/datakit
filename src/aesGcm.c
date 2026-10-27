@@ -14,6 +14,7 @@
 #include "aesGcm.h"
 
 #include "ctmem.h" /* dkCtMemEq16, dkSecureZero */
+#include "dkC23.h" /* stdc_rotate_left */
 #include "dkDiag.h"
 #include "hash/aesGcmArmCrypto.h"
 #include "hash/aesGcmNi.h"
@@ -76,7 +77,7 @@ static uint32_t subWord(uint32_t w) {
 }
 
 static uint32_t rotWord(uint32_t w) {
-    return (w << 8) | (w >> 24);
+    return stdc_rotate_left(w, 8u);
 }
 
 static void aesKeyExpand(uint32_t round_keys[60], const uint8_t *key,

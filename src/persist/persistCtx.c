@@ -7,11 +7,11 @@
 #include "../cleaner.h"
 #include "../datakit.h"
 #include "../dkDiag.h"
+#include "../timeUtil.h"
 
 #include <errno.h>
 #include <stdio.h> /* snprintf */
 #include <string.h>
-#include <sys/time.h>
 
 defcleanerName(char *, zfree, Chars);
 
@@ -19,12 +19,6 @@ defcleanerName(char *, zfree, Chars);
  * Time Utilities
  * ============================================================================
  */
-
-static uint64_t getTimeMicroseconds(void) {
-    struct timeval tv;
-    gettimeofday(&tv, nullptr);
-    return (uint64_t)tv.tv_sec * 1'000'000 + (uint64_t)tv.tv_usec;
-}
 
 /* ============================================================================
  * Default Configuration
@@ -94,7 +88,7 @@ persistCtx *persistCtxNew(const char *basePath,
     ctx->config = config ? *config : persistCtxDefaultConfig();
 
     /* Initialize timing */
-    ctx->lastSyncTime = getTimeMicroseconds();
+    ctx->lastSyncTime = timeUtilUs();
 
     /* Note: The actual persist context (ctx->p) is created when a structure
      * is attached via the wrapper's New or Open functions, since we need
@@ -280,7 +274,7 @@ persistLogResult persistCtxLogOp(persistCtx *ctx, persistOp op,
      * leave memory behind the WAL; the next sync retries */
     if (result == PERSIST_LOG_DURABLE) {
         ctx->totalSyncs++;
-        ctx->lastSyncTime = getTimeMicroseconds();
+        ctx->lastSyncTime = timeUtilUs();
     } else if (result == PERSIST_LOG_NOT_DURABLE) {
         ctx->notDurableOps++;
     }
@@ -324,7 +318,7 @@ bool persistCtxSyncIfDue(persistCtx *ctx) {
         return true;
     }
 
-    const uint64_t now = getTimeMicroseconds();
+    const uint64_t now = timeUtilUs();
     if (now - ctx->lastSyncTime >= 1'000'000) {
         if (!persistSync(ctx->p)) {
             return false;
@@ -343,7 +337,7 @@ bool persistCtxSync(persistCtx *ctx) {
 
     bool result = persistSync(ctx->p);
     if (result) {
-        ctx->lastSyncTime = getTimeMicroseconds();
+        ctx->lastSyncTime = timeUtilUs();
         ctx->totalSyncs++;
     }
     return result;

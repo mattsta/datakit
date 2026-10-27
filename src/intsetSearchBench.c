@@ -14,12 +14,14 @@
 
 /* A standalone program without datakit: it allocates with libc */
 #define IKNOWWHATIMDOING
+#include "dkRandom.h" /* dkLcg64Next: header-only, no library link */
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
+/* Its own monotonic clock: the program links no datakit library */
 static uint64_t nowns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

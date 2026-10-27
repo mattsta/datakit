@@ -416,11 +416,11 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc/zfree */
+#include "timeUtil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -449,12 +449,6 @@ static void rng_fill(uint8_t *p, size_t n) {
         uint64_t v = xrand();
         memcpy(p, &v, n);
     }
-}
-
-static double now_sec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
 int blake3SSE41Test(int, char *[]) {
@@ -626,7 +620,7 @@ int blake3SSE41Test(int, char *[]) {
         size_t blocks = N / BLAKE3_BLOCK_LEN;
 
         /* SSE timing. */
-        double t0 = now_sec();
+        double t0 = timeUtilMonotonicSec();
         for (int it = 0; it < iters; it++) {
             uint32_t cv[8];
             memcpy(cv, IV, sizeof(cv));
@@ -635,10 +629,10 @@ int blake3SSE41Test(int, char *[]) {
                                            BLAKE3_BLOCK_LEN, b, 0);
             }
         }
-        double dt_sse = now_sec() - t0;
+        double dt_sse = timeUtilMonotonicSec() - t0;
 
         /* Portable timing for comparison. */
-        t0 = now_sec();
+        t0 = timeUtilMonotonicSec();
         for (int it = 0; it < iters; it++) {
             uint32_t cv[8];
             memcpy(cv, IV, sizeof(cv));
@@ -647,7 +641,7 @@ int blake3SSE41Test(int, char *[]) {
                                               BLAKE3_BLOCK_LEN, b, 0);
             }
         }
-        double dt_port = now_sec() - t0;
+        double dt_port = timeUtilMonotonicSec() - t0;
 
         double total_bytes = (double)iters * (double)N;
         double mib_sse = (total_bytes / (1024.0 * 1024.0)) / dt_sse;

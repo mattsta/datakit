@@ -20,7 +20,6 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -38,6 +37,7 @@
 
 #define IKNOWWHATIMDOING /* allow malloc usage */
 #include "datakit.h"
+#include "timeUtil.h"
 
 /* Pattern constants */
 #if (ULONG_MAX == 4294967295UL)
@@ -49,16 +49,6 @@
 #else
 #error "ULONG_MAX value not supported."
 #endif
-
-/* ============================================================================
- * Timing Helpers
- * ============================================================================
- */
-static uint64_t memtest_time_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1'000'000'000ULL + (uint64_t)ts.tv_nsec;
-}
 
 /* ============================================================================
  * Number Parsing
@@ -452,7 +442,7 @@ static int memtest_run_pass(uint64_t *mem, size_t bytes, memtestContext *ctx) {
 /* Destructive test */
 static size_t memtest_destructive(void *mem, size_t bytes, int passes,
                                   memtestContext *ctx, memtestResult *result) {
-    uint64_t start = memtest_time_ns();
+    uint64_t start = timeUtilMonotonicNs();
     size_t errors = 0;
 
     for (int pass = 0; pass < passes; pass++) {
@@ -465,7 +455,7 @@ static size_t memtest_destructive(void *mem, size_t bytes, int passes,
     if (result) {
         result->bytes_tested = bytes;
         result->errors_found = errors;
-        result->duration_s = (memtest_time_ns() - start) / 1e9;
+        result->duration_s = (timeUtilMonotonicNs() - start) / 1e9;
     }
 
     return errors;
@@ -487,7 +477,7 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
             : mem;
     size_t left = bytes;
     size_t errors = 0;
-    uint64_t start = memtest_time_ns();
+    uint64_t start = timeUtilMonotonicNs();
 
     if ((bytes & 4095) != 0 || bytes < 8192) {
         if (result) {
@@ -571,7 +561,7 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
         result->bytes_tested = bytes;
         result->errors_found = errors;
         result->passes_complete = passes;
-        result->duration_s = (memtest_time_ns() - start) / 1e9;
+        result->duration_s = (timeUtilMonotonicNs() - start) / 1e9;
     }
 
     return errors;
@@ -1201,7 +1191,7 @@ int memtestTest(int argc, char *argv[]) {
         return 1;
     }
 
-    uint64_t start = memtest_time_ns();
+    uint64_t start = timeUtilMonotonicNs();
     size_t total_errors = 0;
 
     for (int pass = 0; pass < passes; pass++) {
@@ -1243,7 +1233,7 @@ int memtestTest(int argc, char *argv[]) {
 
     free(mem);
 
-    double duration = (memtest_time_ns() - start) / 1e9;
+    double duration = (timeUtilMonotonicNs() - start) / 1e9;
     double throughput = (bytes * passes) / (duration * 1024 * 1024);
 
     printf("  ---\n");

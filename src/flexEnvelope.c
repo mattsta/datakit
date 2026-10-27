@@ -2406,12 +2406,12 @@ bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
 #define CTEST_INCLUDE_VALGEN
 #include "cleaner.h"
 #include "ctest.h"
+#include "timeUtil.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 /* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
 defcleanerName(uint8_t *, zfree, Bytes);
@@ -2421,10 +2421,7 @@ static void fillPseudoRandom(uint8_t *dst, size_t len, uint64_t seed) {
     /* Simple xorshift; reproducible across runs. */
     uint64_t s = seed | 1; /* avoid 0 */
     for (size_t i = 0; i < len; i++) {
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        dst[i] = (uint8_t)(s & 0xFF);
+        dst[i] = (uint8_t)(dkXorshift64Next(&s) & 0xFF);
     }
 }
 
@@ -4989,28 +4986,23 @@ int flexEnvelopeTest(int, char *[]) {
                         iters = 1;
                     }
                 }
-                struct timespec t0, t1;
-                clock_gettime(CLOCK_MONOTONIC, &t0);
+                double t0 = timeUtilMonotonicSec();
                 for (uint32_t i = 0; i < iters; i++) {
                     flexEnvelopeWrap(buf, total, payload, plen, &wp, &written);
                 }
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                double wrap_sec =
-                    (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+                double wrap_sec = timeUtilMonotonicSec() - t0;
 
                 flexEnvelopeVerifyParams vp = {
                     .key = need_key ? bench_key : nullptr,
                     .key_len = need_key ? sizeof(bench_key) : 0,
                 };
-                clock_gettime(CLOCK_MONOTONIC, &t0);
+                t0 = timeUtilMonotonicSec();
                 for (uint32_t i = 0; i < iters; i++) {
                     const uint8_t *p = nullptr;
                     uint64_t pl = 0;
                     flexEnvelopeVerify(buf, total, &vp, &p, &pl);
                 }
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                double verify_sec =
-                    (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+                double verify_sec = timeUtilMonotonicSec() - t0;
 
                 printf("  %-13s payload=%-7zu wrap=%6.0f ns/op  "
                        "verify=%6.0f ns/op  throughput≈%6.1f MB/s\n",

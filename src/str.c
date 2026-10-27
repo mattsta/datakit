@@ -657,6 +657,22 @@ static uint64_t microTestB(uint32_t start) {
 DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     int err = 0;
 
+    TEST("xoroshiro128plus: outputs and state from {1, 2}, worked by hand") {
+        /* output s0 + s1; then s1 ^= s0, s0 = rotl(s0, 55) ^ s1 ^ (s1 << 14),
+         * s1 = rotl(s1, 36) */
+        uint64_t s[2] = {1, 2};
+        const uint64_t first = xoroshiro128plus(s);
+        if (first != 3 || s[0] != UINT64_C(0x008000000000C003) ||
+            s[1] != UINT64_C(0x0000003000000000)) {
+            ERR("first step: 0x%" PRIx64 ", state 0x%" PRIx64 " 0x%" PRIx64,
+                first, s[0], s[1]);
+        }
+        const uint64_t second = xoroshiro128plus(s);
+        if (second != UINT64_C(0x008000300000C003)) {
+            ERR("second output 0x%" PRIx64, second);
+        }
+    }
+
     TEST("StrTenPow / StrTenPowBig exact powers") {
         /* Every entry verified against iterated multiplication; the
          * doubleFormat 128-bit path scales by these, so one wrong or

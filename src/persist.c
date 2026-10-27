@@ -39,6 +39,7 @@
 #include "flexEnvelope.h"
 #include "hmacKeyring.h"
 #include "mflex.h"
+#include "timeUtil.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(flex *, flexFree);
@@ -56,7 +57,6 @@ defcleaner(mflexState *, mflexStateFree);
 #include <stdatomic.h>
 #include <stdio.h> /* rename */
 #include <sys/stat.h>
-#include <sys/time.h> /* gettimeofday */
 #include <unistd.h>
 
 /* The on-disk header structs below are packed and written/read raw — no
@@ -64,11 +64,9 @@ defcleaner(mflexState *, mflexStateFree);
  * platform datakit currently runs on) but silently produces an
  * unportable file on a big-endian host. Pin the assumption at compile
  * time so a BE port is forced to confront it explicitly. */
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
-static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+static_assert(__STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_LITTLE__,
               "persist.c on-disk format assumes little-endian; "
               "big-endian hosts need explicit byte-swap helpers");
-#endif
 
 /* ============================================================================
  * Magic Numbers and Format Constants
@@ -350,11 +348,6 @@ static bool persistCheckHeaderKeyId(persist *p, uint32_t headerKeyId) {
  * Time Utilities
  * ============================================================================
  */
-static uint64_t persistGetMicroseconds(void) {
-    struct timeval tv;
-    gettimeofday(&tv, nullptr);
-    return (uint64_t)tv.tv_sec * 1'000'000 + (uint64_t)tv.tv_usec;
-}
 
 /* ============================================================================
  * Default Configuration
@@ -408,7 +401,7 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
     p->snapshotWalSequence = 0;
     p->walBuffer = nullptr;
     p->walBufferUsed = 0;
-    p->lastSyncTime = persistGetMicroseconds();
+    p->lastSyncTime = timeUtilUs();
     p->walAppendOffset = 0;
     p->walCursorMoved = false;
     p->walInitialized = false;
@@ -814,7 +807,7 @@ bool persistSnapshot(persist *p, const void *structure) {
         return false;
     }
 
-    const uint64_t startTime = persistGetMicroseconds();
+    const uint64_t startTime = timeUtilUs();
 
     size_t payloadLen = 0;
     uint8_t *payload = p->ops->snapshot(structure, &payloadLen);
@@ -931,7 +924,7 @@ bool persistSnapshot(persist *p, const void *structure) {
     p->stats.snapshotCount++;
     p->stats.snapshotBytes += sizeof(header) + envelopeLen;
     p->stats.lastSnapshotTime = startTime;
-    p->stats.lastSnapshotDuration = persistGetMicroseconds() - startTime;
+    p->stats.lastSnapshotDuration = timeUtilUs() - startTime;
 
     return true;
 }
@@ -1510,7 +1503,7 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
         syncNow = true;
         break;
     case PERSIST_SYNC_EVERYSEC: {
-        const uint64_t now = persistGetMicroseconds();
+        const uint64_t now = timeUtilUs();
         if (now - p->lastSyncTime >= 1'000'000) { /* 1 second */
             syncNow = true;
             /* A failed sync waits for the next second, not the next op */
@@ -1995,7 +1988,7 @@ bool persistCompact(persist *p, void *structure) {
     }
 
     p->stats.compactionCount++;
-    p->stats.lastCompactionTime = persistGetMicroseconds();
+    p->stats.lastCompactionTime = timeUtilUs();
     return true;
 }
 
@@ -2082,7 +2075,7 @@ bool persistSync(persist *p) {
 
     p->stats.syncCount++;
     p->stats.lastSyncError = 0;
-    p->lastSyncTime = persistGetMicroseconds();
+    p->lastSyncTime = timeUtilUs();
     return true;
 }
 
@@ -10688,7 +10681,7 @@ int persistTest(int, char *[]) {
                 persistStoreFaultyDisarm(wal);
             }
             if (steps[i].secondPassed) {
-                p->lastSyncTime = persistGetMicroseconds() - 2'000'000;
+                p->lastSyncTime = timeUtilUs() - 2'000'000;
             }
             const persistLogResult got =
                 persistLogOp(p, PERSIST_OP_INSERT, &v, 1);

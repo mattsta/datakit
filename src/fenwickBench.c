@@ -36,6 +36,7 @@
 #include "fenwick/fenwickI16.h"
 #include "fenwick/fenwickI32.h"
 #include "fenwick/fenwickI64.h"
+#include "timeUtil.h"
 #ifdef __SIZEOF_INT128__
 #include "fenwick/fenwickI128.h"
 #endif
@@ -48,7 +49,6 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
-#include <time.h>
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
@@ -63,24 +63,18 @@ static uint64_t benchRand_(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-static double benchNow_(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
-}
-
 /* Run 'body' (using 'seed') until the budget or the op cap; set 'nsPerOp' */
 #define BENCH_TIMED(nsPerOp, body)                                             \
     do {                                                                       \
         uint64_t seed = 99;                                                    \
         size_t ops = 0;                                                        \
-        const double start = benchNow_();                                      \
+        const double start = (double)timeUtilMonotonicNs();                    \
         double elapsed = 0;                                                    \
         while (ops < BENCH_MAX_OPS) {                                          \
             for (size_t rep_ = 0; rep_ < 256; rep_++, ops++) {                 \
                 body;                                                          \
             }                                                                  \
-            elapsed = benchNow_() - start;                                     \
+            elapsed = (double)timeUtilMonotonicNs() - start;                   \
             if (elapsed > BENCH_BUDGET_NS) {                                   \
                 break;                                                         \
             }                                                                  \
@@ -143,11 +137,11 @@ static void benchPrint_(const char *name, size_t n, const benchRow *r) {
     static benchRow benchTyped##T(size_t n) {                                  \
         benchRow r = {};                                                       \
         void *fw = nullptr;                                                    \
-        const double t0 = benchNow_();                                         \
+        const double t0 = (double)timeUtilMonotonicNs();                       \
         for (size_t i = 0; i < n; i++) {                                       \
             fenwick##T##Update(&fw, i, (VT)(i % 7));                           \
         }                                                                      \
-        r.build = (benchNow_() - t0) / (double)n;                              \
+        r.build = ((double)timeUtilMonotonicNs() - t0) / (double)n;            \
         BENCH_TIMED(r.update,                                                  \
                     fenwick##T##Update(&fw, benchRand_(&seed) % n, (VT)1));    \
         BENCH_TIMED(r.query,                                                   \
@@ -188,9 +182,9 @@ BENCH_TYPED(I128, __int128_t)
                           ? DATABOX_DOUBLE(0.5)                                \
                           : DATABOX_UNSIGNED(i % 7);                           \
         }                                                                      \
-        const double t0 = benchNow_();                                         \
+        const double t0 = (double)timeUtilMonotonicNs();                       \
         T *fw = T##NewFromArray(vals, n);                                      \
-        r.build = (benchNow_() - t0) / (double)n;                              \
+        r.build = ((double)timeUtilMonotonicNs() - t0) / (double)n;            \
         const databox one = DATABOX_UNSIGNED(1);                               \
         const databox half = DATABOX_DOUBLE(0.5);                              \
         databox out;                                                           \
@@ -235,11 +229,11 @@ BENCH_MULTI(Flat, multiFenwickFlat)
     static benchRow benchSegment##T(size_t n, segmentOp op) {                  \
         benchRow r = {};                                                       \
         void *seg = segment##T##New(op);                                       \
-        const double t0 = benchNow_();                                         \
+        const double t0 = (double)timeUtilMonotonicNs();                       \
         for (size_t i = 0; i < n; i++) {                                       \
             segment##T##Update(&seg, i, (VT)(i % 7));                          \
         }                                                                      \
-        r.build = (benchNow_() - t0) / (double)n;                              \
+        r.build = ((double)timeUtilMonotonicNs() - t0) / (double)n;            \
         BENCH_TIMED(r.update, {                                                \
             const size_t i = benchRand_(&seed) % n;                            \
             segment##T##Update(&seg, i, segment##T##Get(seg, i) + (VT)1);      \
@@ -278,12 +272,13 @@ static benchRow benchGrowRow_(double nsPerWrite, size_t bytes, size_t n) {
 static benchRow benchGrowTypedI64(size_t n) {
     uint64_t seed = 5;
     void *fw = nullptr;
-    const double t0 = benchNow_();
+    const double t0 = (double)timeUtilMonotonicNs();
     for (size_t i = 0; i < n; i++) {
         fenwickI64Update(&fw, benchRand_(&seed) % n, 1);
     }
     const benchRow r =
-        benchGrowRow_((benchNow_() - t0) / (double)n, fenwickI64Bytes(fw), n);
+        benchGrowRow_(((double)timeUtilMonotonicNs() - t0) / (double)n,
+                      fenwickI64Bytes(fw), n);
     fenwickI64Free(fw);
     return r;
 }
@@ -293,12 +288,13 @@ static benchRow benchGrowTypedI64(size_t n) {
         uint64_t seed = 5;                                                     \
         T *fw = nullptr;                                                       \
         const databox one = DATABOX_UNSIGNED(1);                               \
-        const double t0 = benchNow_();                                         \
+        const double t0 = (double)timeUtilMonotonicNs();                       \
         for (size_t i = 0; i < n; i++) {                                       \
             T##Update(&fw, benchRand_(&seed) % n, &one);                       \
         }                                                                      \
         const benchRow r =                                                     \
-            benchGrowRow_((benchNow_() - t0) / (double)n, T##Bytes(fw), n);    \
+            benchGrowRow_(((double)timeUtilMonotonicNs() - t0) / (double)n,    \
+                          T##Bytes(fw), n);                                    \
         T##Free(fw);                                                           \
         return r;                                                              \
     }
@@ -309,12 +305,13 @@ BENCH_GROW_MULTI(Flat, multiFenwickFlat)
 static benchRow benchGrowSegmentI64(size_t n) {
     uint64_t seed = 5;
     void *seg = nullptr; /* a NULL tree becomes a SUM tree */
-    const double t0 = benchNow_();
+    const double t0 = (double)timeUtilMonotonicNs();
     for (size_t i = 0; i < n; i++) {
         segmentI64Update(&seg, benchRand_(&seed) % n, 1);
     }
     const benchRow r =
-        benchGrowRow_((benchNow_() - t0) / (double)n, segmentI64Bytes(seg), n);
+        benchGrowRow_(((double)timeUtilMonotonicNs() - t0) / (double)n,
+                      segmentI64Bytes(seg), n);
     segmentI64Free(seg);
     return r;
 }
@@ -327,13 +324,14 @@ static benchRow benchGrowSegmentI64(size_t n) {
         benchRow r = {};                                                       \
         const size_t side = (size_t)sqrt((double)n);                           \
         fenwick2d##T *t = nullptr;                                             \
-        const double t0 = benchNow_();                                         \
+        const double t0 = (double)timeUtilMonotonicNs();                       \
         for (size_t i = 0; i < side; i++) {                                    \
             for (size_t j = 0; j < side; j++) {                                \
                 fenwick2d##T##Update(&t, i, j, (VT)((i + j) % 7));             \
             }                                                                  \
         }                                                                      \
-        r.build = (benchNow_() - t0) / (double)(side * side);                  \
+        r.build =                                                              \
+            ((double)timeUtilMonotonicNs() - t0) / (double)(side * side);      \
         BENCH_TIMED(r.update,                                                  \
                     fenwick2d##T##Update(&t, benchRand_(&seed) % side,         \
                                          benchRand_(&seed) % side, (VT)1));    \
@@ -363,7 +361,7 @@ static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
     benchRow r = {};
     const size_t side = (size_t)sqrt((double)n);
     multiFenwick2d *t = nullptr;
-    const double t0 = benchNow_();
+    const double t0 = (double)timeUtilMonotonicNs();
     for (size_t i = 0; i < side; i++) {
         for (size_t j = 0; j < side; j++) {
             const size_t k = i * side + j;
@@ -374,7 +372,7 @@ static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
         }
     }
 
-    r.build = (benchNow_() - t0) / (double)(side * side);
+    r.build = ((double)timeUtilMonotonicNs() - t0) / (double)(side * side);
     const databox one = DATABOX_UNSIGNED(1);
     databox out;
     uint64_t acc = 0;

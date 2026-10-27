@@ -12,6 +12,7 @@
 #include "chacha20poly1305.h"
 
 #include "ctmem.h"
+#include "dkC23.h" /* stdc_rotate_left */
 #include "dkDiag.h"
 #include "hash/chacha20AVX2.h"
 #include "hash/chacha20Neon.h"
@@ -47,10 +48,6 @@ static inline void store64_le(uint8_t *p, uint64_t v) {
     p[7] = (uint8_t)(v >> 56);
 }
 
-static inline uint32_t rotl32(uint32_t v, uint32_t n) {
-    return (v << n) | (v >> (32 - n));
-}
-
 /* ===== ChaCha20 ===== */
 
 /* Four independent quarter-rounds, each step explicitly interleaved
@@ -70,10 +67,10 @@ static inline uint32_t rotl32(uint32_t v, uint32_t n) {
         (d1) ^= (a1);                                                          \
         (d2) ^= (a2);                                                          \
         (d3) ^= (a3);                                                          \
-        (d0) = rotl32((d0), 16);                                               \
-        (d1) = rotl32((d1), 16);                                               \
-        (d2) = rotl32((d2), 16);                                               \
-        (d3) = rotl32((d3), 16);                                               \
+        (d0) = stdc_rotate_left((d0), 16);                                     \
+        (d1) = stdc_rotate_left((d1), 16);                                     \
+        (d2) = stdc_rotate_left((d2), 16);                                     \
+        (d3) = stdc_rotate_left((d3), 16);                                     \
         (c0) += (d0);                                                          \
         (c1) += (d1);                                                          \
         (c2) += (d2);                                                          \
@@ -82,10 +79,10 @@ static inline uint32_t rotl32(uint32_t v, uint32_t n) {
         (b1) ^= (c1);                                                          \
         (b2) ^= (c2);                                                          \
         (b3) ^= (c3);                                                          \
-        (b0) = rotl32((b0), 12);                                               \
-        (b1) = rotl32((b1), 12);                                               \
-        (b2) = rotl32((b2), 12);                                               \
-        (b3) = rotl32((b3), 12);                                               \
+        (b0) = stdc_rotate_left((b0), 12);                                     \
+        (b1) = stdc_rotate_left((b1), 12);                                     \
+        (b2) = stdc_rotate_left((b2), 12);                                     \
+        (b3) = stdc_rotate_left((b3), 12);                                     \
         (a0) += (b0);                                                          \
         (a1) += (b1);                                                          \
         (a2) += (b2);                                                          \
@@ -94,10 +91,10 @@ static inline uint32_t rotl32(uint32_t v, uint32_t n) {
         (d1) ^= (a1);                                                          \
         (d2) ^= (a2);                                                          \
         (d3) ^= (a3);                                                          \
-        (d0) = rotl32((d0), 8);                                                \
-        (d1) = rotl32((d1), 8);                                                \
-        (d2) = rotl32((d2), 8);                                                \
-        (d3) = rotl32((d3), 8);                                                \
+        (d0) = stdc_rotate_left((d0), 8);                                      \
+        (d1) = stdc_rotate_left((d1), 8);                                      \
+        (d2) = stdc_rotate_left((d2), 8);                                      \
+        (d3) = stdc_rotate_left((d3), 8);                                      \
         (c0) += (d0);                                                          \
         (c1) += (d1);                                                          \
         (c2) += (d2);                                                          \
@@ -106,10 +103,10 @@ static inline uint32_t rotl32(uint32_t v, uint32_t n) {
         (b1) ^= (c1);                                                          \
         (b2) ^= (c2);                                                          \
         (b3) ^= (c3);                                                          \
-        (b0) = rotl32((b0), 7);                                                \
-        (b1) = rotl32((b1), 7);                                                \
-        (b2) = rotl32((b2), 7);                                                \
-        (b3) = rotl32((b3), 7);                                                \
+        (b0) = stdc_rotate_left((b0), 7);                                      \
+        (b1) = stdc_rotate_left((b1), 7);                                      \
+        (b2) = stdc_rotate_left((b2), 7);                                      \
+        (b3) = stdc_rotate_left((b3), 7);                                      \
     } while (0)
 
 /* ChaCha20 constants — "expand 32-byte k" per RFC 8439 §2.3. */
@@ -1194,11 +1191,11 @@ bool chacha20poly1305OpenStreamFinal(chacha20poly1305StreamCtx *ctx,
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "timeUtil.h"
 
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 /* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
 defcleanerName(uint8_t *, zfree, Bytes);
@@ -1440,27 +1437,22 @@ static void runBench(size_t payload, uint32_t iters) {
     cleanerName(zfree, Bytes) uint8_t *out = zmalloc(payload);
     memset(pt, 0x42, payload);
 
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         (void)chacha20poly1305Seal(key, nonce, nullptr, 0, pt, payload, ct,
                                    tag);
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double seal_secs = (double)(t1.tv_sec - t0.tv_sec) +
-                       (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+    double seal_secs = timeUtilMonotonicSec() - t0;
     double mb = (double)((uint64_t)payload * iters) / (1000.0 * 1000.0);
     double seal_ns_op = seal_secs * 1e9 / (double)iters;
     double seal_mbs = seal_secs > 0 ? mb / seal_secs : 0.0;
 
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         (void)chacha20poly1305Open(key, nonce, nullptr, 0, ct, payload, tag,
                                    out);
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double open_secs = (double)(t1.tv_sec - t0.tv_sec) +
-                       (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+    double open_secs = timeUtilMonotonicSec() - t0;
     double open_ns_op = open_secs * 1e9 / (double)iters;
     double open_mbs = open_secs > 0 ? mb / open_secs : 0.0;
 

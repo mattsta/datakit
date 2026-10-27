@@ -43,12 +43,12 @@
 #include "sha256.h"
 #include "str.h" /* StrScanScanReliable */
 #include "stringPool.h"
+#include "timeUtil.h"
 
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #define PERF_REG_KEY_LEN ((size_t)32)
 #define PERF_REG_NONCE_LEN ((size_t)12)
@@ -119,12 +119,6 @@ static bool perfNamed(const char *module) {
     return perfListed_(module, false);
 }
 
-static double monoNowSec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
-
 static void fillDeterministic(uint8_t *buf, size_t len, uint64_t seed) {
     uint64_t s = seed | 1u;
     for (size_t i = 0; i < len; i++) {
@@ -185,11 +179,11 @@ static void benchBlake3(size_t bytes) {
     fillDeterministic(buf, bytes, 0xB1u);
     uint8_t out[BLAKE3_OUT_LEN];
     const uint32_t iters = pickIters(bytes);
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         blake3Hash(buf, bytes, out);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("blake3", "hash", bytes, iters, secs);
     antiDce(out, sizeof(out));
 }
@@ -200,11 +194,11 @@ static void benchSha256(size_t bytes) {
     fillDeterministic(buf, bytes, 0xA7u);
     uint8_t out[SHA256_DIGEST_LEN];
     const uint32_t iters = pickIters(bytes);
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         sha256Hash(buf, bytes, out);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("sha256", "hash", bytes, iters, secs);
     antiDce(out, sizeof(out));
 }
@@ -216,11 +210,11 @@ static void benchXxh64(size_t bytes) {
     fillDeterministic(buf, bytes, 0x64u);
     const uint32_t iters = pickIters(bytes);
     [[maybe_unused]] volatile uint64_t sink = 0;
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         sink ^= XXH64(buf, bytes, 0);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("xxh64", "hash", bytes, iters, secs);
 }
 
@@ -229,11 +223,11 @@ static void benchXxh3_64(size_t bytes) {
     fillDeterministic(buf, bytes, 0x33u);
     const uint32_t iters = pickIters(bytes);
     [[maybe_unused]] volatile uint64_t sink = 0;
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         sink ^= XXH3_64bits(buf, bytes);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("xxh3_64", "hash", bytes, iters, secs);
 }
 
@@ -242,12 +236,12 @@ static void benchXxh3_128(size_t bytes) {
     fillDeterministic(buf, bytes, 0x77u);
     const uint32_t iters = pickIters(bytes);
     [[maybe_unused]] volatile uint64_t sink = 0;
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         XXH128_hash_t h = XXH3_128bits(buf, bytes);
         sink ^= h.low64 ^ h.high64;
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("xxh3_128", "hash", bytes, iters, secs);
 }
 
@@ -261,11 +255,11 @@ static void benchRapidhashOneShot(const char *label, rapidhashOneShot fn,
     fillDeterministic(buf, bytes, 0xD3u);
     const uint32_t iters = pickIters(bytes);
     [[maybe_unused]] volatile uint64_t sink = 0;
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         sink ^= fn(buf, bytes);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("rapidhash", label, bytes, iters, secs);
 }
 
@@ -279,7 +273,7 @@ static void benchRapidhashStream(const char *label, rapidhashVariant variant,
     const size_t chunk = 64;
     const uint32_t iters = pickIters(bytes);
     [[maybe_unused]] volatile uint64_t sink = 0;
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         rapidhashCtx ctx;
         rapidhashStreamInit(&ctx, variant, mode, 0, nullptr);
@@ -294,7 +288,7 @@ static void benchRapidhashStream(const char *label, rapidhashVariant variant,
         }
         sink ^= rapidhashStreamFinal(&ctx);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("rapidhash", label, bytes, iters, secs);
 }
 
@@ -319,11 +313,11 @@ static void benchSha256Multi4(size_t bytes_per_lane) {
     const uint8_t *bptrs[4] = {bufs[0], bufs[1], bufs[2], bufs[3]};
 
     const uint32_t iters = pickIters(bytes_per_lane);
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         sha256ArmCryptoCompressBlocksMulti4(st, bptrs, nb);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
 
     /* Report aggregate throughput: bytes processed across all 4 lanes
      * per iteration. */
@@ -343,11 +337,11 @@ static void benchHmacSha256Plain(size_t bytes) {
     fillDeterministic(buf, bytes, 0x42u);
     uint8_t out[32];
     const uint32_t iters = pickIters(bytes);
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         hmacCompute(&hmacAlgoSHA256, key, sizeof(key), buf, bytes, out);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("hmac", "sha256_plain", bytes, iters, secs);
     antiDce(out, sizeof(out));
 }
@@ -364,11 +358,11 @@ static void benchHmacSha256Prepared(size_t bytes) {
                    key, sizeof(key));
     uint8_t out[32];
     const uint32_t iters = pickIters(bytes);
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         hmacComputeWithKey(&prep, buf, bytes, out);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("hmac", "sha256_prepared", bytes, iters, secs);
     antiDce(out, sizeof(out));
 }
@@ -399,12 +393,12 @@ static void benchEnvelope(flexEnvelopeAlgo algo, const char *algo_label,
     const uint32_t iters = pickIters(bytes);
 
     /* Wrap timing. */
-    const double t_w0 = monoNowSec();
+    const double t_w0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         flexEnvelopeWrap(wrapped, total, payload, (uint64_t)bytes, &wp,
                          &written);
     }
-    const double secs_wrap = monoNowSec() - t_w0;
+    const double secs_wrap = timeUtilMonotonicSec() - t_w0;
     char label[64];
     snprintf(label, sizeof(label), "%s_wrap", algo_label);
     emitRow("envelope", label, bytes, iters, secs_wrap);
@@ -412,11 +406,11 @@ static void benchEnvelope(flexEnvelopeAlgo algo, const char *algo_label,
     /* Verify timing (raw key path — every call re-derives K_ipad/K_opad). */
     const uint8_t *last_out_p = nullptr;
     uint64_t last_out_pl = 0;
-    const double t_v0 = monoNowSec();
+    const double t_v0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         flexEnvelopeVerify(wrapped, total, &vp, &last_out_p, &last_out_pl);
     }
-    const double secs_verify = monoNowSec() - t_v0;
+    const double secs_verify = timeUtilMonotonicSec() - t_v0;
     snprintf(label, sizeof(label), "%s_verify", algo_label);
     emitRow("envelope", label, bytes, iters, secs_verify);
 
@@ -437,12 +431,12 @@ static void benchEnvelope(flexEnvelopeAlgo algo, const char *algo_label,
         flexEnvelopeVerifyParams vp_prep = {
             .prepared_key = &prep,
         };
-        const double t_vp0 = monoNowSec();
+        const double t_vp0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             flexEnvelopeVerify(wrapped, total, &vp_prep, &last_out_p,
                                &last_out_pl);
         }
-        const double secs_vp = monoNowSec() - t_vp0;
+        const double secs_vp = timeUtilMonotonicSec() - t_vp0;
         snprintf(label, sizeof(label), "%s_verify_prep", algo_label);
         emitRow("envelope", label, bytes, iters, secs_vp);
     }
@@ -470,22 +464,22 @@ static void benchAead(size_t bytes) {
     uint8_t tag[CHACHA20_POLY1305_TAG_LEN];
     const uint32_t iters = pickIters(bytes);
 
-    const double t_s0 = monoNowSec();
+    const double t_s0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         (void)chacha20poly1305Seal(key, nonce, nullptr, 0u, plain, bytes, ct,
                                    tag);
     }
-    const double secs_seal = monoNowSec() - t_s0;
+    const double secs_seal = timeUtilMonotonicSec() - t_s0;
     emitRow("aead", "chacha20poly1305_seal", bytes, iters, secs_seal);
     antiDce(ct, bytes > 0 ? 1u : 0u);
     antiDce(tag, sizeof(tag));
 
-    const double t_o0 = monoNowSec();
+    const double t_o0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         (void)chacha20poly1305Open(key, nonce, nullptr, 0u, ct, bytes, tag,
                                    plain);
     }
-    const double secs_open = monoNowSec() - t_o0;
+    const double secs_open = timeUtilMonotonicSec() - t_o0;
     emitRow("aead", "chacha20poly1305_open", bytes, iters, secs_open);
     antiDce(plain, bytes > 0 ? 1u : 0u);
 }
@@ -511,12 +505,12 @@ static void benchMailbox(size_t bytes) {
     const uint32_t iters = pickIters(bytes);
 
     /* Seal timing. */
-    const double t_s0 = monoNowSec();
+    const double t_s0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         clusterMailboxSeal(mb, 1u, (uint64_t)i + 2u, 0u, payload, bytes, K,
                            envelope, sealed_sz, &written);
     }
-    const double secs_seal = monoNowSec() - t_s0;
+    const double secs_seal = timeUtilMonotonicSec() - t_s0;
     emitRow("mailbox", "seal", bytes, iters, secs_seal);
 
     /* Ingest timing — measure the steady-state verify+parse+apply
@@ -556,7 +550,7 @@ static void benchMailbox(size_t bytes) {
          * per Ingest. */
         const uint32_t passes = iters / batch_n;
         const uint32_t real_iters = passes * batch_n;
-        const double t_i0 = monoNowSec();
+        const double t_i0 = timeUtilMonotonicSec();
         for (uint32_t p = 0; p < passes; p++) {
             for (uint32_t i = 0; i < batch_n; i++) {
                 /* `written` came from the very first Seal (origin=1,
@@ -578,7 +572,7 @@ static void benchMailbox(size_t bytes) {
             mb = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr,
                                       nullptr);
         }
-        const double secs_ingest = monoNowSec() - t_i0;
+        const double secs_ingest = timeUtilMonotonicSec() - t_i0;
         emitRow("mailbox", "ingest", bytes, real_iters > 0 ? real_iters : 1u,
                 secs_ingest);
     }
@@ -597,13 +591,13 @@ static void benchMailbox(size_t bytes) {
 static void benchMembound(const char *name, membound *pool, size_t bytes) {
     const uint32_t iters = 2'000'000u;
     [[maybe_unused]] volatile void *sink = nullptr;
-    const double t0 = monoNowSec();
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         void *p = memboundAlloc(pool, bytes);
         sink = p;
         memboundFree(pool, p);
     }
-    const double secs = monoNowSec() - t0;
+    const double secs = timeUtilMonotonicSec() - t0;
     emitRow("membound", name, bytes, iters, secs);
 }
 
@@ -658,32 +652,32 @@ static void benchMultidict(void) {
         multidictNew(&multidictTypeExactKey, qdc, 7);
     uint64_t sink = 0;
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         const databox v = databoxNewSigned(i);
         sink += multidictAdd(d, &k, &v);
     }
-    emitRow("multidict", "add", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "add", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         databox v = {};
         sink += multidictFind(d, &k, &v);
     }
-    emitRow("multidict", "find", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "find", 0, n, timeUtilMonotonicSec() - t0);
 
     /* AddNX of present keys: every offer refused */
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         const databox v = databoxNewSigned(i);
         sink += multidictAddNX(d, &k, &v);
     }
-    emitRow("multidict", "addNXPresent", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "addNXPresent", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t r = 0; r < 3; r++) {
         for (uint32_t i = 0; i < n; i++) {
             const databox k = perfContainerKey(keys, i);
@@ -691,42 +685,42 @@ static void benchMultidict(void) {
             sink += multidictIncrBy(d, &k, 1, &out);
         }
     }
-    emitRow("multidict", "incrBy", 0, 3 * n, monoNowSec() - t0);
+    emitRow("multidict", "incrBy", 0, 3 * n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         const databox v = databoxNewSigned(-(int64_t)i);
         sink += multidictAddXX(d, &k, &v);
     }
-    emitRow("multidict", "addXX", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "addXX", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         double out = 0;
         sink += multidictIncrByFloat(d, &k, 0.5, &out);
     }
-    emitRow("multidict", "incrByFloat", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "incrByFloat", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         sink += multidictDelete(d, &k);
     }
-    emitRow("multidict", "delete", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "delete", 0, n, timeUtilMonotonicSec() - t0);
 
     /* Presized: adds without growth, then removals that take the value */
     multidictExpand(d, n / 2);
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         const databox v = databoxNewSigned(i);
         sink += multidictAdd(d, &k, &v);
     }
-    emitRow("multidict", "addPresized", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "addPresized", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         databox v;
@@ -735,16 +729,16 @@ static void benchMultidict(void) {
             databoxFreeData(&v);
         }
     }
-    emitRow("multidict", "getAndDelete", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "getAndDelete", 0, n, timeUtilMonotonicSec() - t0);
 
     /* AddNX of absent keys into the emptied (still presized) table */
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         const databox v = databoxNewSigned(i);
         sink += multidictAddNX(d, &k, &v);
     }
-    emitRow("multidict", "addNX", 0, n, monoNowSec() - t0);
+    emitRow("multidict", "addNX", 0, n, timeUtilMonotonicSec() - t0);
 
     perfContainerSink = sink;
 }
@@ -757,64 +751,66 @@ static void benchMultiOrderedSet(void) {
     cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
     uint64_t sink = 0;
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox s = databoxNewSigned(i);
         const databox m = perfContainerKey(keys, i);
         sink += multiOrderedSetAdd(&mos, &s, &m);
     }
-    emitRow("multiOrderedSet", "add", 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "add", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox s = databoxNewSigned((int64_t)((i * 7919u) % n));
         const databox m = perfContainerKey(keys, i);
         sink += multiOrderedSetAdd(&mos, &s, &m);
     }
-    emitRow("multiOrderedSet", "update", 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "update", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox s = databoxNewSigned((int64_t)((i * 104729u) % n));
         const databox m = perfContainerKey(keys, i);
         sink += multiOrderedSetAddXX(&mos, &s, &m);
     }
-    emitRow("multiOrderedSet", "addXX", 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "addXX", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox delta = databoxNewSigned(3);
         const databox m = perfContainerKey(keys, i);
         databox result = {};
         sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
     }
-    emitRow("multiOrderedSet", "incrBy", 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "incrBy", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox m = perfContainerKey(keys, i);
         databox s = {};
         sink += multiOrderedSetGetScore(mos, &m, &s);
     }
-    emitRow("multiOrderedSet", "getScore", 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "getScore", 0, n, timeUtilMonotonicSec() - t0);
 
     /* Rank of a member spread over the whole set */
     const uint32_t ranks = 2000;
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < ranks; i++) {
         const databox m = perfContainerKey(keys, (i * 7919u) % n);
         sink += (uint64_t)multiOrderedSetGetRank(mos, &m);
     }
-    emitRow("multiOrderedSet", "getRank", 0, ranks, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "getRank", 0, ranks,
+            timeUtilMonotonicSec() - t0);
 
     /* A 100-score window near the top of the set, counted */
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < ranks; i++) {
         const mosRangeSpec top = {.min = databoxNewSigned((int64_t)n - 100),
                                   .max = databoxNewSigned((int64_t)n)};
         sink += multiOrderedSetCountByScore(mos, &top);
     }
-    emitRow("multiOrderedSet", "countByScoreTop", 0, ranks, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "countByScoreTop", 0, ranks,
+            timeUtilMonotonicSec() - t0);
 
     /* Union of two halves overlapping by half of each (n/2 members each,
      * n/4 shared), per input member: SUM and MAX combine the shared ones */
@@ -836,20 +832,21 @@ static void benchMultiOrderedSet(void) {
         } unions[] = {{MOS_AGGREGATE_SUM, "unionSum"},
                       {MOS_AGGREGATE_MAX, "unionMax"}};
         for (size_t u = 0; u < 2; u++) {
-            t0 = monoNowSec();
+            t0 = timeUtilMonotonicSec();
             cleaner(multiOrderedSetFree) multiOrderedSet *un =
                 multiOrderedSetUnion(both, nullptr, 2, unions[u].how);
-            emitRow("multiOrderedSet", unions[u].name, 0, n, monoNowSec() - t0);
+            emitRow("multiOrderedSet", unions[u].name, 0, n,
+                    timeUtilMonotonicSec() - t0);
             sink += multiOrderedSetCount(un);
         }
     }
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox m = perfContainerKey(keys, i);
         sink += multiOrderedSetRemove(&mos, &m);
     }
-    emitRow("multiOrderedSet", "remove", 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", "remove", 0, n, timeUtilMonotonicSec() - t0);
 
     /* Every member with one score: an equal-score run never straddles two
      * of the Full tier's sub-maps, so it stays one flex and each add moves
@@ -860,13 +857,13 @@ static void benchMultiOrderedSet(void) {
         cleaner(multiOrderedSetFree) multiOrderedSet *same =
             multiOrderedSetNew();
         const databox s = databoxNewSigned(7);
-        t0 = monoNowSec();
+        t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < sameN; i++) {
             const databox m = perfContainerKey(keys, i);
             sink += multiOrderedSetAdd(&same, &s, &m);
         }
         emitRow("multiOrderedSet", "addEqualScore10k", 0, sameN,
-                monoNowSec() - t0);
+                timeUtilMonotonicSec() - t0);
     }
 
     /* Bulk removals from a fresh n-member set (score i for member i), per
@@ -883,7 +880,7 @@ static void benchMultiOrderedSet(void) {
 
         const uint32_t windows = 20;
         size_t gone = 0;
-        t0 = monoNowSec();
+        t0 = timeUtilMonotonicSec();
         for (uint32_t w = 0; w < windows; w++) {
             const int64_t lo = (int64_t)(n / 2 + w * 1000);
             const mosRangeSpec r = {.min = databoxNewSigned(lo),
@@ -891,20 +888,20 @@ static void benchMultiOrderedSet(void) {
             gone += multiOrderedSetRemoveRangeByScore(&bulk, &r);
         }
         emitRow("multiOrderedSet", "removeRangeByScore", 0, (uint32_t)gone,
-                monoNowSec() - t0);
+                timeUtilMonotonicSec() - t0);
 
         gone = 0;
-        t0 = monoNowSec();
+        t0 = timeUtilMonotonicSec();
         for (uint32_t w = 0; w < windows; w++) {
             gone += multiOrderedSetRemoveRangeByRank(&bulk, n / 4, n / 4 + 999);
         }
         emitRow("multiOrderedSet", "removeRangeByRank", 0, (uint32_t)gone,
-                monoNowSec() - t0);
+                timeUtilMonotonicSec() - t0);
 
         databox popMembers[1000];
         databox popScores[1000];
         gone = 0;
-        t0 = monoNowSec();
+        t0 = timeUtilMonotonicSec();
         for (uint32_t w = 0; w < windows; w++) {
             const size_t popped =
                 multiOrderedSetPopMin(&bulk, 1000, popMembers, popScores);
@@ -915,7 +912,7 @@ static void benchMultiOrderedSet(void) {
             gone += popped;
         }
         emitRow("multiOrderedSet", "popMin", 0, (uint32_t)gone,
-                monoNowSec() - t0);
+                timeUtilMonotonicSec() - t0);
     }
 
     perfContainerSink = sink;
@@ -943,11 +940,11 @@ static persistCtx *perfPersistCtx(dkTestTmpDir *tmp, const char *name) {
 /* One timed row of n calls: the body runs once for each i in [0, n) */
 #define PERF_ROW(module, row, n, ...)                                          \
     do {                                                                       \
-        const double rowStart_ = monoNowSec();                                 \
+        const double rowStart_ = timeUtilMonotonicSec();                       \
         for (uint32_t i = 0; i < (n); i++) {                                   \
             __VA_ARGS__;                                                       \
         }                                                                      \
-        emitRow(module, row, 0, (n), monoNowSec() - rowStart_);                \
+        emitRow(module, row, 0, (n), timeUtilMonotonicSec() - rowStart_);      \
     } while (0)
 
 /* i in [0, PERF_CONTAINER_N) visited in a fixed scattered order */
@@ -975,11 +972,11 @@ static const flexCapSizeLimit perfSweepLimits[] = {
  * is read after the loop */
 #define PERF_LIMIT_ROW(module, op, limit, bytes, n, ...)                       \
     do {                                                                       \
-        const double rowStart_ = monoNowSec();                                 \
+        const double rowStart_ = timeUtilMonotonicSec();                       \
         for (uint32_t i = 0; i < (n); i++) {                                   \
             __VA_ARGS__;                                                       \
         }                                                                      \
-        const double rowSecs_ = monoNowSec() - rowStart_;                      \
+        const double rowSecs_ = timeUtilMonotonicSec() - rowStart_;            \
         char rowName_[48];                                                     \
         snprintf(rowName_, sizeof(rowName_), "%s%u", (op),                     \
                  flexOptimizationSizeLimit[(limit)]);                          \
@@ -1104,22 +1101,23 @@ static void benchMultiroar(void) {
         multiroarBitSet(b, (uint64_t)i * 8192 + 1);
     }
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     multiroarOr(r, b);
-    emitRow("multiroar", "orInPlace", 0, n, monoNowSec() - t0);
+    emitRow("multiroar", "orInPlace", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     multiroarBitClearRange(r, 0, (uint64_t)n * 8192);
-    emitRow("multiroar", "clearRangeWhole", 0, n, monoNowSec() - t0);
+    emitRow("multiroar", "clearRangeWhole", 0, n, timeUtilMonotonicSec() - t0);
 
     /* Whole chunks set: first into absent chunks, then over full ones */
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     multiroarBitSetRange(r, 0, (uint64_t)n * 8192);
-    emitRow("multiroar", "setRangeWholeNew", 0, n, monoNowSec() - t0);
+    emitRow("multiroar", "setRangeWholeNew", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     multiroarBitSetRange(r, 0, (uint64_t)n * 8192);
-    emitRow("multiroar", "setRangeWholeFull", 0, n, monoNowSec() - t0);
+    emitRow("multiroar", "setRangeWholeFull", 0, n,
+            timeUtilMonotonicSec() - t0);
     perfContainerSink = multiroarBitCount(r) + multiroarBitCount(b);
 }
 
@@ -1204,33 +1202,33 @@ static void benchMultidictP(void) {
         sink += (uint64_t)multidictAddP(dp, &k, &v, nullptr);
     }
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, (i * 7919u) % n);
         const databox v = databoxNewSigned(-(int64_t)i);
         sink += (uint64_t)multidictReplaceP(dp, &k, &v);
     }
-    emitRow("multidictP", "replaceP", 0, n, monoNowSec() - t0);
+    emitRow("multidictP", "replaceP", 0, n, timeUtilMonotonicSec() - t0);
 
     multidict *d = multidictGetP(dp);
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, (i * 7919u) % n);
         const databox v = databoxNewSigned((int64_t)i);
         sink += (uint64_t)multidictReplace(d, &k, &v);
     }
-    emitRow("multidictP", "replacePlain", 0, n, monoNowSec() - t0);
+    emitRow("multidictP", "replacePlain", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, (i * 7919u) % n);
         sink += multidictExistsNoTouch(d, &k);
     }
-    emitRow("multidictP", "existsNoTouch", 0, n, monoNowSec() - t0);
+    emitRow("multidictP", "existsNoTouch", 0, n, timeUtilMonotonicSec() - t0);
 
     /* The wrapper's two searches without the log between them: the check
      * leaves the key's slot warm for the replace */
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, (i * 7919u) % n);
         const databox v = databoxNewSigned((int64_t)i + 1);
@@ -1238,7 +1236,8 @@ static void benchMultidictP(void) {
             sink += (uint64_t)multidictReplace(d, &k, &v);
         }
     }
-    emitRow("multidictP", "existsThenReplace", 0, n, monoNowSec() - t0);
+    emitRow("multidictP", "existsThenReplace", 0, n,
+            timeUtilMonotonicSec() - t0);
 
     multidictCloseP(dp);
     persistCtxFree(ctx);
@@ -1489,26 +1488,28 @@ static void benchMultiOrderedSetLarge(void) {
         sink += multiOrderedSetAdd(&mos, &s, &m);
     }
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = n - timed; i < n; i++) {
         const int klen = snprintf(key, sizeof(key), "large-%07u", i);
         const databox m = databoxNewBytes(key, klen);
         const databox s = databoxNewSigned((int64_t)((i * 7919ull) % n));
         sink += multiOrderedSetAdd(&mos, &s, &m);
     }
-    emitRow("multiOrderedSetLarge", "add600k", 0, timed, monoNowSec() - t0);
+    emitRow("multiOrderedSetLarge", "add600k", 0, timed,
+            timeUtilMonotonicSec() - t0);
 
     const uint32_t ranks = 2000;
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < ranks; i++) {
         const int klen =
             snprintf(key, sizeof(key), "large-%07u", (i * 7919u) % n);
         const databox m = databoxNewBytes(key, klen);
         sink += (uint64_t)multiOrderedSetGetRank(mos, &m);
     }
-    emitRow("multiOrderedSetLarge", "getRank600k", 0, ranks, monoNowSec() - t0);
+    emitRow("multiOrderedSetLarge", "getRank600k", 0, ranks,
+            timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < ranks; i++) {
         databox member;
         databox score;
@@ -1516,7 +1517,7 @@ static void benchMultiOrderedSetLarge(void) {
                                          &member, &score);
     }
     emitRow("multiOrderedSetLarge", "getByRank600k", 0, ranks,
-            monoNowSec() - t0);
+            timeUtilMonotonicSec() - t0);
 
     perfContainerSink = sink;
 }
@@ -1537,7 +1538,7 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
     }
 
     char name[48];
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox delta = databoxNewSigned(1);
         const databox m = perfContainerKey(keys, i % members);
@@ -1545,9 +1546,9 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
         sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
     }
     snprintf(name, sizeof(name), "%sIncrBy", tier);
-    emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", name, 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox s =
             databoxNewSigned((int64_t)((i * 7919u) % (members * 16)));
@@ -1555,16 +1556,16 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
         sink += multiOrderedSetAdd(&mos, &s, &m);
     }
     snprintf(name, sizeof(name), "%sUpdate", tier);
-    emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", name, 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox s = databoxNewSigned(i);
         const databox m = perfContainerKey(keys, i % members);
         sink += multiOrderedSetAddNX(&mos, &s, &m);
     }
     snprintf(name, sizeof(name), "%sAddNXPresent", tier);
-    emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+    emitRow("multiOrderedSet", name, 0, n, timeUtilMonotonicSec() - t0);
 
     perfContainerSink = sink;
 }
@@ -1583,15 +1584,15 @@ static void benchMultiarrayTier(const char *tier, uint32_t n) {
 
     char name[48];
     uint64_t sink = 0;
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < ops; i++) {
         const uint64_t *at = multiarrayGet(m, (i * 7919u) % n);
         sink += *at;
     }
     snprintf(name, sizeof(name), "%sGet", tier);
-    emitRow("multiarray", name, 0, ops, monoNowSec() - t0);
+    emitRow("multiarray", name, 0, ops, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < ops; i++) {
         const uint32_t idx = (i * 7919u) % n;
         uint64_t v = i;
@@ -1600,7 +1601,7 @@ static void benchMultiarrayTier(const char *tier, uint32_t n) {
         sink += v;
     }
     snprintf(name, sizeof(name), "%sInsertPop", tier);
-    emitRow("multiarray", name, 0, ops, monoNowSec() - t0);
+    emitRow("multiarray", name, 0, ops, timeUtilMonotonicSec() - t0);
 
     perfContainerSink = sink;
 }
@@ -1655,33 +1656,34 @@ static void benchMultilru(const uint32_t n) {
         zcalloc(n, sizeof(*ptrs));
     uint64_t sink = 0;
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         ptrs[i] = multilruInsert(mlru);
     }
-    emitRow("multilru", "insert", n, n, monoNowSec() - t0);
+    emitRow("multilru", "insert", n, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         multilruIncrease(mlru, ptrs[(i * 7919u) % n]);
     }
-    emitRow("multilru", "increase", n, n, monoNowSec() - t0);
+    emitRow("multilru", "increase", n, n, timeUtilMonotonicSec() - t0);
 
     const uint32_t deletes = n / 4;
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < deletes; i++) {
         /* every fourth entry, n / 4 distinct ones */
         multilruDelete(mlru, ptrs[(uint32_t)(((uint64_t)i * 4 + 1) % n)]);
     }
-    emitRow("multilru", "delete", n, deletes, monoNowSec() - t0);
+    emitRow("multilru", "delete", n, deletes, timeUtilMonotonicSec() - t0);
 
     const size_t left = multilruCount(mlru);
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     multilruPtr out;
     while (multilruRemoveMinimum(mlru, &out)) {
         sink += out;
     }
-    emitRow("multilru", "removeMinimum", n, (uint32_t)left, monoNowSec() - t0);
+    emitRow("multilru", "removeMinimum", n, (uint32_t)left,
+            timeUtilMonotonicSec() - t0);
     perfContainerSink = sink;
 }
 
@@ -1694,40 +1696,40 @@ static void benchMultimapAtom(void) {
     cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
     uint64_t sink = 0;
 
-    double t0 = monoNowSec();
+    double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvert(ma, &k);
     }
-    emitRow("multimapAtom", "internNew", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "internNew", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvert(ma, &k);
     }
-    emitRow("multimapAtom", "internPresent", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "internPresent", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvertAndRetain(ma, &k);
     }
-    emitRow("multimapAtom", "retain", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "retain", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         sink += multimapAtomRelease(ma, &k);
     }
-    emitRow("multimapAtom", "release", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "release", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         sink += multimapAtomRelease(ma, &k);
     }
-    emitRow("multimapAtom", "releaseLast", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "releaseLast", 0, n, timeUtilMonotonicSec() - t0);
 
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
@@ -1736,15 +1738,15 @@ static void benchMultimapAtom(void) {
 
     /* Persistence of the full table: one snapshot, one restore (ns/atom) */
     size_t snapLen = 0;
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     cleanerName(zfree, U8Buf) uint8_t *snap =
         persistOpsMultimapAtom.snapshot(ma, &snapLen);
-    emitRow("multimapAtom", "snapshot", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "snapshot", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     cleaner(multimapAtomFree) multimapAtom *restored =
         persistOpsMultimapAtom.restore(snap, snapLen);
-    emitRow("multimapAtom", "restore", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "restore", 0, n, timeUtilMonotonicSec() - t0);
     sink += multimapAtomCount(restored);
 
     /* Interning into a lowest-first table: new values, then present ones */
@@ -1772,15 +1774,15 @@ static void benchMultimapAtom(void) {
     }
 
     size_t denseLen = 0;
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     cleanerName(zfree, U8Buf) uint8_t *denseSnap =
         persistOpsMultimapAtomDense.snapshot(dense, &denseLen);
-    emitRow("multimapAtomDense", "snapshot", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtomDense", "snapshot", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     cleaner(multimapAtomDenseFree) multimapAtomDense *denseRestored =
         persistOpsMultimapAtomDense.restore(denseSnap, denseLen);
-    emitRow("multimapAtomDense", "restore", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtomDense", "restore", 0, n, timeUtilMonotonicSec() - t0);
     sink += multimapAtomDenseCount(denseRestored);
 
     /* The hash-backed pool of the same strings */
@@ -1791,22 +1793,22 @@ static void benchMultimapAtom(void) {
     }
 
     size_t poolLen = 0;
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     cleanerName(zfree, U8Buf) uint8_t *poolSnap =
         persistOpsStringPool.snapshot(pool, &poolLen);
-    emitRow("stringPool", "snapshot", 0, n, monoNowSec() - t0);
+    emitRow("stringPool", "snapshot", 0, n, timeUtilMonotonicSec() - t0);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     cleaner(stringPoolFree) stringPool *poolRestored =
         persistOpsStringPool.restore(poolSnap, poolLen);
-    emitRow("stringPool", "restore", 0, n, monoNowSec() - t0);
+    emitRow("stringPool", "restore", 0, n, timeUtilMonotonicSec() - t0);
     sink += stringPoolCount(poolRestored);
 
-    t0 = monoNowSec();
+    t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         sink += multimapAtomDeleteById(ma, i);
     }
-    emitRow("multimapAtom", "deleteById", 0, n, monoNowSec() - t0);
+    emitRow("multimapAtom", "deleteById", 0, n, timeUtilMonotonicSec() - t0);
 
     perfContainerSink = sink;
 }

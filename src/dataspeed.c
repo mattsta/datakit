@@ -1,4 +1,5 @@
 #include "dataspeed.h"
+#include "timeUtil.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -12,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -37,7 +37,6 @@ defcleanerName(char *, zfree, Chars);
 
 /* Platform-specific headers */
 #if defined(__APPLE__)
-#include <mach/mach_time.h>
 #include <sys/sysctl.h>
 #elifdef __linux__
 #include <sched.h>
@@ -84,20 +83,6 @@ defcleanerName(char *, zfree, Chars);
  * ============================================================================
  */
 
-static inline uint64_t dataspeed_time_ns(void) {
-#if defined(__APPLE__)
-    static mach_timebase_info_data_t timebase = {};
-    if (timebase.denom == 0) {
-        mach_timebase_info(&timebase);
-    }
-    return mach_absolute_time() * timebase.numer / timebase.denom;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1'000'000'000ULL + ts.tv_nsec;
-#endif
-}
-
 static inline uint64_t dataspeed_rdtsc(void) {
 #if defined(__aarch64__)
     uint64_t result;
@@ -108,7 +93,7 @@ static inline uint64_t dataspeed_rdtsc(void) {
     __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
 #else
-    return dataspeed_time_ns();
+    return timeUtilMonotonicNs();
 #endif
 }
 
@@ -517,28 +502,28 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     } else {
         /* Fallback: estimate via actual computation throughput */
         [[maybe_unused]] volatile uint64_t dummy = 0;
-        uint64_t start_ns = dataspeed_time_ns();
+        uint64_t start_ns = timeUtilMonotonicNs();
         for (int i = 0; i < 100'000'000; i++) {
             dummy += i;
         }
-        uint64_t elapsed_ns = dataspeed_time_ns() - start_ns;
+        uint64_t elapsed_ns = timeUtilMonotonicNs() - start_ns;
         /* Rough estimate: ~1 add per cycle */
         info->cpu_freq_mhz = 100'000'000.0 / elapsed_ns * 1000.0;
     }
 #else
     /* On x86, RDTSC runs at a fixed rate close to base frequency */
     uint64_t start_tsc = dataspeed_rdtsc();
-    uint64_t start_ns = dataspeed_time_ns();
+    uint64_t start_ns = timeUtilMonotonicNs();
 
     /* Busy loop for ~10ms */
     volatile uint64_t dummy = 0;
     uint64_t target_ns = start_ns + 10'000'000; /* 10ms */
-    while (dataspeed_time_ns() < target_ns) {
+    while (timeUtilMonotonicNs() < target_ns) {
         dummy++;
     }
 
     uint64_t end_tsc = dataspeed_rdtsc();
-    uint64_t end_ns = dataspeed_time_ns();
+    uint64_t end_ns = timeUtilMonotonicNs();
 
     double elapsed_s = (end_ns - start_ns) / 1e9;
     double cycles = (double)(end_tsc - start_tsc);
@@ -630,12 +615,12 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
     double samples[100];
     size_t sample_count = 0;
 
-    uint64_t total_start = dataspeed_time_ns();
+    uint64_t total_start = timeUtilMonotonicNs();
     uint64_t min_duration_ns = 500000000; /* 500ms */
 
     while (sample_count < max_samples) {
         TIMING_BARRIER(); /* Ensure timing is accurate */
-        uint64_t start = dataspeed_time_ns();
+        uint64_t start = timeUtilMonotonicNs();
         uint64_t start_tsc = dataspeed_rdtsc();
         TIMING_BARRIER();
 
@@ -643,7 +628,7 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
 
         TIMING_BARRIER();
         uint64_t end_tsc = dataspeed_rdtsc();
-        uint64_t end = dataspeed_time_ns();
+        uint64_t end = timeUtilMonotonicNs();
         TIMING_BARRIER();
 
         double elapsed_s = (end - start) / 1e9;
@@ -652,7 +637,7 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
         /* Store cycles for last sample */
         result->cycles_per_byte = (double)(end_tsc - start_tsc) / size_bytes;
 
-        if (dataspeed_time_ns() - total_start > min_duration_ns &&
+        if (timeUtilMonotonicNs() - total_start > min_duration_ns &&
             sample_count >= 10) {
             break;
         }
@@ -761,9 +746,9 @@ static void benchmark_latency_at_size(size_t size_bytes,
 
     /* Determine iteration count for ~100ms */
     size_t iterations = 100'000;
-    uint64_t start = dataspeed_time_ns();
+    uint64_t start = timeUtilMonotonicNs();
     chase_pointers(chain, iterations);
-    uint64_t elapsed = dataspeed_time_ns() - start;
+    uint64_t elapsed = timeUtilMonotonicNs() - start;
 
     /* Scale to ~100ms */
     iterations = (size_t)((double)iterations * 100'000'000.0 / elapsed);
@@ -777,7 +762,7 @@ static void benchmark_latency_at_size(size_t size_bytes,
 
     for (size_t s = 0; s < max_samples; s++) {
         TIMING_BARRIER();
-        uint64_t start_ns = dataspeed_time_ns();
+        uint64_t start_ns = timeUtilMonotonicNs();
         uint64_t start_tsc = dataspeed_rdtsc();
         TIMING_BARRIER();
 
@@ -786,7 +771,7 @@ static void benchmark_latency_at_size(size_t size_bytes,
 
         TIMING_BARRIER();
         uint64_t end_tsc = dataspeed_rdtsc();
-        uint64_t end_ns = dataspeed_time_ns();
+        uint64_t end_ns = timeUtilMonotonicNs();
         TIMING_BARRIER();
 
         samples[s] = (double)(end_ns - start_ns) / iterations;
@@ -971,60 +956,60 @@ void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
 
     /* Integer add (8 ops per iteration) */
     TIMING_BARRIER();
-    start = dataspeed_time_ns();
+    start = timeUtilMonotonicNs();
     TIMING_BARRIER();
     r1 = bench_int_add(iterations);
     DO_NOT_OPTIMIZE(r1);
     TIMING_BARRIER();
-    elapsed = dataspeed_time_ns() - start;
+    elapsed = timeUtilMonotonicNs() - start;
     TIMING_BARRIER();
     results->int_add_gops = (iterations * 8.0) / elapsed; /* ops/ns = Gops */
     printf("  Int Add:     %6.2f Gops/s\n", results->int_add_gops);
 
     /* Integer mul (4 ops per iteration) */
     TIMING_BARRIER();
-    start = dataspeed_time_ns();
+    start = timeUtilMonotonicNs();
     TIMING_BARRIER();
     r1 = bench_int_mul(iterations / 10);
     DO_NOT_OPTIMIZE(r1);
     TIMING_BARRIER();
-    elapsed = dataspeed_time_ns() - start;
+    elapsed = timeUtilMonotonicNs() - start;
     TIMING_BARRIER();
     results->int_mul_gops = ((iterations / 10) * 4.0) / elapsed;
     printf("  Int Mul:     %6.2f Gops/s\n", results->int_mul_gops);
 
     /* Float add (8 ops per iteration) */
     TIMING_BARRIER();
-    start = dataspeed_time_ns();
+    start = timeUtilMonotonicNs();
     TIMING_BARRIER();
     r3 = bench_float_add(iterations);
     DO_NOT_OPTIMIZE(r3);
     TIMING_BARRIER();
-    elapsed = dataspeed_time_ns() - start;
+    elapsed = timeUtilMonotonicNs() - start;
     TIMING_BARRIER();
     results->float_add_gops = (iterations * 8.0) / elapsed;
     printf("  Float Add:   %6.2f Gops/s\n", results->float_add_gops);
 
     /* Float mul (4 ops per iteration) */
     TIMING_BARRIER();
-    start = dataspeed_time_ns();
+    start = timeUtilMonotonicNs();
     TIMING_BARRIER();
     r4 = bench_float_mul(iterations / 10);
     DO_NOT_OPTIMIZE(r4);
     TIMING_BARRIER();
-    elapsed = dataspeed_time_ns() - start;
+    elapsed = timeUtilMonotonicNs() - start;
     TIMING_BARRIER();
     results->float_mul_gops = ((iterations / 10) * 4.0) / elapsed;
     printf("  Float Mul:   %6.2f Gops/s\n", results->float_mul_gops);
 
     /* FMA (4 ops per iteration) */
     TIMING_BARRIER();
-    start = dataspeed_time_ns();
+    start = timeUtilMonotonicNs();
     TIMING_BARRIER();
     r5 = bench_float_fma(iterations);
     DO_NOT_OPTIMIZE(r5);
     TIMING_BARRIER();
-    elapsed = dataspeed_time_ns() - start;
+    elapsed = timeUtilMonotonicNs() - start;
     TIMING_BARRIER();
     results->float_fma_gops = (iterations * 4.0) / elapsed;
     printf("  Float FMA:   %6.2f Gops/s\n", results->float_fma_gops);
@@ -1032,14 +1017,14 @@ void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
     /* Function call overhead */
     size_t call_iters = 10'000'000;
     TIMING_BARRIER();
-    start = dataspeed_time_ns();
+    start = timeUtilMonotonicNs();
     TIMING_BARRIER();
     for (size_t i = 0; i < call_iters; i++) {
         size_t x = dummy_call();
         DO_NOT_OPTIMIZE(x);
     }
     TIMING_BARRIER();
-    elapsed = dataspeed_time_ns() - start;
+    elapsed = timeUtilMonotonicNs() - start;
     TIMING_BARRIER();
     results->call_overhead_ns = (double)elapsed / call_iters;
     printf("  Call Overhead: %.2f ns\n", results->call_overhead_ns);
@@ -1055,7 +1040,7 @@ void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
 void dataspeedRunAll(dataspeedReport *report, bool verbose) {
     memset(report, 0, sizeof(*report));
 
-    uint64_t start = dataspeed_time_ns();
+    uint64_t start = timeUtilMonotonicNs();
     report->timestamp = (uint64_t)time(nullptr);
 
     /* System info */
@@ -1076,7 +1061,7 @@ void dataspeedRunAll(dataspeedReport *report, bool verbose) {
     /* Memory bandwidth (use 64MB to exceed L3) */
     dataspeedBenchmarkMemory(&report->memory, 64);
 
-    report->total_duration_s = (dataspeed_time_ns() - start) / 1e9;
+    report->total_duration_s = (timeUtilMonotonicNs() - start) / 1e9;
 
     printf("=== Benchmark Complete (%.1f seconds) ===\n",
            report->total_duration_s);
@@ -1395,18 +1380,18 @@ DK_FN_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
         cleanerName(zfree, Chars) char *mem = zmalloc(sizeBytes);
         assert(mem);
 
-        uint64_t totalStart = dataspeed_time_ns();
+        uint64_t totalStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < iterations && !stopProcessing; i++) {
             memset(mem, 0xDA, sizeBytes);
             if (i && i % 50 == 0) {
-                uint64_t elapsed = dataspeed_time_ns() - totalStart;
+                uint64_t elapsed = timeUtilMonotonicNs() - totalStart;
                 double gbs = (double)(i * sizeBytes) / elapsed;
                 printf("  Progress: %zu/%zu (%.2f GB/s)\n", i, iterations, gbs);
             }
         }
 
-        uint64_t totalElapsed = dataspeed_time_ns() - totalStart;
+        uint64_t totalElapsed = timeUtilMonotonicNs() - totalStart;
         double totalGB = (double)(iterations * sizeBytes) / (1ULL << 30);
         double seconds = totalElapsed / 1e9;
         printf("  Total: %.2f GB in %.2f seconds = %.2f GB/s\n", totalGB,

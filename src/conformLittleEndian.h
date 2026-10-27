@@ -2,11 +2,8 @@
 
 #include "endianIsLittle.h"
 
-/* Note: If your platform *is* little endian, your compiler will detect
- *       it at compile time and remove all these macro bodies since nothing
- *       would happen on your platform.  */
-#if 1
-/* -fstrict-aliasing */
+/* Byte-reverse 'what' in place on a big-endian host; on a little-endian one
+ * endianIsLittle() is a constant and the body compiles away. */
 #define _conformToLittleEndian(size, what)                                     \
     do {                                                                       \
         if (!endianIsLittle()) {                                               \
@@ -19,16 +16,6 @@
             memcpy(&(what), &holder, sizeof(holder));                          \
         }                                                                      \
     } while (0)
-#else
-/* -fno-strict-aliasing */
-/* this version breaks strict aliasing rules (and 'what' is a pointer here) */
-#define _conformToLittleEndian(size, what)                                     \
-    if (!endianIsLittle()) {                                                   \
-        *(what) = __builtin_bswap##size(*(what));                              \
-    }                                                                          \
-    }                                                                          \
-    while (0)
-#endif
 
 #define conformToLittleEndian16(e) _conformToLittleEndian(16, e)
 #define conformToLittleEndian32(e) _conformToLittleEndian(32, e)

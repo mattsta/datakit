@@ -81,6 +81,57 @@ DK_STDBIT_(ull, unsigned long long, ULLONG_WIDTH)
 #define stdc_bit_ceil(x) DK_STDBIT_GENERIC_(stdc_bit_ceil, x)
 #endif
 
+/* stdc_rotate_left / stdc_rotate_right (value, count): the next C
+ * standard's <stdbit.h> rotates, until the library ships them: the
+ * compiler's builtin where it has one, else one function per width (the
+ * shift pair each compiles to a single rotate instruction).  The result has
+ * the value's unsigned type and the count is taken modulo its width, so a
+ * count of 0 or the full width returns the value. */
+#ifndef stdc_rotate_left
+#if __has_builtin(__builtin_stdc_rotate_left) &&                               \
+    __has_builtin(__builtin_stdc_rotate_right)
+#define stdc_rotate_left(x, n) __builtin_stdc_rotate_left(x, n)
+#define stdc_rotate_right(x, n) __builtin_stdc_rotate_right(x, n)
+#else
+#define DK_STDBIT_ROTATE_(suffix, T, width)                                    \
+    static inline T stdc_rotate_left_##suffix(T x, unsigned int n) {           \
+        n %= (width);                                                          \
+        return (T)((T)(x << n) | (T)(x >> (((width) - n) % (width))));         \
+    }                                                                          \
+    static inline T stdc_rotate_right_##suffix(T x, unsigned int n) {          \
+        n %= (width);                                                          \
+        return (T)((T)(x >> n) | (T)(x << (((width) - n) % (width))));         \
+    }
+
+DK_STDBIT_ROTATE_(uc, unsigned char, UCHAR_WIDTH)
+DK_STDBIT_ROTATE_(us, unsigned short, USHRT_WIDTH)
+DK_STDBIT_ROTATE_(ui, unsigned int, UINT_WIDTH)
+DK_STDBIT_ROTATE_(ul, unsigned long, ULONG_WIDTH)
+DK_STDBIT_ROTATE_(ull, unsigned long long, ULLONG_WIDTH)
+#undef DK_STDBIT_ROTATE_
+
+#define DK_STDBIT_ROTATE_GENERIC_(fn, x, n)                                    \
+    _Generic((x),                                                              \
+        unsigned char: fn##_uc,                                                \
+        unsigned short: fn##_us,                                               \
+        unsigned int: fn##_ui,                                                 \
+        unsigned long: fn##_ul,                                                \
+        unsigned long long: fn##_ull)((x), (unsigned int)(n))
+
+#define stdc_rotate_left(x, n) DK_STDBIT_ROTATE_GENERIC_(stdc_rotate_left, x, n)
+#define stdc_rotate_right(x, n)                                                \
+    DK_STDBIT_ROTATE_GENERIC_(stdc_rotate_right, x, n)
+#endif
+#endif
+
+/* __STDC_ENDIAN_NATIVE__ and its two values (C23 7.18.2), from the
+ * compiler's byte-order macros where the library lacks <stdbit.h> */
+#ifndef __STDC_ENDIAN_NATIVE__
+#define __STDC_ENDIAN_LITTLE__ __ORDER_LITTLE_ENDIAN__
+#define __STDC_ENDIAN_BIG__ __ORDER_BIG_ENDIAN__
+#define __STDC_ENDIAN_NATIVE__ __BYTE_ORDER__
+#endif
+
 /* countof(array): its number of elements (the next C standard's
  * <stdcountof.h>, here until every compiler ships it). A pointer is
  * refused at compile time, where sizeof(p) / sizeof(*p) would quietly

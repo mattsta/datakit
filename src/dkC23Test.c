@@ -4,6 +4,7 @@
 #include "ctest.h"
 
 #include <inttypes.h>
+#include <string.h>
 
 /* Independent answers, found one bit at a time */
 static unsigned int dkC23Leading_(uint64_t x, unsigned int width) {
@@ -88,8 +89,59 @@ static uint64_t dkC23Ceil_(uint64_t x, unsigned int width) {
         }                                                                      \
     } while (0)
 
+/* 'x' rotated left by 'n' in 'width' bits, moving one bit at a time */
+static uint64_t dkC23RotateLeft_(uint64_t x, unsigned int n,
+                                 unsigned int width) {
+    uint64_t r = 0;
+    for (unsigned int b = 0; b < width; b++) {
+        if ((x >> b) & 1) {
+            r |= UINT64_C(1) << ((b + n) % width);
+        }
+    }
+    return r;
+}
+
+/* Both rotates of a spread of T values by every count from 0 to twice the
+ * width, against the oracle; right by n is left by width - n mod width */
+#define DKC23_ROTATE_SWEEP(T, width)                                           \
+    do {                                                                       \
+        uint64_t s = 0xD1B54A32D192ED03u;                                      \
+        for (int i = 0; i < 64; i++) {                                         \
+            dkLcg64Next(&s);                                                   \
+            const T x_ = (T)s;                                                 \
+            for (unsigned int n = 0; n <= 2 * (width); n++) {                  \
+                const uint64_t left =                                          \
+                    dkC23RotateLeft_((uint64_t)x_, n % (width), (width));      \
+                const uint64_t right = dkC23RotateLeft_(                       \
+                    (uint64_t)x_, ((width) - n % (width)) % (width), (width)); \
+                const T gotLeft = stdc_rotate_left(x_, n);                     \
+                const T gotRight = stdc_rotate_right(x_, n);                   \
+                if ((uint64_t)gotLeft != left ||                               \
+                    (uint64_t)gotRight != right) {                             \
+                    ERR("%s 0x%" PRIx64 " rotated by %u differs from its "     \
+                        "oracle",                                              \
+                        #T, (uint64_t)x_, n);                                  \
+                }                                                              \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
 int dkC23Test(int, char *[]) {
     int err = 0;
+
+    TEST("stdbit: rotates at every width and count against bit-by-bit "
+         "answers") {
+        DKC23_ROTATE_SWEEP(uint8_t, 8u);
+        DKC23_ROTATE_SWEEP(uint16_t, 16u);
+        DKC23_ROTATE_SWEEP(uint32_t, 32u);
+        DKC23_ROTATE_SWEEP(uint64_t, 64u);
+        /* the result keeps the value's type: no promotion to int */
+        static_assert(
+            _Generic(stdc_rotate_left((uint8_t)1, 1u), uint8_t: 1, default: 0));
+        static_assert(_Generic(stdc_rotate_right((uint64_t)1, 1u),
+                          uint64_t: 1,
+                          default: 0));
+    }
 
     TEST("stdbit: every function at every width against bit-by-bit "
          "answers") {
@@ -98,6 +150,21 @@ int dkC23Test(int, char *[]) {
         DKC23_SWEEP(unsigned int, UINT_WIDTH);
         DKC23_SWEEP(unsigned long, ULONG_WIDTH);
         DKC23_SWEEP(unsigned long long, ULLONG_WIDTH);
+    }
+
+    TEST("stdbit: __STDC_ENDIAN_NATIVE__ names the order a word's bytes "
+         "are stored in") {
+        static_assert(__STDC_ENDIAN_LITTLE__ != __STDC_ENDIAN_BIG__);
+        const uint32_t word = 0x01020304u;
+        uint8_t bytes[4];
+        memcpy(bytes, &word, sizeof(bytes));
+        const bool little = bytes[0] == 0x04 && bytes[3] == 0x01;
+        const bool big = bytes[0] == 0x01 && bytes[3] == 0x04;
+        if ((__STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_LITTLE__) != little ||
+            (__STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__) != big) {
+            ERR("native order %d disagrees with the stored bytes %02x..%02x",
+                (int)__STDC_ENDIAN_NATIVE__, bytes[0], bytes[3]);
+        }
     }
 
     TEST("countof: the elements of an array, as a constant too") {

@@ -8,6 +8,7 @@
 #include "sha256.h"
 
 #include "ctmem.h" /* dkSecureZero */
+#include "dkC23.h" /* stdc_rotate_right */
 
 #include <string.h>
 
@@ -38,10 +39,6 @@ static constexpr uint32_t H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
 /* Inline helpers                                                           */
 /* ------------------------------------------------------------------------ */
 
-static inline uint32_t rotr32(uint32_t x, uint32_t n) {
-    return (x >> n) | (x << (32 - n));
-}
-
 /* SHA-256 logical functions per FIPS 180-4 §4.1.2. */
 static inline uint32_t Ch(uint32_t x, uint32_t y, uint32_t z) {
     return (x & y) ^ (~x & z);
@@ -50,16 +47,18 @@ static inline uint32_t Maj(uint32_t x, uint32_t y, uint32_t z) {
     return (x & y) ^ (x & z) ^ (y & z);
 }
 static inline uint32_t BigSigma0(uint32_t x) {
-    return rotr32(x, 2) ^ rotr32(x, 13) ^ rotr32(x, 22);
+    return stdc_rotate_right(x, 2) ^ stdc_rotate_right(x, 13) ^
+           stdc_rotate_right(x, 22);
 }
 static inline uint32_t BigSigma1(uint32_t x) {
-    return rotr32(x, 6) ^ rotr32(x, 11) ^ rotr32(x, 25);
+    return stdc_rotate_right(x, 6) ^ stdc_rotate_right(x, 11) ^
+           stdc_rotate_right(x, 25);
 }
 static inline uint32_t smallSigma0(uint32_t x) {
-    return rotr32(x, 7) ^ rotr32(x, 18) ^ (x >> 3);
+    return stdc_rotate_right(x, 7) ^ stdc_rotate_right(x, 18) ^ (x >> 3);
 }
 static inline uint32_t smallSigma1(uint32_t x) {
-    return rotr32(x, 17) ^ rotr32(x, 19) ^ (x >> 10);
+    return stdc_rotate_right(x, 17) ^ stdc_rotate_right(x, 19) ^ (x >> 10);
 }
 
 static inline uint32_t loadBE32(const uint8_t *p) {
@@ -269,9 +268,9 @@ void sha256Hash(const void *data, size_t len, uint8_t out[SHA256_DIGEST_LEN]) {
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/sha256TestVectors.h"
+#include "timeUtil.h"
 
 #include <stdlib.h>
-#include <time.h>
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -428,16 +427,12 @@ int sha256Test(int, char *[]) {
         sha256Ctx ctx;
         sha256Init(&ctx);
 
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        const double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             sha256Update(&ctx, buf, bufSize);
         }
         sha256Final(&ctx, out);
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-
-        double secs = (double)(t1.tv_sec - t0.tv_sec) +
-                      (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs = timeUtilMonotonicSec() - t0;
         double mib = (double)((uint64_t)bufSize * iters) / (1024.0 * 1024.0);
         printf("    sha256: %.2f MiB in %.3fs = %.2f MiB/s\n", mib, secs,
                secs > 0 ? mib / secs : 0.0);

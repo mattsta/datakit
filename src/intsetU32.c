@@ -319,16 +319,10 @@ void intsetU32Repr(const intsetU32 *is) {
     printf("]\n");
 }
 
-#include <sys/time.h>
+#include "timeUtil.h"
 #include <time.h>
 static void ok(void) {
     printf("OK\n");
-}
-
-static int64_t usec(void) {
-    struct timeval tv;
-    gettimeofday(&tv, nullptr);
-    return (((int64_t)tv.tv_sec) * 1'000'000) + tv.tv_usec;
 }
 
 #define intsetU32Assert(_e)                                                    \
@@ -481,16 +475,15 @@ int intsetU32Test(int, char **) {
     {
         int32_t num = 100'000, size = 10000;
         int i, bits = 20;
-        int64_t start;
         cleaner(intsetU32Free) intsetU32 *is = createSet(bits, size);
 
-        start = usec();
+        const uint64_t start = timeUtilUs();
         for (i = 0; i < num; i++) {
             intsetU32Search(is, random() % ((1 << bits) - 1), nullptr);
         }
-        printf("%" PRId32 " lookups, %" PRId32 " element set, %" PRId64
+        printf("%" PRId32 " lookups, %" PRId32 " element set, %" PRIu64
                "usec\n",
-               num, size, usec() - start);
+               num, size, timeUtilUs() - start);
     }
 
     printf("Stress add+delete: ");

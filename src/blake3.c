@@ -56,21 +56,17 @@ static constexpr uint8_t BLAKE3_MSG_SCHEDULE[7][16] = {
 static inline uint32_t load_u32_le(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, sizeof(v));
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
     v = __builtin_bswap32(v);
 #endif
     return v;
 }
 
 static inline void store_u32_le(uint8_t *p, uint32_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#if __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
     v = __builtin_bswap32(v);
 #endif
     memcpy(p, &v, sizeof(v));
-}
-
-static inline uint32_t rotr32(uint32_t x, uint32_t n) {
-    return (x >> n) | (x << (32u - n));
 }
 
 /* ----- Compression ----------------------------------------------------
@@ -87,13 +83,13 @@ static inline uint32_t rotr32(uint32_t x, uint32_t n) {
 DK_INLINE_ALWAYS void g_mix(uint32_t state[16], uint32_t a, uint32_t b,
                             uint32_t c, uint32_t d, uint32_t mx, uint32_t my) {
     state[a] = state[a] + state[b] + mx;
-    state[d] = rotr32(state[d] ^ state[a], 16);
+    state[d] = stdc_rotate_right(state[d] ^ state[a], 16);
     state[c] = state[c] + state[d];
-    state[b] = rotr32(state[b] ^ state[c], 12);
+    state[b] = stdc_rotate_right(state[b] ^ state[c], 12);
     state[a] = state[a] + state[b] + my;
-    state[d] = rotr32(state[d] ^ state[a], 8);
+    state[d] = stdc_rotate_right(state[d] ^ state[a], 8);
     state[c] = state[c] + state[d];
-    state[b] = rotr32(state[b] ^ state[c], 7);
+    state[b] = stdc_rotate_right(state[b] ^ state[c], 7);
 }
 
 DK_INLINE_ALWAYS void round_fn(uint32_t state[16], const uint32_t m[16],
@@ -956,6 +952,7 @@ void blake3DeriveKey(const void *context, size_t context_len, const void *ikm,
 #include "hash/blake3Neon.h"
 #include "hash/blake3SSE41.h"
 #include "hash/blake3TestVectors.h"
+#include "timeUtil.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -1565,12 +1562,11 @@ int blake3Test(int, char *[]) {
             const size_t N = chunks[s];
             const size_t nblocks = N * 16;
             const uint32_t iters = iters_per_size[s];
-            struct timespec t0, t1;
             [[maybe_unused]] volatile uint32_t sink = 0;
 
             /* --- Scalar primitive: N*16 sequential calls --- */
             uint32_t cv_s[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-            clock_gettime(CLOCK_MONOTONIC, &t0);
+            double t0 = timeUtilMonotonicSec();
             for (uint32_t i = 0; i < iters; i++) {
                 uint32_t cv[8];
                 memcpy(cv, cv_s, sizeof(cv));
@@ -1583,16 +1579,13 @@ int blake3Test(int, char *[]) {
                     sink ^= cv[k];
                 }
             }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double scalar_ns =
-                ((t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9) *
-                1e9 / iters;
+            double scalar_ns = (timeUtilMonotonicSec() - t0) * 1e9 / iters;
 
             /* --- NEON single-block primitive --- */
             double neon1_ns = 0;
             if (blake3NeonAvailable()) {
                 uint32_t cv_n[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-                clock_gettime(CLOCK_MONOTONIC, &t0);
+                t0 = timeUtilMonotonicSec();
                 for (uint32_t i = 0; i < iters; i++) {
                     uint32_t cv[8];
                     memcpy(cv, cv_n, sizeof(cv));
@@ -1605,10 +1598,7 @@ int blake3Test(int, char *[]) {
                         sink ^= cv[k];
                     }
                 }
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                neon1_ns = ((t1.tv_sec - t0.tv_sec) +
-                            (t1.tv_nsec - t0.tv_nsec) / 1e9) *
-                           1e9 / iters;
+                neon1_ns = (timeUtilMonotonicSec() - t0) * 1e9 / iters;
             }
 
             /* --- Compress4 batched primitive (requires >= 4 chunks) --- */
@@ -1632,7 +1622,7 @@ int blake3Test(int, char *[]) {
                     {1, 2, 3, 4, 5, 6, 7, 8},
                 };
 
-                clock_gettime(CLOCK_MONOTONIC, &t0);
+                t0 = timeUtilMonotonicSec();
                 for (uint32_t i = 0; i < iters; i++) {
                     uint32_t cur[4][8];
                     for (int k = 0; k < 4; k++) {
@@ -1687,10 +1677,7 @@ int blake3Test(int, char *[]) {
                         }
                     }
                 }
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                c4_ns = ((t1.tv_sec - t0.tv_sec) +
-                         (t1.tv_nsec - t0.tv_nsec) / 1e9) *
-                        1e9 / iters;
+                c4_ns = (timeUtilMonotonicSec() - t0) * 1e9 / iters;
             }
 
             if (c4_valid) {
@@ -1755,17 +1742,13 @@ int blake3Test(int, char *[]) {
         for (size_t s = 0; s < n_sizes; s++) {
             const size_t sz = chunks[s] * BLAKE3_CHUNK_LEN;
             const uint32_t iters = iters_per_size[s];
-            struct timespec t0, t1;
-
             /* Force scalar — disables every SIMD entry point. */
             blake3SetForceImpl(BLAKE3_IMPL_SCALAR);
-            clock_gettime(CLOCK_MONOTONIC, &t0);
+            double t0 = timeUtilMonotonicSec();
             for (uint32_t i = 0; i < iters; i++) {
                 blake3Hash(buf, sz, out_scalar);
             }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double scalar_secs =
-                (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+            double scalar_secs = timeUtilMonotonicSec() - t0;
             double scalar_ns = scalar_secs * 1e9 / iters;
 
             /* Force SIMD — engages the widest available compressor
@@ -1774,13 +1757,11 @@ int blake3Test(int, char *[]) {
              * batch threshold this falls back to scalar inside
              * simd_batch_ready (no narrower primitive). */
             blake3SetForceImpl(BLAKE3_IMPL_AUTO);
-            clock_gettime(CLOCK_MONOTONIC, &t0);
+            t0 = timeUtilMonotonicSec();
             for (uint32_t i = 0; i < iters; i++) {
                 blake3Hash(buf, sz, out_simd);
             }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double simd_secs =
-                (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+            double simd_secs = timeUtilMonotonicSec() - t0;
             double simd_ns = simd_secs * 1e9 / iters;
 
             /* Correctness cross-check — both paths must produce the
@@ -1852,14 +1833,11 @@ int blake3Test(int, char *[]) {
         }
         uint8_t digest[32];
         for (size_t s = 0; s < countof(sizes); s++) {
-            struct timespec t0, t1;
-            clock_gettime(CLOCK_MONOTONIC, &t0);
+            const double t0 = timeUtilMonotonicSec();
             for (uint32_t i = 0; i < iters; i++) {
                 blake3Hash(small_input, sizes[s], digest);
             }
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double secs =
-                (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+            double secs = timeUtilMonotonicSec() - t0;
             printf("    blake3Hash %3zuB  : %.0f ns/op\n", sizes[s],
                    secs * 1e9 / iters);
         }
@@ -1881,8 +1859,7 @@ int blake3Test(int, char *[]) {
             0x6A09E667ul, 0xBB67AE85ul, 0x3C6EF372ul, 0xA54FF53Aul,
             0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
         };
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        const double t0 = timeUtilMonotonicSec();
         /* Volatile sink defeats DCE — otherwise -O3 may collapse the
          * inner loop since `cv` is only used internally. */
         [[maybe_unused]] volatile uint32_t sink = 0;
@@ -1897,8 +1874,7 @@ int blake3Test(int, char *[]) {
                 sink ^= cv[k];
             }
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs = timeUtilMonotonicSec() - t0;
         double total_mib = (double)iters * MB / (1024.0 * 1024.0);
         printf("    portable CompressInPlace: %.1f MiB in %.3fs "
                "= %.1f MiB/s\n",

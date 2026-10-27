@@ -687,10 +687,10 @@ void sha256ArmCryptoCompressBlocksMulti4(uint32_t states[4][8],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "timeUtil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -870,31 +870,26 @@ int sha256ArmCryptoTest(int, char *[]) {
          * same bulk buffer as the crypto timing below. (sha256Update()
          * would dispatch to the crypto path on this hardware and time
          * crypto against crypto.) */
-        struct timespec t0, t1;
         uint32_t portableState[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
                                      0xa54ff53a, 0x510e527f, 0x9b05688c,
                                      0x1f83d9ab, 0x5be0cd19};
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             sha256PortableCompressBlocks(portableState, buf,
                                          bufSize / SHA256_BLOCK_LEN);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double secs_portable = (double)(t1.tv_sec - t0.tv_sec) +
-                               (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs_portable = timeUtilMonotonicSec() - t0;
 
         /* Crypto-accelerated timing: feed the full buffer per iteration
          * as a single bulk call. */
         uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                              0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             sha256ArmCryptoCompressBlocks(state, buf,
                                           bufSize / SHA256_BLOCK_LEN);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double secs_crypto = (double)(t1.tv_sec - t0.tv_sec) +
-                             (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs_crypto = timeUtilMonotonicSec() - t0;
 
         double mib = (double)((uint64_t)bufSize * iters) / (1024.0 * 1024.0);
         double portable_rate = secs_portable > 0 ? mib / secs_portable : 0.0;
@@ -1075,18 +1070,14 @@ int sha256ArmCryptoTest(int, char *[]) {
             memcpy(st4[lane], st1, sizeof(st1));
         }
 
-        struct timespec t0, t1;
-
         /* Single-buffer: four serial calls per iteration. */
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             for (uint32_t lane = 0; lane < 4; lane++) {
                 sha256ArmCryptoCompressBlocks(st4[lane], bufs[lane], nb);
             }
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double secs_single = (double)(t1.tv_sec - t0.tv_sec) +
-                             (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs_single = timeUtilMonotonicSec() - t0;
 
         /* Reset state. */
         for (uint32_t lane = 0; lane < 4; lane++) {
@@ -1095,13 +1086,11 @@ int sha256ArmCryptoTest(int, char *[]) {
 
         /* Multi-buffer 4-lane. */
         const uint8_t *bptrs[4] = {bufs[0], bufs[1], bufs[2], bufs[3]};
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             sha256ArmCryptoCompressBlocksMulti4(st4, bptrs, nb);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double secs_multi = (double)(t1.tv_sec - t0.tv_sec) +
-                            (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs_multi = timeUtilMonotonicSec() - t0;
 
         const double total_mib =
             (double)((uint64_t)bufSize * iters * 4u) / (1024.0 * 1024.0);

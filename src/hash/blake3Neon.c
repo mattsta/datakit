@@ -354,7 +354,7 @@ void blake3NeonCompress4(const uint32_t *const cv_inputs[4],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc/zfree */
-#include <time.h>
+#include "timeUtil.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -384,19 +384,16 @@ static constexpr uint8_t REF_SCHED[7][16] = {
     {9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7},
     {11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13},
 };
-static inline uint32_t ref_rotr32(uint32_t x, uint32_t n) {
-    return (x >> n) | (x << (32u - n));
-}
 static inline void ref_g(uint32_t st[16], uint32_t a, uint32_t b, uint32_t c,
                          uint32_t d, uint32_t mx, uint32_t my) {
     st[a] = st[a] + st[b] + mx;
-    st[d] = ref_rotr32(st[d] ^ st[a], 16);
+    st[d] = stdc_rotate_right(st[d] ^ st[a], 16);
     st[c] = st[c] + st[d];
-    st[b] = ref_rotr32(st[b] ^ st[c], 12);
+    st[b] = stdc_rotate_right(st[b] ^ st[c], 12);
     st[a] = st[a] + st[b] + my;
-    st[d] = ref_rotr32(st[d] ^ st[a], 8);
+    st[d] = stdc_rotate_right(st[d] ^ st[a], 8);
     st[c] = st[c] + st[d];
-    st[b] = ref_rotr32(st[b] ^ st[c], 7);
+    st[b] = stdc_rotate_right(st[b] ^ st[c], 7);
 }
 static void ref_compress_pre(uint32_t st[16], const uint32_t cv[8],
                              const uint8_t block[64], uint8_t block_len,
@@ -488,12 +485,6 @@ static void prng_fill(uint8_t *p, size_t n) {
         uint64_t v = prng_next();
         memcpy(p, &v, n);
     }
-}
-
-static double now_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
 int blake3NeonTest(int, char *[]) {
@@ -658,12 +649,12 @@ int blake3NeonTest(int, char *[]) {
         /* Public one-shot hasher. It dispatches to the NEON paths on this
          * hardware, so it is the end-to-end figure, not a portable one. */
         uint8_t digest[BLAKE3_OUT_LEN];
-        double t0 = now_seconds();
+        double t0 = timeUtilMonotonicSec();
         const uint32_t iters = 64;
         for (uint32_t i = 0; i < iters; i++) {
             blake3Hash(buf, MB, digest);
         }
-        double t1 = now_seconds();
+        double t1 = timeUtilMonotonicSec();
         double public_mib_s = (double)iters / (t1 - t0);
 
         /* Portable single-block compress: the scalar kernel in the same
@@ -672,7 +663,7 @@ int blake3NeonTest(int, char *[]) {
         memcpy(cv, REF_IV, sizeof(cv));
         const uint32_t niters = 64;
         [[maybe_unused]] volatile uint32_t portable_sink = 0;
-        t0 = now_seconds();
+        t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < niters; i++) {
             uint32_t cur[8];
             memcpy(cur, cv, sizeof(cur));
@@ -685,12 +676,12 @@ int blake3NeonTest(int, char *[]) {
                 portable_sink ^= cur[k];
             }
         }
-        t1 = now_seconds();
+        t1 = timeUtilMonotonicSec();
         double portable_mib_s = (double)niters / (t1 - t0);
 
         /* NEON single-block compress throughput: raw block-level
          * compress in the same shape the hasher's bulk path uses. */
-        t0 = now_seconds();
+        t0 = timeUtilMonotonicSec();
         /* Volatile sink defeats dead-code elimination: without consuming
          * `cur` after the loop, -O3 NDEBUG can fold the whole bench away
          * and report `inf MiB/s`. */
@@ -707,11 +698,11 @@ int blake3NeonTest(int, char *[]) {
                 neon_sink ^= cur[k];
             }
         }
-        t1 = now_seconds();
+        t1 = timeUtilMonotonicSec();
         double neon_mib_s = (double)niters / (t1 - t0);
 
         /* 4-way batch: same workload spread over 4 lanes. */
-        t0 = now_seconds();
+        t0 = timeUtilMonotonicSec();
         [[maybe_unused]] volatile uint32_t batch_sink = 0;
         for (uint32_t i = 0; i < niters; i++) {
             uint32_t cur[4][8];
@@ -742,7 +733,7 @@ int blake3NeonTest(int, char *[]) {
                 }
             }
         }
-        t1 = now_seconds();
+        t1 = timeUtilMonotonicSec();
         double batch_mib_s = (double)niters / (t1 - t0);
 
         printf("    public blake3Hash (dispatched): %7.1f MiB/s\n",

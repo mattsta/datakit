@@ -11,6 +11,11 @@ uint64_t timeUtilMonotonicNs(void);
 uint64_t timeUtilMonotonicUs(void);
 uint64_t timeUtilMonotonicMs(void);
 
+/* The monotonic clock in seconds, for elapsed-time arithmetic */
+static inline double timeUtilMonotonicSec(void) {
+    return (double)timeUtilMonotonicNs() / 1e9;
+}
+
 #ifdef DATAKIT_TEST
 int timeUtilTest(int argc, char *argv[]);
 #endif

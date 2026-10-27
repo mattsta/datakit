@@ -494,9 +494,9 @@ const hmacHashAlgo hmacAlgoBLAKE3 = {
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/hmacTestVectors.h"
+#include "timeUtil.h"
 
 #include <stdlib.h>
-#include <time.h>
 
 static int digestEqual(const uint8_t *a, const uint8_t *b, size_t n) {
     return memcmp(a, b, n) == 0;
@@ -530,15 +530,11 @@ static void runBench(size_t payload, uint32_t iters) {
     memset(key, 0xa5, sizeof(key));
     uint8_t out[32];
 
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    const double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < iters; i++) {
         hmacCompute(&hmacAlgoSHA256, key, sizeof(key), buf, payload, out);
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-
-    double secs = (double)(t1.tv_sec - t0.tv_sec) +
-                  (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+    double secs = timeUtilMonotonicSec() - t0;
     double mib = (double)((uint64_t)payload * iters) / (1024.0 * 1024.0);
     printf("    hmac-sha256: payload=%zu iters=%u  %.2f MiB in %.3fs = %.2f "
            "MiB/s\n",
@@ -874,13 +870,11 @@ int hmacTest(int, char *[]) {
         memset(buf, 0xa5, sizeof(buf));
         uint8_t out[32];
 
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             hmacCompute(&hmacAlgoSHA256, key, sizeof(key), buf, payload, out);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double secs = timeUtilMonotonicSec() - t0;
         printf("    plain hmacCompute    : %u x %zuB in %.3fs "
                "= %.0f ns/op\n",
                iters, payload, secs, secs * 1e9 / iters);
@@ -890,13 +884,11 @@ int hmacTest(int, char *[]) {
         hmacKey prep;
         hmacPrepareKey(&prep, &hmacAlgoSHA256, prepStorage, prepSize, key,
                        sizeof(key));
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             hmacComputeWithKey(&prep, buf, payload, out);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double prep_secs =
-            (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double prep_secs = timeUtilMonotonicSec() - t0;
         printf("    hmacComputeWithKey   : %u x %zuB in %.3fs "
                "= %.0f ns/op  (%.2fx vs plain)\n",
                iters, payload, prep_secs, prep_secs * 1e9 / iters,
@@ -1011,25 +1003,19 @@ int hmacTest(int, char *[]) {
 
         const uint32_t iters = 50000;
         uint8_t serial_out[4][32], batch_out[4][32];
-        struct timespec t0, t1;
-
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             for (uint32_t j = 0; j < 4u; j++) {
                 hmacComputeWithKey(preps[j], data[j], lens[j], serial_out[j]);
             }
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        const double secs_serial =
-            (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        const double secs_serial = timeUtilMonotonicSec() - t0;
 
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             hmacComputeBatch4(preps, data, lens, batch_out);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        const double secs_batch =
-            (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        const double secs_batch = timeUtilMonotonicSec() - t0;
 
         const double mib =
             (double)((uint64_t)payload * iters * 4u) / (1024.0 * 1024.0);
