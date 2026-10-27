@@ -1417,17 +1417,7 @@ void multilruSetEvictCallback(multilru *mlru,
 }
 
 bool multilruNeedsEviction(const multilru *mlru) {
-    switch (mlru->policy) {
-    case MLRU_POLICY_COUNT:
-        return mlru->maxCount > 0 && mlru->count > mlru->maxCount;
-    case MLRU_POLICY_SIZE:
-        return mlru->maxWeight > 0 && mlru->totalWeight > mlru->maxWeight;
-    case MLRU_POLICY_HYBRID:
-        return (mlru->maxCount > 0 && mlru->count > mlru->maxCount) ||
-               (mlru->maxWeight > 0 && mlru->totalWeight > mlru->maxWeight);
-    default:
-        return false;
-    }
+    return needsEviction(mlru);
 }
 
 /* ====================================================================
