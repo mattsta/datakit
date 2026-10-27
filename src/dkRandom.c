@@ -152,10 +152,13 @@ uint64_t dkRandomZeroBoundTotal(void) {
 }
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 
 #include <sys/wait.h>
+
+defcleanerName(void *, zfree, Void);
 
 /* Advance this thread's block so the next dkRandom64() call refills
  * (atBoundary) or reads the second word of a fresh block. */
@@ -603,6 +606,57 @@ int dkRandomTest(int, char *[]) {
         ctestReplayBytes(got, 0, &state);
         if (state != before) {
             ERR("an empty fill drew");
+        }
+    }
+
+    TEST("ctestHeapMeter counts usable bytes live between start and stop") {
+        if (!datakitConfigMemory__.localUsableSize) {
+            printf("(skipped: the allocator reports no usable sizes)\n");
+        } else {
+            /* A block from before the start, grown inside: only the
+             * growth counts */
+            cleanerName(zfree, Void) void *before = zmalloc(200);
+            const int64_t beforeSize = (int64_t)zusablesize(before);
+
+            if (!ctestHeapMeterStart()) {
+                ERR("the meter did not start");
+            }
+
+            if (ctestHeapMeterStart()) {
+                ERR("a second meter started while one ran");
+            }
+
+            cleanerName(zfree, Void) void *kept = zcalloc(1, 1000);
+            {
+                /* Allocated and freed inside: nets to nothing */
+                cleanerName(zfree, Void) void *passing = zmalloc(300);
+                if (zusablesize(passing) < 300) {
+                    ERR("a 300-byte block has %zu usable",
+                        zusablesize(passing));
+                }
+            }
+
+            zreallocSelf(before, 5000);
+            const int64_t want =
+                (int64_t)(zusablesize(kept) + zusablesize(before)) - beforeSize;
+            const int64_t metered = ctestHeapMeterStop();
+
+            if (zusablesize(kept) < 1000 || metered != want) {
+                ERR("metered %" PRId64 ", want %" PRId64
+                    " (kept block %zu, grown block %zu from %" PRId64 ")",
+                    metered, want, zusablesize(kept), zusablesize(before),
+                    beforeSize);
+            }
+
+            if (ctestHeapMeterStop() != 0) {
+                ERR("a stop with no meter running reported bytes");
+            }
+
+            /* Restored: the frees at scope end go straight to the
+             * allocator */
+            if (datakitConfigMemory__.localFree == ctestHeapFree_) {
+                ERR("the meter left its allocator installed");
+            }
         }
     }
 

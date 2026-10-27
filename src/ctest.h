@@ -9,10 +9,106 @@
 #error "DATAKIT_TEST code needs assertions: NDEBUG must not be defined"
 #endif
 
+#include "datakit.h"  /* datakitConfig: the heap meter's allocator */
 #include "dkEndian.h" /* dkStoreLe64: replayed bytes in one order */
 #include "dkRandom.h" /* dkSplitmix64Next: the tests' replayable stream */
 #include <stdio.h>
 #include <string.h> /* strchr */
+
+/* The heap meter: the net heap bytes allocated through datakit's
+ * allocator between ctestHeapMeterStart and ctestHeapMeterStop, each
+ * block counted at its usable size (zusablesize), so allocator slack,
+ * pointer tables and headers count as they cost.  Frees subtract, blocks
+ * from before the start included, so the result is the change in live
+ * heap.  One meter runs at a time, on the thread doing the work. */
+[[maybe_unused]] static datakitConfig ctestHeapSaved_;
+[[maybe_unused]] static int64_t ctestHeapLive_;
+[[maybe_unused]] static bool ctestHeapRunning_;
+
+[[maybe_unused]] static int64_t ctestHeapSize_(const void *ptr) {
+    return ptr ? (int64_t)ctestHeapSaved_.localUsableSize(ptr) : 0;
+}
+
+[[maybe_unused]] static void *ctestHeapCalloc_(size_t count, size_t sz) {
+    void *ptr = ctestHeapSaved_.localCalloc(count, sz);
+    ctestHeapLive_ += ctestHeapSize_(ptr);
+    return ptr;
+}
+
+[[maybe_unused]] static void *ctestHeapMalloc_(size_t sz) {
+    void *ptr = ctestHeapSaved_.localMalloc(sz);
+    ctestHeapLive_ += ctestHeapSize_(ptr);
+    return ptr;
+}
+
+/* A realloc through 'resize': a failure (NULL for a nonzero size) leaves
+ * the old block live; a zero-size NULL result freed it */
+[[maybe_unused]] static void *ctestHeapResize_(void *(*resize)(void *, size_t),
+                                               void *ptr, size_t sz) {
+    const int64_t was = ctestHeapSize_(ptr);
+    void *out = resize(ptr, sz);
+    if (out || sz == 0) {
+        ctestHeapLive_ += ctestHeapSize_(out) - was;
+    }
+
+    return out;
+}
+
+[[maybe_unused]] static void *ctestHeapRealloc_(void *ptr, size_t sz) {
+    return ctestHeapResize_(ctestHeapSaved_.localRealloc, ptr, sz);
+}
+
+[[maybe_unused]] static void *ctestHeapReallocSlate_(void *ptr, size_t sz) {
+    return ctestHeapResize_(ctestHeapSaved_.localReallocSlate, ptr, sz);
+}
+
+[[maybe_unused]] static int ctestHeapMemalign_(void **memptr, size_t alignment,
+                                               size_t size) {
+    const int result = ctestHeapSaved_.localMemalign(memptr, alignment, size);
+    if (result == 0) {
+        ctestHeapLive_ += ctestHeapSize_(*memptr);
+    }
+
+    return result;
+}
+
+[[maybe_unused]] static void ctestHeapFree_(void *ptr) {
+    ctestHeapLive_ -= ctestHeapSize_(ptr);
+    ctestHeapSaved_.localFree(ptr);
+}
+
+/* Start metering; false (nothing changes) when a meter already runs or
+ * the allocator cannot report usable sizes */
+[[maybe_unused]] static bool ctestHeapMeterStart(void) {
+    if (ctestHeapRunning_ || !datakitConfigMemory__.localUsableSize) {
+        return false;
+    }
+
+    ctestHeapSaved_ = datakitConfigMemory__;
+    ctestHeapLive_ = 0;
+    ctestHeapRunning_ = true;
+    datakitConfig metered = ctestHeapSaved_;
+    metered.localCalloc = ctestHeapCalloc_;
+    metered.localMalloc = ctestHeapMalloc_;
+    metered.localRealloc = ctestHeapRealloc_;
+    metered.localReallocSlate = ctestHeapReallocSlate_;
+    metered.localMemalign = ctestHeapMemalign_;
+    metered.localFree = ctestHeapFree_;
+    datakitConfigSet(&metered);
+    return true;
+}
+
+/* Stop metering, restoring the allocator: the net heap bytes since the
+ * start (0 when no meter ran) */
+[[maybe_unused]] static int64_t ctestHeapMeterStop(void) {
+    if (!ctestHeapRunning_) {
+        return 0;
+    }
+
+    datakitConfigSet(&ctestHeapSaved_);
+    ctestHeapRunning_ = false;
+    return ctestHeapLive_;
+}
 
 /* The 'len' bytes at 'buf' filled with dkRandom64 draws: up to 64 KiB of
  * them, then copies of those to the end, so a buffer of gigabytes costs
