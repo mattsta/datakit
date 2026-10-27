@@ -31,7 +31,7 @@ defcleanerName(char *, zfree, Chars);
 #include <immintrin.h>
 #endif
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
 
@@ -760,7 +760,7 @@ static void benchmark_latency_at_size(size_t size_bytes,
     chase_pointers(chain, 10000);
 
     /* Determine iteration count for ~100ms */
-    size_t iterations = 100000;
+    size_t iterations = 100'000;
     uint64_t start = dataspeed_time_ns();
     chase_pointers(chain, iterations);
     uint64_t elapsed = dataspeed_time_ns() - start;

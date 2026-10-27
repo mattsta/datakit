@@ -4517,7 +4517,7 @@ int dkTestMailboxStatsAlignmentTest(int, char *[]) {
  * heap-use-after-free in the envelope hash. */
 #define CM_RACE_TARGET_OK ((uint64_t)1000)
 #define CM_RACE_TARGET_ROTATIONS ((uint64_t)1000)
-#define CM_RACE_ROTATION_CAP ((uint64_t)2000000)
+#define CM_RACE_ROTATION_CAP ((uint64_t)2'000'000)
 static constexpr unsigned CM_RACE_PAYLOAD_LEN = 32u;
 static constexpr unsigned CM_RACE_PAYLOAD_BYTE = 0x5Au;
 static constexpr unsigned CM_RACE_MSG_TYPE = 3u;

@@ -1952,7 +1952,7 @@ int multiarrayTest(int, char *[]) {
             multiarrayNew(sizeof(s16), rowMax);
 
         srand(88888);
-        const int numOps = 100000;
+        const int numOps = 100'000;
         int currentCount = 0;
 
         for (int i = 0; i < numOps; i++) {

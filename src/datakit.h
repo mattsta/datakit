@@ -25,7 +25,7 @@
 #if DK_OS_LINUX || DK_OS_OPENBSD
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
-#elif !defined(__NetBSD__)
+#elifndef __NetBSD__
 #define _XOPEN_SOURCE
 #endif
 
@@ -213,22 +213,21 @@
 /* ====================================================================
  * Integer Helpers
  * ==================================================================== */
-#define DK_INT128_TO_UINT128(i)                                                \
-    ({                                                                         \
-        assert((i) < 0);                                                       \
-        (__uint128_t)(~(i)) + 1;                                               \
-    })
-#if 1
-/* Manually undo two's compliment negative number */
-#define DK_INT64_TO_UINT64(i)                                                  \
-    ({                                                                         \
-        assert((i) < 0);                                                       \
-        (uint64_t)(~(i)) + 1;                                                  \
-    })
-#else
-#define DK_INT64_TO_UINT64(i)                                                  \
-    ((i) == INT64_MIN ? (uint64_t)INT64_MAX + 1 : (uint64_t)(-(i)))
-#endif
+/* The magnitude of a negative 'i' as unsigned, INT64_MIN / the 128-bit
+ * minimum included (two's complement undone by hand: -i would overflow
+ * there) */
+DK_INLINE_ALWAYS uint64_t dkNegativeMagnitude64(const int64_t i) {
+    assert(i < 0);
+    return (uint64_t)~i + 1;
+}
+
+DK_INLINE_ALWAYS __uint128_t dkNegativeMagnitude128(const __int128_t i) {
+    assert(i < 0);
+    return (__uint128_t)~i + 1;
+}
+
+#define DK_INT64_TO_UINT64(i) dkNegativeMagnitude64(i)
+#define DK_INT128_TO_UINT128(i) dkNegativeMagnitude128(i)
 
 /* ====================================================================
  * Alignment helpers

@@ -34,7 +34,7 @@ void portableRandomFill64(portableRandomState *r, uint64_t *out, size_t count);
 
 /* Bytes emitted between OS re-keys; installed by portableRandom_stir.
  * Each draw charges the bytes it produces against it. */
-#define DK_PR_REFUEL_BYTES 100000
+#define DK_PR_REFUEL_BYTES 100'000
 
 /* Read from the OS entropy source without blocking.  Returns the number
  * of bytes written, or -1, on every platform.  Where the source is

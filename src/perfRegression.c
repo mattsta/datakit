@@ -136,10 +136,10 @@ static void fillDeterministic(uint8_t *buf, size_t len, uint64_t seed) {
 /* Pick an iteration count so the timed window targets ~100 ms. */
 static uint32_t pickIters(size_t bytes_per_op) {
     if (bytes_per_op == 0) {
-        return 100000u;
+        return 100'000u;
     }
     if (bytes_per_op <= 64) {
-        return 200000u;
+        return 200'000u;
     }
     if (bytes_per_op <= 1024) {
         return 50000u;
@@ -595,7 +595,7 @@ static void benchMailbox(size_t bytes) {
  * The multithreaded allocator comparison lives in `memboundBench` (too
  * scheduling-noisy for a regression gate). "op" here = one alloc+free. */
 static void benchMembound(const char *name, membound *pool, size_t bytes) {
-    const uint32_t iters = 2000000u;
+    const uint32_t iters = 2'000'000u;
     [[maybe_unused]] volatile void *sink = nullptr;
     const double t0 = monoNowSec();
     for (uint32_t i = 0; i < iters; i++) {
@@ -609,7 +609,7 @@ static void benchMembound(const char *name, membound *pool, size_t bytes) {
 
 /* Container rows: one operation type per row over PERF_CONTAINER_N
  * distinct 16-byte keys, in a fixed order.  "op" = one call. */
-static constexpr unsigned PERF_CONTAINER_N = 100000u;
+static constexpr unsigned PERF_CONTAINER_N = 100'000u;
 static constexpr unsigned PERF_CONTAINER_KEY = 16u;
 
 defcleanerName(char *, zfree, PerfKeys);
@@ -1477,8 +1477,8 @@ static void benchPersistChecks(void) {
  * once stopped growing: adds of the last 100000, then ranks and score
  * lookups spread over the set (only when asked for by name) */
 static void benchMultiOrderedSetLarge(void) {
-    const uint32_t n = 600000;
-    const uint32_t timed = 100000;
+    const uint32_t n = 600'000;
+    const uint32_t timed = 100'000;
     cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
     uint64_t sink = 0;
     char key[24];

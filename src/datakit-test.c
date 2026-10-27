@@ -1020,7 +1020,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
         {1234567.891, 2, "1,234,567.89"},
         {-1234567, 0, "-1,234,567"},
         {12.5, 1, "12.5"},
-        {100000, 0, "100,000"},
+        {100'000, 0, "100,000"},
     };
     for (size_t i = 0; i < countof(grouped); i++) {
         char out[40];
@@ -1050,7 +1050,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     usleep(2000);
     const uint64_t t1 = perfNowNs();
     const uint64_t c1 = _perfTSC();
-    PHEXPECT(t1 - t0 >= 2000000u && t1 - t0 < 2000000000u,
+    PHEXPECT(t1 - t0 >= 2'000'000u && t1 - t0 < 2000000000u,
              "the ns clock covers a 2 ms sleep");
     PHEXPECT(c1 > c0, "the counter advances");
 
@@ -1074,7 +1074,7 @@ static int dkTestPerfHeaderTest(int, char *[]) {
     /* What a clock read costs (reported; the bound is only a sanity
      * check): the nanosecond clock and the counter, against
      * gettimeofday, the microsecond clock perf.h used to read. */
-    constexpr int kReads = 100000;
+    constexpr int kReads = 100'000;
     uint64_t acc = 0;
     PERF_TIMERS_SETUP;
     for (int i = 0; i < kReads; i++) {
@@ -1352,7 +1352,7 @@ static void *dkTestGateWaiterMain(void *arg) {
  * the exiter thread leave it, waits for zero and frees it at once. The
  * exiter spins on a round counter so its Exit lands as close as possible
  * to the wait; the round count is capped by a wall-clock budget. */
-static constexpr unsigned DK_TEST_GATE_FREE_ROUNDS = 200000u;
+static constexpr unsigned DK_TEST_GATE_FREE_ROUNDS = 200'000u;
 static constexpr unsigned DK_TEST_GATE_FREE_BUDGET_MS = 3000u;
 
 typedef struct dkTestGateFreeCtl {
@@ -11947,17 +11947,18 @@ cleanup_after_phase1:
  * Structure-aware envelope fuzz per algorithm.
  * Every single-bit mutation across the wire MUST be rejected.
  * ==================================================================== */
+/* The next value of a 32-bit xorshift generator */
+static uint32_t envFuzzRngNext_(uint32_t *rng) {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 17;
+    *rng ^= *rng << 5;
+    return *rng;
+}
+
 static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     int failures = 0;
 
     uint32_t rng = 0x1234ABCDu;
-#define ENV_FUZZ_RNG_NEXT()                                                    \
-    ({                                                                         \
-        rng ^= rng << 13;                                                      \
-        rng ^= rng >> 17;                                                      \
-        rng ^= rng << 5;                                                       \
-        rng;                                                                   \
-    })
 
     static const flexEnvelopeAlgo kAlgos[] = {
         FLEX_ENV_ALGO_XXH64,           FLEX_ENV_ALGO_XXH3_64,
@@ -11994,7 +11995,7 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
     payload_sizes[8] = 1024;
     payload_sizes[9] = 4096;
     for (size_t i = 10; i < kNumPayloadSizes; i++) {
-        payload_sizes[i] = 1 + (ENV_FUZZ_RNG_NEXT() % 4096u);
+        payload_sizes[i] = 1 + (envFuzzRngNext_(&rng) % 4096u);
     }
 
     uint64_t total_mut[8] = {};
@@ -12202,7 +12203,6 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
             failures++;
         }
     }
-#undef ENV_FUZZ_RNG_NEXT
 
     if (failures == 0) {
         printf("dkTestEnvelopeStructAwareFuzz: OK\n");

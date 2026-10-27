@@ -156,7 +156,7 @@ int timeUtilTest(int, char *[]) {
 
         /* Check that the delta is reasonable (~1ms = 1000us = 1000000ns) */
         uint64_t deltaUs = us2 - us1;
-        if (deltaUs < 500 || deltaUs > 100000) {
+        if (deltaUs < 500 || deltaUs > 100'000) {
             /* Should be 1ms +/- tolerance, but allow wide margin */
             ERR("Unexpected time delta after 1ms sleep: %" PRIu64 " us",
                 deltaUs);

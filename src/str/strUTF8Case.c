@@ -17,7 +17,7 @@
 
 #if defined(__SSE2__)
 #include <emmintrin.h>
-#elif defined(__aarch64__) || defined(__ARM_NEON)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
 
@@ -62,7 +62,7 @@ void StrAsciiToLower(void *str, size_t len) {
         }
     }
 
-#elif defined(__aarch64__) || defined(__ARM_NEON)
+#elifdef __ARM_NEON
     /* NEON: Process 16 bytes at a time */
     const uint8x16_t upperA = vdupq_n_u8('A');
     const uint8x16_t upperZ = vdupq_n_u8('Z');
@@ -165,7 +165,7 @@ void StrAsciiToUpper(void *str, size_t len) {
         }
     }
 
-#elif defined(__aarch64__) || defined(__ARM_NEON)
+#elifdef __ARM_NEON
     /* NEON: Process 16 bytes at a time */
     const uint8x16_t lowerA = vdupq_n_u8('a');
     const uint8x16_t lowerZ = vdupq_n_u8('z');

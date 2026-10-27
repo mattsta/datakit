@@ -54,11 +54,11 @@
 #define BENCH_SCALE_1K 1000
 #define BENCH_SCALE_10K 10000
 #define BENCH_SCALE_50K 50000
-#define BENCH_SCALE_100K 100000
-#define BENCH_SCALE_500K 500000
-#define BENCH_QUERY_COUNT 100000
+#define BENCH_SCALE_100K 100'000
+#define BENCH_SCALE_500K 500'000
+#define BENCH_QUERY_COUNT 100'000
 #define BENCH_CHURN_BASE 10000
-#define BENCH_CHURN_ITERS 100000
+#define BENCH_CHURN_ITERS 100'000
 #endif
 
 /* ====================================================================
@@ -270,7 +270,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
         const timerWheelId a =
             timerWheelRegister(tw, 1'000'000, 0, testCountingCallback, &state);
-        timerWheelRegister(tw, 2000000, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 2'000'000, 0, testCountingCallback, &state);
         timerWheelStopAll(tw);
         timerWheelStats stats;
         timerWheelGetStats(tw, &stats);
@@ -320,7 +320,7 @@ int timerWheelTest(int, char *[]) {
         int counter = 0;
         const timerWheelId a = timerWheelRegister(
             tw, 1'000'000, 0, testCountingCallback, &counter);
-        timerWheelRegister(tw, 2000000, 0, testCountingCallback, &counter);
+        timerWheelRegister(tw, 2'000'000, 0, testCountingCallback, &counter);
         timerWheelUnregister(tw, a);
         timerWheelStats stats;
         timerWheelGetStats(tw, &stats);
@@ -475,7 +475,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelId id =
-            timerWheelRegister(tw, 100000, 0, testCountingCallback, &state);
+            timerWheelRegister(tw, 100'000, 0, testCountingCallback, &state);
         timerWheelUnregister(tw, id);
 
         timerWheelAdvanceTime(tw, 150000);
@@ -599,7 +599,7 @@ int timerWheelTest(int, char *[]) {
     }
 
     TEST("timerWheel: nextTimerEventStartUs returns correct time") {
-        const uint64_t delayUs = 100000;
+        const uint64_t delayUs = 100'000;
         const int64_t before = (int64_t)timeUtilMonotonicUs();
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {};
@@ -1362,7 +1362,7 @@ int timerWheelTest(int, char *[]) {
         }
 
         /* Everything left fires once; the cancelled ones never */
-        timerWheelAdvanceTime(tw, day + 2000000);
+        timerWheelAdvanceTime(tw, day + 2'000'000);
         if (state.callCount != 1 + 6) {
             ERR("%d callbacks, want 7", state.callCount);
         }
@@ -1411,7 +1411,7 @@ int timerWheelTest(int, char *[]) {
         timerWheelProcessTimerEvents(tw);
 
         timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
-        if (offset > 2000000) {
+        if (offset > 2'000'000) {
             ERR("Query returned %" PRId64
                 "us; pending far timer masked the ~1s wheel timer",
                 offset);
@@ -1486,7 +1486,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState a = {};
         testCallbackState b = {};
         const uint64_t aDelayUs = 10000;
-        const uint64_t bDelayUs = 100000;
+        const uint64_t bDelayUs = 100'000;
 
         const uint64_t before = timeUtilMonotonicUs();
         const timerWheelId aId =
@@ -1519,8 +1519,8 @@ int timerWheelTest(int, char *[]) {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState q = {};
         testCallbackState p = {};
-        const uint64_t qDelayUs = 300000; /* wheel 1, slot +1 */
-        const uint64_t pDelayUs = 600000; /* wheel 1, slot +2 */
+        const uint64_t qDelayUs = 300'000; /* wheel 1, slot +1 */
+        const uint64_t pDelayUs = 600'000; /* wheel 1, slot +2 */
 
         const uint64_t before = timeUtilMonotonicUs();
         const timerWheelId qId =
@@ -1553,9 +1553,9 @@ int timerWheelTest(int, char *[]) {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testLaggingClockState s;
         memset(&s, 0, sizeof(s));
-        s.lagUs = 200000;
+        s.lagUs = 200'000;
         s.nearDelayUs = 50000;
-        s.farDelayUs = 100000;
+        s.farDelayUs = 100'000;
 
         /* Fired from a wheel-0 slot, so its registrations are placed by
          * processPending against the lagging wheel clock: the far
@@ -1600,7 +1600,7 @@ int timerWheelTest(int, char *[]) {
         const uint64_t periodUs = 20000;
         const uint64_t qDelayUs = 30000;
         const uint64_t stepUs = 10000;
-        const uint64_t spanUs = 200000;
+        const uint64_t spanUs = 200'000;
 
         timerWheelRegister(tw, periodUs, periodUs, testCancelOtherCallback, &p);
         p.victim =
@@ -1657,8 +1657,8 @@ int timerWheelTest(int, char *[]) {
         testCallbackState y = {};
         testCallbackState x = {};
         const uint64_t yDelayUs = 520000; /* wheel 1, slot +2 */
-        const uint64_t phaseUs = 200000;
-        const uint64_t xDelayUs = 400000; /* wheel 1, slot +1 from 200ms */
+        const uint64_t phaseUs = 200'000;
+        const uint64_t xDelayUs = 400'000; /* wheel 1, slot +1 from 200ms */
         const uint64_t marginUs = 20000;
 
         const uint64_t beforeY = timeUtilMonotonicUs();
@@ -1842,10 +1842,10 @@ int timerWheelTest(int, char *[]) {
                         delay = testOracleRand(&rng) % 3000;
                         break;
                     case 1:
-                        delay = testOracleRand(&rng) % 300000;
+                        delay = testOracleRand(&rng) % 300'000;
                         break;
                     case 2:
-                        delay = 200000 + testOracleRand(&rng) % 20000000;
+                        delay = 200'000 + testOracleRand(&rng) % 20000000;
                         break;
                     case 3:
                         delay = testOracleRand(&rng) % UINT64_C(1200000000);
@@ -1858,7 +1858,7 @@ int timerWheelTest(int, char *[]) {
                     }
                     const uint64_t repeat =
                         (testOracleRand(&rng) & 63) == 0
-                            ? 50000 + testOracleRand(&rng) % 500000
+                            ? 50000 + testOracleRand(&rng) % 500'000
                             : 0;
                     const timerWheelId id = timerWheelRegister(
                         tw, delay, repeat, testOracleCallback, nullptr);
@@ -1879,7 +1879,7 @@ int timerWheelTest(int, char *[]) {
                             advance = testOracleRand(&rng) % 1000;
                             break;
                         case 1:
-                            advance = testOracleRand(&rng) % 300000;
+                            advance = testOracleRand(&rng) % 300'000;
                             break;
                         case 2:
                             advance = testOracleRand(&rng) % 3000000;
@@ -2036,7 +2036,7 @@ int timerWheelTest(int, char *[]) {
         uint64_t twStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numOps; i++) {
-            timerWheelRegister(tw, 1'000'000 + (i % 100000), 0,
+            timerWheelRegister(tw, 1'000'000 + (i % 100'000), 0,
                                testCountingCallback, &state);
         }
 
@@ -2053,7 +2053,7 @@ int timerWheelTest(int, char *[]) {
         uint64_t mtStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numOps; i++) {
-            multiTimerRegister(mt, 1'000'000 + (i % 100000), 0,
+            multiTimerRegister(mt, 1'000'000 + (i % 100'000), 0,
                                mtCountingCallback, &state);
         }
 
@@ -2122,7 +2122,7 @@ int timerWheelTest(int, char *[]) {
         uint64_t twStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numTimers; i++) {
-            timerWheelRegister(tw, (i % 3600000) * 1000, 0,
+            timerWheelRegister(tw, (i % 3'600'000) * 1000, 0,
                                testCountingCallback, &state);
         }
 
@@ -2142,8 +2142,8 @@ int timerWheelTest(int, char *[]) {
         uint64_t mtStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numTimers; i++) {
-            multiTimerRegister(mt, (i % 3600000) * 1000, 0, mtCountingCallback,
-                               &state);
+            multiTimerRegister(mt, (i % 3'600'000) * 1000, 0,
+                               mtCountingCallback, &state);
         }
 
         uint64_t mtEnd = timeUtilMonotonicNs();
@@ -2255,7 +2255,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState states[4] = {};
 
         /* Wheel 0: < 256ms */
-        timerWheelRegister(tw, 100000, 0, testCountingCallback, &states[0]);
+        timerWheelRegister(tw, 100'000, 0, testCountingCallback, &states[0]);
 
         /* Wheel 1: 256ms - 16s */
         timerWheelRegister(tw, 5000000, 0, testCountingCallback, &states[1]);
@@ -2322,7 +2322,7 @@ int timerWheelTest(int, char *[]) {
             cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
-                timerWheelRegister(tw, 1'000'000 + (i % 100000), 0,
+                timerWheelRegister(tw, 1'000'000 + (i % 100'000), 0,
                                    testCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
@@ -2337,7 +2337,7 @@ int timerWheelTest(int, char *[]) {
             cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
-                multiTimerRegister(mt, 1'000'000 + (i % 100000), 0,
+                multiTimerRegister(mt, 1'000'000 + (i % 100'000), 0,
                                    mtCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
@@ -2574,11 +2574,11 @@ int timerWheelTest(int, char *[]) {
             uint64_t minUs;
             uint64_t maxUs;
         } distributions[] = {
-            {"Uniform short", 1000, 10000},        /* 1-10ms */
-            {"Uniform medium", 100000, 1'000'000}, /* 100ms-1s */
-            {"Uniform long", 1'000'000, 60000000}, /* 1s-60s */
-            {"Clustered", 5000, 5100},             /* 5ms ± 50μs */
-            {"Wide spread", 1000, 3600000000ULL},  /* 1ms-1hr */
+            {"Uniform short", 1000, 10000},         /* 1-10ms */
+            {"Uniform medium", 100'000, 1'000'000}, /* 100ms-1s */
+            {"Uniform long", 1'000'000, 60000000},  /* 1s-60s */
+            {"Clustered", 5000, 5100},              /* 5ms ± 50μs */
+            {"Wide spread", 1000, 3600000000ULL},   /* 1ms-1hr */
         };
         const size_t numDists = countof(distributions);
 
@@ -2689,7 +2689,7 @@ int timerWheelTest(int, char *[]) {
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
             /* Register new timer */
-            timerWheelId id = timerWheelRegister(tw, 500000 + (i % 500000), 0,
+            timerWheelId id = timerWheelRegister(tw, 500'000 + (i % 500'000), 0,
                                                  testCountingCallback, &state);
             /* Cancel ~50% */
             if (i % 2 == 0) {
@@ -2717,7 +2717,7 @@ int timerWheelTest(int, char *[]) {
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
             /* Register new timer */
-            multiTimerId id = multiTimerRegister(mt, 500000 + (i % 500000), 0,
+            multiTimerId id = multiTimerRegister(mt, 500'000 + (i % 500'000), 0,
                                                  mtCountingCallback, &state);
             /* Cancel ~50% */
             if (i % 2 == 0) {
@@ -2804,7 +2804,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
 
         /* Register timer for 100ms - stays in wheel 0 */
-        timerWheelRegister(tw, 100000, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 100'000, 0, testCountingCallback, &state);
 
         timerWheelAdvanceTime(tw, 95000);
         if (state.callCount != 0) {
@@ -2825,7 +2825,7 @@ int timerWheelTest(int, char *[]) {
         testCallbackState state = {};
 
         /* Register 300ms timer - goes to wheel 1 slot 1 (300/256 = 1) */
-        timerWheelRegister(tw, 300000, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 300'000, 0, testCountingCallback, &state);
 
         /* Advance to 250ms - before the cascade, still in wheel 1 */
         timerWheelAdvanceTime(tw, 250000);
@@ -2892,7 +2892,7 @@ int timerWheelTest(int, char *[]) {
         /* All these go to wheel 1 slot 1 (since 260-400/256 = 1) */
         timerWheelRegister(tw, 260000, 0, testCountingCallback, &states[0]);
         timerWheelRegister(tw, 350000, 0, testCountingCallback, &states[1]);
-        timerWheelRegister(tw, 400000, 0, testCountingCallback, &states[2]);
+        timerWheelRegister(tw, 400'000, 0, testCountingCallback, &states[2]);
 
         /* Advance to 250ms - slot 1 not yet entered, nothing fires */
         timerWheelAdvanceTime(tw, 250000);
@@ -2913,7 +2913,7 @@ int timerWheelTest(int, char *[]) {
         }
 
         /* Advance to 410ms - the 350ms and 400ms timers fire on time */
-        timerWheelAdvanceTime(tw, 100000);
+        timerWheelAdvanceTime(tw, 100'000);
         int firedAfter =
             states[0].callCount + states[1].callCount + states[2].callCount;
         if (firedAfter != 3) {
@@ -3026,12 +3026,12 @@ int timerWheelTest(int, char *[]) {
         testCallbackState states[3] = {};
 
         /* All go to wheel 1 slot 1 */
-        [[maybe_unused]] timerWheelId id1 =
-            timerWheelRegister(tw, 300000, 0, testCountingCallback, &states[0]);
+        [[maybe_unused]] timerWheelId id1 = timerWheelRegister(
+            tw, 300'000, 0, testCountingCallback, &states[0]);
         timerWheelId id2 =
             timerWheelRegister(tw, 350000, 0, testCountingCallback, &states[1]);
-        [[maybe_unused]] timerWheelId id3 =
-            timerWheelRegister(tw, 400000, 0, testCountingCallback, &states[2]);
+        [[maybe_unused]] timerWheelId id3 = timerWheelRegister(
+            tw, 400'000, 0, testCountingCallback, &states[2]);
 
         /* Cancel middle timer before cascade */
         timerWheelUnregister(tw, id2);
@@ -3058,7 +3058,7 @@ int timerWheelTest(int, char *[]) {
 
         /* 300ms initial delay, 100ms repeat - starts in wheel 1
          * First fire at cascade (512ms), then reschedules every 100ms */
-        timerWheelRegister(tw, 300000, 100000, testCountingCallback, &state);
+        timerWheelRegister(tw, 300'000, 100'000, testCountingCallback, &state);
 
         /* Advance to 520ms - fires at cascade (~512ms) */
         timerWheelAdvanceTime(tw, 520000);
@@ -3069,7 +3069,7 @@ int timerWheelTest(int, char *[]) {
         int countAfterCascade = state.callCount;
 
         /* Advance another 500ms (to 1020ms) - should fire ~5 more times */
-        timerWheelAdvanceTime(tw, 500000);
+        timerWheelAdvanceTime(tw, 500'000);
 
         /* With 100ms repeat, expect 4-6 more fires in 500ms */
         int additionalFires = state.callCount - countAfterCascade;

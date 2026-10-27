@@ -22,7 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 
 #include <arm_neon.h>
 
@@ -533,7 +533,7 @@ int blake3NeonTest(int, char *[]) {
     }
 
     TEST("blake3 neon single-block compresses match portable") {
-        const uint32_t iters = 100000;
+        const uint32_t iters = 100'000;
         for (uint32_t t = 0; t < iters; t++) {
             uint32_t cv[8];
             uint8_t block[BLAKE3_BLOCK_LEN];

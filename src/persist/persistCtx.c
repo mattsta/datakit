@@ -877,14 +877,14 @@ int persistCtxTest(int, char *[]) {
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs) {
                 ERR("synced before a second had passed");
             }
-            ctx->lastSyncTime -= 2000000;
+            ctx->lastSyncTime -= 2'000'000;
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
                 ERR("did not sync once a second had passed");
             }
 
             /* Other modes leave syncing to their own policy */
             ctx->config.syncMode = PERSIST_CTX_SYNC_NONE;
-            ctx->lastSyncTime -= 2000000;
+            ctx->lastSyncTime -= 2'000'000;
             if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
                 ERR("synced a SYNC_NONE context");
             }

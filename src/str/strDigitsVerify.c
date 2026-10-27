@@ -63,7 +63,7 @@ bool StrIsDigitsFast(const void *buf_, size_t size) {
     /* Cleanup < 16 bytes remaining */
     return StrIsDigitsIndividual((uint8_t *)mover, leftover);
 }
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 
 /* ARM NEON StrIsDigitsFast() - processes 16 bytes at a time */

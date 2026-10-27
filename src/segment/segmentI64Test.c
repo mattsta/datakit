@@ -526,7 +526,7 @@ int segmentI64Test(int, char *[]) {
                "\n");
 
         /* Stop at 10K for naive comparison - larger sizes take too long */
-        size_t sizes[] = {100, 500, 1000, 5000, 10000, 100000};
+        size_t sizes[] = {100, 500, 1000, 5000, 10000, 100'000};
         /* Smoke size (naive scans reach 100K elements per op) */
         const size_t NUM_OPS = 5000;
 
@@ -606,7 +606,7 @@ int segmentI64Test(int, char *[]) {
         printf("--------|------------------|-----------------|----------\n");
 
         /* Stop at 10K for naive comparison - larger sizes take too long */
-        size_t sizes[] = {100, 500, 1000, 5000, 10000, 100000};
+        size_t sizes[] = {100, 500, 1000, 5000, 10000, 100'000};
         /* Smoke size (naive scans reach 100K elements per op) */
         const size_t NUM_OPS = 5000;
 
@@ -676,7 +676,7 @@ int segmentI64Test(int, char *[]) {
         printf("--------|------------------|-----------------|----------\n");
 
         /* Stop at 10K for naive comparison - larger sizes take too long */
-        size_t sizes[] = {100, 500, 1000, 5000, 10000, 100000};
+        size_t sizes[] = {100, 500, 1000, 5000, 10000, 100'000};
         /* Smoke size (naive scans reach 100K elements per op) */
         const size_t NUM_OPS = 5000;
 

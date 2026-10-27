@@ -524,7 +524,7 @@ int bigmathTest(int, char *[]) {
     TEST("imath: FUZZ exptmod vs modular square-multiply oracle") {
         uint64_t rng = 0x9D8C7B6A5F4E3D2CULL;
         for (int32_t t = 0; t < 500; t++) {
-            const uint64_t base = BM_NEXT() % 100000;
+            const uint64_t base = BM_NEXT() % 100'000;
             const uint64_t expo = BM_NEXT() % 64;
             const uint64_t mod = (BM_NEXT() % 999999) + 2;
 

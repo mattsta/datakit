@@ -90,7 +90,7 @@ size_t StrLenUtf8(const void *_ss, size_t len) {
     return originalLen - continuationBytes;
 }
 
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 
 /* ARM NEON optimized: process 16 bytes at a time */

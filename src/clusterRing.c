@@ -6471,7 +6471,7 @@ static int testBenchmarkLocate(void) {
 
         /* Benchmark: 100K lookups */
         uint64_t startNs = timeUtilMonotonicNs();
-        const int iterations = 100000;
+        const int iterations = 100'000;
 
         for (int i = 0; i < iterations; i++) {
             char key[32];
@@ -6548,7 +6548,7 @@ static int testBenchmarkLocate(void) {
 
         /* Benchmark: 100K lookups */
         uint64_t startNs = timeUtilMonotonicNs();
-        const int iterations = 100000;
+        const int iterations = 100'000;
 
         for (int i = 0; i < iterations; i++) {
             char key[32];
@@ -6586,7 +6586,7 @@ static int testBenchmarkLocate(void) {
 
         /* Benchmark: 100K lookups */
         uint64_t startNs = timeUtilMonotonicNs();
-        const int iterations = 100000;
+        const int iterations = 100'000;
 
         for (int i = 0; i < iterations; i++) {
             char key[32];

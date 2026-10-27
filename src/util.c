@@ -655,9 +655,9 @@ int utilTest(int, char **) {
         static const struct {
             double sec;
             const char *unit;
-        } spans[] = {{1e-8, " ns"},    {1e-5, " us"},     {0.5, " ms"},
-                     {5, " seconds"},  {120, " minutes"}, {7200, " hours"},
-                     {200000, " days"}};
+        } spans[] = {{1e-8, " ns"},     {1e-5, " us"},     {0.5, " ms"},
+                     {5, " seconds"},   {120, " minutes"}, {7200, " hours"},
+                     {200'000, " days"}};
         for (size_t i = 0; i < countof(spans); i++) {
             secondsToHuman(human, sizeof(human), spans[i].sec);
             if (!strstr(human, spans[i].unit)) {
@@ -775,8 +775,8 @@ int utilTest(int, char **) {
             {"p", 1000000000000000},
             {"pb", 1000000000000000},
             {"pib", 1125899906842624},
-            {"e", 1000000000000000000},
-            {"eb", 1000000000000000000},
+            {"e", 1'000'000'000'000'000'000},
+            {"eb", 1'000'000'000'000'000'000},
             {"EiB", 1152921504606846976},
         };
 
@@ -956,7 +956,7 @@ int utilTest(int, char **) {
 
         /* Random stress test */
         uint64_t rngState = 0xDEADBEEF12345678ULL;
-        for (int i = 0; i < 100000; i++) {
+        for (int i = 0; i < 100'000; i++) {
             rngState = rngState * 6364136223846793005ULL + 1;
             uint64_t x = rngState;
 

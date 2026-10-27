@@ -24,44 +24,7 @@ typedef multimap multiheap;
 #define multiheapInsert(heap, ref, obj)                                        \
     multiheapInsertObj(heap, ref, obj, sizeof(*obj))
 
-#define multiheapRealloc(heap, ref, newSize)                                   \
-    ({                                                                         \
-        databox key_ = {.data.u = ref, .type = DATABOX_UNSIGNED_64};           \
-        multiheapReallocByKey(heap, &key_, newSize);                           \
-    })
-
-#define multiheapReallocByKey(heap, key, newSize)                              \
-    ({                                                                         \
-        multimapEntry entry_MHRBK;                                             \
-        const bool found = multimapGetUnderlyingEntry((multimap *)*(heap),     \
-                                                      key, &entry_MHRBK);      \
-        assert(found);                                                         \
-        (void)found;                                                           \
-                                                                               \
-        /* Advance from the key entry to its value entry before                \
-         * resizing: entry_MHRBK.fe points AT the key. */                      \
-        entry_MHRBK.fe = flexNext(*entry_MHRBK.map, entry_MHRBK.fe);           \
-        multimapResizeEntry((multimap **)(heap), &entry_MHRBK, newSize);       \
-                                                                               \
-        /* Resize could have moved our base pointer, so caller must use        \
-         * the newly returned base pointer value — and must treat the        \
-         * region's CONTENTS as unspecified after a resize (flex entry         \
-         * resizing does not guarantee prefix preservation): repopulate        \
-         * through the returned pointer before reading. */                     \
-        multiheapReadByKey((multiheap *)*(heap), key);                         \
-    })
-
-/* Macro returns a pointer to the bytes stored for 'ref' inside 'heap'.  The
- * bytes live inside a flex entry and are NOT aligned for any type: copy them
- * out with multiheapRestore (memcpy) rather than dereferencing the pointer as
- * a struct. */
-#define multiheapRead(heap, ref)                                               \
-    ({                                                                         \
-        databox key_ = {.data.u = ref, .type = DATABOX_UNSIGNED_64};           \
-        multiheapReadByKey(heap, &key_);                                       \
-    })
-
-/* Macro returns value 'alignedPtr' when called */
+/* The bytes stored under 'key' */
 DK_FN_UNUSED static void *
 multiheapReadByKey(multiheap *restrict const heap,
                    const databox *restrict const key) {
@@ -83,6 +46,38 @@ multiheapReadByKey(multiheap *restrict const heap,
     assert(start);
 
     return start;
+}
+
+/* A pointer to the bytes stored for 'ref' inside 'heap'.  The bytes live
+ * inside a flex entry and are NOT aligned for any type: copy them out with
+ * multiheapRestore (memcpy) rather than dereferencing the pointer as a
+ * struct. */
+DK_FN_UNUSED static void *multiheapRead(multiheap *heap, uint64_t ref) {
+    const databox key = {.data.u = ref, .type = DATABOX_UNSIGNED_64};
+    return multiheapReadByKey(heap, &key);
+}
+
+/* Resize the bytes under 'key' to 'newSize' and return where they now
+ * are: the resize can move them, and their CONTENTS are unspecified after
+ * it (flex entry resizing does not preserve a prefix), so repopulate
+ * through the returned pointer before reading. */
+DK_FN_UNUSED static void *
+multiheapReallocByKey(multiheap **heap, const databox *key, size_t newSize) {
+    multimapEntry entry;
+    [[maybe_unused]] const bool found =
+        multimapGetUnderlyingEntry((multimap *)*heap, key, &entry);
+    assert(found);
+
+    /* The entry points AT the key: resize the value after it */
+    entry.fe = flexNext(*entry.map, entry.fe);
+    multimapResizeEntry((multimap **)heap, &entry, newSize);
+    return multiheapReadByKey(*heap, key);
+}
+
+DK_FN_UNUSED static void *multiheapRealloc(multiheap **heap, uint64_t ref,
+                                           size_t newSize) {
+    const databox key = {.data.u = ref, .type = DATABOX_UNSIGNED_64};
+    return multiheapReallocByKey(heap, &key, newSize);
 }
 
 /* For restoring struct-like things with known sizeof() size */

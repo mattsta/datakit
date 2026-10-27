@@ -15,7 +15,7 @@
 #endif
 
 /* ARM NEON detection - check all common macros */
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #define DJ_USE_NEON 1
 #include <arm_neon.h>
 #endif
@@ -542,7 +542,7 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
 
         /* If mask populated, some elements require escaping... */
         if (r) {
-            size_t okayLen = __builtin_ffs(r) - 1;
+            size_t okayLen = stdc_trailing_zeros(r);
 
             SPLAT_ENSURE(okayLen);
             SPLAT_LEN(data, okayLen);

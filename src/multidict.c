@@ -6194,7 +6194,7 @@ static int mdTestShrinkingRehashScan_(multidictClass *qdc,
             multidictRehash(d, stepsBetween);
         }
         calls++;
-    } while (cursor != 0 && calls < 100000);
+    } while (cursor != 0 && calls < 100'000);
     for (size_t i = 0; i < N; i++) {
         if ((i % 20 == 0) != (seen[i] == 1)) {
             state.bad++;
@@ -10560,7 +10560,7 @@ int multidictTest(int, char *[]) {
     /* Per-entry cost of the core operations (meaningful under the perf
      * preset; checks the results too) */
     TEST("smoke benchmark (ns per entry)") {
-        constexpr int MD_BENCH_KEYS = 100000;
+        constexpr int MD_BENCH_KEYS = 100'000;
         cleaner(multidictMmClassFree) multidictClass *bc =
             multidictMmClassNew();
         cleaner(multidictFree) multidict *bd =

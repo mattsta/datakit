@@ -1673,7 +1673,7 @@ static inline void deinterleaveBits64AVX2(__uint128_t interleaved,
 /* ====================================================================
  * SIMD-Optimized Bit Interleaving (ARM NEON)
  * ==================================================================== */
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #include <arm_neon.h>
 
 /* NEON-optimized bit interleaving */
@@ -1815,7 +1815,7 @@ static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
         impl = INTERLEAVE_AVX2;
 #elifdef __SSE2__
         impl = INTERLEAVE_SSE2;
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
         impl = INTERLEAVE_NEON;
 #else
         impl = INTERLEAVE_SCALAR;
@@ -1831,7 +1831,7 @@ static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
     case INTERLEAVE_SSE2:
         return interleaveBits64SSE2(ts1, ts2);
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
     case INTERLEAVE_NEON:
         return interleaveBits64NEON(ts1, ts2);
 #endif
@@ -1851,7 +1851,7 @@ static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
         impl = INTERLEAVE_AVX2;
 #elifdef __SSE2__
         impl = INTERLEAVE_SSE2;
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
         impl = INTERLEAVE_NEON;
 #else
         impl = INTERLEAVE_SCALAR;
@@ -1869,7 +1869,7 @@ static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
         deinterleaveBits64SSE2(interleaved, ts1, ts2);
         break;
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
     case INTERLEAVE_NEON:
         deinterleaveBits64NEON(interleaved, ts1, ts2);
         break;
@@ -3607,7 +3607,7 @@ int ulidTest(int, char *[]) {
 #endif
 
     TEST("ulid full roundtrip performance") {
-        const size_t iterations = 500000;
+        const size_t iterations = 500'000;
         ulid_t id, decoded;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
@@ -4274,7 +4274,7 @@ int ulidTest(int, char *[]) {
                                0xFEDCBA9876543210ULL,
                                timeUtilNs(),
                                timeUtilNs() + 2000,
-                               timeUtilNs() - 2000000};
+                               timeUtilNs() - 2'000'000};
 
         /* Test scalar implementation */
         printf("      Testing SCALAR implementation:\n");
@@ -4344,7 +4344,7 @@ int ulidTest(int, char *[]) {
         printf("        AVX2: All %zu tests passed ✓\n", num_tests);
 #endif
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
         /* Test NEON implementation */
         printf("      Testing NEON implementation:\n");
         for (size_t i = 0; i < num_tests; i++) {
@@ -4455,7 +4455,7 @@ int ulidTest(int, char *[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "AVX2 deinterleave ops");
 #endif
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
         /* Benchmark NEON interleave */
         printf("\n      NEON interleave:\n");
         PERF_TIMERS_SETUP;
@@ -4487,7 +4487,7 @@ int ulidTest(int, char *[]) {
     }
 
     TEST("DUALNS_INTERLEAVED end-to-end performance - SCALAR vs AUTO") {
-        const size_t iterations = 100000;
+        const size_t iterations = 100'000;
         ulid_t id;
 
         printf("    End-to-end DUALNS_INTERLEAVED generation benchmark:\n");
@@ -4548,7 +4548,7 @@ int ulidTest(int, char *[]) {
             impl_name = "AVX2";
         }
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
         else if (selected == INTERLEAVE_NEON) {
             impl_name = "NEON";
         }

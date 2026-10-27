@@ -130,7 +130,7 @@ void StrUInt8DigitsToBuf(void *p_, uint32_t u) {
     memcpy(p, &vResult, sizeof(vResult));
     memcpy(p + 4, &uResult, sizeof(uResult));
 }
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 
 /* ARM64 optimized integer-to-string conversion.

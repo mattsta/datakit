@@ -459,12 +459,20 @@ typedef struct databoxStr {
 
 #define databoxLen(box) ((box)->len)
 
+/* The bytes of a bytes box: the bytes embedded in it, or those it points
+ * to (the caller decides whether it may write them, as with strchr) */
+DK_INLINE_ALWAYS uint8_t *databoxBytes_(const databox *box) {
+    assert(box->type != DATABOX_BYTES_OFFSET);
+    return DATABOX_IS_BYTES_EMBED(box) ? (uint8_t *)box->data.bytes.embed
+                                       : box->data.bytes.start;
+}
+
+/* A databox or a databoxBig (whose header is a databox's) */
 #define databoxBytes(box)                                                      \
-    ({                                                                         \
-        assert((box)->type != DATABOX_BYTES_OFFSET);                           \
-        (DATABOX_IS_BYTES_EMBED(box) ? (box)->data.bytes.embed                 \
-                                     : (box)->data.bytes.start);               \
-    })
+    databoxBytes_(_Generic((box),                                              \
+                      databoxBig *: (const databox *)(box),                    \
+                      const databoxBig *: (const databox *)(box),              \
+                      default: (box)))
 
 #define databoxBytesEmbed(box) (box)->data.bytes.embed
 

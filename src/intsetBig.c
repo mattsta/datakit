@@ -1019,6 +1019,15 @@ bool intsetBigRandomDelete(intsetBig *isb, databoxBig *deleted) {
 #define TIME_INIT PERF_TIMERS_SETUP
 #define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
 
+/* The __int128_t a decimal test literal spells (the parse must succeed;
+ * it runs outside the assert) */
+static __int128_t intsetBigTestParse_(const char *a) {
+    __int128_t v = 0;
+    [[maybe_unused]] const bool ok = StrBufToInt128(a, strlen(a), &v);
+    assert(ok);
+    return v;
+}
+
 void intsetBigRepr(const intsetBig *isb) {
     if (isb) {
         if (isb->i) {
@@ -1166,19 +1175,12 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
          *  retrieved and discovered when searching) */
         const char *unlarge = "-18889465931478581186981";
 
-#define quickBufToInt(a)                                                       \
-    ({                                                                         \
-        __int128_t aVal;                                                       \
-        assert(StrBufToInt128(a, strlen(a), &aVal));                           \
-        aVal;                                                                  \
-    })
-
         /* Perform a quick speed test of string to __int128_t conversion. */
         {
-            assert(0 == quickBufToInt("0"));
-            assert(10 == quickBufToInt("10"));
-            assert(INT64_MAX == quickBufToInt("9223372036854775807"));
-            assert(UINT64_MAX == quickBufToInt("18446744073709551615"));
+            assert(0 == intsetBigTestParse_("0"));
+            assert(10 == intsetBigTestParse_("10"));
+            assert(INT64_MAX == intsetBigTestParse_("9223372036854775807"));
+            assert(UINT64_MAX == intsetBigTestParse_("18446744073709551615"));
 
             TIME_INIT;
             size_t count = 2650000;
@@ -1898,7 +1900,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         const size_t numOps = 3000;
         for (size_t op = 0; op < numOps; op++) {
             int64_t val =
-                (random() % 200000) - 100000; /* Range: -100000 to 99999 */
+                (random() % 200'000) - 100'000; /* Range: -100000 to 99999 */
             databoxBig box = DATABOX_BIG_SIGNED(val);
 
             int opType = random() % 3;
@@ -2831,7 +2833,7 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         /* Add 128-bit values that span multiple buckets */
         for (int i = 0; i < 50; i++) {
             __uint128_t bucket = random() % 100;
-            __uint128_t offset = random() % 100000;
+            __uint128_t offset = random() % 100'000;
             __uint128_t val = bucket * BUCKET_SIZE + offset;
 
             /* Also add some very large 128-bit values */

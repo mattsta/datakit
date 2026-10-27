@@ -53,7 +53,7 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
 
-static constexpr int BENCH_MAX_OPS = 200000;
+static constexpr int BENCH_MAX_OPS = 200'000;
 #define BENCH_BUDGET_NS 40000000.0 /* 40 ms per table cell */
 
 static uint64_t benchRand_(uint64_t *state) {
@@ -106,7 +106,7 @@ static void benchSink_(const void *value, size_t len) {
 
 #define BENCH_SINK(v)                                                          \
     do {                                                                       \
-        const typeof(v) sinkValue_ = (v);                                      \
+        auto const sinkValue_ = (v);                                           \
         benchSink_(&sinkValue_, sizeof(sinkValue_));                           \
     } while (0)
 
@@ -406,7 +406,7 @@ static benchRow bench2dMulti(size_t n, size_t doubleEvery) {
 int fenwickBenchTest(int, char *[]) {
     int err = 0;
 
-    const size_t sizes[] = {1000, 100000, 4000000};
+    const size_t sizes[] = {1000, 100'000, 4000000};
     const size_t nSizes = countof(sizes);
     benchRow r;
 #define BENCH_ROW(label, call)                                                 \
@@ -452,7 +452,7 @@ int fenwickBenchTest(int, char *[]) {
             const size_t n = sizes[s];
             BENCH_ROW("fenwickI64", benchGrowTypedI64(n));
             BENCH_ROW("multiFenwickFlat", benchGrowFlat(n));
-            if (n <= 100000) {
+            if (n <= 100'000) {
                 /* 4M writes at tens of microseconds each would take
                  * minutes; the 100K row already shows the trend */
                 BENCH_ROW("multiFenwick", benchGrowFenwick(n));

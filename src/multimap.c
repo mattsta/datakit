@@ -5707,7 +5707,7 @@ int multimapTest(int, char *[]) {
 
         for (int32_t i = 0; i < numEntries; i++) {
             seed = seed * 1103515245 + 12345;
-            keys[i] = (int32_t)(seed % 100000);
+            keys[i] = (int32_t)(seed % 100'000);
         }
 
         /* Insert all keys */
@@ -6384,7 +6384,7 @@ int multimapTest(int, char *[]) {
         for (int32_t i = 0; i < numKeys; i++) {
             /* Generate random key */
             int64_t keyVal =
-                (int64_t)(xoroshiro128plus(seed) % 1'000'000) - 500000;
+                (int64_t)(xoroshiro128plus(seed) % 1'000'000) - 500'000;
 
             databox key = databoxNewSigned(keyVal);
             databox val = databoxNewSigned(i);
@@ -6445,7 +6445,7 @@ int multimapTest(int, char *[]) {
 
         /* Create clusters at widely spaced base values */
         for (int32_t c = 0; c < numClusters; c++) {
-            int64_t clusterBase = c * 100000;
+            int64_t clusterBase = c * 100'000;
 
             for (int32_t k = 0; k < keysPerCluster; k++) {
                 /* Keys within ±50 of cluster base */
@@ -6709,7 +6709,7 @@ int multimapTest(int, char *[]) {
         multimapType lastType = MULTIMAP_TYPE_SMALL;
 
         for (int32_t i = 0; i < 5000; i++) {
-            int64_t keyVal = (int64_t)(xoroshiro128plus(seed) % 100000);
+            int64_t keyVal = (int64_t)(xoroshiro128plus(seed) % 100'000);
             databox key = databoxNewSigned(keyVal);
             databox val = databoxNewSigned(i);
             const databox *elements[2] = {&key, &val};
@@ -6907,7 +6907,7 @@ int multimapTest(int, char *[]) {
             multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Use bitmap as lightweight oracle for existence */
-        const size_t keySpace = 100000;
+        const size_t keySpace = 100'000;
         cleanerName(zfree, Bytes) uint8_t *exists =
             zcalloc((keySpace + 7) / 8, 1);
         size_t existCount = 0;

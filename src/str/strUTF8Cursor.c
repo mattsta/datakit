@@ -160,7 +160,7 @@ const uint8_t *StrUtf8Advance(const void *str, size_t len, size_t n) {
     return s;
 }
 
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 
 /* NEON optimized: fast ASCII scanning for advance */

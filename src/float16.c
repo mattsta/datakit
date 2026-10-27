@@ -118,7 +118,7 @@ float bfloat16Decode_(const uint16_t value) {
  * Batch Float16 Conversion Implementations
  * ==================================================================== */
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
 

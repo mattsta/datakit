@@ -17,27 +17,8 @@
 #define INTSET_BIG_RANGECHECK_UINT128(a)                                       \
     ((a) >= INTSET_BIG_UINT128_MIN && (a) <= INTSET_BIG_UINT128_MAX)
 
-#define INTSET_BIG_RANGECHECK(box)                                             \
-    ({                                                                         \
-        bool ok_range = true;                                                  \
-        switch ((box)->type) {                                                 \
-        /* we know 64 bit integers are okay! */                                \
-        case DATABOX_UNSIGNED_64:                                              \
-        case DATABOX_SIGNED_64:                                                \
-            break;                                                             \
-        case DATABOX_UNSIGNED_128:                                             \
-            ok_range = INTSET_BIG_RANGECHECK_UINT128(*(box)->data.u128);       \
-            break;                                                             \
-        case DATABOX_SIGNED_128:                                               \
-            ok_range = INTSET_BIG_RANGECHECK_INT128(*(box)->data.i128);        \
-            break;                                                             \
-        default:                                                               \
-            assert(false && "Invalid type for numeric compare?");              \
-            unreachable();                                                     \
-        }                                                                      \
-                                                                               \
-        ok_range;                                                              \
-    })
+/* Whether intsetBig holds the value in 'box' (intsetBigCanHold, below) */
+#define INTSET_BIG_RANGECHECK(box) intsetBigCanHold(box)
 
 typedef struct intsetBigSet intsetBig;
 

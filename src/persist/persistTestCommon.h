@@ -337,9 +337,9 @@ DK_FN_UNUSED static int64_t ptestIntByRange(int index) {
     case 3:
         return (int64_t)val * -100; /* Medium negative */
     case 4:
-        return (int64_t)val * 100000; /* Large positive */
+        return (int64_t)val * 100'000; /* Large positive */
     case 5:
-        return (int64_t)val * -100000; /* Large negative */
+        return (int64_t)val * -100'000; /* Large negative */
     case 6:
         return INT64_MAX - val; /* Near max */
     case 7:

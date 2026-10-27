@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 static constexpr int FM_THREADS = 8;
-static constexpr int FM_ITERS = 100000;
+static constexpr int FM_ITERS = 100'000;
 
 typedef struct fmWorkerArg {
     fastMutex *m;

@@ -1117,7 +1117,7 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
     multiroarP *r = multiroarNewP(ctx);
     PTEST_LOGGED(multiroarBitSetP(r, 5, nullptr));
     PTEST_LOGGED(multiroarBitSetP(r, 70000, nullptr));
-    PTEST_LOGGED(multiroarBitSetRangeP(r, 200000, 20000));
+    PTEST_LOGGED(multiroarBitSetRangeP(r, 200'000, 20000));
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
 
@@ -1127,8 +1127,8 @@ static int test_multiroarP_refusedLogs(int, char *[]) {
                          multiroarRemoveP(r, 5, &changed),
                          multiroarRemoveP(r, 70000, &changed),
                          multiroarRemoveP(r, 210000, &changed),
-                         multiroarBitSetRangeP(r, 300000, 9000),
-                         multiroarBitClearRangeP(r, 200000, 20000));
+                         multiroarBitSetRangeP(r, 300'000, 9000),
+                         multiroarBitClearRangeP(r, 200'000, 20000));
     if (changed || !multiroarEquals(multiroarGetRawP(r), want)) {
         ERR("a refused bit change changed the roar");
     }

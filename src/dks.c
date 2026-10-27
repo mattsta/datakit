@@ -48,7 +48,7 @@ defcleanerName(uint8_t *, zfree, U8);
 /* SIMD intrinsics for case conversion */
 #if defined(__SSE2__)
 #include <emmintrin.h>
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
 
@@ -230,11 +230,11 @@ DK_STATIC size_t DKS_GETPREVIOUSINTEGERWITHTYPEREMOVED(const DKS_TYPE *s,
 
 /* Extract type from the byte before buf using single memory read.
  * If LSB is 0, mask with 2 bits; if LSB is 1, mask with 3 bits. */
-#define DKS_TYPE_GET(buf)                                                      \
-    ({                                                                         \
-        const uint8_t _b = *((const uint8_t *)(buf) - 1);                      \
-        (dksType)((_b & 1) ? (_b & DKS_TYPE_3_MASK) : (_b & DKS_TYPE_2_MASK)); \
-    })
+DK_INLINE_ALWAYS dksType dksTypeGet_(const void *buf) {
+    const uint8_t b = *((const uint8_t *)buf - 1);
+    return (dksType)((b & 1) ? (b & DKS_TYPE_3_MASK) : (b & DKS_TYPE_2_MASK));
+}
+#define DKS_TYPE_GET(buf) dksTypeGet_(buf)
 
 /* Direct table lookup for type bit count. */
 #define TYPEBITS(type) (dksTypeBits_[(type)])
@@ -1299,7 +1299,7 @@ void DKS_TOLOWER(DKS_TYPE *s) {
         data += 16;
         len -= 16;
     }
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
     /* ARM NEON: Process 16 bytes at a time */
     const uint8x16_t upperA = vdupq_n_u8('A');
     const uint8x16_t upperZ = vdupq_n_u8('Z');
@@ -1359,7 +1359,7 @@ void DKS_TOUPPER(DKS_TYPE *s) {
         data += 16;
         len -= 16;
     }
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
     /* ARM NEON: Process 16 bytes at a time */
     const uint8x16_t lowerA = vdupq_n_u8('a');
     const uint8x16_t lowerZ = vdupq_n_u8('z');

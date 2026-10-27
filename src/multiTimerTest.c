@@ -275,7 +275,7 @@ int multiTimerTest(int, char *[]) {
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         multiTimerId id =
-            multiTimerRegister(t, 100000, 0, testCountingCallback, &state);
+            multiTimerRegister(t, 100'000, 0, testCountingCallback, &state);
 
         /* Unregister before it fires */
         multiTimerUnregister(t, id);
@@ -425,7 +425,7 @@ int multiTimerTest(int, char *[]) {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {};
 
-        const uint64_t delayUs = 100000; /* 100ms */
+        const uint64_t delayUs = 100'000; /* 100ms */
         const int64_t before = (int64_t)timeUtilMonotonicUs();
 
         multiTimerRegister(t, delayUs, 0, testCountingCallback, &state);
@@ -499,7 +499,7 @@ int multiTimerTest(int, char *[]) {
         /* The sleep lasts at least 1ms, so a nanosecond clock advances at
          * least ~1000000.  The ceiling only catches a wrong unit; how much
          * longer the sleep runs depends on machine load, not on the clock. */
-        if (elapsed < 500000 || elapsed > 1'000'000'000) {
+        if (elapsed < 500'000 || elapsed > 1'000'000'000) {
             ERR("Elapsed time %" PRId64 "ns unexpected for 1ms sleep", elapsed);
         }
     }
@@ -768,7 +768,7 @@ int multiTimerTest(int, char *[]) {
 
         /* Victim fires later than the unregistering callback */
         multiTimerId victimId =
-            multiTimerRegister(t, 100000, 0, testCountingCallback, &victim);
+            multiTimerRegister(t, 100'000, 0, testCountingCallback, &victim);
         testUnregisterOtherState unregState = {.target = victimId,
                                                .callCount = 0};
         multiTimerRegister(t, 1000, 0, testUnregisterOtherCallback,
@@ -974,7 +974,7 @@ int multiTimerTest(int, char *[]) {
     TEST("multiTimer: registration performance") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {};
-        const size_t numOps = 100000;
+        const size_t numOps = 100'000;
 
         PERF_TIMERS_SETUP;
 
@@ -1013,7 +1013,7 @@ int multiTimerTest(int, char *[]) {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {};
         const size_t numTimers = 10000;
-        const size_t numLookups = 100000;
+        const size_t numLookups = 100'000;
 
         /* Register many timers */
         for (size_t i = 0; i < numTimers; i++) {
@@ -1099,7 +1099,7 @@ int multiTimerTest(int, char *[]) {
 
         /* Register 10 timers */
         for (int32_t i = 0; i < 10; i++) {
-            multiTimerRegister(t, 100000, 0, testCountingCallback, &state);
+            multiTimerRegister(t, 100'000, 0, testCountingCallback, &state);
         }
 
         /* Unregister timers 3, 5, 7 */
@@ -1174,8 +1174,8 @@ int multiTimerTest(int, char *[]) {
 
         for (size_t i = 0; i < numTimers; i++) {
             /* Spread timers across 1 hour window */
-            multiTimerRegister(t, (i % 3600000) * 1000, 0, testCountingCallback,
-                               &state);
+            multiTimerRegister(t, (i % 3'600'000) * 1000, 0,
+                               testCountingCallback, &state);
         }
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numTimers,
@@ -1192,16 +1192,16 @@ int multiTimerTest(int, char *[]) {
         PERF_TIMERS_SETUP;
 
         [[maybe_unused]] volatile multiTimerSystemMonotonicUs next = 0;
-        for (size_t i = 0; i < 100000; i++) {
+        for (size_t i = 0; i < 100'000; i++) {
             next = multiTimerNextTimerEventStartUs(t);
         }
 
-        PERF_TIMERS_FINISH_PRINT_RESULTS(100000, "lookups with 1M timers");
+        PERF_TIMERS_FINISH_PRINT_RESULTS(100'000, "lookups with 1M timers");
     }
 
     TEST("multiTimer: high-scale batch expiration") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
-        const size_t numTimers = 100000;
+        const size_t numTimers = 100'000;
         int32_t totalFired = 0;
 
         cleanerName(zfree, States) testCallbackState *states =
@@ -1235,7 +1235,7 @@ int multiTimerTest(int, char *[]) {
     TEST("multiTimer: high-scale mixed operations simulation") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
-        const size_t warmupTimers = 100000;
+        const size_t warmupTimers = 100'000;
         const size_t ops = 50000;
 
         /* Warmup: register many timers spread across time */
@@ -1275,7 +1275,7 @@ int multiTimerTest(int, char *[]) {
     }
 
     TEST("multiTimer: memory efficiency analysis") {
-        const size_t numTimers = 100000;
+        const size_t numTimers = 100'000;
         testCallbackState state = {};
 
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();

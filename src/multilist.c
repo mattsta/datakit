@@ -2693,7 +2693,7 @@ int multilistTest(int, char *[]) {
 
             if (op < 6 && oracleCount < maxSize) {
                 /* Push (60%) */
-                int64_t val = (int64_t)(rand() % 100000) - 50000;
+                int64_t val = (int64_t)(rand() % 100'000) - 50000;
                 int where = rand() % 2;
                 databox box = databoxNewSigned(val);
 
@@ -2874,10 +2874,10 @@ int multilistTest(int, char *[]) {
             char buf[64]; /* Declare outside switch to keep in scope */
             switch (type) {
             case 0:
-                box = databoxNewSigned((int64_t)(rand() % 100000) - 50000);
+                box = databoxNewSigned((int64_t)(rand() % 100'000) - 50000);
                 break;
             case 1:
-                box = databoxNewUnsigned(rand() % 100000);
+                box = databoxNewUnsigned(rand() % 100'000);
                 break;
             case 2:
                 snprintf(buf, sizeof(buf), "str_%d", rand());

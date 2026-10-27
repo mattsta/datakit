@@ -538,7 +538,7 @@ static void runIntegerBenchmarks(size_t count, const char *sizeLabel) {
     benchReportSummary(&r);
 
     /* Test 2: Sensor-like integers (memory/disk usage pattern) */
-    generateSensorIntegers(data, count, 8000000000LL, 100000);
+    generateSensorIntegers(data, count, 8000000000LL, 100'000);
 
     snprintf(dataDesc, sizeof(dataDesc),
              "Sensor integers (memory usage pattern)");
@@ -692,7 +692,7 @@ static void benchMflexFootprint(const char *name, mflexBenchPattern pattern,
         }
         case MFLEX_STRINGS: {
             const int n = snprintf(s, sizeof(s), "user:%zu:session:%zu",
-                                   i % 500, (i * 7919) % 100000);
+                                   i % 500, (i * 7919) % 100'000);
             mflexPushBytes(&m, state, s, (size_t)n, FLEX_ENDPOINT_TAIL);
             break;
         }
@@ -769,8 +769,8 @@ static void runMultilistBenchmarks(void) {
         benchListFootprint("log100", 1'000'000, depths[d]);
     }
 
-    benchListFootprint("loginLine", 100000, 0);
-    benchListFootprint("loginLine", 100000, 1);
+    benchListFootprint("loginLine", 100'000, 0);
+    benchListFootprint("loginLine", 100'000, 1);
 
     printf("\n  mflex LZ4 footprint (one mflex; stored is what it keeps)\n");
     const size_t counts[] = {512, 4096};
@@ -791,7 +791,7 @@ static void runMultilistBenchmarks(void) {
      * short round as a smoke test; their timings mean nothing. */
 #ifdef BENCH_SANITIZED
     constexpr int ROUNDS = 1;
-    const size_t count = 100000;
+    const size_t count = 100'000;
 #else
     constexpr int ROUNDS = 7;
     const size_t count = 1'000'000;
@@ -847,7 +847,7 @@ static double benchMedian(double *runs, size_t n) {
 
 static void runFloat16Benchmarks(void) {
 #ifdef BENCH_SANITIZED
-    const size_t count = 100000;
+    const size_t count = 100'000;
 #else
     const size_t count = 4000000;
 #endif

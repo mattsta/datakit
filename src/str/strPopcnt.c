@@ -1,6 +1,6 @@
 #include "../str.h"
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
 
@@ -96,7 +96,7 @@ uint64_t StrPopCnt8Bit(const void *data_, const size_t len) {
 uint64_t StrPopCntAligned(const void *data_, size_t len) {
     const uint8_t *restrict data = data_;
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
     /* ARM NEON optimized: use vcntq_u8 for byte-level popcount */
     uint64_t result = 0;
 
@@ -219,7 +219,7 @@ uint64_t StrPopCntExact(const void *data_, size_t len) {
      * process all bits. */
     assert(len % multiStepSize == 0);
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
     /* ARM NEON optimized: use vcntq_u8 for byte-level popcount
      * Process 32 bytes (2 x 16-byte vectors) per iteration for throughput
      *

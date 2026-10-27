@@ -5011,7 +5011,7 @@ int flexEnvelopeTest(int, char *[]) {
                 size_t written = 0;
 
                 uint32_t iters =
-                    plen <= 1024 ? 100000 : (plen <= 65536 ? 10000 : 200);
+                    plen <= 1024 ? 100'000 : (plen <= 65536 ? 10000 : 200);
                 /* HMAC paths are far slower per byte; cap iterations
                  * to keep total bench time reasonable. */
                 if (need_key) {

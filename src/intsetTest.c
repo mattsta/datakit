@@ -120,7 +120,7 @@ int intsetTest(int, char *[]) {
         }
 
         /* Add int32 value to trigger upgrade */
-        intsetAdd(&is, 100000, &success);
+        intsetAdd(&is, 100'000, &success);
         if (!success) {
             ERR("Failed to add 100000");
         }
@@ -135,7 +135,7 @@ int intsetTest(int, char *[]) {
         if (!intsetFind(is, 50)) {
             ERR("Should find 50");
         }
-        if (!intsetFind(is, 100000)) {
+        if (!intsetFind(is, 100'000)) {
             ERR("Should find 100000");
         }
 
@@ -148,7 +148,7 @@ int intsetTest(int, char *[]) {
 
         /* Force to medium */
         intsetAdd(&is, 100, nullptr);
-        intsetAdd(&is, 100000, nullptr);
+        intsetAdd(&is, 100'000, nullptr);
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
             ERR("Should be MEDIUM tier");
         }
@@ -169,7 +169,7 @@ int intsetTest(int, char *[]) {
         if (!intsetFind(is, 100)) {
             ERR("Should find 100");
         }
-        if (!intsetFind(is, 100000)) {
+        if (!intsetFind(is, 100'000)) {
             ERR("Should find 100000");
         }
         if (!intsetFind(is, INT64_MAX)) {
@@ -181,7 +181,7 @@ int intsetTest(int, char *[]) {
 
     TEST("stats: tier, width arrays, members and bytes in every tier") {
         cleaner(intsetFree) intset *is = intsetNew();
-        const int64_t members[] = {7, -3, 100, 100000, -70000, INT64_MAX};
+        const int64_t members[] = {7, -3, 100, 100'000, -70000, INT64_MAX};
         /* After each prefix: tier, then 16/32/64-bit member counts */
         const uint8_t tier[] = {1, 1, 1, 2, 2, 3};
         const uint64_t n16[] = {1, 2, 3, 3, 3, 3};
@@ -212,7 +212,7 @@ int intsetTest(int, char *[]) {
 
     TEST("Copy in every tier: same members and tier, independent of the "
          "original") {
-        const int64_t reach[] = {7, 100000, INT64_MAX};
+        const int64_t reach[] = {7, 100'000, INT64_MAX};
         for (size_t t = 0; t < countof(reach); t++) {
             cleaner(intsetFree) intset *is = intsetNew();
             for (int64_t v = -40; v < 40; v += 3) {
@@ -258,7 +258,7 @@ int intsetTest(int, char *[]) {
         for (int64_t v = -300; v < 300; v += 7) {
             intsetAdd(&is, v, nullptr);
         }
-        const int64_t wide[] = {100000, -70000, INT64_MAX, INT64_MIN + 1};
+        const int64_t wide[] = {100'000, -70000, INT64_MAX, INT64_MIN + 1};
         for (size_t i = 0; i < countof(wide); i++) {
             intsetAdd(&is, wide[i], nullptr);
         }
@@ -275,7 +275,7 @@ int intsetTest(int, char *[]) {
 
         /* Removal step, then the tier Compact must reach: no 64-bit values
          * (Medium), then no 32-bit values (Small) */
-        const int64_t drop[] = {INT64_MIN + 1, 100000, -70000};
+        const int64_t drop[] = {INT64_MIN + 1, 100'000, -70000};
         const uint8_t want[] = {2, 2, 1};
         for (size_t i = 0; i < countof(drop); i++) {
             intsetRemove(&is, drop[i], nullptr);
@@ -315,7 +315,7 @@ int intsetTest(int, char *[]) {
 
     TEST("Reset from every tier gives an empty Small that takes new members") {
         /* A 16-bit, then a 32-bit, then a 64-bit member reach each tier */
-        const int64_t reach[] = {7, 100000, INT64_MAX};
+        const int64_t reach[] = {7, 100'000, INT64_MAX};
         for (size_t t = 0; t < countof(reach); t++) {
             cleaner(intsetFree) intset *is = intsetNew();
             for (size_t i = 0; i <= t; i++) {
@@ -698,7 +698,7 @@ int intsetTest(int, char *[]) {
         }
 
         /* Add one int32 to force upgrade */
-        intsetAdd(&is, 100000, nullptr);
+        intsetAdd(&is, 100'000, nullptr);
         if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
             ERR("Should upgrade to MEDIUM");
         }
@@ -903,7 +903,7 @@ int intsetTest(int, char *[]) {
 
             if (op < 70) {
                 /* 70% chance: add random value */
-                int64_t value = rand() % 100000;
+                int64_t value = rand() % 100'000;
                 intsetAdd(&is, value, &success);
                 if (success) {
                     addCount++;
@@ -911,7 +911,7 @@ int intsetTest(int, char *[]) {
                 }
             } else {
                 /* 30% chance: remove random value */
-                int64_t value = rand() % 100000;
+                int64_t value = rand() % 100'000;
                 intsetRemove(&is, value, &success);
                 if (success) {
                     removeCount++;
@@ -1209,9 +1209,9 @@ int intsetTest(int, char *[]) {
         intsetAdd(&is, 300, nullptr);
 
         /* int32 values */
-        intsetAdd(&is, 100000, nullptr);
-        intsetAdd(&is, 200000, nullptr);
-        intsetAdd(&is, 300000, nullptr);
+        intsetAdd(&is, 100'000, nullptr);
+        intsetAdd(&is, 200'000, nullptr);
+        intsetAdd(&is, 300'000, nullptr);
 
         /* int64 values - trigger upgrade to FULL */
         intsetAdd(&is, INT32_MAX + 1000LL, nullptr);
@@ -1226,9 +1226,9 @@ int intsetTest(int, char *[]) {
         int64_t expected[] = {100,
                               200,
                               300,
-                              100000,
-                              200000,
-                              300000,
+                              100'000,
+                              200'000,
+                              300'000,
                               INT32_MAX + 1000LL,
                               INT32_MAX + 2000LL,
                               INT32_MAX + 3000LL};
@@ -1519,9 +1519,9 @@ int intsetTest(int, char *[]) {
         }
 
         /* Force Medium (int32 range), negative wide value is the min */
-        intsetAdd(&is, -100000, &ok);
+        intsetAdd(&is, -100'000, &ok);
         intsetAdd(&is, 70000, &ok);
-        if (!intsetMin(is, &v) || v != -100000 || !intsetMax(is, &v) ||
+        if (!intsetMin(is, &v) || v != -100'000 || !intsetMax(is, &v) ||
             v != 70000) {
             ERR("Medium-tier Min/Max wrong (negative wide value)");
         }
@@ -1538,7 +1538,7 @@ int intsetTest(int, char *[]) {
     TEST("iterator and Get agree with a sorted oracle in every tier") {
         /* Values of every width and sign; the iterator yields exactly the
          * sorted distinct values and Get(i) is the i-th of them */
-        static constexpr int64_t scale[] = {1, 100000, INT64_C(10000000000)};
+        static constexpr int64_t scale[] = {1, 100'000, INT64_C(10000000000)};
         for (size_t tier = 0; tier < 3; tier++) {
             cleaner(intsetFree) intset *is = intsetNew();
             cleanerName(zfree, I64) int64_t *want =

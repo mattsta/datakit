@@ -867,7 +867,7 @@ int hmacTest(int, char *[]) {
 
     TEST("prepared-key API: perf bench (small messages where it matters)") {
         const size_t payload = 64;
-        const uint32_t iters = 500000;
+        const uint32_t iters = 500'000;
         uint8_t key[32];
         memset(key, 0x5a, sizeof(key));
         uint8_t buf[64];

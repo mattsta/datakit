@@ -3609,7 +3609,7 @@ int multilistFullTest(int, char *[]) {
          * walk (tail-relative, negative offset).  After each insert the
          * list must match an array oracle.  Depth 1 compresses the
          * interior nodes. */
-        enum { SPLIT_NODES = 4, SPLIT_MAX = 512, SPLIT_INS = 100000 };
+        enum { SPLIT_NODES = 4, SPLIT_MAX = 512, SPLIT_INS = 100'000 };
         static uint32_t want[SPLIT_MAX + 1];
         bool failed = false;
         for (uint32_t d = 0; d < 2 && !failed; d++) {
@@ -3715,7 +3715,7 @@ int multilistFullTest(int, char *[]) {
             CR_INSERTS = 48,
             CR_ROUNDS = 6,
             CR_MAX = 256,
-            CR_INS = 200000
+            CR_INS = 200'000
         };
         static uint32_t want[CR_MAX];
         for (uint32_t d = 1; d <= 2; d++) {
@@ -3828,7 +3828,7 @@ int multilistFullTest(int, char *[]) {
             MV_OPS = 120,
             MV_ROUNDS = 4,
             MV_MAX = 512,
-            MV_NEW = 300000
+            MV_NEW = 300'000
         };
         static uint32_t want[MV_MAX];
         static const char *const opName[] = {"insert", "DelRange", "DelEntry",
@@ -4068,7 +4068,7 @@ int multilistFullTest(int, char *[]) {
          * stateless call and the WithState call.  After every change
          * each node must match the rule exactly and the list must match
          * an array oracle; pushes at both ends must then keep both. */
-        enum { SD_MAX = 1024, SD_NEW = 400000 };
+        enum { SD_MAX = 1024, SD_NEW = 400'000 };
         static uint32_t want[SD_MAX];
         static constexpr uint32_t seqs[][7] = {
             {0, 1, 2, 0, UINT32_MAX},       {0, 2, 1, 3, 0, UINT32_MAX},

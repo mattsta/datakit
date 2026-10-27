@@ -707,7 +707,7 @@ size_t intersectInt(const uint32_t *set1, const size_t length1,
     return v1(set2, length2, set1, length1, out);
 }
 
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 /* ============================================================================
  * ARM NEON SIMD implementations
  * ============================================================================
@@ -1979,7 +1979,7 @@ static size_t wrapSIMDgalloping(const uint32_t *a, size_t lenA,
 #endif /* x86 wrappers */
 
 /* Wrapper functions for ARM NEON APIs */
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 static size_t wrapV1Neon(const uint32_t *a, size_t lenA, const uint32_t *b,
                          size_t lenB, uint32_t *out) {
     if (lenA == 0 || lenB == 0) {
@@ -2433,7 +2433,7 @@ static int32_t stressTestPlatformSIMD(void) {
                               len_gallop, "scalar", "SIMDgalloping");
 #endif
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
         /* Test ARM NEON functions */
         size_t len_v1 = v1_neon(a, size, b, size, out_v1);
         size_t len_v3 = v3_neon(a, size, b, size, out_v3);
@@ -2623,7 +2623,7 @@ int intersectIntTest(int, char *[]) {
     }
 #endif /* x86 tests */
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
     TEST("v1_neon (wrapped)") {
         err += runTestsForFunction(wrapV1Neon, "v1_neon");
     }

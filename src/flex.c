@@ -8338,7 +8338,7 @@ static int32_t flexTestWideSorted(void) {
                 break;
             }
 
-            const typeof(rows[0]) t = rows[b];
+            auto const t = rows[b];
             rows[b] = rows[b - 1];
             rows[b - 1] = t;
         }
@@ -11356,7 +11356,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         for (int i = -200; i < 0; i++) {
             const databox keybox = databoxNewSigned(i);
-            const databox valbox = databoxNewSigned(i * 100000);
+            const databox valbox = databoxNewSigned(i * 100'000);
             const databox *boxes[2] = {&keybox, &valbox};
             flexInsertByTypeSortedWithMiddleMultiDirect(&f, 2, boxes, &mid);
             assert(mid == flexMiddle(f, 2));
@@ -11408,7 +11408,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             for (int i = 0; i < 64; i++) {
                 char *k = genkey("key", i);
                 char *v =
-                    genval("lowVal", i * ((rand() % 2 == 0) ? 100 : 100000));
+                    genval("lowVal", i * ((rand() % 2 == 0) ? 100 : 100'000));
                 const databox keybox = databoxNewBytes(k, strlen(k));
                 const databox valbox = databoxNewBytes(v, strlen(v));
                 const databox *boxes[2] = {&keybox, &valbox};
@@ -11611,7 +11611,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
 #if defined(FLEX_DEBUG_EXTENSIVE)
 #define GROWMAX 2200
-#elif defined(NDEBUG) /* if not debugging (e.g. release build), test more */
+#elifdef NDEBUG /* if not debugging (e.g. release build), test more */
 #define GROWMAX 1200
 #else /* else, this is a -O0 build and is slow */
 #define GROWMAX 300
@@ -13123,7 +13123,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             if (op < 6 && oracleCount < maxSize) {
                 /* Push (60%) */
-                int64_t val = (int64_t)(rand() % 100000) - 50000;
+                int64_t val = (int64_t)(rand() % 100'000) - 50000;
                 int where = rand() % 2;
 
                 if (where == 0) {
@@ -13214,12 +13214,12 @@ int32_t flexTest(int32_t argc, char **argv) {
             int type = rand() % 5;
             switch (type) {
             case 0: {
-                int64_t val = (int64_t)(rand() % 100000) - 50000;
+                int64_t val = (int64_t)(rand() % 100'000) - 50000;
                 flexPushSigned(&f, val, FLEX_ENDPOINT_TAIL);
                 break;
             }
             case 1: {
-                uint64_t val = rand() % 100000;
+                uint64_t val = rand() % 100'000;
                 flexPushUnsigned(&f, val, FLEX_ENDPOINT_TAIL);
                 break;
             }

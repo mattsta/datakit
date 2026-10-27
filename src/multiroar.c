@@ -3022,7 +3022,7 @@ DK_STATIC void bitmap_not_simd(uint8_t *data, uint64_t bytes) {
     }
 }
 
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 
 DK_STATIC void bitmap_and_simd(uint8_t *dst, const uint8_t *src,
@@ -5052,7 +5052,7 @@ int multiroarTest(int, char *[]) {
 
     TEST("high-scale stress test (100K random bits)") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        const uint64_t scale = 100000;
+        const uint64_t scale = 100'000;
         const uint64_t sampleSize = 10000; /* Track a sample for verification */
         cleanerName(zfree, UInt64) uint64_t *sampleBits =
             zcalloc(sampleSize, sizeof(uint64_t));
@@ -5115,7 +5115,7 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("PERF: sequential insert performance") {
-        const uint64_t scale = 100000;
+        const uint64_t scale = 100'000;
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         int64_t startNs = timeUtilMonotonicNs();
@@ -5128,7 +5128,7 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("PERF: random insert performance") {
-        const uint64_t scale = 100000;
+        const uint64_t scale = 100'000;
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         int64_t startNs = timeUtilMonotonicNs();
@@ -5141,7 +5141,7 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("PERF: lookup performance (dense)") {
-        const uint64_t scale = 100000;
+        const uint64_t scale = 100'000;
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Create dense bitmap */
@@ -5711,7 +5711,7 @@ int multiroarTest(int, char *[]) {
     printf("\n=== MULTIROAR FUZZ TESTING ===\n\n");
 
 /* Simple bitmap oracle - just use bits in an array of uint64_t */
-#define FUZZ_ORACLE_MAX_BIT 100000
+#define FUZZ_ORACLE_MAX_BIT 100'000
 #define FUZZ_ORACLE_WORDS ((FUZZ_ORACLE_MAX_BIT + 63) / 64)
 #define FUZZ_ORACLE_SET(oracle, pos)                                           \
     ((oracle)[(pos) / 64] |= (1ULL << ((pos) % 64)))
@@ -6167,7 +6167,7 @@ int multiroarTest(int, char *[]) {
         uint64_t oracle[FUZZ_ORACLE_WORDS] = {};
 
         srand(88888);
-        const uint64_t numOps = 100000;
+        const uint64_t numOps = 100'000;
 
         for (uint64_t i = 0; i < numOps; i++) {
             uint64_t pos = (uint64_t)rand() % FUZZ_ORACLE_MAX_BIT;
@@ -6801,7 +6801,7 @@ int multiroarTest(int, char *[]) {
 
         srand(33333);
         for (uint64_t i = 0; i < 10000; i++) {
-            uint64_t pos = (uint64_t)rand() % 100000;
+            uint64_t pos = (uint64_t)rand() % 100'000;
             if (!multiroarBitGet(r, pos)) {
                 multiroarBitSet(r, pos);
                 expectedCount++;
@@ -7837,8 +7837,8 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("multiroarMin/Max - single bit at various positions") {
-        uint64_t testPositions[] = {0,    1,    100,    8191,
-                                    8192, 8193, 100000, 1'000'000};
+        uint64_t testPositions[] = {0,    1,    100,     8191,
+                                    8192, 8193, 100'000, 1'000'000};
 
         for (uint64_t i = 0; i < countof(testPositions); i++) {
             cleaner(multiroarFree) multiroar *r = multiroarBitNew();
@@ -7935,7 +7935,7 @@ int multiroarTest(int, char *[]) {
         /* Set bits across multiple chunks */
         multiroarBitSet(r, 100);       /* Chunk 0 */
         multiroarBitSet(r, 10000);     /* Chunk 1 */
-        multiroarBitSet(r, 100000);    /* Chunk 12 */
+        multiroarBitSet(r, 100'000);   /* Chunk 12 */
         multiroarBitSet(r, 1'000'000); /* Chunk 122 */
 
         uint64_t minPos, maxPos;
@@ -8330,11 +8330,11 @@ int multiroarTest(int, char *[]) {
     TEST("multiroarRank - multi-chunk") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits in multiple chunks */
-        multiroarBitSet(r, 100);    /* Chunk 0 */
-        multiroarBitSet(r, 200);    /* Chunk 0 */
-        multiroarBitSet(r, 10000);  /* Chunk 1 */
-        multiroarBitSet(r, 10100);  /* Chunk 1 */
-        multiroarBitSet(r, 100000); /* Chunk 12 */
+        multiroarBitSet(r, 100);     /* Chunk 0 */
+        multiroarBitSet(r, 200);     /* Chunk 0 */
+        multiroarBitSet(r, 10000);   /* Chunk 1 */
+        multiroarBitSet(r, 10100);   /* Chunk 1 */
+        multiroarBitSet(r, 100'000); /* Chunk 12 */
 
         if (multiroarRank(r, 100) != 0) {
             ERR("Rank at 100: expected 0, got %" PRIu64 "",
@@ -8429,11 +8429,11 @@ int multiroarTest(int, char *[]) {
 
     TEST("multiroarSelect - multi-chunk") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
-        multiroarBitSet(r, 100);    /* 1st bit */
-        multiroarBitSet(r, 200);    /* 2nd bit */
-        multiroarBitSet(r, 10000);  /* 3rd bit (chunk 1) */
-        multiroarBitSet(r, 10100);  /* 4th bit */
-        multiroarBitSet(r, 100000); /* 5th bit (chunk 12) */
+        multiroarBitSet(r, 100);     /* 1st bit */
+        multiroarBitSet(r, 200);     /* 2nd bit */
+        multiroarBitSet(r, 10000);   /* 3rd bit (chunk 1) */
+        multiroarBitSet(r, 10100);   /* 4th bit */
+        multiroarBitSet(r, 100'000); /* 5th bit (chunk 12) */
 
         uint64_t pos;
         if (!multiroarSelect(r, 1, &pos) || pos != 100) {
@@ -8448,7 +8448,7 @@ int multiroarTest(int, char *[]) {
         if (!multiroarSelect(r, 4, &pos) || pos != 10100) {
             ERR("Select 4th: expected 10100, got %" PRIu64, pos);
         }
-        if (!multiroarSelect(r, 5, &pos) || pos != 100000) {
+        if (!multiroarSelect(r, 5, &pos) || pos != 100'000) {
             ERR("Select 5th: expected 100000, got %" PRIu64, pos);
         }
         if (multiroarSelect(r, 6, &pos)) {
@@ -9233,7 +9233,7 @@ int multiroarTest(int, char *[]) {
             /* Create random bitmap */
             int numBits = 50 + (rand() % 200);
             for (int i = 0; i < numBits; i++) {
-                uint64_t pos = ((uint64_t)rand() * rand()) % 100000;
+                uint64_t pos = ((uint64_t)rand() * rand()) % 100'000;
                 multiroarBitSet(r, pos);
             }
 
@@ -9432,7 +9432,7 @@ int multiroarTest(int, char *[]) {
                 zcalloc(numPositions, sizeof(uint64_t));
 
             for (int i = 0; i < numPositions; i++) {
-                positions[i] = ((uint64_t)rand() * rand()) % 100000;
+                positions[i] = ((uint64_t)rand() * rand()) % 100'000;
             }
 
             /* Test SetMany */
@@ -10903,7 +10903,7 @@ int multiroarTest(int, char *[]) {
                     positions[i] = i * 977;
                     break;
                 case 2: /* deterministic pseudo-random order */
-                    positions[i] = (i * 2654435761ULL) % 200000;
+                    positions[i] = (i * 2654435761ULL) % 200'000;
                     break;
                 default: /* runs of 2 (below threshold) far apart */
                     positions[i] = (i / 2) * 50000 + (i % 2);
@@ -10929,7 +10929,7 @@ int multiroarTest(int, char *[]) {
                 }
             }
             /* ...and at probe points that were never set */
-            for (uint64_t probe = 1; probe < 200000; probe += 7919) {
+            for (uint64_t probe = 1; probe < 200'000; probe += 7919) {
                 if (multiroarBitGet(batched, probe) !=
                     multiroarBitGet(single, probe)) {
                     mismatches++;
@@ -10944,7 +10944,7 @@ int multiroarTest(int, char *[]) {
     }
 
     TEST("PERF: BitSetMany batched vs per-bit loop") {
-        const uint64_t n = 100000;
+        const uint64_t n = 100'000;
         cleanerName(zfree, UInt64) uint64_t *positions =
             zmalloc(n * sizeof(uint64_t));
         for (uint64_t i = 0; i < n; i++) {

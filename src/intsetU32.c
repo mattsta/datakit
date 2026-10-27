@@ -479,7 +479,7 @@ int intsetU32Test(int, char **) {
 
     printf("Stress lookups: ");
     {
-        int32_t num = 100000, size = 10000;
+        int32_t num = 100'000, size = 10000;
         int i, bits = 20;
         int64_t start;
         cleaner(intsetU32Free) intsetU32 *is = createSet(bits, size);

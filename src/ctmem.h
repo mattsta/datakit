@@ -83,9 +83,9 @@ static inline void dkSecureZero(void *p, size_t n) {
     }
 #if defined(DK_HAVE_MEMSET_EXPLICIT)
     memset_explicit(p, 0, n);
-#elif defined(DK_HAVE_MEMSET_S)
+#elifdef DK_HAVE_MEMSET_S
     memset_s(p, n, 0, n);
-#elif defined(DK_HAVE_EXPLICIT_BZERO)
+#elifdef DK_HAVE_EXPLICIT_BZERO
     explicit_bzero(p, n);
 #else
     /* No libc secure zero (or built without datakit's CMake checks):

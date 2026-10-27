@@ -387,7 +387,7 @@ static int testPerformance(void) {
     }
 
     TEST("Performance: pow10 computation throughput") {
-        const size_t iterations = 100000;
+        const size_t iterations = 100'000;
         PERF_TIMERS_SETUP;
 
         volatile double sum = 0;

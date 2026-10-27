@@ -15,7 +15,7 @@ static int64_t pcIntsetValue(uint64_t *rng) {
     const int64_t pick = (int64_t)(splitmix64(rng) % 512) - 256;
     switch (r % 8) {
     case 0:
-        return pick * 100000; /* int32 */
+        return pick * 100'000; /* int32 */
     case 1:
         return pick * INT64_C(10000000000); /* int64 */
     case 2:

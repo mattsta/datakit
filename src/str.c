@@ -1002,7 +1002,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* Test all 9-digit boundary values */
         const uint32_t testValues[] = {
             0,         1,         9,         10,         99,       100,
-            999,       1000,      9999,      10000,      99999,    100000,
+            999,       1000,      9999,      10000,      99999,    100'000,
             999999,    1'000'000, 9999999,   10'000'000, 99999999, 100'000'000,
             999999999, 123456789, 987654321, 111111111,  500000000};
 
@@ -1029,7 +1029,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
 
         /* Exhaustive test for smaller ranges */
-        for (uint32_t val = 0; val < 100000; val++) {
+        for (uint32_t val = 0; val < 100'000; val++) {
             char buf[10] = {};
             StrUInt9DigitsToBuf(buf, val);
 
@@ -1044,7 +1044,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         /* Random test for larger values */
         uint64_t rngState = 0x12345678;
-        for (int i = 0; i < 100000; i++) {
+        for (int i = 0; i < 100'000; i++) {
             rngState = rngState * 6364136223846793005ULL + 1;
             uint32_t val = (uint32_t)(rngState >> 32) % 1'000'000'000;
 
@@ -1063,8 +1063,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         printf("    StrUInt9DigitsToBuf stress test passed!\n");
     }
 
-#if __SSE2__ || defined(__aarch64__) || defined(__ARM_NEON) ||                 \
-    defined(__ARM_NEON__)
+#if defined(__SSE2__) || defined(__ARM_NEON)
     TEST("StrUInt4DigitsToBuf and StrUInt8DigitsToBuf stress test") {
         printf("  Testing StrUInt4/8DigitsToBuf correctness...\n");
 
@@ -1109,7 +1108,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
 
         /* Exhaustive test for StrUInt8DigitsToBuf on smaller range */
-        for (uint32_t val = 0; val < 100000; val++) {
+        for (uint32_t val = 0; val < 100'000; val++) {
             char buf[9] = {};
             StrUInt8DigitsToBuf(buf, val);
 
@@ -1828,7 +1827,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
     TEST("Speed of uint64_t printing") {
         uint8_t buf[40];
-        size_t printBooster = 100000;
+        size_t printBooster = 100'000;
         const uint64_t bigThing = UINT64_MAX / 64;
         TIME_INIT;
         for (size_t i = 0; i < printBooster; i++) {
@@ -1936,7 +1935,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 #if 0
     TEST("Reliable number parsing simple 0 to 999999999?") {
         for (size_t i = 0; i < 999999999; i++) {
-            if (i % 100000 == 0) {
+            if (i % 100'000 == 0) {
                 printf(".");
                 fflush(stdout);
             }
@@ -2223,12 +2222,12 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             {"-9223372036854775808", true, DATABOX_SIGNED_64, INT64_MIN, 0},
             {"-9223372036854775807", true, DATABOX_SIGNED_64, -INT64_MAX, 0},
             {"-1000000000000000000", true, DATABOX_SIGNED_64,
-             INT64_C(-1000000000000000000), 0},
+             INT64_C(-1'000'000'000'000'000'000), 0},
             {"-999999999999999999", true, DATABOX_SIGNED_64,
              INT64_C(-999999999999999999), 0},
             {"9223372036854775807", true, DATABOX_SIGNED_64, INT64_MAX, 0},
             {"1000000000000000000", true, DATABOX_SIGNED_64,
-             INT64_C(1000000000000000000), 0},
+             INT64_C(1'000'000'000'000'000'000), 0},
             {"9999999999999999999", true, DATABOX_UNSIGNED_64, 0,
              UINT64_C(9999999999999999999)},
             {"18446744073709551615", true, DATABOX_UNSIGNED_64, 0, UINT64_MAX},
@@ -2351,7 +2350,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
     TEST("Perf Number Conversions") {
         /* Smoke size: every string parses; perf builds time larger runs */
-        const size_t loopBooster = 100000;
+        const size_t loopBooster = 100'000;
         const size_t looperDeDoBooster = 2;
 
         char *str[] = {"454545454545.5",       "9223372036854775808",
@@ -2642,7 +2641,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
     TEST("string to unsigned integer speeds") {
         /* Smoke size: every parser agrees on the input */
-        const size_t loopBooster = 100000;
+        const size_t loopBooster = 100'000;
 
         {
             TIME_INIT;
@@ -3308,7 +3307,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                            u8"💛💙💜💔💛💙💜💔";
         const size_t things = 32; /* 32 things, each 4 bytes, 128 bytes total */
         const size_t len = strlen(foo); /* len == 128 */
-        const int booster = 300000;     /* total of 32,000 final things */
+        const int booster = 300'000;    /* total of 32,000 final things */
 
         cleanerName(zfree, Chars) char *tester =
             zcalloc(1, len * booster + 1); /* 38.4 MB */
@@ -3346,7 +3345,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             const char foo[] = u8"💛💙💜💔💛💙💜💔💛💙💜💔💛💙💜💔💛💙💜💔💛💙"
                                u8"💜💔💛💙💜💔💛💙💜💔";
             const size_t len = strlen(foo); /* len == 128 */
-            const int booster = 300000;     /* total of 32,000 final things */
+            const int booster = 300'000;    /* total of 32,000 final things */
             const size_t countCharacters = (32 * booster) / 2;
 
             /* each emoji is a 4 byte UTF-8 character */
@@ -3439,7 +3438,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             "1234567890123456", /* 16 digits - 2x SWAR */
             "1234",             /* 4 digits - scalar only */
         };
-        const size_t iterations = 2000000;
+        const size_t iterations = 2'000'000;
 
         for (size_t t = 0; t < countof(testNumbers); t++) {
             const char *num = testNumbers[t];
@@ -3479,7 +3478,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             buf[i] = (uint8_t)(i * 31 + 17);
         }
 
-        const size_t iterations = 100000;
+        const size_t iterations = 100'000;
         uint64_t resultOpt = 0;
         uint64_t resultScalar = 0;
 
@@ -3513,7 +3512,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         memset(buf, 'a', bufSize - 1);
         buf[bufSize - 1] = '\0';
 
-        const size_t iterations = 100000;
+        const size_t iterations = 100'000;
         size_t resultOpt = 0;
         size_t resultScalar = 0;
 
@@ -3543,7 +3542,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         printf("  Comparing UTF-8 strlen on mixed content...\n");
         const char *mixedUtf8 = "Hello 世界! 🎉 Testing UTF-8 lengths 日本語";
         const size_t len = strlen(mixedUtf8);
-        const size_t iterations = 2000000;
+        const size_t iterations = 2'000'000;
         size_t resultOpt = 0;
         size_t resultScalar = 0;
 
@@ -4068,7 +4067,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                                  "The quick brown fox jumps over the lazy dog. "
                                  "The quick brown fox jumps over the lazy dog.";
         const size_t asciiLen = strlen(asciiHeavy);
-        const size_t iterations = 2000000;
+        const size_t iterations = 2'000'000;
         bool resultOpt = false;
         bool resultScalar = false;
 

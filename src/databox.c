@@ -3,7 +3,7 @@
 #include "floatExtended.h"
 #include "str.h"
 
-#include <math.h> /* isnan */
+#include <math.h> /* isnan, INFINITY, NAN */
 
 #if DATABOX_ENABLE_PTR_MDSC
 #include "mdsc.h"
@@ -3081,7 +3081,7 @@ int databoxTest(int, char *[]) {
 
     TEST("FUZZ: stress test - 100K random comparisons") {
         srand(99999);
-        const int numTests = 100000;
+        const int numTests = 100'000;
         int errors = 0;
 
         for (int i = 0; i < numTests; i++) {
@@ -3899,9 +3899,9 @@ int databoxTest(int, char *[]) {
         DB_ORDER_ADD_FLOAT(0.1f);
         DB_ORDER_ADD_FLOAT(0.0f);
         DB_ORDER_ADD_FLOAT(-0.0f);
-        DB_ORDER_ADD_FLOAT(__builtin_inff());
-        DB_ORDER_ADD_FLOAT(-__builtin_inff());
-        DB_ORDER_ADD_FLOAT(__builtin_nanf(""));
+        DB_ORDER_ADD_FLOAT(INFINITY);
+        DB_ORDER_ADD_FLOAT(-INFINITY);
+        DB_ORDER_ADD_FLOAT(NAN);
         DB_ORDER_ADD_BITS64(UINT64_C(0x0000000000000000)); /* +0.0 */
         DB_ORDER_ADD_BITS64(UINT64_C(0x8000000000000000)); /* -0.0 */
         DB_ORDER_ADD_BITS64(UINT64_C(0x7FF0000000000000)); /* +inf */

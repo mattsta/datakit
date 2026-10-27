@@ -12,7 +12,7 @@
 #define float16Encode(v) _cvtss_sh(v, 0)
 #define float16Decode(v) _cvtsh_ss(v)
 
-#elif defined(__aarch64__)
+#elifdef __aarch64__
 /* ARM64 with FP16: use NEON hardware conversion for consistency
  * with batch operations. This ensures single-value and batch
  * conversions produce identical results. */

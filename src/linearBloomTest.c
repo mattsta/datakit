@@ -100,8 +100,8 @@ int linearBloomTest(int, char *[]) {
 
     TEST("linearBloom: false positive rate validation") {
         linearBloom *bloom = linearBloomNew();
-        const size_t numItemsToAdd = 100000;
-        const size_t numItemsToCheck = 100000;
+        const size_t numItemsToAdd = 100'000;
+        const size_t numItemsToCheck = 100'000;
         uint64_t hash[2];
 
         /* Add items 0 to numItemsToAdd-1 */
@@ -651,7 +651,7 @@ int linearBloomTest(int, char *[]) {
                                 100,
                                 1000,
                                 10000,
-                                100000,
+                                100'000,
                                 LINEARBLOOM_EXTENT_BITS - 100,
                                 LINEARBLOOM_EXTENT_BITS - 1};
 
@@ -852,7 +852,7 @@ int linearBloomTest(int, char *[]) {
         /* Test scalar implementation */
         {
             linearBloomCount *bloom = linearBloomCountNew();
-            for (size_t i = 0; i < 100000; i++) {
+            for (size_t i = 0; i < 100'000; i++) {
                 hashFromInt(i, hash);
                 linearBloomCountHashSet(bloom, hash);
             }
@@ -867,7 +867,7 @@ int linearBloomTest(int, char *[]) {
         /* Test SWAR implementation */
         {
             linearBloomCount *bloom = linearBloomCountNew();
-            for (size_t i = 0; i < 100000; i++) {
+            for (size_t i = 0; i < 100'000; i++) {
                 hashFromInt(i, hash);
                 linearBloomCountHashSet(bloom, hash);
             }
@@ -879,11 +879,11 @@ int linearBloomTest(int, char *[]) {
             linearBloomCountFree(bloom);
         }
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
         /* Test NEON implementation */
         {
             linearBloomCount *bloom = linearBloomCountNew();
-            for (size_t i = 0; i < 100000; i++) {
+            for (size_t i = 0; i < 100'000; i++) {
                 hashFromInt(i, hash);
                 linearBloomCountHashSet(bloom, hash);
             }
@@ -900,7 +900,7 @@ int linearBloomTest(int, char *[]) {
         /* Test SSE2 implementation */
         {
             linearBloomCount *bloom = linearBloomCountNew();
-            for (size_t i = 0; i < 100000; i++) {
+            for (size_t i = 0; i < 100'000; i++) {
                 hashFromInt(i, hash);
                 linearBloomCountHashSet(bloom, hash);
             }
@@ -917,7 +917,7 @@ int linearBloomTest(int, char *[]) {
         /* Test AVX2 implementation */
         {
             linearBloomCount *bloom = linearBloomCountNew();
-            for (size_t i = 0; i < 100000; i++) {
+            for (size_t i = 0; i < 100'000; i++) {
                 hashFromInt(i, hash);
                 linearBloomCountHashSet(bloom, hash);
             }
@@ -933,7 +933,7 @@ int linearBloomTest(int, char *[]) {
         printf("    === End Performance Comparison ===\n");
     }
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
     TEST("linearBloomCount: NEON half correctness vs scalar") {
         linearBloomCount *bloom = linearBloomCountNew();
         linearBloomCount *reference = linearBloomCountNew();
@@ -1183,7 +1183,7 @@ int linearBloomTest(int, char *[]) {
 
         /* Fill with random data */
         srand(98765);
-        for (size_t i = 0; i < 100000; i++) {
+        for (size_t i = 0; i < 100'000; i++) {
             hashFromInt(rand(), hash);
             linearBloomCountHashSet(bloom, hash);
             linearBloomCountHashSet(reference, hash);
@@ -1325,7 +1325,7 @@ int linearBloomTest(int, char *[]) {
 
     TEST("linearBloomCount: large-scale counting stress test") {
         linearBloomCount *bloom = linearBloomCountNew();
-        const size_t numItems = 500000;
+        const size_t numItems = 500'000;
         uint64_t hash[2];
 
         /* Track expected minimum counts */
@@ -1430,7 +1430,7 @@ int linearBloomTest(int, char *[]) {
 
         /* Fill a bloom filter for realistic conditions */
         linearBloomCount *bloom = linearBloomCountNew();
-        for (size_t i = 0; i < 500000; i++) {
+        for (size_t i = 0; i < 500'000; i++) {
             hashFromInt(i, hash);
             linearBloomCountHashSet(bloom, hash);
         }
@@ -1475,7 +1475,7 @@ int linearBloomTest(int, char *[]) {
             linearBloomCountFree(test);
         }
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
         /* Benchmark NEON */
         {
             linearBloomCount *test = linearBloomCountNew();
@@ -1505,7 +1505,7 @@ int linearBloomTest(int, char *[]) {
         uint64_t hash[2];
 
         /* Test with various fill levels */
-        size_t fillLevels[] = {100, 1000, 10000, 100000, 500000};
+        size_t fillLevels[] = {100, 1000, 10000, 100'000, 500'000};
 
         for (size_t f = 0; f < countof(fillLevels); f++) {
             linearBloomReset(bloom);
@@ -1769,7 +1769,7 @@ int linearBloomTest(int, char *[]) {
         /* Verify probabilistic rounding maintains statistical accuracy.
          * Test the RNG and rounding directly rather than full bloom decay. */
         linearBloomCountRNG rng;
-        const size_t numTrials = 100000;
+        const size_t numTrials = 100'000;
         double totalResult = 0;
 
         /* Test: value 6 with factor 0.75 -> expected 4.5 */
@@ -1876,7 +1876,7 @@ int linearBloomTest(int, char *[]) {
         }
 
         /* Apply decay: 1 hour elapsed, 1 hour half-life -> factor 0.5 */
-        linearBloomCountDecay(bloom, 3600000, 3600000, 0);
+        linearBloomCountDecay(bloom, 3'600'000, 3'600'000, 0);
 
         /* Count should be halved (4 -> 2) */
         count = linearBloomCountHashCheck(bloom, hash);
@@ -1901,10 +1901,10 @@ int linearBloomTest(int, char *[]) {
             {500, 1000, "0.5 half-life", 0.7071},
             {100, 1000, "0.1 half-life", 0.9330},
             {5000, 1000, "5 half-lives", 0.03125},
-            {60000, 3600000, "1 min / 1 hr half-life", 0.9885},
-            {1800000, 3600000, "30 min / 1 hr half-life",
+            {60000, 3'600'000, "1 min / 1 hr half-life", 0.9885},
+            {1800000, 3'600'000, "30 min / 1 hr half-life",
              0.7071}, /* 0.5 half-lives */
-            {3600000, 3600000, "60 min / 1 hr half-life",
+            {3'600'000, 3'600'000, "60 min / 1 hr half-life",
              0.5}, /* 1 half-life */
         };
 
@@ -1939,17 +1939,17 @@ int linearBloomTest(int, char *[]) {
         printf("    Initial count: %" PRIuFAST32 "\n", count);
 
         /* 5 minutes pass (half of half-life) */
-        linearBloomCountDecay(bloom, 300000, 600000, 0);
+        linearBloomCountDecay(bloom, 300'000, 600'000, 0);
         count = linearBloomCountHashCheck(bloom, hash);
         printf("    After 5 min (factor ~0.71): %" PRIuFAST32 "\n", count);
 
         /* Another 5 minutes pass (total: 1 half-life) */
-        linearBloomCountDecay(bloom, 300000, 600000, 0);
+        linearBloomCountDecay(bloom, 300'000, 600'000, 0);
         count = linearBloomCountHashCheck(bloom, hash);
         printf("    After 10 min (1 half-life): %" PRIuFAST32 "\n", count);
 
         /* 20 more minutes pass (total: 3 half-lives) */
-        linearBloomCountDecay(bloom, 1200000, 600000, 0);
+        linearBloomCountDecay(bloom, 1200000, 600'000, 0);
         count = linearBloomCountHashCheck(bloom, hash);
         printf("    After 30 min (3 half-lives): %" PRIuFAST32 "\n", count);
 
@@ -1995,7 +1995,7 @@ int linearBloomTest(int, char *[]) {
         uint64_t hash[2];
 
         /* Fill bloom filter */
-        for (size_t i = 0; i < 500000; i++) {
+        for (size_t i = 0; i < 500'000; i++) {
             hashFromInt(i, hash);
             linearBloomCountHashSet(bloom, hash);
         }
@@ -2292,7 +2292,7 @@ int linearBloomTest(int, char *[]) {
         uint64_t hash[2];
 
         /* Fill bloom filter */
-        for (size_t i = 0; i < 500000; i++) {
+        for (size_t i = 0; i < 500'000; i++) {
             hashFromInt(i, hash);
             linearBloomCountHashSet(bloom, hash);
         }

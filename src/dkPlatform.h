@@ -19,13 +19,13 @@
 #define DK_OS_LINUX 1
 #elif defined(__APPLE__) && defined(__MACH__)
 #define DK_OS_APPLE 1
-#elif defined(__FreeBSD__)
+#elifdef __FreeBSD__
 #define DK_OS_FREEBSD 1
-#elif defined(__NetBSD__)
+#elifdef __NetBSD__
 #define DK_OS_NETBSD 1
-#elif defined(__OpenBSD__)
+#elifdef __OpenBSD__
 #define DK_OS_OPENBSD 1
-#elif defined(_AIX)
+#elifdef _AIX
 #define DK_OS_AIX 1
 #endif
 

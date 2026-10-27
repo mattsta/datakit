@@ -7,13 +7,6 @@
 
 #include <stdio.h>
 
-/* Manually undo two's compliment negative number */
-#define DOD_INT64_TO_UINT64(i)                                                 \
-    ({                                                                         \
-        assert((i) < 0);                                                       \
-        (uint64_t)(~(i)) + 1;                                                  \
-    })
-
 #if 0
 #define DOD_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 #define DOD_BYTESUSED(value)                                                   \
@@ -787,7 +780,7 @@ static void dodWriteInteger(dod *restrict const d,
 
     if (dval < 0) {
         /* Safe convert to protect against INT64_MIN */
-        writeIntoBitmap = DOD_INT64_TO_UINT64(dval);
+        writeIntoBitmap = dkNegativeMagnitude64(dval);
         meta++;
     } else {
         writeIntoBitmap = dval;

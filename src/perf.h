@@ -63,7 +63,7 @@ static inline uint64_t _perfTSC(void) {
     __asm__ __volatile__("lfence\n\trdtsc" : "=a"(lo), "=d"(hi)::"memory");
     return ((uint64_t)hi << 32) | lo;
 }
-#elif defined(__aarch64__)
+#elifdef __aarch64__
 #define PERF_COUNTER_CYCLES 0
 static inline uint64_t _perfTSC(void) {
     uint64_t ticks;

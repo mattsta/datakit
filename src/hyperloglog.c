@@ -56,7 +56,7 @@
 #include <immintrin.h>
 #endif
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #define HLL_USE_NEON 1
 #include <arm_neon.h>
 #endif
@@ -1709,7 +1709,7 @@ int hyperloglogTest(int, char *[]) {
          * raw-estimate range */
         uint64_t testCount = HLL_TEST_CYCLES * 1000;
         for (uint64_t j = 1; j <= testCount; j++) {
-            if (j % 500000 == 0) {
+            if (j % 500'000 == 0) {
                 printf("[approximation error]: Testing cycle %" PRIu64
                        " (%0.2f%% done)\n",
                        j, (float)j / testCount * 100);
@@ -2072,7 +2072,7 @@ approximationDone:
 
         const uint64_t countA = hyperloglogCount(a, &invalid);
         cleaner(hyperloglogFree) hyperloglog *c = hyperloglogCopy(a);
-        for (uint64_t i = 100000; i < 100200; i++) {
+        for (uint64_t i = 100'000; i < 100200; i++) {
             hyperloglogAdd(&c, &i, sizeof(i));
         }
         hyperloglogInvalidateCache(a);

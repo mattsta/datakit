@@ -16,7 +16,7 @@ size_t StrDigitCountUInt128(__uint128_t v) {
                 if (v < 10000) {
                     return 4;
                 }
-                return 5 + (v >= 100000);
+                return 5 + (v >= 100'000);
             }
             return 7 + (v >= 10'000'000UL);
         }
@@ -44,7 +44,7 @@ size_t StrDigitCountUInt64(uint64_t v) {
                 if (v < 10000) {
                     return 4;
                 }
-                return 5 + (v >= 100000);
+                return 5 + (v >= 100'000);
             }
             return 7 + (v >= 10'000'000UL);
         }
@@ -71,7 +71,7 @@ size_t StrDigitCountUInt32(uint32_t v) {
             if (v < 10000) {
                 return 4;
             }
-            return 5 + (v >= 100000);
+            return 5 + (v >= 100'000);
         }
         return 7 + (v >= 10'000'000UL);
     }

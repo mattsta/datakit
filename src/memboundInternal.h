@@ -121,15 +121,15 @@
 #if defined(__AVX512F__)
 #define MEMBOUND_USE_AVX512 1
 #include <immintrin.h>
-#elif defined(__AVX2__)
+#elifdef __AVX2__
 #define MEMBOUND_USE_AVX2 1
 #include <immintrin.h>
-#elif defined(__SSE2__)
+#elifdef __SSE2__
 #define MEMBOUND_USE_SSE2 1
 #include <immintrin.h>
 #endif
 
-#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #define MEMBOUND_USE_NEON 1
 #include <arm_neon.h>
 #endif

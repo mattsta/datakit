@@ -2535,7 +2535,7 @@ int multilruTest(int, char *[]) {
 
         cleaner(multilruFree) multilru *mlru =
             multilruNewWithLevelsCapacity(7, 131072);
-        const size_t benchCount = 500000;
+        const size_t benchCount = 500'000;
 
         /* Benchmark insert */
         int64_t startNs = timeUtilMonotonicNs();
@@ -2547,14 +2547,14 @@ int multilruTest(int, char *[]) {
         /* Benchmark increase */
         multilruPtr testPtr = mlru->lowest;
         startNs = timeUtilMonotonicNs();
-        for (size_t i = 0; i < 100000 && testPtr; i++) {
+        for (size_t i = 0; i < 100'000 && testPtr; i++) {
             multilruIncrease(mlru, testPtr);
         }
         int64_t increaseNs = timeUtilMonotonicNs() - startNs;
 
         /* Benchmark remove */
         startNs = timeUtilMonotonicNs();
-        for (size_t i = 0; i < 100000; i++) {
+        for (size_t i = 0; i < 100'000; i++) {
             multilruPtr removed;
             multilruRemoveMinimum(mlru, &removed);
         }
@@ -2563,9 +2563,9 @@ int multilruTest(int, char *[]) {
         printf("Insert rate:   %.0f ops/sec (%.1f ns/op)\n",
                benchCount / (insertNs / 1e9), (double)insertNs / benchCount);
         printf("Increase rate: %.0f ops/sec (%.1f ns/op)\n",
-               100000.0 / (increaseNs / 1e9), (double)increaseNs / 100000);
+               100000.0 / (increaseNs / 1e9), (double)increaseNs / 100'000);
         printf("Remove rate:   %.0f ops/sec (%.1f ns/op)\n",
-               100000.0 / (removeNs / 1e9), (double)removeNs / 100000);
+               100000.0 / (removeNs / 1e9), (double)removeNs / 100'000);
         printf("Memory used:   %zu bytes for %zu entries (%.2f bytes/entry)\n",
                multilruBytes(mlru), multilruCount(mlru),
                multilruCount(mlru) > 0
@@ -3054,7 +3054,7 @@ int multilruTest(int, char *[]) {
                 break;
 
             case FUZZ_SET_MAX_WEIGHT:
-                multilruSetMaxWeight(mlru, (rnd >> 8) % 100000);
+                multilruSetMaxWeight(mlru, (rnd >> 8) % 100'000);
                 break;
 
             default:
@@ -3168,7 +3168,7 @@ int multilruTest(int, char *[]) {
          * - nextFresh and freeCount invariants hold */
 
         const size_t MAX_ENTRIES = 10000;
-        const int NUM_OPS = 100000;
+        const int NUM_OPS = 100'000;
 
         cleaner(multilruFree) multilru *mlru =
             multilruNewWithLevelsCapacity(4, 256);
@@ -3630,7 +3630,7 @@ int multilruTest(int, char *[]) {
 
         /* Random uniform access */
         int64_t startNs = timeUtilMonotonicNs();
-        for (int i = 0; i < 100000; i++) {
+        for (int i = 0; i < 100'000; i++) {
             size_t idx = xoroshiro128plus(seed) % 10000;
             multilruIncrease(mlru, ptrs[idx]);
         }
@@ -3662,7 +3662,7 @@ int multilruTest(int, char *[]) {
 
         /* Zipfian access - 80% of accesses go to 20% of entries */
         int64_t startNs = timeUtilMonotonicNs();
-        for (int i = 0; i < 100000; i++) {
+        for (int i = 0; i < 100'000; i++) {
             size_t idx = zipfian(seed, 10000, 1.0);
             multilruIncrease(mlru, ptrs[idx]);
         }
@@ -3800,7 +3800,7 @@ int multilruTest(int, char *[]) {
                "-----"
                "----\n");
 
-        size_t scales[] = {100, 1000, 10000, 100000, 500000};
+        size_t scales[] = {100, 1000, 10000, 100'000, 500'000};
         for (int s = 0; s < 5; s++) {
             size_t scale = scales[s];
             cleaner(multilruFree) multilru *mlru =
@@ -3816,7 +3816,7 @@ int multilruTest(int, char *[]) {
             /* Benchmark promote */
             multilruPtr testPtr = mlru->lowest;
             startNs = timeUtilMonotonicNs();
-            size_t promoteCount = scale < 100000 ? scale : 100000;
+            size_t promoteCount = scale < 100'000 ? scale : 100'000;
             for (size_t i = 0; i < promoteCount; i++) {
                 multilruIncrease(mlru, testPtr);
             }
@@ -3824,7 +3824,7 @@ int multilruTest(int, char *[]) {
 
             /* Benchmark remove */
             startNs = timeUtilMonotonicNs();
-            size_t removeCount = scale < 100000 ? scale / 2 : 50000;
+            size_t removeCount = scale < 100'000 ? scale / 2 : 50000;
             for (size_t i = 0; i < removeCount; i++) {
                 multilruPtr removed;
                 multilruRemoveMinimum(mlru, &removed);
@@ -3850,7 +3850,7 @@ int multilruTest(int, char *[]) {
         printf("%-12s %-12s %-12s %-12s\n", "Entries", "Width", "Total Bytes",
                "Bytes/Entry");
 
-        size_t testSizes[] = {100, 1000, 10000, 65000, 70000, 100000};
+        size_t testSizes[] = {100, 1000, 10000, 65000, 70000, 100'000};
         for (int i = 0; i < 6; i++) {
             cleaner(multilruFree) multilru *mlru =
                 multilruNewWithLevelsCapacity(7, testSizes[i]);
@@ -4022,7 +4022,7 @@ int multilruTest(int, char *[]) {
 
         /* Rapid alternating insert/delete */
         int64_t startNs = timeUtilMonotonicNs();
-        for (int i = 0; i < 100000; i++) {
+        for (int i = 0; i < 100'000; i++) {
             multilruPtr p = multilruInsert(mlru);
             multilruDelete(mlru, p);
         }
@@ -4659,11 +4659,11 @@ int multilruTest(int, char *[]) {
         assert(stats.capacity > 0);
 
         /* Change config and verify stats reflect it */
-        multilruSetMaxWeight(mlru, 100000);
+        multilruSetMaxWeight(mlru, 100'000);
         multilruSetAutoEvict(mlru, false);
 
         multilruGetStats(mlru, &stats);
-        assert(stats.maxWeight == 100000);
+        assert(stats.maxWeight == 100'000);
         assert(stats.autoEvict == false);
 
         printf("stats - configuration snapshot: PASSED\n");

@@ -3264,7 +3264,7 @@ int multimapFullTest(int, char *[]) {
         m->maxSize = 512;
         char kb[32];
         size_t inserted = 0;
-        for (size_t i = 0; i < 200000 && m->count <= 80; i++) {
+        for (size_t i = 0; i < 200'000 && m->count <= 80; i++) {
             snprintf(kb, sizeof(kb), "g13_%zu", i);
             const databox key = databoxNewBytesAllowEmbed(kb, strlen(kb));
             const databox val = databoxNewBytesAllowEmbed(kb, strlen(kb));

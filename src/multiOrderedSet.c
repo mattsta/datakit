@@ -4446,7 +4446,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             for (size_t i = 0; i < 60; i++) {
                 const bool wide = mode == 1 || (mode == 2 && (i & 1));
                 members[i] = wide ? mosWideValue_(i < 9 ? i : 100 + i)
-                                  : mosWideS_((int64_t)i * 7919 - 100000);
+                                  : mosWideS_((int64_t)i * 7919 - 100'000);
                 scores[i] = wide ? mosWideValue_(200 + i)
                                  : mosWideS_((int64_t)i * 31 - 500);
                 databoxBig member;

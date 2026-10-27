@@ -308,7 +308,7 @@ bool StrUtf8ValidCStr(const char *str) {
     }
 }
 
-#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elifdef __ARM_NEON
 #include <arm_neon.h>
 
 /* ARM NEON optimized validation - fast ASCII scanning with scalar fallback */

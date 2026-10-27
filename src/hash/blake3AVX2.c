@@ -568,7 +568,7 @@ int blake3AVX2Test(int, char *[]) {
         uint32_t cv_p[8], cv_a[8];
         uint8_t block[BLAKE3_BLOCK_LEN];
         int mismatches = 0;
-        for (int iter = 0; iter < 100000; iter++) {
+        for (int iter = 0; iter < 100'000; iter++) {
             for (int i = 0; i < 8; i++) {
                 cv_p[i] = cv_a[i] = (uint32_t)xs64();
             }

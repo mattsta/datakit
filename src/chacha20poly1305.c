@@ -2546,7 +2546,7 @@ int chacha20poly1305Test(int, char *[]) {
     }
 
     TEST("Performance bench") {
-        runBench(64, 200000);
+        runBench(64, 200'000);
         runBench(1024, 50000);
         runBench(65536, 2000);
         runBench(1048576, 200);

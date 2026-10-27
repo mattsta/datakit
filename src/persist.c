@@ -8333,9 +8333,9 @@ int persistTest(int, char *[]) {
         bool success;
 
         /* Mix of int16 and int32 values */
-        int64_t values[] = {0,       1,          -1,         32767,
-                            -32768,  32768,      -32769,     100000,
-                            -100000, 2147483647, -2147483648};
+        int64_t values[] = {0,        1,          -1,         32767,
+                            -32768,   32768,      -32769,     100'000,
+                            -100'000, 2147483647, -2147483648};
         for (size_t i = 0; i < countof(values); i++) {
             intsetAdd(&is, values[i], &success);
         }
@@ -9079,7 +9079,7 @@ int persistTest(int, char *[]) {
 
             switch (op) {
             case 0: { /* Push signed */
-                int64_t val = (int64_t)(seed % 1'000'000) - 500000;
+                int64_t val = (int64_t)(seed % 1'000'000) - 500'000;
                 flexPushSigned(&f, val, FLEX_ENDPOINT_TAIL);
                 break;
             }
@@ -9207,7 +9207,7 @@ int persistTest(int, char *[]) {
                 int len = snprintf(buf, sizeof(buf), "k%u", seed % 10000);
                 key = DATABOX_WITH_BYTES((uint8_t *)buf, len);
             } else {
-                key = DATABOX_SIGNED((int64_t)(seed % 100000) - 50000);
+                key = DATABOX_SIGNED((int64_t)(seed % 100'000) - 50000);
             }
 
             val1 = DATABOX_SIGNED((int64_t)seed);
@@ -10692,7 +10692,7 @@ int persistTest(int, char *[]) {
                 persistStoreFaultyDisarm(wal);
             }
             if (steps[i].secondPassed) {
-                p->lastSyncTime = persistGetMicroseconds() - 2000000;
+                p->lastSyncTime = persistGetMicroseconds() - 2'000'000;
             }
             const persistLogResult got =
                 persistLogOp(p, PERSIST_OP_INSERT, &v, 1);

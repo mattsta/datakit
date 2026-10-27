@@ -5165,8 +5165,8 @@ int memboundTest(int, char *[]) {
         membound *m = memboundCreate(1 << 22);
         assert(m != nullptr);
 
-        size_t sizes[] = {1,   7,    64,   100,   255,   256,   257,
-                          500, 1000, 4096, 10000, 65536, 100000};
+        size_t sizes[] = {1,   7,    64,   100,   255,   256,    257,
+                          500, 1000, 4096, 10000, 65536, 100'000};
         void *ptrs[countof(sizes)];
 
         for (size_t i = 0; i < countof(sizes); i++) {
@@ -5210,7 +5210,7 @@ int memboundTest(int, char *[]) {
         membound *m = memboundCreate(1 << 22);
         assert(m != nullptr);
 
-        const int iterations = 100000;
+        const int iterations = 100'000;
         for (int i = 0; i < iterations; i++) {
             size_t size = 64 + (i % 1024);
             void *p = memboundAlloc(m, size);

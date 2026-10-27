@@ -507,8 +507,8 @@ int multiFenwickFlatTest(int, char *[]) {
         printf("\n=== ns per call (200K calls, random indexes) ===\n");
         printf("    N | op     | flat     | multiFenwick | fenwickI64 | "
                "mfw/flat | flat/i64\n");
-        const size_t sizes[] = {1000, 100000};
-        const size_t OPS = 200000;
+        const size_t sizes[] = {1000, 100'000};
+        const size_t OPS = 200'000;
         for (size_t s = 0; s < countof(sizes); s++) {
             const size_t n = sizes[s];
             cleanerName(zfree, DataboxArray) databox *vals =

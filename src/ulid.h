@@ -187,7 +187,7 @@ bool ulidDecodeAVX2(const char *str, ulid_t *out);
 #endif
 
 /* NEON implementation (ARM) */
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 #define ULID_HAS_NEON 1
 size_t ulidEncodeNEON(const ulid_t *ulid, char *out, size_t outLen);
 bool ulidDecodeNEON(const char *str, ulid_t *out);

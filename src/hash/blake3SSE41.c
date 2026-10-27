@@ -567,7 +567,7 @@ int blake3SSE41Test(int, char *[]) {
         const uint8_t FLAG_CHUNK_END = 1u << 1;
         const uint8_t FLAG_ROOT = 1u << 3;
 
-        for (int iter = 0; iter < 100000; iter++) {
+        for (int iter = 0; iter < 100'000; iter++) {
             size_t n = (size_t)(xrand() % (BLAKE3_CHUNK_LEN + 1));
             rng_fill(buf, n);
 

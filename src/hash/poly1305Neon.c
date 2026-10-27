@@ -32,7 +32,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#if defined(__aarch64__) && defined(__ARM_NEON)
 #define POLY1305_NEON_BUILD 1
 #else
 #define POLY1305_NEON_BUILD 0

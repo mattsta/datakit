@@ -216,7 +216,7 @@ linearBloomCountHalf(linearBloomCount *restrict const bloom) {
     }
 }
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#ifdef __ARM_NEON
 /* NEON-optimized version (uses SWAR - 3-word grouping doesn't vectorize well)
  */
 DK_INLINE_ALWAYS void
