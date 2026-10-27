@@ -763,60 +763,78 @@ static void benchMultidict(void) {
     perfContainerSink = sink;
 }
 
-/* multidict at each count-based load factor (run by name): adds (the
- * bytes column is the dict's live heap after them, metered at the
- * allocator), finds in order and scattered, and deletes */
-static void benchMultidictLoad(void) {
-    static const uint32_t loads[] = {200, 400, 800, 1600, 3200};
-    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
-    const uint32_t n = PERF_CONTAINER_N;
+/* One multidictLoad table: 'n' of the keys at 'load' percent */
+static uint64_t benchMultidictLoadOne(const char *keys, const uint32_t n,
+                                      const uint32_t load) {
     uint64_t sink = 0;
     char row[48];
-    for (size_t l = 0; l < countof(loads); l++) {
-        const bool metered = ctestHeapMeterStart();
-        cleaner(multidictDefaultClassFree) multidictClass *qdc =
-            multidictDefaultClassNew();
-        cleaner(multidictFree) multidict *d =
-            multidictNew(&multidictTypeExactKey, qdc, 7);
-        multidictSetLoadFactors(d, loads[l], 10);
-        double t0 = timeUtilMonotonicSec();
-        for (uint32_t i = 0; i < n; i++) {
-            const databox k = perfContainerKey(keys, i);
-            const databox v = databoxNewSigned(i);
-            sink += multidictAdd(d, &k, &v);
-        }
-        const double addSecs = timeUtilMonotonicSec() - t0;
-        while (multidictRehash(d, 1024)) {
-        }
-        const int64_t heap = metered ? ctestHeapMeterStop() : 0;
-        snprintf(row, sizeof(row), "add%" PRIu32, loads[l]);
-        emitRow("multidictLoad", row, heap > 0 ? (size_t)heap : 0, n, addSecs);
+#define MD_LOAD_ROW(op, bytes, secs)                                           \
+    do {                                                                       \
+        snprintf(row, sizeof(row), "%s%" PRIu32 "@%" PRIu32 "k", (op), load,   \
+                 n / 1000);                                                    \
+        emitRow("multidictLoad", row, (bytes), n, (secs));                     \
+    } while (0)
 
-        t0 = timeUtilMonotonicSec();
-        for (uint32_t i = 0; i < n; i++) {
-            const databox k = perfContainerKey(keys, i);
-            databox v = {};
-            sink += multidictFind(d, &k, &v);
-        }
-        snprintf(row, sizeof(row), "find%" PRIu32, loads[l]);
-        emitRow("multidictLoad", row, 0, n, timeUtilMonotonicSec() - t0);
+    const bool metered = ctestHeapMeterStart();
+    cleaner(multidictDefaultClassFree) multidictClass *qdc =
+        multidictDefaultClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 7);
+    multidictSetLoadFactors(d, load, 10);
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += multidictAdd(d, &k, &v);
+    }
+    const double addSecs = timeUtilMonotonicSec() - t0;
+    while (multidictRehash(d, 1024)) {
+    }
+    const int64_t heap = metered ? ctestHeapMeterStop() : 0;
+    MD_LOAD_ROW("add", heap > 0 ? (size_t)heap : 0, addSecs);
 
-        t0 = timeUtilMonotonicSec();
-        for (uint32_t i = 0; i < n; i++) {
-            const databox k = perfContainerKey(keys, perfScatter(i));
-            databox v = {};
-            sink += multidictFind(d, &k, &v);
-        }
-        snprintf(row, sizeof(row), "findScattered%" PRIu32, loads[l]);
-        emitRow("multidictLoad", row, 0, n, timeUtilMonotonicSec() - t0);
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        databox v = {};
+        sink += multidictFind(d, &k, &v);
+    }
+    MD_LOAD_ROW("find", 0, timeUtilMonotonicSec() - t0);
 
-        t0 = timeUtilMonotonicSec();
-        for (uint32_t i = 0; i < n; i++) {
-            const databox k = perfContainerKey(keys, perfScatter(i));
-            sink += multidictDelete(d, &k);
+    /* Scattered over [0, n): 7919 is prime and divides no size here */
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, (i * 7919u) % n);
+        databox v = {};
+        sink += multidictFind(d, &k, &v);
+    }
+    MD_LOAD_ROW("findScattered", 0, timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, (i * 7919u) % n);
+        sink += multidictDelete(d, &k);
+    }
+    MD_LOAD_ROW("delete", 0, timeUtilMonotonicSec() - t0);
+#undef MD_LOAD_ROW
+    return sink;
+}
+
+/* multidict at each count-based load factor and three sizes (run by
+ * name; a table's slot count steps in powers of two, so one size alone
+ * can put two load factors on the same table): adds (the bytes column is
+ * the dict's live heap after them, metered at the allocator), finds in
+ * order and scattered, and deletes.  Rows are named op, load, '@', size
+ * in thousands. */
+static void benchMultidictLoad(void) {
+    static const uint32_t loads[] = {200, 300, 400, 600, 800};
+    static const uint32_t sizes[] = {40'000, 70'000, PERF_CONTAINER_N};
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    uint64_t sink = 0;
+    for (size_t s = 0; s < countof(sizes); s++) {
+        for (size_t l = 0; l < countof(loads); l++) {
+            sink += benchMultidictLoadOne(keys, sizes[s], loads[l]);
         }
-        snprintf(row, sizeof(row), "delete%" PRIu32, loads[l]);
-        emitRow("multidictLoad", row, 0, n, timeUtilMonotonicSec() - t0);
     }
 
     perfContainerSink = sink;

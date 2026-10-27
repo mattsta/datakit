@@ -704,6 +704,36 @@ multidictResizeEnable(d);
 multidictResize(d);  /* Resize once when done */
 ```
 
+### Load Factors: Memory Against Find Time
+
+```c
+/* Grow at 'expandPercent' entries per 100 slots (50 to 65535), shrink below
+ * 'shrinkPercent' (at most 255 and a quarter of expandPercent) */
+bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
+                             uint32_t shrinkPercent);
+```
+
+Every resize (growth, the automatic shrink, `multidictResize`) leaves the load
+at about half `expandPercent`. The default grows at 200%, so slots hold one to
+two entries. Each slot costs about 24 bytes besides its entries: a small
+multimap's 16-byte header and an 8-byte table pointer. Fuller slots spend
+fewer of those per entry, and each find searches a longer slot.
+
+Measured 2026-10-27 (clang 22 `perf` preset, Apple silicon, 16-byte keys with
+integer values, `perfRegression` module `multidictLoad`, medians of 7 runs;
+heap metered at the allocator):
+
+| entries | heap bytes per entry, 200% | at 800% | find ns, 200% | at 800% |
+| ------- | -------------------------- | ------- | ------------- | ------- |
+| 40k     | 53.7                       | 34.8    | 76            | 89      |
+| 70k     | 44.6                       | 30.1    | 85            | 106     |
+| 100k    | 39.9                       | 28.0    | 97            | 123     |
+
+Adds and deletes cost the same at both settings. A table's slot count steps in
+powers of two, so nearby factors often share a table: 300% to 800% match at
+40k, 200% to 400% at 70k and 100k. The default stays at 200% for find speed.
+Set 800% where a dict's memory matters more than about 15 to 25 ns per find.
+
 ### Incremental Rehashing
 
 ```c
