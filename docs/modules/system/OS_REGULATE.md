@@ -613,23 +613,30 @@ if (OSRegulateNetworkIsPrivate(ai)) {
 }
 ```
 
+"Private" is one rule for both families: reachable only from this
+host, its link or a private network.
+
 **Private IPv4 Ranges Detected:**
 
 - `127.0.0.0/8` - Loopback
-- `192.168.0.0/16` - Private
-- `172.16.0.0/12` - Private
-- `10.0.0.0/8` - Private
+- `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` - Private (RFC 1918)
+- `169.254.0.0/16` - Link-Local (RFC 3927)
 
 **Private IPv6 Ranges Detected:**
 
 - `::1/128` - Loopback
 - `fc00::/7` - Unique Local (ULA)
 - `fe80::/10` - Link-Local
+- `::ffff:0:0/96` - IPv4-mapped: classified by the IPv4 rules
+
+Shared address space (`100.64.0.0/10`, RFC 6598) is not private: many
+subscribers of one network provider share it. An `addrinfo` of a family other
+than `AF_INET` / `AF_INET6` is neither private nor all.
 
 ### Wildcard Address Detection
 
 ```c
-/* Check if address is all zeros (0.0.0.0 or ::)
+/* Check if address is all zeros (0.0.0.0, ::, or ::ffff:0.0.0.0)
  * ai: addrinfo structure to check
  * Returns: true if wildcard address
  */

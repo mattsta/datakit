@@ -1,5 +1,6 @@
 #include "OSRegulate.h"
 #include "cleaner.h"
+#include "dkEndian.h"
 #include "timeUtil.h"
 #include "versionOSRuntime.h"
 
@@ -1256,114 +1257,127 @@ size_t OSRegulateTotalMemoryGet(void) {
 /* ====================================================================
  * Network Validators
  * ==================================================================== */
-/* RFC 6890 notes special IP spaces in general */
-/* RFC 1918 specifies IPv4 special addresses */
-/* RFC 4193 specifies IPv6 special addresses */
-/* We're ignoring some of the more esoteric "benchmarking" networks for now. */
-bool OSRegulateNetworkIsPrivate(const struct addrinfo *ai) {
-    if (ai->ai_family == AF_INET) {
-        return OSRegulateNetworkIsPrivateIPv4(
-            (const struct sockaddr_in *)ai->ai_addr);
-    }
+/* "Private" is one rule for both families: reachable only from this
+ * host, its link or a private network (RFC 6890 lists the special
+ * ranges).  An IPv4-mapped IPv6 address (::ffff:a.b.c.d, RFC 4291
+ * section 2.5.5.2) is its IPv4 address and follows the IPv4 rules.
+ * Shared address space (100.64.0.0/10, RFC 6598) is not private: many
+ * subscribers of one network provider share it. */
 
-    return OSRegulateNetworkIsPrivateIPv6(
-        (const struct sockaddr_in6 *)ai->ai_addr);
-}
+/* An IPv4 network: its leading 'bits' bits, in host order */
+typedef struct osrNet4 {
+    uint32_t net;
+    uint8_t bits;
+} osrNet4;
 
-bool OSRegulateNetworkIsPrivateIPv4(const struct sockaddr_in *const sa) {
-    const uint8_t *netAddr = (uint8_t *)&sa->sin_addr.s_addr;
+static constexpr osrNet4 osrPrivate4[] = {
+    {0x7F000000u, 8},  /* loopback 127.0.0.0/8 (RFC 1122) */
+    {0x0A000000u, 8},  /* 10.0.0.0/8 (RFC 1918) */
+    {0xAC100000u, 12}, /* 172.16.0.0/12 (RFC 1918) */
+    {0xC0A80000u, 16}, /* 192.168.0.0/16 (RFC 1918) */
+    {0xA9FE0000u, 16}, /* link-local 169.254.0.0/16 (RFC 3927) */
+};
 
-    /* The address integer in 'sa' is big endian. */
-
-    /* Loopback (RFC 1122): 127.0.0.0/8 */
-    if (netAddr[0] == 127) {
-        return true;
-    }
-
-    /* RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 */
-    if (netAddr[0] == 10) {
-        return true;
-    }
-
-    /* 192.168.0.0/16 */
-    if (netAddr[0] == 192 && netAddr[1] == 168) {
-        return true;
-    }
-
-    /* 172.16.0.0/12 */
-    if (netAddr[0] == 172 && (netAddr[1] >= 16 && netAddr[1] <= 31)) {
-        return true;
-    }
-
-    return false;
-}
-
-bool OSRegulateNetworkIsPrivateIPv6(const struct sockaddr_in6 *const sa6) {
-    const uint8_t *netAddr = sa6->sin6_addr.s6_addr;
-
-    /* RFC 4193 section 3: Local IPv6 Unicast Addresses */
-    /* fc00::/7 */
-    if (netAddr[0] == 0xfc || netAddr[0] == 0xfd) {
-        return true;
-    }
-
-    /* RFC 4291 section 2.5.3: The Loopback Address */
-    /* ::1/128 */
-    /* We have to verify the first 15 bytes are zero and the final
-     * byte is just 1 */
-    bool is1 = true;
-    for (size_t i = 0; i < 15; i++) {
-        if (netAddr[i] != 0) {
-            is1 = false;
-            break;
+static bool osrIsPrivate4(const uint32_t addr) {
+    for (size_t i = 0; i < countof(osrPrivate4); i++) {
+        const uint32_t mask = UINT32_MAX << (32 - osrPrivate4[i].bits);
+        if ((addr & mask) == osrPrivate4[i].net) {
+            return true;
         }
     }
 
-    if (is1 && netAddr[15] == 1) {
-        return true;
-    }
-
-    /* RFC 4291 section 2.5.6: Link-Local IPv6 Unicast Addresses */
-    /* fe80::/10 */
-    if (netAddr[0] == 0xfe && (netAddr[1] >= 0x80 && netAddr[1] <= 0xbf)) {
-        return true;
-    }
-
     return false;
 }
 
-bool OSRegulateNetworkIsAll(const struct addrinfo *ai) {
-    if (ai->ai_family == AF_INET) {
-        return OSRegulateNetworkIsAllIPv4(
-            (const struct sockaddr_in *)ai->ai_addr);
-    }
-
-    return OSRegulateNetworkIsAllIPv6((const struct sockaddr_in6 *)ai->ai_addr);
-}
-
-bool OSRegulateNetworkIsAllIPv4(const struct sockaddr_in *const sa) {
-    const uint32_t netAddr = sa->sin_addr.s_addr;
-
-    if (netAddr != 0) {
-        return false;
-    }
-
-    return true;
-}
-
-bool OSRegulateNetworkIsAllIPv6(const struct sockaddr_in6 *const sa6) {
-    const uint8_t *netAddr = sa6->sin6_addr.s6_addr;
-    for (size_t i = 0; i < 16; i++) {
-        if (netAddr[i] != 0) {
+/* The IPv4 address an IPv4-mapped IPv6 address carries, in host order;
+ * false for any other IPv6 address */
+static bool osrMapped4(const uint8_t a[16], uint32_t *v4) {
+    for (size_t i = 0; i < 10; i++) {
+        if (a[i] != 0) {
             return false;
         }
     }
 
+    if (a[10] != 0xff || a[11] != 0xff) {
+        return false;
+    }
+
+    *v4 = dkLoadBe32(a + 12);
     return true;
+}
+
+bool OSRegulateNetworkIsPrivate(const struct addrinfo *ai) {
+    switch (ai->ai_family) {
+    case AF_INET:
+        return OSRegulateNetworkIsPrivateIPv4(
+            (const struct sockaddr_in *)ai->ai_addr);
+    case AF_INET6:
+        return OSRegulateNetworkIsPrivateIPv6(
+            (const struct sockaddr_in6 *)ai->ai_addr);
+    default:
+        return false; /* not an IP address */
+    }
+}
+
+bool OSRegulateNetworkIsPrivateIPv4(const struct sockaddr_in *const sa) {
+    /* The address in 'sa' is in network (big-endian) order */
+    return osrIsPrivate4(dkLoadBe32(&sa->sin_addr.s_addr));
+}
+
+bool OSRegulateNetworkIsPrivateIPv6(const struct sockaddr_in6 *const sa6) {
+    const uint8_t *a = sa6->sin6_addr.s6_addr;
+    uint32_t v4;
+    if (osrMapped4(a, &v4)) {
+        return osrIsPrivate4(v4);
+    }
+
+    /* unique local fc00::/7 (RFC 4193) */
+    if ((a[0] & 0xFE) == 0xFC) {
+        return true;
+    }
+
+    /* link-local fe80::/10 (RFC 4291 section 2.5.6) */
+    if (a[0] == 0xFE && (a[1] & 0xC0) == 0x80) {
+        return true;
+    }
+
+    /* loopback ::1 (RFC 4291 section 2.5.3) */
+    static constexpr uint8_t loopback[16] = {[15] = 1};
+    return memcmp(a, loopback, sizeof(loopback)) == 0;
+}
+
+bool OSRegulateNetworkIsAll(const struct addrinfo *ai) {
+    switch (ai->ai_family) {
+    case AF_INET:
+        return OSRegulateNetworkIsAllIPv4(
+            (const struct sockaddr_in *)ai->ai_addr);
+    case AF_INET6:
+        return OSRegulateNetworkIsAllIPv6(
+            (const struct sockaddr_in6 *)ai->ai_addr);
+    default:
+        return false; /* not an IP address */
+    }
+}
+
+bool OSRegulateNetworkIsAllIPv4(const struct sockaddr_in *const sa) {
+    return sa->sin_addr.s_addr == 0;
+}
+
+bool OSRegulateNetworkIsAllIPv6(const struct sockaddr_in6 *const sa6) {
+    const uint8_t *a = sa6->sin6_addr.s6_addr;
+    uint32_t v4;
+    if (osrMapped4(a, &v4)) {
+        return v4 == 0;
+    }
+
+    static constexpr uint8_t unspecified[16] = {};
+    return memcmp(a, unspecified, sizeof(unspecified)) == 0;
 }
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"
+
+#include <sys/un.h> /* sockaddr_un: a non-IP family */
 
 /* Deterministic checks of the kernel-file parsers on synthetic input;
  * nothing here reads /proc or needs privileges */
@@ -1375,10 +1389,33 @@ int OSRegulateTest(int, char *[]) {
             const char *addr;
             bool isPrivate;
             bool isAll;
-        } v4[] = {{"10.1.2.3", true, false},    {"172.16.9.9", true, false},
-                  {"172.32.0.1", false, false}, {"192.168.1.1", true, false},
-                  {"127.0.0.1", true, false},   {"8.8.8.8", false, false},
-                  {"0.0.0.0", false, true}};
+        } v4[] = {
+            /* each private range's ends and its neighbours */
+            {"127.0.0.0", true, false},
+            {"127.255.255.255", true, false},
+            {"126.255.255.255", false, false},
+            {"128.0.0.0", false, false},
+            {"10.0.0.0", true, false},
+            {"10.255.255.255", true, false},
+            {"9.255.255.255", false, false},
+            {"11.0.0.0", false, false},
+            {"172.16.0.0", true, false},
+            {"172.31.255.255", true, false},
+            {"172.15.255.255", false, false},
+            {"172.32.0.0", false, false},
+            {"192.168.0.0", true, false},
+            {"192.168.255.255", true, false},
+            {"192.167.255.255", false, false},
+            {"192.169.0.0", false, false},
+            {"169.254.0.0", true, false},
+            {"169.254.255.255", true, false},
+            {"169.253.255.255", false, false},
+            {"169.255.0.0", false, false},
+            /* shared address space is not private */
+            {"100.64.0.1", false, false},
+            {"8.8.8.8", false, false},
+            {"0.0.0.0", false, true},
+        };
         for (size_t i = 0; i < countof(v4); i++) {
             struct sockaddr_in sa = {.sin_family = AF_INET};
             inet_pton(AF_INET, v4[i].addr, &sa.sin_addr);
@@ -1395,11 +1432,31 @@ int OSRegulateTest(int, char *[]) {
             const char *addr;
             bool isPrivate;
             bool isAll;
-        } v6[] = {{"fc00::1", true, false},
-                  {"fd12::5", true, false},
-                  {"::1", true, false},
-                  {"2001:db8::1", false, false},
-                  {"::", false, true}};
+        } v6[] = {
+            {"fc00::", true, false},
+            {"fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true, false},
+            {"fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false, false},
+            {"fe00::", false, false},
+            {"fe80::", true, false},
+            {"febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true, false},
+            {"fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false, false},
+            {"fec0::", false, false},
+            {"::1", true, false},
+            {"::2", false, false},
+            {"1::1", false, false},
+            {"2001:db8::1", false, false},
+            {"::", false, true},
+            /* IPv4-mapped: the IPv4 rules */
+            {"::ffff:10.0.0.1", true, false},
+            {"::ffff:127.0.0.1", true, false},
+            {"::ffff:169.254.7.7", true, false},
+            {"::ffff:100.64.0.1", false, false},
+            {"::ffff:8.8.8.8", false, false},
+            {"::ffff:0.0.0.0", false, true},
+            /* not mapped: the ::ffff prefix one bit off */
+            {"::fffe:10.0.0.1", false, false},
+            {"0:0:0:0:1:ffff:a00:1", false, false},
+        };
         for (size_t i = 0; i < countof(v6); i++) {
             struct sockaddr_in6 sa6 = {.sin6_family = AF_INET6};
             inet_pton(AF_INET6, v6[i].addr, &sa6.sin6_addr);
@@ -1411,6 +1468,16 @@ int OSRegulateTest(int, char *[]) {
                 OSRegulateNetworkIsAll(&ai) != v6[i].isAll) {
                 ERR("IPv6 %s classified wrongly", v6[i].addr);
             }
+        }
+
+        /* A non-IP family is neither, and its address is never read as
+         * an IPv6 one */
+        struct sockaddr_un su = {.sun_family = AF_UNIX};
+        struct addrinfo unixAi = {.ai_family = AF_UNIX,
+                                  .ai_addr = (struct sockaddr *)&su};
+        if (OSRegulateNetworkIsPrivate(&unixAi) ||
+            OSRegulateNetworkIsAll(&unixAi)) {
+            ERR("an AF_UNIX address classified as private or all");
         }
 
         int64_t selfRSS = 0;
