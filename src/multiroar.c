@@ -715,7 +715,7 @@ bool multiroarBitGet(const multiroar *r, uint64_t position) {
 /* ====================================================================
  * Remove (Clear Bit)
  * ==================================================================== */
-bool multiroarRemove(multiroar *r, uint64_t position) {
+bool multiroarBitClear(multiroar *r, uint64_t position) {
     if (!r || MR_BIT_OP_REFUSED_(r)) {
         return false;
     }
@@ -3975,7 +3975,7 @@ static void mrFillChunk(multiroar *r, uint64_t *o, uint64_t c, uint32_t count,
         for (uint32_t clear = BITMAP_SIZE_IN_BITS - count; clear > 0;) {
             const uint64_t p = base + splitmix64(rng) % BITMAP_SIZE_IN_BITS;
             if (mrOracleGet(o, p)) {
-                multiroarRemove(r, p);
+                multiroarBitClear(r, p);
                 o[p / 64] &= ~(UINT64_C(1) << (p % 64));
                 clear--;
             }
@@ -4152,7 +4152,7 @@ int multiroarTest(int, char *[]) {
         static constexpr uint64_t probe[3] = {3, 1, 5};
         uint64_t arr[4];
         if (multiroarBitSet(V, 3) || multiroarBitGet(V, 3) ||
-            multiroarRemove(V, 3) || multiroarBitCount(V) ||
+            multiroarBitClear(V, 3) || multiroarBitCount(V) ||
             multiroarMin(V, &pos) || multiroarMax(V, &pos) || pos != 99 ||
             multiroarRank(V, 50) || multiroarSelect(V, 1, &pos) ||
             multiroarRangeCount(V, 0, 50) || multiroarIntersects(V, B) ||
@@ -4213,7 +4213,7 @@ int multiroarTest(int, char *[]) {
     } while (0)
         MR_REPORTS_ONCE_(multiroarBitSet(V, 3));
         MR_REPORTS_ONCE_(multiroarBitGet(V, 3));
-        MR_REPORTS_ONCE_(multiroarRemove(V, 3));
+        MR_REPORTS_ONCE_(multiroarBitClear(V, 3));
         MR_REPORTS_ONCE_(multiroarBitCount(V));
         MR_REPORTS_ONCE_(multiroarMin(V, &pos));
         MR_REPORTS_ONCE_(multiroarMax(V, &pos));
@@ -4450,7 +4450,7 @@ int multiroarTest(int, char *[]) {
         for (uint64_t c = 0; c < chunks; c += 2) {
             const uint64_t p =
                 c * BITMAP_SIZE_IN_BITS + (c * 37) % BITMAP_SIZE_IN_BITS;
-            if (!multiroarRemove(r, p) || multiroarRemove(r, p)) {
+            if (!multiroarBitClear(r, p) || multiroarBitClear(r, p)) {
                 ERR("chunk %" PRIu64 ": remove did not report set then clear",
                     c);
             }
@@ -6219,7 +6219,7 @@ int multiroarTest(int, char *[]) {
 
     printf("\n=== NEW FUNCTIONALITY TESTS ===\n\n");
 
-    TEST("multiroarRemove - basic remove from UNDER_FULL") {
+    TEST("multiroarBitClear - basic clear in UNDER_FULL") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
         multiroarBitSet(r, 200);
@@ -6236,7 +6236,7 @@ int multiroarTest(int, char *[]) {
         }
 
         /* Remove middle element */
-        bool wasSet = multiroarRemove(r, 200);
+        bool wasSet = multiroarBitClear(r, 200);
         if (!wasSet) {
             ERR("wasSet should be true for bit 200");
         }
@@ -6251,13 +6251,13 @@ int multiroarTest(int, char *[]) {
         }
 
         /* Remove again - should return false */
-        wasSet = multiroarRemove(r, 200);
+        wasSet = multiroarBitClear(r, 200);
         if (wasSet) {
             ERR("wasSet should be false for already-cleared bit");
         }
     }
 
-    TEST("multiroarRemove - remove from FULL_BITMAP") {
+    TEST("multiroarBitClear - clear in FULL_BITMAP") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Fill enough bits to trigger FULL_BITMAP mode (>629) */
         for (uint64_t i = 0; i < 1000; i++) {
@@ -6267,7 +6267,7 @@ int multiroarTest(int, char *[]) {
         if (!multiroarBitGet(r, 500)) {
             ERR("bit 500 should be set");
         }
-        bool wasSet = multiroarRemove(r, 500);
+        bool wasSet = multiroarBitClear(r, 500);
         if (!wasSet) {
             ERR("wasSet should be true");
         }
@@ -6284,11 +6284,11 @@ int multiroarTest(int, char *[]) {
         }
     }
 
-    TEST("multiroarRemove - remove all bits from chunk") {
+    TEST("multiroarBitClear - clear all bits of a chunk") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
 
-        bool wasSet = multiroarRemove(r, 100);
+        bool wasSet = multiroarBitClear(r, 100);
         if (!wasSet) {
             ERR("wasSet should be true");
         }
@@ -6604,7 +6604,7 @@ int multiroarTest(int, char *[]) {
         for (uint64_t i = 0; i < 200; i++) {
             uint64_t pos = rand() % FUZZ_REMOVE_SIZE;
             bool expectedWasSet = FUZZ_ORACLE_GET(oracle, pos);
-            bool actualWasSet = multiroarRemove(r, pos);
+            bool actualWasSet = multiroarBitClear(r, pos);
 
             if (expectedWasSet != actualWasSet) {
                 ERR("Remove wasSet mismatch at pos %" PRIu64 "", pos);
@@ -7820,7 +7820,7 @@ int multiroarTest(int, char *[]) {
             ERR("Bitmap with bit set should not be empty");
         }
 
-        multiroarRemove(r, 42);
+        multiroarBitClear(r, 42);
         if (!multiroarIsEmpty(r)) {
             ERR("Bitmap after removing all bits should be empty");
         }
@@ -10008,7 +10008,7 @@ int multiroarTest(int, char *[]) {
             multiroarBitSet(r, i);
         }
         for (uint64_t i = 0; i < 100; i += 2) {
-            multiroarRemove(r, i);
+            multiroarBitClear(r, i);
         }
 
         uint64_t size = multiroarSerializedSize(r);
@@ -10365,9 +10365,9 @@ int multiroarTest(int, char *[]) {
         /* b: negative listing - almost all bits set (> 7563) */
         FILL_ALL_ONES(b, 0);
         /* Clear just a few bits to verify difference */
-        multiroarRemove(b, 100);
-        multiroarRemove(b, 200);
-        multiroarRemove(b, 300);
+        multiroarBitClear(b, 100);
+        multiroarBitClear(b, 200);
+        multiroarBitClear(b, 300);
 
         cleaner(multiroarFree) multiroar *result = multiroarNewAnd(a, b);
 
@@ -10439,7 +10439,7 @@ int multiroarTest(int, char *[]) {
         FILL_SPARSE(a, 0, 100);
         /* b: negative listing in chunk 1 (almost all ones) */
         FILL_ALL_ONES(b, 1);
-        multiroarRemove(b, 8192 + 50);
+        multiroarBitClear(b, 8192 + 50);
 
         cleaner(multiroarFree) multiroar *result = multiroarNewOr(a, b);
 
@@ -10542,7 +10542,7 @@ int multiroarTest(int, char *[]) {
 
         /* a: almost all ones (negative listing) */
         FILL_ALL_ONES(a, 0);
-        multiroarRemove(a, 100); /* 8191 bits set */
+        multiroarBitClear(a, 100); /* 8191 bits set */
 
         /* b: dense [0, 4096) */
         FILL_DENSE(b, 0, 0, 4096);
@@ -10575,14 +10575,14 @@ int multiroarTest(int, char *[]) {
         /* Chunk 2: a=all_ones, b=over_full */
         FILL_ALL_ONES(a, 2);
         FILL_ALL_ONES(b, 2);
-        multiroarRemove(b, 2 * 8192 + 500);
+        multiroarBitClear(b, 2 * 8192 + 500);
 
         /* Chunk 3: a=empty, b=bitmap */
         FILL_DENSE(b, 3, 1000, 3000);
 
         /* Chunk 4: a=over_full, b=empty */
         FILL_ALL_ONES(a, 4);
-        multiroarRemove(a, 4 * 8192 + 100);
+        multiroarBitClear(a, 4 * 8192 + 100);
 
         /* Test AND */
         cleaner(multiroarFree) multiroar *andResult = multiroarNewAnd(a, b);
@@ -10828,7 +10828,7 @@ int multiroarTest(int, char *[]) {
         const uint64_t unset[] = {0, 63, 64, 100, 4000, 8191};
         const int U = (int)(countof(unset));
         for (int i = 0; i < U; i++) {
-            multiroarRemove(r, unset[i]);
+            multiroarBitClear(r, unset[i]);
         }
 
         multiroarIterator it;
@@ -10985,7 +10985,7 @@ int multiroarTest(int, char *[]) {
                         const uint32_t i = order == 0   ? k
                                            : order == 1 ? n - 1 - k
                                                         : (k * 7919u) % n;
-                        if (!multiroarRemove(r, (uint64_t)i * stride) ||
+                        if (!multiroarBitClear(r, (uint64_t)i * stride) ||
                             multiroarBitGet(r, (uint64_t)i * stride) ||
                             !multiroarBitGet(r, sentinel) ||
                             !multiroarBitGet(r, sentinel + 3) ||
@@ -11000,8 +11000,8 @@ int multiroarTest(int, char *[]) {
                     uint64_t min = 0;
                     if (!failed &&
                         (!multiroarMin(r, &min) || min != sentinel ||
-                         !multiroarRemove(r, sentinel) ||
-                         !multiroarRemove(r, sentinel + 3) ||
+                         !multiroarBitClear(r, sentinel) ||
+                         !multiroarBitClear(r, sentinel + 3) ||
                          !multiroarIsEmpty(r) || multiroarMin(r, &min))) {
                         ERR("n %u stride %" PRIu64 " order %d: no bits are "
                             "set but the bitmap is not empty",
@@ -11040,7 +11040,7 @@ int multiroarTest(int, char *[]) {
             } else if (op == 2) {
                 for (uint64_t p = at; p < end; p++) {
                     if (oracle[p] && splitmix64(&rng) % 3 == 0) {
-                        multiroarRemove(r, p);
+                        multiroarBitClear(r, p);
                         oracle[p] = 0;
                     }
                 }

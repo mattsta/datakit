@@ -44,7 +44,7 @@ static uint64_t densePeekId_(const multimapAtomDense *d) {
 static uint64_t denseTakeId_(multimapAtomDense *d) {
     uint64_t id;
     if (d->holes && multiroarMin(d->holes, &id)) {
-        multiroarRemove(d->holes, id);
+        multiroarBitClear(d->holes, id);
         if (multiroarIsEmpty(d->holes)) {
             multiroarFree(d->holes);
             d->holes = nullptr;
@@ -72,7 +72,7 @@ static void denseGiveBack_(multimapAtomDense *d, const uint64_t id) {
     /* The highest id: lower next past any holes directly below it */
     d->next--;
     while (d->holes && d->next > 0 && multiroarBitGet(d->holes, d->next - 1)) {
-        multiroarRemove(d->holes, d->next - 1);
+        multiroarBitClear(d->holes, d->next - 1);
         d->next--;
     }
 
@@ -258,7 +258,7 @@ static bool densePersistInsert_(multimapAtomDense *d, const uint64_t id,
 
     if (id < d->next) {
         assert(d->holes && multiroarBitGet(d->holes, id));
-        multiroarRemove(d->holes, id);
+        multiroarBitClear(d->holes, id);
         if (multiroarIsEmpty(d->holes)) {
             multiroarFree(d->holes);
             d->holes = nullptr;

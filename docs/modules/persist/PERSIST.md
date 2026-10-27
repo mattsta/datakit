@@ -100,7 +100,7 @@ structure as it was:
   `multimapDeleteFullWidthP`.
 - **Applied by the search that decides, undone on a refused log** (the undo
   restores exactly what was there and costs nothing when the log succeeds):
-  `multimapInsertIfNotExistsP`, `multiroarBitSetP`, `multiroarRemoveP`,
+  `multimapInsertIfNotExistsP`, `multiroarBitSetP`, `multiroarBitClearP`,
   `multiroarValueRemoveP`, `intsetAddP`, `intsetRemoveP`.
 
 Durability is **best effort with notification**. A failed flush or sync
@@ -123,7 +123,7 @@ out-parameter; pass NULL when you do not need it:
 | Wrapper                                       | Out-parameters                                             |
 | --------------------------------------------- | ---------------------------------------------------------- |
 | `intsetAddP` / `intsetRemoveP`                | `bool *added` / `bool *removed`                            |
-| `multiroarBitSetP` / `multiroarRemoveP`       | `bool *added` / `bool *removed` (positions are `uint64_t`) |
+| `multiroarBitSetP` / `multiroarBitClearP`     | `bool *added` / `bool *cleared` (positions are `uint64_t`) |
 | `multimapInsertP`                             | `bool *replaced`                                           |
 | `multimapFieldIncrP`                          | `int64_t *newValue` (a refused increment is never logged)  |
 | `multidictAddP`                               | `multidictResult *`                                        |

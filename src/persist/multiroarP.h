@@ -77,8 +77,8 @@ persistLogResult multiroarBitSetP(multiroarP *r, uint64_t position,
                                   bool *added);
 
 /* Clear the bit at position */
-persistLogResult multiroarRemoveP(multiroarP *r, uint64_t position,
-                                  bool *removed);
+persistLogResult multiroarBitClearP(multiroarP *r, uint64_t position,
+                                    bool *cleared);
 
 /* Set / clear the bits in [start, start+extent): one log row each */
 persistLogResult multiroarBitSetRangeP(multiroarP *r, uint64_t start,

@@ -74,7 +74,7 @@ static void *pcMultiroarBuild(const persistContractBuild *b) {
             multiroarBitSet(r, pos);
             persistContractRecord(b->log, PERSIST_OP_INSERT, &pos, 1);
         } else if (roll < 12) {
-            multiroarRemove(r, pos);
+            multiroarBitClear(r, pos);
             persistContractRecord(b->log, PERSIST_OP_DELETE, &pos, 1);
         } else {
             /* Up to just over a chunk, so ranges cover whole chunks and

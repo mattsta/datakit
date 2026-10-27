@@ -251,7 +251,7 @@ static void recycleId(stringPool *pool, uint64_t id) {
     pool->nextId--;
     while (pool->freeHoles && pool->nextId > 1 &&
            multiroarBitGet(pool->freeHoles, pool->nextId - 1)) {
-        multiroarRemove(pool->freeHoles, pool->nextId - 1);
+        multiroarBitClear(pool->freeHoles, pool->nextId - 1);
         pool->nextId--;
     }
 
@@ -275,7 +275,7 @@ static uint64_t allocateId(stringPool *pool) {
         id = popFreeId(pool);
     } else if (pool->ids == STRING_POOL_IDS_LOWEST && pool->freeHoles &&
                multiroarMin(pool->freeHoles, &id)) {
-        multiroarRemove(pool->freeHoles, id);
+        multiroarBitClear(pool->freeHoles, id);
         releaseHolesIfEmpty(pool);
     }
 

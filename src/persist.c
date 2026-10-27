@@ -3552,7 +3552,7 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
             }
             multiroarValueRemoveGetRemoved(*r, position, nullptr);
         } else {
-            multiroarRemove(*r, position);
+            multiroarBitClear(*r, position);
         }
         return true;
     }

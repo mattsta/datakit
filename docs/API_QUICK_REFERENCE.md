@@ -354,7 +354,7 @@ intsetRemove(&is, 42, &removed);
 **multiroar**:
 
 ```c
-multiroarRemove(r, 12345);
+multiroarBitClear(r, 12345);
 ```
 
 ### "I want to evict LRU item"
@@ -1171,7 +1171,7 @@ if (multiroarBitGet(activeUsers, 12345678)) {
 }
 
 // Remove
-multiroarRemove(activeUsers, 12345678);
+multiroarBitClear(activeUsers, 12345678);
 ```
 
 ### Pattern: Configuration Storage

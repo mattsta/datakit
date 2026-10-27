@@ -27,7 +27,7 @@ void multiroarFree(multiroar *r);
 bool multiroarBitSet(multiroar *r, uint64_t position);
 bool multiroarBitGet(const multiroar *r, uint64_t position);
 void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent);
-bool multiroarRemove(multiroar *r, uint64_t position);
+bool multiroarBitClear(multiroar *r, uint64_t position);
 
 /* Value mode.  Values are unsigned integers that fit the declared bitWidth
  * (a signed value must be >= 0; booleans store as 0/1) and round-trip as

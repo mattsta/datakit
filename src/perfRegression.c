@@ -1424,11 +1424,11 @@ static void benchPersistChecks(void) {
         PERF_ROW(mod, "bitSetP", n,
                  sink += multiroarBitSetP(rp, perfScatter(i) * 3ull, &done));
         PERF_ROW(mod, "bitRemoveP", n,
-                 sink += multiroarRemoveP(rp, perfScatter(i) * 3ull, &done));
+                 sink += multiroarBitClearP(rp, perfScatter(i) * 3ull, &done));
         PERF_ROW(mod, "bitSet", n,
                  sink += multiroarBitSet(r, perfScatter(i) * 3ull));
         PERF_ROW(mod, "bitRemove", n,
-                 sink += multiroarRemove(r, perfScatter(i) * 3ull));
+                 sink += multiroarBitClear(r, perfScatter(i) * 3ull));
         PERF_ROW(
             mod, "bitGetThenSet", n,
             if (!multiroarBitGet(r, perfScatter(i) * 3ull)) {
@@ -1437,7 +1437,7 @@ static void benchPersistChecks(void) {
         PERF_ROW(
             mod, "bitGetThenRemove", n,
             if (multiroarBitGet(r, perfScatter(i) * 3ull)) {
-                sink += multiroarRemove(r, perfScatter(i) * 3ull);
+                sink += multiroarBitClear(r, perfScatter(i) * 3ull);
             });
 
         /* One bit per 8192-bit chunk: every set makes its chunk, every
@@ -1447,7 +1447,7 @@ static void benchPersistChecks(void) {
         PERF_ROW(mod, "bitGetOwnChunk", n,
                  sink += multiroarBitGet(r, perfScatter(i) * 8192ull));
         PERF_ROW(mod, "bitRemoveOwnChunk", n,
-                 sink += multiroarRemove(r, perfScatter(i) * 8192ull));
+                 sink += multiroarBitClear(r, perfScatter(i) * 8192ull));
         multiroarCloseP(rp);
     }
     persistCtxFree(bctx);

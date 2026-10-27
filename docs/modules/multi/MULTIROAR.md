@@ -183,15 +183,15 @@ if (multiroarBitGet(r, 1000)) {
 }
 ```
 
-### Remove Bits
+### Clear Bits
 
 ```c
 /* Clear bit at position; returns true if the bit was previously set */
-bool multiroarRemove(multiroar *r, uint64_t position);
+bool multiroarBitClear(multiroar *r, uint64_t position);
 
 /* Example */
 multiroarBitSet(r, 500);
-multiroarRemove(r, 500);
+multiroarBitClear(r, 500);
 assert(!multiroarBitGet(r, 500));
 ```
 
@@ -729,7 +729,7 @@ void userLogin(uint64_t userId) {
 }
 
 void userLogout(uint64_t userId) {
-    multiroarRemove(activeUsers, userId);
+    multiroarBitClear(activeUsers, userId);
 }
 
 bool isUserActive(uint64_t userId) {
