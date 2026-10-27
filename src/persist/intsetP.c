@@ -904,13 +904,32 @@ int intsetPTest(int, char *[]) {
             ERR("Intset/tracker mismatch");
         }
 
+        /* Writes after the snapshot go to the WAL alone */
+        for (int i = 500; i < 510; i++) {
+            const int64_t val = ptestIntByRange(i);
+            PTEST_LOGGED(intsetAddP(is, val, nullptr));
+            ptestTrackerAdd(&tracker, val);
+        }
+
         intsetCloseP(is);
         persistCtxFree(ctx);
 
-        /* TODO: File-based compaction recovery has a bug - WAL entries are
-         * replayed on top of snapshot after close/reopen. This works correctly
-         * with in-memory stores. Need to investigate file truncation handling.
-         * For now, skip the cross-session compaction recovery verification. */
+        /* A reopen is the snapshot plus only the WAL written after it */
+        {
+            persistCtx *again = persistCtxOpen(basePath, nullptr);
+            intsetP *reopened = intsetOpenP(again);
+            if (!reopened) {
+                ERR("reopen after compaction failed");
+            } else {
+                if (!verifyIntsetMatchesTracker(reopened, &tracker)) {
+                    ERR("reopen after compaction does not match: %" PRIu64
+                        " values",
+                        intsetCountP(reopened));
+                }
+                intsetCloseP(reopened);
+            }
+            persistCtxFree(again);
+        }
 
         ptestCleanupFiles(basePath);
     }

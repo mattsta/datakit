@@ -962,13 +962,32 @@ int flexPTest(int, char *[]) {
             ERR("Flex/tracker mismatch");
         }
 
+        /* Writes after the snapshot go to the WAL alone */
+        for (int i = 300; i < 305; i++) {
+            databox box = DATABOX_SIGNED(i);
+            PTEST_LOGGED(flexPushTailP(f, &box));
+            ptestBoxTrackerPushTail(&tracker, &box);
+        }
+
         flexCloseP(f);
         persistCtxFree(ctx);
 
-        /* TODO: File-based compaction recovery has a bug - WAL entries are
-         * replayed on top of snapshot after close/reopen. This works correctly
-         * with in-memory stores. Need to investigate file truncation handling.
-         * For now, skip the cross-session compaction recovery verification. */
+        /* A reopen is the snapshot plus only the WAL written after it: the
+         * 300 compacted values are not replayed a second time */
+        {
+            persistCtx *again = persistCtxOpen(basePath, nullptr);
+            flexP *reopened = flexOpenP(again);
+            if (!reopened) {
+                ERR("reopen after compaction failed");
+            } else {
+                if (!verifyFlexMatchesTracker(reopened, &tracker)) {
+                    ERR("reopen after compaction does not match: %zu values",
+                        flexCountP(reopened));
+                }
+                flexCloseP(reopened);
+            }
+            persistCtxFree(again);
+        }
 
         ptestCleanupFiles(basePath);
     }
