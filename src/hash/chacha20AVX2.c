@@ -20,6 +20,7 @@
 #include "chacha20AVX2.h"
 
 #include "../ctmem.h"
+#include "../dkEndian.h" /* dkStoreLe32 */
 
 #include <assert.h>
 #include <stddef.h>
@@ -172,11 +173,7 @@ rotl32_8_avx2(__m256i x) {
     for (uint32_t b = 0; b < 8; b++) {
         uint8_t *o = out + b * 64u;
         for (uint32_t w = 0; w < 16; w++) {
-            uint32_t v = staging[w][b];
-            o[w * 4 + 0] = (uint8_t)(v);
-            o[w * 4 + 1] = (uint8_t)(v >> 8);
-            o[w * 4 + 2] = (uint8_t)(v >> 16);
-            o[w * 4 + 3] = (uint8_t)(v >> 24);
+            dkStoreLe32(o + w * 4, staging[w][b]);
         }
     }
 

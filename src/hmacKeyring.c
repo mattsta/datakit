@@ -11,6 +11,7 @@
 #include "ctmem.h"   /* dkSecureZero */
 #include "datakit.h" /* zmalloc / zfree */
 #include "dkDiag.h"
+#include "dkEndian.h" /* dkStoreLe64 */
 #include "flex.h"
 #include "persist.h"
 
@@ -563,18 +564,6 @@ bool hmacKeyringSetMinValidKeyId(hmacKeyring *ring, hmacKeyId floor) {
 
 /* ---- AEAD nonce-counter helpers --------------------------------------- */
 
-/* Encode a uint64_t in little-endian into 8 bytes. */
-static void hmacKeyringPutLe64(uint8_t out[8], uint64_t v) {
-    out[0] = (uint8_t)(v & 0xFFu);
-    out[1] = (uint8_t)((v >> 8) & 0xFFu);
-    out[2] = (uint8_t)((v >> 16) & 0xFFu);
-    out[3] = (uint8_t)((v >> 24) & 0xFFu);
-    out[4] = (uint8_t)((v >> 32) & 0xFFu);
-    out[5] = (uint8_t)((v >> 40) & 0xFFu);
-    out[6] = (uint8_t)((v >> 48) & 0xFFu);
-    out[7] = (uint8_t)((v >> 56) & 0xFFu);
-}
-
 /* Reservation slow path: `id`'s counter reached its confirmed limit.
  * Hands counter + window to the reservation function and, once it reports
  * the limit durable, confirms it for the same key incarnation.  Returns
@@ -685,7 +674,7 @@ bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
         }
         if (!reserve) {
             /* Build the nonce: 8 bytes counter LE || 4 bytes salt. */
-            hmacKeyringPutLe64(out_nonce, prev);
+            dkStoreLe64(out_nonce, prev);
             out_nonce[8] = slot->aead_salt[0];
             out_nonce[9] = slot->aead_salt[1];
             out_nonce[10] = slot->aead_salt[2];

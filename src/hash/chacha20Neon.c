@@ -25,6 +25,7 @@
 #include "chacha20Neon.h"
 
 #include "../ctmem.h"
+#include "../dkEndian.h" /* dkStoreLe32 */
 
 #include <assert.h>
 #include <stddef.h>
@@ -179,11 +180,7 @@ void chacha20NeonBlock4(const uint32_t state[16], uint8_t out[256]) {
     for (uint32_t b = 0; b < 4; b++) {
         uint8_t *o = out + b * 64u;
         for (uint32_t w = 0; w < 16; w++) {
-            uint32_t v = staging[w][b];
-            o[w * 4 + 0] = (uint8_t)(v);
-            o[w * 4 + 1] = (uint8_t)(v >> 8);
-            o[w * 4 + 2] = (uint8_t)(v >> 16);
-            o[w * 4 + 3] = (uint8_t)(v >> 24);
+            dkStoreLe32(o + w * 4, staging[w][b]);
         }
     }
 

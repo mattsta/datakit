@@ -41,6 +41,22 @@ void sha256Hash(const void *data, size_t len, uint8_t out[SHA256_DIGEST_LEN]);
 void sha256PortableCompressBlocks(uint32_t state[8], const uint8_t *blocks,
                                   size_t num_blocks);
 
+/* FIPS 180-4's initial hash value H(0): the first 32 bits of the
+ * fractional parts of the square roots of the first eight primes */
+static constexpr uint32_t sha256InitialHash[8] = {
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+
+/* A block compressor: folds `num_blocks` 64-byte blocks into `state`
+ * (sha256PortableCompressBlocks, or a hardware backend's) */
+typedef void sha256CompressBlocksFn(uint32_t state[8], const uint8_t *blocks,
+                                    size_t num_blocks);
+
+/* The SHA-256 of data[0, len) with every block compressed by `compress`:
+ * one backend's whole-message digest, for comparing backends */
+void sha256HashWith(sha256CompressBlocksFn *compress, const void *data,
+                    size_t len, uint8_t out[SHA256_DIGEST_LEN]);
+
 #ifdef DATAKIT_TEST
 int sha256Test(int argc, char *argv[]);
 #endif

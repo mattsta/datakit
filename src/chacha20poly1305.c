@@ -14,6 +14,7 @@
 #include "ctmem.h"
 #include "dkC23.h" /* stdc_rotate_left */
 #include "dkDiag.h"
+#include "dkEndian.h" /* dkLoadLe32, dkStoreLe32, dkStoreLe64 */
 #include "hash/chacha20AVX2.h"
 #include "hash/chacha20Neon.h"
 #include "hash/poly1305AVX2.h"
@@ -22,31 +23,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
-/* ===== Endian helpers (portable, no host-endianness assumption) ===== */
-
-static inline uint32_t load32_le(const uint8_t *p) {
-    return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
-}
-
-static inline void store32_le(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)(v);
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
-}
-
-static inline void store64_le(uint8_t *p, uint64_t v) {
-    p[0] = (uint8_t)(v);
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
-    p[4] = (uint8_t)(v >> 32);
-    p[5] = (uint8_t)(v >> 40);
-    p[6] = (uint8_t)(v >> 48);
-    p[7] = (uint8_t)(v >> 56);
-}
 
 /* ===== ChaCha20 ===== */
 
@@ -125,18 +101,18 @@ static inline void chacha20StateInit(uint32_t state[16], const uint8_t key[32],
     state[1] = CHACHA20_CONST_1;
     state[2] = CHACHA20_CONST_2;
     state[3] = CHACHA20_CONST_3;
-    state[4] = load32_le(key + 0);
-    state[5] = load32_le(key + 4);
-    state[6] = load32_le(key + 8);
-    state[7] = load32_le(key + 12);
-    state[8] = load32_le(key + 16);
-    state[9] = load32_le(key + 20);
-    state[10] = load32_le(key + 24);
-    state[11] = load32_le(key + 28);
+    state[4] = dkLoadLe32(key + 0);
+    state[5] = dkLoadLe32(key + 4);
+    state[6] = dkLoadLe32(key + 8);
+    state[7] = dkLoadLe32(key + 12);
+    state[8] = dkLoadLe32(key + 16);
+    state[9] = dkLoadLe32(key + 20);
+    state[10] = dkLoadLe32(key + 24);
+    state[11] = dkLoadLe32(key + 28);
     state[12] = counter;
-    state[13] = load32_le(nonce + 0);
-    state[14] = load32_le(nonce + 4);
-    state[15] = load32_le(nonce + 8);
+    state[13] = dkLoadLe32(nonce + 0);
+    state[14] = dkLoadLe32(nonce + 4);
+    state[15] = dkLoadLe32(nonce + 8);
 }
 
 /* Backend identification — public declarations live in
@@ -216,18 +192,18 @@ static void chacha20Block(const uint8_t key[32], uint32_t counter,
                           const uint8_t nonce[12], uint8_t out[64]) {
     uint32_t s0 = CHACHA20_CONST_0, s1 = CHACHA20_CONST_1,
              s2 = CHACHA20_CONST_2, s3 = CHACHA20_CONST_3;
-    uint32_t s4 = load32_le(key + 0);
-    uint32_t s5 = load32_le(key + 4);
-    uint32_t s6 = load32_le(key + 8);
-    uint32_t s7 = load32_le(key + 12);
-    uint32_t s8 = load32_le(key + 16);
-    uint32_t s9 = load32_le(key + 20);
-    uint32_t s10 = load32_le(key + 24);
-    uint32_t s11 = load32_le(key + 28);
+    uint32_t s4 = dkLoadLe32(key + 0);
+    uint32_t s5 = dkLoadLe32(key + 4);
+    uint32_t s6 = dkLoadLe32(key + 8);
+    uint32_t s7 = dkLoadLe32(key + 12);
+    uint32_t s8 = dkLoadLe32(key + 16);
+    uint32_t s9 = dkLoadLe32(key + 20);
+    uint32_t s10 = dkLoadLe32(key + 24);
+    uint32_t s11 = dkLoadLe32(key + 28);
     uint32_t s12 = counter;
-    uint32_t s13 = load32_le(nonce + 0);
-    uint32_t s14 = load32_le(nonce + 4);
-    uint32_t s15 = load32_le(nonce + 8);
+    uint32_t s13 = dkLoadLe32(nonce + 0);
+    uint32_t s14 = dkLoadLe32(nonce + 4);
+    uint32_t s15 = dkLoadLe32(nonce + 8);
 
     uint32_t x0 = s0, x1 = s1, x2 = s2, x3 = s3, x4 = s4, x5 = s5, x6 = s6,
              x7 = s7, x8 = s8, x9 = s9, x10 = s10, x11 = s11, x12 = s12,
@@ -242,22 +218,22 @@ static void chacha20Block(const uint8_t key[32], uint32_t counter,
             x14);
     }
 
-    store32_le(out + 0, x0 + s0);
-    store32_le(out + 4, x1 + s1);
-    store32_le(out + 8, x2 + s2);
-    store32_le(out + 12, x3 + s3);
-    store32_le(out + 16, x4 + s4);
-    store32_le(out + 20, x5 + s5);
-    store32_le(out + 24, x6 + s6);
-    store32_le(out + 28, x7 + s7);
-    store32_le(out + 32, x8 + s8);
-    store32_le(out + 36, x9 + s9);
-    store32_le(out + 40, x10 + s10);
-    store32_le(out + 44, x11 + s11);
-    store32_le(out + 48, x12 + s12);
-    store32_le(out + 52, x13 + s13);
-    store32_le(out + 56, x14 + s14);
-    store32_le(out + 60, x15 + s15);
+    dkStoreLe32(out + 0, x0 + s0);
+    dkStoreLe32(out + 4, x1 + s1);
+    dkStoreLe32(out + 8, x2 + s2);
+    dkStoreLe32(out + 12, x3 + s3);
+    dkStoreLe32(out + 16, x4 + s4);
+    dkStoreLe32(out + 20, x5 + s5);
+    dkStoreLe32(out + 24, x6 + s6);
+    dkStoreLe32(out + 28, x7 + s7);
+    dkStoreLe32(out + 32, x8 + s8);
+    dkStoreLe32(out + 36, x9 + s9);
+    dkStoreLe32(out + 40, x10 + s10);
+    dkStoreLe32(out + 44, x11 + s11);
+    dkStoreLe32(out + 48, x12 + s12);
+    dkStoreLe32(out + 52, x13 + s13);
+    dkStoreLe32(out + 56, x14 + s14);
+    dkStoreLe32(out + 60, x15 + s15);
 }
 
 /* Stream-xor `len` bytes from `in` into `out` using ChaCha20 starting at
@@ -370,10 +346,10 @@ typedef struct poly1305State {
 static void poly1305Init(poly1305State *st, const uint8_t key[32]) {
     /* Clamp r per RFC 8439 §2.5: clear the four reserved bits in each of
      * r[3], r[7], r[11], r[15] and the low two bits of r[4], r[8], r[12]. */
-    uint32_t r0 = load32_le(key + 0) & 0x0fffffffu;
-    uint32_t r1 = load32_le(key + 4) & 0x0ffffffcu;
-    uint32_t r2 = load32_le(key + 8) & 0x0ffffffcu;
-    uint32_t r3 = load32_le(key + 12) & 0x0ffffffcu;
+    uint32_t r0 = dkLoadLe32(key + 0) & 0x0fffffffu;
+    uint32_t r1 = dkLoadLe32(key + 4) & 0x0ffffffcu;
+    uint32_t r2 = dkLoadLe32(key + 8) & 0x0ffffffcu;
+    uint32_t r3 = dkLoadLe32(key + 12) & 0x0ffffffcu;
 
     /* Repack 4 x 32-bit r into 5 x 26-bit r. */
     st->r[0] = r0 & 0x3ffffffu;
@@ -388,10 +364,10 @@ static void poly1305Init(poly1305State *st, const uint8_t key[32]) {
     st->h[3] = 0;
     st->h[4] = 0;
 
-    st->s[0] = load32_le(key + 16);
-    st->s[1] = load32_le(key + 20);
-    st->s[2] = load32_le(key + 24);
-    st->s[3] = load32_le(key + 28);
+    st->s[0] = dkLoadLe32(key + 16);
+    st->s[1] = dkLoadLe32(key + 20);
+    st->s[2] = dkLoadLe32(key + 24);
+    st->s[3] = dkLoadLe32(key + 28);
 
     st->buf_len = 0;
 }
@@ -410,10 +386,10 @@ static void poly1305Block(poly1305State *st, const uint8_t block[16], size_t,
      * Full blocks pass block_len=16, hibit_set=true => add 1<<24 to
      * limb 4. */
 
-    uint32_t t0 = load32_le(block + 0);
-    uint32_t t1 = load32_le(block + 4);
-    uint32_t t2 = load32_le(block + 8);
-    uint32_t t3 = load32_le(block + 12);
+    uint32_t t0 = dkLoadLe32(block + 0);
+    uint32_t t1 = dkLoadLe32(block + 4);
+    uint32_t t2 = dkLoadLe32(block + 8);
+    uint32_t t3 = dkLoadLe32(block + 12);
 
     /* h += m */
     uint64_t h0 = st->h[0] + (t0 & 0x3ffffffu);
@@ -616,10 +592,10 @@ static void poly1305Final(poly1305State *st, uint8_t tag[16]) {
     t = (uint64_t)f3 + st->s[3] + (t >> 32);
     f3 = (uint32_t)t;
 
-    store32_le(tag + 0, f0);
-    store32_le(tag + 4, f1);
-    store32_le(tag + 8, f2);
-    store32_le(tag + 12, f3);
+    dkStoreLe32(tag + 0, f0);
+    dkStoreLe32(tag + 4, f1);
+    dkStoreLe32(tag + 8, f2);
+    dkStoreLe32(tag + 12, f3);
 
     /* Wipe sensitive state. */
     dkSecureZero(st, sizeof(*st));
@@ -663,8 +639,8 @@ static void computeAeadTag(const uint8_t otk[32], const uint8_t *aad,
     }
 
     uint8_t lens[16];
-    store64_le(lens + 0, (uint64_t)aad_len);
-    store64_le(lens + 8, (uint64_t)ct_len);
+    dkStoreLe64(lens + 0, (uint64_t)aad_len);
+    dkStoreLe64(lens + 8, (uint64_t)ct_len);
     poly1305Update(&st, lens, sizeof(lens));
 
     poly1305Final(&st, tag);
@@ -1132,8 +1108,8 @@ static bool streamFinalise(chacha20poly1305StreamCtx *ctx, uint8_t tag[16]) {
         poly1305Update(streamPoly(ctx), zeros, pad);
     }
     uint8_t lens[16];
-    store64_le(lens + 0, ctx->aad_total);
-    store64_le(lens + 8, ctx->ct_total);
+    dkStoreLe64(lens + 0, ctx->aad_total);
+    dkStoreLe64(lens + 8, ctx->ct_total);
     poly1305Update(streamPoly(ctx), lens, sizeof(lens));
     poly1305Final(streamPoly(ctx), tag);
     /* Tag is now in caller's `tag` buffer; the ctx tail (key, nonce,

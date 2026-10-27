@@ -342,52 +342,10 @@ void sha256ShaNiCompressBlocksMulti4(uint32_t states[4][8],
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 
-/* Local big-endian store, used only by the test wrapper that finalizes a
- * hash via the SHA-NI compressor. We replicate FIPS 180-4 padding inline so
- * the test exercises sha256ShaNiCompressBlocks end-to-end without depending
- * on internals of the portable implementation. */
-static inline void shaniStoreBE32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)(v >> 24);
-    p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);
-    p[3] = (uint8_t)v;
-}
-static inline void shaniStoreBE64(uint8_t *p, uint64_t v) {
-    for (int i = 0; i < 8; i++) {
-        p[i] = (uint8_t)(v >> (56 - 8 * i));
-    }
-}
-
-static constexpr uint32_t SHANI_H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
-                                         0xa54ff53a, 0x510e527f, 0x9b05688c,
-                                         0x1f83d9ab, 0x5be0cd19};
-
-/* Compute a full SHA-256 of `data[0..len)` using sha256ShaNiCompressBlocks.
- * Handles padding per FIPS 180-4: append 0x80, zero-pad, append 64-bit bit
- * length, possibly spilling into a second padding block. */
+/* A full SHA-256 of `data[0..len)` through sha256ShaNiCompressBlocks */
 static void shaniHash(const uint8_t *data, size_t len,
                       uint8_t out[SHA256_DIGEST_LEN]) {
-    uint32_t state[8];
-    memcpy(state, SHANI_H0, sizeof(SHANI_H0));
-
-    size_t full = len / 64;
-    if (full) {
-        sha256ShaNiCompressBlocks(state, data, full);
-    }
-
-    uint8_t pad[128] = {};
-    size_t rem = len - full * 64;
-    memcpy(pad, data + full * 64, rem);
-    pad[rem] = 0x80;
-    /* If we can't fit the 8-byte length in this block, use two padding
-     * blocks; otherwise just one. */
-    size_t padBlocks = (rem >= 56) ? 2 : 1;
-    shaniStoreBE64(pad + padBlocks * 64 - 8, (uint64_t)len * 8);
-    sha256ShaNiCompressBlocks(state, pad, padBlocks);
-
-    for (uint32_t i = 0; i < 8; i++) {
-        shaniStoreBE32(out + i * 4, state[i]);
-    }
+    sha256HashWith(sha256ShaNiCompressBlocks, data, len, out);
 }
 
 static int shaniEqual(const uint8_t *a, const uint8_t *b) {
@@ -516,13 +474,15 @@ int sha256ShaNiTest(int, char *[]) {
              * itself delegates to the portable on non-x86 hosts). */
             uint32_t ref_state[4][8];
             for (uint32_t lane = 0; lane < 4; lane++) {
-                memcpy(ref_state[lane], SHANI_H0, sizeof(SHANI_H0));
+                memcpy(ref_state[lane], sha256InitialHash,
+                       sizeof(sha256InitialHash));
                 sha256ShaNiCompressBlocks(ref_state[lane], bufs[lane], nb);
             }
 
             uint32_t got_state[4][8];
             for (uint32_t lane = 0; lane < 4; lane++) {
-                memcpy(got_state[lane], SHANI_H0, sizeof(SHANI_H0));
+                memcpy(got_state[lane], sha256InitialHash,
+                       sizeof(sha256InitialHash));
             }
             const uint8_t *bptrs[4] = {bufs[0], bufs[1], bufs[2], bufs[3]};
             sha256ShaNiCompressBlocksMulti4(got_state, bptrs, nb);
@@ -559,16 +519,16 @@ int sha256ShaNiTest(int, char *[]) {
         /* Portable baseline: the scalar compress function itself.
          * (sha256Hash() would dispatch to whatever hardware path the
          * host has and time that instead.) */
-        uint32_t stRef[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+        uint32_t stRef[8];
+        memcpy(stRef, sha256InitialHash, sizeof(stRef));
         double t0 = timeUtilMonotonicSec();
         sha256PortableCompressBlocks(stRef, buf, nb);
         double secsRef = timeUtilMonotonicSec() - t0;
 
         /* SHA-NI compress over the same blocks (this test only runs when
          * SHA-NI is available) */
-        uint32_t stAcc[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+        uint32_t stAcc[8];
+        memcpy(stAcc, sha256InitialHash, sizeof(stAcc));
         t0 = timeUtilMonotonicSec();
         sha256ShaNiCompressBlocks(stAcc, buf, nb);
         double secsAcc = timeUtilMonotonicSec() - t0;

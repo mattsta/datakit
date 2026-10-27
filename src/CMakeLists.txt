@@ -655,6 +655,7 @@ if(DatakitTestMode)
         multiTimerTest.c
         perfRegression.c
         dkC23Test.c
+        dkEndianTest.c
         intsetTest.c
         # One simulation driving every tiered family through its tier changes
         tierSimTest.c

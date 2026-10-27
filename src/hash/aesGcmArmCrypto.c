@@ -39,8 +39,9 @@
 
 #include "aesGcmArmCrypto.h"
 
-#include "../ctmem.h" /* dkCtMemEq16, dkSecureZero */
-#include "../dkC23.h" /* stdc_rotate_right */
+#include "../ctmem.h"    /* dkCtMemEq16, dkSecureZero */
+#include "../dkC23.h"    /* stdc_rotate_right */
+#include "../dkEndian.h" /* dkLoadBe32, dkStoreBe32 */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -326,13 +327,7 @@ armInc32Vec(uint8x16_t ctr) {
      * code obvious and is not on the critical path. */
     uint8_t tmp[16];
     vst1q_u8(tmp, ctr);
-    uint32_t c = ((uint32_t)tmp[12] << 24) | ((uint32_t)tmp[13] << 16) |
-                 ((uint32_t)tmp[14] << 8) | (uint32_t)tmp[15];
-    c++;
-    tmp[12] = (uint8_t)(c >> 24);
-    tmp[13] = (uint8_t)(c >> 16);
-    tmp[14] = (uint8_t)(c >> 8);
-    tmp[15] = (uint8_t)c;
+    dkStoreBe32(tmp + 12, dkLoadBe32(tmp + 12) + 1);
     return vld1q_u8(tmp);
 }
 

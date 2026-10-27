@@ -26,6 +26,8 @@
 
 #include "blake3AVX2.h"
 
+#include "../dkEndian.h" /* dkStoreLe32 */
+
 #include <stdint.h>
 #include <string.h>
 
@@ -388,11 +390,7 @@ blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
     }
     for (int j = 0; j < 8; j++) {
         for (int i = 0; i < 8; i++) {
-            uint32_t w = staging[i][j];
-            out_cvs[j][i * 4 + 0] = (uint8_t)(w);
-            out_cvs[j][i * 4 + 1] = (uint8_t)(w >> 8);
-            out_cvs[j][i * 4 + 2] = (uint8_t)(w >> 16);
-            out_cvs[j][i * 4 + 3] = (uint8_t)(w >> 24);
+            dkStoreLe32(out_cvs[j] + i * 4, staging[i][j]);
         }
     }
 }
@@ -603,10 +601,7 @@ int blake3AVX2Test(int, char *[]) {
                                               counters[j], flag_set[j]);
                 uint8_t expected[32];
                 for (int i = 0; i < 8; i++) {
-                    expected[i * 4 + 0] = (uint8_t)(cv_ref[i]);
-                    expected[i * 4 + 1] = (uint8_t)(cv_ref[i] >> 8);
-                    expected[i * 4 + 2] = (uint8_t)(cv_ref[i] >> 16);
-                    expected[i * 4 + 3] = (uint8_t)(cv_ref[i] >> 24);
+                    dkStoreLe32(expected + i * 4, cv_ref[i]);
                 }
                 if (memcmp(expected, out_batch[j], 32) != 0) {
                     if (mismatches++ < 3) {

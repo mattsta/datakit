@@ -306,10 +306,8 @@ static void benchSha256Multi4(size_t bytes_per_lane) {
         fillDeterministic(bufs[lane], actual, 0xC1u + lane);
     }
     uint32_t st[4][8];
-    const uint32_t h0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     for (uint32_t lane = 0; lane < 4; lane++) {
-        memcpy(st[lane], h0, sizeof(h0));
+        memcpy(st[lane], sha256InitialHash, sizeof(st[lane]));
     }
     const uint8_t *bptrs[4] = {bufs[0], bufs[1], bufs[2], bufs[3]};
 

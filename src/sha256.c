@@ -7,8 +7,9 @@
 
 #include "sha256.h"
 
-#include "ctmem.h" /* dkSecureZero */
-#include "dkC23.h" /* stdc_rotate_right */
+#include "ctmem.h"    /* dkSecureZero */
+#include "dkC23.h"    /* stdc_rotate_right */
+#include "dkEndian.h" /* dkLoadBe32, dkStoreBe32, dkStoreBe64 */
 
 #include <string.h>
 
@@ -29,11 +30,6 @@ static constexpr uint32_t K[64] = {
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
     0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
-
-/* First 32 bits of fractional parts of square roots of first 8 primes. */
-static constexpr uint32_t H0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
-                                   0xa54ff53a, 0x510e527f, 0x9b05688c,
-                                   0x1f83d9ab, 0x5be0cd19};
 
 /* ------------------------------------------------------------------------ */
 /* Inline helpers                                                           */
@@ -59,30 +55,6 @@ static inline uint32_t smallSigma0(uint32_t x) {
 }
 static inline uint32_t smallSigma1(uint32_t x) {
     return stdc_rotate_right(x, 17) ^ stdc_rotate_right(x, 19) ^ (x >> 10);
-}
-
-static inline uint32_t loadBE32(const uint8_t *p) {
-    /* Byte-by-byte: portable regardless of host endianness or alignment. */
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8) | ((uint32_t)p[3]);
-}
-
-static inline void storeBE32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)(v >> 24);
-    p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);
-    p[3] = (uint8_t)v;
-}
-
-static inline void storeBE64(uint8_t *p, uint64_t v) {
-    p[0] = (uint8_t)(v >> 56);
-    p[1] = (uint8_t)(v >> 48);
-    p[2] = (uint8_t)(v >> 40);
-    p[3] = (uint8_t)(v >> 32);
-    p[4] = (uint8_t)(v >> 24);
-    p[5] = (uint8_t)(v >> 16);
-    p[6] = (uint8_t)(v >> 8);
-    p[7] = (uint8_t)v;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -119,7 +91,7 @@ static void sha256Compress(uint32_t state[8], const uint8_t block[64]) {
     uint32_t T1, T2;
 
     for (uint32_t i = 0; i < 16; i++) {
-        W[i] = loadBE32(block + i * 4);
+        W[i] = dkLoadBe32(block + i * 4);
     }
     for (uint32_t i = 16; i < 64; i++) {
         W[i] = smallSigma1(W[i - 2]) + W[i - 7] + smallSigma0(W[i - 15]) +
@@ -172,7 +144,7 @@ void sha256PortableCompressBlocks(uint32_t state[8], const uint8_t *blocks,
 void sha256Init(sha256Ctx *ctx) {
     ctx->bit_count = 0;
     ctx->buf_len = 0;
-    memcpy(ctx->state, H0, sizeof(H0));
+    memcpy(ctx->state, sha256InitialHash, sizeof(sha256InitialHash));
 }
 
 void sha256Update(sha256Ctx *ctx, const void *data, size_t len) {
@@ -232,11 +204,11 @@ void sha256Final(sha256Ctx *ctx, uint8_t out[SHA256_DIGEST_LEN]) {
         ctx->buf_len = 0;
     }
     memset(ctx->buf + ctx->buf_len, 0, 56 - ctx->buf_len);
-    storeBE64(ctx->buf + 56, bit_count);
+    dkStoreBe64(ctx->buf + 56, bit_count);
     sha256BulkCompress(ctx->state, ctx->buf, 1);
 
     for (uint32_t i = 0; i < 8; i++) {
-        storeBE32(out + i * 4, ctx->state[i]);
+        dkStoreBe32(out + i * 4, ctx->state[i]);
     }
 
     /* Wipe state to limit incidental leakage of intermediate values. */
@@ -248,6 +220,34 @@ void sha256Hash(const void *data, size_t len, uint8_t out[SHA256_DIGEST_LEN]) {
     sha256Init(&ctx);
     sha256Update(&ctx, data, len);
     sha256Final(&ctx, out);
+}
+
+void sha256HashWith(sha256CompressBlocksFn *compress, const void *data_,
+                    size_t len, uint8_t out[SHA256_DIGEST_LEN]) {
+    const uint8_t *data = data_;
+    uint32_t state[8];
+    memcpy(state, sha256InitialHash, sizeof(state));
+
+    const size_t full = len / SHA256_BLOCK_LEN;
+    if (full) {
+        compress(state, data, full);
+    }
+
+    /* The tail, 0x80, zeros and the 64-bit bit length: one block, or two
+     * when the tail leaves no room for the length */
+    uint8_t pad[2 * SHA256_BLOCK_LEN] = {};
+    const size_t rem = len - full * SHA256_BLOCK_LEN;
+    if (rem) {
+        memcpy(pad, data + full * SHA256_BLOCK_LEN, rem);
+    }
+    pad[rem] = 0x80;
+    const size_t padBlocks = rem >= SHA256_BLOCK_LEN - 8 ? 2 : 1;
+    dkStoreBe64(pad + padBlocks * SHA256_BLOCK_LEN - 8, (uint64_t)len * 8);
+    compress(state, pad, padBlocks);
+
+    for (size_t i = 0; i < 8; i++) {
+        dkStoreBe32(out + i * 4, state[i]);
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -295,6 +295,23 @@ int sha256Test(int, char *[]) {
         reportMismatch("probe: an intentional mismatch", zeros, ones, &counted);
         if (counted != 1) {
             ERR("reportMismatch counted %d errors, want 1", counted);
+        }
+    }
+
+    TEST("sha256HashWith the portable compressor is sha256Hash at every "
+         "length through three blocks") {
+        uint8_t msg[3 * SHA256_BLOCK_LEN];
+        for (size_t i = 0; i < sizeof(msg); i++) {
+            msg[i] = (uint8_t)(i * 31 + 7);
+        }
+        for (size_t len = 0; len <= sizeof(msg); len++) {
+            uint8_t want[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
+            sha256Hash(msg, len, want);
+            sha256HashWith(sha256PortableCompressBlocks, msg, len, got);
+            if (memcmp(want, got, sizeof(want)) != 0) {
+                ERR("sha256HashWith differs at length %zu", len);
+                break;
+            }
         }
     }
 

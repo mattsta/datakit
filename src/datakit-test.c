@@ -27,6 +27,7 @@
 #include "dataspeed.h"
 #include "dj.h"
 #include "dkDiag.h"
+#include "dkEndian.h"
 #include "dkFormat.h"
 #include "dkRandom.h"
 #include "dkTestTmp.h"
@@ -5480,45 +5481,6 @@ static int dkTestBlake3DeriveKeyVarInputTest(int, char *[]) {
     return 1;
 }
 
-static constexpr uint32_t kA12Sha256H0[8] = {
-    0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
-    0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
-
-static void a12Sha256StoreBE32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)(v >> 24);
-    p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);
-    p[3] = (uint8_t)v;
-}
-static void a12Sha256StoreBE64(uint8_t *p, uint64_t v) {
-    for (int i = 0; i < 8; i++) {
-        p[i] = (uint8_t)(v >> (56 - 8 * i));
-    }
-}
-
-typedef void (*a12Sha256Compressor)(uint32_t state[8], const uint8_t *blocks,
-                                    size_t num_blocks);
-
-static void a12Sha256HashWith(a12Sha256Compressor compress, const uint8_t *data,
-                              size_t len, uint8_t out[32]) {
-    uint32_t state[8];
-    memcpy(state, kA12Sha256H0, sizeof(kA12Sha256H0));
-    size_t full = len / 64;
-    if (full) {
-        compress(state, data, full);
-    }
-    uint8_t pad[128] = {};
-    size_t rem = len - full * 64;
-    memcpy(pad, data + full * 64, rem);
-    pad[rem] = 0x80;
-    size_t padBlocks = (rem >= 56) ? 2 : 1;
-    a12Sha256StoreBE64(pad + padBlocks * 64 - 8, (uint64_t)len * 8);
-    compress(state, pad, padBlocks);
-    for (uint32_t i = 0; i < 8; i++) {
-        a12Sha256StoreBE32(out + i * 4, state[i]);
-    }
-}
-
 static int dkTestSha256AllBackendParityTest(int, char *[]) {
     int failures = 0;
     const bool armOk = sha256ArmCryptoAvailable();
@@ -5537,7 +5499,7 @@ static int dkTestSha256AllBackendParityTest(int, char *[]) {
             memcpy(buf + off, &r, chunk);
         }
         uint8_t reference[32], dispatched[32];
-        a12Sha256HashWith(sha256PortableCompressBlocks, buf, len, reference);
+        sha256HashWith(sha256PortableCompressBlocks, buf, len, reference);
         sha256Hash(buf, len, dispatched);
         if (memcmp(reference, dispatched, 32) != 0) {
             printf(
@@ -5547,14 +5509,14 @@ static int dkTestSha256AllBackendParityTest(int, char *[]) {
         }
         if (armOk) {
             uint8_t arm[32];
-            a12Sha256HashWith(sha256ArmCryptoCompressBlocks, buf, len, arm);
+            sha256HashWith(sha256ArmCryptoCompressBlocks, buf, len, arm);
             if (memcmp(reference, arm, 32) != 0) {
                 failures++;
             }
         }
         if (shaniOk) {
             uint8_t shani[32];
-            a12Sha256HashWith(sha256ShaNiCompressBlocks, buf, len, shani);
+            sha256HashWith(sha256ShaNiCompressBlocks, buf, len, shani);
             if (memcmp(reference, shani, 32) != 0) {
                 failures++;
             }
@@ -12499,6 +12461,9 @@ static const TestEntry testRegistry[] = {
 
     /* C23 library pieces under their standard names (dkC23.h) */
     T_A(dkC23, "stdbit"),
+
+    /* Fixed-width integers to and from bytes in a stated order */
+    T_A(dkEndian, "endian"),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),

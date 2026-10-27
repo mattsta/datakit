@@ -16,6 +16,7 @@
 #include "ctmem.h" /* dkCtMemEq16, dkSecureZero */
 #include "dkC23.h" /* stdc_rotate_left */
 #include "dkDiag.h"
+#include "dkEndian.h" /* dkLoadBe32, dkStoreBe32 */
 #include "hash/aesGcmArmCrypto.h"
 #include "hash/aesGcmNi.h"
 
@@ -59,17 +60,6 @@ static constexpr uint32_t RCON[11] = {0x00000000u, 0x01000000u, 0x02000000u,
                                       0x20000000u, 0x40000000u, 0x80000000u,
                                       0x1B000000u, 0x36000000u};
 
-static uint32_t loadBE32(const uint8_t *p) {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
-}
-static void storeBE32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)(v >> 24);
-    p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);
-    p[3] = (uint8_t)v;
-}
-
 static uint32_t subWord(uint32_t w) {
     return ((uint32_t)SBOX[(w >> 24) & 0xFFu] << 24) |
            ((uint32_t)SBOX[(w >> 16) & 0xFFu] << 16) |
@@ -85,7 +75,7 @@ static void aesKeyExpand(uint32_t round_keys[60], const uint8_t *key,
     const uint8_t Nk = (uint8_t)(key_size / 4u);
     const uint32_t total = 4u * ((uint32_t)num_rounds + 1u);
     for (uint8_t i = 0; i < Nk; i++) {
-        round_keys[i] = loadBE32(key + (size_t)i * 4u);
+        round_keys[i] = dkLoadBe32(key + (size_t)i * 4u);
     }
     for (uint32_t i = Nk; i < total; i++) {
         uint32_t t = round_keys[i - 1];
@@ -255,9 +245,9 @@ static bool aesGcmPortableInit(aesGcmKey *out, const uint8_t *key,
 
 /* Increment the low 32 bits of `block` (big-endian counter mode). */
 static void inc32(uint8_t block[16]) {
-    uint32_t c = loadBE32(block + 12);
+    uint32_t c = dkLoadBe32(block + 12);
     c++;
-    storeBE32(block + 12, c);
+    dkStoreBe32(block + 12, c);
 }
 
 /* GCTR(K, ICB, in, len, out) — CTR-mode encrypt under round keys K

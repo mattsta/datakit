@@ -687,7 +687,8 @@ void sha256ArmCryptoCompressBlocksMulti4(uint32_t states[4][8],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
-#include "str.h" /* StrBytesToHex */
+#include "dkEndian.h" /* dkStoreBe32, dkStoreBe64 */
+#include "str.h"      /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdio.h>
@@ -696,54 +697,11 @@ void sha256ArmCryptoCompressBlocksMulti4(uint32_t states[4][8],
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 
-/* Wrapper that mirrors sha256Hash but routes the bulk-compress through
- * our accelerated path.  Padding logic is inlined directly from
- * FIPS 180-4 §5.1.1 so we don't need to touch sha256.c. */
+/* sha256Hash with every block, padding blocks included, compressed by the
+ * crypto-extension path */
 static void sha256ArmCryptoHash(const void *data, size_t len,
                                 uint8_t out[SHA256_DIGEST_LEN]) {
-    sha256Ctx ctx;
-    sha256Init(&ctx);
-
-    const uint8_t *p = (const uint8_t *)data;
-    ctx.bit_count = (uint64_t)len * 8;
-
-    /* Bulk-compress all complete 64-byte blocks via the crypto path. */
-    size_t full = len / SHA256_BLOCK_LEN;
-    if (full > 0) {
-        sha256ArmCryptoCompressBlocks(ctx.state, p, full);
-        p += full * SHA256_BLOCK_LEN;
-        len -= full * SHA256_BLOCK_LEN;
-    }
-
-    /* Stage the tail and append the standard padding.  We route the
-     * final one or two blocks back through the crypto path too so the
-     * test exercises it on the boundary case. */
-    uint8_t tail[2 * SHA256_BLOCK_LEN];
-    memcpy(tail, p, len);
-    tail[len] = 0x80;
-    size_t pad_to = (len < 56) ? SHA256_BLOCK_LEN : 2 * SHA256_BLOCK_LEN;
-    memset(tail + len + 1, 0, pad_to - len - 1 - 8);
-
-    uint64_t bits = ctx.bit_count;
-    uint8_t *lenp = tail + pad_to - 8;
-    lenp[0] = (uint8_t)(bits >> 56);
-    lenp[1] = (uint8_t)(bits >> 48);
-    lenp[2] = (uint8_t)(bits >> 40);
-    lenp[3] = (uint8_t)(bits >> 32);
-    lenp[4] = (uint8_t)(bits >> 24);
-    lenp[5] = (uint8_t)(bits >> 16);
-    lenp[6] = (uint8_t)(bits >> 8);
-    lenp[7] = (uint8_t)bits;
-
-    sha256ArmCryptoCompressBlocks(ctx.state, tail, pad_to / SHA256_BLOCK_LEN);
-
-    for (uint32_t i = 0; i < 8; i++) {
-        uint32_t v = ctx.state[i];
-        out[i * 4 + 0] = (uint8_t)(v >> 24);
-        out[i * 4 + 1] = (uint8_t)(v >> 16);
-        out[i * 4 + 2] = (uint8_t)(v >> 8);
-        out[i * 4 + 3] = (uint8_t)v;
-    }
+    sha256HashWith(sha256ArmCryptoCompressBlocks, data, len, out);
 }
 
 static int hashEqual(const uint8_t *a, const uint8_t *b) {
@@ -862,9 +820,8 @@ int sha256ArmCryptoTest(int, char *[]) {
          * same bulk buffer as the crypto timing below. (sha256Update()
          * would dispatch to the crypto path on this hardware and time
          * crypto against crypto.) */
-        uint32_t portableState[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
-                                     0xa54ff53a, 0x510e527f, 0x9b05688c,
-                                     0x1f83d9ab, 0x5be0cd19};
+        uint32_t portableState[8];
+        memcpy(portableState, sha256InitialHash, sizeof(portableState));
         double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             sha256PortableCompressBlocks(portableState, buf,
@@ -874,8 +831,8 @@ int sha256ArmCryptoTest(int, char *[]) {
 
         /* Crypto-accelerated timing: feed the full buffer per iteration
          * as a single bulk call. */
-        uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+        uint32_t state[8];
+        memcpy(state, sha256InitialHash, sizeof(state));
         t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < iters; i++) {
             sha256ArmCryptoCompressBlocks(state, buf,
@@ -940,14 +897,7 @@ int sha256ArmCryptoTest(int, char *[]) {
              * 0x80 + zero-padding + length block. */
             uint32_t st[4][8];
             for (uint32_t lane = 0; lane < 4; lane++) {
-                st[lane][0] = 0x6a09e667;
-                st[lane][1] = 0xbb67ae85;
-                st[lane][2] = 0x3c6ef372;
-                st[lane][3] = 0xa54ff53a;
-                st[lane][4] = 0x510e527f;
-                st[lane][5] = 0x9b05688c;
-                st[lane][6] = 0x1f83d9ab;
-                st[lane][7] = 0x5be0cd19;
+                memcpy(st[lane], sha256InitialHash, sizeof(st[lane]));
             }
             const uint8_t *bptrs[4] = {bufs[0], bufs[1], bufs[2], bufs[3]};
             sha256ArmCryptoCompressBlocksMulti4(st, bptrs, nb);
@@ -955,24 +905,12 @@ int sha256ArmCryptoTest(int, char *[]) {
             for (uint32_t lane = 0; lane < 4; lane++) {
                 uint8_t tail[SHA256_BLOCK_LEN] = {};
                 tail[0] = 0x80;
-                uint64_t bits = (uint64_t)nbytes * 8;
-                tail[SHA256_BLOCK_LEN - 8] = (uint8_t)(bits >> 56);
-                tail[SHA256_BLOCK_LEN - 7] = (uint8_t)(bits >> 48);
-                tail[SHA256_BLOCK_LEN - 6] = (uint8_t)(bits >> 40);
-                tail[SHA256_BLOCK_LEN - 5] = (uint8_t)(bits >> 32);
-                tail[SHA256_BLOCK_LEN - 4] = (uint8_t)(bits >> 24);
-                tail[SHA256_BLOCK_LEN - 3] = (uint8_t)(bits >> 16);
-                tail[SHA256_BLOCK_LEN - 2] = (uint8_t)(bits >> 8);
-                tail[SHA256_BLOCK_LEN - 1] = (uint8_t)bits;
+                dkStoreBe64(tail + SHA256_BLOCK_LEN - 8, (uint64_t)nbytes * 8);
                 sha256ArmCryptoCompressBlocks(st[lane], tail, 1);
 
                 uint8_t got[SHA256_DIGEST_LEN];
                 for (uint32_t i = 0; i < 8; i++) {
-                    uint32_t v = st[lane][i];
-                    got[i * 4 + 0] = (uint8_t)(v >> 24);
-                    got[i * 4 + 1] = (uint8_t)(v >> 16);
-                    got[i * 4 + 2] = (uint8_t)(v >> 8);
-                    got[i * 4 + 3] = (uint8_t)v;
+                    dkStoreBe32(got + i * 4, st[lane][i]);
                 }
 
                 if (!hashEqual(got, ref[lane])) {
@@ -1055,11 +993,9 @@ int sha256ArmCryptoTest(int, char *[]) {
             memset(bufs[lane], (int)(0x10u + lane), bufSize);
         }
 
-        uint32_t st1[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                           0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
         uint32_t st4[4][8];
         for (uint32_t lane = 0; lane < 4; lane++) {
-            memcpy(st4[lane], st1, sizeof(st1));
+            memcpy(st4[lane], sha256InitialHash, sizeof(st4[lane]));
         }
 
         /* Single-buffer: four serial calls per iteration. */
@@ -1073,7 +1009,7 @@ int sha256ArmCryptoTest(int, char *[]) {
 
         /* Reset state. */
         for (uint32_t lane = 0; lane < 4; lane++) {
-            memcpy(st4[lane], st1, sizeof(st1));
+            memcpy(st4[lane], sha256InitialHash, sizeof(st4[lane]));
         }
 
         /* Multi-buffer 4-lane. */

@@ -1,4 +1,5 @@
 #include "ulid.h"
+#include "dkEndian.h" /* the 64-bit halves of an id are big-endian */
 #include "str.h"
 #include "timeUtil.h"
 #include "util.h"
@@ -80,13 +81,7 @@ static void ulidGenSeedRng(ulidGen *g) {
     uint8_t seed[16];
     getRandomBytes(seed, sizeof(seed));
 
-    uint64_t tempState[2] = {0, 0};
-    for (int32_t i = 0; i < 8; i++) {
-        tempState[0] = (tempState[0] << 8) | seed[i];
-    }
-    for (int32_t i = 0; i < 8; i++) {
-        tempState[1] = (tempState[1] << 8) | seed[i + 8];
-    }
+    uint64_t tempState[2] = {dkLoadBe64(seed), dkLoadBe64(seed + 8)};
 
     /* xoroshiro128+ requires nonzero state */
     if (tempState[0] == 0) {
@@ -272,41 +267,15 @@ bool ulidDecodeScalar(const char *str, ulid_t *out) {
  * SWAR (SIMD Within A Register) Implementation
  * ==================================================================== */
 
-/* SWAR uses word-sized operations to process multiple bytes at once.
- * For Base36, we can optimize the division chain using lookup tables
- * and parallel operations on 64-bit words. */
-
-/* Reserved for future optimizations */
+/* Four digits per loop pass over the same byte-wise division */
 
 size_t ulidEncodeSWAR(const ulid_t *ulid, char *out, size_t outLen) {
     if (!ulid || !out || outLen < ULID_ENCODED_LENGTH + 1) {
         return 0;
     }
 
-    /* Extract timestamp (high 64 bits) and random (low 64 bits) */
-    uint64_t timestamp = 0;
-    uint64_t random = 0;
-
-    for (int32_t i = 0; i < 8; i++) {
-        timestamp = (timestamp << 8) | ulid->data[i];
-        random = (random << 8) | ulid->data[i + 8];
-    }
-
-    /* The 128-bit value spans 25 Base36 digits.
-     * We split into: 13 digits for high part (includes carry), 12 for low.
-     *
-     * 36^13 = 4738381338321616896 which fits in 63 bits
-     * 36^12 = 131621703842267136
-     *
-     * For a 128-bit number: high * 2^64 + low
-     * = high * 2^64 + low
-     *
-     * We need to handle the carry properly. Let's use a different approach:
-     * Split the 128-bit encoding into chunks that fit in 64-bit arithmetic.
-     */
-
-    /* Full scalar fallback for correctness (SWAR optimization is in the
-     * character conversion, not the division) */
+    /* The 128-bit value spans 25 base36 digits, peeled off by repeated
+     * division of the 16 big-endian bytes */
     uint8_t temp[16];
     memcpy(temp, ulid->data, 16);
 
@@ -822,11 +791,9 @@ void ulidGenerate(ulidGen *g, ulid_t *out) {
     uint64_t timestamp = ulidGenNextNs(g);
     uint64_t randomness = ulidGenRandom(g);
 
-    /* Store in big-endian format: timestamp first, then randomness */
-    for (int32_t i = 0; i < 8; i++) {
-        out->data[i] = (uint8_t)((timestamp >> (56 - i * 8)) & 0xFF);
-        out->data[i + 8] = (uint8_t)((randomness >> (56 - i * 8)) & 0xFF);
-    }
+    /* Big-endian: timestamp first, then randomness */
+    dkStoreBe64(out->data, timestamp);
+    dkStoreBe64(out->data + 8, randomness);
 }
 
 size_t ulidEncode(const ulid_t *ulid, char *out, size_t outLen) {
@@ -889,11 +856,7 @@ uint64_t ulidGetTimestampNs(const ulid_t *ulid) {
         return 0;
     }
 
-    uint64_t timestamp = 0;
-    for (int32_t i = 0; i < 8; i++) {
-        timestamp = (timestamp << 8) | ulid->data[i];
-    }
-    return timestamp;
+    return dkLoadBe64(ulid->data);
 }
 
 uint64_t ulidGetRandom(const ulid_t *ulid) {
@@ -901,11 +864,7 @@ uint64_t ulidGetRandom(const ulid_t *ulid) {
         return 0;
     }
 
-    uint64_t random = 0;
-    for (int32_t i = 0; i < 8; i++) {
-        random = (random << 8) | ulid->data[i + 8];
-    }
-    return random;
+    return dkLoadBe64(ulid->data + 8);
 }
 
 size_t ulidGenerateAndEncode(ulidGen *g, char *out, size_t outLen) {
@@ -1354,49 +1313,18 @@ void ulidGenerateDualNs(ulidGen *g, ulid_t *out) {
     uint64_t ts1 = ulidGenNextNs(g);
     uint64_t ts2 = ulidGenNextNs(g);
 
-    /* Store first timestamp in high 64 bits (bytes 0-7) */
-    out->data[0] = (ts1 >> 56) & 0xFF;
-    out->data[1] = (ts1 >> 48) & 0xFF;
-    out->data[2] = (ts1 >> 40) & 0xFF;
-    out->data[3] = (ts1 >> 32) & 0xFF;
-    out->data[4] = (ts1 >> 24) & 0xFF;
-    out->data[5] = (ts1 >> 16) & 0xFF;
-    out->data[6] = (ts1 >> 8) & 0xFF;
-    out->data[7] = ts1 & 0xFF;
-
-    /* Store second timestamp in low 64 bits (bytes 8-15) */
-    out->data[8] = (ts2 >> 56) & 0xFF;
-    out->data[9] = (ts2 >> 48) & 0xFF;
-    out->data[10] = (ts2 >> 40) & 0xFF;
-    out->data[11] = (ts2 >> 32) & 0xFF;
-    out->data[12] = (ts2 >> 24) & 0xFF;
-    out->data[13] = (ts2 >> 16) & 0xFF;
-    out->data[14] = (ts2 >> 8) & 0xFF;
-    out->data[15] = ts2 & 0xFF;
+    /* First timestamp in bytes 0-7, second in 8-15, both big-endian so
+     * the bytes sort as the timestamps do */
+    dkStoreBe64(out->data, ts1);
+    dkStoreBe64(out->data + 8, ts2);
 }
 
 uint64_t ulidGetFirstTimestampNs(const ulid_t *id) {
-    if (!id) {
-        return 0;
-    }
-
-    /* Extract high 64 bits (bytes 0-7) */
-    return ((uint64_t)id->data[0] << 56) | ((uint64_t)id->data[1] << 48) |
-           ((uint64_t)id->data[2] << 40) | ((uint64_t)id->data[3] << 32) |
-           ((uint64_t)id->data[4] << 24) | ((uint64_t)id->data[5] << 16) |
-           ((uint64_t)id->data[6] << 8) | ((uint64_t)id->data[7]);
+    return id ? dkLoadBe64(id->data) : 0;
 }
 
 uint64_t ulidGetSecondTimestampNs(const ulid_t *id) {
-    if (!id) {
-        return 0;
-    }
-
-    /* Extract low 64 bits (bytes 8-15) */
-    return ((uint64_t)id->data[8] << 56) | ((uint64_t)id->data[9] << 48) |
-           ((uint64_t)id->data[10] << 40) | ((uint64_t)id->data[11] << 32) |
-           ((uint64_t)id->data[12] << 24) | ((uint64_t)id->data[13] << 16) |
-           ((uint64_t)id->data[14] << 8) | ((uint64_t)id->data[15]);
+    return id ? dkLoadBe64(id->data + 8) : 0;
 }
 
 /* ====================================================================
@@ -1421,30 +1349,10 @@ void ulidFromDualNsU128(ulid_t *out, __uint128_t value) {
         return;
     }
 
-    /* Extract high 64 bits (first timestamp) */
-    uint64_t ts1 = (uint64_t)(value >> 64);
-    /* Extract low 64 bits (second timestamp) */
-    uint64_t ts2 = (uint64_t)value;
-
-    /* Store first timestamp in high 64 bits (bytes 0-7) */
-    out->data[0] = (ts1 >> 56) & 0xFF;
-    out->data[1] = (ts1 >> 48) & 0xFF;
-    out->data[2] = (ts1 >> 40) & 0xFF;
-    out->data[3] = (ts1 >> 32) & 0xFF;
-    out->data[4] = (ts1 >> 24) & 0xFF;
-    out->data[5] = (ts1 >> 16) & 0xFF;
-    out->data[6] = (ts1 >> 8) & 0xFF;
-    out->data[7] = ts1 & 0xFF;
-
-    /* Store second timestamp in low 64 bits (bytes 8-15) */
-    out->data[8] = (ts2 >> 56) & 0xFF;
-    out->data[9] = (ts2 >> 48) & 0xFF;
-    out->data[10] = (ts2 >> 40) & 0xFF;
-    out->data[11] = (ts2 >> 32) & 0xFF;
-    out->data[12] = (ts2 >> 24) & 0xFF;
-    out->data[13] = (ts2 >> 16) & 0xFF;
-    out->data[14] = (ts2 >> 8) & 0xFF;
-    out->data[15] = ts2 & 0xFF;
+    /* The high 64 bits (first timestamp) in bytes 0-7, the low 64 bits in
+     * 8-15 */
+    dkStoreBe64(out->data, (uint64_t)(value >> 64));
+    dkStoreBe64(out->data + 8, (uint64_t)value);
 }
 
 __uint128_t ulidToDualNsU128(const ulid_t *id) {
@@ -1452,22 +1360,8 @@ __uint128_t ulidToDualNsU128(const ulid_t *id) {
         return 0;
     }
 
-    /* Extract first timestamp (high 64 bits, bytes 0-7) */
-    uint64_t ts1 =
-        ((uint64_t)id->data[0] << 56) | ((uint64_t)id->data[1] << 48) |
-        ((uint64_t)id->data[2] << 40) | ((uint64_t)id->data[3] << 32) |
-        ((uint64_t)id->data[4] << 24) | ((uint64_t)id->data[5] << 16) |
-        ((uint64_t)id->data[6] << 8) | ((uint64_t)id->data[7]);
-
-    /* Extract second timestamp (low 64 bits, bytes 8-15) */
-    uint64_t ts2 =
-        ((uint64_t)id->data[8] << 56) | ((uint64_t)id->data[9] << 48) |
-        ((uint64_t)id->data[10] << 40) | ((uint64_t)id->data[11] << 32) |
-        ((uint64_t)id->data[12] << 24) | ((uint64_t)id->data[13] << 16) |
-        ((uint64_t)id->data[14] << 8) | ((uint64_t)id->data[15]);
-
-    /* Combine into __uint128_t (high 64 = ts1, low 64 = ts2) */
-    return ((__uint128_t)ts1 << 64) | ts2;
+    /* High 64 bits = first timestamp (bytes 0-7), low = second (8-15) */
+    return ((__uint128_t)dkLoadBe64(id->data) << 64) | dkLoadBe64(id->data + 8);
 }
 
 /* ====================================================================

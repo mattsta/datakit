@@ -24,6 +24,7 @@
 #include "blake3.h"
 
 #include "ctmem.h"
+#include "dkEndian.h" /* dkLoadLe32, dkStoreLe32 */
 #include "hash/blake3AVX2.h"
 #include "hash/blake3Neon.h"
 #include "hash/blake3SSE41.h"
@@ -50,24 +51,6 @@ static constexpr uint8_t BLAKE3_MSG_SCHEDULE[7][16] = {
     {9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7},
     {11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13},
 };
-
-/* ----- Little-endian load/store --------------------------------------- */
-
-static inline uint32_t load_u32_le(const uint8_t *p) {
-    uint32_t v;
-    memcpy(&v, p, sizeof(v));
-#if __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
-    v = __builtin_bswap32(v);
-#endif
-    return v;
-}
-
-static inline void store_u32_le(uint8_t *p, uint32_t v) {
-#if __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
-    v = __builtin_bswap32(v);
-#endif
-    memcpy(p, &v, sizeof(v));
-}
 
 /* ----- Compression ----------------------------------------------------
  *
@@ -114,7 +97,7 @@ DK_INLINE_ALWAYS void compress_pre(uint32_t state[16], const uint32_t cv[8],
                                    uint8_t flags) {
     uint32_t m[16];
     for (uint32_t i = 0; i < 16; i++) {
-        m[i] = load_u32_le(block + i * 4);
+        m[i] = dkLoadLe32(block + i * 4);
     }
 
     state[0] = cv[0];
@@ -166,8 +149,8 @@ static void compress_xof(const uint32_t cv[8],
     uint32_t state[16];
     compress_pre(state, cv, block, block_len, counter, flags);
     for (uint32_t i = 0; i < 8; i++) {
-        store_u32_le(out + i * 4, state[i] ^ state[i + 8]);
-        store_u32_le(out + (i + 8) * 4, state[i + 8] ^ cv[i]);
+        dkStoreLe32(out + i * 4, state[i] ^ state[i + 8]);
+        dkStoreLe32(out + (i + 8) * 4, state[i + 8] ^ cv[i]);
     }
 }
 
@@ -210,7 +193,7 @@ static void output_chaining_value(const blake3Output *o, uint8_t out_cv[32]) {
     memcpy(cv_words, o->input_cv, sizeof(cv_words));
     compress_in_place(cv_words, o->block, o->block_len, o->counter, o->flags);
     for (uint32_t i = 0; i < 8; i++) {
-        store_u32_le(out_cv + i * 4, cv_words[i]);
+        dkStoreLe32(out_cv + i * 4, cv_words[i]);
     }
 }
 
@@ -349,7 +332,7 @@ void blake3HasherInitKeyed(blake3Hasher *self,
                            const uint8_t key[BLAKE3_KEY_LEN]) {
     uint32_t key_words[8];
     for (uint32_t i = 0; i < 8; i++) {
-        key_words[i] = load_u32_le(key + i * 4);
+        key_words[i] = dkLoadLe32(key + i * 4);
     }
     hasher_init_internal(self, key_words, BLAKE3_FLAG_KEYED_HASH);
     /* Wipe stack-local key copy. self->key now owns the canonical copy;
@@ -371,7 +354,7 @@ void blake3HasherInitDeriveKeyRaw(blake3Hasher *self, const void *context,
 
     uint32_t key_words[8];
     for (uint32_t i = 0; i < 8; i++) {
-        key_words[i] = load_u32_le(context_key + i * 4);
+        key_words[i] = dkLoadLe32(context_key + i * 4);
     }
     hasher_init_internal(self, key_words, BLAKE3_FLAG_DERIVE_KEY_MATERIAL);
 
