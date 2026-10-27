@@ -864,7 +864,7 @@ static uint64_t powMod(uint64_t a, uint64_t b, uint64_t m) {
     return r;
 }
 
-static int sprp(uint64_t n, uint64_t a) {
+static bool sprp(uint64_t n, uint64_t a) {
     uint64_t d = n - 1;
     unsigned s = 0;
     while (!(d & 0xff)) {
@@ -885,26 +885,26 @@ static int sprp(uint64_t n, uint64_t a) {
     }
     uint64_t b = powMod(a, d, n);
     if (b == 1 || b == n - 1) {
-        return 1;
+        return true;
     }
     for (unsigned r = 1; r < s; r++) {
         b = mulMod(b, b, n);
         if (b <= 1) {
-            return 0;
+            return false;
         }
         if (b == n - 1) {
-            return 1;
+            return true;
         }
     }
-    return 0;
+    return false;
 }
 
-static int isPrime(uint64_t n) {
+static bool isPrime(uint64_t n) {
     if (n < 2 || !(n & 1)) {
-        return 0;
+        return n == 2;
     }
     if (n < 4) {
-        return 1;
+        return true;
     }
     static constexpr uint64_t bases[] = {2,  3,  5,  7,  11, 13,
                                          17, 19, 23, 29, 31, 37};
@@ -914,10 +914,10 @@ static int isPrime(uint64_t n) {
             break;
         }
         if (!sprp(n, bases[i])) {
-            return 0;
+            return false;
         }
     }
-    return 1;
+    return true;
 }
 
 void rapidhashMakeSecret(uint64_t seed, uint64_t secret[RAPIDHASH_SECRET_LEN]) {
@@ -932,26 +932,26 @@ void rapidhashMakeSecret(uint64_t seed, uint64_t secret[RAPIDHASH_SECRET_LEN]) {
     const size_t palette_len = sizeof(palette);
 
     for (size_t i = 0; i < 4; i++) {
-        int ok;
+        bool ok;
         do {
-            ok = 1;
+            ok = true;
             secret[i] = 0;
             for (size_t j = 0; j < 64; j += 8) {
                 secret[i] |= ((uint64_t)palette[wyrand(&seed) % palette_len])
                              << j;
             }
             if ((secret[i] & 1ULL) == 0) {
-                ok = 0;
+                ok = false;
                 continue;
             }
             for (size_t j = 0; j < i; j++) {
                 if (stdc_count_ones(secret[j] ^ secret[i]) != 32) {
-                    ok = 0;
+                    ok = false;
                     break;
                 }
             }
             if (ok && !isPrime(secret[i])) {
-                ok = 0;
+                ok = false;
             }
         } while (!ok);
     }
@@ -1223,6 +1223,44 @@ int rapidhashTest(int, char *[]) {
                         v->seed, j, got[j], def[j]);
                     break;
                 }
+            }
+        }
+    }
+
+    TEST("isPrime: small cases, strong pseudoprimes, 64-bit primes and "
+         "semiprimes") {
+        static constexpr uint64_t primes[] = {
+            2,
+            3,
+            5,
+            7,
+            97,
+            7919,
+            4294967291u,
+            2305843009213693951u /* 2^61-1 */,
+            18446744073709551557u /* the largest below 2^64 */};
+        /* 561 is a Carmichael number; 2047 is a strong pseudoprime to
+         * base 2 and 3215031751 to bases 2, 3, 5 and 7; the last is
+         * (2^32 - 5)(2^32 - 17), which needs the 128-bit products */
+        static constexpr uint64_t composites[] = {
+            0,
+            1,
+            4,
+            9,
+            15,
+            561,
+            2047,
+            3215031751,
+            4294967297u /* 641 x 6700417 */,
+            18446743979220271189u};
+        for (size_t i = 0; i < countof(primes); i++) {
+            if (!isPrime(primes[i])) {
+                ERR("isPrime(%" PRIu64 ") is false", primes[i]);
+            }
+        }
+        for (size_t i = 0; i < countof(composites); i++) {
+            if (isPrime(composites[i])) {
+                ERR("isPrime(%" PRIu64 ") is true", composites[i]);
             }
         }
     }

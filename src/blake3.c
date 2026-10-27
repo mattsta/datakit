@@ -1010,18 +1010,11 @@ static void *blake3MtWorker(void *arg) {
     return nullptr;
 }
 
-static int is_todo_vector(const char *hex) {
-    return hex && strncmp(hex, "TODO_VECTOR_", 12) == 0;
-}
-
-/* Compare hasher output against an expected hex string, skipping if the
- * vector is a TODO placeholder. Returns 1 if compared, 0 if skipped. */
-static int check_against_hex(const uint8_t *digest, size_t digest_len,
-                             const char *expected_hex, const char *label,
-                             size_t input_len, int *err_p) {
-    if (is_todo_vector(expected_hex)) {
-        return 0;
-    }
+/* Compare hasher output against an official vector's hex digits (the
+ * first 32 bytes of each expected output) */
+static void check_against_hex(const uint8_t *digest, size_t digest_len,
+                              const char *expected_hex, const char *label,
+                              size_t input_len, int *err_p) {
     char got[BLAKE3_OUT_LEN * 2 + 1];
     StrBytesToHex(digest, digest_len, got);
     if (strncmp(got, expected_hex, digest_len * 2) != 0) {
@@ -1032,7 +1025,6 @@ static int check_against_hex(const uint8_t *digest, size_t digest_len,
         fflush(stdout);
         (*err_p)++;
     }
-    return 1;
 }
 
 /* Fill a buffer with the official BLAKE3 test pattern (i mod 251). */
