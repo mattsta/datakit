@@ -1896,70 +1896,49 @@ void ulid32Copy(ulid32_t *dst, const ulid32_t *src) {
  * Metadata API
  * ==================================================================== */
 
+/* Each variant's name and layout, one row per variant */
+static const struct {
+    const char *name;
+    const char *description;
+} ulidVariantInfo_[ULID_VARIANT_COUNT] = {
+    [ULID_VARIANT_EPOCH2020] = {"EPOCH2020",
+                                "48-bit ns offset from 2020 + 16-bit random"},
+    [ULID_VARIANT_EPOCH2024] = {"EPOCH2024",
+                                "48-bit ns offset from 2024 + 16-bit random"},
+    [ULID_VARIANT_EPOCHCUSTOM] =
+        {"EPOCHCUSTOM", "48-bit ns offset from custom epoch + 16-bit random"},
+    [ULID_VARIANT_NS] = {"NS", "52-bit ns + 12-bit random"},
+    [ULID_VARIANT_US] = {"US", "46-bit us + 18-bit random"},
+    [ULID_VARIANT_MS] = {"MS", "42-bit ms + 22-bit random"},
+    [ULID_VARIANT_DUALNS] = {"DUALNS",
+                             "64-bit ns + 64-bit ns (128-bit dual timestamp)"},
+    [ULID_VARIANT_DUALNS_INTERLEAVED] =
+        {"DUALNS_INTERLEAVED",
+         "128-bit bit-interleaved dual ns timestamps (sortable)"},
+    [ULID_VARIANT_NSCOUNT] = {"NSCOUNT", "40-bit ns + 24-bit counter"},
+    [ULID_VARIANT_HYBRID] = {"HYBRID", "44-bit us + 20-bit ns delta"},
+    [ULID_VARIANT_SNOWFLAKE] = {"SNOWFLAKE",
+                                "41-bit ms + 10-bit machine + 13-bit sequence"},
+    [ULID_VARIANT_32MS] = {"32MS", "26-bit ms + 6-bit random (32-bit)"},
+    [ULID_VARIANT_32S] = {"32S", "22-bit s + 10-bit random (32-bit)"},
+};
+
 const char *ulid64GetVariantName(ulidVariantType type) {
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-        return "EPOCH2020";
-    case ULID_VARIANT_EPOCH2024:
-        return "EPOCH2024";
-    case ULID_VARIANT_EPOCHCUSTOM:
-        return "EPOCHCUSTOM";
-    case ULID_VARIANT_NS:
-        return "NS";
-    case ULID_VARIANT_US:
-        return "US";
-    case ULID_VARIANT_MS:
-        return "MS";
-    case ULID_VARIANT_DUALNS:
-        return "DUALNS";
-    case ULID_VARIANT_DUALNS_INTERLEAVED:
-        return "DUALNS_INTERLEAVED";
-    case ULID_VARIANT_NSCOUNT:
-        return "NSCOUNT";
-    case ULID_VARIANT_HYBRID:
-        return "HYBRID";
-    case ULID_VARIANT_SNOWFLAKE:
-        return "SNOWFLAKE";
-    case ULID_VARIANT_32MS:
-        return "32MS";
-    case ULID_VARIANT_32S:
-        return "32S";
-    default:
+    if ((size_t)type >= countof(ulidVariantInfo_) ||
+        !ulidVariantInfo_[type].name) {
         return "UNKNOWN";
     }
+
+    return ulidVariantInfo_[type].name;
 }
 
 const char *ulid64GetVariantDescription(ulidVariantType type) {
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-        return "48-bit ns offset from 2020 + 16-bit random";
-    case ULID_VARIANT_EPOCH2024:
-        return "48-bit ns offset from 2024 + 16-bit random";
-    case ULID_VARIANT_EPOCHCUSTOM:
-        return "48-bit ns offset from custom epoch + 16-bit random";
-    case ULID_VARIANT_NS:
-        return "52-bit ns + 12-bit random";
-    case ULID_VARIANT_US:
-        return "46-bit us + 18-bit random";
-    case ULID_VARIANT_MS:
-        return "42-bit ms + 22-bit random";
-    case ULID_VARIANT_DUALNS:
-        return "64-bit ns + 64-bit ns (128-bit dual timestamp)";
-    case ULID_VARIANT_DUALNS_INTERLEAVED:
-        return "128-bit bit-interleaved dual ns timestamps (sortable)";
-    case ULID_VARIANT_NSCOUNT:
-        return "40-bit ns + 24-bit counter";
-    case ULID_VARIANT_HYBRID:
-        return "44-bit us + 20-bit ns delta";
-    case ULID_VARIANT_SNOWFLAKE:
-        return "41-bit ms + 10-bit machine + 13-bit sequence";
-    case ULID_VARIANT_32MS:
-        return "26-bit ms + 6-bit random (32-bit)";
-    case ULID_VARIANT_32S:
-        return "22-bit s + 10-bit random (32-bit)";
-    default:
+    if ((size_t)type >= countof(ulidVariantInfo_) ||
+        !ulidVariantInfo_[type].description) {
         return "Unknown variant";
     }
+
+    return ulidVariantInfo_[type].description;
 }
 
 double ulid64GetVariantRangeYears(ulidVariantType type) {
@@ -2455,6 +2434,21 @@ int ulidTest(int, char *[]) {
         }
     }
 
+    TEST("every variant has a name and a description") {
+        for (int t = 0; t < ULID_VARIANT_COUNT; t++) {
+            if (strcmp(ulid64GetVariantName((ulidVariantType)t), "UNKNOWN") ==
+                    0 ||
+                strcmp(ulid64GetVariantDescription((ulidVariantType)t),
+                       "Unknown variant") == 0) {
+                ERR("variant %d has no name or description", t);
+            }
+        }
+
+        if (strcmp(ulid64GetVariantName(ULID_VARIANT_COUNT), "UNKNOWN") != 0) {
+            ERR("a type past the last variant has a name");
+        }
+    }
+
     TEST("every 64-bit variant round-trips a timestamp in its range") {
         /* At the middle of each variant's valid range and near its top,
          * the extracted timestamp is the generation instant to the
@@ -2504,7 +2498,9 @@ int ulidTest(int, char *[]) {
                     ulid64GetVariantName(type));
             }
             if (!ulid64IsValidVariantType(type) ||
-                !ulid64GetVariantDescription(type) ||
+                strcmp(ulid64GetVariantName(type), "UNKNOWN") == 0 ||
+                strcmp(ulid64GetVariantDescription(type), "Unknown variant") ==
+                    0 ||
                 !ulid64GetVariantPrecision(type) ||
                 !(ulid64GetVariantRangeYears(type) > 0.0)) {
                 ERR("variant %d: metadata missing", (int)type);
