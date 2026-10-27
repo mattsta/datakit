@@ -11,7 +11,7 @@
  * poly1305AVX2Available() returns true AND at least 4 full 16-byte
  * blocks of message remain.
  *
- * Per-function __attribute__((target("avx2"))) lets us build on hosts
+ * Per-function [[gnu::target("avx2")]] lets us build on hosts
  * whose baseline ISA is below AVX2; the dispatcher will only invoke
  * Block4x after a positive runtime probe.
  *

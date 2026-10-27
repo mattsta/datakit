@@ -80,7 +80,7 @@ static inline int fdRelease(int *fd) {
  * perfRegression.c for the runtime-sized variant):
  *     typedef struct xArray { x **items; uint64_t count; } xArray;
  *     DK_FN_UNUSED static void xArrayFree_cleanup(xArray *a) { ... }
- *     __attribute__((cleanup(xArrayFree_cleanup))) xArray arr = {...};
+ *     cleaner(xArrayFree) xArray arr = {...};
  *
  * Wipe-then-free secret buffers: the cleanup fn only receives the
  * pointer, so a runtime wipe length rides in a {ptr, len} holder

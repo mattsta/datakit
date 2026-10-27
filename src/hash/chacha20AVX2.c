@@ -10,7 +10,7 @@
  * AVX-512 (VPROLD); instead synthesize rotates as shift+or for n=12,7
  * and as _mm256_shuffle_epi8 for n=16,8.
  *
- * Per-function __attribute__((target("avx2"))) lets us build on hosts
+ * Per-function [[gnu::target("avx2")]] lets us build on hosts
  * whose baseline ISA is below AVX2; the dispatcher will only invoke
  * Block8 after a positive runtime probe.
  *
