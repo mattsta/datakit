@@ -60,7 +60,7 @@ multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma) {
 /* The index multimapAtomNew and NewPermanent make, and the mask a hash
  * passes through: the suite runs once per index, and once with 2-bit
  * hashes so most values collide */
-static multimapAtomIndex atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_ORDERED;
+static multimapAtomIndex atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_HASHED;
 static uint32_t atomTestHashMask_ = UINT32_MAX;
 #endif
 
@@ -87,7 +87,7 @@ static void atomInitIndexed_(multimapAtom *ma, const multimapAtomIndex index,
 }
 
 void multimapAtomInit(multimapAtom *ma) {
-    atomInitIndexed_(ma, MULTIMAP_ATOM_INDEX_ORDERED, false);
+    atomInitIndexed_(ma, MULTIMAP_ATOM_INDEX_HASHED, false);
 }
 
 multimapAtom *multimapAtomNewIndexed(const multimapAtomIndex index,
@@ -102,7 +102,7 @@ static multimapAtomIndex atomDefaultIndex_(void) {
 #ifdef DATAKIT_TEST
     return atomTestDefaultIndex_;
 #else
-    return MULTIMAP_ATOM_INDEX_ORDERED;
+    return MULTIMAP_ATOM_INDEX_HASHED;
 #endif
 }
 
@@ -301,45 +301,6 @@ static void atomIndexDeleteHeld_(multimapAtom *ma, const databox *value,
     [[maybe_unused]] const bool deleted =
         multimapDeleteWithReference(&ma->mapAtomReverse, value, ma, &found);
     assert(deleted && found.data.u == ref->data.u);
-}
-
-/* HASHED: the atom with the least value, by scanning the forward rows */
-static bool atomHashedMin_(const multimapAtom *ma, databox *minRef) {
-    multimapIterator iter;
-    multimapIteratorInit(ma->mapAtomForward, &iter, true);
-    databox best = {};
-    databoxWide bestWide;
-    uint64_t bestId = 0;
-    bool found = false;
-    while (true) {
-        /* Zeroed: a narrow decode leaves the flag bits as they were */
-        databox id = {};
-        databox value = {};
-        databox count = {};
-        databox *row[3] = {&id, &value, &count};
-        databoxWide wide[3];
-        if (!multimapIteratorNextWithSlots(&iter, row, wide)) {
-            break;
-        }
-
-        if (!found || databoxCompare(&value, &best) < 0) {
-            best = value;
-            if (value.big) {
-                /* the slot is reused by the next row */
-                bestWide = wide[1];
-                best.data.ptr = &bestWide;
-            }
-
-            bestId = id.data.u;
-            found = true;
-        }
-    }
-
-    if (found) {
-        *minRef = atomRefBox_(bestId);
-    }
-
-    return found;
 }
 
 /* ====================================================================
@@ -637,18 +598,6 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
     databox *elements[2] = {&val, count};
 
     multimapLookup(ma->mapAtomForward, key, elements);
-}
-
-/* ====================================================================
- * Further Query / Act
- * ==================================================================== */
-bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef) {
-    if (atomHashed_(ma)) {
-        return atomHashedMin_(ma, minRef);
-    }
-
-    /* ORDERED: the first reverse row, a 1-map */
-    return multimapFirstInto(ma->mapAtomReverse, minRef, 1);
 }
 
 /* ====================================================================
@@ -2213,35 +2162,6 @@ static int atomTestSuite_(void) {
         multimapAtomFree(ma);
     }
 
-    TEST("lookup min/max correctness") {
-        multimapAtom *ma = multimapAtomNew();
-
-        /* Insert keys in random order */
-        int64_t keys[] = {500, 100, 900, 300, 700, 200, 800, 400, 600, 1000};
-        for (size_t i = 0; i < 10; i++) {
-            databox box = databoxNewSigned(keys[i]);
-            multimapAtomInsert(ma, &box);
-        }
-
-        /* Lookup minimum - should be 100 */
-        databox minRef;
-        bool found = multimapAtomLookupMin(ma, &minRef);
-        assert(found);
-        printf("Min ref: %" PRIuMAX " (expected ref for key 100)\n",
-               minRef.data.u);
-
-        /* Verify the min ref maps to key 100 */
-        databox minKey;
-        found = multimapAtomLookup(ma, &minRef, &minKey);
-        assert(found);
-        printf("Min key: %" PRIdMAX " (expected 100)\n", minKey.data.i);
-        if (minKey.data.i != 100) {
-            ERR("Expected min key to be 100 but got %" PRIdMAX, minKey.data.i);
-        }
-
-        multimapAtomFree(ma);
-    }
-
     TEST("string key stress test") {
         multimapAtom *ma = multimapAtomNew();
 
@@ -2682,12 +2602,6 @@ static int atomTestSuite_(void) {
                     ERR("pass %d value %zu: deleted twice", pass, i);
                 }
 
-                const databox *wantMin = nullptr;
-                const databox fillMin = databoxNewSigned(1'000'000);
-                if (fill) {
-                    wantMin = &fillMin;
-                }
-
                 for (size_t j = 0; j < pathValueCount; j++) {
                     const databox refJ = {
                         .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
@@ -2705,21 +2619,6 @@ static int atomTestSuite_(void) {
                                 !atomTestResolvesTo(ma, &refJ, &vals[j]))) {
                         ERR("pass %d after %zu: value %zu resolves wrong", pass,
                             i, j);
-                    }
-
-                    if (live[j] &&
-                        (!wantMin || databoxCompare(&vals[j], wantMin) < 0)) {
-                        wantMin = &vals[j];
-                    }
-                }
-
-                if (wantMin) {
-                    databox minRef = {};
-                    ctestPoisonStack();
-                    if (!multimapAtomLookupMin(ma, &minRef) ||
-                        !atomTestResolvesTo(ma, &minRef, wantMin)) {
-                        ERR("pass %d after %zu: minimum resolves wrong", pass,
-                            i);
                     }
                 }
             }
@@ -3389,7 +3288,7 @@ int multimapAtomTest(int, char *[]) {
         err += atomTestSuite_();
     }
 
-    atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_ORDERED;
+    atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_HASHED;
 
     for (size_t p = 0; p < 2; p++) {
         atomTestHashMask_ = p ? 0x3 : UINT32_MAX;
@@ -3505,17 +3404,6 @@ int multimapAtomTest(int, char *[]) {
                             i);
                         break;
                     }
-                }
-
-                /* The least value: one read ordered, a scan hashed */
-                databox minO = {};
-                databox minH = {};
-                const bool mo = multimapAtomLookupMin(ordered, &minO);
-                const bool mh = multimapAtomLookupMin(hashed, &minH);
-                if (mo != mh || (mo && minO.data.u64 != minH.data.u64)) {
-                    ERR("round %d: least value is atom %" PRIu64
-                        " ordered, %" PRIu64 " hashed",
-                        round, minO.data.u64, minH.data.u64);
                 }
 
                 if (round == 0) {

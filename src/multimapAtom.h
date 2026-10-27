@@ -51,11 +51,10 @@ typedef struct multimapAtom multimapAtom;
  * pointer):
  * - ORDERED: the reverse rows are ids sorted by value.  A find compares
  *   about log n rows, each through a forward-map lookup of its id (about
- *   log^2 n), and LookupMin is one read.
+ *   log^2 n).  The smaller index.
  * - HASHED: the reverse rows are {hash of the value, id}, sorted by hash.
  *   A find is an integer search for the hash, then one forward lookup per
- *   candidate (normally one): about log n.  About 5 more bytes per atom;
- *   LookupMin scans every atom.
+ *   candidate (normally one): about log n.  About 5 more bytes per atom.
  * Equality is databoxCompare's in both (5, 5.0 and a 128-bit 5 are one
  * value), and the hash never reaches a snapshot: restore rebuilds it. */
 typedef enum multimapAtomIndex {
@@ -73,7 +72,7 @@ multimapAtom *multimapAtomNew(void);
 /* A permanent table (see ID BEHAVIOURS above) */
 multimapAtom *multimapAtomNewPermanent(void);
 /* A table with the reverse index 'index', reusing or permanent ids.
- * multimapAtomNew and NewPermanent make ORDERED tables. */
+ * multimapAtomNew and NewPermanent make HASHED tables. */
 multimapAtom *multimapAtomNewIndexed(multimapAtomIndex index, bool permanent);
 bool multimapAtomIsPermanent(const multimapAtom *ma);
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
@@ -128,8 +127,6 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
                                 databox *count);
 bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
                                  databox *atomRef);
-
-bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef);
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key);
 /* Retain 'key' (inserting it when new) and replace it with its reference */

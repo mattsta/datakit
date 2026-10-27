@@ -1783,12 +1783,12 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     perfContainerSink = sink;
 }
 
-/* The atom table under each reverse index, then the lowest-first table,
- * the string pool and deletes by id */
+/* The atom table under each reverse index (the default, hashed, then
+ * ordered), then the lowest-first table and the string pool */
 static void benchMultimapAtom(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
-    benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_ORDERED, keys);
-    benchAtomTable("multimapAtomHashed", MULTIMAP_ATOM_INDEX_HASHED, keys);
+    benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
+    benchAtomTable("multimapAtomOrdered", MULTIMAP_ATOM_INDEX_ORDERED, keys);
 
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;

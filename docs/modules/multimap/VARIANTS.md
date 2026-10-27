@@ -465,23 +465,39 @@ integer reference wherever a repeated byte string would otherwise go.
 
 ```c
 struct multimapAtom {
-    multimap *mapAtomForward; /* 3-element rows: {ID, Key, Refcount} */
-    multimap *mapAtomReverse; /* 1-element rows: IDs sorted by their Key */
-    uint64_t highest;         /* next ID to hand out; top bit: permanent */
+    multimap *mapAtomForward; /* {ID, Key, Refcount} sorted by ID */
+    multimap *mapAtomReverse; /* the reverse index (multimapAtomIndex) */
+    uint64_t highest;         /* next ID; bit 63: permanent, bit 62: hashed */
+    atomResolved_ *resolving; /* set only during one retain or release */
 };
 ```
 
-Both inner multimaps are created with `FLEX_CAP_LEVEL_512`.
+Both inner multimaps are created with `FLEX_CAP_LEVEL_512`. IDs stay below
+`MULTIMAP_ATOM_ID_LIMIT` (2^62).
 
-`mapAtomReverse` is a self-sorting list: it stores only the atom ID, but is
-inserted through `multimapInsertWithSurrogateKey()` so it sorts by the
-_resolved_ string. That is what makes "find the ID for this string" a binary
-search over the strings.
+`mapAtomReverse` finds a key's ID. It is one of two kinds, chosen at creation
+and read back by `multimapAtomGetIndex()`:
+
+- `MULTIMAP_ATOM_INDEX_HASHED` (the default for `multimapAtomNew()`,
+  `multimapAtomNewPermanent()` and `multimapAtomInit()`): a set of
+  `{hash of the key, ID}` rows sorted by hash. A find is an integer search for
+  the hash, then one forward lookup per candidate (normally one).
+- `MULTIMAP_ATOM_INDEX_ORDERED`: rows holding only the ID, inserted through
+  `multimapInsertWithSurrogateKey()` so they sort by the _resolved_ key. Every
+  comparison in a find resolves an ID through the forward map (about
+  log² n), but each atom costs about 5 bytes less.
+
+Equality is `databoxCompare()`'s under both kinds (5, 5.0 and a 128-bit 5 are
+one key). A snapshot records the kind but never the hashes; restore rebuilds
+the index.
 
 ### API
 
 ```c
 multimapAtom *multimapAtomNew(void);
+multimapAtom *multimapAtomNewPermanent(void);
+multimapAtom *multimapAtomNewIndexed(multimapAtomIndex index, bool permanent);
+multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
 void multimapAtomInit(multimapAtom *ma);
 void multimapAtomFree(multimapAtom *ma);
 
@@ -502,7 +518,6 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
                                 databox *count);
 bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
                                  databox *atomRef);
-bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef);
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key);
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
