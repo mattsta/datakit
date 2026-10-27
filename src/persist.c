@@ -36,6 +36,7 @@
 #include "persist.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "dkEndian.h" /* dkStoreLe64, dkLoadLe64 */
 #include "flexEnvelope.h"
 #include "hmacKeyring.h"
 #include "mflex.h"
@@ -1683,12 +1684,10 @@ static bool persistWALHeal_(persist *p, int64_t goodEnd) {
 
     /* The record header, little-endian; a fixed layout, not a flex: it is
      * read by an operator's tool before anything is known to be intact */
-    uint8_t head[32] = {'D', 'K', 'P', 'Q', 1, 0, 0, 0};
-    for (size_t i = 0; i < 8; i++) {
-        head[8 + i] = (uint8_t)((uint64_t)goodEnd >> (8 * i));
-        head[16 + i] = (uint8_t)(p->walSequence >> (8 * i));
-        head[24 + i] = (uint8_t)(bytes >> (8 * i));
-    }
+    uint8_t head[PERSIST_QUARANTINE_HEADER_BYTES] = {'D', 'K', 'P', 'Q', 1};
+    dkStoreLe64(head + PERSIST_QUARANTINE_OFFSET_AT, (uint64_t)goodEnd);
+    dkStoreLe64(head + PERSIST_QUARANTINE_SEQUENCE_AT, p->walSequence);
+    dkStoreLe64(head + PERSIST_QUARANTINE_BYTES_AT, bytes);
     bool kept = q && q->seek(q->ctx, 0, SEEK_END) >= 0 &&
                 q->write(q->ctx, head, sizeof(head)) == (ssize_t)sizeof(head) &&
                 persistQuarantineCopy_(wal, q, goodEnd, bytes) &&
@@ -10846,10 +10845,9 @@ int persistTest(int, char *[]) {
         const bool met = persistLastBadEntry(p, &r);
         size_t qLen = 0;
         const uint8_t *rec = persistStoreMemoryBuffer(q, &qLen);
-        uint64_t n = 0;
-        for (size_t i = 0; qLen >= 32 && i < 8; i++) {
-            n |= (uint64_t)rec[24 + i] << (8 * i);
-        }
+        const uint64_t n = qLen >= PERSIST_QUARANTINE_HEADER_BYTES
+                               ? dkLoadLe64(rec + PERSIST_QUARANTINE_BYTES_AT)
+                               : 0;
         if (!partial || intsetCount(partial) != 1 || !met ||
             r.kind != PERSIST_BAD_ENTRY_CORRUPT ||
             r.action != PERSIST_BAD_ENTRY_HEALED || r.offset != (int64_t)at ||

@@ -952,6 +952,13 @@ typedef enum persistBadEntryAction {
     PERSIST_BAD_ENTRY_HELD = 2,      /* left in place, appends refused */
 } persistBadEntryAction;
 
+/* The quarantine record header described above: its size and where each
+ * 64-bit little-endian field starts */
+static constexpr size_t PERSIST_QUARANTINE_HEADER_BYTES = 32;
+static constexpr size_t PERSIST_QUARANTINE_OFFSET_AT = 8;
+static constexpr size_t PERSIST_QUARANTINE_SEQUENCE_AT = 16;
+static constexpr size_t PERSIST_QUARANTINE_BYTES_AT = 24;
+
 typedef struct persistBadEntryReport {
     persistBadEntryKind kind;
     persistBadEntryAction action;

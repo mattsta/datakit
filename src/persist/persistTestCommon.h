@@ -14,6 +14,7 @@
 
 #include "../ctest.h"
 #include "../databox.h"
+#include "../dkEndian.h" /* dkLoadLe64 */
 #include "../dkTestTmp.h"
 #include "persistCtx.h"
 #include <stdio.h>
@@ -187,12 +188,10 @@ DK_FN_UNUSED static bool ptestExpectHealed(const persistCtx *ctx,
     if (!q) {
         return false;
     }
-    uint8_t head[32];
+    uint8_t head[PERSIST_QUARANTINE_HEADER_BYTES];
     const bool read = fread(head, 1, sizeof(head), q) == sizeof(head);
-    uint64_t n = 0;
-    for (size_t i = 0; read && i < 8; i++) {
-        n |= (uint64_t)head[24 + i] << (8 * i);
-    }
+    const uint64_t n =
+        read ? dkLoadLe64(head + PERSIST_QUARANTINE_BYTES_AT) : 0;
     const bool atEnd = read && fseek(q, 0, SEEK_END) == 0 &&
                        (uint64_t)ftell(q) == sizeof(head) + n;
     fclose(q);
