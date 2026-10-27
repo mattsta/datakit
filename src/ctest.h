@@ -35,6 +35,19 @@
     }
 }
 
+/* Fill 8 KiB of the stack below the caller with 0xFF, so a decoder that
+ * reads a box (or any temporary) before setting it up sees big = 1 and an
+ * all-ones pointer instead of lucky zeros.  AddressSanitizer is off here
+ * so redzones do not frame the array and leave the top of the next frame
+ * unpoisoned. */
+[[maybe_unused]] [[gnu::noinline, gnu::no_sanitize("address")]] static void
+ctestPoisonStack(void) {
+    volatile uint8_t junk[8192];
+    for (size_t i = 0; i < sizeof(junk); i++) {
+        junk[i] = 0xFF;
+    }
+}
+
 /* Generate new string concatenating integer i against string 'prefix'.
  * Marked unused: a TU may enable the generator but reference only some. */
 #define CTEST_INCLUDE_GEN(named)                                               \

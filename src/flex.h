@@ -573,9 +573,18 @@ bool flexGetNextByTypeBig(flex *f, flexEntry **fe, databoxBig *box);
 /* Retrieve specific data.  Each returns false, leaving '*value' alone, when
  * the entry does not fit the result type: a 64-bit integer out of its
  * range, any 96/128-bit value, and every entry that is no integer (bytes,
- * reals, booleans, null, ...). */
-bool flexGetSigned(flexEntry *fe, int64_t *value);
-bool flexGetUnsigned(flexEntry *fe, uint64_t *value);
+ * reals, booleans, null, ...).  flex stores every non-negative integer in
+ * its unsigned form, so flexGetUnsigned takes exactly the 64-bit
+ * unsigned entries.  No payload is decoded or written for a wide entry,
+ * so a crafted one cannot steer a write: snapshot and wire decoders read
+ * their integer fields with these. */
+bool flexGetSigned(const flexEntry *fe, int64_t *value);
+bool flexGetUnsigned(const flexEntry *fe, uint64_t *value);
+
+/* flexGetUnsigned on the entry at '*fe', stepping '*fe' to the next entry
+ * on success; false, with '*fe' and '*value' unchanged, for another type
+ * or at the end (a null '*fe') */
+bool flexReadUnsigned(const flex *f, flexEntry **fe, uint64_t *value);
 
 /* Replace.  flexReplaceSigned/Unsigned and flexIncrby* take 64-bit
  * integer entries (flexIncrbySigned also booleans) and return false for
@@ -748,6 +757,12 @@ int32_t flexTest(int32_t argc, char *argv[]);
  * validators.  Returns the number of failures.  flexTest runs it; other
  * suites may call it too. */
 int32_t flexValidateTotalitySweep(void);
+
+/* A copy of 'f' with entry 'idx' replaced by 'with' (an index past the
+ * end copies every entry unchanged), every entry stored exactly as it
+ * decodes: for suites that corrupt one field of a snapshot or wire
+ * message.  The caller frees it with flexFree. */
+flex *flexTestReplaceEntry(const flex *f, size_t idx, const databoxBig *with);
 #endif
 
 __END_DECLS

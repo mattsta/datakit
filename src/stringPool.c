@@ -544,16 +544,6 @@ static uint8_t *stringPoolPersistSnapshot_(const void *structure, size_t *len) {
     return (uint8_t *)f;
 }
 
-/* The next entry as an unsigned 64-bit value */
-static bool stringPoolPersistUnsigned_(const flex *f, flexEntry **fe,
-                                       uint64_t *out) {
-    databoxBig box;
-    flexGetByTypeBig(*fe, &box);
-    *fe = flexNext(f, *fe);
-    *out = box.data.u64;
-    return box.type == DATABOX_UNSIGNED_64;
-}
-
 /* A new string with one reference under 'id' */
 static bool stringPoolPersistPlace_(stringPool *pool, uint64_t id,
                                     const databox *str, uint64_t refcount) {
@@ -592,9 +582,8 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
     uint64_t mode;
     uint64_t next;
     uint64_t live;
-    if (n < 3 || !stringPoolPersistUnsigned_(f, &fe, &mode) ||
-        !stringPoolPersistUnsigned_(f, &fe, &next) ||
-        !stringPoolPersistUnsigned_(f, &fe, &live) ||
+    if (n < 3 || !flexReadUnsigned(f, &fe, &mode) ||
+        !flexReadUnsigned(f, &fe, &next) || !flexReadUnsigned(f, &fe, &live) ||
         mode > STRING_POOL_IDS_LOWEST || next == 0 || live >= next ||
         (n - 3) / 3 < live) {
         return nullptr;
@@ -622,13 +611,13 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
         uint64_t id;
         uint64_t refcount;
         databoxBig str;
-        if (!stringPoolPersistUnsigned_(f, &fe, &id)) {
+        if (!flexReadUnsigned(f, &fe, &id)) {
             return nullptr;
         }
 
         flexGetByTypeBig(fe, &str);
         fe = flexNext(f, fe);
-        if (!stringPoolPersistUnsigned_(f, &fe, &refcount) || id <= prevId ||
+        if (!flexReadUnsigned(f, &fe, &refcount) || id <= prevId ||
             id >= next || !DATABOX_IS_BYTES((const databox *)&str) ||
             refcount == 0 ||
             (mode == STRING_POOL_IDS_PERMANENT && refcount != 1) ||
@@ -658,7 +647,7 @@ static void *stringPoolPersistRestore_(const uint8_t *data, size_t len) {
     bool ok = true;
     for (uint64_t i = 0; ok && i < gaps; i++) {
         uint64_t id;
-        ok = stringPoolPersistUnsigned_(f, &fe, &id) && id && id < next &&
+        ok = flexReadUnsigned(f, &fe, &id) && id && id < next &&
              !pool->entries[id].refcount && pool->entries[id].len != SIZE_MAX &&
              (mode != STRING_POOL_IDS_LOWEST || id > prevFree);
         if (!ok) {

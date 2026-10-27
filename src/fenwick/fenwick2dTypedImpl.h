@@ -380,16 +380,6 @@ static void F2D_PUB_(PersistPushUnsigned_)(flex **f, uint64_t v) {
     flexPushByTypeExact(f, &box, FLEX_ENDPOINT_TAIL);
 }
 
-/* The next entry as an unsigned 64-bit value */
-static bool F2D_PUB_(PersistNextUnsigned_)(const flex *f, flexEntry **fe,
-                                           uint64_t *out) {
-    databoxBig box;
-    flexGetByTypeBig(*fe, &box);
-    *fe = flexNext(f, *fe);
-    *out = box.data.u64;
-    return box.type == DATABOX_UNSIGNED_64;
-}
-
 static uint8_t *F2D_PUB_(PersistSnapshot_)(const void *structure, size_t *len) {
     const F2D_T_ *t = structure;
     /* @own: caller; free=zfree */
@@ -429,10 +419,9 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
     uint64_t colCap;
     uint64_t rows;
     uint64_t cols;
-    if (n < 4 || !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rowCap) ||
-        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &colCap) ||
-        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rows) ||
-        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &cols)) {
+    if (n < 4 || !flexReadUnsigned(f, &fe, &rowCap) ||
+        !flexReadUnsigned(f, &fe, &colCap) ||
+        !flexReadUnsigned(f, &fe, &rows) || !flexReadUnsigned(f, &fe, &cols)) {
         return nullptr;
     }
 
@@ -473,9 +462,8 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
 #else
     uint64_t rows;
     uint64_t cols;
-    if (n < 2 || !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &rows) ||
-        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &cols) ||
-        (rows == 0) != (cols == 0) ||
+    if (n < 2 || !flexReadUnsigned(f, &fe, &rows) ||
+        !flexReadUnsigned(f, &fe, &cols) || (rows == 0) != (cols == 0) ||
         (rows && (cols > (n - 2) / rows || rows * cols != n - 2)) ||
         (!rows && n != 2)) {
         return nullptr;
@@ -537,9 +525,8 @@ static bool F2D_PUB_(PersistApplyOp_)(void *structure, persistOp op,
     uint64_t col;
     databoxBig value;
     F2D_VALUE_T v;
-    if (!F2D_PUB_(PersistNextUnsigned_)(f, &fe, &row) ||
-        !F2D_PUB_(PersistNextUnsigned_)(f, &fe, &col) || row > SIZE_MAX ||
-        col > SIZE_MAX) {
+    if (!flexReadUnsigned(f, &fe, &row) || !flexReadUnsigned(f, &fe, &col) ||
+        row > SIZE_MAX || col > SIZE_MAX) {
         return false;
     }
 

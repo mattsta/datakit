@@ -614,15 +614,6 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
     return (uint8_t *)f;
 }
 
-/* The next entry as an unsigned 64-bit value */
-static bool atomPersistUnsigned_(const flex *f, flexEntry **fe, uint64_t *out) {
-    databoxBig box;
-    flexGetByTypeBig(*fe, &box);
-    *fe = flexNext(f, *fe);
-    *out = box.data.u64;
-    return box.type == DATABOX_UNSIGNED_64;
-}
-
 /* A value an atom may intern from persisted bytes: a number, true,
  * false, null or bytes */
 bool atomPersistValueOk(const databox *value) {
@@ -659,8 +650,8 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
     uint64_t flags;
     uint64_t next;
-    if (n < 2 || (n - 2) % 3 || !atomPersistUnsigned_(f, &fe, &flags) ||
-        !atomPersistUnsigned_(f, &fe, &next) ||
+    if (n < 2 || (n - 2) % 3 || !flexReadUnsigned(f, &fe, &flags) ||
+        !flexReadUnsigned(f, &fe, &next) ||
         (flags & ~(uint64_t)ATOM_PERSIST_FLAG_PERMANENT_) ||
         next >= MULTIMAP_ATOM_ID_LIMIT) {
         return nullptr;
@@ -684,7 +675,7 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     for (size_t r = 0; r < atoms; r++) {
         uint64_t count;
         databoxBig countBox;
-        if (!atomPersistUnsigned_(f, &fe, &ids[r])) {
+        if (!flexReadUnsigned(f, &fe, &ids[r])) {
             return nullptr;
         }
 
@@ -878,17 +869,6 @@ static bool populateSet(void *userData, const databox *elements[]) {
 defcleanerName(uint64_t *, zfree, U64);
 defcleaner(multimap *, multimapFree);
 
-/* Fill the stack below the caller with 0xFF so a temporary that is read
- * before it is set up sees big = 1 and an all-ones pointer.  ASan is off
- * here so the array is not framed by redzones. */
-[[gnu::noinline, gnu::no_sanitize("address")]] static void
-atomTestPoisonStack(void) {
-    volatile uint8_t junk[8192];
-    for (size_t i = 0; i < sizeof(junk); i++) {
-        junk[i] = 0xFF;
-    }
-}
-
 /* True when 'ref' resolves to a value equal to 'want', read through an
  * armed databoxBig so a 96/128-bit value comes back whole.  Equal by
  * value, not type: storage keeps the canonical form, so a non-negative
@@ -899,7 +879,7 @@ static bool atomTestResolvesTo(const multimapAtom *ma, const databox *ref,
     memset(&got, 0xFF, sizeof(got));
     *(databox *)&got = (databox){};
     DATABOX_BIG_INIT(&got);
-    atomTestPoisonStack();
+    ctestPoisonStack();
     if (!multimapAtomLookup(ma, ref, (databox *)&got)) {
         return false;
     }
@@ -2010,7 +1990,7 @@ int multimapAtomTest(int, char *[]) {
                 }
 
                 databox count = {};
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomLookupRefcount(ma, &ref, &count);
                 if (count.type != DATABOX_FALSE) {
                     ERR("pass %d value %zu: refcount type %d", pass, i,
@@ -2073,7 +2053,7 @@ int multimapAtomTest(int, char *[]) {
             }
 
             for (size_t i = 0; i < pathValueCount; i++) {
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomInsert(ma, &vals[i]);
             }
 
@@ -2092,7 +2072,7 @@ int multimapAtomTest(int, char *[]) {
             uint64_t ids[pathValueCount] = {};
             for (size_t i = 0; i < pathValueCount; i++) {
                 databox ref = {};
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 if (!multimapAtomLookupReference(ma, &vals[i], &ref) ||
                     ref.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
                     ERR("pass %d value %zu: not interned", pass, i);
@@ -2109,18 +2089,18 @@ int multimapAtomTest(int, char *[]) {
              * a lookup convert that takes none.  Every converted box comes
              * back as a clean reference. */
             for (size_t i = 0; i < pathValueCount; i++) {
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomRetain(ma, &vals[i]);
 
                 databox viaRetain = vals[i];
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomRetainConvert(ma, &viaRetain);
                 if (!atomTestIsCleanRef(&viaRetain, ids[i])) {
                     ERR("pass %d value %zu: RetainConvert box wrong", pass, i);
                 }
 
                 databox viaInsertRetain = vals[i];
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 if (!multimapAtomInsertIfNewConvertAndRetain(
                         ma, &viaInsertRetain) ||
                     !atomTestIsCleanRef(&viaInsertRetain, ids[i])) {
@@ -2130,14 +2110,14 @@ int multimapAtomTest(int, char *[]) {
                 }
 
                 databox viaInsert = vals[i];
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 if (!multimapAtomInsertIfNewConvert(ma, &viaInsert) ||
                     !atomTestIsCleanRef(&viaInsert, ids[i])) {
                     ERR("pass %d value %zu: InsertIfNewConvert box wrong", pass,
                         i);
                 }
 
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomRetainById(ma, ids[i]);
             }
 
@@ -2163,7 +2143,7 @@ int multimapAtomTest(int, char *[]) {
                 case 0:
                 case 1:
                     for (int r = 0; r < 5; r++) {
-                        atomTestPoisonStack();
+                        ctestPoisonStack();
                         removed = i % 4 == 0
                                       ? multimapAtomRelease(ma, &vals[i])
                                       : multimapAtomReleaseById(ma, &ref);
@@ -2174,11 +2154,11 @@ int multimapAtomTest(int, char *[]) {
                     }
                     break;
                 case 2:
-                    atomTestPoisonStack();
+                    ctestPoisonStack();
                     removed = multimapAtomDelete(ma, &vals[i]);
                     break;
                 default:
-                    atomTestPoisonStack();
+                    ctestPoisonStack();
                     removed = multimapAtomDeleteById(ma, ids[i]);
                     break;
                 }
@@ -2195,7 +2175,7 @@ int multimapAtomTest(int, char *[]) {
                         multimapAtomCount(ma), liveCount);
                 }
 
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 if (multimapAtomDeleteByRef(ma, &ref)) {
                     ERR("pass %d value %zu: deleted twice", pass, i);
                 }
@@ -2211,7 +2191,7 @@ int multimapAtomTest(int, char *[]) {
                         .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                         .data.u = ids[j]};
                     databox found = {};
-                    atomTestPoisonStack();
+                    ctestPoisonStack();
                     const bool bound =
                         multimapAtomLookupReference(ma, &vals[j], &found);
                     if (bound != live[j]) {
@@ -2233,7 +2213,7 @@ int multimapAtomTest(int, char *[]) {
 
                 if (wantMin) {
                     databox minRef = {};
-                    atomTestPoisonStack();
+                    ctestPoisonStack();
                     if (!multimapAtomLookupMin(ma, &minRef) ||
                         !atomTestResolvesTo(ma, &minRef, wantMin)) {
                         ERR("pass %d after %zu: minimum resolves wrong", pass,
@@ -2250,13 +2230,13 @@ int multimapAtomTest(int, char *[]) {
                                          DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                                      .data.u = exact};
                 const databox rebound = databoxNewSigned(-777 - (int64_t)i);
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomInsertWithExactAtomID(ma, exact, &vals[i]);
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 multimapAtomInsertWithExactAtomID(ma, exact, &rebound);
 
                 databox found = {};
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 if (multimapAtomLookupReference(ma, &vals[i], &found)) {
                     ERR("pass %d value %zu: still bound after rebind", pass, i);
                 }
@@ -2267,7 +2247,7 @@ int multimapAtomTest(int, char *[]) {
                         i);
                 }
 
-                atomTestPoisonStack();
+                ctestPoisonStack();
                 if (!multimapAtomDeleteById(ma, exact) ||
                     multimapAtomCount(ma) != fill) {
                     ERR("pass %d value %zu: rebound id not deleted", pass, i);

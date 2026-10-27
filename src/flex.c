@@ -4093,7 +4093,7 @@ bool flexGetNextByTypeBig(flex *const f, flexEntry **const fe,
 /* flexGetSigned and flexGetUnsigned only need to know that a value is
  * wide, never its payload, so they decode with no slot: a wide value
  * comes back deferred and nothing is written for it. */
-bool flexGetSigned(flexEntry *fe, int64_t *value) {
+bool flexGetSigned(const flexEntry *fe, int64_t *value) {
     databox box;
     flexGetByTypeInto(fe, &box, nullptr);
 
@@ -4113,7 +4113,7 @@ bool flexGetSigned(flexEntry *fe, int64_t *value) {
     return true;
 }
 
-bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
+bool flexGetUnsigned(const flexEntry *fe, uint64_t *value) {
     databox box;
     flexGetByTypeInto(fe, &box, nullptr);
 
@@ -4128,6 +4128,15 @@ bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
     }
 
     *value = box.data.u64;
+    return true;
+}
+
+bool flexReadUnsigned(const flex *f, flexEntry **fe, uint64_t *value) {
+    if (*fe == nullptr || !flexGetUnsigned(*fe, value)) {
+        return false;
+    }
+
+    *fe = flexNext(f, *fe);
     return true;
 }
 
@@ -7563,6 +7572,22 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
            accepted, reverseWalked);
 
     return err;
+}
+
+flex *flexTestReplaceEntry(const flex *f, size_t idx, const databoxBig *with) {
+    /* @own: caller; free=flexFree */
+    flex *out = flexNew();
+    size_t i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe != nullptr;
+         fe = flexNext(f, fe), i++) {
+        databoxBig box;
+        flexGetByTypeBig(fe, &box);
+        const databox *push =
+            i == idx ? (const databox *)with : (const databox *)&box;
+        flexPushByTypeExact(&out, push, FLEX_ENDPOINT_TAIL);
+    }
+
+    return out;
 }
 
 int32_t flexValidateTotalitySweep(void) {
@@ -12247,7 +12272,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t totalSize = flexBytes(f);
         assert(totalSize >= CFLEX_MINIMUM_COMPRESS_BYTES);
 
-        size_t cSize = jebufSizeAllocation(totalSize);
+        /* Random bytes do not compress: room for LZ4's worst case (its
+         * bound) plus the cflex header and length always fits */
+        const size_t cSize =
+            jebufSizeAllocation((size_t)LZ4_COMPRESSBOUND(totalSize) + 16);
         cleaner(zfree) void *cBuf = zcalloc(1, cSize);
         cflex *c = (cflex *)cBuf;
         if (!flexConvertToCFlex(f, cBuf, cSize)) {
@@ -14218,6 +14246,54 @@ int32_t flexTest(int32_t argc, char **argv) {
             buf[2] = bad_tags[i];
             assert(flexValidateBuffer(buf, sizeof(buf)) == true);
             assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        }
+    }
+
+    TEST("flexReadUnsigned reads unsigned fields in order and refuses the "
+         "rest") {
+        /* A non-negative signed integer is stored in the unsigned form, so
+         * it reads back as unsigned; a negative one, a real and bytes do
+         * not */
+        cleaner(flexFree) flex *fields = flexNew();
+        const databox pushed[] = {
+            DATABOX_UNSIGNED(7), DATABOX_UNSIGNED(UINT64_MAX),
+            DATABOX_SIGNED(5),   DATABOX_SIGNED(-1),
+            DATABOX_DOUBLE(1.5), DATABOX_WITH_BYTES((uint8_t *)"x", 1),
+        };
+        for (size_t i = 0; i < countof(pushed); i++) {
+            flexPushByTypeExact(&fields, &pushed[i], FLEX_ENDPOINT_TAIL);
+        }
+
+        flexEntry *cursor = flexHead(fields);
+        const uint64_t want[] = {7, UINT64_MAX, 5};
+        bool inOrder = true;
+        for (size_t i = 0; inOrder && i < countof(want); i++) {
+            uint64_t v = 0;
+            inOrder = flexReadUnsigned(fields, &cursor, &v) && v == want[i];
+        }
+
+        if (!inOrder) {
+            ERR("the unsigned fields did not read back in order");
+        }
+
+        /* The rest are refused, each leaving the cursor and value alone */
+        for (size_t i = countof(want); inOrder && i < countof(pushed); i++) {
+            flexEntry *const at = cursor;
+            uint64_t v = 42;
+            if (flexReadUnsigned(fields, &cursor, &v) || cursor != at ||
+                v != 42) {
+                ERR("field %zu (type %d) was taken as unsigned", i,
+                    (int)pushed[i].type);
+                break;
+            }
+
+            cursor = flexNext(fields, cursor);
+        }
+
+        uint64_t v = 42;
+        if (inOrder && (cursor != nullptr ||
+                        flexReadUnsigned(fields, &cursor, &v) || v != 42)) {
+            ERR("reading past the last entry must fail");
         }
     }
 

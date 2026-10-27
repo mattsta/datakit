@@ -571,16 +571,6 @@ static uint8_t *multiFenwickPersistSnapshot_(const void *structure,
     return (uint8_t *)f;
 }
 
-/* The next entry as an unsigned 64-bit value */
-static bool multiFenwickPersistUnsigned_(const flex *f, flexEntry **fe,
-                                         uint64_t *out) {
-    databoxBig box;
-    flexGetByTypeBig(*fe, &box);
-    *fe = flexNext(f, *fe);
-    *out = box.data.u64;
-    return box.type == DATABOX_UNSIGNED_64;
-}
-
 static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
         return nullptr;
@@ -591,8 +581,8 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
     uint64_t capacity;
     uint64_t count;
-    if (n < 2 || !multiFenwickPersistUnsigned_(f, &fe, &capacity) ||
-        !multiFenwickPersistUnsigned_(f, &fe, &count) || capacity != n - 2 ||
+    if (n < 2 || !flexReadUnsigned(f, &fe, &capacity) ||
+        !flexReadUnsigned(f, &fe, &count) || capacity != n - 2 ||
         count > capacity || (capacity & (capacity - 1)) ||
         (count == 0) != (capacity == 0) ||
         capacity > MULTIFENWICK_INDEX_MAX + 1) {

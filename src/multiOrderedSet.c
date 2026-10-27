@@ -1165,21 +1165,12 @@ static void mosWideFill_(mosWidePair *p, size_t n) {
     }
 }
 
-/* Fill the stack below the caller with 0xFF, so a temporary that is
- * read before it is set up sees big = 1 and an all-ones pointer. */
-[[gnu::noinline]] static void mosTestPoisonStack_(void) {
-    volatile uint8_t junk[8192];
-    for (size_t i = 0; i < sizeof(junk); i++) {
-        junk[i] = 0xFF;
-    }
-}
-
 static void mosWideAdd_(multiOrderedSet **mos, const mosWidePair *p) {
     databoxBig score;
     databoxBig member;
     mosWideNumBox_(&score, p->score);
     mosWideMemberBox_(&member, p);
-    mosTestPoisonStack_();
+    ctestPoisonStack();
     multiOrderedSetAdd(mos, (databox *)&score, (databox *)&member);
 }
 
@@ -1198,7 +1189,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
     for (int dir = 0; dir < 2; dir++) {
         const bool forward = dir == 0;
         mosIterator iter;
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         multiOrderedSetIteratorInit(mos, &iter, forward);
         size_t k = 0;
         databoxBig member;
@@ -1206,7 +1197,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         for (;;) {
             DATABOX_BIG_INIT(&member);
             DATABOX_BIG_INIT(&score);
-            mosTestPoisonStack_();
+            ctestPoisonStack();
             if (!multiOrderedSetIteratorNext(&iter, (databox *)&member,
                                              (databox *)&score)) {
                 break;
@@ -1232,7 +1223,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         databoxBig member;
         mosWideMemberBox_(&member, p);
 
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         if (!multiOrderedSetExists(mos, (databox *)&member)) {
             ERR("member %zu not found", k);
             continue;
@@ -1240,20 +1231,20 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
 
         databoxBig score;
         DATABOX_BIG_INIT(&score);
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         if (!multiOrderedSetGetScore(mos, (databox *)&member,
                                      (databox *)&score) ||
             !mosWideScoreMatches_((databox *)&score, p)) {
             ERR("GetScore mismatch at %zu", k);
         }
 
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         const int64_t rank = multiOrderedSetGetRank(mos, (databox *)&member);
         if (rank != (int64_t)k) {
             ERR("GetRank %" PRId64 ", expected %zu", rank, k);
         }
 
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         const int64_t rev =
             multiOrderedSetGetReverseRank(mos, (databox *)&member);
         if (rev != (int64_t)(n - 1 - k)) {
@@ -1263,7 +1254,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         databoxBig gotMember;
         DATABOX_BIG_INIT(&gotMember);
         DATABOX_BIG_INIT(&score);
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         if (!multiOrderedSetGetByRank(mos, (int64_t)k, (databox *)&gotMember,
                                       (databox *)&score) ||
             !mosWideScoreMatches_((databox *)&score, p) ||
@@ -1280,7 +1271,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         databoxBig at;
         mosWideNumBox_(&at, p->score);
         mosIterator iter;
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         if (!multiOrderedSetIteratorInitAtScore(mos, &iter, (databox *)&at,
                                                 true)) {
             ERR("IteratorInitAtScore failed at %zu", k);
@@ -1321,7 +1312,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
         databox rScores[8];
         memset(rMembers, 0xFF, sizeof(rMembers));
         memset(rScores, 0xFF, sizeof(rScores));
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         const size_t picked =
             multiOrderedSetRandomMembers(mos, -8, rMembers, rScores);
         if (picked == 0) {
@@ -1375,7 +1366,7 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
                     }
                 }
 
-                mosTestPoisonStack_();
+                ctestPoisonStack();
                 const size_t got = multiOrderedSetCountByScore(mos, &range);
                 if (got != want) {
                     ERR("CountByScore [%zu..%zu] ex=%d: %zu, expected %zu", a,
@@ -1470,7 +1461,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
          * state is never read */
         databoxBig prev;
         memset(&prev, 0xFF, sizeof(prev));
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         if (!multiOrderedSetAddGetPrevious(&mos, (databox *)&score,
                                            (databox *)&member,
                                            (databox *)&prev)) {
@@ -1501,7 +1492,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
         if (i % 2) {
             databox score;
             memset(&score, 0xFF, sizeof(score));
-            mosTestPoisonStack_();
+            ctestPoisonStack();
             if (!multiOrderedSetRemoveGetScore(&mos, (databox *)&member,
                                                &score)) {
                 ERR("RemoveGetScore did not find member %zu", i);
@@ -1513,7 +1504,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
                 databoxFreeData(&score);
             }
         } else {
-            mosTestPoisonStack_();
+            ctestPoisonStack();
             if (!multiOrderedSetRemove(&mos, (databox *)&member)) {
                 ERR("Remove did not find member %zu", i);
             }
@@ -1532,7 +1523,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
         databox scores[3];
         memset(members, 0xFF, sizeof(members));
         memset(scores, 0xFF, sizeof(scores));
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         const size_t popped =
             side == 0 ? multiOrderedSetPopMin(&mos, 3, members, scores)
                       : multiOrderedSetPopMax(&mos, 3, members, scores);
@@ -1582,7 +1573,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
             end--;
         }
 
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         const size_t removed = multiOrderedSetRemoveRangeByScore(&mos, &range);
         if (removed != end - first) {
             ERR("RemoveRangeByScore removed %zu, expected %zu", removed,
@@ -1595,7 +1586,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
 
     /* Rank range removal */
     if (live > 4) {
-        mosTestPoisonStack_();
+        ctestPoisonStack();
         const size_t removed = multiOrderedSetRemoveRangeByRank(&mos, 1, 2);
         if (removed != 2) {
             ERR("RemoveRangeByRank removed %zu, expected 2", removed);
@@ -4461,13 +4452,13 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             }
 
             const multiOrderedSet *sets[2] = {a, b};
-            mosTestPoisonStack_();
+            ctestPoisonStack();
             cleaner(multiOrderedSetFree) multiOrderedSet *u =
                 multiOrderedSetUnion(sets, nullptr, 2, MOS_AGGREGATE_MAX);
-            mosTestPoisonStack_();
+            ctestPoisonStack();
             cleaner(multiOrderedSetFree) multiOrderedSet *x =
                 multiOrderedSetIntersect(sets, nullptr, 2, MOS_AGGREGATE_MIN);
-            mosTestPoisonStack_();
+            ctestPoisonStack();
             cleaner(multiOrderedSetFree) multiOrderedSet *d =
                 multiOrderedSetDifference(sets, 2);
 

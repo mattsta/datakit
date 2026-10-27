@@ -3608,20 +3608,14 @@ size_t clusterRingSerialize(const clusterRing *ring, void *buf, size_t bufLen) {
  * error, returns false and leaves *out unchanged. */
 static bool crReadUnsignedRange(const flex *f, flexEntry **fe, uint64_t lo,
                                 uint64_t hi, uint64_t *out) {
-    if (*fe == nullptr) {
+    flexEntry *at = *fe;
+    uint64_t v;
+    if (!flexReadUnsigned(f, &at, &v) || v < lo || v > hi) {
         return false;
     }
-    databoxBig box;
-    flexGetByTypeBig(*fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64) {
-        return false;
-    }
-    const uint64_t v = box.data.u64;
-    if (v < lo || v > hi) {
-        return false;
-    }
+
     *out = v;
-    *fe = flexNext(f, *fe);
+    *fe = at;
     return true;
 }
 

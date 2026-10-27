@@ -218,16 +218,11 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
     }
 
     flexEntry *fe = flexHead(f);
-    databoxBig box;
     uint64_t header[4];
     for (size_t h = 0; h < 4; h++) {
-        flexGetByTypeBig(fe, &box);
-        fe = flexNext(f, fe);
-        if (box.type != DATABOX_UNSIGNED_64) {
+        if (!flexReadUnsigned(f, &fe, &header[h])) {
             return nullptr;
         }
-
-        header[h] = box.data.u64;
     }
 
     const uint64_t rowCap = header[0];
@@ -257,6 +252,7 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
     t->rows = rows;
     t->cols = cols;
     for (uint64_t i = 0; i < cells; i++) {
+        databoxBig box;
         flexGetByTypeBig(fe, &box);
         fe = flexNext(f, fe);
         multiFenwickNum num;

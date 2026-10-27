@@ -962,24 +962,12 @@ typedef struct hkrRestoreUndoLog {
     size_t count;
 } hkrRestoreUndoLog;
 
-/* Restore's field decoders.  flexGetByTypeBig never reads the box's
- * prior state and gives it its own storage for a wide value, so a
- * crafted entry cannot steer a write.  No snapshot field can hold a
- * 96/128-bit value: anything other than the expected type is refused.
- *
- * hkrReadBytes borrows from 'fe', so the result is valid only while the
- * snapshot buffer is.  Borrowing also keeps raw key bytes from being
- * copied to the heap. */
-static bool hkrReadU64(const flexEntry *fe, uint64_t *out) {
-    databoxBig box;
-    flexGetByTypeBig(fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64) {
-        return false;
-    }
-    *out = box.data.u64;
-    return true;
-}
-
+/* Restore's bytes field decoder (numbers use flexGetUnsigned).
+ * flexGetByTypeBig never reads the box's prior state and gives it its own
+ * storage for a wide value, so a crafted entry cannot steer a write;
+ * anything other than bytes is refused.  The result borrows from 'fe', so
+ * it is valid only while the snapshot buffer is.  Borrowing also keeps
+ * raw key bytes from being copied to the heap. */
 static bool hkrReadBytes(const flexEntry *fe, const uint8_t **start,
                          size_t *len) {
     databoxBig box;
@@ -1014,7 +1002,7 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
      * only retires installed ids) */
     flexEntry *fe = flexHead(f);
     uint64_t floor_id = 0;
-    if (!hkrReadU64(fe, &floor_id) || floor_id > UINT32_MAX) {
+    if (!flexGetUnsigned(fe, &floor_id) || floor_id > UINT32_MAX) {
         return false;
     }
     const hmacKeyId parsed_floor = (hmacKeyId)floor_id;
@@ -1027,7 +1015,8 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
 
         /* Entry 1: id (unsigned). */
         uint64_t raw_id = 0;
-        if (!hkrReadU64(fe, &raw_id) || raw_id > UINT32_MAX || raw_id == 0) {
+        if (!flexGetUnsigned(fe, &raw_id) || raw_id > UINT32_MAX ||
+            raw_id == 0) {
             goto rollback;
         }
         const hmacKeyId id = (hmacKeyId)raw_id;
@@ -1038,7 +1027,7 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
 
         /* Entry 2: algo tag (unsigned). */
         uint64_t tag = 0;
-        if (!hkrReadU64(fe, &tag)) {
+        if (!flexGetUnsigned(fe, &tag)) {
             goto rollback;
         }
         const hmacHashAlgo *algo = hkrTagToAlgo(tag);
@@ -1065,7 +1054,7 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
 
         /* Entry 4: counter (unsigned). */
         uint64_t counter = 0;
-        if (!hkrReadU64(fe, &counter)) {
+        if (!flexGetUnsigned(fe, &counter)) {
             goto rollback;
         }
         fe = flexNext(f, fe);
@@ -1375,37 +1364,6 @@ static bool hkrTestReserveFn(void *ctx, hmacKeyId id, uint64_t limit) {
     return true;
 }
 
-/* Fill the stack below the caller with 0xFF so a decoder that reads an
- * uninitialized box sees big = 1 and an all-ones pointer.  ASan is off
- * here so the array is not framed by redzones, which would leave the
- * top of the next frame unpoisoned. */
-[[gnu::noinline, gnu::no_sanitize("address")]] static void
-hkrTestPoisonStack(void) {
-    volatile uint8_t junk[8192];
-    for (size_t i = 0; i < sizeof(junk); i++) {
-        junk[i] = 0xFF;
-    }
-}
-
-/* Copy of 'src' with entry 'idx' replaced by 'wide' (a SIZE_MAX index
- * copies every entry unchanged). */
-static flex *hkrTestReplaceEntry(const flex *src, size_t idx,
-                                 const databoxBig *wide) {
-    /* @own: caller; free=flexFree */
-    flex *out = flexNew();
-    size_t i = 0;
-    for (flexEntry *fe = flexHeadIfAny(src); fe != nullptr;
-         fe = flexNext(src, fe)) {
-        databoxBig box;
-        flexGetByTypeBig(fe, &box);
-        const databox *push =
-            (i == idx) ? (const databox *)wide : (const databox *)&box;
-        flexPushByType(&out, push, FLEX_ENDPOINT_TAIL);
-        i++;
-    }
-    return out;
-}
-
 int hmacKeyringTest(int, char *[]) {
     int err = 0;
 
@@ -1549,9 +1507,9 @@ int hmacKeyringTest(int, char *[]) {
          * the replaced field alone. */
         {
             cleaner(flexFree) flex *same =
-                hkrTestReplaceEntry(src, SIZE_MAX, nullptr);
+                flexTestReplaceEntry(src, SIZE_MAX, nullptr);
             hmacKeyring *dst = hmacKeyringCreate();
-            hkrTestPoisonStack();
+            ctestPoisonStack();
             if (!hmacKeyringRestore(dst, same, flexBytes(same)) ||
                 hmacKeyringSize(dst) != 2u ||
                 hmacKeyringMinValidKeyId(dst) != 5u) {
@@ -1563,14 +1521,14 @@ int hmacKeyringTest(int, char *[]) {
         for (size_t w = 0; w < 3; w++) {
             for (size_t idx = 0; idx < entries; idx++) {
                 cleaner(flexFree) flex *bad =
-                    hkrTestReplaceEntry(src, idx, &wides[w]);
+                    flexTestReplaceEntry(src, idx, &wides[w]);
                 databoxBig check;
                 flexGetByTypeBig(flexIndex(bad, (int32_t)idx), &check);
                 if (!check.big) {
                     ERR("value %zu at entry %zu was not stored wide", w, idx);
                 }
                 hmacKeyring *dst = hmacKeyringCreate();
-                hkrTestPoisonStack();
+                ctestPoisonStack();
                 if (hmacKeyringRestore(dst, bad, flexBytes(bad))) {
                     ERR("value %zu at entry %zu was accepted", w, idx);
                 }

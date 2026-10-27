@@ -417,21 +417,6 @@ size_t aeadNonceLogToBytes(const aeadNonceLog *log, uint8_t *out,
     return need;
 }
 
-/* Decode one snapshot field, which must be a 64-bit unsigned integer.
- * flexGetByTypeBig never reads the box's prior state and gives it its
- * own storage for a wide value, and it borrows instead of allocating.
- * A 96/128-bit entry (no field can hold one), a signed value, bytes, or
- * any other type is refused. */
-static bool anlReadU64(const flexEntry *fe, uint64_t *out) {
-    databoxBig box;
-    flexGetByTypeBig(fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64) {
-        return false;
-    }
-    *out = box.data.u64;
-    return true;
-}
-
 aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
     if (buf == nullptr) {
         return nullptr;
@@ -455,7 +440,7 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
      * limit, as a live log does */
     flexEntry *fe = flexHead(f);
     uint64_t cap = 0;
-    if (!anlReadU64(fe, &cap) || cap < AEAD_NONCE_LOG_MIN_CAP ||
+    if (!flexGetUnsigned(fe, &cap) || cap < AEAD_NONCE_LOG_MIN_CAP ||
         cap > AEAD_NONCE_LOG_MAX_CAP || !stdc_has_single_bit(cap) ||
         records > aeadNonceLogLoadLimit((size_t)cap)) {
         return nullptr;
@@ -482,7 +467,8 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
         fe = flexNext(f, fe);
 
         uint64_t key_id = 0;
-        if (!anlReadU64(fe, &key_id) || key_id == 0u || key_id > UINT32_MAX) {
+        if (!flexGetUnsigned(fe, &key_id) || key_id == 0u ||
+            key_id > UINT32_MAX) {
             return nullptr;
         }
         fe = flexNext(f, fe);
@@ -685,37 +671,6 @@ static void *aeadOomFailCalloc(size_t, size_t) {
 defcleanerName(uint8_t *, zfree, TestBytes);
 defcleaner(flex *, flexFree);
 
-/* Fill the stack below the caller with 0xFF so a decoder that reads an
- * uninitialized box sees big = 1 and an all-ones pointer.  ASan is off
- * here so the array is not framed by redzones, which would leave the
- * top of the next frame unpoisoned. */
-[[gnu::noinline, gnu::no_sanitize("address")]] static void
-anlTestPoisonStack(void) {
-    volatile uint8_t junk[8192];
-    for (size_t i = 0; i < sizeof(junk); i++) {
-        junk[i] = 0xFF;
-    }
-}
-
-/* Copy of 'src' with entry 'idx' replaced by 'wide' (a SIZE_MAX index
- * copies every entry unchanged). */
-static flex *anlTestReplaceEntry(const flex *src, size_t idx,
-                                 const databoxBig *wide) {
-    /* @own: caller; free=flexFree */
-    flex *out = flexNew();
-    size_t i = 0;
-    for (flexEntry *fe = flexHeadIfAny(src); fe != nullptr;
-         fe = flexNext(src, fe)) {
-        databoxBig box;
-        flexGetByTypeBig(fe, &box);
-        const databox *push =
-            (i == idx) ? (const databox *)wide : (const databox *)&box;
-        flexPushByType(&out, push, FLEX_ENDPOINT_TAIL);
-        i++;
-    }
-    return out;
-}
-
 int aeadNonceLogTest(int, char *[]) {
     int err = 0;
 
@@ -803,8 +758,8 @@ int aeadNonceLogTest(int, char *[]) {
          * the replaced field alone. */
         {
             cleaner(flexFree) flex *same =
-                anlTestReplaceEntry(src, SIZE_MAX, nullptr);
-            anlTestPoisonStack();
+                flexTestReplaceEntry(src, SIZE_MAX, nullptr);
+            ctestPoisonStack();
             cleaner(aeadNonceLogFree) aeadNonceLog *back =
                 aeadNonceLogFromBytes((const uint8_t *)same, flexBytes(same));
             if (back == nullptr || aeadNonceLogSize(back) != 2u) {
@@ -815,13 +770,13 @@ int aeadNonceLogTest(int, char *[]) {
         for (size_t w = 0; w < 3; w++) {
             for (size_t idx = 0; idx < entries; idx++) {
                 cleaner(flexFree) flex *bad =
-                    anlTestReplaceEntry(src, idx, &wides[w]);
+                    flexTestReplaceEntry(src, idx, &wides[w]);
                 databoxBig check;
                 flexGetByTypeBig(flexIndex(bad, (int32_t)idx), &check);
                 if (!check.big) {
                     ERR("value %zu at entry %zu was not stored wide", w, idx);
                 }
-                anlTestPoisonStack();
+                ctestPoisonStack();
                 cleaner(aeadNonceLogFree) aeadNonceLog *back =
                     aeadNonceLogFromBytes((const uint8_t *)bad, flexBytes(bad));
                 if (back != nullptr) {

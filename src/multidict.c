@@ -4056,15 +4056,6 @@ static size_t mdWideFind_(const mdWidePair *p, size_t n, const databox *key) {
     return SIZE_MAX;
 }
 
-/* Fill the stack below the caller with 0xFF, so a temporary that is
- * read before it is set up sees big = 1 and an all-ones pointer. */
-[[gnu::noinline]] static void mdTestPoisonStack_(void) {
-    volatile uint8_t junk[8192];
-    for (size_t i = 0; i < sizeof(junk); i++) {
-        junk[i] = 0xFF;
-    }
-}
-
 typedef struct mdWideScanState {
     const mdWidePair *p;
     size_t n;
@@ -4126,7 +4117,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         databoxBig val;
         mdWideBox_(&key, &p[i].key);
         DATABOX_BIG_INIT(&val);
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         if (!multidictFind(d, (databox *)&key, (databox *)&val) ||
             !mdWideMatches_((databox *)&val, &p[i].val)) {
             ERR("wide Find mismatch for pair %zu", i);
@@ -4160,7 +4151,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         size_t visited = 0;
         for (;;) {
             memset(&entry, 0xFF, sizeof(entry));
-            mdTestPoisonStack_();
+            ctestPoisonStack();
             if (!multidictIteratorNext(&iter, &entry)) {
                 break;
             }
@@ -4199,7 +4190,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
     if (live > 0) {
         databox some[16];
         memset(some, 0xFF, sizeof(some));
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         const uint32_t got = multidictGetSomeKeys(d, some, 16);
         if (got == 0) {
             ERR("GetSomeKeys returned nothing");
@@ -4220,7 +4211,7 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
     mdWideScanState state = {.p = p, .n = n, .seen = seen, .bad = 0};
     uint64_t cursor = 0;
     do {
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         cursor = multidictScan(d, cursor, mdWideScanCb_, &state);
     } while (cursor != 0);
     for (size_t i = 0; i < n; i++) {
@@ -4322,7 +4313,7 @@ static int multidictTestWide_(mdWideMode mode) {
         databoxBig val;
         mdWideBox_(&key, &p[i].key);
         mdWideBox_(&val, &p[i].val);
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         if (multidictAdd(d, (databox *)&key, (databox *)&val) !=
             MULTIDICT_OK_INSERTED) {
             ERR("wide Add of pair %zu did not insert", i);
@@ -4368,7 +4359,7 @@ static int multidictTestWide_(mdWideMode mode) {
     for (int r = 0; r < 64; r++) {
         databoxBig key;
         DATABOX_BIG_INIT(&key);
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         if (!multidictGetRandomKey(d, (databox *)&key) ||
             mdWideFind_(p, n, (databox *)&key) == SIZE_MAX) {
             ERR("GetRandomKey returned an unknown key");
@@ -4405,7 +4396,7 @@ static int multidictTestWide_(mdWideMode mode) {
     for (size_t i = 0; i < n; i += 4) {
         databoxBig key;
         mdWideBox_(&key, &p[i].key);
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         if (!multidictDelete(d, (databox *)&key)) {
             ERR("wide Delete of pair %zu failed", i);
         }
@@ -4421,7 +4412,7 @@ static int multidictTestWide_(mdWideMode mode) {
         mdWideBox_(&key, &p[i].key);
         databox val;
         memset(&val, 0xFF, sizeof(val));
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         if (!multidictGetAndDelete(d, (databox *)&key, &val)) {
             ERR("GetAndDelete of pair %zu failed", i);
         } else {
@@ -4439,7 +4430,7 @@ static int multidictTestWide_(mdWideMode mode) {
         databox val;
         memset(&key, 0xFF, sizeof(key));
         memset(&val, 0xFF, sizeof(val));
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         if (!multidictPopRandom(d, &key, &val)) {
             ERR("PopRandom failed");
             break;
@@ -4491,7 +4482,7 @@ static int multidictTestWide_(mdWideMode mode) {
         multidictSetEvictionCallback(e, mdWideEvictCb_, nullptr);
         multidictSetMaxMemory(e, (multidictKeyBytes(e) + multidictValBytes(e)) /
                                      2);
-        mdTestPoisonStack_();
+        ctestPoisonStack();
         const uint32_t evicted = multidictEvictToLimit(e);
         if (evicted == 0 || mdWideEvictBad_ != 0 ||
             mdWideEvictSeen_ < (int)evicted) {
