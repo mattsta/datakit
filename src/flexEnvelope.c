@@ -203,22 +203,22 @@ static const flexEnvelopeAlgoDesc *findAlgo(flexEnvelopeAlgo algo) {
 /* === Algorithm queries ============================================== */
 
 size_t flexEnvelopeAlgoDigestLen(flexEnvelopeAlgo algo) {
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(algo);
     return d ? d->digest_len : 0;
 }
 
 const char *flexEnvelopeAlgoName(flexEnvelopeAlgo algo) {
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(algo);
     return d ? d->name : "unknown";
 }
 
 bool flexEnvelopeAlgoIsKeyed(flexEnvelopeAlgo algo) {
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(algo);
     return d ? d->is_keyed : false;
 }
 
 bool flexEnvelopeAlgoIsDeprecated(flexEnvelopeAlgo algo) {
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(algo);
     return d ? d->is_deprecated : false;
 }
 
@@ -283,9 +283,17 @@ static size_t varintEncodedLen(uint64_t val) {
 
 /* === Sizing ========================================================= */
 
+/* A frame's size, header + trailers + payload, in '*total'; false when
+ * the sum does not fit a size_t (the frame is refused) */
+static bool envFrameSize_(size_t header, size_t trailers, uint64_t payload,
+                          size_t *total) {
+    return !ckd_add(total, header, trailers) &&
+           !ckd_add(total, *total, payload);
+}
+
 size_t flexEnvelopeWrappedSize(uint64_t payload_len, flexEnvelopeAlgo algo,
                                uint32_t on_wire_flags) {
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(algo);
     if (!d) {
         return 0;
     }
@@ -311,19 +319,12 @@ size_t flexEnvelopeWrappedSize(uint64_t payload_len, flexEnvelopeAlgo algo,
     const size_t header_total = magic_bytes + version_size + algo_size +
                                 flags_size + keyid_size + plen_size;
 
-    /* Overflow-safe running-total check. Each subtraction guards
-     * against the next addition wrapping; the order matters since
-     * computing `SIZE_MAX - a - b` in one go would underflow if
-     * `a + b > SIZE_MAX`. */
     const size_t trailers = d->digest_len + d->nonce_len;
-    if (trailers > SIZE_MAX - header_total) {
+    size_t total;
+    if (!envFrameSize_(header_total, trailers, payload_len, &total)) {
         return 0;
     }
-    const size_t prefix_plus_trailers = header_total + trailers;
-    if (payload_len > SIZE_MAX - prefix_plus_trailers) {
-        return 0;
-    }
-    return prefix_plus_trailers + (size_t)payload_len;
+    return total;
 }
 
 /* === Internal: framing layout result ================================ */
@@ -378,7 +379,7 @@ static bool parseFramingEx(const uint8_t *buf, size_t buf_len,
     if (algo_raw > UINT16_MAX) {
         return false;
     }
-    const flexEnvelopeAlgoDesc *algo_desc = findAlgo((uint16_t)algo_raw);
+    const flexEnvelopeAlgoDesc *algo_desc = findAlgo(algo_raw);
     if (!algo_desc) {
         return false;
     }
@@ -431,23 +432,18 @@ static bool parseFramingEx(const uint8_t *buf, size_t buf_len,
      * supplied payload bytes, so we skip the buf_len fit check — the
      * stream API will validate Update / Final byte counts against the
      * parsed payload_len. The overflow guard still applies. */
-    /* Overflow-safe trailer + payload accounting. Compute each
-     * intermediate sum and reject before the next addition can wrap.
-     * The order matters: doing `SIZE_MAX - pos - trailers` in one
-     * expression would underflow if `pos + trailers > SIZE_MAX`. */
+    /* Overflow-checked trailer + payload accounting (payload and
+     * trailers must fit 64 bits even when only the header is here) */
     const size_t trailers = algo_desc->digest_len + algo_desc->nonce_len;
-    if (payload_len > UINT64_MAX - (uint64_t)trailers) {
+    uint64_t payloadAndTrailers;
+    if (ckd_add(&payloadAndTrailers, payload_len, trailers)) {
         return false;
     }
     if (!header_only) {
-        if (trailers > SIZE_MAX - pos) {
+        size_t required;
+        if (!envFrameSize_(pos, trailers, payload_len, &required)) {
             return false;
         }
-        const size_t pos_plus_trailers = pos + trailers;
-        if (payload_len > (uint64_t)(SIZE_MAX - pos_plus_trailers)) {
-            return false;
-        }
-        const size_t required = pos_plus_trailers + (size_t)payload_len;
         if (required > buf_len) {
             return false;
         }
@@ -579,7 +575,7 @@ static bool wrapEmitHeader(uint8_t *out, size_t out_cap, uint64_t payload_len,
         return false;
     }
 
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)params->algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(params->algo);
     if (!d || !d->is_implemented) {
         return false;
     }
@@ -656,16 +652,9 @@ static bool wrapEmitHeader(uint8_t *out, size_t out_cap, uint64_t payload_len,
     const size_t prefix_total = magic_bytes + version_size + algo_size +
                                 flags_size + keyid_size + plen_size;
     const size_t trailers = d->digest_len + d->nonce_len;
-    if (trailers > SIZE_MAX - prefix_total) {
-        return false;
-    }
-    if (payload_len > UINT64_MAX - (uint64_t)trailers ||
-        (uint64_t)payload_len >
-            (uint64_t)(SIZE_MAX - prefix_total - trailers)) {
-        return false;
-    }
-    const size_t needed = prefix_total + trailers + (size_t)payload_len;
-    if (needed > out_cap) {
+    size_t needed;
+    if (!envFrameSize_(prefix_total, trailers, payload_len, &needed) ||
+        needed > out_cap) {
         return false;
     }
 
@@ -766,7 +755,7 @@ bool flexEnvelopeFinalizeWrap(uint8_t *out, size_t out_cap, size_t header_len,
         params->_pad[2] != 0u) {
         return false;
     }
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)params->algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(params->algo);
     if (!d || !d->is_implemented) {
         return false;
     }
@@ -818,16 +807,9 @@ bool flexEnvelopeFinalizeWrap(uint8_t *out, size_t out_cap, size_t header_len,
         return false;
     }
     const size_t trailers = d->digest_len + d->nonce_len;
-    if (trailers > SIZE_MAX - expected_header_len) {
-        return false;
-    }
-    if (payload_len > UINT64_MAX - (uint64_t)trailers ||
-        (uint64_t)payload_len >
-            (uint64_t)(SIZE_MAX - expected_header_len - trailers)) {
-        return false;
-    }
-    const size_t needed = expected_header_len + trailers + (size_t)payload_len;
-    if (needed > out_cap) {
+    size_t needed;
+    if (!envFrameSize_(expected_header_len, trailers, payload_len, &needed) ||
+        needed > out_cap) {
         return false;
     }
 
@@ -1228,7 +1210,7 @@ static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
         return false;
     }
 
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)params->algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(params->algo);
     if (!d || !d->is_implemented || !d->is_aead) {
         return false;
     }
@@ -1276,16 +1258,9 @@ static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
     const size_t prefix_total = magic_bytes + version_size + algo_size +
                                 flags_size + keyid_size + plen_size;
     const size_t trailers = d->digest_len + d->nonce_len;
-    if (trailers > SIZE_MAX - prefix_total) {
-        return false;
-    }
-    const size_t prefix_plus_trailers = prefix_total + trailers;
-    if (plaintext_len > UINT64_MAX - (uint64_t)trailers ||
-        (uint64_t)plaintext_len > (uint64_t)(SIZE_MAX - prefix_plus_trailers)) {
-        return false;
-    }
-    const size_t needed = prefix_plus_trailers + (size_t)plaintext_len;
-    if (needed > out_cap) {
+    size_t needed;
+    if (!envFrameSize_(prefix_total, trailers, plaintext_len, &needed) ||
+        needed > out_cap) {
         return false;
     }
 
@@ -1531,7 +1506,7 @@ static bool sealFinalize(uint8_t *out, size_t out_cap,
         params->_pad[2] != 0u) {
         return false;
     }
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)params->algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(params->algo);
     if (!d || !d->is_implemented || !d->is_aead) {
         return false;
     }
@@ -1570,16 +1545,10 @@ static bool sealFinalize(uint8_t *out, size_t out_cap,
         return false;
     }
     const size_t trailers = d->digest_len + d->nonce_len;
-    if (trailers > SIZE_MAX - expected_header_size) {
-        return false;
-    }
-    const size_t prefix_plus_trailers = expected_header_size + trailers;
-    if (plaintext_len > UINT64_MAX - (uint64_t)trailers ||
-        (uint64_t)plaintext_len > (uint64_t)(SIZE_MAX - prefix_plus_trailers)) {
-        return false;
-    }
-    const size_t needed = prefix_plus_trailers + (size_t)plaintext_len;
-    if (needed > out_cap) {
+    size_t needed;
+    if (!envFrameSize_(expected_header_size, trailers, plaintext_len,
+                       &needed) ||
+        needed > out_cap) {
         return false;
     }
 
@@ -2007,7 +1976,7 @@ bool flexEnvelopeWrapStreamInit(flexEnvelopeWrapStream *ctx,
         return false;
     }
 
-    const flexEnvelopeAlgoDesc *d = findAlgo((uint16_t)params->algo);
+    const flexEnvelopeAlgoDesc *d = findAlgo(params->algo);
     if (!d || !d->is_implemented) {
         return false;
     }

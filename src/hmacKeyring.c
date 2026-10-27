@@ -600,9 +600,11 @@ static bool hkrAeadReserve(hmacKeyring *ring, hmacKeyId id) {
         pthread_mutex_unlock(&ring->reserve_mu);
         return true;
     }
-    const uint64_t window = ring->reserve_window;
-    const uint64_t limit =
-        counter > UINT64_MAX - window ? UINT64_MAX : counter + window;
+    /* counter + window, saturating at UINT64_MAX */
+    uint64_t limit;
+    if (ckd_add(&limit, counter, ring->reserve_window)) {
+        limit = UINT64_MAX;
+    }
     /* Recorded before fn runs, so a snapshot taken while fn makes the
      * limit durable already restores the counter above it. */
     if (slot->aead_reserved < limit) {

@@ -86,11 +86,12 @@ uint64_t humanToBytes(const void *buf_, const size_t len, bool *err) {
     }
 
     /* Unknown unit, or a product that does not fit */
-    if (mul == 0 || val > UINT64_MAX / mul) {
+    uint64_t bytes;
+    if (mul == 0 || ckd_mul(&bytes, val, mul)) {
         return humanToBytesRefuse(err);
     }
 
-    return val * mul;
+    return bytes;
 }
 
 /* ====================================================================
