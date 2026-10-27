@@ -128,12 +128,12 @@ multiFenwick *multiFenwickNew(void) {
         return nullptr;
     }
 
-    /* Create multilist with reasonable limits */
-    /* Tradeoff: the larger the multilist flex:
-     *   - more memory saved for longer flex compaction
-     *   - slower speed because it requires more linear updates */
+    /* The cells live in a multilist at the family's measured node limit
+     * (dkTierLimit.h): every prefix walk reads ~log2(n) cells, and each
+     * read walks entries within one node, so the node size sets the cost
+     * of a read */
     /* @own: container; free=multilistFree */
-    mfw->tree = multilistNewLimit(FLEX_CAP_LEVEL_8192, 0);
+    mfw->tree = multilistNewLimit(dkTierDefaultLimit(DK_TIER_MULTILIST), 0);
     if (!mfw->tree) {
         return nullptr;
     }
@@ -623,7 +623,8 @@ static void *multiFenwickPersistRestore_(const uint8_t *data, size_t len) {
 
     multilistFree(mfw->tree);
     /* @own: container; free=multilistFree */
-    mfw->tree = multilistNewFromDump(FLEX_CAP_LEVEL_8192, 0, mfw->state, cells);
+    mfw->tree = multilistNewFromDump(dkTierDefaultLimit(DK_TIER_MULTILIST), 0,
+                                     mfw->state, cells);
     cells = nullptr; /* taken by the multilist */
     mfw->capacity = capacity;
     mfw->count = count;
