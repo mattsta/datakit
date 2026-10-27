@@ -41,10 +41,6 @@ defcleaner(void *, zfree);
         }                                                                      \
     } while (0)
 
-#define mars(m) ((multiarraySmall *)_MULTIARRAY_USE(m))
-#define marm(m) ((multiarrayMedium *)_MULTIARRAY_USE(m))
-#define marl(m) ((multiarrayLarge *)_MULTIARRAY_USE(m))
-
 #define _MULTIARRAY(ret, m, func, ...)                                         \
     do {                                                                       \
         switch (_multiarrayType(m)) {                                          \
