@@ -206,11 +206,7 @@ void aeadNonceLogFree(aeadNonceLog *log) {
     }
     /* Wipe slot contents before free — leaked log should not leak
      * observed nonces. */
-    volatile uint8_t *p = (volatile uint8_t *)log->slots;
-    const size_t bytes = log->cap * sizeof(aeadNonceLogSlot);
-    for (size_t i = 0; i < bytes; i++) {
-        p[i] = 0;
-    }
+    dkSecureZero(log->slots, log->cap * sizeof(aeadNonceLogSlot));
     pthread_mutex_destroy(&log->lock);
     zfree(log->links);
     zfree(log->slots);
@@ -219,10 +215,7 @@ void aeadNonceLogFree(aeadNonceLog *log) {
 
 /* Zero a slot's bytes (observed nonces never linger in freed slots) */
 static void aeadNonceLogWipeSlot(aeadNonceLog *log, size_t idx) {
-    volatile uint8_t *p = (volatile uint8_t *)&log->slots[idx];
-    for (size_t i = 0; i < sizeof(aeadNonceLogSlot); i++) {
-        p[i] = 0;
-    }
+    dkSecureZero(&log->slots[idx], sizeof(aeadNonceLogSlot));
 }
 
 /* Move the occupied slot `from` to the vacated slot `to`, keeping its
