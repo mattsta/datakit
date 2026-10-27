@@ -2088,7 +2088,6 @@ size_t DKS_UTF8GRAPHEMETRUNCATE(const DKS_TYPE *s, size_t n) {
     } while (0)
 
 #include "limits.h"
-#include <fcntl.h>
 #include <stdio.h>
 
 struct testLimit {
@@ -2116,41 +2115,6 @@ DK_STATIC char *DKS_TYPENAME(dksType type) {
 
     assert(false);
     unreachable();
-}
-
-DK_STATIC void DKS_RANDBYTES(uint8_t *buf, size_t len) {
-    size_t total = 0;
-    size_t chunkSize = (1024 * 1024 * 64); /* max 64 MB random data */
-
-    /* If len < chunkSize, get len.
-     * else, get one chunkSize and repeat it until len is reached. */
-
-    size_t remaining = len;
-    size_t attempt = remaining;
-    if (len > chunkSize) {
-        attempt = chunkSize;
-    }
-
-    int randfd = open("/dev/urandom", O_RDONLY);
-    ssize_t got = read(randfd, buf, attempt);
-    if (got < 0) {
-        perror("read error");
-        assert(false);
-    }
-
-    close(randfd);
-    total += got;
-
-    /* Now we just copy our 64 MB random data N times until
-     * we fill our requested total buffer size.
-     * If (total-len) > chunkSize, copy chunk size_t
-     * else, copy (total-len) */
-    while (total != len) {
-        remaining = len - total;
-        attempt = remaining > chunkSize ? chunkSize : remaining;
-        memcpy(buf + total, buf, attempt);
-        total += attempt;
-    }
 }
 
 /* DKS_FREEZERO check: a free hook that inspects one watched allocation just
@@ -3184,7 +3148,7 @@ int DKS_TEST(int argc, char *argv[]) {
                    startSize, DKS_TYPENAME(limit.startType));
             continue;
         }
-        DKS_RANDBYTES(buf, startSize);
+        ctestRandomBytes(buf, startSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(buf, startSize);
         printf("Initial type: %d\n", DKS_TYPE_GET(testing));
@@ -3284,7 +3248,7 @@ int DKS_TEST(int argc, char *argv[]) {
                    belowSize, DKS_TYPENAME(limit.startType));
             continue;
         }
-        DKS_RANDBYTES(belowlimitbuf, belowSize);
+        ctestRandomBytes(belowlimitbuf, belowSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(belowlimitbuf, belowSize);
         testCond("dks created properly below limit",
@@ -3295,7 +3259,7 @@ int DKS_TEST(int argc, char *argv[]) {
                  memcmp(testing, belowlimitbuf, belowSize), 0, "%d");
 
         cleanerName(zfree, U8) uint8_t *exactaddbuf = zmalloc(limit.incrby);
-        DKS_RANDBYTES(exactaddbuf, limit.incrby);
+        ctestRandomBytes(exactaddbuf, limit.incrby);
         testing = DKS_EXPANDBYEXACT(testing, limit.incrby);
         testing = DKS_CATLEN(testing, exactaddbuf, limit.incrby);
 
@@ -3324,7 +3288,7 @@ int DKS_TEST(int argc, char *argv[]) {
                  "%d");
 
         cleanerName(zfree, U8) uint8_t *abovelimitbuf = zmalloc(limit.incrby);
-        DKS_RANDBYTES(abovelimitbuf, limit.incrby);
+        ctestRandomBytes(abovelimitbuf, limit.incrby);
         testing = DKS_EXPANDBYEXACT(testing, limit.incrby);
         testing = DKS_CATLEN(testing, abovelimitbuf, limit.incrby);
 
@@ -3400,7 +3364,7 @@ int DKS_TEST(int argc, char *argv[]) {
 
         cleanerName(zfree, U8) uint8_t *startbuf =
             zmalloc(startSize); /* WARNING: can be big (> 4 GB) */
-        DKS_RANDBYTES(startbuf, startSize);
+        ctestRandomBytes(startbuf, startSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(startbuf, startSize);
         testCond("dks created properly below limit",
@@ -3477,7 +3441,7 @@ int DKS_TEST(int argc, char *argv[]) {
 
         cleanerName(zfree, U8) uint8_t *startbuf =
             zmalloc(startSize); /* WARNING: can be big (~1 GB) */
-        DKS_RANDBYTES(startbuf, startSize);
+        ctestRandomBytes(startbuf, startSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(startbuf, startSize);
         testCond("dks created properly below limit",

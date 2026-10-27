@@ -6650,49 +6650,15 @@ static void pop(flex **const ff, flexEndpoint where) {
     }
 }
 
-#include <fcntl.h>
+/* Random bytes at 'buf', a random count in [minlen, maxlen] of them (just
+ * minlen when maxlen is smaller); returns the count */
 DK_STATIC size_t randbytes(uint8_t *buf, size_t minlen, size_t maxlen) {
-    size_t total = 0;
-    size_t chunkSize = 1024; /* max 1 KB random data */
-
-    /* guard against bad math of max="multiple * i" when i == 0 */
     if (maxlen < minlen) {
         maxlen = minlen;
     }
 
-    size_t len = minlen + rand() % (maxlen - minlen + 1);
-
-    /* If len < chunkSize, get len.
-     * else, get one chunkSize and repeat it until len is reached. */
-
-    size_t remaining = len;
-    size_t attempt = remaining;
-    if (len > chunkSize) {
-        attempt = chunkSize;
-    }
-
-    int randfd = open("/dev/urandom", O_RDONLY);
-    ssize_t got = read(randfd, buf, attempt);
-    if (got < 0) {
-        perror("read error");
-        assert(false);
-    }
-
-    close(randfd);
-    total += got;
-
-    /* Now we just copy our 64 MB random data N times until
-     * we fill our requested total buffer size.
-     * If (total-len) > chunkSize, copy chunk size_t
-     * else, copy (total-len) */
-    while (total != len) {
-        remaining = len - total;
-        attempt = remaining > chunkSize ? chunkSize : remaining;
-        memcpy(buf + total, buf, attempt);
-        total += attempt;
-    }
-
-    assert(total == len);
+    const size_t len = minlen + dkRandomBounded(maxlen - minlen + 1);
+    ctestRandomBytes(buf, len);
     return len;
 }
 

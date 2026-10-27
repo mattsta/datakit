@@ -159,7 +159,6 @@ typedef char mdsc;
 #define DKS_ISHEXDIGIT DK_NAME(DKS_TYPE, IsHexDigit)       /* breakout */
 #define DKS_HEXDIGITTOINT DK_NAME(DKS_TYPE, HexDigitToInt) /* breakout */
 #define DKS_TYPENAME DK_NAME(DKS_TYPE, TypeName)
-#define DKS_RANDBYTES DK_NAME(DKS_TYPE, randbytes)
 
 /* Exported functions */
 [[nodiscard]] DKS_TYPE *DKS_NEWLEN(const void *init, size_t initlen);
@@ -423,7 +422,6 @@ int DKS_BENCHMAIN(void);
 #undef DKS_ISHEXDIGIT
 #undef DKS_HEXDIGITTOINT
 #undef DKS_TYPENAME
-#undef DKS_RANDBYTES
 
 #endif
 __END_DECLS

@@ -13,6 +13,28 @@
 #include <stdio.h>
 #include <string.h> /* strchr */
 
+/* The 'len' bytes at 'buf' filled with dkRandom64 draws: up to 64 KiB of
+ * them, then copies of those to the end, so a buffer of gigabytes costs
+ * copies rather than draws.  Different on every run, like the draws. */
+[[maybe_unused]] static void ctestRandomBytes(void *buf, size_t len) {
+    uint8_t *b = buf;
+    constexpr size_t fresh = 64 * 1024;
+    size_t have = 0;
+    while (have < len && have < fresh) {
+        const uint64_t draw = dkRandom64();
+        const size_t n = len - have < sizeof(draw) ? len - have : sizeof(draw);
+        memcpy(b + have, &draw, n);
+        have += n;
+    }
+
+    /* Each copy reads only bytes already written: [0, n) with n <= have */
+    while (have < len) {
+        const size_t n = len - have < have ? len - have : have;
+        memcpy(b + have, b, n);
+        have += n;
+    }
+}
+
 /* Generate new string concatenating integer i against string 'prefix'.
  * Marked unused: a TU may enable the generator but reference only some. */
 #define CTEST_INCLUDE_GEN(named)                                               \

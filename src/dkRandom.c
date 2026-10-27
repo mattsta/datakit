@@ -502,6 +502,55 @@ int dkRandomTest(int, char *[]) {
         }
     }
 
+    TEST("ctestRandomBytes fills exactly 'len' bytes, 64 KiB then copies") {
+        constexpr size_t fresh = 64 * 1024;
+        constexpr size_t guard = 16;
+        static uint8_t buf[3 * fresh + 3 + guard];
+        const size_t lens[] = {0,
+                               1,
+                               7,
+                               8,
+                               9,
+                               fresh - 1,
+                               fresh,
+                               fresh + 1,
+                               2 * fresh,
+                               3 * fresh,
+                               3 * fresh + 3};
+        for (size_t l = 0; l < countof(lens); l++) {
+            const size_t len = lens[l];
+            memset(buf, 0xA5, sizeof(buf));
+            ctestRandomBytes(buf, len);
+
+            for (size_t i = len; i < len + guard; i++) {
+                if (buf[i] != 0xA5) {
+                    ERR("len %zu: byte %zu past the end was written", len, i);
+                    break;
+                }
+            }
+
+            for (size_t i = fresh; i < len; i++) {
+                if (buf[i] != buf[i % fresh]) {
+                    ERR("len %zu: byte %zu is not a copy of byte %zu", len, i,
+                        i % fresh);
+                    break;
+                }
+            }
+
+            /* 16 or more drawn bytes all equal to the poison: 2^-128 */
+            if (len >= 16) {
+                size_t poisoned = 0;
+                while (poisoned < len && buf[poisoned] == 0xA5) {
+                    poisoned++;
+                }
+
+                if (poisoned == len) {
+                    ERR("len %zu: no byte was drawn", len);
+                }
+            }
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */
