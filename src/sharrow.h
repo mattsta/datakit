@@ -49,7 +49,7 @@
  * If 'checkedOut' IS a pointer, and NOT NULL, run the release check.
  * If 'checkedOut' IS a pointer, and NULL, run immediate release/free. */
 /* Note: to "run release check" we return false here which DOESN'T
- *       short circut in sharrowRelease().
+ *       short circuit in sharrowRelease().
  *       to "run immediate" we return true which DOES short circuit. */
 /* PURPOSE: prevents running atomics when (s)->checkedOut is NULL pointer;
  *          the result is inverted due to the OR condition in the final

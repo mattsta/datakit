@@ -814,7 +814,7 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
      * by a ZERO opcode with len > 1, or by an XZERO opcode.
      *
      * In those cases the original opcode must be split into multiple
-     * opcodes. The worst case is an XZERO split in the middle resuling into
+     * opcodes. The worst case is an XZERO split in the middle resulting into
      * XZERO - VAL - XZERO, so the resulting sequence max length is
      * 5 bytes.
      *
@@ -957,7 +957,7 @@ promote: /* Promote to dense representation. */
  * specified value if the current value is smaller than 'count'.
  *
  * This function is actually a wrapper for hllSparseSet(), it only performs
- * the hashshing of the elmenet to obtain the index and zeros run length. */
+ * the hashing of the element to obtain the index and zeros run length. */
 DK_STATIC int32_t hyperloglogSparseAdd(hyperloglog **inHll, const void *data_,
                                        size_t len) {
     int64_t index;

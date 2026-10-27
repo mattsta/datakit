@@ -2361,7 +2361,7 @@ bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
          * one-shot — but since we've already streamed through the
          * data with the raw-key hmacCtx, the running state already
          * absorbed everything correctly. (Prepared-key acceleration in
-         * streaming only helps if you re-use the same key across many
+         * streaming only helps if you reuse the same key across many
          * short messages; for stream it's irrelevant. Future
          * enhancement: use the prepared inner_ctx as a checkpoint.) */
         if (streamHashFinal(ctx->algo, &ctx->u, &ctx->hmac, computed,

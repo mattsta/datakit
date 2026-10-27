@@ -50,7 +50,7 @@ DK_STATIC multiarrayMedium *multiarrayMediumNew_(int16_t len, int16_t rowMax,
          * to temp storage so we can realloc our temp
          * node into our new container.
          * Then, restore initializer node as our first
-         * inner node whlie also allocating an extra
+         * inner node while also allocating an extra
          * unused node. */
         multiarrayMediumNode tmp = *node;
         /* @own: caller; free=multiarrayMediumFree */

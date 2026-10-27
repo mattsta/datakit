@@ -102,7 +102,7 @@ bool StrIsDigitsFast(const void *buf_, size_t size) {
 #else
 #warning "Using unoptimized StrIsDigitsFast()!"
 bool StrIsDigitsFast(const void *buf_, const size_t size) {
-    /* Note: fancy SWAR methods are not noticably faster than
+    /* Note: fancy SWAR methods are not noticeably faster than
      *       optimized-native-compiled StrIsDigitsIndividual! */
     return StrIsDigitsIndividual(buf_, size);
 }

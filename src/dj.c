@@ -697,7 +697,7 @@ void djString(djState *state, const void *data_, size_t len,
     /* Table of characters to use for escaping a single byte sequence.
      * If value is 'u', then value is written as hex digits formatted \u00XX */
     /* We shorten the table to save some cache pollution potentially at the cost
-     * of a branch at every useage of escape_ */
+     * of a branch at every usage of escape_ */
     static constexpr uint8_t escape_[] = {
         'u',     'u', 'u', 'u', 'u', 'u', 'u', 'u', 'b', 't', 'n', 'u', 'f',
         'r',     'u',

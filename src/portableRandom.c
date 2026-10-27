@@ -253,7 +253,7 @@ void portableRandom_add(portableRandomState *r, const uint8_t *key,
         }                                                                      \
     } while (0)
 
-/* The pid checks are assertations aginst RNG problems in forked processes. */
+/* The pid checks are assertions against RNG problems in forked processes. */
 #define randomSetup(content)                                                   \
     do {                                                                       \
         new_pid = 0;                                                           \

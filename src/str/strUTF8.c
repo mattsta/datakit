@@ -276,7 +276,7 @@ size_t StrLenUtf8(const void *_ss, size_t len) {
          *  0000000000000000000000000000000000000000000000000000000000000011
          *
          * And our result is 3.  The number of bytes used by multibyte
-         * characters in this 8 byte quanity is 4, but we are only counting the
+         * characters in this 8 byte quantity is 4, but we are only counting the
          * "overflow" character bytes.  Our 4-byte character has 3
          * bytes used by the full UTF-8 encoding.  And that's correct.
          *

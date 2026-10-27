@@ -815,7 +815,7 @@ protocol.
    about to be freed or go out of scope is legally elidable under
    `-O3 -flto`.
 
-8. **Re-using a `chacha20poly1305StreamCtx` after `Final`.** The
+8. **Reusing a `chacha20poly1305StreamCtx` after `Final`.** The
    post-Final ctx is bytewise zero (see the wipe contract above). A
    second `Final`
    returns `false`; an `Update` after `Final` returns `false`. Treat

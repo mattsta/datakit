@@ -129,7 +129,7 @@ uint64_t xorshift1024star(uint64_t s[16], uint8_t *restrict sIndex) {
  * sequence of 64-bit values that is equidistributed in the maximum possible
  * dimension (except that they will never output zero 16 times in a row). */
 
-/* Faster with no multipication:
+/* Faster with no multiplication:
  * xorshift+ family, based on 64-bit shifts:
  * the following xorshift128+ generator uses 128 bits of state and has a
  * maximal period of 2^128 − 1. It passes BigCrush, even when reversed. */

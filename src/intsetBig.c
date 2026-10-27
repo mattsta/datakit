@@ -778,7 +778,7 @@ size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
 
     /* Now look up each common bucket in 'a' and 'b' and retrieve
      * both underlying intsetU32 pointers. */
-    /* element-by-element zipper algoirthm for intersecting two sorted lists. */
+    /* element-by-element zipper algorithm for intersecting two sorted lists. */
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
         if (compared < 0) {
@@ -820,7 +820,7 @@ size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
                 intsetU32Array(eaai), eaaiCount, intsetU32Array(ebbi),
                 ebbiCount, intsetU32Array(tmpU32));
 
-            /* Resize and update metdata of 'tmpU32' */
+            /* Resize and update metadata of 'tmpU32' */
             intsetU32UpdateCount(tmpU32, intersectedCount);
 #if 1
             intsetU32ShrinkToSize(tmpU32);

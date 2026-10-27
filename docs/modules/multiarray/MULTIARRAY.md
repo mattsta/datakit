@@ -148,7 +148,7 @@ struct multiarrayMedium {
     multiarrayMediumNode *node;
     uint32_t count;  /* number of 'node' (i.e. node is size: len * count) */
     uint16_t len;    /* width of individual entries in node->data */
-    uint16_t rowMax; /* maximum entires inside each 'node' */
+    uint16_t rowMax; /* maximum entries inside each 'node' */
 };
 ```
 
@@ -169,7 +169,7 @@ typedef struct multiarrayLargeNode {
 struct multiarrayLarge {
     multiarrayLargeNode *head;
     multiarrayLargeNode *tail;
-    uint16_t len;    /* width of individual node->data entires */
+    uint16_t len;    /* width of individual node->data entries */
     uint16_t rowMax; /* maximum entries per node before creating new node */
     /* 4 bytes padding */
 };

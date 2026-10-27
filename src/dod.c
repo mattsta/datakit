@@ -833,7 +833,7 @@ void dodAppend(dod *const d, const dodVal t0, const dodVal t1,
  * ==================================================================== */
 
 /* ====================================================================
- * Create new cannonical dod
+ * Create new canonical dod
  * ==================================================================== */
 void dodInit(dodWriter *const w) {
     w->d = nullptr;
@@ -845,7 +845,7 @@ void dodInit(dodWriter *const w) {
 }
 
 /* ====================================================================
- * Read from cannonical dod
+ * Read from canonical dod
  * ==================================================================== */
 dodVal dodRead(dodWriter *const w, const size_t offset) {
     /* Fewer than two values: they live only in t[], no stream yet */
@@ -873,7 +873,7 @@ dodVal dodRead(dodWriter *const w, const size_t offset) {
 }
 
 /* ====================================================================
- * Write to cannonical dod
+ * Write to canonical dod
  * ==================================================================== */
 /* Make 'w->d' big enough for 'extraBits' more bits after 'usedBits', plus
  * what a reader touches past the end: decoding the last entry reads its

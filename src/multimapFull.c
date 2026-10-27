@@ -659,7 +659,7 @@ static multimapFull *multimapFullNewFromManyGrow_(
      * map placement, but we already have a split functionality created
      * for inserting elements, so let's reuse that without cluttering
      * up the initial placement loop.  This may create an O(count^3)
-     * iteration over our total maps, but our initial count is ususally 2. */
+     * iteration over our total maps, but our initial count is usually 2. */
 
     /* For the initial split, give us larger maps since we're growing
      * from a larger representation anyway. */
@@ -788,7 +788,7 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
      *  - m->map
      *  - m->middle
      *  - m->rangeBox
-     *      - NOTE: rangeBoxes could be ALLOCATED so need to DUPLCIATE too!
+     *      - NOTE: rangeBoxes could be ALLOCATED so need to DUPLICATE too!
      *
      * But, multiarray doesn't have copy functions and right now we don't want
      * to bother with writing them all, so let's copy our flexs and middles
@@ -828,7 +828,7 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
         middles[i] = getMiddle(m, i);
     }
 
-    /* First arg of NULL will allocate a new multimap instead of re-using an
+    /* First arg of NULL will allocate a new multimap instead of reusing an
      * existing one.  The grow reads only middle[0, count), so a map with no
      * inner maps (DeleteNMapsIterate can empty one) passes no middles at
      * all, rather than a stack array nothing was written to. */

@@ -78,7 +78,7 @@
     do {                                                                       \
         /* else, remaining is *before* the 50% mark and remaining is           \
          * *bigger* than idx.                                                  \
-         * Move 'idx' entires then place new value at TAIL. */                 \
+         * Move 'idx' entries then place new value at TAIL. */                 \
         /* split gets put BEFORE found */                                      \
         /* @own: container */                                                  \
         split->data = zcalloc((len), ((offset) + 1));                          \

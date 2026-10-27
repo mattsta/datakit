@@ -111,7 +111,7 @@ const uint8_t StrCtypeMap[256] = {
 ** StrIsIdChar[X] must be 1.
 **
 ** Ticket #1066.  the SQL standard does not allow '$' in the
-** middle of identfiers.  But many SQL implementations do.
+** middle of identifiers.  But many SQL implementations do.
 ** SQLite will allow '$' in identifiers for compatibility.
 ** But the feature is undocumented.
 */
@@ -440,7 +440,7 @@ do_atof_calc:
     /* store the result */
     *pResult = result;
 
-    /* return true if number and no extra non-whitespace chracters after */
+    /* return true if number and no extra non-whitespace characters after */
     return z >= zEnd && nDigits > 0 && eValid && nonNum == 0;
 }
 
@@ -584,7 +584,7 @@ DK_INLINE_ALWAYS bool StrAtoFReliable(int64_t s, const int32_t sign,
     /* store the result */
     *pResult = result;
 
-    /* return true if number and no extra non-whitespace chracters after */
+    /* return true if number and no extra non-whitespace characters after */
     return z >= zEnd && nDigits > 0;
 }
 
@@ -929,7 +929,7 @@ void StrBytesToHex(const uint8_t *in, size_t n, char *out) {
  * Math Overflow Detection Helpers (sqlite3)
  * ==================================================================== */
 /*
-** Attempt to add, substract, or multiply the 64-bit signed value iB against
+** Attempt to add, subtract, or multiply the 64-bit signed value iB against
 ** the other 64-bit signed integer at *pA and store the result in *pA.
 ** Return true on success.  Or if the operation would have resulted in an
 ** overflow, leave *pA unchanged and return false.

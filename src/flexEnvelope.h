@@ -594,7 +594,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
  * the trailing digest bytes. After Final, the ctx is consumed and
  * the secret-bearing regions (`hmac_storage` and the `u` union)
  * are wiped by Final itself. Callers MUST treat the ctx as
- * discarded after Final — re-use without a fresh Init is rejected.
+ * discarded after Final — reuse without a fresh Init is rejected.
  *
  * Lifecycle (verify) is the same shape; Update accepts arbitrary chunk
  * sizes and Final returns true iff the running digest matches the wire

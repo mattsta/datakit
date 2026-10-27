@@ -290,7 +290,7 @@ typedef enum flexType {
 /* Integer encoding step is the number of elements between successive
  * same-signed integer encodings.
  * (which is 2 since the steps are (negative, unsigned),
- * but this is more programatically explicit) */
+ * but this is more programmatically explicit) */
 #define FLEX_INTEGER_ENCODING_STEP (FLEX_UINT_16B - FLEX_UINT_8B)
 
 /* Width (as a varintWidth) of a fixed-int flex encoding.
@@ -333,7 +333,7 @@ typedef enum flexType {
     ((enc) >= FLEX_NEG_96B && (enc) <= FLEX_UINT_128B)
 #define FLEX_IS_BOOL(enc) ((enc) == FLEX_TRUE || (enc) == FLEX_FALSE)
 
-/* Identify an external refrence */
+/* Identify an external reference */
 #define FLEX_IS_REF_EXTERNAL(enc)                                              \
     ((enc) >= FLEX_CONTAINER_REFERENCE_EXTERNAL_8 &&                           \
      (enc) <= FLEX_CONTAINER_REFERENCE_EXTERNAL_64)
@@ -1258,7 +1258,7 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
         /* If 'fe' == 'data', then there's nothing new to write!
          * else, copy 'len' 'data' to 'fe' */
         if (fe != data) {
-            /* memove (instead of memcpy()) because 'fe' could
+            /* memmove (instead of memcpy()) because 'fe' could
              * be inside the range of 'data' + 'len' */
             memmove(fe, data, len);
         }
@@ -1279,7 +1279,7 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
         /* varints are unsigned 64 bit integers.  If we cast a negative
          * number to unsigned, it grows really big due to the sign bit
          * being in the topmost set bit position.
-         * For storage, we _properly_ convert the negaive integer to a positive
+         * For storage, we _properly_ convert the negative integer to a positive
          * integer for deconstructing the unused bytes.
          * We _already_ did the conversion to "acceptable range of int64_t for
          * reversing sign to a uint64_t" before getting here by using
@@ -2159,7 +2159,7 @@ DK_STATIC void flexInsertReplace_____(flex **const ff, flexEntry *fe,
 
     commonFlexInsertCalculatePreconditions_(replaceOffset);
 
-    /* Calculate size of entires we are about to replace. */
+    /* Calculate size of entries we are about to replace. */
     /* replacingElements is the number of elements in contents[]
      * being replaced, so subtract the initial offset non-replace
      * elements. */
@@ -3007,7 +3007,7 @@ flex *flexDuplicate(const flex *f) {
 /* ====================================================================
  * flex splitting
  * ==================================================================== */
-/* Split flex '*ff' into two halfs: [0, fe) and [fe, tail].
+/* Split flex '*ff' into two halves: [0, fe) and [fe, tail].
  * Returns new [fe, tail] flex while modifying '*ff' to be [0, fe). */
 flex *flexSplitMiddle(flex **const ff, uint_fast32_t elementsPerEntry,
                       const flexEntry *middleEntry) {
@@ -6177,7 +6177,7 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
      * compressed data down one or more bytes. */
     /* 2 bytes of a splitFullNoZero varint stores values [65, 16447].
      * If the length of < 64 or > 16447, we'll need to memmove after
-     * the entires are decompressed. */
+     * the entries are decompressed. */
     uint8_t *cflexStartCompressPosition =
         cBuffer + headerWidth + EXPECT_LENGTH_BYTES;
     const size_t cBufferRemainingLength =
@@ -11497,7 +11497,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         databox insertKey = key;
         databox val = databoxNewBytes(genval("val", 9000), 32);
 
-        /* We re-use this same box array of databoxes throughout since
+        /* We reuse this same box array of databoxes throughout since
          * 'key' and 'val' just continue getting repopulated with new values. */
         const databox *boxes[2] = {&key, &val};
 

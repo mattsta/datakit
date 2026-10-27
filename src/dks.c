@@ -1470,7 +1470,7 @@ DKS_TYPE **DKS_SPLITLEN_MAX(const void *const s_, const size_t len,
              * loop) */
             start = j + sepLen;
 
-            /* jump over 'sep' for next string postion check */
+            /* jump over 'sep' for next string position check */
             j += sepLen - 1;
         }
     }
@@ -1819,7 +1819,7 @@ DKS_TYPE *DKS_FORMATIP(char *ip, int port) {
  * already, this will be detected and handled correctly.
  *
  * The function does not try to normalize everything, but only the obvious
- * case of one or more "../" appearning at the start of "filename"
+ * case of one or more "../" appearing at the start of "filename"
  * relative path. */
 DKS_TYPE *DKS_GETABSOLUTEPATH(char *filename) {
     char cwd[1024] = {};

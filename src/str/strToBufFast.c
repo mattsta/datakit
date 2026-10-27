@@ -480,7 +480,7 @@ size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
 
     uint8_t *buf = (uint8_t *)buf_;
 
-    /* We wite from back-to-front, so the offset starts at the end
+    /* We write from back-to-front, so the offset starts at the end
      * of the buffer and "grows" towards the front. */
     size_t offset = bufLen - 1;
 

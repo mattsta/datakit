@@ -939,7 +939,7 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
         return 0;
     }
 
-    /* Types don't match and aren't directly convertable, so
+    /* Types don't match and aren't directly convertible, so
      * compare using a cross-type sort order of:
      *   void < bytes < integers < floats < true < false < null */
 

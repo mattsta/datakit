@@ -23,7 +23,7 @@ size_t jebufSizeAllocation(const size_t currentBufSize) {
         return jebufSizeAllocation16(currentBufSize);
     }
 
-    /* also limit 32 bit builds to 32 bit memory requets */
+    /* also limit 32 bit builds to 32 bit memory requests */
     if (currentBufSize <= 3584 MiB || sizeof(void *) == 4) {
         return jebufSizeAllocation32(currentBufSize);
     }

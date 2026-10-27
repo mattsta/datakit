@@ -12,12 +12,12 @@ typedef multiarraySmall multiarrayMediumNode;
  * 'node' is an array of multiarraySmall containers.
  * 'count' is the number of multiarraySmall containers.
  * 'len' is the width of each entry inside each multiarraySmall container.
- * 'rowMax' is the maximum number of entires inside each multiarraySmall
+ * 'rowMax' is the maximum number of entries inside each multiarraySmall
  *          container before we grow 'node' to use a new multiarraySmall
  *          container for new data. */
 struct multiarrayMedium {
     multiarrayMediumNode *node;
     uint32_t count;  /* number of 'node' (i.e. node is size: len * count) */
     uint16_t len;    /* width of individual entries in node->data */
-    uint16_t rowMax; /* maximum entires inside each 'node' */
+    uint16_t rowMax; /* maximum entries inside each 'node' */
 };

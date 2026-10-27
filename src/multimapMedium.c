@@ -812,7 +812,7 @@ bool multimapMediumLast(multimapMedium *m, databox *elements[]) {
     if (flexCount(useMap) == 0) {
         useMap = m->map[0];
         if (flexCount(useMap) == 0) {
-            /* If neither map has entries, we can't retrive elements. */
+            /* If neither map has entries, we can't retrieve elements. */
             return false;
         }
     }

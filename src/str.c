@@ -92,7 +92,7 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
      *       will fail because we bail out with parsing when the initial digits
      *       overflow.
      *
-     *       Also, we re-use the intial integer-part components re-constructed
+     *       Also, we reuse the initial integer-part components re-constructed
      *       in each loop as input to the float creator, so we can't just
      *       jump into the float creator if we detect a decimal. We have to
      *       pre-parse and convert the non-fractional portion too. */

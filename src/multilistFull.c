@@ -49,7 +49,7 @@ struct multilistFull {
     uint16_t compress; /* depth of end nodes not to compress;0=off */
 };
 
-/* STORAGE_MAX is the maximum number of entires in our
+/* STORAGE_MAX is the maximum number of entries in our
  * mflex array before it grows to a new multiarray
  * storage type.  The larger the number, the more reallocation
  * overhead with every insert.  The smaller the number, the sooner
@@ -1201,7 +1201,7 @@ void multilistFullInsertByTypeAfter(multilistFull *ml, mflexState *state[2],
 /* Delete a range of elements from the multilistFull.
  *
  * Returns true if one or more entries were deleted.
- * Returns false if no entires were deleted. */
+ * Returns false if no entries were deleted. */
 bool multilistFullDelRange(multilistFull *ml, mflexState *state,
                            const mlOffsetId start, const int64_t values) {
     if (values <= 0 || start >= ml->values || start < -ml->values) {
@@ -2282,7 +2282,7 @@ int multilistFullTest(int, char *[]) {
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistFullPushByTypeTail(ml, s0, &pushBox);
-            /* 1 for head and 1 for tail beacuse 1 node = head = tail */
+            /* 1 for head and 1 for tail because 1 node = head = tail */
             mlVerify(ml, 1);
             multilistFullFree(ml);
         }
@@ -2292,7 +2292,7 @@ int multilistFullTest(int, char *[]) {
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistFullPushByTypeHead(ml, s0, &pushBox);
-            /* 1 for head and 1 for tail beacuse 1 node = head = tail */
+            /* 1 for head and 1 for tail because 1 node = head = tail */
             mlVerify(ml, 1);
             multilistFullFree(ml);
         }
@@ -2974,7 +2974,7 @@ int multilistFullTest(int, char *[]) {
             multilistFullFree(ml);
         }
 
-        TEST("delete range of entire node with overflow valuess") {
+        TEST("delete range of entire node with overflow values") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 32; i++) {
@@ -3013,7 +3013,7 @@ int multilistFullTest(int, char *[]) {
             multilistFullFree(ml);
         }
 
-        TEST("delete negative 1 from 500 list with overflow valuess") {
+        TEST("delete negative 1 from 500 list with overflow values") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {

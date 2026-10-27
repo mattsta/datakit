@@ -9,23 +9,23 @@
  * Offsets can be forward (positive) or reverse (negative).
  * This limits us to 2 billion nodes.
  * Examples:
- *   - If each node holds 200 small entires (~40 bytes each),
- *     this limits us to 400 billion maximum entires.
+ *   - If each node holds 200 small entries (~40 bytes each),
+ *     this limits us to 400 billion maximum entries.
  *   - If each node holds one entry (each entry > 8kb),
  *     this limits us to 2 billion maximum entries.
  *   - If each node holds 4,000 2 byte integers,
- *     this limuts us to 8 trillion maximum entires. */
+ *     this limits us to 8 trillion maximum entries. */
 typedef int32_t mlNodeId;
 
 /* mlOffsetId is the offset extent in our entire list.
  * Offsets can be forward (positive) or reverse (negative).
- * This limits us to 9 quintillion maximum entires, but we
+ * This limits us to 9 quintillion maximum entries, but we
  * will hit physical node limits first. */
 typedef int64_t mlOffsetId;
 
 /* Note: this is oversized for small/medium because we stuff required Full state
  * in the common iterator too.
- * If space is a problem, we could refactor this futher into an extensible
+ * If space is a problem, we could refactor this further into an extensible
  * prefix struct type.
  *
  * 'wide' is the iterator's storage for one 96/128-bit element:

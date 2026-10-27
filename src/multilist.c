@@ -1380,7 +1380,7 @@ int multilistTest(int, char *[]) {
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeTail(&ml, s0, &pushBox);
-            /* 1 for head and 1 for tail beacuse 1 node = head = tail */
+            /* 1 for head and 1 for tail because 1 node = head = tail */
         }
 
         TEST("add to head of empty list") {
@@ -1388,7 +1388,7 @@ int multilistTest(int, char *[]) {
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeHead(&ml, s0, &pushBox);
-            /* 1 for head and 1 for tail beacuse 1 node = head = tail */
+            /* 1 for head and 1 for tail because 1 node = head = tail */
         }
 
         TEST("IndexNear: anchored lookup matches Index across all tiers") {
@@ -2080,7 +2080,7 @@ int multilistTest(int, char *[]) {
             multilistDelRange(&ml, s0, 0, 32);
         }
 
-        TEST("delete range of entire node with overflow valuess") {
+        TEST("delete range of entire node with overflow values") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 32; i++) {
@@ -2110,7 +2110,7 @@ int multilistTest(int, char *[]) {
             multilistDelRange(&ml, s0, -1, 1);
         }
 
-        TEST("delete negative 1 from 500 list with overflow valuess") {
+        TEST("delete negative 1 from 500 list with overflow values") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
             for (int i = 0; i < 500; i++) {

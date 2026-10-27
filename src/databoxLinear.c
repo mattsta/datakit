@@ -45,7 +45,7 @@ typedef enum databoxLinearType {
 /* Integer encoding step is the number of elements between successive
  * same-signed integer encodings.
  * (which is 2 since the steps are (negative, unsigned),
- * but this is more programatically explicit) */
+ * but this is more programmatically explicit) */
 #define DL_INTEGER_ENCODING_STEP (DL_UINT_16B - DL_UINT_8B)
 
 #define DL_WIDTH_FROM_ENCODING(encoding)                                       \

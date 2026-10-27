@@ -221,7 +221,7 @@ void multilistMediumDelEntry(multilistIterator *iter, multilistEntry *entry) {
 
     multilistIterOffsetAfterDelete_(iter, entry->offset);
 
-    /* If deleted only element in F0 and F1 stil has data,
+    /* If deleted only element in F0 and F1 still has data,
      * move F1 to F0 since F0 must always have elements (if data exists).
      * The deleted element was F0's only one, so nothing precedes it; a
      * forward iterator continues at the head of the new F0. */

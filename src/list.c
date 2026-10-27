@@ -240,7 +240,7 @@ void listRewindTail(list *l, listIter *li) {
  * listDelNode(), but not to remove other elements.
  *
  * The function returns a pointer to the next element of the list,
- * or NULL if there are no more elements, so the classical usage patter
+ * or NULL if there are no more elements, so the classical usage pattern
  * is:
  *
  * iter = listGetIterator(list,<direction>);

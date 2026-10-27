@@ -187,8 +187,8 @@ void mflexFree(mflex *m) {
 void mflexReset(mflex **mm) {
     /* A custom implementation of Reset() since it doesn't
      * make sense to decompress a full flex just to delete
-     * all the entires.
-     * So, just free the orginal and create a new one. */
+     * all the entries.
+     * So, just free the original and create a new one. */
     mflexFree(*mm);
 
     /* @own: caller; free=mflexFree */

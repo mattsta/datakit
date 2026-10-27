@@ -2,12 +2,12 @@
 
 #include "datakit.h"
 
-/* multiarraySmall is a single array with entires of length 'len'
+/* multiarraySmall is a single array with entries of length 'len'
  * and can be randomly accessed directly by index with no traversals
  * required.
  * This is only efficient for inserts and deletes up to a total array size
  * between 8 KB and 16 KB.
- * (if entires are 16 bytes each, thats 512 to 1024 entries total) */
+ * (if entries are 16 bytes each, that's 512 to 1024 entries total) */
 
 /* ====================================================================
  * Container / Function API
