@@ -192,12 +192,12 @@ persistLogResult multidictReplaceP(multidictP *d, const databox *key,
      * nothing either); a present one is logged and rewritten where it was
      * found, and that is the call's one LRU use */
     mdpReplace_ r = {.ctx = d->ctx, .args = {key, val}};
-    const int32_t rewritten =
+    const multidictUpdateResult rewritten =
         multidictUpdateValue(d->d, key, mdpLogThenReplace_, &r);
-    if (rewritten < 0) {
+    if (rewritten == MULTIDICT_UPDATE_ABSENT) {
         return PERSIST_LOG_UNCHANGED;
     }
-    if (rewritten == 0) {
+    if (rewritten == MULTIDICT_UPDATE_DECLINED) {
         return PERSIST_LOG_REFUSED;
     }
 

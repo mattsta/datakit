@@ -331,9 +331,11 @@ if (multidictAddNX(d, &key, &val) == MULTIDICT_OK_INSERTED) {
 
 ```c
 /* 'update' sees the stored value and fills the new one, or returns false
- * to change nothing: 1 rewritten (one LRU use), 0 refused, -1 absent */
-int32_t multidictUpdateValue(multidict *d, const databox *keybox,
-                             multidictValueUpdate *update, void *ctx);
+ * to change nothing: MULTIDICT_UPDATE_REWRITTEN (one LRU use),
+ * MULTIDICT_UPDATE_DECLINED, MULTIDICT_UPDATE_ABSENT */
+multidictUpdateResult multidictUpdateValue(multidict *d, const databox *keybox,
+                                           multidictValueUpdate *update,
+                                           void *ctx);
 ```
 
 The key is found once and the value is rewritten where it was found. The

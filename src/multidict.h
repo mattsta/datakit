@@ -136,6 +136,20 @@ typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
 typedef bool(multidictValueUpdate)(void *ctx, const databox *current,
                                    databox *replacement);
 
+/* What a value rewrite did (updateByType, multidictUpdateValue) */
+typedef enum multidictUpdateResult {
+    MULTIDICT_UPDATE_ABSENT = -1,   /* the key is not there */
+    MULTIDICT_UPDATE_DECLINED = 0,  /* 'update' returned false: no change */
+    MULTIDICT_UPDATE_REWRITTEN = 1, /* the stored value was replaced */
+} multidictUpdateResult;
+
+/* What an insert-only-when-absent did (insertIfAbsentByType) */
+typedef enum multidictInsertAbsentResult {
+    MULTIDICT_INSERT_NO_SLOT = -1, /* no slot to insert into */
+    MULTIDICT_INSERT_PRESENT = 0,  /* the key is there: the slot unchanged */
+    MULTIDICT_INSERT_ADDED = 1,    /* the row went in */
+} multidictInsertAbsentResult;
+
 /* multidictClass is a (17 * 8) + 1, padded = 144 byte struct: the
  * per-operation hooks fill the first cache line. */
 typedef struct multidictClass {
@@ -188,19 +202,19 @@ typedef struct multidictClass {
                        multidictIterProcess process, void *privdata);
 
     /* Rewrite the value of 'keybox' where it is stored, in one search:
-     * 'update' sees the stored value and supplies the new one.  Returns 1
-     * when rewritten, 0 when 'update' refused, -1 when the key is not in
-     * the slot.  (IncrBy, IncrByFloat, AddXX and Replace use it.) */
-    int32_t (*updateByType)(struct multidictClass *qdc, multidictSlot **slot,
-                            const databox *keybox, multidictValueUpdate *update,
-                            void *ctx);
+     * 'update' sees the stored value and supplies the new one.
+     * (IncrBy, IncrByFloat, AddXX and Replace use it.) */
+    multidictUpdateResult (*updateByType)(struct multidictClass *qdc,
+                                          multidictSlot **slot,
+                                          const databox *keybox,
+                                          multidictValueUpdate *update,
+                                          void *ctx);
 
     /* Insert 'keybox' -> 'valbox' only when the key is not in the slot, in
-     * one search: 1 inserted, 0 present (the slot unchanged), -1 no slot.
-     * (AddNX uses it.) */
-    int64_t (*insertIfAbsentByType)(struct multidictClass *qdc,
-                                    multidictSlot **slot, const databox *keybox,
-                                    const databox *valbox);
+     * one search.  (AddNX uses it.) */
+    multidictInsertAbsentResult (*insertIfAbsentByType)(
+        struct multidictClass *qdc, multidictSlot **slot, const databox *keybox,
+        const databox *valbox);
 
     /* Rehash uses getIter/iterNext, insertByType and freeSlot: every row
      * of an old slot is read in place and inserted into its new slot, then
@@ -360,10 +374,12 @@ multidictResult multidictReplace(multidict *d, const databox *keybox,
  * value (borrowed, valid during the call) and fills the new one, or
  * returns false to leave everything unchanged (it may do work of its own
  * first, such as logging the change, but must not touch this dict).
- * Returns 1 when rewritten (the call's one LRU use), 0 when 'update'
- * refused (no LRU use), -1 when the key is absent. */
-int32_t multidictUpdateValue(multidict *d, const databox *keybox,
-                             multidictValueUpdate *update, void *ctx);
+ * MULTIDICT_UPDATE_REWRITTEN is the call's one LRU use; DECLINED (the
+ * update refused) and ABSENT (no such key, or a missing argument) use
+ * none. */
+multidictUpdateResult multidictUpdateValue(multidict *d, const databox *keybox,
+                                           multidictValueUpdate *update,
+                                           void *ctx);
 
 /* Atomic Get-and-Delete Operations */
 bool multidictGetAndDelete(multidict *d, const databox *keybox,

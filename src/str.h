@@ -109,13 +109,25 @@ typedef enum strEnc {
  * ==================================================================== */
 bool StrAtoF(const void *_z, double *pResult, int32_t length, strEnc enc,
              bool skipSpaces);
-int32_t StrAtoi64(const void *zNum, int64_t *pNum, int32_t length, uint8_t enc,
-                  bool skipSpaces);
 
-/* Decimal or 0x-hex text (zero-terminated) to int64_t: 0 when it fits, 1
- * when too large or malformed, 2 for 9223372036854775808.  Hex is the
- * bits of up to 16 digits (0xffffffffffffffff is -1). */
-int32_t StrDecOrHexToInt64(const char *z, int64_t *pOut);
+/* What reading text as an int64_t found */
+typedef enum strInt64Read {
+    STR_INT64_FITS = 0,    /* *pNum holds the value */
+    STR_INT64_REFUSED = 1, /* empty, malformed or out of range: *pNum holds
+                              the leading digits' value, clamped */
+    STR_INT64_JUST_PAST_MAX = 2, /* exactly 9223372036854775808, which fits
+                                    only negated: *pNum holds INT64_MAX */
+} strInt64Read;
+
+/* Decimal text of 'length' bytes in 'enc' to int64_t (an optional sign,
+ * leading spaces when 'skipSpaces') */
+strInt64Read StrAtoi64(const void *zNum, int64_t *pNum, int32_t length,
+                       strEnc enc, bool skipSpaces);
+
+/* Decimal or 0x-hex text (zero-terminated) to int64_t, read as StrAtoi64
+ * reads it.  Hex is the bits of up to 16 digits (0xffffffffffffffff is
+ * -1). */
+strInt64Read StrDecOrHexToInt64(const char *z, int64_t *pOut);
 
 /* Decimal or 0x-hex text to int32_t; true when it fits.  Text after the
  * number is ignored.  StrAtoi gives the value, or 0 when it does not

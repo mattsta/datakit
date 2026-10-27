@@ -325,8 +325,10 @@ static bool multidictRemoveFromTable_(multidict *d, int htidx,
                                       const databox *keybox, uint32_t hash,
                                       size_t keySize, databox *removedVal,
                                       bool take, const mdRemoveAsk_ *ask);
-DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
-                                   multidictValueUpdate *update, void *ctx);
+DK_STATIC multidictUpdateResult multidictUpdate_(multidict *d,
+                                                 const databox *keybox,
+                                                 multidictValueUpdate *update,
+                                                 void *ctx);
 static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
                                      databox *keybox, databoxWide *slot);
 DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
@@ -1362,14 +1364,14 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
     const size_t lenBefore = op.created ? 0 : d->shared->sizeBytes(*op.slot);
 
     /* One search finds the key or inserts it */
-    const int64_t inserted =
+    const multidictInsertAbsentResult inserted =
         d->shared->insertIfAbsentByType(d->shared, op.slot, keybox, valbox);
-    if (inserted == 0) {
+    if (inserted == MULTIDICT_INSERT_PRESENT) {
         multidictLRUOnAccess(d, keybox);
         return MULTIDICT_ERR; /* Key exists - NX fails */
     }
 
-    if (inserted < 0) {
+    if (inserted == MULTIDICT_INSERT_NO_SLOT) {
         return MULTIDICT_ERR;
     }
 
@@ -1385,14 +1387,16 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
     return MULTIDICT_OK_INSERTED;
 }
 
-int32_t multidictUpdateValue(multidict *d, const databox *keybox,
-                             multidictValueUpdate *update, void *ctx) {
+multidictUpdateResult multidictUpdateValue(multidict *d, const databox *keybox,
+                                           multidictValueUpdate *update,
+                                           void *ctx) {
     if (unlikely(!d || !keybox || !update)) {
-        return -1;
+        return MULTIDICT_UPDATE_ABSENT;
     }
 
-    const int32_t result = multidictUpdate_(d, keybox, update, ctx);
-    if (result > 0) {
+    const multidictUpdateResult result =
+        multidictUpdate_(d, keybox, update, ctx);
+    if (result == MULTIDICT_UPDATE_REWRITTEN) {
         multidictLRUOnAccess(d, keybox);
     }
     return result;
@@ -1412,7 +1416,8 @@ multidictResult multidictAddXX(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    return multidictUpdateValue(d, keybox, mdReplaceUpdate_, (void *)valbox) > 0
+    return multidictUpdateValue(d, keybox, mdReplaceUpdate_, (void *)valbox) ==
+                   MULTIDICT_UPDATE_REWRITTEN
                ? MULTIDICT_OK_REPLACED
                : MULTIDICT_ERR; /* Key doesn't exist - XX fails */
 }
@@ -1560,13 +1565,14 @@ static bool mdUpdateMeasured_(void *ctx, const databox *current,
 
 /* Rewrite the value of 'keybox' where it is stored: one hash and one
  * slot search per table (the newer first while rehashing), keeping the
- * byte counts.  The key is matched as the dict's type does.  Returns 1
- * when rewritten, 0 when 'update' refused, -1 when the key is absent.
- * LRU use is the caller's. */
-DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
-                                   multidictValueUpdate *update, void *ctx) {
+ * byte counts.  The key is matched as the dict's type does.  LRU use is
+ * the caller's. */
+DK_STATIC multidictUpdateResult multidictUpdate_(multidict *d,
+                                                 const databox *keybox,
+                                                 multidictValueUpdate *update,
+                                                 void *ctx) {
     if (unlikely(HTSIZE(d, 0) == 0)) {
-        return -1;
+        return MULTIDICT_UPDATE_ABSENT;
     }
 
     mdKeyCopy copy = {.heap = nullptr};
@@ -1576,8 +1582,9 @@ DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
 
     multidictRehashStep(d);
     const uint32_t hash = multidictHashOfKey_(d, key);
-    int32_t result = -1;
-    for (int32_t t = d->rehashing ? 1 : 0; t >= 0 && result < 0; t--) {
+    multidictUpdateResult result = MULTIDICT_UPDATE_ABSENT;
+    for (int32_t t = d->rehashing ? 1 : 0;
+         t >= 0 && result == MULTIDICT_UPDATE_ABSENT; t--) {
         multidictSlot **slot = SLOT_BY_HASH_PTR_PTR(d, t, hash);
         if (!*slot) {
             continue;
@@ -1587,7 +1594,7 @@ DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
         mdUpdateCtx u = {.update = update, .ctx = ctx};
         result = d->shared->updateByType(d->shared, slot, key,
                                          mdUpdateMeasured_, &u);
-        if (result > 0) {
+        if (result == MULTIDICT_UPDATE_REWRITTEN) {
             multidictHT *ht = HT(d, t);
             ht->usedBytes =
                 ht->usedBytes - before + d->shared->sizeBytes(*slot);
@@ -1885,10 +1892,11 @@ multidictResult multidictIncrBy(multidict *d, const databox *keybox,
     /* An existing key is rewritten in place, in one search; the call makes
      * one LRU use of it, rewritten or refused */
     mdIncrCtx x = {.increment = increment};
-    const int32_t updated = multidictUpdate_(d, keybox, mdIncrUpdate_, &x);
-    if (updated >= 0) {
+    const multidictUpdateResult updated =
+        multidictUpdate_(d, keybox, mdIncrUpdate_, &x);
+    if (updated != MULTIDICT_UPDATE_ABSENT) {
         multidictLRUOnAccess(d, keybox);
-        if (updated == 0) {
+        if (updated == MULTIDICT_UPDATE_DECLINED) {
             return MULTIDICT_ERR; /* not an int64 value, or out of range */
         }
 
@@ -1919,10 +1927,11 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
     /* As in multidictIncrBy: an existing key is rewritten in place in one
      * search, with one LRU use, rewritten or refused */
     mdIncrFloatCtx x = {.increment = increment};
-    const int32_t updated = multidictUpdate_(d, keybox, mdIncrFloatUpdate_, &x);
-    if (updated >= 0) {
+    const multidictUpdateResult updated =
+        multidictUpdate_(d, keybox, mdIncrFloatUpdate_, &x);
+    if (updated != MULTIDICT_UPDATE_ABSENT) {
         multidictLRUOnAccess(d, keybox);
-        if (updated == 0) {
+        if (updated == MULTIDICT_UPDATE_DECLINED) {
             return MULTIDICT_ERR; /* not a number, or a non-finite result */
         }
 
@@ -3323,15 +3332,17 @@ DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,
     return wasReplaced ? 0 : 1; /* 1 = new insert, 0 = replaced */
 }
 
-DK_STATIC int64_t mmSlotInsertIfAbsent(multidictClass *, multidictSlot **slot,
-                                       const databox *keybox,
-                                       const databox *valbox) {
+DK_STATIC multidictInsertAbsentResult
+mmSlotInsertIfAbsent(multidictClass *, multidictSlot **slot,
+                     const databox *keybox, const databox *valbox) {
     if (*slot == nullptr) {
-        return -1;
+        return MULTIDICT_INSERT_NO_SLOT;
     }
 
     const databox *elements[2] = {keybox, valbox};
-    return multimapInsertIfAbsent(MM_SLOT_REF(slot), elements) ? 1 : 0;
+    return multimapInsertIfAbsent(MM_SLOT_REF(slot), elements)
+               ? MULTIDICT_INSERT_ADDED
+               : MULTIDICT_INSERT_PRESENT;
 }
 
 DK_STATIC void *mmSlotGetOrCreate(multidictClass *, multidictSlot **slot,
@@ -3488,13 +3499,15 @@ DK_STATIC void mmSlotIterateAll(multidictClass *, multidictSlot *slot,
     }
 }
 
-DK_STATIC int32_t mmSlotUpdate(multidictClass *, multidictSlot **slot,
-                               const databox *keybox,
-                               multidictValueUpdate *update, void *ctx) {
+DK_STATIC multidictUpdateResult mmSlotUpdate(multidictClass *,
+                                             multidictSlot **slot,
+                                             const databox *keybox,
+                                             multidictValueUpdate *update,
+                                             void *ctx) {
     multimapEntry me;
     if (*slot == nullptr ||
         !multimapGetUnderlyingEntry(MM_SLOT(*slot), keybox, &me)) {
-        return -1;
+        return MULTIDICT_UPDATE_ABSENT;
     }
 
     /* The row is found once: read the value through its entry and, unless
@@ -3507,11 +3520,11 @@ DK_STATIC int32_t mmSlotUpdate(multidictClass *, multidictSlot **slot,
 
     databox replacement;
     if (!update(ctx, &current, &replacement)) {
-        return 0;
+        return MULTIDICT_UPDATE_DECLINED;
     }
 
     multimapReplaceEntry(MM_SLOT_REF(slot), &me, &replacement);
-    return 1;
+    return MULTIDICT_UPDATE_REWRITTEN;
 }
 
 DK_STATIC void mmSlotClassFree(multidictClass *) {

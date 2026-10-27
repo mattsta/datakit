@@ -1192,27 +1192,26 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     TEST("StrAtoi64 clamps magnitudes past 64 bits instead of wrapping") {
         static const struct {
             const char *s;
-            int32_t rc;
+            strInt64Read rc;
             int64_t want;
         } cases[] = {
-            {"-9223372036854775808", 0, INT64_MIN},
-            {"9223372036854775807", 0, INT64_MAX},
-            {"9223372036854775808", 2, INT64_MAX},
-            {"18446744073709551616", 1, INT64_MAX},
-            {"20500000000000000000", 1, INT64_MAX},
-            {"36893488147419103232", 1, INT64_MAX},
-            {"-36893488147419103232", 1, INT64_MIN},
-            {"123456789012345678901234567890", 1, INT64_MAX},
-            {"-123456789012345678901234567890", 1, INT64_MIN},
+            {"-9223372036854775808", STR_INT64_FITS, INT64_MIN},
+            {"9223372036854775807", STR_INT64_FITS, INT64_MAX},
+            {"9223372036854775808", STR_INT64_JUST_PAST_MAX, INT64_MAX},
+            {"18446744073709551616", STR_INT64_REFUSED, INT64_MAX},
+            {"20500000000000000000", STR_INT64_REFUSED, INT64_MAX},
+            {"36893488147419103232", STR_INT64_REFUSED, INT64_MAX},
+            {"-36893488147419103232", STR_INT64_REFUSED, INT64_MIN},
+            {"123456789012345678901234567890", STR_INT64_REFUSED, INT64_MAX},
+            {"-123456789012345678901234567890", STR_INT64_REFUSED, INT64_MIN},
         };
         for (size_t i = 0; i < countof(cases); i++) {
             int64_t got = 0;
-            const int32_t rc = StrAtoi64(
+            const strInt64Read rc = StrAtoi64(
                 cases[i].s, &got, (int32_t)strlen(cases[i].s), STR_UTF8, false);
             if (rc != cases[i].rc || got != cases[i].want) {
-                ERR("StrAtoi64(%s) = %" PRId32 ", %" PRId64 "; want %" PRId32
-                    ", %" PRId64,
-                    cases[i].s, rc, got, cases[i].rc, cases[i].want);
+                ERR("StrAtoi64(%s) = %d, %" PRId64 "; want %d, %" PRId64,
+                    cases[i].s, (int)rc, got, (int)cases[i].rc, cases[i].want);
             }
         }
     }
@@ -1496,16 +1495,18 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             int64_t i8 = 0;
             int64_t ile = 0;
             int64_t ibe = 0;
-            const int32_t r8 =
+            const strInt64Read r8 =
                 StrAtoi64(nums[i], &i8, (int32_t)n, STR_UTF8, true);
-            const int32_t rle = StrAtoi64(le, &ile, len16, STR_UTF16LE, true);
-            const int32_t rbe = StrAtoi64(be, &ibe, len16, STR_UTF16BE, true);
+            const strInt64Read rle =
+                StrAtoi64(le, &ile, len16, STR_UTF16LE, true);
+            const strInt64Read rbe =
+                StrAtoi64(be, &ibe, len16, STR_UTF16BE, true);
             if (f8 != fle || f8 != fbe || memcmp(&d8, &dle, sizeof(d8)) != 0 ||
                 memcmp(&d8, &dbe, sizeof(d8)) != 0 || r8 != rle || r8 != rbe ||
                 i8 != ile || i8 != ibe) {
                 ERR("UTF-16 read of \"%s\" differs: atof %d/%d/%d, atoi "
-                    "%" PRId32 "/%" PRId32 "/%" PRId32,
-                    nums[i], f8, fle, fbe, r8, rle, rbe);
+                    "%d/%d/%d",
+                    nums[i], f8, fle, fbe, (int)r8, (int)rle, (int)rbe);
             }
         }
         /* A unit above 0xFF is not part of a number */
@@ -1513,7 +1514,8 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         double dw = 0;
         int64_t iw = 0;
         if (StrAtoF(wide, &dw, 6, STR_UTF16LE, true) || dw != 12.0 ||
-            StrAtoi64(wide, &iw, 6, STR_UTF16LE, true) != 1 || iw != 12) {
+            StrAtoi64(wide, &iw, 6, STR_UTF16LE, true) != STR_INT64_REFUSED ||
+            iw != 12) {
             ERR("UTF-16 non-Latin unit read as part of a number");
         }
     }
@@ -1521,26 +1523,28 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     TEST("sqlite integer and hex text helpers") {
         static const struct {
             const char *s;
-            int32_t rc;
+            strInt64Read rc;
             int64_t want;
         } h64[] = {
-            {"0x10", 0, 16},
-            {"0xffffffffffffffff", 0, -1},
-            {"0x1ffffffffffffffff", 1, 0},
-            {"0x0000000000000000001", 0, 1},
-            {"0x1g", 1, 0},
-            {"123", 0, 123},
-            {"-45", 0, -45},
-            {"9223372036854775808", 2, INT64_MAX},
-            {"12a", 1, 12},
+            {"0x10", STR_INT64_FITS, 16},
+            {"0xffffffffffffffff", STR_INT64_FITS, -1},
+            {"0x1ffffffffffffffff", STR_INT64_REFUSED, 0},
+            {"0x0000000000000000001", STR_INT64_FITS, 1},
+            {"0x1g", STR_INT64_REFUSED, 0},
+            {"123", STR_INT64_FITS, 123},
+            {"-45", STR_INT64_FITS, -45},
+            {"9223372036854775808", STR_INT64_JUST_PAST_MAX, INT64_MAX},
+            {"12a", STR_INT64_REFUSED, 12},
         };
         for (size_t i = 0; i < countof(h64); i++) {
             int64_t got = 0;
-            const int32_t rc = StrDecOrHexToInt64(h64[i].s, &got);
-            if (rc != h64[i].rc || (rc != 1 && got != h64[i].want) ||
-                (h64[i].rc == 1 && h64[i].want && got != h64[i].want)) {
-                ERR("StrDecOrHexToInt64(%s) = %" PRId32 ", %" PRId64, h64[i].s,
-                    rc, got);
+            const strInt64Read rc = StrDecOrHexToInt64(h64[i].s, &got);
+            if (rc != h64[i].rc ||
+                (rc != STR_INT64_REFUSED && got != h64[i].want) ||
+                (h64[i].rc == STR_INT64_REFUSED && h64[i].want &&
+                 got != h64[i].want)) {
+                ERR("StrDecOrHexToInt64(%s) = %d, %" PRId64, h64[i].s, (int)rc,
+                    got);
             }
         }
 
@@ -2469,7 +2473,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                     const size_t useStr = i % countof(str);
                     if (len[useStr] <= 32 &&
                         StrAtoi64(str[useStr], &ivalue, len[useStr], STR_UTF8,
-                                  false) == 0) {
+                                  false) == STR_INT64_FITS) {
                         assert(ivalue > 0);
                     } else if (len[useStr] <= 19 &&
                                StrAtoF(str[useStr], &dvalue, len[useStr],

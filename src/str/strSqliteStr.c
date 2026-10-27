@@ -626,22 +626,23 @@ DK_STATIC int32_t compare2pow63(const uint8_t *zNum, int32_t incr) {
 ** routine does *not* accept hexadecimal notation.
 **
 ** If the zNum value is representable as a 64-bit twos-complement
-** integer, then write that value into *pNum and return 0.
+** integer, then write that value into *pNum and return STR_INT64_FITS.
 **
-** If zNum is exactly 9223372036854775808, return 2.  This special
-** case is broken out because while 9223372036854775808 cannot be a
-** signed 64-bit integer, its negative -9223372036854775808 can be.
+** If zNum is exactly 9223372036854775808, return STR_INT64_JUST_PAST_MAX.
+** This special case is broken out because while 9223372036854775808
+** cannot be a signed 64-bit integer, its negative -9223372036854775808 can
+** be.
 **
 ** If zNum is too big for a 64-bit integer and is not
 ** 9223372036854775808  or if zNum contains any non-numeric text,
-** then return 1.
+** then return STR_INT64_REFUSED.
 **
 ** length is the number of bytes in the string (bytes, not characters).
 ** The string is not necessarily zero-terminated.  The encoding is
 ** given by enc.
 */
-int32_t StrAtoi64(const void *_zNum, int64_t *pNum, int32_t length, uint8_t enc,
-                  bool skipSpaces) {
+strInt64Read StrAtoi64(const void *_zNum, int64_t *pNum, int32_t length,
+                       strEnc enc, bool skipSpaces) {
     const uint8_t *zNum = _zNum;
     int32_t incr;
     uint64_t u = 0;
@@ -706,11 +707,11 @@ int32_t StrAtoi64(const void *_zNum, int64_t *pNum, int32_t length, uint8_t enc,
         i > 19 * incr || nonNum) {
         /* zNum is empty or contains non-numeric text or is longer
         ** than 19 digits (thus guaranteeing that it is too large) */
-        return 1;
+        return STR_INT64_REFUSED;
     } else if (i < 19 * incr) {
         /* Less than 19 digits, so we know that it fits in 64 bits */
         assert(u <= INT64_MAX);
-        return 0;
+        return STR_INT64_FITS;
     } else {
         /* zNum is a 19-digit numbers.  Compare it against 9223372036854775808.
          */
@@ -718,18 +719,18 @@ int32_t StrAtoi64(const void *_zNum, int64_t *pNum, int32_t length, uint8_t enc,
         if (c < 0) {
             /* zNum is less than 9223372036854775808 so it fits */
             assert(u <= INT64_MAX);
-            return 0;
+            return STR_INT64_FITS;
         }
 
         if (c > 0) {
             /* zNum is greater than 9223372036854775808 so it overflows */
-            return 1;
+            return STR_INT64_REFUSED;
         }
 
-        /* zNum is exactly 9223372036854775808.  Fits if negative.  The
-        ** special case 2 overflow if positive */
+        /* zNum is exactly 9223372036854775808.  Fits if negative; one past
+        ** the maximum if positive */
         assert(u - 1 == INT64_MAX);
-        return neg ? 0 : 2;
+        return neg ? STR_INT64_FITS : STR_INT64_JUST_PAST_MAX;
     }
 }
 
@@ -753,13 +754,13 @@ uint8_t StrHexToInt(int32_t h) {
 ** into a 64-bit signed integer.  This routine accepts hexadecimal literals,
 ** whereas StrAtoi64() does not.
 **
-** Returns:
+** Returns, as StrAtoi64 does:
 **
-**     0    Successful transformation.  Fits in a 64-bit signed integer.
-**     1    Integer too large for a 64-bit signed integer or is malformed
-**     2    Special case of 9223372036854775808
+**     STR_INT64_FITS           fits in a 64-bit signed integer
+**     STR_INT64_REFUSED        too large for one, or malformed
+**     STR_INT64_JUST_PAST_MAX  the special case of 9223372036854775808
 */
-int32_t StrDecOrHexToInt64(const char *z, int64_t *pOut) {
+strInt64Read StrDecOrHexToInt64(const char *z, int64_t *pOut) {
     if (z[0] == '0' && (z[1] == 'x' || z[1] == 'X') && StrIsxdigit(z[2])) {
         uint64_t u = 0;
         int32_t i, k;
@@ -771,7 +772,7 @@ int32_t StrDecOrHexToInt64(const char *z, int64_t *pOut) {
         }
 
         memcpy(pOut, &u, 8);
-        return (z[k] == 0 && k - i <= 16) ? 0 : 1;
+        return (z[k] == 0 && k - i <= 16) ? STR_INT64_FITS : STR_INT64_REFUSED;
     }
 
     return StrAtoi64(z, pOut, strlen(z), STR_UTF8, true);

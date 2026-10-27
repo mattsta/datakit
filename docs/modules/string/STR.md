@@ -80,15 +80,16 @@ typedef enum strEnc {
     STR_UTF16BE,
 } strEnc;
 
-/* Convert string to 64-bit integer */
-int32_t StrAtoi64(const void *zNum, int64_t *pNum, int32_t length,
-                  uint8_t enc, bool skipSpaces);
+/* Convert string to 64-bit integer: STR_INT64_FITS, STR_INT64_REFUSED
+ * (empty, malformed, out of range) or STR_INT64_JUST_PAST_MAX
+ * (9223372036854775808, which fits only negated) */
+strInt64Read StrAtoi64(const void *zNum, int64_t *pNum, int32_t length,
+                       strEnc enc, bool skipSpaces);
 
 /* Example usage */
 int64_t value;
 const char *str = "12345";
-int32_t result = StrAtoi64(str, &value, strlen(str), STR_UTF8, false);
-if (result == 0) {
+if (StrAtoi64(str, &value, strlen(str), STR_UTF8, false) == STR_INT64_FITS) {
     printf("Converted: %" PRId64 "\n", value);  /* 12345 */
 }
 ```
