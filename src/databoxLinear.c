@@ -183,6 +183,10 @@ ssize_t databoxLinearEncode(const databox *restrict const box,
     case DATABOX_NULL:
         boxl->type = DL_NULL;
         return 0;
+    default:
+        /* No fixed-width encoding (bytes go through
+         * DATABOX_LINEAR_PARTS_ENCODE): refused, 'boxl' untouched */
+        return -1;
     }
 
     /* Step 3: Write required bytes and return length of data */
@@ -372,6 +376,25 @@ int databoxLinearTest(int, char *[]) {
     /* ----------------------------------------------------------------
      * Unsigned Integer Tests
      * ---------------------------------------------------------------- */
+
+    TEST("a type with no fixed-width encoding is refused, the output "
+         "untouched") {
+        const databox boxes[] = {
+            databoxNewBytesString("abc"),
+            {.type = DATABOX_VOID},
+            {.type = DATABOX_ERROR},
+        };
+        for (size_t i = 0; i < countof(boxes); i++) {
+            databoxLinear dl;
+            memset(&dl, 0xA5, sizeof(dl));
+            if (databoxLinearEncode(&boxes[i], &dl) != -1) {
+                ERR("box type %d encoded", (int)boxes[i].type);
+            }
+            if (dl.type != 0xA5) {
+                ERR("box type %d wrote a linear type", (int)boxes[i].type);
+            }
+        }
+    }
 
     TEST("unsigned integers - small values") {
         uint64_t values[] = {0, 1, 2, 127, 128, 255};
