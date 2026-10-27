@@ -861,6 +861,13 @@ DK_INLINE_ALWAYS bool databoxJoinsNumeric_(const databox *box) {
            box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL;
 }
 
+/* An unsigned 64-bit value as the numeric class reads it: UNSIGNED_64, or
+ * a pointer or reference joining as one */
+DK_INLINE_ALWAYS bool databoxReadsUnsigned64_(const databox *box) {
+    return box->type == DATABOX_UNSIGNED_64 || box->type == DATABOX_PTR ||
+           box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+}
+
 int databoxCompare(const databox *restrict a, const databox *restrict b) {
 #if 1
     if (IS_BYTES(a) && IS_BYTES(b)) {
@@ -875,6 +882,13 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
          * value; everything else compares equal only to its own type, and
          * mismatches sort by the global type order (below). */
         if (databoxJoinsNumeric_(a) && databoxJoinsNumeric_(b)) {
+            /* The common pair: a reference or pointer against another or
+             * against a stored (decoded UNSIGNED_64) one, all unsigned
+             * 64-bit values: compared directly */
+            if (databoxReadsUnsigned64_(a) && databoxReadsUnsigned64_(b)) {
+                _gtlteqReturn(a->data.u64, b->data.u64);
+            }
+
             databox aa = *a;
             databox bb = *b;
             if (aa.type >= c3bMAX_LT) {
@@ -3221,6 +3235,57 @@ int databoxTest(int, char *[]) {
         }
         if (databoxCompare(&pLo, &sNeg) <= 0) {
             ERR("PTR (as unsigned) must order above negative signed");
+        }
+    }
+
+    TEST("compare: references, pointers and unsigned values order as "
+         "unsigned 64-bit numbers") {
+        /* Every pair of the three kinds at the edges of the range, and
+         * against signed values and reals on both sides of them */
+        static const uint64_t values[] = {0,
+                                          1,
+                                          255,
+                                          (uint64_t)INT64_MAX,
+                                          (uint64_t)INT64_MAX + 1,
+                                          UINT64_MAX - 1,
+                                          UINT64_MAX};
+        static const databoxType kinds[] = {
+            DATABOX_UNSIGNED_64, DATABOX_PTR,
+            DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        for (size_t x = 0; x < countof(values); x++) {
+            for (size_t y = 0; y < countof(values); y++) {
+                const int want =
+                    (values[x] > values[y]) - (values[x] < values[y]);
+                for (size_t kx = 0; kx < countof(kinds); kx++) {
+                    for (size_t ky = 0; ky < countof(kinds); ky++) {
+                        const databox a = {.data.u64 = values[x],
+                                           .type = kinds[kx]};
+                        const databox b = {.data.u64 = values[y],
+                                           .type = kinds[ky]};
+                        const int got = databoxCompare(&a, &b);
+                        if ((got > 0) - (got < 0) != want) {
+                            ERR("types %d/%d: %" PRIu64 " vs %" PRIu64
+                                " compared %d, want %d",
+                                (int)kinds[kx], (int)kinds[ky], values[x],
+                                values[y], got, want);
+                        }
+                    }
+                }
+            }
+
+            /* Against the rest of the numeric class: a negative signed
+             * value is below, a real is compared by value */
+            const databox ref = {.data.u64 = values[x],
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+            const databox negative = databoxNewSigned(-1);
+            const databox half = DATABOX_DOUBLE(0.5);
+            const int toHalf = databoxCompare(&ref, &half);
+            if (databoxCompare(&ref, &negative) <= 0 ||
+                databoxCompare(&negative, &ref) >= 0 ||
+                (values[x] ? toHalf <= 0 : toHalf >= 0)) {
+                ERR("reference %" PRIu64 " misorders against -1 or 0.5",
+                    values[x]);
+            }
         }
     }
 
