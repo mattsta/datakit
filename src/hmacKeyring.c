@@ -11,7 +11,7 @@
 #include "ctmem.h"   /* dkSecureZero */
 #include "datakit.h" /* zmalloc / zfree */
 #include "dkDiag.h"
-#include "dkEndian.h" /* dkStoreLe64 */
+#include "dkEndian.h" /* dkStoreLe64, dkLoadLe64 */
 #include "flex.h"
 #include "persist.h"
 
@@ -1254,11 +1254,7 @@ static void *hmacKeyringNonceWorker(void *arg) {
             c->out[i] = UINT64_MAX;
             continue;
         }
-        uint64_t v = 0;
-        for (int32_t j = 7; j >= 0; j--) {
-            v = (v << 8) | (uint64_t)n[(uint32_t)j];
-        }
-        c->out[i] = v;
+        c->out[i] = dkLoadLe64(n); /* the counter, nonce bytes 0..7 */
     }
     return nullptr;
 }
@@ -1310,15 +1306,6 @@ static int hkrTestCmpU64(const void *a, const void *b) {
     const uint64_t x = *(const uint64_t *)a;
     const uint64_t y = *(const uint64_t *)b;
     return (x > y) - (x < y);
-}
-
-/* The counter a nonce carries (bytes 0..7, little-endian). */
-static uint64_t hkrTestNonceCounter(const uint8_t n[12]) {
-    uint64_t v = 0;
-    for (int32_t j = 7; j >= 0; j--) {
-        v = (v << 8) | (uint64_t)n[(uint32_t)j];
-    }
-    return v;
 }
 
 /* A reservation function for the tests: counts calls, keeps the last
@@ -1980,8 +1967,7 @@ int hmacKeyringTest(int, char *[]) {
         }
         for (uint64_t i = 0; i < 10; i++) {
             uint8_t n[12];
-            if (!hmacKeyringNextAeadNonce(ring, 31u, n) ||
-                hkrTestNonceCounter(n) != i) {
+            if (!hmacKeyringNextAeadNonce(ring, 31u, n) || dkLoadLe64(n) != i) {
                 ERR("nonce %" PRIu64 " not issued in order", i);
             }
         }
@@ -2061,8 +2047,8 @@ int hmacKeyringTest(int, char *[]) {
             ERR("a refused reservation must fail closed, counter unmoved");
         }
         r.refuse = false;
-        if (!hmacKeyringNextAeadNonce(ring, 32u, n) ||
-            hkrTestNonceCounter(n) != 0 || r.calls != 2) {
+        if (!hmacKeyringNextAeadNonce(ring, 32u, n) || dkLoadLe64(n) != 0 ||
+            r.calls != 2) {
             ERR("after the refusal, the next nonce reserves and is 0");
         }
         hmacKeyringFree(ring);
@@ -2102,8 +2088,8 @@ int hmacKeyringTest(int, char *[]) {
         hkrTestReserve r = {.ring = ring, .action = HKR_TEST_RESERVE_REPLACE};
         hmacKeyringSetAeadReservation(ring, 8, hkrTestReserveFn, &r);
         uint8_t n[12];
-        if (!hmacKeyringNextAeadNonce(ring, 34u, n) ||
-            hkrTestNonceCounter(n) != 0 || r.calls != 2) {
+        if (!hmacKeyringNextAeadNonce(ring, 34u, n) || dkLoadLe64(n) != 0 ||
+            r.calls != 2) {
             ERR("calls %" PRIu64 " (want 2: the new key reserves again)",
                 r.calls);
         }
@@ -2176,7 +2162,7 @@ int hmacKeyringTest(int, char *[]) {
                 ERR("issuance through persist reservations");
                 break;
             }
-            highest = hkrTestNonceCounter(n);
+            highest = dkLoadLe64(n);
             if (i == 19 && !persistSnapshot(p, ring)) {
                 ERR("mid-way snapshot");
             }
@@ -2236,7 +2222,7 @@ int hmacKeyringTest(int, char *[]) {
             persistStoreFaultyDisarm(wal);
             const bool resumed = hmacKeyringNextAeadNonce(ring, 37u, n);
             if (!ok || pastWindow || counter != 8 || !resumed ||
-                hkrTestNonceCounter(n) != 8) {
+                dkLoadLe64(n) != 8) {
                 ERR("sync mode %d: window issued %d, past an unsynced "
                     "reservation %d (counter %" PRIu64 "), resumed %d",
                     m, ok, pastWindow, counter, resumed);
