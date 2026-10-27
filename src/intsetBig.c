@@ -505,9 +505,11 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
     /* @own: caller; free=intsetBigFree */
     intsetBig *isb = intsetBigNew();
     multimapFree(isb->i);
-    /* The rows ascend by key (checked above), so this never refuses */
+    /* The rows ascend by key (checked above), so this never refuses.  The
+     * family's default limit, as intsetBigNew's multimapNew has. */
     /* @own: container; free=multimapFree */
-    isb->i = multimapNewFromDump(2, false, false, FLEX_CAP_LEVEL_2048, rows);
+    isb->i = multimapNewFromDump(2, false, false,
+                                 dkTierDefaultLimit(DK_TIER_MULTIMAP), rows);
     isb->count = total;
     return isb;
 
