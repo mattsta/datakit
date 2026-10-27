@@ -130,6 +130,15 @@ uint8_t StrHexToInt(int32_t h);
  * zero-terminated zmalloc'd buffer the caller zfrees */
 void *StrHexToBlob(const char *z, int32_t n);
 
+/* The 'outLen' bytes spelled by the 'hexLen' characters at 'hex' (either
+ * case); false, with 'out' partly written, unless 'hexLen' is exactly
+ * 2 * outLen and every character is a hex digit */
+bool StrHexToBytes(const char *hex, size_t hexLen, uint8_t *out, size_t outLen);
+
+/* The 'n' bytes at 'in' as 2 * n lowercase hex digits and a terminating
+ * zero at 'out' (2 * n + 1 bytes) */
+void StrBytesToHex(const uint8_t *in, size_t n, char *out);
+
 /* |x|, with INT32_MIN giving INT32_MAX */
 int32_t StrAbsInt32(int32_t x);
 

@@ -687,6 +687,7 @@ void sha256ArmCryptoCompressBlocksMulti4(uint32_t states[4][8],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdio.h>
@@ -749,15 +750,6 @@ static int hashEqual(const uint8_t *a, const uint8_t *b) {
     return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
 }
 
-static void hashToHex(const uint8_t *h, char out[65]) {
-    static constexpr char hex[] = "0123456789abcdef";
-    for (uint32_t i = 0; i < SHA256_DIGEST_LEN; i++) {
-        out[i * 2] = hex[h[i] >> 4];
-        out[i * 2 + 1] = hex[h[i] & 0xf];
-    }
-    out[64] = 0;
-}
-
 int sha256ArmCryptoTest(int, char *[]) {
     int err = 0;
 
@@ -778,8 +770,8 @@ int sha256ArmCryptoTest(int, char *[]) {
             sha256ArmCryptoHash((const uint8_t *)s, n, got);
             if (!hashEqual(ref, got)) {
                 char rh[65], gh[65];
-                hashToHex(ref, rh);
-                hashToHex(got, gh);
+                StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
+                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
                 ERR("stub vector[%zu] '%s': got %s, ref %s", i, s, gh, rh);
             }
         }
@@ -813,8 +805,8 @@ int sha256ArmCryptoTest(int, char *[]) {
             sha256ArmCryptoHash(cases[i].input, cases[i].len, got);
             if (!hashEqual(got, expected)) {
                 char gh[65], eh[65];
-                hashToHex(got, gh);
-                hashToHex(expected, eh);
+                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
+                StrBytesToHex(expected, SHA256_DIGEST_LEN, eh);
                 ERR("vector len=%zu: got %s, expected %s", cases[i].len, gh,
                     eh);
             }
@@ -845,8 +837,8 @@ int sha256ArmCryptoTest(int, char *[]) {
                 mismatches++;
                 if (mismatches <= 3) {
                     char gh[65], eh[65];
-                    hashToHex(crypto, gh);
-                    hashToHex(portable, eh);
+                    StrBytesToHex(crypto, SHA256_DIGEST_LEN, gh);
+                    StrBytesToHex(portable, SHA256_DIGEST_LEN, eh);
                     ERR("mismatch at iter %u (n=%zu): got %s, expected %s", t,
                         n, gh, eh);
                 }
@@ -987,8 +979,8 @@ int sha256ArmCryptoTest(int, char *[]) {
                     mismatches++;
                     if (mismatches <= 3) {
                         char gh[65], eh[65];
-                        hashToHex(got, gh);
-                        hashToHex(ref[lane], eh);
+                        StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
+                        StrBytesToHex(ref[lane], SHA256_DIGEST_LEN, eh);
                         ERR("multi4 mismatch iter=%u lane=%u nb=%zu: "
                             "got %s, ref %s",
                             t, lane, nb, gh, eh);

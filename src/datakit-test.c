@@ -4568,14 +4568,6 @@ done:
  * verify dispatcher selects SCALAR, probe returns false, NI stub
  * refuses direct calls (a no-op stub would silently corrupt callers).
  * ==================================================================== */
-static void a3HexDec(const char *hex, uint8_t *out, size_t out_len) {
-    for (size_t i = 0; i < out_len; i++) {
-        char c1 = hex[i * 2], c2 = hex[i * 2 + 1];
-        out[i] = (uint8_t)(((c1 >= 'a' ? c1 - 'a' + 10 : c1 - '0') << 4) |
-                           (c2 >= 'a' ? c2 - 'a' + 10 : c2 - '0'));
-    }
-}
-
 typedef struct a3Vector {
     const char *name;
     size_t key_len;
@@ -4664,19 +4656,19 @@ static int dkTestAesNiTest(int, char *[]) {
     for (size_t i = 0; i < n_vectors; i++) {
         const a3Vector *v = &vectors[i];
         uint8_t key[32], nonce[12];
-        a3HexDec(v->key_hex, key, v->key_len);
-        a3HexDec(v->nonce_hex, nonce, 12);
+        TEST_HEX(failures, v->key_hex, key, v->key_len);
+        TEST_HEX(failures, v->nonce_hex, nonce, 12);
 
         uint8_t aad_buf[64];
         const uint8_t *aad = nullptr;
         if (v->aad_hex != nullptr && v->aad_len > 0) {
-            a3HexDec(v->aad_hex, aad_buf, v->aad_len);
+            TEST_HEX(failures, v->aad_hex, aad_buf, v->aad_len);
             aad = aad_buf;
         }
         uint8_t pt_buf[128];
         const uint8_t *pt = nullptr;
         if (v->pt_hex != nullptr && v->pt_len > 0) {
-            a3HexDec(v->pt_hex, pt_buf, v->pt_len);
+            TEST_HEX(failures, v->pt_hex, pt_buf, v->pt_len);
             pt = pt_buf;
         }
 
@@ -4704,14 +4696,14 @@ static int dkTestAesNiTest(int, char *[]) {
         }
 
         uint8_t exp_tag[16];
-        a3HexDec(v->tag_hex, exp_tag, 16);
+        TEST_HEX(failures, v->tag_hex, exp_tag, 16);
         if (memcmp(ni_tag, exp_tag, 16) != 0) {
             printf("dkTestAesNi: NI tag != NIST on %s\n", v->name);
             failures++;
         }
         if (v->ct_hex != nullptr && v->pt_len > 0) {
             uint8_t exp_ct[128];
-            a3HexDec(v->ct_hex, exp_ct, v->pt_len);
+            TEST_HEX(failures, v->ct_hex, exp_ct, v->pt_len);
             if (memcmp(ni_ct, exp_ct, v->pt_len) != 0) {
                 printf("dkTestAesNi: NI CT != NIST on %s\n", v->name);
                 failures++;
@@ -4809,7 +4801,7 @@ static int dkTestAesNiTest(int, char *[]) {
 }
 
 /* ARMv8 AES + PMULL backend parity vs portable scalar.
- * Reuses a3HexDec / a3Vector from dkTestAesNi above. */
+ * Reuses a3Vector from dkTestAesNi above. */
 static int dkTestAesArmCryptoTest(int, char *[]) {
     int failures = 0;
 
@@ -4847,19 +4839,19 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
     for (size_t i = 0; i < n_vectors; i++) {
         const a3Vector *v = &vectors[i];
         uint8_t key[32], nonce[12];
-        a3HexDec(v->key_hex, key, v->key_len);
-        a3HexDec(v->nonce_hex, nonce, 12);
+        TEST_HEX(failures, v->key_hex, key, v->key_len);
+        TEST_HEX(failures, v->nonce_hex, nonce, 12);
 
         uint8_t aad_buf[64];
         const uint8_t *aad = nullptr;
         if (v->aad_hex != nullptr && v->aad_len > 0) {
-            a3HexDec(v->aad_hex, aad_buf, v->aad_len);
+            TEST_HEX(failures, v->aad_hex, aad_buf, v->aad_len);
             aad = aad_buf;
         }
         uint8_t pt_buf[128];
         const uint8_t *pt = nullptr;
         if (v->pt_hex != nullptr && v->pt_len > 0) {
-            a3HexDec(v->pt_hex, pt_buf, v->pt_len);
+            TEST_HEX(failures, v->pt_hex, pt_buf, v->pt_len);
             pt = pt_buf;
         }
 
@@ -4886,7 +4878,7 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
             failures++;
         }
         uint8_t exp_tag[16];
-        a3HexDec(v->tag_hex, exp_tag, 16);
+        TEST_HEX(failures, v->tag_hex, exp_tag, 16);
         if (memcmp(arm_tag, exp_tag, 16) != 0) {
             printf("dkTestAesArmCrypto: ARM tag != NIST on %s\n", v->name);
             failures++;
@@ -5469,25 +5461,6 @@ static int dkTestX25519Iter1000KATTest(int, char *[]) {
     return 1;
 }
 
-static uint8_t a12HexNyb(char c) {
-    if (c >= '0' && c <= '9') {
-        return (uint8_t)(c - '0');
-    }
-    if (c >= 'a' && c <= 'f') {
-        return (uint8_t)(c - 'a' + 10);
-    }
-    if (c >= 'A' && c <= 'F') {
-        return (uint8_t)(c - 'A' + 10);
-    }
-    return 0;
-}
-static void a12HexDec(const char *hex, uint8_t *out, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        out[i] =
-            (uint8_t)((a12HexNyb(hex[i * 2]) << 4) | a12HexNyb(hex[i * 2 + 1]));
-    }
-}
-
 static int dkTestBlake3DeriveKeyVarInputTest(int, char *[]) {
     int failures = 0;
     const char *context = BLAKE3_TEST_DERIVE_CONTEXT;
@@ -5501,7 +5474,7 @@ static int dkTestBlake3DeriveKeyVarInputTest(int, char *[]) {
             input[i] = (uint8_t)(i % 251);
         }
         uint8_t expect[32];
-        a12HexDec(tv->derive_key_hex, expect, 32);
+        TEST_HEX(failures, tv->derive_key_hex, expect, 32);
         uint8_t out[32];
         blake3DeriveKey(context, ctx_len, input, tv->input_len, out, 32);
         if (memcmp(out, expect, 32) != 0) {
@@ -5627,14 +5600,6 @@ typedef struct a5Vector {
     const char *tag_hex;
 } a5Vector;
 
-static void a5HexDec(const char *hex, uint8_t *out, size_t out_len) {
-    for (size_t i = 0; i < out_len; i++) {
-        char c1 = hex[i * 2], c2 = hex[i * 2 + 1];
-        out[i] = (uint8_t)(((c1 >= 'a' ? c1 - 'a' + 10 : c1 - '0') << 4) |
-                           (c2 >= 'a' ? c2 - 'a' + 10 : c2 - '0'));
-    }
-}
-
 static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
     int failures = 0;
 
@@ -5673,18 +5638,18 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
     for (size_t i = 0; i < n_vectors; i++) {
         const a5Vector *v = &vectors[i];
         uint8_t key[32], nonce[12];
-        a5HexDec(v->key_hex, key, v->key_len);
-        a5HexDec(v->nonce_hex, nonce, 12);
+        TEST_HEX(failures, v->key_hex, key, v->key_len);
+        TEST_HEX(failures, v->nonce_hex, nonce, 12);
         uint8_t aad_buf[64];
         const uint8_t *aad = nullptr;
         if (v->aad_hex != nullptr && v->aad_len > 0) {
-            a5HexDec(v->aad_hex, aad_buf, v->aad_len);
+            TEST_HEX(failures, v->aad_hex, aad_buf, v->aad_len);
             aad = aad_buf;
         }
         uint8_t pt_buf[128];
         const uint8_t *pt = nullptr;
         if (v->pt_hex != nullptr && v->pt_len > 0) {
-            a5HexDec(v->pt_hex, pt_buf, v->pt_len);
+            TEST_HEX(failures, v->pt_hex, pt_buf, v->pt_len);
             pt = pt_buf;
         }
         aesGcmKey k;
@@ -5700,7 +5665,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
             continue;
         }
         uint8_t exp_tag[16];
-        a5HexDec(v->tag_hex, exp_tag, 16);
+        TEST_HEX(failures, v->tag_hex, exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
             printf("dkTestAesGcmExtendedVectors V[%zu]: TAG mismatch on %s\n",
                    i, v->name);
@@ -5708,7 +5673,7 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         }
         if (v->ct_hex != nullptr && v->pt_len > 0) {
             uint8_t exp_ct[128];
-            a5HexDec(v->ct_hex, exp_ct, v->pt_len);
+            TEST_HEX(failures, v->ct_hex, exp_ct, v->pt_len);
             if (memcmp(ct, exp_ct, v->pt_len) != 0) {
                 printf(
                     "dkTestAesGcmExtendedVectors V[%zu]: CT mismatch on %s\n",

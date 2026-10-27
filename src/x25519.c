@@ -513,29 +513,10 @@ bool x25519(uint8_t out_shared[32], const uint8_t priv[32],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc / zfree */
+#include "str.h"     /* StrHexToBytes, StrBytesToHex */
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
-
-static void hexDecode(const char *hex, uint8_t out[32]) {
-    for (uint32_t i = 0; i < 32; i++) {
-        const char c1 = hex[i * 2];
-        const char c2 = hex[i * 2 + 1];
-        uint8_t v = 0;
-        v |= (uint8_t)((c1 >= 'a' ? c1 - 'a' + 10 : c1 - '0') << 4);
-        v |= (uint8_t)(c2 >= 'a' ? c2 - 'a' + 10 : c2 - '0');
-        out[i] = v;
-    }
-}
-
-static void hexEncode(const uint8_t in[32], char out[65]) {
-    static constexpr char hex[] = "0123456789abcdef";
-    for (uint32_t i = 0; i < 32; i++) {
-        out[i * 2] = hex[in[i] >> 4];
-        out[i * 2 + 1] = hex[in[i] & 0xf];
-    }
-    out[64] = 0;
-}
 
 int x25519Test(int, char *[]) {
     int err = 0;
@@ -543,40 +524,46 @@ int x25519Test(int, char *[]) {
     /* RFC 7748 §5.2 test vectors. */
     TEST("RFC 7748 §5.2: scalar multiplication, vector 1") {
         uint8_t scalar[32], u[32], expected[32], got[32];
-        hexDecode(
+        TEST_HEX(
+            err,
             "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
-            scalar);
-        hexDecode(
+            scalar, 32);
+        TEST_HEX(
+            err,
             "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
-            u);
-        hexDecode(
+            u, 32);
+        TEST_HEX(
+            err,
             "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
-            expected);
+            expected, 32);
         x25519(got, scalar, u);
         if (memcmp(got, expected, 32) != 0) {
             char gh[65], eh[65];
-            hexEncode(got, gh);
-            hexEncode(expected, eh);
+            StrBytesToHex(got, 32, gh);
+            StrBytesToHex(expected, 32, eh);
             ERR("vec1: got %s\nexp %s", gh, eh);
         }
     }
 
     TEST("RFC 7748 §5.2: scalar multiplication, vector 2") {
         uint8_t scalar[32], u[32], expected[32], got[32];
-        hexDecode(
+        TEST_HEX(
+            err,
             "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
-            scalar);
-        hexDecode(
+            scalar, 32);
+        TEST_HEX(
+            err,
             "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
-            u);
-        hexDecode(
+            u, 32);
+        TEST_HEX(
+            err,
             "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
-            expected);
+            expected, 32);
         x25519(got, scalar, u);
         if (memcmp(got, expected, 32) != 0) {
             char gh[65], eh[65];
-            hexEncode(got, gh);
-            hexEncode(expected, eh);
+            StrBytesToHex(got, 32, gh);
+            StrBytesToHex(expected, 32, eh);
             ERR("vec2: got %s\nexp %s", gh, eh);
         }
     }
@@ -589,21 +576,26 @@ int x25519Test(int, char *[]) {
         uint8_t shared_expect[32];
         uint8_t shared_a[32], shared_b[32];
 
-        hexDecode(
+        TEST_HEX(
+            err,
             "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
-            alice_priv);
-        hexDecode(
+            alice_priv, 32);
+        TEST_HEX(
+            err,
             "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
-            alice_pub_expect);
-        hexDecode(
+            alice_pub_expect, 32);
+        TEST_HEX(
+            err,
             "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
-            bob_priv);
-        hexDecode(
+            bob_priv, 32);
+        TEST_HEX(
+            err,
             "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
-            bob_pub_expect);
-        hexDecode(
+            bob_pub_expect, 32);
+        TEST_HEX(
+            err,
             "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
-            shared_expect);
+            shared_expect, 32);
 
         x25519Base(alice_pub, alice_priv);
         x25519Base(bob_pub, bob_priv);

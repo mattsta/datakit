@@ -882,6 +882,49 @@ void *StrHexToBlob(const char *z, int32_t n) {
     return zBlob;
 }
 
+/* A hex digit's value, or -1 for any other character */
+static int32_t strHexDigit_(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+bool StrHexToBytes(const char *hex, size_t hexLen, uint8_t *out,
+                   size_t outLen) {
+    if (hexLen % 2 != 0 || hexLen / 2 != outLen) {
+        return false;
+    }
+
+    for (size_t i = 0; i < outLen; i++) {
+        const int32_t hi = strHexDigit_(hex[2 * i]);
+        const int32_t lo = strHexDigit_(hex[2 * i + 1]);
+        if ((hi | lo) < 0) {
+            return false;
+        }
+
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    return true;
+}
+
+void StrBytesToHex(const uint8_t *in, size_t n, char *out) {
+    static constexpr char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) {
+        out[2 * i] = digits[in[i] >> 4];
+        out[2 * i + 1] = digits[in[i] & 0xf];
+    }
+
+    out[2 * n] = '\0';
+}
+
 /* ====================================================================
  * Math Overflow Detection Helpers (sqlite3)
  * ==================================================================== */

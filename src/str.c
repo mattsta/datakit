@@ -1623,6 +1623,66 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
     }
 
+    TEST("StrHexToBytes / StrBytesToHex: every byte both ways, every "
+         "malformed text refused") {
+        uint8_t all[256];
+        for (size_t i = 0; i < countof(all); i++) {
+            all[i] = (uint8_t)i;
+        }
+        char hex[2 * countof(all) + 1];
+        StrBytesToHex(all, countof(all), hex);
+        for (size_t i = 0; i < countof(all); i++) {
+            char want[3];
+            snprintf(want, sizeof(want), "%02x", (unsigned int)i);
+            if (memcmp(hex + 2 * i, want, 2) != 0) {
+                ERR("StrBytesToHex of 0x%02zx gave %.2s", i, hex + 2 * i);
+            }
+        }
+        if (strlen(hex) != 2 * countof(all)) {
+            ERR("StrBytesToHex wrote %zu digits", strlen(hex));
+        }
+
+        uint8_t back[256] = {};
+        if (!StrHexToBytes(hex, strlen(hex), back, countof(back)) ||
+            memcmp(back, all, sizeof(all)) != 0) {
+            ERR("StrHexToBytes did not invert StrBytesToHex");
+        }
+
+        uint8_t three[3] = {};
+        if (!StrHexToBytes("00FF7a", 6, three, 3) || three[0] != 0x00 ||
+            three[1] != 0xff || three[2] != 0x7a) {
+            ERR("StrHexToBytes of mixed case");
+        }
+
+        uint8_t one[1] = {};
+        uint8_t none[1] = {};
+        char empty[1] = {'x'};
+        StrBytesToHex(none, 0, empty);
+        if (!StrHexToBytes("", 0, none, 0) || empty[0] != '\0') {
+            ERR("zero bytes both ways");
+        }
+        if (StrHexToBytes("abc", 3, one, 1) ||
+            StrHexToBytes("abcd", 4, one, 1) ||
+            StrHexToBytes("ab", 2, three, 3)) {
+            ERR("StrHexToBytes took a text of the wrong length");
+        }
+
+        /* each neighbour of a digit range, at every position */
+        static constexpr char notHex[] = {'/', ':', '@', 'G', '`',
+                                          'g', ' ', 'x', '\0'};
+        for (size_t c = 0; c < countof(notHex); c++) {
+            for (size_t pos = 0; pos < 4; pos++) {
+                char text[4] = {'1', '2', '3', '4'};
+                text[pos] = notHex[c];
+                uint8_t two[2] = {};
+                if (StrHexToBytes(text, 4, two, 2)) {
+                    ERR("StrHexToBytes took 0x%02x at %zu",
+                        (unsigned int)(uint8_t)notHex[c], pos);
+                }
+            }
+        }
+    }
+
     TEST("StrAddInt64 / StrSubInt64 / StrMulInt64 detect overflow exactly") {
         static const struct {
             char op; /* '+', '-', '*' */

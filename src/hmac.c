@@ -494,6 +494,7 @@ const hmacHashAlgo hmacAlgoBLAKE3 = {
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/hmacTestVectors.h"
+#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdlib.h>
@@ -502,22 +503,13 @@ static int digestEqual(const uint8_t *a, const uint8_t *b, size_t n) {
     return memcmp(a, b, n) == 0;
 }
 
-static void digestToHex(const uint8_t *h, size_t n, char *out) {
-    static constexpr char hex[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; i++) {
-        out[i * 2] = hex[h[i] >> 4];
-        out[i * 2 + 1] = hex[h[i] & 0xf];
-    }
-    out[n * 2] = 0;
-}
-
 /* Reports the mismatch and returns its failure count (1) for the caller to
  * add to its own */
 static int reportMismatch(const char *name, const uint8_t *got,
                           const uint8_t *expected, size_t n) {
     char gotHex[129], expHex[129];
-    digestToHex(got, n, gotHex);
-    digestToHex(expected, n, expHex);
+    StrBytesToHex(got, n, gotHex);
+    StrBytesToHex(expected, n, expHex);
     int err = 0;
     ERR("vector '%s': got %s, expected %s", name, gotHex, expHex);
     return err;
@@ -945,8 +937,8 @@ int hmacTest(int, char *[]) {
             for (uint32_t i = 0; i < 4u; i++) {
                 if (memcmp(expected[i], got[i], 32) != 0) {
                     char eh[65], gh[65];
-                    digestToHex(expected[i], 32, eh);
-                    digestToHex(got[i], 32, gh);
+                    StrBytesToHex(expected[i], 32, eh);
+                    StrBytesToHex(got[i], 32, gh);
                     ERR("case %zu lane %u (len=%zu): batch %s, serial %s", c, i,
                         lens[i], gh, eh);
                 }

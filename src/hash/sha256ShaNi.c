@@ -333,6 +333,7 @@ void sha256ShaNiCompressBlocksMulti4(uint32_t states[4][8],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdio.h>
@@ -393,15 +394,6 @@ static int shaniEqual(const uint8_t *a, const uint8_t *b) {
     return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
 }
 
-static void shaniToHex(const uint8_t *h, char out[65]) {
-    static constexpr char hex[] = "0123456789abcdef";
-    for (uint32_t i = 0; i < SHA256_DIGEST_LEN; i++) {
-        out[i * 2] = hex[h[i] >> 4];
-        out[i * 2 + 1] = hex[h[i] & 0xf];
-    }
-    out[64] = 0;
-}
-
 int sha256ShaNiTest(int, char *[]) {
     int err = 0;
 
@@ -424,8 +416,8 @@ int sha256ShaNiTest(int, char *[]) {
             shaniHash((const uint8_t *)s, n, got);
             if (!shaniEqual(ref, got)) {
                 char rh[65], gh[65];
-                shaniToHex(ref, rh);
-                shaniToHex(got, gh);
+                StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
+                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
                 ERR("stub vector[%zu] '%s': got %s, ref %s", i, s, gh, rh);
             }
         }
@@ -451,8 +443,8 @@ int sha256ShaNiTest(int, char *[]) {
             shaniHash((const uint8_t *)s, n, got);
             if (!shaniEqual(ref, got)) {
                 char rh[65], gh[65];
-                shaniToHex(ref, rh);
-                shaniToHex(got, gh);
+                StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
+                StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
                 ERR("vector[%zu] '%s': got %s, ref %s", i, s, gh, rh);
             }
         }
@@ -484,8 +476,8 @@ int sha256ShaNiTest(int, char *[]) {
             if (!shaniEqual(ref, got)) {
                 if (mismatches++ < 4) {
                     char rh[65], gh[65];
-                    shaniToHex(ref, rh);
-                    shaniToHex(got, gh);
+                    StrBytesToHex(ref, SHA256_DIGEST_LEN, rh);
+                    StrBytesToHex(got, SHA256_DIGEST_LEN, gh);
                     ERR("trial %u n=%zu: got %s, ref %s", t, n, gh, rh);
                 }
             }

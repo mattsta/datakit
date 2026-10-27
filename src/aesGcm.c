@@ -518,18 +518,11 @@ bool aesGcmOpen(const aesGcmKey *k, const uint8_t nonce[12], const uint8_t *aad,
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "str.h" /* StrHexToBytes */
 
 /* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
 defcleanerName(uint8_t *, zfree, Bytes);
 defcleanerName(aesGcmKey *, zfree, Key);
-
-static void hexDec(const char *hex, uint8_t *out, size_t out_len) {
-    for (size_t i = 0; i < out_len; i++) {
-        char c1 = hex[i * 2], c2 = hex[i * 2 + 1];
-        out[i] = (uint8_t)(((c1 >= 'a' ? c1 - 'a' + 10 : c1 - '0') << 4) |
-                           (c2 >= 'a' ? c2 - 'a' + 10 : c2 - '0'));
-    }
-}
 
 int aesGcmTest(int, char *[]) {
     int err = 0;
@@ -545,7 +538,7 @@ int aesGcmTest(int, char *[]) {
         }
         aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 0, nullptr, tag);
         uint8_t exp_tag[16];
-        hexDec("58e2fccefa7e3061367f1d57a4e7455a", exp_tag, 16);
+        TEST_HEX(err, "58e2fccefa7e3061367f1d57a4e7455a", exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
             ERR("tag mismatch");
         }
@@ -561,8 +554,8 @@ int aesGcmTest(int, char *[]) {
         aesGcmInit(&k, key, 16);
         aesGcmSeal(&k, nonce, nullptr, 0, pt, 16, ct, tag);
         uint8_t exp_ct[16], exp_tag[16];
-        hexDec("0388dace60b6a392f328c2b971b2fe78", exp_ct, 16);
-        hexDec("ab6e47d42cec13bdf53a67b21257bddf", exp_tag, 16);
+        TEST_HEX(err, "0388dace60b6a392f328c2b971b2fe78", exp_ct, 16);
+        TEST_HEX(err, "ab6e47d42cec13bdf53a67b21257bddf", exp_tag, 16);
         if (memcmp(ct, exp_ct, 16) != 0) {
             ERR("CT mismatch");
         }
@@ -574,17 +567,19 @@ int aesGcmTest(int, char *[]) {
     /* NIST Vector 3: AES-128 GCM with real key + nonce + 64-byte PT. */
     TEST("AES-128-GCM: NIST Test Vector 3") {
         uint8_t key[16], nonce[12], pt[64], exp_ct[64], exp_tag[16];
-        hexDec("feffe9928665731c6d6a8f9467308308", key, 16);
-        hexDec("cafebabefacedbaddecaf888", nonce, 12);
-        hexDec(
+        TEST_HEX(err, "feffe9928665731c6d6a8f9467308308", key, 16);
+        TEST_HEX(err, "cafebabefacedbaddecaf888", nonce, 12);
+        TEST_HEX(
+            err,
             "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
             "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255",
             pt, 64);
-        hexDec(
+        TEST_HEX(
+            err,
             "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e"
             "21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091473f5985",
             exp_ct, 64);
-        hexDec("4d5c2af327cd64a62cf35abd2ba6fab4", exp_tag, 16);
+        TEST_HEX(err, "4d5c2af327cd64a62cf35abd2ba6fab4", exp_tag, 16);
         uint8_t ct[64], tag[16];
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
@@ -608,18 +603,20 @@ int aesGcmTest(int, char *[]) {
     /* NIST Vector 4: AES-128 GCM with AAD. */
     TEST("AES-128-GCM: NIST Test Vector 4 (with AAD)") {
         uint8_t key[16], nonce[12], pt[60], aad[20], exp_ct[60], exp_tag[16];
-        hexDec("feffe9928665731c6d6a8f9467308308", key, 16);
-        hexDec("cafebabefacedbaddecaf888", nonce, 12);
-        hexDec(
+        TEST_HEX(err, "feffe9928665731c6d6a8f9467308308", key, 16);
+        TEST_HEX(err, "cafebabefacedbaddecaf888", nonce, 12);
+        TEST_HEX(
+            err,
             "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
             "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
             pt, 60);
-        hexDec("feedfacedeadbeeffeedfacedeadbeefabaddad2", aad, 20);
-        hexDec(
+        TEST_HEX(err, "feedfacedeadbeeffeedfacedeadbeefabaddad2", aad, 20);
+        TEST_HEX(
+            err,
             "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e"
             "21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091",
             exp_ct, 60);
-        hexDec("5bc94fbc3221a5db94fae95ae7121a47", exp_tag, 16);
+        TEST_HEX(err, "5bc94fbc3221a5db94fae95ae7121a47", exp_tag, 16);
         uint8_t ct[60], tag[16];
         aesGcmKey k;
         aesGcmInit(&k, key, 16);
@@ -650,7 +647,7 @@ int aesGcmTest(int, char *[]) {
         }
         aesGcmSeal(&k, nonce, nullptr, 0, nullptr, 0, nullptr, tag);
         uint8_t exp_tag[16];
-        hexDec("530f8afbc74536b9a963b4f1c4cb738b", exp_tag, 16);
+        TEST_HEX(err, "530f8afbc74536b9a963b4f1c4cb738b", exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
             ERR("tag mismatch");
         }

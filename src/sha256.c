@@ -268,6 +268,7 @@ void sha256Hash(const void *data, size_t len, uint8_t out[SHA256_DIGEST_LEN]) {
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/sha256TestVectors.h"
+#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <stdlib.h>
@@ -279,22 +280,13 @@ static int hashEqual(const uint8_t *a, const uint8_t *b) {
     return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
 }
 
-static void hashToHex(const uint8_t *h, char out[65]) {
-    static constexpr char hex[] = "0123456789abcdef";
-    for (uint32_t i = 0; i < SHA256_DIGEST_LEN; i++) {
-        out[i * 2] = hex[h[i] >> 4];
-        out[i * 2 + 1] = hex[h[i] & 0xf];
-    }
-    out[64] = 0;
-}
-
 /* Report a digest mismatch and count it in the caller's *errCount (ERR
  * counts into the 'err' in scope, here a local) */
 static void reportMismatch(const char *name, const uint8_t *got,
                            const uint8_t *expected, int *errCount) {
     char gotHex[65], expHex[65];
-    hashToHex(got, gotHex);
-    hashToHex(expected, expHex);
+    StrBytesToHex(got, SHA256_DIGEST_LEN, gotHex);
+    StrBytesToHex(expected, SHA256_DIGEST_LEN, expHex);
     int err = 0;
     ERR("vector '%s': got %s, expected %s", name, gotHex, expHex);
     *errCount += err;

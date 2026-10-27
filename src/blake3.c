@@ -952,6 +952,7 @@ void blake3DeriveKey(const void *context, size_t context_len, const void *ikm,
 #include "hash/blake3Neon.h"
 #include "hash/blake3SSE41.h"
 #include "hash/blake3TestVectors.h"
+#include "str.h" /* StrBytesToHex */
 #include "timeUtil.h"
 
 #include <pthread.h>
@@ -1009,20 +1010,6 @@ static void *blake3MtWorker(void *arg) {
     return nullptr;
 }
 
-/* Lowercase hex of a single byte. */
-static void byte_to_hex(uint8_t b, char out[3]) {
-    static constexpr char H[] = "0123456789abcdef";
-    out[0] = H[b >> 4];
-    out[1] = H[b & 0x0F];
-    out[2] = 0;
-}
-
-static void bytes_to_hex(const uint8_t *bytes, size_t n, char *out) {
-    for (size_t i = 0; i < n; i++) {
-        byte_to_hex(bytes[i], out + i * 2);
-    }
-}
-
 static int is_todo_vector(const char *hex) {
     return hex && strncmp(hex, "TODO_VECTOR_", 12) == 0;
 }
@@ -1036,8 +1023,7 @@ static int check_against_hex(const uint8_t *digest, size_t digest_len,
         return 0;
     }
     char got[BLAKE3_OUT_LEN * 2 + 1];
-    bytes_to_hex(digest, digest_len, got);
-    got[digest_len * 2] = 0;
+    StrBytesToHex(digest, digest_len, got);
     if (strncmp(got, expected_hex, digest_len * 2) != 0) {
         printf("%s:%d\tERROR! %s mismatch at input_len=%zu: got=%s "
                "expected=%.*s\n",

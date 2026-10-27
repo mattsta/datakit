@@ -63,6 +63,21 @@ CTEST_INCLUDE_GEN(val)
         err++;                                                                 \
     } while (0)
 
+/* 'out' gets the 'n' bytes a hex test vector spells; a vector that is not
+ * exactly 2n hex digits is reported and adds one to 'failures' (the
+ * test's counter: err or failures).  Needs str.h for StrHexToBytes. */
+#define TEST_HEX(failures, hex, out, n)                                        \
+    do {                                                                       \
+        const char *hex_ = (hex);                                              \
+        if (!StrHexToBytes(hex_, strlen(hex_), (out), (n))) {                  \
+            currentFilename();                                                 \
+            printf("ERROR! hex vector is not %zu bytes: %s\n", (size_t)(n),    \
+                   hex_);                                                      \
+            fflush(stdout);                                                    \
+            (failures)++;                                                      \
+        }                                                                      \
+    } while (0)
+
 #define TEST(name)                                                             \
     printf("test — %s\n", name);                                               \
     fflush(stdout);
