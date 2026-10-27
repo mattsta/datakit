@@ -653,20 +653,17 @@ static bool multiFenwickPersistApplyOp_(void *structure, persistOp op,
         return true;
     }
 
-    databoxBig idx;
+    size_t idx;
     databoxBig value;
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
-        !flexGetTwoDataboxesBig(data, len, &idx, &value) ||
-        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX) {
+        !persistOpDecodeIndexValue(data, len, &idx, &value)) {
         return false;
     }
 
     /* Update and Set refuse every value a tree does not take */
     return op == PERSIST_OP_NUM_INCR
-               ? multiFenwickUpdate(mfw, (size_t)idx.data.u64,
-                                    (const databox *)&value)
-               : multiFenwickSet(mfw, (size_t)idx.data.u64,
-                                 (const databox *)&value);
+               ? multiFenwickUpdate(mfw, idx, (const databox *)&value)
+               : multiFenwickSet(mfw, idx, (const databox *)&value);
 }
 
 static void *multiFenwickPersistNewEmpty_(void) {

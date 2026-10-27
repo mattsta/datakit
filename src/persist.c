@@ -1297,6 +1297,18 @@ uint8_t *persistOpNoBody(size_t *len) {
     return zmalloc(1);
 }
 
+bool persistOpDecodeIndexValue(const uint8_t *data, size_t len, size_t *index,
+                               databoxBig *value) {
+    databoxBig idx;
+    if (!flexGetTwoDataboxesBig(data, len, &idx, value) ||
+        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX) {
+        return false;
+    }
+
+    *index = (size_t)idx.data.u64;
+    return true;
+}
+
 uint8_t *persistOpEncodeBoxes(const databox *const *boxes, size_t n,
                               size_t *len) {
     *len = 0;
@@ -10486,6 +10498,35 @@ int persistTest(int, char *[]) {
                     got ? "made a map" : "refused", stats.entriesSkipped);
             }
             persistClose(p);
+        }
+    }
+
+    TEST("persistOpDecodeIndexValue takes [unsigned index, value] only") {
+        const databox idx = DATABOX_UNSIGNED(41);
+        const databox neg = DATABOX_SIGNED(-1);
+        const databox val = DATABOX_SIGNED(-7);
+        const databox *ok[] = {&idx, &val};
+        const databox *signedIdx[] = {&neg, &val};
+        const databox *three[] = {&idx, &val, &val};
+        size_t len = 0;
+        cleanerName(zfree, Bytes) uint8_t *body =
+            persistOpEncodeBoxes(ok, countof(ok), &len);
+        size_t at = 0;
+        databoxBig got;
+        if (!persistOpDecodeIndexValue(body, len, &at, &got) || at != 41 ||
+            got.type != DATABOX_SIGNED_64 || got.data.i64 != -7) {
+            ERR("a well-formed [index, value] did not decode");
+        }
+
+        const databox *const *refused[] = {signedIdx, three, ok};
+        const size_t widths[] = {2, 3, 1};
+        for (size_t r = 0; r < countof(refused); r++) {
+            size_t rlen = 0;
+            cleanerName(zfree, Bytes) uint8_t *rbody =
+                persistOpEncodeBoxes(refused[r], widths[r], &rlen);
+            if (persistOpDecodeIndexValue(rbody, rlen, &at, &got)) {
+                ERR("body %zu decoded as [index, value]", r);
+            }
         }
     }
 

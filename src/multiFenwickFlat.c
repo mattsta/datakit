@@ -561,19 +561,16 @@ static bool multiFenwickFlatPersistApplyOp_(void *structure, persistOp op,
         return true;
     }
 
-    databoxBig idx;
+    size_t idx;
     databoxBig value;
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
-        !flexGetTwoDataboxesBig(data, len, &idx, &value) ||
-        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX) {
+        !persistOpDecodeIndexValue(data, len, &idx, &value)) {
         return false;
     }
 
     return op == PERSIST_OP_NUM_INCR
-               ? multiFenwickFlatUpdate(mfw, (size_t)idx.data.u64,
-                                        (const databox *)&value)
-               : multiFenwickFlatSet(mfw, (size_t)idx.data.u64,
-                                     (const databox *)&value);
+               ? multiFenwickFlatUpdate(mfw, idx, (const databox *)&value)
+               : multiFenwickFlatSet(mfw, idx, (const databox *)&value);
 }
 
 static void *multiFenwickFlatPersistNewEmpty_(void) {

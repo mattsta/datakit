@@ -1013,6 +1013,13 @@ bool persistOpCopyInto(const void *src, size_t bytes, uint8_t *dst, size_t cap,
 bool persistOpEncodeBoxesInto(const databox *const *boxes, size_t n,
                               uint8_t *dst, size_t cap, size_t *len);
 
+/* For an applyOp implementation: a body of exactly [index, value], the
+ * index an unsigned 64-bit entry that fits size_t (the encodeOp side of
+ * a positional NUM_INCR / UPDATE).  False refuses any other body; the
+ * value may be any type, 96/128-bit included, for the caller to check. */
+bool persistOpDecodeIndexValue(const uint8_t *data, size_t len, size_t *index,
+                               databoxBig *value);
+
 /* An encodeOp made from an encodeOpInto, so a type writes its encoding
  * once: the body is sized, allocated and written. */
 uint8_t *persistOpEncodeViaInto(persistOpEncodeInto *into, persistOp op,

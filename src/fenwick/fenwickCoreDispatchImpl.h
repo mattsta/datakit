@@ -457,18 +457,16 @@ static bool FENWICK_D_FN_(PersistApplyOp_)(void *structure, persistOp op,
         return false;
     }
 
-    databoxBig idx;
+    size_t idx;
     databoxBig value;
     FENWICK_VALUE_TYPE v;
-    if (!flexGetTwoDataboxesBig(data, len, &idx, &value) ||
-        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX ||
+    if (!persistOpDecodeIndexValue(data, len, &idx, &value) ||
         !FENWICK_D_FN_(PersistUnbox_)(&value, &v)) {
         return false;
     }
 
-    return op == PERSIST_OP_NUM_INCR
-               ? FENWICK_D_FN_(Update)(fw, (size_t)idx.data.u64, v)
-               : FENWICK_D_FN_(Set)(fw, (size_t)idx.data.u64, v);
+    return op == PERSIST_OP_NUM_INCR ? FENWICK_D_FN_(Update)(fw, idx, v)
+                                     : FENWICK_D_FN_(Set)(fw, idx, v);
 }
 
 const persistOps FENWICK_D_OPS_ = {
