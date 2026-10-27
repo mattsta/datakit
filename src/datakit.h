@@ -322,7 +322,7 @@ DK_LIBC_ALLOCATOR_ char *strdup(const char *s);
     do {                                                                       \
         (ptr) = zreallocSlate(ptr, sz);                                        \
     } while (0)
-#define zrealloaSlatecSelfAdjusted(ptr, sz)                                    \
+#define zreallocSlateSelfAdjusted(ptr, sz)                                     \
     do {                                                                       \
         (ptr) = zreallocSlateAdjusted(ptr, sz);                                \
     } while (0)
