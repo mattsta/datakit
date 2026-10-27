@@ -514,7 +514,7 @@ bool x25519(uint8_t out_shared[32], const uint8_t priv[32],
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc / zfree */
-#include "str.h"     /* StrHexToBytes, StrBytesToHex */
+#include "str.h"     /* StrHexToBytes */
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -538,12 +538,7 @@ int x25519Test(int, char *[]) {
             "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
             expected, 32);
         x25519(got, scalar, u);
-        if (memcmp(got, expected, 32) != 0) {
-            char gh[65], eh[65];
-            StrBytesToHex(got, 32, gh);
-            StrBytesToHex(expected, 32, eh);
-            ERR("vec1: got %s\nexp %s", gh, eh);
-        }
+        TEST_BYTES(err, got, expected, 32, "vec1");
     }
 
     TEST("RFC 7748 §5.2: scalar multiplication, vector 2") {
@@ -561,12 +556,7 @@ int x25519Test(int, char *[]) {
             "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
             expected, 32);
         x25519(got, scalar, u);
-        if (memcmp(got, expected, 32) != 0) {
-            char gh[65], eh[65];
-            StrBytesToHex(got, 32, gh);
-            StrBytesToHex(expected, 32, eh);
-            ERR("vec2: got %s\nexp %s", gh, eh);
-        }
+        TEST_BYTES(err, got, expected, 32, "vec2");
     }
 
     TEST("RFC 7748 §6.1: full ECDH round-trip with the canonical keypair") {

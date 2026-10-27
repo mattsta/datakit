@@ -935,7 +935,7 @@ void blake3DeriveKey(const void *context, size_t context_len, const void *ikm,
 #include "hash/blake3Neon.h"
 #include "hash/blake3SSE41.h"
 #include "hash/blake3TestVectors.h"
-#include "str.h" /* StrBytesToHex */
+#include "str.h" /* StrHexToBytes */
 #include "timeUtil.h"
 
 #include <pthread.h>
@@ -993,21 +993,22 @@ static void *blake3MtWorker(void *arg) {
     return nullptr;
 }
 
-/* Compare hasher output against an official vector's hex digits (the
- * first 32 bytes of each expected output) */
+/* Compare hasher output against the leading hex digits of an official
+ * vector (each expected output is longer than one digest) */
 static void check_against_hex(const uint8_t *digest, size_t digest_len,
                               const char *expected_hex, const char *label,
                               size_t input_len, int *err_p) {
-    char got[BLAKE3_OUT_LEN * 2 + 1];
-    StrBytesToHex(digest, digest_len, got);
-    if (strncmp(got, expected_hex, digest_len * 2) != 0) {
-        printf("%s:%d\tERROR! %s mismatch at input_len=%zu: got=%s "
-               "expected=%.*s\n",
-               __FILE__, __LINE__, label, input_len, got, (int)(digest_len * 2),
-               expected_hex);
-        fflush(stdout);
-        (*err_p)++;
+    int err = 0;
+    uint8_t want[BLAKE3_OUT_LEN];
+    if (digest_len > sizeof(want) ||
+        !StrHexToBytes(expected_hex, digest_len * 2, want, digest_len)) {
+        ERR("%s vector at input_len=%zu is not hex", label, input_len);
+    } else {
+        TEST_BYTES(err, digest, want, digest_len, "%s at input_len=%zu", label,
+                   input_len);
     }
+
+    *err_p += err;
 }
 
 /* Fill a buffer with the official BLAKE3 test pattern (i mod 251). */

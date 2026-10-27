@@ -4692,24 +4692,18 @@ static int dkTestAesNiTest(int, char *[]) {
             printf("dkTestAesNi: CT mismatch on %s\n", v->name);
             failures++;
         }
-        if (memcmp(scalar_tag, ni_tag, 16) != 0) {
-            printf("dkTestAesNi: TAG mismatch on %s\n", v->name);
-            failures++;
-        }
+        TEST_BYTES(failures, scalar_tag, ni_tag, 16,
+                   "dkTestAesNi: TAG mismatch on %s", v->name);
 
         uint8_t exp_tag[16];
         TEST_HEX(failures, v->tag_hex, exp_tag, 16);
-        if (memcmp(ni_tag, exp_tag, 16) != 0) {
-            printf("dkTestAesNi: NI tag != NIST on %s\n", v->name);
-            failures++;
-        }
+        TEST_BYTES(failures, ni_tag, exp_tag, 16,
+                   "dkTestAesNi: NI tag != NIST on %s", v->name);
         if (v->ct_hex != nullptr && v->pt_len > 0) {
             uint8_t exp_ct[128];
             TEST_HEX(failures, v->ct_hex, exp_ct, v->pt_len);
-            if (memcmp(ni_ct, exp_ct, v->pt_len) != 0) {
-                printf("dkTestAesNi: NI CT != NIST on %s\n", v->name);
-                failures++;
-            }
+            TEST_BYTES(failures, ni_ct, exp_ct, v->pt_len,
+                       "dkTestAesNi: NI CT != NIST on %s", v->name);
         }
 
         uint8_t rec_scalar[128] = {}, rec_ni[128] = {};
@@ -4788,10 +4782,8 @@ static int dkTestAesNiTest(int, char *[]) {
                 printf("dkTestAesNi: sweep CT mismatch kl=%zu n=%zu\n", kl, n);
                 failures++;
             }
-            if (memcmp(scalar_tag, ni_tag, 16) != 0) {
-                printf("dkTestAesNi: sweep TAG mismatch kl=%zu n=%zu\n", kl, n);
-                failures++;
-            }
+            TEST_BYTES(failures, scalar_tag, ni_tag, 16,
+                       "dkTestAesNi: sweep TAG mismatch kl=%zu n=%zu", kl, n);
         }
     }
     aesGcmSetForceBackend(AES_GCM_FORCE_AUTO);
@@ -4875,16 +4867,12 @@ static int dkTestAesArmCryptoTest(int, char *[]) {
             printf("dkTestAesArmCrypto: CT mismatch on %s\n", v->name);
             failures++;
         }
-        if (memcmp(scalar_tag, arm_tag, 16) != 0) {
-            printf("dkTestAesArmCrypto: TAG mismatch on %s\n", v->name);
-            failures++;
-        }
+        TEST_BYTES(failures, scalar_tag, arm_tag, 16,
+                   "dkTestAesArmCrypto: TAG mismatch on %s", v->name);
         uint8_t exp_tag[16];
         TEST_HEX(failures, v->tag_hex, exp_tag, 16);
-        if (memcmp(arm_tag, exp_tag, 16) != 0) {
-            printf("dkTestAesArmCrypto: ARM tag != NIST on %s\n", v->name);
-            failures++;
-        }
+        TEST_BYTES(failures, arm_tag, exp_tag, 16,
+                   "dkTestAesArmCrypto: ARM tag != NIST on %s", v->name);
     }
     aesGcmSetForceBackend(AES_GCM_FORCE_AUTO);
 
@@ -4986,9 +4974,9 @@ static int dkTestX25519SmallOrderRejectTest(int, char *[]) {
     if (!x25519(kat_out, kat_scalar, kat_u)) {
         printf("dkTestX25519SmallOrderReject: KAT pre-rejected\n");
         failures++;
-    } else if (memcmp(kat_out, kat_expect, 32) != 0) {
-        printf("dkTestX25519SmallOrderReject: KAT output mismatch\n");
-        failures++;
+    } else {
+        TEST_BYTES(failures, kat_out, kat_expect, 32,
+                   "dkTestX25519SmallOrderReject: KAT output mismatch");
     }
 
     if (failures == 0) {
@@ -5164,12 +5152,9 @@ static int dkTestChaChaSimdParityTest(int, char *[]) {
                            iter, pt_len);
                     failures++;
                 }
-                if (memcmp(tag_scalar, tag_simd, 16) != 0) {
-                    printf(
-                        "dkTestChaChaSimdParity: NEON tag mismatch iter %d\n",
-                        iter);
-                    failures++;
-                }
+                TEST_BYTES(failures, tag_scalar, tag_simd, 16,
+                           "dkTestChaChaSimdParity: NEON tag mismatch iter %d",
+                           iter);
                 chacha20SetForceBackend(CHACHA20_FORCE_NEON);
                 if (!chacha20poly1305Open(key, nonce, aad, sizeof(aad), ct_simd,
                                           pt_len, tag_simd, rec)) {
@@ -5222,10 +5207,8 @@ static int dkTestChaChaSimdParityTest(int, char *[]) {
         if (!chacha20poly1305SealStreamFinal(&ctx, stream_tag)) {
             failures++;
         }
-        if (memcmp(one_ct, stream_ct, pl) != 0) {
-            printf("dkTestChaChaSimdParity: streaming CT != one-shot\n");
-            failures++;
-        }
+        TEST_BYTES(failures, one_ct, stream_ct, pl,
+                   "dkTestChaChaSimdParity: streaming CT != one-shot");
         if (memcmp(one_tag, stream_tag, 16) != 0) {
             failures++;
         }
@@ -5365,12 +5348,10 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
                        iter, pt_len);
                 failures++;
             }
-            if (memcmp(tag_scalar, tag_simd, 16) != 0) {
-                printf("dkTestPoly1305SimdParity: NEON tag mismatch iter %d "
-                       "len=%zu\n",
+            TEST_BYTES(failures, tag_scalar, tag_simd, 16,
+                       "dkTestPoly1305SimdParity: NEON tag mismatch iter %d "
+                       "len=%zu",
                        iter, pt_len);
-                failures++;
-            }
             poly1305SetForceBackend(POLY1305_FORCE_NEON);
             if (!chacha20poly1305Open(key, nonce, aad, sizeof(aad),
                                       pt_len > 0 ? ct_simd : nullptr, pt_len,
@@ -5442,10 +5423,8 @@ static int dkTestX25519Iter1000KATTest(int, char *[]) {
             failures++;
         }
     }
-    if (memcmp(k, expect_iter1000, 32) != 0) {
-        printf("dkTestX25519Iter1000KAT: iter1000 mismatch\n");
-        failures++;
-    }
+    TEST_BYTES(failures, k, expect_iter1000, 32,
+               "dkTestX25519Iter1000KAT: iter1000 mismatch");
     if (failures == 0) {
         printf("dkTestX25519Iter1000KAT: OK\n");
         return 0;
@@ -5469,10 +5448,8 @@ static int dkTestBlake3DeriveKeyVarInputTest(int, char *[]) {
         TEST_HEX(failures, tv->derive_key_hex, expect, 32);
         uint8_t out[32];
         blake3DeriveKey(context, ctx_len, input, tv->input_len, out, 32);
-        if (memcmp(out, expect, 32) != 0) {
-            printf("dkTestBlake3DK: KAT mismatch len=%zu\n", tv->input_len);
-            failures++;
-        }
+        TEST_BYTES(failures, out, expect, 32,
+                   "dkTestBlake3DK: KAT mismatch len=%zu", tv->input_len);
     }
     if (failures == 0) {
         printf("dkTestBlake3DeriveKeyVarInput: OK (%zu KAT)\n",
@@ -5502,12 +5479,9 @@ static int dkTestSha256AllBackendParityTest(int, char *[]) {
         uint8_t reference[32], dispatched[32];
         sha256HashWith(sha256PortableCompressBlocks, buf, len, reference);
         sha256Hash(buf, len, dispatched);
-        if (memcmp(reference, dispatched, 32) != 0) {
-            printf(
-                "dkTestSha256AllBackendParity: dispatched mismatch len=%zu\n",
-                len);
-            failures++;
-        }
+        TEST_BYTES(failures, reference, dispatched, 32,
+                   "dkTestSha256AllBackendParity: dispatched mismatch len=%zu",
+                   len);
         if (armOk) {
             uint8_t arm[32];
             sha256HashWith(sha256ArmCryptoCompressBlocks, buf, len, arm);
@@ -5612,20 +5586,15 @@ static int dkTestAesGcmExtendedVectorsTest(int, char *[]) {
         }
         uint8_t exp_tag[16];
         TEST_HEX(failures, v->tag_hex, exp_tag, 16);
-        if (memcmp(tag, exp_tag, 16) != 0) {
-            printf("dkTestAesGcmExtendedVectors V[%zu]: TAG mismatch on %s\n",
-                   i, v->name);
-            failures++;
-        }
+        TEST_BYTES(failures, tag, exp_tag, 16,
+                   "dkTestAesGcmExtendedVectors V[%zu]: TAG mismatch on %s", i,
+                   v->name);
         if (v->ct_hex != nullptr && v->pt_len > 0) {
             uint8_t exp_ct[128];
             TEST_HEX(failures, v->ct_hex, exp_ct, v->pt_len);
-            if (memcmp(ct, exp_ct, v->pt_len) != 0) {
-                printf(
-                    "dkTestAesGcmExtendedVectors V[%zu]: CT mismatch on %s\n",
-                    i, v->name);
-                failures++;
-            }
+            TEST_BYTES(failures, ct, exp_ct, v->pt_len,
+                       "dkTestAesGcmExtendedVectors V[%zu]: CT mismatch on %s",
+                       i, v->name);
         }
         uint8_t rec[128] = {};
         if (!aesGcmOpen(&k, nonce, aad, v->aad_len,
@@ -5831,12 +5800,10 @@ static int dkTestBlake3DeriveKeyContextsTest(int, char *[]) {
         memset(out2, 0xFD, OUT_LEN);
         blake3DeriveKey(ctx_buf, cl, ikm_a, sizeof(ikm_a), out1, OUT_LEN);
         blake3DeriveKey(ctx_buf, cl, ikm_a, sizeof(ikm_a), out2, OUT_LEN);
-        if (memcmp(out1, out2, OUT_LEN) != 0) {
-            printf("dkTestBlake3DeriveKeyContexts: determinism fail at "
-                   "ctx_len=%zu\n",
+        TEST_BYTES(failures, out1, out2, OUT_LEN,
+                   "dkTestBlake3DeriveKeyContexts: determinism fail at "
+                   "ctx_len=%zu",
                    cl);
-            failures++;
-        }
         uint8_t out_b[OUT_LEN];
         blake3DeriveKey(ctx_buf, cl, ikm_b, sizeof(ikm_b), out_b, OUT_LEN);
         if (memcmp(out1, out_b, OUT_LEN) == 0) {
@@ -6087,16 +6054,12 @@ static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int, char *[]) {
         uint8_t mac_dst_b[64] = {};
         hmacComputeWithKey(dst_a, probe, sizeof(probe), mac_dst_a);
         hmacComputeWithKey(dst_b, probe, sizeof(probe), mac_dst_b);
-        if (memcmp(mac_src_a, mac_dst_a, hmacAlgoSHA256.digest_size) != 0) {
-            printf("dkTestKeyringPersistOpsDescriptorRoundTrip: MAC under "
-                   "ID_A drifted after round-trip\n");
-            failures++;
-        }
-        if (memcmp(mac_src_b, mac_dst_b, hmacAlgoBLAKE3.digest_size) != 0) {
-            printf("dkTestKeyringPersistOpsDescriptorRoundTrip: MAC under "
-                   "ID_B drifted after round-trip\n");
-            failures++;
-        }
+        TEST_BYTES(failures, mac_src_a, mac_dst_a, hmacAlgoSHA256.digest_size,
+                   "dkTestKeyringPersistOpsDescriptorRoundTrip: MAC under "
+                   "ID_A drifted after round-trip");
+        TEST_BYTES(failures, mac_src_b, mac_dst_b, hmacAlgoBLAKE3.digest_size,
+                   "dkTestKeyringPersistOpsDescriptorRoundTrip: MAC under "
+                   "ID_B drifted after round-trip");
     }
 
     persistOpsHmacKeyring.free(dst);
@@ -6569,22 +6532,18 @@ static int dkTestBlake3Avx2DispatchTest(int, char *[]) {
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
     uint8_t got_auto[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_auto);
-    if (memcmp(expected, got_auto, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestBlake3Avx2Dispatch: AUTO digest differs from scalar "
-               "reference\n");
-        failures++;
-    }
+    TEST_BYTES(failures, expected, got_auto, BLAKE3_OUT_LEN,
+               "dkTestBlake3Avx2Dispatch: AUTO digest differs from scalar "
+               "reference");
 
     blake3SetForceImpl(BLAKE3_IMPL_SIMD);
     uint8_t got_simd[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_simd);
-    if (memcmp(expected, got_simd, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestBlake3Avx2Dispatch: SIMD-forced digest differs from "
+    TEST_BYTES(failures, expected, got_simd, BLAKE3_OUT_LEN,
+               "dkTestBlake3Avx2Dispatch: SIMD-forced digest differs from "
                "scalar reference "
-               "(backend=%d)\n",
+               "(backend=%d)",
                (int)blake3DispatcherActiveBackend());
-        failures++;
-    }
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
 
     /* Sweep chunk counts around the 8-chunk AVX2 / 4-chunk NEON boundaries. */
@@ -6602,13 +6561,11 @@ static int dkTestBlake3Avx2DispatchTest(int, char *[]) {
         blake3Hash(buf, len, ref);
         blake3SetForceImpl(BLAKE3_IMPL_AUTO);
         blake3Hash(buf, len, obs);
-        if (memcmp(ref, obs, BLAKE3_OUT_LEN) != 0) {
-            printf("dkTestBlake3Avx2Dispatch: dispatch digest mismatch at "
+        TEST_BYTES(failures, ref, obs, BLAKE3_OUT_LEN,
+                   "dkTestBlake3Avx2Dispatch: dispatch digest mismatch at "
                    "chunks=%zu "
-                   "(len=%zu)\n",
+                   "(len=%zu)",
                    sweep_chunks[i], len);
-            failures++;
-        }
     }
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
 
@@ -7682,22 +7639,18 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
     uint8_t got_auto[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_auto);
-    if (memcmp(expected, got_auto, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestBlake3Sse41Batch: AUTO digest differs from scalar "
-               "reference\n");
-        failures++;
-    }
+    TEST_BYTES(failures, expected, got_auto, BLAKE3_OUT_LEN,
+               "dkTestBlake3Sse41Batch: AUTO digest differs from scalar "
+               "reference");
 
     blake3SetForceImpl(BLAKE3_IMPL_SIMD);
     uint8_t got_simd[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_simd);
-    if (memcmp(expected, got_simd, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestBlake3Sse41Batch: SIMD-forced digest differs from scalar "
+    TEST_BYTES(failures, expected, got_simd, BLAKE3_OUT_LEN,
+               "dkTestBlake3Sse41Batch: SIMD-forced digest differs from scalar "
                "reference "
-               "(backend=%d)\n",
+               "(backend=%d)",
                (int)blake3DispatcherActiveBackend());
-        failures++;
-    }
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
 
     const size_t sweep_chunks[] = {1,  2,  3,  4,  5,  7,  8,  9,  12, 15,
@@ -7714,12 +7667,10 @@ static int dkTestBlake3Sse41BatchTest(int, char *[]) {
         blake3Hash(buf, len, ref);
         blake3SetForceImpl(BLAKE3_IMPL_AUTO);
         blake3Hash(buf, len, obs);
-        if (memcmp(ref, obs, BLAKE3_OUT_LEN) != 0) {
-            printf("dkTestBlake3Sse41Batch: dispatch digest mismatch at "
-                   "chunks=%zu (len=%zu)\n",
+        TEST_BYTES(failures, ref, obs, BLAKE3_OUT_LEN,
+                   "dkTestBlake3Sse41Batch: dispatch digest mismatch at "
+                   "chunks=%zu (len=%zu)",
                    sweep_chunks[i], len);
-            failures++;
-        }
     }
     blake3SetForceImpl(BLAKE3_IMPL_AUTO);
 
