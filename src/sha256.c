@@ -267,6 +267,63 @@ void sha256HashWith(sha256CompressBlocksFn *compress, const void *data_,
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 
+int sha256TestBackendAgainstPortable(const char *name,
+                                     sha256CompressBlocksFn *one,
+                                     sha256CompressBlocksMulti4Fn *four) {
+    int err = 0;
+    constexpr size_t maxBlocks = 5;
+    uint64_t rng = 0x5A256;
+    for (uint32_t trial = 0; trial < 16; trial++) {
+        const size_t nb = 1 + trial % maxBlocks;
+        uint8_t data[4][maxBlocks * SHA256_BLOCK_LEN];
+        uint32_t states[4][8];
+        const uint8_t *lanes[4];
+        for (size_t l = 0; l < 4; l++) {
+            for (size_t b = 0; b < nb * SHA256_BLOCK_LEN; b++) {
+                data[l][b] = (uint8_t)dkSplitmix64Next(&rng);
+            }
+            for (size_t w = 0; w < 8; w++) {
+                states[l][w] = (uint32_t)dkSplitmix64Next(&rng);
+            }
+            lanes[l] = data[l];
+        }
+
+        uint32_t want[4][8];
+        memcpy(want, states, sizeof(want));
+        for (size_t l = 0; l < 4; l++) {
+            sha256PortableCompressBlocks(want[l], data[l], nb);
+        }
+
+        uint32_t got[8];
+        memcpy(got, states[0], sizeof(got));
+        one(got, data[0], nb);
+        TEST_BYTES(err, got, want[0], sizeof(got),
+                   "%s one lane, %zu blocks, trial %" PRIu32, name, nb, trial);
+
+        four(states, lanes, nb);
+        for (size_t l = 0; l < 4; l++) {
+            TEST_BYTES(err, states[l], want[l], sizeof(want[l]),
+                       "%s four lanes: lane %zu, %zu blocks, trial %" PRIu32,
+                       name, l, nb, trial);
+        }
+    }
+
+    uint8_t msg[130];
+    for (size_t i = 0; i < sizeof(msg); i++) {
+        msg[i] = (uint8_t)(i * 7 + 3);
+    }
+    for (size_t len = 0; len <= sizeof(msg); len++) {
+        uint8_t want[SHA256_DIGEST_LEN];
+        uint8_t got[SHA256_DIGEST_LEN];
+        sha256Hash(msg, len, want);
+        sha256HashWith(one, msg, len, got);
+        TEST_BYTES(err, got, want, sizeof(want), "%s digest of %zu bytes", name,
+                   len);
+    }
+
+    return err;
+}
+
 int sha256Test(int, char *[]) {
     int err = 0;
 

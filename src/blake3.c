@@ -462,16 +462,6 @@ static_assert(BLAKE3_BATCH_SSE41_CHUNKS == BLAKE3_SSE41_COMPRESS4_LANES,
 static_assert(BLAKE3_BATCH_AVX2_CHUNKS == BLAKE3_AVX2_COMPRESS8_LANES,
               "BLAKE3 AVX2 batch constant must match compressor lane count");
 
-/* A backend's batched compress: lane i compresses blocks[i] under
- * cv_inputs[i] and writes its CV as 32 little-endian bytes in out_cvs[i]
- * (blake3NeonCompress4, blake3SSE41Compress4, blake3AVX2Compress8) */
-typedef void blake3BatchCompressFn(const uint32_t *const cv_inputs[],
-                                   const uint8_t *const blocks[],
-                                   const uint8_t block_lens[],
-                                   const uint64_t counters[],
-                                   const uint8_t flag_set[],
-                                   uint8_t out_cvs[][32]);
-
 /* SIMD batch path: hash 'lanes' full chunks at a time through 'compress',
  * then push the chunk CVs onto the merkle stack, while whole batches
  * remain.  Caller guarantees the precondition: the backend is available,
@@ -918,6 +908,79 @@ static void check_against_hex(const uint8_t *digest, size_t digest_len,
     }
 
     *err_p += err;
+}
+
+int blake3TestBackendAgainstPortable(const char *name,
+                                     blake3CompressInPlaceFn *inPlace,
+                                     blake3CompressXofFn *xof, size_t lanes,
+                                     blake3BatchCompressFn *batch) {
+    int err = 0;
+    constexpr size_t maxLanes = 8;
+    assert(lanes <= maxLanes);
+    uint64_t rng = 0xB1A4E3B3;
+    for (uint32_t trial = 0; trial < 65; trial++) {
+        uint32_t cvs[maxLanes][8];
+        uint8_t blocks[maxLanes][BLAKE3_BLOCK_LEN];
+        const uint32_t *cvPtrs[maxLanes];
+        const uint8_t *blockPtrs[maxLanes];
+        uint8_t lens[maxLanes];
+        uint64_t counters[maxLanes];
+        uint8_t flags[maxLanes];
+        for (size_t l = 0; l < lanes; l++) {
+            for (size_t w = 0; w < 8; w++) {
+                cvs[l][w] = (uint32_t)dkSplitmix64Next(&rng);
+            }
+            for (size_t b = 0; b < BLAKE3_BLOCK_LEN; b++) {
+                blocks[l][b] = (uint8_t)dkSplitmix64Next(&rng);
+            }
+            cvPtrs[l] = cvs[l];
+            blockPtrs[l] = blocks[l];
+            lens[l] = (uint8_t)((trial + l) % (BLAKE3_BLOCK_LEN + 1));
+            counters[l] = dkSplitmix64Next(&rng);
+            flags[l] = (uint8_t)(dkSplitmix64Next(&rng) & 0x7F);
+        }
+
+        /* In place and XOF, on lane 0's input */
+        uint32_t want[8];
+        uint32_t got[8];
+        memcpy(want, cvs[0], sizeof(want));
+        memcpy(got, cvs[0], sizeof(got));
+        blake3PortableCompressInPlace(want, blocks[0], lens[0], counters[0],
+                                      flags[0]);
+        inPlace(got, blocks[0], lens[0], counters[0], flags[0]);
+        TEST_BYTES(err, got, want, sizeof(want), "%s in place, trial %" PRIu32,
+                   name, trial);
+
+        uint8_t xofWant[64];
+        uint8_t xofGot[64];
+        blake3PortableCompressXof(cvs[0], blocks[0], lens[0], counters[0],
+                                  flags[0], xofWant);
+        xof(cvs[0], blocks[0], lens[0], counters[0], flags[0], xofGot);
+        TEST_BYTES(err, xofGot, xofWant, sizeof(xofWant),
+                   "%s XOF, trial %" PRIu32, name, trial);
+
+        /* The batch: each lane one portable compress, written out byte by
+         * byte here, independent of the backends' stores */
+        uint8_t out[maxLanes][32];
+        batch(cvPtrs, blockPtrs, lens, counters, flags, out);
+        for (size_t l = 0; l < lanes; l++) {
+            uint32_t cv[8];
+            memcpy(cv, cvs[l], sizeof(cv));
+            blake3PortableCompressInPlace(cv, blocks[l], lens[l], counters[l],
+                                          flags[l]);
+            uint8_t laneWant[32];
+            for (size_t w = 0; w < 8; w++) {
+                laneWant[4 * w + 0] = (uint8_t)cv[w];
+                laneWant[4 * w + 1] = (uint8_t)(cv[w] >> 8);
+                laneWant[4 * w + 2] = (uint8_t)(cv[w] >> 16);
+                laneWant[4 * w + 3] = (uint8_t)(cv[w] >> 24);
+            }
+            TEST_BYTES(err, out[l], laneWant, sizeof(laneWant),
+                       "%s batch lane %zu, trial %" PRIu32, name, l, trial);
+        }
+    }
+
+    return err;
 }
 
 /* Fill a buffer with the official BLAKE3 test pattern (i mod 251). */

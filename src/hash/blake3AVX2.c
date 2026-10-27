@@ -469,28 +469,12 @@ static void fill_random(uint8_t *p, size_t n) {
 int blake3AVX2Test(int, char *[]) {
     int err = 0;
 
-    /* Stub-delegation guard: a direct call to blake3AVX2CompressInPlace
-     * must produce the portable digest on every platform, including
-     * those where AVX2 is unavailable and the symbol is a stub.  Catch
-     * the silent-no-op regression class before doing anything else. */
-    TEST("stub delegation: avx2-compress matches portable on direct call") {
-        uint32_t cv[8];
-        uint8_t block[BLAKE3_BLOCK_LEN];
-        for (uint32_t i = 0; i < 8u; i++) {
-            cv[i] = (uint32_t)(0xC0FFEE00u + i);
-        }
-        for (uint32_t i = 0; i < BLAKE3_BLOCK_LEN; i++) {
-            block[i] = (uint8_t)(i * 7u + 1u);
-        }
-        uint32_t cv_ref[8], cv_simd[8];
-        memcpy(cv_ref, cv, sizeof(cv));
-        memcpy(cv_simd, cv, sizeof(cv));
-        blake3PortableCompressInPlace(cv_ref, block, BLAKE3_BLOCK_LEN,
-                                      0xDEADBEEFCAFEull, 0x0Bu);
-        blake3AVX2CompressInPlace(cv_simd, block, BLAKE3_BLOCK_LEN,
-                                  0xDEADBEEFCAFEull, 0x0Bu);
-        TEST_BYTES(err, cv_ref, cv_simd, sizeof(cv_ref),
-                   "Stub/SIMD compress-in-place output != portable");
+    /* Every entry point against the portable path, whether AVX2 runs
+     * here or the symbols are the portable stubs */
+    TEST("every avx2 entry point matches portable on direct call") {
+        err += blake3TestBackendAgainstPortable(
+            "avx2", blake3AVX2CompressInPlace, blake3AVX2CompressXof,
+            BLAKE3_AVX2_COMPRESS8_LANES, blake3AVX2Compress8);
     }
 
     if (!blake3AVX2Available()) {

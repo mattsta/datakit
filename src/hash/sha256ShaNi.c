@@ -358,18 +358,10 @@ int sha256ShaNiTest(int, char *[]) {
      * MUST equal the portable digest byte-for-byte.  A previous bug
      * shipped silent no-op stubs that returned without touching `state`;
      * this check catches that class of regression. */
-    TEST("stub delegation: shani-compress matches portable on direct call") {
-        static const char *vectors[] = {
-            "", "abc", "The quick brown fox jumps over the lazy dog"};
-        for (size_t i = 0; i < countof(vectors); i++) {
-            const char *s = vectors[i];
-            const size_t n = strlen(s);
-            uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
-            sha256Hash(s, n, ref);
-            shaniHash((const uint8_t *)s, n, got);
-            TEST_BYTES(err, got, ref, SHA256_DIGEST_LEN,
-                       "stub vector[%zu] '%s'", i, s);
-        }
+    TEST("every shani entry point matches portable on direct call") {
+        err +=
+            sha256TestBackendAgainstPortable("shani", sha256ShaNiCompressBlocks,
+                                             sha256ShaNiCompressBlocksMulti4);
     }
 
     if (!sha256ShaNiAvailable()) {

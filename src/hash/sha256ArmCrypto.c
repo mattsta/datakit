@@ -711,19 +711,10 @@ int sha256ArmCryptoTest(int, char *[]) {
      * but ONLY if the stub is wired correctly.  Catch the silent-no-op
      * regression class by running a small known-input differential
      * against the portable digest on every platform. */
-    TEST("stub delegation: arm-crypto-compress matches portable on direct "
-         "call") {
-        static const char *vectors[] = {
-            "", "abc", "The quick brown fox jumps over the lazy dog"};
-        for (size_t i = 0; i < countof(vectors); i++) {
-            const char *s = vectors[i];
-            const size_t n = strlen(s);
-            uint8_t ref[SHA256_DIGEST_LEN], got[SHA256_DIGEST_LEN];
-            sha256Hash(s, n, ref);
-            sha256ArmCryptoHash((const uint8_t *)s, n, got);
-            TEST_BYTES(err, got, ref, SHA256_DIGEST_LEN,
-                       "stub vector[%zu] '%s'", i, s);
-        }
+    TEST("every arm-crypto entry point matches portable on direct call") {
+        err += sha256TestBackendAgainstPortable(
+            "arm-crypto", sha256ArmCryptoCompressBlocks,
+            sha256ArmCryptoCompressBlocksMulti4);
     }
 
     if (!sha256ArmCryptoAvailable()) {

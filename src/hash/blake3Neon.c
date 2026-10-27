@@ -465,31 +465,12 @@ static void prng_fill(uint8_t *p, size_t n) {
 int blake3NeonTest(int, char *[]) {
     int err = 0;
 
-    /* Stub-delegation guard: on non-NEON builds blake3NeonCompressInPlace
-     * must delegate to the portable path, not return as a silent no-op.
-     * Verify a single direct call agrees with the portable reference,
-     * before deciding whether the rest of the suite (which assumes a
-     * working SIMD path) applies. */
-    TEST("stub delegation: neon-compress matches portable on direct call") {
-        uint32_t cv[8] = {0u};
-        uint8_t block[BLAKE3_BLOCK_LEN] = {0u};
-        for (uint32_t i = 0; i < 8u; i++) {
-            cv[i] = 0xDEADBEEFu + i * 0x1010101u;
-        }
-        for (uint32_t i = 0; i < BLAKE3_BLOCK_LEN; i++) {
-            block[i] = (uint8_t)(i ^ 0x5Au);
-        }
-        const uint64_t counter = 42u;
-        const uint8_t block_len = (uint8_t)BLAKE3_BLOCK_LEN;
-        const uint8_t flags = 0x07u;
-
-        uint32_t cv_ref[8], cv_simd[8];
-        memcpy(cv_ref, cv, sizeof(cv));
-        memcpy(cv_simd, cv, sizeof(cv));
-        portable_compress_in_place(cv_ref, block, block_len, counter, flags);
-        blake3NeonCompressInPlace(cv_simd, block, block_len, counter, flags);
-        TEST_BYTES(err, cv_ref, cv_simd, sizeof(cv_ref),
-                   "Stub/SIMD compress-in-place output != portable");
+    /* Every entry point against the portable path, whether NEON runs
+     * here or the symbols are the portable stubs */
+    TEST("every neon entry point matches portable on direct call") {
+        err += blake3TestBackendAgainstPortable(
+            "neon", blake3NeonCompressInPlace, blake3NeonCompressXof,
+            BLAKE3_NEON_COMPRESS4_LANES, blake3NeonCompress4);
     }
 
     if (!blake3NeonAvailable()) {

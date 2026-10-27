@@ -57,8 +57,24 @@ typedef void sha256CompressBlocksFn(uint32_t state[8], const uint8_t *blocks,
 void sha256HashWith(sha256CompressBlocksFn *compress, const void *data,
                     size_t len, uint8_t out[SHA256_DIGEST_LEN]);
 
+/* A four-lane block compressor: lane i folds `num_blocks` blocks from
+ * blocks[i] into states[i] (sha256ShaNiCompressBlocksMulti4,
+ * sha256ArmCryptoCompressBlocksMulti4) */
+typedef void sha256CompressBlocksMulti4Fn(uint32_t states[4][8],
+                                          const uint8_t *const blocks[4],
+                                          size_t num_blocks);
+
 #ifdef DATAKIT_TEST
 int sha256Test(int argc, char *argv[]);
+
+/* For each backend's test: its one-lane and four-lane compressors
+ * against the portable one over replayable random states and blocks,
+ * and its whole-message digests (lengths 0..130, padding included)
+ * against sha256Hash.  Runs whether the backend is native here or its
+ * portable stub; returns the failures, each reported under 'name'. */
+int sha256TestBackendAgainstPortable(const char *name,
+                                     sha256CompressBlocksFn *one,
+                                     sha256CompressBlocksMulti4Fn *four);
 #endif
 
 #ifdef __cplusplus

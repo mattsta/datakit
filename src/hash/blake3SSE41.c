@@ -428,31 +428,13 @@ static void rng_fill(uint8_t *p, size_t n) {
 int blake3SSE41Test(int, char *[]) {
     int err = 0;
 
-    /* Stub-delegation guard: ensure direct calls to
-     * blake3SSE41CompressInPlace produce the portable digest even when
-     * SSE4.1 is unavailable on this CPU.  Without this check, a silent
-     * no-op stub would only surface when a user happens to disable the
-     * adaptive dispatcher. */
-    TEST("stub delegation: sse41-compress matches portable on direct call") {
-        uint32_t cv[8];
-        uint8_t block[BLAKE3_BLOCK_LEN];
-        for (uint32_t i = 0; i < 8u; i++) {
-            cv[i] = 0xCAFEBABEu ^ (i * 0x01020304u);
-        }
-        for (uint32_t i = 0; i < BLAKE3_BLOCK_LEN; i++) {
-            block[i] = (uint8_t)(i + 0x37u);
-        }
-        const uint64_t counter = 7u;
-        const uint8_t block_len = (uint8_t)BLAKE3_BLOCK_LEN;
-        const uint8_t flags = 0x0Bu;
-
-        uint32_t cv_ref[8], cv_simd[8];
-        memcpy(cv_ref, cv, sizeof(cv));
-        memcpy(cv_simd, cv, sizeof(cv));
-        blake3PortableCompressInPlace(cv_ref, block, block_len, counter, flags);
-        blake3SSE41CompressInPlace(cv_simd, block, block_len, counter, flags);
-        TEST_BYTES(err, cv_ref, cv_simd, sizeof(cv_ref),
-                   "Stub/SIMD compress-in-place output != portable");
+    /* Every entry point against the portable path, whether SSE4.1 runs
+     * here or the symbols are the portable stubs: a silent no-op stub
+     * would otherwise surface only when a caller bypasses the dispatcher */
+    TEST("every sse41 entry point matches portable on direct call") {
+        err += blake3TestBackendAgainstPortable(
+            "sse41", blake3SSE41CompressInPlace, blake3SSE41CompressXof,
+            BLAKE3_SSE41_COMPRESS4_LANES, blake3SSE41Compress4);
     }
 
     if (!blake3SSE41Available()) {
