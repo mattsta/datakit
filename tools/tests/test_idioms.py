@@ -35,6 +35,7 @@ class Rules(unittest.TestCase):
                 b"    return (x > y) - (x < y);\n}\n"
             ),
             "div-ceil": b"#define D(a, b) (((a) + (b) - 1) / (b))\n",
+            "encode-op-boxes": b"flex *f = flexNewFromDataboxPtrsExact(boxes, argc);\n",
             "memcmp-err": (b'if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n}\n'),
         }
         for rule, src in cases.items():
@@ -47,6 +48,8 @@ class Rules(unittest.TestCase):
             b"/* v |= b[i] << (8 * i) */\n",  # a comment
             b'const char *s = "rand() << 32";\n',  # a literal
             b"y = (n + 7) / 8;\n",  # a constant divisor, not (a + b - 1) / b
+            # a row of a known width, not an encodeOp's operands
+            b"flex *f = flexNewFromDataboxPtrsExact(row, 2);\n",
             b"static int cmp(const void *a, const void *b) {\n"
             b"    const row *x = a;\n    return 0;\n}\n",  # a struct comparator
             # ordering by what the loaded indices point at

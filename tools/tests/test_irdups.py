@@ -67,11 +67,28 @@ class Normalise(unittest.TestCase):
         swapped = body("g").replace("%1, %0", "%0, %1")
         self.assertNotEqual(base, digests(swapped)["g"])
 
-    def test_string_constant_numbering_does_not_count(self) -> None:
-        a = body("f").replace("@helper(i32 %6)", "@helper(ptr @.str.3)")
-        b = body("g").replace("@helper(i32 %6)", "@helper(ptr @.str)")
-        got = digests(a + "\n" + b)
-        self.assertEqual(got["f"], got["g"])
+    def test_string_constants_count_by_contents_not_numbering(self) -> None:
+        consts = (
+            '@.str = private unnamed_addr constant [2 x i8] c"[\\00", align 1\n'
+            '@.str.3 = private unnamed_addr constant [2 x i8] c"[\\00", align 1\n'
+            '@.str.4 = private unnamed_addr constant [2 x i8] c"{\\00", align 1\n'
+        )
+
+        def calling(name: str, const: str) -> str:
+            text = body(name).replace("@helper(i32 %2)", f"@helper(ptr {const})")
+            self.assertIn(const, text)
+            return text
+
+        got = digests(
+            consts
+            + calling("f", "@.str.3")
+            + "\n"
+            + calling("g", "@.str")
+            + "\n"
+            + calling("h", "@.str.4")
+        )
+        self.assertEqual(got["f"], got["g"])  # both "["
+        self.assertNotEqual(got["f"], got["h"])  # "[" against "{"
 
 
 class Groups(unittest.TestCase):

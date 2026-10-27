@@ -16,6 +16,8 @@ helper to use instead:
   comparing two plain numbers -> dkSort.h
 - ``memcmp-err``: ``if (memcmp(...) != 0) { ERR(...); }`` -> TEST_BYTES
   (``dktools testbytes`` rewrites it)
+- ``encode-op-boxes``: ``flexNewFromDataboxPtrsExact(boxes, argc)`` in a
+  persist encodeOp -> persistOpEncodeBoxes
 - ``div-ceil``: ``(a + b - 1) / b`` (overflows near the top) -> dkDivCeil
 
 Only code counts: comments and literals never match, preprocessor lines
@@ -88,6 +90,13 @@ RULES: tuple[Rule, ...] = (
         ),
         "dkSort.h dkSortArray / dkCompare*",
         frozenset({"src/dkSort.h"}),
+    ),
+    Rule(
+        "encode-op-boxes",
+        # an encodeOp turning its argc operand boxes into the op body
+        re.compile(rb"\bflexNewFromDataboxPtrsExact\s*\(\s*\w+\s*,\s*argc\s*\)"),
+        "persist.h persistOpEncodeBoxes",
+        frozenset({"src/persist.c"}),
     ),
     Rule(
         "div-ceil",

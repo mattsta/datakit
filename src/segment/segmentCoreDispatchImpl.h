@@ -303,18 +303,12 @@ static void *SEGMENT_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
 
 static uint8_t *SEGMENT_D_FN_(PersistEncodeOp_)(persistOp op, const void *args,
                                                 size_t argc, size_t *len) {
-    const databox *const *boxes = args;
     *len = 0;
-    if (op != PERSIST_OP_UPDATE || (argc != 2 && argc != 3) || !boxes) {
+    if (op != PERSIST_OP_UPDATE || (argc != 2 && argc != 3)) {
         return nullptr;
     }
 
-    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 static bool SEGMENT_D_FN_(PersistApplyOp_)(void *structure, persistOp op,

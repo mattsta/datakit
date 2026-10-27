@@ -692,7 +692,8 @@ uv run --project tools dktools idioms [FILE ...]
   the helper to use: `byte-shift-loop` (dkEndian.h), `inline-lcg` and
   `inline-xorshift64star` (dkRandom.h), `rand-64` (two 31-bit draws;
   dkSplitmix64Next), `qsort-comparator` (dkSort.h), `memcmp-err`
-  (TEST_BYTES; `dktools testbytes` rewrites it), `div-ceil` (dkDivCeil).
+  (TEST_BYTES; `dktools testbytes` rewrites it), `div-ceil` (dkDivCeil),
+  `encode-op-boxes` (a persist encodeOp's operands; persistOpEncodeBoxes).
 - Only code counts: comments and literals never match; preprocessor
   lines do. Each rule skips the file that defines its shared form.
 - Exceptions are `PATH RULE REASON` lines in `tools/idioms-allow.txt`;
@@ -828,7 +829,8 @@ uv run --project tools dktools irdups [--preset PRESET] [--min-instructions N] [
   debug and sanitizer flags.
 - Normalises each function body (metadata, attribute groups and value
   names go; locals and labels are numbered by first use; string
-  constants lose their numbering; callee and global names stay) and
+  constants read as their contents, not their numbering; callee and
+  global names stay) and
   lists bodies of at least `--min-instructions` instructions (default 20) found under two or more function names, largest first. A header's
   static inline compiled into many units has one name and is not listed;
   a group whose names differ only in a type token (`I16`, `U64`,

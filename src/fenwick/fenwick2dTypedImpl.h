@@ -486,20 +486,13 @@ static void *F2D_PUB_(PersistRestore_)(const uint8_t *data, size_t len) {
 
 static uint8_t *F2D_PUB_(PersistEncodeOp_)(persistOp op, const void *args,
                                            size_t argc, size_t *len) {
-    const databox *const *boxes = args;
     *len = 0;
-    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3 ||
-        !boxes) {
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3) {
         /* CLEAR has no operand; nothing else is replayed */
         return nullptr;
     }
 
-    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
-    if (f) {
-        *len = flexBytes(f);
-    }
-
-    return (uint8_t *)f;
+    return persistOpEncodeBoxes(args, argc, len);
 }
 
 static bool F2D_PUB_(PersistApplyOp_)(void *structure, persistOp op,

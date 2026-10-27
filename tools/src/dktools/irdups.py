@@ -11,7 +11,8 @@ compares tokens; this finds what only the compiler can see is the same.
 
 A body is normalised before it is hashed: debug and other metadata,
 attribute groups and value names go (locals and labels are numbered by
-first use), string constants lose their numbering, and the names of
+first use), string constants read as their contents (not their
+numbering), and the names of
 called functions and referenced globals stay, so two bodies match only
 when they compute the same thing from the same callees.  Bodies of at
 least ``--min-instructions`` instructions (default 20) found under two
@@ -49,7 +50,8 @@ _DEFINE = re.compile(r"^define\b[^@]*@(\"[^\"]+\"|[\w.$]+)\(")
 _METADATA = re.compile(r",?\s*!(?:[\w.]+)\s+!\d+")
 _ATTR_GROUP = re.compile(r"\s#\d+")
 _LOCAL = re.compile(r"%(\"[^\"]+\"|[\w.$]+)")
-_STR_CONST = re.compile(r"@\.str(?:\.\d+)?")
+_STR_CONST = re.compile(r"@\.str(?:\.\d+)?\b")
+_STR_DEF = re.compile(r"^(@\.str(?:\.\d+)?) = .*?(c\".*\")", re.MULTILINE)
 _SUFFIX = re.compile(r"\.\d+$")
 _DROPPED_FLAGS = re.compile(r"^-(?:O\w*|g\w*|fsanitize\S*|fno-sanitize\S*|c|MD|MMD)$")
 
@@ -80,11 +82,19 @@ def function_bodies(ir: str) -> list[tuple[str, list[str]]]:
     return found
 
 
-def normalise(lines: list[str]) -> tuple[str, int]:
+def normalise(
+    lines: list[str], strings: dict[str, str] | None = None
+) -> tuple[str, int]:
     """The body as compared, and its instruction count.  The define line
     keeps only its parameter list (the return type shows in each ret);
-    comments, metadata, attribute groups and value names go."""
+    comments, metadata, attribute groups and value names go.  A string
+    constant reads as its contents ('strings': @.str.N -> c"..."), so
+    its numbering in the unit does not count and its text does."""
+    strings = strings or {}
     numbers: dict[str, str] = {}
+
+    def text(m: re.Match[str]) -> str:
+        return "@str" + strings.get(m.group(0), "?")
 
     def local(m: re.Match[str]) -> str:
         return numbers.setdefault(m.group(1), f"%v{len(numbers)}")
@@ -110,7 +120,7 @@ def normalise(lines: list[str]) -> tuple[str, int]:
         if i and line.startswith(" "):
             count += 1
         line = _LOCAL.sub(local, line)
-        out.append(_STR_CONST.sub("@.str", line).strip())
+        out.append(_STR_CONST.sub(text, line).strip())
     return "\n".join(out), count
 
 
@@ -130,8 +140,9 @@ def _base_name(name: str) -> str:
 
 def bodies_of(unit: str, ir: str, min_instructions: int) -> list[Body]:
     found = []
+    strings = dict(_STR_DEF.findall(ir))
     for name, lines in function_bodies(ir):
-        text, count = normalise(lines)
+        text, count = normalise(lines, strings)
         if count >= min_instructions:
             digest = hashlib.blake2b(text.encode(), digest_size=16).hexdigest()
             found.append(Body(unit, _base_name(name), count, digest))

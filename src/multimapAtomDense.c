@@ -177,12 +177,7 @@ bool multimapAtomDenseDelete(multimapAtomDense *d, const databox *key) {
 }
 
 uint64_t multimapAtomDenseNextId(const multimapAtomDense *d) {
-    uint64_t id;
-    if (d->holes && multiroarMin(d->holes, &id)) {
-        return id;
-    }
-
-    return d->next;
+    return densePeekId_(d);
 }
 
 size_t multimapAtomDenseCount(const multimapAtomDense *d) {
