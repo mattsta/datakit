@@ -34,6 +34,7 @@ from . import (
     retoken,
     spell,
     stdattr,
+    testbytes,
     testtime,
     toolchain,
     tune,
@@ -317,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
     da.add_argument("--arity", type=int, required=True, help="arguments each call has")
     da.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     da.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    tb = sub.add_parser(
+        "testbytes",
+        help="rewrite each test's single-ERR memcmp check as TEST_BYTES",
+    )
+    tb.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+    tb.add_argument("--dry-run", action="store_true", help="report, change no file")
 
     sa = sub.add_parser(
         "stdattr",
@@ -1148,6 +1156,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         return dropargs.run(
             args.repo, args.name, args.keep, args.arity, tuple(args.paths), args.dry_run
         )
+
+    if args.command == "testbytes":
+        return testbytes.run(args.repo, tuple(args.paths), args.dry_run)
 
     if args.command == "stdattr":
         return stdattr.run(args.repo, tuple(args.paths), args.dry_run)

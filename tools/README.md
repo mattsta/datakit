@@ -749,6 +749,21 @@ uv run --project tools dktools dropargs NAME --keep 0,2 --arity 5 [--dry-run] [F
   a call of NAME nested in another's arguments is left as written.
 - Files default to the tracked `src/**/*.c` and `*.h`.
 
+## testbytes — byte comparisons in tests as `TEST_BYTES`
+
+```sh
+uv run --project tools dktools testbytes [--dry-run] [FILE ...]
+```
+
+- Each `if (memcmp(GOT, WANT, N) != 0) { ERR(FORMAT, ...); }` becomes
+  `TEST_BYTES(err, GOT, WANT, N, FORMAT, ...);` (src/ctest.h), which
+  counts the failure as ERR does and prints both sides in hex.
+- Only that shape: another condition, a second statement in the body or
+  an `else` leaves the check as written, as do comments, literals and
+  preprocessor lines.
+- Files default to the tracked `src/**/*.c` and `*.h`. Prints each
+  file's count. Exits 0, or 2 for a missing file.
+
 ## stdattr — `__attribute__` in the standard `[[...]]` form
 
 ```sh
