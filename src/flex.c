@@ -7718,14 +7718,6 @@ static int flexTestWideCmp(const void *a_, const void *b_) {
     return (a->bits > b->bits) - (a->bits < b->bits);
 }
 
-static uint64_t flexTestWideRand(uint64_t *state) {
-    /* xorshift64*: deterministic, independent of the global rand() seed */
-    *state ^= *state >> 12;
-    *state ^= *state << 25;
-    *state ^= *state >> 27;
-    return *state * UINT64_C(2685821657736338717);
-}
-
 /* Sorted insert and find over 64 distinct 96/128-bit keys mixed with
  * 64-bit keys, against a qsort oracle; then a 2-element map whose
  * duplicate narrow keys are ordered by wide values. */
@@ -8187,8 +8179,8 @@ static int32_t flexTestWideSorted(void) {
 
     while (n < KEYS) {
         const bool wantWide = n < WIDE_KEYS;
-        __uint128_t r = ((__uint128_t)flexTestWideRand(&state) << 64) |
-                        flexTestWideRand(&state);
+        __uint128_t r = ((__uint128_t)dkXorshift64StarNext(&state) << 64) |
+                        dkXorshift64StarNext(&state);
         flexTestWide v;
         if (!wantWide) {
             v = (r & 1) ? flexTestWideS((int64_t)(uint64_t)r)
@@ -8219,7 +8211,7 @@ static int32_t flexTestWideSorted(void) {
     }
 
     for (size_t i = KEYS - 1; i > 0; i--) {
-        const size_t j = flexTestWideRand(&state) % (i + 1);
+        const size_t j = dkXorshift64StarNext(&state) % (i + 1);
         const size_t t = order[i];
         order[i] = order[j];
         order[j] = t;

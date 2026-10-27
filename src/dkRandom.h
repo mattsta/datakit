@@ -89,6 +89,17 @@ static inline uint32_t dkXorshift32Next(uint32_t *state) {
     return *state;
 }
 
+/* Vigna's xorshift64*: advance '*state' (shifts 12, 25, 27) and return it
+ * times 0x2545F4914F6CDD1D, which scrambles the low bits a plain xorshift
+ * leaves weak.  A zero state stays zero.  str.h's xorshift64star() is
+ * this stream as an exported function. */
+static inline uint64_t dkXorshift64StarNext(uint64_t *state) {
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    return *state * UINT64_C(0x2545F4914F6CDD1D);
+}
+
 /* splitmix64's finalizer: a bijection on 64 bits that spreads every input
  * bit over the result (a hash mixer for integer keys as well as the
  * generator's output stage) */

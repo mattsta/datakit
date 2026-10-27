@@ -404,15 +404,10 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 
-/* Cheap xorshift64* for reproducible random fill. */
+/* A replayable stream for random test data */
 static uint64_t rng_state = 0xDEADBEEFCAFEBABEull;
 static uint64_t xrand(void) {
-    uint64_t x = rng_state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    rng_state = x;
-    return x * 2685821657736338717ull;
+    return dkXorshift64StarNext(&rng_state);
 }
 static void rng_seed(uint64_t s) {
     rng_state = s ? s : 1;

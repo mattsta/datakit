@@ -326,13 +326,10 @@ bool databoxLinearDecodeParts(const uint_fast8_t type,
 #include <float.h>
 #include <math.h>
 
-/* Simple xorshift64* PRNG for reproducible fuzzing */
+/* A replayable stream for fuzzing */
 static uint64_t fuzzState = 0x123456789ABCDEF0ULL;
 static uint64_t fuzzNext(void) {
-    fuzzState ^= fuzzState >> 12;
-    fuzzState ^= fuzzState << 25;
-    fuzzState ^= fuzzState >> 27;
-    return fuzzState * 0x2545F4914F6CDD1DULL;
+    return dkXorshift64StarNext(&fuzzState);
 }
 
 /* Generate random value in range [0, max] */

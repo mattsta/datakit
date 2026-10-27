@@ -107,10 +107,7 @@ void xorshift128(uint32_t *restrict x, uint32_t *restrict y,
 
 /* SPEED RANK: SLOWEST (4th) */
 uint64_t xorshift64star(uint64_t *x) {
-    *x ^= *x >> 12; // a
-    *x ^= *x << 25; // b
-    *x ^= *x >> 27; // c
-    return *x * UINT64_C(2685821657736338717);
+    return dkXorshift64StarNext(x);
 }
 
 /* xorshift1024* generator with 1024 bits of state and a maximal period of

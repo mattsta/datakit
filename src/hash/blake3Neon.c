@@ -444,15 +444,10 @@ static void portable_compress_xof(const uint32_t cv[8], const uint8_t block[64],
     assert(memcmp(ref, out, sizeof(ref)) == 0);
 }
 
-/* Lightweight xorshift64* for deterministic random data. */
+/* A replayable stream for random test data */
 static uint64_t prng_state = 0x9E3779B97F4A7C15ull;
 static inline uint64_t prng_next(void) {
-    uint64_t x = prng_state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    prng_state = x;
-    return x * 0x2545F4914F6CDD1Dull;
+    return dkXorshift64StarNext(&prng_state);
 }
 static void prng_fill(uint8_t *p, size_t n) {
     while (n >= 8) {

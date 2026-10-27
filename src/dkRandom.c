@@ -223,6 +223,18 @@ int dkRandomTest(int, char *[]) {
         }
     }
 
+    TEST("dkXorshift64StarNext replays Vigna's xorshift64*") {
+        /* From 1, worked by hand: 1 ^ 1>>12 = 1; ^ <<25 = 33554433;
+         * ^ >>27 = 33554433.  The output is that state times the
+         * multiplier, modulo 2^64. */
+        uint64_t s = 1;
+        const uint64_t out = dkXorshift64StarNext(&s);
+        if (s != UINT64_C(33554433) ||
+            out != UINT64_C(33554433) * UINT64_C(0x2545F4914F6CDD1D)) {
+            ERR("xorshift64* from 1 gave state %" PRIu64, s);
+        }
+    }
+
     TEST("dkSplitmix64Next replays Vigna's splitmix64") {
         /* From 0, the reference generator's first two outputs; the state
          * advances by the golden-ratio step each time */
