@@ -1,4 +1,5 @@
 #include "dataspeed.h"
+#include "dkSort.h"
 #include "timeUtil.h"
 
 #include <assert.h>
@@ -97,13 +98,6 @@ static inline uint64_t dataspeed_rdtsc(void) {
 #endif
 }
 
-/* Compare function for qsort */
-static int compare_double(const void *a, const void *b) {
-    double da = *(const double *)a;
-    double db = *(const double *)b;
-    return (da > db) - (da < db);
-}
-
 /* Compute statistics from samples */
 static void compute_stats(double *samples, size_t n, dataspeedStats *stats) {
     if (n == 0) {
@@ -112,7 +106,7 @@ static void compute_stats(double *samples, size_t n, dataspeedStats *stats) {
     }
 
     /* Sort for median and percentiles */
-    qsort(samples, n, sizeof(double), compare_double);
+    dkSortArray(samples, n);
 
     stats->min = samples[0];
     stats->max = samples[n - 1];

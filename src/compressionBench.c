@@ -26,6 +26,7 @@
 #include "databox.h"
 #include "datakit.h"
 #include "dkRandom.h" /* dkSplitmix64Next */
+#include "dkSort.h"
 #include "dod.h"
 #include "flex.h"
 #include "float16.h"
@@ -744,12 +745,6 @@ static double benchListPushPop(const char *pattern, size_t count,
     return (double)(timeUtilMonotonicUs() - start);
 }
 
-static int benchCmpDouble(const void *a, const void *b) {
-    const double x = *(const double *)a;
-    const double y = *(const double *)b;
-    return (x > y) - (x < y);
-}
-
 #if defined(__SANITIZE_ADDRESS__)
 #define BENCH_SANITIZED 1
 #elifdef __has_feature
@@ -808,7 +803,7 @@ static void runMultilistBenchmarks(void) {
         }
 
         for (size_t d = 0; d < 3; d++) {
-            qsort(runs[d], ROUNDS, sizeof(double), benchCmpDouble);
+            dkSortArray(runs[d], ROUNDS);
             printf("  %-6s depth %u: median %8.1f ms (min %8.1f, max "
                    "%8.1f), %6.0f ns per push+pop\n",
                    patterns[p], timedDepths[d], runs[d][ROUNDS / 2] / 1000.0,
@@ -830,7 +825,7 @@ static void runMultilistBenchmarks(void) {
 #endif
 
 static double benchMedian(double *runs, size_t n) {
-    qsort(runs, n, sizeof(double), benchCmpDouble);
+    dkSortArray(runs, n);
     return runs[n / 2];
 }
 

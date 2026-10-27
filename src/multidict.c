@@ -7,6 +7,7 @@
 #include "asmUtils.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "dkSort.h"
 #include "fibbuf.h"
 #include "flex.h"
 #include "multilru.h"
@@ -4066,12 +4067,6 @@ typedef struct mdWideScanState {
 defcleanerName(uint8_t *, zfree, SeenBytes);
 defcleanerName(char *, zfree, BenchKeys);
 defcleanerName(uint32_t *, zfree, HashWords);
-
-static int mdTestCompareU32_(const void *a, const void *b) {
-    const uint32_t x = *(const uint32_t *)a;
-    const uint32_t y = *(const uint32_t *)b;
-    return (x > y) - (x < y);
-}
 
 static void mdWideScanCb_(void *privdata, const databox *key,
                           const databox *val) {
@@ -10512,8 +10507,8 @@ int multidictTest(int, char *[]) {
             multidictIntHashFunction(12345)) {
             ERR("an integer hash is not deterministic");
         }
-        qsort(h32, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
-        qsort(h64, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
+        dkSortArray(h32, MD_HASH_KEYS);
+        dkSortArray(h64, MD_HASH_KEYS);
         size_t same32 = 0;
         size_t same64 = 0;
         for (size_t i = 1; i < MD_HASH_KEYS; i++) {

@@ -31,6 +31,7 @@
 #include "dkEndian.h"
 #include "dkFormat.h"
 #include "dkRandom.h"
+#include "dkSort.h"
 #include "dkTestTmp.h"
 #include "dkTierLimit.h"
 #include "dod.h"
@@ -3791,16 +3792,6 @@ static void *dkGateReaderMain_(void *arg) {
     return nullptr;
 }
 
-static int dkGateCmpU64_(const void *a, const void *b) {
-    const uint64_t x = *(const uint64_t *)a;
-    const uint64_t y = *(const uint64_t *)b;
-    return x < y ? -1 : (x > y ? 1 : 0);
-}
-
-static void dkGateSortU64_(uint64_t *v, size_t n) {
-    qsort(v, n, sizeof(*v), dkGateCmpU64_);
-}
-
 defcleanerName(dkGateReaderCtx *, zfree, GateReaderCtx);
 defcleanerName(pthread_t *, zfree, Threads);
 defcleanerName(uint64_t *, zfree, U64s);
@@ -3843,7 +3834,7 @@ static uint64_t dkGateRun_(dkGateFlavour flavour, uint32_t readers,
         }
         unprovable += ctx[i].unprovable;
     }
-    qsort(all, k, sizeof(*all), dkGateCmpU64_);
+    dkSortArray(all, k);
     const uint64_t p99 = k ? all[(k * 99u) / 100u] : UINT64_MAX;
     if (outUnprovable) {
         *outUnprovable = unprovable;
@@ -3885,7 +3876,7 @@ static int dkTestOwnedSeqGateTest(int, char *[]) {
     uint64_t med[3][2];
     for (int f = 0; f < 3; f++) {
         for (int w = 0; w < 2; w++) {
-            dkGateSortU64_(p99[f][w], DK_GATE_TRIALS);
+            dkSortArray(p99[f][w], DK_GATE_TRIALS);
             best[f][w] = p99[f][w][0];
             med[f][w] = p99[f][w][DK_GATE_TRIALS / 2];
         }
@@ -12417,6 +12408,9 @@ static const TestEntry testRegistry[] = {
 
     /* Bit arrays in bytes or 64-bit words */
     T_A(dkBits, "bits"),
+
+    /* Sorting arrays of plain numbers */
+    T_A(dkSort, "sort"),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),

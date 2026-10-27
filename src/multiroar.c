@@ -7,6 +7,7 @@
 #include "cleaner.h"
 #include "dkBits.h"
 #include "dkDiag.h"
+#include "dkSort.h"
 #include "str.h" /* optimized popcnt helpers */
 #include <inttypes.h>
 #include <stdlib.h> /* qsort */
@@ -3561,12 +3562,6 @@ DK_STATIC bool mrAnyValueMode_(uint64_t n, multiroar *const *roars) {
  * ==================================================================== */
 
 /* Helper: Collect all unique chunk IDs across N multiroars */
-static int cmpChunkKeyAsc(const void *a, const void *b) {
-    const uint64_t x = *(const uint64_t *)a;
-    const uint64_t y = *(const uint64_t *)b;
-    return (x > y) - (x < y);
-}
-
 DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
                                         uint64_t *outCount) {
     if (n == 0 || !roars) {
@@ -3612,7 +3607,7 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
     }
 
     if (keyCount > 1) {
-        qsort(allKeys, keyCount, sizeof(uint64_t), cmpChunkKeyAsc);
+        dkSortArray(allKeys, keyCount);
         uint64_t w = 1;
         for (uint64_t r = 1; r < keyCount; r++) {
             if (allKeys[r] != allKeys[w - 1]) {

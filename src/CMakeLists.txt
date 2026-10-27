@@ -657,6 +657,7 @@ if(DatakitTestMode)
         dkC23Test.c
         dkEndianTest.c
         dkBitsTest.c
+        dkSortTest.c
         intsetTest.c
         # One simulation driving every tiered family through its tier changes
         tierSimTest.c

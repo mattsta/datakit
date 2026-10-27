@@ -1299,14 +1299,9 @@ static void *hmacKeyringMtWorker(void *arg) {
     return nullptr;
 }
 
-#include <pthread.h>
-#include <stdlib.h> /* qsort */
+#include "dkSort.h"
 
-static int hkrTestCmpU64(const void *a, const void *b) {
-    const uint64_t x = *(const uint64_t *)a;
-    const uint64_t y = *(const uint64_t *)b;
-    return (x > y) - (x < y);
-}
+#include <pthread.h>
 
 /* A reservation function for the tests: counts calls, keeps the last
  * limit, refuses while `refuse` is set, and can act on the ring from
@@ -1936,7 +1931,7 @@ int hmacKeyringTest(int, char *[]) {
             pthread_join(tids[t], nullptr);
         }
         /* Sort and check uniqueness. */
-        qsort(collected, total, sizeof(*collected), hkrTestCmpU64);
+        dkSortArray(collected, total);
         for (size_t i = 1; i < total; i++) {
             if (collected[i] == collected[i - 1]) {
                 ERR("duplicate nonce at index %zu (value %" PRIu64 ")", i,
@@ -2121,7 +2116,7 @@ int hmacKeyringTest(int, char *[]) {
         for (uint32_t t = 0; t < kThreads; t++) {
             pthread_join(tids[t], nullptr);
         }
-        qsort(collected, total, sizeof(*collected), hkrTestCmpU64);
+        dkSortArray(collected, total);
         bool contiguous = true;
         for (size_t i = 0; i < total; i++) {
             contiguous = contiguous && collected[i] == (uint64_t)i;
