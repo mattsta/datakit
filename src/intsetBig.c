@@ -1016,8 +1016,6 @@ bool intsetBigRandomDelete(intsetBig *isb, databoxBig *deleted) {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 #include "perf.h"
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
 
 /* The __int128_t a decimal test literal spells (the parse must succeed;
  * it runs outside the assert) */

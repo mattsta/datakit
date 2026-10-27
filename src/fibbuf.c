@@ -155,15 +155,6 @@ static uint64_t fibbufNextBuffer64(const uint64_t currentBufSize) {
 
 #include <inttypes.h> /* PRIu64 */
 
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
-
 int fibbufTest(int, char *[]) {
     int err = 0;
 

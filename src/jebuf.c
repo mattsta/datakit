@@ -287,15 +287,6 @@ static size_t jebufSizeAllocation64(const size_t currentBufSize) {
 
 #include <inttypes.h> /* PRIu64 */
 
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
-
 int jebufTest(int, char *[]) {
     int err = 0;
 

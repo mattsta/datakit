@@ -269,15 +269,6 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
 defcleanerName(float *, zfree, FloatBuf);
 defcleanerName(uint16_t *, zfree, U16Buf);
 
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
-
 #if __F16C__
 #include <immintrin.h>
 #endif

@@ -812,15 +812,6 @@ typedef struct mosWidePair mosWidePair;
 defcleanerName(mosWidePair *, zfree, WidePairs);
 defcleanerName(size_t *, zfree, Sizes);
 
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
-
 /* A non-empty map's stored middle offset is its exact middle row */
 static void mosVerifyMiddle_(const flex *map, uint32_t middle) {
     if (flexCount(map)) {

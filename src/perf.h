@@ -309,6 +309,21 @@ static inline const char *perfFormatNs(double ns, char *out, size_t cap) {
         PERF_TIMERS_RESULT_PRINT(i, units);                                    \
     } while (0)
 
+/* A test's timing points: TIME_INIT starts the timers, TIME_FINISH(i,
+ * what) prints the results for 'i' units of 'what'.  A file that defines
+ * PERF_REPORT_TIME as 0 before including this header compiles both
+ * away. */
+#ifndef PERF_REPORT_TIME
+#define PERF_REPORT_TIME 1
+#endif
+#if PERF_REPORT_TIME
+#define TIME_INIT PERF_TIMERS_SETUP
+#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
+#else
+#define TIME_INIT
+#define TIME_FINISH(i, what)
+#endif
+
 /* Time `code`, run once, as `i` units. */
 #define PERF_TIMERS_THIS(code, i, units)                                       \
     do {                                                                       \

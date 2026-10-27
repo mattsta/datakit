@@ -1556,15 +1556,6 @@ defcleaner(multimapAtom *, multimapAtomFree);
 #include <stdlib.h> /* getenv */
 #include <unistd.h> /* getpid, unlink for the wide persist sweep */
 
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
-
 #define multimapReport(m) multimapReport_(m, true)
 #define multimapReportSizeOnly(m) multimapReport_(m, false)
 

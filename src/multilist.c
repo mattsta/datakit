@@ -567,15 +567,6 @@ CTEST_INCLUDE_GEN(str)
 #if 0
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
-
-#define REPORT_TIME 1
-#if REPORT_TIME
-#define TIME_INIT PERF_TIMERS_SETUP
-#define TIME_FINISH(i, what) PERF_TIMERS_FINISH_PRINT_RESULTS(i, what)
-#else
-#define TIME_INIT
-#define TIME_FINISH(i, what)
-#endif
 #endif
 void multilistRepr(const multilist *m) {
     const multilistType type = _multilistType(m);
