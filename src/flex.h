@@ -570,6 +570,33 @@ bool flexGetNextByType(flex *f, flexEntry **fe, databox *box);
 void flexGetByTypeBig(const flexEntry *fe, databoxBig *box);
 bool flexGetNextByTypeBig(flex *f, flexEntry **fe, databoxBig *box);
 
+/* The value at 'fe' as a box that outlives the entry, for a pop or delete
+ * handing it back: BYTES of 8 bytes or less come back embedded
+ * (DATABOX_BYTES_EMBED, allocated = 0), other values below BYTES decode
+ * once with their flags clear, and long BYTES, containers and 96/128-bit
+ * values go through flexGetByTypeCopy (the caller releases them with
+ * databoxFreeData; a wide value lands in band when box->big is set). */
+static inline void flexGetByTypeDetached(const flexEntry *fe, databox *box) {
+    databox found = {};
+    flexGetByTypeInto(fe, &found, nullptr);
+    if (found.type == DATABOX_BYTES) {
+        if (found.len <= sizeof(found.data.bytes.embed8)) {
+            databox embed = {};
+            memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
+            embed.type = DATABOX_BYTES_EMBED;
+            embed.len = found.len;
+            *box = embed;
+            return;
+        }
+    } else if (found.type < DATABOX_BYTES && !databoxIsWideDeferred(&found)) {
+        /* Nothing below BYTES borrows from the flex; flags are clear */
+        *box = found;
+        return;
+    }
+
+    flexGetByTypeCopy(fe, box);
+}
+
 /* Retrieve specific data.  Each returns false, leaving '*value' alone, when
  * the entry does not fit the result type: a 64-bit integer out of its
  * range, any 96/128-bit value, and every entry that is no integer (bytes,

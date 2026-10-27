@@ -593,7 +593,7 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
 
     if (fe) {
         /* The element is about to be deleted, so hand out an owned copy. */
-        multilistPopCopy_(fe, box);
+        flexGetByTypeDetached(fe, box);
         flexDeleteRange(ffl, flIdx, 1);
 
         /* F0 must hold elements whenever the list is nonempty */

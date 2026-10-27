@@ -36,42 +36,13 @@ DK_INLINE_ALWAYS void multimapIteratorDecode_(const flexEntry *const fe,
     }
 }
 
-/* The self-contained copy DeleteRandomValue hands back for the entry at
- * 'fe', which is about to be deleted, matching multilistPop: BYTES of 8
- * bytes or less come back embedded (DATABOX_BYTES_EMBED, allocated = 0),
- * other values below BYTES decode once with their flags clear, and long
- * BYTES, containers and 96/128-bit values go through flexGetByTypeCopy,
- * which writes a wide value in band when box->big is set and to a 16-byte
- * heap payload the caller owns otherwise. */
-static inline void multimapRemovedCopy_(const flexEntry *const fe,
-                                        databox *const box) {
-    databox found = {};
-    flexGetByTypeInto(fe, &found, nullptr);
-    if (found.type == DATABOX_BYTES) {
-        if (found.len <= sizeof(found.data.bytes.embed8)) {
-            databox embed = {};
-            memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
-            embed.type = DATABOX_BYTES_EMBED;
-            embed.len = found.len;
-            *box = embed;
-            return;
-        }
-    } else if (found.type < DATABOX_BYTES && !databoxIsWideDeferred(&found)) {
-        /* Nothing below BYTES borrows from the flex. */
-        *box = found;
-        return;
-    }
-
-    flexGetByTypeCopy(fe, box);
-}
-
 /* Report the value entries of the row whose key entry is 'fe', which is
  * about to be deleted, into 'removedOut' ('elementsPerEntry - 1' slots;
  * NULL is a no-op).  Without 'take', under replacedOut's rules: numbers by
  * value; a BYTES or container slot keeps its type and length but points
  * into the map, so it must not be read after the delete; a 96/128-bit
  * value is type-only.  With 'take', as DeleteRandomValue hands values
- * back (multimapRemovedCopy_): self-contained, owned by the caller. */
+ * back (flexGetByTypeDetached): self-contained, owned by the caller. */
 static inline void
 multimapRemovedOutFill_(const flex *map, const flexEntry *fe,
                         const multimapElements elementsPerEntry,
@@ -83,7 +54,7 @@ multimapRemovedOutFill_(const flex *map, const flexEntry *fe,
     for (multimapElements i = 1; i < elementsPerEntry; i++) {
         fe = flexNext(map, (flexEntry *)fe);
         if (take) {
-            multimapRemovedCopy_(fe, &removedOut[i - 1]);
+            flexGetByTypeDetached(fe, &removedOut[i - 1]);
         } else {
             removedOut[i - 1] = (databox){};
             flexGetByTypeInto(fe, &removedOut[i - 1], nullptr);

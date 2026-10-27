@@ -338,7 +338,7 @@ bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail) {
 
     if (fe) {
         /* The element is about to be deleted, so hand out an owned copy. */
-        multilistPopCopy_(fe, box);
+        flexGetByTypeDetached(fe, box);
         flexDeleteRange(&ml->fl, flIdx, 1);
         return true;
     }

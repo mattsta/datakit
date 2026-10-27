@@ -349,7 +349,7 @@ bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
                                     databox **deletedBox) {
     multimapEntry me;
     /* Pass NULL for deletedBox to multimapSmallRandomValue, then manually
-     * copy the data using multimapRemovedCopy_. This avoids use-after-free
+     * copy the data using flexGetByTypeDetached. This avoids use-after-free
      * since flexGetByType returns pointers to internal flex data which
      * become invalid after multimapSmallDeleteEntry. */
     if (!multimapSmallRandomValue(m, deleteFromTail, nullptr, &me)) {
@@ -360,7 +360,7 @@ bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
     if (deletedBox) {
         flexEntry *fe = me.fe;
         for (size_t i = 0; i < m->elementsPerEntry; i++) {
-            multimapRemovedCopy_(fe, deletedBox[i]);
+            flexGetByTypeDetached(fe, deletedBox[i]);
             fe = flexNext(m->map, fe);
         }
     }

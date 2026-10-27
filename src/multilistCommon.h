@@ -121,32 +121,3 @@ static inline void multilistIterOffsetAfterDelete_(multilistIterator *iter,
         iter->offset++;
     }
 }
-
-/* Internal to the tier Pop implementations: the self-contained copy of
- * the element at 'fe', which is about to be deleted.  It is
- * flexGetByTypeCopy()'s result, except that BYTES of 8 bytes or less come
- * back embedded (DATABOX_BYTES_EMBED, allocated = 0), so popping a narrow
- * value never allocates.  Fixed-width values decode once; long BYTES,
- * containers and 96/128-bit values go through flexGetByTypeCopy(), which
- * writes a wide value in band when got->big is set and to a heap payload
- * otherwise. */
-static inline void multilistPopCopy_(const flexEntry *fe, databox *got) {
-    databox found = {};
-    flexGetByTypeInto(fe, &found, nullptr);
-    if (found.type == DATABOX_BYTES) {
-        if (found.len <= sizeof(found.data.bytes.embed8)) {
-            databox embed = {};
-            memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
-            embed.type = DATABOX_BYTES_EMBED;
-            embed.len = found.len;
-            *got = embed;
-            return;
-        }
-    } else if (found.type < DATABOX_BYTES && !databoxIsWideDeferred(&found)) {
-        /* Nothing below BYTES borrows from the flex; flags are clear. */
-        *got = found;
-        return;
-    }
-
-    flexGetByTypeCopy(fe, got);
-}

@@ -1822,7 +1822,7 @@ multilistFullPopResult multilistFullPop(multilistFull *ml, mflexState *state,
 
     if (fe) {
         /* The element is about to be deleted, so hand out an owned copy. */
-        multilistPopCopy_(fe, box);
+        flexGetByTypeDetached(fe, box);
 
         /* No merge check: a pop only shrinks an end node until it empties
          * and goes, leaving at most one sparse node at each end */
