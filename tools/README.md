@@ -191,7 +191,10 @@ machine, so a run leaves it usable:
 - Tests at once: `DKTOOLS_TEST_JOBS`, else half the compile jobs; many
   tests start threads of their own.
 - Load ceiling: make (`-l`) and ctest (`--test-load`) start no new job
-  while the load average is at or above the performance-core count.
+  while the load average is at or above `DKTOOLS_LOAD`, else the
+  performance-core count. `DKTOOLS_LOAD=0` removes it: on a machine
+  another workload keeps above the ceiling, ctest would otherwise wait
+  without starting a test.
 - Run one heavy command at a time: each one already sizes itself to
   the machine.
 
@@ -369,9 +372,9 @@ gate before a milestone.
   list that leaves it out) is reported on a `missing` line, apart from
   real failures, with a `hint` naming the targets to add.
 - `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check` and `spell` then run on the exported tree with
-  the tree's own dktools (the `alloc`, `atomic`, `output` and `spell`
-  lines).
+  `outputaudit check`, `spell` and `idioms` then run on the exported
+  tree with the tree's own dktools (the `alloc`, `atomic`, `output`,
+  `spell` and `idioms` lines).
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,
   allocaudit, failing test names, log paths), also kept in
@@ -444,7 +447,8 @@ uv run --project tools dktools validate [--rev REV] \
   set per configuration.
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
   output, `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check` and `spell` on the exported tree, and the leakage
+  `outputaudit check`, `spell` and `idioms` on the exported tree, and
+  the leakage
   gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
 - Writes `ROOT/validate/<hash>-<configs>/summary.md` (`<configs>` joins
@@ -677,6 +681,27 @@ uv run --project tools dktools retoken _Static_assert static_assert [--comments]
   code.
 - Prints each file's count. Exits 0, or 2 for a token that is not a C
   identifier or a missing file.
+
+## idioms — hand-written forms of what a shared helper does
+
+```sh
+uv run --project tools dktools idioms [FILE ...]
+```
+
+- One rule per idiom the platform has a shared form for, each naming
+  the helper to use: `byte-shift-loop` (dkEndian.h), `inline-lcg` and
+  `inline-xorshift64star` (dkRandom.h), `rand-64` (two 31-bit draws;
+  dkSplitmix64Next), `qsort-comparator` (dkSort.h), `memcmp-err`
+  (TEST_BYTES; `dktools testbytes` rewrites it), `div-ceil` (dkDivCeil).
+- Only code counts: comments and literals never match; preprocessor
+  lines do. Each rule skips the file that defines its shared form.
+- Exceptions are `PATH RULE REASON` lines in `tools/idioms-allow.txt`;
+  a line without a reason or naming no rule is an input error (exit 2),
+  and a line that no longer matches fails the gate, so the list stays
+  true.
+- Runs in `verify` and `validate` (the `idioms` line). Files default to
+  the tracked `src/**/*.c` and `*.h`. Exits 0 clean, 1 for hits or
+  stale allow lines.
 
 ## spell — misspellings in the sources, docs and tools
 

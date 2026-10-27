@@ -1,0 +1,6 @@
+# Exceptions to `dktools idioms`: PATH RULE REASON (reason required).
+# A line that no longer matches anything fails the gate; delete it then.
+src/dkEndianTest.c byte-shift-loop the independent byte-by-byte oracle dkEndian.h is checked against
+src/dkRandom.c inline-lcg the test replays the MMIX LCG by hand to check dkLcg64Next
+src/dod.c div-ceil inside an #if 0 block
+src/flexEnvelope.c byte-shift-loop the digest KATs build their expected little-endian bytes by hand, independent of dkStoreLe64

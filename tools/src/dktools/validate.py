@@ -28,7 +28,8 @@ why, and how to run it.
 
 After the matrix it scans the test logs for UBSan ("runtime error:"),
 ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors``,
-``atomicaudit check``, ``outputaudit check`` and ``spell`` on the exported tree, checks
+``atomicaudit check``, ``outputaudit check``, ``spell`` and ``idioms`` on the
+exported tree, checks
 that every file of the tree is formatted (``dktools.formatting``; it rewrites
 nothing: ``dktools format write`` does), and runs the leakage gate
 over the added lines of
@@ -260,6 +261,7 @@ def render(
     atomic: Step,
     output: Step,
     spelling: Step,
+    idiom: Step,
     leak: tuple[str, list[leakcheck.Hit]] | None,
     passed: bool,
     fmt: tuple[formatting.Report, Path],
@@ -364,6 +366,9 @@ def render(
     md += ["", "## Spelling", ""]
     md.append(f"{_step_cell(spelling)}: {steps.last_line(spelling.log)}")
 
+    md += ["", "## Idioms", ""]
+    md.append(f"{_step_cell(idiom)}: {steps.last_line(idiom.log)}")
+
     md += ["", "## Formatting", ""]
     md.append(formatting.gate_line(fmt[0]))
     md += [f"- {line}" for line in fmt[0].lines("would change")]
@@ -394,6 +399,7 @@ def render(
     md.append(f"- {atomic.log}")
     md.append(f"- {output.log}")
     md.append(f"- {spelling.log}")
+    md.append(f"- {idiom.log}")
     md.append(f"- {fmt[1]}")
     return "\n".join(md) + "\n"
 
@@ -468,6 +474,9 @@ def run(repo: Path, opts: ValidateOptions) -> int:
     spelling = steps.run_tree_gate(
         "spell", steps.spell_command, work / "spell.log", src, steps.SPELL_TIMEOUT
     )
+    idiom = steps.run_tree_gate(
+        "idioms", steps.idioms_command, work / "idioms.log", src, steps.IDIOMS_TIMEOUT
+    )
 
     leak = None
     leak_ok = True
@@ -483,6 +492,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         and atomic.ok
         and output.ok
         and spelling.ok
+        and idiom.ok
         and leak_ok
         and fmt.clean()
     )
@@ -495,6 +505,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         atomic,
         output,
         spelling,
+        idiom,
         leak,
         passed,
         (fmt, work / "format.log"),

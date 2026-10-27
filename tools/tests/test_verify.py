@@ -489,9 +489,11 @@ class VerifyRun(unittest.TestCase):
                 "atomicaudit",
                 "outputaudit",
                 "spell",
+                "idioms",
             ],
         )
         self.assertIn("  spell     ok (", out)
+        self.assertIn("  idioms    ok (", out)
         script = runner.command("test-commands")[-2:]
         self.assertEqual(script, ["-P", str(steps.CTEST_COMMANDS_SCRIPT)])
         self.assertTrue(steps.CTEST_COMMANDS_SCRIPT.is_file())

@@ -26,6 +26,7 @@ from . import (
     fusionscan,
     gitutil,
     historyscrub,
+    idioms,
     leakcheck,
     objdiff,
     outputaudit,
@@ -332,6 +333,13 @@ def main(argv: list[str] | None = None) -> int:
         help="list near-copies (renamed names, other constants) instead",
     )
     df.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    idm = sub.add_parser(
+        "idioms",
+        help="find hand-written forms of what a shared helper does "
+        "(exit 0, 1 for hits not in tools/idioms-allow.txt or stale allow lines)",
+    )
+    idm.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
 
     tb = sub.add_parser(
         "testbytes",
@@ -1173,6 +1181,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "dupfuncs":
         return dupfuncs.run(args.repo, tuple(args.paths), args.min_tokens, args.shape)
+
+    if args.command == "idioms":
+        return idioms.run(args.repo, tuple(args.paths))
 
     if args.command == "testbytes":
         return testbytes.run(args.repo, tuple(args.paths), args.dry_run)

@@ -138,9 +138,11 @@ class ValidateRun(unittest.TestCase):
                 self.assertIn(f"{label} {step}", names)
         self.assertFalse(any(LIBRARY_ONLY in name for name in names))
         self.assertEqual(
-            names[-4:], ["allocaudit", "atomicaudit", "outputaudit", "spell"]
+            names[-5:],
+            ["allocaudit", "atomicaudit", "outputaudit", "spell", "idioms"],
         )
         self.assertIn("## Spelling\n\n", out)
+        self.assertIn("## Idioms\n\n", out)
 
         # All targets: no --target.
         self.assertNotIn("--target", runner.command("clang22-dev build"))
@@ -405,6 +407,7 @@ class ValidateRun(unittest.TestCase):
             "atomicaudit",
             "outputaudit",
             "spell",
+            "idioms",
         ):
             with self.subTest(step=step):
                 runner = MatrixRunner(timed_out=[step])

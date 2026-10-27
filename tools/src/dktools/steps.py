@@ -38,6 +38,8 @@ ATOMICAUDIT_TIMEOUT = 10 * 60
 OUTPUTAUDIT_TIMEOUT = 10 * 60
 #: The spelling gate reads every source and doc once.
 SPELL_TIMEOUT = 10 * 60
+#: The idiom gate is lexical, one pass over the sources.
+IDIOMS_TIMEOUT = 10 * 60
 #: ``ctest --timeout``: the limit for each test that sets no TIMEOUT
 #: property of its own (ctest's conventional default), so one hung
 #: test fails alone instead of running into CTEST_TIMEOUT.
@@ -584,6 +586,22 @@ def run_tree_gate(
         log.write_text(f"{exc}\n")
         return Step(name, log, 127)
     return run_logged(name, command(uv, tree), log, cwd=tree / "tools", timeout=timeout)
+
+
+def idioms_command(uv: str, tree: Path) -> list[str]:
+    """The idiom gate (hand-written forms of shared helpers, with the
+    tree's allow list), run with the tree's own dktools."""
+    return [
+        uv,
+        "run",
+        "--frozen",
+        "--project",
+        str(tree / "tools"),
+        "dktools",
+        "--repo",
+        str(tree),
+        "idioms",
+    ]
 
 
 def spell_command(uv: str, tree: Path) -> list[str]:
