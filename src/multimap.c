@@ -965,16 +965,11 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
      *       but we aren't upgrading maps here. */
 }
 #else
-/* The field at 'fieldOffset' of 'key''s row as an int64 counter: TRUE and
- * FALSE count as 1 and 0.  False for a missing key or a field that is not
- * an int64-range integer or boolean. */
-static bool multimapFieldCounter_(multimap *m, const databox *key,
-                                  uint32_t fieldOffset, multimapEntry *me,
+/* The field at 'fieldOffset' of the row 'me' starts (moving 'me' to it) as
+ * an int64 counter: TRUE and FALSE count as 1 and 0.  False for a field
+ * that is not an int64-range integer or boolean. */
+static bool multimapFieldCounter_(uint32_t fieldOffset, multimapEntry *me,
                                   databox *field, int64_t *value) {
-    if (!multimapGetUnderlyingEntry(m, key, me)) {
-        return false;
-    }
-
     while (fieldOffset--) {
         me->fe = flexNext(*me->map, me->fe);
     }
@@ -1003,16 +998,19 @@ static bool multimapFieldCounter_(multimap *m, const databox *key,
     }
 }
 
-bool multimapFieldIncrByIf(multimap **m, const databox *key,
-                           uint32_t fieldOffset, int64_t incrBy,
-                           int64_t *newValue, flexProceed *proceed, void *ctx) {
+/* The increment of multimapFieldIncrByIf at the row 'row' already found
+ * (a copy: the walk to the field moves it) */
+static bool multimapFieldIncrAt_(multimap **m, multimapEntry row,
+                                 uint32_t fieldOffset, int64_t incrBy,
+                                 int64_t *newValue, flexProceed *proceed,
+                                 void *ctx) {
     /* A set's values order its rows (they are part of each row's
      * identity), so none is a counter to rewrite in place */
-    multimapEntry me;
+    multimapEntry me = row;
     databox field;
     int64_t current = 0;
     if (MM_SET_REWRITE_REFUSED_(*m) ||
-        !multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)) {
+        !multimapFieldCounter_(fieldOffset, &me, &field, &current)) {
         if (newValue) {
             *newValue = 0;
         }
@@ -1041,6 +1039,38 @@ bool multimapFieldIncrByIf(multimap **m, const databox *key,
         }
 
         multimapReplaceEntry(m, &me, &result);
+    }
+
+    if (newValue) {
+        *newValue = next;
+    }
+
+    return true;
+}
+
+bool multimapFieldIncrByIf(multimap **m, const databox *key,
+                           uint32_t fieldOffset, int64_t incrBy,
+                           int64_t *newValue, flexProceed *proceed, void *ctx) {
+    multimapEntry row;
+    if (!multimapGetUnderlyingEntry(*m, key, &row)) {
+        if (newValue) {
+            *newValue = 0;
+        }
+        return false;
+    }
+
+    return multimapFieldIncrAt_(m, row, fieldOffset, incrBy, newValue, proceed,
+                                ctx);
+}
+
+bool multimapFieldIncrEntry(multimap **m, const multimapEntry *row,
+                            uint32_t fieldOffset, int64_t incrBy,
+                            int64_t *newValue) {
+    /* As multimapFieldIncrBy: '*newValue' is written only on success */
+    int64_t next;
+    if (!multimapFieldIncrAt_(m, *row, fieldOffset, incrBy, &next, nullptr,
+                              nullptr)) {
+        return false;
     }
 
     if (newValue) {
@@ -4330,6 +4360,10 @@ static int32_t multimapDeleteEntrySweep_(void) {
 
     return err;
 }
+
+/* A report slot's value before a call, so a test tells a slot the call
+ * left alone from one it wrote */
+static constexpr int64_t MM_TEST_NOT_WRITTEN = INT64_MIN;
 
 int multimapTest(int, char *[]) {
     int err = 0;
@@ -8399,6 +8433,81 @@ int multimapTest(int, char *[]) {
         }
     }
 
+    TEST("FieldIncrEntry: the increment of FieldIncrBy at a row found") {
+        /* Twin maps take the same increments, one by key and one at the
+         * row multimapGetUnderlyingEntry found; results, reports and the
+         * stored fields agree, across a boolean growing into an integer,
+         * the int64 edge and a non-counter, and a set refuses the entry
+         * form as it refuses the keyed one */
+        cleaner(multimapFree) multimap *byKey = multimapNew(3);
+        cleaner(multimapFree) multimap *byRow = multimapNew(3);
+        const databox vStr = databoxNewBytesString("text");
+        const databox vMax = databoxNewSigned(INT64_MAX - 1);
+        for (int64_t k = 0; k < 3; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox *value = k == 0   ? &DATABOX_BOX_FALSE
+                                   : k == 1 ? &vMax
+                                            : &vStr;
+            const databox *row[] = {&key, &vStr, value};
+            multimapInsert(&byKey, row);
+            multimapInsert(&byRow, row);
+        }
+
+        typedef struct mmIncrStep {
+            int64_t key;
+            int64_t by;
+        } mmIncrStep;
+        static const mmIncrStep steps[] = {{0, 1},    {0, 1}, {0, 300},
+                                           {0, -302}, {1, 1}, {1, 1},
+                                           {1, -5},   {2, 1}, {0, 0}};
+        for (size_t s = 0; s < countof(steps); s++) {
+            const databox key = databoxNewSigned(steps[s].key);
+            int64_t wantNew = MM_TEST_NOT_WRITTEN;
+            int64_t gotNew = MM_TEST_NOT_WRITTEN;
+            const bool want =
+                multimapFieldIncrBy(&byKey, &key, 2, steps[s].by, &wantNew);
+            multimapEntry row;
+            bool got = false;
+            if (multimapGetUnderlyingEntry(byRow, &key, &row)) {
+                got = multimapFieldIncrEntry(&byRow, &row, 2, steps[s].by,
+                                             &gotNew);
+            }
+
+            databox a = {};
+            databox b = {};
+            databox ignored = {};
+            databox *outA[] = {&ignored, &a};
+            databox *outB[] = {&ignored, &b};
+            multimapLookup(byKey, &key, outA);
+            multimapLookup(byRow, &key, outB);
+            if (got != want || gotNew != wantNew ||
+                databoxCompare(&a, &b) != 0 || a.type != b.type) {
+                ERR("step %zu (key %" PRId64 " by %" PRId64
+                    "): entry %d/%" PRId64 ", keyed %d/%" PRId64,
+                    s, steps[s].key, steps[s].by, got, gotNew, want, wantNew);
+            }
+        }
+
+        cleaner(multimapFree) multimap *set = multimapSetNew(2);
+        const databox one = databoxNewSigned(1);
+        const databox *setRow[] = {&one, &one};
+        multimapInsert(&set, setRow);
+        multimapEntry me;
+        multimapGetUnderlyingEntry(set, &one, &me);
+        const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
+        dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
+        bool wrote = false;
+        int64_t now = MM_TEST_NOT_WRITTEN;
+        DK_DIAG_EXPECT_REPORTS(
+            "a set by entry", 1, DK_DIAG_MULTIMAP_SET_REWRITE,
+            wrote = multimapFieldIncrEntry(&set, &me, 1, 1, &now));
+        dkDiagSetPrintMode(priorPrint);
+        if (wrote || now != MM_TEST_NOT_WRITTEN) {
+            ERR("a set's row was incremented in place by entry (or its "
+                "report was written)");
+        }
+    }
+
     TEST("a set refuses every in-place rewrite: its values order the rows") {
         /* (1, 1) (1, 5) (2, 3): raising (1, 1) to 11 in place would sit it
          * before (1, 5), and full-width searches would stop finding rows.
@@ -8419,7 +8528,7 @@ int multimapTest(int, char *[]) {
         const databox eleven = databoxNewSigned(11);
         const dkDiagPrintMode priorPrint = dkDiagGetPrintMode();
         dkDiagSetPrintMode(DK_DIAG_PRINT_NEVER);
-        int64_t now = -1;
+        int64_t now = MM_TEST_NOT_WRITTEN;
         bool wrote = false;
         multimapEntry me;
         multimapGetUnderlyingEntry(set, &one, &me);
@@ -8445,7 +8554,7 @@ int multimapTest(int, char *[]) {
         dkDiagSetPrintMode(priorPrint);
         databox got = {};
         databox *out[] = {&got};
-        if (wrote || now != -1) {
+        if (wrote || now != MM_TEST_NOT_WRITTEN) {
             ERR("a set row was rewritten in place");
         }
         if (!mapWrote || !multimapLookup(map, &one, out) || got.data.i != 11) {
@@ -8481,7 +8590,7 @@ int multimapTest(int, char *[]) {
         /* Declined: the field keeps its value and type, and the current
          * value is reported */
         mmProceedProbe_ probe = {.answer = false, .asked = 0};
-        int64_t now = -1;
+        int64_t now = MM_TEST_NOT_WRITTEN;
         databox got = {};
         databox *out[] = {&got};
         if (multimapFieldIncrByIf(&m, &kBool, 1, 1, &now, mmProceedProbe,

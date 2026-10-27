@@ -5,6 +5,15 @@
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleanerName(void *, zfree, Void);
 
+/* The forward row a reverse search last resolved an id through, kept
+ * while a retain or release searches so its count update reuses the row
+ * instead of searching the forward map again */
+typedef struct atomResolved_ {
+    multimapEntry row;
+    uint64_t id;
+    bool found;
+} atomResolved_;
+
 struct multimapAtom {
     multimap *mapAtomForward; /* ID -> String, sorted by ID */
     multimap *mapAtomReverse; /* IDs sorted by string value */
@@ -12,6 +21,10 @@ struct multimapAtom {
      * (set: permanent), so the behaviour costs no bytes.  Ids stay below
      * MULTIMAP_ATOM_ID_LIMIT. */
     uint64_t highest;
+    /* Set only for the length of one retain or release (a mutating call,
+     * so no reader runs alongside): the id lookups record into it.  NULL
+     * otherwise, when lookups write nothing. */
+    atomResolved_ *resolving;
 };
 
 #define ATOM_PERMANENT_BIT_ MULTIMAP_ATOM_ID_LIMIT
@@ -42,6 +55,7 @@ void multimapAtomInit(multimapAtom *ma) {
     ma->mapAtomReverse = multimapNewLimit(1, FLEX_CAP_LEVEL_512);
 
     ma->highest = 0;
+    ma->resolving = nullptr;
 }
 
 multimapAtom *multimapAtomNew(void) {
@@ -155,6 +169,52 @@ static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
     return atomFindOrCreateWithId_(ma, key, atomNextId_(ma), ref);
 }
 
+/* atomFindOrCreate_ with the forward row its search resolved the found
+ * id through recorded in 'resolved' */
+static bool atomFindOrCreateResolved_(multimapAtom *ma, const databox *key,
+                                      databox *ref, atomResolved_ *resolved) {
+    *resolved = (atomResolved_){};
+    ma->resolving = resolved;
+    const bool existed = atomFindOrCreate_(ma, key, ref);
+    ma->resolving = nullptr;
+    return existed;
+}
+
+/* Add 'delta' to the stored count of the atom 'ref' and return the result
+ * (multimapFieldIncr's report).  A reusing table only: a permanent one
+ * keeps no counts.  'resolved' (may be NULL), from the search that found
+ * 'ref', gives the forward row when it is that atom's: the update then
+ * needs no search of its own. */
+static int64_t atomCountAdd_(multimapAtom *ma, const databox *ref,
+                             const atomResolved_ *resolved,
+                             const int64_t delta) {
+    assert(!multimapAtomIsPermanent(ma));
+    int64_t next;
+    if (resolved && resolved->found && resolved->id == ref->data.u &&
+        multimapFieldIncrEntry(&ma->mapAtomForward, &resolved->row, 2, delta,
+                               &next)) {
+        return next;
+    }
+
+    /* No row from the search, or a refusal: the keyed form, which also
+     * reports the current count on a refusal */
+
+    return multimapFieldIncr(&ma->mapAtomForward, ref, 2, delta);
+}
+
+/* The atom of 'key' with one more reference: an existing atom's count goes
+ * up at the row its search found; a new one is created with its one
+ * reference.  True when it existed; 'ref' its reference. */
+static bool atomRetainKey_(multimapAtom *ma, const databox *key, databox *ref) {
+    atomResolved_ resolved;
+    const bool existed = atomFindOrCreateResolved_(ma, key, ref, &resolved);
+    if (existed && !multimapAtomIsPermanent(ma)) {
+        atomCountAdd_(ma, ref, &resolved, 1);
+    }
+
+    return existed;
+}
+
 void multimapAtomInsert(multimapAtom *ma, const databox *box) {
     abstractInsert(ma, box, atomNextId_(ma));
 }
@@ -227,11 +287,7 @@ bool multimapAtomInsertIfNewConvert(multimapAtom *ma, databox *key) {
 
 bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key) {
     databox ref = {};
-    const bool existed = atomFindOrCreate_(ma, key, &ref);
-    if (existed) {
-        /* Increase reference count automatically since is also a checkout */
-        multimapAtomRetainByRef(ma, &ref);
-    }
+    const bool existed = atomRetainKey_(ma, key, &ref); /* a checkout */
 
     *key = ref;
     key->created = !existed;
@@ -263,6 +319,32 @@ void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
     result->refcount = count.data.u;
 }
 
+/* multimapLookup of the forward row of 'ref' into 'elements' (value,
+ * count).  While a retain or release searches, the same one search
+ * records the row it found in 'resolving', decoding the elements the
+ * way multimapLookup does. */
+static bool atomForwardLookup_(const multimapAtom *ma, const databox *ref,
+                               databox *elements[2]) {
+    if (!ma->resolving) {
+        return multimapLookup(ma->mapAtomForward, ref, elements);
+    }
+
+    multimapEntry row;
+    if (!multimapGetUnderlyingEntry(ma->mapAtomForward, ref, &row)) {
+        return false;
+    }
+
+    flexEntry *fe = row.fe;
+    for (size_t i = 0; i < 2; i++) {
+        fe = flexNext(*row.map, fe);
+        flexGetByType(fe, elements[i]);
+    }
+
+    *ma->resolving =
+        (atomResolved_){.row = row, .id = ref->data.u, .found = true};
+    return true;
+}
+
 void multimapAtomLookupConvert(const multimapAtom *ma, databox *box) {
     /* The reference is copied out first so the lookup key is never the
      * box being decoded into. */
@@ -273,7 +355,7 @@ void multimapAtomLookupConvert(const multimapAtom *ma, databox *box) {
     /* A plain databox can't hold a 96/128-bit value: report it type-only
      * rather than write it through the reference id in the payload. */
     box->big = false;
-    if (!multimapLookup(ma->mapAtomForward, &ref, elements)) {
+    if (!atomForwardLookup_(ma, &ref, elements)) {
         *box = ref;
     }
 }
@@ -288,7 +370,7 @@ void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box) {
      * a wide value has somewhere to land. */
     *out = (databox){};
     DATABOX_BIG_INIT(box);
-    if (multimapLookup(ma->mapAtomForward, &ref, elements)) {
+    if (atomForwardLookup_(ma, &ref, elements)) {
         box->big = box->type == DATABOX_SIGNED_128 ||
                    box->type == DATABOX_UNSIGNED_128;
     } else {
@@ -325,20 +407,11 @@ bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef) {
  * ==================================================================== */
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef) {
     assert(foundRef->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL);
-#if 0
-    databox kkey;
-    databox count;
-
-    databox *gots[2] = {&kkey, &count};
-
-    assert(multimapLookup(ma->mapAtomForward, foundRef, gots));
-    assert(multimapExistsWithReference(ma->mapAtomReverse, &kkey, &count, ma));
-#endif
     if (multimapAtomIsPermanent(ma)) {
         return; /* no count is kept: the atom lives until Delete or Free */
     }
 
-    multimapFieldIncr(&ma->mapAtomForward, foundRef, 2, 1);
+    atomCountAdd_(ma, foundRef, nullptr, 1);
 }
 
 void multimapAtomRetainById(multimapAtom *ma, const uint64_t id) {
@@ -347,21 +420,15 @@ void multimapAtomRetainById(multimapAtom *ma, const uint64_t id) {
 }
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key) {
-    /* A new atom is created with its one reference */
     databox ref = {};
-    if (atomFindOrCreate_(ma, key, &ref)) {
-        multimapAtomRetainByRef(ma, &ref);
-    }
+    atomRetainKey_(ma, key, &ref);
 }
 
 void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
     /* Zeroed: a reference id decodes narrow and leaves the flag bits as
      * they were, and this box is handed back to the caller whole. */
     databox ref = {};
-    if (atomFindOrCreate_(ma, key, &ref)) {
-        multimapAtomRetainByRef(ma, &ref);
-    }
-
+    atomRetainKey_(ma, key, &ref);
     *key = ref;
 }
 
@@ -420,7 +487,8 @@ static void atomDeleteKnown(multimapAtom *ma, multimapEntry *reverseEntry,
  * by the caller. */
 DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
                                           const databox *foundRef,
-                                          multimapEntry *reverseEntry) {
+                                          multimapEntry *reverseEntry,
+                                          const atomResolved_ *resolved) {
     /* Decrement refcount first, then delete if it goes negative.
      * We use 0-based internal refcounts for memory efficiency:
      * Internal 0 = 1 ref, 1 = 2 refs, etc. (DATABOX_FALSE = 1 byte vs 3 bytes)
@@ -429,8 +497,7 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
         return false; /* permanent atoms live until Delete or Free */
     }
 
-    const int64_t checkedOut =
-        multimapFieldIncr(&ma->mapAtomForward, foundRef, 2, -1);
+    const int64_t checkedOut = atomCountAdd_(ma, foundRef, resolved, -1);
 
     /* Internal 0-based: goes negative when last reference released */
     if (checkedOut < 0) {
@@ -449,17 +516,23 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
 }
 
 bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
-    return conformRefcountDecr(ma, foundRef, nullptr);
+    return conformRefcountDecr(ma, foundRef, nullptr, nullptr);
 }
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
-    /* The reverse row found here is the one a last release deletes */
+    /* The reverse row found here is the one a last release deletes, and
+     * the forward row its search resolved the id through takes the
+     * count update */
     multimapEntry me = {};
-    if (multimapGetUnderlyingEntryWithReference(ma->mapAtomReverse, key, &me,
-                                                ma)) {
+    atomResolved_ resolved = {};
+    ma->resolving = &resolved;
+    const bool found = multimapGetUnderlyingEntryWithReference(
+        ma->mapAtomReverse, key, &me, ma);
+    ma->resolving = nullptr;
+    if (found) {
         databox foundRef = {};
         flexGetByType(me.fe, &foundRef);
-        return conformRefcountDecr(ma, &foundRef, &me);
+        return conformRefcountDecr(ma, &foundRef, &me, &resolved);
     }
 
     /* else, releasing something we don't have is an error */
@@ -790,7 +863,7 @@ static bool multimapAtomPersistApplyOp_(void *structure, persistOp op,
         }
 
         if (b.type == DATABOX_SIGNED_64 && b.data.i64 == -1) {
-            conformRefcountDecr(ma, &ref, nullptr);
+            conformRefcountDecr(ma, &ref, nullptr, nullptr);
             return true;
         }
 
@@ -897,6 +970,50 @@ static bool atomTestIsCleanRef(const databox *box, const uint64_t id) {
     return box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
            box->data.u == id && !box->big && !box->allocated;
 }
+
+/* The key of test atom 'i', written into 'buf' */
+static databox atomTestKey_(char *buf, size_t cap, int32_t i) {
+    snprintf(buf, cap, "atom-value-%06" PRId32, i);
+    return databoxNewBytesString(buf);
+}
+
+/* What a test atom's stored count reads as */
+typedef enum atomTestRefs {
+    ATOM_TEST_REFS_READ = 0,      /* '*refs' holds its references (0: none) */
+    ATOM_TEST_REFS_NOT_COUNT = 1, /* the count field is not an integer */
+} atomTestRefs;
+
+/* The references test atom 'i' holds, into '*refs': 0 when there is no
+ * such atom, else the stored 0-based count plus one */
+static atomTestRefs atomTestStored_(const multimapAtom *ma, char *buf,
+                                    size_t cap, int32_t i, int64_t *refs) {
+    const databox key = atomTestKey_(buf, cap, i);
+    databox ref = {};
+    *refs = 0;
+    if (!multimapAtomLookupReference(ma, &key, &ref)) {
+        return ATOM_TEST_REFS_READ;
+    }
+
+    databox count = {};
+    multimapAtomLookupRefcount(ma, &ref, &count);
+    switch (count.type) {
+    case DATABOX_FALSE:
+        *refs = 1;
+        return ATOM_TEST_REFS_READ;
+    case DATABOX_TRUE:
+        *refs = 2;
+        return ATOM_TEST_REFS_READ;
+    case DATABOX_SIGNED_64:
+        *refs = count.data.i64 + 1;
+        return ATOM_TEST_REFS_READ;
+    case DATABOX_UNSIGNED_64:
+        *refs = (int64_t)count.data.u64 + 1;
+        return ATOM_TEST_REFS_READ;
+    default:
+        return ATOM_TEST_REFS_NOT_COUNT;
+    }
+}
+
 int multimapAtomTest(int, char *[]) {
     int err = 0;
 
@@ -925,7 +1042,7 @@ int multimapAtomTest(int, char *[]) {
         }
 
         const size_t forwardLen = multimapCount(ma->mapAtomForward);
-        const size_t reverseLen = multimapCount(ma->mapAtomForward);
+        const size_t reverseLen = multimapCount(ma->mapAtomReverse);
 
         multimapAtomRepr(ma);
 
@@ -2668,6 +2785,116 @@ int multimapAtomTest(int, char *[]) {
                  databoxLen(&back) != strlen(name) ||
                  memcmp(databoxCBytes(&back), name, strlen(name)) != 0)) {
                 ERR("%s's reference no longer resolves to it", name);
+            }
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("retains and releases by key count at the row the search found") {
+        /* Retain and release by key update the count at the forward row
+         * their reverse search resolved; by id they search.  A replayable
+         * mix of all six over enough atoms for both maps to reach the Full
+         * tier, against an oracle of each atom's references (0: no atom),
+         * checked for the touched atom after every operation and for all
+         * of them every 1000 */
+        typedef enum atomTestOp {
+            ATOM_TEST_OP_INTERN_RETAIN = 0,
+            ATOM_TEST_OP_RETAIN,
+            ATOM_TEST_OP_RETAIN_CONVERT,
+            ATOM_TEST_OP_RELEASE,
+            ATOM_TEST_OP_RELEASE_BY_ID,
+            ATOM_TEST_OP_RETAIN_BY_ID,
+            ATOM_TEST_OP_COUNT
+        } atomTestOp;
+
+        constexpr int32_t atoms = 2000;
+        constexpr int32_t ops = 20000;
+        int64_t oracle[atoms] = {};
+
+        multimapAtom *ma = multimapAtomNew();
+        uint64_t rng = 0xA70C0;
+        char name[32];
+        for (int32_t op = 0; op < ops; op++) {
+            const int32_t i = (int32_t)dkSplitmix64Bounded(&rng, atoms);
+            const atomTestOp kind =
+                (atomTestOp)dkSplitmix64Bounded(&rng, ATOM_TEST_OP_COUNT);
+            databox key = atomTestKey_(name, sizeof(name), i);
+            databox ref = {};
+            const bool present = oracle[i] > 0;
+            if (present) {
+                multimapAtomLookupReference(ma, &key, &ref);
+            }
+
+            bool existed = present;
+            switch (kind) {
+            case ATOM_TEST_OP_INTERN_RETAIN:
+                existed = multimapAtomInsertIfNewConvertAndRetain(ma, &key);
+                oracle[i]++;
+                break;
+            case ATOM_TEST_OP_RETAIN:
+                multimapAtomRetain(ma, &key);
+                oracle[i]++;
+                break;
+            case ATOM_TEST_OP_RETAIN_CONVERT:
+                multimapAtomRetainConvert(ma, &key);
+                oracle[i]++;
+                break;
+            case ATOM_TEST_OP_RELEASE:
+                if (present) {
+                    const bool deleted = multimapAtomRelease(ma, &key);
+                    oracle[i]--;
+                    if (deleted != (oracle[i] == 0)) {
+                        ERR("op %" PRId32 ": release of %s deleted %d", op,
+                            name, deleted);
+                    }
+                }
+                break;
+            case ATOM_TEST_OP_RELEASE_BY_ID:
+                if (present) {
+                    multimapAtomReleaseById(ma, &ref);
+                    oracle[i]--;
+                }
+                break;
+            case ATOM_TEST_OP_RETAIN_BY_ID:
+                if (present) {
+                    multimapAtomRetainById(ma, ref.data.u);
+                    oracle[i]++;
+                }
+                break;
+            case ATOM_TEST_OP_COUNT:
+                break;
+            }
+
+            if (existed != present || ma->resolving) {
+                ERR("op %" PRId32 " (kind %d): existed %d for an atom %s, "
+                    "memo %s",
+                    op, (int)kind, existed, present ? "present" : "absent",
+                    ma->resolving ? "left set" : "clear");
+                break;
+            }
+
+            int64_t refs = 0;
+            if (atomTestStored_(ma, name, sizeof(name), i, &refs) !=
+                    ATOM_TEST_REFS_READ ||
+                refs != oracle[i]) {
+                ERR("op %" PRId32 " (kind %d): %s holds %" PRId64
+                    " references, want %" PRId64,
+                    op, (int)kind, name, refs, oracle[i]);
+                break;
+            }
+
+            if (op % 1000 == 999) {
+                for (int32_t a = 0; a < atoms; a++) {
+                    if (atomTestStored_(ma, name, sizeof(name), a, &refs) !=
+                            ATOM_TEST_REFS_READ ||
+                        refs != oracle[a]) {
+                        ERR("after op %" PRId32 ": %s holds %" PRId64
+                            " references, want %" PRId64,
+                            op, name, refs, oracle[a]);
+                        break;
+                    }
+                }
             }
         }
 

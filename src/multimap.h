@@ -238,6 +238,13 @@ bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
 bool multimapFieldIncrByIf(multimap **m, const databox *key,
                            uint32_t fieldOffset, int64_t incrBy,
                            int64_t *newValue, flexProceed *proceed, void *ctx);
+/* multimapFieldIncrBy at the row 'row' already found (by
+ * multimapGetUnderlyingEntry, with no change to the map since): the
+ * increment without a second search for the key.  Same results and
+ * refusals ('*newValue', may be NULL, written only on success). */
+bool multimapFieldIncrEntry(multimap **m, const multimapEntry *row,
+                            uint32_t fieldOffset, int64_t incrBy,
+                            int64_t *newValue);
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 

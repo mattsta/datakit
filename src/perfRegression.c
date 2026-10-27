@@ -599,6 +599,7 @@ static constexpr unsigned PERF_CONTAINER_N = 100'000u;
 static constexpr unsigned PERF_CONTAINER_KEY = 16u;
 
 defcleanerName(char *, zfree, PerfKeys);
+defcleanerName(uint64_t *, zfree, PerfIds);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
 defcleaner(multidict *, multidictFree);
 defcleaner(multiarray *, multiarrayFree);
@@ -1719,6 +1720,26 @@ static void benchMultimapAtom(void) {
         sink += multimapAtomInsertIfNewConvertAndRetain(ma, &k);
     }
     emitRow("multimapAtom", "retain", 0, n, timeUtilMonotonicSec() - t0);
+
+    /* The count update alone, by reference: the part of a retain after the
+     * value is found (then undone by reference, untimed) */
+    cleanerName(zfree, PerfIds) uint64_t *ids = zcalloc(n, sizeof(uint64_t));
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        sink += multimapAtomInsertIfNewConvert(ma, &k);
+        ids[i] = k.data.u;
+    }
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        multimapAtomRetainById(ma, ids[i]);
+    }
+    emitRow("multimapAtom", "retainById", 0, n, timeUtilMonotonicSec() - t0);
+    for (uint32_t i = 0; i < n; i++) {
+        const databox ref = {.data.u = ids[i],
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        sink += multimapAtomReleaseById(ma, &ref);
+    }
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
