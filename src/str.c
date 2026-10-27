@@ -783,7 +783,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             dkLcg64Next(&rng);
             const size_t count = (size_t)((rng >> 33) % 12);
             for (size_t k = 0; k < count; k++) {
-                rng = rng * 6364136223846793005ULL + 1;
+                dkLcg64Next(&rng);
                 const size_t p = (size_t)((rng >> 40) % (countof(pieces)));
                 memcpy(s + L, pieces[p].bytes, pieces[p].len);
                 L += pieces[p].len;
@@ -1089,7 +1089,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* Random test for larger values */
         uint64_t rngState = 0x12345678;
         for (int i = 0; i < 100'000; i++) {
-            rngState = rngState * 6364136223846793005ULL + 1;
+            dkLcg64Next(&rngState);
             uint32_t val = (uint32_t)(rngState >> 32) % 1'000'000'000;
 
             char buf[10] = {};

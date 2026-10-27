@@ -744,7 +744,7 @@ int aesGcmTest(int, char *[]) {
                                               sizeof(pt), sizeof(aad)};
                     for (size_t f = 0; f < 4; f++) {
                         for (size_t i = 0; i < fillLen[f]; i++) {
-                            rng = rng * 6364136223846793005ULL + 1;
+                            dkLcg64Next(&rng);
                             fill[f][i] = (uint8_t)(rng >> 56);
                         }
                     }

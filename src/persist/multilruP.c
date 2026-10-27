@@ -1384,7 +1384,7 @@ static int test_multilruP_demotions_replay(int, char *[]) {
             live[liveCount++] = h;
         }
         for (int p = 0; p < 3 && liveCount; p++) {
-            rng = rng * 6364136223846793005ULL + 1;
+            dkLcg64Next(&rng);
             PTEST_LOGGED(
                 multilruIncreaseP(mlru, live[(rng >> 33) % liveCount]));
         }

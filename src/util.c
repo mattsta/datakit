@@ -615,11 +615,11 @@ int utilTest(int, char **) {
                 const int sl = (int)((rng >> 45) % 9);
                 const int nocase = (int)((rng >> 60) & 1);
                 for (int i = 0; i < pl; i++) {
-                    rng = rng * 6364136223846793005ULL + 1;
+                    dkLcg64Next(&rng);
                     p[i] = palpha[(rng >> 40) % (sizeof(palpha) - 1)];
                 }
                 for (int i = 0; i < sl; i++) {
-                    rng = rng * 6364136223846793005ULL + 1;
+                    dkLcg64Next(&rng);
                     s[i] = salpha[(rng >> 40) % (sizeof(salpha) - 1)];
                 }
                 if (stringmatchlen(p, pl, s, sl, nocase) !=
@@ -947,7 +947,7 @@ int utilTest(int, char **) {
         /* Random stress test */
         uint64_t rngState = 0xDEADBEEF12345678ULL;
         for (int i = 0; i < 100'000; i++) {
-            rngState = rngState * 6364136223846793005ULL + 1;
+            dkLcg64Next(&rngState);
             uint64_t x = rngState;
 
             /* Also test smaller values more frequently */
