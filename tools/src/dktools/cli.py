@@ -20,6 +20,7 @@ from . import (
     defconst,
     dropargs,
     dropinclude,
+    dupfuncs,
     enumconst,
     formatting,
     fusionscan,
@@ -318,6 +319,14 @@ def main(argv: list[str] | None = None) -> int:
     da.add_argument("--arity", type=int, required=True, help="arguments each call has")
     da.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     da.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    df = sub.add_parser(
+        "dupfuncs",
+        help="list function bodies defined at two or more places "
+        "(candidates for one shared helper)",
+    )
+    df.add_argument("--min-tokens", type=int, default=40, help="smallest body reported")
+    df.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
 
     tb = sub.add_parser(
         "testbytes",
@@ -1156,6 +1165,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         return dropargs.run(
             args.repo, args.name, args.keep, args.arity, tuple(args.paths), args.dry_run
         )
+
+    if args.command == "dupfuncs":
+        return dupfuncs.run(args.repo, tuple(args.paths), args.min_tokens)
 
     if args.command == "testbytes":
         return testbytes.run(args.repo, tuple(args.paths), args.dry_run)

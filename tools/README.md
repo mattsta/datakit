@@ -749,6 +749,21 @@ uv run --project tools dktools dropargs NAME --keep 0,2 --arity 5 [--dry-run] [F
   a call of NAME nested in another's arguments is left as written.
 - Files default to the tracked `src/**/*.c` and `*.h`.
 
+## dupfuncs — function bodies written out more than once
+
+```sh
+uv run --project tools dktools dupfuncs [--min-tokens N] [FILE ...]
+```
+
+- Finds each file-scope function definition and compares bodies as
+  tokens: comments and layout do not count, literals do.
+- Lists every body of at least `--min-tokens` tokens (default 40) that
+  is defined at two or more places, largest first, with each place's
+  `path:line: name`. Each group is a candidate for one shared helper.
+- Preprocessor lines are not code here, so functions a macro defines are
+  not seen. Files default to the tracked `src/**/*.c` and `*.h`. Exits
+  0 (the report is advice), or 2 for a missing file.
+
 ## testbytes — byte comparisons in tests as `TEST_BYTES`
 
 ```sh
