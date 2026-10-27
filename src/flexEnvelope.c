@@ -190,7 +190,7 @@ static_assert(2 * sizeof(blake3Hasher) + 2 * BLAKE3_BLOCK_LEN <=
 static_assert(12 <= FLEX_ENV_MAX_NONCE_LEN,
               "ChaCha20-Poly1305 nonce exceeds wire slot");
 
-static const flexEnvelopeAlgoDesc *findAlgo(uint16_t algo) {
+static const flexEnvelopeAlgoDesc *findAlgo(flexEnvelopeAlgo algo) {
     const size_t n = countof(kAlgoDescs);
     for (size_t i = 0; i < n; i++) {
         if (kAlgoDescs[i].algo == (flexEnvelopeAlgo)algo) {
@@ -1809,7 +1809,7 @@ cleanup:
 /* Initialize the per-algorithm running-hash state inside the streaming
  * context union. `key`/`key_len` apply to keyed algorithms only.
  * Returns true on success. */
-static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
+static bool streamHashInit(flexEnvelopeAlgo algo, void *u_state, hmacCtx *hmac,
                            uint8_t *hmac_storage, size_t hmac_storage_cap,
                            const uint8_t *key, size_t key_len,
                            const hmacKey *prepared_key) {
@@ -1896,8 +1896,8 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
 }
 
 /* Feed bytes into the running hash for the active algorithm. */
-static bool streamHashUpdate(uint16_t algo, void *u_state, hmacCtx *hmac,
-                             const uint8_t *data, size_t len) {
+static bool streamHashUpdate(flexEnvelopeAlgo algo, void *u_state,
+                             hmacCtx *hmac, const uint8_t *data, size_t len) {
     if (len == 0) {
         return true;
     }
@@ -1932,7 +1932,7 @@ static bool streamHashUpdate(uint16_t algo, void *u_state, hmacCtx *hmac,
 }
 
 /* Finalize the running hash and write digest bytes. */
-static bool streamHashFinal(uint16_t algo, void *u_state, hmacCtx *hmac,
+static bool streamHashFinal(flexEnvelopeAlgo algo, void *u_state, hmacCtx *hmac,
                             uint8_t *digest_out, size_t digest_len) {
     switch ((flexEnvelopeAlgo)algo) {
     case FLEX_ENV_ALGO_NONE:

@@ -63,7 +63,8 @@ extern const struct dkFormatSpec flexEnvelopeFormat;
  * Adding an algorithm: append a new enum value, add a descriptor in
  * flexEnvelope.c's static table, wire the hash function. No wire-format
  * bump needed. */
-typedef enum flexEnvelopeAlgo {
+/* Two bytes: the header and stream structs store it in a 16-bit field */
+typedef enum flexEnvelopeAlgo : uint16_t {
     FLEX_ENV_ALGO_NONE = 0, /* 0-byte digest; test-only */
 
     /* Checksum class (1..127) — integrity only, no key */
@@ -214,7 +215,7 @@ typedef struct flexEnvelopeHeader {
     uint64_t header_size;
     uint32_t flags;
     uint32_t key_id; /* valid iff (flags & FLEX_ENV_FLAG_KEYID_PRESENT) */
-    uint16_t algo;
+    flexEnvelopeAlgo algo;
     uint8_t version;
     /* GUARANTEED zero — populated to {0,0,0} on every successful Peek /
      * Verify return. Defense-in-depth assertion lives inside
@@ -660,7 +661,7 @@ typedef struct flexEnvelopeWrapStream {
     hmacCtx hmac;
     uint64_t payload_len_declared;
     uint64_t payload_bytes_seen;
-    uint16_t algo;
+    flexEnvelopeAlgo algo;
     uint8_t digest_len;
     flexEnvelopeStreamPhase phase;
     uint8_t _pad[4];
@@ -688,7 +689,7 @@ typedef struct flexEnvelopeVerifyStream {
     uint64_t payload_len_declared;
     uint64_t payload_bytes_seen;
     uint32_t opts;
-    uint16_t algo;
+    flexEnvelopeAlgo algo;
     uint8_t digest_len;
     flexEnvelopeStreamPhase phase;
     /* Wire digest, captured byte-by-byte from the trailing portion of
