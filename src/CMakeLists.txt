@@ -370,6 +370,12 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     # implicit seq_cst forms the lexical audit cannot see, such as `++`
     # or `=` on an _Atomic object.
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Watomic-implicit-seq-cst")
+else()
+    # An else-if repeating an earlier condition, if and else arms that
+    # are the same code, and && / || that cannot mean what they say:
+    # each is a copy-paste slip or dead logic
+    set(CMAKE_C_FLAGS
+        "${CMAKE_C_FLAGS} -Wduplicated-cond -Wduplicated-branches -Wlogical-op")
 endif()
 
 # ============================================================================

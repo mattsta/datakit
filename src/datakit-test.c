@@ -9189,7 +9189,7 @@ static int testMailboxRotateAnnounceStructAwareFuzzTest(int, char *[]) {
                  * HMAC_KEY_ID_INVALID).  We make no claim about the
                  * specific value — many bit flips produce a different
                  * but valid u32. */
-                if (got == HMAC_KEY_ID_INVALID || got == 0u) {
+                if (got == HMAC_KEY_ID_INVALID) {
                     sweep_unexpected++;
                     printf("testMailboxRotateAnnounceStructAwareFuzz: "
                            "bpos=%zu bit=%u parsed-but-zero id\n",
@@ -12029,13 +12029,8 @@ static int dkTestEnvelopeStructAwareFuzzTest(int, char *[]) {
         const bool is_keyed = FLEX_ENV_ALGO_IS_KEYED(algo) || is_aead;
         size_t key_len = 0;
         if (is_keyed) {
-            if (algo == FLEX_ENV_ALGO_AEAD_AES128_GCM) {
-                key_len = 16;
-            } else if (algo == FLEX_ENV_ALGO_AEAD_AES256_GCM) {
-                key_len = 32;
-            } else {
-                key_len = 32;
-            }
+            /* AES-128 takes a 16-byte key, every other keyed algo 32 */
+            key_len = algo == FLEX_ENV_ALGO_AEAD_AES128_GCM ? 16 : 32;
         }
 
         for (size_t pi = 0; pi < kNumPayloadSizes; pi++) {
