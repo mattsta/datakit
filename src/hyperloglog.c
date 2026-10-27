@@ -671,16 +671,17 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
  * '*inHll' is the sketch; it is taken by reference because the update may
  * enlarge (reallocate) it.
  *
- * On success, the function returns 1 if the cardinality changed, or 0
- * if the register for this element was not updated.
- * On error (if the representation is invalid) -1 is returned.
+ * HYPERLOGLOG_ADD_CHANGED when the register grew, HYPERLOGLOG_ADD_UNCHANGED
+ * when it already held 'count' or more, HYPERLOGLOG_ADD_CORRUPT for an
+ * invalid representation.
  *
  * As a side effect the function may promote the HLL representation from
  * sparse to dense: this happens when a register requires to be set to a value
  * not representable with the sparse representation, or when the resulting
- * size would be greater than server.hyperloglogSparseMaxBytes. */
-DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
-                                       uint_fast8_t count) {
+ * size would be greater than serverSparseMaxBytes. */
+DK_STATIC hyperloglogAddResult hyperloglogSparseSet(hyperloglog **inHll,
+                                                    int64_t index,
+                                                    uint_fast8_t count) {
     hyperloglog *h = *inHll;
     mdsc *hmdsc = toMDSC(h);
     hyperloglogHeader *hdr;
@@ -743,7 +744,7 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
         first += span;
     }
     if (span == 0) {
-        return -1; /* Invalid format. */
+        return HYPERLOGLOG_ADD_CORRUPT; /* Invalid format. */
     }
 
     next = HLL_SPARSE_IS_XZERO(p) ? p + 2 : p + 1;
@@ -781,7 +782,7 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
      *
      * A) If it is a VAL opcode already set to a value >= our 'count'
      *    no update is needed, regardless of the VAL run-length field.
-     *    In this case the add returns 0 since no changes are performed.
+     *    In this case the add returns HYPERLOGLOG_ADD_UNCHANGED.
      *
      * B) If it is a VAL opcode with len = 1 (representing only our
      *    register) and the value is less than 'count', we just update it
@@ -790,7 +791,7 @@ DK_STATIC int32_t hyperloglogSparseSet(hyperloglog **inHll, int64_t index,
         oldcount = HLL_SPARSE_VAL_VALUE(p);
         /* Case A. */
         if (oldcount >= count) {
-            return 0;
+            return HYPERLOGLOG_ADD_UNCHANGED;
         }
 
         /* Case B. */
@@ -933,7 +934,7 @@ updated:
     hdr = toHLL(hmdsc);
     HLL_INVALIDATE_CACHE(hdr);
     *inHll = hdr;
-    return 1;
+    return HYPERLOGLOG_ADD_CHANGED;
 
 promote: /* Promote to dense representation. */
     if (hyperloglogSparseToDense(toHLLIn(hmdsc)) == false) {
@@ -943,23 +944,24 @@ promote: /* Promote to dense representation. */
     hdr = toHLL(hmdsc);
     *inHll = hdr;
 
-    /* We need to call hyperloglogDenseAdd() to perform the operation after the
-     * conversion. However the result must be 1, since if we need to
-     * convert from sparse to dense a register requires to be updated: the
-     * add always reports a change when it converted the sketch. */
-    const int32_t denseRetval =
+    /* The dense set after the conversion always changes the register: a
+     * conversion happens only when this register must grow past what
+     * the sparse form holds. */
+    [[maybe_unused]] const bool grew =
         hyperloglogDenseSet(hdr->registers, index, count);
-    assert(denseRetval == 1);
-    return denseRetval;
+    assert(grew);
+    return HYPERLOGLOG_ADD_CHANGED;
 }
 
 /* Low level function to set the sparse HLL register at 'index' to the
  * specified value if the current value is smaller than 'count'.
  *
- * This function is actually a wrapper for hllSparseSet(), it only performs
- * the hashing of the element to obtain the index and zeros run length. */
-DK_STATIC int32_t hyperloglogSparseAdd(hyperloglog **inHll, const void *data_,
-                                       size_t len) {
+ * This function is actually a wrapper for hyperloglogSparseSet(), it only
+ * performs the hashing of the element to obtain the index and zeros run
+ * length. */
+DK_STATIC hyperloglogAddResult hyperloglogSparseAdd(hyperloglog **inHll,
+                                                    const void *data_,
+                                                    size_t len) {
     int64_t index;
     const uint_fast8_t count = hyperloglogPatLen(data_, len, &index);
 
@@ -1241,14 +1243,15 @@ uint64_t hyperloglogCount(hyperloglog *hdr, bool *invalid) {
 /* Call hyperloglogDenseAdd() or hyperloglogSparseAdd() according to the HLL
  * encoding.  An add that changes a register invalidates the cached
  * cardinality (the sparse path does so itself). */
-int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size) {
+hyperloglogAddResult hyperloglogAdd(hyperloglog **inHll, const void *data,
+                                    size_t size) {
     hyperloglogHeader *hdr = *inHll;
     if (hdr->encoding == HLL_DENSE) {
-        const int changed = hyperloglogDenseAdd(hdr->registers, data, size);
-        if (changed > 0) {
-            HLL_INVALIDATE_CACHE(hdr);
+        if (!hyperloglogDenseAdd(hdr->registers, data, size)) {
+            return HYPERLOGLOG_ADD_UNCHANGED;
         }
-        return changed;
+        HLL_INVALIDATE_CACHE(hdr);
+        return HYPERLOGLOG_ADD_CHANGED;
     }
 
     /* else, is sparse */
@@ -1259,11 +1262,12 @@ int64_t hyperloglogAddMany(hyperloglog **inHll, const void *const *data,
                            const size_t *lens, size_t n) {
     int64_t updated = 0;
     for (size_t i = 0; i < n; i++) {
-        const int added = hyperloglogAdd(inHll, data[i], lens[i]);
-        if (added < 0) {
+        const hyperloglogAddResult added =
+            hyperloglogAdd(inHll, data[i], lens[i]);
+        if (added == HYPERLOGLOG_ADD_CORRUPT) {
             return -1;
         }
-        updated += added;
+        updated += added == HYPERLOGLOG_ADD_CHANGED;
     }
     return updated;
 }
@@ -2027,11 +2031,12 @@ approximationDone:
             }
             bool invalid = false;
             const uint64_t three = hyperloglogCount(sk, &invalid);
-            const int repeat = hyperloglogAdd(&sk, "alpha", 5);
+            const hyperloglogAddResult repeat = hyperloglogAdd(&sk, "alpha", 5);
             const uint64_t stillThree = hyperloglogCount(sk, &invalid);
-            const int fresh = hyperloglogAdd(&sk, "delta", 5);
+            const hyperloglogAddResult fresh = hyperloglogAdd(&sk, "delta", 5);
             const uint64_t four = hyperloglogCount(sk, &invalid);
-            if (three != 3 || repeat != 0 || stillThree != 3 || fresh != 1 ||
+            if (three != 3 || repeat != HYPERLOGLOG_ADD_UNCHANGED ||
+                stillThree != 3 || fresh != HYPERLOGLOG_ADD_CHANGED ||
                 four != 4 || invalid) {
                 ERR("%s cache: %" PRIu64 ", repeat %d, %" PRIu64
                     ", fresh %d, %" PRIu64,

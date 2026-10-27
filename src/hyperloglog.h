@@ -16,10 +16,18 @@ bool hyperloglogDetect(hyperloglog *h);
  * cached.  0 with *invalid set (when given) for a corrupt sketch. */
 uint64_t hyperloglogCount(hyperloglog *hdr, bool *invalid);
 
-/* Add one element: 1 if a register changed (the cached count is then
- * invalid), 0 if it was already represented, -1 for a corrupt sketch.
- * '*inHll' may move (sparse growth, promotion to dense). */
-int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size);
+/* What one add did to a sketch */
+typedef enum hyperloglogAddResult {
+    HYPERLOGLOG_ADD_CORRUPT = -1,  /* the sketch is corrupt: nothing changed */
+    HYPERLOGLOG_ADD_UNCHANGED = 0, /* the element was already represented */
+    HYPERLOGLOG_ADD_CHANGED = 1,   /* a register grew: the cached count is
+                                      invalid */
+} hyperloglogAddResult;
+
+/* Add one element.  '*inHll' may move (sparse growth, promotion to
+ * dense). */
+hyperloglogAddResult hyperloglogAdd(hyperloglog **inHll, const void *data,
+                                    size_t size);
 
 /* Add 'n' elements (data[i], lens[i]) in one call: how many changed a
  * register, or -1 at the first corrupt-sketch report (the adds stop there).

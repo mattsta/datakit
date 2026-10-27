@@ -193,9 +193,12 @@ hyperloglogFree(hll);
 ```c
 /* Add element to HyperLogLog.
  * Takes hyperloglog ** because a sparse HLL may grow or promote.
- * Returns: 1 if a register changed, 0 if no change, -1 on error
+ * Returns HYPERLOGLOG_ADD_CHANGED if a register changed,
+ * HYPERLOGLOG_ADD_UNCHANGED if not, HYPERLOGLOG_ADD_CORRUPT for a corrupt
+ * sketch
  */
-int hyperloglogAdd(hyperloglog **hh, const void *data, size_t size);
+hyperloglogAddResult hyperloglogAdd(hyperloglog **hh, const void *data,
+                                    size_t size);
 
 /* Example: Adding elements */
 hyperloglog *hll = hyperloglogNew();
@@ -359,9 +362,10 @@ hyperloglogAddMany(&visitors, users, userLens, 3);
 `hyperloglogCount` writes a freshly computed estimate into the header's
 cached-cardinality field, so a "read" can dirty the object — relevant when
 deciding whether a read should trigger a persist or a cross-node write.
-`hyperloglogAdd` returns 1 when a register changed (and invalidates the
-cache), 0 for an element already represented (not an error), -1 for a
-corrupt sketch. A restored snapshot recounts once rather than trusting the
+`hyperloglogAdd` returns `HYPERLOGLOG_ADD_CHANGED` when a register changed
+(and invalidates the cache), `HYPERLOGLOG_ADD_UNCHANGED` for an element
+already represented (not an error), `HYPERLOGLOG_ADD_CORRUPT` for a corrupt
+sketch. A restored snapshot recounts once rather than trusting the
 stored cache.
 
 ## Sparse vs Dense Modes

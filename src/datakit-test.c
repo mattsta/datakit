@@ -7527,7 +7527,7 @@ static int dkTestEmptyNullInputTest(int, char *[]) {
         }
 
         cleaner(hyperloglogFree) hyperloglog *h = hyperloglogNew();
-        if (hyperloglogAdd(&h, nullptr, 0) < 0) {
+        if (hyperloglogAdd(&h, nullptr, 0) == HYPERLOGLOG_ADD_CORRUPT) {
             ERR("hyperloglogAdd refused (NULL, 0)");
         }
     }
