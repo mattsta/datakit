@@ -363,6 +363,10 @@ endif()
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     # Clang-specific warnings
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")
+    # A value read on a path that may not have set it, and loops whose
+    # variable or range cannot do what they appear to
+    set(CMAKE_C_FLAGS
+        "${CMAKE_C_FLAGS} -Wconditional-uninitialized -Wloop-analysis")
 # We know we're using computed gotos on clang and it's really okay
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-gnu-label-as-value")
     # Every atomic operation states its order (and carries a @sync tag

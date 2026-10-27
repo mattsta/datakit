@@ -2539,7 +2539,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         TEST_DESC("memmem detect newline at loopBooster %zu", loopBooster) {
             TIME_INIT;
-            void *found;
+            void *found = nullptr;
             for (size_t i = 0; i < loopBooster; i++) {
                 PERF_TIMERS_STAT_START;
                 found = memmem(newlineProcessStr, origLen, "\n", 1);
@@ -2553,7 +2553,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         TEST_DESC("strchr detect newline at loopBooster %zu", loopBooster) {
             TIME_INIT;
-            void *found;
+            void *found = nullptr;
             for (size_t i = 0; i < loopBooster; i++) {
                 PERF_TIMERS_STAT_START;
                 found = strchr(newlineProcessStr, '\n');
@@ -3046,7 +3046,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* Each pass reads the whole ~38 MB buffer; a few passes check
          * the count (perf builds can raise this to time it) */
         const size_t loopBooster = 3;
-        size_t utf8len;
+        size_t utf8len = 0;
         {
             TIME_INIT;
             for (size_t i = 0; i < loopBooster; i++) {
@@ -3079,7 +3079,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* Each pass reads the whole ~38 MB buffer; a few passes check
          * the count (perf builds can raise this to time it) */
         const size_t loopBooster = 3;
-        size_t utf8len;
+        size_t utf8len = 0;
         {
             TIME_INIT;
             for (size_t i = 0; i < loopBooster; i++) {
@@ -3318,7 +3318,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         /* Each pass reads the whole ~38 MB buffer; a few passes check
          * the count (perf builds can raise this to time it) */
         const size_t loopBooster = 3;
-        size_t utf8len;
+        size_t utf8len = 0;
         {
             TIME_INIT;
             for (size_t i = 0; i < loopBooster; i++) {
@@ -3362,7 +3362,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             /* Each pass reads the whole ~38 MB buffer; a few passes check
              * the count (perf builds can raise this to time it) */
             const size_t loopBooster = 3;
-            size_t utf8len;
+            size_t utf8len = 0;
             {
                 TIME_INIT;
                 for (size_t i = 0; i < loopBooster; i++) {

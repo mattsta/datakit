@@ -4505,7 +4505,7 @@ int ulidTest(int, char *[]) {
         /* Test extraction with SCALAR */
         printf("      SCALAR extraction:\n");
         ulidGenerateDualNsInterleaved(&g, &id);
-        uint64_t ts1, ts2;
+        uint64_t ts1 = 0, ts2 = 0;
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
             ts1 = ulidGetFirstTimestampNsInterleaved(&id);

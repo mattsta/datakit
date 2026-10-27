@@ -3372,7 +3372,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
             const uint64_t abandonBefore = ownedSeqPublishAbandonedTotal();
             dkSeqHoldCtx hold = {.seq = &sh};
             pthread_t ta;
-            pthread_t tb;
+            pthread_t tb = {};
             const bool startedA =
                 pthread_create(&ta, nullptr, dkSeqHoldWriterA_, &hold) == 0;
             /* B waits for A to be inside: start it only when A runs */
