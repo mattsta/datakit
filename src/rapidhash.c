@@ -18,7 +18,8 @@
  *     7-lane mix body the one-shot uses. */
 
 #include "rapidhash.h"
-#include "dkC23.h" /* countof, __STDC_ENDIAN_NATIVE__ */
+#include "dkC23.h"    /* countof */
+#include "dkEndian.h" /* dkLoadLe64, dkLoadLe32 */
 
 #include <string.h>
 
@@ -46,21 +47,11 @@ const uint64_t *rapidhashGetDefaultSecret(void) {
  * ============================================================ */
 
 [[gnu::always_inline]] static inline uint64_t rapidRead64(const uint8_t *p) {
-    uint64_t v;
-    memcpy(&v, p, sizeof(v));
-#if __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
-    v = __builtin_bswap64(v);
-#endif
-    return v;
+    return dkLoadLe64(p);
 }
 
 [[gnu::always_inline]] static inline uint64_t rapidRead32(const uint8_t *p) {
-    uint32_t v;
-    memcpy(&v, p, sizeof(v));
-#if __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
-    v = __builtin_bswap32(v);
-#endif
-    return (uint64_t)v;
+    return dkLoadLe32(p);
 }
 
 /* ============================================================ *

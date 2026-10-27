@@ -2,7 +2,7 @@
 #include "../deps/varint/src/varint.h"
 #include "../deps/varint/src/varintExternal.h" /* user integers */
 
-#include "conformLittleEndian.h"
+#include "dkEndian.h" /* dkLoadLe*, dkStoreLe* */
 #include "float16.h"
 
 typedef enum databoxLinearType {
@@ -127,22 +127,22 @@ DK_STATIC databoxLinearType databoxLinearEncodingDouble(double value) {
 
 DK_STATIC void databoxLinearSaveFloatHalf(uint8_t *const target,
                                           const float value) {
-    const uint16_t encoded = float16Encode(value);
-    memcpy(target, &encoded, sizeof(encoded));
-    conformToLittleEndian16(*target);
+    dkStoreLe16(target, float16Encode(value));
 }
 
 DK_STATIC void databoxLinearSaveFloat(uint8_t *const target,
                                       const float value) {
-    memcpy(target, &value, sizeof(value));
-    conformToLittleEndian32(*target);
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    dkStoreLe32(target, bits);
 }
 
 /* Store double 'value' at 'fe' */
 DK_STATIC void databoxLinearSaveDouble(uint8_t *const target,
                                        const double value) {
-    memcpy(target, &value, sizeof(value));
-    conformToLittleEndian64(*target);
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    dkStoreLe64(target, bits);
 }
 
 /* ====================================================================
@@ -272,26 +272,23 @@ static bool databoxLinearDecodeAbstract(const databoxLinearType type,
         box->data.i64 =
             SIGNED_RESTORE(box->data.i64); /* restore sign and offset */
         break;
-    case DL_REAL_16B: {
-        /* Copy buffer back to our space,
-         * bswap if necessary,
-         * decode back to usable f32 */
-        memcpy(&box->data.u16, start, 2);
-        conformToLittleEndian16(box->data.u16);
-        box->data.f32 = float16Decode(box->data.u16);
+    case DL_REAL_16B:
+        /* Decode the little-endian half back to a usable f32 */
+        box->data.f32 = float16Decode(dkLoadLe16(start));
+        box->type = DATABOX_FLOAT_32;
+        break;
+    case DL_REAL_32B: {
+        const uint32_t bits = dkLoadLe32(start);
+        memcpy(&box->data.f32, &bits, sizeof(bits));
         box->type = DATABOX_FLOAT_32;
         break;
     }
-    case DL_REAL_32B:
-        memcpy(&box->data.f32, start, sizeof(box->data.f32));
-        conformToLittleEndian32(box->data.f32);
-        box->type = DATABOX_FLOAT_32;
-        break;
-    case DL_REAL_64B:
-        memcpy(&box->data.d64, start, sizeof(box->data.d64));
-        conformToLittleEndian64(box->data.d64);
+    case DL_REAL_64B: {
+        const uint64_t bits = dkLoadLe64(start);
+        memcpy(&box->data.d64, &bits, sizeof(bits));
         box->type = DATABOX_DOUBLE_64;
         break;
+    }
     case DL_TRUE:
         box->type = DATABOX_TRUE;
         break;

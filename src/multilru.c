@@ -1,7 +1,7 @@
 #include "datakit.h"
 
 #include "cleaner.h"
-#include "conformLittleEndian.h"
+#include "dkEndian.h" /* dkLoadLe64, dkStoreLe64 */
 #include "fibbuf.h"
 #include "jebuf.h"
 #include "multilru.h"
@@ -197,39 +197,32 @@ DK_INLINE_ALWAYS uint32_t mlruLinkBits_(uint32_t w) {
     return 4 * (w - 1);
 }
 
+/* The w - 1 link bytes widened with zero bytes to a little-endian 64- or
+ * 128-bit value, and back */
 DK_INLINE_ALWAYS uint64_t mlruLinksLoad64_(const uint8_t *e, uint32_t w) {
-    uint64_t v = 0;
-    memcpy(&v, e, w - 1);
-    conformToLittleEndian64(v);
-    return v;
+    uint8_t b[8] = {};
+    memcpy(b, e, w - 1);
+    return dkLoadLe64(b);
 }
 
 DK_INLINE_ALWAYS void mlruLinksStore64_(uint8_t *e, uint32_t w, uint64_t v) {
-    conformToLittleEndian64(v);
-    memcpy(e, &v, w - 1);
-}
-
-/* The byte reverse of a 128-bit value (big-endian hosts only) */
-DK_INLINE_ALWAYS __uint128_t mlruSwap128_(__uint128_t v) {
-    return ((__uint128_t)__builtin_bswap64((uint64_t)v) << 64) |
-           __builtin_bswap64((uint64_t)(v >> 64));
+    uint8_t b[8];
+    dkStoreLe64(b, v);
+    memcpy(e, b, w - 1);
 }
 
 DK_INLINE_ALWAYS __uint128_t mlruLinksLoad128_(const uint8_t *e, uint32_t w) {
-    __uint128_t v = 0;
-    memcpy(&v, e, w - 1);
-    if (!endianIsLittle()) {
-        v = mlruSwap128_(v);
-    }
-    return v;
+    uint8_t b[16] = {};
+    memcpy(b, e, w - 1);
+    return (__uint128_t)dkLoadLe64(b + 8) << 64 | dkLoadLe64(b);
 }
 
 DK_INLINE_ALWAYS void mlruLinksStore128_(uint8_t *e, uint32_t w,
                                          __uint128_t v) {
-    if (!endianIsLittle()) {
-        v = mlruSwap128_(v);
-    }
-    memcpy(e, &v, w - 1);
+    uint8_t b[16];
+    dkStoreLe64(b, (uint64_t)v);
+    dkStoreLe64(b + 8, (uint64_t)(v >> 64));
+    memcpy(e, b, w - 1);
 }
 
 /* Link 'which' (0 prev, 1 next) of the w-byte entry at 'e' */

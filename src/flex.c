@@ -91,7 +91,7 @@
 
 #include "multimapAtom.h"
 
-#include "conformLittleEndian.h"
+#include "dkEndian.h" /* dkLoadLe*, dkStoreLe* */
 #include "util.h"
 #include <assert.h>
 
@@ -1213,29 +1213,27 @@ DK_STATIC flexEncoding flexEncodingDouble(double value) {
  * ==================================================================== */
 /* Store float 'value' at 'fe' */
 DK_STATIC void flexSaveFloat16(flexData *const fe, const float value) {
-    const uint16_t writer = float16Encode(value);
-    memcpy(fe, &writer, sizeof(writer));
-    conformToLittleEndian16(*fe);
+    dkStoreLe16(fe, float16Encode(value));
     D("SAVING HALF FLOAT AS 2 bytes\n");
 }
 
 DK_STATIC void flexSaveFloatB16(flexData *const fe, const float value) {
-    const uint16_t writer = bfloat16Encode(value);
-    memcpy(fe, &writer, sizeof(writer));
-    conformToLittleEndian16(*fe);
+    dkStoreLe16(fe, bfloat16Encode(value));
     D("SAVING BHALF FLOAT AS 2 bytes\n");
 }
 
 DK_STATIC void flexSaveFloat(flexData *const fe, const float value) {
-    memcpy(fe, &value, sizeof(value));
-    conformToLittleEndian32(*fe);
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    dkStoreLe32(fe, bits);
     D("SAVING FLOAT AS 4 bytes\n");
 }
 
 /* Store double 'value' at 'fe' */
 DK_STATIC void flexSaveDouble(flexData *const fe, const double value) {
-    memcpy(fe, &value, sizeof(value));
-    conformToLittleEndian64(*fe);
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    dkStoreLe64(fe, bits);
     D("SAVING DOUBLE AS 8 bytes\n");
 }
 
@@ -1492,26 +1490,26 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
     }
     case FLEX_REAL_B16B:
         /* Restore 2 byte real to 4 byte real */
-        memcpy(&r->data.u16, d, 2);
-        r->data.f32 = bfloat16Decode(r->data.u16);
+        r->data.f32 = bfloat16Decode(dkLoadLe16(d));
         r->type = DATABOX_FLOAT_32;
         break;
     case FLEX_REAL_16B:
         /* Restore 2 byte real to 4 byte real */
-        memcpy(&r->data.u16, d, 2);
-        r->data.f32 = float16Decode(r->data.u16);
+        r->data.f32 = float16Decode(dkLoadLe16(d));
         r->type = DATABOX_FLOAT_32;
         break;
-    case FLEX_REAL_32B:
-        memcpy(&r->data.f32, d, sizeof(r->data.f32));
-        conformToLittleEndian32(r->data.f32);
+    case FLEX_REAL_32B: {
+        const uint32_t bits = dkLoadLe32(d);
+        memcpy(&r->data.f32, &bits, sizeof(bits));
         r->type = DATABOX_FLOAT_32;
         break;
-    case FLEX_REAL_64B:
-        memcpy(&r->data.d64, d, sizeof(r->data.d64));
-        conformToLittleEndian64(r->data.d64);
+    }
+    case FLEX_REAL_64B: {
+        const uint64_t bits = dkLoadLe64(d);
+        memcpy(&r->data.d64, &bits, sizeof(bits));
         r->type = DATABOX_DOUBLE_64;
         break;
+    }
 #if FLEX_ENABLE_PTR_MDSC
     case FLEX_EXTERNAL_MDSC_48B:
         r->data.uptr = varintExternalGet(d, 6);
@@ -1757,8 +1755,8 @@ void flexBulkPushBytesMembers(flex **const ff,
         return;
     }
 
-    const size_t chunkCount = (count + FLEX_BULK_PUSH_MEMBERS_PER_CHUNK - 1) /
-                              FLEX_BULK_PUSH_MEMBERS_PER_CHUNK;
+    const size_t chunkCount =
+        dkDivCeil(count, FLEX_BULK_PUSH_MEMBERS_PER_CHUNK);
     /* +1 slot: the caller's existing flex leads the merge, so whatever
      * it already holds keeps its position ahead of the new members. */
     const size_t mergeCap = chunkCount + 1;
