@@ -725,6 +725,37 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
     }
 
+    TEST("StrUtf8DecodeOne: the first character's codepoint and length") {
+        static const struct {
+            const char *bytes;
+            size_t len;
+            uint32_t cp;
+            size_t took;
+        } cases[] = {
+            {"A", 1, 0x41, 1},
+            {"\xC3\xA9!", 3, 0xE9, 2},
+            {"\xE2\x82\xAC", 3, 0x20AC, 3},
+            {"\xF0\x9F\x98\x80", 4, 0x1F600, 4},
+            {"\xF4\x8F\xBF\xBF", 4, 0x10FFFF, 4},
+            {"", 0, 0, 0},                 /* nothing to decode */
+            {"\xC3", 1, 0, 0},             /* truncated */
+            {"\x80", 1, 0, 0},             /* a lone continuation byte */
+            {"\xE0\x80\x80", 3, 0, 0},     /* overlong */
+            {"\xED\xA0\x80", 3, 0, 0},     /* a surrogate */
+            {"\xF4\x90\x80\x80", 4, 0, 0}, /* above U+10FFFF */
+        };
+        for (size_t i = 0; i < countof(cases); i++) {
+            uint32_t cp = 0xA5A5A5A5;
+            const size_t took = StrUtf8DecodeOne(
+                (const uint8_t *)cases[i].bytes, cases[i].len, &cp);
+            if (took != cases[i].took || cp != cases[i].cp) {
+                ERR("case %zu: took %zu, cp 0x%" PRIx32
+                    "; want %zu, 0x%" PRIx32,
+                    i, took, cp, cases[i].took, cases[i].cp);
+            }
+        }
+    }
+
     TEST("StrUtf8 width functions agree with each other, invalid bytes too") {
         /* Random strings of narrow, wide, zero-width and invalid pieces
          * (each invalid byte is one cell).  The whole width is the same
@@ -763,17 +794,16 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             bool hasWide = false;
             bool narrow = true;
             for (size_t i = 0; i < L;) {
-                const uint8_t *pos = s + i;
-                size_t rem = L - i;
-                const uint32_t cp = StrUtf8Decode(&pos, &rem);
-                if (cp == 0xFFFFFFFF) {
+                uint32_t cp;
+                const size_t n = StrUtf8DecodeOne(s + i, L - i, &cp);
+                if (n == 0) {
                     i++;
                     continue;
                 }
                 const int w = StrUnicodeEastAsianWidth(cp);
                 hasWide = hasWide || w == 2;
                 narrow = narrow && w == 1;
-                i = (size_t)(pos - s);
+                i += n;
             }
             if (StrUtf8WidthN(s, L, SIZE_MAX) != W ||
                 StrUtf8WidthN(s, L, 0) != 0 ||
@@ -795,11 +825,9 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
                 /* the next character (or invalid byte) after t */
                 size_t next = t;
                 if (t < L) {
-                    const uint8_t *pos = s + t;
-                    size_t rem = L - t;
-                    next = StrUtf8Decode(&pos, &rem) == 0xFFFFFFFF
-                               ? t + 1
-                               : (size_t)(pos - s);
+                    uint32_t cp;
+                    const size_t n = StrUtf8DecodeOne(s + t, L - t, &cp);
+                    next = t + (n == 0 ? 1 : n);
                 }
                 const size_t at = StrUtf8IndexAtWidth(s, L, w);
                 const size_t atWidth = StrUtf8Width(s, at);
@@ -4340,11 +4368,11 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
 
         /* Peek past end returns error */
         cp = StrUtf8Peek(ascii, asciiLen, start + 5);
-        assert(cp == 0xFFFFFFFF);
+        assert(cp == STR_UTF8_INVALID);
 
         /* Peek with NULL returns error */
         cp = StrUtf8Peek(ascii, asciiLen, nullptr);
-        assert(cp == 0xFFFFFFFF);
+        assert(cp == STR_UTF8_INVALID);
     }
 
     TEST("StrUtf8Peek - multibyte") {

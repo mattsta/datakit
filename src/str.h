@@ -203,9 +203,31 @@ size_t StrUtf8ValidCountBytes(const void *_str, size_t len,
 /* ====================================================================
  * UTF-8 Encoding/Decoding
  * ==================================================================== */
+/* What a decode returns for bytes that are not a whole valid sequence:
+ * above every codepoint (U+10FFFF), so no decoded character equals it */
+static constexpr uint32_t STR_UTF8_INVALID = 0xFFFFFFFF;
+
 /* Decode a UTF-8 sequence to a Unicode codepoint.
- * Returns codepoint and advances *str, or 0xFFFFFFFF on error. */
+ * Returns codepoint and advances *str, or STR_UTF8_INVALID (not
+ * advancing) on error. */
 uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining);
+
+/* The codepoint the 'len' bytes at 's' start with in '*cp', returning the
+ * bytes it takes; 0, with '*cp' = 0, when they do not start with a whole
+ * valid sequence (an empty 'len' included) */
+static inline size_t StrUtf8DecodeOne(const uint8_t *s, size_t len,
+                                      uint32_t *cp) {
+    const uint8_t *pos = s;
+    size_t remaining = len;
+    const uint32_t decoded = StrUtf8Decode(&pos, &remaining);
+    if (decoded == STR_UTF8_INVALID) {
+        *cp = 0;
+        return 0;
+    }
+
+    *cp = decoded;
+    return (size_t)(pos - s);
+}
 /* Encode a Unicode codepoint to UTF-8. Returns bytes written (1-4) or 0. */
 size_t StrUtf8Encode(uint8_t *dst, uint32_t codepoint);
 /* Get expected byte length for a codepoint (1-4, or 0 if invalid) */

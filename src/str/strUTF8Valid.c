@@ -508,13 +508,13 @@ size_t StrUtf8ValidCountBytes(const void *_str, size_t len,
 
 /* Decode a UTF-8 sequence to a Unicode codepoint.
  * Returns the codepoint and advances *str by the number of bytes consumed.
- * Returns 0xFFFFFFFF on error (and does not advance). */
+ * Returns STR_UTF8_INVALID on error (and does not advance). */
 uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining) {
     const uint8_t *s = *str;
     const size_t len = *remaining;
 
     if (len == 0) {
-        return 0xFFFFFFFF;
+        return STR_UTF8_INVALID;
     }
 
     const uint8_t b0 = s[0];
@@ -528,7 +528,7 @@ uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining) {
 
     const uint8_t expectedLen = utf8FirstByteLUT[b0];
     if (expectedLen == 0 || expectedLen > len) {
-        return 0xFFFFFFFF;
+        return STR_UTF8_INVALID;
     }
 
     /* Validate and decode continuation bytes */
@@ -537,21 +537,21 @@ uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining) {
     switch (expectedLen) {
     case 2:
         if (!IS_CONTINUATION(s[1])) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         cp = ((uint32_t)(b0 & 0x1F) << 6) | (s[1] & 0x3F);
         break;
 
     case 3:
         if (!IS_CONTINUATION(s[1]) || !IS_CONTINUATION(s[2])) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         /* Check overlong and surrogate */
         if (b0 == 0xE0 && s[1] < 0xA0) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         if (b0 == 0xED && s[1] > 0x9F) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         cp = ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(s[1] & 0x3F) << 6) |
              (s[2] & 0x3F);
@@ -560,21 +560,21 @@ uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining) {
     case 4:
         if (!IS_CONTINUATION(s[1]) || !IS_CONTINUATION(s[2]) ||
             !IS_CONTINUATION(s[3])) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         /* Check overlong and max codepoint */
         if (b0 == 0xF0 && s[1] < 0x90) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         if (b0 == 0xF4 && s[1] > 0x8F) {
-            return 0xFFFFFFFF;
+            return STR_UTF8_INVALID;
         }
         cp = ((uint32_t)(b0 & 0x07) << 18) | ((uint32_t)(s[1] & 0x3F) << 12) |
              ((uint32_t)(s[2] & 0x3F) << 6) | (s[3] & 0x3F);
         break;
 
     default:
-        return 0xFFFFFFFF;
+        return STR_UTF8_INVALID;
     }
 
     *str = s + expectedLen;

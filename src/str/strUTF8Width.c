@@ -12,22 +12,6 @@
 #include "../str.h"
 #include <string.h>
 
-/* Helper: decode a codepoint and return byte length (or 0 on error) */
-static inline size_t decodeCodepoint(const uint8_t *s, size_t len,
-                                     uint32_t *cpOut) {
-    const uint8_t *pos = s;
-    size_t remaining = len;
-    uint32_t cp = StrUtf8Decode(&pos, &remaining);
-
-    if (cp == 0xFFFFFFFF) {
-        *cpOut = 0;
-        return 0;
-    }
-
-    *cpOut = cp;
-    return (size_t)(pos - s);
-}
-
 /* ====================================================================
  * StrUtf8Width - Calculate display width of UTF-8 string
  * ==================================================================== */
@@ -42,7 +26,7 @@ size_t StrUtf8Width(const void *str, size_t len) {
 
     while (i < len) {
         uint32_t cp;
-        size_t cpLen = decodeCodepoint(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             /* Invalid UTF-8, treat as 1-byte character */
@@ -71,7 +55,7 @@ size_t StrUtf8WidthN(const void *str, size_t len, size_t n) {
 
     while (i < len && count < n) {
         uint32_t cp;
-        size_t cpLen = decodeCodepoint(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             width += 1;
@@ -104,7 +88,7 @@ size_t StrUtf8TruncateWidth(const void *str, size_t len, size_t maxWidth) {
 
     while (i < len) {
         uint32_t cp;
-        size_t cpLen = decodeCodepoint(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             /* Invalid UTF-8 */
@@ -146,7 +130,7 @@ size_t StrUtf8IndexAtWidth(const void *str, size_t len, size_t targetWidth) {
 
     while (i < len && width < targetWidth) {
         uint32_t cp;
-        size_t cpLen = decodeCodepoint(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             width += 1;
@@ -236,7 +220,7 @@ bool StrUtf8IsNarrow(const void *str, size_t len) {
 
     while (i < len) {
         uint32_t cp;
-        size_t cpLen = decodeCodepoint(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             i++;
@@ -264,7 +248,7 @@ bool StrUtf8HasWide(const void *str, size_t len) {
 
     while (i < len) {
         uint32_t cp;
-        size_t cpLen = decodeCodepoint(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             i++;

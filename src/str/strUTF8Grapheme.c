@@ -12,22 +12,6 @@
 #include "../str.h"
 #include <string.h>
 
-/* Helper: decode a codepoint and return byte length (or 0 on error) */
-static inline size_t decodeCodepointG(const uint8_t *s, size_t len,
-                                      uint32_t *cpOut) {
-    const uint8_t *pos = s;
-    size_t remaining = len;
-    uint32_t cp = StrUtf8Decode(&pos, &remaining);
-
-    if (cp == 0xFFFFFFFF) {
-        *cpOut = 0;
-        return 0;
-    }
-
-    *cpOut = cp;
-    return (size_t)(pos - s);
-}
-
 /* ====================================================================
  * StrUtf8GraphemeNext - Find end of next grapheme cluster
  * ==================================================================== */
@@ -45,7 +29,7 @@ size_t StrUtf8GraphemeNext(const void *str, size_t len) {
 
     /* Get first codepoint */
     uint32_t prevCp;
-    size_t cpLen = decodeCodepointG(s, len, &prevCp);
+    size_t cpLen = StrUtf8DecodeOne(s, len, &prevCp);
     if (cpLen == 0) {
         return 1; /* Invalid byte, treat as single grapheme */
     }
@@ -54,7 +38,7 @@ size_t StrUtf8GraphemeNext(const void *str, size_t len) {
     /* Continue while there's no grapheme break */
     while (i < len) {
         uint32_t cp;
-        cpLen = decodeCodepointG(s + i, len - i, &cp);
+        cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
         if (cpLen == 0) {
             break; /* Invalid byte, stop here */
         }
@@ -90,7 +74,7 @@ size_t StrUtf8GraphemeCount(const void *str, size_t len) {
 
     while (i < len) {
         uint32_t cp;
-        size_t cpLen = decodeCodepointG(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             /* Invalid byte, treat as separate grapheme */
@@ -191,7 +175,7 @@ size_t StrUtf8GraphemeWidth(const void *str, size_t len) {
 
     while (i < len) {
         uint32_t cp;
-        size_t cpLen = decodeCodepointG(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             /* Invalid byte, treat as width 1 */
@@ -267,7 +251,7 @@ void StrUtf8GraphemeReverse(void *str, size_t len) {
 
     while (i < len && boundaryCount < 255) {
         uint32_t cp;
-        size_t cpLen = decodeCodepointG(s + i, len - i, &cp);
+        size_t cpLen = StrUtf8DecodeOne(s + i, len - i, &cp);
 
         if (cpLen == 0) {
             if (havePrev) {

@@ -345,7 +345,7 @@ uint32_t StrUtf8Peek(const void *str, size_t len, const uint8_t *pos) {
     const uint8_t *end = start + len;
 
     if (pos == nullptr || pos < start || pos >= end) {
-        return 0xFFFFFFFF;
+        return STR_UTF8_INVALID;
     }
 
     size_t remaining = (size_t)(end - pos);
