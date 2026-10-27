@@ -20,6 +20,18 @@
         }                                                                      \
     }
 
+/* For a fixed array of 'n' owned pointers: `cleanerName(cleanupFunction,
+ * name) type arr[n]` runs cleanupFunction on every non-null slot at scope
+ * exit (null a slot to keep it) */
+#define defcleanerArrayName(type, n, cleanupFunction, name)                    \
+    DK_FN_UNUSED static void cleanupFunction##name##_cleanup(type(*a)[n]) {    \
+        for (size_t i_ = 0; i_ < (n); i_++) {                                  \
+            if ((*a)[i_]) {                                                    \
+                cleanupFunction((*a)[i_]);                                     \
+            }                                                                  \
+        }                                                                      \
+    }
+
 #define cleaner(cleanupFunction) [[gnu::cleanup(cleanupFunction##_cleanup)]]
 
 #define cleanerName(cleanupFunction, name)                                     \

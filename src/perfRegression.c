@@ -57,15 +57,8 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8Buf);
 
-/* Scope-exit cleaner for a fixed 4-lane buffer array (benchSha256Multi4):
- * frees whichever slots were allocated. */
-DK_FN_UNUSED static void freeLaneBufs4_cleanup(uint8_t *(*bufs)[4]) {
-    for (uint32_t lane = 0; lane < 4; lane++) {
-        if ((*bufs)[lane]) {
-            zfree((*bufs)[lane]);
-        }
-    }
-}
+/* benchSha256Multi4's lane buffers */
+defcleanerArrayName(uint8_t *, 4, zfree, Lanes4);
 
 /* Scope-exit cleaner for a runtime-sized array of owned buffers
  * (benchMailbox's pre-built envelope batch): frees each element then the
@@ -299,7 +292,7 @@ static void benchSha256Multi4(size_t bytes_per_lane) {
      * entry point sees identical work per lane. */
     const size_t nb = bytes_per_lane / SHA256_BLOCK_LEN;
     const size_t actual = nb * SHA256_BLOCK_LEN;
-    cleaner(freeLaneBufs4)
+    cleanerName(zfree, Lanes4)
         uint8_t *bufs[4] = {nullptr, nullptr, nullptr, nullptr};
     for (uint32_t lane = 0; lane < 4; lane++) {
         bufs[lane] = zmalloc(actual ? actual : 1u);

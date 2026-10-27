@@ -14,15 +14,8 @@
 
 defcleanerName(multilistP *, zfree, MultilistP);
 
-/* Scope-exit cleaner for the fixed 2-slot mflex state array the read-only
- * iterator requires: frees whichever slots were created. */
-DK_FN_UNUSED static void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
-    for (size_t i = 0; i < 2; i++) {
-        if ((*arr)[i]) {
-            mflexStateFree((*arr)[i]);
-        }
-    }
-}
+/* The 2-slot mflex state array the read-only iterator requires */
+defcleanerArrayName(mflexState *, 2, mflexStateFree, States2);
 
 /* ============================================================================
  * Lifecycle
@@ -386,7 +379,7 @@ static const databox *mlpWideValue(uint32_t i, databoxBig *storage, char *str,
  * order, with the tracker: every wide element must come back whole. */
 static bool verifyMultilistIterMatchesTracker(multilistP *ml,
                                               const ptestBoxTracker *tracker) {
-    cleaner(freeMflexStates2)
+    cleanerName(mflexStateFree, States2)
         mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
     multilistIterator iter;
     memset(&iter, 0xFF, sizeof(iter));
@@ -547,7 +540,7 @@ int multilistPTest(int, char *[]) {
         }
 
         /* Verify all elements have correct sequential values */
-        cleaner(freeMflexStates2)
+        cleanerName(mflexStateFree, States2)
             mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
         multilistIterator iter;
         multilistIteratorInitForwardReadOnlyP(ml, states, &iter);

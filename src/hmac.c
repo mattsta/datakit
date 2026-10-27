@@ -23,15 +23,7 @@
 defcleanerName(uint8_t *, zfree, Bytes);
 
 #ifdef DATAKIT_TEST
-/* Scope-exit cleaner for a fixed 4-lane array of owned buffers
- * (defcleanerName only covers single pointers). */
-DK_FN_UNUSED static void freeLaneStorage4_cleanup(uint8_t *(*lanes)[4]) {
-    for (uint32_t lane = 0; lane < 4; lane++) {
-        if ((*lanes)[lane]) {
-            zfree((*lanes)[lane]);
-        }
-    }
-}
+defcleanerArrayName(uint8_t *, 4, zfree, Lanes4);
 #endif
 
 /* RFC 2104 §2: inner pad byte 0x36 and outer pad byte 0x5c are XOR'd into
@@ -942,7 +934,7 @@ int hmacTest(int, char *[]) {
     TEST("hmacComputeBatch4: perf bench (4 lanes, 1KiB each)") {
         const uint8_t key[32] = {0xBB};
         const size_t ps = hmacPreparedSize(&hmacAlgoSHA256);
-        cleaner(freeLaneStorage4)
+        cleanerName(zfree, Lanes4)
             uint8_t *st[4] = {nullptr, nullptr, nullptr, nullptr};
         hmacKey p[4];
         const hmacKey *preps[4];

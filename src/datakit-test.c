@@ -162,16 +162,8 @@ defcleaner(aeadNonceLog *, aeadNonceLogFree);
 defcleaner(mds *, mdsfree);
 defcleaner(hyperloglog *, hyperloglogFree);
 
-/* Scope-exit cleaner for a fixed 3-slot owned-buffer array (used by
- * dkTestRevokedKeyFloorTest's per-key wrapped envelopes): frees whichever
- * slots were allocated. */
-DK_FN_UNUSED static void freeBytesArray3_cleanup(uint8_t *(*arr)[3]) {
-    for (uint32_t i = 0; i < 3; i++) {
-        if ((*arr)[i]) {
-            zfree((*arr)[i]);
-        }
-    }
-}
+/* dkTestRevokedKeyFloorTest's per-key wrapped envelopes */
+defcleanerArrayName(uint8_t *, 3, zfree, Bytes3);
 
 /* ====================================================================
  * Test Registry - Single source of truth for all tests
@@ -6942,7 +6934,7 @@ static int dkTestRevokedKeyFloorTest(int, char *[]) {
     }
 
     const uint8_t payload[24] = "c3-revoked-payload";
-    cleaner(freeBytesArray3) uint8_t *envs[3] = {nullptr, nullptr, nullptr};
+    cleanerName(zfree, Bytes3) uint8_t *envs[3] = {nullptr, nullptr, nullptr};
     size_t env_lens[3] = {0, 0, 0};
     const hmacKeyId ids[3] = {K1, K2, K3};
     const uint8_t *keys[3] = {key1, key2, key3};
