@@ -5907,7 +5907,7 @@ static int testFuzzSerializationRoundtrip(void) {
                 clusterNodeConfig nodeConfig = {
                     .id = (uint64_t)i,
                     .weight = (uint32_t)(rand() % 500 + 10),
-                    .capacityBytes = (uint64_t)rand() * rand(),
+                    .capacityBytes = dkRandom64(),
                     .initialState = CLUSTER_NODE_UP,
                     .location =
                         {

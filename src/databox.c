@@ -2554,10 +2554,17 @@ int databoxTest(int, char *[]) {
 
     TEST("stress test - random comparisons maintain consistency") {
         /* Generate random values and verify comparison properties */
-        srand(12345); /* Fixed seed for reproducibility */
+        /* Replayable draws over every magnitude and both signs: a full
+         * 64-bit draw shifted right by 0..63 bits, and every eighth pair
+         * equal */
+        uint64_t rng = 12345;
         for (int iter = 0; iter < 1000; iter++) {
-            int64_t val1 = (int64_t)rand() - RAND_MAX / 2;
-            int64_t val2 = (int64_t)rand() - RAND_MAX / 2;
+            const int64_t val1 = (int64_t)dkSplitmix64Next(&rng) >>
+                                 dkSplitmix64Bounded(&rng, 64);
+            const int64_t val2 = iter % 8 == 0
+                                     ? val1
+                                     : (int64_t)dkSplitmix64Next(&rng) >>
+                                           dkSplitmix64Bounded(&rng, 64);
             databox a = databoxNewSigned(val1);
             databox b = databoxNewSigned(val2);
 

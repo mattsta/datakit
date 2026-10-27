@@ -4718,7 +4718,7 @@ int multiroarTest(int, char *[]) {
 #if 1
     TEST_DESC("set and get (%d of random positions; individual roars)", lots) {
         for (int32_t i = 0; i < lots; i++) {
-            const uint64_t position = (uint64_t)rand() % SIZE_MAX;
+            const uint64_t position = dkRandomBounded(UINT64_MAX);
 
             cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
@@ -4791,7 +4791,7 @@ int multiroarTest(int, char *[]) {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t highest = 0;
         for (int32_t i = 0; i < lots; i++) {
-            const uint64_t position = ((uint64_t)rand() * rand()) % SIZE_MAX;
+            const uint64_t position = dkRandomBounded(UINT64_MAX);
 
             if (position > highest) {
                 highest = position;
@@ -5004,8 +5004,7 @@ int multiroarTest(int, char *[]) {
 
         /* Set random bits, tracking a sample for verification */
         for (uint64_t i = 0; i < scale; i++) {
-            const uint64_t position =
-                ((uint64_t)rand() * rand()) % (SIZE_MAX / 2);
+            const uint64_t position = dkRandomBounded(UINT64_MAX / 2);
 
             /* Track every Nth position for verification */
             if (i < sampleSize) {
@@ -5078,7 +5077,7 @@ int multiroarTest(int, char *[]) {
 
         int64_t startNs = timeUtilMonotonicNs();
         for (uint64_t i = 0; i < scale; i++) {
-            multiroarBitSet(r, ((uint64_t)rand() * rand()) % (SIZE_MAX / 2));
+            multiroarBitSet(r, dkRandomBounded(UINT64_MAX / 2));
         }
         int64_t elapsed = timeUtilMonotonicNs() - startNs;
         printf("Random insert: %.1f ns/op, %.0f ops/sec\n",

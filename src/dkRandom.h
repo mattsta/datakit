@@ -116,6 +116,16 @@ static inline uint64_t dkSplitmix64Next(uint64_t *state) {
     return dkSplitmix64Mix(*state += UINT64_C(0x9E3779B97F4A7C15));
 }
 
+/* A value in [0, bound) from the splitmix64 stream at '*state', exactly
+ * uniform, with dkRandomBounded's contract (bound 0 returns 0 and is
+ * counted and reported).  The replayable bounded draw for tests: the
+ * same seed gives the same values on every platform, which srand()
+ * with rand() does not (each libc has its own generator), and every
+ * bound up to 2^64 - 1 is reachable, which rand()'s 31 bits are not.
+ * Reproducible data only: never for anything that must be
+ * unpredictable. */
+uint64_t dkSplitmix64Bounded(uint64_t *state, uint64_t bound);
+
 #ifdef DATAKIT_TEST
 int dkRandomTest(int argc, char *argv[]);
 #endif

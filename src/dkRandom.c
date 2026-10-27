@@ -91,7 +91,17 @@ uint64_t dkRandom64(void) {
     return t->block[t->blockUsed++];
 }
 
-uint64_t dkRandomBounded(const uint64_t bound) {
+/* dkRandom64 in the shape of a stream step, for dkBoundedFrom */
+static uint64_t dkRandomThreadDraw(uint64_t *) {
+    return dkRandom64();
+}
+
+/* A value in [0, bound) from the stream 'draw' advances at '*state'; the
+ * one bounded reduction behind dkRandomBounded and dkSplitmix64Bounded.
+ * Always inlined, so each caller's draw is a direct call. */
+[[gnu::always_inline]] static inline uint64_t
+dkBoundedFrom(uint64_t (*const draw)(uint64_t *), uint64_t *const state,
+              const uint64_t bound) {
     if (bound == 0) {
         /* @sync: relaxed counter */
         (void)atomic_fetch_add_explicit(&zeroBoundTotal, 1,
@@ -111,7 +121,7 @@ uint64_t dkRandomBounded(const uint64_t bound) {
      * all classes the same size, so the result is exactly uniform.  The
      * remainder (a division) is computed only when low < bound, which is
      * rare unless bound approaches 2^64. */
-    __uint128_t wide = (__uint128_t)dkRandom64() * (__uint128_t)bound;
+    __uint128_t wide = (__uint128_t)draw(state) * (__uint128_t)bound;
     uint64_t low = (uint64_t)wide;
 
     if (low < bound) {
@@ -120,12 +130,20 @@ uint64_t dkRandomBounded(const uint64_t bound) {
         const uint64_t threshold = (UINT64_MAX - bound + 1) % bound;
 
         while (low < threshold) {
-            wide = (__uint128_t)dkRandom64() * (__uint128_t)bound;
+            wide = (__uint128_t)draw(state) * (__uint128_t)bound;
             low = (uint64_t)wide;
         }
     }
 
     return (uint64_t)(wide >> DK_RANDOM_WORD_BITS);
+}
+
+uint64_t dkRandomBounded(const uint64_t bound) {
+    return dkBoundedFrom(dkRandomThreadDraw, nullptr, bound);
+}
+
+uint64_t dkSplitmix64Bounded(uint64_t *const state, const uint64_t bound) {
+    return dkBoundedFrom(dkSplitmix64Next, state, bound);
 }
 
 uint64_t dkRandomZeroBoundTotal(void) {
@@ -246,6 +264,45 @@ int dkRandomTest(int, char *[]) {
             state != 2 * UINT64_C(0x9E3779B97F4A7C15)) {
             ERR("from 0: %" PRIu64 ", %" PRIu64 ", state %" PRIu64, first,
                 second, state);
+        }
+    }
+
+    TEST("dkSplitmix64Bounded replays the splitmix64 draws it reduces") {
+        /* From seed 0: the high word of each reference draw times the
+         * bound.  The first draw is splitmix64's published first output;
+         * a rejection at bound 1000 needs a low word below 616, which
+         * these draws do not have. */
+        uint64_t state = 0;
+        uint64_t ref = 0;
+        for (int i = 0; i < 64; i++) {
+            const uint64_t draw = dkSplitmix64Next(&ref);
+            if (i == 0 && draw != UINT64_C(16294208416658607535)) {
+                ERR("reference first draw %" PRIu64, draw);
+            }
+            const uint64_t want =
+                (uint64_t)(((unsigned __int128)draw * 1000u) >> 64);
+            const uint64_t got = dkSplitmix64Bounded(&state, 1000);
+            if (got != want || state != ref) {
+                ERR("draw %d: %" PRIu64 ", want %" PRIu64, i, got, want);
+                break;
+            }
+        }
+
+        /* Every bound is reachable: the top bit of a draw below
+         * UINT64_MAX shows up within 64 draws (a miss is 2^-64) */
+        bool high = false;
+        for (int i = 0; i < 64 && !high; i++) {
+            high = dkSplitmix64Bounded(&state, UINT64_MAX) >> 63;
+        }
+        if (!high) {
+            ERR("no draw below UINT64_MAX reached 2^63");
+        }
+
+        const uint64_t zeros = dkRandomZeroBoundTotal();
+        const uint64_t before = state;
+        if (dkSplitmix64Bounded(&state, 0) != 0 || state != before ||
+            dkRandomZeroBoundTotal() != zeros + 1) {
+            ERR("bound 0 must return 0, leave the state, and be counted");
         }
     }
 

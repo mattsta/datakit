@@ -1346,6 +1346,68 @@ static const char *mlrWalk(multilistIterator *iter, uint32_t n, bool forward,
     return nullptr;
 }
 
+/* 'rounds' random operations on a multilistNewLimit(4, 2) list and a
+ * shadow deque: pushes (pushPercent of the rounds) and pops, each at the
+ * head or the tail.  Values are replayable draws from 'seed' over every
+ * magnitude and both signs (a 64-bit draw shifted right 0..63 bits).
+ * Each pop must return the deque's end (compared as numbers, so a
+ * non-negative value may come back unsigned), a pop from an empty list
+ * must fail, and the counts must agree after every round.  Returns
+ * NULL, or what went wrong, with the round in *failedRound. */
+static const char *mlfDequeFuzz(mflexState *state, const uint64_t seed,
+                                const uint32_t rounds,
+                                const uint32_t pushPercent,
+                                uint32_t *failedRound) {
+    cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
+    cleanerName(zfree, I64) int64_t *deque =
+        zcalloc(2 * (size_t)rounds + 1, sizeof(int64_t));
+    size_t head = rounds; /* deque[head, tail) mirrors the list */
+    size_t tail = rounds;
+    uint64_t rng = seed;
+
+    for (uint32_t round = 0; round < rounds; round++) {
+        *failedRound = round;
+        const bool atTail = dkSplitmix64Bounded(&rng, 2);
+        if (dkSplitmix64Bounded(&rng, 100) < pushPercent) {
+            const int64_t val = (int64_t)dkSplitmix64Next(&rng) >>
+                                dkSplitmix64Bounded(&rng, 64);
+            const databox box = databoxNewSigned(val);
+            if (atTail) {
+                multilistPushByTypeTail(&ml, state, &box);
+                deque[tail++] = val;
+            } else {
+                multilistPushByTypeHead(&ml, state, &box);
+                deque[--head] = val;
+            }
+        } else {
+            databox got = {};
+            const bool popped = multilistPop(&ml, state, &got, atTail);
+            if (head == tail) {
+                if (popped) {
+                    databoxFreeData(&got);
+                    return "pop from an empty list succeeded";
+                }
+            } else {
+                const int64_t want = atTail ? deque[--tail] : deque[head++];
+                const databox wantBox = databoxNewSigned(want);
+                const bool same = popped && databoxCompare(&got, &wantBox) == 0;
+                databoxFreeData(&got);
+                if (!same) {
+                    return atTail
+                               ? "pop from the tail returned the wrong value"
+                               : "pop from the head returned the wrong value";
+                }
+            }
+        }
+
+        if (multilistCount(ml) != tail - head) {
+            return "count differs from the shadow deque";
+        }
+    }
+
+    return nullptr;
+}
+
 int multilistTest(int, char *[]) {
     uint32_t err = 0;
     cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
@@ -2669,89 +2731,22 @@ int multilistTest(int, char *[]) {
 
     printf("\n=== MULTILIST FUZZ TESTING ===\n\n");
 
-    TEST("FUZZ: push/pop operations with oracle verification") {
-        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
-        const size_t maxSize = 1000;
-        cleanerName(zfree, I64) int64_t *oracle =
-            zcalloc(maxSize, sizeof(int64_t));
-        size_t oracleCount = 0;
-
-        srand(12345);
-        size_t pushOps = 0, popOps = 0;
-
-        for (size_t round = 0; round < 5000; round++) {
-            int op = rand() % 10;
-
-            if (op < 6 && oracleCount < maxSize) {
-                /* Push (60%) */
-                int64_t val = (int64_t)(rand() % 100'000) - 50000;
-                int where = rand() % 2;
-                databox box = databoxNewSigned(val);
-
-                if (where == 0) {
-                    /* Push head */
-                    multilistPushByTypeHead(&ml, s0, &box);
-                    memmove(&oracle[1], &oracle[0],
-                            oracleCount * sizeof(int64_t));
-                    oracle[0] = val;
-                } else {
-                    /* Push tail */
-                    multilistPushByTypeTail(&ml, s0, &box);
-                    oracle[oracleCount] = val;
-                }
-                oracleCount++;
-                pushOps++;
-            } else if (oracleCount > 0) {
-                /* Pop (40%) */
-                int where = rand() % 2;
-                databox got = {};
-
-                if (where == 0) {
-                    /* Pop head */
-                    multilistPopHead(&ml, s0, &got);
-                    int64_t expected = oracle[0];
-                    int64_t actual = (got.type == DATABOX_SIGNED_64)
-                                         ? got.data.i
-                                         : (int64_t)got.data.u;
-                    if (actual != expected) {
-                        ERR("head mismatch: got %" PRId64 " expected %" PRId64,
-                            actual, expected);
-                    }
-                    memmove(&oracle[0], &oracle[1],
-                            (oracleCount - 1) * sizeof(int64_t));
-                } else {
-                    /* Pop tail */
-                    multilistPopTail(&ml, s0, &got);
-                    int64_t expected = oracle[oracleCount - 1];
-                    int64_t actual = (got.type == DATABOX_SIGNED_64)
-                                         ? got.data.i
-                                         : (int64_t)got.data.u;
-                    if (actual != expected) {
-                        ERR("tail mismatch: got %" PRId64 " expected %" PRId64,
-                            actual, expected);
-                    }
-                }
-                databoxFreeData(&got);
-                oracleCount--;
-                popOps++;
-            }
-
-            /* Periodic verification */
-            if (round % 500 == 0) {
-                if (multilistCount(ml) != oracleCount) {
-                    ERR("count mismatch at round %zu: ml=%zu oracle=%zu", round,
-                        multilistCount(ml), oracleCount);
-                }
-            }
+    TEST("FUZZ: push/pop against a shadow deque (60% pushes)") {
+        uint32_t round = 0;
+        const char *why = mlfDequeFuzz(s0, 12345, 5000, 60, &round);
+        if (why) {
+            ERR("round %" PRIu32 ": %s", round, why);
         }
+    }
 
-        /* Final verification */
-        if (multilistCount(ml) != oracleCount) {
-            ERR("final count mismatch: ml=%zu oracle=%zu", multilistCount(ml),
-                oracleCount);
+    TEST("FUZZ: drain-heavy churn against a shadow deque (40% pushes)") {
+        /* The list empties often: pops from an empty list, and pushes
+         * into one just drained */
+        uint32_t round = 0;
+        const char *why = mlfDequeFuzz(s0, 424242, 5000, 40, &round);
+        if (why) {
+            ERR("round %" PRIu32 ": %s", round, why);
         }
-
-        printf("  push=%zu pop=%zu final=%zu\n", pushOps, popOps, oracleCount);
     }
 
     TEST("FUZZ: index access verification") {
@@ -3899,50 +3894,12 @@ int multilistTest(int, char *[]) {
         }
     }
 
-    TEST("FUZZ: stress random operations") {
-        cleaner(multilistFree) multilist *ml = multilistNewLimit(4, 2);
-        size_t count = 0;
-
-        srand(99999);
-        for (size_t round = 0; round < 10000; round++) {
-            int op = rand() % 10;
-
-            if (op < 4) {
-                /* Push head (40%) */
-                databox box = databoxNewSigned((int64_t)rand());
-                multilistPushByTypeHead(&ml, s0, &box);
-                count++;
-            } else if (op < 8) {
-                /* Push tail (40%) */
-                databox box = databoxNewSigned((int64_t)rand());
-                multilistPushByTypeTail(&ml, s0, &box);
-                count++;
-            } else if (count > 0) {
-                /* Pop (20%) */
-                databox got = {};
-                if (rand() % 2) {
-                    multilistPopHead(&ml, s0, &got);
-                } else {
-                    multilistPopTail(&ml, s0, &got);
-                }
-                databoxFreeData(&got);
-                count--;
-            }
-
-            /* Periodic verification */
-            if (round % 1000 == 0) {
-                if (multilistCount(ml) != count) {
-                    ERR("round %zu: ml=%zu oracle=%zu", round,
-                        multilistCount(ml), count);
-                }
-            }
+    TEST("FUZZ: push-heavy growth against a shadow deque (80% pushes)") {
+        uint32_t round = 0;
+        const char *why = mlfDequeFuzz(s0, 99999, 10000, 80, &round);
+        if (why) {
+            ERR("round %" PRIu32 ": %s", round, why);
         }
-
-        if (multilistCount(ml) != count) {
-            ERR("final: ml=%zu oracle=%zu", multilistCount(ml), count);
-        }
-
-        printf("  completed 10K random operations, final count=%zu\n", count);
     }
 
     printf("\n=== All multilist fuzz tests completed! ===\n\n");
