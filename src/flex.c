@@ -1201,7 +1201,7 @@ DK_STATIC flexEncoding flexEncodingFloat(const float value) {
 DK_STATIC flexEncoding flexEncodingDouble(double value) {
     /* Attempt to encode double to float with no loss of precision */
     if ((double)(float)value == value) {
-        /* Sucess! Now try to encode to REAL_16 or REAL_B16 too. */
+        /* Success! Now try to encode to REAL_16 or REAL_B16 too. */
         return flexEncodingFloat(value);
     }
 

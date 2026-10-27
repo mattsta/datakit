@@ -747,7 +747,7 @@ static void dodWriteInteger(dod *restrict const d,
 
         /* Yes, our ranges are symmetric.
          * We don't have larger signed storage per level due to 'adjustmentBase'
-         * uncompensating for the lower additive compliment offset.
+         * uncompensating for the lower additive complement offset.
          * Don't worry because everything works for INT64_MIN to INT64_MAX. */
         if (dval > -rangeCheck && dval < rangeCheck) {
 #if 0

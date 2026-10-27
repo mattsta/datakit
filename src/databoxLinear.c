@@ -118,7 +118,7 @@ DK_STATIC databoxLinearType databoxLinearEncodingFloat(float value) {
 DK_STATIC databoxLinearType databoxLinearEncodingDouble(double value) {
     /* Attempt to encode double to float with no loss of precision */
     if ((double)(float)value == value) {
-        /* Sucess! Now try to encode to REAL_16 too. */
+        /* Success! Now try to encode to REAL_16 too. */
         return databoxLinearEncodingFloat(value);
     }
 

@@ -20,7 +20,7 @@ defcleaner(flex *, flexFree);
  * and size of contiguous blocks of data for lookup binary search. */
 /* You can empirically discover correct numbers based on your workload
  * and platform by searching an exponential cache space then running
- * your workload for performance comparisions.
+ * your workload for performance comparisons.
  * By default, we tune for 2016-era general purpose architectures
  * with per-CPU 32k L1 data caches, 256k L2 cache, and multi-MB
  * shared L3 caches (4 MB to 45 MB) */

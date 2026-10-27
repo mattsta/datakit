@@ -33,7 +33,7 @@ multiheapReadByKey(multiheap *restrict const heap,
         multimapGetUnderlyingEntry((multimap *)heap, key, &entry_MHRBK);
     assert(found);
 
-    /* the retrieved mulimapEntry points *to* 'key', so we need to advance
+    /* the retrieved multimapEntry points *to* 'key', so we need to advance
      * by one to reach the value offset: */
     const flexEntry *const valEntry =
         flexNext(*entry_MHRBK.map, entry_MHRBK.fe);

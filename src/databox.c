@@ -895,7 +895,7 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
             return 0;
         }
 
-        /* else, sort based on thier incompatible type ordering */
+        /* else, sort based on their incompatible type ordering */
         _gtlteqReturn(a->type, b->type);
     }
 #else

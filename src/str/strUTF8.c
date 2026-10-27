@@ -427,7 +427,7 @@ size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
 
     /* This loop gets triggered when:
      *   - len < STRLEN_UTF8_STEP_SIZE */
-    /* Use 'extraLen' instead of 'len' because below we end up decremeting
+    /* Use 'extraLen' instead of 'len' because below we end up decrementing
      * 'len' by multiple character steps, so if we have a malformed utf8
      * input, we don't want to skip over our 'len == 0' terminating
      * condition by subtracting more bytes than exist in our byte length. */
