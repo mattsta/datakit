@@ -3159,14 +3159,16 @@ static persistStore *persistStoreFileOpen_(const char *path, const int flags) {
     return store;
 }
 
-/* The read-only store of 'path' when its header is a persist header of
- * the kind asked for ('wal'), with the type it names in '*type'; NULL,
- * '*why' set, otherwise */
+/* The store of 'path' (read-write when 'writable', never created; else
+ * read-only) when its header is a persist header of the kind asked for
+ * ('wal'), with the type it names in '*type'; NULL, '*why' set,
+ * otherwise */
 static persistStore *persistOpenOne_(const char *path, const bool wal,
-                                     persistType *type,
+                                     const bool writable, persistType *type,
                                      persistOpenResult *why) {
     /* @own: caller; free=persistStoreClose */
-    persistStore *store = persistStoreFileReadOnly(path);
+    persistStore *store = writable ? persistStoreFile(path, false)
+                                   : persistStoreFileReadOnly(path);
     if (!store) {
         *why = PERSIST_OPEN_NO_FILE;
         return nullptr;
@@ -3191,8 +3193,9 @@ static persistStore *persistOpenOne_(const char *path, const bool wal,
     return nullptr;
 }
 
-persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
-                          persistOpenResult *why) {
+/* persistOpenFiles, through read-write stores when 'writable' */
+static persist *persistOpenFiles_(const char *snapshotPath, const char *walPath,
+                                  const bool writable, persistOpenResult *why) {
     persistOpenResult unused;
     persistOpenResult *result = why ? why : &unused;
     *result = PERSIST_OPEN_OK;
@@ -3205,11 +3208,13 @@ persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
     persistType walType = PERSIST_TYPE_INVALID;
     persistStore *snapshot = nullptr;
     persistStore *wal = nullptr;
-    if (snapshotPath && !(snapshot = persistOpenOne_(snapshotPath, false,
-                                                     &snapshotType, result))) {
+    if (snapshotPath &&
+        !(snapshot = persistOpenOne_(snapshotPath, false, writable,
+                                     &snapshotType, result))) {
         return nullptr;
     }
-    if (walPath && !(wal = persistOpenOne_(walPath, true, &walType, result))) {
+    if (walPath &&
+        !(wal = persistOpenOne_(walPath, true, writable, &walType, result))) {
         persistStoreClose(snapshot);
         return nullptr;
     }
@@ -3230,6 +3235,37 @@ persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
         persistAttachWAL(p, wal);
     }
     return p;
+}
+
+persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
+                          persistOpenResult *why) {
+    /* @own: caller; free=persistClose */
+    return persistOpenFiles_(snapshotPath, walPath, false, why);
+}
+
+bool persistRepairFiles(const char *snapshotPath, const char *walPath,
+                        const char *quarantinePath, persistRepairReport *out,
+                        persistOpenResult *why) {
+    *out = (persistRepairReport){};
+    if (!snapshotPath || !walPath || !quarantinePath) {
+        if (why) {
+            *why = PERSIST_OPEN_NO_PATH;
+        }
+        return false;
+    }
+    persist *p = persistOpenFiles_(snapshotPath, walPath, true, why);
+    if (!p) {
+        return false;
+    }
+
+    /* persist's own open: a torn tail is cut, a corrupt entry heals into
+     * the quarantine, a key or read problem stays held */
+    persistAttachQuarantineFile(p, quarantinePath);
+    persistRecoverSummarize(p, &out->rebuilt);
+    persistLastBadEntry(p, &out->bad);
+    const bool synced = persistSync(p);
+    persistClose(p);
+    return synced;
 }
 
 /* ============================================================================
@@ -10518,6 +10554,139 @@ int persistTest(int, char *[]) {
                 memcmp(after, bytes, damaged[d].len) != 0) {
                 ERR("damage %zu: reading the WAL changed it", d);
             }
+        }
+    }
+
+    TEST("operators: persistRepairFiles repairs files as an open does: cut, "
+         "heal into the quarantine, or hold") {
+        /* An empty intset's snapshot and a WAL inserting 1, 2, 3, then
+         * per case the WAL as given and what repair leaves:
+         *   clean:   nothing met, the WAL as it was, no quarantine file
+         *   torn:    the tail cut at the third entry, no quarantine file
+         *   flipped: CORRUPT / HEALED at the second entry, the WAL cut
+         *            there and one quarantine record holding exactly the
+         *            bytes from there on
+         * each rebuilding the entries before its stop; a missing path
+         * refuses, and after repair every WAL walks to its end */
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
+        char snapPath[PATH_MAX];
+        char walPath[PATH_MAX];
+        char qPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "r.snap", snapPath, sizeof(snapPath)) ||
+            !dkTestTmpDirPath(&tmp, "r.wal", walPath, sizeof(walPath)) ||
+            !dkTestTmpDirPath(&tmp, "r.quarantine", qPath, sizeof(qPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+            return err;
+        }
+        {
+            persist *p = persistCreate(&persistOpsIntset, nullptr);
+            persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+            persistAttachWAL(p, persistStoreFile(walPath, true));
+            cleaner(intsetFree) intset *empty = intsetNew();
+            persistSnapshot(p, empty);
+            for (int64_t v = 1; v <= 3; v++) {
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+            }
+            persistSync(p);
+            persistClose(p);
+        }
+        static uint8_t clean[4096];
+        const size_t walLen =
+            persistTestReadFile(walPath, clean, sizeof(clean));
+        persistTestWalOffsets o = {.stopAfter = SIZE_MAX};
+        {
+            persist *p = persistOpenFiles(nullptr, walPath, nullptr);
+            if (!p ||
+                !persistIterateWAL(p, persistTestCollectOffsets, &o, nullptr) ||
+                o.n != 3) {
+                ERR("the clean WAL did not walk");
+                persistClose(p);
+                return err;
+            }
+            persistClose(p);
+        }
+        uint32_t secondLen = 0;
+        memcpy(&secondLen, clean + o.at[1], sizeof(secondLen));
+
+        const struct {
+            size_t len;
+            int64_t flipAt; /* -1: none */
+            persistBadEntryKind kind;
+            int64_t walAfter;
+            uint64_t members;
+            bool quarantined;
+        } cases[] = {
+            {walLen, -1, PERSIST_BAD_ENTRY_NONE, (int64_t)walLen, 3, false},
+            {walLen - 3, -1, PERSIST_BAD_ENTRY_NONE, o.at[2], 2, false},
+            {walLen, o.at[1] + (int64_t)sizeof(secondLen) + secondLen / 2,
+             PERSIST_BAD_ENTRY_CORRUPT, o.at[1], 1, true},
+        };
+        for (size_t c = 0; c < countof(cases); c++) {
+            static uint8_t bytes[4096];
+            static uint8_t after[4096];
+            static uint8_t quarantined[4096];
+            memcpy(bytes, clean, walLen);
+            if (cases[c].flipAt >= 0) {
+                bytes[cases[c].flipAt] ^= 0x10u;
+            }
+            unlink(qPath);
+            if (!persistTestWriteFile(walPath, bytes, cases[c].len)) {
+                ERR("case %zu: could not write the WAL", c);
+                continue;
+            }
+
+            persistRepairReport rep;
+            persistOpenResult why = PERSIST_OPEN_NO_PATH;
+            const bool repaired =
+                persistRepairFiles(snapPath, walPath, qPath, &rep, &why);
+            const size_t walNow =
+                persistTestReadFile(walPath, after, sizeof(after));
+            const size_t qNow =
+                persistTestReadFile(qPath, quarantined, sizeof(quarantined));
+            if (!repaired || why != PERSIST_OPEN_OK ||
+                rep.bad.kind != cases[c].kind || !rep.rebuilt.recovered ||
+                rep.rebuilt.count != cases[c].members ||
+                (int64_t)walNow != cases[c].walAfter ||
+                memcmp(after, bytes, walNow) != 0 ||
+                (qNow != 0) != cases[c].quarantined) {
+                ERR("case %zu: repaired %d (why %s), kind %s, %" PRIu64
+                    " members, WAL %zu bytes (want %" PRId64
+                    "), quarantine %zu bytes",
+                    c, repaired, persistOpenResultName(why),
+                    persistBadEntryKindName(rep.bad.kind), rep.rebuilt.count,
+                    walNow, cases[c].walAfter, qNow);
+                continue;
+            }
+            if (cases[c].quarantined) {
+                const size_t tail = cases[c].len - (size_t)cases[c].walAfter;
+                if (rep.bad.action != PERSIST_BAD_ENTRY_HEALED ||
+                    qNow != PERSIST_QUARANTINE_HEADER_BYTES + tail ||
+                    memcmp(quarantined + PERSIST_QUARANTINE_HEADER_BYTES,
+                           bytes + cases[c].walAfter, tail) != 0) {
+                    ERR("case %zu: the quarantine does not hold the cut tail",
+                        c);
+                }
+            }
+
+            /* The repaired WAL reads to its end */
+            persist *p = persistOpenFiles(snapPath, walPath, nullptr);
+            persistTestWalOffsets walked = {.stopAfter = SIZE_MAX};
+            persistWALWalkReport r = {};
+            if (!p ||
+                !persistIterateWAL(p, persistTestCollectOffsets, &walked, &r) ||
+                r.stop != PERSIST_WAL_STOP_END ||
+                walked.n != cases[c].members) {
+                ERR("case %zu: the repaired WAL stops %s after %zu entries", c,
+                    persistWALStopName(r.stop), walked.n);
+            }
+            persistClose(p);
+        }
+
+        persistRepairReport rep;
+        persistOpenResult why = PERSIST_OPEN_OK;
+        if (persistRepairFiles(snapPath, walPath, nullptr, &rep, &why) ||
+            why != PERSIST_OPEN_NO_PATH) {
+            ERR("a repair with no quarantine path did not refuse");
         }
     }
 

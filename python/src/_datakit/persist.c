@@ -304,6 +304,54 @@ static PyObject *dkpyQuarantine(PyObject *, PyObject *arg) {
                          persistQuarantineReadName(end), DKPY_I64(fileBytes));
 }
 
+/* ---- repair(snapshot, wal, quarantine) -> (status, report or None) ----
+ * In place: datakit.persist calls it on copies only */
+
+static PyObject *dkpyRepair(PyObject *, PyObject *args) {
+    PyObject *snapshotArg;
+    PyObject *walArg;
+    PyObject *quarantineArg;
+    if (!PyArg_ParseTuple(args, "OOO:repair", &snapshotArg, &walArg,
+                          &quarantineArg)) {
+        return nullptr;
+    }
+    PyObject *snapshot = nullptr;
+    PyObject *wal = nullptr;
+    PyObject *quarantine = nullptr;
+    if (!dkpyPath(snapshotArg, false, &snapshot) ||
+        !dkpyPath(walArg, false, &wal) ||
+        !dkpyPath(quarantineArg, false, &quarantine)) {
+        Py_XDECREF(snapshot);
+        Py_XDECREF(wal);
+        return nullptr;
+    }
+
+    persistRepairReport rep = {};
+    persistOpenResult why = PERSIST_OPEN_OK;
+    bool repaired = false;
+    Py_BEGIN_ALLOW_THREADS;
+    repaired = persistRepairFiles(dkpyPathChars(snapshot), dkpyPathChars(wal),
+                                  dkpyPathChars(quarantine), &rep, &why);
+    Py_END_ALLOW_THREADS;
+    Py_DECREF(snapshot);
+    Py_DECREF(wal);
+    Py_DECREF(quarantine);
+
+    if (why != PERSIST_OPEN_OK) {
+        return Py_BuildValue("(sO)", persistOpenResultName(why), Py_None);
+    }
+    return Py_BuildValue(
+        "(s{s:N,s:s,s:s,s:N,s:N,s:N,s:N,s:N,s:N,s:N})", "OK", "synced",
+        PyBool_FromLong(repaired), "bad_kind",
+        persistBadEntryKindName(rep.bad.kind), "bad_action",
+        persistBadEntryActionName(rep.bad.action), "bad_offset",
+        DKPY_I64(rep.bad.offset), "bad_bytes", DKPY_U64(rep.bad.bytes),
+        "entries_before", DKPY_U64(rep.bad.entriesBefore), "recovered",
+        PyBool_FromLong(rep.rebuilt.recovered), "valid",
+        PyBool_FromLong(rep.rebuilt.valid), "count",
+        DKPY_U64(rep.rebuilt.count), "bytes", DKPY_U64(rep.rebuilt.bytes));
+}
+
 PyMethodDef dkpyPersistMethods[] = {
     {"registry", dkpyRegistry, METH_NOARGS,
      "Every persisted type: (type_id, name, format_version, "
@@ -320,6 +368,9 @@ PyMethodDef dkpyPersistMethods[] = {
     {"recover", (PyCFunction)(void (*)(void))dkpyRecover,
      METH_VARARGS | METH_KEYWORDS,
      "What recovery rebuilds: (open status, summary dict or None)."},
+    {"repair", dkpyRepair, METH_VARARGS,
+     "Repair a snapshot and WAL IN PLACE as an open does: (status, report "
+     "or None).  datakit.persist.repair works on copies."},
     {"quarantine", dkpyQuarantine, METH_O,
      "A quarantine file's records: (status, records, end, file bytes)."},
     {nullptr, nullptr, 0, nullptr},

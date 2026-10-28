@@ -5,16 +5,21 @@
     python -m datakit dump WAL [SNAPSHOT] [--limit N]
     python -m datakit stats FILE [FILE]
     python -m datakit quarantine FILE [--show N]
+    python -m datakit repair plan FILE FILE
+    python -m datakit repair apply FILE FILE --out DIR
 
 FILE arguments are snapshots or WALs in any order: each one's header says
-which it is.  Every command reads files read-only and changes nothing.
+which it is.  Every command reads files read-only and changes nothing;
+``repair apply`` writes only copies, in a new directory.
 ``--json`` prints JSON instead of text (``dump`` prints one JSON object
 per entry, then one for the stop).  Op bodies and quarantined bytes are
 shown as hex: their layout belongs to the structure's type.
 
 Exit status: 0 when everything read is whole and checks; 1 when a check
 fails or a file is damaged (a failed envelope, a WAL that stops before
-its end, a damaged quarantine record); 2 when the files do not open.
+its end, a damaged quarantine record, a plan with something to repair, a
+repaired WAL still held); 2 when the files do not open or a repair is
+refused (its directory is the originals' or already holds its files).
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -59,6 +65,8 @@ def _plain(value: Any) -> Any:
         }
     if isinstance(value, bytes):
         return value.hex()
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
     if isinstance(value, list):
         return [_plain(v) for v in value]
     if isinstance(value, dict):
@@ -186,6 +194,53 @@ def cmd_quarantine(args: argparse.Namespace) -> int:
     return CLEAN if q.end == "END" else DAMAGED
 
 
+def cmd_repair_plan(args: argparse.Namespace) -> int:
+    snapshot, wal = _pair(args.files)
+    if snapshot is None or wal is None:
+        raise persist.OpenError("NO_PATH", snapshot, wal)
+    plan = persist.repair_plan(snapshot, wal)
+    what = {
+        "NONE": "nothing to do: the WAL is whole",
+        "CUT": f"cut the torn tail: {plan.bytes_past} bytes after {plan.cut_at}",
+        "HEAL": (
+            f"heal: move {plan.bytes_past} bytes from {plan.cut_at} (the "
+            f"corrupt entry on) into the quarantine and cut the WAL there"
+        ),
+        "HOLD": f"hold: a {plan.bad_kind} problem at {plan.cut_at}; nothing changes",
+    }[plan.action]
+    _emit(
+        args,
+        plan,
+        f"{what}\nkeeps {plan.entries_kept} WAL entries; rebuilds "
+        f"{plan.rebuilt.count} elements",
+    )
+    return CLEAN if plan.action == "NONE" else DAMAGED
+
+
+def cmd_repair_apply(args: argparse.Namespace) -> int:
+    snapshot, wal = _pair(args.files)
+    if snapshot is None or wal is None:
+        raise persist.OpenError("NO_PATH", snapshot, wal)
+    try:
+        result = persist.repair(snapshot, wal, args.out)
+    except (ValueError, FileExistsError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return UNOPENED
+    walk = persist.wal_walk(result.wal, result.snapshot)
+    met = (
+        "nothing bad"
+        if result.bad_kind == "NONE"
+        else f"{result.bad_kind} at {result.bad_offset}, {result.bad_action}"
+    )
+    _emit(
+        args,
+        {"result": result, "after": {"stop": walk.stop, "entries": len(walk.entries)}},
+        f"repaired copies in {args.out}: {met}; rebuilds {result.count} "
+        f"elements\nthe repaired WAL: {_stop_text(walk)}",
+    )
+    return CLEAN if result.synced and walk.stop == "END" else DAMAGED
+
+
 def _count(text: str) -> int:
     value = int(text)
     if value < 0:
@@ -222,6 +277,16 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("file")
     s.add_argument("--show", type=_count, metavar="N", help="record N with its bytes")
     s.set_defaults(run=cmd_quarantine)
+
+    s = sub.add_parser("repair", help="what an open would repair, or repair copies")
+    rsub = s.add_subparsers(dest="repair", required=True)
+    r = rsub.add_parser("plan", help="what a repair would do (reads only)")
+    r.add_argument("files", nargs=2, metavar="FILE", help="the snapshot and WAL")
+    r.set_defaults(run=cmd_repair_plan)
+    r = rsub.add_parser("apply", help="repair copies in a new directory")
+    r.add_argument("files", nargs=2, metavar="FILE", help="the snapshot and WAL")
+    r.add_argument("--out", required=True, help="the new directory for the copies")
+    r.set_defaults(run=cmd_repair_apply)
     return p
 
 

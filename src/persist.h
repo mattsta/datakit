@@ -1188,6 +1188,25 @@ typedef enum persistOpenResult {
 persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
                           persistOpenResult *why);
 
+/* What persistRepairFiles met and what the repaired files rebuild */
+typedef struct persistRepairReport {
+    persistBadEntryReport bad;     /* the bad entry met (events 0: none) */
+    persistRecoverSummary rebuilt; /* what the files rebuild afterwards */
+} persistRepairReport;
+
+/* Repairs the snapshot and WAL at these paths IN PLACE, as an open does:
+ * recovery under the type their headers name, a torn WAL tail cut, a
+ * corrupt entry and everything after it moved into a record at
+ * 'quarantinePath' (created when needed) and the WAL cut there, and a key
+ * or read problem left held (nothing changes).  A snapshot that does not
+ * restore leaves both files as they were.  Operators run it on copies.
+ * False when the files do not open ('*why' says why, as for
+ * persistOpenFiles; NO_PATH unless all three paths are given) or the
+ * final sync fails */
+bool persistRepairFiles(const char *snapshotPath, const char *walPath,
+                        const char *quarantinePath, persistRepairReport *out,
+                        persistOpenResult *why);
+
 /* Memory-based storage (for testing) */
 persistStore *persistStoreMemory(size_t initialCapacity);
 

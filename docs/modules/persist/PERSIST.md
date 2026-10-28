@@ -276,6 +276,12 @@ The Python package `datakit.persist` (`python/`) is these calls for
 operators, one wheel for Python 3.15+. An op body's layout belongs to its type (some are
 flexes, some fixed-width operands), so a generic reader shows the bytes.
 
+`persistRepairFiles(snapshotPath, walPath, quarantinePath, &report, &why)`
+repairs files IN PLACE as an open does (a torn tail cut, a corrupt entry
+healed into a record at `quarantinePath`, a key or read problem held) and
+reports the bad entry it met and what the files rebuild; operator tools run
+it on copies (OPERATORS.md, "Repairing").
+
 `persistRecoverSummarize(p, &summary)` recovers through the type's own
 descriptor and reports what that rebuilt without keeping it: whether a
 snapshot restored, whether the type's `validate` accepts the result, its

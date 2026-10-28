@@ -1,8 +1,9 @@
 # Operating on persisted files
 
 How to look at a structure's files at rest: what they hold, whether they
-check, where a WAL stops and what a heal set aside. Every command here reads
-files read-only; none of them changes a file.
+check, where a WAL stops and what a heal set aside, and how to repair them.
+Every command reads files read-only; none changes a file. `repair apply`
+writes only copies, in a new directory.
 
 The tools are the Python package in `python/` (`datakit`, one wheel for
 Python 3.15+, regular or free-threaded) over datakit's own calls (see
@@ -28,17 +29,21 @@ python -m datakit verify FILE [FILE]       # check every envelope
 python -m datakit dump WAL [SNAPSHOT] [--limit N]
 python -m datakit stats FILE [FILE]        # what recovery rebuilds
 python -m datakit quarantine FILE [--show N]
+python -m datakit repair plan FILE FILE    # what a repair would do
+python -m datakit repair apply FILE FILE --out DIR
 ```
+
+The package installs the same commands as `datakit`.
 
 Give a snapshot and its WAL in either order: each file's header says which
 it is. `--json` (before the command) prints JSON; `dump` prints one object
 per entry and a last one for the stop, so its output is JSON Lines.
 
-| Exit | Meaning                                                                  |
-| ---- | ------------------------------------------------------------------------ |
-| 0    | everything read is whole and checks                                      |
-| 1    | a check failed or a file is damaged (see the output for which and where) |
-| 2    | the files did not open (named reason: `NO_FILE`, `NOT_PERSIST`, ...)     |
+| Exit | Meaning                                                                                       |
+| ---- | --------------------------------------------------------------------------------------------- |
+| 0    | everything read is whole and checks                                                           |
+| 1    | a check failed or a file is damaged (see the output for which and where)                      |
+| 2    | the files did not open (named reason: `NO_FILE`, `NOT_PERSIST`, ...), or a repair was refused |
 
 ### inspect
 
@@ -101,3 +106,36 @@ header, a wrong magic, a count past the end of the file).
   healed; the WAL is held until it reads under the right key.
 - `BAD` with `READ`: the store failed to read. Check the device; the WAL is
   held and nothing is moved.
+
+## Repairing
+
+A repair is what the next open would do anyway, done ahead of time on
+copies, so the result can be checked before anything live changes.
+
+`repair plan SNAPSHOT WAL` reads the files and says what a repair would do,
+and exits 1 when that is anything:
+
+| action | When                      | What happens                                                       |
+| ------ | ------------------------- | ------------------------------------------------------------------ |
+| `NONE` | the WAL is whole          | nothing                                                            |
+| `CUT`  | a torn tail               | the WAL is cut at `cut_at` (the `bytes_past` after it are dropped) |
+| `HEAL` | a `CORRUPT` entry         | from `cut_at` on, the bytes move into a quarantine record; WAL cut |
+| `HOLD` | a `KEY` or `READ` problem | nothing changes: bind the key, or fix the device, and open again   |
+
+It also gives the entries kept and what the files rebuild afterwards.
+
+`repair apply SNAPSHOT WAL --out DIR` copies the snapshot and WAL (and a
+`<base>.quarantine` beside the WAL, so new records follow the old ones)
+into DIR and repairs the copies through persist's own open
+(`persistRepairFiles`). The originals are never opened for writing. DIR is
+created if needed; it may not be the originals' directory, and no file the
+repair writes may already be there (exit 2, refused). The output gives the
+bad entry met, what the repaired files rebuild and where the repaired WAL
+stops: `END` after a cut or a heal, exit 0. A held WAL keeps its stop
+(exit 1). Check the copies (`verify`, `stats`), then put them in place of
+the originals while the structure is closed.
+
+A quarantine record is never replayed. It holds the bad entry and every
+entry after it; applying those later entries without the bad one could
+build a state that never existed. Keep it for inspection
+(`quarantine --show`).

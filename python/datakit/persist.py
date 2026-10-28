@@ -12,7 +12,9 @@ Status and kind names are datakit's own (``persistOpenResultName``,
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
+from pathlib import Path as FsPath
 
 from . import _datakit
 
@@ -141,6 +143,120 @@ class Quarantine:
     records: list[QuarantineRecord]
     end: str
     file_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class RepairPlan:
+    """What a repair (an open) would do to a snapshot and WAL.
+
+    ``action``: ``NONE`` (the WAL is whole), ``CUT`` (a torn tail: the
+    WAL is cut at ``cut_at``), ``HEAL`` (a corrupt entry: it and the
+    ``bytes_past`` bytes after it move into the quarantine and the WAL is
+    cut at ``cut_at``) or ``HOLD`` (a key or read problem, or a WAL that
+    does not read: nothing changes).  ``rebuilt`` is what the files
+    rebuild afterwards: the entries before the stop.
+    """
+
+    action: str
+    stop: str
+    bad_kind: str
+    cut_at: int
+    bytes_past: int
+    entries_kept: int
+    rebuilt: RecoverSummary
+
+
+@dataclass(frozen=True, slots=True)
+class RepairResult:
+    """A repair done on copies in a new directory.
+
+    ``bad_*`` describe the bad entry met (``bad_kind`` ``NONE``: none; a
+    torn tail is not one), ``bad_action`` ``HEALED`` or ``HELD``.
+    ``quarantine`` is the quarantine file when one exists afterwards.
+    """
+
+    snapshot: FsPath
+    wal: FsPath
+    quarantine: FsPath | None
+    synced: bool
+    bad_kind: str
+    bad_action: str
+    bad_offset: int
+    bad_bytes: int
+    entries_before: int
+    recovered: bool
+    valid: bool
+    count: int
+    bytes: int
+
+
+def quarantine_name(wal: FsPath) -> str:
+    """The quarantine file's name beside a WAL: ``<base>.quarantine`` for
+    ``<base>.wal``, as a persist context names it."""
+    name = wal.name
+    base = name.removesuffix(".wal")
+    return f"{base}.quarantine"
+
+
+def repair_plan(snapshot: Path, wal: Path) -> RepairPlan:
+    """What a repair would do, read without changing anything."""
+    walk = wal_walk(wal, snapshot)
+    if walk.stop == "END":
+        action = "NONE"
+    elif walk.stop == "TORN":
+        action = "CUT"
+    elif walk.stop == "BAD" and walk.bad_kind == "CORRUPT":
+        action = "HEAL"
+    else:
+        action = "HOLD"
+    return RepairPlan(
+        action=action,
+        stop=walk.stop,
+        bad_kind=walk.bad_kind,
+        cut_at=walk.good_end,
+        bytes_past=walk.wal_end - walk.good_end,
+        entries_kept=len(walk.entries),
+        rebuilt=recover(snapshot, wal),
+    )
+
+
+def repair(snapshot: Path, wal: Path, out_dir: Path) -> RepairResult:
+    """Repair copies of the snapshot and WAL in ``out_dir``, as an open
+    does; the originals are never opened for writing.
+
+    ``out_dir`` is created if needed; it may not be the directory of
+    either original (ValueError) or already hold a file the repair would
+    write (FileExistsError).  A quarantine file beside the original WAL is
+    copied too, so new records follow the old ones.
+    """
+    snapshot, wal, out = (FsPath(os.fsdecode(p)) for p in (snapshot, wal, out_dir))
+    if out.exists() and any(
+        out.resolve() == p.resolve().parent for p in (snapshot, wal)
+    ):
+        raise ValueError(f"{out}: repairs go to a new directory, not the originals'")
+    quarantine = wal.parent / quarantine_name(wal)
+    targets = [out / snapshot.name, out / wal.name, out / quarantine.name]
+    if len({t.name for t in targets}) != len(targets):
+        raise ValueError("the snapshot, WAL and quarantine need different names")
+    for target in targets:
+        if target.exists():
+            raise FileExistsError(f"{target}: already there")
+    # Opening reads the headers and refuses before anything is copied
+    verify(snapshot, wal)
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(snapshot, targets[0])
+    shutil.copyfile(wal, targets[1])
+    if quarantine.exists():
+        shutil.copyfile(quarantine, targets[2])
+    status, report = _datakit.repair(targets[0], targets[1], targets[2])
+    if status != "OK":
+        raise OpenError(status, targets[0], targets[1])
+    return RepairResult(
+        snapshot=targets[0],
+        wal=targets[1],
+        quarantine=targets[2] if targets[2].exists() else None,
+        **report,
+    )
 
 
 def registry() -> list[PersistedType]:
