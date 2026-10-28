@@ -938,6 +938,35 @@ static void benchMultidictLimits(void) {
     }
 }
 
+/* Score updates of existing members and nothing else (run by name, for
+ * profiling the write path): a 100k-member Full-tier set, 20 passes of
+ * IncrBy over every member */
+static void benchMultiOrderedSetWrite(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    uint64_t sink = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const databox s = databoxNewSigned(i);
+        const databox m = perfContainerKey(keys, i);
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+
+    constexpr uint32_t passes = 20;
+    const double t0 = timeUtilMonotonicSec();
+    for (uint32_t p = 0; p < passes; p++) {
+        for (uint32_t i = 0; i < n; i++) {
+            const databox delta = databoxNewSigned((int64_t)(i % 7) - 3);
+            const databox m = perfContainerKey(keys, perfScatter(i));
+            databox result = {};
+            sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
+        }
+    }
+    emitRow("multiOrderedSetWrite", "incrByScattered", 0, passes * n,
+            timeUtilMonotonicSec() - t0);
+    perfContainerSink = sink;
+}
+
 /* A Full-tier set: adds of new members, then updates of existing ones
  * (new scores by Add, AddXX and IncrBy), score reads and removals */
 static void benchMultiOrderedSet(void) {
@@ -2499,6 +2528,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multimapRefRead")) {
             benchMultimapRefRead();
+        }
+
+        if (perfNamed("multiOrderedSetWrite")) {
+            benchMultiOrderedSetWrite();
         }
 
         if (perfWanted("idRows")) {

@@ -506,16 +506,14 @@ DK_INLINE_ALWAYS int databoxCompareBytes_(const uint8_t *aBytes,
      * (longer run is the larger number, then lex on the digit
      * bytes); everything else compares lexicographically.  This
      * produces a strict total order so it is safe as a binary-search
-     * comparator.
+     * comparator, and two byte strings compare equal only when they are
+     * identical.
      *
-     * The previous formulation tracked only the FIRST digit
-     * difference between a and b and then made post-hoc decisions
-     * when one side's digit run ended before the other.  That
-     * produced a non-transitive ordering: comparing the triplet
-     * { "g_2_39", "g_10_0", "g_1_6" } reported A<B, B>C, A>C — a
-     * cycle.  Binary search over a flex sorted by such a comparator
-     * silently dropped keys that iteration could still find,
-     * because the search walked a wrong branch.
+     * Deciding by the FIRST digit difference alone, when one side's
+     * digit run ends before the other, would not be transitive: the
+     * triplet { "g_2_39", "g_10_0", "g_1_6" } would give A<B, B>C, A>C,
+     * and a binary search over rows sorted that way would miss keys
+     * that iteration finds.
      *
      * Run-length-first comparison is transitive: digit runs of
      * different length are ordered by length alone, runs of the
