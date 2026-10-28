@@ -5,8 +5,9 @@
 Every function a public header under ``src/`` declares (the headers and
 declarations ``dktools coverage`` counts as public API) is looked for, as
 a whole word, in the user-level docs: ``docs/**/*.md`` and ``README.md``
-(suite and benchmark entry points, ``fooTest`` / ``fooBench``, are not
-API and are not counted).
+(suite and benchmark entry points, ``fooTest`` / ``fooBench``, and
+declarations under ``#ifdef DATAKIT_TEST`` are not API and are not
+counted).
 Prints one line per header with undocumented functions, most undocumented
 first, then the totals; ``--names`` (or naming HEADERs) lists each
 header's undocumented functions too.  Without HEADERs it also names the
@@ -21,7 +22,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .coverage import collect_headers, declared_functions
+from .coverage import collect_headers, declared_functions, test_lines
 
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -52,13 +53,26 @@ def doc_words(repo: Path) -> set[str]:
     return words
 
 
+def api_text(header_text: str) -> str:
+    """The header without its test-only code (``#ifdef DATAKIT_TEST``
+    blocks): those declarations are test hooks, not API."""
+    test = test_lines(header_text)
+    return "\n".join(
+        line for n, line in enumerate(header_text.splitlines(), 1) if n not in test
+    )
+
+
 def gaps(headers: dict[str, str], words: set[str]) -> list[HeaderGaps]:
     """Per header with declarations: its functions no doc names, sorted
     most undocumented first (then by path)."""
     out = []
     for path, text in headers.items():
         names = sorted(
-            {n for n in declared_functions(text) if not _ENTRY_POINT.search(n)}
+            {
+                n
+                for n in declared_functions(api_text(text))
+                if not _ENTRY_POINT.search(n)
+            }
         )
         if names:
             missing = tuple(n for n in names if n not in words)

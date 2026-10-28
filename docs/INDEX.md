@@ -16,6 +16,7 @@
 - [databox](modules/core/DATABOX.md) - Universal 16-byte container for any data type
 - [Diagnostics (dkDiag)](modules/core/DIAGNOSTICS.md) - How datakit reports misuse and conditions without printing
 - [Tiered containers](modules/core/TIERS.md) - The lifecycle, stats, size-limit defaults, tier rules and Compact shared by multimap, multiOrderedSet, multilist, multiarray and intset
+- [bigmath](modules/core/BIGMATH.md) - Arbitrary-precision signed integers in a caller-owned 64-byte struct
 
 Core platform plumbing has no standalone guide; read the headers
 directly: `src/datakit.h` (platform abstraction and shared macros),
@@ -109,6 +110,8 @@ dropped from the CTest list otherwise.
 - [setproctitle](modules/system/SETPROCTITLE.md) - Process title manipulation
 - [versionOSRuntime](modules/system/VERSION_OS_RUNTIME.md) - OS/runtime detection
 - [fastmutex](modules/system/FASTMUTEX.md) - High-performance mutex
+- [ownedState](modules/system/OWNED_STATE.md) - Single-writer publication without reader locks, and deferred reclamation of what it replaces
+- [clusterRing](modules/system/CLUSTER_RING.md) - Replica placement by consistent hashing: strategies, quorums, topology affinity, health and rebalance plans
 - [timeUtil](modules/system/TIME_UTIL.md) - Time utilities
 - [multiTimer](modules/system/MULTI_TIMER.md) - Multi-timer management
 - [timerWheel](modules/system/TIMER_WHEEL.md) - Hierarchical timing wheel
@@ -118,6 +121,7 @@ dropped from the CTest list otherwise.
 - [list](modules/utils/LIST.md) - Doubly-linked list
 - [multiheap](modules/utils/MULTIHEAP.md) - Keyed byte-region store (ref -> resizable bytes)
 - [intersectInt](modules/utils/INTERSECT_INT.md) - Set intersection operations
+- [ULID](modules/utils/ULID.md) - Time-ordered identifiers: 128-bit ULIDs and 64/32-bit compact variants, their layouts and ranges
 
 ### Bundled Dependencies
 

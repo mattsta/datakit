@@ -27,6 +27,7 @@ class DocGaps(unittest.TestCase):
         )
         (self.repo / "src" / "b.h").write_text(
             "#pragma once\nvoid bOnly(void);\nint bTest(int argc, char *argv[]);\n"
+            "#ifdef DATAKIT_TEST\nvoid bTestHook(void);\n#endif\n"
         )
         # internal headers are not public API
         (self.repo / "src" / "aInternal.h").write_text("void hidden(void);\n")

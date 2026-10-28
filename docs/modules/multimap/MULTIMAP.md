@@ -1211,6 +1211,28 @@ pthread_rwlock_unlock(&lock);
 Borrowed byte values read under the read lock must be copied before the lock is
 released.
 
+## More calls by job
+
+| Job                           | Calls                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| What a map is                 | `multimapGetType` (the tier holding the rows now), `multimapIsSet` (rows deduplicated whole; one key may hold several rows), `multimapElementsPerEntry` (row width, key first), `multimapLimit` / `multimapCompresses` (its size limit and compression)                                                            |
+| Build from sorted rows        | `multimapNewFromDump(width, isSet, compress, limit, rows)`: takes a flex of whole rows in the map's order and cuts it straight into the tier the size needs, O(rows) with no per-row insert; NULL (rows freed) when rows are not whole or out of order. `multimapNewFromDumpWithReference` for atom-reference keys |
+| By position                   | `multimapLookupByPosition(m, i, elements)` / `multimapDeleteByPosition(&m, i)`: the i-th row from the head (negative: from the tail, -1 last), found through maintained counts and anchors, so a walk covers at most a quarter of one inner map                                                                    |
+| Delete and keep the value     | `multimapDeleteTaking(&m, key, takenOut)`: one search; the deleted row's values come back owned (release each with `databoxFreeData`). `multimapDeleteReporting` reports them without owning (bytes point into the rewritten map: types and lengths only)                                                          |
+| Change a found row            | after `multimapGetUnderlyingEntry` (no change to the map since): `multimapFieldIncrEntry` (an increment with no second search), `multimapDeleteEntry` / `multimapDeleteEntryWithReference`                                                                                                                         |
+| Rewrite a row's values        | `multimapEntryReplace(&m, key, values)`: every value field of the row with `key` (which must exist), the key kept; `multimapEntryResize(&m, key, n)`: the row's first value becomes `n` bytes (bytes past the old length are unspecified)                                                                          |
+| Keys that are atom references | `multimapLookupWithReference` and `multimapInsertWithSurrogateKeyIfAbsent` find a key by the value its reference resolves to (see [VARIANTS](VARIANTS.md#multimapatom))                                                                                                                                            |
+
+Best practices:
+
+- Find a row once, then work on it: `GetUnderlyingEntry` followed by
+  `FieldIncrEntry` or `DeleteEntry` costs one search where Lookup-then-change
+  costs two.
+- Loading many rows already in order: build with `multimapNewFromDump`
+  instead of inserting one by one.
+- Keep using the pointer a writer leaves (`&m` everywhere): any write may move
+  the map to another tier.
+
 ## See Also
 
 - [VARIANTS.md](VARIANTS.md) - Small/Medium/Full internals and the atom API
