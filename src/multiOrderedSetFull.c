@@ -3305,8 +3305,8 @@ int multiOrderedSetFullTest(int, char *[]) {
             if (!multiOrderedSetFullGetScore(m, &member, &got)) {
                 ERR("GetScore missing m%06d after split", i);
             } else if (got.data.i != want) {
-                ERR("GetScore m%06d expected %d got %" PRId64, i, want,
-                    (int64_t)got.data.i);
+                ERR("GetScore m%06d expected %d got %" PRIdMAX, i, want,
+                    got.data.i);
             }
         }
         int64_t prevScore = INT64_MIN;

@@ -2356,13 +2356,13 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
             }
             if (rows[i].type == DATABOX_SIGNED_64 &&
                 result.data.i != rows[i].i) {
-                ERR("'%s': expected %" PRId64 ", got %" PRId64, rows[i].s,
-                    rows[i].i, (int64_t)result.data.i);
+                ERR("'%s': expected %" PRId64 ", got %" PRIdMAX, rows[i].s,
+                    rows[i].i, result.data.i);
             }
             if (rows[i].type == DATABOX_UNSIGNED_64 &&
                 result.data.u != rows[i].u) {
-                ERR("'%s': expected %" PRIu64 ", got %" PRIu64, rows[i].s,
-                    rows[i].u, (uint64_t)result.data.u);
+                ERR("'%s': expected %" PRIu64 ", got %" PRIuMAX, rows[i].s,
+                    rows[i].u, result.data.u);
             }
         }
     }
@@ -2444,8 +2444,8 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
 
         if (result.data.i != 2411321300310020112LL) {
-            ERR("Expected %" PRId64 ", but got %" PRId64, 2411321300310020112LL,
-                (int64_t)result.data.i);
+            ERR("Expected %" PRId64 ", but got %" PRIdMAX,
+                2411321300310020112LL, result.data.i);
         }
     }
 

@@ -24,7 +24,10 @@ given.  Every run's output is kept as ``run-<side>-<round>.tsv``.
 
 For each row key (module, name, bytes) present on both sides the median
 ns_per_op of each side is printed with the change in percent; the table
-is also written to ``result.txt``.  Rows on one side only are listed.
+is also written to ``result.txt``.  A row whose bytes differ between the
+sides (a metered heap the change grew or shrank) is still compared, by
+module and name, with its bytes change at the end of the line.  Rows on
+one side only are listed.
 Exits 0, or 1 when ``--tolerance PCT`` is given and some row's current
 median exceeds its base median by more than PCT percent (the rows
 perfdiff would call regressed), or when a build or run fails; 2 on an
@@ -117,6 +120,28 @@ def change_pct(base: float, current: float) -> float | None:
     return (current - base) / base * 100.0
 
 
+def bytes_changed(base: dict[Key, float], current: dict[Key, float]) -> dict[Key, Key]:
+    """Base keys whose row reports other bytes on the current side (a
+    change to a metered heap), each to its current key: a (module, name)
+    that is on each side once, with bytes that differ"""
+
+    def one_sided(
+        side: dict[Key, float], other: dict[Key, float]
+    ) -> dict[tuple[str, str], Key]:
+        found: dict[tuple[str, str], list[Key]] = {}
+        for key in side:
+            if key not in other:
+                found.setdefault(key[:2], []).append(key)
+        return {name: keys[0] for name, keys in found.items() if len(keys) == 1}
+
+    current_by_name = one_sided(current, base)
+    return {
+        key: current_by_name[name]
+        for name, key in one_sided(base, current).items()
+        if name in current_by_name
+    }
+
+
 def table(
     base: dict[Key, float],
     current: dict[Key, float],
@@ -136,22 +161,29 @@ def table(
         + ("  base range        current range" if spread else "")
     ]
     regressed: list[Key] = []
+    partner = bytes_changed(base, current)
     for key, b in base.items():
-        if key not in current:
+        ckey = key if key in current else partner.get(key)
+        if ckey is None:
             continue
-        c = current[key]
+        c = current[ckey]
         pct = change_pct(b, c)
         shown = "-" if pct is None else f"{pct:+.1f}%"
         module, name, nbytes = key
         line = f"{module:<16} {name:<14} {nbytes:>8} {b:>10.1f} {c:>10.1f} {shown:>8}"
         if spread:
-            (blo, bhi), (clo, chi) = spread[0][key], spread[1][key]
+            (blo, bhi), (clo, chi) = spread[0][key], spread[1][ckey]
             line += f"  [{blo:.1f}-{bhi:.1f}]".ljust(20) + f"[{clo:.1f}-{chi:.1f}]"
+        if ckey != key:
+            bpct = change_pct(float(nbytes), float(ckey[2]))
+            bshown = "" if bpct is None else f" ({bpct:+.1f}%)"
+            line += f"  bytes -> {ckey[2]}{bshown}"
         lines.append(line)
         if tolerance is not None and pct is not None and pct > tolerance:
             regressed.append(key)
-    only_base = [k for k in base if k not in current]
-    only_current = [k for k in current if k not in base]
+    paired = set(partner.values())
+    only_base = [k for k in base if k not in current and k not in partner]
+    only_current = [k for k in current if k not in base and k not in paired]
     for label, keys in (("base only", only_base), ("current only", only_current)):
         for module, name, nbytes in keys:
             lines.append(f"{label}: {module} {name} {nbytes}")

@@ -6098,9 +6098,9 @@ static int multidictTestAddNXMidRehash_(void) {
         databox val = {};
         const int64_t want = k < present ? k * 3 : -1;
         if (!multidictFind(d, &key, &val) || val.data.i != want) {
-            ERR("AddNX mid-rehash: key %" PRId64 " holds %" PRId64
+            ERR("AddNX mid-rehash: key %" PRId64 " holds %" PRIdMAX
                 ", want %" PRId64,
-                k, (int64_t)val.data.i, want);
+                k, val.data.i, want);
         }
     }
 

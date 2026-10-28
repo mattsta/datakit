@@ -19,6 +19,9 @@ helper to use instead:
 - ``encode-op-boxes``: ``flexNewFromDataboxPtrsExact(boxes, argc)`` in a
   persist encodeOp -> persistOpEncodeBoxes
 - ``div-ceil``: ``(a + b - 1) / b`` (overflows near the top) -> dkDivCeil
+- ``databox-int-cast``: ``(int64_t)x.data.i`` / ``(uint64_t)x.data.u``,
+  a databox's intmax_t / uintmax_t field cast to the 64-bit type of the
+  same sign -> the field as is, printed with PRIdMAX / PRIuMAX
 
 Only code counts: comments and literals never match, preprocessor lines
 do (a macro body is code).  Each rule skips the file that defines its
@@ -103,6 +106,15 @@ RULES: tuple[Rule, ...] = (
         re.compile(rb"\+\s*\(?\s*(\w+)\s*\)?\s*-\s*1\s*\)\s*/\s*\(?\s*\1\b"),
         "dkBits.h dkDivCeil",
         frozenset({"src/dkBits.h"}),
+    ),
+    Rule(
+        "databox-int-cast",
+        # Same sign only: a cast across signs converts the value
+        re.compile(
+            rb"\(\s*int64_t\s*\)\s*[\w.\->\[\]]*\bdata\.i\b"
+            rb"|\(\s*uint64_t\s*\)\s*[\w.\->\[\]]*\bdata\.u\b"
+        ),
+        "the field as is (intmax_t / uintmax_t), printed with PRIdMAX / PRIuMAX",
     ),
 )
 

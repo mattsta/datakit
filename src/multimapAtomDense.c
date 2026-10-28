@@ -449,8 +449,8 @@ static int denseSoak_(const uint64_t seed, const size_t ops) {
             databox key = denseValue_(v, buf, sizeof(buf));
             if (multimapAtomDenseInsertIfNewConvert(d, &key) || !key.created ||
                 key.data.u != want) {
-                ERR("op %zu: new value got id %" PRIu64 ", want %" PRIu64, op,
-                    (uint64_t)key.data.u, want);
+                ERR("op %zu: new value got id %" PRIuMAX ", want %" PRIu64, op,
+                    key.data.u, want);
                 break;
             }
 
@@ -560,7 +560,7 @@ int multimapAtomDenseTest(int, char *[]) {
         databox c = databoxNewSigned(3);
         multimapAtomDenseInsertConvert(d, &c);
         if (c.data.u != 0 || d->holes) {
-            ERR("the freed id came back as %" PRIu64, (uint64_t)c.data.u);
+            ERR("the freed id came back as %" PRIuMAX, c.data.u);
         }
 
         /* A WAL insert under id 6 while the next id is 2: 2..5 are holes,
@@ -582,8 +582,8 @@ int multimapAtomDenseTest(int, char *[]) {
             databox x = databoxNewSigned(100 + (int64_t)i);
             multimapAtomDenseInsertConvert(d, &x);
             if (x.data.u != want[i]) {
-                ERR("atom %zu got id %" PRIu64 ", want %" PRIu64, i,
-                    (uint64_t)x.data.u, want[i]);
+                ERR("atom %zu got id %" PRIuMAX ", want %" PRIu64, i, x.data.u,
+                    want[i]);
             }
         }
         multimapAtomDenseFree(d);
@@ -606,8 +606,8 @@ int multimapAtomDenseTest(int, char *[]) {
             databox x = databoxNewSigned(600 + (int64_t)i);
             multimapAtomDenseInsertConvert(d, &x);
             if (x.data.u != want[i]) {
-                ERR("atom %zu got id %" PRIu64 ", want %" PRIu64, i,
-                    (uint64_t)x.data.u, want[i]);
+                ERR("atom %zu got id %" PRIuMAX ", want %" PRIu64, i, x.data.u,
+                    want[i]);
             }
         }
 

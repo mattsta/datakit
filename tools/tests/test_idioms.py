@@ -37,6 +37,7 @@ class Rules(unittest.TestCase):
             "div-ceil": b"#define D(a, b) (((a) + (b) - 1) / (b))\n",
             "encode-op-boxes": b"flex *f = flexNewFromDataboxPtrsExact(boxes, argc);\n",
             "memcmp-err": (b'if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n}\n'),
+            "databox-int-cast": b'ERR("%" PRId64, (int64_t)got.box.data.i);\n',
         }
         for rule, src in cases.items():
             with self.subTest(rule=rule):
@@ -57,9 +58,21 @@ class Rules(unittest.TestCase):
             b"    const uint32_t ia = *(const uint32_t *)a;\n"
             b"    const uint32_t ib = *(const uint32_t *)b;\n"
             b"    const int64_t sa = s[ia];\n    return 0;\n}\n",
+            # a cast across signs converts the value
+            b"m = negative ? 0 - (uint64_t)box->data.i : box->data.u;\n",
+            b"v = (int64_t)entry.box.data.u;\n",
         ):
             with self.subTest(src=src):
                 self.assertEqual(rules_in(src), [])
+
+    def test_a_databox_cast_matches_each_access_form(self) -> None:
+        for src in (
+            b"f((uint64_t)ids[i].data.u);\n",
+            b"f((int64_t) box->data.i);\n",
+            b"f((uint64_t)key.data.u, want);\n",
+        ):
+            with self.subTest(src=src):
+                self.assertEqual(rules_in(src), ["databox-int-cast"])
 
     def test_a_rules_home_file_is_skipped(self) -> None:
         src = b"return x * 0x2545F4914F6CDD1Dull;\n"

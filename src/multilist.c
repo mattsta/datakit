@@ -1542,9 +1542,9 @@ int multilistTest(int, char *[]) {
                         const int64_t expect = t < 0 ? total + t : t;
                         if (got.box.data.i != expect) {
                             ERR("IndexNear(tier %d, anchor %d, target %d): "
-                                "got %" PRId64 " expected %" PRId64 "!",
+                                "got %" PRIdMAX " expected %" PRId64 "!",
                                 (int)_multilistType(ml), anchors[ai], t,
-                                (int64_t)got.box.data.i, expect);
+                                got.box.data.i, expect);
                             assert(false);
                         }
                     }

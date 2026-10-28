@@ -1357,9 +1357,9 @@ int multimapMediumTest(int, char *[]) {
         uint64_t expect = 5;
         while (multimapMediumIteratorNext(&iter, elements)) {
             if (expect == 0 || key.data.u != expect - 1) {
-                ERR("reverse iteration gave key %" PRIu64 ", expected "
+                ERR("reverse iteration gave key %" PRIuMAX ", expected "
                     "%" PRIu64,
-                    (uint64_t)key.data.u, expect - 1);
+                    key.data.u, expect - 1);
                 break;
             }
 

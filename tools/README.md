@@ -693,7 +693,9 @@ uv run --project tools dktools idioms [FILE ...]
   `inline-xorshift64star` (dkRandom.h), `rand-64` (two 31-bit draws;
   dkSplitmix64Next), `qsort-comparator` (dkSort.h), `memcmp-err`
   (TEST_BYTES; `dktools testbytes` rewrites it), `div-ceil` (dkDivCeil),
-  `encode-op-boxes` (a persist encodeOp's operands; persistOpEncodeBoxes).
+  `encode-op-boxes` (a persist encodeOp's operands; persistOpEncodeBoxes),
+  `databox-int-cast` (a databox's intmax_t / uintmax_t field cast to the
+  64-bit type of the same sign; print it as is with PRIdMAX / PRIuMAX).
 - Only code counts: comments and literals never match; preprocessor
   lines do. Each rule skips the file that defines its shared form.
 - Exceptions are `PATH RULE REASON` lines in `tools/idioms-allow.txt`;
@@ -1093,7 +1095,9 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
   `run-<side>-<round>.tsv`.
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only
-  one side has. `--spread` adds each side's lowest and highest run per
+  one side has. A row whose bytes differ between the sides (a metered
+  heap the change grew or shrank) is paired by module and name and ends
+  with `bytes -> N (change)`. `--spread` adds each side's lowest and highest run per
   row: memory-bound rows (finds over tables larger than the caches) stray
   far more from run to run than compute-bound ones, and a change smaller
   than a row's own spread is noise.

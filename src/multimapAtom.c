@@ -2844,7 +2844,7 @@ static int atomTestSuite_(void) {
             ids[i] = databoxNewSigned(100 + i);
             multimapAtomInsertConvert(ma, &ids[i]);
             if (ids[i].data.u != (uint64_t)i) {
-                ERR("atom %d got id %" PRIu64, i, (uint64_t)ids[i].data.u);
+                ERR("atom %d got id %" PRIuMAX, i, ids[i].data.u);
             }
         }
 
@@ -2882,8 +2882,8 @@ static int atomTestSuite_(void) {
         databox e = databoxNewSigned(104);
         multimapAtomInsertConvert(ma, &e);
         if (d.data.u != 3 || e.data.u != 4 || multimapAtomCount(ma) != 1) {
-            ERR("permanent ids repeated: d %" PRIu64 ", e %" PRIu64,
-                (uint64_t)d.data.u, (uint64_t)e.data.u);
+            ERR("permanent ids repeated: d %" PRIuMAX ", e %" PRIuMAX, d.data.u,
+                e.data.u);
         }
 
         multimapAtomFree(ma);
@@ -2905,8 +2905,8 @@ static int atomTestSuite_(void) {
         databox f = databoxNewSigned(300);
         multimapAtomInsertConvert(ma, &f);
         if (f.data.u != 4) {
-            ERR("after the top release the next id is %" PRIu64 ", want 4",
-                (uint64_t)f.data.u);
+            ERR("after the top release the next id is %" PRIuMAX ", want 4",
+                f.data.u);
         }
 
         /* An interior hole stays unused */
@@ -2914,8 +2914,8 @@ static int atomTestSuite_(void) {
         databox g = databoxNewSigned(301);
         multimapAtomInsertConvert(ma, &g);
         if (g.data.u != 5) {
-            ERR("an interior release moved the next id to %" PRIu64 ", want 5",
-                (uint64_t)g.data.u);
+            ERR("an interior release moved the next id to %" PRIuMAX ", want 5",
+                g.data.u);
         }
 
         /* Releasing down from the top skips back over the hole only to
@@ -2925,8 +2925,8 @@ static int atomTestSuite_(void) {
         databox h = databoxNewSigned(302);
         multimapAtomInsertConvert(ma, &h);
         if (h.data.u != 4) {
-            ERR("the next id after releasing 5 and 4 is %" PRIu64 ", want 4",
-                (uint64_t)h.data.u);
+            ERR("the next id after releasing 5 and 4 is %" PRIuMAX ", want 4",
+                h.data.u);
         }
 
         /* Last-in-first-out churn reuses one id */
@@ -2934,8 +2934,7 @@ static int atomTestSuite_(void) {
             databox x = databoxNewSigned(1'000'000 + i);
             multimapAtomInsertConvert(ma, &x);
             if (x.data.u != 5) {
-                ERR("churn %d got id %" PRIu64 ", want 5", i,
-                    (uint64_t)x.data.u);
+                ERR("churn %d got id %" PRIuMAX ", want 5", i, x.data.u);
                 break;
             }
 
@@ -2953,8 +2952,8 @@ static int atomTestSuite_(void) {
         databox gen = databoxNewSigned(600);
         multimapAtomInsertConvert(ma, &gen);
         if (gen.data.u <= 5) {
-            ERR("generated id %" PRIu64 " reuses the exact-id range",
-                (uint64_t)gen.data.u);
+            ERR("generated id %" PRIuMAX " reuses the exact-id range",
+                gen.data.u);
         }
 
         const databox exactRef = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
@@ -3011,8 +3010,8 @@ static int atomTestSuite_(void) {
             databox c = databoxNewSigned(3);
             multimapAtomInsertConvert(ma, &c);
             if (c.data.u != 0) {
-                ERR("way %d: first id after emptying is %" PRIu64 ", want 0",
-                    how, (uint64_t)c.data.u);
+                ERR("way %d: first id after emptying is %" PRIuMAX ", want 0",
+                    how, c.data.u);
             }
 
             multimapAtomFree(ma);
@@ -3081,9 +3080,9 @@ static int atomTestSuite_(void) {
                     if (pass == 0) {
                         refs[i] = k.data.u;
                     } else if (!existed || k.data.u != refs[i]) {
-                        ERR("order %d: second offer of %s gave ref %" PRIu64
+                        ERR("order %d: second offer of %s gave ref %" PRIuMAX
                             " existed %d, first gave %" PRIu64,
-                            order, name, (uint64_t)k.data.u, existed, refs[i]);
+                            order, name, k.data.u, existed, refs[i]);
                     }
                 }
             }

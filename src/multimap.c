@@ -1710,17 +1710,17 @@ static int32_t rpJudge(const char *where, const uint64_t key,
     }
 
     if (out[0].type == DATABOX_VOID || out[0].data.u != counter) {
-        ERR("%s: key %" PRIu64 " replaced counter reported %" PRIu64
+        ERR("%s: key %" PRIu64 " replaced counter reported %" PRIuMAX
             " (type %d), expected %" PRIu64,
-            where, key, (uint64_t)out[0].data.u, (int)out[0].type, counter);
+            where, key, out[0].data.u, (int)out[0].type, counter);
     }
 
     if (out[1].type == DATABOX_VOID ||
         out[1].data.u != (uintptr_t)RP_PTR_TAG(ptrIdx)) {
-        ERR("%s: key %" PRIu64 " replaced pointer reported 0x%" PRIx64
-            " (type %d), expected 0x%" PRIx64,
-            where, key, (uint64_t)out[1].data.u, (int)out[1].type,
-            (uint64_t)(uintptr_t)RP_PTR_TAG(ptrIdx));
+        ERR("%s: key %" PRIu64 " replaced pointer reported 0x%" PRIxMAX
+            " (type %d), expected 0x%" PRIxPTR,
+            where, key, out[1].data.u, (int)out[1].type,
+            (uintptr_t)RP_PTR_TAG(ptrIdx));
     }
 
     return err;
@@ -1823,10 +1823,10 @@ static int32_t rpWide(const char *where, rpInsertFn fn, void *m,
 
     if (out[1].type == DATABOX_VOID ||
         out[1].data.u != (uintptr_t)RP_PTR_TAG(key)) {
-        ERR("%s: key %" PRIu64 " replaced pointer reported 0x%" PRIx64
-            " (type %d), expected 0x%" PRIx64,
-            where, key, (uint64_t)out[1].data.u, (int)out[1].type,
-            (uint64_t)(uintptr_t)RP_PTR_TAG(key));
+        ERR("%s: key %" PRIu64 " replaced pointer reported 0x%" PRIxMAX
+            " (type %d), expected 0x%" PRIxPTR,
+            where, key, out[1].data.u, (int)out[1].type,
+            (uintptr_t)RP_PTR_TAG(key));
     }
 
     const databox again = databoxNewUnsigned(key + 2000);
@@ -3991,9 +3991,9 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
         }
 
         if (k.type != DATABOX_UNSIGNED_64 || k.data.u >= rows) {
-            ERR("%s: a draw returned key %" PRIu64 " (type %d), outside "
+            ERR("%s: a draw returned key %" PRIuMAX " (type %d), outside "
                 "[0, %d)",
-                where, (uint64_t)k.data.u, (int)k.type, rows);
+                where, k.data.u, (int)k.type, rows);
             return err;
         }
 
@@ -4037,9 +4037,9 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
         databox *boxes[2] = {&k, &v};
         multimapEntry me;
         if (!draw(m, true, boxes, &me) || k.data.u != lastKey.data.u) {
-            ERR("%s: fromTail returned key %" PRIu64 ", not the last row "
-                "%" PRIu64,
-                where, (uint64_t)k.data.u, (uint64_t)lastKey.data.u);
+            ERR("%s: fromTail returned key %" PRIuMAX ", not the last row "
+                "%" PRIuMAX,
+                where, k.data.u, lastKey.data.u);
             break;
         }
     }
@@ -4209,9 +4209,9 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
             flexGetByType(me.fe, &gotKey);
             flexGetByType(flexNext(*me.map, me.fe), &gotVal);
             if (gotKey.data.u != key || gotVal.data.u != firstValue[key]) {
-                ERR("if-absent: key %" PRIu64 " entry names %" PRIu64
-                    " = %" PRIu64,
-                    key, (uint64_t)gotKey.data.u, (uint64_t)gotVal.data.u);
+                ERR("if-absent: key %" PRIu64 " entry names %" PRIuMAX
+                    " = %" PRIuMAX,
+                    key, gotKey.data.u, gotVal.data.u);
             }
         }
 
@@ -4243,9 +4243,9 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
         const bool found = multimapLookup(m, &k, out);
         if (found != seen[key] || (found && (got.type != DATABOX_UNSIGNED_64 ||
                                              got.data.u != firstValue[key]))) {
-            ERR("if-absent: key %" PRIu64 " found %d value %" PRIu64
+            ERR("if-absent: key %" PRIu64 " found %d value %" PRIuMAX
                 ", expected found %d value %" PRIu64,
-                key, found, (uint64_t)got.data.u, seen[key],
+                key, found, got.data.u, seen[key],
                 seen[key] ? firstValue[key] : 0);
         }
     }
@@ -4278,9 +4278,9 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
     } else {
         flexGetByType(flexNext(*me.map, me.fe), &gotVal);
         if (gotVal.data.u != 0) {
-            ERR("if-absent: a set's entry names value %" PRIu64
+            ERR("if-absent: a set's entry names value %" PRIuMAX
                 ", not the first row's 0",
-                (uint64_t)gotVal.data.u);
+                gotVal.data.u);
         }
     }
 
@@ -4335,8 +4335,8 @@ static int32_t multimapDeleteEntrySweep_(void) {
             const bool found = multimapLookup(m, &k, out);
             if (found != (i % 3 == 0) || (found && got.data.i != i * 10)) {
                 ERR("delete-entry (%" PRId64 " rows, tier %d): key %" PRId64
-                    " found %d value %" PRId64,
-                    n, tier, i, found, (int64_t)got.data.i);
+                    " found %d value %" PRIdMAX,
+                    n, tier, i, found, got.data.i);
             }
 
             kept += i % 3 == 0;
@@ -8118,14 +8118,14 @@ int multimapTest(int, char *[]) {
                 databox fe[2];
                 databox le[2];
                 if (!multimapFirstInto(m, fe, 2) || fe[0].data.i != shKey[0]) {
-                    ERR("op %d: first key %" PRId64 " != shadow %" PRId64, op,
-                        (int64_t)fe[0].data.i, (int64_t)shKey[0]);
+                    ERR("op %d: first key %" PRIdMAX " != shadow %" PRId64, op,
+                        fe[0].data.i, shKey[0]);
                     soakFail++;
                 }
                 if (!multimapLastInto(m, le, 2) ||
                     le[0].data.i != shKey[shCount - 1]) {
-                    ERR("op %d: last key %" PRId64 " != shadow %" PRId64, op,
-                        (int64_t)le[0].data.i, (int64_t)shKey[shCount - 1]);
+                    ERR("op %d: last key %" PRIdMAX " != shadow %" PRId64, op,
+                        le[0].data.i, shKey[shCount - 1]);
                     soakFail++;
                 }
             }
@@ -8145,11 +8145,10 @@ int multimapTest(int, char *[]) {
                     }
                     if (row[0].data.i != shKey[seen] ||
                         row[1].data.i != shVal[seen]) {
-                        ERR("op %d: row %d (%" PRId64 ",%" PRId64
+                        ERR("op %d: row %d (%" PRIdMAX ",%" PRIdMAX
                             ") != shadow (%" PRId64 ",%" PRId64 ")",
-                            op, seen, (int64_t)row[0].data.i,
-                            (int64_t)row[1].data.i, (int64_t)shKey[seen],
-                            (int64_t)shVal[seen]);
+                            op, seen, row[0].data.i, row[1].data.i, shKey[seen],
+                            shVal[seen]);
                         soakFail++;
                         break;
                     }
@@ -8237,12 +8236,11 @@ int multimapTest(int, char *[]) {
                 if (v[0].type != DATABOX_UNSIGNED_64 ||
                     v[0].data.u != 100 + key ||
                     v[1].data.u != (uintptr_t)RP_PTR_TAG(key)) {
-                    ERR("%s alias: key %" PRIu64 " reported (%" PRIu64
-                        ", 0x%" PRIx64 "), expected (%" PRIu64 ", 0x%" PRIx64
+                    ERR("%s alias: key %" PRIu64 " reported (%" PRIuMAX
+                        ", 0x%" PRIxMAX "), expected (%" PRIu64 ", 0x%" PRIxPTR
                         ")",
-                        where, key, (uint64_t)v[0].data.u,
-                        (uint64_t)v[1].data.u, 100 + key,
-                        (uint64_t)(uintptr_t)RP_PTR_TAG(key));
+                        where, key, v[0].data.u, v[1].data.u, 100 + key,
+                        (uintptr_t)RP_PTR_TAG(key));
                 }
 
                 /* Read back what the exchange stored. */
@@ -8254,12 +8252,11 @@ int multimapTest(int, char *[]) {
                 if (stored[0].type != DATABOX_UNSIGNED_64 ||
                     stored[0].data.u != 200 + key ||
                     stored[1].data.u != (uintptr_t)RP_PTR_TAG(key + 1000)) {
-                    ERR("%s alias: key %" PRIu64 " stored (%" PRIu64
-                        ", 0x%" PRIx64 "), expected (%" PRIu64 ", 0x%" PRIx64
+                    ERR("%s alias: key %" PRIu64 " stored (%" PRIuMAX
+                        ", 0x%" PRIxMAX "), expected (%" PRIu64 ", 0x%" PRIxPTR
                         ")",
-                        where, key, (uint64_t)stored[0].data.u,
-                        (uint64_t)stored[1].data.u, 200 + key,
-                        (uint64_t)(uintptr_t)RP_PTR_TAG(key + 1000));
+                        where, key, stored[0].data.u, stored[1].data.u,
+                        200 + key, (uintptr_t)RP_PTR_TAG(key + 1000));
                 }
             }
         }

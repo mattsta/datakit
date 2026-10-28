@@ -94,6 +94,25 @@ class Table(unittest.TestCase):
         )
         self.assertNotIn("range", plain[0])
 
+    def test_a_row_whose_bytes_changed_is_still_compared(self) -> None:
+        base = {("m", "heap", 2800): 130.0, ("m", "gone", 5): 1.0}
+        current = {("m", "heap", 2400): 117.0, ("m", "new", 6): 2.0}
+        lines, regressed = perfcompare.table(base, current, 5.0)
+        text = "\n".join(lines)
+        self.assertIn("-10.0%", text)
+        self.assertIn("bytes -> 2400 (-14.3%)", text)
+        self.assertNotIn("base only: m heap", text)
+        self.assertNotIn("current only: m heap", text)
+        # Different names never pair
+        self.assertIn("base only: m gone 5", text)
+        self.assertIn("current only: m new 6", text)
+        self.assertEqual(regressed, [])
+
+    def test_a_name_on_one_side_twice_is_not_paired(self) -> None:
+        base = {("m", "x", 1): 1.0, ("m", "x", 2): 1.0}
+        current = {("m", "x", 3): 1.0}
+        self.assertEqual(perfcompare.bytes_changed(base, current), {})
+
     def test_no_tolerance_never_regresses(self) -> None:
         _, regressed = perfcompare.table(
             {("m", "a", 0): 1.0}, {("m", "a", 0): 50.0}, None
