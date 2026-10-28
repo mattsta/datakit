@@ -74,6 +74,39 @@ Both refusals report a misuse diagnostic (`DK_DIAG_PERSIST_CTX_WRONG_TYPE`,
 treats as absent). `persistCtxExists` answers whether it is PRESENT and
 reports an orphaned WAL as a `DK_DIAG_PERSIST_ORPHAN_WAL` condition.
 
+### Every wrapper
+
+Each wrapper has the same lifecycle and housekeeping calls, named after its
+structure (`multimapNewP`, `multimapOpenP`, ...):
+
+| Call                             | Does                                                                    |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| `<s>NewP(ctx, ...)`              | a new structure; writes the first snapshot and holds the context        |
+| `<s>OpenP(ctx)`                  | the structure recovered from snapshot + WAL (NULL: nothing to open)     |
+| `<s>CloseP(w)`                   | syncs, frees the structure and lets the context go                      |
+| `<s>SyncP(w)` / `<s>CompactP(w)` | sync the WAL now / fold it into a fresh snapshot now                    |
+| `<s>GetStatsP(w, &stats)`        | the context's counters (ops, syncs, compactions, not-durable ops)       |
+| `<s>CountP` / `<s>BytesP`        | as the structure's own Count / Bytes                                    |
+| `<s>GetP(w)` / `<s>GetRawP(w)`   | the structure itself, for reads the wrapper does not mirror (read only) |
+
+Writers log first and apply only when the log takes the op (see Mutation
+Results); readers go straight to the structure. The writers and readers:
+
+| Wrapper            | Writers (log, then apply)                                                                                                                                                                                                                    | Readers                                                                                                                                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `flexP`            | `flexPushHeadP`, `flexPushTailP`, `flexResetP`                                                                                                                                                                                               | `flexGetP`, `flexIndexP`, `flexGetByTypeP`                                                                                                                                                                   |
+| `intsetP`          | `intsetAddP`, `intsetRemoveP`                                                                                                                                                                                                                | `intsetFindP`, `intsetGetAtP`, `intsetGetRawP`                                                                                                                                                               |
+| `multimapP`        | `multimapInsertP`, `multimapInsertIfNotExistsP`, `multimapDeleteP`, `multimapDeleteFullWidthP`, `multimapFieldIncrP`, `multimapResetP`; `multimapNewConfigureP`                                                                              | `multimapLookupP`, `multimapExistsP`, `multimapFirstP`, `multimapLastP`, `multimapRandomValueP`, `multimapIteratorInitP`, `multimapIteratorInitAtP`, `multimapGetP`                                          |
+| `multilistP`       | `multilistPushHeadP`, `multilistPushTailP`, `multilistPopHeadP`, `multilistPopTailP`, `multilistReplaceAtIndexP`, `multilistDelRangeP`, `multilistResetP`                                                                                    | `multilistIndexP`, `multilistIndexGetP`, `multilistIndexCheckP`, the `multilistIteratorInit*P` family, `multilistGetP`                                                                                       |
+| `multidictP`       | `multidictAddP`, `multidictReplaceP`, `multidictDeleteP`, `multidictEmptyP`                                                                                                                                                                  | `multidictFindP`, `multidictExistsP`, `multidictIteratorInitP`, `multidictGetP`                                                                                                                              |
+| `multiOrderedSetP` | `multiOrderedSetAddP`, `multiOrderedSetRemoveP`, `multiOrderedSetResetP`                                                                                                                                                                     | `multiOrderedSetGetScoreP`, `multiOrderedSetExistsP`, `multiOrderedSetGetByRankP`, `multiOrderedSetCountByScoreP`, `multiOrderedSetFirstP`, `multiOrderedSetLastP`, the `multiOrderedSetIterator*P` calls    |
+| `multilruP`        | `multilruInsertP`, `multilruInsertWeightedP`, `multilruIncreaseP`, `multilruUpdateWeightP`, `multilruDeleteP`, `multilruRemoveMinimumP`, `multilruSetMaxCountP`, `multilruSetMaxWeightP`; `multilruNewWithConfigP`, `multilruNewWithLevelsP` | `multilruGetLevelP`, `multilruGetWeightP`, `multilruTotalWeightP`, `multilruLevelCountP`, `multilruLevelWeightP`, `multilruIsPopulatedP`, `multilruGetMaxCountP`, `multilruGetMaxWeightP`                    |
+| `multiroarP`       | `multiroarBitSetP`, `multiroarBitClearP`, `multiroarBitSetRangeP`, `multiroarBitClearRangeP`, `multiroarValueSetP`, `multiroarValueRemoveP`; `multiroarValueNewP`                                                                            | `multiroarBitGetP`, `multiroarBitCountP`, `multiroarRankP`, `multiroarSelectP`, `multiroarMinP`, `multiroarMaxP`, `multiroarIsEmptyP`, `multiroarValueGetP`, `multiroarValueCountP`, `multiroarMemoryUsageP` |
+
+A structure changed directly (through `GetRawP` or the structure's own
+calls) is changed only in memory: the files no longer describe it, and the
+next recovery loses the change. Write through the wrapper.
+
 ## Mutation Results
 
 Every P mutator returns a `persistLogResult`:
@@ -340,9 +373,31 @@ multimap *restored = persistRecover(p);      /* snapshot + WAL replay */
 persistClose(p);
 ```
 
-`persistStoreMemory` is an in-memory backend for tests. A custom backend
-fills in `persistStore`; providing `rewriteBegin`/`rewriteCommit`/
-`rewriteAbort` gives it atomic snapshot publishing.
+`persistStoreMemory` is an in-memory backend for tests
+(`persistStoreMemoryBuffer` shows its bytes). A custom backend fills in
+`persistStore`; providing `rewriteBegin`/`rewriteCommit`/`rewriteAbort`
+gives it atomic snapshot publishing. A store no persist owns is closed with
+`persistStoreClose`.
+
+The core's calls by job:
+
+| Job                     | Calls                                                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| make and bind           | `persistCreate`, `persistAttachSnapshot`, `persistAttachWAL`, `persistAttachQuarantine(File)`, `persistClose`                                                                   |
+| configure               | `persistDefaultConfig`, `persistGetConfig`, `persistSetConfig`, `persistGetOps`                                                                                                 |
+| keys                    | `persistSetIntegrityKey`, `persistSetIntegrityPreparedKey`, `persistAttachKeyring`, `persistRebindKeyring`                                                                      |
+| write                   | `persistSnapshot`, `persistLogOp`, `persistSync`, `persistWALReady` (whether an append is taken now)                                                                            |
+| compact                 | `persistShouldCompact`, `persistCompact`                                                                                                                                        |
+| read back               | `persistRecover` (snapshot then WAL), or the steps: `persistRestore`, `persistReplayWAL`                                                                                        |
+| check and inspect       | `persistVerifySnapshot`, `persistVerifyWAL`, `persistIterateWAL`, `persistInspect(Attached)`, `persistLastError`, `persistLastBadEntry`, `persistGetStats`, `persistResetStats` |
+| the stores in use       | `persistSnapshotStore`, `persistWALStore`                                                                                                                                       |
+| fault injection (tests) | `persistStoreFaulty`, `persistStoreFaultyArm`, `persistStoreFaultyDisarm`, `persistStoreFaultyCalls`                                                                            |
+
+`persistSetConfig` replaces a live `persist`'s configuration for what it
+does next. A new `walBufferSize` first writes out the buffered WAL bytes;
+when that write fails the call returns false and keeps the old
+configuration. A file already written keeps the digest it was written with:
+every envelope records its own algorithm, and readers judge an entry by it.
 
 Built-in descriptors: `persistOpsFlex`, `persistOpsIntset`,
 `persistOpsIntsetBig`, `persistOpsMultiroar`, `persistOpsHyperloglog`,
@@ -389,4 +444,78 @@ should be registered there too. The contract checks:
 3. every truncation and single-byte corruption restores to NULL or a valid
    structure;
 4. strings that look like numbers keep their bytes through snapshot,
-   restore and replay.
+   restore and replay;
+5. a restored structure keeps its settings (size limits, compression,
+   load factors and the like), with the builds varying them by seed.
+
+The contract also checks that its type list and the registry
+(`persistRegistry`, which `persistOpsForType` and the format manifest read)
+name the same descriptors: a new descriptor goes in `persistRegistry.c` and
+in the contract's list.
+
+Helpers for `encodeOp`: `persistOpNoBody` (an op with no operands, CLEAR or
+an end pop), `persistOpEncodeBoxes` (the operand boxes as an exact flex),
+`persistOpDecodeIndexValue` (an `[index, value]` body back into boxes);
+`persistOpsFormat(ops)` is the format stamp a descriptor declares.
+
+## Writing a P wrapper
+
+A wrapper is a structure plus its `persistCtx`. It is small: one lifecycle
+call per step, and one log call before each change.
+
+```c
+typedef struct counterP { persistCtx *ctx; intset *set; } counterP;
+
+counterP *counterNewP(persistCtx *ctx) {
+    intset *set = intsetNew();
+    /* binds ctx to the type, writes the first snapshot, holds the ctx */
+    if (!persistCtxStartNew(ctx, set, &persistOpsIntset)) {
+        intsetFree(set);
+        return NULL;
+    }
+    counterP *c = zmalloc(sizeof(*c));
+    *c = (counterP){.ctx = ctx, .set = set};
+    return c;
+}
+
+counterP *counterOpenP(persistCtx *ctx) {
+    intset *set = persistCtxStartRecovered(ctx, &persistOpsIntset);
+    if (!set) {
+        return NULL; /* held elsewhere, another type, or nothing to recover */
+    }
+    counterP *c = zmalloc(sizeof(*c));
+    *c = (counterP){.ctx = ctx, .set = set};
+    return c;
+}
+
+persistLogResult counterAddP(counterP *c, int64_t v) {
+    /* log first; apply exactly when the log took it */
+    const persistLogResult r = persistCtxLogOp(c->ctx, PERSIST_OP_INSERT, &v, 1);
+    if (r != PERSIST_LOG_REFUSED) {
+        intsetAdd(&c->set, v, NULL);
+        persistCtxMaybeCompact(c->ctx, c->set, &persistOpsIntset);
+    }
+    return r;
+}
+
+void counterCloseP(counterP *c) {
+    persistCtxFinish(c->ctx); /* syncs, lets the context go */
+    intsetFree(c->set);
+    zfree(c);
+}
+```
+
+- `persistCtxClaim` / `persistCtxRelease` are what StartNew / StartRecovered
+  / Finish use to hold a context; a wrapper rarely calls them itself.
+- A change persisted by a snapshot instead of a log entry (multilruP's
+  limit changes are) asks `persistCtxCanLog` first, so it is refused
+  exactly when a logged change would be, then writes the snapshot with
+  `persistCtxCompact`. `persistCtxSaveSnapshot` writes a snapshot without
+  resetting the WAL (StartNew's first snapshot).
+- `persistCtxSync`, `persistCtxSyncIfDue` (for EVERYSEC from an event loop),
+  `persistCtxCompact` and `persistCtxGetStats` back the wrapper's own Sync,
+  Compact and GetStats calls; `persistCtxRecover` is recovery without
+  holding the context, and `persistCtxInitForType` the binding step alone.
+- Tests can make every log refuse with `persistCtxTestRefuseLogsBegin` /
+  `End` (test builds), to check that a wrapper applies nothing it could not
+  log.

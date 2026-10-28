@@ -65,10 +65,13 @@ These containers use **scale-aware** implementations with small/medium/large var
 - [multiOrderedSet](modules/multi/MULTIORDEREDSET.md) - Sorted set by score with member lookup and ranks
 - [multilru](modules/multi/MULTILRU.md) - Least Recently Used cache
 - [multiroar](modules/multi/MULTIROAR.md) - Roaring bitmap implementation
+- [idRows](modules/multi/IDROWS.md) - Rows addressed by integer id, read and changed in place without a search
+- [Interning](modules/multi/ATOMS.md) - atomPool, stringPool, multimapAtom and multimapAtomDense: choosing, ids and references, measured costs
 
 #### Persistence
 
 - [persist](modules/persist/PERSIST.md) - Snapshots, WAL, compaction and recovery; the P wrappers and their durability results
+- [Operating on persisted files](modules/persist/OPERATORS.md) - Inspect, verify, dump and repair snapshots, WALs and quarantine files with the `datakit` command (Python package in `python/`)
 
 ### Integer Sets and Cardinality
 

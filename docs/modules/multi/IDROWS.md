@@ -8,6 +8,62 @@ locates the row. It is the forward store of every atom table
 (`{value, refcount}` by atom id), and fits anywhere ids are handed out by a
 counter or a free list.
 
+## API
+
+| Call                                                                      | Does                                                       |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `idRowsNew(elementsPerRow)` / `idRowsFree(r)`                             | make and free; every row has `elementsPerRow` elements     |
+| `idRowsSet(r, id, row)`                                                   | store the row of `id`, replacing any it had (true: new id) |
+| `idRowsGet(r, id, row)`                                                   | read the row of `id` into `row[]` boxes (false: absent)    |
+| `idRowsGetWithSlots(r, id, row, slots)`                                   | as Get, decoding 96/128-bit elements into `slots[i]`       |
+| `idRowsReplaceField(r, id, field, box)`                                   | replace one element in place (false: absent id)            |
+| `idRowsFieldIncr(r, id, field, by, &sum)`                                 | add to an integer element in place, refusing overflow      |
+| `idRowsDelete(r, id)` / `idRowsClear(r)`                                  | remove one row / every row                                 |
+| `idRowsExists(r, id)`                                                     | whether `id` has a row                                     |
+| `idRowsFirst(r, &id)` / `idRowsLast(r, &id)`                              | the lowest / highest id present (false: empty)             |
+| `idRowsIteratorInit(r, &it)` / `idRowsIteratorNext(&it, &id, row, slots)` | every row in id order                                      |
+| `idRowsCount(r)` / `idRowsBytes(r)` / `idRowsElementsPerRow(r)`           | rows held, bytes held, row width                           |
+
+```c
+#include "idRows.h"
+
+/* Sessions by id: {user name, request count} */
+idRows *sessions = idRowsNew(2);
+
+const databox user = databoxNewBytesString("alice");
+const databox zero = databoxNewSigned(0);
+const databox *row[2] = {&user, &zero};
+idRowsSet(sessions, 1001, row);
+
+int64_t requests = 0;
+idRowsFieldIncr(sessions, 1001, 1, 1, &requests); /* in place: requests == 1 */
+
+databox name, count;
+databox *out[2] = {&name, &count};
+if (idRowsGet(sessions, 1001, out)) {
+    /* 'name' points into the page: valid until the next change to the rows */
+}
+
+idRowsIterator it;
+idRowsIteratorInit(sessions, &it);
+uint64_t id;
+while (idRowsIteratorNext(&it, &id, out, nullptr)) {
+    /* rows in id order; changing the rows ends the iteration */
+}
+
+idRowsFree(sessions);
+```
+
+Rules worth knowing:
+
+- **Byte strings read out point into the rows** and stay valid only until the next change (Set,
+  ReplaceField, FieldIncr, Delete, Clear). Copy what you keep.
+- **Wide integers** (96/128-bit) need slots: `idRowsGetWithSlots`, or the iterator's `slots`
+  argument. Without them the element reports its type only.
+- **`idRowsFieldIncr` refuses rather than wraps**: an element that is not a 64-bit integer, or a sum
+  past `int64_t`, leaves the row unchanged and returns false (the current value in `*newValue`).
+- **Any `uint64_t` id is valid**, dense or not; dense ids read fastest (see Costs).
+
 ## Layout
 
 ```

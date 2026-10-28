@@ -9,8 +9,8 @@
  * ====================================================================
  *
  * Abstract interface for string interning that supports multiple backends:
- *   - ATOM_POOL_HASH:  O(1) hash-based (stringPool) - fast, more memory
- *   - ATOM_POOL_TREE:  O(log n) tree-based (multimapAtom) - slower, compact
+ *   - ATOM_POOL_HASH:  stringPool (hash table + id array) - fast, more memory
+ *   - ATOM_POOL_TREE:  multimapAtom (index + id rows) - slower, compact
  *
  * This allows data structures like multiOrderedSet to use interning
  * without being coupled to a specific implementation. You can switch
@@ -34,33 +34,14 @@
  *
  *   atomPoolFree(pool);
  *
- * PERFORMANCE COMPARISON
- * ----------------------
- *   Operation          | HASH (stringPool) | TREE (multimapAtom)
- *   -------------------|-------------------|--------------------
- *   Intern             | O(1) avg          | O(log n)
- *   Lookup by string   | O(1) avg          | O(log n)
- *   Lookup by ID       | O(1) array        | O(log n)
- *   Retain/Release     | O(1)              | O(log n)
- *   Iteration          | ~2 cycles/op      | ~10 cycles/op (5-6x slower!)
- *   Memory/entry       | ~84 bytes         | ~22 bytes (3-4x smaller)
- *
- * BACKEND SELECTION GUIDE
- * -----------------------
- *   Use ATOM_POOL_HASH when:
- *     - Lookup speed is critical (100+ M ops/s for ID lookup)
- *     - You iterate over pooled members frequently
- *     - You have many lookups per intern
- *     - Memory is not a primary constraint
- *
- *   Use ATOM_POOL_TREE when:
- *     - Memory efficiency is critical (3-4x less memory)
- *     - Write-heavy workload (intern/release frequent)
- *     - Small to medium pools where O(log n) is acceptable
- *     - Iteration is rare or not performance-critical
- *
- *   CRITICAL: TREE is 5-10x slower for iteration than HASH!
- *   If your workload iterates frequently, use HASH despite memory cost.
+ * CHOOSING
+ * --------
+ *   HASH: id -> string is an array read and every operation is a hash
+ *   lookup or less; about 1.8x TREE's memory per atom.  TREE: the compact
+ *   one (its bytes are close to the string's own), with each operation a
+ *   search of its index.  Measured numbers and a guide:
+ *   docs/modules/multi/ATOMS.md (perfRegression rows atomPoolHash and
+ *   atomPoolTree).
  *
  * LIMITATIONS
  * -----------
@@ -78,8 +59,8 @@
 
 /* Backend implementation types */
 typedef enum atomPoolType {
-    ATOM_POOL_HASH = 0, /* stringPool - O(1) hash, more memory */
-    ATOM_POOL_TREE = 1, /* multimapAtom - O(log n) tree, compact */
+    ATOM_POOL_HASH = 0, /* stringPool: fastest, more memory */
+    ATOM_POOL_TREE = 1, /* multimapAtom: compact, slower */
 } atomPoolType;
 
 /* The id behaviour, fixed at creation; both backends offer all three and
@@ -120,8 +101,9 @@ atomPoolIds atomPoolGetIds(const atomPool *pool);
 /* Free the pool and all interned strings */
 void atomPoolFree(atomPool *pool);
 
-/* Reset pool to empty state (keeps allocated memory).
- * Note: TREE backend does not support reset - this is a no-op for TREE. */
+/* Empty the pool: every atom gone, ids start over.  HASH clears its
+ * tables in place (keeping their memory); TREE replaces its table with a
+ * new empty one. */
 void atomPoolReset(atomPool *pool);
 
 /* ====================================================================

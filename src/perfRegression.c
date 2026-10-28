@@ -11,6 +11,7 @@
 #ifdef DATAKIT_TEST
 
 #include "atomPersist.h"
+#include "atomPool.h"
 #include "blake3.h"
 #include "chacha20poly1305.h"
 #include "cleaner.h"
@@ -2395,6 +2396,39 @@ static void benchMultilru(const uint32_t n) {
  * index 'index', its rows under 'module': interning new and present
  * values, retains and releases by value (the last release deletes), the
  * count update alone, and a snapshot and restore */
+/* atomPool over one backend (module atomPoolHash or atomPoolTree): new
+ * strings interned (bytes: the pool's metered heap with every atom), the
+ * same strings interned again, ids read back to their strings in scattered
+ * order, a present string's id, and a retain and release by id */
+static void benchAtomPool(const char *module, const atomPoolType type,
+                          const char *keys) {
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    const bool metered = ctestHeapMeterStart();
+    atomPool *pool = atomPoolNew(type);
+    cleanerName(zfree, PerfIds) uint64_t *ids = zcalloc(n, sizeof(uint64_t));
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        ids[i] = atomPoolIntern(pool, &k);
+    }
+    const double internSecs = timeUtilMonotonicSec() - t0;
+    emitRow(module, "internNew", perfHeapStop(metered), n, internSecs);
+
+    PERF_ROW(module, "internPresent", n,
+             const databox k = perfContainerKey(keys, i);
+             sink += atomPoolIntern(pool, &k));
+    PERF_ROW(module, "lookupByIdScattered", n, databox s = {};
+             sink += atomPoolLookup(pool, ids[perfScatter(i)], &s));
+    PERF_ROW(module, "getId", n,
+             const databox k = perfContainerKey(keys, perfScatter(i));
+             sink += atomPoolGetId(pool, &k));
+    PERF_ROW(module, "retainRelease", n, atomPoolRetain(pool, ids[i]);
+             sink += atomPoolRelease(pool, ids[i]));
+    atomPoolFree(pool);
+    perfContainerSink = sink;
+}
+
 static void benchAtomTable(const char *module, const multimapAtomIndex index,
                            const char *keys) {
     const uint32_t n = PERF_CONTAINER_N;
@@ -2725,6 +2759,8 @@ static void benchMultimapAtom(void) {
     benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
     benchAtomTable("multimapAtomOrdered", MULTIMAP_ATOM_INDEX_ORDERED, keys);
     benchAtomTable("multimapAtomDict", MULTIMAP_ATOM_INDEX_DICT, keys);
+    benchAtomPool("atomPoolHash", ATOM_POOL_HASH, keys);
+    benchAtomPool("atomPoolTree", ATOM_POOL_TREE, keys);
 
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;

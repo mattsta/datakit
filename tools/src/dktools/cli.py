@@ -18,6 +18,7 @@ from . import (
     countof,
     coverage,
     defconst,
+    docgaps,
     dropargs,
     dropinclude,
     dupfuncs,
@@ -357,6 +358,16 @@ def main(argv: list[str] | None = None) -> int:
         "(exit 0, 1 for hits not in tools/idioms-allow.txt or stale allow lines)",
     )
     idm.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    dg = sub.add_parser(
+        "docgaps",
+        help="list public functions no doc under docs/ (or README.md) names "
+        "(a report: exit 0; 2 for a header that is not public)",
+    )
+    dg.add_argument("headers", nargs="*", help="repo-relative public headers")
+    dg.add_argument(
+        "--names", action="store_true", help="list each header's undocumented names"
+    )
 
     hdr = sub.add_parser(
         "headers",
@@ -1346,6 +1357,8 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "idioms":
         return idioms.run(args.repo, tuple(args.paths))
+    if args.command == "docgaps":
+        return docgaps.run(args.repo, tuple(args.headers), args.names)
     if args.command == "headers":
         return headers.run(
             args.repo, tuple(args.paths), args.build, args.preset, args.jobs

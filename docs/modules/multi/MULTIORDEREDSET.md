@@ -136,6 +136,99 @@ intersection weight each input's scores (`weights` NULL means 1.0) and combine
 a member's scores with `MOS_AGGREGATE_SUM`, `MIN` or `MAX`, as doubles. Union
 adds each member with one search of the result.
 
+## API reference
+
+| Group        | Calls                                                                                                                                                                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| make         | `multiOrderedSetNew`, `multiOrderedSetNewLimit`, `multiOrderedSetNewCompress`, `multiOrderedSetCopy`, `multiOrderedSetFree`                                                                                                            |
+| size         | `multiOrderedSetCount`, `multiOrderedSetBytes`, `multiOrderedSetStats`, `multiOrderedSetLimit`, `multiOrderedSetCompresses`                                                                                                            |
+| write        | `multiOrderedSetAdd`, `multiOrderedSetAddNX` (absent only), `multiOrderedSetAddXX` (present only), `multiOrderedSetAddGetPrevious`, `multiOrderedSetIncrBy`                                                                            |
+| remove       | `multiOrderedSetRemove`, `multiOrderedSetRemoveGetScore`, `multiOrderedSetRemoveIf`, `multiOrderedSetRemoveRangeByScore`, `multiOrderedSetRemoveRangeByRank`, `multiOrderedSetPopMin`, `multiOrderedSetPopMax`, `multiOrderedSetReset` |
+| by member    | `multiOrderedSetExists`, `multiOrderedSetGetScore`, `multiOrderedSetGetRank`, `multiOrderedSetGetReverseRank` (-1 when absent)                                                                                                         |
+| by order     | `multiOrderedSetFirst`, `multiOrderedSetLast`, `multiOrderedSetGetByRank` (negative counts from the end), `multiOrderedSetCountByScore`, `multiOrderedSetRandomMembers`                                                                |
+| iterate      | `multiOrderedSetIteratorInit`, `multiOrderedSetIteratorInitAtScore`, `multiOrderedSetIteratorInitAtRank`, `multiOrderedSetIteratorNext`, `multiOrderedSetIteratorRelease`                                                              |
+| combine      | `multiOrderedSetUnion`, `multiOrderedSetIntersect` (with weights and `MOS_AGGREGATE_*`), `multiOrderedSetDifference`                                                                                                                   |
+| housekeeping | `multiOrderedSetCompact`; test builds: `multiOrderedSetRepr`, `multiOrderedSetVerify`                                                                                                                                                  |
+
+Boxes read out of the set (`GetScore`, `GetByRank`, `First`, `Last`, the
+iterator) point into it when they hold bytes: valid until the set changes.
+Removing reads (`AddGetPrevious`, `RemoveGetScore`, `PopMin`, `PopMax`) hand
+back owned copies: release each with `databoxFreeData`.
+
+### Recipes
+
+The top ten of a leaderboard, highest first:
+
+```c
+mosIterator it;
+multiOrderedSetIteratorInit(board, &it, false); /* false: descending */
+databox member, score;
+for (int i = 0; i < 10 && multiOrderedSetIteratorNext(&it, &member, &score); i++) {
+    /* member and score point into 'board': read them before changing it */
+}
+multiOrderedSetIteratorRelease(&it);
+```
+
+Everyone scoring in [1000, 2000):
+
+```c
+const mosRangeSpec window = {.min = databoxNewSigned(1000),
+                             .max = databoxNewSigned(2000),
+                             .maxExclusive = true};
+const size_t inWindow = multiOrderedSetCountByScore(board, &window);
+
+mosIterator it;
+const databox from = databoxNewSigned(1000);
+if (multiOrderedSetIteratorInitAtScore(board, &it, &from, true)) {
+    databox member, score;
+    while (multiOrderedSetIteratorNext(&it, &member, &score) &&
+           databoxCompare(&score, &window.max) < 0) {
+        /* ... */
+    }
+}
+multiOrderedSetIteratorRelease(&it);
+```
+
+A deadline queue (score = due time): take what is due, oldest first:
+
+```c
+databox members[32], scores[32];
+const size_t taken = multiOrderedSetPopMin(&queue, 32, members, scores);
+for (size_t i = 0; i < taken; i++) {
+    /* ... handle members[i] ... */
+    databoxFreeData(&members[i]); /* popped boxes are owned */
+    databoxFreeData(&scores[i]);
+}
+```
+
+Expire everything scored before a cutoff, in one call:
+
+```c
+const mosRangeSpec stale = {.min = databoxNewSigned(INT64_MIN),
+                            .max = databoxNewSigned(cutoff),
+                            .maxExclusive = true};
+multiOrderedSetRemoveRangeByScore(&board, &stale);
+```
+
+Count a member's points across two boards (weights scale each input):
+
+```c
+const multiOrderedSet *both[2] = {weekA, weekB};
+multiOrderedSet *total =
+    multiOrderedSetUnion(both, nullptr, 2, MOS_AGGREGATE_SUM);
+/* ... */
+multiOrderedSetFree(total);
+```
+
+Best practices:
+
+- Prefer `IncrBy` over a GetScore-then-Add: it is one member search, and it
+  keeps a row in place when the new score does not change its position.
+- Keep members short or intern them ([Interning](ATOMS.md)): the Full tier
+  holds each member twice (in the member index and in the ordered rows).
+- Pass `&set` to every writer and keep using the pointer it leaves: a write
+  may move the set to another tier.
+
 ## Persistence
 
 `multiOrderedSetP` (`persist/multiOrderedSetP.h`) wraps a set in a

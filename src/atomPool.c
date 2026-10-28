@@ -369,8 +369,8 @@ void atomPoolReset(atomPool *pool) {
         if (pool->vtable->reset) {
             pool->vtable->reset(pool->impl);
         } else {
-            /* Backend has no in-place clear: recreate it empty (was a
-             * silent no-op for TREE, leaving atoms interned forever) */
+            /* A backend with no in-place clear is replaced by a new empty
+             * one */
             pool->vtable->free(pool->impl);
             pool->impl = atomPoolImplNew(pool->type, pool->ids);
         }

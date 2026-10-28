@@ -709,6 +709,22 @@ uv run --project tools dktools pytest NAME [--python 3.15,3.15t] [--tests PATTER
 - Exit 0 on success, 1 for a failed build or run, 2 when `pytest` finds
   no wheel. `validate --python` runs both on the exported tree.
 
+## docgaps — public functions no doc names
+
+```sh
+uv run --project tools dktools docgaps [HEADER ...] [--names]
+```
+
+- Every function a public `src/` header declares (the public API as
+  `coverage` counts it; suite and benchmark entry points aside) is looked
+  for as a whole word in `docs/**/*.md` and `README.md`. One line per
+  header with undocumented functions, most first, then totals;
+  `--names` (or naming headers) lists the names.
+- Without headers it also names module docs (`docs/modules/**/*.md`)
+  that `docs/INDEX.md` does not link.
+- A report for writing docs from: exit 0 (2 for a header that is not
+  public).
+
 ## idioms — hand-written forms of what a shared helper does
 
 ```sh
