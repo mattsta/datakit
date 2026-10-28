@@ -41,11 +41,11 @@ defcleaner(multimapSmall *, multimapSmallFree);
 
 /* The pointer's tag: 0 for a bare Small map (multimapSmallInternal.h),
  * else the tier of the struct it points to */
-#define MULTIMAP_TAG_OF_(map) ((uint32_t)_PTRLIB_TYPE(map))
+#define MULTIMAP_TAG_OF_(map) ptrlibBareTag(map)
 /* The tier: a bare map is Small */
 #define multimapType_(map)                                                     \
     ((multimapType)(MULTIMAP_TAG_OF_(map) | (MULTIMAP_TAG_OF_(map) == 0)))
-#define MULTIMAP_USE_(map) _PTRLIB_TOP_USE_ALL(map)
+#define MULTIMAP_USE_(map) ptrlibBareBody(map)
 #define MULTIMAP_TAG_(map, type) ((multimap *)_PTRLIB_TAG(map, type))
 
 /* Stack allocation threshold for iterator element arrays to avoid VLA blowup */

@@ -33,63 +33,55 @@ static inline double mosDataboxToDouble(const databox *box) {
 /* ====================================================================
  * Pointer Tagging Setup
  * ==================================================================== */
-#define PTRLIB_BITS_LOW 2
-#define PTRLIB_BITS_HIGH 16
-#include "ptrlib.h"
+#include "ptrlibBare.h"
 
-/* A set's pointer: the tier in bits 0-1, and in bits 48-63 (the
- * platform's pointer requirement, docs/advanced/PLATFORMS.md: 48-bit,
- * untagged user pointers) the size limit (4 bits), the compress flag
- * (1 bit) and, for a Small set, its middle row's byte offset (11 bits).
+/* A set's pointer: the tier in bits 0-1, and in bits 48-63 the size limit
+ * (4 bits), the compress flag (1 bit) and, for a Small set, its middle
+ * row's byte offset (11 bits).
  * A Small set has no header: its pointer is its flex.  A middle the 11
  * bits cannot hold is stored as MOS_MIDDLE_UNKNOWN and found again by
  * the next call; a Small set whose middle passes them moves up to
  * Medium at its next add, and a set moves down to Small only at sizes
  * whose middle fits (MOS_SMALL_BYTES_MAX). */
-#define mosType_(mos) ((multiOrderedSetType)_PTRLIB_TYPE(mos))
-#define MOS_USE_(mos) _PTRLIB_TOP_USE_ALL(mos)
+#define mosType_(mos) ((multiOrderedSetType)ptrlibBareTag(mos))
+#define MOS_USE_(mos) ptrlibBareBody(mos)
 
-static constexpr uint32_t MOS_META_SHIFT = 48;
-static constexpr uint32_t MOS_META_BITS = 5; /* limit (4) + compress (1) */
-static constexpr uint32_t MOS_MIDDLE_SHIFT = MOS_META_SHIFT + MOS_META_BITS;
-static constexpr uint32_t MOS_MIDDLE_UNKNOWN =
-    (1u << (64 - MOS_MIDDLE_SHIFT)) - 1;
+/* The pointer's 16-bit field (ptrlibBare.h): the size limit in bits 0-3,
+ * the compress flag in bit 4 ("meta": both, kept by every tier), and a
+ * Small set's middle offset in bits 5-15 */
+static constexpr uint32_t MOS_META_BITS = 5;
+static constexpr uint32_t MOS_MIDDLE_BITS = 11;
+static constexpr uint32_t MOS_MIDDLE_UNKNOWN = (1u << MOS_MIDDLE_BITS) - 1;
 /* A flex of at most this many bytes has its middle row below
  * MOS_MIDDLE_UNKNOWN */
 static constexpr size_t MOS_SMALL_BYTES_MAX = MOS_MIDDLE_UNKNOWN;
-static_assert(MOS_MIDDLE_SHIFT == 53 && sizeof(uintptr_t) == 8,
-              "the Small middle takes pointer bits 53-63");
+static_assert(MOS_META_BITS + MOS_MIDDLE_BITS == 16, "the field is 16 bits");
 static_assert(FLEX_CAP_LEVEL_65536 < 16, "a size limit takes 4 bits");
 
-#define MOS_LIMIT_(m) ((uint32_t)(((uintptr_t)(m) >> MOS_META_SHIFT) & 0xF))
-#define MOS_COMPRESS_(m)                                                       \
-    ((uint32_t)(((uintptr_t)(m) >> (MOS_META_SHIFT + 4)) & 1))
-#define MOS_META_(m)                                                           \
-    ((uint32_t)(((uintptr_t)(m) >> MOS_META_SHIFT) &                           \
-                ((1u << MOS_META_BITS) - 1)))
-#define MOS_MIDDLE_(m) ((uint32_t)((uintptr_t)(m) >> MOS_MIDDLE_SHIFT))
+#define MOS_LIMIT_(m) ptrlibBareBits(ptrlibBareField(m), 0, 4)
+#define MOS_COMPRESS_(m) ptrlibBareBits(ptrlibBareField(m), 4, 1)
+#define MOS_META_(m) ptrlibBareBits(ptrlibBareField(m), 0, MOS_META_BITS)
+#define MOS_MIDDLE_(m)                                                         \
+    ptrlibBareBits(ptrlibBareField(m), MOS_META_BITS, MOS_MIDDLE_BITS)
 
 /* The meta bits of a set of 'limit' that does ('compress') or does not
  * compress */
 DK_INLINE_ALWAYS uint32_t mosMetaOf_(const uint32_t compress,
                                      const uint32_t limit) {
-    assert(compress <= 1 && limit < 16);
-    return limit | (compress << 4);
+    return ptrlibBareSetBits(ptrlibBareSetBits(0, 0, 4, limit), 4, 1, compress);
 }
 
 /* The pointer of tier 'type' at 'body', with 'meta' and (Small only)
- * 'middle' */
+ * 'middle' (MOS_MIDDLE_UNKNOWN when it does not fit) */
 DK_INLINE_ALWAYS multiOrderedSet *mosPack_(const void *body,
                                            const multiOrderedSetType type,
                                            const uint32_t meta,
                                            const uint32_t middle) {
-    assert(((uintptr_t)body >> MOS_META_SHIFT) == 0 &&
-           ((uintptr_t)body & 3u) == 0);
     const uint32_t stored =
         middle < MOS_MIDDLE_UNKNOWN ? middle : MOS_MIDDLE_UNKNOWN;
-    return (multiOrderedSet *)((uintptr_t)body | type |
-                               ((uintptr_t)meta << MOS_META_SHIFT) |
-                               ((uintptr_t)stored << MOS_MIDDLE_SHIFT));
+    return ptrlibBarePack(
+        body, type,
+        ptrlibBareSetBits(meta, MOS_META_BITS, MOS_MIDDLE_BITS, stored));
 }
 
 /* The middle row's offset of the rows 'map' */

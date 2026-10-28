@@ -15,6 +15,7 @@
 #define PTRLIB_BITS_HIGH 16
 #include "ptrlib.h"
 
+#include "ptrlibBare.h"
 #include "ptrlibCompress.h"
 
 #ifdef DATAKIT_TEST
@@ -216,6 +217,45 @@ int ptrlibTest(int, char *[]) {
         raw[63] = 0x99;
         if (((uint8_t *)alloc)[0] != 0x77 || ((uint8_t *)alloc)[63] != 0x99) {
             ERR("untagged pointer does not address the allocation");
+        }
+    }
+
+    TEST("ptrlibBare: body, tag and field round-trip; bits set and read "
+         "apart; the layout is ptrlib's own") {
+        for (uint32_t tag = 0; tag < 4; tag++) {
+            const uint32_t fields[] = {0, 1, 0x7FF, 0x8000, UINT16_MAX};
+            for (size_t i = 0; i < countof(fields); i++) {
+                void *p = ptrlibBarePack(alloc, tag, fields[i]);
+                if (ptrlibBareBody(p) != alloc || ptrlibBareTag(p) != tag ||
+                    ptrlibBareField(p) != fields[i] ||
+                    (uint32_t)_PTRLIB_TYPE(p) != tag ||
+                    _PTRLIB_TOP_USE_ALL(p) != alloc) {
+                    ERR("tag %u field %#x did not round-trip", tag, fields[i]);
+                }
+            }
+        }
+
+        /* Sub-fields: limit 4 bits, a flag, an 11-bit offset */
+        uint32_t f = ptrlibBareSetBits(0, 0, 4, 11);
+        f = ptrlibBareSetBits(f, 4, 1, 1);
+        f = ptrlibBareSetBits(f, 5, 11, 2046);
+        if (ptrlibBareBits(f, 0, 4) != 11 || ptrlibBareBits(f, 4, 1) != 1 ||
+            ptrlibBareBits(f, 5, 11) != 2046) {
+            ERR("sub-fields read back %u %u %u", ptrlibBareBits(f, 0, 4),
+                ptrlibBareBits(f, 4, 1), ptrlibBareBits(f, 5, 11));
+        }
+        f = ptrlibBareSetBits(f, 4, 1, 0); /* changes only its own bits */
+        if (ptrlibBareBits(f, 0, 4) != 11 || ptrlibBareBits(f, 4, 1) != 0 ||
+            ptrlibBareBits(f, 5, 11) != 2046) {
+            ERR("setting one sub-field disturbed another");
+        }
+
+        /* An 8 + 8 field reads as ptrlibCompress's limit and depth */
+        void *p = ptrlibBarePack(
+            alloc, 1,
+            ptrlibBareSetBits(ptrlibBareSetBits(0, 0, 8, 9), 8, 8, 3));
+        if (COMPRESS_LIMIT(p) != 9 || COMPRESS_DEPTH(p) != 3) {
+            ERR("an 8 + 8 field is not ptrlibCompress's layout");
         }
     }
 

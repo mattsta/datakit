@@ -19,6 +19,7 @@
 #define PTRLIB_BITS_LOW 2
 #define PTRLIB_BITS_HIGH 16
 #include "ptrlib.h"
+#include "ptrlibBare.h"
 #include "ptrlibCompress.h"
 
 /* multilistFull has different arguments than Small/Medium, so we need to make
@@ -37,8 +38,8 @@ typedef enum multilistType {
     MULTILIST_TYPE_FULL = 3,   /* 24 bytes, grows as necessary. */
 } multilistType;
 
-#define _multilistType(list) _PTRLIB_TYPE(list)
-#define _MULTILIST_USE(list) _PTRLIB_TOP_USE_ALL(list)
+#define _multilistType(list) ptrlibBareTag(list)
+#define _MULTILIST_USE(list) ptrlibBareBody(list)
 #define _MULTILIST_TAG(list, type) ((multilist *)_PTRLIB_TAG(list, type))
 
 /* A Small list has no header: its pointer is its flex (tier in bits 0-1,
@@ -49,21 +50,21 @@ typedef enum multilistType {
 #define mlm(m) ((multilistMedium *)_MULTILIST_USE(m))
 #define mlf(m) ((multilistFull *)_MULTILIST_USE(m))
 
+/* A new Small list of 'fl' with 'limit' and 'depth': a bare pointer
+ * (ptrlibBare.h) whose field holds the limit in its low byte and the
+ * depth in its high byte, as every tier's pointer does
+ * (ptrlibCompress.h) */
+DK_INLINE_ALWAYS multilist *mlSmallNew_(flex *fl, const uint32_t depth,
+                                        const uint32_t limit) {
+    const uint32_t field =
+        ptrlibBareSetBits(ptrlibBareSetBits(0, 0, 8, limit), 8, 8, depth);
+    return ptrlibBarePack(fl, MULTILIST_TYPE_SMALL, field);
+}
+
 /* The pointer of a Small list whose elements are 'fl', with the limit and
  * depth of 'was' */
 DK_INLINE_ALWAYS multilist *mlSmallPack_(flex *fl, const multilist *was) {
-    /* The platform's pointer requirement (docs/advanced/PLATFORMS.md) */
-    assert(((uintptr_t)fl >> 48) == 0 && ((uintptr_t)fl & 3u) == 0);
-    multilist *ml =
-        SET_COMPRESS_DEPTH_LIMIT(fl, COMPRESS_DEPTH(was), COMPRESS_LIMIT(was));
-    return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
-}
-
-/* A new Small list of 'fl' with 'limit' and 'depth' */
-DK_INLINE_ALWAYS multilist *mlSmallNew_(flex *fl, const uint32_t depth,
-                                        const uint32_t limit) {
-    multilist *ml = SET_COMPRESS_DEPTH_LIMIT(fl, depth, limit);
-    return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
+    return mlSmallNew_(fl, COMPRESS_DEPTH(was), COMPRESS_LIMIT(was));
 }
 
 /* A call that may change the elements: 'm' is an lvalue (the caller's
