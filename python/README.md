@@ -7,6 +7,10 @@ rebuilds, and read quarantined bytes. Every call opens files read-only, so nothi
 The package is a thin layer over a C extension; every decode and check is datakit's own. One wheel per
 platform (stable ABI `abi3t`) loads on Python 3.15+, regular and free-threaded.
 
+Operators use the commands (`datakit`, or `python -m datakit`): `inspect`, `verify`, `dump`, `stats` and
+`quarantine`, with `--json` for machine-readable output. The guide is
+[docs/modules/persist/OPERATORS.md](../docs/modules/persist/OPERATORS.md).
+
 Build and test from the repository root:
 
 ```

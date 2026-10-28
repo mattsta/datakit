@@ -41,15 +41,18 @@ static bool dkpyLogInsert(int64_t v, void *ctx) {
     return true;
 }
 
-/* _write_intset(snapshot, wal, members, inserts): a snapshot of an intset
- * holding 'members' and a WAL logging an insert of each of 'inserts' */
+/* _write_intset(snapshot, wal, members, inserts, key=None): a snapshot of
+ * an intset holding 'members' and a WAL logging an insert of each of
+ * 'inserts'; with a 32-byte 'key', both under HMAC-SHA256 */
 static PyObject *dkpyWriteIntset(PyObject *, PyObject *args) {
     PyObject *snapshotArg;
     PyObject *walArg;
     PyObject *members;
     PyObject *inserts;
-    if (!PyArg_ParseTuple(args, "OOOO:_write_intset", &snapshotArg, &walArg,
-                          &members, &inserts)) {
+    const char *key = nullptr;
+    Py_ssize_t keyLen = 0;
+    if (!PyArg_ParseTuple(args, "OOOO|z#:_write_intset", &snapshotArg, &walArg,
+                          &members, &inserts, &key, &keyLen)) {
         return nullptr;
     }
     PyObject *snapshot = nullptr;
@@ -60,7 +63,19 @@ static PyObject *dkpyWriteIntset(PyObject *, PyObject *args) {
         return nullptr;
     }
 
-    persist *p = persistCreate(&persistOpsIntset, nullptr);
+    persistConfig cfg = persistDefaultConfig();
+    if (key) {
+        cfg.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+    }
+    persist *p = persistCreate(&persistOpsIntset, &cfg);
+    if (key &&
+        !persistSetIntegrityKey(p, (const uint8_t *)key, (size_t)keyLen)) {
+        persistClose(p);
+        Py_DECREF(snapshot);
+        Py_DECREF(wal);
+        PyErr_SetString(PyExc_ValueError, "the key was refused");
+        return nullptr;
+    }
     persistAttachSnapshot(p, persistStoreFile(dkpyPathChars(snapshot), true));
     persistAttachWAL(p, persistStoreFile(dkpyPathChars(wal), true));
     intset *is = intsetNew();

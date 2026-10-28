@@ -294,6 +294,26 @@ static bool persistBuildWrapParams(persist *p,
  * keyring binding has been invalidated. Like persistBuildWrapParams
  * this takes non-const `persist *` because the resolver mutates cached
  * pointers + lastError. */
+/* After an envelope failed its check: whether that is a key problem
+ * rather than damage, judged by the envelope's own algorithm (not the
+ * reader's configuration).  It is when the algorithm is keyed and either
+ * no key is bound (PERSIST_ERR_NO_KEY_ATTACHED is set) or the bound key
+ * has verified nothing yet, so it may be the wrong one.  An algorithm byte
+ * damaged into a keyed one reads as a key problem: held, never healed */
+static bool persistKeyProblem_(persist *p, const uint8_t *envelope,
+                               const size_t len) {
+    flexEnvelopeHeader header;
+    if (!flexEnvelopePeek(envelope, len, &header) ||
+        !flexEnvelopeAlgoIsKeyed(header.algo)) {
+        return false;
+    }
+    if (!p->integrityKey && !p->integrityPreparedKey && !p->attachedKeyring) {
+        p->lastError = PERSIST_ERR_NO_KEY_ATTACHED;
+        return true;
+    }
+    return !p->keyProven;
+}
+
 static bool persistBuildVerifyParams(persist *p,
                                      flexEnvelopeVerifyParams *outParams) {
     if (p->attachedKeyring != nullptr) {
@@ -994,6 +1014,7 @@ void *persistRestore(persist *p) {
         uint64_t payloadLen = 0;
         if (!flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
                                 &payload, &payloadLen)) {
+            persistKeyProblem_(p, envelope, (size_t)header.envelopeLen);
             return nullptr;
         }
         p->keyProven = true; /* the key reads what it wrote */
@@ -1596,16 +1617,13 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
         return PERSIST_WAL_BAD;
     }
 
-    /* A failed check under a keyed algorithm whose key has verified
-     * nothing yet may be the wrong key, not damage */
-    const bool keyed = flexEnvelopeAlgoIsKeyed(
-        persistChecksumToEnvelopeAlgo(p->config.checksumType));
     const uint8_t *payload = nullptr;
     uint64_t payloadLen = 0;
     if (!flexEnvelopeVerify(envelope, envelopeLen, &verify, &payload,
                             &payloadLen)) {
-        p->walBadKind = keyed && !p->keyProven ? PERSIST_BAD_ENTRY_KEY
-                                               : PERSIST_BAD_ENTRY_CORRUPT;
+        p->walBadKind = persistKeyProblem_(p, envelope, envelopeLen)
+                            ? PERSIST_BAD_ENTRY_KEY
+                            : PERSIST_BAD_ENTRY_CORRUPT;
         return PERSIST_WAL_BAD;
     }
     p->keyProven = true;
@@ -2219,8 +2237,12 @@ bool persistVerifySnapshot(persist *p) {
 
     const uint8_t *payload = nullptr;
     uint64_t payloadLen = 0;
-    return flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
-                              &payload, &payloadLen);
+    if (!flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
+                            &payload, &payloadLen)) {
+        persistKeyProblem_(p, envelope, (size_t)header.envelopeLen);
+        return false;
+    }
+    return true;
 }
 
 bool persistVerifyWAL(persist *p) {
@@ -11769,6 +11791,85 @@ int persistTest(int, char *[]) {
         }
         if (!sawRead || healed) {
             ERR("a failing read was not held as a READ problem");
+        }
+    }
+
+    TEST("keyed files read with no key bound are a KEY problem by their own "
+         "envelopes, held even with a quarantine, never healed") {
+        /* An HMAC snapshot and WAL, copied into a reader with the default
+         * (unkeyed) configuration, no key and a quarantine: the snapshot
+         * does not verify or restore, the WAL's first entry is KEY / HELD
+         * whatever the reader's checksum setting, each names
+         * PERSIST_ERR_NO_KEY_ATTACHED, the quarantine stays empty and the
+         * WAL keeps every byte; bound to the key, it all reads */
+        static constexpr uint8_t key[32] = {7};
+        persistConfig kcfg = persistDefaultConfig();
+        kcfg.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+        cleaner(persistClose) persist *w =
+            persistCreate(&persistOpsIntset, &kcfg);
+        persistStore *wsnap = persistStoreMemory(0);
+        persistStore *wwal = persistStoreMemory(0);
+        persistAttachSnapshot(w, wsnap);
+        persistAttachWAL(w, wwal);
+        persistSetIntegrityKey(w, key, sizeof(key));
+        cleaner(intsetFree) intset *one = intsetNew();
+        intsetAdd(&one, 10, nullptr);
+        persistSnapshot(w, one);
+        for (int64_t v = 1; v <= 2; v++) {
+            PTEST_LOGGED(persistLogOp(w, PERSIST_OP_INSERT, &v, 1));
+        }
+        persistSync(w);
+
+        /* The reader's own copies of the bytes */
+        size_t snapLen = 0;
+        size_t walLen = 0;
+        const uint8_t *snapBytes = persistStoreMemoryBuffer(wsnap, &snapLen);
+        const uint8_t *walBytes = persistStoreMemoryBuffer(wwal, &walLen);
+        persistStore *rsnap = persistStoreMemory(0);
+        persistStore *rwal = persistStoreMemory(0);
+        persistStore *q = persistStoreMemory(0);
+        rsnap->write(rsnap->ctx, snapBytes, snapLen);
+        rwal->write(rwal->ctx, walBytes, walLen);
+        cleaner(persistClose) persist *r =
+            persistCreate(&persistOpsIntset, nullptr);
+        persistAttachSnapshot(r, rsnap);
+        persistAttachWAL(r, rwal);
+        persistAttachQuarantine(r, q);
+
+        if (persistVerifySnapshot(r) ||
+            persistLastError(r) != PERSIST_ERR_NO_KEY_ATTACHED) {
+            ERR("a keyed snapshot verified with no key, or said %s",
+                persistErrName(persistLastError(r)));
+        }
+        intset *restored = persistRestore(r);
+        if (restored) {
+            intsetFree(restored);
+            ERR("a keyed snapshot restored with no key");
+        }
+        cleaner(intsetFree) intset *is = intsetNew();
+        persistReplayWAL(r, &is);
+        persistBadEntryReport report;
+        size_t qLen = 0;
+        size_t walAfter = 0;
+        persistStoreMemoryBuffer(q, &qLen);
+        const uint8_t *after = persistStoreMemoryBuffer(rwal, &walAfter);
+        if (!persistLastBadEntry(r, &report) ||
+            report.kind != PERSIST_BAD_ENTRY_KEY ||
+            report.action != PERSIST_BAD_ENTRY_HELD ||
+            persistLastError(r) != PERSIST_ERR_NO_KEY_ATTACHED || qLen != 0 ||
+            walAfter != walLen || memcmp(after, walBytes, walLen) != 0) {
+            ERR("a keyed WAL with no key: kind %s action %s, error %s, "
+                "%zu quarantined bytes, WAL %zu of %zu bytes",
+                persistBadEntryKindName(report.kind),
+                persistBadEntryActionName(report.action),
+                persistErrName(persistLastError(r)), qLen, walAfter, walLen);
+        }
+
+        /* The key reads it all (the WAL replays over the snapshot) */
+        persistSetIntegrityKey(r, key, sizeof(key));
+        cleaner(intsetFree) intset *all = persistRecover(r);
+        if (!persistVerifySnapshot(r) || !all || intsetCount(all) != 3) {
+            ERR("bound to its key, the keyed files did not read");
         }
     }
 
