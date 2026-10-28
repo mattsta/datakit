@@ -2036,7 +2036,8 @@ static int atomTestSuite_(void) {
 
     TEST("populate and half delete and populate (generate atom id)") {
         const ssize_t doUntil = 200;
-        const size_t mod = random() % doUntil;
+        /* 1..doUntil-1: every value 'i % mod' divides by is nonzero */
+        const size_t mod = 1 + (size_t)random() % (doUntil - 1);
         printf("mod %zu\n", mod);
         multimapAtom *ma = multimapAtomNew();
         for (ssize_t j = 1; j <= 100; j++) {
