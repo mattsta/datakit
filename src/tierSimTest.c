@@ -918,7 +918,7 @@ static void mlStats(void *c, dkTierStats *s) {
 static size_t mlWalk(void *c, int64_t from, bool forward, int64_t *out,
                      size_t max) {
     multilistIterator it;
-    if (!multilistIteratorInitAtIdx(c, mlState, &it, from, forward, true)) {
+    if (!multilistIteratorInitAtIdxReadOnly(c, mlState, &it, from, forward)) {
         return 0;
     }
     size_t n = 0;

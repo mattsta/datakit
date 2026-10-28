@@ -908,7 +908,7 @@ for (size_t i = 0; i < multilistCount(ml); i++) {
 /* RIGHT - iterator-based */
 mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
 multilistIterator iter;
-multilistIteratorInitForward(ml, states, &iter);
+multilistIteratorInitForwardReadOnly(ml, states, &iter);
 
 multilistEntry entry;
 while (multilistNext(&iter, &entry)) {

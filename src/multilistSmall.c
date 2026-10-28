@@ -4,29 +4,19 @@
 /* ====================================================================
  * Create
  * ==================================================================== */
-static multilistSmall *multilistSmallCreateContainer(void) {
-    /* @own: caller; free=multilistSmallFree */
-    multilistSmall *ml = zcalloc(1, sizeof(*ml));
-    return ml;
-}
-
-multilistSmall *multilistSmallCreate(void) {
-    multilistSmall *ml = multilistSmallCreateContainer();
-    /* @own: container; free=flexFree */
+/* A Small list has no header: the multilist's pointer is its flex, and
+ * 'ml' here is a view the caller builds on the stack
+ * (multilistSmallInternal.h) */
+void multilistSmallInit(multilistSmall *ml) {
+    /* @own: container; free=multilistSmallFree */
     ml->fl = flexNew();
-    return ml;
 }
 
 /* Small keeps one flex and never compresses.  The fill limit and the
  * compress depth belong to the multilist that owns the tier (it keeps
  * them in its tagged pointer and decides when to move to Medium), so
- * the Small struct has no field for either: they are accepted for
- * signature parity with Full and ignored. */
-multilistSmall *multilistSmallNew([[maybe_unused]] int fill,
-                                  [[maybe_unused]] int compress) {
-    return multilistSmallCreate();
-}
-
+ * the Small view has no field for either: the setters accept them for
+ * signature parity with Full and ignore them. */
 void multilistSmallSetCompressDepth(multilistSmall *, int) {
 }
 
@@ -39,25 +29,11 @@ void multilistSmallSetOptions(multilistSmall *ml, int fill, int depth) {
 }
 
 /* ====================================================================
- * Copy
- * ==================================================================== */
-multilistSmall *multilistSmallDuplicate(multilistSmall *orig) {
-    multilistSmall *ml = multilistSmallCreate();
-    /* Create() pre-allocated an empty flex; release before overwrite */
-    flexFree(ml->fl);
-    /* @own: container; free=flexFree */
-    ml->fl = flexDuplicate(orig->fl);
-    return ml;
-}
-
-/* ====================================================================
  * Free
  * ==================================================================== */
+/* Frees the list's elements (the view itself is the caller's) */
 void multilistSmallFree(multilistSmall *ml) {
-    if (ml) {
-        flexFree(ml->fl);
-        zfree(ml);
-    }
+    flexFree(ml->fl);
 }
 
 /* ====================================================================
@@ -82,22 +58,9 @@ void multilistSmallAppendValuesFromFlex(multilistSmall *ml, const flex *fl) {
     multilistSmallAppendFlex(ml, fl);
 }
 
-multilistSmall *multilistSmallNewFromFlexConsume(flex *fl) {
-    multilistSmall *ml = multilistSmallCreateContainer();
-    ml->fl = fl;
-    return ml;
-}
-
 flex *multilistSmallDump(const multilistSmall *ml) {
     /* @own: caller; free=flexFree */
     return flexDuplicate(ml->fl);
-}
-
-multilistSmall *multilistSmallNewFromFlex(const flex *fl) {
-    multilistSmall *ml = multilistSmallCreateContainer();
-    /* @own: container; free=flexFree */
-    ml->fl = flexDuplicate(fl);
-    return ml;
 }
 
 /* ====================================================================
@@ -123,13 +86,16 @@ void multilistSmallInsertByTypeAfter(multilistSmall *ml,
 /* ====================================================================
  * Delete with cursor
  * ==================================================================== */
+/* The iterator holds the list's flex in iter->f; the delete may move it
+ * there, and the caller (multilist.c) stores it back in the list's
+ * pointer */
 void multilistSmallDelEntry(multilistIterator *iter, multilistEntry *entry) {
-    flexDelete(&((multilistSmall *)iter->ml)->fl, &entry->fe);
+    flexDelete(&iter->f, &entry->fe);
 
     if (iter->fe) {
         if (!iter->forward && entry->fe) {
             /* update for reverse direction */
-            iter->fe = flexPrev(((multilistSmall *)iter->ml)->fl, entry->fe);
+            iter->fe = flexPrev(iter->f, entry->fe);
         } else {
             /* update for forward direction */
             iter->fe = entry->fe;
@@ -194,7 +160,10 @@ void multilistSmallIteratorInit(multilistSmall *ml, multilistIterator *iter,
     }
 
     iter->forward = forward;
-    iter->ml = ml;
+    /* The flex, not 'ml': the view lives on the caller's stack.
+     * multilist.c sets iter->ml (the list's handle, for a writable
+     * iterator) */
+    iter->f = ml->fl;
     iter->fe = flexIndexDirect(ml->fl, iter->offset);
 }
 
@@ -231,9 +200,9 @@ void multilistSmallReleaseIterator(multilistIterator *) {
 }
 
 bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
-    entry->ml = iter->ml;
+    flex *const fl = iter->f;
+    entry->ml = fl;
     entry->nodeIdx = iter->nodeIdx;
-    flex *const fl = ((multilistSmall *)iter->ml)->fl;
 
     if (iter->fe) {
         /* Populate value from existing flex position; a wide value
@@ -265,7 +234,7 @@ bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
 bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
                              const multilistEntry *anchor, mlOffsetId anchorIdx,
                              multilistEntry *entry) {
-    entry->ml = ml;
+    entry->ml = ml->fl; /* the flex: 'ml' is a view on the caller's stack */
 
     /* Check the range at full width: the flex walk takes an int32_t, so
      * an index beyond it would otherwise wrap onto a real element. */

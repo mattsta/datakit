@@ -25,11 +25,10 @@
 
 typedef struct multilistSmall multilistSmall;
 
-/* Create */
-multilistSmall *multilistSmallCreate(void);
-multilistSmall *multilistSmallNew(int fill, int compress);
-
-/* Free */
+/* 'ml' is a view (multilistSmallInternal.h): a Small list has no header,
+ * its multilist pointer is its flex.  Init gives a view empty elements;
+ * Free frees them. */
+void multilistSmallInit(multilistSmall *ml);
 void multilistSmallFree(multilistSmall *ml);
 
 /* Metadata */
@@ -38,8 +37,8 @@ size_t multilistSmallBytes(const multilistSmall *ml);
 
 /* Settings.  Small never compresses and has no node size limit of its
  * own: the owning multilist keeps the fill limit and compress depth and
- * decides tier moves.  New and these setters accept them for signature
- * parity with Full and ignore them. */
+ * decides tier moves.  These setters accept them for signature parity
+ * with Full and ignore them. */
 void multilistSmallSetCompressDepth(multilistSmall *ml, int depth);
 void multilistSmallSetFill(multilistSmall *ml, int fill);
 void multilistSmallSetOptions(multilistSmall *ml, int fill, int depth);
@@ -51,8 +50,6 @@ void multilistSmallPushByTypeTail(multilistSmall *ml, const databox *box);
 /* Bulk appending; not conforming to multilist* protocol */
 void multilistSmallAppendFlex(multilistSmall *ml, const flex *fl);
 void multilistSmallAppendValuesFromFlex(multilistSmall *ml, const flex *fl);
-multilistSmall *multilistSmallNewFromFlex(const flex *fl);
-multilistSmall *multilistSmallNewFromFlexConsume(flex *fl);
 
 /* Insert with entry cursor */
 void multilistSmallInsertByTypeBefore(multilistSmall *ml,
@@ -62,7 +59,8 @@ void multilistSmallInsertByTypeAfter(multilistSmall *ml,
                                      const multilistEntry *entry,
                                      const databox *box);
 
-/* Delete based on entry cursor */
+/* Delete based on entry cursor: the iterator holds the list's flex in
+ * iter->f, where the delete leaves it (moved or not) */
 void multilistSmallDelEntry(multilistIterator *iter, multilistEntry *entry);
 
 /* Delete based on position */
@@ -97,9 +95,6 @@ void multilistSmallRewindTail(multilistSmall *ml, multilistIterator *iter);
 
 /* Close iterator */
 void multilistSmallReleaseIterator(multilistIterator *iter);
-
-/* Copy entire multilistSmall */
-multilistSmall *multilistSmallDuplicate(multilistSmall *orig);
 
 /* Every element, in order, as one new flex (see multilistDump) */
 flex *multilistSmallDump(const multilistSmall *ml);

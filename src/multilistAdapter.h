@@ -12,10 +12,8 @@
 /* ====================================================================
  * Small to Full Prototype Conforming Adapter
  * ==================================================================== */
-/* Create */
-#define multilistSmallAdapterCreate() multilistSmallCreate()
-#define multilistSmallAdapterNew(fill, compress)                               \
-    multilistSmallNew(fill, compress)
+/* A Small list is a view (multilistSmallInternal.h); multilist.c makes
+ * and copies Small lists from their flex */
 
 /* Free */
 #define multilistSmallAdapterFree(ml) multilistSmallFree(ml)
@@ -41,9 +39,6 @@
 #define multilistSmallAdapterAppendFlex(ml, fl) multilistSmallAppendFlex(ml, fl)
 #define multilistSmallAdapterAppendValuesFromFlex(ml, fl)                      \
     multilistSmallAppendValuesFromFlex(ml, fl)
-#define multilistSmallAdapterNewFromFlex(fl) multilistSmallNewFromFlex(fl)
-#define multilistSmallAdapterNewFromFlexConsume(fl)                            \
-    multilistSmallNewFromFlexConsume(fl)
 
 /* Insert with entry cursor */
 #define multilistSmallAdapterInsertByTypeBefore(ml, state, entry, box)         \
@@ -84,9 +79,6 @@
 /* Close iterator */
 #define multilistSmallAdapterReleaseIterator(iter)                             \
     multilistSmallReleaseIterator(iter)
-
-/* Copy entire */
-#define multilistSmallAdapterDuplicate(orig) multilistSmallDuplicate(orig)
 
 /* Every element as one flex */
 #define multilistSmallAdapterDump(ml, state) multilistSmallDump(ml)

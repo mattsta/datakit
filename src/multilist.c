@@ -32,7 +32,7 @@ defcleanerName(flex **, zfree, Flexes);
 
 typedef enum multilistType {
     MULTILIST_TYPE_INVALID = 0,
-    MULTILIST_TYPE_SMALL = 1,  /* 8 bytes, fixed. */
+    MULTILIST_TYPE_SMALL = 1,  /* no header: the pointer is the flex */
     MULTILIST_TYPE_MEDIUM = 2, /* 16 bytes, fixed. */
     MULTILIST_TYPE_FULL = 3,   /* 24 bytes, grows as necessary. */
 } multilistType;
@@ -41,9 +41,53 @@ typedef enum multilistType {
 #define _MULTILIST_USE(list) _PTRLIB_TOP_USE_ALL(list)
 #define _MULTILIST_TAG(list, type) ((multilist *)_PTRLIB_TAG(list, type))
 
-#define mls(m) ((multilistSmall *)_MULTILIST_USE(m))
+/* A Small list has no header: its pointer is its flex (tier in bits 0-1,
+ * limit and depth in bits 48-63, as every tier).  mls() is a view of it
+ * for one call that does not change the elements; MULTILIST_UPDATE_
+ * makes the calls that may, and stores the flex back. */
+#define mls(m) (&(multilistSmall){.fl = _MULTILIST_USE(m)})
 #define mlm(m) ((multilistMedium *)_MULTILIST_USE(m))
 #define mlf(m) ((multilistFull *)_MULTILIST_USE(m))
+
+/* The pointer of a Small list whose elements are 'fl', with the limit and
+ * depth of 'was' */
+DK_INLINE_ALWAYS multilist *mlSmallPack_(flex *fl, const multilist *was) {
+    /* The platform's pointer requirement (docs/advanced/PLATFORMS.md) */
+    assert(((uintptr_t)fl >> 48) == 0 && ((uintptr_t)fl & 3u) == 0);
+    multilist *ml =
+        SET_COMPRESS_DEPTH_LIMIT(fl, COMPRESS_DEPTH(was), COMPRESS_LIMIT(was));
+    return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
+}
+
+/* A new Small list of 'fl' with 'limit' and 'depth' */
+DK_INLINE_ALWAYS multilist *mlSmallNew_(flex *fl, const uint32_t depth,
+                                        const uint32_t limit) {
+    multilist *ml = SET_COMPRESS_DEPTH_LIMIT(fl, depth, limit);
+    return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
+}
+
+/* A call that may change the elements: 'm' is an lvalue (the caller's
+ * handle), rewritten when a Small list's flex moves */
+#define MULTILIST_UPDATE_(ret, m, func, ...)                                   \
+    do {                                                                       \
+        switch (_multilistType(m)) {                                           \
+        case MULTILIST_TYPE_SMALL: {                                           \
+            multilistSmall v_ = {.fl = _MULTILIST_USE(m)};                     \
+            ret multilistSmallAdapter##func(&v_, __VA_ARGS__);                 \
+            (m) = mlSmallPack_(v_.fl, (m));                                    \
+            break;                                                             \
+        }                                                                      \
+        case MULTILIST_TYPE_MEDIUM:                                            \
+            ret multilistMediumAdapter##func(mlm(m), __VA_ARGS__);             \
+            break;                                                             \
+        case MULTILIST_TYPE_FULL:                                              \
+            ret multilistFull##func(mlf(m), __VA_ARGS__);                      \
+            break;                                                             \
+        default:                                                               \
+            assert(false);                                                     \
+            unreachable();                                                     \
+        }                                                                      \
+    } while (0)
 
 #define _MULTILIST(ret, m, func, ...)                                          \
     do {                                                                       \
@@ -97,20 +141,17 @@ multilist *multilistNew(void) {
 
 multilist *multilistNewLimit(const flexCapSizeLimit limit,
                              const uint32_t depth) {
-    multilist *ml = (multilist *)multilistSmallCreate();
-    ml = SET_COMPRESS_DEPTH_LIMIT(ml, depth, limit);
-    return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
+    /* @own: caller; free=multilistFree */
+    return mlSmallNew_(flexNew(), depth, limit);
 }
 
 multilist *multilistNewFromFlex(const flexCapSizeLimit limit,
                                 const uint32_t depth, flex *fl) {
-    /* Retain 'fl' inside our new multilistSmall.
+    /* 'fl' becomes the Small list.
      * Note: we don't auto-upgrade here if the flex is too big.
      * During the next data write operation, the multilistUpgradeIfNecessary()
      * call will be triggered to become MEDIUM or FULL as required. */
-    multilist *ml = (multilist *)multilistSmallNewFromFlexConsume(fl);
-    ml = SET_COMPRESS_DEPTH_LIMIT(ml, depth, limit);
-    return _MULTILIST_TAG(ml, MULTILIST_TYPE_SMALL);
+    return mlSmallNew_(fl, depth, limit);
 }
 
 multilist *multilistCopy(const multilist *mlOrig) {
@@ -121,7 +162,8 @@ multilist *multilistCopy(const multilist *mlOrig) {
 
     void *ml;
 sm:
-    ml = multilistSmallDuplicate(mls(mlOrig));
+    /* @own: caller; free=multilistFree */
+    ml = flexDuplicate(_MULTILIST_USE(mlOrig));
     goto goodbye;
 
 md:
@@ -172,11 +214,12 @@ void multilistStats(const multilist *m, dkTierStats *out) {
     const uint32_t limit = flexOptimizationSizeLimit[COMPRESS_LIMIT(m)];
     switch (_multilistType(m)) {
     case MULTILIST_TYPE_SMALL: {
+        /* No header: the list is its flex */
         const multilistSmall *s = mls(m);
         const uint64_t data = multilistSmallBytes(s);
         *out = (dkTierStats){.count = multilistSmallCount(s),
                              .dataBytes = data,
-                             .totalBytes = data + sizeof(*s),
+                             .totalBytes = data,
                              .units = 1,
                              .unitLimit = limit,
                              .tier = MULTILIST_TYPE_SMALL};
@@ -204,11 +247,11 @@ static void multilistUpgradeIfNecessary(multilist **m, mflexState *state,
                                         const uint_fast32_t limit) {
     const multilistType type = _multilistType(*m);
     if (type == MULTILIST_TYPE_SMALL) {
-        multilistSmall *small = mls(*m);
+        flex *fl = _MULTILIST_USE(*m);
         /* Statically defined growth cases: fix?  parameterize?  modularize? */
-        if (multilistSmallBytes(small) > flexOptimizationSizeLimit[limit]) {
+        if (flexBytes(fl) > flexOptimizationSizeLimit[limit]) {
             multilistMedium *medium =
-                multilistMediumNewFromFlexConsumeGrow(small, small->fl);
+                multilistMediumNewFromFlexConsumeGrow(nullptr, fl);
             /* Tag the metadata-carrying pointer (*m holds the
              * depth/limit top bits; tagging the raw pointer would
              * discard them and break the Medium->Full threshold) */
@@ -271,7 +314,7 @@ multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
  * ==================================================================== */
 void multilistPushByTypeHead(multilist **ml, mflexState *state,
                              const databox *box) {
-    MULTILIST_NORETURN(*ml, PushByTypeHead, state, box);
+    MULTILIST_UPDATE_(, *ml, PushByTypeHead, state, box);
     const uint32_t depth = COMPRESS_DEPTH(*ml);
     const uint32_t limit = COMPRESS_LIMIT(*ml);
     multilistUpgradeIfNecessary(ml, state, depth, limit);
@@ -279,7 +322,7 @@ void multilistPushByTypeHead(multilist **ml, mflexState *state,
 
 void multilistPushByTypeTail(multilist **ml, mflexState *state,
                              const databox *box) {
-    MULTILIST_NORETURN(*ml, PushByTypeTail, state, box);
+    MULTILIST_UPDATE_(, *ml, PushByTypeTail, state, box);
     const uint32_t depth = COMPRESS_DEPTH(*ml);
     const uint32_t limit = COMPRESS_LIMIT(*ml);
     multilistUpgradeIfNecessary(ml, state, depth, limit);
@@ -287,7 +330,7 @@ void multilistPushByTypeTail(multilist **ml, mflexState *state,
 
 void multilistInsertByTypeAfter(multilist **ml, mflexState *state[2],
                                 multilistEntry *node, const databox *box) {
-    MULTILIST_NORETURN(*ml, InsertByTypeAfter, state, node, box);
+    MULTILIST_UPDATE_(, *ml, InsertByTypeAfter, state, node, box);
     const uint32_t depth = COMPRESS_DEPTH(*ml);
     const uint32_t limit = COMPRESS_LIMIT(*ml);
     multilistUpgradeIfNecessary(ml, state[0], depth, limit);
@@ -295,7 +338,7 @@ void multilistInsertByTypeAfter(multilist **ml, mflexState *state[2],
 
 void multilistInsertByTypeBefore(multilist **ml, mflexState *state[2],
                                  multilistEntry *node, const databox *box) {
-    MULTILIST_NORETURN(*ml, InsertByTypeBefore, state, node, box);
+    MULTILIST_UPDATE_(, *ml, InsertByTypeBefore, state, node, box);
     const uint32_t depth = COMPRESS_DEPTH(*ml);
     const uint32_t limit = COMPRESS_LIMIT(*ml);
     multilistUpgradeIfNecessary(ml, state[0], depth, limit);
@@ -309,9 +352,15 @@ void multilistDelEntry(multilistIterator *iter, multilistEntry *entry) {
 
     goto *dupers[iter->type];
 
-sm:
+sm: {
+    /* A writable Small iterator holds the list's handle in iter->ml and
+     * its flex in iter->f, where the delete leaves it */
+    multilist **handle = iter->ml;
+    assert(handle && !iter->readOnly);
     multilistSmallDelEntry(iter, entry);
+    *handle = mlSmallPack_(iter->f, *handle);
     return;
+}
 
 md:
     multilistMediumDelEntry(iter, entry);
@@ -367,18 +416,16 @@ DK_INLINE_ALWAYS void multilistMoveDown_(multilist **m, mflexState *state,
         return;
     }
 
-    /* @own: caller; free=multilistFree */
-    multilistSmall *small = multilistSmallNewFromFlexConsume(values);
-    *m = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
-    *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_SMALL);
-
     /* Values above 'smallBytes' (from a Full) belong in Medium, split as an
      * upgrade splits them */
     if (flexBytes(values) > smallBytes) {
         multilistMedium *medium =
-            multilistMediumNewFromFlexConsumeGrow(small, small->fl);
+            multilistMediumNewFromFlexConsumeGrow(nullptr, values);
         *m = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
         *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_MEDIUM);
+    } else {
+        /* @own: caller; free=multilistFree */
+        *m = mlSmallNew_(values, depth, limit);
     }
 }
 
@@ -401,7 +448,7 @@ void multilistCompact(multilist **ml, mflexState *state) {
 #define MULTILIST_DELETE_(m, state, fullHint, func, ...)                       \
     do {                                                                       \
         int removed_;                                                          \
-        _MULTILIST(removed_ =, *(m), func, state, __VA_ARGS__);                \
+        MULTILIST_UPDATE_(removed_ =, *(m), func, state, __VA_ARGS__);         \
         /* A long Full list (the common case) never enters the check */        \
         if (removed_ && _multilistType(*(m)) != MULTILIST_TYPE_SMALL &&        \
             (_multilistType(*(m)) != MULTILIST_TYPE_FULL || (fullHint))) {     \
@@ -417,7 +464,9 @@ bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
 
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
                                    mlOffsetId index, const databox *box) {
-    MULTILIST_RETURN(*m, ReplaceByTypeAtIndex, state, index, box);
+    bool replaced;
+    MULTILIST_UPDATE_(replaced =, *m, ReplaceByTypeAtIndex, state, index, box);
+    return replaced;
 }
 
 /* ====================================================================
@@ -475,19 +524,51 @@ bool multilistIndexNearWide(const multilist *ml, mflexState *state,
            multilistIndexWideFinish_(entry, slot);
 }
 
-void multilistIteratorInit(multilist *ml, mflexState *state[2],
-                           multilistIterator *iter, bool forward,
-                           bool readOnly) {
-    iter->type = _multilistType(ml);
-    MULTILIST_NORETURN(ml, IteratorInit, state, iter, forward, readOnly);
+/* After a tier's iterator init: a Small iterator keeps the list's handle
+ * (none for a read-only one), so DelEntry can store a moved flex back */
+DK_INLINE_ALWAYS void mlIterHandle_(multilistIterator *iter, multilist **handle,
+                                    const bool readOnly) {
+    if (iter->type == MULTILIST_TYPE_SMALL) {
+        iter->ml = readOnly ? nullptr : handle;
+        iter->readOnly = readOnly;
+    }
 }
 
-bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
+void multilistIteratorInit(multilist **ml, mflexState *state[2],
+                           multilistIterator *iter, bool forward,
+                           bool readOnly) {
+    iter->type = _multilistType(*ml);
+    MULTILIST_NORETURN(*ml, IteratorInit, state, iter, forward, readOnly);
+    mlIterHandle_(iter, ml, readOnly);
+}
+
+void multilistIteratorInitReadOnly(const multilist *ml, mflexState *state[2],
+                                   multilistIterator *iter, bool forward) {
+    iter->type = _multilistType(ml);
+    MULTILIST_NORETURN(ml, IteratorInit, state, iter, forward, true);
+    mlIterHandle_(iter, nullptr, true);
+}
+
+bool multilistIteratorInitAtIdx(multilist **ml, mflexState *state[2],
                                 multilistIterator *iter, mlOffsetId idx,
                                 bool forward, bool readOnly) {
+    iter->type = _multilistType(*ml);
+    bool found;
+    _MULTILIST(found =, *ml, IteratorInitAtIdx, state, iter, idx, forward,
+               readOnly);
+    mlIterHandle_(iter, ml, readOnly);
+    return found;
+}
+
+bool multilistIteratorInitAtIdxReadOnly(const multilist *ml,
+                                        mflexState *state[2],
+                                        multilistIterator *iter, mlOffsetId idx,
+                                        bool forward) {
     iter->type = _multilistType(ml);
-    MULTILIST_RETURN(ml, IteratorInitAtIdx, state, iter, idx, forward,
-                     readOnly);
+    bool found;
+    _MULTILIST(found =, ml, IteratorInitAtIdx, state, iter, idx, forward, true);
+    mlIterHandle_(iter, nullptr, true);
+    return found;
 }
 
 void multilistIteratorRelease(multilistIterator *iter) {
@@ -501,12 +582,12 @@ void multilistIteratorRelease(multilistIterator *iter) {
  * tail (RewindTail), reusing the iterator's retained mflex states and
  * readOnly mode.  Any open node is released first, so rewinding is
  * always safe mid-iteration. */
-void multilistRewind(multilist *ml, multilistIterator *iter) {
+void multilistRewind(multilist **ml, multilistIterator *iter) {
     multilistIteratorRelease(iter);
     multilistIteratorInit(ml, iter->state, iter, true, iter->readOnly);
 }
 
-void multilistRewindTail(multilist *ml, multilistIterator *iter) {
+void multilistRewindTail(multilist **ml, multilistIterator *iter) {
     multilistIteratorRelease(iter);
     multilistIteratorInit(ml, iter->state, iter, false, iter->readOnly);
 }
@@ -533,8 +614,8 @@ bool multilistPop(multilist **m, mflexState *state, databox *got,
                       Pop, got, fromTail);
 }
 
-void multilistRotate(multilist *m, mflexState *state[2]) {
-    MULTILIST_NORETURN(m, Rotate, state);
+void multilistRotate(multilist **m, mflexState *state[2]) {
+    MULTILIST_UPDATE_(, *m, Rotate, state);
 }
 
 flex *multilistDump(const multilist *m, mflexState *state) {
@@ -558,7 +639,6 @@ defcleanerName(int64_t *, zfree, I64);
 defcleaner(multilist *, multilistFree);
 defcleaner(mflexState *, mflexStateFree);
 defcleaner(flex *, flexFree);
-defcleaner(multilistSmall *, multilistSmallFree);
 defcleaner(multilistMedium *, multilistMediumFree);
 defcleaner(multilistFull *, multilistFullFree);
 
@@ -899,13 +979,13 @@ static uint32_t mlwVerifyFrom(multilist *ml, mflexState *s[2],
     memset(&iter, 0xFF, sizeof(iter));
     size_t idx = start < 0 ? (size_t)((mlOffsetId)n + start) : (size_t)start;
     if (atIdx) {
-        if (!multilistIteratorInitAtIdx(ml, s, &iter, start, forward,
+        if (!multilistIteratorInitAtIdx(&ml, s, &iter, start, forward,
                                         forward)) {
             ERR("%s: IteratorInitAtIdx(%" PRId64 ") failed", what, start);
             return err;
         }
     } else {
-        multilistIteratorInit(ml, s, &iter, forward, forward);
+        multilistIteratorInit(&ml, s, &iter, forward, forward);
     }
 
     size_t seen = 0;
@@ -1113,6 +1193,90 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
     return true;
 }
 
+/* The adapter walk's lists, made, copied and freed per tier: a Small list
+ * is a view of a flex (kept on the heap here so the walk holds it as a
+ * pointer, as it holds a Medium), and its iterator's delete leaves the
+ * flex in the iterator */
+static multilistSmall *mlaSmallNew_(void) {
+    /* @own: caller; free=mlaSmallFree_ */
+    multilistSmall *ml = zcalloc(1, sizeof(*ml));
+    multilistSmallInit(ml);
+    return ml;
+}
+
+static void mlaSmallFree_(multilistSmall *ml) {
+    if (ml) {
+        multilistSmallFree(ml);
+        zfree(ml);
+    }
+}
+
+static multilistSmall *mlaSmallDuplicate_(const multilistSmall *orig) {
+    /* @own: caller; free=mlaSmallFree_ */
+    multilistSmall *ml = zcalloc(1, sizeof(*ml));
+    /* @own: container; free=mlaSmallFree_ */
+    ml->fl = flexDuplicate(orig->fl);
+    return ml;
+}
+
+static multilistSmall *mlaSmallCreate_(void) {
+    /* @own: caller; free=mlaSmallFree_ */
+    return mlaSmallNew_();
+}
+
+static multilistSmall *mlaSmallNewFromFlexConsume_(flex *fl) {
+    /* @own: caller; free=mlaSmallFree_ */
+    multilistSmall *ml = zcalloc(1, sizeof(*ml));
+    ml->fl = fl;
+    return ml;
+}
+
+static multilistSmall *mlaSmallNewFromFlex_(const flex *fl) {
+    /* @own: caller; free=mlaSmallFree_ */
+    return mlaSmallNewFromFlexConsume_(flexDuplicate(fl));
+}
+
+static void mlaSmallAfterDelEntry_(multilistSmall *ml,
+                                   const multilistIterator *iter) {
+    ml->fl = iter->f;
+}
+
+static multilistMedium *mlaMediumNew_(void) {
+    /* @own: caller; free=multilistMediumFree */
+    return multilistMediumAdapterNew(7, 3);
+}
+
+static multilistMedium *mlaMediumCreate_(void) {
+    /* @own: caller; free=multilistMediumFree */
+    return multilistMediumAdapterCreate();
+}
+
+static multilistMedium *mlaMediumNewFromFlex_(const flex *fl) {
+    /* @own: caller; free=multilistMediumFree */
+    return multilistMediumAdapterNewFromFlex(fl);
+}
+
+static multilistMedium *mlaMediumNewFromFlexConsume_(flex *fl) {
+    /* @own: caller; free=multilistMediumFree */
+    return multilistMediumAdapterNewFromFlexConsume(fl);
+}
+
+static void mlaMediumFree_(multilistMedium *ml) {
+    multilistMediumFree(ml);
+}
+
+static multilistMedium *mlaMediumDuplicate_(multilistMedium *orig) {
+    /* @own: caller; free=multilistMediumFree */
+    return multilistMediumAdapterDuplicate(orig);
+}
+
+static void mlaMediumAfterDelEntry_(multilistMedium *,
+                                    const multilistIterator *) {
+}
+
+defcleaner(multilistSmall *, mlaSmallFree_);
+defcleaner(multilistMedium *, mlaMediumFree_);
+
 /* Drive one tier through every multilist{Small,Medium}Adapter* macro
  * (and the tier functions they name), checking each result against the
  * id oracle 'want'.  PFX is Small or Medium; 'why' is set on the first
@@ -1123,8 +1287,7 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
         uint32_t want_[16];                                                    \
         uint32_t n_ = 0;                                                       \
         databox box_;                                                          \
-        cleaner(multilist##PFX##Free) multilist##PFX *ml_ =                    \
-            multilist##PFX##AdapterNew(7, 3);                                  \
+        cleaner(mla##PFX##Free_) multilist##PFX *ml_ = mla##PFX##New_();       \
         multilist##PFX##AdapterSetCompressDepth(ml_, 2);                       \
         multilist##PFX##AdapterSetFill(ml_, 5);                                \
         multilist##PFX##AdapterSetOptions(ml_, 5, 2);                          \
@@ -1214,6 +1377,7 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
             break;                                                             \
         }                                                                      \
         multilist##PFX##AdapterDelEntry(&it_, &e_);                            \
+        mla##PFX##AfterDelEntry_(ml_, &it_);                                   \
         memmove(&want_[0], &want_[1], (n_ - 1) * sizeof(*want_));              \
         n_--;                                                                  \
         if (!multilist##PFX##AdapterNext(&it_, &e_) ||                         \
@@ -1244,8 +1408,8 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
                                                                                \
         /* Duplicate and Dump */                                               \
         {                                                                      \
-            cleaner(multilist##PFX##Free) multilist##PFX *dup_ =               \
-                multilist##PFX##AdapterDuplicate(ml_);                         \
+            cleaner(mla##PFX##Free_) multilist##PFX *dup_ =                    \
+                mla##PFX##Duplicate_(ml_);                                     \
             cleaner(flexFree) flex *dump_ =                                    \
                 multilist##PFX##AdapterDump(dup_, s0);                         \
             if (!mlaFlexIs(dump_, want_, n_)) {                                \
@@ -1291,13 +1455,11 @@ static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
         /* The constructors: Create, NewFromFlex, NewFromFlexConsume */        \
         {                                                                      \
             const uint32_t w34_[2] = {3, 4};                                   \
-            cleaner(multilist##PFX##Free) multilist##PFX *c_ =                 \
-                multilist##PFX##AdapterCreate();                               \
-            cleaner(multilist##PFX##Free) multilist##PFX *nf_ =                \
-                multilist##PFX##AdapterNewFromFlex(f34_);                      \
-            cleaner(multilist##PFX##Free) multilist##PFX *nc_ =                \
-                multilist##PFX##AdapterNewFromFlexConsume(                     \
-                    flexDuplicate(f34_));                                      \
+            cleaner(mla##PFX##Free_) multilist##PFX *c_ = mla##PFX##Create_(); \
+            cleaner(mla##PFX##Free_) multilist##PFX *nf_ =                     \
+                mla##PFX##NewFromFlex_(f34_);                                  \
+            cleaner(mla##PFX##Free_) multilist##PFX *nc_ =                     \
+                mla##PFX##NewFromFlexConsume_(flexDuplicate(f34_));            \
             cleaner(flexFree) flex *d1_ =                                      \
                 multilist##PFX##AdapterDump(nf_, s0);                          \
             cleaner(flexFree) flex *d2_ =                                      \
@@ -1568,7 +1730,7 @@ int multilistTest(int, char *[]) {
             }
 
             multilistIterator iter;
-            multilistIteratorInitForward(ml, s, &iter);
+            multilistIteratorInitForward(&ml, s, &iter);
 
             /* consume a few entries, then rewind mid-iteration */
             multilistEntry entry;
@@ -1576,7 +1738,7 @@ int multilistTest(int, char *[]) {
                 assert(multilistNext(&iter, &entry));
             }
 
-            multilistRewind(ml, &iter);
+            multilistRewind(&ml, &iter);
             assert(multilistNext(&iter, &entry));
             assert(entry.box.data.i == 0);
 
@@ -1588,7 +1750,7 @@ int multilistTest(int, char *[]) {
             assert(expect == 40);
 
             /* rewind to the tail flips direction from the same iter */
-            multilistRewindTail(ml, &iter);
+            multilistRewindTail(&ml, &iter);
             assert(multilistNext(&iter, &entry));
             assert(entry.box.data.i == 39);
             assert(multilistNext(&iter, &entry));
@@ -1678,7 +1840,7 @@ int multilistTest(int, char *[]) {
         TEST("rotate empty") {
             cleaner(multilistFree) multilist *ml =
                 multilistNewLimit(defaultCompressSizeLimit, depth[_i]);
-            multilistRotate(ml, s);
+            multilistRotate(&ml, s);
             cleaner(flexFree) flex *want = flexNew();
             MLT_HOLDS(ml, want);
         }
@@ -1689,7 +1851,7 @@ int multilistTest(int, char *[]) {
                     multilistNewLimit(f, depth[_i]);
                 multilistPushHead(ml, s0, "hello", 6);
 
-                multilistRotate(ml, s);
+                multilistRotate(&ml, s);
 
                 cleaner(flexFree) flex *want = flexNew();
                 mltWant(&want, "hello", 6);
@@ -1722,7 +1884,7 @@ int multilistTest(int, char *[]) {
 
                 for (int i = 0; i < 5000; i++) {
                     assert(multilistCount(ml) == 504);
-                    multilistRotate(ml, s);
+                    multilistRotate(&ml, s);
                     assert(multilistCount(ml) == 504);
                 }
 
@@ -2352,7 +2514,7 @@ int multilistTest(int, char *[]) {
 
                 /* lrem 0 bar */
                 multilistIterator iter = {};
-                multilistIteratorInitForward(ml, s, &iter);
+                multilistIteratorInitForward(&ml, s, &iter);
                 multilistEntry entry;
                 int i = 0;
                 while (multilistNext(&iter, &entry)) {
@@ -2385,7 +2547,7 @@ int multilistTest(int, char *[]) {
                 multilistPushTail(ml, s0, "foo", 3);
 
                 /* lrem -2 foo */
-                multilistIteratorInitReverse(ml, s, &iter);
+                multilistIteratorInitReverse(&ml, s, &iter);
                 multilistRepr(ml);
                 i = 0;
                 int del = 2;
@@ -2449,7 +2611,7 @@ int multilistTest(int, char *[]) {
 
                 multilistEntry entry;
                 multilistIterator iter = {};
-                multilistIteratorInitReverse(ml, s, &iter);
+                multilistIteratorInitReverse(&ml, s, &iter);
                 int i = 0;
                 while (multilistNext(&iter, &entry)) {
                     printf("Entry fe: %p (%.*s)\n", entry.fe, 3, entry.fe + 1);
@@ -2466,7 +2628,7 @@ int multilistTest(int, char *[]) {
                 }
 
                 /* Check results after deletion of "hij" */
-                multilistIteratorInitForward(ml, s, &iter);
+                multilistIteratorInitForward(&ml, s, &iter);
                 i = 0;
                 char *vals[] = {"abc", "def", "jkl", "oop"};
                 while (multilistNext(&iter, &entry)) {
@@ -2954,7 +3116,7 @@ int multilistTest(int, char *[]) {
             if (want == MULTILIST_TYPE_SMALL) {
                 shape = st.units == 1 && st.unitLimit == limit &&
                         st.dataBytes == multilistBytes(ml) &&
-                        st.totalBytes == st.dataBytes + sizeof(multilistSmall);
+                        st.totalBytes == st.dataBytes; /* no header */
             } else if (want == MULTILIST_TYPE_MEDIUM) {
                 shape = st.units == 2 && st.unitLimit == limit &&
                         st.dataBytes == multilistBytes(ml) &&
@@ -3406,7 +3568,7 @@ int multilistTest(int, char *[]) {
             bool kept[60];
             multilistIterator iter;
             multilistEntry entry;
-            multilistIteratorInit(ml, s, &iter, forward, false);
+            multilistIteratorInit(&ml, s, &iter, forward, false);
             int visited = 0;
             while (multilistNext(&iter, &entry)) {
                 const int i = forward ? visited : total - 1 - visited;
@@ -3527,9 +3689,9 @@ int multilistTest(int, char *[]) {
 
                     const char *why = nullptr;
                     if (from < 2) {
-                        multilistIteratorInit(ml, s, &iter, forward, false);
+                        multilistIteratorInit(&ml, s, &iter, forward, false);
                     } else if (!multilistIteratorInitAtIdx(
-                                   ml, s, &iter, at[from], forward, false)) {
+                                   &ml, s, &iter, at[from], forward, false)) {
                         why = "InitAtIdx refused a valid index";
                     }
 
@@ -3705,7 +3867,7 @@ int multilistTest(int, char *[]) {
                 }
 
                 memset(&iter, 0, sizeof(iter));
-                if (multilistIteratorInitAtIdx(ml, s, &iter, bad[k], true,
+                if (multilistIteratorInitAtIdx(&ml, s, &iter, bad[k], true,
                                                true)) {
                     ERR("%s: InitAtIdx(%" PRId64 ") was accepted", name,
                         bad[k]);
@@ -3782,7 +3944,7 @@ int multilistTest(int, char *[]) {
              * change tier (pops and range deletes shrink a drained list) */
             {
                 multilistIterator emptying = {};
-                multilistIteratorInitForward(ml, s, &emptying);
+                multilistIteratorInitForward(&ml, s, &emptying);
                 multilistEntry gone;
                 while (multilistNext(&emptying, &gone)) {
                     multilistDelEntry(&emptying, &gone);
@@ -3801,7 +3963,7 @@ int multilistTest(int, char *[]) {
             for (size_t k = 0; k < countof(emptyIdx); k++) {
                 if (multilistIndexGet(ml, s0, emptyIdx[k], &entry) ||
                     multilistIndexCheck(ml, s0, emptyIdx[k], &entry) ||
-                    multilistIteratorInitAtIdx(ml, s, &iter, emptyIdx[k], true,
+                    multilistIteratorInitAtIdx(&ml, s, &iter, emptyIdx[k], true,
                                                true) ||
                     multilistReplaceByTypeAtIndex(&ml, s0, emptyIdx[k], &rep) ||
                     multilistDelRange(&ml, s0, emptyIdx[k], 1)) {
@@ -3815,9 +3977,9 @@ int multilistTest(int, char *[]) {
                 ERR("%s: the empty list popped something", name);
             }
 
-            multilistRotate(ml, s);
+            multilistRotate(&ml, s);
             for (int dir = 0; dir < 2; dir++) {
-                multilistIteratorInit(ml, s, &iter, dir == 0, true);
+                multilistIteratorInit(&ml, s, &iter, dir == 0, true);
                 if (multilistNext(&iter, &entry)) {
                     ERR("%s: the empty list iterated an element", name);
                 }
@@ -3886,8 +4048,7 @@ int multilistTest(int, char *[]) {
             /* Small -> Medium the way the upgrade does it */
             flex *fl = flexDuplicate(src);
             cleaner(multilistMediumFree) multilistMedium *md =
-                multilistMediumAdapterNewFromFlexConsumeGrow(
-                    multilistSmallAdapterNewFromFlexConsume(fl), fl);
+                multilistMediumAdapterNewFromFlexConsumeGrow(nullptr, fl);
             cleaner(flexFree) flex *dump = multilistMediumAdapterDump(md, s0);
             if (!mlaFlexIs(dump, want, LK_N)) {
                 ERR("Medium NewFromFlexConsumeGrow differs");
@@ -4241,7 +4402,7 @@ int multilistTest(int, char *[]) {
 
                 multilistIterator iter;
                 memset(&iter, 0, sizeof(iter));
-                multilistIteratorInit(ml, s, &iter, true, ro);
+                multilistIteratorInit(&ml, s, &iter, true, ro);
                 const char *why = mlrWalk(&iter, n, true, n / 3);
                 if (!why) {
                     mlrTierRewind(ml, &iter, false);
@@ -4272,7 +4433,7 @@ int multilistTest(int, char *[]) {
                 multilistIteratorRelease(&iter);
 
                 if (!why) {
-                    multilistIteratorInit(ml, s, &iter, true, true);
+                    multilistIteratorInit(&ml, s, &iter, true, true);
                     why = mlrWalk(&iter, n, true, n);
                     multilistIteratorRelease(&iter);
                     if (!why && multilistCount(ml) != n) {
@@ -4327,7 +4488,7 @@ int multilistTest(int, char *[]) {
 
                 multilistIterator iter;
                 memset(&iter, 0, sizeof(iter));
-                multilistIteratorInit(ml, s, &iter, true, ro);
+                multilistIteratorInit(&ml, s, &iter, true, ro);
                 const char *why = mlrWalk(&iter, n, true, n / 2);
                 if (!why) {
                     multilistIterator before;
@@ -4359,7 +4520,7 @@ int multilistTest(int, char *[]) {
                 }
 
                 if (!why) {
-                    multilistIteratorInit(ml, s, &iter, true, true);
+                    multilistIteratorInit(&ml, s, &iter, true, true);
                     why = mlrWalk(&iter, n, true, n);
                     mlrTierRelease(ml, &iter);
                     if (!why && multilistCount(ml) != n) {
@@ -4456,7 +4617,7 @@ int multilistTest(int, char *[]) {
             for (size_t at = 0; at < n; at += 3) {
                 multilistIterator iter;
                 memset(&iter, 0xFF, sizeof(iter));
-                if (!multilistIteratorInitAtIdx(ml, s, &iter, (mlOffsetId)at,
+                if (!multilistIteratorInitAtIdx(&ml, s, &iter, (mlOffsetId)at,
                                                 true, true)) {
                     ERR("%s: IteratorInitAtIdx(%zu) failed", name, at);
                     break;
@@ -4557,7 +4718,7 @@ int multilistTest(int, char *[]) {
             /* Rotate: the first move is the wide tail. */
             for (int r = 0; r < 5; r++) {
                 const mlwVal moved = want[n - 1];
-                multilistRotate(ml, s);
+                multilistRotate(&ml, s);
                 mlwRemoveAt(want, &n, n - 1);
                 mlwInsertAt(want, &n, 0, moved);
             }
@@ -4613,7 +4774,7 @@ int multilistTest(int, char *[]) {
             for (int pass = 0; pass < 2; pass++) {
                 const bool forward = pass == 0;
                 multilistIterator iter;
-                multilistIteratorInit(ml, s, &iter, forward, false);
+                multilistIteratorInit(&ml, s, &iter, forward, false);
                 size_t idx = forward ? 0 : n - 1;
                 size_t visited = 0;
                 const size_t total = n;
@@ -4799,7 +4960,7 @@ int multilistTest(int, char *[]) {
              * and delete a range. */
             for (int r = 0; r < 3; r++) {
                 const mlwVal moved = want[n - 1];
-                multilistRotate(ml, s);
+                multilistRotate(&ml, s);
                 mlwRemoveAt(want, &n, n - 1);
                 mlwInsertAt(want, &n, 0, moved);
             }
@@ -4956,6 +5117,73 @@ int multilistTest(int, char *[]) {
                     }
                 }
             }
+        }
+    }
+
+    TEST("multilist: a Small list is its own flex; deletes through a "
+         "writable iterator and rotations keep the handle current") {
+        /* 300 integers in one Small list: deleting all but the last
+         * through a writable iterator shrinks its flex, and rotating a
+         * long tail to the head grows it; each may move the flex, which
+         * the handle must follow (a stale handle is a use after free
+         * under the sanitizers).  The checks are the contents, never
+         * whether the allocation moved, which is the allocator's call. */
+        cleaner(multilistFree) multilist *ml =
+            multilistNewLimit(FLEX_CAP_LEVEL_4096, 0);
+        static constexpr int64_t n = 300;
+        for (int64_t i = 0; i < n; i++) {
+            const databox b = DATABOX_SIGNED(i);
+            multilistPushByTypeTail(&ml, s0, &b);
+        }
+        if (_multilistType(ml) != MULTILIST_TYPE_SMALL) {
+            ERR("300 integers left tier %d", (int)_multilistType(ml));
+        }
+
+        multilistIterator iter = {};
+        multilistIteratorInitForward(&ml, s, &iter);
+        multilistEntry entry;
+        while (multilistNext(&iter, &entry)) {
+            if (entry.box.data.i != n - 1) {
+                multilistDelEntry(&iter, &entry);
+            }
+        }
+        multilistIteratorRelease(&iter);
+        multilistEntry last;
+        if (multilistCount(ml) != 1 || !multilistIndexGet(ml, s0, 0, &last) ||
+            last.box.data.i != n - 1) {
+            ERR("deletes through the iterator left %zu elements",
+                multilistCount(ml));
+        }
+
+        /* [n-1, a, b] with a long tail; each rotation moves the tail to
+         * the head: [b, n-1, a], [a, b, n-1], [n-1, a, b] */
+        char longText[200];
+        memset(longText, 'b', sizeof(longText));
+        const databox a = DATABOX_SIGNED(-1);
+        const databox b = databoxNewBytes(longText, sizeof(longText));
+        multilistPushByTypeTail(&ml, s0, &a);
+        multilistPushByTypeTail(&ml, s0, &b);
+        for (int32_t r = 1; r <= 3; r++) {
+            multilistRotate(&ml, s);
+            multilistEntry head;
+            const bool longHead = r % 3 == 1;
+            if (!multilistIndexGet(ml, s0, 0, &head) ||
+                (longHead ? head.box.len != sizeof(longText)
+                          : head.box.type == DATABOX_BYTES)) {
+                ERR("rotation %d put the wrong element at the head", r);
+            }
+        }
+
+        /* A read-only iterator over the list as a const pointer */
+        const multilist *view = ml;
+        multilistIteratorInitForwardReadOnly(view, s, &iter);
+        int32_t seen = 0;
+        while (multilistNext(&iter, &entry)) {
+            seen++;
+        }
+        multilistIteratorRelease(&iter);
+        if (seen != 3) {
+            ERR("a read-only walk saw %d elements, expected 3", seen);
         }
     }
 

@@ -92,31 +92,39 @@ bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
                                    mlOffsetId index, const databox *box);
 
-void multilistIteratorInit(multilist *ml, mflexState *state[2],
+/* An iterator over '*ml' that keeps the handle 'ml': a small list is its
+ * own flex, which multilistDelEntry through the iterator may move, and
+ * the iterator stores it back in *ml.  A read-only iterator needs no
+ * handle: the ReadOnly forms take the list itself. */
+void multilistIteratorInit(multilist **ml, mflexState *state[2],
                            multilistIterator *iter, bool forward,
                            bool readOnly);
-#define multilistIteratorInitReadOnly(ml, s, iter, forward)                    \
-    multilistIteratorInit(ml, s, iter, forward, true)
+void multilistIteratorInitReadOnly(const multilist *ml, mflexState *state[2],
+                                   multilistIterator *iter, bool forward);
 #define multilistIteratorInitForwardReadOnly(ml, s, iter)                      \
-    multilistIteratorInit(ml, s, iter, true, true)
+    multilistIteratorInitReadOnly(ml, s, iter, true)
 #define multilistIteratorInitForward(ml, s, iter)                              \
     multilistIteratorInit(ml, s, iter, true, false)
 #define multilistIteratorInitReverse(ml, s, iter)                              \
     multilistIteratorInit(ml, s, iter, false, false)
 #define multilistIteratorInitReverseReadOnly(ml, s, iter)                      \
-    multilistIteratorInit(ml, s, iter, false, true)
+    multilistIteratorInitReadOnly(ml, s, iter, false)
 
-bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
+bool multilistIteratorInitAtIdx(multilist **ml, mflexState *state[2],
                                 multilistIterator *iter, mlOffsetId idx,
                                 bool forward, bool readOnly);
+bool multilistIteratorInitAtIdxReadOnly(const multilist *ml,
+                                        mflexState *state[2],
+                                        multilistIterator *iter, mlOffsetId idx,
+                                        bool forward);
 #define multilistIteratorInitAtIdxForward(ml, s, iter, idx)                    \
     multilistIteratorInitAtIdx(ml, s, iter, idx, true, false)
 #define multilistIteratorInitAtIdxForwardReadOnly(ml, s, iter, idx)            \
-    multilistIteratorInitAtIdx(ml, s, iter, idx, true, true)
+    multilistIteratorInitAtIdxReadOnly(ml, s, iter, idx, true)
 #define multilistIteratorInitAtIdxReverse(ml, s, iter, idx)                    \
     multilistIteratorInitAtIdx(ml, s, iter, idx, false, false)
 #define multilistIteratorInitAtIdxReverseReadOnly(ml, s, iter, idx)            \
-    multilistIteratorInitAtIdx(ml, s, iter, idx, false, true)
+    multilistIteratorInitAtIdxReadOnly(ml, s, iter, idx, false)
 
 /* multilistNext fills 'entry' (it needs no initialization) and decodes the
  * element into entry->box.  A 96/128-bit element reads back whole, with
@@ -125,8 +133,8 @@ bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
  * multilistEntry in multilistCommon.h for how long it stays valid. */
 bool multilistNext(multilistIterator *iter, multilistEntry *entry);
 
-void multilistRewind(multilist *ml, multilistIterator *iter);
-void multilistRewindTail(multilist *ml, multilistIterator *iter);
+void multilistRewind(multilist **ml, multilistIterator *iter);
+void multilistRewindTail(multilist **ml, multilistIterator *iter);
 
 void multilistIteratorRelease(multilistIterator *iter);
 
@@ -177,7 +185,9 @@ bool multilistIndexNearWide(const multilist *ml, mflexState *state,
                             mlOffsetId anchorIdx, multilistEntry *entry,
                             databoxWide *slot);
 
-void multilistRotate(multilist *m, mflexState *state[2]);
+/* Move the tail element to the head; may move a small list's flex, so it
+ * rewrites *m */
+void multilistRotate(multilist **m, mflexState *state[2]);
 
 /* Remove the head or tail element and return it in *got as a
  * self-contained value, on every tier:

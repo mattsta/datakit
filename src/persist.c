@@ -4255,9 +4255,9 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
     multilistIterator iter = {};
     bool removed = false;
     if (fromTail) {
-        multilistIteratorInitReverse(*ml, pair, &iter);
+        multilistIteratorInitReverse(ml, pair, &iter);
     } else {
-        multilistIteratorInitForward(*ml, pair, &iter);
+        multilistIteratorInitForward(ml, pair, &iter);
     }
     multilistEntry entry = {};
     while (multilistNext(&iter, &entry)) {
@@ -4403,7 +4403,7 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
                 return false;
             }
             mflexState *pair[2] = {state, tmp};
-            multilistRotate(*ml, pair);
+            multilistRotate(ml, pair);
         }
         return true;
     }
@@ -7530,7 +7530,7 @@ int persistTest(int, char *[]) {
 
         for (int r = 0; r < 3; r++) {
             const uint32_t moved = ids[n - 1];
-            multilistRotate(ml, s);
+            multilistRotate(&ml, s);
             PTEST_LOGGED(persistLogOp(p, PERSIST_OP_ROTATE, nullptr, 0));
             memmove(&ids[1], &ids[0], (n - 1) * sizeof(*ids));
             ids[0] = moved;

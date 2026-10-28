@@ -209,7 +209,7 @@ for (size_t i = 0; i < multilistCount(ml); i++) {
  * ARRAY OF TWO mflexState pointers. */
 mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
 multilistIterator iter;
-multilistIteratorInitForward(ml, states, &iter);
+multilistIteratorInitForwardReadOnly(ml, states, &iter);
 while (multilistNext(&iter, &entry)) {
     // amortized O(1) per iteration
 }
@@ -588,7 +588,7 @@ for (size_t i = 0; i < multilistCount(ml); i++) {
 /* RIGHT: Iterator-based */
 mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
 multilistIterator iter;
-multilistIteratorInitForward(ml, states, &iter);
+multilistIteratorInitForwardReadOnly(ml, states, &iter);
 while (multilistNext(&iter, &entry)) {  // amortized O(1)
     /* entry holds the decoded element */
 }

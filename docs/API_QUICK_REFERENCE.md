@@ -521,7 +521,7 @@ do {
 mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
 
 multilistIterator iter;
-multilistIteratorInitForward(ml, states, &iter);
+multilistIteratorInitForwardReadOnly(ml, states, &iter);
 
 multilistEntry entry;
 while (multilistNext(&iter, &entry)) {
@@ -533,7 +533,7 @@ multilistIteratorRelease(&iter);
 **multilist (reverse)**:
 
 ```c
-multilistIteratorInitReverse(ml, states, &iter);
+multilistIteratorInitReverseReadOnly(ml, states, &iter);
 while (multilistNext(&iter, &entry)) {
     // Process in reverse
 }

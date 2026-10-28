@@ -242,7 +242,7 @@ void recentListTouch(recentList *r, const char *key) {
     bool found = false;
 
     multilistIterator iter = {0};
-    multilistIteratorInitForward(r->ml, r->s, &iter);
+    multilistIteratorInitForward(&r->ml, r->s, &iter);
 
     multilistEntry entry;
     while (multilistNext(&iter, &entry)) {
@@ -344,7 +344,7 @@ void rotationStep(rotation *r) {
            entry.box.data.bytes.cstart);
 
     /* Tail becomes the new head; the previous tail-1 becomes the tail. */
-    multilistRotate(r->ml, r->s);
+    multilistRotate(&r->ml, r->s);
 }
 
 void rotationExample(void) {
@@ -368,9 +368,9 @@ void rotationExample(void) {
 }
 ```
 
-`multilistRotate()` takes `multilist *`, not `multilist **`: rotation cannot
-change the element count, so it can never trigger a variant upgrade. Rotating a
-list of 0 or 1 elements is a no-op.
+`multilistRotate()` takes the handle (`multilist **`): rotation never changes
+the element count or the variant, but a small list is its own flex, which the
+rotation may move. Rotating a list of 0 or 1 elements is a no-op.
 
 ## Advanced Examples
 

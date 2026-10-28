@@ -36,7 +36,9 @@ typedef int64_t mlOffsetId;
  * a slot of its own (a box read through the original still points into
  * the original). */
 typedef struct multilistIterator {
-    void *ml; /* pointer back to (untagged) multilist instance itself. */
+    /* the tier's struct (untagged); for Small, which has none, the list's
+     * handle (multilist **) when the iterator is writable, else NULL */
+    void *ml;
     flexEntry *fe;
     /* offset of 'fe' (the element the next multilistNext returns) in the
      * current flex: head-relative when >= 0, tail-relative when < 0.
@@ -46,8 +48,11 @@ typedef struct multilistIterator {
     /* Medium and Full */
     mlNodeId nodeIdx; /* only used for Medium and Full */
 
-    /* Full Only */
+    /* the flex the iterator walks: Small's only flex (its list has no
+     * struct to hold it), Medium's current half, Full's open node */
     flex *f;
+
+    /* Full Only */
     mflexState *state[2];
     bool readOnly;
 

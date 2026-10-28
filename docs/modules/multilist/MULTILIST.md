@@ -32,7 +32,7 @@ The multilist family uses **pointer tagging** to transparently manage three unde
 │  multilist* │  Opaque pointer with a 2-bit low type tag
 └──────┬──────┘  plus two 8-bit high fields (compress depth, size limit)
        │
-       ├──[tag=1]──> multilistSmall  (8 bytes, single flex)
+       ├──[tag=1]──> the flex itself (Small: no header)
        ├──[tag=2]──> multilistMedium (16 bytes, two flexes)
        └──[tag=3]──> multilistFull   (24 bytes + multiarray of mflex nodes)
 ```
@@ -42,7 +42,7 @@ Small/Medium structs: `ptrlibCompress.h` stores the compression depth and the
 size limit in the top 8-bit fields of the tagged pointer (see `ptrlib.h`,
 `PTRLIB_BITS_HIGH 16`). This is why every mutating call takes `multilist **`:
 the tag bits and the metadata bits travel with the pointer when a variant is
-replaced.
+replaced, and a Small list's pointer is its flex, which any change may move.
 
 ### What is a Multilist Node?
 
@@ -512,7 +512,7 @@ multilistDelRange(&ml, state, -5, 5);  /* Delete last 5 elements */
 
 /* Example: Delete while iterating (supported) */
 multilistIterator iter;
-multilistIteratorInitForward(ml, s, &iter);
+multilistIteratorInitForward(&ml, s, &iter); /* writable: takes the handle */
 multilistEntry entry;
 
 while (multilistNext(&iter, &entry)) {
@@ -653,26 +653,33 @@ if (multilistIndexWide(ml, state, -1, &entry, &slot) &&
 ### Basic Iteration
 
 ```c
-void multilistIteratorInit(multilist *ml, mflexState *state[2],
+/* Writable (or either, by 'readOnly'): takes the list's handle */
+void multilistIteratorInit(multilist **ml, mflexState *state[2],
                            multilistIterator *iter, bool forward,
                            bool readOnly);
+/* Read-only: takes the list */
+void multilistIteratorInitReadOnly(const multilist *ml, mflexState *state[2],
+                                   multilistIterator *iter, bool forward);
 
-/* Convenience macros */
-#define multilistIteratorInitReadOnly(ml, s, iter, forward)
+/* Convenience macros: the ReadOnly forms take 'ml', the others '&ml' */
 #define multilistIteratorInitForwardReadOnly(ml, s, iter)
-#define multilistIteratorInitForward(ml, s, iter)
-#define multilistIteratorInitReverse(ml, s, iter)
+#define multilistIteratorInitForward(mlp, s, iter)
+#define multilistIteratorInitReverse(mlp, s, iter)
 #define multilistIteratorInitReverseReadOnly(ml, s, iter)
 
 /* Initialize at a specific index */
-bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
+bool multilistIteratorInitAtIdx(multilist **ml, mflexState *state[2],
                                 multilistIterator *iter, mlOffsetId idx,
                                 bool forward, bool readOnly);
+bool multilistIteratorInitAtIdxReadOnly(const multilist *ml,
+                                        mflexState *state[2],
+                                        multilistIterator *iter,
+                                        mlOffsetId idx, bool forward);
 
 /* Convenience macros */
-#define multilistIteratorInitAtIdxForward(ml, s, iter, idx)
+#define multilistIteratorInitAtIdxForward(mlp, s, iter, idx)
 #define multilistIteratorInitAtIdxForwardReadOnly(ml, s, iter, idx)
-#define multilistIteratorInitAtIdxReverse(ml, s, iter, idx)
+#define multilistIteratorInitAtIdxReverse(mlp, s, iter, idx)
 #define multilistIteratorInitAtIdxReverseReadOnly(ml, s, iter, idx)
 
 /* Advance iterator */
@@ -690,6 +697,12 @@ changes nothing. The tier-level forms are `multilistSmallReleaseIterator()`,
 
 `multilistIteratorInit()` returns void and always succeeds;
 `multilistIteratorInitAtIdx()` returns `false` when `idx` is out of range.
+
+A writable iterator takes the list's handle (`&ml`) because a Small list
+has no header: its `multilist *` is its flex, which `multilistDelEntry()`
+may move, and the iterator stores the moved flex back through the handle.
+A read-only iterator changes nothing, so the ReadOnly forms take the list
+itself (`const multilist *`).
 
 ```c
 mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
@@ -736,8 +749,8 @@ if you need it past that.
 ### Restarting Iteration
 
 ```c
-void multilistRewind(multilist *ml, multilistIterator *iter);
-void multilistRewindTail(multilist *ml, multilistIterator *iter);
+void multilistRewind(multilist **ml, multilistIterator *iter);
+void multilistRewindTail(multilist **ml, multilistIterator *iter);
 ```
 
 `multilistRewind()` restarts an iterator that has already been initialized
@@ -756,12 +769,12 @@ while (multilistNext(&iter, &entry)) {
     /* first pass */
 }
 
-multilistRewind(ml, &iter);
+multilistRewind(&ml, &iter);
 while (multilistNext(&iter, &entry)) {
     /* second pass, from the head again */
 }
 
-multilistRewindTail(ml, &iter);
+multilistRewindTail(&ml, &iter);
 while (multilistNext(&iter, &entry)) {
     /* third pass, from the tail */
 }
@@ -770,10 +783,10 @@ multilistIteratorRelease(&iter);
 ```
 
 Each tier also has its own pair, for code that holds a tier pointer
-directly: `multilistSmallRewind()`, `multilistMediumRewind()` and
-`multilistFullRewind()`, plus their `RewindTail` forms. They behave the same
-way. Small and Medium keep no per-iterator state, so for them a rewind is a
-fresh init. `multilistFullRewind*()` releases the open node first and keeps
+directly: `multilistSmallRewind()` (on a Small view), `multilistMediumRewind()`
+and `multilistFullRewind()`, plus their `RewindTail` forms. They behave the
+same way. Small and Medium keep no per-iterator state, so for them a rewind is
+a fresh init. `multilistFullRewind*()` releases the open node first and keeps
 the iterator's state pair and `readOnly` mode.
 
 ## Special Operations
@@ -782,13 +795,14 @@ the iterator's state pair and `readOnly` mode.
 
 ```c
 /* Move the tail element to the head */
-void multilistRotate(multilist *m, mflexState *state[2]);
+void multilistRotate(multilist **m, mflexState *state[2]);
 ```
 
 `multilistRotate()` copies the **tail** entry to the **head** and deletes the
-old tail. It takes `multilist *` (not `multilist **`) because rotation cannot
-change the element count and therefore never triggers an upgrade. Rotating a
-list of 0 or 1 elements is a no-op. A 96/128-bit tail moves intact.
+old tail. Rotation never changes the element count or the tier, but it takes
+the handle (`multilist **`): a Small list is its own flex, which the rotation
+may move. Rotating a list of 0 or 1 elements is a no-op. A 96/128-bit tail
+moves intact.
 
 ```c
 /* Example: Round-robin processing.
@@ -803,7 +817,7 @@ for (uint32_t round = 0; round < 1000; round++) {
                entry.box.data.bytes.cstart);
 
         /* Move that element to the front; the next tail becomes current */
-        multilistRotate(tasks, s);
+        multilistRotate(&tasks, s);
     }
 }
 ```
@@ -1041,7 +1055,7 @@ multilist *bigList = multilistNewLimit(FLEX_CAP_LEVEL_4096, 2);
 
 ```c
 multilistIterator iter = {0};
-multilistIteratorInitForward(ml, s, &iter);
+multilistIteratorInitForward(&ml, s, &iter);
 
 while (multilistNext(&iter, &entry)) {
     /* ... */
@@ -1069,8 +1083,9 @@ Do **not** call `databoxFreeData()` on a `multilistEntry.box` from
 /* Read-only avoids marking Full nodes dirty for recompression */
 multilistIteratorInitForwardReadOnly(ml, s, &iter);
 
-/* Use read-write only when you will call multilistDelEntry() */
-multilistIteratorInitForward(ml, s, &iter);
+/* Use read-write only when you will call multilistDelEntry(); it takes
+ * the list's handle */
+multilistIteratorInitForward(&ml, s, &iter);
 ```
 
 ## Thread Safety

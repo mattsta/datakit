@@ -272,7 +272,7 @@ void multilistIteratorInitP(multilistP *ml, mflexState *state[2],
     if (!ml || !ml->ml) {
         return;
     }
-    multilistIteratorInit(ml->ml, state, iter, forward, readOnly);
+    multilistIteratorInit(&ml->ml, state, iter, forward, readOnly);
 }
 
 /* ============================================================================

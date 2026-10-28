@@ -31,7 +31,10 @@ boundaries are 512 bytes and 1.5 KB.
 
 ### Small Variant
 
-`multilistSmallInternal.h`:
+A Small list has no header: its `multilist *` is its flex, with the tier
+in the pointer's low 2 bits and the depth and limit in its top 16 bits.
+`multilistSmallInternal.h` holds the view each call builds on the stack
+from the pointer:
 
 ```c
 struct multilistSmall {
@@ -42,7 +45,7 @@ struct multilistSmall {
 **Structure:**
 
 - Single flex array containing all elements
-- 8-byte struct
+- No header: one allocation, the flex
 - No compression support (the `mflexState *` argument is discarded by
   `multilistSmallAdapter*` in `multilistAdapter.h`)
 - Suited to small, short-lived lists
@@ -50,11 +53,15 @@ struct multilistSmall {
 **Memory Layout:**
 
 ```
-multilistSmall (8 bytes)
+multilist * (tagged: the flex itself)
     |
     v
 [flex: elem elem elem elem elem ...]
 ```
+
+Calls that can move the flex take the handle (`multilist **`): pushes,
+inserts, deletes, pops, replace, rotate, and writable iterators (whose
+`multilistDelEntry()` stores the moved flex back through it).
 
 **When to Use:**
 
@@ -67,7 +74,7 @@ multilistSmall (8 bytes)
 Upgrades to Medium when:
 
 ```c
-multilistSmallBytes(small) > flexOptimizationSizeLimit[limit]
+flexBytes(fl) > flexOptimizationSizeLimit[limit]
 ```
 
 ### Medium Variant

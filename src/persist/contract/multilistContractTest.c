@@ -77,7 +77,7 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
         } else if (roll == 26) {
             if (count > 1) {
                 mflexState *pair[2] = {state, second};
-                multilistRotate(ml, pair);
+                multilistRotate(&ml, pair);
             }
             persistContractRecord(b->log, PERSIST_OP_ROTATE, nullptr, 0);
         } else {
