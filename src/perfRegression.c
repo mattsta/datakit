@@ -763,35 +763,49 @@ static void benchMultidict(void) {
     perfContainerSink = sink;
 }
 
-/* One multidictLoad table: 'n' of the keys at 'load' percent */
-static uint64_t benchMultidictLoadOne(const char *keys, const uint32_t n,
-                                      const uint32_t load) {
-    uint64_t sink = 0;
-    char row[48];
-#define MD_LOAD_ROW(op, bytes, secs)                                           \
-    do {                                                                       \
-        snprintf(row, sizeof(row), "%s%" PRIu32 "@%" PRIu32 "k", (op), load,   \
-                 n / 1000);                                                    \
-        emitRow("multidictLoad", row, (bytes), n, (secs));                     \
-    } while (0)
+/* The operations a multidict load measurement times, in row order */
+typedef enum mdLoadOp {
+    MD_LOAD_ADD = 0,
+    MD_LOAD_FIND,
+    MD_LOAD_FIND_SCATTERED,
+    MD_LOAD_DELETE,
+    MD_LOAD_OP_COUNT
+} mdLoadOp;
 
+static const char *const mdLoadOpNames[MD_LOAD_OP_COUNT] = {
+    "add", "find", "findScattered", "delete"};
+
+/* One measured table: seconds per operation kind over its 'n' entries,
+ * and its live heap after the adds (metered at the allocator; 0 when the
+ * allocator cannot report sizes) */
+typedef struct mdLoadResult {
+    double secs[MD_LOAD_OP_COUNT];
+    int64_t heap;
+} mdLoadResult;
+
+/* 'n' of the keys in a dict at 'load' percent (shrinking below a
+ * twentieth of it, as the defaults do): adds, finds in order and
+ * scattered, deletes */
+static mdLoadResult benchMultidictLoadOne(const char *keys, const uint32_t n,
+                                          const uint32_t load) {
+    mdLoadResult r = {};
+    uint64_t sink = 0;
     const bool metered = ctestHeapMeterStart();
     cleaner(multidictDefaultClassFree) multidictClass *qdc =
         multidictDefaultClassNew();
     cleaner(multidictFree) multidict *d =
         multidictNew(&multidictTypeExactKey, qdc, 7);
-    multidictSetLoadFactors(d, load, 10);
+    multidictSetLoadFactors(d, load, load / 20);
     double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
         const databox v = databoxNewSigned(i);
         sink += multidictAdd(d, &k, &v);
     }
-    const double addSecs = timeUtilMonotonicSec() - t0;
+    r.secs[MD_LOAD_ADD] = timeUtilMonotonicSec() - t0;
     while (multidictRehash(d, 1024)) {
     }
-    const int64_t heap = metered ? ctestHeapMeterStop() : 0;
-    MD_LOAD_ROW("add", heap > 0 ? (size_t)heap : 0, addSecs);
+    r.heap = metered ? ctestHeapMeterStop() : 0;
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
@@ -799,7 +813,7 @@ static uint64_t benchMultidictLoadOne(const char *keys, const uint32_t n,
         databox v = {};
         sink += multidictFind(d, &k, &v);
     }
-    MD_LOAD_ROW("find", 0, timeUtilMonotonicSec() - t0);
+    r.secs[MD_LOAD_FIND] = timeUtilMonotonicSec() - t0;
 
     /* Scattered over [0, n): 7919 is prime and divides no size here */
     t0 = timeUtilMonotonicSec();
@@ -808,36 +822,74 @@ static uint64_t benchMultidictLoadOne(const char *keys, const uint32_t n,
         databox v = {};
         sink += multidictFind(d, &k, &v);
     }
-    MD_LOAD_ROW("findScattered", 0, timeUtilMonotonicSec() - t0);
+    r.secs[MD_LOAD_FIND_SCATTERED] = timeUtilMonotonicSec() - t0;
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, (i * 7919u) % n);
         sink += multidictDelete(d, &k);
     }
-    MD_LOAD_ROW("delete", 0, timeUtilMonotonicSec() - t0);
-#undef MD_LOAD_ROW
-    return sink;
+    r.secs[MD_LOAD_DELETE] = timeUtilMonotonicSec() - t0;
+    perfContainerSink = sink;
+    return r;
 }
 
-/* multidict at each count-based load factor and three sizes (run by
- * name; a table's slot count steps in powers of two, so one size alone
- * can put two load factors on the same table): adds (the bytes column is
- * the dict's live heap after them, metered at the allocator), finds in
- * order and scattered, and deletes.  Rows are named op, load, '@', size
- * in thousands. */
+/* The load factors and table sizes both multidict sweeps measure: a
+ * table's slot count steps in powers of two, so one size alone can put
+ * two load factors on the same table */
+static const uint32_t mdLoadFactors[] = {200, 400, 800, 1600, 3200};
+static const uint32_t mdLoadSizes[] = {40'000, 70'000, PERF_CONTAINER_N};
+
+/* multidict at each load factor and size (run by name): rows named op,
+ * load, '@', size in thousands; each add row's bytes column is the dict's
+ * live heap */
 static void benchMultidictLoad(void) {
-    static const uint32_t loads[] = {200, 400, 800, 1600, 3200};
-    static const uint32_t sizes[] = {40'000, 70'000, PERF_CONTAINER_N};
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
-    uint64_t sink = 0;
-    for (size_t s = 0; s < countof(sizes); s++) {
-        for (size_t l = 0; l < countof(loads); l++) {
-            sink += benchMultidictLoadOne(keys, sizes[s], loads[l]);
+    char row[48];
+    for (size_t s = 0; s < countof(mdLoadSizes); s++) {
+        const uint32_t n = mdLoadSizes[s];
+        for (size_t l = 0; l < countof(mdLoadFactors); l++) {
+            const mdLoadResult r =
+                benchMultidictLoadOne(keys, n, mdLoadFactors[l]);
+            for (int op = 0; op < MD_LOAD_OP_COUNT; op++) {
+                snprintf(row, sizeof(row), "%s%" PRIu32 "@%" PRIu32 "k",
+                         mdLoadOpNames[op], mdLoadFactors[l], n / 1000);
+                const bool heapRow = op == MD_LOAD_ADD && r.heap > 0;
+                emitRow("multidictLoad", row, heapRow ? (size_t)r.heap : 0, n,
+                        r.secs[op]);
+            }
         }
     }
+}
 
-    perfContainerSink = sink;
+/* The sweep `dktools tune --families multidict` reads (run by name):
+ * per load factor, each operation over all three sizes together (a
+ * growth cycle's spread of table fullness), rows named op and load; every
+ * row's bytes column is the summed heap of the three tables */
+static void benchMultidictLimits(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    char row[48];
+    for (size_t l = 0; l < countof(mdLoadFactors); l++) {
+        double secs[MD_LOAD_OP_COUNT] = {};
+        uint32_t entries = 0;
+        int64_t heap = 0;
+        for (size_t s = 0; s < countof(mdLoadSizes); s++) {
+            const mdLoadResult r =
+                benchMultidictLoadOne(keys, mdLoadSizes[s], mdLoadFactors[l]);
+            for (int op = 0; op < MD_LOAD_OP_COUNT; op++) {
+                secs[op] += r.secs[op];
+            }
+            entries += mdLoadSizes[s];
+            heap += r.heap;
+        }
+
+        for (int op = 0; op < MD_LOAD_OP_COUNT; op++) {
+            snprintf(row, sizeof(row), "%s%" PRIu32, mdLoadOpNames[op],
+                     mdLoadFactors[l]);
+            emitRow("multidictLimits", row, heap > 0 ? (size_t)heap : 0,
+                    entries, secs[op]);
+        }
+    }
 }
 
 /* A Full-tier set: adds of new members, then updates of existing ones
@@ -2167,6 +2219,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multidictLoad")) {
             benchMultidictLoad();
+        }
+
+        if (perfNamed("multidictLimits")) {
+            benchMultidictLimits();
         }
 
         if (perfNamed("persistChecks")) {

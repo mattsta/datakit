@@ -470,6 +470,15 @@ void multidictResizeDisable(multidict *d);
  * pointer), slightly longer slot searches. */
 bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
                              uint32_t shrinkPercent);
+/* The load factors every dict created from now on starts with (the same
+ * bounds; false, changing nothing, for others).  Dicts that exist keep
+ * theirs.  The compiled default is 800% and 40% (MULTIDICT.md, "Load
+ * Factors"); `dktools tune --families multidict` measures it again on a
+ * machine. */
+bool multidictSetDefaultLoadFactors(uint32_t expandPercent,
+                                    uint32_t shrinkPercent);
+void multidictDefaultLoadFactors(uint32_t *expandPercent,
+                                 uint32_t *shrinkPercent);
 bool multidictRehash(multidict *d, int32_t n);
 int64_t multidictRehashMilliseconds(multidict *d, int64_t ms);
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed);

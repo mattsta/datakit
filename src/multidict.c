@@ -915,8 +915,11 @@ multidict *multidictNew(multidictType *type, multidictClass *qdc,
     d->rehashidx = MULTIDICT_REHASHIDX_INVALID;
     d->rehashing = false;
     d->iterators = 0;
-    d->expandLoadFactor = MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR;
-    d->shrinkLoadFactor = MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR;
+    uint32_t expandPercent;
+    uint32_t shrinkPercent;
+    multidictDefaultLoadFactors(&expandPercent, &shrinkPercent);
+    d->expandLoadFactor = (uint16_t)expandPercent;
+    d->shrinkLoadFactor = (uint8_t)shrinkPercent;
     d->autoResize = true;
     /* Count-based resizing unless multidictEnableByteBasedExpansion asks
      * for byte-based */
@@ -3158,19 +3161,52 @@ void multidictResizeDisable(multidict *d) {
         true; /* Also update class for backwards compat */
 }
 
+/* Load factors a dict may use: every resize leaves the load at about half
+ * the growth point, which must stay above the shrink point; below 50% the
+ * slot table would outweigh the entries */
+static bool multidictLoadFactorsOk_(const uint32_t expandPercent,
+                                    const uint32_t shrinkPercent) {
+    return expandPercent >= 50 && expandPercent <= UINT16_MAX &&
+           shrinkPercent <= UINT8_MAX && shrinkPercent * 4 <= expandPercent;
+}
+
 bool multidictSetLoadFactors(multidict *d, const uint32_t expandPercent,
                              const uint32_t shrinkPercent) {
-    /* Every resize leaves the load at about half the growth point, which
-     * must stay above the shrink point; below 50% the slot table would
-     * outweigh the entries */
-    if (!d || expandPercent < 50 || expandPercent > UINT16_MAX ||
-        shrinkPercent > UINT8_MAX || shrinkPercent * 4 > expandPercent) {
+    if (!d || !multidictLoadFactorsOk_(expandPercent, shrinkPercent)) {
         return false;
     }
 
     d->expandLoadFactor = (uint16_t)expandPercent;
     d->shrinkLoadFactor = (uint8_t)shrinkPercent;
     return true;
+}
+
+/* The load factors new dicts start with: expand in the low 16 bits,
+ * shrink above them, one word so a reader sees both from one setting */
+static _Atomic uint32_t multidictDefaultLoads_ =
+    (uint32_t)MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR |
+    ((uint32_t)MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR << 16);
+
+bool multidictSetDefaultLoadFactors(const uint32_t expandPercent,
+                                    const uint32_t shrinkPercent) {
+    if (!multidictLoadFactorsOk_(expandPercent, shrinkPercent)) {
+        return false;
+    }
+
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&multidictDefaultLoads_,
+                          expandPercent | (shrinkPercent << 16),
+                          memory_order_relaxed);
+    return true;
+}
+
+void multidictDefaultLoadFactors(uint32_t *expandPercent,
+                                 uint32_t *shrinkPercent) {
+    /* @sync: relaxed hint */
+    const uint32_t loads =
+        atomic_load_explicit(&multidictDefaultLoads_, memory_order_relaxed);
+    *expandPercent = loads & UINT16_MAX;
+    *shrinkPercent = loads >> 16;
 }
 
 /* ====================================================================
@@ -8509,6 +8545,52 @@ int multidictTest(int, char *[]) {
                 ERR("1600%%: %s lost", keyBuf);
                 break;
             }
+        }
+    }
+
+    TEST("12.5c multidictSetDefaultLoadFactors: new dicts start with it") {
+        uint32_t expand = 0;
+        uint32_t shrink = 0;
+        multidictDefaultLoadFactors(&expand, &shrink);
+        if (expand != MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR ||
+            shrink != MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR) {
+            ERR("compiled default reads %u/%u", expand, shrink);
+        }
+
+        if (multidictSetDefaultLoadFactors(40, 10) ||
+            multidictSetDefaultLoadFactors(400, 101)) {
+            ERR("an out-of-bounds default was taken");
+        }
+
+        cleaner(multidictMmClassFree) multidictClass *qdcDefault =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *before =
+            multidictNew(&multidictTypeExactKey, qdcDefault, 5);
+        if (!multidictSetDefaultLoadFactors(200, 10)) {
+            ERR("200%%/10%% refused as a default");
+        }
+
+        cleaner(multidictFree) multidict *after =
+            multidictNew(&multidictTypeExactKey, qdcDefault, 5);
+        multidictSetDefaultLoadFactors(MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR,
+                                       MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR);
+        for (int j = 0; j < 3000; j++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "default-%d", j);
+            const databox key = databoxNewBytesString(keyBuf);
+            const databox val = databoxNewSigned(j);
+            MULTIDICT_TEST_OK(multidictAdd(before, &key, &val));
+            MULTIDICT_TEST_OK(multidictAdd(after, &key, &val));
+        }
+
+        while (multidictRehash(before, 1024) || multidictRehash(after, 1024)) {
+        }
+
+        /* The dict made under 200% has at least twice the slots of the
+         * one made before the change, which kept 800% */
+        if (multidictSlotCount(after) < 2 * multidictSlotCount(before)) {
+            ERR("200%% default: %" PRIu64 " slots, 800%%: %" PRIu64,
+                multidictSlotCount(after), multidictSlotCount(before));
         }
     }
 
