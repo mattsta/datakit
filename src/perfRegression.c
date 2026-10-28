@@ -613,6 +613,7 @@ defcleaner(stringPool *, stringPoolFree);
 defcleaner(intset *, intsetFree);
 defcleaner(multilru *, multilruFree);
 defcleanerName(multilruPtr *, zfree, PerfLruPtrs);
+defcleanerName(multiOrderedSet **, zfree, PerfSets);
 defcleaner(multimap *, multimapFree);
 defcleaner(multiroar *, multiroarFree);
 defcleaner(multilist *, multilistFree);
@@ -2049,6 +2050,56 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
     perfContainerSink = sink;
 }
 
+/* Many small sets, as a store of one set per key holds them: 25000 sets
+ * of 4 members each made (bytes: their metered heap), every member's
+ * score read with the sets visited in scattered order, then the sets
+ * freed */
+static void benchMultiOrderedSetMany(void) {
+    static constexpr uint32_t sets = 25'000;
+    static constexpr uint32_t per = 4;
+    static_assert(sets * per <= PERF_CONTAINER_N, "a key per member");
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    cleanerName(zfree, PerfSets) multiOrderedSet **many =
+        zcalloc(sets, sizeof(*many));
+    uint64_t sink = 0;
+
+    const bool metered = ctestHeapMeterStart();
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < sets; i++) {
+        /* @own: container; free=multiOrderedSetFree */
+        many[i] = multiOrderedSetNew();
+        for (uint32_t j = 0; j < per; j++) {
+            const databox s = databoxNewSigned(j);
+            const databox m = perfContainerKey(keys, i * per + j);
+            sink += multiOrderedSetAdd(&many[i], &s, &m);
+        }
+    }
+    const double addSecs = timeUtilMonotonicSec() - t0;
+    emitRow("multiOrderedSet", "manySmallAdd", perfHeapStop(metered),
+            sets * per, addSecs);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < sets; i++) {
+        const uint32_t set = (i * 7919u) % sets;
+        for (uint32_t j = 0; j < per; j++) {
+            const databox m = perfContainerKey(keys, set * per + j);
+            databox s;
+            sink += multiOrderedSetGetScore(many[set], &m, &s);
+        }
+    }
+    emitRow("multiOrderedSet", "manySmallGetScore", 0, sets * per,
+            timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < sets; i++) {
+        multiOrderedSetFree(many[i]);
+    }
+    emitRow("multiOrderedSet", "manySmallFree", 0, sets,
+            timeUtilMonotonicSec() - t0);
+
+    perfContainerSink = sink;
+}
+
 /* A multiarray of 'n' 8-byte elements, 64 per node, held in the tier
  * 'tier' names (64 or fewer: Small; up to 64 nodes: Medium; past that:
  * Large): PERF_CONTAINER_N reads at scattered indexes, then as many
@@ -2765,6 +2816,7 @@ int perfRegressionTest(int, char *[]) {
             benchMultiOrderedSet();
             benchMultiOrderedSetTier("small", 48);
             benchMultiOrderedSetTier("medium", 160);
+            benchMultiOrderedSetMany();
         }
 
         if (perfWanted("multimapAtom")) {
