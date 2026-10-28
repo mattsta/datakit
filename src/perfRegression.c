@@ -643,6 +643,33 @@ static uint32_t perfScatter(uint32_t i) {
 /* Sink for results the timed loops produce, so none is optimised out */
 static volatile uint64_t perfContainerSink;
 
+/* Adds of new keys and nothing else (run by name, for profiling the write
+ * path, resizes included): 60 dicts each filled with 100k keys (long
+ * enough for a sampler that attaches by pid) */
+static void benchMultidictWrite(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multidictDefaultClassFree) multidictClass *qdc =
+        multidictDefaultClassNew();
+    uint64_t sink = 0;
+    constexpr uint32_t passes = 60;
+    double secs = 0;
+    for (uint32_t p = 0; p < passes; p++) {
+        cleaner(multidictFree) multidict *d =
+            multidictNew(&multidictTypeExactKey, qdc, 7);
+        const double t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            const databox v = databoxNewSigned(i);
+            sink += multidictAdd(d, &k, &v);
+        }
+        secs += timeUtilMonotonicSec() - t0;
+    }
+
+    emitRow("multidictWrite", "add", 0, passes * n, secs);
+    perfContainerSink = sink;
+}
+
 static void benchMultidict(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -2532,6 +2559,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multiOrderedSetWrite")) {
             benchMultiOrderedSetWrite();
+        }
+
+        if (perfNamed("multidictWrite")) {
+            benchMultidictWrite();
         }
 
         if (perfWanted("idRows")) {
