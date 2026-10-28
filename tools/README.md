@@ -1095,9 +1095,11 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
   `run-<side>-<round>.tsv`.
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only
-  one side has. A row whose bytes differ between the sides (a metered
-  heap the change grew or shrank) is paired by module and name and ends
-  with `bytes -> N (change)`. `--spread` adds each side's lowest and highest run per
+  one side has. A row whose bytes vary between one side's runs (a heap
+  metered at the allocator) takes that side's median bytes; a row whose
+  bytes differ between the sides (a metered heap the change grew or
+  shrank) is paired by module and name and ends with `bytes -> N
+(change)`. `--spread` adds each side's lowest and highest run per
   row: memory-bound rows (finds over tables larger than the caches) stray
   far more from run to run than compute-bound ones, and a change smaller
   than a row's own spread is noise.

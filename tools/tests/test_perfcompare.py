@@ -108,6 +108,25 @@ class Table(unittest.TestCase):
         self.assertIn("current only: m new 6", text)
         self.assertEqual(regressed, [])
 
+    def test_bytes_that_vary_between_runs_settle_on_the_median(self) -> None:
+        runs = [
+            run_of(row("m", "heap", 10.0, 1000), row("m", "fixed", 1.0, 5)),
+            run_of(row("m", "heap", 12.0, 1010), row("m", "fixed", 1.0, 5)),
+            run_of(row("m", "heap", 11.0, 990), row("m", "fixed", 1.0, 5)),
+        ]
+        settled = perfcompare.settle_bytes(runs)
+        self.assertEqual(
+            perfcompare.medians(settled),
+            {("m", "heap", 1000): 11.0, ("m", "fixed", 5): 1.0},
+        )
+
+    def test_a_name_a_run_reports_twice_keeps_its_keys(self) -> None:
+        runs = [
+            run_of(row("m", "x", 1.0, 1), row("m", "x", 2.0, 2)),
+            run_of(row("m", "x", 1.0, 3), row("m", "x", 2.0, 4)),
+        ]
+        self.assertEqual(perfcompare.settle_bytes(runs), runs)
+
     def test_a_name_on_one_side_twice_is_not_paired(self) -> None:
         base = {("m", "x", 1): 1.0, ("m", "x", 2): 1.0}
         current = {("m", "x", 3): 1.0}

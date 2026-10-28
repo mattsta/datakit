@@ -24,9 +24,11 @@ given.  Every run's output is kept as ``run-<side>-<round>.tsv``.
 
 For each row key (module, name, bytes) present on both sides the median
 ns_per_op of each side is printed with the change in percent; the table
-is also written to ``result.txt``.  A row whose bytes differ between the
-sides (a metered heap the change grew or shrank) is still compared, by
-module and name, with its bytes change at the end of the line.  Rows on
+is also written to ``result.txt``.  A row whose bytes vary between one
+side's runs (a heap metered at the allocator) takes that side's median
+bytes, and a row whose bytes differ between the sides (a metered heap the
+change grew or shrank) is still compared, by module and name, with its
+bytes change at the end of the line.  Rows on
 one side only are listed.
 Exits 0, or 1 when ``--tolerance PCT`` is given and some row's current
 median exceeds its base median by more than PCT percent (the rows
@@ -92,6 +94,39 @@ def parse_modules(text: str | None) -> str | None:
         if not _MODULE.match(name):
             raise ToolError(f"--modules: {name!r} is not a module name")
     return ",".join(names)
+
+
+def settle_bytes(
+    runs: list[dict[Key, perfdiff.PerfRow]],
+) -> list[dict[Key, perfdiff.PerfRow]]:
+    """One side's runs with each row's bytes made steady: a (module, name)
+    every run reports once, with bytes that differ between runs (a heap
+    metered at the allocator varies a little), is keyed by the median of
+    its bytes in every run, so the runs agree on one row.  Rows a run
+    reports more than once, or with the same bytes everywhere, keep their
+    keys."""
+    seen: dict[tuple[str, str], list[int]] = {}
+    repeated: set[tuple[str, str]] = set()
+    for rows in runs:
+        names: set[tuple[str, str]] = set()
+        for key in rows:
+            name = key[:2]
+            if name in names:
+                repeated.add(name)
+            names.add(name)
+            seen.setdefault(name, []).append(key[2])
+
+    steady: dict[tuple[str, str], int] = {}
+    for name, sizes in seen.items():
+        if name not in repeated and len(sizes) == len(runs) and len(set(sizes)) > 1:
+            steady[name] = int(statistics.median(sizes))
+
+    if not steady:
+        return runs
+    return [
+        {(k[0], k[1], steady.get(k[:2], k[2])): row for k, row in rows.items()}
+        for rows in runs
+    ]
 
 
 def medians(runs: list[dict[Key, perfdiff.PerfRow]]) -> dict[Key, float]:
@@ -319,11 +354,13 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
             except perfdiff.PerfDiffInputError as exc:
                 raise ToolError(str(exc)) from exc
 
+    base_runs = settle_bytes(runs["base"])
+    current_runs = settle_bytes(runs["current"])
     lines, regressed = table(
-        medians(runs["base"]),
-        medians(runs["current"]),
+        medians(base_runs),
+        medians(current_runs),
         opts.tolerance,
-        (ranges(runs["base"]), ranges(runs["current"])) if opts.spread else None,
+        (ranges(base_runs), ranges(current_runs)) if opts.spread else None,
     )
     verdict = "REGRESSION" if regressed else "ok"
     header = [
