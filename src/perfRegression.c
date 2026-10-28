@@ -2299,6 +2299,22 @@ static void benchMultimapMany(void) {
     }
     emitRow("multimap", "manySmallFree", 0, maps, timeUtilMonotonicSec() - t0);
 
+    /* One map of 100k rows with three values each: every row's values
+     * replaced, in scattered order */
+    constexpr uint32_t rows = PERF_CONTAINER_N;
+    cleaner(multimapFree) multimap *wide = multimapNew(4);
+    for (uint32_t i = 0; i < rows; i++) {
+        const databox k = databoxNewSigned(i);
+        const databox v = databoxNewSigned(i);
+        const databox *row[4] = {&k, &v, &v, &v};
+        sink += multimapInsert(&wide, row);
+    }
+    PERF_ROW("multimap", "entryReplace3", rows,
+             const databox k = databoxNewSigned(perfScatter(i));
+             const databox v = databoxNewSigned((int64_t)i * 3);
+             const databox *values[3] = {&v, &v, &v};
+             multimapEntryReplace(&wide, &k, values));
+
     perfContainerSink = sink;
 }
 

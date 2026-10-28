@@ -997,25 +997,30 @@ void multimapEntryResize(multimap **m, const databox *key, size_t newSize) {
 }
 
 /* Replace the VALUE fields of the row with 'key': elements[] holds
- * elementsPerEntry - 1 replacement boxes, applied in field order.  The
- * key stays in place (replacing a key would break sort order); the key
- * must exist (asserted).  Each field replacement may reallocate the
- * underlying storage, so the row is re-found per field. */
+ * elementsPerEntry - 1 replacement boxes, in field order.  The key stays
+ * in place (a set's rows are all key: refused, as every in-place rewrite
+ * of a set is); the key must exist (asserted).  One search: a map's
+ * insert of a present key rewrites every value field of its row at once
+ * (and grows the tier as an insert does). */
 void multimapEntryReplace(multimap **m, const databox *key,
                           const databox *elements[]) {
-    const multimapElements epe = multimapElementsPerEntry_(*m);
-    for (multimapElements i = 0; i + 1 < epe; i++) {
-        multimapEntry me;
-        [[maybe_unused]] const bool found =
-            multimapGetUnderlyingEntry(*m, key, &me);
-        assert(found);
-
-        for (multimapElements skip = 0; skip <= i; skip++) {
-            me.fe = flexNext(*me.map, me.fe);
-        }
-
-        multimapReplaceEntry(m, &me, elements[i]);
+    if (MM_SET_REWRITE_REFUSED_(*m)) {
+        return;
     }
+
+    const multimapElements epe = multimapElementsPerEntry_(*m);
+    constexpr multimapElements stackRow = 8;
+    const databox *stack[stackRow];
+    cleanerName(zfree, Void) void *heap =
+        epe > stackRow ? zmalloc(epe * sizeof(const databox *)) : nullptr;
+    const databox **row = heap ? (const databox **)heap : stack;
+    row[0] = key;
+    for (multimapElements i = 1; i < epe; i++) {
+        row[i] = elements[i - 1];
+    }
+
+    [[maybe_unused]] const bool replaced = multimapInsert(m, row);
+    assert(replaced);
 }
 
 bool multimapExists(const multimap *m, const databox *key) {
@@ -4727,6 +4732,80 @@ int multimapTest(int, char *[]) {
 
     TEST("delete by entry through every tier") {
         err += multimapDeleteEntrySweep_();
+    }
+
+    TEST("EntryReplace rewrites every value field of a row, in every tier "
+         "and row width") {
+        /* Maps of 4- and 10-element rows (3 and 9 values: the stack and
+         * the heap scratch) at 20, 300 and 3000 rows under a small limit:
+         * replacing every row's values leaves each reading back its new
+         * values (some longer, some shorter), the count unchanged and the
+         * map verified */
+        bool sawType[MULTIMAP_TYPE_FULL + 1] = {false};
+        const multimapElements widths[] = {4, 10};
+        const int64_t sizes[] = {20, 300, 3000};
+        for (size_t w = 0; w < countof(widths); w++) {
+            const multimapElements width = widths[w];
+            for (size_t s = 0; s < countof(sizes); s++) {
+                cleaner(multimapFree) multimap *m =
+                    multimapNewLimit(width, FLEX_CAP_LEVEL_512);
+                databox boxes[10];
+                const databox *row[10];
+                for (int64_t k = 0; k < sizes[s]; k++) {
+                    boxes[0] = databoxNewSigned(k);
+                    for (multimapElements f = 1; f < width; f++) {
+                        boxes[f] = databoxNewSigned(k * 100 + f);
+                    }
+                    for (multimapElements f = 0; f < width; f++) {
+                        row[f] = &boxes[f];
+                    }
+                    multimapInsert(&m, row);
+                }
+                sawType[multimapGetType(m)] = true;
+                char text[10][24];
+                for (int64_t k = 0; k < sizes[s]; k++) {
+                    const databox key = databoxNewSigned(k);
+                    const databox *values[9];
+                    for (multimapElements f = 1; f < width; f++) {
+                        /* bytes of varying length, then a large integer */
+                        if (f % 2) {
+                            snprintf(text[f], sizeof(text[f]),
+                                     "v%" PRId64 "-%u", k,
+                                     (unsigned)(f * (k % 7)));
+                            boxes[f] = databoxNewBytesString(text[f]);
+                        } else {
+                            boxes[f] = databoxNewSigned(-k * 1'000'003 - f);
+                        }
+                        values[f - 1] = &boxes[f];
+                    }
+                    multimapEntryReplace(&m, &key, values);
+                    databox got[10];
+                    databox *gotP[10];
+                    for (multimapElements f = 0; f + 1 < width; f++) {
+                        gotP[f] = &got[f];
+                    }
+                    if (!multimapLookup(m, &key, gotP)) {
+                        ERR("width %u size %" PRId64 ": key %" PRId64 " lost",
+                            (unsigned)width, sizes[s], k);
+                        break;
+                    }
+                    for (multimapElements f = 1; f < width; f++) {
+                        if (databoxCompare(&got[f - 1], &boxes[f]) != 0) {
+                            ERR("width %u key %" PRId64
+                                " field %u not replaced",
+                                (unsigned)width, k, (unsigned)f);
+                        }
+                    }
+                }
+                if (multimapCount(m) != (size_t)sizes[s]) {
+                    ERR("EntryReplace changed the row count");
+                }
+                multimapVerify(m);
+            }
+        }
+        if (!sawType[MULTIMAP_TYPE_FULL]) {
+            ERR("the EntryReplace sweep never reached Full");
+        }
     }
 
     TEST("a set's insert-if-absent hands back the row its lookup finds, "
