@@ -221,6 +221,9 @@ typedef enum persistType {
     PERSIST_TYPE_STRING_POOL = 142,
     PERSIST_TYPE_ATOM_POOL = 143,
 
+    /* Rows addressed by id */
+    PERSIST_TYPE_ID_ROWS = 150,
+
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
 } persistType;
@@ -1149,6 +1152,20 @@ void *multidictPersistRestoreAs(const uint8_t *data, size_t len,
 extern const persistOps persistOpsMultiarray;
 extern const persistOps persistOpsMultiOrderedSet;
 extern const persistOps persistOpsMultiLRU;
+/* persistOpsIdRows (idRows.c), format 1:
+ *   snapshot: flex [elementsPerRow, rows, then per row in id order: id,
+ *             its elements stored exactly ("22" stays bytes)]
+ *   restore:  refuses a width of 0, a row count the entries do not
+ *             match, and ids that do not strictly ascend; memory is
+ *             O(rows) whatever the ids.
+ *   WAL (args: const databox *const *, ids and fields UNSIGNED_64):
+ *     INSERT   [id, elements...]  idRowsSet (a present id is replaced)
+ *     UPDATE   [id, field, value] idRowsReplaceField
+ *     NUM_INCR [id, field, by]    idRowsFieldIncr (refused past int64_t)
+ *     DELETE   [id]               idRowsDelete
+ *     CLEAR                       idRowsClear
+ *   The width is fixed at creation, so there is no newEmpty. */
+extern const persistOps persistOpsIdRows;
 
 /* Identity-verified POP fold observability (see the apply-arm
  * comment in persist.c): deep-remove = the stamped element was

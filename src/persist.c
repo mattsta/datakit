@@ -2368,6 +2368,8 @@ const char *persistTypeName(persistType type) {
         return "stringPool";
     case PERSIST_TYPE_ATOM_POOL:
         return "atomPool";
+    case PERSIST_TYPE_ID_ROWS:
+        return "idRows";
     default:
         return "unknown";
     }
@@ -7709,6 +7711,13 @@ int persistTest(int, char *[]) {
               {PERSIST_OP_CLEAR, nullptr, 0}},
              3,
              false},
+            {&persistOpsIdRows,
+             {{PERSIST_OP_INSERT, row, 1},
+              {PERSIST_OP_UPDATE, row, 2},
+              {PERSIST_OP_DELETE, row, 2},
+              {unknownOp, row, 2}},
+             4,
+             true},
             {&persistOpsHmacKeyring,
              {{PERSIST_OP_UPDATE, row, 1},
               {PERSIST_OP_UPDATE, holeRow, 2},

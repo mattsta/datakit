@@ -2177,6 +2177,23 @@ static void benchIdRows(void) {
              sink += idRowsFieldIncr(r, perfScatter(i), 1, 1, &now));
     PERF_ROW("idRows", "delete", n, sink += idRowsDelete(r, perfScatter(i)));
 
+    /* One row in every 8th page: the directory is a sorted list of the
+     * pages (each read a binary search), and its bytes stay per row */
+    constexpr uint64_t sparseStride = (uint64_t)IDROWS_PAGE * 8;
+    metered = ctestHeapMeterStart();
+    cleaner(idRowsFree) idRows *sparse = idRowsNew(2);
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox v = perfContainerKey(keys, i);
+        const databox *row[2] = {&v, &one};
+        sink += idRowsSet(sparse, i * sparseStride, row);
+    }
+    secs = timeUtilMonotonicSec() - t0;
+    emitRow("idRows", "setSparse", perfHeapStop(metered), n, secs);
+    PERF_ROW("idRows", "getSparseScattered", n, databox v = {}; databox c = {};
+             databox * row[2] = {&v, &c};
+             sink += idRowsGet(sparse, perfScatter(i) * sparseStride, row));
+
     metered = ctestHeapMeterStart();
     cleaner(multimapFree) multimap *m =
         multimapNewLimit(3, dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM));

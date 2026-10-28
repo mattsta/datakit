@@ -74,6 +74,7 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractMultimapAtomDense,
     &persistContractStringPool,
     &persistContractAtomPool,
+    &persistContractIdRows,
 };
 
 /* ====================================================================

@@ -11,9 +11,13 @@
  * offset per present id), then the present rows in id order.  A read is
  * the page pointer, a bit test and a popcount into the index, and the
  * row: no comparison, whatever the row's values.  The index costs 8 bytes
- * a page and 4 a row, so a page holding a single row stays small: ids
- * may be sparse, and one page pointer per IDROWS_PAGE ids (up to the
- * highest page) is the only cost of the holes.
+ * a page and 4 a row, so a page holding a single row stays small.  The
+ * directory of pages is a plain array while the ids it covers are dense
+ * enough (a quarter of its pages in use) and a sorted list of the pages
+ * in use otherwise, so it costs O(pages holding rows) whatever the ids:
+ * any uint64_t id may be used, a counter that has run far costs nothing
+ * for the ids it left behind, and reads stay one load while ids are
+ * dense (a binary search over the pages when they are not).
  *
  * Values are stored exactly (flex's exact write path).  A read decodes
  * into the caller's boxes: byte strings point into the page and stay
@@ -54,6 +58,11 @@ bool idRowsFieldIncr(idRows *r, uint64_t id, uint32_t field, int64_t incrBy,
                      int64_t *newValue);
 /* Remove the row of 'id': true when it was present */
 bool idRowsDelete(idRows *r, uint64_t id);
+/* Remove every row (the width stays) */
+void idRowsClear(idRows *r);
+
+/* Persistence: persistOpsIdRows (persist.h) snapshots and replays an
+ * idRows of any width.  Its format and WAL ops are described there. */
 
 /* The lowest and the highest id present; false when empty */
 bool idRowsFirst(const idRows *r, uint64_t *id);
@@ -63,6 +72,7 @@ bool idRowsLast(const idRows *r, uint64_t *id);
 typedef struct idRowsIterator {
     const idRows *r;
     uint64_t next; /* the next id to look at */
+    bool ended;    /* no row is left (the last id may be UINT64_MAX) */
 } idRowsIterator;
 
 void idRowsIteratorInit(const idRows *r, idRowsIterator *iter);

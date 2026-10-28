@@ -300,7 +300,9 @@ Fenwick trees (`fenwick/fenwickPersist.h`) and `persistOpsMultiFenwick`,
 ones (see FENWICK.md), `persistOpsSegment<T>` for the typed segment trees
 (`segment/segmentPersist.h`; see SEGMENT.md), and `persistOpsMultimapAtom`,
 `persistOpsMultimapAtomDense`, `persistOpsStringPool` and `persistOpsAtomPool`
-for atom tables (`atomPersist.h`; see multimap/VARIANTS.md).
+for atom tables (`atomPersist.h`; see multimap/VARIANTS.md), and
+`persistOpsIdRows` for rows addressed by id (`idRows.h`; format and ops in
+`persist.h`).
 
 ## Writing a persistOps Descriptor
 

@@ -688,7 +688,8 @@ if(DatakitTestMode)
         persist/contract/fenwickContractTest.c
         persist/contract/multiFenwickContractTest.c
         persist/contract/segmentContractTest.c
-        persist/contract/atomContractTest.c)
+        persist/contract/atomContractTest.c
+        persist/contract/idRowsContractTest.c)
 endif()
 
 # Every function datakit defines with external linkage must have a prior

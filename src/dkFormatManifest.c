@@ -28,7 +28,7 @@ size_t dkFormatManifest(dkFormatSpec *out, size_t cap) {
         &persistOpsMultiarray,     &persistOpsMultiOrderedSet,
         &persistOpsMultiLRU,       &persistOpsHmacKeyring,
         &persistOpsClusterMailbox, &persistOpsClusterRing,
-        &persistOpsAeadNonceLog,
+        &persistOpsAeadNonceLog,   &persistOpsIdRows,
     };
 
     size_t n = 0;

@@ -39,6 +39,29 @@ when it is vendored in.
 | **PowerPC**  | Supported    | Big-endian testing     |
 | **MIPS**     | Supported    | Basic support          |
 
+### Pointer requirements
+
+Containers keep their own tier and layout data inside their pointers
+instead of beside them, so a container needs no header object of its own
+(at 10^9 containers, a separate 8-byte header pointer each would cost
+8 GB). That requires every heap pointer to be:
+
+- **48-bit**: bits 48-63 clear. multimap, multilist and multiOrderedSet
+  carry tag bits there, and a multidict slot carries its middle-row offset
+  there. Linux (x86_64 and arm64) and macOS user space give 48-bit
+  addresses by default; a kernel with a larger address space hands out
+  higher addresses only to a mapping that asks for them, which datakit's
+  allocators never do.
+- **untagged**: the allocator must not set the top byte. Hardware memory
+  tagging (an allocator that stores a tag in the top byte) is not a
+  target.
+- **16-byte aligned** for the low tag bits (every supported allocator
+  aligns to at least 16).
+
+Test and debug builds assert the multidict slot's requirement where a slot
+pointer is built. These containers need 64-bit pointers; 32-bit targets
+build the rest of the library.
+
 ## Feature Detection
 
 ### Compile-Time Detection
