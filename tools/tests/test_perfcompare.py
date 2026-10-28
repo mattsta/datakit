@@ -72,6 +72,28 @@ class Table(unittest.TestCase):
         self.assertIn("current only: m new 0", text)
         self.assertEqual(regressed, [("m", "b", 0)])
 
+    def test_spread_shows_each_sides_lowest_and_highest_run(self) -> None:
+        def side(*ns: float) -> list:
+            return [run_of(row("m", "a", v)) for v in ns]
+
+        base_runs = side(100.0, 90.0, 140.0)
+        current_runs = side(80.0, 85.0, 75.0)
+        self.assertEqual(perfcompare.ranges(base_runs), {("m", "a", 0): (90.0, 140.0)})
+        lines, _ = perfcompare.table(
+            perfcompare.medians(base_runs),
+            perfcompare.medians(current_runs),
+            None,
+            (perfcompare.ranges(base_runs), perfcompare.ranges(current_runs)),
+        )
+        self.assertIn("base range", lines[0])
+        self.assertIn("[90.0-140.0]", lines[1])
+        self.assertIn("[75.0-85.0]", lines[1])
+        # Without it, the table is as before
+        plain, _ = perfcompare.table(
+            perfcompare.medians(base_runs), perfcompare.medians(current_runs), None
+        )
+        self.assertNotIn("range", plain[0])
+
     def test_no_tolerance_never_regresses(self) -> None:
         _, regressed = perfcompare.table(
             {("m", "a", 0): 1.0}, {("m", "a", 0): 50.0}, None

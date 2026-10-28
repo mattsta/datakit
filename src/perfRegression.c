@@ -835,6 +835,49 @@ static mdLoadResult benchMultidictLoadOne(const char *keys, const uint32_t n,
     return r;
 }
 
+/* Where multidict find time varies (run by name): one process finds every
+ * key of dicts that differ only in hash seed, at a size whose table and
+ * slots outgrow the caches (100k) and one that fits them (10k).  Rows
+ * agreeing within a run but moving together between runs point at the
+ * process (memory placement, other load), not the seed; a seed whose row
+ * stands apart points at the hash. */
+static void benchMultidictSeeds(void) {
+    static const uint32_t sizes[] = {10'000, PERF_CONTAINER_N};
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    uint64_t sink = 0;
+    char row[48];
+    for (size_t s = 0; s < countof(sizes); s++) {
+        const uint32_t n = sizes[s];
+        for (int32_t seed = 1; seed <= 8; seed++) {
+            cleaner(multidictDefaultClassFree) multidictClass *qdc =
+                multidictDefaultClassNew();
+            cleaner(multidictFree) multidict *d =
+                multidictNew(&multidictTypeExactKey, qdc, seed);
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, i);
+                const databox v = databoxNewSigned(i);
+                sink += multidictAdd(d, &k, &v);
+            }
+
+            while (multidictRehash(d, 1024)) {
+            }
+
+            const double t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, i);
+                databox v = {};
+                sink += multidictFind(d, &k, &v);
+            }
+
+            snprintf(row, sizeof(row), "find%" PRIu32 "kSeed%" PRId32, n / 1000,
+                     seed);
+            emitRow("multidictSeeds", row, 0, n, timeUtilMonotonicSec() - t0);
+        }
+    }
+
+    perfContainerSink = sink;
+}
+
 /* The load factors and table sizes both multidict sweeps measure: a
  * table's slot count steps in powers of two, so one size alone can put
  * two load factors on the same table */
@@ -2274,6 +2317,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multidictLimits")) {
             benchMultidictLimits();
+        }
+
+        if (perfNamed("multidictSeeds")) {
+            benchMultidictSeeds();
         }
 
         if (perfNamed("persistChecks")) {

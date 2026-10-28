@@ -3,7 +3,7 @@
 Usage::
 
     dktools perfcompare NAME --base REV [--modules M[,M...]] [--runs N]
-        [--tolerance PCT] [--bench-path PATH ...] [--compiler C]
+        [--tolerance PCT] [--spread] [--bench-path PATH ...] [--compiler C]
         [--root DIR] [-j N]
 
 Two trees are built under ``ROOT/perfcompare/NAME``:
@@ -63,6 +63,8 @@ class PerfCompareOptions:
     #: cmake cache entries (NAME=VALUE) for the current side only, to time
     #: a build option against the same base
     current_defines: tuple[str, ...] = ()
+    #: print each row's lowest-highest run per side beside the medians
+    spread: bool = False
 
 
 def perf_preset(compiler: toolchain.Compiler) -> str | None:
@@ -93,6 +95,16 @@ def medians(runs: list[dict[Key, perfdiff.PerfRow]]) -> dict[Key, float]:
     return {key: statistics.median(vals) for key, vals in values.items()}
 
 
+def ranges(runs: list[dict[Key, perfdiff.PerfRow]]) -> dict[Key, tuple[float, float]]:
+    """Per row key, the lowest and highest ns_per_op over the runs that
+    have it: how far one run can stray from the median"""
+    values: dict[Key, list[float]] = {}
+    for rows in runs:
+        for key, row in rows.items():
+            values.setdefault(key, []).append(row.ns_per_op)
+    return {key: (min(vals), max(vals)) for key, vals in values.items()}
+
+
 def change_pct(base: float, current: float) -> float | None:
     """current against base in percent; None when base is 0"""
     if base == 0:
@@ -101,15 +113,22 @@ def change_pct(base: float, current: float) -> float | None:
 
 
 def table(
-    base: dict[Key, float], current: dict[Key, float], tolerance: float | None
+    base: dict[Key, float],
+    current: dict[Key, float],
+    tolerance: float | None,
+    spread: tuple[dict[Key, tuple[float, float]], dict[Key, tuple[float, float]]]
+    | None = None,
 ) -> tuple[list[str], list[Key]]:
-    """The comparison lines and the keys that regressed past `tolerance`.
+    """The comparison lines and the keys that regressed past `tolerance`;
+    with `spread` (each side's ranges), each row ends with both sides'
+    lowest-highest runs.
 
     Rows keep the base side's key order (perfRegression's order, as
     runs were parsed in it)."""
     lines = [
         f"{'module':<16} {'name':<14} {'bytes':>8} {'base':>10} "
         f"{'current':>10} {'change':>8}"
+        + ("  base range        current range" if spread else "")
     ]
     regressed: list[Key] = []
     for key, b in base.items():
@@ -119,9 +138,11 @@ def table(
         pct = change_pct(b, c)
         shown = "-" if pct is None else f"{pct:+.1f}%"
         module, name, nbytes = key
-        lines.append(
-            f"{module:<16} {name:<14} {nbytes:>8} {b:>10.1f} {c:>10.1f} {shown:>8}"
-        )
+        line = f"{module:<16} {name:<14} {nbytes:>8} {b:>10.1f} {c:>10.1f} {shown:>8}"
+        if spread:
+            (blo, bhi), (clo, chi) = spread[0][key], spread[1][key]
+            line += f"  [{blo:.1f}-{bhi:.1f}]".ljust(20) + f"[{clo:.1f}-{chi:.1f}]"
+        lines.append(line)
         if tolerance is not None and pct is not None and pct > tolerance:
             regressed.append(key)
     only_base = [k for k in base if k not in current]
@@ -243,7 +264,10 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
                 raise ToolError(str(exc)) from exc
 
     lines, regressed = table(
-        medians(runs["base"]), medians(runs["current"]), opts.tolerance
+        medians(runs["base"]),
+        medians(runs["current"]),
+        opts.tolerance,
+        (ranges(runs["base"]), ranges(runs["current"])) if opts.spread else None,
     )
     verdict = "REGRESSION" if regressed else "ok"
     header = [

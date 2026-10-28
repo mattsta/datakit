@@ -1070,7 +1070,7 @@ on the same perfRegression benchmarks:
 
 ```sh
 uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
-    [--runs N] [--tolerance PCT] [--bench-path PATH ...] \
+    [--runs N] [--tolerance PCT] [--spread] [--bench-path PATH ...] \
     [--compiler clang22|gcc15] [--root DIR] [-j N]
 ```
 
@@ -1086,7 +1086,10 @@ uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
   `run-<side>-<round>.tsv`.
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only
-  one side has.
+  one side has. `--spread` adds each side's lowest and highest run per
+  row: memory-bound rows (finds over tables larger than the caches) stray
+  far more from run to run than compute-bound ones, and a change smaller
+  than a row's own spread is noise.
 - Exits 0; 1 when `--tolerance PCT` is given and a row's median grew by
   more than PCT percent, or when a build or run fails; 2 on an input
   error.

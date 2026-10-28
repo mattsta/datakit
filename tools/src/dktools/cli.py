@@ -675,6 +675,11 @@ def main(argv: list[str] | None = None) -> int:
         help="exit 1 when a row's median grows by more than PCT percent",
     )
     pc.add_argument(
+        "--spread",
+        action="store_true",
+        help="print each row's lowest and highest run per side beside the medians",
+    )
+    pc.add_argument(
         "--bench-path",
         action="append",
         default=None,
@@ -1091,6 +1096,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 root=args.root,
                 jobs=args.jobs,
                 current_defines=tuple(args.current_define),
+                spread=args.spread,
             ),
         )
 
