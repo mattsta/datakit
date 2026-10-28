@@ -7,7 +7,7 @@
  * multiOrderedSetNew reads DK_TIER_MULTIORDEREDSET's, multilistNew reads
  * DK_TIER_MULTILIST's, and every multimapAtom constructor (and so
  * multimapAtomDense and stringPool) reads DK_TIER_MULTIMAP_ATOM's for its
- * forward map and multimap index.  Constructors that take a limit ignore
+ * multimap index.  Constructors that take a limit ignore
  * these defaults.
  *
  * Each family starts at its compiled default (dkTierCompiledLimit):

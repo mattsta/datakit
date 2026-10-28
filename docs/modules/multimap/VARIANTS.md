@@ -465,17 +465,21 @@ integer reference wherever a repeated byte string would otherwise go.
 
 ```c
 struct multimapAtom {
-    multimap *mapAtomForward; /* {ID, Key, Refcount} sorted by ID */
-    union {                   /* the reverse index (multimapAtomIndex) */
+    idRows *forward; /* {Key, Refcount} rows addressed by ID */
+    union {          /* the reverse index (multimapAtomIndex) */
         multimap *mapAtomReverse;   /* ORDERED, HASHED */
         multidict *dictAtomReverse; /* DICT */
     };
-    uint64_t highest;         /* next ID; bit 63: permanent, 61-62: index */
-    atomResolved_ *resolving; /* set only during one retain or release */
+    uint64_t highest; /* next ID; bit 63: permanent, 61-62: index */
 };
 ```
 
-The inner multimaps take the atom tier family's node limit
+The forward rows are an `idRows` (`idRows.h`): IDs in pages of 64, each page
+one flex led by a table of row offsets, so reading an ID back is a page
+pointer, an offset and the row's entries, with no search. The atom table
+hands out dense IDs, which is what keeps those pages full.
+
+The multimap index takes the atom tier family's node limit
 (`dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM)`, compiled as `FLEX_CAP_LEVEL_512`;
 `dktools tune --families multimapAtom` measures it on a machine and
 `dkTierSetDefaultLimit` changes it for tables made afterwards).
@@ -492,8 +496,8 @@ creation (`multimapAtomNewIndexed()`) and read back by
   the hash, then one forward lookup per candidate (normally one).
 - `MULTIMAP_ATOM_INDEX_ORDERED`: rows holding only the ID, inserted through
   `multimapInsertWithSurrogateKey()` so they sort by the _resolved_ key. Every
-  comparison in a find resolves an ID through the forward map (about
-  log² n). The smallest index.
+  comparison in a find reads an ID's key from the forward rows by position
+  (about log n comparisons). The smallest index.
 - `MULTIMAP_ATOM_INDEX_DICT`: a `multidict` from each key to its ID. A find is
   one hash and one slot search, with no forward lookup, but every key is
   stored a second time and the dict adds a slot table and a slot allocation

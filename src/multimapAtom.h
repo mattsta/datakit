@@ -3,9 +3,10 @@
 /* multimapAtom: a reference-counted atom table (interning).  Each distinct
  * value is stored once and named by a small integer id, handed out as a
  * DATABOX_CONTAINER_REFERENCE_EXTERNAL box (a "ref").  Two maps hold it:
- * forward {id -> value, refcount}, a multimap sorted by id, and a reverse
- * index from value to id (multimapAtomIndex below: ids sorted by value,
- * value hashes with ids, or a multidict).
+ * forward {id -> value, refcount} rows addressed by id (idRows.h: a read
+ * by id is positional, with no search), and a reverse index from value to
+ * id (multimapAtomIndex below: ids sorted by value, value hashes with
+ * ids, or a multidict).
  *
  * REFERENCES
  * - An Insert creates the atom with one reference.  Retain adds one;
@@ -50,8 +51,8 @@ typedef struct multimapAtom multimapAtom;
 /* How the table finds a value's id (chosen at creation; the kind costs no
  * byte):
  * - ORDERED: the reverse rows are ids sorted by value.  A find compares
- *   about log n rows, each through a forward-map lookup of its id (about
- *   log^2 n).  The smallest index.
+ *   about log n rows, each read positionally from the forward rows by its
+ *   id.  The smallest index.
  * - HASHED: the reverse rows are {hash of the value, id}, sorted by hash.
  *   A find is an integer search for the hash, then one forward lookup per
  *   candidate (normally one): about log n.  About 5 more bytes per atom.
@@ -164,8 +165,9 @@ typedef struct multimapAtomStats {
     uint64_t inlineBytes;    /* each reference holding its value's entry */
     uint64_t referenceBytes; /* each reference holding its id's entry */
     int64_t savedBytes;      /* inlineBytes - (tableBytes + referenceBytes) */
-    uint32_t unitLimit; /* bytes per node of the table's multimaps (the atom
-                           family's limit when made: dkTierLimit.h) */
+    uint32_t unitLimit;      /* bytes per node of the table's multimap index
+                                (the atom family's limit when made:
+                                dkTierLimit.h); 0 for a DICT index */
 } multimapAtomStats;
 
 /* Fill 'stats' for 'ma': one pass over the atoms */

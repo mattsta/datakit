@@ -1991,7 +1991,7 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     }
 
     /* A reference read back to its value: what every holder of an id pays
-     * to use it (the forward map alone, the same under every index) */
+     * to use it (the forward rows alone, the same under every index) */
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox ref = {.data.u = ids[i],
@@ -2066,8 +2066,8 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
 
 /* The atom table under each reverse index (the default, hashed, then
  * ordered and dict), then the lowest-first table and the string pool */
-/* Rows of {value, count} addressed by dense ids, against the multimap of
- * {id, value, count} rows sorted by id that the same data takes today:
+/* Rows of {value, count} addressed by dense ids, against a multimap of
+ * {id, value, count} rows sorted by id holding the same data:
  * rows set in id order, read back in order and scattered, counts
  * incremented, rows deleted.  The set rows' bytes are each structure's
  * metered heap. */
