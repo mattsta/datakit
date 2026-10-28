@@ -5405,8 +5405,16 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
                                                size_t *len) {
     const multiOrderedSet *mos = structure;
 
-    /* Create a flex to hold all (score, member) pairs */
+    /* [limit, compress, score0, member0, score1, member1, ...]: the set's
+     * size limit and compress setting, then every (score, member) pair in
+     * score order.  The settings lead so restore makes the set before its
+     * first add. */
     cleaner(flexFree) flex *f = flexNew();
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, mos ? multiOrderedSetLimit(mos)
+                              : dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET));
+    flexRowUnsigned(&row, mos && multiOrderedSetCompresses(mos));
+    flexRowAppendExact(&f, &row);
 
     /* Handle NULL (empty set) */
     if (mos) {
@@ -5451,19 +5459,34 @@ static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
     cleaner(flexFree) flex *f = zmalloc(len);
     memcpy(f, data, len);
 
-    /* Iterate through (score, member) pairs in the flex */
-    size_t count = flexCount(f);
-    if (count % 2 != 0) {
-        /* Invalid: should have even number of elements (score, member pairs) */
+    /* [limit, compress, then (score, member) pairs]: an even count of at
+     * least the two settings */
+    const size_t count = flexCount(f);
+    if (count < 2 || count % 2 != 0) {
+        return nullptr;
+    }
+
+    flexEntry *fe = flexHead(f);
+    databox limit = {};
+    databox compress = {};
+    flexGetByType(fe, &limit);
+    fe = flexNext(f, fe);
+    flexGetByType(fe, &compress);
+    fe = flexNext(f, fe);
+    if (limit.type != DATABOX_UNSIGNED_64 ||
+        limit.data.u64 > FLEX_CAP_LEVEL_65536 ||
+        compress.type != DATABOX_UNSIGNED_64 || compress.data.u64 > 1) {
         return nullptr;
     }
 
     /* Create multiOrderedSet (starts as Small tier even if empty) */
     /* @own: caller; free=multiOrderedSetFree */
-    multiOrderedSet *mos = multiOrderedSetNew();
+    multiOrderedSet *mos =
+        compress.data.u64
+            ? multiOrderedSetNewCompress((flexCapSizeLimit)limit.data.u64)
+            : multiOrderedSetNewLimit((flexCapSizeLimit)limit.data.u64);
 
-    flexEntry *fe = flexHead(f);
-    for (size_t i = 0; i < count / 2 && fe; i++) {
+    for (size_t i = 0; i < (count - 2) / 2 && fe; i++) {
         databoxBig score, member; /* room for 96/128-bit scores/members */
 
         /* Read score */
@@ -5585,8 +5608,9 @@ static void *multiOrderedSetPersistNewEmpty(void) {
 const persistOps persistOpsMultiOrderedSet = {
     .type = PERSIST_TYPE_MULTIORDEREDSET,
     .name = "multiOrderedSet",
-    .formatVersion = 1,
-    .minReadVersion = 1,
+    /* 2: the snapshot leads with the set's limit and compress setting */
+    .formatVersion = 2,
+    .minReadVersion = 2,
     .snapshot = multiOrderedSetPersistSnapshot,
     .restore = multiOrderedSetPersistRestore,
     .newEmpty = multiOrderedSetPersistNewEmpty,

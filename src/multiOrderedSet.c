@@ -404,6 +404,10 @@ flexCapSizeLimit multiOrderedSetLimit(const multiOrderedSet *mos) {
     return (flexCapSizeLimit)MOS_LIMIT_(mos);
 }
 
+bool multiOrderedSetCompresses(const multiOrderedSet *mos) {
+    return MOS_COMPRESS_(mos) != 0;
+}
+
 void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out) {
     const uint32_t limit = flexOptimizationSizeLimit[MOS_LIMIT_(mos)];
     switch (mosType_(mos)) {

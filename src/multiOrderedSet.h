@@ -320,6 +320,8 @@ size_t multiOrderedSetBytes(const multiOrderedSet *mos);
 /* The size limit the set was made with, in every tier: when a tier grows,
  * and the size Full's sub-maps split at */
 flexCapSizeLimit multiOrderedSetLimit(const multiOrderedSet *mos);
+/* Whether the set was made with multiOrderedSetNewCompress */
+bool multiOrderedSetCompresses(const multiOrderedSet *mos);
 
 /* The tier, sub-maps (1, 2, or Full's count), pairs, and bytes: the
  * sub-maps' flex bytes, and those plus each tier's struct (Full: its

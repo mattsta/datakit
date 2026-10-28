@@ -36,8 +36,24 @@ static void pcMosScore(uint64_t *rng, databoxBig *score) {
 }
 
 static void *pcMosBuild(const persistContractBuild *b) {
-    /* @own: caller; free=multiOrderedSetFree */
-    multiOrderedSet *mos = multiOrderedSetNew();
+    /* The settings vary by seed, so the snapshot carries them: the
+     * default, a small limit (builds reach Medium and Full), or a small
+     * limit with compression */
+    multiOrderedSet *mos;
+    switch (b->seed % 3) {
+    case 0:
+        /* @own: caller; free=multiOrderedSetFree */
+        mos = multiOrderedSetNew();
+        break;
+    case 1:
+        /* @own: caller; free=multiOrderedSetFree */
+        mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_256);
+        break;
+    default:
+        /* @own: caller; free=multiOrderedSetFree */
+        mos = multiOrderedSetNewCompress(FLEX_CAP_LEVEL_512);
+        break;
+    }
     persistContractStart(b->log, mos);
 
     uint64_t rng = b->seed;
