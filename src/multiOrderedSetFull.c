@@ -1195,11 +1195,33 @@ static bool mosFullRescoreInPlace_(multiOrderedSetFull *m,
 /* 'member', now scored 'old', given 'score' in place when its row keeps
  * its place (mosFullRescoreInPlace_), its member index value rewritten
  * too; false, changing nothing, when the row must move */
-static bool mosFullUpdateInPlace_(multiOrderedSetFull *m, const databox *member,
-                                  const databox *old, const databox *score) {
+/* Take the row at 'entry' of sub-map 'mapIdx' out of the score maps */
+static void removeRowAt_(multiOrderedSetFull *m, const uint32_t mapIdx,
+                         flexEntry *entry) {
+    deleteRows_(m, mapIdx, entry, 1);
+    const uint32_t before = m->mapCount;
+    reclaimEmptySubMap(m, mapIdx);
+    if (m->mapCount == before) {
+        coalesceAround_(m, mapIdx);
+    }
+}
+
+/* 'member', now scored 'old', is to take 'score': rescored in place when
+ * its row keeps its place (mosFullRescoreInPlace_; the member index then
+ * takes the new score too, and the result is true), else its row is taken
+ * out of the score maps, found by the same one search, for the caller to
+ * insert again (false) */
+static bool mosFullRescoreOrRemove_(multiOrderedSetFull *m,
+                                    const databox *member, const databox *old,
+                                    const databox *score) {
     uint32_t mapIdx;
     flexEntry *entry = findEntryForScore(m, member, old, &mapIdx);
-    if (!entry || !mosFullRescoreInPlace_(m, mapIdx, entry, score)) {
+    if (!entry) {
+        return false;
+    }
+
+    if (!mosFullRescoreInPlace_(m, mapIdx, entry, score)) {
+        removeRowAt_(m, mapIdx, entry);
         return false;
     }
 
@@ -1215,12 +1237,7 @@ static void removeMemberRow(multiOrderedSetFull *m, const databox *member,
     uint32_t mapIdx;
     flexEntry *entry = findEntryForScore(m, member, old, &mapIdx);
     if (entry) {
-        deleteRows_(m, mapIdx, entry, 1);
-        const uint32_t before = m->mapCount;
-        reclaimEmptySubMap(m, mapIdx);
-        if (m->mapCount == before) {
-            coalesceAround_(m, mapIdx);
-        }
+        removeRowAt_(m, mapIdx, entry);
     }
 }
 
@@ -1248,11 +1265,9 @@ bool multiOrderedSetFullAdd(multiOrderedSetFull *m, const databox *score,
     databoxWide oldWide;
     const bool existed = findScore(m, member, &old, &oldWide);
     if (existed) {
-        if (mosFullUpdateInPlace_(m, member, &old, score)) {
+        if (mosFullRescoreOrRemove_(m, member, &old, score)) {
             return true;
         }
-
-        removeMemberRow(m, member, &old);
     }
 
     setMemberScore(m, member, score, existed);
@@ -1316,11 +1331,9 @@ bool multiOrderedSetFullCombine(multiOrderedSetFull *m, const databox *operand,
             return false;
         }
 
-        if (mosFullUpdateInPlace_(m, member, &existingScore, result)) {
+        if (mosFullRescoreOrRemove_(m, member, &existingScore, result)) {
             return true;
         }
-
-        removeMemberRow(m, member, &existingScore);
     } else {
         *result = *operand;
     }
