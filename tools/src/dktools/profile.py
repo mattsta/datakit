@@ -2,11 +2,14 @@
 
 Usage::
 
-    dktools profile NAME --modules M[,M...] [--top N] [--compiler C]
-        [--root DIR] [-j N]
+    dktools profile NAME --modules M[,M...] [--rev REV] [--top N]
+        [--compiler C] [--root DIR] [-j N]
 
-HEAD plus every changed tracked path (as perfcompare's ``current`` side)
-is built with the compiler's perf preset under ``ROOT/profile/NAME``.
+HEAD plus every changed tracked path (as perfcompare's ``current`` side),
+or with ``--rev REV`` that revision plus the benchmark sources (as
+perfcompare's base side, so two profiles show where a change moved the
+time), is built with the compiler's perf preset under
+``ROOT/profile/NAME``.
 ``datakit-test test perfRegression`` then runs once with
 ``DK_PERF_MODULES`` set to ``--modules``, watched by the platform's
 sampling profiler:
@@ -59,6 +62,9 @@ class ProfileOptions:
     )
     root: Path | None = None
     jobs: int | None = None
+    #: a revision (plus the benchmark sources) in place of HEAD and the
+    #: working tree
+    rev: str | None = None
 
 
 @dataclass
@@ -250,14 +256,22 @@ def run(repo: Path, opts: ProfileOptions) -> int:
     size = procs.sizing(opts.jobs)
 
     head = gitutil.resolve_commit(repo, "HEAD")
+    commit = gitutil.resolve_commit(repo, opts.rev) if opts.rev is not None else None
+    bench = [(gitutil.repo_path(p), None) for p in perfcompare.DEFAULT_BENCH_PATHS]
     with tempfile.TemporaryDirectory(prefix="dktools-profile-") as tmp:
-        tree = gitutil.build_tree(
-            repo, Path(tmp) / "index", [(p, None) for p in gitutil.changed_paths(repo)]
-        )
+        index = Path(tmp) / "index"
+        if commit is None:
+            tree = gitutil.build_tree(
+                repo, index, [(p, None) for p in gitutil.changed_paths(repo)]
+            )
+        else:
+            tree = gitutil.build_tree(repo, index, bench, base=commit)
     config.compiler.check()
 
     root = gitutil.scratch_root(opts.root, repo).resolve()
-    work = buildstore.fresh_build(repo, root, "profile", name, head, "profile")
+    work = buildstore.fresh_build(
+        repo, root, "profile", name, commit or head, "profile"
+    )
     src = work / "tree"
     gitutil.export_tree(repo, tree, src)
     config.check_presets_file(src)
@@ -277,7 +291,7 @@ def run(repo: Path, opts: ProfileOptions) -> int:
     samples = parse_sample(text) if darwin else parse_perf_script(text)
     header = [
         f"profile {name}: {config.label}, modules {modules}",
-        f"  tree      HEAD + working tree ({tree[:10]})",
+        f"  tree      {perfcompare.current_label(opts.rev, commit, tree, bench)}",
         f"  recording {report}",
     ]
     lines = header + render(samples, opts.top)

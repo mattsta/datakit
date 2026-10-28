@@ -195,15 +195,16 @@ def build_side(side: Side, work: Path, size: procs.Sizing) -> steps.Step:
 
 
 def current_label(
-    opts: PerfCompareOptions,
+    rev: str | None,
     commit: str | None,
     tree: str,
     bench: list[tuple[str, None]],
 ) -> str:
-    """What the current side was built from, for the result header"""
+    """What a build was made from, for a result header: HEAD and the
+    working tree (`commit` None), or `rev` plus the benchmark sources"""
     if commit is None:
         return f"HEAD + working tree ({tree[:10]})"
-    return f"{opts.current} ({commit[:10]}) + {', '.join(p for p, _ in bench)}"
+    return f"{rev} ({commit[:10]}) + {', '.join(p for p, _ in bench)}"
 
 
 def run(repo: Path, opts: PerfCompareOptions) -> int:
@@ -296,7 +297,7 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
     header = [
         f"perfcompare {name}: {verdict}",
         f"  base      {opts.base} ({base_commit[:10]}) + {', '.join(p for p, _ in bench)}",
-        f"  current   {current_label(opts, current_commit, current_tree, bench)}",
+        f"  current   {current_label(opts.current, current_commit, current_tree, bench)}",
         f"  config    {config.label}, {opts.runs} runs each, medians of ns/op"
         + (f", modules {modules}" if modules else ""),
     ]

@@ -135,14 +135,12 @@ class Refusals(unittest.TestCase):
 class CurrentLabel(unittest.TestCase):
     def test_working_tree_or_revision_with_bench_paths(self) -> None:
         bench: list[tuple[str, None]] = [("src/perfRegression.c", None)]
-        opts = perfcompare.PerfCompareOptions(name="t", base="HEAD~1")
         self.assertEqual(
-            perfcompare.current_label(opts, None, "abcdef0123456789", bench),
+            perfcompare.current_label(None, None, "abcdef0123456789", bench),
             "HEAD + working tree (abcdef0123)",
         )
-        opts.current = "HEAD"
         self.assertEqual(
-            perfcompare.current_label(opts, "0123456789abcdef", "ffff", bench),
+            perfcompare.current_label("HEAD", "0123456789abcdef", "ffff", bench),
             "HEAD (0123456789) + src/perfRegression.c",
         )
 

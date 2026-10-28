@@ -1102,12 +1102,14 @@ in perfRegression with the change, and the comparison is reproducible.
 ## profile — where perfRegression rows spend their time
 
 ```sh
-uv run --project tools dktools profile NAME --modules M[,M...] [--top N] \
-    [--compiler clang22|gcc15] [--root DIR] [-j N]
+uv run --project tools dktools profile NAME --modules M[,M...] [--rev REV] \
+    [--top N] [--compiler clang22|gcc15] [--root DIR] [-j N]
 ```
 
-- Builds HEAD plus every changed tracked path (as perfcompare's `current`)
-  with the perf preset under `ROOT/profile/NAME`, then runs
+- Builds HEAD plus every changed tracked path (as perfcompare's `current`),
+  or with `--rev REV` that revision plus the benchmark sources (as
+  perfcompare's `base`: profile a change and its base to see where the
+  time moved), with the perf preset under `ROOT/profile/NAME`, then runs
   `datakit-test test perfRegression` once with `DK_PERF_MODULES` set to
   `--modules`, watched by the platform's sampling profiler: macOS
   `sample PID` (base system; attached as the run starts, stopped once it

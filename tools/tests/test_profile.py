@@ -8,8 +8,10 @@ Run from the repository root::
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from dktools import profile
+from dktools.gitutil import ToolError
 
 SAMPLE = """Analysis of sampling datakit-test (pid 123) every 1 millisecond
 Process:         datakit-test [123]
@@ -94,6 +96,16 @@ class Render(unittest.TestCase):
 
     def test_empty(self) -> None:
         self.assertEqual(profile.render(profile.Samples(), top=5), ["0 sample weight"])
+
+
+class Refusals(unittest.TestCase):
+    def test_unknown_revision_refuses_before_building(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        opts = profile.ProfileOptions(
+            name="t", modules="idRows", rev="no-such-revision-anywhere"
+        )
+        with self.assertRaises(ToolError):
+            profile.run(repo, opts)
 
 
 if __name__ == "__main__":

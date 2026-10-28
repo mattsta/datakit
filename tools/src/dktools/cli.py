@@ -626,6 +626,13 @@ def main(argv: list[str] | None = None) -> int:
         "--modules", required=True, help="comma-separated perfRegression modules"
     )
     pf.add_argument(
+        "--rev",
+        default=None,
+        metavar="REV",
+        help="profile this revision (plus the benchmark sources) instead of "
+        "HEAD and the working tree",
+    )
+    pf.add_argument(
         "--top", type=int, default=25, help="functions per table (default 25)"
     )
     pf.add_argument(
@@ -1086,6 +1093,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 compiler=toolchain.from_args(args.compiler, args),
                 root=args.root,
                 jobs=args.jobs,
+                rev=args.rev,
             ),
         )
 
