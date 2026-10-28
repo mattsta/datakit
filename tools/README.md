@@ -1012,7 +1012,7 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
 ## tune — size limits and load factors measured on this machine
 
 ```sh
-uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multidict] \
+uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multimapAtom,multidict] \
     [--mix [NAME:]KEY=SHARE[,KEY=SHARE...]]... [--baseline N] [--slower PCT] \
     [--runs N] [--reuse]
 ```
@@ -1025,8 +1025,9 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   operation summed over tables of 40k, 70k and 100k entries so a factor's
   numbers span a growth cycle; bytes are the tables' metered heap).
 - Everything is read against the baseline: the setting the plain
-  constructors use today, each family's own (2048 for the size limits, 800
-  for multidict; `--baseline` sets one for every family), marked `*`.
+  constructors use today, each family's own (2048 for the size limits, 512
+  for the atom table's nodes, 800 for multidict; `--baseline` sets one for
+  every family), marked `*`.
   `--slower PCT` (default 15) is how much slower a win may make a mix or
   one of its operations: raise it where memory matters more than time.
   Per family and setting:
@@ -1058,7 +1059,8 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   ratio range) are kept in the work directory.
 - The call is `dkTierSetDefaultLimit` (`src/dkTierLimit.h`), which each
   family's plain constructor (`multimapNew`, `multiOrderedSetNew`,
-  `multilistNew`) reads; for multidict, `multidictSetDefaultLoadFactors`
+  `multilistNew`, every `multimapAtom` constructor) reads; for multidict,
+  `multidictSetDefaultLoadFactors`
   (`src/multidict.h`), which `multidictNew` reads.
 
 ## perfcompare — a change's performance against a base revision

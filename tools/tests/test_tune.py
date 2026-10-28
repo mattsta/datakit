@@ -399,6 +399,11 @@ class Report(unittest.TestCase):
             f"#define DK_TIER_LIMIT_COMPILED FLEX_CAP_LEVEL_{tune.DEFAULT_BASELINE}",
             header,
         )
+        self.assertIn(
+            "#define DK_TIER_LIMIT_ATOM_COMPILED "
+            f"FLEX_CAP_LEVEL_{tune.DEFAULT_BASELINES['multimapAtom']}",
+            header,
+        )
         source = (REPO / "src" / "multidict.c").read_text()
         self.assertIn(
             "MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR = "

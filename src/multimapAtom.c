@@ -1,6 +1,7 @@
 #include "multimapAtom.h"
 #include "atomPersist.h"
 #include "cleaner.h"
+#include "dkTierLimit.h"
 #include "multidict.h"
 #include "rapidhash.h"
 
@@ -90,21 +91,23 @@ static void atomDictFree_(multidict *d) {
 
 static void atomInitIndexed_(multimapAtom *ma, const multimapAtomIndex index,
                              const bool permanent) {
+    /* Every multimap of the table takes the atom family's node limit */
+    const flexCapSizeLimit limit = dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM);
+
     /* {id, value, count} by id */
     /* @own: container; free=multimapAtomFree */
-    ma->mapAtomForward = multimapNewLimit(3, FLEX_CAP_LEVEL_512);
+    ma->mapAtomForward = multimapNewLimit(3, limit);
 
     /* ORDERED: {id} by value (resolved through the forward map); HASHED:
      * the set of {hash, id}; DICT: value -> id */
     switch (index) {
     case MULTIMAP_ATOM_INDEX_ORDERED:
         /* @own: container; free=multimapAtomFree */
-        ma->mapAtomReverse = multimapNewLimit(1, FLEX_CAP_LEVEL_512);
+        ma->mapAtomReverse = multimapNewLimit(1, limit);
         break;
     case MULTIMAP_ATOM_INDEX_HASHED:
-        ma->mapAtomReverse =
-            /* @own: container; free=multimapAtomFree */
-            multimapNewConfigure(2, true, false, FLEX_CAP_LEVEL_512);
+        /* @own: container; free=multimapAtomFree */
+        ma->mapAtomReverse = multimapNewConfigure(2, true, false, limit);
         break;
     case MULTIMAP_ATOM_INDEX_DICT:
         /* @own: container; free=multimapAtomFree */
@@ -1014,7 +1017,10 @@ static uint64_t atomEntryBytes_(const databox *box) {
 }
 
 void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats) {
-    *stats = (multimapAtomStats){.tableBytes = multimapAtomBytes(ma)};
+    dkTierStats forward;
+    multimapStats(ma->mapAtomForward, &forward);
+    *stats = (multimapAtomStats){.tableBytes = multimapAtomBytes(ma),
+                                 .unitLimit = forward.unitLimit};
     const bool permanent = multimapAtomIsPermanent(ma);
 
     multimapIterator iter;
@@ -1145,7 +1151,8 @@ static multimap *atomPersistOrderedIndex_(const multimapAtom *ma,
     }
 
     /* @own: caller; free=multimapFree */
-    return multimapNewFromDumpWithReference(1, FLEX_CAP_LEVEL_512, rows, ma);
+    return multimapNewFromDumpWithReference(
+        1, dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM), rows, ma);
 }
 
 /* One HASHED row before it is placed: a value's hash, its id, and which
@@ -1200,7 +1207,8 @@ static multimap *atomPersistHashedIndex_(const databoxBig *values,
     }
 
     /* @own: caller; free=multimapFree */
-    return multimapNewFromDump(2, true, false, FLEX_CAP_LEVEL_512, f);
+    return multimapNewFromDump(2, true, false,
+                               dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM), f);
 }
 
 /* DICT: each value -> its id, added to the empty dict 'd' sized for them

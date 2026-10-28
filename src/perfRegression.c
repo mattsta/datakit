@@ -18,6 +18,7 @@
 #include "ctest.h"
 #include "datakit.h"
 #include "dkTestTmp.h"
+#include "dkTierLimit.h"
 #include "fenwick/fenwickI64.h"
 #include "flexEnvelope.h"
 #include "hash/sha256ArmCrypto.h"
@@ -1158,6 +1159,56 @@ static void benchMultimapLimits(void) {
     perfContainerSink = sink;
 }
 
+/* The live heap since a ctestHeapMeterStart that 'metered' says ran, for
+ * a sweep row's bytes (0 when the allocator cannot report sizes) */
+static size_t perfHeapStop(const bool metered) {
+    const int64_t heap = metered ? ctestHeapMeterStop() : 0;
+    return heap > 0 ? (size_t)heap : 0;
+}
+
+/* multimapAtom (string atoms, the default index) at each node limit of
+ * the atom family (run by name; `dktools tune` reads it): new atoms
+ * interned (bytes: the filled table's metered heap), present ones
+ * interned again, ids read back in scattered order, atoms deleted by id */
+static void benchMultimapAtomLimits(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    for (size_t l = 0; l < countof(perfSweepLimits); l++) {
+        const flexCapSizeLimit limit = perfSweepLimits[l];
+        if (dkTierSetDefaultLimit(DK_TIER_MULTIMAP_ATOM, limit) !=
+            DK_TIER_LIMIT_SET) {
+            continue;
+        }
+
+        const bool metered = ctestHeapMeterStart();
+        cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+        PERF_LIMIT_ROW("multimapAtomLimits", "intern", limit,
+                       perfHeapStop(metered), n,
+                       databox k = perfContainerKey(keys, i);
+                       sink += multimapAtomInsertIfNewConvert(ma, &k));
+        PERF_LIMIT_ROW("multimapAtomLimits", "find", limit, 0, n,
+                       databox k = perfContainerKey(keys, perfScatter(i));
+                       sink += multimapAtomInsertIfNewConvert(ma, &k));
+        /* A fresh table hands out ids 0, 1, 2, ... */
+        PERF_LIMIT_ROW(
+            "multimapAtomLimits", "lookup", limit, 0, n,
+            const databox ref = {.data.u = perfScatter(i),
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+            databox value = {}; sink += multimapAtomLookup(ma, &ref, &value));
+        PERF_LIMIT_ROW("multimapAtomLimits", "delete", limit, 0, n,
+                       sink += multimapAtomDeleteById(ma, perfScatter(i)));
+    }
+
+    if (dkTierSetDefaultLimit(DK_TIER_MULTIMAP_ATOM,
+                              dkTierCompiledLimit(DK_TIER_MULTIMAP_ATOM)) !=
+        DK_TIER_LIMIT_SET) {
+        printf("multimapAtomLimits: the atom limit was not restored\n");
+    }
+
+    perfContainerSink = sink;
+}
+
 static uint64_t perfOrderedSetTotal(const multiOrderedSet *mos) {
     dkTierStats s;
     multiOrderedSetStats(mos, &s);
@@ -2231,6 +2282,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multimapLimits")) {
             benchMultimapLimits();
+        }
+
+        if (perfNamed("multimapAtomLimits")) {
+            benchMultimapAtomLimits();
         }
 
         if (perfNamed("multiOrderedSetLimits")) {

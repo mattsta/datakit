@@ -475,7 +475,11 @@ struct multimapAtom {
 };
 ```
 
-The inner multimaps are created with `FLEX_CAP_LEVEL_512`. IDs stay below
+The inner multimaps take the atom tier family's node limit
+(`dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM)`, compiled as `FLEX_CAP_LEVEL_512`;
+`dktools tune --families multimapAtom` measures it on a machine and
+`dkTierSetDefaultLimit` changes it for tables made afterwards).
+`multimapAtomGetStats` reports a table's `unitLimit`. IDs stay below
 `MULTIMAP_ATOM_ID_LIMIT` (2^61).
 
 The reverse index finds a key's ID. It is one of three kinds, chosen at

@@ -164,6 +164,8 @@ typedef struct multimapAtomStats {
     uint64_t inlineBytes;    /* each reference holding its value's entry */
     uint64_t referenceBytes; /* each reference holding its id's entry */
     int64_t savedBytes;      /* inlineBytes - (tableBytes + referenceBytes) */
+    uint32_t unitLimit; /* bytes per node of the table's multimaps (the atom
+                           family's limit when made: dkTierLimit.h) */
 } multimapAtomStats;
 
 /* Fill 'stats' for 'ma': one pass over the atoms */

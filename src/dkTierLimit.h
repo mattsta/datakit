@@ -5,22 +5,28 @@
 /* The size limit a family's plain constructor gives each new container:
  * multimapNew and multimapSetNew read DK_TIER_MULTIMAP's,
  * multiOrderedSetNew reads DK_TIER_MULTIORDEREDSET's, multilistNew reads
- * DK_TIER_MULTILIST's.  Constructors that take a limit ignore these
- * defaults.
+ * DK_TIER_MULTILIST's, and every multimapAtom constructor (and so
+ * multimapAtomDense and stringPool) reads DK_TIER_MULTIMAP_ATOM's for its
+ * forward map and multimap index.  Constructors that take a limit ignore
+ * these defaults.
  *
- * Every family starts at DK_TIER_LIMIT_COMPILED.  `dktools tune`
- * measures each family's speed and memory per limit on the machine it
- * runs on; an operator sets the limit it recommends once at startup.  A
- * change applies to containers made after it: existing containers keep
- * the limit they were made with.  Reads and writes are safe from any
- * thread; a constructor racing a change uses either limit. */
+ * Each family starts at its compiled default (dkTierCompiledLimit):
+ * DK_TIER_LIMIT_COMPILED, and DK_TIER_LIMIT_ATOM_COMPILED for the atom
+ * table, whose reads by id favour smaller nodes.  `dktools tune` measures
+ * each family's speed and memory per limit on the machine it runs on; an
+ * operator sets the limit it recommends once at startup.  A change
+ * applies to containers made after it: existing containers keep the limit
+ * they were made with.  Reads and writes are safe from any thread; a
+ * constructor racing a change uses either limit. */
 
 #define DK_TIER_LIMIT_COMPILED FLEX_CAP_LEVEL_2048
+#define DK_TIER_LIMIT_ATOM_COMPILED FLEX_CAP_LEVEL_512
 
 typedef enum dkTierFamily {
     DK_TIER_MULTIMAP = 0,
     DK_TIER_MULTIORDEREDSET = 1,
     DK_TIER_MULTILIST = 2,
+    DK_TIER_MULTIMAP_ATOM = 3,
     DK_TIER_FAMILY_COUNT
 } dkTierFamily;
 
@@ -34,6 +40,9 @@ typedef enum [[nodiscard]] dkTierLimitResult {
 /* The family's current default (DK_TIER_LIMIT_COMPILED for a family
  * that isn't a dkTierFamily). */
 flexCapSizeLimit dkTierDefaultLimit(dkTierFamily family);
+/* The family's compiled default, the one it starts with
+ * (DK_TIER_LIMIT_COMPILED for a family that isn't a dkTierFamily). */
+flexCapSizeLimit dkTierCompiledLimit(dkTierFamily family);
 dkTierLimitResult dkTierSetDefaultLimit(dkTierFamily family,
                                         flexCapSizeLimit limit);
 

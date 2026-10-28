@@ -5,7 +5,16 @@
 /* One limit per family.  A default publishes no other data, so plain
  * relaxed loads and stores carry it. */
 static _Atomic uint8_t dkTierDefaultLimit_[DK_TIER_FAMILY_COUNT] = {
-    [0 ... DK_TIER_FAMILY_COUNT - 1] = DK_TIER_LIMIT_COMPILED};
+    [DK_TIER_MULTIMAP] = DK_TIER_LIMIT_COMPILED,
+    [DK_TIER_MULTIORDEREDSET] = DK_TIER_LIMIT_COMPILED,
+    [DK_TIER_MULTILIST] = DK_TIER_LIMIT_COMPILED,
+    [DK_TIER_MULTIMAP_ATOM] = DK_TIER_LIMIT_ATOM_COMPILED,
+};
+
+flexCapSizeLimit dkTierCompiledLimit(dkTierFamily family) {
+    return family == DK_TIER_MULTIMAP_ATOM ? DK_TIER_LIMIT_ATOM_COMPILED
+                                           : DK_TIER_LIMIT_COMPILED;
+}
 
 flexCapSizeLimit dkTierDefaultLimit(dkTierFamily family) {
     if ((uint32_t)family >= DK_TIER_FAMILY_COUNT) {
@@ -41,8 +50,10 @@ dkTierLimitResult dkTierSetDefaultLimit(dkTierFamily family,
 #include "multiOrderedSet.h"
 #include "multilist.h"
 #include "multimap.h"
+#include "multimapAtom.h"
 
 defcleaner(multimap *, multimapFree);
+defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
 defcleaner(multilist *, multilistFree);
 
@@ -70,6 +81,12 @@ static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
         }
         break;
     }
+    case DK_TIER_MULTIMAP_ATOM: {
+        cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+        multimapAtomStats as;
+        multimapAtomGetStats(ma, &as);
+        return as.unitLimit;
+    }
     default:
         break;
     }
@@ -89,11 +106,20 @@ static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
 int dkTierLimitTest(int, char *[]) {
     int err = 0;
 
-    TEST("every family starts at the compiled default") {
+    TEST("every family starts at its compiled default") {
         for (uint32_t f = 0; f < DK_TIER_FAMILY_COUNT; f++) {
-            if (dkTierDefaultLimit((dkTierFamily)f) != DK_TIER_LIMIT_COMPILED) {
-                ERR("family %u starts at limit %u", f,
-                    dkTierDefaultLimit((dkTierFamily)f));
+            const dkTierFamily family = (dkTierFamily)f;
+            const flexCapSizeLimit want = f == DK_TIER_MULTIMAP_ATOM
+                                              ? DK_TIER_LIMIT_ATOM_COMPILED
+                                              : DK_TIER_LIMIT_COMPILED;
+            if (dkTierDefaultLimit(family) != want ||
+                dkTierCompiledLimit(family) != want ||
+                dkTierLimitTestNewLimit_(family) !=
+                    flexOptimizationSizeLimit[want]) {
+                ERR("family %u starts at limit %u (compiled %u, new "
+                    "container %u)",
+                    f, dkTierDefaultLimit(family), dkTierCompiledLimit(family),
+                    dkTierLimitTestNewLimit_(family));
             }
         }
     }
@@ -119,12 +145,12 @@ int dkTierLimitTest(int, char *[]) {
                 }
 
                 if (dkTierLimitTestNewLimit_(other) !=
-                    flexOptimizationSizeLimit[DK_TIER_LIMIT_COMPILED]) {
+                    flexOptimizationSizeLimit[dkTierCompiledLimit(other)]) {
                     ERR("setting family %u moved family %u", f, other);
                 }
             }
 
-            TIER_SET(family, DK_TIER_LIMIT_COMPILED);
+            TIER_SET(family, dkTierCompiledLimit(family));
         }
     }
 

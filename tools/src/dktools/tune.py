@@ -60,7 +60,7 @@ from . import buildstore, gitutil, perfcompare, perfdiff, procs, steps, toolchai
 from .gitutil import ToolError
 
 #: The families whose setting is a dkTierFamily size limit (dkTierLimit.h)
-TIER_FAMILIES = ("multimap", "multiOrderedSet", "multilist")
+TIER_FAMILIES = ("multimap", "multiOrderedSet", "multilist", "multimapAtom")
 #: Every tuned family: the tier families, and multidict, whose setting is
 #: its count-based load factor (percent; multidictSetDefaultLoadFactors)
 FAMILIES = (*TIER_FAMILIES, "multidict")
@@ -69,7 +69,12 @@ FAMILIES = (*TIER_FAMILIES, "multidict")
 DEFAULT_BASELINE = 2048
 #: Per family, the setting its plain constructors use until changed
 #: (multidict: MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR in multidict.c)
-DEFAULT_BASELINES = {**dict.fromkeys(TIER_FAMILIES, DEFAULT_BASELINE), "multidict": 800}
+#: (multimapAtom: DK_TIER_LIMIT_ATOM_COMPILED in dkTierLimit.h)
+DEFAULT_BASELINES = {
+    **dict.fromkeys(TIER_FAMILIES, DEFAULT_BASELINE),
+    "multimapAtom": 512,
+    "multidict": 800,
+}
 #: A baseline for every family alike (--baseline), or one per family
 Baseline = int | dict[str, int]
 #: A limit wins on speed when its mix runs this much faster than at the
@@ -89,6 +94,7 @@ DEFAULT_SETTERS = {
     "multimap": "DK_TIER_MULTIMAP",
     "multiOrderedSet": "DK_TIER_MULTIORDEREDSET",
     "multilist": "DK_TIER_MULTILIST",
+    "multimapAtom": "DK_TIER_MULTIMAP_ATOM",
 }
 
 #: Each family's sweep operations, as reads or writes
@@ -105,6 +111,12 @@ OP_CLASS = {
         "index": "read",
         "delete": "write",
         "popHead": "write",
+    },
+    "multimapAtom": {
+        "intern": "write",
+        "find": "read",
+        "lookup": "read",
+        "delete": "write",
     },
     "multidict": {
         "add": "write",
