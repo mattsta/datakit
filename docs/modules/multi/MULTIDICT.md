@@ -714,27 +714,30 @@ bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
 ```
 
 Every resize (growth, the automatic shrink, `multidictResize`) leaves the load
-at about half `expandPercent`. The default grows at 200%, so slots hold one to
-two entries. Each slot costs about 24 bytes besides its entries: a small
-multimap's 16-byte header and an 8-byte table pointer. Fuller slots spend
-fewer of those per entry, and each find searches a longer slot.
+at about half `expandPercent`. The default grows at 800% (shrinks below 40%),
+so slots hold four to eight entries. Each slot costs about 24 bytes besides
+its entries: a small multimap's 16-byte header and an 8-byte table pointer.
+Fuller slots spend fewer of those per entry, and each find searches a longer
+slot.
 
 Measured 2026-10-27 (clang 22 `perf` preset, Apple silicon, 16-byte keys with
 integer values, `perfRegression` module `multidictLoad`, medians of 7 runs;
-heap metered at the allocator):
+heap metered at the allocator). A table's slot count steps in powers of two,
+so factors share tables in pairs (200% with 400%, 800% with 1600%, at most
+sizes); each column is one table size:
 
-| entries | heap bytes per entry, 200% | at 800% | find ns, 200% | at 800% |
-| ------- | -------------------------- | ------- | ------------- | ------- |
-| 40k     | 53.7                       | 34.8    | 51            | 67      |
-| 70k     | 44.6                       | 30.1    | 55            | 76      |
-| 100k    | 39.9                       | 28.0    | 62            | 85      |
+| entries | heap bytes per entry: 200% / 800% / 3200% | scattered find ns: 200% / 800% / 3200% |
+| ------- | ----------------------------------------- | -------------------------------------- |
+| 40k     | 53.7 / 34.8 / 25.6                        | 57 / 79 / 114                          |
+| 70k     | 44.6 / 30.1 / 24.1                        | 67 / 91 / 142                          |
+| 100k    | 39.9 / 28.0 / 23.8                        | 80 / 98 / 172                          |
 
-Adds and deletes cost the same at both settings. A table's slot count steps in
-powers of two, so nearby factors often share a table: 300% to 800% match at
-40k, 200% to 400% at 70k and 100k. The default stays at 200% for find speed.
-Set 800% where a dict's memory matters more than about 15 to 25 ns per find
-(the longer slot walk, not its key compares: making compares 20 to 30 percent
-faster left that difference as it was).
+The first halving of the slot count (200% to 800%) saves about 16 bytes per
+entry for about 20 ns per find, with adds and deletes unchanged: the default.
+The next saves about 9 bytes for another 15 to 35 ns and makes adds about 30
+percent slower; the one after saves about 4 bytes for 50 to 75 ns. Set 200%
+where find time matters more than memory, 1600% or more where memory matters
+most. The difference is the longer slot walk, not its key compares.
 
 ### Incremental Rehashing
 
@@ -1015,7 +1018,7 @@ multidictAdd(ci, &FOO, &two); /* MULTIDICT_OK_REPLACED, still "Foo" = 2 */
 Iteration, scans, random keys and eviction callbacks report the stored
 spelling. A lookup that misses a key's exact bytes walks that key's slot,
 comparing each byte-string key there, so a case dict pays per slot entry on
-those lookups (two entries a slot on average at the default load factor).
+those lookups (four to eight entries a slot at the default load factor).
 
 ### Persisting the Key Type
 

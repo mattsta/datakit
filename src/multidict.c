@@ -84,13 +84,15 @@ typedef struct multidictHT {
     uint64_t valBytes;     /* total bytes of all values stored */
 } multidictHT;
 
-/* Load factor defaults (percentage): expand at 200%, shrink at 10%
- * Note: 200% means we expand when count is 2x the number of slots.
- * This allows the multimap slots to accumulate some entries before
- * triggering a rehash, which matches the design where slots hold
- * multiple entries. Max value is 255 (fits in uint8_t). */
-static constexpr int MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR = 200;
-static constexpr int MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR = 10;
+/* Load factor defaults (entries per 100 slots): grow at 800%, so a resize
+ * lands at 400% (four entries a slot, each slot one allocation and one
+ * table pointer whatever it holds), and shrink below 40%, a tenth of that
+ * landing point.  Measured against 200% (perfRegression multidictLoad, at
+ * 40k / 70k / 100k entries): 30 to 35 percent less heap per entry for
+ * about 20 ns per find; the next halving saves less and costs more (see
+ * MULTIDICT.md, "Load Factors"). */
+static constexpr int MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR = 800;
+static constexpr int MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR = 40;
 static constexpr int MULTIDICT_MIN_SLOTS_FOR_SHRINK =
     8; /* Don't shrink below this */
 
@@ -6919,11 +6921,13 @@ int multidictTest(int, char *[]) {
         while (multidictIsRehashing(d)) {
             multidictRehash(d, 100);
         }
-        /* 100 entries fit in 128 slots: not the sparse table, and not
-         * collapsed to the minimum */
-        if (multidictSlots(d) != 128 || (sparseSlots > 128 && !resized)) {
+        /* A resize lands at half the growth point: 100 entries at 400%
+         * (the default 800% halved) want 25 slots, so 32, the power of
+         * two above: not the sparse table, and not collapsed to the
+         * minimum of 8 */
+        if (multidictSlots(d) != 32 || (sparseSlots > 32 && !resized)) {
             ERR("resize left %" PRIu64 " slots for %" PRIu64
-                " entries, want 128",
+                " entries, want 32",
                 multidictSlots(d), multidictCount(d));
         }
 
@@ -8471,7 +8475,8 @@ int multidictTest(int, char *[]) {
             multidictSetLoadFactors(dense, 2000, 300) ||
             multidictSetLoadFactors(dense, 400, 101) ||
             multidictSetLoadFactors(nullptr, 400, 10) ||
-            !multidictSetLoadFactors(dense, 1600, 10)) {
+            !multidictSetLoadFactors(dense, 1600, 10) ||
+            !multidictSetLoadFactors(sparse, 200, 10)) {
             ERR("load factor bounds wrong");
         }
 
@@ -8487,10 +8492,10 @@ int multidictTest(int, char *[]) {
         while (multidictRehash(dense, 1024) || multidictRehash(sparse, 1024)) {
         }
 
-        /* At 1600% each slot holds up to 16 entries, at the default 2 */
+        /* At 1600% each slot holds up to 16 entries, at 200% up to 2 */
         if (multidictSlotCount(dense) * 4 > multidictSlotCount(sparse) ||
             multidictLoadFactor(dense) > 1600) {
-            ERR("1600%%: %" PRIu64 " slots (load %u), default: %" PRIu64,
+            ERR("1600%%: %" PRIu64 " slots (load %u), 200%%: %" PRIu64,
                 multidictSlotCount(dense), multidictLoadFactor(dense),
                 multidictSlotCount(sparse));
         }

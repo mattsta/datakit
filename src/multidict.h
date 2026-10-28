@@ -95,7 +95,7 @@ typedef struct multidictLoadMetrics {
  * iteration, scans, random keys and eviction callbacks report the stored
  * spelling.  A lookup that does not match a key's exact bytes walks the
  * key's slot comparing each byte-string key there, so its cost grows
- * with slot size (two entries a slot on average at the default load
+ * with slot size (four to eight entries a slot at the default load
  * factor). */
 typedef struct multidictType {
     uint32_t (*hashFunction)(struct multidict *d, const void *key,

@@ -827,7 +827,7 @@ static uint64_t benchMultidictLoadOne(const char *keys, const uint32_t n,
  * order and scattered, and deletes.  Rows are named op, load, '@', size
  * in thousands. */
 static void benchMultidictLoad(void) {
-    static const uint32_t loads[] = {200, 300, 400, 600, 800};
+    static const uint32_t loads[] = {200, 400, 800, 1600, 3200};
     static const uint32_t sizes[] = {40'000, 70'000, PERF_CONTAINER_N};
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     uint64_t sink = 0;
