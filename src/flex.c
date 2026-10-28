@@ -4652,20 +4652,16 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
         int_fast32_t diff = offsetIndexPhysical - (prevOffsetIndexPhysical);   \
                                                                                \
         if (diff > 0) {                                                        \
-            /* basically flexNext() up to the next element */                  \
+            /* basically flexNext() up to the next element.  No prefetch:      \
+             * each hop reads the entry it lands on at once, so a prefetch     \
+             * of it could hide nothing. */                                    \
             while (diff--) {                                                   \
-                const size_t entryLen = flexRawEntryLength(fe_);               \
-                /* Prefetch next entry to hide memory latency */               \
-                __builtin_prefetch((fe_) + entryLen, 0, 1);                    \
-                (fe_) += entryLen;                                             \
+                (fe_) += flexRawEntryLength(fe_);                              \
             }                                                                  \
         } else if (diff < 0) {                                                 \
             /* basically flexPrev() down to the prev element */                \
             while (diff++) {                                                   \
-                flexEntry *prevEntry = flexGetPreviousEntry(fe_);              \
-                /* Prefetch previous entry to hide memory latency */           \
-                __builtin_prefetch(prevEntry, 0, 1);                           \
-                (fe_) = prevEntry;                                             \
+                (fe_) = flexGetPreviousEntry(fe_);                             \
                 assert((fe_) > (f));                                           \
             }                                                                  \
         } /* else, diff == 0 and we don't advance or retreat. */               \
