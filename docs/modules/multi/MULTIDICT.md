@@ -725,14 +725,16 @@ heap metered at the allocator):
 
 | entries | heap bytes per entry, 200% | at 800% | find ns, 200% | at 800% |
 | ------- | -------------------------- | ------- | ------------- | ------- |
-| 40k     | 53.7                       | 34.8    | 76            | 89      |
-| 70k     | 44.6                       | 30.1    | 85            | 106     |
-| 100k    | 39.9                       | 28.0    | 97            | 123     |
+| 40k     | 53.7                       | 34.8    | 51            | 67      |
+| 70k     | 44.6                       | 30.1    | 55            | 76      |
+| 100k    | 39.9                       | 28.0    | 62            | 85      |
 
 Adds and deletes cost the same at both settings. A table's slot count steps in
 powers of two, so nearby factors often share a table: 300% to 800% match at
 40k, 200% to 400% at 70k and 100k. The default stays at 200% for find speed.
-Set 800% where a dict's memory matters more than about 15 to 25 ns per find.
+Set 800% where a dict's memory matters more than about 15 to 25 ns per find
+(the longer slot walk, not its key compares: making compares 20 to 30 percent
+faster left that difference as it was).
 
 ### Incremental Rehashing
 
