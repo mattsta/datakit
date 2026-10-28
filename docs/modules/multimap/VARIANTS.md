@@ -511,23 +511,25 @@ heap bytes per atom", which meters the allocator over 20k atoms.
 
 | per atom                    | ORDERED | HASHED | DICT  |
 | --------------------------- | ------- | ------ | ----- |
-| find, scattered order       | 1210    | 591    | 125   |
-| intern a present key        | 827     | 426    | 75    |
-| intern a new key            | 1358    | 1207   | 544   |
-| retain by key               | 912     | 496    | 260   |
+| find, scattered order       | 1210    | 591    | 112   |
+| intern a present key        | 827     | 426    | 88    |
+| intern a new key            | 1358    | 1207   | 577   |
+| retain by key               | 912     | 496    | 263   |
 | release by key              | 971     | 520    | 277   |
-| delete by ID                | 1414    | 936    | 531   |
-| read an ID back, scattered  | 165     | 167    | 165   |
-| heap bytes, 11-byte strings | 24.8    | 31.0   | 54.2  |
-| heap bytes, 48-byte strings | 74.0    | 79.6   | 145.9 |
-| heap bytes, integers        | 15.7    | 22.1   | 37.2  |
+| delete by ID                | 1414    | 936    | 512   |
+| read an ID back, scattered  | 165     | 167    | 150   |
+| heap bytes, 11-byte strings | 24.8    | 31.0   | 42.6  |
+| heap bytes, 48-byte strings | 74.0    | 79.6   | 134.2 |
+| heap bytes, integers        | 15.7    | 22.1   | 25.6  |
 
 - HASHED (default): half to two thirds of ORDERED's time on every key
   operation for 6 to 7 more bytes per atom.
 - ORDERED: the least memory. For large tables of rarely searched keys, where
   references are mostly read back by ID (the same cost under every kind).
-- DICT: 5 to 6 times faster than HASHED on finds, at about twice the memory.
-  The key is stored twice, so the cost grows with key length: it suits tables
+- DICT: about 5 times faster than HASHED on finds, at 1.2 to 1.7 times its
+  memory (multidict's default 800% load factor; its 200% setting is faster
+  and larger). The key is stored twice, so the cost grows with key length:
+  it suits tables
   of short keys searched far more often than they are added, and not tables
   kept to share long values.
 
