@@ -565,6 +565,7 @@ add_library(${PROJECT_NAME} OBJECT
     aeadNonceLog.c
     dkFormat.c
     dkFormatManifest.c
+    persistRegistry.c
     rapidhash.c
     clusterMailbox.c
     clusterReplicator.c

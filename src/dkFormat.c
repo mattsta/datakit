@@ -141,6 +141,7 @@ dkFormatResult dkFormatPrefixRead(const dkFormatSpec *spec, const uint8_t *buf,
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 #include "datakit.h" /* zmalloc / zfree */
+#include "persist.h" /* persistRegistry */
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -304,14 +305,19 @@ int dkFormatTest(int, char *[]) {
     /* The catalog: every format named once, with a sane read range; the
      * table is the operator's view of what this build writes and reads */
     TEST("manifest: every format once, versions in range") {
-        dkFormatSpec specs[64];
-        const size_t n = dkFormatManifest(specs, 64);
-        if (n != dkFormatManifest(nullptr, 0) || n < 19 || n > 64) {
-            ERR("manifest lists %zu formats", n);
+        /* Every persisted type's format (persistRegistry) and the fixed
+         * ones */
+        dkFormatSpec specs[128];
+        const size_t n = dkFormatManifest(specs, countof(specs));
+        const persistOps *const *registered = nullptr;
+        const size_t types = persistRegistry(&registered);
+        if (n != dkFormatManifest(nullptr, 0) || n <= types ||
+            n > countof(specs)) {
+            ERR("manifest lists %zu formats for %zu persisted types", n, types);
         }
         printf("%-34s %8s %8s %8s %18s\n", "format", "id", "writes",
                "reads>=", "known features");
-        for (size_t i = 0; i < n && i < 64; i++) {
+        for (size_t i = 0; i < n && i < countof(specs); i++) {
             const dkFormatSpec *s = &specs[i];
             printf("%-34s %8" PRIu32 " %8" PRIu32 " %8" PRIu32 " 0x%016" PRIx64
                    "\n",

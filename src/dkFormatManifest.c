@@ -6,11 +6,8 @@
 
 #include "dkFormat.h"
 
-#include "aeadNonceLog.h"
 #include "clusterMailbox.h"
-#include "clusterRing.h"
 #include "flexEnvelope.h"
-#include "hmacKeyring.h"
 #include "persist.h"
 
 size_t dkFormatManifest(dkFormatSpec *out, size_t cap) {
@@ -20,16 +17,9 @@ size_t dkFormatManifest(dkFormatSpec *out, size_t cap) {
         &clusterMailboxProtocol,
         &flexEnvelopeFormat,
     };
-    static const persistOps *const structures[] = {
-        &persistOpsFlex,           &persistOpsIntset,
-        &persistOpsIntsetBig,      &persistOpsMultiroar,
-        &persistOpsHyperloglog,    &persistOpsMultilist,
-        &persistOpsMultimap,       &persistOpsMultidict,
-        &persistOpsMultiarray,     &persistOpsMultiOrderedSet,
-        &persistOpsMultiLRU,       &persistOpsHmacKeyring,
-        &persistOpsClusterMailbox, &persistOpsClusterRing,
-        &persistOpsAeadNonceLog,   &persistOpsIdRows,
-    };
+    /* Every persisted structure's own format (persistRegistry.c) */
+    const persistOps *const *structures = nullptr;
+    const size_t structureCount = persistRegistry(&structures);
 
     size_t n = 0;
     for (size_t i = 0; i < countof(fixed); i++, n++) {
@@ -37,7 +27,7 @@ size_t dkFormatManifest(dkFormatSpec *out, size_t cap) {
             out[n] = *fixed[i];
         }
     }
-    for (size_t i = 0; i < countof(structures); i++, n++) {
+    for (size_t i = 0; i < structureCount; i++, n++) {
         if (out && n < cap) {
             out[n] = persistOpsFormat(structures[i]);
         }

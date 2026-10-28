@@ -598,6 +598,31 @@ int persistContractTest(int, char *[]) {
         }
     }
 
+    /* The persist registry (persistRegistry.c) and this list name the
+     * same descriptors, one contract type each, and a file's type id
+     * leads back to its own descriptor */
+    {
+        const persistOps *const *registered = nullptr;
+        const size_t types = persistRegistry(&registered);
+        if (types != countof(pcRegistry)) {
+            ERR("the persist registry has %zu types, the contract %zu", types,
+                countof(pcRegistry));
+        }
+        for (size_t i = 0; i < types; i++) {
+            size_t found = 0;
+            for (size_t j = 0; j < countof(pcRegistry); j++) {
+                found += pcRegistry[j]->ops == registered[i];
+            }
+            if (found != 1) {
+                ERR("%s: %zu contract types", registered[i]->name, found);
+            }
+            if (persistOpsForType(registered[i]->type) != registered[i]) {
+                ERR("%s: its type id leads to another descriptor",
+                    registered[i]->name);
+            }
+        }
+    }
+
     printf("| type | elements | snapshot B/elem | snapshot ns/elem | "
            "restore ns/elem | WAL ops replayed | damaged refused | "
            "damaged accepted | result |\n");

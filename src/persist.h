@@ -1185,6 +1185,14 @@ uint64_t persistMultilistPopIdentityAbsentNoopTotal(void);
 /* Get human-readable name for type */
 const char *persistTypeName(persistType type);
 
+/* Every structure type this build persists, one descriptor each
+ * (persistRegistry.c): sets *ops to the list and returns its length */
+size_t persistRegistry(const persistOps *const **ops);
+
+/* The descriptor of 'type' (the type a file's header names), or NULL for
+ * a type this build does not persist */
+const persistOps *persistOpsForType(persistType type);
+
 /* Get human-readable name for operation */
 const char *persistOpName(persistOp op);
 
