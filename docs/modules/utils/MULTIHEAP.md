@@ -602,7 +602,7 @@ entry keeps its sorted position and no other ref is disturbed.
 
 ```
 Base overhead (multiheap itself):
-- multimapSmall:  16 bytes (1 flex)
+- multimapSmall:  0 bytes (a bare map: its 1 flex alone)
 - multimapMedium: 28 bytes (2 flex arrays)
 - multimapFull:   40+ bytes (N flex arrays)
 

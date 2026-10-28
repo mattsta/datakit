@@ -39,150 +39,247 @@ defcleaner(multimapSmall *, multimapSmallFree);
 
 #include "flexCapacityManagement.h"
 
-#define multimapType_(map) ((multimapType)_PTRLIB_TYPE(map))
+/* The pointer's tag: 0 for a bare Small map (multimapSmallInternal.h),
+ * else the tier of the struct it points to */
+#define MULTIMAP_TAG_OF_(map) ((uint32_t)_PTRLIB_TYPE(map))
+/* The tier: a bare map is Small */
+#define multimapType_(map)                                                     \
+    ((multimapType)(MULTIMAP_TAG_OF_(map) | (MULTIMAP_TAG_OF_(map) == 0)))
 #define MULTIMAP_USE_(map) _PTRLIB_TOP_USE_ALL(map)
 #define MULTIMAP_TAG_(map, type) ((multimap *)_PTRLIB_TAG(map, type))
 
 /* Stack allocation threshold for iterator element arrays to avoid VLA blowup */
 static constexpr int MULTIMAP_STACK_THRESHOLD = 8;
 
-#define mms(m) ((multimapSmall *)MULTIMAP_USE_(m))
+/* A Small map's struct, or for a bare map a view of it on the stack (good
+ * for reads only: a change through it is lost; changes go through
+ * MULTIMAP_UPDATE_ and friends, which store a bare map back) */
+#define mms(m)                                                                 \
+    (MULTIMAP_IS_BARE(m) ? (multimapSmall[1]){multimapBareView(m)}             \
+                         : (multimapSmall *)MULTIMAP_USE_(m))
 #define mmm(m) ((multimapMedium *)MULTIMAP_USE_(m))
 #define mmf(m) ((multimapFull *)MULTIMAP_USE_(m))
 
+/* The limit and compress setting of any map */
+DK_INLINE_ALWAYS flexCapSizeLimit mmLimit_(const multimap *m) {
+    return (flexCapSizeLimit)(MULTIMAP_IS_BARE(m) ? multimapBareLimit(m)
+                                                  : COMPRESS_LIMIT(m));
+}
+
+DK_INLINE_ALWAYS uint32_t mmDepth_(const multimap *m) {
+    return MULTIMAP_IS_BARE(m) ? 0 : (uint32_t)COMPRESS_DEPTH(m);
+}
+
+/* A Small map of 'view' (its rows taken): bare when its shape and middle
+ * fit the pointer, else a struct Small */
+static multimap *mmSmallOf_(const multimapSmall *view, const uint32_t depth,
+                            const flexCapSizeLimit limit) {
+    if (depth == 0 && multimapBareFits(view->elementsPerEntry, view->mapIsSet,
+                                       view->middle)) {
+        /* @own: caller; free=multimapFree */
+        return multimapBarePack(view->map, view->middle, view->elementsPerEntry,
+                                limit);
+    }
+
+    /* @own: caller; free=multimapFree */
+    multimapSmall *small = zcalloc(1, sizeof(*small));
+    *small = *view;
+    multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
+    return MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_SMALL);
+}
+
+/* After a change through a bare map's view: the map again (it stays bare
+ * while its middle fits, else it moves into a struct Small) */
+DK_INLINE_ALWAYS multimap *mmBareSettle_(const multimapSmall *view,
+                                         const multimap *was) {
+    if (likely(view->middle < MULTIMAP_BARE_MIDDLE_LIMIT)) {
+        return multimapBarePack(view->map, view->middle, view->elementsPerEntry,
+                                multimapBareLimit(was));
+    }
+
+    return mmSmallOf_(view, 0, (flexCapSizeLimit)multimapBareLimit(was));
+}
+
+/* An entry filled through a bare map's view points at the view's map
+ * field; it points at its own slot instead */
+DK_INLINE_ALWAYS void mmBareEntry_(multimapEntry *me, flex *map) {
+    me->bare = map;
+    me->map = &me->bare;
+}
+
+/* After a change through a bare map's view that filled or used 'me': the
+ * entry points at its own slot while 'm' is bare, or at the struct a
+ * too-wide middle moved the map into */
+DK_INLINE_ALWAYS void mmBareRelink_(const multimap *m, multimapEntry *me,
+                                    flex *map) {
+    if (MULTIMAP_IS_BARE(m)) {
+        mmBareEntry_(me, map);
+    } else {
+        me->map = &((multimapSmall *)MULTIMAP_USE_(m))->map;
+    }
+}
+
 #define MULTIMAP_USE_COMPUTED_GOTO_JUMPING 1
 
+/* The four arms of a call by tag.  'bare' is the bare map's arm (a macro
+ * of (ret, m, func, ...)); a struct tier's arm calls its own function. */
 #if MULTIMAP_USE_COMPUTED_GOTO_JUMPING
-#define MULTIMAP_SETUP_LABELS(m)                                               \
-    __label__ mapSmall;                                                        \
-    __label__ mapMedium;                                                       \
-    __label__ mapFull;                                                         \
-    static const void **jumper[4] = {nullptr, &&mapSmall, &&mapMedium,         \
-                                     &&mapFull};                               \
-    goto *jumper[multimapType_(m)]
-#endif
-
-#if !MULTIMAP_USE_COMPUTED_GOTO_JUMPING
-#define MULTIMAP_(ret, m, func, ...)                                           \
+#define MULTIMAP_DISPATCH_(bare, ret, m, func, ...)                            \
     do {                                                                       \
-        switch (multimapType_(m)) {                                            \
+        __label__ mapBare;                                                     \
+        __label__ mapSmall;                                                    \
+        __label__ mapMedium;                                                   \
+        __label__ mapFull;                                                     \
+        static const void **jumper[4] = {&&mapBare, &&mapSmall, &&mapMedium,   \
+                                         &&mapFull};                           \
+        goto *jumper[MULTIMAP_TAG_OF_(m)];                                     \
+        do {                                                                   \
+        mapBare:                                                               \
+            bare(ret, m, func __VA_OPT__(, ) __VA_ARGS__);                     \
+            break;                                                             \
+        mapSmall:                                                              \
+            ret multimapSmall##func((multimapSmall *)MULTIMAP_USE_(m)          \
+                                        __VA_OPT__(, ) __VA_ARGS__);           \
+            break;                                                             \
+        mapMedium:                                                             \
+            ret multimapMedium##func(mmm(m) __VA_OPT__(, ) __VA_ARGS__);       \
+            break;                                                             \
+        mapFull:                                                               \
+            ret multimapFull##func(mmf(m) __VA_OPT__(, ) __VA_ARGS__);         \
+            break;                                                             \
+        } while (0);                                                           \
+    } while (0)
+#else
+#define MULTIMAP_DISPATCH_(bare, ret, m, func, ...)                            \
+    do {                                                                       \
+        switch (MULTIMAP_TAG_OF_(m)) {                                         \
+        case 0:                                                                \
+            bare(ret, m, func __VA_OPT__(, ) __VA_ARGS__);                     \
+            break;                                                             \
         case MULTIMAP_TYPE_SMALL:                                              \
-            ret multimapSmall##func(mms(m), __VA_ARGS__);                      \
+            ret multimapSmall##func((multimapSmall *)MULTIMAP_USE_(m)          \
+                                        __VA_OPT__(, ) __VA_ARGS__);           \
             break;                                                             \
         case MULTIMAP_TYPE_MEDIUM:                                             \
-            ret multimapMedium##func(mmm(m), __VA_ARGS__);                     \
+            ret multimapMedium##func(mmm(m) __VA_OPT__(, ) __VA_ARGS__);       \
             break;                                                             \
         case MULTIMAP_TYPE_FULL:                                               \
-            ret multimapFull##func(mmf(m), __VA_ARGS__);                       \
+            ret multimapFull##func(mmf(m) __VA_OPT__(, ) __VA_ARGS__);         \
             break;                                                             \
         default:                                                               \
             assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
-#else
-#define MULTIMAP_(ret, m, func, ...)                                           \
-    do {                                                                       \
-        MULTIMAP_SETUP_LABELS(m);                                              \
-        do {                                                                   \
-        mapSmall:                                                              \
-            ret multimapSmall##func(mms(m), __VA_ARGS__);                      \
-            break;                                                             \
-        mapMedium:                                                             \
-            ret multimapMedium##func(mmm(m), __VA_ARGS__);                     \
-            break;                                                             \
-        mapFull:                                                               \
-            ret multimapFull##func(mmf(m), __VA_ARGS__);                       \
-            break;                                                             \
-        } while (0);                                                           \
-    } while (0)
 #endif
 
-#define MULTIMAP_NORETURN(m, func, ...) MULTIMAP_(, m, func, __VA_ARGS__)
-#define MULTIMAP_RETURN(m, func, ...) MULTIMAP_(return, m, func, __VA_ARGS__)
+/* Bare arms.  READ: a call on the view.  UPDATE: 'm' is the caller's
+ * handle (an lvalue), stored back after the call.  READ_ENTRY: a read
+ * that fills the entry 'me' (the call's last argument).  UPDATE_ENTRY: a
+ * change through the entry 'me' (the call's first argument after the
+ * map), which points at the view's map during the call. */
+#define MM_BARE_READ_(ret, m, func, ...)                                       \
+    {                                                                          \
+        multimapSmall v_ = multimapBareView(m);                                \
+        ret multimapSmall##func(&v_ __VA_OPT__(, ) __VA_ARGS__);               \
+    }
+#define MM_BARE_UPDATE_(ret, m, func, ...)                                     \
+    {                                                                          \
+        multimapSmall v_ = multimapBareView(m);                                \
+        ret multimapSmall##func(&v_ __VA_OPT__(, ) __VA_ARGS__);               \
+        (m) = mmBareSettle_(&v_, (m));                                         \
+    }
+
+#define MULTIMAP_(ret, m, func, ...)                                           \
+    MULTIMAP_DISPATCH_(MM_BARE_READ_, ret, m, func __VA_OPT__(, ) __VA_ARGS__)
+#define MULTIMAP_NORETURN(m, func, ...)                                        \
+    MULTIMAP_(, m, func __VA_OPT__(, ) __VA_ARGS__)
+#define MULTIMAP_RETURN(m, func, ...)                                          \
+    MULTIMAP_(return, m, func __VA_OPT__(, ) __VA_ARGS__)
 #define MULTIMAP_SETRESULT(var, m, func, ...)                                  \
-    MULTIMAP_(var =, m, func, __VA_ARGS__)
+    MULTIMAP_(var =, m, func __VA_OPT__(, ) __VA_ARGS__)
+/* A change: 'm' is the caller's handle (*m) */
+#define MULTIMAP_UPDATE_(ret, m, func, ...)                                    \
+    MULTIMAP_DISPATCH_(MM_BARE_UPDATE_, ret, m, func __VA_OPT__(, ) __VA_ARGS__)
 
-#if !MULTIMAP_USE_COMPUTED_GOTO_JUMPING
-#define MULTIMAP_SINGLE_(ret, m, func)                                         \
+#define MULTIMAP_SINGLE_NORETURN(m, func) MULTIMAP_(, m, func)
+#define MULTIMAP_SINGLE_RETURN(m, func) MULTIMAP_(return, m, func)
+
+/* A read that fills the entry 'me': on a bare map the entry points at
+ * its own slot (a view's map field is gone once the call returns) */
+#define MULTIMAP_ENTRY_READ_(var, m, me, func, ...)                            \
     do {                                                                       \
-        switch (multimapType_(m)) {                                            \
-        case MULTIMAP_TYPE_SMALL:                                              \
-            ret multimapSmall##func(mms(m));                                   \
-            break;                                                             \
-        case MULTIMAP_TYPE_MEDIUM:                                             \
-            ret multimapMedium##func(mmm(m));                                  \
-            break;                                                             \
-        case MULTIMAP_TYPE_FULL:                                               \
-            ret multimapFull##func(mmf(m));                                    \
-            break;                                                             \
-        default:                                                               \
-            assert(false);                                                     \
-            unreachable();                                                     \
+        if (MULTIMAP_IS_BARE(m)) {                                             \
+            multimapSmall v_ = multimapBareView(m);                            \
+            var = multimapSmall##func(&v_, __VA_ARGS__);                       \
+            if (me) {                                                          \
+                mmBareEntry_((me), v_.map);                                    \
+            }                                                                  \
+        } else {                                                               \
+            MULTIMAP_SETRESULT(var, m, func, __VA_ARGS__);                     \
         }                                                                      \
     } while (0)
-#else
-#define MULTIMAP_SINGLE_(ret, m, func)                                         \
+
+/* A change through the entry 'me' ('m' is the caller's handle): on a bare
+ * map the entry points at the view's map during the call and at its own
+ * slot (or the struct a too-wide middle moved the map into) after */
+#define MULTIMAP_ENTRY_UPDATE_(m, me, func, ...)                               \
     do {                                                                       \
-        MULTIMAP_SETUP_LABELS(m);                                              \
-        do {                                                                   \
-        mapSmall:                                                              \
-            ret multimapSmall##func(mms(m));                                   \
-            break;                                                             \
-        mapMedium:                                                             \
-            ret multimapMedium##func(mmm(m));                                  \
-            break;                                                             \
-        mapFull:                                                               \
-            ret multimapFull##func(mmf(m));                                    \
-            break;                                                             \
-        } while (0);                                                           \
+        if (MULTIMAP_IS_BARE(m)) {                                             \
+            multimapSmall v_ = multimapBareView(m);                            \
+            (me)->map = &v_.map;                                               \
+            multimapSmall##func(&v_, me __VA_OPT__(, ) __VA_ARGS__);           \
+            (m) = mmBareSettle_(&v_, (m));                                     \
+            mmBareRelink_((m), (me), v_.map);                                  \
+        } else {                                                               \
+            MULTIMAP_NORETURN(m, func, me __VA_OPT__(, ) __VA_ARGS__);         \
+        }                                                                      \
     } while (0)
-#endif
 
-#define MULTIMAP_SINGLE_NORETURN(m, func) MULTIMAP_SINGLE_(, m, func)
-#define MULTIMAP_SINGLE_RETURN(m, func) MULTIMAP_SINGLE_(return, m, func)
-
-multimap *multimapNew(multimapElements elementsPerEntry) {
+/* A new, empty Small map: bare when its shape allows (mmSmallOf_) */
+static multimap *mmNew_(const multimapElements elementsPerEntry,
+                        const bool isSet, const bool compress,
+                        const flexCapSizeLimit limit) {
     /* Note: You can only have up to 64k 'elementsPerEntry'
      *       (which is overkill anyway) */
+    multimapSmall view = {.middle = FLEX_EMPTY_SIZE,
+                          .elementsPerEntry = elementsPerEntry,
+                          .mapIsSet = isSet};
+    /* @own: container; free=multimapFree */
+    view.map = flexNew();
     /* @own: caller; free=multimapFree */
-    multimapSmall *created = multimapSmallNew(elementsPerEntry, false);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, false,
-                                       dkTierDefaultLimit(DK_TIER_MULTIMAP));
-    return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
+    return mmSmallOf_(&view, compress, limit);
+}
+
+multimap *multimapNew(multimapElements elementsPerEntry) {
+    /* @own: caller; free=multimapFree */
+    return mmNew_(elementsPerEntry, false, false,
+                  dkTierDefaultLimit(DK_TIER_MULTIMAP));
 }
 
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
                            const flexCapSizeLimit limit) {
     /* @own: caller; free=multimapFree */
-    multimapSmall *created = multimapSmallNew(elementsPerEntry, false);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, false, limit);
-    return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
+    return mmNew_(elementsPerEntry, false, false, limit);
 }
 
 multimap *multimapNewCompress(multimapElements elementsPerEntry,
                               const flexCapSizeLimit limit) {
     /* @own: caller; free=multimapFree */
-    multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, false);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, true, limit);
-    return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
+    return mmNew_(elementsPerEntry, false, true, limit);
 }
 
 multimap *multimapSetNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFree */
-    multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, true);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, false,
-                                       dkTierDefaultLimit(DK_TIER_MULTIMAP));
-    return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
+    return mmNew_(elementsPerEntry, true, false,
+                  dkTierDefaultLimit(DK_TIER_MULTIMAP));
 }
 
 multimap *multimapNewConfigure(multimapElements elementsPerEntry,
                                const bool isSet, const bool compress,
                                const flexCapSizeLimit sizeLimit) {
     /* @own: caller; free=multimapFree */
-    multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, isSet);
-    created = SET_COMPRESS_DEPTH_LIMIT(created, compress, sizeLimit);
-    return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
+    return mmNew_(elementsPerEntry, isSet, compress, sizeLimit);
 }
 
 size_t multimapCount(const multimap *m) {
@@ -204,13 +301,14 @@ multimapType multimapGetType(const multimap *m) {
 void multimapStats(const multimap *m, dkTierStats *out) {
     *out = (dkTierStats){.count = multimapCount(m),
                          .tier = (uint8_t)multimapType_(m),
-                         .unitLimit =
-                             flexOptimizationSizeLimit[COMPRESS_LIMIT(m)]};
+                         .unitLimit = flexOptimizationSizeLimit[mmLimit_(m)]};
     switch (multimapType_(m)) {
     case MULTIMAP_TYPE_SMALL:
         out->units = 1;
         out->dataBytes = multimapSmallBytes(mms(m));
-        out->totalBytes = out->dataBytes + sizeof(multimapSmall);
+        /* A bare map has no struct: it is its flex */
+        out->totalBytes =
+            out->dataBytes + (MULTIMAP_IS_BARE(m) ? 0 : sizeof(multimapSmall));
         break;
     case MULTIMAP_TYPE_MEDIUM:
         out->units = 2;
@@ -344,11 +442,11 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
 }
 
 flexCapSizeLimit multimapLimit(const multimap *m) {
-    return (flexCapSizeLimit)COMPRESS_LIMIT(m);
+    return mmLimit_(m);
 }
 
 bool multimapCompresses(const multimap *m) {
-    return COMPRESS_DEPTH(m) != 0;
+    return mmDepth_(m) != 0;
 }
 
 static void multimapUpgradeIfNecessaryWithReference(
@@ -403,14 +501,12 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
     /* Up to what Medium holds: the rows become a Small's one map, grown
      * once as an insert would grow it */
     if (bytes <= splitSize * 3 || total < 4) {
+        const multimapSmall view = {
+            .map = rows,
+            .middle = (uint32_t)(flexMiddle(rows, elementsPerEntry) - rows),
+            .elementsPerEntry = elementsPerEntry};
         /* @own: caller; free=multimapFree */
-        multimapSmall *small = multimapSmallNew(elementsPerEntry, false);
-        flexFree(small->map);
-        small->map = rows;
-        small->middle =
-            (uint32_t)(flexMiddle(rows, elementsPerEntry) - small->map);
-        multimap *m = SET_COMPRESS_DEPTH_LIMIT(small, 0, limit);
-        m = MULTIMAP_TAG_(m, MULTIMAP_TYPE_SMALL);
+        multimap *m = mmSmallOf_(&view, 0, limit);
         multimapUpgradeIfNecessaryWithReference(&m, 0, limit,
                                                 referenceContainer);
         return m;
@@ -459,10 +555,12 @@ DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
             multimapSmallCount(small) > (small->elementsPerEntry * 2)) {
             /* Medium self-manages reference lookups, so we do not need an
              * independent multimapMediumNewFromOneGrowWithReference() */
+            /* Medium reuses a struct Small's allocation; a bare map has
+             * none */
             /* @own: container; free=multimapMediumFree */
             multimapMedium *medium = multimapMediumNewFromOneGrow(
-                small, small->map, small->middle, small->elementsPerEntry,
-                small->mapIsSet);
+                MULTIMAP_IS_BARE(*m) ? nullptr : small, small->map,
+                small->middle, small->elementsPerEntry, small->mapIsSet);
 
             medium = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
             *m = MULTIMAP_TAG_(medium, MULTIMAP_TYPE_MEDIUM);
@@ -526,8 +624,8 @@ static void multimapUpgradeIfNecessary(multimap **m, const uint_fast32_t depth,
  * right for maps of references. */
 DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
                                         size_t fullBytes, size_t smallBytes) {
-    const uint32_t depth = COMPRESS_DEPTH(*m);
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = mmDepth_(*m);
+    const flexCapSizeLimit limit = mmLimit_(*m);
     flex *rows = nullptr;
     multimapElements elementsPerEntry;
     bool isSet;
@@ -562,13 +660,11 @@ DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
         return;
     }
 
-    /* @own: caller; free=multimapFree */
-    multimapSmall *small = multimapSmallNew(elementsPerEntry, isSet);
-    flexFree(small->map);
-    small->map = rows;
-    small->middle = (uint32_t)(flexMiddle(rows, elementsPerEntry) - rows);
-    multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
-    *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_SMALL);
+    const multimapSmall view = {
+        .map = rows,
+        .middle = (uint32_t)(flexMiddle(rows, elementsPerEntry) - rows),
+        .elementsPerEntry = elementsPerEntry,
+        .mapIsSet = isSet};
 
     /* Rows above 'smallBytes' (from a Full) belong in Medium, which needs
      * two whole rows to split, as an upgrade does */
@@ -576,19 +672,22 @@ DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
         flexCount(rows) > elementsPerEntry * 2) {
         /* @own: container; free=multimapMediumFree */
         multimapMedium *medium = multimapMediumNewFromOneGrow(
-            small, small->map, small->middle, elementsPerEntry, isSet);
-        tagged = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
+            nullptr, rows, view.middle, elementsPerEntry, isSet);
+        multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
         *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_MEDIUM);
+    } else {
+        /* @own: caller; free=multimapFree */
+        *m = mmSmallOf_(&view, depth, limit);
     }
 }
 
 static void multimapShrinkIfNecessary_(multimap **m) {
-    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    const size_t L = flexOptimizationSizeLimit[mmLimit_(*m)];
     multimapMoveDown_(m, 3, L + L / 2, L / 2);
 }
 
 void multimapCompact(multimap **m) {
-    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    const size_t L = flexOptimizationSizeLimit[mmLimit_(*m)];
     if (multimapType_(*m) == MULTIMAP_TYPE_FULL) {
         multimapFullCompact(mmf(*m));
     }
@@ -597,7 +696,7 @@ void multimapCompact(multimap **m) {
 
 void multimapCompactWithReference(multimap **m,
                                   const multimapAtom *referenceContainer) {
-    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    const size_t L = flexOptimizationSizeLimit[mmLimit_(*m)];
     if (multimapType_(*m) == MULTIMAP_TYPE_FULL) {
         multimapFullCompactWithReference(mmf(*m), referenceContainer);
     }
@@ -608,7 +707,7 @@ void multimapCompactWithReference(multimap **m,
 #define MULTIMAP_DELETE_(m, func, ...)                                         \
     do {                                                                       \
         bool deleted_;                                                         \
-        MULTIMAP_SETRESULT(deleted_, *(m), func, __VA_ARGS__);                 \
+        MULTIMAP_UPDATE_(deleted_ =, *(m), func, __VA_ARGS__);                 \
         if (deleted_) {                                                        \
             multimapShrinkIfNecessary_(m);                                     \
         }                                                                      \
@@ -621,12 +720,19 @@ static void multimapUpgradeIfNecessaryWithReference(
     multimapUpgradeIfNecessary_(m, depth, limit, true, referenceContainer);
 }
 multimap *multimapCopy(const multimap *m) {
-    const uint32_t depth = COMPRESS_DEPTH(m);
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(m);
+    const uint32_t depth = mmDepth_(m);
+    const flexCapSizeLimit limit = mmLimit_(m);
 
     multimap *copy;
 
     const multimapType type = multimapType_(m);
+    if (MULTIMAP_IS_BARE(m)) {
+        multimapSmall view = multimapBareView(m);
+        /* @own: caller; free=multimapFree */
+        view.map = flexDuplicate(view.map);
+        return mmSmallOf_(&view, depth, limit);
+    }
+
     if (type == MULTIMAP_TYPE_SMALL) {
         /* @own: caller; free=multimapFree */
         copy = (multimap *)multimapSmallCopy(mms(m));
@@ -656,12 +762,12 @@ bool multimapInsertReplacing(multimap **m, const databox *elements[],
                              databox *replacedOut) {
     /* Insert new elements */
     bool replaced;
-    MULTIMAP_SETRESULT(replaced, *m, InsertReplacing, elements, replacedOut);
+    MULTIMAP_UPDATE_(replaced =, *m, InsertReplacing, elements, replacedOut);
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
-    const uint32_t depth = COMPRESS_DEPTH(*m);
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = mmDepth_(*m);
+    const flexCapSizeLimit limit = mmLimit_(*m);
     multimapUpgradeIfNecessary(m, depth, limit);
     return replaced;
 }
@@ -669,10 +775,20 @@ bool multimapInsertReplacing(multimap **m, const databox *elements[],
 bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
                                  multimapEntry *me) {
     bool inserted;
-    MULTIMAP_SETRESULT(inserted, *m, InsertIfAbsent, elements, me);
+    if (MULTIMAP_IS_BARE(*m)) {
+        multimapSmall v = multimapBareView(*m);
+        inserted = multimapSmallInsertIfAbsent(&v, elements, me);
+        *m = mmBareSettle_(&v, *m);
+        if (me && !inserted) {
+            mmBareRelink_(*m, me, v.map);
+        }
+    } else {
+        MULTIMAP_SETRESULT(inserted, *m, InsertIfAbsent, elements, me);
+    }
+
     if (inserted) {
-        const uint32_t depth = COMPRESS_DEPTH(*m);
-        const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+        const uint32_t depth = mmDepth_(*m);
+        const flexCapSizeLimit limit = mmLimit_(*m);
         multimapUpgradeIfNecessary(m, depth, limit);
     }
 
@@ -685,12 +801,12 @@ bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
 
 void multimapInsertFullWidth(multimap **m, const databox *elements[]) {
     /* Insert new elements */
-    MULTIMAP_NORETURN(*m, InsertFullWidth, elements);
+    MULTIMAP_UPDATE_(, *m, InsertFullWidth, elements);
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
-    const uint32_t depth = COMPRESS_DEPTH(*m);
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = mmDepth_(*m);
+    const flexCapSizeLimit limit = mmLimit_(*m);
     multimapUpgradeIfNecessary(m, depth, limit);
 }
 
@@ -698,13 +814,13 @@ void multimapInsertWithSurrogateKey(multimap **m, const databox *elements[],
                                     const databox *insertKey,
                                     const multimapAtom *referenceContainer) {
     /* Insert new elements */
-    MULTIMAP_NORETURN(*m, InsertWithSurrogateKey, elements, insertKey,
-                      referenceContainer);
+    MULTIMAP_UPDATE_(, *m, InsertWithSurrogateKey, elements, insertKey,
+                     referenceContainer);
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
-    const uint32_t depth = COMPRESS_DEPTH(*m);
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = mmDepth_(*m);
+    const flexCapSizeLimit limit = mmLimit_(*m);
     multimapUpgradeIfNecessaryWithReference(m, depth, limit,
                                             referenceContainer);
 }
@@ -714,12 +830,12 @@ bool multimapInsertWithSurrogateKeyIfAbsent(
     const multimapAtom *referenceContainer, databox *foundKey,
     flexWhenAbsent *whenAbsent, void *whenAbsentCtx) {
     bool inserted;
-    MULTIMAP_SETRESULT(inserted, *m, InsertWithSurrogateKeyIfAbsent, elements,
-                       insertKey, referenceContainer, foundKey, whenAbsent,
-                       whenAbsentCtx);
+    MULTIMAP_UPDATE_(inserted =, *m, InsertWithSurrogateKeyIfAbsent, elements,
+                     insertKey, referenceContainer, foundKey, whenAbsent,
+                     whenAbsentCtx);
     if (inserted) {
-        const uint32_t depth = COMPRESS_DEPTH(*m);
-        const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+        const uint32_t depth = mmDepth_(*m);
+        const flexCapSizeLimit limit = mmLimit_(*m);
         multimapUpgradeIfNecessaryWithReference(m, depth, limit,
                                                 referenceContainer);
     }
@@ -728,16 +844,18 @@ bool multimapInsertWithSurrogateKeyIfAbsent(
 }
 
 void multimapAppend(multimap **m, const databox *elements[]) {
-    MULTIMAP_NORETURN(*m, Append, elements);
+    MULTIMAP_UPDATE_(, *m, Append, elements);
 
-    const uint32_t depth = COMPRESS_DEPTH(*m);
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+    const uint32_t depth = mmDepth_(*m);
+    const flexCapSizeLimit limit = mmLimit_(*m);
     multimapUpgradeIfNecessary(m, depth, limit);
 }
 
 bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
                                 multimapEntry *me) {
-    MULTIMAP_RETURN(m, GetUnderlyingEntry, key, me);
+    bool found;
+    MULTIMAP_ENTRY_READ_(found, m, me, GetUnderlyingEntry, key, me);
+    return found;
 }
 
 /* An in-place rewrite of a set row (replace, resize, increment): every
@@ -758,21 +876,26 @@ bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
 bool multimapGetUnderlyingEntryWithReference(
     multimap *m, const databox *key, multimapEntry *me,
     const multimapAtom *referenceContainer) {
-    MULTIMAP_RETURN(m, GetUnderlyingEntryWithReference, key, me,
-                    referenceContainer);
+    bool found;
+    MULTIMAP_ENTRY_READ_(found, m, me, GetUnderlyingEntryWithReference, key, me,
+                         referenceContainer);
+    return found;
 }
 
 bool multimapGetUnderlyingEntryFullWidth(multimap *m, const databox *elements[],
                                          multimapEntry *me) {
-    MULTIMAP_RETURN(m, GetUnderlyingEntryFullWidth, elements, me);
+    bool found;
+    MULTIMAP_ENTRY_READ_(found, m, me, GetUnderlyingEntryFullWidth, elements,
+                         me);
+    return found;
 }
 
 static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
                                   flex **map) {
     const multimapType type = multimapType_(*m);
     if (type == MULTIMAP_TYPE_SMALL || type == MULTIMAP_TYPE_MEDIUM) {
-        const uint32_t depth = COMPRESS_DEPTH(*m);
-        const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+        const uint32_t depth = mmDepth_(*m);
+        const flexCapSizeLimit limit = mmLimit_(*m);
         multimapUpgradeIfNecessary(m, depth, limit);
     } else {
         multimapFull *full = mmf(*m);
@@ -781,13 +904,14 @@ static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
 }
 
 void multimapDeleteEntry(multimap **m, multimapEntry *me) {
-    MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, nullptr);
+    MULTIMAP_ENTRY_UPDATE_(*m, me, DeleteEntryWithReference, nullptr);
     multimapShrinkIfNecessary_(m);
 }
 
 void multimapDeleteEntryWithReference(multimap **m, multimapEntry *me,
                                       const multimapAtom *referenceContainer) {
-    MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, referenceContainer);
+    MULTIMAP_ENTRY_UPDATE_(*m, me, DeleteEntryWithReference,
+                           referenceContainer);
     multimapShrinkIfNecessary_(m);
 }
 
@@ -796,7 +920,7 @@ bool multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen) {
         return false;
     }
 
-    MULTIMAP_NORETURN(*m, ResizeEntry, me, newLen);
+    MULTIMAP_ENTRY_UPDATE_(*m, me, ResizeEntry, newLen);
     multimapRegularizeMap(m, me->mapIdx, me->map);
     return true;
 }
@@ -806,7 +930,7 @@ bool multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box) {
         return false;
     }
 
-    MULTIMAP_NORETURN(*m, ReplaceEntry, me, box);
+    MULTIMAP_ENTRY_UPDATE_(*m, me, ReplaceEntry, box);
 
     /* NOTE: DO NOT regularize map here because if a map requires surrogate keys
      * and we regularize the map, we aren't passing through the
@@ -827,7 +951,7 @@ bool multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
         return false;
     }
 
-    MULTIMAP_NORETURN(*m, ReplaceEntry, me, box);
+    MULTIMAP_ENTRY_UPDATE_(*m, me, ReplaceEntry, box);
 
     const multimapType type = multimapType_(*m);
     if (type == MULTIMAP_TYPE_FULL) {
@@ -946,7 +1070,9 @@ bool multimapDeleteFullWidth(multimap **m, const databox *elements[]) {
 
 bool multimapRandomValue(multimap *m, const bool fromTail, databox **found,
                          multimapEntry *me) {
-    MULTIMAP_RETURN(m, RandomValue, fromTail, found, me);
+    bool picked;
+    MULTIMAP_ENTRY_READ_(picked, m, me, RandomValue, fromTail, found, me);
+    return picked;
 }
 
 bool multimapDeleteRandomValue(multimap **m, const bool fromTail,
@@ -1111,7 +1237,7 @@ void multimapReset(multimap **m) {
     multimapElements elementsPerEntry;
     switch (multimapType_(*m)) {
     case MULTIMAP_TYPE_SMALL:
-        multimapSmallReset(mms(*m));
+        MULTIMAP_UPDATE_(, *m, Reset);
         return;
     case MULTIMAP_TYPE_MEDIUM:
         elementsPerEntry = mmm(*m)->elementsPerEntry;
@@ -1133,7 +1259,10 @@ void multimapReset(multimap **m) {
 }
 
 void multimapFree(multimap *m) {
-    if (m) {
+    if (MULTIMAP_IS_BARE(m)) {
+        /* A bare map is its flex alone (and NULL frees nothing) */
+        flexFree(multimapBareFlex(m));
+    } else {
         MULTIMAP_SINGLE_NORETURN(m, Free);
     }
 }
@@ -1610,7 +1739,8 @@ static size_t multimapReport_(const multimap *m, const bool print) {
     switch (multimapType_(m)) {
     case MULTIMAP_TYPE_SMALL:
         count = 1;
-        containerBytes = sizeof(multimapSmall);
+        /* a bare map has no struct */
+        containerBytes = MULTIMAP_IS_BARE(m) ? 0 : sizeof(multimapSmall);
         mapPtrBytes = 0; /* included in container */
         middleBytes = 0; /* included in container */
         type = "S";
@@ -5166,7 +5296,13 @@ int multimapTest(int, char *[]) {
             assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
 
             databox key = databoxNewBytesString("key00000");
-            assert(multimapSmallFieldIncr(mms(m), &key, 1, 5) == 15);
+            /* The tier's own call on the map's Small form: for a bare map
+             * a view, stored back after the change */
+            multimapSmall *small = mms(m);
+            assert(multimapSmallFieldIncr(small, &key, 1, 5) == 15);
+            if (MULTIMAP_IS_BARE(m)) {
+                m = mmBareSettle_(small, m);
+            }
             multimapVerify(m);
             assert(multimapSmallFieldIncr(mms(m), &missing, 1, 5) == 0);
             assert(multimapFieldIncr(&m, &missing, 1, 5) == 0);
@@ -5974,8 +6110,11 @@ int multimapTest(int, char *[]) {
                 next++;
             }
             multimapStats(m, &s);
+            /* Small: none when bare (the map is its flex), else its struct */
+            const bool full = want == MULTIMAP_TYPE_FULL;
             const size_t overhead =
-                want == MULTIMAP_TYPE_SMALL    ? sizeof(multimapSmall)
+                want == MULTIMAP_TYPE_SMALL
+                    ? (MULTIMAP_IS_BARE(m) ? 0 : sizeof(multimapSmall))
                 : want == MULTIMAP_TYPE_MEDIUM ? sizeof(multimapMedium)
                                                : 0;
             const uint32_t units = want == MULTIMAP_TYPE_SMALL ? 1
@@ -5985,9 +6124,8 @@ int multimapTest(int, char *[]) {
             if (s.tier != want || s.units != units ||
                 s.count != (uint64_t)next || s.unitLimit != limit ||
                 s.dataBytes != multimapBytes(m) ||
-                (overhead && s.totalBytes != s.dataBytes + overhead) ||
-                (!overhead && s.totalBytes != multimapFullBytesFull(mmf(m))) ||
-                s.totalBytes <= s.dataBytes) {
+                (!full && s.totalBytes != s.dataBytes + overhead) ||
+                (full && s.totalBytes != multimapFullBytesFull(mmf(m)))) {
                 ERR("tier %d: stats tier %u units %u count %" PRIu64
                     " limit %u data %" PRIu64 " total %" PRIu64,
                     want, s.tier, s.units, s.count, s.unitLimit, s.dataBytes,
@@ -8864,6 +9002,130 @@ int multimapTest(int, char *[]) {
                         found);
                     break;
                 }
+            }
+        }
+    }
+
+    TEST("multimap: a Small map of one- or two-element rows that is not a "
+         "set is its flex alone, through every entry operation") {
+        /* Which maps start bare: rows of 1, of 2, of 3; a set; a
+         * compressing map; a 64 KB limit */
+        static const bool bare[] = {true, true, false, false, false, true};
+        for (size_t i = 0; i < countof(bare); i++) {
+            cleaner(multimapFree) multimap *shape = nullptr;
+            switch (i) {
+            case 0:
+                shape = multimapNew(1);
+                break;
+            case 1:
+                shape = multimapNew(2);
+                break;
+            case 2:
+                shape = multimapNew(3);
+                break;
+            case 3:
+                shape = multimapSetNew(2);
+                break;
+            case 4:
+                shape = multimapNewCompress(2, FLEX_CAP_LEVEL_2048);
+                break;
+            default:
+                shape = multimapNewLimit(2, FLEX_CAP_LEVEL_65536);
+                break;
+            }
+            dkTierStats s;
+            multimapStats(shape, &s);
+            if (MULTIMAP_IS_BARE(shape) != bare[i] ||
+                multimapGetType(shape) != MULTIMAP_TYPE_SMALL ||
+                (bare[i] && s.totalBytes != s.dataBytes)) {
+                ERR("shape %zu: bare %d, tier %d, total %" PRIu64
+                    " data %" PRIu64,
+                    i, MULTIMAP_IS_BARE(shape), multimapGetType(shape),
+                    s.totalBytes, s.dataBytes);
+            }
+        }
+
+        /* Entry operations on a bare map: each may move the flex, which
+         * the map (and the entry, for the next call) must follow; a stale
+         * pointer is a use after free under the sanitizers */
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        for (int64_t k = 0; k < 8; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(k * 10);
+            const databox *row[2] = {&key, &val};
+            multimapInsert(&m, row);
+        }
+        char longText[300];
+        memset(longText, 'v', sizeof(longText));
+        const databox longVal = databoxNewBytes(longText, sizeof(longText));
+        const databox key3 = databoxNewSigned(3);
+        multimapEntry me;
+        if (!multimapGetUnderlyingEntry(m, &key3, &me)) {
+            ERR("key 3 is missing");
+        }
+        me.fe = flexNext(*me.map, me.fe);        /* the value */
+        multimapReplaceEntry(&m, &me, &longVal); /* grows the flex */
+        multimapVerify(m);
+        databox got;
+        databox *gotp[1] = {&got};
+        if (!MULTIMAP_IS_BARE(m) || !multimapLookup(m, &key3, gotp) ||
+            got.len != sizeof(longText)) {
+            ERR("a replace through the entry was lost (bare %d)",
+                MULTIMAP_IS_BARE(m));
+        }
+
+        /* A present key through InsertIfAbsentEntry gives its row */
+        const databox five = databoxNewSigned(5);
+        const databox fifty = databoxNewSigned(50);
+        const databox *present[2] = {&five, &fifty};
+        if (multimapInsertIfAbsentEntry(&m, present, &me)) {
+            ERR("key 5 was inserted again");
+        }
+        multimapDeleteEntry(&m, &me);
+        multimapVerify(m);
+        if (multimapExists(m, &five) || multimapCount(m) != 7) {
+            ERR("a delete through the entry left %zu rows", multimapCount(m));
+        }
+
+        multimapEntry picked;
+        if (!multimapRandomValue(m, true, nullptr, &picked)) {
+            ERR("no row to pick");
+        }
+        multimapDeleteEntry(&m, &picked); /* the last row, key 7 */
+        const databox seven = databoxNewSigned(7);
+        if (multimapExists(m, &seven) || multimapCount(m) != 6) {
+            ERR("a delete of the picked row left %zu rows", multimapCount(m));
+        }
+
+        cleaner(multimapFree) multimap *copy = multimapCopy(m);
+        if (!MULTIMAP_IS_BARE(copy) || multimapCount(copy) != 6 ||
+            !multimapLookup(copy, &key3, gotp) || got.len != sizeof(longText)) {
+            ERR("a copy of a bare map differs");
+        }
+
+        /* A middle past 11 bits: the map keeps a struct, still Small */
+        cleaner(multimapFree) multimap *wide =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_65536);
+        int64_t k = 0;
+        while (MULTIMAP_IS_BARE(wide) && k < 64) {
+            const databox key = databoxNewSigned(k++);
+            const databox *row[2] = {&key, &longVal};
+            multimapInsert(&wide, row);
+        }
+        multimapVerify(wide);
+        if (MULTIMAP_IS_BARE(wide) ||
+            multimapGetType(wide) != MULTIMAP_TYPE_SMALL ||
+            multimapCount(wide) != (size_t)k) {
+            ERR("a wide middle left bare %d, tier %d, %zu rows",
+                MULTIMAP_IS_BARE(wide), multimapGetType(wide),
+                multimapCount(wide));
+        }
+        for (int64_t j = 0; j < k; j++) {
+            const databox key = databoxNewSigned(j);
+            if (!multimapLookup(wide, &key, gotp) ||
+                got.len != sizeof(longText)) {
+                ERR("row %" PRId64 " of the wide map is missing", j);
+                break;
             }
         }
     }

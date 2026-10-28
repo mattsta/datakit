@@ -716,9 +716,9 @@ bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
 Every resize (growth, the automatic shrink, `multidictResize`) leaves the load
 at about half `expandPercent`. The default grows at 800% (shrinks below 40%),
 so slots hold four to eight entries. A slot is a bare flex of its rows while
-it is small: its pointer carries the small multimap's tier bits (none) and,
-in its top 16 bits, the offset of its middle row, so no 16-byte header sits
-beside it. Each slot then costs its 8-byte table pointer and its flex's
+it is small: a bare Small multimap (multimap VARIANTS.md), whose pointer
+carries the size limit, the row width and the offset of its middle row in
+its top 16 bits, so no 16-byte header sits beside it. Each slot then costs its 8-byte table pointer and its flex's
 header and allocation rounding. A slot that grows past a small multimap's
 size limit becomes a multimap and grows tiers itself. Fuller slots spend
 fewer per-slot bytes per entry, and each find searches a longer slot.

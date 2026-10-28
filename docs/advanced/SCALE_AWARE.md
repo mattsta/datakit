@@ -18,11 +18,11 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 
 ### Multi-Container Variants
 
-| Module         | Small    | Medium    | Large/Full | Native  |
-| -------------- | -------- | --------- | ---------- | ------- |
-| **multimap**   | 16 bytes | 28 bytes  | 40+ bytes  | N/A     |
-| **multilist**  | 8 bytes  | 16 bytes  | 24+ bytes  | N/A     |
-| **multiarray** | 16 bytes | 16+ bytes | 24+ bytes  | 0 bytes |
+| Module         | Small         | Medium    | Large/Full | Native  |
+| -------------- | ------------- | --------- | ---------- | ------- |
+| **multimap**   | 0 or 16 bytes | 28 bytes  | 40+ bytes  | N/A     |
+| **multilist**  | 0 bytes       | 16 bytes  | 24+ bytes  | N/A     |
+| **multiarray** | 16 bytes      | 16+ bytes | 24+ bytes  | 0 bytes |
 
 ### Detailed Variant Breakdown
 
@@ -32,7 +32,7 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 ┌──────────────┬───────────┬──────────────┬─────────────────────┐
 │ Variant      │ Overhead  │ Storage      │ Best For            │
 ├──────────────┼───────────┼──────────────┼─────────────────────┤
-│ Small        │ 16 bytes  │ 1 flex       │ < 100 entries       │
+│ Small        │ 0 or 16 B │ 1 flex       │ < 100 entries       │
 │ Medium       │ 28 bytes  │ 2 flex       │ 100-1000 entries    │
 │ Full         │ 40 bytes  │ N flex       │ 1000+ entries       │
 └──────────────┴───────────┴──────────────┴─────────────────────┘

@@ -80,9 +80,13 @@ static_assert(sizeof(multimapIterator) == 32,
               "multimapIterator grew bigger than we expected?");
 
 typedef struct multimapEntry {
-    flex **map;
+    flex **map; /* the flex holding the row */
     flexEntry *fe;
     multimapFullIdx mapIdx;
+    /* A bare Small map (no struct: its pointer is its flex) has no field
+     * for 'map' to point at, so it points here: use an entry where it was
+     * filled (a by-value copy still points into the original) */
+    flex *bare;
 } multimapEntry;
 
 typedef enum multimapCondition {

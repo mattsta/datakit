@@ -47,9 +47,10 @@ instead of beside them, so a container needs no header object of its own
 8 GB). That requires every heap pointer to be:
 
 - **48-bit**: bits 48-63 clear. multimap, multilist and multiOrderedSet
-  carry tag bits there (a Small multilist or multiOrderedSet is a bare
-  flex, no header); a multidict slot and a Small multiOrderedSet carry
-  their middle-row offset there. Linux (x86_64 and arm64) and macOS user space give 48-bit
+  carry tag bits there (a Small multilist or multiOrderedSet, and most
+  Small multimaps, are a bare flex with no header); a bare multimap
+  (multidict's small slots are bare multimaps) and a Small multiOrderedSet
+  carry their middle-row offset there. Linux (x86_64 and arm64) and macOS user space give 48-bit
   addresses by default; a kernel with a larger address space hands out
   higher addresses only to a mapping that asks for them, which datakit's
   allocators never do.
@@ -59,8 +60,9 @@ instead of beside them, so a container needs no header object of its own
 - **16-byte aligned** for the low tag bits (every supported allocator
   aligns to at least 16).
 
-Test and debug builds assert the requirement where a multidict slot, a
-multiOrderedSet pointer or a Small multilist pointer is built. These containers need 64-bit pointers; 32-bit targets
+Test and debug builds assert the requirement where a bare multimap (a
+multidict slot included), a multiOrderedSet pointer or a Small multilist
+pointer is built. These containers need 64-bit pointers; 32-bit targets
 build the rest of the library.
 
 ## Feature Detection

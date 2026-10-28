@@ -571,7 +571,7 @@ DK_INLINE_ALWAYS bool multimapSmallIteratorInitAt_(multimapSmall *m,
                                                    bool forward,
                                                    flexEntry *startAt) {
     flex *const map = m->map;
-    iter->mm = m;
+    iter->mm = map; /* the flex: 'm' may be a view on the caller's stack */
     iter->map = map;
     iter->mapIndex = 0; /* irrelevant for multimapSmall */
     iter->forward = forward;

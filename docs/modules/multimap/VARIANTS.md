@@ -15,7 +15,7 @@ can be rewritten after an upgrade.
 
 | Tier       | Container | Submaps     | Per-submap metadata | Promotes when         |
 | ---------- | --------- | ----------- | ------------------- | --------------------- |
-| **Small**  | 16 bytes  | 1 flex      | none                | bytes > limit         |
+| **Small**  | 0 or 16 B | 1 flex      | none                | bytes > limit         |
 | **Medium** | 28 bytes  | 2 flex      | none                | bytes > limit \* 3    |
 | **Full**   | 48 bytes  | N flex      | 8 + 4 + 16 bytes    | never (final tier)    |
 | **Atom**   | wrapper   | 2 multimaps | n/a                 | not a tier; see below |
@@ -30,6 +30,19 @@ points, so a container never flips between tiers at a boundary (see
 MULTIMAP.md, "Automatic Tier Thresholds").
 
 ## multimapSmall
+
+### Bare Small maps (no container)
+
+A Small map that is not a set, does not compress and has rows of one or two
+elements has no struct: its `multimap *` is its flex. The pointer's low two
+bits are 0 (the struct tiers' are 1-3), and its top 16 bits hold the size
+limit (bits 48-51), the row width (bit 52) and the middle row's byte offset
+(bits 53-63). Each call builds the struct below on the stack from the
+pointer and, after a change, stores the flex and middle back. A map whose
+middle offset reaches 2048 moves into the struct form, still Small; entries
+(`multimapEntry`) of a bare map point at a flex slot inside the entry.
+multidict's small slots are bare maps of width 2. Every other Small map
+keeps the struct:
 
 ### Structure
 
@@ -82,7 +95,7 @@ later search.
 
 **Advantages**
 
-- Minimal overhead: 16 bytes of container for the whole structure
+- Minimal overhead: no container for a bare map, else 16 bytes
 - Cache friendly: one contiguous allocation
 - Simplest search: one binary search, no routing step
 

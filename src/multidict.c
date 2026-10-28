@@ -3342,57 +3342,56 @@ void multidictOpRepr(const multidictOp *op) {
  * Multimap-Based Slot Implementation
  * ==================================================================== */
 
-/* A slot holds {key, value} rows.  While it is small it is a bare flex:
- * no multimap header beside it, and no header to load before the rows.
- * Its pointer carries what the header would: the low two bits are 0 (a
- * multimap's are its tier, 1 to 3), and the top 16 bits, which 64-bit
- * user addresses leave clear (ptrlib.h), hold the offset of its middle
- * row.  Each operation views it as a small multimap built on the stack
- * from that pointer, so every row operation is the small multimap's own
- * code, and the view's middle goes back into the pointer after a change.
- * Once it grows past what a small multimap holds it becomes a multimap,
- * which grows its tiers itself.  The table cell holds the slot, and the
- * hooks that may reallocate or replace it take the cell. */
+/* A slot holds {key, value} rows.  While it is small it is a bare
+ * multimap (multimapSmallInternal.h): a flex with no header beside it,
+ * its pointer carrying what a header would (low two bits 0, then in bits
+ * 48-63 the size limit, the row width and the middle row's offset).  The
+ * slot works its rows itself, through a small multimap view built on the
+ * stack from that pointer, so it skips the multimap's dispatch; and since
+ * the layout is the multimap's own, the slot is a multimap too, as the
+ * multimap a grown slot becomes is a slot.  Once it grows past what a
+ * small multimap holds it becomes a multimap, which grows its tiers
+ * itself.  The table cell holds the slot, and the hooks that may
+ * reallocate or replace it take the cell. */
 #define MM_SLOT(slot) ((multimap *)(slot))
 #define MM_SLOT_REF(slot) ((multimap **)(slot))
-#define MM_SLOT_IS_FLEX(slot) (((uintptr_t)(slot) & 3u) == 0)
-#define MM_FLEX_OF(slot)                                                       \
-    ((flex *)((uintptr_t)(slot) & ~(UINT64_C(0xFFFF) << 48)))
-#define MM_FLEX_MIDDLE(slot) ((uint32_t)((uintptr_t)(slot) >> 48))
-static_assert(sizeof(uintptr_t) == 8,
-              "a bare flex slot keeps its middle in pointer bits 48-63");
+#define MM_SLOT_IS_FLEX(slot) MULTIMAP_IS_BARE(slot)
+#define MM_FLEX_OF(slot) multimapBareFlex(slot)
 
-/* The pointer of a bare flex slot: the flex and its middle row's offset */
-DK_INLINE_ALWAYS multidictSlot *mmFlexSlot_(flex *f, const uint32_t middle) {
-    /* The platform's pointer requirement (docs/advanced/PLATFORMS.md:
-     * 48-bit, untagged user pointers): a pointer that broke it would
-     * collide with the middle, so fail loudly here rather than read a
-     * wrong flex later */
-    assert(((uintptr_t)f >> 48) == 0 && middle <= UINT16_MAX);
-    return (multidictSlot *)((uintptr_t)f | ((uintptr_t)middle << 48));
+/* The pointer of a bare flex slot: the flex, its middle row's offset and
+ * its size limit */
+DK_INLINE_ALWAYS multidictSlot *mmFlexSlot_(flex *f, const uint32_t middle,
+                                            const flexCapSizeLimit limit) {
+    return multimapBarePack(f, middle, 2, limit);
 }
 
-/* A new, empty bare flex slot */
+/* A new, empty bare flex slot, at the process default multimap limit
+ * (which it keeps, as a multimap keeps the limit it was made with) */
 DK_INLINE_ALWAYS multidictSlot *mmFlexSlotNew_(void) {
     /* @own: container; free=mmSlotFree */
-    return mmFlexSlot_(flexNew(), FLEX_EMPTY_SIZE);
+    return mmFlexSlot_(flexNew(), FLEX_EMPTY_SIZE,
+                       dkTierDefaultLimit(DK_TIER_MULTIMAP));
 }
 
 /* A bare flex slot as a small multimap of {key, value} rows */
 DK_INLINE_ALWAYS multimapSmall mmFlexView_(multidictSlot *slot) {
-    return (multimapSmall){.map = MM_FLEX_OF(slot),
-                           .middle = MM_FLEX_MIDDLE(slot),
-                           .elementsPerEntry = 2};
+    multimapSmall view = multimapBareView(slot);
+    /* A slot's rows are {key, value}: the constant width lets the row
+     * code fold its per-element loops */
+    assert(view.elementsPerEntry == 2);
+    view.elementsPerEntry = 2;
+    return view;
 }
 
 /* After a change through 'view': the cell holds its (maybe moved) flex
  * and middle, or, past a small multimap's size (or a middle the pointer
  * cannot hold), the multimap its rows become */
 DK_STATIC void mmFlexSettle_(multidictSlot **slot, const multimapSmall *view) {
-    const flexCapSizeLimit limit = dkTierDefaultLimit(DK_TIER_MULTIMAP);
+    /* *slot still holds the slot as it was: its limit is in its bits */
+    const flexCapSizeLimit limit = (flexCapSizeLimit)multimapBareLimit(*slot);
     if (flexBytes(view->map) <= flexOptimizationSizeLimit[limit] &&
-        view->middle <= UINT16_MAX) {
-        *slot = mmFlexSlot_(view->map, view->middle);
+        view->middle < MULTIMAP_BARE_MIDDLE_LIMIT) {
+        *slot = mmFlexSlot_(view->map, view->middle, limit);
         return;
     }
 
@@ -3463,7 +3462,7 @@ DK_STATIC bool mmSlotRemove(multidictClass *, multidictSlot **slot,
         const bool removed =
             take ? multimapSmallDeleteTaking(&view, keybox, removedVal)
                  : multimapSmallDeleteReporting(&view, keybox, removedVal);
-        *slot = mmFlexSlot_(view.map, view.middle);
+        mmFlexSettle_(slot, &view);
         return removed;
     }
 
