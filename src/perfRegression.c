@@ -2231,6 +2231,35 @@ static void benchIdRows(void) {
 /* References read back to their values and nothing else (run by name,
  * for profiling the read path): 100k string atoms, 60 scattered passes
  * over every id (long enough for a sampler that attaches by pid) */
+/* idRows read back by id and nothing else (run by name): 100k rows of
+ * {string, count} under dense ids, 60 scattered passes over every id */
+static void benchIdRowsRead(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    const databox one = {.type = DATABOX_FALSE};
+    cleaner(idRowsFree) idRows *r = idRowsNew(2);
+    uint64_t sink = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const databox v = perfContainerKey(keys, i);
+        const databox *row[2] = {&v, &one};
+        sink += idRowsSet(r, i, row);
+    }
+
+    constexpr uint32_t passes = 60;
+    const double t0 = timeUtilMonotonicSec();
+    for (uint32_t p = 0; p < passes; p++) {
+        for (uint32_t i = 0; i < n; i++) {
+            databox v = {};
+            databox c = {};
+            databox *row[2] = {&v, &c};
+            sink += idRowsGet(r, perfScatter(i), row);
+        }
+    }
+    emitRow("idRowsRead", "getScattered", 0, passes * n,
+            timeUtilMonotonicSec() - t0);
+    perfContainerSink = sink;
+}
+
 static void benchMultimapAtomRead(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -2568,6 +2597,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multimapAtomRead")) {
             benchMultimapAtomRead();
+        }
+
+        if (perfNamed("idRowsRead")) {
+            benchIdRowsRead();
         }
 
         if (perfNamed("multimapRefRead")) {

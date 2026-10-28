@@ -198,17 +198,24 @@ static uint64_t idRowsLowerBound_(const idRows *r, const uint64_t p) {
     return lo;
 }
 
+/* The sparse directory's search, out of line so the dense read stays small
+ * enough to inline into its callers */
+[[gnu::noinline]] static flex **idRowsCellSparse_(const idRows *r,
+                                                  const uint64_t p) {
+    const uint64_t i = idRowsLowerBound_(r, p);
+    return i < r->span && r->pageNo[i] == p ? &r->page[i] : nullptr;
+}
+
 /* The directory entry holding page number 'p', or NULL when it holds
  * no row */
-static flex **idRowsCell_(const idRows *r, const uint64_t p) {
-    if (!r->pageNo) {
+DK_INLINE_ALWAYS flex **idRowsCell_(const idRows *r, const uint64_t p) {
+    if (likely(!r->pageNo)) {
         /* Below 'base' the difference wraps past 'span' */
         const uint64_t i = p - r->base;
         return i < r->span && r->page[i] ? &r->page[i] : nullptr;
     }
 
-    const uint64_t i = idRowsLowerBound_(r, p);
-    return i < r->span && r->pageNo[i] == p ? &r->page[i] : nullptr;
+    return idRowsCellSparse_(r, p);
 }
 
 /* Room for 'entries' directory entries */
@@ -402,8 +409,8 @@ static void idRowsDropPage_(idRows *r, const uint64_t p) {
  * ==================================================================== */
 /* The first entry of the row of 'id', its page in '*pageOut'; NULL when
  * the id is absent */
-static flexEntry *idRowsFind_(const idRows *r, const uint64_t id,
-                              flex **pageOut) {
+DK_INLINE_ALWAYS flexEntry *idRowsFind_(const idRows *r, const uint64_t id,
+                                        flex **pageOut) {
     flex **cell = idRowsCell_(r, id / IDROWS_PAGE);
     if (!cell) {
         return nullptr;
