@@ -250,6 +250,12 @@ static bool atomHashedWalk_(const multimapAtom *ma, const databox *value,
  * (a set's first row with the key 'hash') and read in place along that
  * map.  Rows with the hash that run on past the map's end go to
  * atomHashedWalk_, which crosses maps. */
+/* The atom holding 'value' among the index rows of 'hash', the first of
+ * which is 'found' */
+static bool atomHashedFindFrom_(const multimapAtom *ma, const databox *value,
+                                const databox *hash, const multimapEntry *found,
+                                databox *ref);
+
 static bool atomHashedFind_(const multimapAtom *ma, const databox *value,
                             const databox *hash, databox *ref) {
     multimapEntry row;
@@ -257,6 +263,13 @@ static bool atomHashedFind_(const multimapAtom *ma, const databox *value,
         return false;
     }
 
+    return atomHashedFindFrom_(ma, value, hash, &row, ref);
+}
+
+static bool atomHashedFindFrom_(const multimapAtom *ma, const databox *value,
+                                const databox *hash, const multimapEntry *found,
+                                databox *ref) {
+    const multimapEntry row = *found;
     flexEntry *fe = row.fe;
     while (true) {
         flexEntry *idEntry = flexNext(*row.map, fe);
@@ -490,16 +503,21 @@ static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
     switch (multimapAtomGetIndex(ma)) {
     case MULTIMAP_ATOM_INDEX_HASHED: {
-        /* One hash search; a new atom's rows go in after it */
+        /* One search: a hash no atom has gets its index row where it was
+         * looked for; a present hash's rows are checked for the key, and
+         * a key that only shares its hash adds a row of its own */
         const databox hash = atomHashBox_(key);
-        if (atomHashedFind_(ma, key, &hash, ref)) {
-            return true;
+        const databox idBox = DATABOX_UNSIGNED(id);
+        const databox *row[2] = {&hash, &idBox};
+        multimapEntry first;
+        if (!multimapInsertIfAbsentEntry(&ma->mapAtomReverse, row, &first)) {
+            if (atomHashedFindFrom_(ma, key, &hash, &first, ref)) {
+                return true;
+            }
+            multimapInsertFullWidth(&ma->mapAtomReverse, row);
         }
 
         atomCreateForward_(&create);
-        const databox idBox = DATABOX_UNSIGNED(id);
-        const databox *row[2] = {&hash, &idBox};
-        multimapInsertFullWidth(&ma->mapAtomReverse, row);
         *ref = atomId;
         return false;
     }

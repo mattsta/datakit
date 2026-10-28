@@ -1015,20 +1015,29 @@ DK_STATIC multimapFullIdx multimapFullBinarySearch(const multimapFull *m,
  * map before ends with the key, so the key's FIRST row is addressed and
  * which row a lookup, delete or increment touches never depends on where
  * the maps happen to split. */
+/* Whether a set's rows with 'key' continue from the map before 'idx' (its
+ * last row has the key) */
+DK_INLINE_ALWAYS bool multimapFullKeyContinuesBefore_(
+    const multimapFull *m, const multimapFullIdx idx, const databox *key,
+    const bool useReference, const multimapAtom *referenceContainer) {
+    if (!m->mapIsSet || idx == 0 ||
+        databoxCompare(getRangeBox(m, idx - 1), key) != 0) {
+        return false;
+    }
+    databox last;
+    databoxWide lastWide;
+    multimapGetByTypeInto_(
+        flexIndex(getMap(m, idx - 1), -(int32_t)m->elementsPerEntry), &last,
+        &lastWide, useReference ? referenceContainer : nullptr);
+    return databoxCompare(&last, key) == 0;
+}
+
 DK_INLINE_ALWAYS multimapFullIdx multimapFullKeyMap_(
     const multimapFull *m, const databox *key, const bool useReference,
     const multimapAtom *referenceContainer) {
     multimapFullIdx idx = multimapFullBinarySearch(m, key);
-    while (m->mapIsSet && idx > 0 &&
-           databoxCompare(getRangeBox(m, idx - 1), key) == 0) {
-        databox last;
-        databoxWide lastWide;
-        multimapGetByTypeInto_(
-            flexIndex(getMap(m, idx - 1), -(int32_t)m->elementsPerEntry), &last,
-            &lastWide, useReference ? referenceContainer : nullptr);
-        if (databoxCompare(&last, key) != 0) {
-            break;
-        }
+    while (multimapFullKeyContinuesBefore_(m, idx, key, useReference,
+                                           referenceContainer)) {
         idx--;
     }
     return idx;
@@ -1897,7 +1906,8 @@ bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[],
     if (flexBytes(*mapPtr) <= m->maxSize || flexCount(*mapPtr) == 0) {
         flexEntry *middle = GET_MIDDLE(m, mapIdx, *mapPtr);
         if (!flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
-                mapPtr, m->elementsPerEntry, elements, &middle, &found)) {
+                mapPtr, m->elementsPerEntry, elements, &middle, &found,
+                m->mapIsSet && me)) {
             updateRangeBoxForIdx(m, mapIdx, *mapPtr);
             SET_MIDDLE(m, mapIdx, middle, *mapPtr);
             m->values++;
@@ -1905,18 +1915,21 @@ bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[],
         }
     } else {
         /* A full map splits before the insert: look first, then insert */
-        found = flexFindByTypeSortedWithMiddle(*mapPtr, m->elementsPerEntry,
-                                               elements[0],
-                                               GET_MIDDLE(m, mapIdx, *mapPtr));
+        found = multimapFullFindKeyInMap_(m, *mapPtr,
+                                          GET_MIDDLE(m, mapIdx, *mapPtr),
+                                          elements[0], false, nullptr);
         if (!found) {
             multimapFullInsert_(m, elements, mapIdx, nullptr);
             return true;
         }
     }
 
-    /* Present: the map is unchanged */
+    /* Present: the map is unchanged.  A set's lookup reports the key's
+     * first row, found above within this map; only when the key's rows
+     * start in an earlier map is it looked up there */
     if (me) {
-        if (m->mapIsSet) {
+        if (multimapFullKeyContinuesBefore_(m, mapIdx, elements[0], false,
+                                            nullptr)) {
             multimapFullGetUnderlyingEntry(m, elements[0], me);
         } else {
             me->fe = found;

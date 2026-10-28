@@ -3838,35 +3838,33 @@ DK_STATIC multidictUpdateResult mmSlotUpdate(multidictClass *,
 }
 
 DK_STATIC multidictUpsertResult
-mmSlotUpsert(multidictClass *qdc, multidictSlot **slot, const databox *keybox,
+mmSlotUpsert(multidictClass *, multidictSlot **slot, const databox *keybox,
              const databox *valbox, multidictValueUpdate *update, void *ctx) {
     if (*slot == nullptr) {
         return MULTIDICT_UPSERT_NO_SLOT;
     }
 
-    /* The find comes first: it is the map's own tuned search, so a present
-     * key (the common case) costs what an update does.  An absent key is
-     * inserted into this slot, searched again only within it.  (The
-     * insert-if-absent search is the generic sorted insert: measured 7%
-     * slower for present keys.) */
-    switch (mmSlotUpdate(qdc, slot, keybox, update, ctx)) {
-    case MULTIDICT_UPDATE_REWRITTEN:
-        return MULTIDICT_UPSERT_REWRITTEN;
-    case MULTIDICT_UPDATE_DECLINED:
-        return MULTIDICT_UPSERT_DECLINED;
-    case MULTIDICT_UPDATE_ABSENT:
-        break;
+    /* One search: the row goes in where the key would be, or the key's
+     * row comes back for a rewrite in place (the insert-if-absent search
+     * is the find's own) */
+    const databox *elements[2] = {keybox, valbox};
+    const bool flexSlot = MM_SLOT_IS_FLEX(*slot);
+    multimapSmall view = {};
+    multimapEntry me;
+    if (flexSlot) {
+        view = mmFlexView_(*slot);
+        if (multimapSmallInsertIfAbsent(&view, elements, &me)) {
+            mmFlexSettle_(slot, &view);
+            return MULTIDICT_UPSERT_ADDED;
+        }
+    } else if (multimapInsertIfAbsentEntry(MM_SLOT_REF(slot), elements, &me)) {
+        return MULTIDICT_UPSERT_ADDED;
     }
 
-    const databox *elements[2] = {keybox, valbox};
-    if (MM_SLOT_IS_FLEX(*slot)) {
-        multimapSmall view = mmFlexView_(*slot);
-        (void)multimapSmallInsert(&view, elements);
-        mmFlexSettle_(slot, &view);
-    } else {
-        (void)multimapInsert(MM_SLOT_REF(slot), elements);
-    }
-    return MULTIDICT_UPSERT_ADDED;
+    return mmSlotRewrite_(slot, flexSlot ? &view : nullptr, &me, update, ctx) ==
+                   MULTIDICT_UPDATE_REWRITTEN
+               ? MULTIDICT_UPSERT_REWRITTEN
+               : MULTIDICT_UPSERT_DECLINED;
 }
 
 DK_STATIC void mmSlotClassFree(multidictClass *) {

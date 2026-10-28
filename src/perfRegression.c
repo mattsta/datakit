@@ -672,6 +672,45 @@ static void benchMultidictWrite(void) {
     perfContainerSink = sink;
 }
 
+/* Counters (run by name, for profiling IncrBy): 40 dicts, each with 100k
+ * counters created by IncrBy and then incremented twice over, so new and
+ * present keys both run long enough for a sampler that attaches by pid */
+static void benchMultidictCounters(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multidictDefaultClassFree) multidictClass *qdc =
+        multidictDefaultClassNew();
+    uint64_t sink = 0;
+    constexpr uint32_t passes = 40;
+    double newSecs = 0;
+    double presentSecs = 0;
+    for (uint32_t p = 0; p < passes; p++) {
+        cleaner(multidictFree) multidict *d =
+            multidictNew(&multidictTypeExactKey, qdc, 7);
+        double t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            int64_t out = 0;
+            sink += multidictIncrBy(d, &k, 1, &out);
+        }
+        newSecs += timeUtilMonotonicSec() - t0;
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t r = 0; r < 2; r++) {
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, perfScatter(i));
+                int64_t out = 0;
+                sink += multidictIncrBy(d, &k, 1, &out);
+            }
+        }
+        presentSecs += timeUtilMonotonicSec() - t0;
+    }
+
+    emitRow("multidictCounters", "incrByNew", 0, passes * n, newSecs);
+    emitRow("multidictCounters", "incrByPresent", 0, 2 * passes * n,
+            presentSecs);
+    perfContainerSink = sink;
+}
+
 static void benchMultidict(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -2974,6 +3013,9 @@ int perfRegressionTest(int, char *[]) {
             benchMultiOrderedSetWrite();
         }
 
+        if (perfNamed("multidictCounters")) {
+            benchMultidictCounters();
+        }
         if (perfNamed("multidictWrite")) {
             benchMultidictWrite();
         }

@@ -4905,6 +4905,27 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReference_(
         compareElementDepth, true, referenceContainer, false);
 }
 
+/* The two searches above, a match reported at the first row with the key
+ * (a set's rows can share one) */
+DK_STATIC flexEntry *flexFindPositionByTypeSortedDirectLowest_(
+    const flex *const f, const uint_fast32_t elementsPerEntry,
+    const databox **compareAgainst, bool *const found,
+    const flexEntry *startMiddle, const uint_fast32_t compareElementDepth) {
+    return abstractFindPositionByTypeSortedDirect(
+        f, elementsPerEntry, compareAgainst, found, startMiddle,
+        compareElementDepth, false, nullptr, true);
+}
+
+DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReferenceLowest_(
+    const flex *const f, const uint_fast32_t elementsPerEntry,
+    const databox **compareAgainst, bool *const found,
+    const flexEntry *startMiddle, const uint_fast32_t compareElementDepth,
+    const multimapAtom *referenceContainer) {
+    return abstractFindPositionByTypeSortedDirect(
+        f, elementsPerEntry, compareAgainst, found, startMiddle,
+        compareElementDepth, true, referenceContainer, true);
+}
+
 flexEntry *flexFindByTypeSortedWithMiddleLowest(
     const flex *const f, const uint_fast32_t elementsPerEntry,
     const databox *compareAgainst, const flexEntry *middleFE) {
@@ -4994,8 +5015,10 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     const bool newKeysBecomeShared, void **keyAsAllocation,
     const bool keepFound, databox *const replacedOut,
     flexEntry **const foundOut, flexWhenAbsent *const whenAbsent,
-    void *const whenAbsentCtx) {
-    /* When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
+    void *const whenAbsentCtx, const bool foundLowest) {
+    /* 'foundLowest': a key found is reported at its first row (a set's
+     * rows can share a key), so a caller needs no second search for it.
+     * When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
      * that receive the value entries a replace overwrites, in tuple order.
      * A call that does not replace (new key, full-width insert, set dedupe
      * hit, key-only map) reports VOID in every slot.  The slots may alias
@@ -5029,12 +5052,20 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
 
     flexEntry *fe = nullptr;
     if (useReference) {
-        fe = flexFindPositionByTypeSortedWithReference_(
-            *ff, elementsPerEntry, box, &found, mid, maxSubElementsToCompare,
-            referenceContainer);
+        fe = foundLowest ? flexFindPositionByTypeSortedWithReferenceLowest_(
+                               *ff, elementsPerEntry, box, &found, mid,
+                               maxSubElementsToCompare, referenceContainer)
+                         : flexFindPositionByTypeSortedWithReference_(
+                               *ff, elementsPerEntry, box, &found, mid,
+                               maxSubElementsToCompare, referenceContainer);
     } else {
-        fe = flexFindPositionByTypeSortedDirect_(
-            *ff, elementsPerEntry, box, &found, mid, maxSubElementsToCompare);
+        fe = foundLowest
+                 ? flexFindPositionByTypeSortedDirectLowest_(
+                       *ff, elementsPerEntry, box, &found, mid,
+                       maxSubElementsToCompare)
+                 : flexFindPositionByTypeSortedDirect_(*ff, elementsPerEntry,
+                                                       box, &found, mid,
+                                                       maxSubElementsToCompare);
     }
 
     /* 'keepFound': a found entry is reported found WITHOUT touching the
@@ -5280,7 +5311,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
         useReference, referenceContainer, useSurrogateKeyForInsert,
         surrogateKey, newKeysBecomeShared, keyAsAllocation, keepFound,
-        replacedOut, nullptr, nullptr, nullptr);
+        replacedOut, nullptr, nullptr, nullptr, false);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
@@ -5321,10 +5352,16 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
 bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
     flex **const ff, const uint_fast32_t elementsPerEntry,
     const databox **const box, flexEntry **const middleEntry,
-    flexEntry **const foundEntry) {
-    return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
-        ff, elementsPerEntry, box, middleEntry, true, false, nullptr, false,
-        nullptr, false, nullptr, true, nullptr, foundEntry, nullptr, nullptr);
+    flexEntry **const foundEntry, const bool foundLowest) {
+    return foundLowest
+               ? abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+                     ff, elementsPerEntry, box, middleEntry, true, false,
+                     nullptr, false, nullptr, false, nullptr, true, nullptr,
+                     foundEntry, nullptr, nullptr, true)
+               : abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+                     ff, elementsPerEntry, box, middleEntry, true, false,
+                     nullptr, false, nullptr, false, nullptr, true, nullptr,
+                     foundEntry, nullptr, nullptr, false);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -5396,7 +5433,7 @@ bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
     return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         ff, elementsPerEntry, box, middleEntry, true, true, referenceContainer,
         true, boxInsertKey, false, nullptr, true, nullptr, foundEntry,
-        whenAbsent, whenAbsentCtx);
+        whenAbsent, whenAbsentCtx, false);
 }
 
 void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,

@@ -4729,6 +4729,57 @@ int multimapTest(int, char *[]) {
         err += multimapDeleteEntrySweep_();
     }
 
+    TEST("a set's insert-if-absent hands back the row its lookup finds, "
+         "in every tier") {
+        /* Sets of 40 keys holding 1..61 rows each under a small node
+         * limit, so they reach Medium and Full and some keys' rows span
+         * sub-maps: offering any key again inserts nothing and names the
+         * very row GetUnderlyingEntry finds (the key's first) */
+        bool sawType[MULTIMAP_TYPE_FULL + 1] = {false};
+        const int64_t rowsPerKey[] = {1, 7, 61};
+        for (size_t s = 0; s < countof(rowsPerKey); s++) {
+            cleaner(multimapFree) multimap *set =
+                multimapNewConfigure(2, true, false, FLEX_CAP_LEVEL_512);
+            for (int64_t k = 0; k < 40; k++) {
+                for (int64_t r = 0; r < rowsPerKey[s]; r++) {
+                    const databox key = databoxNewSigned(k);
+                    const databox val = databoxNewSigned(r);
+                    const databox *row[2] = {&key, &val};
+                    multimapInsertFullWidth(&set, row);
+                }
+            }
+            sawType[multimapGetType(set)] = true;
+            const size_t before = multimapCount(set);
+            for (int64_t k = 0; k < 40; k++) {
+                const databox key = databoxNewSigned(k);
+                const databox other = databoxNewSigned(-1);
+                const databox *offered[2] = {&key, &other};
+                multimapEntry viaInsert = {};
+                multimapEntry viaLookup = {};
+                const bool inserted =
+                    multimapInsertIfAbsentEntry(&set, offered, &viaInsert);
+                const bool found =
+                    multimapGetUnderlyingEntry(set, &key, &viaLookup);
+                if (inserted || !found || viaInsert.fe != viaLookup.fe ||
+                    viaInsert.mapIdx != viaLookup.mapIdx ||
+                    *viaInsert.map != *viaLookup.map) {
+                    ERR("%" PRId64 " rows a key, key %" PRId64
+                        ": inserted %d, entry %s the lookup's",
+                        rowsPerKey[s], k, inserted,
+                        viaInsert.fe == viaLookup.fe ? "map differs from"
+                                                     : "differs from");
+                }
+            }
+            if (multimapCount(set) != before) {
+                ERR("offering present keys changed the set's count");
+            }
+            multimapVerify(set);
+        }
+        if (!sawType[MULTIMAP_TYPE_FULL]) {
+            ERR("the sweep never reached a Full set");
+        }
+    }
+
     TEST("multimapProcessPredicate: every condition below, at and above") {
         static const multimapCondition conds[] = {
             MULTIMAP_CONDITION_ALL,

@@ -251,9 +251,12 @@ bool multimapMediumInsertIfAbsent(multimapMedium *m, const databox *elements[],
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
     flexEntry *found = nullptr;
     if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
-            &m->map[mapIdx], m->elementsPerEntry, elements, &middle, &found)) {
+            &m->map[mapIdx], m->elementsPerEntry, elements, &middle, &found,
+            m->mapIsSet && me)) {
         if (me) {
-            if (m->mapIsSet) {
+            if (m->mapIsSet && mapIdx > 0) {
+                /* The key's rows may start in the map before: the lookup
+                 * reports a set's first row */
                 multimapMediumGetUnderlyingEntry(m, elements[0], me);
             } else {
                 me->fe = found;

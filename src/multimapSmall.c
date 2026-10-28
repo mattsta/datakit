@@ -120,15 +120,14 @@ bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[],
                                  multimapEntry *me) {
     flexEntry *middle = GET_MIDDLE(m);
     flexEntry *found = nullptr;
+    /* A set's present key comes back at its first row, as its lookups
+     * report it: no second search */
     if (flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
-            &m->map, m->elementsPerEntry, elements, &middle, &found)) {
+            &m->map, m->elementsPerEntry, elements, &middle, &found,
+            m->mapIsSet && me)) {
         if (me) {
-            if (m->mapIsSet) {
-                multimapSmallGetUnderlyingEntry(m, elements[0], me);
-            } else {
-                me->fe = found;
-                me->map = &m->map;
-            }
+            me->fe = found;
+            me->map = &m->map;
         }
         return false;
     }
