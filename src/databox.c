@@ -1,5 +1,6 @@
 #include "databox.h"
 #include "dkDiag.h"
+#include "dkEndian.h" /* dkLoadLe64: the byte compare's word steps */
 #include "dkRandom.h" /* dkSplitmix64Mix */
 #include "floatExtended.h"
 #include "str.h"
@@ -519,9 +520,54 @@ DK_INLINE_ALWAYS int databoxCompareBytes_(const uint8_t *aBytes,
      * Run-length-first comparison is transitive: digit runs of
      * different length are ordered by length alone, runs of the
      * same length fall back to memcmp.  Non-digit positions are
-     * pure byte comparison, which is trivially transitive. */
-    size_t ai = 0;
-    size_t bi = 0;
+     * pure byte comparison, which is trivially transitive.
+     *
+     * The walk below keeps both positions equal (runs that continue it
+     * have equal lengths), so it starts at the first differing byte 'p':
+     * everything before p is identical in both and decides nothing,
+     * except a digit run that p falls inside.  That run's total lengths
+     * differ exactly when the digit tails from p differ (the run's part
+     * before p is shared), and with equal tails its memcmp decides at p,
+     * where the walk below arrives at once. */
+    const size_t shared = aLen < bLen ? aLen : bLen;
+    size_t p = 0;
+    while (p + sizeof(uint64_t) <= shared) {
+        const uint64_t diff = dkLoadLe64(aBytes + p) ^ dkLoadLe64(bBytes + p);
+        if (diff) {
+            p += stdc_trailing_zeros(diff) / 8;
+            break;
+        }
+        p += sizeof(uint64_t);
+    }
+
+    /* The bytes past the last whole word (none after a break: p differs) */
+    while (p < shared && aBytes[p] == bBytes[p]) {
+        p++;
+    }
+
+    if (p > 0 && StrIsdigit(aBytes[p - 1])) {
+        size_t aTail = 0;
+        while (p + aTail < aLen && StrIsdigit(aBytes[p + aTail])) {
+            aTail++;
+        }
+
+        size_t bTail = 0;
+        while (p + bTail < bLen && StrIsdigit(bBytes[p + bTail])) {
+            bTail++;
+        }
+
+        if (aTail != bTail) {
+            return aTail < bTail ? -1 : 1;
+        }
+
+        if (aTail) {
+            /* Equal-length runs differing first at p */
+            return aBytes[p] < bBytes[p] ? -1 : 1;
+        }
+    }
+
+    size_t ai = p;
+    size_t bi = p;
     while (ai < aLen && bi < bLen) {
         const uint_fast8_t aa = aBytes[ai];
         const uint_fast8_t bb = bBytes[bi];
@@ -1267,6 +1313,48 @@ void databoxRepr(const databox *const box) {
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/* The natural byte order, token by token: a token is a digit run or one
+ * other byte.  Two runs order by length, then by their bytes; any other
+ * pair of tokens by its first byte; when one string runs out of tokens
+ * first it is the smaller.  Returns -1, 0 or 1. */
+static size_t dbTestToken_(const uint8_t *s, size_t len, size_t at) {
+    size_t end = at;
+    while (end < len && s[end] >= '0' && s[end] <= '9') {
+        end++;
+    }
+
+    return end > at ? end - at : 1;
+}
+
+static int dbTestNaturalOracle_(const uint8_t *a, size_t aLen, const uint8_t *b,
+                                size_t bLen) {
+    size_t i = 0;
+    size_t j = 0;
+    while (i < aLen && j < bLen) {
+        const size_t at = dbTestToken_(a, aLen, i);
+        const size_t bt = dbTestToken_(b, bLen, j);
+        const bool aRun = a[i] >= '0' && a[i] <= '9';
+        const bool bRun = b[j] >= '0' && b[j] <= '9';
+        if (aRun && bRun) {
+            if (at != bt) {
+                return at < bt ? -1 : 1;
+            }
+
+            const int bytes = memcmp(a + i, b + j, at);
+            if (bytes) {
+                return bytes < 0 ? -1 : 1;
+            }
+        } else if (a[i] != b[j]) {
+            return a[i] < b[j] ? -1 : 1;
+        }
+
+        i += aRun && bRun ? at : 1;
+        j += aRun && bRun ? bt : 1;
+    }
+
+    return (i < aLen) - (j < bLen);
+}
 
 /* Run databoxCompare(a, b) in a child and report whether the child
  * aborted.  The child turns SIGABRT into a distinct exit status, which
@@ -2381,6 +2469,47 @@ int databoxTest(int, char *[]) {
                 printf("sort produced non-monotonic: idx %zu '%s' > %zu '%s'\n",
                        i - 1, buf[i - 1], i, buf[i]);
                 ERR("natural sort produces non-monotonic ordering");
+            }
+        }
+    }
+
+    TEST("natural sort agrees with a token-by-token oracle") {
+        /* Pairs sharing a prefix of every length (so the first
+         * difference falls before, inside and after digit runs and word
+         * boundaries), over bytes at the digit range's edges, compared
+         * with an oracle that splits each string into tokens (a digit
+         * run, or one other byte) and orders runs by length then
+         * bytes */
+        static const uint8_t alphabet[] = {'0', '1', '5',  '9',  '/', ':',
+                                           'a', 'z', 0x00, 0x7F, 0xFF};
+        uint64_t rng = 0xB17E5;
+        uint8_t a[48];
+        uint8_t b[48];
+        for (int pair = 0; pair < 60000; pair++) {
+            const size_t aLen = dkSplitmix64Bounded(&rng, sizeof(a) + 1);
+            for (size_t i = 0; i < aLen; i++) {
+                a[i] = alphabet[dkSplitmix64Bounded(&rng, countof(alphabet))];
+            }
+
+            const size_t keep = dkSplitmix64Bounded(&rng, aLen + 1);
+            const size_t bLen =
+                keep + dkSplitmix64Bounded(&rng, sizeof(b) - keep + 1);
+            memcpy(b, a, keep);
+            for (size_t i = keep; i < bLen; i++) {
+                b[i] = alphabet[dkSplitmix64Bounded(&rng, countof(alphabet))];
+            }
+
+            const int want = dbTestNaturalOracle_(a, aLen, b, bLen);
+            const databox x = databoxNewBytes(a, aLen);
+            const databox y = databoxNewBytes(b, bLen);
+            const int got = databoxCompare(&x, &y);
+            const int back = databoxCompare(&y, &x);
+            if ((got > 0) - (got < 0) != want ||
+                (back > 0) - (back < 0) != -want) {
+                ERR("pair %d (lengths %zu/%zu, %zu shared): compared %d and "
+                    "%d, oracle %d",
+                    pair, aLen, bLen, keep, got, back, want);
+                break;
             }
         }
     }
