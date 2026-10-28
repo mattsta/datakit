@@ -2,14 +2,16 @@
 
 Usage::
 
-    dktools perfcompare NAME --base REV [--modules M[,M...]] [--runs N]
-        [--tolerance PCT] [--spread] [--bench-path PATH ...] [--compiler C]
-        [--root DIR] [-j N]
+    dktools perfcompare NAME --base REV [--current REV] [--modules M[,M...]]
+        [--runs N] [--tolerance PCT] [--spread] [--bench-path PATH ...]
+        [--compiler C] [--root DIR] [-j N]
 
 Two trees are built under ``ROOT/perfcompare/NAME``:
 
 - ``current``: HEAD plus every changed tracked path (as ``verify
-  --all-changed``; plain HEAD when nothing changed);
+  --all-changed``; plain HEAD when nothing changed), or with
+  ``--current REV`` that revision plus the benchmark sources, so two
+  commits are timed apart from whatever else the working tree holds;
 - ``base``: REV with the benchmark sources (``--bench-path``, default
   ``src/perfRegression.c`` and ``src/perfRegression.h``) taken from the
   working tree, so both builds time the same benchmark code.
@@ -65,6 +67,9 @@ class PerfCompareOptions:
     current_defines: tuple[str, ...] = ()
     #: print each row's lowest-highest run per side beside the medians
     spread: bool = False
+    #: a revision for the current side (plus the benchmark sources) in
+    #: place of HEAD and the working tree
+    current: str | None = None
 
 
 def perf_preset(compiler: toolchain.Compiler) -> str | None:
@@ -189,6 +194,18 @@ def build_side(side: Side, work: Path, size: procs.Sizing) -> steps.Step:
     )
 
 
+def current_label(
+    opts: PerfCompareOptions,
+    commit: str | None,
+    tree: str,
+    bench: list[tuple[str, None]],
+) -> str:
+    """What the current side was built from, for the result header"""
+    if commit is None:
+        return f"HEAD + working tree ({tree[:10]})"
+    return f"{opts.current} ({commit[:10]}) + {', '.join(p for p, _ in bench)}"
+
+
 def run(repo: Path, opts: PerfCompareOptions) -> int:
     """Run the comparison; return the exit code (ToolError: input)."""
     name = gitutil.check_name(opts.name)
@@ -207,11 +224,17 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
     size = procs.sizing(opts.jobs)
 
     base_commit = gitutil.resolve_commit(repo, opts.base)
+    current_commit = (
+        gitutil.resolve_commit(repo, opts.current) if opts.current is not None else None
+    )
     with tempfile.TemporaryDirectory(prefix="dktools-perfcompare-") as tmp:
         index = Path(tmp) / "index"
-        current_tree = gitutil.build_tree(
-            repo, index, [(p, None) for p in gitutil.changed_paths(repo)]
-        )
+        if current_commit is None:
+            current_tree = gitutil.build_tree(
+                repo, index, [(p, None) for p in gitutil.changed_paths(repo)]
+            )
+        else:
+            current_tree = gitutil.build_tree(repo, index, bench, base=current_commit)
         base_tree = gitutil.build_tree(repo, index, bench, base=base_commit)
     config.compiler.check()
 
@@ -273,7 +296,7 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
     header = [
         f"perfcompare {name}: {verdict}",
         f"  base      {opts.base} ({base_commit[:10]}) + {', '.join(p for p, _ in bench)}",
-        f"  current   HEAD + working tree ({current_tree[:10]})",
+        f"  current   {current_label(opts, current_commit, current_tree, bench)}",
         f"  config    {config.label}, {opts.runs} runs each, medians of ns/op"
         + (f", modules {modules}" if modules else ""),
     ]

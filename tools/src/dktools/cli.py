@@ -653,6 +653,13 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("name", help="work-dir name under ROOT/perfcompare")
     pc.add_argument("--base", required=True, help="base revision")
     pc.add_argument(
+        "--current",
+        default=None,
+        metavar="REV",
+        help="time this revision (plus the benchmark sources) as the current "
+        "side instead of HEAD and the working tree",
+    )
+    pc.add_argument(
         "--current-define",
         action="append",
         default=[],
@@ -1097,6 +1104,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 jobs=args.jobs,
                 current_defines=tuple(args.current_define),
                 spread=args.spread,
+                current=args.current,
             ),
         )
 

@@ -126,9 +126,25 @@ class Refusals(unittest.TestCase):
             {"name": "../escape"},
             {"bench_paths": ["/abs/path.c"]},
             {"current_defines": ("NoValue",)},
+            {"current": "no-such-revision-anywhere"},
         ):
             with self.assertRaises(ToolError, msg=str(kw)):
                 perfcompare.run(repo, self.options(**kw))
+
+
+class CurrentLabel(unittest.TestCase):
+    def test_working_tree_or_revision_with_bench_paths(self) -> None:
+        bench: list[tuple[str, None]] = [("src/perfRegression.c", None)]
+        opts = perfcompare.PerfCompareOptions(name="t", base="HEAD~1")
+        self.assertEqual(
+            perfcompare.current_label(opts, None, "abcdef0123456789", bench),
+            "HEAD + working tree (abcdef0123)",
+        )
+        opts.current = "HEAD"
+        self.assertEqual(
+            perfcompare.current_label(opts, "0123456789abcdef", "ffff", bench),
+            "HEAD (0123456789) + src/perfRegression.c",
+        )
 
 
 if __name__ == "__main__":

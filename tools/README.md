@@ -1069,13 +1069,15 @@ Builds a base revision and the working tree side by side and times them
 on the same perfRegression benchmarks:
 
 ```sh
-uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
-    [--runs N] [--tolerance PCT] [--spread] [--bench-path PATH ...] \
-    [--compiler clang22|gcc15] [--root DIR] [-j N]
+uv run dktools perfcompare NAME --base REV [--current REV] \
+    [--modules M[,M...]] [--runs N] [--tolerance PCT] [--spread] \
+    [--bench-path PATH ...] [--compiler clang22|gcc15] [--root DIR] [-j N]
 ```
 
 - `current` is HEAD plus every changed tracked path (as `verify
---all-changed`); `base` is REV with the benchmark sources
+--all-changed`), or with `--current REV` that revision plus the
+  benchmark sources: a commit timed against its parent while the working
+  tree holds the next change. `base` is REV with the benchmark sources
   (`--bench-path`, default `src/perfRegression.c` and `.h`) taken from
   the working tree, so a benchmark added for the change also times the
   base. Both build only `datakit-test`, with the perf preset (gcc15:
