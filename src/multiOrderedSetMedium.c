@@ -165,9 +165,8 @@ multiOrderedSetMedium *multiOrderedSetMediumNew(void) {
     return m;
 }
 
-multiOrderedSetMedium *
-multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
-                                  uint32_t middle) {
+multiOrderedSetMedium *multiOrderedSetMediumNewFromSmall(flex *map,
+                                                         uint32_t middle) {
     /* @own: caller; free=multiOrderedSetMediumFree */
     multiOrderedSetMedium *m = zcalloc(1, sizeof(*m));
 
@@ -231,9 +230,6 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
         /* Free the original map */
         flexFree(map);
     }
-
-    /* Free the small struct (but not the map we already handled) */
-    zfree(small);
 
     return m;
 }

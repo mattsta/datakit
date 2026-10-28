@@ -77,21 +77,21 @@ Each family grows at one point and shrinks well below it, so a container
 never flips tiers at a boundary (one insert after a shrink never grows it
 back).
 
-| family          | grows                                                               | deletes move it down                                                                                | deletes merge neighbours when the pair fits in  |
-| --------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| multimap        | Small -> Medium past L; Medium -> Full past 3L                      | Full with 3 inner maps or fewer -> Medium at 1.5L or less (Small at L/2); Medium -> Small at L/2    | one inner map                                   |
-| multiOrderedSet | same                                                                | same                                                                                                | half a sub-map                                  |
-| multilist       | same                                                                | same (pops and range deletes)                                                                       | half a node (uncompressed pairs, range deletes) |
-| multiarray      | Small -> Medium at rowMax elements; Medium -> Large at rowMax nodes | Large -> Medium at rowMax/2 nodes or fewer; Medium -> Small at rowMax/2 elements in at most 2 nodes | half a node                                     |
-| intset          | by value width (16 -> 32 -> 64 bit) and count/byte caps             | never (one wide add would move it straight back)                                                    | (one array per width)                           |
+| family          | grows                                                                 | deletes move it down                                                                                                    | deletes merge neighbours when the pair fits in  |
+| --------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| multimap        | Small -> Medium past L; Medium -> Full past 3L                        | Full with 3 inner maps or fewer -> Medium at 1.5L or less (Small at L/2); Medium -> Small at L/2                        | one inner map                                   |
+| multiOrderedSet | same; also Small -> Medium at an add once the middle row is past 2 KB | same, but Small only at 2 KB or less (a Small set is a bare flex; its pointer holds the middle row's offset in 11 bits) | half a sub-map                                  |
+| multilist       | same                                                                  | same (pops and range deletes)                                                                                           | half a node (uncompressed pairs, range deletes) |
+| multiarray      | Small -> Medium at rowMax elements; Medium -> Large at rowMax nodes   | Large -> Medium at rowMax/2 nodes or fewer; Medium -> Small at rowMax/2 elements in at most 2 nodes                     | half a node                                     |
+| intset          | by value width (16 -> 32 -> 64 bit) and count/byte caps               | never (one wide add would move it straight back)                                                                        | (one array per width)                           |
 
 ## Compact
 
 Deletes keep containers reasonably dense without thrashing; `Compact` is
 the explicit call for the densest layout. Every unit fills to the limit
 (every one but the last within one row of it), then the container moves to
-the smallest tier that holds its data without growing: Small at L or less,
-Medium at 3L or less (multiarray: the tier `multiarrayNewFromArray` would
+the smallest tier that holds its data without growing: Small at L or less
+(multiOrderedSet: at L or 2 KB, whichever is less), Medium at 3L or less (multiarray: the tier `multiarrayNewFromArray` would
 choose; intset: the narrowest width tier its values allow). Data and order
 never change and the unit count never grows; multilist also keeps its old
 layout when a repack of compressed nodes would come out larger. It costs

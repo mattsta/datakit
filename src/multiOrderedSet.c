@@ -36,110 +36,156 @@ static inline double mosDataboxToDouble(const databox *box) {
 #define PTRLIB_BITS_LOW 2
 #define PTRLIB_BITS_HIGH 16
 #include "ptrlib.h"
-#include "ptrlibCompress.h"
 
+/* A set's pointer: the tier in bits 0-1, and in bits 48-63 (the
+ * platform's pointer requirement, docs/advanced/PLATFORMS.md: 48-bit,
+ * untagged user pointers) the size limit (4 bits), the compress flag
+ * (1 bit) and, for a Small set, its middle row's byte offset (11 bits).
+ * A Small set has no header: its pointer is its flex.  A middle the 11
+ * bits cannot hold is stored as MOS_MIDDLE_UNKNOWN and found again by
+ * the next call; a Small set whose middle passes them moves up to
+ * Medium at its next add, and a set moves down to Small only at sizes
+ * whose middle fits (MOS_SMALL_BYTES_MAX). */
 #define mosType_(mos) ((multiOrderedSetType)_PTRLIB_TYPE(mos))
 #define MOS_USE_(mos) _PTRLIB_TOP_USE_ALL(mos)
-#define MOS_TAG_(mos, type) ((multiOrderedSet *)_PTRLIB_TAG(mos, type))
 
-#define moss(m) ((multiOrderedSetSmall *)MOS_USE_(m))
+static constexpr uint32_t MOS_META_SHIFT = 48;
+static constexpr uint32_t MOS_META_BITS = 5; /* limit (4) + compress (1) */
+static constexpr uint32_t MOS_MIDDLE_SHIFT = MOS_META_SHIFT + MOS_META_BITS;
+static constexpr uint32_t MOS_MIDDLE_UNKNOWN =
+    (1u << (64 - MOS_MIDDLE_SHIFT)) - 1;
+/* A flex of at most this many bytes has its middle row below
+ * MOS_MIDDLE_UNKNOWN */
+static constexpr size_t MOS_SMALL_BYTES_MAX = MOS_MIDDLE_UNKNOWN;
+static_assert(MOS_MIDDLE_SHIFT == 53 && sizeof(uintptr_t) == 8,
+              "the Small middle takes pointer bits 53-63");
+static_assert(FLEX_CAP_LEVEL_65536 < 16, "a size limit takes 4 bits");
+
+#define MOS_LIMIT_(m) ((uint32_t)(((uintptr_t)(m) >> MOS_META_SHIFT) & 0xF))
+#define MOS_COMPRESS_(m)                                                       \
+    ((uint32_t)(((uintptr_t)(m) >> (MOS_META_SHIFT + 4)) & 1))
+#define MOS_META_(m)                                                           \
+    ((uint32_t)(((uintptr_t)(m) >> MOS_META_SHIFT) &                           \
+                ((1u << MOS_META_BITS) - 1)))
+#define MOS_MIDDLE_(m) ((uint32_t)((uintptr_t)(m) >> MOS_MIDDLE_SHIFT))
+
+/* The meta bits of a set of 'limit' that does ('compress') or does not
+ * compress */
+DK_INLINE_ALWAYS uint32_t mosMetaOf_(const uint32_t compress,
+                                     const uint32_t limit) {
+    assert(compress <= 1 && limit < 16);
+    return limit | (compress << 4);
+}
+
+/* The pointer of tier 'type' at 'body', with 'meta' and (Small only)
+ * 'middle' */
+DK_INLINE_ALWAYS multiOrderedSet *mosPack_(const void *body,
+                                           const multiOrderedSetType type,
+                                           const uint32_t meta,
+                                           const uint32_t middle) {
+    assert(((uintptr_t)body >> MOS_META_SHIFT) == 0 &&
+           ((uintptr_t)body & 3u) == 0);
+    const uint32_t stored =
+        middle < MOS_MIDDLE_UNKNOWN ? middle : MOS_MIDDLE_UNKNOWN;
+    return (multiOrderedSet *)((uintptr_t)body | type |
+                               ((uintptr_t)meta << MOS_META_SHIFT) |
+                               ((uintptr_t)stored << MOS_MIDDLE_SHIFT));
+}
+
+/* The middle row's offset of the rows 'map' */
+DK_INLINE_ALWAYS uint32_t mosMiddleOf_(const flex *map) {
+    return flexCount(map)
+               ? (uint32_t)(flexMiddle(map, MOS_ELEMENTS_PER_ENTRY) - map)
+               : FLEX_EMPTY_SIZE;
+}
+
+/* A Small set's view: its flex and middle, from its pointer */
+DK_INLINE_ALWAYS multiOrderedSetSmall mosSmallView_(const multiOrderedSet *m) {
+    flex *map = MOS_USE_(m);
+    const uint32_t middle = MOS_MIDDLE_(m);
+    return (multiOrderedSetSmall){
+        .map = map,
+        .middle = middle != MOS_MIDDLE_UNKNOWN ? middle : mosMiddleOf_(map)};
+}
+
+/* The pointer of a Small set after a change through 'view' */
+DK_INLINE_ALWAYS multiOrderedSet *
+mosSmallSettle_(const multiOrderedSetSmall *view, const multiOrderedSet *was) {
+    return mosPack_(view->map, MOS_TYPE_SMALL, MOS_META_(was), view->middle);
+}
+
 #define mosm(m) ((multiOrderedSetMedium *)MOS_USE_(m))
 #define mosf(m) ((multiOrderedSetFull *)MOS_USE_(m))
 
 /* ====================================================================
  * Computed Goto Dispatch Macros
- * ==================================================================== */
+ * ====================================================================
+ * MOS_ reads: the Small arm calls through a view of the pointer.
+ * MOS_UPDATE_ may change the rows: the Small arm packs the view back
+ * into 'm' (an lvalue) after the call. */
 #define MOS_USE_COMPUTED_GOTO_JUMPING 1
 
+#define MOS_SMALL_READ_(ret, m, func, ...)                                     \
+    {                                                                          \
+        multiOrderedSetSmall v_ = mosSmallView_(m);                            \
+        ret multiOrderedSetSmall##func(&v_ __VA_OPT__(, ) __VA_ARGS__);        \
+    }
+#define MOS_SMALL_UPDATE_(ret, m, func, ...)                                   \
+    {                                                                          \
+        multiOrderedSetSmall v_ = mosSmallView_(m);                            \
+        ret multiOrderedSetSmall##func(&v_ __VA_OPT__(, ) __VA_ARGS__);        \
+        (m) = mosSmallSettle_(&v_, (m));                                       \
+    }
+
 #if MOS_USE_COMPUTED_GOTO_JUMPING
-#define MOS_SETUP_LABELS(m)                                                    \
-    __label__ mosSmall;                                                        \
-    __label__ mosMedium;                                                       \
-    __label__ mosFull;                                                         \
-    static const void **jumper[4] = {nullptr, &&mosSmall, &&mosMedium,         \
-                                     &&mosFull};                               \
-    goto *jumper[mosType_(m)]
-#endif
-
-#if !MOS_USE_COMPUTED_GOTO_JUMPING
-#define MOS_(ret, m, func, ...)                                                \
+#define MOS_DISPATCH_(small, ret, m, func, ...)                                \
+    do {                                                                       \
+        __label__ mosSmall;                                                    \
+        __label__ mosMedium;                                                   \
+        __label__ mosFull;                                                     \
+        static const void **jumper[4] = {nullptr, &&mosSmall, &&mosMedium,     \
+                                         &&mosFull};                           \
+        goto *jumper[mosType_(m)];                                             \
+        do {                                                                   \
+        mosSmall:                                                              \
+            small(ret, m, func __VA_OPT__(, ) __VA_ARGS__);                    \
+            break;                                                             \
+        mosMedium:                                                             \
+            ret multiOrderedSetMedium##func(mosm(m) __VA_OPT__(, )             \
+                                                __VA_ARGS__);                  \
+            break;                                                             \
+        mosFull:                                                               \
+            ret multiOrderedSetFull##func(mosf(m) __VA_OPT__(, ) __VA_ARGS__); \
+            break;                                                             \
+        } while (0);                                                           \
+    } while (0)
+#else
+#define MOS_DISPATCH_(small, ret, m, func, ...)                                \
     do {                                                                       \
         switch (mosType_(m)) {                                                 \
         case MOS_TYPE_SMALL:                                                   \
-            ret multiOrderedSetSmall##func(moss(m), __VA_ARGS__);              \
+            small(ret, m, func __VA_OPT__(, ) __VA_ARGS__);                    \
             break;                                                             \
         case MOS_TYPE_MEDIUM:                                                  \
-            ret multiOrderedSetMedium##func(mosm(m), __VA_ARGS__);             \
+            ret multiOrderedSetMedium##func(mosm(m) __VA_OPT__(, )             \
+                                                __VA_ARGS__);                  \
             break;                                                             \
         case MOS_TYPE_FULL:                                                    \
-            ret multiOrderedSetFull##func(mosf(m), __VA_ARGS__);               \
+            ret multiOrderedSetFull##func(mosf(m) __VA_OPT__(, ) __VA_ARGS__); \
             break;                                                             \
         default:                                                               \
             assert(false);                                                     \
             unreachable();                                                     \
         }                                                                      \
     } while (0)
-#else
-#define MOS_(ret, m, func, ...)                                                \
-    do {                                                                       \
-        MOS_SETUP_LABELS(m);                                                   \
-        do {                                                                   \
-        mosSmall:                                                              \
-            ret multiOrderedSetSmall##func(moss(m), __VA_ARGS__);              \
-            break;                                                             \
-        mosMedium:                                                             \
-            ret multiOrderedSetMedium##func(mosm(m), __VA_ARGS__);             \
-            break;                                                             \
-        mosFull:                                                               \
-            ret multiOrderedSetFull##func(mosf(m), __VA_ARGS__);               \
-            break;                                                             \
-        } while (0);                                                           \
-    } while (0)
 #endif
 
-#define MOS_NORETURN(m, func, ...) MOS_(, m, func, __VA_ARGS__)
-#define MOS_RETURN(m, func, ...) MOS_(return, m, func, __VA_ARGS__)
-#define MOS_SETRESULT(var, m, func, ...) MOS_(var =, m, func, __VA_ARGS__)
-
-/* Single-argument dispatch macros */
-#if !MOS_USE_COMPUTED_GOTO_JUMPING
-#define MOS_SINGLE_(ret, m, func)                                              \
-    do {                                                                       \
-        switch (mosType_(m)) {                                                 \
-        case MOS_TYPE_SMALL:                                                   \
-            ret multiOrderedSetSmall##func(moss(m));                           \
-            break;                                                             \
-        case MOS_TYPE_MEDIUM:                                                  \
-            ret multiOrderedSetMedium##func(mosm(m));                          \
-            break;                                                             \
-        case MOS_TYPE_FULL:                                                    \
-            ret multiOrderedSetFull##func(mosf(m));                            \
-            break;                                                             \
-        default:                                                               \
-            assert(false);                                                     \
-            unreachable();                                                     \
-        }                                                                      \
-    } while (0)
-#else
-#define MOS_SINGLE_(ret, m, func)                                              \
-    do {                                                                       \
-        MOS_SETUP_LABELS(m);                                                   \
-        do {                                                                   \
-        mosSmall:                                                              \
-            ret multiOrderedSetSmall##func(moss(m));                           \
-            break;                                                             \
-        mosMedium:                                                             \
-            ret multiOrderedSetMedium##func(mosm(m));                          \
-            break;                                                             \
-        mosFull:                                                               \
-            ret multiOrderedSetFull##func(mosf(m));                            \
-            break;                                                             \
-        } while (0);                                                           \
-    } while (0)
-#endif
-
-#define MOS_SINGLE_NORETURN(m, func) MOS_SINGLE_(, m, func)
-#define MOS_SINGLE_RETURN(m, func) MOS_SINGLE_(return, m, func)
+#define MOS_NORETURN(m, func, ...)                                             \
+    MOS_DISPATCH_(MOS_SMALL_READ_, , m, func __VA_OPT__(, ) __VA_ARGS__)
+#define MOS_RETURN(m, func, ...)                                               \
+    MOS_DISPATCH_(MOS_SMALL_READ_, return, m, func __VA_OPT__(, ) __VA_ARGS__)
+#define MOS_UPDATE_(var, m, func, ...)                                         \
+    MOS_DISPATCH_(MOS_SMALL_UPDATE_, var =, m, func, __VA_ARGS__)
 
 /* ====================================================================
  * Tier Promotion
@@ -149,24 +195,23 @@ static inline double mosDataboxToDouble(const databox *box) {
 static constexpr int MOS_MIN_ENTRIES_FOR_PROMOTION = 2;
 
 DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
-    const uint32_t limit = COMPRESS_LIMIT(*m);
-    const uint32_t depth = COMPRESS_DEPTH(*m); /* carried into every tier */
+    const uint32_t limit = MOS_LIMIT_(*m);
+    const uint32_t meta = MOS_META_(*m); /* carried into every tier */
     const multiOrderedSetType type = mosType_(*m);
 
     if (type == MOS_TYPE_SMALL) {
-        multiOrderedSetSmall *small = moss(*m);
-        size_t bytes = multiOrderedSetSmallBytes(small);
-        size_t count = multiOrderedSetSmallCount(small);
+        const multiOrderedSetSmall small = mosSmallView_(*m);
+        size_t bytes = multiOrderedSetSmallBytes(&small);
+        size_t count = multiOrderedSetSmallCount(&small);
 
-        /* Need at least 2 entries to split for Medium tier */
-        if (bytes > flexOptimizationSizeLimit[limit] &&
+        /* Need at least 2 entries to split for Medium tier; a middle the
+         * pointer cannot hold moves up too */
+        if ((bytes > flexOptimizationSizeLimit[limit] ||
+             MOS_MIDDLE_(*m) == MOS_MIDDLE_UNKNOWN) &&
             count >= MOS_MIN_ENTRIES_FOR_PROMOTION) {
-            /* Promote to Medium */
-            multiOrderedSetMedium *medium = multiOrderedSetMediumNewFromSmall(
-                small, small->map, small->middle);
-            /* Small struct freed by NewFromSmall, just update pointer */
-            *m = MOS_TAG_(medium, MOS_TYPE_MEDIUM);
-            *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
+            multiOrderedSetMedium *medium =
+                multiOrderedSetMediumNewFromSmall(small.map, small.middle);
+            *m = mosPack_(medium, MOS_TYPE_MEDIUM, meta, 0);
         }
     } else if (type == MOS_TYPE_MEDIUM) {
         multiOrderedSetMedium *medium = mosm(*m);
@@ -186,8 +231,7 @@ DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
              * Full in one sub-map, and a large-limit set's sub-maps short) */
             full->maxMapSize = flexOptimizationSizeLimit[limit];
 
-            *m = MOS_TAG_(full, MOS_TYPE_FULL);
-            *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
+            *m = mosPack_(full, MOS_TYPE_FULL, meta, 0);
         }
     }
     /* Full tier does not promote further */
@@ -203,12 +247,15 @@ DK_INLINE_ALWAYS void mosUpgradeIfNecessary(multiOrderedSet **m) {
 /* The move itself: a Full of at most 'fullMaps' sub-maps and 'fullBytes'
  * bytes, or a Medium of at most 'smallBytes', becomes a Small; rows past
  * 'smallBytes' then split into a Medium.  A shrink passes its hysteresis
- * thresholds, multiOrderedSetCompact the growth points (3L, L). */
+ * thresholds, multiOrderedSetCompact the growth points (3L, L).  A Small
+ * holds at most MOS_SMALL_BYTES_MAX, so its middle fits its pointer. */
 DK_INLINE_ALWAYS void mosMoveDown_(multiOrderedSet **m, uint32_t fullMaps,
                                    size_t fullBytes, size_t smallBytes) {
-    const uint32_t limit = COMPRESS_LIMIT(*m);
-    const uint32_t depth = COMPRESS_DEPTH(*m);
+    const uint32_t meta = MOS_META_(*m);
     flex *rows = nullptr;
+    if (smallBytes > MOS_SMALL_BYTES_MAX) {
+        smallBytes = MOS_SMALL_BYTES_MAX;
+    }
 
     switch (mosType_(*m)) {
     case MOS_TYPE_FULL: {
@@ -240,34 +287,29 @@ DK_INLINE_ALWAYS void mosMoveDown_(multiOrderedSet **m, uint32_t fullMaps,
         return;
     }
 
-    /* @own: caller; free=multiOrderedSetFree */
-    multiOrderedSetSmall *small = multiOrderedSetSmallNew();
-    flexFree(small->map);
-    small->map = rows;
-    small->middle =
-        flexCount(rows)
-            ? (uint32_t)(flexMiddle(rows, MOS_ELEMENTS_PER_ENTRY) - rows)
-            : FLEX_EMPTY_SIZE;
-    *m = MOS_TAG_(small, MOS_TYPE_SMALL);
+    const uint32_t middle = mosMiddleOf_(rows);
 
     /* Rows above 'smallBytes' (from a Full) belong in Medium, split as an
      * upgrade splits them */
     if (flexBytes(rows) > smallBytes &&
-        multiOrderedSetSmallCount(small) >= MOS_MIN_ENTRIES_FOR_PROMOTION) {
+        flexCount(rows) / MOS_ELEMENTS_PER_ENTRY >=
+            MOS_MIN_ENTRIES_FOR_PROMOTION) {
         multiOrderedSetMedium *medium =
-            multiOrderedSetMediumNewFromSmall(small, small->map, small->middle);
-        *m = MOS_TAG_(medium, MOS_TYPE_MEDIUM);
+            multiOrderedSetMediumNewFromSmall(rows, middle);
+        *m = mosPack_(medium, MOS_TYPE_MEDIUM, meta, 0);
+    } else {
+        /* @own: caller; free=multiOrderedSetFree */
+        *m = mosPack_(rows, MOS_TYPE_SMALL, meta, middle);
     }
-    *m = SET_COMPRESS_DEPTH_LIMIT(*m, depth, limit);
 }
 
 static void mosShrinkIfNecessary(multiOrderedSet **m) {
-    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*m)];
+    const size_t L = flexOptimizationSizeLimit[MOS_LIMIT_(*m)];
     mosMoveDown_(m, 3, L + L / 2, L / 2);
 }
 
 void multiOrderedSetCompact(multiOrderedSet **mos) {
-    const size_t L = flexOptimizationSizeLimit[COMPRESS_LIMIT(*mos)];
+    const size_t L = flexOptimizationSizeLimit[MOS_LIMIT_(*mos)];
     if (mosType_(*mos) == MOS_TYPE_FULL) {
         multiOrderedSetFullCompact(mosf(*mos));
     }
@@ -279,7 +321,7 @@ void multiOrderedSetCompact(multiOrderedSet **mos) {
 #define MOS_REMOVE_(type, m, func, ...)                                        \
     do {                                                                       \
         type removed_;                                                         \
-        MOS_SETRESULT(removed_, *(m), func, __VA_ARGS__);                      \
+        MOS_UPDATE_(removed_, *(m), func, __VA_ARGS__);                        \
         if (removed_) {                                                        \
             mosShrinkIfNecessary(m);                                           \
         }                                                                      \
@@ -290,66 +332,60 @@ void multiOrderedSetCompact(multiOrderedSet **mos) {
  * Creation / Destruction
  * ==================================================================== */
 
+/* A new, empty Small set with 'meta' */
+static multiOrderedSet *mosNewSmall_(const uint32_t meta) {
+    /* @own: caller; free=multiOrderedSetFree */
+    return mosPack_(flexNew(), MOS_TYPE_SMALL, meta, FLEX_EMPTY_SIZE);
+}
+
 multiOrderedSet *multiOrderedSetNew(void) {
-    multiOrderedSetSmall *created = multiOrderedSetSmallNew();
-    multiOrderedSet *mos = MOS_TAG_(created, MOS_TYPE_SMALL);
-    mos = SET_COMPRESS_DEPTH_LIMIT(mos, 0,
-                                   dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET));
-    return mos;
+    return mosNewSmall_(
+        mosMetaOf_(0, dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET)));
 }
 
 multiOrderedSet *multiOrderedSetNewLimit(flexCapSizeLimit limit) {
-    multiOrderedSetSmall *created = multiOrderedSetSmallNew();
-    multiOrderedSet *mos = MOS_TAG_(created, MOS_TYPE_SMALL);
-    mos = SET_COMPRESS_DEPTH_LIMIT(mos, 0, limit);
-    return mos;
+    return mosNewSmall_(mosMetaOf_(0, limit));
 }
 
 multiOrderedSet *multiOrderedSetNewCompress(flexCapSizeLimit limit) {
-    multiOrderedSetSmall *created = multiOrderedSetSmallNew();
-    multiOrderedSet *mos = MOS_TAG_(created, MOS_TYPE_SMALL);
-    mos = SET_COMPRESS_DEPTH_LIMIT(mos, 1, limit);
-    return mos;
+    return mosNewSmall_(mosMetaOf_(1, limit));
 }
 
 multiOrderedSet *multiOrderedSetCopy(const multiOrderedSet *mos) {
-    const uint32_t limit = COMPRESS_LIMIT(mos);
-    const uint32_t depth = COMPRESS_DEPTH(mos);
-    multiOrderedSet *copy;
-
+    const uint32_t meta = MOS_META_(mos);
     const multiOrderedSetType type = mosType_(mos);
     if (type == MOS_TYPE_SMALL) {
-        copy = (multiOrderedSet *)multiOrderedSetSmallCopy(moss(mos));
-    } else if (type == MOS_TYPE_MEDIUM) {
-        copy = (multiOrderedSet *)multiOrderedSetMediumCopy(mosm(mos));
-    } else {
-        copy = (multiOrderedSet *)multiOrderedSetFullCopy(mosf(mos));
+        /* @own: caller; free=multiOrderedSetFree */
+        return mosPack_(flexDuplicate(MOS_USE_(mos)), type, meta,
+                        MOS_MIDDLE_(mos));
     }
 
-    copy = SET_COMPRESS_DEPTH_LIMIT(copy, depth, limit);
-    copy = MOS_TAG_(copy, type);
-    return copy;
+    if (type == MOS_TYPE_MEDIUM) {
+        /* @own: caller; free=multiOrderedSetFree */
+        return mosPack_(multiOrderedSetMediumCopy(mosm(mos)), type, meta, 0);
+    }
+
+    /* @own: caller; free=multiOrderedSetFree */
+    return mosPack_(multiOrderedSetFullCopy(mosf(mos)), type, meta, 0);
 }
 
 void multiOrderedSetFree(multiOrderedSet *mos) {
     if (mos) {
-        MOS_SINGLE_NORETURN(mos, Free);
+        MOS_NORETURN(mos, Free);
     }
 }
 
 void multiOrderedSetReset(multiOrderedSet **mos) {
+    const uint32_t meta = MOS_META_(*mos);
     if (mosType_(*mos) == MOS_TYPE_SMALL) {
-        multiOrderedSetSmallReset(moss(*mos));
+        multiOrderedSetSmall view = mosSmallView_(*mos);
+        multiOrderedSetSmallReset(&view);
+        *mos = mosSmallSettle_(&view, *mos);
         return;
     }
 
-    const flexCapSizeLimit limit = COMPRESS_LIMIT(*mos);
-    const uint32_t depth = COMPRESS_DEPTH(*mos);
     multiOrderedSetFree(*mos);
-    /* @own: caller; free=multiOrderedSetFree */
-    multiOrderedSet *created =
-        MOS_TAG_(multiOrderedSetSmallNew(), MOS_TYPE_SMALL);
-    *mos = SET_COMPRESS_DEPTH_LIMIT(created, depth, limit);
+    *mos = mosNewSmall_(meta);
 }
 
 /* ====================================================================
@@ -357,26 +393,27 @@ void multiOrderedSetReset(multiOrderedSet **mos) {
  * ==================================================================== */
 
 size_t multiOrderedSetCount(const multiOrderedSet *mos) {
-    MOS_SINGLE_RETURN(mos, Count);
+    MOS_RETURN(mos, Count);
 }
 
 size_t multiOrderedSetBytes(const multiOrderedSet *mos) {
-    MOS_SINGLE_RETURN(mos, Bytes);
+    MOS_RETURN(mos, Bytes);
 }
 
 flexCapSizeLimit multiOrderedSetLimit(const multiOrderedSet *mos) {
-    return (flexCapSizeLimit)COMPRESS_LIMIT(mos);
+    return (flexCapSizeLimit)MOS_LIMIT_(mos);
 }
 
 void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out) {
-    const uint32_t limit = flexOptimizationSizeLimit[COMPRESS_LIMIT(mos)];
+    const uint32_t limit = flexOptimizationSizeLimit[MOS_LIMIT_(mos)];
     switch (mosType_(mos)) {
     case MOS_TYPE_SMALL: {
-        const multiOrderedSetSmall *s = moss(mos);
-        const uint64_t data = multiOrderedSetSmallBytes(s);
-        *out = (dkTierStats){.count = multiOrderedSetSmallCount(s),
+        /* No header: the set is its flex */
+        const multiOrderedSetSmall s = mosSmallView_(mos);
+        const uint64_t data = multiOrderedSetSmallBytes(&s);
+        *out = (dkTierStats){.count = multiOrderedSetSmallCount(&s),
                              .dataBytes = data,
-                             .totalBytes = data + sizeof(*s),
+                             .totalBytes = data,
                              .units = 1,
                              .unitLimit = limit,
                              .tier = MOS_TYPE_SMALL};
@@ -406,7 +443,7 @@ void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out) {
 bool multiOrderedSetAdd(multiOrderedSet **mos, const databox *score,
                         const databox *member) {
     bool result;
-    MOS_SETRESULT(result, *mos, Add, score, member);
+    MOS_UPDATE_(result, *mos, Add, score, member);
     mosUpgradeIfNecessary(mos);
     return result;
 }
@@ -414,7 +451,7 @@ bool multiOrderedSetAdd(multiOrderedSet **mos, const databox *score,
 bool multiOrderedSetAddNX(multiOrderedSet **mos, const databox *score,
                           const databox *member) {
     bool result;
-    MOS_SETRESULT(result, *mos, AddNX, score, member);
+    MOS_UPDATE_(result, *mos, AddNX, score, member);
     mosUpgradeIfNecessary(mos);
     return result;
 }
@@ -422,7 +459,7 @@ bool multiOrderedSetAddNX(multiOrderedSet **mos, const databox *score,
 bool multiOrderedSetAddXX(multiOrderedSet **mos, const databox *score,
                           const databox *member) {
     bool result;
-    MOS_SETRESULT(result, *mos, AddXX, score, member);
+    MOS_UPDATE_(result, *mos, AddXX, score, member);
     /* No upgrade needed for XX (update-only) */
     return result;
 }
@@ -430,7 +467,7 @@ bool multiOrderedSetAddXX(multiOrderedSet **mos, const databox *score,
 bool multiOrderedSetAddGetPrevious(multiOrderedSet **mos, const databox *score,
                                    const databox *member, databox *prevScore) {
     bool result;
-    MOS_SETRESULT(result, *mos, AddGetPrevious, score, member, prevScore);
+    MOS_UPDATE_(result, *mos, AddGetPrevious, score, member, prevScore);
     mosUpgradeIfNecessary(mos);
     return result;
 }
@@ -442,7 +479,7 @@ static bool mosCombineAt_(multiOrderedSet **mos, const databox *operand,
                           const databox *member, mosCombineOp op,
                           databox *result) {
     bool ret;
-    MOS_SETRESULT(ret, *mos, Combine, operand, member, op, result);
+    MOS_UPDATE_(ret, *mos, Combine, operand, member, op, result);
     mosUpgradeIfNecessary(mos);
     return ret;
 }
@@ -822,9 +859,15 @@ static void mosVerifyMiddle_(const flex *map, uint32_t middle) {
 
 void multiOrderedSetVerify(const multiOrderedSet *mos) {
     switch (mosType_(mos)) {
-    case MOS_TYPE_SMALL:
-        mosVerifyMiddle_(moss(mos)->map, moss(mos)->middle);
+    case MOS_TYPE_SMALL: {
+        /* The pointer holds the exact middle, or the marker for one it
+         * cannot hold */
+        const multiOrderedSetSmall s = mosSmallView_(mos);
+        mosVerifyMiddle_(s.map, s.middle);
+        assert(MOS_MIDDLE_(mos) == MOS_MIDDLE_UNKNOWN ||
+               MOS_MIDDLE_(mos) == s.middle);
         break;
+    }
     case MOS_TYPE_MEDIUM: {
         const multiOrderedSetMedium *md = mosm(mos);
         mosVerifyMiddle_(md->map[0], md->middle[0]);
@@ -853,9 +896,11 @@ void multiOrderedSetRepr(const multiOrderedSet *mos) {
            mosType_(mos), multiOrderedSetCount(mos), multiOrderedSetBytes(mos));
 
     switch (mosType_(mos)) {
-    case MOS_TYPE_SMALL:
-        multiOrderedSetSmallRepr(moss(mos));
+    case MOS_TYPE_SMALL: {
+        const multiOrderedSetSmall s = mosSmallView_(mos);
+        multiOrderedSetSmallRepr(&s);
         break;
+    }
     case MOS_TYPE_MEDIUM:
         multiOrderedSetMediumRepr(mosm(mos));
         break;
@@ -1750,6 +1795,73 @@ static int mosUpdateOracleCheck_(const multiOrderedSet *mos, uint32_t n,
     return err;
 }
 
+/* The wide-middle test's rows: short rows (integer members) score 0-9,
+ * long rows (1000-byte members) score 110-118, and a last short row
+ * scores 119 */
+static constexpr int32_t MOS_WIDE_SHORT_ROWS = 10;
+static constexpr int32_t MOS_WIDE_LONG_ROWS = 9;
+static constexpr int32_t MOS_WIDE_ROWS =
+    MOS_WIDE_SHORT_ROWS + MOS_WIDE_LONG_ROWS + 1;
+static constexpr size_t MOS_WIDE_LONG_BYTES = 1000;
+
+static int64_t mosWideScore_(const int32_t row) {
+    return row < MOS_WIDE_SHORT_ROWS ? row : 100 + row;
+}
+
+static bool mosWideIsLong_(const int32_t row) {
+    return row >= MOS_WIDE_SHORT_ROWS &&
+           row < MOS_WIDE_SHORT_ROWS + MOS_WIDE_LONG_ROWS;
+}
+
+/* Every row 'present' says is in 'mos' is found with its score and rank,
+ * no other row is, iteration visits them in score order, and the set
+ * verifies */
+static int mosWideCheck_(const multiOrderedSet *mos, const databox *members,
+                         const bool *present, const char *when) {
+    int err = 0;
+    int64_t rank = 0;
+    multiOrderedSetVerify(mos);
+    for (int32_t r = 0; r < MOS_WIDE_ROWS; r++) {
+        databox score = {};
+        const bool found = multiOrderedSetGetScore(mos, &members[r], &score);
+        if (found != present[r]) {
+            ERR("%s: row %d found %d, present %d", when, r, found, present[r]);
+            continue;
+        }
+        if (!found) {
+            continue;
+        }
+        if (score.data.i != mosWideScore_(r) ||
+            multiOrderedSetGetRank(mos, &members[r]) != rank) {
+            ERR("%s: row %d score %" PRIdMAX " rank %" PRId64
+                ", expected %" PRId64,
+                when, r, score.data.i, multiOrderedSetGetRank(mos, &members[r]),
+                rank);
+        }
+        rank++;
+    }
+
+    mosIterator it;
+    multiOrderedSetIteratorInit(mos, &it, true);
+    databox member;
+    databox score;
+    int64_t seen = 0;
+    int64_t prev = -1;
+    while (multiOrderedSetIteratorNext(&it, &member, &score)) {
+        if (score.data.i <= prev) {
+            ERR("%s: iteration out of order at %" PRId64, when, seen);
+        }
+        prev = score.data.i;
+        seen++;
+    }
+    if ((int64_t)multiOrderedSetCount(mos) != rank || seen != rank) {
+        ERR("%s: count %zu, iterated %" PRId64 ", expected %" PRId64, when,
+            multiOrderedSetCount(mos), seen, rank);
+    }
+
+    return err;
+}
+
 static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
     int err = 0;
     cleanerName(zfree, Int64) int64_t *scores = zcalloc(n, sizeof(*scores));
@@ -1804,9 +1916,9 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
             databox prev = {};
             if (!multiOrderedSetAddGetPrevious(&mos, &s, &m, &prev) ||
                 prev.data.i != scores[i]) {
-                ERR("update oracle: AddGetPrevious of %s gave %" PRId64
+                ERR("update oracle: AddGetPrevious of %s gave %" PRIdMAX
                     ", expected %" PRId64,
-                    name, (int64_t)prev.data.i, scores[i]);
+                    name, prev.data.i, scores[i]);
             }
             break;
         }
@@ -1815,9 +1927,9 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
             databox result = {};
             if (!multiOrderedSetIncrBy(&mos, &delta, &m, &result) ||
                 result.data.i != next) {
-                ERR("update oracle: IncrBy of %s gave %" PRId64
+                ERR("update oracle: IncrBy of %s gave %" PRIdMAX
                     ", expected %" PRId64,
-                    name, (int64_t)result.data.i, next);
+                    name, result.data.i, next);
             }
             break;
         }
@@ -1846,9 +1958,8 @@ static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
         !multiOrderedSetGetScore(mos, &asInteger, &gotB) || gotA.data.i != -5 ||
         gotB.data.i != -6) {
         ERR("update oracle: \"22\" and 22 are not two members (count %zu, "
-            "scores %" PRId64 " %" PRId64 ")",
-            multiOrderedSetCount(mos), (int64_t)gotA.data.i,
-            (int64_t)gotB.data.i);
+            "scores %" PRIdMAX " %" PRIdMAX ")",
+            multiOrderedSetCount(mos), gotA.data.i, gotB.data.i);
     }
 
     return err;
@@ -2497,7 +2608,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 cleaner(multiOrderedSetFree) multiOrderedSet *mos =
                     compress ? multiOrderedSetNewCompress(FLEX_CAP_LEVEL_64)
                              : multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
-                const uint32_t depth = COMPRESS_DEPTH(mos);
+                const uint32_t depth = MOS_COMPRESS_(mos);
                 int64_t next = 0;
                 do {
                     databox score;
@@ -2513,7 +2624,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                     multiOrderedSetCount(mos) != 0 ||
                     multiOrderedSetExists(mos, &member) ||
                     multiOrderedSetLimit(mos) != FLEX_CAP_LEVEL_64 ||
-                    COMPRESS_DEPTH(mos) != depth) {
+                    MOS_COMPRESS_(mos) != depth) {
                     ERR("compress %d tier %d: reset to tier %d, count %zu",
                         compress, tier, mosType_(mos),
                         multiOrderedSetCount(mos));
@@ -2548,9 +2659,9 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             multiOrderedSetStats(mos, &s);
             bool shape;
             if (want == MOS_TYPE_SMALL) {
+                /* No header: the set is its flex */
                 shape = s.units == 1 && s.unitLimit == limit &&
-                        s.totalBytes ==
-                            s.dataBytes + sizeof(multiOrderedSetSmall) &&
+                        s.totalBytes == s.dataBytes &&
                         s.dataBytes == multiOrderedSetBytes(mos);
             } else if (want == MOS_TYPE_MEDIUM) {
                 shape = s.units == 2 && s.unitLimit == limit &&
@@ -2572,14 +2683,99 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 ERR("tier %d: limit %d, copy's %d", want,
                     multiOrderedSetLimit(mos), multiOrderedSetLimit(copy));
             }
-            if (s.tier != want || s.count != (uint64_t)next || !shape ||
-                s.totalBytes <= s.dataBytes) {
+            /* 'shape' holds each tier's total against its data */
+            if (s.tier != want || s.count != (uint64_t)next || !shape) {
                 ERR("tier %d: stats tier %u units %u count %" PRIu64
                     " limit %u data %" PRIu64 " total %" PRIu64,
                     want, s.tier, s.units, s.count, s.unitLimit, s.dataBytes,
                     s.totalBytes);
             }
         }
+    }
+
+    TEST("multiOrderedSet: a Small set's middle past its pointer bits is "
+         "found per call, moves the set up at the next add, and a set moves "
+         "down only where its middle fits") {
+        /* Ten short rows then nine long ones: the middle row is short, near
+         * the flex's start (mosWideScore_ gives the order).  Removing short
+         * rows moves the middle into the long rows, past 11 bits, while the set
+         * stays Small (a removal never moves a set up); a 64 KB limit keeps it
+         * Small by size */
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNewLimit(FLEX_CAP_LEVEL_65536);
+        char longText[MOS_WIDE_LONG_ROWS][MOS_WIDE_LONG_BYTES];
+        databox members[MOS_WIDE_ROWS];
+        bool present[MOS_WIDE_ROWS] = {};
+        for (int32_t r = 0; r < MOS_WIDE_ROWS; r++) {
+            if (mosWideIsLong_(r)) {
+                char *text = longText[r - MOS_WIDE_SHORT_ROWS];
+                memset(text, 'a' + r, MOS_WIDE_LONG_BYTES);
+                members[r] = databoxNewBytes(text, MOS_WIDE_LONG_BYTES);
+            } else {
+                members[r] = databoxNewSigned(r);
+            }
+        }
+
+        /* Every row but the last: it is the add that moves the set up */
+        const int32_t last = MOS_WIDE_ROWS - 1;
+        for (int32_t r = 0; r < last; r++) {
+            const databox score = databoxNewSigned(mosWideScore_(r));
+            multiOrderedSetAdd(&mos, &score, &members[r]);
+            present[r] = true;
+        }
+        if (mosType_(mos) != MOS_TYPE_SMALL ||
+            MOS_MIDDLE_(mos) == MOS_MIDDLE_UNKNOWN) {
+            ERR("built: tier %d, middle %u", mosType_(mos), MOS_MIDDLE_(mos));
+        }
+        err += mosWideCheck_(mos, members, present, "built");
+
+        int32_t removed = 0;
+        while (removed < MOS_WIDE_SHORT_ROWS &&
+               MOS_MIDDLE_(mos) != MOS_MIDDLE_UNKNOWN) {
+            multiOrderedSetRemove(&mos, &members[removed]);
+            present[removed++] = false;
+        }
+        if (mosType_(mos) != MOS_TYPE_SMALL ||
+            MOS_MIDDLE_(mos) != MOS_MIDDLE_UNKNOWN) {
+            ERR("removals left tier %d, middle %u", mosType_(mos),
+                MOS_MIDDLE_(mos));
+        }
+        err += mosWideCheck_(mos, members, present, "middle unknown");
+        {
+            cleaner(multiOrderedSetFree) multiOrderedSet *copy =
+                multiOrderedSetCopy(mos);
+            err += mosWideCheck_(copy, members, present, "copy");
+        }
+
+        /* A row past the end keeps the middle in the long rows */
+        const databox lastScore = databoxNewSigned(mosWideScore_(last));
+        multiOrderedSetAdd(&mos, &lastScore, &members[last]);
+        present[last] = true;
+        if (mosType_(mos) != MOS_TYPE_MEDIUM) {
+            ERR("the add after an unknown middle left tier %d", mosType_(mos));
+        }
+        err += mosWideCheck_(mos, members, present, "moved up");
+
+        /* Compacting asks for Small at up to the limit, but a Small holds
+         * only rows whose middle fits */
+        multiOrderedSetCompact(&mos);
+        if (mosType_(mos) != MOS_TYPE_MEDIUM) {
+            ERR("compact moved %zu bytes to tier %d", multiOrderedSetBytes(mos),
+                mosType_(mos));
+        }
+
+        for (int32_t r = last; r >= MOS_WIDE_SHORT_ROWS; r--) {
+            multiOrderedSetRemove(&mos, &members[r]);
+            present[r] = false;
+            if (mosType_(mos) == MOS_TYPE_SMALL &&
+                MOS_MIDDLE_(mos) == MOS_MIDDLE_UNKNOWN) {
+                ERR("moved down with an unknown middle at row %d", r);
+            }
+        }
+        if (mosType_(mos) != MOS_TYPE_SMALL) {
+            ERR("drained to tier %d", mosType_(mos));
+        }
+        err += mosWideCheck_(mos, members, present, "drained");
     }
 
     TEST("multiOrderedSet: the compress setting survives growth, shrink and "
@@ -2591,23 +2787,22 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             const databox b = databoxNewSigned(next++);
             multiOrderedSetAdd(&mos, &b, &b);
         }
-        if (COMPRESS_DEPTH(mos) != 1 ||
-            COMPRESS_LIMIT(mos) != FLEX_CAP_LEVEL_64) {
-            ERR("Full kept depth %u limit %u", (uint32_t)COMPRESS_DEPTH(mos),
-                (uint32_t)COMPRESS_LIMIT(mos));
+        if (MOS_COMPRESS_(mos) != 1 || MOS_LIMIT_(mos) != FLEX_CAP_LEVEL_64) {
+            ERR("Full kept depth %u limit %u", MOS_COMPRESS_(mos),
+                MOS_LIMIT_(mos));
         }
         while (next > 1) {
             const databox b = databoxNewSigned(--next);
             multiOrderedSetRemove(&mos, &b);
         }
-        if (mosType_(mos) != MOS_TYPE_SMALL || COMPRESS_DEPTH(mos) != 1 ||
-            COMPRESS_LIMIT(mos) != FLEX_CAP_LEVEL_64) {
+        if (mosType_(mos) != MOS_TYPE_SMALL || MOS_COMPRESS_(mos) != 1 ||
+            MOS_LIMIT_(mos) != FLEX_CAP_LEVEL_64) {
             ERR("drained to tier %d with depth %u limit %u", mosType_(mos),
-                (uint32_t)COMPRESS_DEPTH(mos), (uint32_t)COMPRESS_LIMIT(mos));
+                MOS_COMPRESS_(mos), MOS_LIMIT_(mos));
         }
         cleaner(multiOrderedSetFree) multiOrderedSet *copy =
             multiOrderedSetCopy(mos);
-        if (COMPRESS_DEPTH(copy) != 1) {
+        if (MOS_COMPRESS_(copy) != 1) {
             ERR("a copy lost the compress setting");
         }
     }
@@ -3683,7 +3878,9 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     printf("\n--- Direct Tier Implementation Tests ---\n");
 
     TEST("DIRECT: multiOrderedSetSmall basic ops") {
-        multiOrderedSetSmall *small = multiOrderedSetSmallNew();
+        multiOrderedSetSmall smallView;
+        multiOrderedSetSmallInit(&smallView);
+        multiOrderedSetSmall *small = &smallView;
 
         /* Insert 20 entries */
         for (int i = 0; i < 20; i++) {

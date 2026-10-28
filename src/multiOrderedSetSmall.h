@@ -8,9 +8,10 @@ typedef struct multiOrderedSetSmall multiOrderedSetSmall;
 
 /* ====================================================================
  * Creation / Destruction
- * ==================================================================== */
-multiOrderedSetSmall *multiOrderedSetSmallNew(void);
-multiOrderedSetSmall *multiOrderedSetSmallCopy(const multiOrderedSetSmall *m);
+ * ====================================================================
+ * 'm' is a view (multiOrderedSetSmallInternal.h): Init gives it empty
+ * rows, Free frees its rows, Reset empties them. */
+void multiOrderedSetSmallInit(multiOrderedSetSmall *m);
 void multiOrderedSetSmallFree(multiOrderedSetSmall *m);
 void multiOrderedSetSmallReset(multiOrderedSetSmall *m);
 

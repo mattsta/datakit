@@ -5,15 +5,15 @@
 
 /* Forward declaration */
 typedef struct multiOrderedSetMedium multiOrderedSetMedium;
-struct multiOrderedSetSmall;
 
 /* ====================================================================
  * Creation / Destruction
  * ==================================================================== */
 multiOrderedSetMedium *multiOrderedSetMediumNew(void);
-multiOrderedSetMedium *
-multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
-                                  uint32_t middle);
+/* A Medium of a Small set's rows ('map', middle row at 'middle'); takes
+ * 'map' */
+multiOrderedSetMedium *multiOrderedSetMediumNewFromSmall(flex *map,
+                                                         uint32_t middle);
 multiOrderedSetMedium *
 multiOrderedSetMediumCopy(const multiOrderedSetMedium *m);
 void multiOrderedSetMediumFree(multiOrderedSetMedium *m);

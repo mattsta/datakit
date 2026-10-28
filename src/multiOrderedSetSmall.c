@@ -72,31 +72,14 @@ static void mosSetRowScore(multiOrderedSetSmall *m, flexEntry *entry,
  * Creation / Destruction
  * ==================================================================== */
 
-multiOrderedSetSmall *multiOrderedSetSmallNew(void) {
-    /* @own: caller; free=multiOrderedSetSmallFree */
-    multiOrderedSetSmall *m = zcalloc(1, sizeof(*m));
+void multiOrderedSetSmallInit(multiOrderedSetSmall *m) {
     /* @own: container; free=multiOrderedSetSmallFree */
     m->map = flexNew();
     m->middle = FLEX_EMPTY_SIZE;
-    m->flags = 0;
-    return m;
-}
-
-multiOrderedSetSmall *multiOrderedSetSmallCopy(const multiOrderedSetSmall *m) {
-    /* @own: caller; free=multiOrderedSetSmallFree */
-    multiOrderedSetSmall *copy = zcalloc(1, sizeof(*copy));
-    /* @own: container; free=multiOrderedSetSmallFree */
-    copy->map = flexDuplicate(m->map);
-    copy->middle = m->middle;
-    copy->flags = m->flags;
-    return copy;
 }
 
 void multiOrderedSetSmallFree(multiOrderedSetSmall *m) {
-    if (m) {
-        flexFree(m->map);
-        zfree(m);
-    }
+    flexFree(m->map);
 }
 
 void multiOrderedSetSmallReset(multiOrderedSetSmall *m) {
@@ -458,7 +441,7 @@ size_t multiOrderedSetSmallCountByScore(const multiOrderedSetSmall *m,
 
 void multiOrderedSetSmallIteratorInit(const multiOrderedSetSmall *m,
                                       mosIterator *iter, bool forward) {
-    iter->mos = (void *)m;
+    iter->mos = m->map; /* the rows: 'm' is a view on the caller's stack */
     iter->type = MOS_TYPE_SMALL;
     iter->forward = forward;
     iter->mapIndex = 0;
@@ -482,7 +465,7 @@ bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
                                              mosIterator *iter,
                                              const databox *score,
                                              bool forward) {
-    iter->mos = (void *)m;
+    iter->mos = m->map; /* the rows: 'm' is a view on the caller's stack */
     iter->type = MOS_TYPE_SMALL;
     iter->forward = forward;
     iter->mapIndex = 0;
@@ -515,7 +498,7 @@ bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
 bool multiOrderedSetSmallIteratorInitAtRank(const multiOrderedSetSmall *m,
                                             mosIterator *iter, int64_t rank,
                                             bool forward) {
-    iter->mos = (void *)m;
+    iter->mos = m->map; /* the rows: 'm' is a view on the caller's stack */
     iter->type = MOS_TYPE_SMALL;
     iter->forward = forward;
     iter->mapIndex = 0;
@@ -540,10 +523,10 @@ bool multiOrderedSetSmallIteratorNext(mosIterator *iter, databox *member,
         return false;
     }
 
-    multiOrderedSetSmall *m = (multiOrderedSetSmall *)iter->mos;
+    flex *map = (flex *)iter->mos;
     flexEntry *entry = (flexEntry *)iter->current;
 
-    flexEntry *memberEntry = flexNext(m->map, entry);
+    flexEntry *memberEntry = flexNext(map, entry);
     if (!memberEntry) {
         iter->valid = false;
         return false;
@@ -554,11 +537,11 @@ bool multiOrderedSetSmallIteratorNext(mosIterator *iter, databox *member,
 
     /* Advance iterator */
     if (iter->forward) {
-        iter->current = flexNext(m->map, memberEntry);
+        iter->current = flexNext(map, memberEntry);
     } else {
         /* Move backwards: the previous pair's score is two elements back */
-        flexEntry *prevMember = flexPrev(m->map, entry);
-        iter->current = prevMember ? flexPrev(m->map, prevMember) : nullptr;
+        flexEntry *prevMember = flexPrev(map, entry);
+        iter->current = prevMember ? flexPrev(map, prevMember) : nullptr;
     }
 
     iter->valid = (iter->current != nullptr);
@@ -641,7 +624,21 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
 #include "cleaner.h"
 #include "ctest.h"
 
-defcleaner(multiOrderedSetSmall *, multiOrderedSetSmallFree);
+/* A test's Small set: a view on the heap, so a test holds it by pointer
+ * as the other tiers' tests do */
+static multiOrderedSetSmall *mosSmallTestNew_(void) {
+    /* @own: caller; free=mosSmallTestFree_ */
+    multiOrderedSetSmall *m = zcalloc(1, sizeof(*m));
+    multiOrderedSetSmallInit(m);
+    return m;
+}
+
+static void mosSmallTestFree_(multiOrderedSetSmall *m) {
+    multiOrderedSetSmallFree(m);
+    zfree(m);
+}
+
+defcleaner(multiOrderedSetSmall *, mosSmallTestFree_);
 
 void multiOrderedSetSmallRepr(const multiOrderedSetSmall *m) {
     printf("multiOrderedSetSmall {\n");
@@ -676,18 +673,18 @@ int multiOrderedSetSmallTest(int, char *[]) {
     int err = 0;
 
     TEST("multiOrderedSetSmall — create and free") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
         if (!mos) {
             ERR("Failed to create multiOrderedSetSmall");
         }
         if (multiOrderedSetSmallCount(mos) != 0) {
             ERR("New set should be empty");
         }
-        multiOrderedSetSmallFree(mos);
+        mosSmallTestFree_(mos);
     }
 
     TEST("multiOrderedSetSmall — add and lookup") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
 
         databox score1 = databoxNewSigned(100);
         databox member1 = databoxNewBytesAllowEmbed("member1", 7);
@@ -757,11 +754,11 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("member1 rank should be 2, got %" PRId64, rank);
         }
 
-        multiOrderedSetSmallFree(mos);
+        mosSmallTestFree_(mos);
     }
 
     TEST("multiOrderedSetSmall — update score") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
 
         databox score1 = databoxNewSigned(100);
         databox member1 = databoxNewBytesAllowEmbed("member1", 7);
@@ -784,11 +781,11 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("Score should be updated to 200");
         }
 
-        multiOrderedSetSmallFree(mos);
+        mosSmallTestFree_(mos);
     }
 
     TEST("multiOrderedSetSmall — remove") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
 
         databox score1 = databoxNewSigned(100);
         databox member1 = databoxNewBytesAllowEmbed("member1", 7);
@@ -815,14 +812,14 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("member2 should still exist");
         }
 
-        multiOrderedSetSmallFree(mos);
+        mosSmallTestFree_(mos);
     }
 
     TEST("multiOrderedSetSmall — popping more than there are takes them all") {
         /* Three members, either end asked for 10: all 3 come back in that
          * end's order, the set is left empty, and a further pop gives 0 */
         for (int fromMax = 0; fromMax <= 1; fromMax++) {
-            multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+            multiOrderedSetSmall *mos = mosSmallTestNew_();
             for (int i = 0; i < 3; i++) {
                 databox score = databoxNewSigned(i * 10);
                 char buf[8];
@@ -851,12 +848,12 @@ int multiOrderedSetSmallTest(int, char *[]) {
                     fromMax ? "max" : "min", popped, ordered,
                     multiOrderedSetSmallCount(mos));
             }
-            multiOrderedSetSmallFree(mos);
+            mosSmallTestFree_(mos);
         }
     }
 
     TEST("multiOrderedSetSmall — pop min/max") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
 
         for (int i = 0; i < 5; i++) {
             databox score = databoxNewSigned(i * 10);
@@ -905,11 +902,11 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("Count should be 2 after pop max");
         }
 
-        multiOrderedSetSmallFree(mos);
+        mosSmallTestFree_(mos);
     }
 
     TEST("multiOrderedSetSmall — iteration") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
 
         for (int i = 0; i < 5; i++) {
             databox score = databoxNewSigned(i * 10);
@@ -938,7 +935,7 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("Forward iteration should visit 5 entries, got %d", idx);
         }
 
-        multiOrderedSetSmallFree(mos);
+        mosSmallTestFree_(mos);
     }
 
     TEST("multiOrderedSetSmall — misses, empty sets and edge positions") {
@@ -947,8 +944,8 @@ int multiOrderedSetSmallTest(int, char *[]) {
          * score-range removal skips scores below its minimum; iterators
          * start where asked (or report nothing past the end); an empty set
          * has no first, last, random member or iterator position */
-        cleaner(multiOrderedSetSmallFree) multiOrderedSetSmall *mos =
-            multiOrderedSetSmallNew();
+        cleaner(mosSmallTestFree_) multiOrderedSetSmall *mos =
+            mosSmallTestNew_();
         static constexpr char names[] = "abcd";
         for (int i = 0; i < 4; i++) {
             const databox score = databoxNewSigned((i + 1) * 10);
@@ -1021,8 +1018,8 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("an iterator by rank started in the wrong place");
         }
 
-        cleaner(multiOrderedSetSmallFree) multiOrderedSetSmall *empty =
-            multiOrderedSetSmallNew();
+        cleaner(mosSmallTestFree_) multiOrderedSetSmall *empty =
+            mosSmallTestNew_();
         databox members[2];
         databox scores[2];
         multiOrderedSetSmallIteratorInit(empty, &iter, true);
@@ -1044,13 +1041,17 @@ int multiOrderedSetSmallTest(int, char *[]) {
     }
 
     TEST("multiOrderedSetSmall — copy") {
-        multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
+        multiOrderedSetSmall *mos = mosSmallTestNew_();
 
         databox score = databoxNewSigned(42);
         databox member = databoxNewBytesAllowEmbed("test", 4);
         multiOrderedSetSmallAdd(mos, &score, &member);
 
-        multiOrderedSetSmall *copy = multiOrderedSetSmallCopy(mos);
+        multiOrderedSetSmall *copy = mosSmallTestNew_();
+        flexFree(copy->map);
+        /* @own: container; free=mosSmallTestFree_ */
+        copy->map = flexDuplicate(mos->map);
+        copy->middle = mos->middle;
         if (multiOrderedSetSmallCount(copy) != 1) {
             ERR("Copy should have count 1");
         }
@@ -1070,8 +1071,8 @@ int multiOrderedSetSmallTest(int, char *[]) {
             ERR("Copy should be independent of original");
         }
 
-        multiOrderedSetSmallFree(mos);
-        multiOrderedSetSmallFree(copy);
+        mosSmallTestFree_(mos);
+        mosSmallTestFree_(copy);
     }
 
     TEST_FINAL_RESULT;
