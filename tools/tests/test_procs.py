@@ -149,6 +149,24 @@ class Run(Scratch):
         self.assertIsNotNone(proc.returncode)
         self.assertEqual(wait_gone([proc.pid]), [])
 
+    def test_started_hands_over_a_running_program_and_waits(self) -> None:
+        out = self.tmp / "out.log"
+        cmd = [sys.executable, "-c", "import os; print(os.getpid()); exit(3)"]
+        with out.open("wb") as f, procs.started(cmd, f, cwd=HERE) as proc:
+            self.assertGreater(proc.pid, 0)
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(out.read_text().strip(), str(proc.pid))
+
+    def test_started_kills_on_an_exception(self) -> None:
+        with (
+            tempfile.TemporaryFile() as out,
+            self.assertRaises(RuntimeError),
+            procs.started(SLEEP_FOREVER, out) as proc,
+        ):
+            raise RuntimeError("watcher failed")
+        self.assertIsNotNone(proc.returncode)
+        self.assertEqual(wait_gone([proc.pid]), [])
+
     def test_signals_deferred_redelivers(self) -> None:
         with self.assertRaises(KeyboardInterrupt), procs.signals_deferred():
             os.kill(os.getpid(), signal.SIGINT)

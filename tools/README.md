@@ -1083,6 +1083,28 @@ uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
 Use it for every before/after claim about a change: the benchmark lands
 in perfRegression with the change, and the comparison is reproducible.
 
+## profile — where perfRegression rows spend their time
+
+```sh
+uv run --project tools dktools profile NAME --modules M[,M...] [--top N] \
+    [--compiler clang22|gcc15] [--root DIR] [-j N]
+```
+
+- Builds HEAD plus every changed tracked path (as perfcompare's `current`)
+  with the perf preset under `ROOT/profile/NAME`, then runs
+  `datakit-test test perfRegression` once with `DK_PERF_MODULES` set to
+  `--modules`, watched by the platform's sampling profiler: macOS
+  `sample PID` (base system; attached as the run starts, stopped once it
+  ends), Linux `perf record -g` (read back with `perf script`).
+- Prints, and writes to `result.txt`, the `--top` functions by self samples
+  (the sampled frame) and by inclusive samples (anywhere on the stack), as
+  percents of all samples. The recording stays in the work directory.
+- Exits 0; 1 when the build, the run or the profiler fails (or no sample
+  was read); 2 on an input error.
+
+Use it before a performance change to find what to change, and keep the
+before/after claim to perfcompare.
+
 ## objdiff — did a function's machine code change, or only move?
 
 ```sh

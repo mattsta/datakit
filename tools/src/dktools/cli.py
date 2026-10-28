@@ -34,6 +34,7 @@ from . import (
     perfcompare,
     perfdiff,
     procs,
+    profile,
     retoken,
     spell,
     stdattr,
@@ -615,6 +616,34 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(vf)
 
+    pf = sub.add_parser(
+        "profile",
+        help="sample where perfRegression modules spend their time "
+        "(exit 0 ok, 1 build/run/profiler failure, 2 input error)",
+    )
+    pf.add_argument("name", help="work-dir name under ROOT/profile")
+    pf.add_argument(
+        "--modules", required=True, help="comma-separated perfRegression modules"
+    )
+    pf.add_argument(
+        "--top", type=int, default=25, help="functions per table (default 25)"
+    )
+    pf.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    pf.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
+    )
+    pf.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(pf)
+
     pc = sub.add_parser(
         "perfcompare",
         help="time a base revision and the working tree on the same "
@@ -1024,6 +1053,19 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "perfdiff":
         return perfdiff.run(args.baseline, args.current, args.tolerance)
+
+    if args.command == "profile":
+        return profile.run(
+            args.repo,
+            profile.ProfileOptions(
+                name=args.name,
+                modules=args.modules,
+                top=args.top,
+                compiler=toolchain.from_args(args.compiler, args),
+                root=args.root,
+                jobs=args.jobs,
+            ),
+        )
 
     if args.command == "perfcompare":
         return perfcompare.run(

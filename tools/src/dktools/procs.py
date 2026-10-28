@@ -367,6 +367,31 @@ def run_to_file(
 
 
 @contextmanager
+def started(
+    cmd: Sequence[str],
+    out: IO[bytes],
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Iterator[subprocess.Popen]:
+    """Start `cmd` with stdout and stderr written to `out` (an open file)
+    and hand it to the block while it runs, for another program to watch
+    (a profiler attaching by pid).  On leaving the block the program is
+    waited for; on an exception its process group is stopped and reaped
+    first.  The caller checks ``returncode``."""
+    out.flush()
+    proc = _popen(
+        cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out
+    )
+    try:
+        yield proc
+    except BaseException:
+        kill_group(proc)
+        raise
+    proc.wait()
+
+
+@contextmanager
 def streaming(
     cmd: Sequence[str],
     stderr: IO[bytes],
