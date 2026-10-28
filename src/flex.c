@@ -326,7 +326,9 @@ typedef enum flexType {
  * the ORDERED atom index) run 1-7% slower, because a predicted jump gave
  * the size without the table's dependent load.  Sizing integers and
  * references by arithmetic on the byte, branching per family, was slower
- * than both on mixed rows. */
+ * than both on mixed rows.  A switch whose cases each return the size
+ * compiles (clang 22, -O3) to this same one-load lookup, with 8-byte
+ * entries: the table is the compiler's own lowering, written densely. */
 #define FLEX_ENTRY_FIXED_(encoding, payloadBytes)                              \
     [encoding] = 2 + (payloadBytes)
 #define FLEX_ENTRY_INTEGER_PAIR_(bits)                                         \

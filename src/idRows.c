@@ -37,6 +37,9 @@ static constexpr uint64_t IDROWS_DENSE_PER_LIVE = 4;
 static constexpr uint64_t IDROWS_SPARSE_BACK_PER_LIVE = 2;
 static constexpr uint64_t IDROWS_DENSE_SLACK = 64;
 
+/* Interpolation probes a sparse lookup makes before its binary search */
+static constexpr int IDROWS_INTERPOLATE = 3;
+
 /* A page's index, its entry 0: a little-endian uint64_t with bit s set
  * when id s of the page is present, then room for 'capacity' little-endian
  * uint32_t offsets, the first 'rows' in use: one per present id, in id
@@ -186,6 +189,28 @@ static uint64_t idRowsPageNumber_(const idRows *r, const uint64_t i) {
 static uint64_t idRowsLowerBound_(const idRows *r, const uint64_t p) {
     uint64_t lo = 0;
     uint64_t hi = r->span;
+
+    /* Interpolation first: sparse ids (a counter run far, a permanent
+     * table with holes) spread about evenly, so a probe placed by value
+     * lands near.  Each probe narrows [lo, hi) as a binary step would;
+     * after IDROWS_INTERPOLATE probes, or once 'p' is outside the range's
+     * values, the binary search finishes. */
+    for (int probe = 0; probe < IDROWS_INTERPOLATE && hi - lo > 8; probe++) {
+        const uint64_t first = r->pageNo[lo];
+        const uint64_t last = r->pageNo[hi - 1];
+        if (p <= first || p > last) {
+            break;
+        }
+
+        const uint64_t at = lo + (uint64_t)((__uint128_t)(p - first) *
+                                            (hi - 1 - lo) / (last - first));
+        if (r->pageNo[at] < p) {
+            lo = at + 1;
+        } else {
+            hi = at;
+        }
+    }
+
     while (lo < hi) {
         const uint64_t mid = lo + (hi - lo) / 2;
         if (r->pageNo[mid] < p) {
