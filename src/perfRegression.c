@@ -1945,16 +1945,43 @@ static void benchMultilru(const uint32_t n) {
 static void benchAtomTable(const char *module, const multimapAtomIndex index,
                            const char *keys) {
     const uint32_t n = PERF_CONTAINER_N;
-    cleaner(multimapAtomFree) multimapAtom *ma =
-        multimapAtomNewIndexed(index, false);
     uint64_t sink = 0;
 
+    /* A permanent table left sparse: every atom interned, then all but one
+     * in each 64 ids deleted.  The bytes are the heap the remaining atoms
+     * hold (each id page keeps its offset table for one row). */
+    {
+        const bool metered = ctestHeapMeterStart();
+        cleaner(multimapAtomFree) multimapAtom *sparse =
+            multimapAtomNewIndexed(index, true);
+        for (uint32_t i = 0; i < n; i++) {
+            databox k = perfContainerKey(keys, i);
+            sink += multimapAtomInsertIfNewConvert(sparse, &k);
+        }
+
+        uint32_t deletes = 0;
+        const double t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            if (i % 64) {
+                sink += multimapAtomDeleteById(sparse, i);
+                deletes++;
+            }
+        }
+        const double secs = timeUtilMonotonicSec() - t0;
+        emitRow(module, "deleteSparse", perfHeapStop(metered), deletes, secs);
+    }
+
+    /* The bytes of internNew are the table's heap holding every atom */
+    const bool metered = ctestHeapMeterStart();
+    cleaner(multimapAtomFree) multimapAtom *ma =
+        multimapAtomNewIndexed(index, false);
     double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
         sink += multimapAtomInsertIfNewConvert(ma, &k);
     }
-    emitRow(module, "internNew", 0, n, timeUtilMonotonicSec() - t0);
+    const double internSecs = timeUtilMonotonicSec() - t0;
+    emitRow(module, "internNew", perfHeapStop(metered), n, internSecs);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {

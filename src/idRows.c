@@ -1,4 +1,5 @@
 #include "idRows.h"
+#include "dkC23.h"
 #include "dkEndian.h"
 
 struct idRows {
@@ -10,41 +11,85 @@ struct idRows {
     uint32_t elementsPerRow;
 };
 
-/* A page's table: one little-endian uint32_t per id of the page, the
- * offset of its row's first entry from the table's own first byte (0 for
- * an absent id: every row lies past the table).  A flex header that grows
- * moves the table and the rows alike, so offsets never change for it. */
-static constexpr size_t IDROWS_TABLE_BYTES = IDROWS_PAGE * sizeof(uint32_t);
+/* A page's index, its entry 0: a little-endian uint64_t with bit s set
+ * when id s of the page is present, then room for 'capacity' little-endian
+ * uint32_t offsets, the first 'rows' in use: one per present id, in id
+ * order, the offset of its row's first entry from the index's own first
+ * byte.  The rank of an id among the present ones (a popcount below its
+ * bit) is its offset's place.
+ *
+ * Capacity doubles when the offsets fill and halves when a quarter are in
+ * use, so a set or a delete edits the index in place, and only a resize
+ * rewrites the entry (the rows then move by the bytes the entry grew,
+ * which is added to every offset).  A flex header that grows moves the
+ * index and the rows alike, so it changes no offset.  The index costs 8
+ * bytes a page and 4 to 8 a row: a page holding one row stays small, and
+ * a full page's index is 8 + 4 * 64 bytes. */
+static constexpr size_t IDROWS_PRESENT_BYTES = sizeof(uint64_t);
+static constexpr size_t IDROWS_INDEX_MAX =
+    IDROWS_PRESENT_BYTES + IDROWS_PAGE * sizeof(uint32_t);
+static constexpr uint32_t IDROWS_CAPACITY_FIRST = 1;
+static_assert(IDROWS_PAGE == 64, "a page's presence is one uint64_t");
 
-static uint8_t *idRowsTable_(const flex *f) {
+typedef struct idRowsIndex {
+    uint8_t *at;      /* the index's first byte, writable in place */
+    uint64_t present; /* bit s: id s of the page is present */
+    uint32_t rows;    /* offsets in use */
+    uint32_t capacity;
+} idRowsIndex;
+
+static idRowsIndex idRowsIndexOf_(const flex *f) {
     databox t;
     flexGetByType(flexHead(f), &t);
-    return (uint8_t *)(uintptr_t)t.data.bytes.start;
+    uint8_t *at = (uint8_t *)(uintptr_t)t.data.bytes.start;
+    const uint64_t present = dkLoadLe64(at);
+    return (idRowsIndex){
+        .at = at,
+        .present = present,
+        .rows = (uint32_t)stdc_count_ones(present),
+        .capacity =
+            (uint32_t)((t.len - IDROWS_PRESENT_BYTES) / sizeof(uint32_t)),
+    };
 }
 
-static uint32_t idRowsOffset_(const uint8_t *table, const uint32_t slot) {
-    return dkLoadLe32(table + (size_t)slot * sizeof(uint32_t));
+/* The place of 'slot' among the present slots below it */
+static uint32_t idRowsRank_(const uint64_t present, const uint32_t slot) {
+    return (uint32_t)stdc_count_ones(present & ((UINT64_C(1) << slot) - 1));
 }
 
-static void idRowsSetOffset_(uint8_t *table, const uint32_t slot,
+static uint32_t idRowsOffset_(const uint8_t *at, const uint32_t rank) {
+    return dkLoadLe32(at + IDROWS_PRESENT_BYTES + rank * sizeof(uint32_t));
+}
+
+static void idRowsSetOffset_(uint8_t *at, const uint32_t rank,
                              const uint32_t offset) {
-    dkStoreLe32(table + (size_t)slot * sizeof(uint32_t), offset);
+    dkStoreLe32(at + IDROWS_PRESENT_BYTES + rank * sizeof(uint32_t), offset);
 }
 
-/* The bytes from the table's first byte to the flex's end: a change to
- * the rows moves it by exactly the bytes the change added or removed */
-static size_t idRowsSpan_(const flex *f, const uint8_t *table) {
-    return (size_t)((const uint8_t *)f + flexBytes(f) - table);
+/* The bytes from the index's first byte to the flex's end: a change to
+ * the rows, or to the index's size, moves it by exactly the bytes the
+ * change added or removed past the index's start */
+static size_t idRowsSpan_(const flex *f, const uint8_t *at) {
+    return (size_t)((const uint8_t *)f + flexBytes(f) - at);
 }
 
-/* Move the rows of the slots after 'slot' by 'delta' bytes */
-static void idRowsShift_(uint8_t *table, const uint32_t slot,
-                         const int64_t delta) {
-    for (uint32_t s = slot + 1; s < IDROWS_PAGE; s++) {
-        const uint32_t offset = idRowsOffset_(table, s);
-        if (offset) {
-            idRowsSetOffset_(table, s, (uint32_t)((int64_t)offset + delta));
-        }
+/* Give a page's index room for 'capacity' offsets (at least its rows) */
+static void idRowsResize_(flex **ff, const uint32_t capacity) {
+    const idRowsIndex ix = idRowsIndexOf_(*ff);
+    assert(capacity >= ix.rows && capacity <= IDROWS_PAGE);
+    uint8_t bytes[IDROWS_INDEX_MAX] = {};
+    memcpy(bytes, ix.at, IDROWS_PRESENT_BYTES + ix.rows * sizeof(uint32_t));
+    const size_t spanBefore = idRowsSpan_(*ff, ix.at);
+    flexReplaceBytes(ff, flexHead(*ff), bytes,
+                     IDROWS_PRESENT_BYTES + capacity * sizeof(uint32_t));
+
+    const idRowsIndex after = idRowsIndexOf_(*ff);
+    const int64_t delta =
+        (int64_t)idRowsSpan_(*ff, after.at) - (int64_t)spanBefore;
+    for (uint32_t k = 0; k < after.rows; k++) {
+        idRowsSetOffset_(
+            after.at, k,
+            (uint32_t)((int64_t)idRowsOffset_(after.at, k) + delta));
     }
 }
 
@@ -100,14 +145,14 @@ static flexEntry *idRowsFind_(const idRows *r, const uint64_t id,
     }
 
     flex *f = r->page[p];
-    uint8_t *table = idRowsTable_(f);
-    const uint32_t offset = idRowsOffset_(table, (uint32_t)(id % IDROWS_PAGE));
-    if (!offset) {
+    const idRowsIndex ix = idRowsIndexOf_(f);
+    const uint32_t slot = (uint32_t)(id % IDROWS_PAGE);
+    if (!(ix.present >> slot & 1)) {
         return nullptr;
     }
 
     *pageOut = f;
-    return (flexEntry *)(table + offset);
+    return ix.at + idRowsOffset_(ix.at, idRowsRank_(ix.present, slot));
 }
 
 /* Decode the row at 'fe' of 'f' into 'row' (wide elements into 'slots'
@@ -149,7 +194,7 @@ bool idRowsGet(const idRows *r, const uint64_t id, databox *row[]) {
 /* ====================================================================
  * Change
  * ==================================================================== */
-/* The page for 'id', made (with an empty table) when it has none */
+/* The page for 'id', made (with an index of no row) when it has none */
 static flex **idRowsPageFor_(idRows *r, const uint64_t id) {
     const uint64_t p = id / IDROWS_PAGE;
     if (p >= r->pages) {
@@ -164,11 +209,11 @@ static flex **idRowsPageFor_(idRows *r, const uint64_t id) {
     }
 
     if (!r->page[p]) {
-        static const uint8_t empty[IDROWS_TABLE_BYTES] = {};
+        uint8_t none[IDROWS_PRESENT_BYTES +
+                     IDROWS_CAPACITY_FIRST * sizeof(uint32_t)] = {};
         /* @own: container; free=idRowsFree */
         r->page[p] = flexNew();
-        flexPushBytesExact(&r->page[p], empty, sizeof(empty),
-                           FLEX_ENDPOINT_TAIL);
+        flexPushBytesExact(&r->page[p], none, sizeof(none), FLEX_ENDPOINT_TAIL);
     }
 
     return &r->page[p];
@@ -178,59 +223,78 @@ static flex **idRowsPageFor_(idRows *r, const uint64_t id) {
  * present row of the page, or after the last */
 static void idRowsInsertRow_(const idRows *r, flex **ff, const uint32_t slot,
                              const databox *row[]) {
-    uint8_t *table = idRowsTable_(*ff);
-    const size_t spanBefore = idRowsSpan_(*ff, table);
-    uint32_t next = 0;
-    for (uint32_t s = slot + 1; s < IDROWS_PAGE && !next; s++) {
-        next = idRowsOffset_(table, s);
+    idRowsIndex ix = idRowsIndexOf_(*ff);
+    if (ix.rows == ix.capacity) {
+        /* The slot is absent, so rows < IDROWS_PAGE: doubling stays
+         * within a page */
+        idRowsResize_(ff, ix.capacity * 2);
+        ix = idRowsIndexOf_(*ff);
     }
 
-    uint32_t offset;
-    if (next) {
+    /* The row goes where the next present row starts, or at the end */
+    const uint32_t rank = idRowsRank_(ix.present, slot);
+    const size_t spanBefore = idRowsSpan_(*ff, ix.at);
+    const uint32_t offset =
+        rank < ix.rows ? idRowsOffset_(ix.at, rank) : (uint32_t)spanBefore;
+    if (rank < ix.rows) {
         /* Last element first at one position: they end in row order */
         for (uint32_t i = r->elementsPerRow; i-- > 0;) {
-            flexInsertByType(ff, (flexEntry *)(idRowsTable_(*ff) + next),
-                             row[i]);
+            flexInsertByType(ff, idRowsIndexOf_(*ff).at + offset, row[i]);
         }
-
-        offset = next;
     } else {
         for (uint32_t i = 0; i < r->elementsPerRow; i++) {
             flexPushByTypeExact(ff, row[i], FLEX_ENDPOINT_TAIL);
         }
-
-        flexEntry *fe = flexTail(*ff);
-        for (uint32_t i = 1; i < r->elementsPerRow; i++) {
-            fe = flexPrev(*ff, fe);
-        }
-
-        offset = (uint32_t)((uint8_t *)fe - idRowsTable_(*ff));
     }
 
-    table = idRowsTable_(*ff);
-    idRowsShift_(table, slot,
-                 (int64_t)idRowsSpan_(*ff, table) - (int64_t)spanBefore);
-    idRowsSetOffset_(table, slot, offset);
+    /* The later rows move up one place and by the row's bytes */
+    uint8_t *at = idRowsIndexOf_(*ff).at;
+    const int64_t delta = (int64_t)idRowsSpan_(*ff, at) - (int64_t)spanBefore;
+    for (uint32_t k = ix.rows; k > rank; k--) {
+        idRowsSetOffset_(at, k,
+                         (uint32_t)((int64_t)idRowsOffset_(at, k - 1) + delta));
+    }
+
+    idRowsSetOffset_(at, rank, offset);
+    dkStoreLe64(at, ix.present | UINT64_C(1) << slot);
 }
 
-/* Remove the row of 'slot', which is present */
-static void idRowsDeleteRow_(const idRows *r, flex **ff, const uint32_t slot) {
-    uint8_t *table = idRowsTable_(*ff);
-    const size_t spanBefore = idRowsSpan_(*ff, table);
-    flexEntry *fe = (flexEntry *)(table + idRowsOffset_(table, slot));
+/* Remove the row of 'slot', which is present; false when the page is
+ * left with no row (its index unchanged: the page is to be freed or
+ * refilled) */
+static bool idRowsDeleteRow_(const idRows *r, flex **ff, const uint32_t slot) {
+    const idRowsIndex ix = idRowsIndexOf_(*ff);
+    const uint32_t rank = idRowsRank_(ix.present, slot);
+    const size_t spanBefore = idRowsSpan_(*ff, ix.at);
+    flexEntry *fe = ix.at + idRowsOffset_(ix.at, rank);
     flexDeleteCount(ff, &fe, r->elementsPerRow);
-    table = idRowsTable_(*ff);
-    idRowsShift_(table, slot,
-                 (int64_t)idRowsSpan_(*ff, table) - (int64_t)spanBefore);
-    idRowsSetOffset_(table, slot, 0);
+    if (ix.rows == 1) {
+        return false;
+    }
+
+    /* The later rows move down one place and by the row's bytes */
+    uint8_t *at = idRowsIndexOf_(*ff).at;
+    const int64_t delta = (int64_t)idRowsSpan_(*ff, at) - (int64_t)spanBefore;
+    for (uint32_t k = rank; k + 1 < ix.rows; k++) {
+        idRowsSetOffset_(at, k,
+                         (uint32_t)((int64_t)idRowsOffset_(at, k + 1) + delta));
+    }
+
+    dkStoreLe64(at, ix.present & ~(UINT64_C(1) << slot));
+    if (ix.capacity > IDROWS_CAPACITY_FIRST && ix.rows - 1 <= ix.capacity / 4) {
+        idRowsResize_(ff, ix.capacity / 2);
+    }
+
+    return true;
 }
 
 bool idRowsSet(idRows *r, const uint64_t id, const databox *row[]) {
     flex **ff = idRowsPageFor_(r, id);
     const uint32_t slot = (uint32_t)(id % IDROWS_PAGE);
-    const bool present = idRowsOffset_(idRowsTable_(*ff), slot) != 0;
-    if (present) {
-        idRowsDeleteRow_(r, ff, slot);
+    const bool present = idRowsIndexOf_(*ff).present >> slot & 1;
+    if (present && !idRowsDeleteRow_(r, ff, slot)) {
+        /* The page's only row went: its index now holds no row */
+        dkStoreLe64(idRowsIndexOf_(*ff).at, 0);
     }
 
     idRowsInsertRow_(r, ff, slot, row);
@@ -262,6 +326,23 @@ static flexEntry *idRowsField_(idRows *r, const uint64_t id,
     return fe;
 }
 
+static size_t idRowsSpanOf_(const flex *f) {
+    return idRowsSpan_(f, idRowsIndexOf_(f).at);
+}
+
+/* After the row of 'slot' changed size in place: move the later rows'
+ * offsets by the bytes gained or lost since the span was 'spanBefore' */
+static void idRowsRowResized_(flex **ff, const uint32_t slot,
+                              const size_t spanBefore) {
+    const idRowsIndex ix = idRowsIndexOf_(*ff);
+    const int64_t delta =
+        (int64_t)idRowsSpan_(*ff, ix.at) - (int64_t)spanBefore;
+    for (uint32_t k = idRowsRank_(ix.present, slot) + 1; k < ix.rows; k++) {
+        idRowsSetOffset_(ix.at, k,
+                         (uint32_t)((int64_t)idRowsOffset_(ix.at, k) + delta));
+    }
+}
+
 bool idRowsReplaceField(idRows *r, const uint64_t id, const uint32_t field,
                         const databox *box) {
     flex **ff;
@@ -271,11 +352,9 @@ bool idRowsReplaceField(idRows *r, const uint64_t id, const uint32_t field,
         return false;
     }
 
-    const size_t spanBefore = idRowsSpan_(*ff, idRowsTable_(*ff));
+    const size_t spanBefore = idRowsSpanOf_(*ff);
     flexReplaceByType(ff, fe, box);
-    uint8_t *table = idRowsTable_(*ff);
-    idRowsShift_(table, slot,
-                 (int64_t)idRowsSpan_(*ff, table) - (int64_t)spanBefore);
+    idRowsRowResized_(ff, slot, spanBefore);
     return true;
 }
 
@@ -292,7 +371,7 @@ bool idRowsFieldIncr(idRows *r, const uint64_t id, const uint32_t field,
         return false;
     }
 
-    const size_t spanBefore = idRowsSpan_(*ff, idRowsTable_(*ff));
+    const size_t spanBefore = idRowsSpanOf_(*ff);
     int64_t sum = 0;
     if (!flexIncrbySigned(ff, fe, incrBy, &sum)) {
         if (newValue) {
@@ -304,9 +383,7 @@ bool idRowsFieldIncr(idRows *r, const uint64_t id, const uint32_t field,
         return false;
     }
 
-    uint8_t *table = idRowsTable_(*ff);
-    idRowsShift_(table, slot,
-                 (int64_t)idRowsSpan_(*ff, table) - (int64_t)spanBefore);
+    idRowsRowResized_(ff, slot, spanBefore);
     if (newValue) {
         *newValue = sum;
     }
@@ -321,37 +398,26 @@ bool idRowsDelete(idRows *r, const uint64_t id) {
     }
 
     flex **ff = &r->page[id / IDROWS_PAGE];
-    idRowsDeleteRow_(r, ff, (uint32_t)(id % IDROWS_PAGE));
     r->count--;
-
-    /* A page left with no row goes */
-    const uint8_t *table = idRowsTable_(*ff);
-    for (uint32_t s = 0; s < IDROWS_PAGE; s++) {
-        if (idRowsOffset_(table, s)) {
-            return true;
-        }
+    if (!idRowsDeleteRow_(r, ff, (uint32_t)(id % IDROWS_PAGE))) {
+        /* A page left with no row goes */
+        flexFree(*ff);
+        *ff = nullptr;
     }
 
-    flexFree(*ff);
-    *ff = nullptr;
     return true;
 }
 
 /* ====================================================================
  * Order
  * ==================================================================== */
+/* A page that exists holds at least one row, so its presence is never 0 */
 bool idRowsFirst(const idRows *r, uint64_t *id) {
     for (uint64_t p = 0; p < r->pages; p++) {
-        if (!r->page[p]) {
-            continue;
-        }
-
-        const uint8_t *table = idRowsTable_(r->page[p]);
-        for (uint32_t s = 0; s < IDROWS_PAGE; s++) {
-            if (idRowsOffset_(table, s)) {
-                *id = p * IDROWS_PAGE + s;
-                return true;
-            }
+        if (r->page[p]) {
+            const uint64_t present = idRowsIndexOf_(r->page[p]).present;
+            *id = p * IDROWS_PAGE + stdc_trailing_zeros(present);
+            return true;
         }
     }
 
@@ -360,16 +426,11 @@ bool idRowsFirst(const idRows *r, uint64_t *id) {
 
 bool idRowsLast(const idRows *r, uint64_t *id) {
     for (uint64_t p = r->pages; p-- > 0;) {
-        if (!r->page[p]) {
-            continue;
-        }
-
-        const uint8_t *table = idRowsTable_(r->page[p]);
-        for (uint32_t s = IDROWS_PAGE; s-- > 0;) {
-            if (idRowsOffset_(table, s)) {
-                *id = p * IDROWS_PAGE + s;
-                return true;
-            }
+        if (r->page[p]) {
+            const uint64_t present = idRowsIndexOf_(r->page[p]).present;
+            *id = p * IDROWS_PAGE + (IDROWS_PAGE - 1) -
+                  stdc_leading_zeros(present);
+            return true;
         }
     }
 
@@ -391,16 +452,19 @@ bool idRowsIteratorNext(idRowsIterator *iter, uint64_t *id, databox *row[],
             continue;
         }
 
-        uint8_t *table = idRowsTable_(f);
-        for (uint32_t s = (uint32_t)(iter->next % IDROWS_PAGE); s < IDROWS_PAGE;
-             s++) {
-            const uint32_t offset = idRowsOffset_(table, s);
-            if (offset) {
-                *id = p * IDROWS_PAGE + s;
-                iter->next = *id + 1;
-                idRowsDecode_(r, f, (flexEntry *)(table + offset), row, slots);
-                return true;
-            }
+        /* The present slots at or after the next id */
+        const idRowsIndex ix = idRowsIndexOf_(f);
+        const uint32_t from = (uint32_t)(iter->next % IDROWS_PAGE);
+        const uint64_t ahead = ix.present & (UINT64_MAX << from);
+        if (ahead) {
+            const uint32_t slot = stdc_trailing_zeros(ahead);
+            *id = p * IDROWS_PAGE + slot;
+            iter->next = *id + 1;
+            idRowsDecode_(
+                r, f,
+                ix.at + idRowsOffset_(ix.at, idRowsRank_(ix.present, slot)),
+                row, slots);
+            return true;
         }
 
         iter->next = (p + 1) * IDROWS_PAGE;
@@ -629,6 +693,61 @@ int idRowsTest(int, char *[]) {
 
         if (idRowsCount(r) != 0 || idRowsBytes(r) > r->pages * sizeof(flex *)) {
             ERR("emptied: %zu rows, %zu bytes", idRowsCount(r), idRowsBytes(r));
+        }
+    }
+
+    TEST("a sparse page costs its index only for the rows it holds") {
+        /* One row in each of 100 pages: per row, one flex of a 2-byte
+         * header, the index entry (8 bytes of presence + one 4-byte
+         * offset, between 1-byte length varints: 14) and the row (a
+         * 1-byte integer entry, 3, and an immediate, 1), beside the page
+         * pointers.  A full page adds 4 bytes of index per row. */
+        cleaner(idRowsFree) idRows *sparse = idRowsNew(2);
+        cleaner(idRowsFree) idRows *dense = idRowsNew(2);
+        const databox one = databoxNewUnsigned(7);
+        const databox flag = {.type = DATABOX_FALSE};
+        const databox *row[2] = {&one, &flag};
+        constexpr uint64_t pages = 100;
+        for (uint64_t p = 0; p < pages; p++) {
+            idRowsSet(sparse, p * IDROWS_PAGE + 5, row);
+        }
+
+        for (uint64_t id = 0; id < IDROWS_PAGE; id++) {
+            idRowsSet(dense, id, row);
+        }
+
+        const size_t perSparse =
+            (idRowsBytes(sparse) - sparse->pages * sizeof(flex *)) / pages;
+        const size_t perDensePage =
+            idRowsBytes(dense) - dense->pages * sizeof(flex *);
+        if (perSparse != 2 + 14 + 3 + 1) {
+            ERR("a sparse row costs %zu bytes", perSparse);
+        }
+
+        /* At most a 4-byte header, the 264-byte index (8 + 4 * 64)
+         * between 2-byte varints, and 64 rows of 4 bytes */
+        if (perDensePage > 4 + 264 + 4 + IDROWS_PAGE * 4) {
+            ERR("a full page costs %zu bytes", perDensePage);
+        }
+
+        /* Emptied to one row, the full page's offsets shrink back (the
+         * capacity halves at a quarter used, so one row keeps room for 2:
+         * 4 bytes past a single row's page) */
+        for (uint64_t id = 1; id < IDROWS_PAGE; id++) {
+            idRowsDelete(dense, id);
+        }
+
+        const size_t perShrunk =
+            idRowsBytes(dense) - dense->pages * sizeof(flex *);
+        if (perShrunk != 2 + 14 + 4 + 3 + 1) {
+            ERR("a page emptied to one row costs %zu bytes", perShrunk);
+        }
+
+        uint64_t first = 0, last = 0;
+        if (!idRowsFirst(sparse, &first) || first != 5 ||
+            !idRowsLast(sparse, &last) ||
+            last != (pages - 1) * IDROWS_PAGE + 5) {
+            ERR("first %" PRIu64 " last %" PRIu64, first, last);
         }
     }
 

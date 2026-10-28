@@ -7,13 +7,13 @@
  * ids, read and written in place without a search.
  *
  * Ids are grouped in pages of IDROWS_PAGE consecutive ids.  A page is one
- * flex: entry 0 is a table of IDROWS_PAGE row offsets (0 for an absent
- * id), then the present rows in id order.  A read is the page pointer,
- * the table and the row: no comparison, whatever the row's values.  One
- * page pointer per IDROWS_PAGE ids is the only per-id structure beyond
- * the table.  Ids may be sparse, but a page holds a table as soon as one
- * of its ids is present, so ids handed out densely (counters, reused
- * holes) suit it best.
+ * flex: entry 0 is its index (a 64-bit presence mask, then one 32-bit
+ * offset per present id), then the present rows in id order.  A read is
+ * the page pointer, a bit test and a popcount into the index, and the
+ * row: no comparison, whatever the row's values.  The index costs 8 bytes
+ * a page and 4 a row, so a page holding a single row stays small: ids
+ * may be sparse, and one page pointer per IDROWS_PAGE ids (up to the
+ * highest page) is the only cost of the holes.
  *
  * Values are stored exactly (flex's exact write path).  A read decodes
  * into the caller's boxes: byte strings point into the page and stay
