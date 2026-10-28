@@ -61,9 +61,13 @@ static uint32_t idRowsOffset_(const uint8_t *at, const uint32_t rank) {
     return dkLoadLe32(at + IDROWS_PRESENT_BYTES + rank * sizeof(uint32_t));
 }
 
+/* Offsets are 32-bit: a page whose rows pass 4 GB fails here rather than
+ * wrapping */
 static void idRowsSetOffset_(uint8_t *at, const uint32_t rank,
-                             const uint32_t offset) {
-    dkStoreLe32(at + IDROWS_PRESENT_BYTES + rank * sizeof(uint32_t), offset);
+                             const int64_t offset) {
+    assert(offset >= 0 && offset <= UINT32_MAX);
+    dkStoreLe32(at + IDROWS_PRESENT_BYTES + rank * sizeof(uint32_t),
+                (uint32_t)offset);
 }
 
 /* The bytes from the index's first byte to the flex's end: a change to
@@ -87,9 +91,8 @@ static void idRowsResize_(flex **ff, const uint32_t capacity) {
     const int64_t delta =
         (int64_t)idRowsSpan_(*ff, after.at) - (int64_t)spanBefore;
     for (uint32_t k = 0; k < after.rows; k++) {
-        idRowsSetOffset_(
-            after.at, k,
-            (uint32_t)((int64_t)idRowsOffset_(after.at, k) + delta));
+        idRowsSetOffset_(after.at, k,
+                         (int64_t)idRowsOffset_(after.at, k) + delta);
     }
 }
 
@@ -234,8 +237,8 @@ static void idRowsInsertRow_(const idRows *r, flex **ff, const uint32_t slot,
     /* The row goes where the next present row starts, or at the end */
     const uint32_t rank = idRowsRank_(ix.present, slot);
     const size_t spanBefore = idRowsSpan_(*ff, ix.at);
-    const uint32_t offset =
-        rank < ix.rows ? idRowsOffset_(ix.at, rank) : (uint32_t)spanBefore;
+    const int64_t offset =
+        rank < ix.rows ? idRowsOffset_(ix.at, rank) : (int64_t)spanBefore;
     if (rank < ix.rows) {
         /* Last element first at one position: they end in row order */
         for (uint32_t i = r->elementsPerRow; i-- > 0;) {
@@ -251,8 +254,7 @@ static void idRowsInsertRow_(const idRows *r, flex **ff, const uint32_t slot,
     uint8_t *at = idRowsIndexOf_(*ff).at;
     const int64_t delta = (int64_t)idRowsSpan_(*ff, at) - (int64_t)spanBefore;
     for (uint32_t k = ix.rows; k > rank; k--) {
-        idRowsSetOffset_(at, k,
-                         (uint32_t)((int64_t)idRowsOffset_(at, k - 1) + delta));
+        idRowsSetOffset_(at, k, (int64_t)idRowsOffset_(at, k - 1) + delta);
     }
 
     idRowsSetOffset_(at, rank, offset);
@@ -276,8 +278,7 @@ static bool idRowsDeleteRow_(const idRows *r, flex **ff, const uint32_t slot) {
     uint8_t *at = idRowsIndexOf_(*ff).at;
     const int64_t delta = (int64_t)idRowsSpan_(*ff, at) - (int64_t)spanBefore;
     for (uint32_t k = rank; k + 1 < ix.rows; k++) {
-        idRowsSetOffset_(at, k,
-                         (uint32_t)((int64_t)idRowsOffset_(at, k + 1) + delta));
+        idRowsSetOffset_(at, k, (int64_t)idRowsOffset_(at, k + 1) + delta);
     }
 
     dkStoreLe64(at, ix.present & ~(UINT64_C(1) << slot));
@@ -338,8 +339,7 @@ static void idRowsRowResized_(flex **ff, const uint32_t slot,
     const int64_t delta =
         (int64_t)idRowsSpan_(*ff, ix.at) - (int64_t)spanBefore;
     for (uint32_t k = idRowsRank_(ix.present, slot) + 1; k < ix.rows; k++) {
-        idRowsSetOffset_(ix.at, k,
-                         (uint32_t)((int64_t)idRowsOffset_(ix.at, k) + delta));
+        idRowsSetOffset_(ix.at, k, (int64_t)idRowsOffset_(ix.at, k) + delta);
     }
 }
 

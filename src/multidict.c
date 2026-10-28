@@ -3364,6 +3364,10 @@ static_assert(sizeof(uintptr_t) == 8,
 
 /* The pointer of a bare flex slot: the flex and its middle row's offset */
 DK_INLINE_ALWAYS multidictSlot *mmFlexSlot_(flex *f, const uint32_t middle) {
+    /* An allocator that tags the top byte (arm64 top-byte-ignore heaps,
+     * MTE) or a 57-bit address space would collide with the middle: fail
+     * loudly here rather than read a wrong flex later */
+    assert(((uintptr_t)f >> 48) == 0 && middle <= UINT16_MAX);
     return (multidictSlot *)((uintptr_t)f | ((uintptr_t)middle << 48));
 }
 
