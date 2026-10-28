@@ -152,7 +152,15 @@ typedef enum multidictInsertAbsentResult {
     MULTIDICT_INSERT_ADDED = 1,    /* the row went in */
 } multidictInsertAbsentResult;
 
-/* multidictClass is a (17 * 8) + 1, padded = 144 byte struct: the
+/* What a rewrite-or-insert did (upsertByType) */
+typedef enum multidictUpsertResult {
+    MULTIDICT_UPSERT_NO_SLOT = -1,  /* no slot to insert into */
+    MULTIDICT_UPSERT_DECLINED = 0,  /* present; 'update' returned false */
+    MULTIDICT_UPSERT_REWRITTEN = 1, /* present; its value replaced */
+    MULTIDICT_UPSERT_ADDED = 2,     /* absent; the given row went in */
+} multidictUpsertResult;
+
+/* multidictClass is a (18 * 8) + 1, padded = 152 byte struct: the
  * per-operation hooks fill the first cache line. */
 typedef struct multidictClass {
     /* Private data this class needs (atom dict, key dict, etc) */
@@ -217,6 +225,14 @@ typedef struct multidictClass {
     multidictInsertAbsentResult (*insertIfAbsentByType)(
         struct multidictClass *qdc, multidictSlot **slot, const databox *keybox,
         const databox *valbox);
+
+    /* Rewrite the value of 'keybox' in place as 'update' says (it sees
+     * the stored value and supplies the new one), or, when the key is not
+     * in the slot, insert 'keybox' -> 'valbox' there.  (IncrBy and
+     * IncrByFloat use it, so a new counter costs one dict lookup.) */
+    multidictUpsertResult (*upsertByType)(
+        struct multidictClass *qdc, multidictSlot **slot, const databox *keybox,
+        const databox *valbox, multidictValueUpdate *update, void *ctx);
 
     /* Rehash uses getIter/iterNext, insertByType and freeSlot: every row
      * of an old slot is read in place and inserted into its new slot, then

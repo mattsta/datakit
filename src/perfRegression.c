@@ -733,6 +733,19 @@ static void benchMultidict(void) {
     }
     emitRow("multidict", "incrByFloat", 0, n, timeUtilMonotonicSec() - t0);
 
+    /* IncrBy of keys not yet there: each one creates its counter */
+    {
+        cleaner(multidictFree) multidict *fresh =
+            multidictNew(&multidictTypeExactKey, qdc, 7);
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            int64_t out = 0;
+            sink += multidictIncrBy(fresh, &k, 1, &out);
+        }
+        emitRow("multidict", "incrByNew", 0, n, timeUtilMonotonicSec() - t0);
+    }
+
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox k = perfContainerKey(keys, i);
