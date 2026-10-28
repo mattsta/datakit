@@ -112,10 +112,17 @@ static bool pcMosHoldsBytes(const void *structure, const databox *bytes) {
     return found;
 }
 
+static bool pcMosSameSettings(const void *original, const void *restored) {
+    return multiOrderedSetLimit(original) == multiOrderedSetLimit(restored) &&
+           multiOrderedSetCompresses(original) ==
+               multiOrderedSetCompresses(restored);
+}
+
 const persistContractType persistContractMultiOrderedSet = {
     .ops = &persistOpsMultiOrderedSet,
     .build = pcMosBuild,
     .holdsBytes = pcMosHoldsBytes,
+    .sameSettings = pcMosSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

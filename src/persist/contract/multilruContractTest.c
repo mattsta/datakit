@@ -25,13 +25,17 @@ static void pcLruDelete(multilru *lru, const persistContractBuild *b,
 
 static void *pcLruBuild(const persistContractBuild *b) {
     uint64_t rng = b->seed;
-    /* Weighted and unweighted LRUs of four levels, no limits (evictions
-     * are explicit, as multilruP logs them) */
+    /* Weighted and unweighted LRUs of four or seven levels; limits far
+     * above what a build holds, so evictions stay explicit (as multilruP
+     * logs them) while the snapshot still carries every setting */
     const bool weights = splitmix64(&rng) & 1;
+    const bool other = splitmix64(&rng) & 1;
     const multilruConfig config = {
-        .maxLevels = 4,
-        .policy = MLRU_POLICY_COUNT,
-        .evictStrategy = MLRU_EVICT_LRU,
+        .maxLevels = other ? 7 : 4,
+        .maxCount = other ? UINT64_C(1) << 40 : 0,
+        .maxWeight = other && weights ? UINT64_C(1) << 50 : 0,
+        .policy = other && weights ? MLRU_POLICY_HYBRID : MLRU_POLICY_COUNT,
+        .evictStrategy = other ? MLRU_EVICT_SIZE_LRU : MLRU_EVICT_LRU,
         .enableWeights = weights,
     };
     /* @own: caller; free=multilruFree */
@@ -91,9 +95,23 @@ static void *pcLruBuild(const persistContractBuild *b) {
     return lru;
 }
 
+static bool pcLruSameSettings(const void *original, const void *restored) {
+    multilruStats a;
+    multilruStats b;
+    multilruGetStats(original, &a);
+    multilruGetStats(restored, &b);
+    return a.maxLevels == b.maxLevels && a.maxCount == b.maxCount &&
+           a.maxWeight == b.maxWeight &&
+           multilruGetPolicy(original) == multilruGetPolicy(restored) &&
+           multilruGetEvictStrategy(original) ==
+               multilruGetEvictStrategy(restored) &&
+           multilruHasWeights(original) == multilruHasWeights(restored);
+}
+
 const persistContractType persistContractMultiLRU = {
     .ops = &persistOpsMultiLRU,
     .build = pcLruBuild,
+    .sameSettings = pcLruSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

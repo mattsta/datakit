@@ -61,6 +61,8 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
  * it compresses */
 flexCapSizeLimit multimapLimit(const multimap *m);
 bool multimapCompresses(const multimap *m);
+/* The elements in each row (key first) */
+multimapElements multimapElementsPerEntry(const multimap *m);
 
 bool multimapInsert(multimap **m, const databox *elements[]);
 /* multimapInsert that also reports the value entries a replace overwrote

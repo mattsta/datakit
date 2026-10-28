@@ -34,8 +34,9 @@ static void pcAtomRecordId(persistContractLog *log, persistOp op, uint64_t id,
  * id, releases by value (the last release deletes) and deletes by id; a
  * quarter of the seeds build a permanent table */
 static void *pcMultimapAtomBuild(const persistContractBuild *b) {
-    multimapAtom *ma =
-        b->seed % 4 == 0 ? multimapAtomNewPermanent() : multimapAtomNew();
+    /* Every index kind, permanent ids or not, by seed */
+    multimapAtom *ma = multimapAtomNewIndexed(
+        (multimapAtomIndex)((b->seed / 4) % 3), b->seed % 4 == 0);
     persistContractStart(b->log, ma);
 
     uint64_t rng = b->seed;
@@ -99,10 +100,18 @@ static bool pcMultimapAtomHoldsBytes(const void *structure,
            persistContractSameBytes(&got, bytes);
 }
 
+static bool pcMultimapAtomSameSettings(const void *original,
+                                       const void *restored) {
+    return multimapAtomGetIndex(original) == multimapAtomGetIndex(restored) &&
+           multimapAtomIsPermanent(original) ==
+               multimapAtomIsPermanent(restored);
+}
+
 const persistContractType persistContractMultimapAtom = {
     .ops = &persistOpsMultimapAtom,
     .build = pcMultimapAtomBuild,
     .holdsBytes = pcMultimapAtomHoldsBytes,
+    .sameSettings = pcMultimapAtomSameSettings,
 };
 
 /* As pcMultimapAtomBuild through the lowest-first table: releases and
@@ -260,10 +269,16 @@ static bool pcStringPoolHoldsBytes(const void *structure,
            persistContractSameBytes(&got, bytes);
 }
 
+static bool pcStringPoolSameSettings(const void *original,
+                                     const void *restored) {
+    return stringPoolIdsOf(original) == stringPoolIdsOf(restored);
+}
+
 const persistContractType persistContractStringPool = {
     .ops = &persistOpsStringPool,
     .build = pcStringPoolBuild,
     .holdsBytes = pcStringPoolHoldsBytes,
+    .sameSettings = pcStringPoolSameSettings,
 };
 
 /* As pcStringPoolBuild through the pool interface, over both backends and
@@ -327,10 +342,16 @@ static bool pcAtomPoolHoldsBytes(const void *structure, const databox *bytes) {
            persistContractSameBytes(&got, bytes);
 }
 
+static bool pcAtomPoolSameSettings(const void *original, const void *restored) {
+    return atomPoolGetType(original) == atomPoolGetType(restored) &&
+           atomPoolGetIds(original) == atomPoolGetIds(restored);
+}
+
 const persistContractType persistContractAtomPool = {
     .ops = &persistOpsAtomPool,
     .build = pcAtomPoolBuild,
     .holdsBytes = pcAtomPoolHoldsBytes,
+    .sameSettings = pcAtomPoolSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

@@ -31,6 +31,9 @@ typedef struct idRows idRows;
 [[nodiscard]] idRows *idRowsNew(uint32_t elementsPerRow);
 void idRowsFree(idRows *r);
 
+/* The elements in each row, as made */
+uint32_t idRowsElementsPerRow(const idRows *r);
+
 /* Rows held, and the bytes of the pages and the page pointers */
 size_t idRowsCount(const idRows *r);
 size_t idRowsBytes(const idRows *r);

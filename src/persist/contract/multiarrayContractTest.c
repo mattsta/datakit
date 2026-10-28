@@ -23,8 +23,10 @@ static void pcMultiarrayElement(uint64_t *rng, uint8_t out[PC_MA_WIDTH]) {
 }
 
 static void *pcMultiarrayBuild(const persistContractBuild *b) {
+    /* The row maximum varies by seed, so the snapshot carries it */
+    const uint16_t rowMax = b->seed & 1 ? PC_MA_ROWMAX * 4 : PC_MA_ROWMAX;
     /* @own: caller; free=multiarrayFree */
-    multiarray *m = multiarrayNew(PC_MA_WIDTH, PC_MA_ROWMAX);
+    multiarray *m = multiarrayNew(PC_MA_WIDTH, rowMax);
     persistContractStart(b->log, m);
 
     uint64_t rng = b->seed;
@@ -57,18 +59,26 @@ static void *pcMultiarrayBuild(const persistContractBuild *b) {
         }
 
         if (b->size >= 100 && i == b->size / 3) {
+            /* A clear keeps the array's settings, as replay's does */
             multiarrayFree(m);
             /* @own: caller; free=multiarrayFree */
-            m = multiarrayNew(PC_MA_WIDTH, PC_MA_ROWMAX);
+            m = multiarrayNew(PC_MA_WIDTH, rowMax);
             persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
         }
     }
     return m;
 }
 
+static bool pcMultiarraySameSettings(const void *original,
+                                     const void *restored) {
+    return multiarrayElementLen(original) == multiarrayElementLen(restored) &&
+           multiarrayRowMax(original) == multiarrayRowMax(restored);
+}
+
 const persistContractType persistContractMultiarray = {
     .ops = &persistOpsMultiarray,
     .build = pcMultiarrayBuild,
+    .sameSettings = pcMultiarraySameSettings,
 };
 
 #endif /* DATAKIT_TEST */

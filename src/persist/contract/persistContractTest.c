@@ -465,6 +465,19 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
     uint8_t *snap = nullptr;
     size_t snapLen = 0;
     if (pcRoundTrip(row, ops, live, "round trip", &snap, &snapLen)) {
+        /* The restored structure has the settings the live one was built
+         * with (a setting the snapshot does not carry leaves both
+         * snapshots equal, so only a direct comparison sees it) */
+        if (t->sameSettings) {
+            void *restored = pcRestore(ops, snap, snapLen);
+            if (restored && !t->sameSettings(live, restored)) {
+                PC_FAIL(row, ops, "%s", "restore changed a setting");
+            }
+            if (restored) {
+                ops->free(restored);
+            }
+        }
+
         /* A snapshot-only type (no encodeOp/applyOp) has no WAL */
         const bool hasWal = ops->encodeOp && ops->applyOp;
         if (hasWal) {

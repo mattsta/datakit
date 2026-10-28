@@ -434,6 +434,12 @@ configuration, and holds it to one frozen contract:
    bound.
 4. **Strings**: numeral-looking strings (`"22"`, `"007"`, `"1.5"`, `"-3"`, 128-bit
    numerals) keep their bytes through snapshot, restore and replay.
+5. **Settings**: a type with construction settings (size limits, compression,
+   set or row width, load factors, eviction policy and limits, LRU levels,
+   index kinds, id policies) builds with settings that vary by seed, and its
+   `sameSettings` probe compares the restored structure's settings with the
+   live one's through the type's getters. A setting the snapshot does not
+   carry leaves both snapshots equal, so only this check sees it.
 
 It prints one table row per type (elements, snapshot bytes and ns per element,
 restore ns per element, WAL ops replayed, damaged snapshots refused and

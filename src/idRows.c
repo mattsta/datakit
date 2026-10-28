@@ -156,6 +156,10 @@ void idRowsFree(idRows *r) {
     zfree(r);
 }
 
+uint32_t idRowsElementsPerRow(const idRows *r) {
+    return r->elementsPerRow;
+}
+
 size_t idRowsCount(const idRows *r) {
     return r->count;
 }

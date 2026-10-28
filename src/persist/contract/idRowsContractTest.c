@@ -98,10 +98,15 @@ static bool pcIdRowsHoldsBytes(const void *structure, const databox *bytes) {
     return false;
 }
 
+static bool pcIdRowsSameSettings(const void *original, const void *restored) {
+    return idRowsElementsPerRow(original) == idRowsElementsPerRow(restored);
+}
+
 const persistContractType persistContractIdRows = {
     .ops = &persistOpsIdRows,
     .build = pcIdRowsBuild,
     .holdsBytes = pcIdRowsHoldsBytes,
+    .sameSettings = pcIdRowsSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

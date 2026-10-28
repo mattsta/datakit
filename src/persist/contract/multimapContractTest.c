@@ -39,8 +39,13 @@ static void *pcMultimapBuild(const persistContractBuild *b) {
     const uint64_t shape = splitmix64(&rng);
     const uint32_t width = 1 + (uint32_t)(shape % 3);
     const bool set = (shape >> 8) & 1;
+    /* ... compressing or not, at a small, the default or a large limit */
+    const bool compress = (shape >> 9) & 1;
+    static const flexCapSizeLimit limits[] = {
+        FLEX_CAP_LEVEL_256, FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_4096};
+    const flexCapSizeLimit limit = limits[(shape >> 10) % countof(limits)];
     /* @own: caller; free=multimapFree */
-    multimap *m = set ? multimapSetNew(width) : multimapNew(width);
+    multimap *m = multimapNewConfigure(width, set, compress, limit);
     persistContractStart(b->log, m);
 
     /* Two rows: each insert fills the other one, so the last inserted row
@@ -133,10 +138,20 @@ static bool pcMultimapHoldsBytes(const void *structure, const databox *bytes) {
     return false;
 }
 
+static bool pcMultimapSameSettings(const void *original, const void *restored) {
+    const multimap *a = original;
+    const multimap *b = restored;
+    return multimapElementsPerEntry(a) == multimapElementsPerEntry(b) &&
+           multimapIsSet(a) == multimapIsSet(b) &&
+           multimapCompresses(a) == multimapCompresses(b) &&
+           multimapLimit(a) == multimapLimit(b);
+}
+
 const persistContractType persistContractMultimap = {
     .ops = &persistOpsMultimap,
     .build = pcMultimapBuild,
     .holdsBytes = pcMultimapHoldsBytes,
+    .sameSettings = pcMultimapSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

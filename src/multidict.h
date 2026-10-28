@@ -470,6 +470,8 @@ void multidictResizeDisable(multidict *d);
  * pointer), slightly longer slot searches. */
 bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
                              uint32_t shrinkPercent);
+void multidictGetLoadFactors(const multidict *d, uint32_t *expandPercent,
+                             uint32_t *shrinkPercent);
 /* The load factors every dict created from now on starts with (the same
  * bounds; false, changing nothing, for others).  Dicts that exist keep
  * theirs.  The compiled default is 800% and 40% (MULTIDICT.md, "Load
@@ -500,6 +502,10 @@ void multidictEnableByteBasedExpansion(multidict *d, uint64_t targetSlotBytes,
                                        uint64_t maxSlotBytes);
 void multidictDisableByteBasedExpansion(multidict *d);
 bool multidictIsByteBasedExpansion(multidict *d);
+/* Whether byte-based expansion is on; its target and maximum slot bytes */
+bool multidictGetByteBasedExpansion(const multidict *d,
+                                    uint64_t *targetSlotBytes,
+                                    uint64_t *maxSlotBytes);
 
 /* LRU Policy Configuration */
 typedef enum multidictEvictPolicy {
@@ -527,6 +533,8 @@ typedef enum multidictEvictPolicy {
 bool multidictEnableLRU(multidict *d, size_t levels);
 void multidictDisableLRU(multidict *d);
 bool multidictHasLRU(multidict *d);
+/* The LRU's level count, 0 when LRU tracking is off */
+size_t multidictLRULevels(const multidict *d);
 void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy);
 multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
 void multidictTouch(multidict *d, const databox *keybox);

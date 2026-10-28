@@ -2251,6 +2251,14 @@ bool multidictIsByteBasedExpansion(multidict *d) {
     return likely(d) ? d->useByteBasedExpand : false;
 }
 
+bool multidictGetByteBasedExpansion(const multidict *d,
+                                    uint64_t *targetSlotBytes,
+                                    uint64_t *maxSlotBytes) {
+    *targetSlotBytes = d->targetSlotBytes;
+    *maxSlotBytes = d->maxSlotBytes;
+    return d->useByteBasedExpand;
+}
+
 /* Helper: get user data bytes (key + val, not slot overhead) */
 static uint64_t multidictUserBytes(multidict *d) {
     return multidictKeyBytes(d) + multidictValBytes(d);
@@ -2463,6 +2471,16 @@ void multidictDisableLRU(multidict *d) {
 /* Check if LRU is enabled */
 bool multidictHasLRU(multidict *d) {
     return d && d->lruEnabled;
+}
+
+size_t multidictLRULevels(const multidict *d) {
+    if (!d->lruEnabled) {
+        return 0;
+    }
+
+    multilruStats stats;
+    multilruGetStats(d->lru, &stats);
+    return stats.maxLevels;
 }
 
 /* Set eviction policy */
@@ -3182,6 +3200,12 @@ bool multidictSetLoadFactors(multidict *d, const uint32_t expandPercent,
     d->expandLoadFactor = (uint16_t)expandPercent;
     d->shrinkLoadFactor = (uint8_t)shrinkPercent;
     return true;
+}
+
+void multidictGetLoadFactors(const multidict *d, uint32_t *expandPercent,
+                             uint32_t *shrinkPercent) {
+    *expandPercent = d->expandLoadFactor;
+    *shrinkPercent = d->shrinkLoadFactor;
 }
 
 /* The load factors new dicts start with: expand in the low 16 bits,
@@ -5428,10 +5452,11 @@ static int multidictTestPersistKeys_(void) {
     cleanerName(zfree, SeenBytes) uint8_t *customSnap =
         testSnapshot_(custom, &customLen);
 
-    /* The key record and the hash seed, then the pairs */
-    if (!exactSnap || flexCount((const flex *)exactSnap) != 6 || !ciSnap ||
-        flexCount((const flex *)ciSnap) != 6 || !ciEmptySnap ||
-        flexCount((const flex *)ciEmptySnap) != 2 || !customSnap) {
+    /* The key record, the hash seed and the eight settings, then the
+     * pairs */
+    if (!exactSnap || flexCount((const flex *)exactSnap) != 14 || !ciSnap ||
+        flexCount((const flex *)ciSnap) != 14 || !ciEmptySnap ||
+        flexCount((const flex *)ciEmptySnap) != 10 || !customSnap) {
         ERR("multidict snapshot layout");
         return err;
     }

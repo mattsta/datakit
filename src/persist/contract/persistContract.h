@@ -68,6 +68,10 @@ typedef struct persistContractType {
      * the same content.  NULL for types that store no strings (4 is then
      * not applicable). */
     bool (*holdsBytes)(const void *structure, const databox *bytes);
+    /* True iff `restored` has every construction setting of `original`
+     * (limits, compression, kinds, policies), read through the type's
+     * getters.  NULL for types with no settings beyond their contents. */
+    bool (*sameSettings)(const void *original, const void *restored);
 } persistContractType;
 
 /* Every registered type, each defined in its own *ContractTest.c */

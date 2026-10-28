@@ -100,9 +100,19 @@ static void *pcMultiroarBuild(const persistContractBuild *b) {
     return r;
 }
 
+static bool pcMultiroarSameSettings(const void *original,
+                                    const void *restored) {
+    uint64_t aRows = 0, aCols = 0, bRows = 0, bCols = 0;
+    multiroarValueDimensions(original, &aRows, &aCols);
+    multiroarValueDimensions(restored, &bRows, &bCols);
+    return multiroarValueWidth(original) == multiroarValueWidth(restored) &&
+           aRows == bRows && aCols == bCols;
+}
+
 const persistContractType persistContractMultiroar = {
     .ops = &persistOpsMultiroar,
     .build = pcMultiroarBuild,
+    .sameSettings = pcMultiroarSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

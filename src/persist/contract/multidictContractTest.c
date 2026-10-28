@@ -23,6 +23,25 @@ static void *pcMultidictBuild(const persistContractBuild *b) {
     multidictClass *cls = multidictDefaultClassNew();
     /* @own: caller; free=multidictFree */
     multidict *d = multidictNew(&multidictTypeExactKey, cls, 0);
+
+    /* Settings by seed, so the snapshot carries them: the defaults; other
+     * load factors with LRU tracking, an LRU policy and a memory cap (far
+     * above what a build holds, so nothing is evicted); byte-based
+     * expansion */
+    switch (b->seed % 3) {
+    case 1:
+        multidictSetLoadFactors(d, 400, 50);
+        multidictEnableLRU(d, 5);
+        multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
+        multidictSetMaxMemory(d, UINT64_C(1) << 40);
+        break;
+    case 2:
+        multidictSetLoadFactors(d, 1600, 100);
+        multidictEnableByteBasedExpansion(d, 4096, 65536);
+        break;
+    default:
+        break;
+    }
     persistContractStart(b->log, d);
 
     uint64_t rng = b->seed;
@@ -82,10 +101,31 @@ static bool pcMultidictHoldsBytes(const void *structure, const databox *bytes) {
     return found;
 }
 
+static bool pcMultidictSameSettings(const void *original,
+                                    const void *restored) {
+    multidict *a = (multidict *)original;
+    multidict *b = (multidict *)restored;
+    uint32_t aExpand, aShrink, bExpand, bShrink;
+    multidictGetLoadFactors(a, &aExpand, &aShrink);
+    multidictGetLoadFactors(b, &bExpand, &bShrink);
+    uint64_t aTarget, aMax, bTarget, bMax;
+    const bool aBytes = multidictGetByteBasedExpansion(a, &aTarget, &aMax);
+    const bool bBytes = multidictGetByteBasedExpansion(b, &bTarget, &bMax);
+    return aExpand == bExpand && aShrink == bShrink &&
+           multidictGetMaxMemory(a) == multidictGetMaxMemory(b) &&
+           multidictGetEvictPolicy(a) == multidictGetEvictPolicy(b) &&
+           aBytes == bBytes &&
+           (!aBytes || (aTarget == bTarget && aMax == bMax)) &&
+           multidictLRULevels(a) == multidictLRULevels(b) &&
+           multidictGetHashFunctionSeed(a) == multidictGetHashFunctionSeed(b) &&
+           multidictGetType(a) == multidictGetType(b);
+}
+
 const persistContractType persistContractMultidict = {
     .ops = &persistOpsMultidict,
     .build = pcMultidictBuild,
     .holdsBytes = pcMultidictHoldsBytes,
+    .sameSettings = pcMultidictSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

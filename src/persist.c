@@ -3815,12 +3815,7 @@ static constexpr int MULTIMAP_PERSIST_LIMIT_SHIFT = 16;
 /* Get elementsPerEntry using the iterator interface (avoids internal
  * headers) */
 static uint32_t multimapPersistGetElementsPerEntry(const multimap *m) {
-    /* The iterator caches elementsPerEntry, so we can use it to extract the
-     * value */
-    multimapIterator iter;
-    multimapIteratorInit(m, &iter,
-                         true); /* void return, always sets elementsPerEntry */
-    return iter.elementsPerEntry;
+    return multimapElementsPerEntry(m);
 }
 
 static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
@@ -4046,9 +4041,10 @@ const persistOps persistOpsMultimap = {
     .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_MULTIMAP,
     .name = "multimap",
-    /* 2: the snapshot shape carries the size limit and compression */
-    .formatVersion = 2,
-    .minReadVersion = 2,
+    /* The snapshot's shape word carries the row width, set, compression
+     * and size limit */
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multimapPersistSnapshot,
     .restore = multimapPersistRestore,
     .newEmpty = multimapPersistNewEmpty,
@@ -4488,6 +4484,9 @@ typedef enum mdPersistKeys {
     MD_PERSIST_KEYS_CUSTOM = 2, /* any other type: the caller supplies it */
 } mdPersistKeys;
 
+/* A snapshot: [keys, seed, the settings (this many), key, val, ...] */
+static constexpr size_t MD_PERSIST_SETTINGS = 8;
+
 static mdPersistKeys mdPersistKeysOf(const multidictType *type) {
     if (type == &multidictTypeExactKey) {
         return MD_PERSIST_KEYS_EXACT;
@@ -4530,6 +4529,27 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     const databox seed =
         DATABOX_UNSIGNED(multidictGetHashFunctionSeed((multidict *)d));
     flexPushByTypeExact(&f, &seed, FLEX_ENDPOINT_TAIL);
+
+    /* The dict's settings, as restore applies them (MD_PERSIST_SETTINGS
+     * entries): load factors, memory cap, eviction policy, byte-based
+     * expansion (on, target, maximum) and LRU levels (0: off) */
+    uint32_t expand;
+    uint32_t shrink;
+    multidictGetLoadFactors(d, &expand, &shrink);
+    uint64_t byteTarget;
+    uint64_t byteMax;
+    const bool byBytes =
+        multidictGetByteBasedExpansion(d, &byteTarget, &byteMax);
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, expand);
+    flexRowUnsigned(&row, shrink);
+    flexRowUnsigned(&row, multidictGetMaxMemory((multidict *)d));
+    flexRowUnsigned(&row, multidictGetEvictPolicy((multidict *)d));
+    flexRowUnsigned(&row, byBytes);
+    flexRowUnsigned(&row, byteTarget);
+    flexRowUnsigned(&row, byteMax);
+    flexRowUnsigned(&row, multidictLRULevels(d));
+    flexRowAppendExact(&f, &row);
 
     /* [key, val, key, val, ...] in key order: the hash table's order
      * depends on its size and growth history, so pairs are sorted to make
@@ -4587,8 +4607,9 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
 
-    /* The key-matching element and the hash seed, then whole pairs */
-    if (count < 2 || count % 2 != 0) {
+    /* The key-matching element, the hash seed and the settings, then whole
+     * pairs */
+    if (count < 2 + MD_PERSIST_SETTINGS || (count - MD_PERSIST_SETTINGS) % 2) {
         return nullptr;
     }
     databox tag = {};
@@ -4606,7 +4627,19 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     }
     const int32_t seed = (int32_t)(uint32_t)seedBox.data.u;
     fe = flexNext(f, fe);
-    count -= 2;
+
+    /* expand, shrink, maxMemory, policy, byBytes, byteTarget, byteMax,
+     * lruLevels: each an unsigned, checked as the setters check them */
+    uint64_t s[MD_PERSIST_SETTINGS];
+    for (size_t i = 0; i < MD_PERSIST_SETTINGS; i++) {
+        if (!flexReadUnsigned(f, &fe, &s[i])) {
+            return nullptr;
+        }
+    }
+    if (s[3] > MULTIDICT_EVICT_SIZE_LRU || s[4] > 1 || s[7] > 64) {
+        return nullptr;
+    }
+    count -= 2 + MD_PERSIST_SETTINGS;
 
     multidictType *type;
     if (want) {
@@ -4630,6 +4663,20 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     /* @own: caller; free=multidictFree */
     multidict *d = multidictNew(type, qdc, seed);
 
+    /* The settings that shape growth and tracking go in before the pairs;
+     * the memory cap and eviction policy after them, so no restore evicts
+     * what it is restoring */
+    if (s[0] > UINT32_MAX || s[1] > UINT32_MAX ||
+        !multidictSetLoadFactors(d, (uint32_t)s[0], (uint32_t)s[1]) ||
+        (s[7] && !multidictEnableLRU(d, (size_t)s[7]))) {
+        multidictFree(d);
+        multidictDefaultClassFree(qdc);
+        return nullptr;
+    }
+    if (s[4]) {
+        multidictEnableByteBasedExpansion(d, s[5], s[6]);
+    }
+
     /* Size the table for every pair once, instead of rehashing as it
      * grows through the adds */
     if (count >= 2) {
@@ -4652,6 +4699,8 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         multidictPut(d, (databox *)&key, (databox *)&val);
     }
 
+    multidictSetMaxMemory(d, s[2]);
+    multidictSetEvictPolicy(d, (multidictEvictPolicy)s[3]);
     return d;
 }
 
@@ -4771,9 +4820,11 @@ static void *multidictPersistNewEmpty(void) {
 const persistOps persistOpsMultidict = {
     .type = PERSIST_TYPE_MULTIDICT,
     .name = "multidict",
-    /* 2: the snapshot carries the dict's hash seed */
-    .formatVersion = 2,
-    .minReadVersion = 2,
+    /* The snapshot carries the key kind, the hash seed and the dict's
+     * settings (load factors, memory cap, eviction policy, byte-based
+     * expansion, LRU levels) ahead of the pairs */
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multidictPersistSnapshot,
     .restore = multidictPersistRestore,
     .newEmpty = multidictPersistNewEmpty,
@@ -5608,9 +5659,9 @@ static void *multiOrderedSetPersistNewEmpty(void) {
 const persistOps persistOpsMultiOrderedSet = {
     .type = PERSIST_TYPE_MULTIORDEREDSET,
     .name = "multiOrderedSet",
-    /* 2: the snapshot leads with the set's limit and compress setting */
-    .formatVersion = 2,
-    .minReadVersion = 2,
+    /* The snapshot leads with the set's limit and compress setting */
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multiOrderedSetPersistSnapshot,
     .restore = multiOrderedSetPersistRestore,
     .newEmpty = multiOrderedSetPersistNewEmpty,

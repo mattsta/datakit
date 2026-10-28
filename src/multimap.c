@@ -976,6 +976,10 @@ static multimapElements multimapElementsPerEntry_(const multimap *m) {
     }
 }
 
+multimapElements multimapElementsPerEntry(const multimap *m) {
+    return multimapElementsPerEntry_(m);
+}
+
 /* Resize the FIRST VALUE field of the row with 'key' to 'newSize' bytes
  * (rows wider than key+value: use multimapGetUnderlyingEntry +
  * multimapResizeEntry to target other fields).  The key must exist

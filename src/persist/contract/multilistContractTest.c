@@ -26,9 +26,13 @@ static void pcMultilistPush(multilist **ml, mflexState *state,
 static void *pcMultilistBuild(const persistContractBuild *b) {
     cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
     cleaner(mflexStateFree) mflexState *second = mflexStateCreate();
-    /* A small node size, so builds reach the Medium and Full tiers */
+    /* A small node size, so builds reach the Medium and Full tiers; the
+     * limit and compression depth vary by seed, so the snapshot carries
+     * them */
+    const flexCapSizeLimit limit =
+        b->seed & 1 ? FLEX_CAP_LEVEL_512 : FLEX_CAP_LEVEL_256;
     /* @own: caller; free=multilistFree */
-    multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_256, 0);
+    multilist *ml = multilistNewLimit(limit, (uint32_t)(b->seed % 3));
     persistContractStart(b->log, ml);
 
     uint64_t rng = b->seed;
@@ -118,10 +122,17 @@ static bool pcMultilistHoldsBytes(const void *structure, const databox *bytes) {
     return found;
 }
 
+static bool pcMultilistSameSettings(const void *original,
+                                    const void *restored) {
+    return multilistLimit(original) == multilistLimit(restored) &&
+           multilistDepth(original) == multilistDepth(restored);
+}
+
 const persistContractType persistContractMultilist = {
     .ops = &persistOpsMultilist,
     .build = pcMultilistBuild,
     .holdsBytes = pcMultilistHoldsBytes,
+    .sameSettings = pcMultilistSameSettings,
 };
 
 #endif /* DATAKIT_TEST */
