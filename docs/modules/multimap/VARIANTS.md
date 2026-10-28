@@ -511,22 +511,22 @@ heap bytes per atom", which meters the allocator over 20k atoms.
 
 | per atom                    | ORDERED | HASHED | DICT  |
 | --------------------------- | ------- | ------ | ----- |
-| find, scattered order       | 1650    | 732    | 113   |
-| intern a present key        | 1093    | 531    | 67    |
-| intern a new key            | 1809    | 1278   | 605   |
-| retain by key               | 1178    | 600    | 315   |
-| release by key              | 1198    | 612    | 343   |
-| delete by ID                | 1885    | 1024   | 619   |
-| read an ID back, scattered  | 270     | 270    | 270   |
+| find, scattered order       | 1210    | 591    | 125   |
+| intern a present key        | 827     | 426    | 75    |
+| intern a new key            | 1358    | 1207   | 544   |
+| retain by key               | 912     | 496    | 260   |
+| release by key              | 971     | 520    | 277   |
+| delete by ID                | 1414    | 936    | 531   |
+| read an ID back, scattered  | 165     | 167    | 165   |
 | heap bytes, 11-byte strings | 24.8    | 31.0   | 54.2  |
 | heap bytes, 48-byte strings | 74.0    | 79.6   | 145.9 |
 | heap bytes, integers        | 15.7    | 22.1   | 37.2  |
 
-- HASHED (default): about half ORDERED's time on every key operation for 6 to
-  7 more bytes per atom.
+- HASHED (default): half to two thirds of ORDERED's time on every key
+  operation for 6 to 7 more bytes per atom.
 - ORDERED: the least memory. For large tables of rarely searched keys, where
   references are mostly read back by ID (the same cost under every kind).
-- DICT: 6 to 8 times faster than HASHED on finds, at about twice the memory.
+- DICT: 5 to 6 times faster than HASHED on finds, at about twice the memory.
   The key is stored twice, so the cost grows with key length: it suits tables
   of short keys searched far more often than they are added, and not tables
   kept to share long values.
