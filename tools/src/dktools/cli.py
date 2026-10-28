@@ -719,9 +719,19 @@ def main(argv: list[str] | None = None) -> int:
     tu.add_argument(
         "--baseline",
         type=int,
-        default=tune.DEFAULT_BASELINE,
-        help="the limit results are read against and kept unless a clear win "
-        f"beats it (default {tune.DEFAULT_BASELINE}, the compiled default)",
+        default=None,
+        help="the setting results are read against and kept unless a clear win "
+        "beats it, for every family (default: each family's compiled default, "
+        f"{tune.DEFAULT_BASELINE} for the size limits, "
+        f"{tune.DEFAULT_BASELINES['multidict']} for multidict's load factor)",
+    )
+    tu.add_argument(
+        "--slower",
+        type=float,
+        default=tune.SLOWER * 100,
+        help="the most, in percent, a win may slow the mix or one operation "
+        f"(default {tune.SLOWER * 100:.0f}; raise it to take memory wins that "
+        "cost more time)",
     )
     tu.add_argument("--runs", type=int, default=5, help="sweep runs (default 5)")
     tu.add_argument(
@@ -1092,6 +1102,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 families=tune.parse_families(args.families),
                 mixes=tune.parse_mixes(args.mix),
                 baseline=args.baseline,
+                slower=args.slower / 100,
                 runs=args.runs,
                 compiler=toolchain.from_args(args.compiler, args),
                 root=args.root,

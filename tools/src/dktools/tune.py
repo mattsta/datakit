@@ -1,6 +1,10 @@
 """Measure each tiered family's speed and memory against its size limit on
 this machine, against the default limit, and say whether a different
-limit is a clear win.
+limit is a clear win.  multidict is tuned the same way on its count-based
+load factor (its ``multidictLimits`` sweep averages each factor over
+three table sizes, a growth cycle's spread of fullness), against its own
+default of 800.  ``--slower PCT`` sets how much slower a memory win may be
+(default 15).
 
 Usage::
 
@@ -55,10 +59,19 @@ from pathlib import Path
 from . import buildstore, gitutil, perfcompare, perfdiff, procs, steps, toolchain
 from .gitutil import ToolError
 
-FAMILIES = ("multimap", "multiOrderedSet", "multilist")
+#: The families whose setting is a dkTierFamily size limit (dkTierLimit.h)
+TIER_FAMILIES = ("multimap", "multiOrderedSet", "multilist")
+#: Every tuned family: the tier families, and multidict, whose setting is
+#: its count-based load factor (percent; multidictSetDefaultLoadFactors)
+FAMILIES = (*TIER_FAMILIES, "multidict")
 #: The limit the plain constructors use until changed (DK_TIER_LIMIT_COMPILED
 #: in dkTierLimit.h): the baseline every result is read against
 DEFAULT_BASELINE = 2048
+#: Per family, the setting its plain constructors use until changed
+#: (multidict: MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR in multidict.c)
+DEFAULT_BASELINES = {**dict.fromkeys(TIER_FAMILIES, DEFAULT_BASELINE), "multidict": 800}
+#: A baseline for every family alike (--baseline), or one per family
+Baseline = int | dict[str, int]
 #: A limit wins on speed when its mix runs this much faster than at the
 #: baseline in every run
 SPEED_WIN = 0.15
@@ -93,7 +106,20 @@ OP_CLASS = {
         "delete": "write",
         "popHead": "write",
     },
+    "multidict": {
+        "add": "write",
+        "find": "read",
+        "findScattered": "read",
+        "delete": "write",
+    },
 }
+
+
+def baseline_of(baseline: Baseline, family: str) -> int:
+    """The family's baseline: the one for every family, or its own"""
+    return baseline if isinstance(baseline, int) else baseline[family]
+
+
 CLASSES = ("read", "write")
 
 _ROW = re.compile(r"^(?P<op>[A-Za-z]+?)(?P<limit>\d+)$")
@@ -223,7 +249,10 @@ class TuneOptions:
     name: str
     families: list[str] = field(default_factory=lambda: list(FAMILIES))
     mixes: tuple[Mix, ...] = MIXES
-    baseline: int = DEFAULT_BASELINE
+    #: one baseline for every family; None: each family's own default
+    baseline: int | None = None
+    #: the most a win may slow the mix or one operation (a fraction)
+    slower: float = SLOWER
     runs: int = 5
     compiler: toolchain.Compiler = field(
         default_factory=lambda: toolchain.resolve_compiler(toolchain.DEFAULT_COMPILER)
@@ -335,9 +364,12 @@ class Sweep:
                 out[limit] = Spread.of(ratios)
         return out
 
-    def decide(self, mix: Mix, baseline: int) -> Decision | None:
+    def decide(
+        self, mix: Mix, baseline: int, slower: float = SLOWER
+    ) -> Decision | None:
         """Keep the baseline unless a limit is a clear win for 'mix'
-        (None when the mix runs none of these operations)"""
+        (None when the mix runs none of these operations); 'slower' caps
+        how much slower a win may make the mix or one operation"""
         vs = self.versus(mix, baseline)
         if not vs:
             return None
@@ -346,7 +378,7 @@ class Sweep:
         base_bytes = self.bytes.get(baseline)
 
         def no_op_slower(limit: int) -> bool:
-            return all(change[limit].get(op, 0.0) < SLOWER - _EPS for op in ran)
+            return all(change[limit].get(op, 0.0) < slower - _EPS for op in ran)
 
         others = [limit for limit in vs if limit != baseline]
         faster = [
@@ -360,7 +392,7 @@ class Sweep:
             if base_bytes
             and limit in self.bytes
             and self.bytes[limit] <= (1 - BYTES_WIN) * base_bytes + _EPS
-            and vs[limit].high < 1 + SLOWER - _EPS
+            and vs[limit].high < 1 + slower - _EPS
             and no_op_slower(limit)
         ]
 
@@ -390,7 +422,7 @@ class Sweep:
         slow = [
             f"{op} {change[nearest][op] * 100:+.0f}%"
             for op in ran
-            if change[nearest].get(op, 0.0) >= SLOWER - _EPS
+            if change[nearest].get(op, 0.0) >= slower - _EPS
         ]
         if slow:
             reasons.append(f"{', '.join(slow)} there")
@@ -399,7 +431,7 @@ class Sweep:
             for limit in others
             if base_bytes
             and self.bytes.get(limit, base_bytes) < base_bytes
-            and vs[limit].median < 1 + SLOWER - _EPS
+            and vs[limit].median < 1 + slower - _EPS
             and no_op_slower(limit)
         ]
         denser = densest(close) if close else None
@@ -513,7 +545,10 @@ def _human(n: int) -> str:
 
 
 def apply_text(family: str, limit: int) -> str:
-    """The C that makes ``limit`` the family's limit."""
+    """The C that makes ``limit`` the family's setting (multidict: its
+    load factor, shrinking below a twentieth of it as the default does)."""
+    if family == "multidict":
+        return f"multidictSetDefaultLoadFactors({limit}, {limit // 20});"
     return f"dkTierSetDefaultLimit({DEFAULT_SETTERS[family]}, FLEX_CAP_LEVEL_{limit});"
 
 
@@ -559,19 +594,28 @@ def _table(header: list[str], rows: list[list[tuple[str, str]]]) -> list[str]:
     return out
 
 
-def legend(mixes: tuple[Mix, ...], baseline: int, runs: int) -> list[str]:
+def legend(
+    mixes: tuple[Mix, ...], baseline: Baseline, runs: int, slower: float = SLOWER
+) -> list[str]:
     """How to read the report, said once at its top"""
+    if isinstance(baseline, int):
+        marks = f"limit {baseline} (the default the plain constructors use)"
+    else:
+        marks = (
+            "each family's default ("
+            + ", ".join(f"{family} {value}" for family, value in baseline.items())
+            + ")"
+        )
     lines = [
-        f"reading   * marks the baseline, limit {baseline} (the default the plain "
-        "constructors use)",
+        f"reading   * marks the baseline, {marks}",
         "          an operation: median ns/op, then its change against the baseline",
         "          bytes: the filled container, then its change against the baseline",
         "          a mix: its mean ns per operation against the baseline's (0.85 = 15% "
         "faster), [lowest-highest] over the runs",
         f"          change only for a clear win: {SPEED_WIN:.0%} faster for the mix in "
         f"every run, or {BYTES_WIN:.0%} fewer bytes",
-        f"          while under {SLOWER:.0%} slower in every run; never with one "
-        f"operation {SLOWER:.0%} or more slower",
+        f"          while under {slower:.0%} slower in every run; never with one "
+        f"operation {slower:.0%} or more slower",
     ]
     if runs < 3:
         lines.append(
@@ -617,7 +661,8 @@ def render(
     found: dict[str, Sweep],
     caches: list[tuple[str, int]],
     mixes: tuple[Mix, ...] = MIXES,
-    baseline: int = DEFAULT_BASELINE,
+    baselines: Baseline = DEFAULT_BASELINE,
+    slower: float = SLOWER,
 ) -> list[str]:
     lines = []
     if caches:
@@ -625,8 +670,9 @@ def render(
             "caches    " + ", ".join(f"{label} {_human(n)}" for label, n in caches)
         )
     runs = min((s.runs() for s in found.values()), default=0)
-    lines.extend(legend(mixes, baseline, runs))
+    lines.extend(legend(mixes, baselines, runs, slower))
     for family, sweep in found.items():
+        baseline = baseline_of(baselines, family)
         ops = sweep.ops()
         classes = OP_CLASS.get(family, {})
         ns = sweep.ns
@@ -681,7 +727,7 @@ def render(
             rows.append(row)
         lines.extend(_table(["limit", *ops, "bytes", *(m.name for m in mixes)], rows))
         for mix in mixes:
-            d = sweep.decide(mix, baseline)
+            d = sweep.decide(mix, baseline, slower)
             text = (
                 decision_text(family, sweep, d)
                 if d
@@ -702,16 +748,18 @@ def _spread_json(s: Spread) -> dict[str, float]:
 def analysis(
     found: dict[str, Sweep],
     mixes: tuple[Mix, ...] = MIXES,
-    baseline: int = DEFAULT_BASELINE,
+    baselines: Baseline = DEFAULT_BASELINE,
+    slower: float = SLOWER,
 ) -> dict:
     """Everything the report says, as data: per family the noise, each
     limit's bytes and per-operation change, and per mix the decision and
     every limit's ratio against the baseline"""
     families: dict[str, dict] = {}
     for family, sweep in found.items():
+        baseline = baseline_of(baselines, family)
         per_mix = {}
         for mix in mixes:
-            d = sweep.decide(mix, baseline)
+            d = sweep.decide(mix, baseline, slower)
             if d is None:
                 continue
             entry = {
@@ -740,9 +788,10 @@ def analysis(
                 str(k): {op: round(v, 4) for op, v in per.items()}
                 for k, per in sweep.op_change(baseline).items()
             },
+            "baseline": baseline,
             "mixes": per_mix,
         }
-    return {"baseline": baseline, "families": families}
+    return {"baseline": baselines, "slower": slower, "families": families}
 
 
 # -- run -----------------------------------------------------------------
@@ -760,9 +809,10 @@ def parse_families(text: str | None) -> list[str]:
     return names
 
 
-def check_baseline(found: dict[str, Sweep], baseline: int) -> None:
-    """ToolError unless every family measured the baseline limit"""
+def check_baseline(found: dict[str, Sweep], baselines: Baseline) -> None:
+    """ToolError unless every family measured its baseline"""
     for family, sweep in found.items():
+        baseline = baseline_of(baselines, family)
         if baseline not in sweep.samples:
             raise ToolError(
                 f"--baseline {baseline}: {family} measured only "
@@ -803,12 +853,17 @@ def report(
     missing = [f for f in opts.families if f not in found]
     if missing:
         raise ToolError(f"no sweep rows for {', '.join(missing)}")
-    check_baseline(found, opts.baseline)
-    body = render(found, cache_sizes(), opts.mixes, opts.baseline)
+    baselines: Baseline = (
+        opts.baseline
+        if opts.baseline is not None
+        else {family: DEFAULT_BASELINES[family] for family in found}
+    )
+    check_baseline(found, baselines)
+    body = render(found, cache_sizes(), opts.mixes, baselines, opts.slower)
     text = "\n".join([title, *body]) + "\n"
     (work / "result.txt").write_text(text)
     (work / "result.json").write_text(
-        json.dumps(analysis(found, opts.mixes, opts.baseline), indent=2) + "\n"
+        json.dumps(analysis(found, opts.mixes, baselines, opts.slower), indent=2) + "\n"
     )
     sys.stdout.write(text)
     return 0
@@ -818,8 +873,10 @@ def run(repo: Path, opts: TuneOptions) -> int:
     """Build, sweep, report (or, with opts.reuse, report on an earlier
     measurement of the same name); the exit code (ToolError: input)."""
     name = gitutil.check_name(opts.name)
-    if opts.baseline < 1:
-        raise ToolError(f"--baseline must be a limit in bytes (got {opts.baseline})")
+    if opts.baseline is not None and opts.baseline < 1:
+        raise ToolError(f"--baseline must be a positive setting (got {opts.baseline})")
+    if not 0 < opts.slower < 10:
+        raise ToolError(f"--slower must be a percent above 0 (got {opts.slower:.0%})")
     if opts.runs < 1:
         raise ToolError(f"--runs must be at least 1 (got {opts.runs})")
     if opts.jobs is not None and opts.jobs < 1:

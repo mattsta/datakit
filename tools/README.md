@@ -1009,19 +1009,27 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
   root, where the TSVs are generated, use
   `uv run --project tools dktools perfdiff perf.baseline.tsv perf.current.tsv`.
 
-## tune — size limits measured on this machine
+## tune — size limits and load factors measured on this machine
 
 ```sh
-uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist] \
-    [--mix [NAME:]KEY=SHARE[,KEY=SHARE...]]... [--baseline LIMIT] [--runs N] [--reuse]
+uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multidict] \
+    [--mix [NAME:]KEY=SHARE[,KEY=SHARE...]]... [--baseline N] [--slower PCT] \
+    [--runs N] [--reuse]
 ```
 
 - Builds HEAD plus the changed tracked paths with the perf preset under
-  `ROOT/tune/NAME`, then runs perfRegression's size-limit sweeps
-  (`<family>Limits`: every operation at every limit from 256 B to 8 KB,
-  100,000 values, rows named `<op><limit>`) `--runs` times.
-- Everything is read against the baseline: the limit the plain constructors
-  use today (`--baseline`, default 2048, marked `*`). Per family and limit:
+  `ROOT/tune/NAME`, then runs perfRegression's sweeps `--runs` times:
+  the size-limit sweeps (`<family>Limits`: every operation at every limit
+  from 256 B to 8 KB, 100,000 values, rows named `<op><limit>`) and
+  multidict's load factor sweep (`multidictLimits`: 200% to 3200%, each
+  operation summed over tables of 40k, 70k and 100k entries so a factor's
+  numbers span a growth cycle; bytes are the tables' metered heap).
+- Everything is read against the baseline: the setting the plain
+  constructors use today, each family's own (2048 for the size limits, 800
+  for multidict; `--baseline` sets one for every family), marked `*`.
+  `--slower PCT` (default 15) is how much slower a win may make a mix or
+  one of its operations: raise it where memory matters more than time.
+  Per family and setting:
   - each operation's median ns/op and its change against the baseline (the
     family's header says which operations are reads and which writes);
   - the filled container's bytes and their change;
@@ -1050,7 +1058,8 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   ratio range) are kept in the work directory.
 - The call is `dkTierSetDefaultLimit` (`src/dkTierLimit.h`), which each
   family's plain constructor (`multimapNew`, `multiOrderedSetNew`,
-  `multilistNew`) reads.
+  `multilistNew`) reads; for multidict, `multidictSetDefaultLoadFactors`
+  (`src/multidict.h`), which `multidictNew` reads.
 
 ## perfcompare — a change's performance against a base revision
 

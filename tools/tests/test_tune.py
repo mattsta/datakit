@@ -61,6 +61,15 @@ MULTIMAP = {
 }
 MULTIMAP_BYTES = {512: 2427742, 1024: 2336757, 2048: 2291032, 4096: 2264514}
 
+#: multidict's load sweep in the measured shape: 200 is faster and much
+#: larger, 3200 smaller and much slower, against the default 800
+MULTIDICT = {
+    200: {"add": 290.0, "find": 57.0, "findScattered": 68.0, "delete": 125.0},
+    800: {"add": 300.0, "find": 75.0, "findScattered": 89.0, "delete": 140.0},
+    3200: {"add": 380.0, "find": 125.0, "findScattered": 143.0, "delete": 180.0},
+}
+MULTIDICT_BYTES = {200: 9262736, 800: 6300592, 3200: 5084992}
+
 
 class Sweeps(unittest.TestCase):
     def test_rows_group_by_family_op_and_limit_in_run_order(self) -> None:
@@ -390,6 +399,46 @@ class Report(unittest.TestCase):
             f"#define DK_TIER_LIMIT_COMPILED FLEX_CAP_LEVEL_{tune.DEFAULT_BASELINE}",
             header,
         )
+        source = (REPO / "src" / "multidict.c").read_text()
+        self.assertIn(
+            "MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR = "
+            f"{tune.DEFAULT_BASELINES['multidict']};",
+            source,
+        )
+
+    def test_each_family_reads_against_its_own_baseline(self) -> None:
+        found = {
+            "multimap": sweep_of("multimap", MULTIMAP, MULTIMAP_BYTES),
+            "multidict": sweep_of("multidict", MULTIDICT, MULTIDICT_BYTES),
+        }
+        baselines = {f: tune.DEFAULT_BASELINES[f] for f in found}
+        tune.check_baseline(found, baselines)
+        with self.assertRaises(ToolError):
+            tune.check_baseline(found, 2048)  # multidict never measured 2048
+        text = "\n".join(tune.render(found, [], tune.MIXES, baselines))
+        self.assertIn("each family's default (multimap 2048, multidict 800)", text)
+        self.assertIn("800*", text)
+        self.assertIn("2048*", text)
+        out = tune.analysis(found, tune.MIXES, baselines)
+        self.assertEqual(out["families"]["multidict"]["baseline"], 800)
+        self.assertEqual(out["families"]["multimap"]["baseline"], 2048)
+
+    def test_slower_lets_a_memory_win_cost_more_time(self) -> None:
+        # Against 200, 800 holds 32% fewer bytes with finds about 31%
+        # slower: past the default 15% cap on one operation, inside a 40%
+        # one (3200's finds, over twice as slow, stay out either way)
+        sweep = sweep_of("multidict", MULTIDICT, MULTIDICT_BYTES)
+        equal = tune.MIXES[0]
+        kept = sweep.decide(equal, 200)
+        self.assertEqual(kept.why, "keep")
+        taken = sweep.decide(equal, 200, slower=0.40)
+        self.assertEqual((taken.why, taken.limit), ("smaller", 800))
+        self.assertEqual(
+            tune.decision_text("multidict", sweep, taken).split("apply: ")[1],
+            "multidictSetDefaultLoadFactors(800, 40);",
+        )
+        legend = "\n".join(tune.legend(tune.MIXES, 200, 5, 0.40))
+        self.assertIn("while under 40% slower", legend)
 
 
 class Mixes(unittest.TestCase):
@@ -438,6 +487,11 @@ class Mixes(unittest.TestCase):
             r'PERF_LIMIT_ROW\(\s*"(\w+)Limits",\s*"(\w+)"', source
         ):
             rows.setdefault(family, set()).add(op)
+        # multidict's sweep names its rows from its operation table
+        names = re.search(r"mdLoadOpNames\[MD_LOAD_OP_COUNT\] = \{([^}]*)\}", source)
+        self.assertIsNotNone(names)
+        rows["multidict"] = set(re.findall(r'"(\w+)"', names.group(1)))
+        self.assertIn('emitRow("multidictLimits"', source)
         self.assertEqual(sorted(rows), sorted(tune.FAMILIES))
         for family, ops in rows.items():
             with self.subTest(family=family):
@@ -458,10 +512,19 @@ class Mixes(unittest.TestCase):
 
     def test_every_family_has_a_setter_the_header_names(self) -> None:
         text = (REPO / "src" / "dkTierLimit.h").read_text()
-        self.assertEqual(sorted(tune.DEFAULT_SETTERS), sorted(tune.FAMILIES))
+        self.assertEqual(sorted(tune.DEFAULT_SETTERS), sorted(tune.TIER_FAMILIES))
         for family, setter in tune.DEFAULT_SETTERS.items():
             with self.subTest(family=family):
                 self.assertIn(setter, text)
+        # multidict's setting is its load factor, set by its own call
+        self.assertIn(
+            "bool multidictSetDefaultLoadFactors(",
+            (REPO / "src" / "multidict.h").read_text(),
+        )
+        self.assertEqual(
+            tune.apply_text("multidict", 1600),
+            "multidictSetDefaultLoadFactors(1600, 80);",
+        )
 
 
 class Caches(unittest.TestCase):
