@@ -2174,6 +2174,57 @@ static void benchMultilist(void) {
     perfContainerSink = sink;
 }
 
+defcleanerName(multilist **, zfree, PerfLists);
+
+/* Many small lists, as a store of one list per key holds them: 25000
+ * lists of 4 integers each made (bytes: their metered heap), every
+ * element read by index with the lists visited in scattered order, then
+ * the lists freed */
+static void benchMultilistMany(void) {
+    static constexpr uint32_t lists = 25'000;
+    static constexpr uint32_t per = 4;
+    cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
+    cleanerName(zfree, PerfLists) multilist **many =
+        zcalloc(lists, sizeof(*many));
+    uint64_t sink = 0;
+
+    const bool metered = ctestHeapMeterStart();
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < lists; i++) {
+        /* @own: container; free=multilistFree */
+        many[i] = multilistNew();
+        for (uint32_t j = 0; j < per; j++) {
+            const databox b = databoxNewSigned((int64_t)(i * per + j));
+            multilistPushByTypeTail(&many[i], s, &b);
+        }
+    }
+    const double addSecs = timeUtilMonotonicSec() - t0;
+    emitRow("multilist", "manySmallPush", perfHeapStop(metered), lists * per,
+            addSecs);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < lists; i++) {
+        const uint32_t list = (i * 7919u) % lists;
+        for (uint32_t j = 0; j < per; j++) {
+            multilistEntry e;
+            sink += multilistIndexGet(many[list], s, j, &e)
+                        ? (uint64_t)e.box.data.i
+                        : 0;
+        }
+    }
+    emitRow("multilist", "manySmallIndex", 0, lists * per,
+            timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < lists; i++) {
+        multilistFree(many[i]);
+    }
+    emitRow("multilist", "manySmallFree", 0, lists,
+            timeUtilMonotonicSec() - t0);
+
+    perfContainerSink = sink;
+}
+
 /* An LRU of 'n' entries ('n' picks the entry width: 5 bytes up to 64K
  * entries, 6 bytes to 1M): inserts, promotions of scattered entries,
  * deletes of every fourth entry, and evicting the rest, each running
@@ -2855,6 +2906,7 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("multilist")) {
             benchMultilist();
+            benchMultilistMany();
         }
 
         if (perfWanted("multilru")) {
