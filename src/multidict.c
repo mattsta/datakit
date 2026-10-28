@@ -8,10 +8,13 @@
 #include "cleaner.h"
 #include "datakit.h"
 #include "dkSort.h"
+#include "dkTierLimit.h" /* a bare flex slot's size before it is a multimap */
 #include "fibbuf.h"
 #include "flex.h"
 #include "multilru.h"
 #include "multimap.h"
+#include "multimapSmall.h"         /* a bare flex slot's row operations */
+#include "multimapSmallInternal.h" /* the view a bare flex slot is used as */
 #include "str.h"
 #include "timeUtil.h"
 #include "util.h" /* getRandomBytes */
@@ -3339,10 +3342,58 @@ void multidictOpRepr(const multidictOp *op) {
  * Multimap-Based Slot Implementation
  * ==================================================================== */
 
-/* A slot is the multimap itself (key + value rows): the table cell holds
- * it, and the hooks that may reallocate it take the cell */
+/* A slot holds {key, value} rows.  While it is small it is a bare flex:
+ * no multimap header beside it, and no header to load before the rows.
+ * Its pointer carries what the header would: the low two bits are 0 (a
+ * multimap's are its tier, 1 to 3), and the top 16 bits, which 64-bit
+ * user addresses leave clear (ptrlib.h), hold the offset of its middle
+ * row.  Each operation views it as a small multimap built on the stack
+ * from that pointer, so every row operation is the small multimap's own
+ * code, and the view's middle goes back into the pointer after a change.
+ * Once it grows past what a small multimap holds it becomes a multimap,
+ * which grows its tiers itself.  The table cell holds the slot, and the
+ * hooks that may reallocate or replace it take the cell. */
 #define MM_SLOT(slot) ((multimap *)(slot))
 #define MM_SLOT_REF(slot) ((multimap **)(slot))
+#define MM_SLOT_IS_FLEX(slot) (((uintptr_t)(slot) & 3u) == 0)
+#define MM_FLEX_OF(slot)                                                       \
+    ((flex *)((uintptr_t)(slot) & ~(UINT64_C(0xFFFF) << 48)))
+#define MM_FLEX_MIDDLE(slot) ((uint32_t)((uintptr_t)(slot) >> 48))
+static_assert(sizeof(uintptr_t) == 8,
+              "a bare flex slot keeps its middle in pointer bits 48-63");
+
+/* The pointer of a bare flex slot: the flex and its middle row's offset */
+DK_INLINE_ALWAYS multidictSlot *mmFlexSlot_(flex *f, const uint32_t middle) {
+    return (multidictSlot *)((uintptr_t)f | ((uintptr_t)middle << 48));
+}
+
+/* A new, empty bare flex slot */
+DK_INLINE_ALWAYS multidictSlot *mmFlexSlotNew_(void) {
+    /* @own: container; free=mmSlotFree */
+    return mmFlexSlot_(flexNew(), FLEX_EMPTY_SIZE);
+}
+
+/* A bare flex slot as a small multimap of {key, value} rows */
+DK_INLINE_ALWAYS multimapSmall mmFlexView_(multidictSlot *slot) {
+    return (multimapSmall){.map = MM_FLEX_OF(slot),
+                           .middle = MM_FLEX_MIDDLE(slot),
+                           .elementsPerEntry = 2};
+}
+
+/* After a change through 'view': the cell holds its (maybe moved) flex
+ * and middle, or, past a small multimap's size (or a middle the pointer
+ * cannot hold), the multimap its rows become */
+DK_STATIC void mmFlexSettle_(multidictSlot **slot, const multimapSmall *view) {
+    const flexCapSizeLimit limit = dkTierDefaultLimit(DK_TIER_MULTIMAP);
+    if (flexBytes(view->map) <= flexOptimizationSizeLimit[limit] &&
+        view->middle <= UINT16_MAX) {
+        *slot = mmFlexSlot_(view->map, view->middle);
+        return;
+    }
+
+    /* @own: container; free=mmSlotFree */
+    *slot = multimapNewFromDump(2, false, false, limit, view->map);
+}
 
 DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,
                                const databox *keybox, const databox *valbox,
@@ -3353,8 +3404,16 @@ DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,
 
     const databox *elements[2] = {keybox, valbox};
     databox overwritten;
-    const bool wasReplaced = multimapInsertReplacing(
-        MM_SLOT_REF(slot), elements, replaced ? replaced : &overwritten);
+    databox *const out = replaced ? replaced : &overwritten;
+    bool wasReplaced;
+    if (MM_SLOT_IS_FLEX(*slot)) {
+        multimapSmall view = mmFlexView_(*slot);
+        wasReplaced = multimapSmallInsertReplacing(&view, elements, out);
+        mmFlexSettle_(slot, &view);
+    } else {
+        wasReplaced = multimapInsertReplacing(MM_SLOT_REF(slot), elements, out);
+    }
+
     return wasReplaced ? 0 : 1; /* 1 = new insert, 0 = replaced */
 }
 
@@ -3366,16 +3425,23 @@ mmSlotInsertIfAbsent(multidictClass *, multidictSlot **slot,
     }
 
     const databox *elements[2] = {keybox, valbox};
-    return multimapInsertIfAbsent(MM_SLOT_REF(slot), elements)
-               ? MULTIDICT_INSERT_ADDED
-               : MULTIDICT_INSERT_PRESENT;
+    bool added;
+    if (MM_SLOT_IS_FLEX(*slot)) {
+        multimapSmall view = mmFlexView_(*slot);
+        added = multimapSmallInsertIfAbsent(&view, elements, nullptr);
+        mmFlexSettle_(slot, &view);
+    } else {
+        added = multimapInsertIfAbsent(MM_SLOT_REF(slot), elements);
+    }
+
+    return added ? MULTIDICT_INSERT_ADDED : MULTIDICT_INSERT_PRESENT;
 }
 
 DK_STATIC void *mmSlotGetOrCreate(multidictClass *, multidictSlot **slot,
                                   const databox *) {
     if (*slot == nullptr) {
         /* @own: container; free=mmSlotFree */
-        *slot = multimapNew(2); /* key + value */
+        *slot = mmFlexSlotNew_(); /* rows of key + value */
     }
     return *slot;
 }
@@ -3385,6 +3451,15 @@ DK_STATIC bool mmSlotRemove(multidictClass *, multidictSlot **slot,
                             bool take) {
     if (*slot == nullptr) {
         return false;
+    }
+
+    if (MM_SLOT_IS_FLEX(*slot)) {
+        multimapSmall view = mmFlexView_(*slot);
+        const bool removed =
+            take ? multimapSmallDeleteTaking(&view, keybox, removedVal)
+                 : multimapSmallDeleteReporting(&view, keybox, removedVal);
+        *slot = mmFlexSlot_(view.map, view.middle);
+        return removed;
     }
 
     return take
@@ -3398,28 +3473,62 @@ DK_STATIC bool mmSlotFindValue(multidictClass *, multidictSlot *slot,
         return false;
     }
 
-    /* multimapLookup returns only the non-key elements in the array.
-     * For a 2-element multimap (key + value), elements[0] gets the value. */
+    /* Lookups return only the non-key elements in the array.  For rows
+     * of key + value, elements[0] gets the value. */
     databox *elements[1] = {valbox};
+    if (MM_SLOT_IS_FLEX(slot)) {
+        multimapSmall view = mmFlexView_(slot);
+        return multimapSmallLookup(&view, keybox, elements);
+    }
+
     return multimapLookup(MM_SLOT(slot), keybox, elements);
 }
 
 DK_STATIC void *mmSlotCreate(void) {
     /* @own: container; free=mmSlotFree */
-    return multimapNew(2); /* key + value */
+    return mmFlexSlotNew_(); /* rows of key + value */
+}
+
+/* The rows a slot holds */
+DK_INLINE_ALWAYS uint32_t mmSlotRows_(multidictSlot *slot) {
+    return MM_SLOT_IS_FLEX(slot) ? (uint32_t)(flexCount(MM_FLEX_OF(slot)) / 2)
+                                 : (uint32_t)multimapCount(MM_SLOT(slot));
 }
 
 DK_STATIC uint32_t mmSlotFree(multidictClass *, multidictSlot *slot) {
-    if (slot) {
-        const uint32_t count = multimapCount(MM_SLOT(slot));
-        multimapFree(MM_SLOT(slot));
-        return count;
+    if (!slot) {
+        return 0;
     }
-    return 0;
+
+    const uint32_t count = mmSlotRows_(slot);
+    if (MM_SLOT_IS_FLEX(slot)) {
+        flexFree(MM_FLEX_OF(slot));
+    } else {
+        multimapFree(MM_SLOT(slot));
+    }
+
+    return count;
 }
 
 DK_STATIC size_t mmSlotSizeBytes(multidictSlot *slot) {
-    return slot ? multimapBytes(MM_SLOT(slot)) : 0;
+    if (!slot) {
+        return 0;
+    }
+
+    return MM_SLOT_IS_FLEX(slot) ? flexBytes(MM_FLEX_OF(slot))
+                                 : multimapBytes(MM_SLOT(slot));
+}
+
+/* An iterator over a slot's rows, forward */
+DK_INLINE_ALWAYS void mmSlotIteratorInit_(multidictSlot *slot,
+                                          multimapIterator *iter) {
+    if (MM_SLOT_IS_FLEX(slot)) {
+        /* The iterator keeps the flex, not the view */
+        multimapSmall view = mmFlexView_(slot);
+        multimapSmallIteratorInit(&view, iter, true);
+    } else {
+        multimapIteratorInit(MM_SLOT(slot), iter, true);
+    }
 }
 
 /* Iterator state stored in multidictSlotIterator.iterspace */
@@ -3432,12 +3541,12 @@ DK_STATIC bool mmSlotGetIter(multidictSlotIterator *iter, multidictSlot *slot) {
         return false;
     }
 
-    if (multimapCount(MM_SLOT(slot)) == 0) {
+    if (mmSlotRows_(slot) == 0) {
         return false;
     }
 
     mmSlotIterState *state = (mmSlotIterState *)iter->iterspace;
-    multimapIteratorInit(MM_SLOT(slot), &state->mmIter, true);
+    mmSlotIteratorInit_(slot, &state->mmIter);
     iter->slot = slot;
     iter->index = 0;
     return true;
@@ -3470,7 +3579,7 @@ DK_STATIC bool mmSlotIterNext(multidictSlotIterator *iter,
 }
 
 DK_STATIC uint32_t mmSlotCount(multidictSlot *slot) {
-    return slot ? multimapCount(MM_SLOT(slot)) : 0;
+    return slot ? mmSlotRows_(slot) : 0;
 }
 
 DK_STATIC bool mmSlotFindKeyByPos(multidictClass *, multidictSlot *slot,
@@ -3481,7 +3590,7 @@ DK_STATIC bool mmSlotFindKeyByPos(multidictClass *, multidictSlot *slot,
 
     /* Iterate to find key at position */
     multimapIterator mmIter;
-    multimapIteratorInit(MM_SLOT(slot), &mmIter, true);
+    mmSlotIteratorInit_(slot, &mmIter);
 
     /* Walk with our own boxes, then deliver only the key at 'pos' into
      * the caller's box: decoding every key into it would let a narrow
@@ -3508,7 +3617,7 @@ DK_STATIC void mmSlotIterateAll(multidictClass *, multidictSlot *slot,
     }
 
     multimapIterator mmIter;
-    multimapIteratorInit(MM_SLOT(slot), &mmIter, true);
+    mmSlotIteratorInit_(slot, &mmIter);
 
     /* The callback sees big = 1 exactly for a wide value */
     databox key, val;
@@ -3530,9 +3639,19 @@ DK_STATIC multidictUpdateResult mmSlotUpdate(multidictClass *,
                                              const databox *keybox,
                                              multidictValueUpdate *update,
                                              void *ctx) {
+    if (*slot == nullptr) {
+        return MULTIDICT_UPDATE_ABSENT;
+    }
+
+    const bool flexSlot = MM_SLOT_IS_FLEX(*slot);
+    multimapSmall view = {};
     multimapEntry me;
-    if (*slot == nullptr ||
-        !multimapGetUnderlyingEntry(MM_SLOT(*slot), keybox, &me)) {
+    if (flexSlot) {
+        view = mmFlexView_(*slot);
+        if (!multimapSmallGetUnderlyingEntry(&view, keybox, &me)) {
+            return MULTIDICT_UPDATE_ABSENT;
+        }
+    } else if (!multimapGetUnderlyingEntry(MM_SLOT(*slot), keybox, &me)) {
         return MULTIDICT_UPDATE_ABSENT;
     }
 
@@ -3549,7 +3668,13 @@ DK_STATIC multidictUpdateResult mmSlotUpdate(multidictClass *,
         return MULTIDICT_UPDATE_DECLINED;
     }
 
-    multimapReplaceEntry(MM_SLOT_REF(slot), &me, &replacement);
+    if (flexSlot) {
+        multimapSmallReplaceEntry(&view, &me, &replacement);
+        mmFlexSettle_(slot, &view);
+    } else {
+        multimapReplaceEntry(MM_SLOT_REF(slot), &me, &replacement);
+    }
+
     return MULTIDICT_UPDATE_REWRITTEN;
 }
 

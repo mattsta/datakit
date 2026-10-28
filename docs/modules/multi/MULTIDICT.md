@@ -715,10 +715,13 @@ bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
 
 Every resize (growth, the automatic shrink, `multidictResize`) leaves the load
 at about half `expandPercent`. The default grows at 800% (shrinks below 40%),
-so slots hold four to eight entries. Each slot costs about 24 bytes besides
-its entries: a small multimap's 16-byte header and an 8-byte table pointer.
-Fuller slots spend fewer of those per entry, and each find searches a longer
-slot.
+so slots hold four to eight entries. A slot is a bare flex of its rows while
+it is small: its pointer carries the small multimap's tier bits (none) and,
+in its top 16 bits, the offset of its middle row, so no 16-byte header sits
+beside it. Each slot then costs its 8-byte table pointer and its flex's
+header and allocation rounding. A slot that grows past a small multimap's
+size limit becomes a multimap and grows tiers itself. Fuller slots spend
+fewer per-slot bytes per entry, and each find searches a longer slot.
 
 Measured 2026-10-27 (clang 22 `perf` preset, Apple silicon, 16-byte keys with
 integer values, `perfRegression` module `multidictLoad`, medians of 7 runs;
@@ -728,16 +731,15 @@ sizes); each column is one table size:
 
 | entries | heap bytes per entry: 200% / 800% / 3200% | scattered find ns: 200% / 800% / 3200% |
 | ------- | ----------------------------------------- | -------------------------------------- |
-| 40k     | 53.7 / 34.8 / 25.6                        | 57 / 79 / 114                          |
-| 70k     | 44.6 / 30.1 / 24.1                        | 67 / 91 / 142                          |
-| 100k    | 39.9 / 28.0 / 23.8                        | 80 / 98 / 172                          |
+| 40k     | 41.7 / 28.8 / 23.9                        | 53 / 82 / 121                          |
+| 70k     | 34.8 / 26.4 / 23.2                        | 64 / 92 / 149                          |
+| 100k    | 31.7 / 25.4 / 23.1                        | 80 / 112 / 215                         |
 
-The first halving of the slot count (200% to 800%) saves about 16 bytes per
-entry for about 20 ns per find, with adds and deletes unchanged: the default.
-The next saves about 9 bytes for another 15 to 35 ns and makes adds about 30
-percent slower; the one after saves about 4 bytes for 50 to 75 ns. Set 200%
-where find time matters more than memory, 1600% or more where memory matters
-most. The difference is the longer slot walk, not its key compares.
+The first halving of the slot count (200% to 800%) saves 6 to 13 bytes per
+entry for 20 to 30 ns per find, with adds and deletes about the same: the
+default. Later halvings save 2 to 5 bytes each for 30 ns or more per find.
+Set 200% where find time matters more than memory, 1600% or more where memory
+matters most. The difference is the longer slot walk, not its key compares.
 
 ### Incremental Rehashing
 
