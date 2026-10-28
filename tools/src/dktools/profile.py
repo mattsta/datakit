@@ -280,7 +280,13 @@ def run(repo: Path, opts: ProfileOptions) -> int:
         f"  tree      HEAD + working tree ({tree[:10]})",
         f"  recording {report}",
     ]
-    out = "\n".join(header + render(samples, opts.top)) + "\n"
+    lines = header + render(samples, opts.top)
+    if not samples.total:
+        lines.append(
+            "  no samples: the run may have ended before the profiler "
+            "attached (rows need about a second or more)"
+        )
+    out = "\n".join(lines) + "\n"
     (work / "result.txt").write_text(out)
     sys.stdout.write(out)
     return 0 if samples.total else 1
