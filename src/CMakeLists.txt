@@ -601,6 +601,7 @@ add_library(${PROJECT_NAME} OBJECT
     # patternTrie.c
     intersectInt.c
     intsetBig.c
+    idRows.c
     intset.c
     intsetSmall.c
     intsetMedium.c

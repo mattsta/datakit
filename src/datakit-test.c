@@ -59,6 +59,7 @@
 #include "hmac.h"
 #include "hmacKeyring.h"
 #include "hyperloglog.h"
+#include "idRows.h"
 #include "inflightGate.h"
 #include "intersectInt.h"
 #include "intset.h"
@@ -12361,9 +12362,9 @@ static const TestEntry testRegistry[] = {
     T_ADJ(fibbuf), T_ADJ(jebuf), T_ADJ(ptrlib), T_ADJ(bigmath),
 
     /* Utilities */
-    T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray), T(multiheap),
-    T_ADJ(membound), T_ADJ(memtest), T_ADJ(bbits), T_ADJ(ulid), T(persist),
-    T(OSRegulate), T(versionOSRuntime), T(dataspeedParse),
+    T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray), T(idRows),
+    T(multiheap), T_ADJ(membound), T_ADJ(memtest), T_ADJ(bbits), T_ADJ(ulid),
+    T(persist), T(OSRegulate), T(versionOSRuntime), T(dataspeedParse),
     T_A(persistCtx, "pctx"), T_A(persistContract, "pcontract"),
     T_A(multimapP, "mmP"), T_A(multilistP, "mlP"), T_A(multidictP, "mdP"),
     T_A(flexP, "fP"), T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"),

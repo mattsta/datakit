@@ -24,6 +24,7 @@
 #include "hash/sha256ArmCrypto.h"
 #include "hmac.h"
 #include "hmacKeyring.h"
+#include "idRows.h"
 #include "membound.h"
 #include "mflex.h"
 #include "multiFenwick.h"
@@ -606,6 +607,7 @@ defcleaner(multidict *, multidictFree);
 defcleaner(multiarray *, multiarrayFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
+defcleaner(idRows *, idRowsFree);
 defcleaner(multimapAtomDense *, multimapAtomDenseFree);
 defcleaner(stringPool *, stringPoolFree);
 defcleaner(intset *, intsetFree);
@@ -2064,6 +2066,70 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
 
 /* The atom table under each reverse index (the default, hashed, then
  * ordered and dict), then the lowest-first table and the string pool */
+/* Rows of {value, count} addressed by dense ids, against the multimap of
+ * {id, value, count} rows sorted by id that the same data takes today:
+ * rows set in id order, read back in order and scattered, counts
+ * incremented, rows deleted.  The set rows' bytes are each structure's
+ * metered heap. */
+static void benchIdRows(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    const databox one = {.type = DATABOX_FALSE};
+
+    bool metered = ctestHeapMeterStart();
+    cleaner(idRowsFree) idRows *r = idRowsNew(2);
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox v = perfContainerKey(keys, i);
+        const databox *row[2] = {&v, &one};
+        sink += idRowsSet(r, i, row);
+    }
+    double secs = timeUtilMonotonicSec() - t0;
+    emitRow("idRows", "set", perfHeapStop(metered), n, secs);
+    PERF_ROW("idRows", "get", n, databox v = {}; databox c = {};
+             databox * row[2] = {&v, &c}; sink += idRowsGet(r, i, row));
+    PERF_ROW("idRows", "getScattered", n, databox v = {}; databox c = {};
+             databox * row[2] = {&v, &c};
+             sink += idRowsGet(r, perfScatter(i), row));
+    PERF_ROW("idRows", "incr", n, int64_t now = 0;
+             sink += idRowsFieldIncr(r, perfScatter(i), 1, 1, &now));
+    PERF_ROW("idRows", "delete", n, sink += idRowsDelete(r, perfScatter(i)));
+
+    metered = ctestHeapMeterStart();
+    cleaner(multimapFree) multimap *m =
+        multimapNewLimit(3, dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM));
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox id = {.data.u = i,
+                            .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        const databox v = perfContainerKey(keys, i);
+        const databox *row[3] = {&id, &v, &one};
+        sink += multimapInsert(&m, row);
+    }
+    secs = timeUtilMonotonicSec() - t0;
+    emitRow("idRows", "multimapSet", perfHeapStop(metered), n, secs);
+    PERF_ROW("idRows", "multimapGet", n,
+             const databox id = {.data.u = i,
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+             databox v = {}; databox c = {}; databox * row[2] = {&v, &c};
+             sink += multimapLookup(m, &id, row));
+    PERF_ROW("idRows", "multimapGetScattered", n,
+             const databox id = {.data.u = perfScatter(i),
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+             databox v = {}; databox c = {}; databox * row[2] = {&v, &c};
+             sink += multimapLookup(m, &id, row));
+    PERF_ROW("idRows", "multimapIncr", n,
+             const databox id = {.data.u = perfScatter(i),
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+             sink += (uint64_t)multimapFieldIncr(&m, &id, 2, 1));
+    PERF_ROW("idRows", "multimapDelete", n,
+             const databox id = {.data.u = perfScatter(i),
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+             sink += multimapDelete(&m, &id));
+    perfContainerSink = sink;
+}
+
 /* References read back to their values and nothing else (run by name,
  * for profiling the read path): 100k string atoms, 60 scattered passes
  * over every id (long enough for a sampler that attaches by pid) */
@@ -2367,6 +2433,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multimapAtomRead")) {
             benchMultimapAtomRead();
+        }
+
+        if (perfWanted("idRows")) {
+            benchIdRows();
         }
 
         if (perfWanted("multiarray")) {
