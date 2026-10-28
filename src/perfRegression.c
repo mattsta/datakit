@@ -2175,6 +2175,55 @@ static void benchMultilist(void) {
 }
 
 defcleanerName(multilist **, zfree, PerfLists);
+defcleanerName(multimap **, zfree, PerfMaps);
+
+/* Many small maps, as a store of one map per key holds them: 25000 maps
+ * of 4 {integer key, integer value} rows each made (bytes: their metered
+ * heap), every key looked up with the maps visited in scattered order,
+ * then the maps freed */
+static void benchMultimapMany(void) {
+    static constexpr uint32_t maps = 25'000;
+    static constexpr uint32_t per = 4;
+    cleanerName(zfree, PerfMaps) multimap **many = zcalloc(maps, sizeof(*many));
+    uint64_t sink = 0;
+
+    const bool metered = ctestHeapMeterStart();
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < maps; i++) {
+        /* @own: container; free=multimapFree */
+        many[i] = multimapNew(2);
+        for (uint32_t j = 0; j < per; j++) {
+            const databox k = databoxNewSigned(j);
+            const databox v = databoxNewSigned((int64_t)(i * per + j));
+            const databox *row[2] = {&k, &v};
+            sink += multimapInsert(&many[i], row);
+        }
+    }
+    const double addSecs = timeUtilMonotonicSec() - t0;
+    emitRow("multimap", "manySmallInsert", perfHeapStop(metered), maps * per,
+            addSecs);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < maps; i++) {
+        const uint32_t map = (i * 7919u) % maps;
+        for (uint32_t j = 0; j < per; j++) {
+            const databox k = databoxNewSigned(j);
+            databox v;
+            databox *found[1] = {&v};
+            sink += multimapLookup(many[map], &k, found);
+        }
+    }
+    emitRow("multimap", "manySmallLookup", 0, maps * per,
+            timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < maps; i++) {
+        multimapFree(many[i]);
+    }
+    emitRow("multimap", "manySmallFree", 0, maps, timeUtilMonotonicSec() - t0);
+
+    perfContainerSink = sink;
+}
 
 /* Many small lists, as a store of one list per key holds them: 25000
  * lists of 4 integers each made (bytes: their metered heap), every
@@ -2907,6 +2956,10 @@ int perfRegressionTest(int, char *[]) {
         if (perfWanted("multilist")) {
             benchMultilist();
             benchMultilistMany();
+        }
+
+        if (perfWanted("multimap")) {
+            benchMultimapMany();
         }
 
         if (perfWanted("multilru")) {
