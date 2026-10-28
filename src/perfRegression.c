@@ -49,6 +49,7 @@
 #include "str.h" /* StrScanScanReliable */
 #include "stringPool.h"
 #include "timeUtil.h"
+#include "ulid.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -604,6 +605,8 @@ static constexpr unsigned PERF_CONTAINER_KEY = 16u;
 
 defcleanerName(char *, zfree, PerfKeys);
 defcleanerName(uint64_t *, zfree, PerfIds);
+defcleanerName(ulid_t *, zfree, PerfUlids);
+defcleanerName(char *, zfree, PerfUlidText);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
 defcleaner(multidict *, multidictFree);
 defcleaner(multiarray *, multiarrayFree);
@@ -2583,6 +2586,55 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
  * rows set in id order, read back in order and scattered, counts
  * incremented, rows deleted.  The set rows' bytes are each structure's
  * metered heap. */
+/* ULIDs: 128-bit generation, then encoding and decoding under each
+ * implementation this build has (the row names the implementation), then
+ * a 64-bit variant's generation, encoding and decoding */
+static void benchUlid(void) {
+    constexpr uint32_t n = 100'000;
+    uint64_t sink = 0;
+    ulidGen gen;
+    ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+    cleanerName(zfree, PerfUlids) ulid_t *ids = zcalloc(n, sizeof(ulid_t));
+    cleanerName(zfree, PerfUlidText) char *text =
+        zcalloc(n, ULID_ENCODED_LENGTH + 1);
+
+    PERF_ROW("ulid", "generate", n, ulidGenerate(&gen, &ids[i]));
+
+    const ulidEncodeImpl was = ulidGetEncodeImpl();
+    for (int impl = 0; impl < ULID_ENCODE_AUTO; impl++) {
+        if (!ulidIsImplAvailable((ulidEncodeImpl)impl) ||
+            !ulidSetEncodeImpl((ulidEncodeImpl)impl)) {
+            continue;
+        }
+        char row[48];
+        const char *name = ulidGetImplName((ulidEncodeImpl)impl);
+        snprintf(row, sizeof(row), "encode%s", name);
+        PERF_ROW("ulid", row, n,
+                 sink += ulidEncode(
+                     &ids[i], text + (size_t)i * (ULID_ENCODED_LENGTH + 1),
+                     ULID_ENCODED_LENGTH + 1));
+        snprintf(row, sizeof(row), "decode%s", name);
+        PERF_ROW("ulid", row, n, ulid_t back;
+                 sink += ulidDecode(
+                     text + (size_t)i * (ULID_ENCODED_LENGTH + 1), &back));
+    }
+    ulidSetEncodeImpl(was);
+
+    /* 64-bit ids, each distinct, written into and read back from their
+     * own text */
+    cleanerName(zfree, PerfIds) uint64_t *ids64 = zcalloc(n, sizeof(uint64_t));
+    PERF_ROW("ulid", "generate64MS", n, ulid64_t id64;
+             sink += ulid64Generate(&gen, &id64, ULID_VARIANT_MS);
+             ids64[i] = id64.data);
+    constexpr size_t w64 = ULID64_ENCODED_LENGTH + 1;
+    PERF_ROW("ulid", "encode64", n, const ulid64_t id64 = {.data = ids64[i]};
+             sink += ulid64Encode(&id64, text + (size_t)i * w64, w64));
+    PERF_ROW("ulid", "decode64", n, ulid64_t id64;
+             sink += ulid64Decode(text + (size_t)i * w64, &id64);
+             sink += id64.data);
+    perfContainerSink = sink;
+}
+
 static void benchIdRows(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     const uint32_t n = PERF_CONTAINER_N;
@@ -3058,6 +3110,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("idRows")) {
             benchIdRows();
+        }
+
+        if (perfWanted("ulid")) {
+            benchUlid();
         }
 
         if (perfWanted("multiarray")) {

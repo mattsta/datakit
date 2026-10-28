@@ -5,6 +5,7 @@
 #include "util.h"
 
 #include <math.h> /* ldexp: a variant's range in years */
+#include <stdatomic.h>
 #include <string.h>
 
 /* SIMD includes */
@@ -26,50 +27,65 @@ static constexpr char BASE36_CHARS[36] = {
     'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
     'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
 
-/* Runtime-initialized decode lookup table */
+/* Each character's Base36 digit value plus one, upper and lower case
+ * alike; 0 for every other byte.  Built at compile time: decoders share
+ * it from any thread with no initialization. */
+#define ULID_B36_(c, v) [(c)] = (v) + 1
+#define ULID_B36_LETTER_(upper, v)                                             \
+    ULID_B36_(upper, v), ULID_B36_((upper) + ('a' - 'A'), v)
+static constexpr uint8_t base36ValuePlus1_[256] = {
+    ULID_B36_('0', 0),         ULID_B36_('1', 1),
+    ULID_B36_('2', 2),         ULID_B36_('3', 3),
+    ULID_B36_('4', 4),         ULID_B36_('5', 5),
+    ULID_B36_('6', 6),         ULID_B36_('7', 7),
+    ULID_B36_('8', 8),         ULID_B36_('9', 9),
+    ULID_B36_LETTER_('A', 10), ULID_B36_LETTER_('B', 11),
+    ULID_B36_LETTER_('C', 12), ULID_B36_LETTER_('D', 13),
+    ULID_B36_LETTER_('E', 14), ULID_B36_LETTER_('F', 15),
+    ULID_B36_LETTER_('G', 16), ULID_B36_LETTER_('H', 17),
+    ULID_B36_LETTER_('I', 18), ULID_B36_LETTER_('J', 19),
+    ULID_B36_LETTER_('K', 20), ULID_B36_LETTER_('L', 21),
+    ULID_B36_LETTER_('M', 22), ULID_B36_LETTER_('N', 23),
+    ULID_B36_LETTER_('O', 24), ULID_B36_LETTER_('P', 25),
+    ULID_B36_LETTER_('Q', 26), ULID_B36_LETTER_('R', 27),
+    ULID_B36_LETTER_('S', 28), ULID_B36_LETTER_('T', 29),
+    ULID_B36_LETTER_('U', 30), ULID_B36_LETTER_('V', 31),
+    ULID_B36_LETTER_('W', 32), ULID_B36_LETTER_('X', 33),
+    ULID_B36_LETTER_('Y', 34), ULID_B36_LETTER_('Z', 35),
+};
+#undef ULID_B36_LETTER_
+#undef ULID_B36_
 
-/* Mark uninitialized entries as invalid */
-static uint8_t base36DecodeTable[256];
-static bool base36DecodeTableInitialized = false;
-
-static void initBase36DecodeTable(void) {
-    if (base36DecodeTableInitialized) {
-        return;
-    }
-    memset(base36DecodeTable, 0xFF, sizeof(base36DecodeTable));
-    for (int32_t i = 0; i < 36; i++) {
-        base36DecodeTable[(uint8_t)BASE36_CHARS[i]] = (uint8_t)i;
-    }
-    /* Add lowercase support */
-    for (int32_t i = 10; i < 36; i++) {
-        base36DecodeTable[(uint8_t)('a' + (i - 10))] = (uint8_t)i;
-    }
-    base36DecodeTableInitialized = true;
+/* The Base36 value of character 'c', or -1 when it is not one */
+DK_INLINE_ALWAYS int ulidB36Value_(const char c) {
+    return (int)base36ValuePlus1_[(uint8_t)c] - 1;
 }
 
 /* ====================================================================
  * Implementation State
  * ==================================================================== */
-static ulidEncodeImpl currentImpl = ULID_ENCODE_AUTO;
-static bool implInitialized = false;
-static ulidEncodeImpl detectedBestImpl = ULID_ENCODE_SCALAR;
+/* The encoder in use (ulidSetEncodeImpl); a stale read is harmless: every
+ * implementation writes the same characters */
+static _Atomic ulidEncodeImpl currentImpl = ULID_ENCODE_AUTO;
 
-static void detectBestImplementation(void) {
-    if (implInitialized) {
-        return;
-    }
-
+/* What AUTO uses: the fastest this build has (perfRegression module
+ * ulid measures each) */
 #if ULID_HAS_AVX2
-    detectedBestImpl = ULID_ENCODE_AVX2;
+static constexpr ulidEncodeImpl ulidBestImpl_ = ULID_ENCODE_AVX2;
 #elif ULID_HAS_NEON
-    detectedBestImpl = ULID_ENCODE_NEON;
+static constexpr ulidEncodeImpl ulidBestImpl_ = ULID_ENCODE_NEON;
 #elif ULID_HAS_SSE2
-    detectedBestImpl = ULID_ENCODE_SSE2;
+static constexpr ulidEncodeImpl ulidBestImpl_ = ULID_ENCODE_SSE2;
 #else
-    detectedBestImpl = ULID_ENCODE_SWAR;
+static constexpr ulidEncodeImpl ulidBestImpl_ = ULID_ENCODE_SWAR;
 #endif
 
-    implInitialized = true;
+/* The implementation ulidEncode / ulidDecode run now */
+static ulidEncodeImpl ulidImplInUse_(void) {
+    /* @sync: relaxed hint */
+    const ulidEncodeImpl impl =
+        atomic_load_explicit(&currentImpl, memory_order_relaxed);
+    return impl == ULID_ENCODE_AUTO ? ulidBestImpl_ : impl;
 }
 
 /* ====================================================================
@@ -165,41 +181,67 @@ static uint64_t ulidGenNextNs(ulidGen *g) {
  * ==================================================================== */
 
 /* Divide 128-bit number by 36, return quotient and remainder */
-static void div128by36(const uint8_t *num, uint8_t *quotient,
-                       uint8_t *remainder) {
-    uint64_t carry = 0;
+/* 36^12: twelve Base36 digits, the most a 64-bit word holds (< 2^63) */
+static constexpr uint64_t ULID_B36_POW12_ = UINT64_C(2176782336) * 2176782336;
 
-    for (int32_t i = 0; i < 16; i++) {
-        uint64_t current = carry * 256 + num[i];
-        quotient[i] = (uint8_t)(current / 36);
-        carry = current % 36;
-    }
+/* The 25 Base36 digit values of a 128-bit id, most significant first:
+ * two 128-bit divisions split it into 12 + 12 digits (each in a 64-bit
+ * word, emitted with 64-bit divisions by 36) and the leading digit */
+static void ulidDigits128_(const ulid_t *id, uint8_t d[ULID_ENCODED_LENGTH]) {
+    __uint128_t v =
+        ((__uint128_t)dkLoadBe64(id->data) << 64) | dkLoadBe64(id->data + 8);
+    uint64_t low = (uint64_t)(v % ULID_B36_POW12_);
+    v /= ULID_B36_POW12_;
+    uint64_t mid = (uint64_t)(v % ULID_B36_POW12_);
+    d[0] = (uint8_t)(v / ULID_B36_POW12_); /* < 16: 2^128 / 36^24 */
 
-    *remainder = (uint8_t)carry;
-}
-
-/* Check if 128-bit number is zero */
-static bool isZero128(const uint8_t *num) {
-    for (int32_t i = 0; i < 16; i++) {
-        if (num[i] != 0) {
-            return false;
+    /* Four independent chains of six digits (each word split once at
+     * 36^6): a quarter of one chain's serial division latency */
+    constexpr uint64_t pow6 = 2176782336; /* 36^6 */
+    uint64_t chains[4] = {mid / pow6, mid % pow6, low / pow6, low % pow6};
+    for (int k = 5; k >= 0; k--) {
+        for (int c = 0; c < 4; c++) {
+            d[1 + c * 6 + k] = (uint8_t)(chains[c] % 36);
+            chains[c] /= 36;
         }
     }
+}
+
+/* The id the 25 digit values (each < 36, most significant first) encode:
+ * false when that is past 2^128 - 1 (25 Base36 digits reach 36^25) */
+static bool ulidFromDigits128_(const uint8_t d[ULID_ENCODED_LENGTH],
+                               ulid_t *out) {
+    uint64_t mid = 0;
+    uint64_t low = 0;
+    for (int i = 1; i <= 12; i++) {
+        mid = mid * 36 + d[i];
+    }
+    for (int i = 13; i < ULID_ENCODED_LENGTH; i++) {
+        low = low * 36 + d[i];
+    }
+    __uint128_t v = (__uint128_t)d[0] * ULID_B36_POW12_ + mid;
+    if (ckd_mul(&v, v, (__uint128_t)ULID_B36_POW12_) ||
+        ckd_add(&v, v, (__uint128_t)low)) {
+        return false;
+    }
+    dkStoreBe64(out->data, (uint64_t)(v >> 64));
+    dkStoreBe64(out->data + 8, (uint64_t)v);
     return true;
 }
 
-/* Multiply 128-bit number by 36 and add a value.
- * Returns true if the result did not fit in 128 bits. */
-static bool mul128by36AndAdd(uint8_t *num, uint8_t addVal) {
-    uint32_t carry = addVal;
-
-    for (int32_t i = 15; i >= 0; i--) {
-        uint32_t product = (uint32_t)num[i] * 36 + carry;
-        num[i] = (uint8_t)(product & 0xFF);
-        carry = product >> 8;
+/* The 25 digit values of 'str' (exactly 25 Base36 characters, either
+ * case) into 'd'; false for any other string */
+static bool ulidStrDigits_(const char *str, uint8_t d[ULID_ENCODED_LENGTH]) {
+    if (strlen(str) != ULID_ENCODED_LENGTH) {
+        return false;
     }
-
-    return carry != 0;
+    int bad = 0;
+    for (int i = 0; i < ULID_ENCODED_LENGTH; i++) {
+        const int v = ulidB36Value_(str[i]);
+        bad |= v;
+        d[i] = (uint8_t)v;
+    }
+    return bad >= 0; /* -1 anywhere sets the sign bit */
 }
 
 /* ====================================================================
@@ -210,141 +252,51 @@ size_t ulidEncodeScalar(const ulid_t *ulid, char *out, size_t outLen) {
         return 0;
     }
 
-    /* Work with a copy to preserve original */
-    uint8_t temp[16];
-    memcpy(temp, ulid->data, 16);
-
-    /* Extract digits in reverse order */
-    char digits[ULID_ENCODED_LENGTH];
-    int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
-
-    while (digitIdx >= 0) {
-        uint8_t quotient[16];
-        uint8_t remainder;
-
-        div128by36(temp, quotient, &remainder);
-        digits[digitIdx] = BASE36_CHARS[remainder];
-        memcpy(temp, quotient, 16);
-        digitIdx--;
+    uint8_t d[ULID_ENCODED_LENGTH];
+    ulidDigits128_(ulid, d);
+    for (int i = 0; i < ULID_ENCODED_LENGTH; i++) {
+        out[i] = BASE36_CHARS[d[i]];
     }
-
-    memcpy(out, digits, ULID_ENCODED_LENGTH);
     out[ULID_ENCODED_LENGTH] = '\0';
-
     return ULID_ENCODED_LENGTH;
 }
 
 bool ulidDecodeScalar(const char *str, ulid_t *out) {
-    if (!str || !out) {
-        return false;
-    }
-
-    initBase36DecodeTable();
-
-    size_t len = strlen(str);
-    if (len != ULID_ENCODED_LENGTH) {
-        return false;
-    }
-
-    memset(out->data, 0, 16);
-
-    bool overflow = false;
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        uint8_t val = base36DecodeTable[(uint8_t)str[i]];
-        if (val == 0xFF) {
-            return false; /* Invalid character */
-        }
-        overflow |= mul128by36AndAdd(out->data, val);
-    }
-
-    /* 25 base36 digits reach past 2^128 */
-    return !overflow;
+    uint8_t d[ULID_ENCODED_LENGTH];
+    return str && out && ulidStrDigits_(str, d) && ulidFromDigits128_(d, out);
 }
 
 /* ====================================================================
  * SWAR (SIMD Within A Register) Implementation
  * ==================================================================== */
 
-/* Four digits per loop pass over the same byte-wise division */
-
+/* Encoding turns eight digit values into characters at once in a 64-bit
+ * word: each byte v < 36 becomes v + '0', plus 7 more ('A' - '0' - 10)
+ * when v >= 10 (v + 118 then sets the byte's top bit, with no carry
+ * between bytes).  Decoding reads characters through the table, as
+ * scalar does. */
 size_t ulidEncodeSWAR(const ulid_t *ulid, char *out, size_t outLen) {
     if (!ulid || !out || outLen < ULID_ENCODED_LENGTH + 1) {
         return 0;
     }
 
-    /* The 128-bit value spans 25 base36 digits, peeled off by repeated
-     * division of the 16 big-endian bytes */
-    uint8_t temp[16];
-    memcpy(temp, ulid->data, 16);
-
-    char digits[ULID_ENCODED_LENGTH];
-    int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
-
-    /* Process 4 digits at a time when possible using SWAR techniques */
-    while (digitIdx >= 3) {
-        /* Extract 4 remainders at once by doing 4 divisions */
-        uint8_t r0, r1, r2, r3;
-        uint8_t q0[16], q1[16], q2[16], q3[16];
-
-        div128by36(temp, q0, &r0);
-        div128by36(q0, q1, &r1);
-        div128by36(q1, q2, &r2);
-        div128by36(q2, q3, &r3);
-
-        digits[digitIdx--] = BASE36_CHARS[r0];
-        digits[digitIdx--] = BASE36_CHARS[r1];
-        digits[digitIdx--] = BASE36_CHARS[r2];
-        digits[digitIdx--] = BASE36_CHARS[r3];
-
-        memcpy(temp, q3, 16);
+    uint8_t d[32] = {};
+    ulidDigits128_(ulid, d);
+    constexpr uint64_t ones = UINT64_C(0x0101010101010101);
+    for (int i = 0; i < 32; i += 8) {
+        uint64_t w;
+        memcpy(&w, d + i, sizeof(w));
+        const uint64_t letter = ((w + 118 * ones) >> 7) & ones;
+        w += '0' * ones + 7 * letter;
+        memcpy(d + i, &w, sizeof(w));
     }
-
-    /* Handle remaining digits */
-    while (digitIdx >= 0) {
-        uint8_t quotient[16];
-        uint8_t remainder;
-        div128by36(temp, quotient, &remainder);
-        digits[digitIdx--] = BASE36_CHARS[remainder];
-        memcpy(temp, quotient, 16);
-    }
-
-    memcpy(out, digits, ULID_ENCODED_LENGTH);
+    memcpy(out, d, ULID_ENCODED_LENGTH);
     out[ULID_ENCODED_LENGTH] = '\0';
-
     return ULID_ENCODED_LENGTH;
 }
 
 bool ulidDecodeSWAR(const char *str, ulid_t *out) {
-    if (!str || !out) {
-        return false;
-    }
-
-    initBase36DecodeTable();
-
-    size_t len = strlen(str);
-    if (len != ULID_ENCODED_LENGTH) {
-        return false;
-    }
-
-    /* Validate all characters */
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        if (base36DecodeTable[(uint8_t)str[i]] == 0xFF) {
-            return false;
-        }
-    }
-
-    /* Decode using SWAR: process multiple characters in parallel */
-    memset(out->data, 0, 16);
-
-    /* Accumulate with full 128-bit precision */
-    bool overflow = false;
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        uint8_t val = base36DecodeTable[(uint8_t)str[i]];
-        overflow |= mul128by36AndAdd(out->data, val);
-    }
-
-    /* 25 base36 digits reach past 2^128 */
-    return !overflow;
+    return ulidDecodeScalar(str, out);
 }
 
 /* ====================================================================
@@ -428,19 +380,9 @@ size_t ulidEncodeSSE2(const ulid_t *ulid, char *out, size_t outLen) {
      * SSE2 can help with the final character conversion.
      * First, compute digits using scalar 128-bit arithmetic. */
 
-    uint8_t temp[16];
-    memcpy(temp, ulid->data, 16);
-
-    uint8_t digitValues[ULID_ENCODED_LENGTH];
-    int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
-
-    while (digitIdx >= 0) {
-        uint8_t quotient[16];
-        uint8_t remainder;
-        div128by36(temp, quotient, &remainder);
-        digitValues[digitIdx--] = remainder;
-        memcpy(temp, quotient, 16);
-    }
+    /* 32 bytes: the second 16-byte load reaches past the 25 digits */
+    uint8_t digitValues[32] = {};
+    ulidDigits128_(ulid, digitValues);
 
     /* Convert digit values to characters using SSE2 */
     /* Process first 16 bytes (positions 0-15) */
@@ -495,14 +437,7 @@ bool ulidDecodeSSE2(const char *str, ulid_t *out) {
         }
     }
 
-    /* Accumulate into 128-bit result; 25 base36 digits reach past 2^128 */
-    memset(out->data, 0, 16);
-    bool overflow = false;
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        overflow |= mul128by36AndAdd(out->data, values[i]);
-    }
-
-    return !overflow;
+    return ulidFromDigits128_(values, out);
 }
 #endif /* ULID_HAS_SSE2 */
 
@@ -572,20 +507,8 @@ size_t ulidEncodeAVX2(const ulid_t *ulid, char *out, size_t outLen) {
         return 0;
     }
 
-    /* Compute digit values using scalar 128-bit arithmetic */
-    uint8_t temp[16];
-    memcpy(temp, ulid->data, 16);
-
-    uint8_t digitValues[32] = {}; /* Padded for AVX2 */
-    int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
-
-    while (digitIdx >= 0) {
-        uint8_t quotient[16];
-        uint8_t remainder;
-        div128by36(temp, quotient, &remainder);
-        digitValues[digitIdx--] = remainder;
-        memcpy(temp, quotient, 16);
-    }
+    uint8_t digitValues[32] = {}; /* padded for the 32-byte load */
+    ulidDigits128_(ulid, digitValues);
 
     /* Convert all 25 digit values to characters using AVX2 */
     __m256i vals = _mm256_loadu_si256((__m256i *)digitValues);
@@ -628,14 +551,7 @@ bool ulidDecodeAVX2(const char *str, ulid_t *out) {
         }
     }
 
-    /* Accumulate into 128-bit result; 25 base36 digits reach past 2^128 */
-    memset(out->data, 0, 16);
-    bool overflow = false;
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        overflow |= mul128by36AndAdd(out->data, values[i]);
-    }
-
-    return !overflow;
+    return ulidFromDigits128_(values, out);
 }
 #endif /* ULID_HAS_AVX2 */
 
@@ -701,19 +617,8 @@ size_t ulidEncodeNEON(const ulid_t *ulid, char *out, size_t outLen) {
     }
 
     /* Compute digit values using scalar 128-bit arithmetic */
-    uint8_t temp[16];
-    memcpy(temp, ulid->data, 16);
-
-    uint8_t digitValues[32] = {}; /* Padded for alignment */
-    int32_t digitIdx = ULID_ENCODED_LENGTH - 1;
-
-    while (digitIdx >= 0) {
-        uint8_t quotient[16];
-        uint8_t remainder;
-        div128by36(temp, quotient, &remainder);
-        digitValues[digitIdx--] = remainder;
-        memcpy(temp, quotient, 16);
-    }
+    uint8_t digitValues[32] = {}; /* the second 16-byte load reaches past 25 */
+    ulidDigits128_(ulid, digitValues);
 
     /* Convert first 16 digit values to characters using NEON (positions 0-15)
      */
@@ -766,14 +671,7 @@ bool ulidDecodeNEON(const char *str, ulid_t *out) {
         }
     }
 
-    /* Accumulate into 128-bit result; 25 base36 digits reach past 2^128 */
-    memset(out->data, 0, 16);
-    bool overflow = false;
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        overflow |= mul128by36AndAdd(out->data, values[i]);
-    }
-
-    return !overflow;
+    return ulidFromDigits128_(values, out);
 }
 #endif /* ULID_HAS_NEON */
 
@@ -795,12 +693,7 @@ void ulidGenerate(ulidGen *g, ulid_t *out) {
 }
 
 size_t ulidEncode(const ulid_t *ulid, char *out, size_t outLen) {
-    detectBestImplementation();
-
-    ulidEncodeImpl impl =
-        (currentImpl == ULID_ENCODE_AUTO) ? detectedBestImpl : currentImpl;
-
-    switch (impl) {
+    switch (ulidImplInUse_()) {
 #if ULID_HAS_AVX2
     case ULID_ENCODE_AVX2:
         return ulidEncodeAVX2(ulid, out, outLen);
@@ -822,13 +715,7 @@ size_t ulidEncode(const ulid_t *ulid, char *out, size_t outLen) {
 }
 
 bool ulidDecode(const char *str, ulid_t *out) {
-    detectBestImplementation();
-    initBase36DecodeTable();
-
-    ulidEncodeImpl impl =
-        (currentImpl == ULID_ENCODE_AUTO) ? detectedBestImpl : currentImpl;
-
-    switch (impl) {
+    switch (ulidImplInUse_()) {
 #if ULID_HAS_AVX2
     case ULID_ENCODE_AVX2:
         return ulidDecodeAVX2(str, out);
@@ -880,14 +767,16 @@ size_t ulidGenerateAndEncode(ulidGen *g, char *out, size_t outLen) {
  * ==================================================================== */
 
 ulidEncodeImpl ulidGetEncodeImpl(void) {
-    return currentImpl;
+    /* @sync: relaxed hint */
+    return atomic_load_explicit(&currentImpl, memory_order_relaxed);
 }
 
 bool ulidSetEncodeImpl(ulidEncodeImpl impl) {
     if (!ulidIsImplAvailable(impl)) {
         return false;
     }
-    currentImpl = impl;
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&currentImpl, impl, memory_order_relaxed);
     return true;
 }
 
@@ -948,7 +837,7 @@ bool ulidIsZero(const ulid_t *ulid) {
     if (!ulid) {
         return true;
     }
-    return isZero128(ulid->data);
+    return (dkLoadBe64(ulid->data) | dkLoadBe64(ulid->data + 8)) == 0;
 }
 
 void ulidClear(ulid_t *ulid) {
@@ -1076,52 +965,68 @@ static uint64_t ulidLayoutSpanNs_(const ulidLayout_ *l) {
  * ==================================================================== */
 
 /* Encode 64-bit value to Base36 (13 characters) */
-size_t ulid64Encode(const ulid64_t *id, char *out, size_t outLen) {
-    if (!id || !out || outLen < ULID64_ENCODED_LENGTH + 1) {
+/* 'value' as 'len' Base36 characters and a NUL: 'len', or 0 when 'out'
+ * (of 'outLen' bytes) cannot take them */
+DK_INLINE_ALWAYS size_t ulidEncodeWord_(uint64_t value, const size_t len,
+                                        char *out, const size_t outLen) {
+    if (!out || outLen < len + 1) {
         return 0;
     }
-
-    uint64_t value = id->data;
-    char digits[ULID64_ENCODED_LENGTH];
-
-    /* Extract digits in reverse order */
-    for (int32_t i = ULID64_ENCODED_LENGTH - 1; i >= 0; i--) {
-        digits[i] = BASE36_CHARS[value % 36];
+    for (size_t i = len; i-- > 0;) {
+        out[i] = BASE36_CHARS[value % 36];
         value /= 36;
     }
+    out[len] = '\0';
+    return len;
+}
 
-    memcpy(out, digits, ULID64_ENCODED_LENGTH);
-    out[ULID64_ENCODED_LENGTH] = '\0';
-
-    return ULID64_ENCODED_LENGTH;
+size_t ulid64Encode(const ulid64_t *id, char *out, size_t outLen) {
+    return id ? ulidEncodeWord_(id->data, ULID64_ENCODED_LENGTH, out, outLen)
+              : 0;
 }
 
 /* Decode Base36 string to 64-bit value */
-bool ulid64Decode(const char *str, ulid64_t *out) {
-    if (!str || !out) {
+/* The value of 'str': exactly 'len' Base36 characters (either case)
+ * naming at most 'max'; false for anything else */
+DK_INLINE_ALWAYS bool ulidDecodeWord_(const char *str, const size_t len,
+                                      const uint64_t max, uint64_t *out) {
+    if (!str || strlen(str) != len) {
         return false;
     }
-
-    initBase36DecodeTable();
-
-    size_t len = strlen(str);
-    if (len != ULID64_ENCODED_LENGTH) {
-        return false;
+    /* Two independent multiply-add chains, the leading 'split' digits and
+     * the rest (each under 36^7, so neither can overflow), joined once with
+     * the one overflow check: half the serial latency of one chain */
+    static constexpr uint64_t pow36[8] = {
+        1, 36, 1296, 46656, 1679616, 60466176, 2176782336, 78364164096};
+    const size_t split = len / 2;
+    uint64_t high = 0;
+    uint64_t low = 0;
+    int bad = 0;
+    for (size_t i = 0; i < split; i++) {
+        const int digit = ulidB36Value_(str[i]);
+        bad |= digit;
+        high = high * 36 + (uint64_t)(uint8_t)digit;
     }
-
-    /* 13 base36 digits reach past 2^64, so refuse values that overflow */
+    for (size_t i = split; i < len; i++) {
+        const int digit = ulidB36Value_(str[i]);
+        bad |= digit;
+        low = low * 36 + (uint64_t)(uint8_t)digit;
+    }
     uint64_t value = 0;
-    for (size_t i = 0; i < ULID64_ENCODED_LENGTH; i++) {
-        uint8_t digitValue = base36DecodeTable[(uint8_t)str[i]];
-        if (digitValue == 0xFF) {
-            return false; /* Invalid character */
-        }
-
-        if (ckd_mul(&value, value, 36) || ckd_add(&value, value, digitValue)) {
-            return false;
-        }
+    if (bad < 0 || ckd_mul(&value, high, pow36[len - split]) ||
+        ckd_add(&value, value, low) || value > max) {
+        return false;
     }
+    *out = value;
+    return true;
+}
 
+bool ulid64Decode(const char *str, ulid64_t *out) {
+    uint64_t value = 0;
+    if (!out ||
+        !ulidDecodeWord_(str, ULID64_ENCODED_LENGTH, UINT64_MAX, &value)) {
+        return false;
+    }
     out->data = value;
     return true;
 }
@@ -1131,50 +1036,17 @@ bool ulid64Decode(const char *str, ulid64_t *out) {
  * ==================================================================== */
 
 size_t ulid32Encode(const ulid32_t *id, char *out, size_t outLen) {
-    if (!id || !out || outLen < ULID32_ENCODED_LENGTH + 1) {
-        return 0;
-    }
-
-    uint32_t value = id->data;
-    char digits[ULID32_ENCODED_LENGTH];
-
-    for (int32_t i = ULID32_ENCODED_LENGTH - 1; i >= 0; i--) {
-        digits[i] = BASE36_CHARS[value % 36];
-        value /= 36;
-    }
-
-    memcpy(out, digits, ULID32_ENCODED_LENGTH);
-    out[ULID32_ENCODED_LENGTH] = '\0';
-
-    return ULID32_ENCODED_LENGTH;
+    return id ? ulidEncodeWord_(id->data, ULID32_ENCODED_LENGTH, out, outLen)
+              : 0;
 }
 
 bool ulid32Decode(const char *str, ulid32_t *out) {
-    if (!str || !out) {
+    uint64_t value = 0;
+    if (!out ||
+        !ulidDecodeWord_(str, ULID32_ENCODED_LENGTH, UINT32_MAX, &value)) {
         return false;
     }
-
-    initBase36DecodeTable();
-
-    size_t len = strlen(str);
-    if (len != ULID32_ENCODED_LENGTH) {
-        return false;
-    }
-
-    /* 7 base36 digits reach past 2^32, so refuse values that overflow */
-    uint32_t value = 0;
-    for (size_t i = 0; i < ULID32_ENCODED_LENGTH; i++) {
-        uint8_t digitValue = base36DecodeTable[(uint8_t)str[i]];
-        if (digitValue == 0xFF) {
-            return false;
-        }
-
-        if (ckd_mul(&value, value, 36) || ckd_add(&value, value, digitValue)) {
-            return false;
-        }
-    }
-
-    out->data = value;
+    out->data = (uint32_t)value;
     return true;
 }
 
@@ -1284,7 +1156,8 @@ bool ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
     uint64_t low = 0;
     switch (l->low) {
     case ULID_LOW_RANDOM_:
-        low = ulidGenRandom(g);
+        /* The top bits: xoroshiro128+'s lowest bits are its weakest */
+        low = ulidGenRandom(g) >> (64 - l->lowBits);
         break;
     case ULID_LOW_SUBUNIT_:
         low = sinceNs % l->unitNs;
@@ -1338,7 +1211,9 @@ bool ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
 
     /* The time field is a window: the Unix time modulo its span */
     const uint64_t unit = ulidLow_(ulidGenNextNs(g) / l->unitNs, l->timeBits);
-    uint32_t id = (uint32_t)ulidPack64_(unit, ulidGenRandom(g), l->lowBits);
+    /* The random field from the generator's top bits (its strongest) */
+    uint32_t id = (uint32_t)ulidPack64_(
+        unit, ulidGenRandom(g) >> (64 - l->lowBits), l->lowBits);
 
     /* Within the last id's time unit, the last one plus one while the low
      * field has room (a window wraps, so no unit is borrowed: past the
@@ -1962,6 +1837,7 @@ uint64_t ulid64GetMaxTimestamp(ulidVariantType type) {
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "ctest.h"
+#include "dkRandom.h" /* replayable test ids */
 #include "perf.h"
 #include <stdio.h>
 #include <unistd.h>
@@ -1972,6 +1848,25 @@ defcleanerName(ulid64_t *, zfree, Ulid64s);
 
 /* Add one to a fixed-width uppercase Base36 string, digit by digit.
  * Returns false if the carry runs off the front. */
+/* The reference encoding: byte-wise long division of the 16 big-endian
+ * bytes by 36, 25 times (slow, and independent of the codec's 128-bit
+ * arithmetic) */
+static void ulidTestReferenceEncode(const ulid_t *id,
+                                    char out[ULID_ENCODED_LENGTH + 1]) {
+    uint8_t num[16];
+    memcpy(num, id->data, sizeof(num));
+    for (int digit = ULID_ENCODED_LENGTH - 1; digit >= 0; digit--) {
+        uint32_t carry = 0;
+        for (int i = 0; i < 16; i++) {
+            const uint32_t cur = carry * 256 + num[i];
+            num[i] = (uint8_t)(cur / 36);
+            carry = cur % 36;
+        }
+        out[digit] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[carry];
+    }
+    out[ULID_ENCODED_LENGTH] = '\0';
+}
+
 static bool ulidTestBase36Increment(char *s, size_t len) {
     static constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     for (size_t i = len; i-- > 0;) {
@@ -2114,6 +2009,78 @@ static int32_t ulidInterleaveCheck_(const char *name, ulidInterleaveFn *inter,
 
 int ulidTest(int, char *[]) {
     int32_t err = 0;
+
+    TEST("the decode table gives every byte its Base36 value or -1") {
+        for (int c = 0; c < 256; c++) {
+            int want = -1;
+            if (c >= '0' && c <= '9') {
+                want = c - '0';
+            } else if (c >= 'A' && c <= 'Z') {
+                want = c - 'A' + 10;
+            } else if (c >= 'a' && c <= 'z') {
+                want = c - 'a' + 10;
+            }
+            if (ulidB36Value_((char)c) != want) {
+                ERR("byte %d decodes as %d, want %d", c, ulidB36Value_((char)c),
+                    want);
+            }
+        }
+    }
+
+    TEST("every implementation encodes as the reference long division and "
+         "decodes back") {
+        /* Edge values (0, 2^64 - 1, 2^64, 36^24 - 1, 36^24, 2^128 - 1)
+         * and 20,000 replayable random ids: each available implementation
+         * writes the reference's characters and reads them (and their
+         * lowercase) back to the same id */
+        uint64_t edges[][2] = {{0, 0}, {0, UINT64_MAX},         {1, 0}, {0, 0},
+                               {0, 0}, {UINT64_MAX, UINT64_MAX}};
+        /* 36^24 = 36^12 squared, as 128 bits */
+        const __uint128_t p24 =
+            (__uint128_t)ULID_B36_POW12_ * (__uint128_t)ULID_B36_POW12_;
+        edges[3][0] = (uint64_t)((p24 - 1) >> 64);
+        edges[3][1] = (uint64_t)(p24 - 1);
+        edges[4][0] = (uint64_t)(p24 >> 64);
+        edges[4][1] = (uint64_t)p24;
+        uint64_t state = 0x1d;
+        const ulidEncodeImpl was = ulidGetEncodeImpl();
+        for (int impl = 0; impl < ULID_ENCODE_AUTO; impl++) {
+            if (!ulidSetEncodeImpl((ulidEncodeImpl)impl)) {
+                continue;
+            }
+            for (int i = 0; i < 20'000 + (int)countof(edges); i++) {
+                ulid_t id;
+                if (i < (int)countof(edges)) {
+                    dkStoreBe64(id.data, edges[i][0]);
+                    dkStoreBe64(id.data + 8, edges[i][1]);
+                } else {
+                    dkStoreBe64(id.data, dkSplitmix64Next(&state));
+                    dkStoreBe64(id.data + 8, dkSplitmix64Next(&state));
+                }
+                char want[ULID_ENCODED_LENGTH + 1];
+                char got[ULID_ENCODED_LENGTH + 1];
+                ulidTestReferenceEncode(&id, want);
+                ulid_t back;
+                ulid_t backLower;
+                char lower[ULID_ENCODED_LENGTH + 1];
+                const size_t n = ulidEncode(&id, got, sizeof(got));
+                for (int c = 0; c <= ULID_ENCODED_LENGTH; c++) {
+                    lower[c] = (char)(got[c] >= 'A' && got[c] <= 'Z'
+                                          ? got[c] - 'A' + 'a'
+                                          : got[c]);
+                }
+                if (n != ULID_ENCODED_LENGTH || strcmp(got, want) ||
+                    !ulidDecode(got, &back) || memcmp(back.data, id.data, 16) ||
+                    !ulidDecode(lower, &backLower) ||
+                    memcmp(backLower.data, id.data, 16)) {
+                    ERR("%s, id %d: %s (reference %s)",
+                        ulidGetImplName((ulidEncodeImpl)impl), i, got, want);
+                    break;
+                }
+            }
+        }
+        ulidSetEncodeImpl(was);
+    }
 
     TEST("every codec refuses bad characters, NULL and short buffers") {
         /* Each decoder this build has: a bad byte at either end of either

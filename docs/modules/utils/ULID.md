@@ -111,6 +111,10 @@ ordered by the first then the second, or in Z-order (bit-interleaved), through `
 ## Encoding
 
 `ulidEncode` / `ulidDecode` pick the fastest implementation available (scalar, SWAR, SSE2, AVX2, NEON);
-`ulidSetEncodeImpl` forces one and `ulidIsImplAvailable` / `ulidGetImplName` report them. All give the
-same bytes. `ulid64Encode` / `ulid64Decode` use 13 characters, `ulid32Encode` / `ulid32Decode` 7; a decode
+`ulidSetEncodeImpl` forces one (for any thread: a process-wide setting) and `ulidIsImplAvailable` /
+`ulidGetImplName` report them. All give the same characters and ids. Every implementation splits the
+128-bit value with native 128-bit arithmetic into four independent 6-digit chains; they differ in how
+digits become characters (a table, eight per 64-bit word, or vector lanes). Measured (perf preset, clang
+22, Apple M-series; `perfRegression` module `ulid`): encode 29 ns scalar, 26 ns NEON, 35 ns SWAR; decode
+15 ns scalar, 12 ns NEON; generate 19 ns; a 64-bit id encodes in 6 ns and decodes in 7 ns. `ulid64Encode` / `ulid64Decode` use 13 characters, `ulid32Encode` / `ulid32Decode` 7; a decode
 refuses a wrong length, a non-Base36 character, or a value past the type.
