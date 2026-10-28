@@ -3941,11 +3941,10 @@ int dkTestMailboxWindowOrientationTest(int, char *[]) {
     }
 
     TEST("bug-reveal — snapshot behind current carries in-window bits") {
-        /* This is the scenario the old code silently broke: a stale
-         * snapshot mid-life carrying bits the in-memory mailbox does
-         * not have, where those bits ARE in the merged window. Without
-         * Option B, the snapshot is dropped and the previously-applied
-         * sequences become replayable. */
+        /* A stale snapshot mid-life carrying bits the in-memory mailbox
+         * does not have, where those bits ARE in the merged window.
+         * Restore keeps them (Option B): dropping the snapshot would make
+         * the sequences it applied replayable. */
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
@@ -3980,10 +3979,10 @@ int dkTestMailboxWindowOrientationTest(int, char *[]) {
          * 49 (seq 1). After restore current window has bits
          * 0 (seq 50), 40 (seq 10), 49 (seq 1) set; last_applied=50.
          *
-         * Under the OLD code, snapshot would be dropped silently
-         * because snap.seq=10 < current.last_applied=50. An attacker
-         * replaying seq 10 would then be accepted as in-window
-         * out-of-order — a silent replay-protection downgrade. */
+         * snap.seq=10 < current.last_applied=50, so a restore that
+         * dropped the snapshot would accept a replayed seq 10 as
+         * in-window out-of-order: a silent replay-protection
+         * downgrade. */
         if (!clusterMailboxRestore(mb_tgt, snap, snap_size)) {
             ERR("snapshotRestore bug-reveal: restore failed");
         }
@@ -4368,16 +4367,15 @@ int dkTestMailboxStatsRaceTest(int, char *[]) {
 
 /* === mailbox stats cache-line alignment ==========================
  *
- * Forward-looking SMP hardening. The 14 stats counters previously
- * packed into one 112B struct that straddled two cache lines; if the
- * single-writer/multi-reader model ever relaxes to multi-writer ingest,
- * the rejection counters would ping-pong the line that holds the hot
- * counters on every error path. The struct is reordered + padded so the
- * 4 hot counters (ingest_total, apply_ok, bytes_ingested, bytes_sealed)
- * sit on cache line 1 and the 10 cold rejection counters sit on cache
- * line 2. The static_assert at the struct definition is the primary
- * proof; this runtime test is a belt-and-braces check that the
- * compiler honoured alignas through the embedding `clusterMailbox`
+ * SMP hardening. The 14 stats counters packed into one 112B struct
+ * would straddle two cache lines; if the single-writer/multi-reader
+ * model relaxes to multi-writer ingest, the rejection counters would
+ * ping-pong the line that holds the hot counters on every error path.
+ * The struct is ordered and padded so the 4 hot counters (ingest_total,
+ * apply_ok, bytes_ingested, bytes_sealed) sit on cache line 1 and the 10 cold
+ * rejection counters sit on cache line 2. The static_assert at the struct
+ * definition is the primary proof; this runtime test is a belt-and-braces check
+ * that the compiler honoured alignas through the embedding `clusterMailbox`
  * allocation pipeline (zmalloc). If zmalloc ever stopped returning
  * 64B-aligned pointers for an aligned struct, this test would catch
  * it. */

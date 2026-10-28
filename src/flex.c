@@ -236,19 +236,12 @@ typedef enum flexType {
     /* 237-251 are unassigned; read and validation refuse them.  An
      * addition here updates the "embedded types" test's accounting.
      *
-     * Nested containers were removed (2026-10): bytes 237-240 tagged an
-     * entry holding a whole serialized flex in place (MAP, LIST, SET,
-     * TUPLE: [TAG][inner flex, its own total-bytes header][inner size
-     * reversed][TAG]), and 241 was reserved for a compressed one.  Nothing
-     * built or read them, the kinds were labels only (a "map" did not
-     * pair keys, a "set" did not dedupe), and validation never looked
-     * inside.  A value nested that way is a frozen snapshot: editing it
-     * means copying it out, changing it and replacing the whole entry.
-     *
-     * If nesting returns, decide the model first:
-     *   - in place (as above): the outer flex owns a serialized copy; walk
-     *     it by entering the inner flex; validation must descend into it
-     *     with a depth limit; edits rewrite the entry;
+     * A container nested in an entry needs its model decided first:
+     *   - in place: the outer flex owns a serialized copy ([TAG][inner
+     *     flex, its own total-bytes header][inner size reversed][TAG]);
+     *     walk it by entering the inner flex; validation must descend into
+     *     it with a depth limit.  Such a value is a frozen snapshot: an
+     *     edit copies it out, changes it and rewrites the whole entry;
      *   - by reference: the entry holds a reference to a structure kept
      *     elsewhere (as FLEX_CONTAINER_REFERENCE_EXTERNAL_* do for ids),
      *     which stays editable, and serializing the outer value means
@@ -312,6 +305,67 @@ typedef enum flexType {
 /* + 1 because our minimum reference is a 1 byte integer */
 #define EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding)                        \
     (((encoding) - FLEX_CONTAINER_REFERENCE_EXTERNAL_8) + 1)
+
+/* Total bytes of an entry by its first byte, for every encoding whose size
+ * the byte alone gives: an immediate is one byte, any other fixed-width
+ * value is [ENC][payload][ENC].  Byte strings (their size is in their
+ * length varint) and the unassigned bytes are 0: the unassigned 237-251,
+ * FLEX_REAL_32D/64D, and the MDSC references when FLEX_ENABLE_PTR_MDSC is
+ * off.  An entry's last byte is read the same way walking backwards: a
+ * fixed entry ends in its encoding byte, a byte string in its length
+ * varint's tag.  One table serves the walk, the decoder and the validator
+ * (flexRawEntryLengthSafe), so they cannot disagree.
+ *
+ * Measured against the switch it replaces (perfcompare, clang 22, M-series):
+ * rows of mixed fixed widths run 3-12% faster (multiOrderedSet, the HASHED
+ * atom index), because a jump between width cases mispredicts and a load
+ * does not; rows of one repeating pattern (a multimap keyed by references,
+ * the ORDERED atom index) run 1-7% slower, because a predicted jump gave
+ * the size without the table's dependent load.  Sizing integers and
+ * references by arithmetic on the byte, branching per family, was slower
+ * than both on mixed rows. */
+#define FLEX_ENTRY_FIXED_(encoding, payloadBytes)                              \
+    [encoding] = 2 + (payloadBytes)
+#define FLEX_ENTRY_INTEGER_PAIR_(bits)                                         \
+    FLEX_ENTRY_FIXED_(FLEX_NEG_##bits##B, (bits) / 8),                         \
+        FLEX_ENTRY_FIXED_(FLEX_UINT_##bits##B, (bits) / 8)
+#define FLEX_ENTRY_REFERENCE_(bits)                                            \
+    FLEX_ENTRY_FIXED_(FLEX_CONTAINER_REFERENCE_EXTERNAL_##bits, (bits) / 8)
+static const uint8_t flexEntryBytes_[256] = {
+    FLEX_ENTRY_INTEGER_PAIR_(8),
+    FLEX_ENTRY_INTEGER_PAIR_(16),
+    FLEX_ENTRY_INTEGER_PAIR_(24),
+    FLEX_ENTRY_INTEGER_PAIR_(32),
+    FLEX_ENTRY_INTEGER_PAIR_(40),
+    FLEX_ENTRY_INTEGER_PAIR_(48),
+    FLEX_ENTRY_INTEGER_PAIR_(56),
+    FLEX_ENTRY_INTEGER_PAIR_(64),
+    FLEX_ENTRY_INTEGER_PAIR_(96),
+    FLEX_ENTRY_INTEGER_PAIR_(128),
+    FLEX_ENTRY_FIXED_(FLEX_REAL_B16B, 2),
+    FLEX_ENTRY_FIXED_(FLEX_REAL_16B, 2),
+    FLEX_ENTRY_FIXED_(FLEX_REAL_32B, 4),
+    FLEX_ENTRY_FIXED_(FLEX_REAL_64B, 8),
+#if FLEX_ENABLE_PTR_MDSC
+    FLEX_ENTRY_FIXED_(FLEX_EXTERNAL_MDSC_48B, 6),
+    FLEX_ENTRY_FIXED_(FLEX_EXTERNAL_MDSC_64B, 8),
+#endif
+    FLEX_ENTRY_REFERENCE_(8),
+    FLEX_ENTRY_REFERENCE_(16),
+    FLEX_ENTRY_REFERENCE_(24),
+    FLEX_ENTRY_REFERENCE_(32),
+    FLEX_ENTRY_REFERENCE_(40),
+    FLEX_ENTRY_REFERENCE_(48),
+    FLEX_ENTRY_REFERENCE_(56),
+    FLEX_ENTRY_REFERENCE_(64),
+    [FLEX_BYTES_EMPTY] = 1,
+    [FLEX_TRUE] = 1,
+    [FLEX_FALSE] = 1,
+    [FLEX_NULL] = 1,
+};
+#undef FLEX_ENTRY_REFERENCE_
+#undef FLEX_ENTRY_INTEGER_PAIR_
+#undef FLEX_ENTRY_FIXED_
 
 /* ====================================================================
  * Macros for accessing flex metadata contents
@@ -454,6 +508,10 @@ DK_INLINE_ALWAYS flexEntry *flexGetPreviousEntry(flexEntry *const fe) {
     /* Note: 'flexGetPreviousEntry' is an unsafe version of 'flexPrev'.
      *       If 'fe' is the head element and we try to get the previous,
      *       we'll segfault. */
+    if (!FLEX_IS_STR((fe - 1)[0])) {
+        return fe - flexEntryBytes_[(fe - 1)[0]];
+    }
+
     FLEX_DECODE_LENGTH_REVERSE(fe - 1, reverseByteCount, reverseLength);
     return FLEX_ENTRY_PREVIOUS_(fe, reverseLength, (fe - 1)[0],
                                 reverseByteCount);
@@ -755,101 +813,43 @@ DK_INLINE_ALWAYS bool flexEntryIsIntegerNarrow_(const flexEntry *fe) {
 
 /* Return total number of bytes used by entry at 'fe'. */
 DK_INLINE_ALWAYS size_t flexRawEntryLength(flexEntry *const fe) {
+    /* The byte decides first, so a byte string's step never waits on the
+     * table load.  No assert on this hot step (test builds keep asserts):
+     * entries from outside are validated, and writers emit only sized
+     * encodings. */
+    if (!FLEX_IS_STR(fe[0])) {
+        return flexEntryBytes_[fe[0]];
+    }
+
+    /* A byte string: [LEN][DATA][LEN REVERSED] */
     size_t len;
-    varintWidth encodingSize;
-    FLEX_DECODE_LENGTH_FORWARD(fe, encodingSize, len);
-    return len + FLEX_ENCODING_SIZE_TOTAL_FORWARD(fe, encodingSize);
+    varintWidth lenWidth;
+    varintSplitFullNoZeroGet_(fe, lenWidth, len);
+    return len + 2 * (size_t)lenWidth;
 }
 
 /* ====================================================================
  * flex internal accounting
  * ==================================================================== */
-/* Payload size for every encoding whose size depends on the encoding
- * byte alone: fixed-width numbers and references plus the immediates.
- * Every other value is absent: the unassigned bytes 237-251,
- * FLEX_REAL_32D/64D, and the MDSC references when FLEX_ENABLE_PTR_MDSC is
- * off.
- *
- * This one case list expands into two switches: the decode-size switch
- * (flexDataSizeForFixedWidthEncoding, which asserts on anything else) and
- * flexFixedWidthPayloadSize (used by flexRawEntryLengthSafe, which
- * rejects anything else).  Sharing the list keeps the decoder and the
- * validator in step; expanding it in place keeps the decode path a
- * single jump table.  'SIZE_IS(n)' must leave the switch. */
-#if FLEX_ENABLE_PTR_MDSC
-#define FLEX_FIXED_WIDTH_MDSC_CASES_(SIZE_IS)                                  \
-    case FLEX_EXTERNAL_MDSC_48B:                                               \
-        SIZE_IS(48 / 8);                                                       \
-    case FLEX_EXTERNAL_MDSC_64B:                                               \
-        SIZE_IS(64 / 8);
-#else
-#define FLEX_FIXED_WIDTH_MDSC_CASES_(SIZE_IS)
-#endif
+/* Payload size of an encoding flexEntryBytes_ sizes (an entry of
+ * 'total' bytes): an immediate is its one byte, any other fixed entry is
+ * [ENC][payload][ENC] */
+DK_INLINE_ALWAYS size_t flexFixedPayload_(const flexEncoding encoding,
+                                          const size_t total) {
+    return total - (FLEX_IS_IMMEDIATE(encoding) ? 1 : 2);
+}
 
-#define FLEX_FIXED_WIDTH_CASES_(encoding, SIZE_IS)                             \
-    case FLEX_NEG_8B:                                                          \
-    case FLEX_NEG_16B:                                                         \
-    case FLEX_NEG_24B:                                                         \
-    case FLEX_NEG_32B:                                                         \
-    case FLEX_NEG_40B:                                                         \
-    case FLEX_NEG_48B:                                                         \
-    case FLEX_NEG_56B:                                                         \
-    case FLEX_NEG_64B:                                                         \
-    case FLEX_UINT_8B:                                                         \
-    case FLEX_UINT_16B:                                                        \
-    case FLEX_UINT_24B:                                                        \
-    case FLEX_UINT_32B:                                                        \
-    case FLEX_UINT_40B:                                                        \
-    case FLEX_UINT_48B:                                                        \
-    case FLEX_UINT_56B:                                                        \
-    case FLEX_UINT_64B:                                                        \
-        SIZE_IS((size_t)EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding));       \
-    case FLEX_UINT_96B:                                                        \
-    case FLEX_NEG_96B:                                                         \
-        SIZE_IS(96 / 8);                                                       \
-    case FLEX_UINT_128B:                                                       \
-    case FLEX_NEG_128B:                                                        \
-        SIZE_IS(128 / 8);                                                      \
-    case FLEX_REAL_B16B:                                                       \
-    case FLEX_REAL_16B:                                                        \
-        SIZE_IS(16 / 8);                                                       \
-    case FLEX_REAL_32B:                                                        \
-        SIZE_IS(32 / 8);                                                       \
-    case FLEX_REAL_64B:                                                        \
-        SIZE_IS(64 / 8);                                                       \
-        FLEX_FIXED_WIDTH_MDSC_CASES_(SIZE_IS)                                  \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_8:                                  \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_16:                                 \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_24:                                 \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_32:                                 \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_40:                                 \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_48:                                 \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_56:                                 \
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_64:                                 \
-        SIZE_IS((size_t)EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding));      \
-    case FLEX_BYTES_EMPTY:                                                     \
-    case FLEX_TRUE:                                                            \
-    case FLEX_FALSE:                                                           \
-    case FLEX_NULL:                                                            \
-        /* immediate encoding, no value */                                     \
-        SIZE_IS(0);
-
-/* Returns false for every encoding the table above does not size. */
+/* False for every encoding flexEntryBytes_ does not size (byte strings
+ * and the unassigned bytes) */
 DK_INLINE_ALWAYS bool flexFixedWidthPayloadSize(const flexEncoding encoding,
                                                 size_t *const outSize) {
-#define FLEX_FIXED_WIDTH_STORE_(size)                                          \
-    do {                                                                       \
-        *outSize = (size);                                                     \
-        return true;                                                           \
-    } while (0)
-
-    switch (encoding) {
-        FLEX_FIXED_WIDTH_CASES_(encoding, FLEX_FIXED_WIDTH_STORE_)
-    default:
+    const size_t total = flexEntryBytes_[encoding];
+    if (!total) {
         return false;
     }
 
-#undef FLEX_FIXED_WIDTH_STORE_
+    *outSize = flexFixedPayload_(encoding, total);
+    return true;
 }
 
 /* Return bytes needed to store fixed type encoded by 'encoding' */
@@ -861,18 +861,9 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncoding(
         *encodingSize = 1; /* ONE side of the encoding */
     }
 
-#define FLEX_FIXED_WIDTH_RETURN_(size) return (size)
-
-    switch (encoding) {
-        FLEX_FIXED_WIDTH_CASES_(encoding, FLEX_FIXED_WIDTH_RETURN_)
-    default:
-        /* Writers never emit an encoding outside the table, and the
-         * validators reject one. */
-        assert(false);
-        unreachable();
-    }
-
-#undef FLEX_FIXED_WIDTH_RETURN_
+    /* Writers never emit an encoding outside the table, and the
+     * validators reject one */
+    return flexFixedPayload_(encoding, flexEntryBytes_[encoding]);
 }
 
 DK_FN_CONST DK_STATIC uint_fast8_t flexEncodingLength(flexEncoding encoding,
@@ -1020,42 +1011,23 @@ DK_STATIC uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
     unreachable();
 }
 
-DK_FN_CONST DK_STATIC uint64_t
+/* A reference of k bytes stores its value minus the largest value the
+ * (k-1)-byte form holds: the base each width adds back */
+static const uint64_t flexReferenceBase_[8] = {
+    0,
+    REFERENCE_MAX_8,
+    REFERENCE_MAX_16,
+    REFERENCE_MAX_24,
+    REFERENCE_MAX_32,
+    REFERENCE_MAX_40,
+    REFERENCE_MAX_48,
+    REFERENCE_MAX_56,
+};
+
+DK_INLINE_ALWAYS uint64_t
 flexEncodingReferenceUnsignedDecode(flexEncoding encoding, uint64_t value) {
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_8) {
-        return value;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_16) {
-        return value + REFERENCE_MAX_8;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_24) {
-        return value + REFERENCE_MAX_16;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_32) {
-        return value + REFERENCE_MAX_24;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_40) {
-        return value + REFERENCE_MAX_32;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_48) {
-        return value + REFERENCE_MAX_40;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_56) {
-        return value + REFERENCE_MAX_48;
-    }
-
-    if (encoding == FLEX_CONTAINER_REFERENCE_EXTERNAL_64) {
-        return value + REFERENCE_MAX_56;
-    }
-
-    assert(false);
-    unreachable();
+    return value +
+           flexReferenceBase_[encoding - FLEX_CONTAINER_REFERENCE_EXTERNAL_8];
 }
 
 DK_FN_CONST DK_STATIC flexEncoding
@@ -1408,6 +1380,24 @@ flexWideTarget_(databox *r, databoxWide *slot, const flexWideStore_ store) {
     unreachable();
 }
 
+/* The unsigned little-endian payload of 'width' (1-8) bytes at 'd'.  Up
+ * to 3 bytes, the byte reads of varintExternalGetQuick_; from 4, two
+ * loads that both stay inside the payload, the first and the last 4 bytes
+ * (overlapping where the width is under 8, on bytes both loads read
+ * alike), in place of the general getter's call */
+DK_INLINE_ALWAYS uint64_t flexLoadPayload_(const flexData *const d,
+                                           const uint32_t width) {
+    if (width >= 4) {
+        const uint64_t lo = dkLoadLe32(d);
+        const uint64_t hi = dkLoadLe32(d + width - 4);
+        return lo | (hi << (8 * (width - 4)));
+    }
+
+    uint64_t value;
+    varintExternalGetQuick_(d, width, value);
+    return value;
+}
+
 /* Read value pointed to by 'entry', store result in databox 'r'.  Narrow
  * arms write only type, data and (for variable-length types) len; a
  * 96/128-bit value finds its storage through flexWideTarget_. */
@@ -1433,8 +1423,8 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
     case FLEX_UINT_48B:
     case FLEX_UINT_56B:
     case FLEX_UINT_64B:
-        varintExternalGetQuick_(
-            d, EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding), r->data.u64);
+        r->data.u64 =
+            flexLoadPayload_(d, EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding));
         r->type = DATABOX_UNSIGNED_64;
         break;
     case FLEX_UINT_96B:
@@ -1455,9 +1445,8 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
     case FLEX_NEG_48B:
     case FLEX_NEG_56B:
     case FLEX_NEG_64B: {
-        uint64_t magnitude;
-        varintExternalGetQuick_(
-            d, EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding), magnitude);
+        const uint64_t magnitude =
+            flexLoadPayload_(d, EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding));
         if (likely(magnitude <= INT64_MAX)) {
             r->type = DATABOX_SIGNED_64;
             r->data.i64 = -(int64_t)magnitude - 1;
@@ -1512,12 +1501,12 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
     }
 #if FLEX_ENABLE_PTR_MDSC
     case FLEX_EXTERNAL_MDSC_48B:
-        r->data.uptr = varintExternalGet(d, 6);
+        r->data.uptr = flexLoadPayload_(d, 6);
         r->type = DATABOX_PTR_MDSC;
         r->len = mdsclen(r->data.ptr);
         break;
     case FLEX_EXTERNAL_MDSC_64B:
-        r->data.uptr = varintExternalGet(d, 8);
+        r->data.uptr = flexLoadPayload_(d, 8);
         r->type = DATABOX_PTR_MDSC;
         r->len = mdsclen(r->data.ptr);
         break;
@@ -1530,10 +1519,9 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
     case FLEX_CONTAINER_REFERENCE_EXTERNAL_48:
     case FLEX_CONTAINER_REFERENCE_EXTERNAL_56:
     case FLEX_CONTAINER_REFERENCE_EXTERNAL_64:
-        varintExternalGetQuick_(
-            d, EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding), r->data.u64);
-        r->data.u64 =
-            flexEncodingReferenceUnsignedDecode(encoding, r->data.u64);
+        r->data.u64 = flexEncodingReferenceUnsignedDecode(
+            encoding, flexLoadPayload_(
+                          d, EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding)));
         r->type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
         break;
     case FLEX_BYTES_EMPTY:
@@ -3658,8 +3646,9 @@ int flexFactorySelfTest(void) {
     }
 
     /* pointer-array factory (multimap convention): N boxes incl a non-last
-     * BYTES value — the case the old hand-rolled multimap delta couldn't
-     * encode.  Verify count + that the leading BYTES element round-trips. */
+     * BYTES value (a BYTES value before the last element needs its own
+     * size counted).  Verify count + that the leading BYTES element
+     * round-trips. */
     {
         databox b0 = databoxNewBytes("member-key", 10);
         databox b1 = databoxNewUnsigned(7);
@@ -5019,10 +5008,9 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     /* Wider entries spill to one heap block carved in descending
      * alignment order: bigBuffer (16-byte alignment) first, then the
      * 16-byte copyBox structs, then content, then the pointer array.
-     * Every region must be disjoint - a previous carve based bigBuffer
-     * at the wrong offset, overlapping the tail of content[], which
-     * silently corrupted insert descriptors whenever a wide entry
-     * carried 128-bit elements. Block frees itself at scope exit. */
+     * The regions are disjoint: bigBuffer overlapping content[] would
+     * corrupt the insert descriptors of a wide entry with 128-bit
+     * elements.  The block frees itself at scope exit. */
     cleaner(zfree) void *sortedInsertScratch_ = nullptr;
     if (elementsPerEntry > SORTED_INSERT_STACK_ELEMENTS_) {
         const size_t bigBufferLen = elementsPerEntry * sizeof(*bigBuffer);
@@ -8719,6 +8707,178 @@ static int32_t flexTestIndexOf(const flex *f, const flexEntry *fe) {
     return -2; /* not an entry of 'f' at all (e.g. the flex itself) */
 }
 
+/* One entry of every encoding flexEntryBytes_ sizes
+ * (flexFixedWidthPayloadSize), plus byte strings at
+ * each length-varint width.  Each entry's total size is stated here by
+ * hand (the oracle); the walk forward (flexRawEntryLength) and back
+ * (flexGetPreviousEntry) must step exactly those sizes, cover the whole
+ * flex, read every value back, and meet every sized encoding once. */
+static int32_t flexTestEntryWalk(void) {
+    int err = 0;
+    cleaner(flexFree) flex *f = flexNew();
+    static uint8_t text[VARINT_SPLIT_FULL_NO_ZERO_MAX_14 + 1];
+    memset(text, 'x', sizeof(text));
+
+    constexpr size_t WALK_ENTRIES_ = 64;
+    databoxBig want[WALK_ENTRIES_];
+    size_t bytes[WALK_ENTRIES_];
+    size_t n = 0;
+
+    /* Write 'box' (want[n] itself for a 96/128-bit value) as entry n of
+     * 'total' bytes */
+#define WALK_ENTRY_(box, total)                                                \
+    do {                                                                       \
+        const databox *walkBox_ = (box);                                       \
+        if ((const void *)walkBox_ != (const void *)&want[n]) {                \
+            databoxBigCopyFrom(&want[n], walkBox_);                            \
+        }                                                                      \
+        flexPushByTypeExact(&f, walkBox_, FLEX_ENDPOINT_TAIL);                 \
+        bytes[n++] = (total);                                                  \
+    } while (0)
+
+    for (uint32_t k = 1; k <= 8; k++) {
+        /* k payload bytes: unsigned, negative, then a reference.  The top
+         * bit makes the width; the bytes below it all differ, so a byte
+         * read from the wrong place changes the value. */
+        const uint64_t top = (uint64_t)1 << (8 * k - 1);
+        const uint64_t v = top | (UINT64_C(0x7f6e5d4c3b2a1908) & (top - 1));
+        const databox u = databoxNewUnsigned(v);
+        const databox s =
+            databoxNewSigned(k == 8 ? INT64_MIN + 0x1908 : -(int64_t)v);
+        const databox r = {.data.u = v,
+                           .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        WALK_ENTRY_(&u, 2 + k);
+        WALK_ENTRY_(&s, 2 + k);
+        WALK_ENTRY_(&r, 2 + k);
+    }
+
+    DATABOX_BIG_UNSIGNED_128(&want[n], (__uint128_t)1 << 70);
+    WALK_ENTRY_((const databox *)&want[n], 2 + 96 / 8);
+    DATABOX_BIG_SIGNED_128(&want[n], -((__int128_t)1 << 70));
+    WALK_ENTRY_((const databox *)&want[n], 2 + 96 / 8);
+    DATABOX_BIG_UNSIGNED_128(&want[n], (__uint128_t)1 << 100);
+    WALK_ENTRY_((const databox *)&want[n], 2 + 128 / 8);
+    DATABOX_BIG_SIGNED_128(&want[n], -((__int128_t)1 << 100));
+    WALK_ENTRY_((const databox *)&want[n], 2 + 128 / 8);
+
+    const databox third = databoxNewReal(1.0 / 3);
+    const databox thirdF = {.data.f32 = 1.0f / 3, .type = DATABOX_FLOAT_32};
+    WALK_ENTRY_(&third, 2 + 8);
+    WALK_ENTRY_(&thirdF, 2 + 4);
+    WALK_ENTRY_(&DATABOX_BOX_TRUE, 1);
+    WALK_ENTRY_(&DATABOX_BOX_FALSE, 1);
+    WALK_ENTRY_(&DATABOX_BOX_NULL, 1);
+
+#if FLEX_ENABLE_PTR_MDSC
+    /* A decode reads the string's length through the pointer, so the
+     * 48-bit form holds a real string.  The 64-bit form needs pointer top
+     * bits no heap pointer here has: it is walked and sized, never
+     * decoded. */
+    cleaner(mdscfree) mdsc *walkString = mdscnewlen("walk", 4);
+    const databox p48 = {.data.ptr = walkString,
+                         .len = mdsclen(walkString),
+                         .type = DATABOX_PTR_MDSC};
+    const databox p64 = {.data.ptr =
+                             (void *)(uintptr_t)UINT64_C(0xFFFF000000123456),
+                         .type = DATABOX_PTR_MDSC};
+    WALK_ENTRY_(&p48, 2 + 6);
+    WALK_ENTRY_(&p64, 2 + 8);
+    const size_t undecoded = n - 1;
+#else
+    const size_t undecoded = SIZE_MAX;
+#endif
+
+    /* Byte strings: [LEN][DATA][LEN REVERSED], the length varint 1, 2 or
+     * 3 bytes; an empty one is the immediate FLEX_BYTES_EMPTY */
+    const size_t lens[] = {0,
+                           1,
+                           VARINT_SPLIT_FULL_NO_ZERO_MAX_6,
+                           VARINT_SPLIT_FULL_NO_ZERO_MAX_6 + 1,
+                           VARINT_SPLIT_FULL_NO_ZERO_MAX_14,
+                           VARINT_SPLIT_FULL_NO_ZERO_MAX_14 + 1};
+    const size_t lenBytes[] = {0, 1, 1, 2, 2, 3};
+    for (size_t i = 0; i < countof(lens); i++) {
+        const databox b = databoxNewBytes(text, lens[i]);
+        WALK_ENTRY_(&b, lens[i] ? lens[i] + 2 * lenBytes[i] : 1);
+    }
+#undef WALK_ENTRY_
+
+    /* The two half-width floats have their own writers */
+    flexPushFloatB16(&f, 1.5f, FLEX_ENDPOINT_TAIL);
+    databoxBigCopyFrom(&want[n],
+                       &(databox){.data.f32 = 1.5f, .type = DATABOX_FLOAT_32});
+    bytes[n++] = 2 + 2;
+    flexPushFloat16(&f, 1.5f, FLEX_ENDPOINT_TAIL);
+    databoxBigCopyFrom(&want[n],
+                       &(databox){.data.f32 = 1.5f, .type = DATABOX_FLOAT_32});
+    bytes[n++] = 2 + 2;
+    assert(n <= WALK_ENTRIES_);
+
+    if ((size_t)flexCount(f) != n) {
+        ERR("walk flex holds %zu entries, wrote %zu", (size_t)flexCount(f), n);
+        return err;
+    }
+
+    /* Forward: each step is the stated size, and the steps end the flex */
+    bool seen[256] = {};
+    flexEntry *at[WALK_ENTRIES_];
+    flexEntry *fe = flexHead(f);
+    size_t total = (size_t)(fe - f);
+    for (size_t i = 0; i < n; i++) {
+        at[i] = fe;
+        seen[fe[0]] = true;
+        const size_t step = flexRawEntryLength(fe);
+        if (step != bytes[i]) {
+            ERR("entry %zu (encoding %u) steps %zu bytes, is %zu", i,
+                (unsigned)fe[0], step, bytes[i]);
+            return err;
+        }
+
+        databoxBig got;
+        DATABOX_BIG_INIT(&got);
+        if (i != undecoded) {
+            flexGetByTypeBig(fe, &got);
+        }
+
+        if (i != undecoded && databoxCompare((const databox *)&got,
+                                             (const databox *)&want[i]) != 0) {
+            ERR("entry %zu (encoding %u) read back a different value", i,
+                (unsigned)fe[0]);
+        }
+
+        fe += step;
+        total += step;
+    }
+
+    if (total != flexBytes(f)) {
+        ERR("forward walk covers %zu of %zu bytes", total, flexBytes(f));
+    }
+
+    /* Backward: from the tail, every step lands on the same entry */
+    fe = flexTail(f);
+    for (size_t i = n; i-- > 0;) {
+        if (fe != at[i]) {
+            ERR("backward walk missed entry %zu", i);
+            break;
+        }
+
+        if (i) {
+            fe = flexGetPreviousEntry(fe);
+        }
+    }
+
+    /* Every encoding the table sizes was walked */
+    for (uint32_t enc = 0; enc < 256; enc++) {
+        size_t payload = 0;
+        if (flexFixedWidthPayloadSize((flexEncoding)enc, &payload) &&
+            !seen[enc]) {
+            ERR("encoding %" PRIu32 " is sized but was never walked", enc);
+        }
+    }
+
+    return err;
+}
+
 /* Every typed find against an oracle of entry positions, in a flex holding
  * one entry of each kind. */
 static int32_t flexTestTypedFind(void) {
@@ -10599,6 +10759,10 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("typed finds match by kind and value") {
         err += flexTestTypedFind();
+    }
+
+    TEST("entry sizes step every encoding forward and back") {
+        err += flexTestEntryWalk();
     }
 
     TEST("the exact push path stores values as given") {
@@ -14234,10 +14398,9 @@ int32_t flexTest(int32_t argc, char **argv) {
      * FLEX VALIDATOR REJECTS ENCODINGS THE SIZE HELPER CANNOT HANDLE
      *
      * Between the references and the immediates sit the unassigned
-     * bytes 237..251 (once the nested-container tags).  None is sizable
-     * by flexDataSizeForFixedWidthEncoding (they land on its
-     * assert(NULL) default), so the validator must reject them: a
-     * fuzzed tag byte cannot tunnel through to a fail-loud abort.
+     * bytes 237..251.  flexEntryBytes_ sizes none of them (0 there), so
+     * the validator must reject them before any decode: a fuzzed tag
+     * byte cannot reach a decoder that trusts the table.
      *
      * Similarly the fixed-width range carries two declared-but-unused
      * encodings (FLEX_REAL_32D, FLEX_REAL_64D); the validator must

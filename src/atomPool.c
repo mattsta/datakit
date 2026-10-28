@@ -1086,8 +1086,8 @@ int atomPoolTest(int, char *[]) {
     }
 
     TEST("atomPool reset empties both backends") {
-        /* TREE reset used to be a silent no-op: atoms stayed interned
-         * and counts went stale, silently diverging from HASH */
+        /* A reset empties TREE exactly as it empties HASH: no atom stays
+         * interned and every count reads zero */
         const atomPoolType resetBackends[2] = {ATOM_POOL_HASH, ATOM_POOL_TREE};
         for (int t = 0; t < 2; t++) {
             atomPool *pool = atomPoolNew(resetBackends[t]);

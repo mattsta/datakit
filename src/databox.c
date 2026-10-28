@@ -2323,13 +2323,11 @@ int databoxTest(int, char *[]) {
     }
 
     TEST("natural sort comparator is a strict total order") {
-        /* Regression: a previous formulation of databoxCompareBytes_
-         * recorded only the FIRST differing digit and made post-hoc
-         * decisions when the digit runs ended at different
-         * positions.  That produced a non-transitive ordering for
-         * mixed-length numeric keys, which silently broke binary
-         * search inside multimapFull (BinarySearch missed keys that
-         * iteration found).  Lock the fix here. */
+        /* Mixed-length digit runs must order transitively: a comparator
+         * that decided from the FIRST differing digit alone, when the
+         * runs end at different positions, is non-transitive, and binary
+         * search inside multimapFull would then miss keys that
+         * iteration finds. */
         const char *cases[] = {
             "g_2_39",  "g_10_0", "g_1_6",  "g_0_2",  "g_0_45",
             "g_10_47", "g_1_47", "g_2_40", "g_2_42",

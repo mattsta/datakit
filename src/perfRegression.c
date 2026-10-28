@@ -2064,8 +2064,6 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     perfContainerSink = sink;
 }
 
-/* The atom table under each reverse index (the default, hashed, then
- * ordered and dict), then the lowest-first table and the string pool */
 /* Rows of {value, count} addressed by dense ids, against a multimap of
  * {id, value, count} rows sorted by id holding the same data:
  * rows set in id order, read back in order and scattered, counts
@@ -2159,6 +2157,43 @@ static void benchMultimapAtomRead(void) {
     perfContainerSink = sink;
 }
 
+/* A multimap of {reference id, string, count} rows read by id, in id
+ * order (run by name, for profiling a find keyed by references): 100k
+ * rows, 60 passes */
+static void benchMultimapRefRead(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    const databox one = {.type = DATABOX_FALSE};
+    cleaner(multimapFree) multimap *m =
+        multimapNewLimit(3, dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM));
+    uint64_t sink = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const databox id = {.data.u = i,
+                            .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        const databox v = perfContainerKey(keys, i);
+        const databox *row[3] = {&id, &v, &one};
+        sink += multimapInsert(&m, row);
+    }
+
+    constexpr uint32_t passes = 60;
+    const double t0 = timeUtilMonotonicSec();
+    for (uint32_t p = 0; p < passes; p++) {
+        for (uint32_t i = 0; i < n; i++) {
+            const databox id = {.data.u = i,
+                                .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+            databox v = {};
+            databox c = {};
+            databox *row[2] = {&v, &c};
+            sink += multimapLookup(m, &id, row);
+        }
+    }
+    emitRow("multimapRefRead", "lookupById", 0, passes * n,
+            timeUtilMonotonicSec() - t0);
+    perfContainerSink = sink;
+}
+
+/* The atom table under each reverse index (the default, hashed, then
+ * ordered and dict), then the lowest-first table and the string pool */
 static void benchMultimapAtom(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
@@ -2433,6 +2468,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multimapAtomRead")) {
             benchMultimapAtomRead();
+        }
+
+        if (perfNamed("multimapRefRead")) {
+            benchMultimapRefRead();
         }
 
         if (perfWanted("idRows")) {

@@ -334,10 +334,9 @@ uint8_t *DKS_NATIVE(DKS_TYPE *s, size_t *len) {
 
     memmove(base, info.buf, info.len);
 
-    /* We previously used "return zrealloc(base, info.len);", but
-     * the caller may not need their DKS_NATIVE realloc()'d.
-     * We now allow the caller to retrieve the length of the
-     * allocated string so they can realloc manually if needed. */
+    /* No shrinking realloc here: the caller may not need its DKS_NATIVE
+     * string realloc()'d, and '*len' gives the length to realloc to
+     * when it does. */
 
     /* Return pointer to start of dks allocation instead of to
      * dks->buf, which is offset 2 to 16 bytes into the allocation. */

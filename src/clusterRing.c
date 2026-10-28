@@ -1390,7 +1390,7 @@ clusterResult clusterRingRemoveNode(clusterRing *ring, uint64_t nodeId) {
 
     /* Rebuild the state that pointed at the node before the callback, as
      * a state change does: a callback that places keys sees the ring
-     * without it (the Jump buckets used to still hold it) */
+     * without it (the Jump buckets included) */
     const clusterNodeState oldState = node->state;
     clusterRingRefreshHealthy(ring);
     ring->version++;
@@ -6230,8 +6230,8 @@ static int testFuzzLargeScale(void) {
         }
 
         /* Small rings: 5 nodes, 3 replicas, 2000 keys; every placement
-         * gets 3 distinct nodes (Jump used to lose one whenever a seed
-         * landed on a node already chosen) */
+         * gets 3 distinct nodes (Jump included, where a seed can land
+         * on a node already chosen) */
         for (size_t s = 0; s < countof(strategies); s++) {
             clusterRingConfig config = {
                 .name = "small-replicas",
