@@ -12,6 +12,7 @@ dependencies = [
     "git-filter-repo>=2.47.0",
     "libclang>=18.1.1",
     "ruff>=0.17.2",
+    "uv>=0.13.6",
 ]
 
 [project.scripts]

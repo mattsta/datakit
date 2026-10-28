@@ -267,7 +267,13 @@ stopped: the end, the callback, a torn tail (the WAL ends inside an entry),
 a bad entry (with its kind: CORRUPT, KEY, READ) or an unreadable header. It
 also gives the end of the last complete entry (where a heal would cut), the
 WAL's size and the count of entries read. `persistOpName` / `persistTypeName`
-name ops and types. An op body's layout belongs to its type (some are
+name ops and types; `persistOpenResultName`, `persistWALStopName`,
+`persistBadEntryKindName`, `persistBadEntryActionName`,
+`persistQuarantineReadName` and `persistErrName` give each status its stable
+name, the enumerator's suffix (`NO_FILE`, `TORN`, `CORRUPT`, ...), and
+`dkFormatResultName` does the same for format checks (`OK`, `WRONG_ID`, ...).
+The Python package `datakit.persist` (`python/`) is these calls for
+operators, one wheel for Python 3.15+. An op body's layout belongs to its type (some are
 flexes, some fixed-width operands), so a generic reader shows the bytes.
 
 `persistRecoverSummarize(p, &summary)` recovers through the type's own

@@ -1294,6 +1294,15 @@ const persistOps *persistOpsForType(persistType type);
 /* Get human-readable name for operation */
 const char *persistOpName(persistOp op);
 
+/* Stable names for operator tooling: each enumerator's suffix
+ * ("NO_FILE", "TORN", "CORRUPT", ...), "UNKNOWN" for any other value */
+const char *persistOpenResultName(persistOpenResult result);
+const char *persistWALStopName(persistWALStop stop);
+const char *persistBadEntryKindName(persistBadEntryKind kind);
+const char *persistBadEntryActionName(persistBadEntryAction action);
+const char *persistQuarantineReadName(persistQuarantineRead read);
+const char *persistErrName(persistErr err);
+
 /* Verify snapshot file integrity (parses header + unwraps body envelope). */
 bool persistVerifySnapshot(persist *p);
 

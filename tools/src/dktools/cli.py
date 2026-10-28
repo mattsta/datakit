@@ -36,6 +36,7 @@ from . import (
     perfdiff,
     procs,
     profile,
+    pybuild,
     retoken,
     spell,
     stdattr,
@@ -485,6 +486,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     toolchain.add_arguments(cf)
 
+    pb = sub.add_parser(
+        "pybuild",
+        help="build the python/ package's abi3t wheel into "
+        "build/dktools/pybuild/NAME (exit 0, 1 when the build fails)",
+    )
+    pb.add_argument("name", help="work-dir name")
+    pb.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    toolchain.add_arguments(pb)
+
+    pt = sub.add_parser(
+        "pytest",
+        help="install pybuild NAME's wheel per interpreter and run python/tests "
+        "(exit 0, 1 when a run fails, 2 with no wheel)",
+    )
+    pt.add_argument("name", help="the pybuild work-dir name")
+    pt.add_argument(
+        "--python",
+        default=",".join(pybuild.DEFAULT_PYTHONS),
+        help="comma-separated uv interpreter requests "
+        f"(default {','.join(pybuild.DEFAULT_PYTHONS)})",
+    )
+    pt.add_argument(
+        "--tests", default="test*.py", help="test file pattern (default test*.py)"
+    )
+
     od = sub.add_parser(
         "objdiff",
         help="compare named functions' machine code between the two builds of "
@@ -874,6 +905,12 @@ def main(argv: list[str] | None = None) -> int:
         help="also build the library with DatakitTestMode=OFF and no test "
         "binary, once per compiler, judged on warnings (no tests)",
     )
+    va.add_argument(
+        "--python",
+        action="store_true",
+        help="also build the python/ package's wheel and run its tests on "
+        f"{', '.join(pybuild.DEFAULT_PYTHONS)}",
+    )
     slow_default = validate.DEFAULT_SLOW or "none"
     debug_slow_default = validate.DEFAULT_DEBUG_SLOW or "none"
     va.add_argument(
@@ -1048,6 +1085,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 debug_slow=args.debug_slow,
                 full=args.full,
                 library_only=args.library_only,
+                python=args.python,
                 leak_base=args.leak_base,
                 root=args.root,
                 jobs=args.jobs,
@@ -1153,6 +1191,14 @@ def _dispatch(args: argparse.Namespace) -> int:
         return configure.run(
             args.repo, toolchain.from_args(args.compiler, args), args.preset
         )
+
+    if args.command == "pybuild":
+        return pybuild.run_build(
+            args.repo, args.name, toolchain.from_args(args.compiler, args)
+        )
+    if args.command == "pytest":
+        pythons = tuple(p for p in args.python.split(",") if p)
+        return pybuild.run_tests(args.repo, args.name, pythons, args.tests)
 
     if args.command == "objdiff":
         clang = toolchain.from_args("clang22", args)

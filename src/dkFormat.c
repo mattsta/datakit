@@ -41,20 +41,20 @@ dkFormatResult dkFormatCheck(const dkFormatSpec *spec,
 const char *dkFormatResultName(dkFormatResult result) {
     switch (result) {
     case DK_FORMAT_OK:
-        return "ok";
+        return "OK";
     case DK_FORMAT_MALFORMED:
-        return "malformed format stamp";
+        return "MALFORMED";
     case DK_FORMAT_WRONG_ID:
-        return "a different format";
+        return "WRONG_ID";
     case DK_FORMAT_VERSION_TOO_NEW:
-        return "version newer than this build reads";
+        return "VERSION_TOO_NEW";
     case DK_FORMAT_VERSION_TOO_OLD:
-        return "version older than this build reads";
+        return "VERSION_TOO_OLD";
     case DK_FORMAT_FEATURE_UNKNOWN:
-        return "must-understand feature unknown to this build";
+        return "FEATURE_UNKNOWN";
     }
 
-    return "unknown result";
+    return "UNKNOWN";
 }
 
 /* The prefix flex for `stamp` (caller frees) */
@@ -176,7 +176,8 @@ int dkFormatTest(int, char *[]) {
                 }
             }
         }
-        if (strcmp(dkFormatResultName((dkFormatResult)99), "unknown result")) {
+        if (strcmp(dkFormatResultName(DK_FORMAT_WRONG_ID), "WRONG_ID") ||
+            strcmp(dkFormatResultName((dkFormatResult)99), "UNKNOWN")) {
             ERR("an unknown result is not named as such");
         }
     }

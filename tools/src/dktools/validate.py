@@ -14,6 +14,10 @@ uncommitted work never takes part.
 preset with ``DatakitTestMode=OFF BuildTestBinary=OFF``, what a
 consumer without test mode compiles): it must configure and build with
 no warning, and runs no tests.
+``--python`` also builds the Python package's wheel from the exported
+tree with the first configuration's compiler and runs its tests on each
+interpreter (``dktools.pybuild``); the summary's "Python package"
+section reports them.
 For each (compiler, preset) of the matrix (see
 ``toolchain.matrix``: gcc15 builds ``release``) it runs a clean
 configure, an all-targets build, then ctest twice: every test outside
@@ -52,7 +56,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import buildstore, formatting, gitutil, leakcheck, procs, steps, toolchain
+from . import (
+    buildstore,
+    formatting,
+    gitutil,
+    leakcheck,
+    procs,
+    pybuild,
+    steps,
+    toolchain,
+)
 from .gitutil import ToolError
 from .steps import CtestResult, SanitizerHit, Step, Warning_
 
@@ -100,6 +113,8 @@ class ValidateOptions:
     full: bool = False
     #: also build each compiler's library-only config (test mode off)
     library_only: bool = False
+    #: also build the Python package's wheel and test it per interpreter
+    python: bool = False
     leak_base: str = DEFAULT_LEAK_BASE
     root: Path | None = None
     jobs: int | None = None
@@ -268,6 +283,7 @@ def render(
     leak: tuple[str, list[leakcheck.Hit]] | None,
     passed: bool,
     fmt: tuple[formatting.Report, Path],
+    python: tuple[pybuild.Built, list[pybuild.Tested]] | None = None,
 ) -> str:
     """The markdown summary."""
     md = [
@@ -381,6 +397,18 @@ def render(
     md += ["", "## Formatting", ""]
     md.append(formatting.gate_line(fmt[0]))
     md += [f"- {line}" for line in fmt[0].lines("would change")]
+
+    md += ["", "## Python package", ""]
+    if python is None:
+        md.append("not run (`--python` runs it)")
+    else:
+        built, tested = python
+        if built.ok:
+            assert built.wheel is not None
+            md.append(f"- build: ok, {built.wheel.name}")
+        else:
+            md.append(f"- build: FAIL (exit {built.step.code}; see {built.step.log})")
+        md += [f"- {t.python}: {pybuild.describe(t)}" for t in tested]
 
     md += ["", "## Leakage gate", ""]
     if leak is None:
@@ -504,6 +532,19 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         steps.TESTCHECKS_TIMEOUT,
     )
 
+    python = None
+    if opts.python:
+        # With the first configuration's compiler, on the exported tree
+        built = pybuild.build(src, "validate", configs[0].compiler)
+        tested = []
+        if built.ok:
+            assert built.wheel is not None
+            tested = [
+                pybuild.wheel_tests(src, "validate", p, built.wheel, "test*.py")
+                for p in pybuild.DEFAULT_PYTHONS
+            ]
+        python = (built, tested)
+
     leak = None
     leak_ok = True
     if leak_range is not None:
@@ -523,6 +564,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         and testcheck.ok
         and leak_ok
         and fmt.clean()
+        and (python is None or (python[0].ok and all(t.ok for t in python[1])))
     )
     text = render(
         commit,
@@ -539,6 +581,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         leak,
         passed,
         (fmt, work / "format.log"),
+        python,
     )
     summary = work / "summary.md"
     summary.write_text(text)

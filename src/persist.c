@@ -2495,6 +2495,77 @@ const char *persistOpName(persistOp op) {
     }
 }
 
+/* One enumerator's case: its name is the suffix after the shared prefix */
+#define PERSIST_NAME_CASE_(prefix, suffix)                                     \
+    case prefix##suffix:                                                       \
+        return #suffix
+
+const char *persistOpenResultName(persistOpenResult result) {
+    switch (result) {
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, OK);
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, NO_PATH);
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, NO_FILE);
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, NOT_PERSIST);
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, WRONG_KIND);
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, UNKNOWN_TYPE);
+        PERSIST_NAME_CASE_(PERSIST_OPEN_, TYPES_DIFFER);
+    }
+    return "UNKNOWN";
+}
+
+const char *persistWALStopName(persistWALStop stop) {
+    switch (stop) {
+        PERSIST_NAME_CASE_(PERSIST_WAL_STOP_, END);
+        PERSIST_NAME_CASE_(PERSIST_WAL_STOP_, CALLBACK);
+        PERSIST_NAME_CASE_(PERSIST_WAL_STOP_, TORN);
+        PERSIST_NAME_CASE_(PERSIST_WAL_STOP_, BAD);
+        PERSIST_NAME_CASE_(PERSIST_WAL_STOP_, UNREADABLE);
+    }
+    return "UNKNOWN";
+}
+
+const char *persistBadEntryKindName(persistBadEntryKind kind) {
+    switch (kind) {
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, NONE);
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, CORRUPT);
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, KEY);
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, READ);
+    }
+    return "UNKNOWN";
+}
+
+const char *persistBadEntryActionName(persistBadEntryAction action) {
+    switch (action) {
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, NO_ACTION);
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, HEALED);
+        PERSIST_NAME_CASE_(PERSIST_BAD_ENTRY_, HELD);
+    }
+    return "UNKNOWN";
+}
+
+const char *persistQuarantineReadName(persistQuarantineRead read) {
+    switch (read) {
+        PERSIST_NAME_CASE_(PERSIST_QUARANTINE_, RECORD);
+        PERSIST_NAME_CASE_(PERSIST_QUARANTINE_, END);
+        PERSIST_NAME_CASE_(PERSIST_QUARANTINE_, DAMAGED);
+    }
+    return "UNKNOWN";
+}
+
+const char *persistErrName(persistErr err) {
+    switch (err) {
+        PERSIST_NAME_CASE_(PERSIST_ERR_, NONE);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, KEY_GENERATION_MISMATCH);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, KEY_NOT_FOUND);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, NO_KEY_ATTACHED);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, KEY_ID_MISMATCH);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, CONTAINER_FORMAT);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, STRUCTURE_FORMAT);
+    }
+    return "UNKNOWN";
+}
+#undef PERSIST_NAME_CASE_
+
 /* ============================================================================
  * Memory Storage Backend
  * ============================================================================
@@ -10134,6 +10205,41 @@ int persistTest(int, char *[]) {
             }
             persistClose(p);
         }
+    }
+
+    TEST("operators: every status enumerator has its own stable name, and "
+         "any other value is UNKNOWN") {
+        /* Each family's names, in enumerator order from 0: the name is
+         * the enumerator's suffix */
+#define PERSIST_TEST_NAMES_(fn, type, ...)                                     \
+    do {                                                                       \
+        const char *const want[] = {__VA_ARGS__};                              \
+        for (size_t i = 0; i < countof(want); i++) {                           \
+            const char *got = fn((type)i);                                     \
+            if (strcmp(got, want[i]) != 0) {                                   \
+                ERR(#fn "(%zu) is %s, want %s", i, got, want[i]);              \
+            }                                                                  \
+        }                                                                      \
+        if (strcmp(fn((type)countof(want)), "UNKNOWN") != 0) {                 \
+            ERR(#fn " names a value past its last enumerator");                \
+        }                                                                      \
+    } while (0)
+        PERSIST_TEST_NAMES_(persistOpenResultName, persistOpenResult, "OK",
+                            "NO_PATH", "NO_FILE", "NOT_PERSIST", "WRONG_KIND",
+                            "UNKNOWN_TYPE", "TYPES_DIFFER");
+        PERSIST_TEST_NAMES_(persistWALStopName, persistWALStop, "END",
+                            "CALLBACK", "TORN", "BAD", "UNREADABLE");
+        PERSIST_TEST_NAMES_(persistBadEntryKindName, persistBadEntryKind,
+                            "NONE", "CORRUPT", "KEY", "READ");
+        PERSIST_TEST_NAMES_(persistBadEntryActionName, persistBadEntryAction,
+                            "NO_ACTION", "HEALED", "HELD");
+        PERSIST_TEST_NAMES_(persistQuarantineReadName, persistQuarantineRead,
+                            "RECORD", "END", "DAMAGED");
+        PERSIST_TEST_NAMES_(persistErrName, persistErr, "NONE",
+                            "KEY_GENERATION_MISMATCH", "KEY_NOT_FOUND",
+                            "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
+                            "CONTAINER_FORMAT", "STRUCTURE_FORMAT");
+#undef PERSIST_TEST_NAMES_
     }
 
     TEST("operators: persistOpenFiles reads a snapshot and WAL by path, by "

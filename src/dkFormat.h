@@ -69,7 +69,9 @@ dkFormatStamp dkFormatStampFor(const dkFormatSpec *spec, uint64_t features);
 dkFormatResult dkFormatCheck(const dkFormatSpec *spec,
                              const dkFormatStamp *stamp);
 
-/* Stable name of a result, for logs and operator tooling */
+/* Stable name of a result, for logs and operator tooling: the
+ * enumerator's suffix ("OK", "WRONG_ID", ...), "UNKNOWN" for any other
+ * value */
 const char *dkFormatResultName(dkFormatResult result);
 
 /* ---- Standalone serializations ----------------------------------------

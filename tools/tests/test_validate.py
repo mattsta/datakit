@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from dktools import leakcheck, steps, toolchain, validate
+from dktools import leakcheck, pybuild, steps, toolchain, validate
 from dktools.gitutil import ToolError
 from dktools.steps import Step
 from repofixture import IsolatedGitEnv, TempRepo
@@ -295,6 +295,61 @@ class ValidateRun(unittest.TestCase):
         self.assertTrue(
             (base / f"{self.head[:10]}-clang22-tsan" / "summary.md").exists()
         )
+
+    def test_the_python_package_runs_only_when_asked(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(runner)
+        self.assertEqual(code, 0, out)
+        self.assertIn("## Python package\n\nnot run (`--python` runs it)\n", out)
+        self.assertFalse([n for n, _ in runner.calls if n.startswith("python")])
+
+    def run_python(self, runner: MatrixRunner) -> tuple[int, str]:
+        wheel = Path("datakit-0.1.0-cp315-abi3.abi3t-x.whl")
+        with mock.patch("dktools.pybuild.built_wheel", return_value=wheel):
+            return self.run_validate(runner, python=True)
+
+    def test_the_python_package_builds_and_tests_on_each_interpreter(self) -> None:
+        verdict = "Ran 17 tests in 0.03s\n\nOK\n"
+        runner = MatrixRunner(
+            outputs={
+                "allocaudit": "100% clean pattern\n",
+                "python 3.15 tests": verdict,
+                "python 3.15t tests": verdict,
+            }
+        )
+        code, out = self.run_python(runner)
+        self.assertEqual(code, 0, out)
+        names = [n for n, _ in runner.calls if n.startswith("python")]
+        self.assertEqual(
+            names,
+            ["python build"]
+            + [
+                f"python {p} {s}"
+                for p in ("3.15", "3.15t")
+                for s in pybuild.TEST_STAGES
+            ],
+        )
+        # built with the first configuration's compiler
+        self.assertIn(
+            f"cmake.define.CMAKE_C_COMPILER={self.compilers[0].cc}",
+            runner.command("python build"),
+        )
+        self.assertIn("- build: ok, datakit-0.1.0-cp315-abi3.abi3t-x.whl\n", out)
+        self.assertIn("- 3.15t: ok (Ran 17 tests in 0.03s, OK)\n", out)
+
+    def test_a_failing_python_stage_fails_the_run_and_stops_that_interpreter(
+        self,
+    ) -> None:
+        runner = MatrixRunner(
+            codes={"python 3.15 install": 1},
+            outputs={"allocaudit": "100% clean pattern\n"},
+        )
+        code, out = self.run_python(runner)
+        self.assertEqual(code, 1, out)
+        names = [n for n, _ in runner.calls]
+        self.assertNotIn("python 3.15 tests", names)
+        self.assertIn("python 3.15t tests", names)
+        self.assertIn("- 3.15: FAIL (python 3.15 install:", out)
 
     def test_library_only_builds_without_tests_when_asked(self) -> None:
         runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})

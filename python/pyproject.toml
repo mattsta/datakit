@@ -1,0 +1,25 @@
+[build-system]
+requires = ["scikit-build-core>=1.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "datakit"
+version = "0.1.0"
+description = "datakit for Python: operator tools for datakit's persisted files"
+readme = "README.md"
+requires-python = ">=3.15"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=4.4"
+cmake.build-type = "Release"
+# Built by the free-threaded interpreter: one abi3t binary, tagged
+# cp315-abi3.abi3t, loads on the regular and the free-threaded 3.15+
+wheel.py-api = "cp315.cp315t"
+wheel.packages = ["datakit"]
+
+[tool.scikit-build.cmake.define]
+DatakitTestMode = "OFF"
+BuildTestBinary = "OFF"
+EnableASAN = "OFF"
+EnableUBSAN = "OFF"

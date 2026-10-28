@@ -411,7 +411,7 @@ uv run --project tools dktools validate [--rev REV] \
     [--compilers clang22,gcc15] [--presets dev,debug] \
     [--serial REGEX] [--skip REGEX] [--debug-skip REGEX] \
     [--tsan-skip REGEX] [--full] [--slow REGEX] [--debug-slow REGEX] \
-    [--leak-base BASE] [--root DIR] [-j N]
+    [--library-only] [--python] [--leak-base BASE] [--root DIR] [-j N]
 ```
 
 - The matrix is every requested preset each compiler supports:
@@ -451,6 +451,10 @@ uv run --project tools dktools validate [--rev REV] \
   exported tree, and the leakage
   gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
+- `--python` also builds the Python package's wheel from the exported
+  tree (the first configuration's compiler) and runs its tests on each
+  interpreter, as `pybuild` / `pytest` do; the summary's "Python
+  package" section reports the build and each interpreter.
 - Writes `ROOT/validate/<hash>-<configs>/summary.md` (`<configs>` joins
   the matrix's labels, e.g. `clang22-dev+clang22-debug+gcc15-release`, so a
   TSan matrix on the same revision keeps the default one's logs; warnings split into
@@ -682,6 +686,29 @@ uv run --project tools dktools retoken _Static_assert static_assert [--comments]
 - Prints each file's count. Exits 0, or 2 for a token that is not a C
   identifier or a missing file.
 
+## pybuild / pytest — the Python package's wheel and its tests
+
+```sh
+uv run --project tools dktools pybuild NAME [--compiler clang22]
+uv run --project tools dktools pytest NAME [--python 3.15,3.15t] [--tests PATTERN]
+```
+
+- `pybuild` builds `python/` (the `datakit` package over its C
+  extension) into `build/dktools/pybuild/NAME/wheel`: one wheel tagged
+  `cp315-abi3.abi3t`, which loads on the regular and the free-threaded
+  interpreter. The free-threaded 3.15 builds it (the build backend makes
+  the shared `abi3t` binary only there). The backend's versions are
+  pinned, with hashes, in `python/build-constraints.txt` (compiled from
+  `python/build-requirements.in` by `uv pip compile`); uv itself is a
+  locked tools dependency.
+- `pytest` installs that wheel into a fresh environment per interpreter
+  (uv-managed interpreters only) and runs `python/tests` (stdlib
+  `unittest`) with the tests directory as the top level, so the
+  installed package is what they import. One result line per
+  interpreter; each stage's output in `test-<python>-<stage>.log`.
+- Exit 0 on success, 1 for a failed build or run, 2 when `pytest` finds
+  no wheel. `validate --python` runs both on the exported tree.
+
 ## idioms — hand-written forms of what a shared helper does
 
 ```sh
@@ -695,7 +722,9 @@ uv run --project tools dktools idioms [FILE ...]
   (TEST_BYTES; `dktools testbytes` rewrites it), `div-ceil` (dkDivCeil),
   `encode-op-boxes` (a persist encodeOp's operands; persistOpEncodeBoxes),
   `databox-int-cast` (a databox's intmax_t / uintmax_t field cast to the
-  64-bit type of the same sign; print it as is with PRIdMAX / PRIuMAX).
+  64-bit type of the same sign; print it as is with PRIdMAX / PRIuMAX),
+  `store-close-free` (a persist store's close then a hand-written free;
+  persistStoreClose).
 - Only code counts: comments and literals never match; preprocessor
   lines do. Each rule skips the file that defines its shared form.
 - Exceptions are `PATH RULE REASON` lines in `tools/idioms-allow.txt`;
