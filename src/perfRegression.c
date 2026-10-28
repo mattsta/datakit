@@ -1185,6 +1185,28 @@ static void benchMultiOrderedSet(void) {
     }
     emitRow("multiOrderedSet", "incrBy", 0, n, timeUtilMonotonicSec() - t0);
 
+    /* Scores 100 apart and deltas of +-3: an update keeps its row's
+     * place, the case a score rewrite in place serves */
+    {
+        cleaner(multiOrderedSetFree) multiOrderedSet *spread =
+            multiOrderedSetNew();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox s = databoxNewSigned((int64_t)i * 100);
+            const databox m = perfContainerKey(keys, i);
+            sink += multiOrderedSetAdd(&spread, &s, &m);
+        }
+
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox delta = databoxNewSigned((int64_t)(i % 7) - 3);
+            const databox m = perfContainerKey(keys, perfScatter(i));
+            databox result = {};
+            sink += multiOrderedSetIncrBy(&spread, &delta, &m, &result);
+        }
+        emitRow("multiOrderedSet", "incrBySpread", 0, n,
+                timeUtilMonotonicSec() - t0);
+    }
+
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox m = perfContainerKey(keys, i);

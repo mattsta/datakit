@@ -1127,6 +1127,88 @@ void multiOrderedSetFullStats(const multiOrderedSetFull *m, dkTierStats *out) {
  * Insertion / Update
  * ==================================================================== */
 
+/* -1, 0 or 1 as the row (score, memberOrId) at 'row' of 'map' compares
+ * with ('score', the member or id entry at 'memberEntry') */
+static int mosFullRowCompare_(const flex *map, flexEntry *row,
+                              const databox *score, flexEntry *memberEntry) {
+    databox s;
+    databoxWide sWide;
+    flexGetByTypeInto(row, &s, &sWide);
+    const int byScore = databoxCompare(&s, score);
+    if (byScore) {
+        return byScore;
+    }
+
+    databox a;
+    databoxWide aWide;
+    databox b;
+    databoxWide bWide;
+    flexGetByTypeInto(flexNext(map, row), &a, &aWide);
+    flexGetByTypeInto(memberEntry, &b, &bWide);
+    return databoxCompare(&a, &b);
+}
+
+/* Give the row at 'entry' (sub-map 'mapIdx') the score 'score' where it
+ * is, when the rows stay in order: a row before it and a row after it in
+ * the same sub-map, below and above the new (score, member).  False,
+ * changing nothing, otherwise (the row must move, or it is a sub-map's
+ * first or last row, which routing and the next sub-map's order read).
+ * A score update that keeps its place (small deltas on spread scores)
+ * then costs one rewrite instead of a delete and an insert. */
+static bool mosFullRescoreInPlace_(multiOrderedSetFull *m,
+                                   const uint32_t mapIdx, flexEntry *entry,
+                                   const databox *score) {
+    flex *map = getSubMap(m, mapIdx);
+    if (!map || entry == flexHead(map)) {
+        return false;
+    }
+
+    flexEntry *member = flexNext(map, entry);
+    flexEntry *next = member ? flexNext(map, member) : nullptr;
+    flexEntry *prevMember = flexPrev(map, entry);
+    flexEntry *prev = prevMember ? flexPrev(map, prevMember) : nullptr;
+    if (!next || !prev || mosFullRowCompare_(map, prev, score, member) >= 0 ||
+        mosFullRowCompare_(map, next, score, member) <= 0) {
+        return false;
+    }
+
+    /* The middle is an offset: an entry before it that changes size moves
+     * it by the change */
+    const size_t at = (size_t)(entry - map);
+    size_t middle = getMiddle(m, mapIdx);
+    const size_t bytesBefore = flexBytes(map);
+    flexReplaceByType(&map, map + at, score);
+    if (at < middle) {
+        middle = (size_t)((int64_t)middle + (int64_t)flexBytes(map) -
+                          (int64_t)bytesBefore);
+    }
+
+    setSubMap(m, mapIdx, map);
+    setMiddle(m, mapIdx, (uint32_t)middle);
+    if (flexBytes(map) > m->maxMapSize && subMapCount(map) >= 2) {
+        splitSubMap(m, mapIdx);
+    }
+
+    return true;
+}
+
+/* 'member', now scored 'old', given 'score' in place when its row keeps
+ * its place (mosFullRescoreInPlace_), its member index value rewritten
+ * too; false, changing nothing, when the row must move */
+static bool mosFullUpdateInPlace_(multiOrderedSetFull *m, const databox *member,
+                                  const databox *old, const databox *score) {
+    uint32_t mapIdx;
+    flexEntry *entry = findEntryForScore(m, member, old, &mapIdx);
+    if (!entry || !mosFullRescoreInPlace_(m, mapIdx, entry, score)) {
+        return false;
+    }
+
+    /* The row holds the new score now: the index follows it (multidict
+     * fails fast on allocation, so the replace completes) */
+    (void)multidictReplace(m->memberIndex, member, score);
+    return true;
+}
+
 /* Take the score-map row of 'member', whose stored score is 'old' */
 static void removeMemberRow(multiOrderedSetFull *m, const databox *member,
                             const databox *old) {
@@ -1166,6 +1248,10 @@ bool multiOrderedSetFullAdd(multiOrderedSetFull *m, const databox *score,
     databoxWide oldWide;
     const bool existed = findScore(m, member, &old, &oldWide);
     if (existed) {
+        if (mosFullUpdateInPlace_(m, member, &old, score)) {
+            return true;
+        }
+
         removeMemberRow(m, member, &old);
     }
 
@@ -1228,6 +1314,10 @@ bool multiOrderedSetFullCombine(multiOrderedSetFull *m, const databox *operand,
     if (existed) {
         if (!mosCombine(&existingScore, operand, op, result)) {
             return false;
+        }
+
+        if (mosFullUpdateInPlace_(m, member, &existingScore, result)) {
+            return true;
         }
 
         removeMemberRow(m, member, &existingScore);
@@ -3035,6 +3125,98 @@ int multiOrderedSetFullTest(int, char *[]) {
             }
             err += mosfCheck_(m, present, step, &rng);
         }
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: score updates in place and moved agree with an oracle") {
+        /* 3000 members on spread scores (100 apart, so small deltas keep
+         * a row in place) take 20000 updates: mostly small IncrBy and Add
+         * of a nearby score, now and then a far jump or a score equal to
+         * another member's.  Every 2000 updates: every score, the order
+         * (strictly ascending (score, member)), the count and the sub-map
+         * invariants */
+        constexpr int64_t members = 3000;
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        static int64_t oracle[3000];
+        char name[24];
+        for (int64_t i = 0; i < members; i++) {
+            mosfName_(name, sizeof(name), i);
+            oracle[i] = i * 100;
+            const databox member = databoxNewBytesString(name);
+            const databox score = databoxNewSigned(oracle[i]);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+
+        uint64_t rng = 0x5C0E;
+        for (int step = 0; step < 20000 && !err; step++) {
+            const int64_t i = (int64_t)(splitmix64(&rng) % members);
+            mosfName_(name, sizeof(name), i);
+            const databox member = databoxNewBytesString(name);
+            const uint64_t roll = splitmix64(&rng) % 20;
+            if (roll < 12) {
+                const databox delta =
+                    databoxNewSigned((int64_t)(splitmix64(&rng) % 61) - 30);
+                databox result = {};
+                multiOrderedSetFullCombine(m, &delta, &member, MOS_COMBINE_INCR,
+                                           &result);
+                oracle[i] += delta.data.i64;
+            } else {
+                const int64_t to =
+                    roll < 17
+                        ? oracle[i] + (int64_t)(splitmix64(&rng) % 41) - 20
+                    : roll < 19
+                        ? (int64_t)(splitmix64(&rng) % (members * 100))
+                        : oracle[splitmix64(&rng) % members]; /* a tie */
+                const databox score = databoxNewSigned(to);
+                multiOrderedSetFullAdd(m, &score, &member);
+                oracle[i] = to;
+            }
+
+            if (step % 2000 != 1999) {
+                continue;
+            }
+
+            for (int64_t k = 0; k < members && !err; k++) {
+                mosfName_(name, sizeof(name), k);
+                const databox member2 = databoxNewBytesString(name);
+                databox score = {};
+                if (!multiOrderedSetFullGetScore(m, &member2, &score) ||
+                    score.data.i64 != oracle[k]) {
+                    ERR("step %d: member %" PRId64 " scores %" PRId64
+                        ", oracle %" PRId64,
+                        step, k, score.data.i64, oracle[k]);
+                }
+            }
+
+            mosIterator iter;
+            multiOrderedSetFullIteratorInit(m, &iter, true);
+            databox prevMember = {};
+            databox prevScore = {};
+            size_t seen = 0;
+            databox gotMember;
+            databox gotScore;
+            while (
+                multiOrderedSetFullIteratorNext(&iter, &gotMember, &gotScore)) {
+                if (seen && (databoxCompare(&prevScore, &gotScore) > 0 ||
+                             (databoxCompare(&prevScore, &gotScore) == 0 &&
+                              databoxCompare(&prevMember, &gotMember) >= 0))) {
+                    ERR("step %d: rows out of order at %zu", step, seen);
+                    break;
+                }
+                prevMember = gotMember;
+                prevScore = gotScore;
+                seen++;
+            }
+
+            if (seen != (size_t)members ||
+                multiOrderedSetFullCount(m) != (size_t)members ||
+                mosFullCheckInvariants(m)) {
+                ERR("step %d: %zu rows walked, count %zu, invariants %d", step,
+                    seen, multiOrderedSetFullCount(m),
+                    mosFullCheckInvariants(m));
+            }
+        }
+
         multiOrderedSetFullFree(m);
     }
 
