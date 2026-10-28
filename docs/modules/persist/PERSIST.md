@@ -246,6 +246,49 @@ never appended to or overwritten.
 stamps, key id, element count and WAL sequence. `persistVerifySnapshot` /
 `persistVerifyWAL` check every envelope.
 
+### Reading files by path (operators)
+
+`persistOpenFiles(snapshotPath, walPath, &why)` opens a snapshot and a WAL
+(either may be `NULL`) through read-only stores (`persistStoreFileReadOnly`:
+the file is opened read-only, so nothing the context is asked to do can
+change it) and picks the descriptor from the type the headers name
+(`persistOpsForType`; `persistRegistry` lists every persisted type). The
+result works with `persistInspectAttached`, `persistVerifySnapshot` /
+`persistVerifyWAL`, `persistIterateWAL` and `persistRecover`; attach a
+keyring first when a header names a key id. `persistClose` releases it. On
+`NULL`, `why` names the check that refused: no path, a path that does not
+open, a header that is not a persist header, a WAL given as the snapshot (or
+the reverse), a type this build does not persist, or two files of different
+types.
+
+`persistIterateWAL(p, cb, ctx, &report)` hands each entry (sequence, offset
+in the WAL, op, body bytes) to `cb`; `report` (optional) says why the walk
+stopped: the end, the callback, a torn tail (the WAL ends inside an entry),
+a bad entry (with its kind: CORRUPT, KEY, READ) or an unreadable header. It
+also gives the end of the last complete entry (where a heal would cut), the
+WAL's size and the count of entries read. `persistOpName` / `persistTypeName`
+name ops and types. An op body's layout belongs to its type (some are
+flexes, some fixed-width operands), so a generic reader shows the bytes.
+
+`persistRecoverSummarize(p, &summary)` recovers through the type's own
+descriptor and reports what that rebuilt without keeping it: whether a
+snapshot restored, whether the type's `validate` accepts the result, its
+element count and estimated size. `persistGetStats` gives the entries
+replayed and skipped. A torn or bad WAL entry ends the replay there; the
+read-only stores never cut or heal it.
+
+`persistQuarantineNext(store, &rec, &walBytes)` reads the quarantine record
+at the store's position and leaves the store past it: `rec` gives the
+record's own offset, the bad entry's WAL offset, the WAL's next sequence
+and the byte count, and `walBytes` (optional; free with `zfree`) the bytes
+themselves. It returns `PERSIST_QUARANTINE_RECORD`, `PERSIST_QUARANTINE_END`
+at the end of the store, or `PERSIST_QUARANTINE_DAMAGED` for bytes that are
+not a whole record (a short header, a wrong magic or version, a count past
+the end of the store). The count is checked against the bytes left before
+anything is allocated. Open a quarantine file with
+`persistStoreFileReadOnly` and close it with `persistStoreClose` (which
+closes and frees any store no persist owns).
+
 ## Errors
 
 A false return from the core API may leave a typed code in

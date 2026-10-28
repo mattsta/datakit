@@ -712,15 +712,8 @@ void persistClose(persist *p) {
     /* Flush any buffered WAL data */
     persistSync(p);
 
-    /* Close storage backends */
-    if (p->snapshotStore && p->snapshotStore->close) {
-        p->snapshotStore->close(p->snapshotStore->ctx);
-        zfree(p->snapshotStore);
-    }
-    if (p->walStore && p->walStore->close) {
-        p->walStore->close(p->walStore->ctx);
-        zfree(p->walStore);
-    }
+    persistStoreClose(p->snapshotStore);
+    persistStoreClose(p->walStore);
     persistAttachQuarantine(p, nullptr);
     persistAttachQuarantineFile(p, nullptr);
 
@@ -1136,9 +1129,11 @@ static bool persistWALReadVerifyHeader(persist *p,
     return true;
 }
 
-/* Called per WAL entry by persistWALWalk; false stops the walk */
-typedef bool (*persistWALEntryFn)(persist *p, uint64_t seq, persistOp op,
-                                  const uint8_t *data, size_t len, void *ctx);
+/* Called per WAL entry (starting at 'at') by persistWALWalk; false stops
+ * the walk */
+typedef bool (*persistWALEntryFn)(persist *p, int64_t at, uint64_t seq,
+                                  persistOp op, const uint8_t *data, size_t len,
+                                  void *ctx);
 static int persistWALWalk(persist *p, persistWALEntryFn cb, void *ctx,
                           int64_t *goodEnd);
 static bool persistWALResume(persist *p, int64_t goodEnd, int stop);
@@ -1704,10 +1699,7 @@ static bool persistWALHeal_(persist *p, int64_t goodEnd) {
                 q->write(q->ctx, head, sizeof(head)) == (ssize_t)sizeof(head) &&
                 persistQuarantineCopy_(wal, q, goodEnd, bytes) &&
                 (!q->sync || q->sync(q->ctx));
-    if (opened) {
-        opened->close(opened->ctx);
-        zfree(opened);
-    }
+    persistStoreClose(opened);
 
     /* Only once the bytes are safe is the WAL cut */
     kept = kept && wal->seek(wal->ctx, goodEnd, SEEK_SET) == goodEnd &&
@@ -1718,15 +1710,59 @@ static bool persistWALHeal_(persist *p, int64_t goodEnd) {
     return kept;
 }
 
+persistQuarantineRead persistQuarantineNext(persistStore *store,
+                                            persistQuarantineRecord *rec,
+                                            uint8_t **walBytes) {
+    if (walBytes) {
+        *walBytes = nullptr;
+    }
+    const int64_t at = store->seek(store->ctx, 0, SEEK_CUR);
+    const int64_t size = store->size(store->ctx);
+    if (at < 0 || size < 0) {
+        return PERSIST_QUARANTINE_DAMAGED;
+    }
+    if (at == size) {
+        return PERSIST_QUARANTINE_END;
+    }
+
+    uint8_t head[PERSIST_QUARANTINE_HEADER_BYTES];
+    if ((uint64_t)(size - at) < sizeof(head) ||
+        store->read(store->ctx, head, sizeof(head)) != (ssize_t)sizeof(head) ||
+        memcmp(head, "DKPQ\x01\x00", 6) != 0) {
+        return PERSIST_QUARANTINE_DAMAGED;
+    }
+
+    *rec = (persistQuarantineRecord){
+        .at = (uint64_t)at,
+        .walOffset = (int64_t)dkLoadLe64(head + PERSIST_QUARANTINE_OFFSET_AT),
+        .nextSequence = dkLoadLe64(head + PERSIST_QUARANTINE_SEQUENCE_AT),
+        .bytes = dkLoadLe64(head + PERSIST_QUARANTINE_BYTES_AT)};
+    const uint64_t left = (uint64_t)(size - at) - sizeof(head);
+    if (rec->bytes > left) {
+        return PERSIST_QUARANTINE_DAMAGED;
+    }
+
+    if (walBytes) {
+        /* @own: caller; free=zfree */
+        uint8_t *bytes = zmalloc(rec->bytes ? rec->bytes : 1);
+        if (store->read(store->ctx, bytes, rec->bytes) != (ssize_t)rec->bytes) {
+            zfree(bytes);
+            return PERSIST_QUARANTINE_DAMAGED;
+        }
+        *walBytes = bytes;
+    } else if (store->seek(store->ctx, (int64_t)rec->bytes, SEEK_CUR) < 0) {
+        return PERSIST_QUARANTINE_DAMAGED;
+    }
+
+    return PERSIST_QUARANTINE_RECORD;
+}
+
 bool persistAttachQuarantine(persist *p, persistStore *store) {
     if (!p) {
         return false;
     }
-    if (p->quarantine && p->quarantine != store) {
-        if (p->quarantine->close) {
-            p->quarantine->close(p->quarantine->ctx);
-        }
-        zfree(p->quarantine);
+    if (p->quarantine != store) {
+        persistStoreClose(p->quarantine);
     }
     p->quarantine = store;
     p->walHeld = false;
@@ -1821,9 +1857,11 @@ static int persistWALWalk(persist *p, persistWALEntryFn cb, void *ctx,
             return rc;
         }
 
+        const int64_t at = *goodEnd;
         *goodEnd = store->tell(store->ctx);
         p->walEntriesRead++;
-        const bool more = cb ? cb(p, seq, op, opData, opDataLen, ctx) : true;
+        const bool more =
+            cb ? cb(p, at, seq, op, opData, opDataLen, ctx) : true;
         if (seq >= p->walSequence) {
             p->walSequence = seq + 1;
         }
@@ -1839,7 +1877,7 @@ typedef struct persistReplayCtx {
     bool failed;     /* strict recovery met an op that does not apply */
 } persistReplayCtx;
 
-static bool persistReplayEntry(persist *p, uint64_t seq, persistOp op,
+static bool persistReplayEntry(persist *p, int64_t, uint64_t seq, persistOp op,
                                const uint8_t *data, size_t len, void *ctx) {
     persistReplayCtx *r = ctx;
 
@@ -1915,15 +1953,21 @@ typedef struct persistIterateCtx {
     void *ctx;
 } persistIterateCtx;
 
-static bool persistIterateEntry(persist *, uint64_t seq, persistOp op,
-                                const uint8_t *data, size_t len, void *ctx) {
+static bool persistIterateEntry(persist *, int64_t at, uint64_t seq,
+                                persistOp op, const uint8_t *data, size_t len,
+                                void *ctx) {
     const persistIterateCtx *it = ctx;
     const persistWALEntry entry = {
-        .sequence = seq, .op = op, .data = data, .len = len};
+        .sequence = seq, .offset = at, .op = op, .data = data, .len = len};
     return it->cb(&entry, it->ctx);
 }
 
-bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
+bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx,
+                       persistWALWalkReport *report) {
+    persistWALWalkReport r = {.stop = PERSIST_WAL_STOP_UNREADABLE};
+    if (report) {
+        *report = r;
+    }
     if (!p || !p->walStore || !cb) {
         return false;
     }
@@ -1939,8 +1983,27 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
     }
 
     persistIterateCtx it = {.cb = cb, .ctx = ctx};
-    int64_t goodEnd = 0;
-    const int rc = persistWALWalk(p, persistIterateEntry, &it, &goodEnd);
+    const int rc = persistWALWalk(p, persistIterateEntry, &it, &r.goodEnd);
+    r.entries = p->walEntriesRead;
+    r.walEnd = p->walStore->size(p->walStore->ctx);
+    switch (rc) {
+    case PERSIST_WAL_END:
+        r.stop = PERSIST_WAL_STOP_END;
+        break;
+    case PERSIST_WAL_ENTRY:
+        r.stop = PERSIST_WAL_STOP_CALLBACK;
+        break;
+    case PERSIST_WAL_TORN:
+        r.stop = PERSIST_WAL_STOP_TORN;
+        break;
+    default:
+        r.stop = PERSIST_WAL_STOP_BAD;
+        r.badKind = p->walBadKind;
+        break;
+    }
+    if (report) {
+        *report = r;
+    }
     return rc == PERSIST_WAL_END || rc == PERSIST_WAL_ENTRY;
 }
 
@@ -2068,6 +2131,24 @@ void *persistRecover(persist *p) {
     }
 
     return structure;
+}
+
+bool persistRecoverSummarize(persist *p, persistRecoverSummary *out) {
+    *out = (persistRecoverSummary){};
+    void *structure = persistRecover(p);
+    if (!structure) {
+        return false;
+    }
+    const persistOps *ops = p->ops;
+    *out = (persistRecoverSummary){
+        .recovered = true,
+        .valid = !ops->validate || ops->validate(structure),
+        .count = ops->count ? ops->count(structure) : 0,
+        .bytes = ops->estimateSize ? ops->estimateSize(structure) : 0};
+    if (ops->free) {
+        ops->free(structure);
+    }
+    return true;
 }
 
 bool persistSync(persist *p) {
@@ -2524,7 +2605,7 @@ persistStore *persistStoreMemory(size_t initialCapacity) {
     m->capacity = initialCapacity;
     m->position = 0;
 
-    /* @own: caller; free=zfree */
+    /* @own: caller; free=persistStoreClose */
     persistStore *store = zmalloc(sizeof(*store));
     store->ctx = m;
     store->write = persistMemWrite;
@@ -2642,20 +2723,14 @@ static int64_t persistFaultySize(void *ctx) {
 }
 
 static void persistFaultyDropStaging(persistFaultyStore *f) {
-    if (f->staging) {
-        f->staging->close(f->staging->ctx);
-        zfree(f->staging);
-        f->staging = nullptr;
-    }
+    persistStoreClose(f->staging);
+    f->staging = nullptr;
 }
 
 static void persistFaultyClose(void *ctx) {
     persistFaultyStore *f = ctx;
     persistFaultyDropStaging(f);
-    if (f->inner->close) {
-        f->inner->close(f->inner->ctx);
-    }
-    zfree(f->inner);
+    persistStoreClose(f->inner);
     zfree(f);
 }
 
@@ -2699,7 +2774,7 @@ persistStore *persistStoreFaulty(persistStore *inner, bool rewrite) {
     for (size_t i = 0; i < PERSIST_FAULT_OP_COUNT; i++) {
         f->failFrom[i] = UINT64_MAX;
     }
-    /* @own: caller; free=zfree */
+    /* @own: caller; free=persistStoreClose */
     persistStore *store = zcalloc(1, sizeof(*store));
     store->ctx = f;
     store->write = persistFaultyWrite;
@@ -2930,14 +3005,33 @@ static void persistFileClose(void *ctx) {
     zfree(f);
 }
 
+static persistStore *persistStoreFileOpen_(const char *path, const int flags);
+
 persistStore *persistStoreFile(const char *path, bool create) {
+    /* @own: caller; free=persistStoreClose */
+    return persistStoreFileOpen_(path, O_RDWR | (create ? O_CREAT : 0));
+}
+
+persistStore *persistStoreFileReadOnly(const char *path) {
+    /* @own: caller; free=persistStoreClose */
+    return persistStoreFileOpen_(path, O_RDONLY);
+}
+
+void persistStoreClose(persistStore *store) {
+    if (store) {
+        if (store->close) {
+            store->close(store->ctx);
+        }
+        zfree(store);
+    }
+}
+
+/* A file store on 'path' opened with 'flags' (O_RDONLY: every write,
+ * truncate or rewrite the store is asked for fails, as the descriptor
+ * refuses it) */
+static persistStore *persistStoreFileOpen_(const char *path, const int flags) {
     if (!path) {
         return nullptr;
-    }
-
-    int flags = O_RDWR;
-    if (create) {
-        flags |= O_CREAT;
     }
 
     int fd = open(path, flags, 0644);
@@ -2954,7 +3048,7 @@ persistStore *persistStoreFile(const char *path, bool create) {
     f->tmpFd = -1;
     f->tmpPath = nullptr;
 
-    /* @own: caller; free=zfree */
+    /* @own: caller; free=persistStoreClose */
     persistStore *store = zmalloc(sizeof(*store));
     store->ctx = f;
     store->write = persistFileWrite;
@@ -2970,6 +3064,79 @@ persistStore *persistStoreFile(const char *path, bool create) {
     store->rewriteAbort = persistFileRewriteAbort;
 
     return store;
+}
+
+/* The read-only store of 'path' when its header is a persist header of
+ * the kind asked for ('wal'), with the type it names in '*type'; NULL,
+ * '*why' set, otherwise */
+static persistStore *persistOpenOne_(const char *path, const bool wal,
+                                     persistType *type,
+                                     persistOpenResult *why) {
+    /* @own: caller; free=persistStoreClose */
+    persistStore *store = persistStoreFileReadOnly(path);
+    if (!store) {
+        *why = PERSIST_OPEN_NO_FILE;
+        return nullptr;
+    }
+
+    persistFileInfo info;
+    if (!persistInspect(store, &info)) {
+        *why = PERSIST_OPEN_NOT_PERSIST;
+    } else if (info.wal != wal) {
+        *why = PERSIST_OPEN_WRONG_KIND;
+    } else if (!persistOpsForType((persistType)info.format.id)) {
+        *why = PERSIST_OPEN_UNKNOWN_TYPE;
+    } else {
+        /* The readers start where they need to; leave the store at the
+         * start, as a fresh one is */
+        store->seek(store->ctx, 0, SEEK_SET);
+        *type = (persistType)info.format.id;
+        return store;
+    }
+
+    persistStoreClose(store);
+    return nullptr;
+}
+
+persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
+                          persistOpenResult *why) {
+    persistOpenResult unused;
+    persistOpenResult *result = why ? why : &unused;
+    *result = PERSIST_OPEN_OK;
+    if (!snapshotPath && !walPath) {
+        *result = PERSIST_OPEN_NO_PATH;
+        return nullptr;
+    }
+
+    persistType snapshotType = PERSIST_TYPE_INVALID;
+    persistType walType = PERSIST_TYPE_INVALID;
+    persistStore *snapshot = nullptr;
+    persistStore *wal = nullptr;
+    if (snapshotPath && !(snapshot = persistOpenOne_(snapshotPath, false,
+                                                     &snapshotType, result))) {
+        return nullptr;
+    }
+    if (walPath && !(wal = persistOpenOne_(walPath, true, &walType, result))) {
+        persistStoreClose(snapshot);
+        return nullptr;
+    }
+    if (snapshot && wal && snapshotType != walType) {
+        *result = PERSIST_OPEN_TYPES_DIFFER;
+        persistStoreClose(snapshot);
+        persistStoreClose(wal);
+        return nullptr;
+    }
+
+    /* @own: caller; free=persistClose */
+    persist *p = persistCreate(
+        persistOpsForType(snapshot ? snapshotType : walType), nullptr);
+    if (snapshot) {
+        persistAttachSnapshot(p, snapshot);
+    }
+    if (wal) {
+        persistAttachWAL(p, wal);
+    }
+    return p;
 }
 
 /* ============================================================================
@@ -5944,6 +6111,46 @@ static bool persistTestCountEntries(const persistWALEntry *entry, void *ctx) {
     return c->seen < c->stopAfter;
 }
 
+/* Up to 'cap' bytes of the file at 'path' into 'buf': the count read (0
+ * when it does not open) */
+static size_t persistTestReadFile(const char *path, uint8_t *buf,
+                                  const size_t cap) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return 0;
+    }
+    const size_t n = fread(buf, 1, cap, f);
+    fclose(f);
+    return n;
+}
+
+/* 'len' bytes of 'buf' as the whole file at 'path': true when written */
+static bool persistTestWriteFile(const char *path, const uint8_t *buf,
+                                 const size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        return false;
+    }
+    const bool wrote = fwrite(buf, 1, len, f) == len;
+    return fclose(f) == 0 && wrote;
+}
+
+/* Each entry's offset in the WAL, in order (up to 8) */
+typedef struct persistTestWalOffsets {
+    int64_t at[8];
+    size_t n;
+    size_t stopAfter;
+} persistTestWalOffsets;
+
+static bool persistTestCollectOffsets(const persistWALEntry *entry, void *ctx) {
+    persistTestWalOffsets *o = ctx;
+    if (o->n < countof(o->at)) {
+        o->at[o->n] = entry->offset;
+    }
+    o->n++;
+    return o->n < o->stopAfter;
+}
+
 /* A memory store whose writes fail once `persistTestWriteBudget` bytes
  * have been written (SIZE_MAX: never), writing the bytes that fit */
 static size_t persistTestWriteBudget = SIZE_MAX;
@@ -6793,8 +7000,7 @@ int persistTest(int, char *[]) {
             ERR("Read data mismatch: got '%s'", buf);
         }
 
-        store->close(store->ctx);
-        zfree(store);
+        persistStoreClose(store);
     }
 
     TEST("memory store seek operations") {
@@ -6829,8 +7035,7 @@ int persistTest(int, char *[]) {
             ERR("Expected '8', got '%c'", c);
         }
 
-        store->close(store->ctx);
-        zfree(store);
+        persistStoreClose(store);
     }
 
     TEST("memory store truncate") {
@@ -6849,8 +7054,7 @@ int persistTest(int, char *[]) {
                 store->size(store->ctx));
         }
 
-        store->close(store->ctx);
-        zfree(store);
+        persistStoreClose(store);
     }
 
     /* ================================================================
@@ -9665,8 +9869,7 @@ int persistTest(int, char *[]) {
         }
         PERSIST_TEST_FILE_IS("new2");
 #undef PERSIST_TEST_FILE_IS
-        s->close(s->ctx);
-        zfree(s);
+        persistStoreClose(s);
     }
 
     TEST("rebinding to a new key mid-WAL keeps everything recoverable") {
@@ -9797,8 +10000,7 @@ int persistTest(int, char *[]) {
                     how ? "after a failed restore" : "after re-attaching",
                     (size_t)intsetCount(rebuilt));
             }
-            old->close(old->ctx);
-            zfree(old);
+            persistStoreClose(old);
             persistClose(p);
         }
     }
@@ -9827,19 +10029,18 @@ int persistTest(int, char *[]) {
         persistTestWalCount onSecond = {.stopAfter = SIZE_MAX, .ordered = true};
         const bool secondOk =
             persistVerifyWAL(p) &&
-            persistIterateWAL(p, persistTestCountEntries, &onSecond);
+            persistIterateWAL(p, persistTestCountEntries, &onSecond, nullptr);
         persistAttachWAL(p, first);
         persistTestWalCount onFirst = {.stopAfter = SIZE_MAX, .ordered = true};
         const bool firstOk =
             persistVerifyWAL(p) &&
-            persistIterateWAL(p, persistTestCountEntries, &onFirst);
+            persistIterateWAL(p, persistTestCountEntries, &onFirst, nullptr);
         if (!logged || !secondOk || !firstOk || onSecond.seen != 1 ||
             onFirst.seen != 3) {
             ERR("new store holds %zu entries (want 1), old %zu (want 3)",
                 onSecond.seen, onFirst.seen);
         }
-        second->close(second->ctx);
-        zfree(second);
+        persistStoreClose(second);
         persistClose(p);
     }
 
@@ -9932,6 +10133,263 @@ int persistTest(int, char *[]) {
                 intsetFree(got);
             }
             persistClose(p);
+        }
+    }
+
+    TEST("operators: persistOpenFiles reads a snapshot and WAL by path, by "
+         "their headers' type, and never writes them") {
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
+        char snapPath[PATH_MAX];
+        char walPath[PATH_MAX];
+        char listPath[PATH_MAX];
+        char oddPath[PATH_MAX];
+        char junkPath[PATH_MAX];
+        char missingPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "op.snap", snapPath, sizeof(snapPath)) ||
+            !dkTestTmpDirPath(&tmp, "op.wal", walPath, sizeof(walPath)) ||
+            !dkTestTmpDirPath(&tmp, "list.snap", listPath, sizeof(listPath)) ||
+            !dkTestTmpDirPath(&tmp, "odd.snap", oddPath, sizeof(oddPath)) ||
+            !dkTestTmpDirPath(&tmp, "junk.bin", junkPath, sizeof(junkPath)) ||
+            !dkTestTmpDirPath(&tmp, "missing", missingPath,
+                              sizeof(missingPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+            return err;
+        }
+
+        /* An empty intset's snapshot and a WAL inserting 1, 2, 3; a
+         * multilist snapshot; a snapshot of a type this build does not
+         * register (the intset descriptor under another id); junk */
+        {
+            persist *p = persistCreate(&persistOpsIntset, nullptr);
+            persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+            persistAttachWAL(p, persistStoreFile(walPath, true));
+            cleaner(intsetFree) intset *empty = intsetNew();
+            persistSnapshot(p, empty);
+            for (int64_t v = 1; v <= 3; v++) {
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+            }
+            persistSync(p);
+            persistClose(p);
+
+            p = persistCreate(&persistOpsMultilist, nullptr);
+            persistAttachSnapshot(p, persistStoreFile(listPath, true));
+            cleaner(multilistFree) multilist *ml = multilistNew();
+            persistSnapshot(p, ml);
+            persistClose(p);
+
+            persistOps unregistered = persistOpsIntset;
+            unregistered.type = (persistType)200;
+            p = persistCreate(&unregistered, nullptr);
+            persistAttachSnapshot(p, persistStoreFile(oddPath, true));
+            persistSnapshot(p, empty);
+            persistClose(p);
+
+            FILE *junk = fopen(junkPath, "wb");
+            if (junk) {
+                fputs("not a persist file at all, just some bytes", junk);
+                fclose(junk);
+            }
+        }
+
+        static uint8_t snapBefore[4096];
+        static uint8_t walBefore[4096];
+        static uint8_t snapAfter[4096];
+        static uint8_t walAfter[4096];
+        const size_t snapLen =
+            persistTestReadFile(snapPath, snapBefore, sizeof(snapBefore));
+        const size_t walLen =
+            persistTestReadFile(walPath, walBefore, sizeof(walBefore));
+
+        persistOpenResult why = PERSIST_OPEN_NO_PATH;
+        persist *p = persistOpenFiles(snapPath, walPath, &why);
+        persistFileInfo info = {};
+        persistTestWalCount count = {.stopAfter = SIZE_MAX, .ordered = true};
+        if (!p || why != PERSIST_OPEN_OK ||
+            persistGetOps(p) != &persistOpsIntset ||
+            !persistInspectAttached(p, true, &info) || !info.wal ||
+            !persistVerifySnapshot(p) || !persistVerifyWAL(p) ||
+            !persistIterateWAL(p, persistTestCountEntries, &count, nullptr) ||
+            count.seen != 3 || !count.ordered) {
+            ERR("the files did not open, verify and iterate (why %d, %zu "
+                "entries)",
+                (int)why, count.seen);
+        }
+        if (p) {
+            intset *got = persistRecover(p);
+            if (!got || intsetCount(got) != 3) {
+                ERR("recovery through the opened files lost entries");
+            }
+            /* An append through a read-only store cannot land (its result
+             * is whatever the buffer says; the files below are the check) */
+            const int64_t four = 4;
+            (void)persistLogOp(p, PERSIST_OP_INSERT, &four, 1);
+            persistSync(p);
+            if (got) {
+                intsetFree(got);
+            }
+            persistClose(p);
+        }
+        if (persistTestReadFile(snapPath, snapAfter, sizeof(snapAfter)) !=
+                snapLen ||
+            persistTestReadFile(walPath, walAfter, sizeof(walAfter)) !=
+                walLen ||
+            memcmp(snapBefore, snapAfter, snapLen) != 0 ||
+            memcmp(walBefore, walAfter, walLen) != 0) {
+            ERR("reading the files through persistOpenFiles changed them");
+        }
+
+        /* A WAL alone opens too, and restores nothing (no snapshot) */
+        p = persistOpenFiles(nullptr, walPath, &why);
+        persistRecoverSummary sum = {.recovered = true};
+        if (!p || persistGetOps(p) != &persistOpsIntset ||
+            persistRecoverSummarize(p, &sum) || sum.recovered) {
+            ERR("a WAL alone did not open, or restored without a snapshot");
+        }
+        persistClose(p);
+
+        /* Each refusal says why */
+        const struct {
+            const char *snapshot;
+            const char *wal;
+            persistOpenResult want;
+        } refused[] = {
+            {nullptr, nullptr, PERSIST_OPEN_NO_PATH},
+            {missingPath, nullptr, PERSIST_OPEN_NO_FILE},
+            {snapPath, missingPath, PERSIST_OPEN_NO_FILE},
+            {junkPath, nullptr, PERSIST_OPEN_NOT_PERSIST},
+            {walPath, nullptr, PERSIST_OPEN_WRONG_KIND},
+            {nullptr, snapPath, PERSIST_OPEN_WRONG_KIND},
+            {oddPath, nullptr, PERSIST_OPEN_UNKNOWN_TYPE},
+            {listPath, walPath, PERSIST_OPEN_TYPES_DIFFER},
+        };
+        for (size_t i = 0; i < countof(refused); i++) {
+            why = PERSIST_OPEN_OK;
+            persist *r =
+                persistOpenFiles(refused[i].snapshot, refused[i].wal, &why);
+            if (r || why != refused[i].want) {
+                ERR("refusal %zu: opened %d, why %d, expected %d", i,
+                    r != nullptr, (int)why, (int)refused[i].want);
+            }
+            persistClose(r);
+        }
+    }
+
+    TEST("operators: a WAL opened by path reports where and why its walk "
+         "stops, damaged or not, and is never changed") {
+        /* An empty intset's snapshot and a WAL inserting 1, 2, 3.  Clean:
+         * END after 3 entries, the first just past the header and each
+         * next one its length prefix later, goodEnd at the WAL's end.  A
+         * callback stopping after one: CALLBACK, goodEnd at the second
+         * entry.  Cut 3 bytes short: TORN after 2 entries.  A flipped byte
+         * in the second entry: BAD (CORRUPT) after 1.  Each damaged WAL
+         * still recovers its whole entries, and no read changes it */
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
+        char snapPath[PATH_MAX];
+        char walPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "walk.snap", snapPath, sizeof(snapPath)) ||
+            !dkTestTmpDirPath(&tmp, "walk.wal", walPath, sizeof(walPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+            return err;
+        }
+        {
+            persist *p = persistCreate(&persistOpsIntset, nullptr);
+            persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+            persistAttachWAL(p, persistStoreFile(walPath, true));
+            cleaner(intsetFree) intset *empty = intsetNew();
+            persistSnapshot(p, empty);
+            for (int64_t v = 1; v <= 3; v++) {
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+            }
+            persistSync(p);
+            persistClose(p);
+        }
+        static uint8_t clean[4096];
+        const size_t walLen =
+            persistTestReadFile(walPath, clean, sizeof(clean));
+
+        persistOpenResult why = PERSIST_OPEN_NO_PATH;
+        persist *p = persistOpenFiles(snapPath, walPath, &why);
+        persistTestWalOffsets o = {.stopAfter = SIZE_MAX};
+        persistWALWalkReport r = {};
+        if (!p || !persistIterateWAL(p, persistTestCollectOffsets, &o, &r) ||
+            r.stop != PERSIST_WAL_STOP_END || r.entries != 3 || o.n != 3 ||
+            r.goodEnd != (int64_t)walLen || r.walEnd != (int64_t)walLen ||
+            o.at[0] != (int64_t)sizeof(persistWALHeader)) {
+            ERR("a clean walk: stop %d after %" PRIu64
+                " entries, goodEnd %" PRId64 " of %zu, first at %" PRId64,
+                (int)r.stop, r.entries, r.goodEnd, walLen, o.at[0]);
+            persistClose(p);
+            return err;
+        }
+        uint32_t prefix[3] = {};
+        for (size_t i = 0; i < 3; i++) {
+            memcpy(&prefix[i], clean + o.at[i], sizeof(prefix[i]));
+            const int64_t next =
+                o.at[i] + (int64_t)sizeof(prefix[i]) + prefix[i];
+            if (next != (i < 2 ? o.at[i + 1] : (int64_t)walLen)) {
+                ERR("entry %zu ends at %" PRId64 ", not where the next starts",
+                    i, next);
+            }
+        }
+        persistTestWalOffsets one = {.stopAfter = 1};
+        if (!persistIterateWAL(p, persistTestCollectOffsets, &one, &r) ||
+            r.stop != PERSIST_WAL_STOP_CALLBACK || r.entries != 1 ||
+            r.goodEnd != o.at[1]) {
+            ERR("a stopped walk: stop %d after %" PRIu64 " entries",
+                (int)r.stop, r.entries);
+        }
+        persistClose(p);
+
+        const struct {
+            size_t len;
+            int64_t flipAt; /* -1: none */
+            persistWALStop stop;
+            persistBadEntryKind kind;
+            uint64_t entries;
+            int64_t goodEnd;
+        } damaged[] = {
+            {walLen - 3, -1, PERSIST_WAL_STOP_TORN, PERSIST_BAD_ENTRY_NONE, 2,
+             o.at[2]},
+            {walLen, o.at[1] + (int64_t)sizeof(prefix[1]) + prefix[1] / 2,
+             PERSIST_WAL_STOP_BAD, PERSIST_BAD_ENTRY_CORRUPT, 1, o.at[1]},
+        };
+        for (size_t d = 0; d < countof(damaged); d++) {
+            static uint8_t bytes[4096];
+            static uint8_t after[4096];
+            memcpy(bytes, clean, walLen);
+            if (damaged[d].flipAt >= 0) {
+                bytes[damaged[d].flipAt] ^= 0x10u;
+            }
+            if (!persistTestWriteFile(walPath, bytes, damaged[d].len)) {
+                ERR("damage %zu: could not write the WAL", d);
+                continue;
+            }
+            p = persistOpenFiles(snapPath, walPath, &why);
+            persistTestWalOffsets all = {.stopAfter = SIZE_MAX};
+            const bool walked =
+                p && persistIterateWAL(p, persistTestCollectOffsets, &all, &r);
+            if (!p || walked || r.stop != damaged[d].stop ||
+                r.badKind != damaged[d].kind ||
+                r.entries != damaged[d].entries ||
+                r.goodEnd != damaged[d].goodEnd ||
+                r.walEnd != (int64_t)damaged[d].len) {
+                ERR("damage %zu: stop %d kind %d after %" PRIu64
+                    " entries, goodEnd %" PRId64,
+                    d, (int)r.stop, (int)r.badKind, r.entries, r.goodEnd);
+            }
+            persistRecoverSummary sum = {};
+            if (!p || !persistRecoverSummarize(p, &sum) || !sum.valid ||
+                sum.count != damaged[d].entries || sum.bytes == 0) {
+                ERR("damage %zu: recovered %" PRIu64 " members (valid %d), "
+                    "want %" PRIu64,
+                    d, sum.count, (int)sum.valid, damaged[d].entries);
+            }
+            persistClose(p);
+            if (persistTestReadFile(walPath, after, sizeof(after)) !=
+                    damaged[d].len ||
+                memcmp(after, bytes, damaged[d].len) != 0) {
+                ERR("damage %zu: reading the WAL changed it", d);
+            }
         }
     }
 
@@ -10412,18 +10870,18 @@ int persistTest(int, char *[]) {
 
         /* Iteration sees buffered entries; stopping early is allowed */
         persistTestWalCount early = {.stopAfter = 2, .ordered = true};
-        if (!persistIterateWAL(p, persistTestCountEntries, &early) ||
+        if (!persistIterateWAL(p, persistTestCountEntries, &early, nullptr) ||
             early.seen != 2) {
             ERR("early-stopped iteration saw %zu", early.seen);
         }
         persistTestWalCount all = {.stopAfter = SIZE_MAX, .ordered = true};
-        if (!persistIterateWAL(p, persistTestCountEntries, &all) ||
+        if (!persistIterateWAL(p, persistTestCountEntries, &all, nullptr) ||
             all.seen != 6 || !all.ordered) {
             ERR("iteration saw %zu entries (ordered %d)", all.seen,
                 (int)all.ordered);
         }
         persistTestWalCount stop = {.stopAfter = 3, .ordered = true};
-        persistIterateWAL(p, persistTestCountEntries, &stop);
+        persistIterateWAL(p, persistTestCountEntries, &stop, nullptr);
         if (!persistVerifyWAL(p)) {
             ERR("VerifyWAL refused a sound WAL");
         }
@@ -10436,7 +10894,7 @@ int persistTest(int, char *[]) {
             ERR("an append after a WAL reader overwrote entries");
         }
         persistTestWalCount after = {.stopAfter = SIZE_MAX, .ordered = true};
-        persistIterateWAL(p, persistTestCountEntries, &after);
+        persistIterateWAL(p, persistTestCountEntries, &after, nullptr);
         if (after.seen != 10 || !after.ordered) {
             ERR("WAL holds %zu entries after recovery", after.seen);
         }
@@ -10876,7 +11334,7 @@ int persistTest(int, char *[]) {
                             ok = persistVerifyWAL(p);
                         } else if (r == R_ITERATE) {
                             ok = persistIterateWAL(p, persistTestCountEntries,
-                                                   &count) &&
+                                                   &count, nullptr) &&
                                  count.seen == 3;
                         } else if (r == R_INSPECT) {
                             persistFileInfo info;
@@ -10981,6 +11439,23 @@ int persistTest(int, char *[]) {
             memcmp(rec + 32, expected, tail) != 0) {
             ERR("a corrupt entry was not healed into one exact record");
         }
+
+        /* The reader gives that record back, then the end */
+        q->seek(q->ctx, 0, SEEK_SET);
+        persistQuarantineRecord got;
+        uint8_t *gotBytes = nullptr;
+        const persistQuarantineRead first =
+            persistQuarantineNext(q, &got, &gotBytes);
+        if (first != PERSIST_QUARANTINE_RECORD || got.at != 0 ||
+            got.walOffset != (int64_t)at || got.bytes != tail || !gotBytes ||
+            memcmp(gotBytes, expected, tail) != 0) {
+            ERR("the quarantine reader gave %d, not the healed record",
+                (int)first);
+        }
+        zfree(gotBytes);
+        if (persistQuarantineNext(q, &got, nullptr) != PERSIST_QUARANTINE_END) {
+            ERR("the quarantine reader went past its one record");
+        }
         persistStoreMemoryBuffer(wal, &walLen);
         const int64_t later = 99;
         if (walLen != at || persistLogOp(p, PERSIST_OP_INSERT, &later, 1) ==
@@ -10995,6 +11470,89 @@ int persistTest(int, char *[]) {
             r.events != 1 || heard.calls != 1 ||
             heard.last.action != PERSIST_BAD_ENTRY_HEALED) {
             ERR("after healing: wrong members, or reported again");
+        }
+    }
+
+    TEST("operators: the quarantine reader walks records and reads damage "
+         "as DAMAGED, never as an allocation") {
+        /* Two records (5 bytes, then 0 bytes) read back in order with
+         * their fields, skipping or copying the bytes, then END; an empty
+         * store is END at once.  Each damaged form reads as DAMAGED after
+         * any whole records before it: a short header, a wrong magic, a
+         * record claiming 2^62 bytes (more than the store holds, so
+         * nothing is allocated) and a body cut short */
+        uint8_t file[2 * PERSIST_QUARANTINE_HEADER_BYTES + 5] = {};
+        const uint8_t body[5] = {9, 8, 7, 6, 5};
+        uint8_t *h = file;
+        memcpy(h, "DKPQ\x01\x00", 6);
+        dkStoreLe64(h + PERSIST_QUARANTINE_OFFSET_AT, 40);
+        dkStoreLe64(h + PERSIST_QUARANTINE_SEQUENCE_AT, 11);
+        dkStoreLe64(h + PERSIST_QUARANTINE_BYTES_AT, sizeof(body));
+        memcpy(h + PERSIST_QUARANTINE_HEADER_BYTES, body, sizeof(body));
+        h += PERSIST_QUARANTINE_HEADER_BYTES + sizeof(body);
+        memcpy(h, "DKPQ\x01\x00", 6);
+        dkStoreLe64(h + PERSIST_QUARANTINE_OFFSET_AT, 77);
+        dkStoreLe64(h + PERSIST_QUARANTINE_SEQUENCE_AT, 12);
+
+        /* Each case: the file's first 'len' bytes, after 'patch' */
+        typedef enum { PATCH_NONE, PATCH_MAGIC, PATCH_HUGE } patchKind;
+        const struct {
+            size_t len;
+            patchKind patch;
+            int records;
+            persistQuarantineRead last;
+        } cases[] = {
+            {sizeof(file), PATCH_NONE, 2, PERSIST_QUARANTINE_END},
+            {0, PATCH_NONE, 0, PERSIST_QUARANTINE_END},
+            {PERSIST_QUARANTINE_HEADER_BYTES + 5 + 31, PATCH_NONE, 1,
+             PERSIST_QUARANTINE_DAMAGED},
+            {sizeof(file), PATCH_MAGIC, 1, PERSIST_QUARANTINE_DAMAGED},
+            {sizeof(file), PATCH_HUGE, 0, PERSIST_QUARANTINE_DAMAGED},
+            {PERSIST_QUARANTINE_HEADER_BYTES + 4, PATCH_NONE, 0,
+             PERSIST_QUARANTINE_DAMAGED},
+        };
+        for (size_t c = 0; c < countof(cases); c++) {
+            uint8_t copy[sizeof(file)];
+            memcpy(copy, file, sizeof(file));
+            if (cases[c].patch == PATCH_MAGIC) {
+                copy[PERSIST_QUARANTINE_HEADER_BYTES + 5] = 'X';
+            } else if (cases[c].patch == PATCH_HUGE) {
+                dkStoreLe64(copy + PERSIST_QUARANTINE_BYTES_AT, UINT64_C(1)
+                                                                    << 62);
+            }
+            persistStore *s = persistStoreMemory(0);
+            s->write(s->ctx, copy, cases[c].len);
+            s->seek(s->ctx, 0, SEEK_SET);
+
+            int records = 0;
+            persistQuarantineRead r;
+            persistQuarantineRecord rec;
+            for (;;) {
+                uint8_t *bytes = nullptr;
+                r = persistQuarantineNext(s, &rec,
+                                          (records % 2) ? nullptr : &bytes);
+                if (r != PERSIST_QUARANTINE_RECORD) {
+                    if (bytes) {
+                        ERR("case %zu: bytes handed out with %d", c, (int)r);
+                    }
+                    break;
+                }
+                const bool firstRec = records == 0;
+                if (rec.at != (firstRec ? 0 : 37) ||
+                    rec.walOffset != (firstRec ? 40 : 77) ||
+                    rec.nextSequence != (firstRec ? 11u : 12u) ||
+                    rec.bytes != (firstRec ? sizeof(body) : 0) ||
+                    (firstRec && memcmp(bytes, body, sizeof(body)) != 0)) {
+                    ERR("case %zu: record %d read back wrong", c, records);
+                }
+                zfree(bytes);
+                records++;
+            }
+            if (records != cases[c].records || r != cases[c].last) {
+                ERR("case %zu: %d records then %d, want %d then %d", c, records,
+                    (int)r, cases[c].records, (int)cases[c].last);
+            }
+            persistStoreClose(s);
         }
     }
 

@@ -38,6 +38,9 @@ class Rules(unittest.TestCase):
             "encode-op-boxes": b"flex *f = flexNewFromDataboxPtrsExact(boxes, argc);\n",
             "memcmp-err": (b'if (memcmp(a, b, 4) != 0) {\n    ERR("x");\n}\n'),
             "databox-int-cast": b'ERR("%" PRId64, (int64_t)got.box.data.i);\n',
+            "store-close-free": (
+                b"p->walStore->close(p->walStore->ctx);\n    zfree(p->walStore);\n"
+            ),
         }
         for rule, src in cases.items():
             with self.subTest(rule=rule):
@@ -61,6 +64,10 @@ class Rules(unittest.TestCase):
             # a cast across signs converts the value
             b"m = negative ? 0 - (uint64_t)box->data.i : box->data.u;\n",
             b"v = (int64_t)entry.box.data.u;\n",
+            # a close that owns the free (persistStoreClose's own body)
+            b"if (s->close) {\n    s->close(s->ctx);\n}\nzfree(s);\n",
+            # another store's struct freed after a close
+            b"a->close(a->ctx);\nzfree(b);\n",
         ):
             with self.subTest(src=src):
                 self.assertEqual(rules_in(src), [])

@@ -22,6 +22,8 @@ helper to use instead:
 - ``databox-int-cast``: ``(int64_t)x.data.i`` / ``(uint64_t)x.data.u``,
   a databox's intmax_t / uintmax_t field cast to the 64-bit type of the
   same sign -> the field as is, printed with PRIdMAX / PRIuMAX
+- ``store-close-free``: ``s->close(s->ctx); zfree(s);``, a persist
+  store closed and freed by hand -> persistStoreClose
 
 Only code counts: comments and literals never match, preprocessor lines
 do (a macro body is code).  Each rule skips the file that defines its
@@ -115,6 +117,15 @@ RULES: tuple[Rule, ...] = (
             rb"|\(\s*uint64_t\s*\)\s*[\w.\->\[\]]*\bdata\.u\b"
         ),
         "the field as is (intmax_t / uintmax_t), printed with PRIdMAX / PRIuMAX",
+    ),
+    Rule(
+        "store-close-free",
+        # a persist store's own close, then the struct freed by hand
+        re.compile(
+            rb"([\w.\[\]]+(?:->[\w.\[\]]+)*)->close\s*\(\s*\1->ctx\s*\)\s*;"
+            rb"\s*zfree\s*\(\s*\1\s*\)"
+        ),
+        "persist.h persistStoreClose",
     ),
 )
 

@@ -676,6 +676,7 @@ struct persistStats {
  */
 struct persistWALEntry {
     uint64_t sequence;
+    int64_t offset; /* where the entry starts in the WAL */
     persistOp op;
     const uint8_t *data;
     size_t len;
@@ -962,6 +963,29 @@ static constexpr size_t PERSIST_QUARANTINE_OFFSET_AT = 8;
 static constexpr size_t PERSIST_QUARANTINE_SEQUENCE_AT = 16;
 static constexpr size_t PERSIST_QUARANTINE_BYTES_AT = 24;
 
+/* One quarantine record, as read back (operators) */
+typedef struct persistQuarantineRecord {
+    uint64_t at;           /* the record's own offset in the quarantine */
+    int64_t walOffset;     /* where the bad entry sat in its WAL */
+    uint64_t nextSequence; /* the WAL's next sequence when it was cut */
+    uint64_t bytes;        /* WAL bytes moved aside (the bad entry on) */
+} persistQuarantineRecord;
+
+typedef enum persistQuarantineRead {
+    PERSIST_QUARANTINE_RECORD = 0,  /* a record, and the store past it */
+    PERSIST_QUARANTINE_END = 1,     /* no more records */
+    PERSIST_QUARANTINE_DAMAGED = 2, /* bytes that are not a whole record */
+} persistQuarantineRead;
+
+/* The record at 'store's position, leaving the store past it: its header
+ * in *rec and, when 'walBytes' is non-NULL, its WAL bytes in a new buffer
+ * (*walBytes, freed with zfree).  A record's length is checked against
+ * the bytes left in the store before anything is allocated, so a damaged
+ * file reads as DAMAGED, never as a large allocation. */
+persistQuarantineRead persistQuarantineNext(persistStore *store,
+                                            persistQuarantineRecord *rec,
+                                            uint8_t **walBytes);
+
 typedef struct persistBadEntryReport {
     persistBadEntryKind kind;
     persistBadEntryAction action;
@@ -1045,7 +1069,32 @@ struct mflexState *persistGetReplayState(void);
 
 /* Iterate WAL entries without applying */
 typedef bool (*persistWALCallback)(const persistWALEntry *entry, void *ctx);
-bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx);
+
+/* Why a WAL walk stopped */
+typedef enum persistWALStop {
+    PERSIST_WAL_STOP_END = 0,      /* every entry read; the WAL ends clean */
+    PERSIST_WAL_STOP_CALLBACK = 1, /* the callback returned false */
+    PERSIST_WAL_STOP_TORN = 2,     /* the WAL ends inside an entry (an append a
+                                    * crash cut short) */
+    PERSIST_WAL_STOP_BAD = 3,      /* an entry failed its check: badKind */
+    PERSIST_WAL_STOP_UNREADABLE = 4, /* no WAL, or its header was refused
+                                      * (persistLastError says why) */
+} persistWALStop;
+
+/* What a walk met: where a heal would cut (goodEnd), and what lies past
+ * it (walEnd - goodEnd bytes) */
+typedef struct persistWALWalkReport {
+    persistWALStop stop;
+    persistBadEntryKind badKind; /* for PERSIST_WAL_STOP_BAD */
+    int64_t goodEnd;             /* the end of the last complete entry */
+    int64_t walEnd;              /* the WAL's size */
+    uint64_t entries;            /* complete entries read */
+} persistWALWalkReport;
+
+/* Hands each entry to 'cb' in order; true when the walk reached the end or
+ * 'cb' stopped it.  'report' (optional) says where and why it stopped */
+bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx,
+                       persistWALWalkReport *report);
 
 /* ---- Compaction ---- */
 
@@ -1059,6 +1108,20 @@ bool persistShouldCompact(const persist *p);
 
 /* Full recovery: restore snapshot + replay WAL */
 void *persistRecover(persist *p);
+
+/* What a recovery rebuilds, without keeping it (operators) */
+typedef struct persistRecoverSummary {
+    bool recovered; /* a snapshot restored (and the WAL replayed onto it) */
+    bool valid;     /* the type's validate accepted it (true when the type
+                     * has none) */
+    uint64_t count; /* its elements (the type's count; 0 when none) */
+    uint64_t bytes; /* its estimated in-memory size (0 when none) */
+} persistRecoverSummary;
+
+/* persistRecover, then the summary of what it rebuilt, then frees it:
+ * false (and *out zeroed) when nothing restored.  persistGetStats gives
+ * the entries replayed and skipped */
+bool persistRecoverSummarize(persist *p, persistRecoverSummary *out);
 
 /* ---- Lifecycle ---- */
 
@@ -1089,6 +1152,41 @@ void persistClose(persist *p);
 
 /* File-based storage */
 persistStore *persistStoreFile(const char *path, bool create);
+
+/* A file store that only reads: the file is opened read-only, so any
+ * write, truncate or rewrite the store is asked for fails and the file
+ * stays as it was (operator tools: inspect, verify, iterate, recover) */
+persistStore *persistStoreFileReadOnly(const char *path);
+
+/* Closes and frees a store no persist owns (one never attached, or one
+ * detached by attaching another; persistClose closes attached ones).
+ * NULL is a no-op */
+void persistStoreClose(persistStore *store);
+
+/* ---- Reading persisted files by path (operators) ----
+ *
+ * A persist reading the snapshot at 'snapshotPath' and the WAL at
+ * 'walPath' (either may be NULL, not both), each through a read-only
+ * store: the descriptor is the one the files' headers name
+ * (persistOpsForType).  Use it with persistInspectAttached,
+ * persistVerifySnapshot / persistVerifyWAL, persistIterateWAL and
+ * persistRecover (attach a keyring first when a header names a key id);
+ * persistClose releases the stores.  NULL when the files do not open as
+ * one structure's snapshot and WAL; '*why' (when non-NULL) says which
+ * check refused. */
+typedef enum persistOpenResult {
+    PERSIST_OPEN_OK = 0,
+    PERSIST_OPEN_NO_PATH = 1,      /* neither path given */
+    PERSIST_OPEN_NO_FILE = 2,      /* a path does not open */
+    PERSIST_OPEN_NOT_PERSIST = 3,  /* a header is not a persist header */
+    PERSIST_OPEN_WRONG_KIND = 4,   /* a WAL given as the snapshot, or the
+                                      reverse */
+    PERSIST_OPEN_UNKNOWN_TYPE = 5, /* a type this build does not persist */
+    PERSIST_OPEN_TYPES_DIFFER = 6, /* the two files name different types */
+} persistOpenResult;
+
+persist *persistOpenFiles(const char *snapshotPath, const char *walPath,
+                          persistOpenResult *why);
 
 /* Memory-based storage (for testing) */
 persistStore *persistStoreMemory(size_t initialCapacity);

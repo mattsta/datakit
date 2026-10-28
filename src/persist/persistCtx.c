@@ -183,14 +183,8 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
     persistStore *walStore = persistStoreFile(ctx->walPath, true);
 
     if (!snapStore || !walStore) {
-        if (snapStore) {
-            snapStore->close(snapStore->ctx);
-            zfree(snapStore);
-        }
-        if (walStore) {
-            walStore->close(walStore->ctx);
-            zfree(walStore);
-        }
+        persistStoreClose(snapStore);
+        persistStoreClose(walStore);
         persistClose(ctx->p);
         ctx->p = nullptr;
         return false;
@@ -513,7 +507,7 @@ bool persistCtxTestRefuseLogsBegin(persistCtx *ctx, persistCtxTestRefusal *r) {
     r->failing = persistStoreFaulty(persistStoreMemory(0), false);
     persistStoreFaultyArm(r->failing, PERSIST_FAULT_WRITE, 0);
     if (!persistAttachWAL(ctx->p, r->failing)) {
-        r->failing->close(r->failing->ctx);
+        persistStoreClose(r->failing);
         *r = (persistCtxTestRefusal){};
         return false;
     }
@@ -524,7 +518,7 @@ void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r) {
     if (r->failing) {
         persistStoreFaultyDisarm(r->failing);
         persistAttachWAL(ctx->p, r->original);
-        r->failing->close(r->failing->ctx);
+        persistStoreClose(r->failing);
     }
     *r = (persistCtxTestRefusal){};
 }
