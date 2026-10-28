@@ -564,6 +564,37 @@ bool databoxEqual(const databox *a, const databox *b);
  * compare == 0, when a NaN must not equal itself. */
 int databoxCompare(const databox *a, const databox *b);
 
+/* databoxCompare, with the integer pairs a search meets most decided
+ * inline: two values that read as unsigned 64-bit (UNSIGNED_64, and PTR
+ * and CONTAINER_REFERENCE_EXTERNAL, which join that order), or two
+ * SIGNED_64.  Every other pair calls databoxCompare.  For search loops
+ * that compare once per probe. */
+static inline int databoxCompareQuick(const databox *a, const databox *b) {
+    /* Byte strings (every type from DATABOX_BYTES up) go straight to the
+     * full compare, after one test */
+    if (a->type >= DATABOX_BYTES) {
+        return databoxCompare(a, b);
+    }
+
+    /* PTR and CONTAINER_REFERENCE_EXTERNAL are adjacent: one subtraction
+     * tests both */
+    static_assert(DATABOX_CONTAINER_REFERENCE_EXTERNAL == DATABOX_PTR + 1,
+                  "the unsigned-joining types are adjacent");
+    const bool aUnsigned =
+        a->type == DATABOX_UNSIGNED_64 || (uint32_t)a->type - DATABOX_PTR <= 1u;
+    const bool bUnsigned =
+        b->type == DATABOX_UNSIGNED_64 || (uint32_t)b->type - DATABOX_PTR <= 1u;
+    if (aUnsigned && bUnsigned) {
+        return (a->data.u64 > b->data.u64) - (a->data.u64 < b->data.u64);
+    }
+
+    if (a->type == DATABOX_SIGNED_64 && b->type == DATABOX_SIGNED_64) {
+        return (a->data.i64 > b->data.i64) - (a->data.i64 < b->data.i64);
+    }
+
+    return databoxCompare(a, b);
+}
+
 /* A 64-bit key for hashing a number by value, so that boxes databoxCompare
  * calls equal get equal keys whatever their types.  For a numeric box
  * (SIGNED_64, UNSIGNED_64, 96/128-bit with a payload, FLOAT_32, DOUBLE_64,

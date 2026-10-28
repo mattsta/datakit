@@ -1918,6 +1918,35 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
 
 /* The atom table under each reverse index (the default, hashed, then
  * ordered and dict), then the lowest-first table and the string pool */
+/* References read back to their values and nothing else (run by name,
+ * for profiling the read path): 100k string atoms, 60 scattered passes
+ * over every id (long enough for a sampler that attaches by pid) */
+static void benchMultimapAtomRead(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        multimapAtomInsertConvert(ma, &k);
+    }
+
+    uint64_t sink = 0;
+    constexpr uint32_t passes = 60;
+    const double t0 = timeUtilMonotonicSec();
+    for (uint32_t p = 0; p < passes; p++) {
+        for (uint32_t i = 0; i < n; i++) {
+            const databox ref = {.data.u = perfScatter(i),
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+            databox value = {};
+            sink += multimapAtomLookup(ma, &ref, &value);
+            sink += databoxLen(&value);
+        }
+    }
+    emitRow("multimapAtomRead", "lookupByIdScattered", 0, passes * n,
+            timeUtilMonotonicSec() - t0);
+    perfContainerSink = sink;
+}
+
 static void benchMultimapAtom(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
@@ -2176,6 +2205,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("multimapAtom")) {
             benchMultimapAtom();
+        }
+
+        if (perfNamed("multimapAtomRead")) {
+            benchMultimapAtomRead();
         }
 
         if (perfWanted("multiarray")) {

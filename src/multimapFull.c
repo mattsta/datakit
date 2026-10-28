@@ -878,7 +878,7 @@ DK_STATIC multimapFullIdx multimapFullBinarySearch(const multimapFull *m,
         __builtin_prefetch(got->data.bytes.start, 0, 3);
 #endif
 
-        const int compared = databoxCompare(got, key);
+        const int compared = databoxCompareQuick(got, key);
 #if 0
         printf("Current index: %zu\n", mid);
         databoxReprSay("Comparing databox A", got);

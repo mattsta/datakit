@@ -3367,6 +3367,45 @@ int databoxTest(int, char *[]) {
         }
     }
 
+    TEST("databoxCompareQuick orders every pair as databoxCompare does") {
+        databoxBig wide[2];
+        DATABOX_BIG_SIGNED_128(&wide[0], -((__int128)1 << 70));
+        DATABOX_BIG_UNSIGNED_128(&wide[1], (__uint128_t)UINT64_MAX + 9);
+        const databox boxes[] = {
+            databoxNewSigned(INT64_MIN),
+            databoxNewSigned(-1),
+            databoxNewSigned(0),
+            databoxNewSigned(7),
+            databoxNewSigned(INT64_MAX),
+            databoxNewUnsigned(0),
+            databoxNewUnsigned(7),
+            databoxNewUnsigned((uint64_t)INT64_MAX + 1),
+            databoxNewUnsigned(UINT64_MAX),
+            {.data.u64 = 7, .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL},
+            {.data.u64 = UINT64_MAX,
+             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL},
+            {.data.u64 = 8, .type = DATABOX_PTR},
+            DATABOX_DOUBLE(6.5),
+            DATABOX_DOUBLE(-0.5),
+            *(const databox *)&wide[0],
+            *(const databox *)&wide[1],
+            databoxNewBytesString("7"),
+            databoxNewBytesString("abc"),
+            {.type = DATABOX_TRUE},
+            {.type = DATABOX_NULL},
+        };
+        for (size_t i = 0; i < countof(boxes); i++) {
+            for (size_t j = 0; j < countof(boxes); j++) {
+                const int quick = databoxCompareQuick(&boxes[i], &boxes[j]);
+                const int full = databoxCompare(&boxes[i], &boxes[j]);
+                if ((quick > 0) - (quick < 0) != (full > 0) - (full < 0)) {
+                    ERR("boxes %zu/%zu (types %d/%d): quick %d, full %d", i, j,
+                        (int)boxes[i].type, (int)boxes[j].type, quick, full);
+                }
+            }
+        }
+    }
+
     TEST("compare: references, pointers and unsigned values order as "
          "unsigned 64-bit numbers") {
         /* Every pair of the three kinds at the edges of the range, and

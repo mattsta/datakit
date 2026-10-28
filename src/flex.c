@@ -4763,7 +4763,7 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
                 flexResolveReferenceInto_(&box, &wide, referenceContainer);
             }
 
-            const int compared = databoxCompare(&box, compareAgainst[i]);
+            const int compared = databoxCompareQuick(&box, compareAgainst[i]);
             if (compared < 0) {
                 /* current key < search box */
                 min = mid + 1;
