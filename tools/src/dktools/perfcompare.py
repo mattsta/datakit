@@ -29,15 +29,20 @@ side's runs (a heap metered at the allocator) takes that side's median
 bytes, and a row whose bytes differ between the sides (a metered heap the
 change grew or shrank) is still compared, by module and name, with its
 bytes change at the end of the line.  Rows on
-one side only are listed.
+one side only are listed.  Each row's verdict compares the two sides'
+runs by a rank-sum (Mann-Whitney U) test: ``slower`` or ``faster`` when
+the two-sided p is below 0.01, ``~`` when the runs do not tell the sides
+apart (a stray run moves a rank, not the verdict), ``-`` with fewer than
+five runs a side.
 Exits 0, or 1 when ``--tolerance PCT`` is given and some row's current
-median exceeds its base median by more than PCT percent (the rows
-perfdiff would call regressed), or when a build or run fails; 2 on an
+median exceeds its base median by more than PCT percent with a
+``slower`` verdict (or no verdict), or when a build or run fails; 2 on an
 input error.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import statistics
 import sys
@@ -148,6 +153,65 @@ def ranges(runs: list[dict[Key, perfdiff.PerfRow]]) -> dict[Key, tuple[float, fl
     return {key: (min(vals), max(vals)) for key, vals in values.items()}
 
 
+#: A row's verdict names a direction when its two-sided p is below this
+SIGNIFICANCE = 0.01
+#: Fewer runs a side than this and a row gets no verdict
+MIN_SAMPLES = 5
+
+
+def samples(runs: list[dict[Key, perfdiff.PerfRow]]) -> dict[Key, list[float]]:
+    """Per row key, the ns_per_op of every run that has it"""
+    values: dict[Key, list[float]] = {}
+    for rows in runs:
+        for key, row in rows.items():
+            values.setdefault(key, []).append(row.ns_per_op)
+    return values
+
+
+def rank_sum_p(a: list[float], b: list[float]) -> float | None:
+    """The two-sided p of the Mann-Whitney U (rank-sum) test that 'a' and
+    'b' come from one distribution: the normal approximation with the
+    tie and continuity corrections.  Ranks, not values, so one stray run
+    moves it by one rank.  None when a side has fewer than MIN_SAMPLES."""
+    n1, n2 = len(a), len(b)
+    if n1 < MIN_SAMPLES or n2 < MIN_SAMPLES:
+        return None
+    pooled = sorted([(v, 0) for v in a] + [(v, 1) for v in b])
+    n = n1 + n2
+    rank_a = 0.0
+    ties = 0.0
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and pooled[j + 1][0] == pooled[i][0]:
+            j += 1
+        rank = (i + j) / 2 + 1  # the tied values' average rank
+        t = j - i + 1
+        ties += t**3 - t
+        rank_a += rank * sum(1 for k in range(i, j + 1) if pooled[k][1] == 0)
+        i = j + 1
+    u = rank_a - n1 * (n1 + 1) / 2
+    mean = n1 * n2 / 2
+    variance = n1 * n2 / 12 * ((n + 1) - ties / (n * (n - 1)))
+    if variance <= 0:
+        return 1.0
+    z = max(abs(u - mean) - 0.5, 0.0) / math.sqrt(variance)
+    return math.erfc(z / math.sqrt(2))
+
+
+def verdict(base: list[float], current: list[float]) -> str:
+    """'slower' or 'faster' when the runs differ beyond SIGNIFICANCE,
+    '~' when they do not, '-' with too few runs to tell"""
+    p = rank_sum_p(base, current)
+    if p is None:
+        return "-"
+    if p >= SIGNIFICANCE:
+        return "~"
+    return (
+        "slower" if statistics.median(current) > statistics.median(base) else "faster"
+    )
+
+
 def change_pct(base: float, current: float) -> float | None:
     """current against base in percent; None when base is 0"""
     if base == 0:
@@ -183,16 +247,20 @@ def table(
     tolerance: float | None,
     spread: tuple[dict[Key, tuple[float, float]], dict[Key, tuple[float, float]]]
     | None = None,
+    runs: tuple[dict[Key, list[float]], dict[Key, list[float]]] | None = None,
 ) -> tuple[list[str], list[Key]]:
     """The comparison lines and the keys that regressed past `tolerance`;
     with `spread` (each side's ranges), each row ends with both sides'
-    lowest-highest runs.
+    lowest-highest runs; with `runs` (each side's samples), each row has
+    a verdict (verdict()), and a regression past `tolerance` must also be
+    a 'slower' verdict.
 
     Rows keep the base side's key order (perfRegression's order, as
     runs were parsed in it)."""
     lines = [
         f"{'module':<16} {'name':<14} {'bytes':>8} {'base':>10} "
         f"{'current':>10} {'change':>8}"
+        + (f" {'verdict':>7}" if runs else "")
         + ("  base range        current range" if spread else "")
     ]
     regressed: list[Key] = []
@@ -206,6 +274,9 @@ def table(
         shown = "-" if pct is None else f"{pct:+.1f}%"
         module, name, nbytes = key
         line = f"{module:<16} {name:<14} {nbytes:>8} {b:>10.1f} {c:>10.1f} {shown:>8}"
+        said = verdict(runs[0][key], runs[1][ckey]) if runs else None
+        if said is not None:
+            line += f" {said:>7}"
         if spread:
             (blo, bhi), (clo, chi) = spread[0][key], spread[1][ckey]
             line += f"  [{blo:.1f}-{bhi:.1f}]".ljust(20) + f"[{clo:.1f}-{chi:.1f}]"
@@ -214,7 +285,12 @@ def table(
             bshown = "" if bpct is None else f" ({bpct:+.1f}%)"
             line += f"  bytes -> {ckey[2]}{bshown}"
         lines.append(line)
-        if tolerance is not None and pct is not None and pct > tolerance:
+        if (
+            tolerance is not None
+            and pct is not None
+            and pct > tolerance
+            and said in (None, "slower", "-")
+        ):
             regressed.append(key)
     paired = set(partner.values())
     only_base = [k for k in base if k not in current and k not in partner]
@@ -361,6 +437,7 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         medians(current_runs),
         opts.tolerance,
         (ranges(base_runs), ranges(current_runs)) if opts.spread else None,
+        (samples(base_runs), samples(current_runs)),
     )
     verdict = "REGRESSION" if regressed else "ok"
     header = [

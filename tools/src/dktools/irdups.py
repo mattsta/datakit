@@ -184,10 +184,17 @@ def ir_command(command: str) -> list[str]:
 
 def database_entries(repo: Path, preset: str) -> dict[str, tuple[str, str]]:
     """Repo-relative source -> (directory, command), the test target's
-    command where a file has one"""
+    command where a file has one, from build/PRESET's database"""
     db = repo / "build" / preset / "compile_commands.json"
     if not db.is_file():
         raise ToolError(f"{db}: no compile database (dktools configure {preset})")
+    return database_entries_at(repo, db)
+
+
+def database_entries_at(repo: Path, db: Path) -> dict[str, tuple[str, str]]:
+    """database_entries for the compile database 'db'"""
+    if not db.is_file():
+        raise ToolError(f"{db}: no compile database")
     entries: dict[str, tuple[str, str]] = {}
     for entry in json.loads(db.read_text()):
         try:

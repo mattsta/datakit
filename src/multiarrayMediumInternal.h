@@ -4,7 +4,7 @@
 
 /* We typedef'd multiarraySmallNode to multiarrayMediumNode because
  * all we need is 'data' and 'count' and small has them both already. */
-typedef multiarraySmall multiarrayMediumNode;
+typedef struct multiarraySmall multiarrayMediumNode;
 
 /* This looks curiously like our pre-existing multiarraySmall except
  * we have an explicit 'data'->'node' here. */

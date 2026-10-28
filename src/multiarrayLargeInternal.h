@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 /* multiarrayLargeNode is a 16 byte struct.
  * 'data' is an array of entrires each with width multiarrayLarge.len
  * 'prevNext' is an xor doubly linked list reference.

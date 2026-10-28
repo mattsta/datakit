@@ -37,6 +37,8 @@
  * Seeds: 0, 0xdeadbeefcafebabe, 0x0123456789abcdef.
  */
 
+#include "../dkC23.h" /* countof */
+
 #include <stddef.h>
 #include <stdint.h>
 

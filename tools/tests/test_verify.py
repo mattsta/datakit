@@ -490,10 +490,12 @@ class VerifyRun(unittest.TestCase):
                 "outputaudit",
                 "spell",
                 "idioms",
+                "headers",
                 "testchecks",
             ],
         )
         self.assertIn("  spell     ok (", out)
+        self.assertIn("  headers   ok (", out)
         self.assertIn("  idioms    ok (", out)
         self.assertIn("  checks    ok (", out)
         script = runner.command("test-commands")[-2:]

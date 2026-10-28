@@ -1,0 +1,15 @@
+# Headers that compile only inside an includer (dktools headers): PATH REASON
+src/dks.h macro template: its includer defines DKS_TYPE (and the dks* names) before including it
+src/dksCompact.h macro template: dks.c includes it with DKS_CONTAINERTYPE and the header layout macros defined
+src/dksFull.h macro template: dks.c includes it with DKS_CONTAINERTYPE and the header layout macros defined
+src/fenwick/fenwick2dCoreImpl.h macro template: its includer defines F2D_STORE_T and the 2d suffix macros
+src/fenwick/fenwick2dTypedImpl.h macro template: its includer defines F2D_VALUE_T and the 2d suffix macros
+src/fenwick/fenwickCoreAlgo.h macro template: its includer defines FENWICK_VALUE_TYPE
+src/fenwick/fenwickCoreDispatchImpl.h macro template: its includer defines FENWICK_SUFFIX
+src/fenwick/fenwickCoreFullImpl.h macro template: its includer defines FENWICK_SUFFIX
+src/fenwick/fenwickCoreImpl.h macro template: its includer defines FENWICK_SUFFIX
+src/fenwick/fenwickPersistValueImpl.h macro template: its includer defines the value box macros (Box_)
+src/segment/segmentCoreAlgo.h macro template: its includer defines SEGMENT_VALUE_TYPE
+src/segment/segmentCoreDispatchImpl.h macro template: its includer defines SEGMENT_SUFFIX
+src/segment/segmentCoreFullImpl.h macro template: its includer defines SEGMENT_SUFFIX
+src/segment/segmentCoreImpl.h macro template: its includer defines SEGMENT_SUFFIX

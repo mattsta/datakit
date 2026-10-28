@@ -706,6 +706,27 @@ uv run --project tools dktools idioms [FILE ...]
   the tracked `src/**/*.c` and `*.h`. Exits 0 clean, 1 for hits or
   stale allow lines.
 
+## headers — every header compiles on its own
+
+```sh
+uv run --project tools dktools headers [--build DIR | --preset P] [-j N] [FILE ...]
+```
+
+- Compiles each tracked `src/**/*.h` (vendored trees aside) alone: a
+  one-line unit that includes it, with the build's compile command for
+  `src/datakit.c` (flags, include paths, defines; test builds' included),
+  `-fsyntax-only` and no `-Werror`, so only errors fail. A header that
+  relies on what its includer brought in first fails here.
+- The database is DIR's `compile_commands.json` (`--build`, a verify
+  tree's binary dir) or `build/PRESET`'s (`dktools configure`).
+- Exceptions are `PATH REASON` lines in `tools/headers-allow.txt` (macro
+  templates, which compile only after an includer defines their type
+  macros); a line without a reason is an input error (exit 2), and a line
+  whose header compiles on its own now, or names no checked header,
+  fails, so the list stays true.
+- Runs in `verify` and `validate` after the build (the `headers` line).
+  Exits 0 clean, 1 for a failing header or a stale allow line.
+
 ## testchecks — TEST blocks that check nothing
 
 ```sh
@@ -1095,7 +1116,12 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
   `run-<side>-<round>.tsv`.
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only
-  one side has. A row whose bytes vary between one side's runs (a heap
+  one side has. Each row's verdict compares the sides' runs with a
+  rank-sum (Mann-Whitney U) test: `slower` / `faster` when the two-sided
+  p is below 0.01, `~` when the runs do not tell the sides apart (a stray
+  run moves one rank, not the verdict), `-` with fewer than five runs a
+  side; `--tolerance` counts a row past it only with a `slower` verdict.
+  A row whose bytes vary between one side's runs (a heap
   metered at the allocator) takes that side's median bytes; a row whose
   bytes differ between the sides (a metered heap the change grew or
   shrank) is paired by module and name and ends with `bytes -> N
@@ -1104,8 +1130,8 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
   far more from run to run than compute-bound ones, and a change smaller
   than a row's own spread is noise.
 - Exits 0; 1 when `--tolerance PCT` is given and a row's median grew by
-  more than PCT percent, or when a build or run fails; 2 on an input
-  error.
+  more than PCT percent with a `slower` verdict, or when a build or run
+  fails; 2 on an input error.
 
 Use it for every before/after claim about a change: the benchmark lands
 in perfRegression with the change, and the comparison is reproducible.

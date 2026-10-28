@@ -43,7 +43,8 @@ preset, which compiles the library with ``NDEBUG`` as consumers do.
 timing-sensitive tests in ``validate.DEFAULT_SERIAL``, and those are
 excluded from the parallel run.  Both are whole-name regexes, and a
 regex that matches no test is a failure.  ``allocaudit check --constructors``,
-``atomicaudit check``, ``outputaudit check``, ``spell``, ``idioms`` and
+``atomicaudit check``, ``outputaudit check``, ``spell``, ``idioms``,
+``headers`` (against the configured build's compile database) and
 ``testchecks`` run on the tree with the tree's own dktools.
 
 Formatting is part of the run (``dktools.formatting``): before the tree
@@ -477,6 +478,16 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     idiom = steps.run_tree_gate(
         "idioms", steps.idioms_command, work / "idioms.log", src, steps.IDIOMS_TIMEOUT
     )
+    # Needs the build's compile database
+    header = Step("headers", work / "headers.log")
+    if configure.ok:
+        header = steps.run_tree_gate(
+            "headers",
+            steps.headers_command(bindir),
+            header.log,
+            src,
+            steps.HEADERS_TIMEOUT,
+        )
     testcheck = steps.run_tree_gate(
         "testchecks",
         steps.testchecks_command,
@@ -498,6 +509,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and output.ok
         and spelling.ok
         and idiom.ok
+        and header.ok
         and testcheck.ok
         and fmt.clean()
         and len(also) == len(others)
@@ -529,6 +541,8 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"  spell     {'ok' if spelling.ok else 'FAILED'} "
         f"({steps.last_line(spelling.log)})",
         f"  idioms    {'ok' if idiom.ok else 'FAILED'} ({steps.last_line(idiom.log)})",
+        f"  headers   {'ok' if header.ok else 'FAILED'} "
+        f"({steps.last_line(header.log)})",
         f"  checks    {'ok' if testcheck.ok else 'FAILED'} "
         f"({steps.last_line(testcheck.log)})",
         f"  format    {formatting.gate_line(fmt)}",

@@ -93,6 +93,7 @@
  *
  */
 
+#include "dkC23.h" /* stdc_bit_width where libc lacks it */
 #include "membound.h"
 
 #include <pthread.h>

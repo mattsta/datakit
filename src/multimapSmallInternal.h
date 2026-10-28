@@ -16,7 +16,8 @@ struct multimapSmall {
     multimapElements unused : 13;     /* free flags! */
 };
 
-static_assert(sizeof(multimapSmall) == (sizeof(flex *) + sizeof(uint32_t) * 2),
+static_assert(sizeof(struct multimapSmall) ==
+                  (sizeof(flex *) + sizeof(uint32_t) * 2),
               "multimapSmall struct is bigger than we think it should be!");
 
 /* ====================================================================

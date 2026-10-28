@@ -1,5 +1,7 @@
 #pragma once
 
+#include "datakit.h"
+
 /* The smallest power of two >= x, with 0 and 1 giving 2 and a ceiling past
  * 2^63 giving 0 (C23 leaves stdc_bit_ceil unspecified there, so that case
  * is decided here) */

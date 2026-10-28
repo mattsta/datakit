@@ -1,5 +1,7 @@
 #pragma once
 
+#include "flex.h"
+
 /* State buffer for (de)compression
  *   - buf[0] is the decompression buffer.
  *   - buf[1] is the compression buffer.

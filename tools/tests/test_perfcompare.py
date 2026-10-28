@@ -132,6 +132,50 @@ class Table(unittest.TestCase):
         current = {("m", "x", 3): 1.0}
         self.assertEqual(perfcompare.bytes_changed(base, current), {})
 
+    def test_rank_sum_separates_shifted_runs_and_not_one_stray_run(self) -> None:
+        base = [100.0 + i for i in range(11)]
+        shifted = [120.0 + i for i in range(11)]
+        p = perfcompare.rank_sum_p(base, shifted)
+        assert p is not None
+        self.assertLess(p, 0.001)
+        self.assertEqual(perfcompare.verdict(base, shifted), "slower")
+        self.assertEqual(perfcompare.verdict(shifted, base), "faster")
+        # The same runs, one of them stray: no verdict either way
+        stray = [*base[:-1], 300.0]
+        self.assertEqual(perfcompare.verdict(base, stray), "~")
+        # Identical runs, ties throughout
+        same = [5.0] * 11
+        self.assertEqual(perfcompare.rank_sum_p(same, same), 1.0)
+        # Too few runs to tell
+        self.assertIsNone(perfcompare.rank_sum_p(base[:4], shifted[:4]))
+        self.assertEqual(perfcompare.verdict(base[:4], shifted[:4]), "-")
+
+    def test_a_regression_past_tolerance_needs_a_slower_verdict(self) -> None:
+        key = ("m", "a", 0)
+        base = [100.0 + i for i in range(11)]
+        # The median moves past the tolerance (105 -> 107), the ranks barely
+        noisy = [100.0, 101.0, 102.0, 103.0, 104.0, 107.0, 108.0, 109.0, 110.0]
+        noisy += [111.0, 400.0]
+        slower = [130.0 + i for i in range(11)]
+        for runs, want in ((noisy, []), (slower, [key])):
+            with self.subTest(want=want):
+                lines, regressed = perfcompare.table(
+                    {key: perfcompare.statistics.median(base)},
+                    {key: perfcompare.statistics.median(runs)},
+                    0.5,
+                    None,
+                    ({key: base}, {key: runs}),
+                )
+                self.assertIn("verdict", lines[0])
+                self.assertGreater(
+                    perfcompare.change_pct(
+                        perfcompare.statistics.median(base),
+                        perfcompare.statistics.median(runs),
+                    ),
+                    0.5,
+                )
+                self.assertEqual(regressed, want)
+
     def test_no_tolerance_never_regresses(self) -> None:
         _, regressed = perfcompare.table(
             {("m", "a", 0): 1.0}, {("m", "a", 0): 50.0}, None

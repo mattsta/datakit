@@ -40,6 +40,8 @@ OUTPUTAUDIT_TIMEOUT = 10 * 60
 SPELL_TIMEOUT = 10 * 60
 #: The idiom gate is lexical, one pass over the sources.
 IDIOMS_TIMEOUT = 10 * 60
+#: The header gate compiles each header alone, syntax only, in parallel.
+HEADERS_TIMEOUT = 10 * 60
 #: The test-check gate is lexical too: one pass, plus every header's
 #: macros.
 TESTCHECKS_TIMEOUT = 10 * 60
@@ -581,6 +583,16 @@ def run_tree_gate(
         log.write_text(f"{exc}\n")
         return Step(name, log, 127)
     return run_logged(name, command(uv, tree), log, cwd=tree / "tools", timeout=timeout)
+
+
+def headers_command(bindir: Path) -> Callable[[str, Path], list[str]]:
+    """The header gate (every src header compiles on its own, with the
+    tree's allow list) against the compile database in 'bindir'"""
+
+    def command(uv: str, tree: Path) -> list[str]:
+        return tree_dktools(uv, tree, "headers", "--build", str(bindir))
+
+    return command
 
 
 def idioms_command(uv: str, tree: Path) -> list[str]:

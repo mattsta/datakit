@@ -25,6 +25,7 @@ from . import (
     formatting,
     fusionscan,
     gitutil,
+    headers,
     historyscrub,
     idioms,
     irdups,
@@ -355,6 +356,21 @@ def main(argv: list[str] | None = None) -> int:
         "(exit 0, 1 for hits not in tools/idioms-allow.txt or stale allow lines)",
     )
     idm.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    hdr = sub.add_parser(
+        "headers",
+        help="compile every src header on its own (exit 0, 1 for a header "
+        "that does not and is not in tools/headers-allow.txt, or a stale "
+        "allow line)",
+    )
+    hdr.add_argument(
+        "--build",
+        type=Path,
+        help="binary dir whose compile_commands.json to use (default: build/PRESET)",
+    )
+    hdr.add_argument("--preset", default="dev", help="build/PRESET's database")
+    hdr.add_argument("-j", "--jobs", type=int, help="parallel compiles")
+    hdr.add_argument("paths", nargs="*", help="repo-relative headers (default: src)")
 
     tc = sub.add_parser(
         "testchecks",
@@ -1284,6 +1300,10 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "idioms":
         return idioms.run(args.repo, tuple(args.paths))
+    if args.command == "headers":
+        return headers.run(
+            args.repo, tuple(args.paths), args.build, args.preset, args.jobs
+        )
 
     if args.command == "testchecks":
         return testchecks.run(args.repo, tuple(args.paths))

@@ -28,7 +28,8 @@ why, and how to run it.
 
 After the matrix it scans the test logs for UBSan ("runtime error:"),
 ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors``,
-``atomicaudit check``, ``outputaudit check``, ``spell``, ``idioms`` and
+``atomicaudit check``, ``outputaudit check``, ``spell``, ``idioms``,
+``headers`` (against the first configuration's compile database) and
 ``testchecks`` on the exported tree, checks
 that every file of the tree is formatted (``dktools.formatting``; it rewrites
 nothing: ``dktools format write`` does), and runs the leakage gate
@@ -262,6 +263,7 @@ def render(
     output: Step,
     spelling: Step,
     idiom: Step,
+    header: Step,
     testcheck: Step,
     leak: tuple[str, list[leakcheck.Hit]] | None,
     passed: bool,
@@ -370,6 +372,9 @@ def render(
     md += ["", "## Idioms", ""]
     md.append(f"{_step_cell(idiom)}: {steps.last_line(idiom.log)}")
 
+    md += ["", "## Headers", ""]
+    md.append(f"{_step_cell(header)}: {steps.last_line(header.log)}")
+
     md += ["", "## Test checks", ""]
     md.append(f"{_step_cell(testcheck)}: {steps.last_line(testcheck.log)}")
 
@@ -404,6 +409,7 @@ def render(
     md.append(f"- {output.log}")
     md.append(f"- {spelling.log}")
     md.append(f"- {idiom.log}")
+    md.append(f"- {header.log}")
     md.append(f"- {testcheck.log}")
     md.append(f"- {fmt[1]}")
     return "\n".join(md) + "\n"
@@ -482,6 +488,14 @@ def run(repo: Path, opts: ValidateOptions) -> int:
     idiom = steps.run_tree_gate(
         "idioms", steps.idioms_command, work / "idioms.log", src, steps.IDIOMS_TIMEOUT
     )
+    # Against the first configuration's compile database
+    header = steps.run_tree_gate(
+        "headers",
+        steps.headers_command(configs[0].binary_dir(src)),
+        work / "headers.log",
+        src,
+        steps.HEADERS_TIMEOUT,
+    )
     testcheck = steps.run_tree_gate(
         "testchecks",
         steps.testchecks_command,
@@ -505,6 +519,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         and output.ok
         and spelling.ok
         and idiom.ok
+        and header.ok
         and testcheck.ok
         and leak_ok
         and fmt.clean()
@@ -519,6 +534,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         output,
         spelling,
         idiom,
+        header,
         testcheck,
         leak,
         passed,
