@@ -1012,7 +1012,7 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
 ## tune — size limits and load factors measured on this machine
 
 ```sh
-uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multimapAtom,multidict] \
+uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multimapAtom,multidict,flexSlack] \
     [--mix [NAME:]KEY=SHARE[,KEY=SHARE...]]... [--baseline N] [--slower PCT] \
     [--runs N] [--reuse]
 ```
@@ -1023,11 +1023,16 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   from 256 B to 8 KB, 100,000 values, rows named `<op><limit>`) and
   multidict's load factor sweep (`multidictLimits`: 200% to 3200%, each
   operation summed over tables of 40k, 70k and 100k entries so a factor's
-  numbers span a growth cycle; bytes are the tables' metered heap).
+  numbers span a growth cycle; bytes are the tables' metered heap), and
+  flex's growth slack sweep (`flexSlackLimits`: 0% to 25% of each growth,
+  with a multidict, a multimap, a multilist and an ordered set written and
+  read at each; bytes are each container's metered heap). The speed rule
+  does not weigh bytes, so read the slack's byte changes too.
 - Everything is read against the baseline: the setting the plain
   constructors use today, each family's own (2048 for the size limits, 512
-  for the atom table's nodes, 800 for multidict; `--baseline` sets one for
-  every family), marked `*`.
+  for the atom table's nodes, 800 for multidict, the compiled slack
+  percent for flexSlack; `--baseline` sets one for every family), marked
+  `*`.
   `--slower PCT` (default 15) is how much slower a win may make a mix or
   one of its operations: raise it where memory matters more than time.
   Per family and setting:

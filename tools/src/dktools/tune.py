@@ -3,8 +3,11 @@ this machine, against the default limit, and say whether a different
 limit is a clear win.  multidict is tuned the same way on its count-based
 load factor (its ``multidictLimits`` sweep averages each factor over
 three table sizes, a growth cycle's spread of fullness), against its own
-default of 800.  ``--slower PCT`` sets how much slower a memory win may be
-(default 15).
+default of 800.  flexSlack is flex's growth slack (flexSetGrowthSlack, a
+percent of each growth; its ``flexSlackLimits`` sweep writes and reads a
+multidict, a multimap, a multilist and an ordered set at each percent),
+against its default of 0.  ``--slower PCT`` sets how much slower a memory
+win may be (default 15).
 
 Usage::
 
@@ -63,17 +66,19 @@ from .gitutil import ToolError
 TIER_FAMILIES = ("multimap", "multiOrderedSet", "multilist", "multimapAtom")
 #: Every tuned family: the tier families, and multidict, whose setting is
 #: its count-based load factor (percent; multidictSetDefaultLoadFactors)
-FAMILIES = (*TIER_FAMILIES, "multidict")
+FAMILIES = (*TIER_FAMILIES, "multidict", "flexSlack")
 #: The limit the plain constructors use until changed (DK_TIER_LIMIT_COMPILED
 #: in dkTierLimit.h): the baseline every result is read against
 DEFAULT_BASELINE = 2048
 #: Per family, the setting its plain constructors use until changed
 #: (multidict: MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR in multidict.c)
 #: (multimapAtom: DK_TIER_LIMIT_ATOM_COMPILED in dkTierLimit.h)
+#: (flexSlack: FLEX_GROWTH_SLACK_PERCENT in flex.h, a percent of growth)
 DEFAULT_BASELINES = {
     **dict.fromkeys(TIER_FAMILIES, DEFAULT_BASELINE),
     "multimapAtom": 512,
     "multidict": 800,
+    "flexSlack": 0,
 }
 #: A baseline for every family alike (--baseline), or one per family
 Baseline = int | dict[str, int]
@@ -123,6 +128,16 @@ OP_CLASS = {
         "find": "read",
         "findScattered": "read",
         "delete": "write",
+    },
+    "flexSlack": {
+        "dictAdd": "write",
+        "dictFind": "read",
+        "dictDelete": "write",
+        "mapInsert": "write",
+        "mapFind": "read",
+        "mapAppend": "write",
+        "listPush": "write",
+        "setAdd": "write",
     },
 }
 
@@ -285,6 +300,19 @@ class Sweep:
     family: str = ""
     samples: dict[int, dict[str, list[float]]] = field(default_factory=dict)
     bytes: dict[int, int] = field(default_factory=dict)
+    #: per limit, each operation's container bytes (a family that sweeps
+    #: several containers reports each one's on its own operations)
+    op_bytes: dict[int, dict[str, int]] = field(default_factory=dict)
+
+    def containers(self, limit: int) -> dict[str, int]:
+        """At 'limit', the first operation naming each container's bytes:
+        operations on one container report the same bytes, so each distinct
+        value is one container"""
+        seen: dict[str, int] = {}
+        for op, n in self.op_bytes.get(limit, {}).items():
+            if n not in seen.values():
+                seen[op] = n
+        return seen
 
     @classmethod
     def of_medians(
@@ -465,7 +493,10 @@ def sweeps(runs: list[dict[perfcompare.Key, perfdiff.PerfRow]]) -> dict[str, Swe
     first run printed them.  Rows match across runs by module and name (a
     row's byte count can differ between runs: a hashed container's size
     does); only rows every run has are kept, so sample r of every cell is
-    run r, and a limit's bytes are the median over the runs."""
+    run r.  An operation's bytes are the median over the runs, and a
+    limit's bytes the sum over its containers (Sweep.containers): one
+    container's for a family that sweeps one, all of them for one that
+    sweeps several."""
     if not runs:
         return {}
     by_name = [{(r.module, r.name): r for r in rows.values()} for rows in runs]
@@ -485,7 +516,12 @@ def sweeps(runs: list[dict[perfcompare.Key, perfdiff.PerfRow]]) -> dict[str, Swe
         sweep.samples.setdefault(limit, {})[m.group("op")] = [r.ns_per_op for r in rows]
         sizes = [r.bytes_ for r in rows if r.bytes_]
         if sizes:
-            sweep.bytes[limit] = round(statistics.median(sizes))
+            sweep.op_bytes.setdefault(limit, {})[m.group("op")] = round(
+                statistics.median(sizes)
+            )
+    for sweep in out.values():
+        for limit in sweep.op_bytes:
+            sweep.bytes[limit] = sum(sweep.containers(limit).values())
     return out
 
 
@@ -556,11 +592,40 @@ def _human(n: int) -> str:
     return f"{n} B"
 
 
+def _container_lines(sweep: Sweep, baseline: int) -> list[str]:
+    """For a family sweeping several containers, each one's bytes per
+    limit and their change against the baseline (named by the first
+    operation on it); nothing for a family sweeping one"""
+    base = sweep.containers(baseline)
+    if len(base) < 2:
+        return []
+    lines = ["  bytes by container (named by its first operation):"]
+    for limit in sorted(sweep.op_bytes):
+        parts = []
+        for op, n in sweep.containers(limit).items():
+            was = sweep.op_bytes.get(baseline, {}).get(op)
+            change = (
+                "" if limit == baseline or not was else f" {(n / was - 1) * 100:+.1f}%"
+            )
+            parts.append(f"{op} {n}{change}")
+        lines.append(
+            f"    {limit}{'*' if limit == baseline else ' '} " + ", ".join(parts)
+        )
+    return lines
+
+
 def apply_text(family: str, limit: int) -> str:
     """The C that makes ``limit`` the family's setting (multidict: its
     load factor, shrinking below a twentieth of it as the default does)."""
     if family == "multidict":
         return f"multidictSetDefaultLoadFactors({limit}, {limit // 20});"
+    if family == "flexSlack":
+        if not limit:
+            return "flexSetGrowthSlack(0, 0, 0);"
+        return (
+            f"flexSetGrowthSlack({limit}, FLEX_GROWTH_SLACK_MIN_BYTES, "
+            "FLEX_GROWTH_SLACK_MAX_BYTES);"
+        )
     return f"dkTierSetDefaultLimit({DEFAULT_SETTERS[family]}, FLEX_CAP_LEVEL_{limit});"
 
 
@@ -738,6 +803,7 @@ def render(
                     )
             rows.append(row)
         lines.extend(_table(["limit", *ops, "bytes", *(m.name for m in mixes)], rows))
+        lines.extend(_container_lines(sweep, baseline))
         for mix in mixes:
             d = sweep.decide(mix, baseline, slower)
             text = (

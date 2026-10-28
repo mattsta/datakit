@@ -120,6 +120,35 @@ class Sweeps(unittest.TestCase):
         self.assertEqual(mos.samples[2048]["add"], [90.0, 90.0, 90.0])
         self.assertEqual(mos.bytes, {2048: 1002})
 
+    def test_a_family_of_several_containers_sums_them(self) -> None:
+        # Operations on one container report its bytes; the limit's bytes
+        # are the containers' total, and each container is listed
+        rows = [
+            ("flexSlackLimits", "dictAdd0", 500, 10.0),
+            ("flexSlackLimits", "dictFind0", 500, 5.0),
+            ("flexSlackLimits", "listPush0", 300, 8.0),
+            ("flexSlackLimits", "dictAdd25", 520, 9.0),
+            ("flexSlackLimits", "dictFind25", 520, 5.0),
+            ("flexSlackLimits", "listPush25", 360, 4.0),
+        ]
+        run = {(m, n, b): perfdiff.PerfRow(m, n, b, 1, ns, 0.0) for m, n, b, ns in rows}
+        slack = tune.sweeps([run])["flexSlack"]
+        self.assertEqual(slack.bytes, {0: 800, 25: 880})
+        self.assertEqual(slack.containers(25), {"dictAdd": 520, "listPush": 360})
+        lines = tune._container_lines(slack, 25)
+        self.assertEqual(
+            lines[1:],
+            [
+                "    0  dictAdd 500 -3.8%, listPush 300 -16.7%",
+                "    25* dictAdd 520, listPush 360",
+            ],
+        )
+        # one container: no breakdown
+        self.assertEqual(
+            tune._container_lines(tune.Sweep("", {}, {}, {0: {"a": 5, "b": 5}}), 0),
+            [],
+        )
+
     def test_versus_compares_each_run_with_itself(self) -> None:
         # Run 2 is twice as slow everywhere: each run's ratio is the same
         sweep = tune.Sweep(
@@ -404,6 +433,12 @@ class Report(unittest.TestCase):
             f"FLEX_CAP_LEVEL_{tune.DEFAULT_BASELINES['multimapAtom']}",
             header,
         )
+        flexHeader = (REPO / "src" / "flex.h").read_text()
+        self.assertIn(
+            "#define FLEX_GROWTH_SLACK_PERCENT "
+            f"{tune.DEFAULT_BASELINES['flexSlack']}\n",
+            flexHeader,
+        )
         source = (REPO / "src" / "multidict.c").read_text()
         self.assertIn(
             "MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR = "
@@ -497,6 +532,13 @@ class Mixes(unittest.TestCase):
         self.assertIsNotNone(names)
         rows["multidict"] = set(re.findall(r'"(\w+)"', names.group(1)))
         self.assertIn('emitRow("multidictLimits"', source)
+        # so does the flex growth slack's
+        slack = re.search(
+            r"flexSlackOpNames\[FLEX_SLACK_OP_COUNT\] = \{([^}]*)\}", source
+        )
+        self.assertIsNotNone(slack)
+        rows["flexSlack"] = set(re.findall(r'"(\w+)"', slack.group(1)))
+        self.assertIn('emitRow("flexSlackLimits"', source)
         self.assertEqual(sorted(rows), sorted(tune.FAMILIES))
         for family, ops in rows.items():
             with self.subTest(family=family):
@@ -529,6 +571,16 @@ class Mixes(unittest.TestCase):
         self.assertEqual(
             tune.apply_text("multidict", 1600),
             "multidictSetDefaultLoadFactors(1600, 80);",
+        )
+        # and flex's growth slack by flexSetGrowthSlack (0: no slack at all)
+        self.assertIn("bool flexSetGrowthSlack(", (REPO / "src" / "flex.h").read_text())
+        self.assertEqual(
+            tune.apply_text("flexSlack", 6),
+            "flexSetGrowthSlack(6, FLEX_GROWTH_SLACK_MIN_BYTES, "
+            "FLEX_GROWTH_SLACK_MAX_BYTES);",
+        )
+        self.assertEqual(
+            tune.apply_text("flexSlack", 0), "flexSetGrowthSlack(0, 0, 0);"
         )
 
 

@@ -965,6 +965,156 @@ static void benchMultidictLimits(void) {
     }
 }
 
+/* The flex growth slack (flexSetGrowthSlack) swept over the containers
+ * whose writes grow flexes row by row: rows "<op><percent>", each with its
+ * own container's metered heap, for dktools tune's flexSlack family.  A
+ * percent of 0 means no slack at all; any other takes the compiled byte
+ * bounds (FLEX_GROWTH_SLACK_MIN_BYTES, FLEX_GROWTH_SLACK_MAX_BYTES). */
+static const uint32_t flexSlackPercents[] = {0, 6, 12, 25, 50};
+
+typedef enum flexSlackOp {
+    FLEX_SLACK_DICT_ADD = 0,
+    FLEX_SLACK_DICT_FIND,
+    FLEX_SLACK_DICT_DELETE,
+    FLEX_SLACK_MAP_INSERT,
+    FLEX_SLACK_MAP_FIND,
+    FLEX_SLACK_MAP_APPEND,
+    FLEX_SLACK_LIST_PUSH,
+    FLEX_SLACK_SET_ADD,
+    FLEX_SLACK_OP_COUNT
+} flexSlackOp;
+
+static const char *const flexSlackOpNames[FLEX_SLACK_OP_COUNT] = {
+    "dictAdd", "dictFind",  "dictDelete", "mapInsert",
+    "mapFind", "mapAppend", "listPush",   "setAdd"};
+
+static void benchFlexSlackLimits(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    uint32_t savedPercent;
+    uint32_t savedMin;
+    uint32_t savedMax;
+    flexGrowthSlack(&savedPercent, &savedMin, &savedMax);
+    uint64_t sink = 0;
+    char name[48];
+    for (size_t s = 0; s < countof(flexSlackPercents); s++) {
+        const uint32_t percent = flexSlackPercents[s];
+        flexSetGrowthSlack(percent, percent ? FLEX_GROWTH_SLACK_MIN_BYTES : 0,
+                           percent ? FLEX_GROWTH_SLACK_MAX_BYTES : 0);
+        double secs[FLEX_SLACK_OP_COUNT] = {};
+        int64_t heap[FLEX_SLACK_OP_COUNT] = {};
+
+        {
+            bool metered = ctestHeapMeterStart();
+            cleaner(multidictDefaultClassFree) multidictClass *qdc =
+                multidictDefaultClassNew();
+            cleaner(multidictFree) multidict *d =
+                multidictNew(&multidictTypeExactKey, qdc, 7);
+            double t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, i);
+                const databox v = databoxNewSigned(i);
+                sink += multidictAdd(d, &k, &v);
+            }
+            secs[FLEX_SLACK_DICT_ADD] = timeUtilMonotonicSec() - t0;
+            while (multidictRehash(d, 1024)) {
+            }
+            heap[FLEX_SLACK_DICT_ADD] = metered ? ctestHeapMeterStop() : 0;
+            heap[FLEX_SLACK_DICT_FIND] = heap[FLEX_SLACK_DICT_ADD];
+            heap[FLEX_SLACK_DICT_DELETE] = heap[FLEX_SLACK_DICT_ADD];
+            t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, perfScatter(i));
+                databox v = {};
+                sink += multidictFind(d, &k, &v);
+            }
+            secs[FLEX_SLACK_DICT_FIND] = timeUtilMonotonicSec() - t0;
+            t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, perfScatter(i));
+                sink += multidictDelete(d, &k);
+            }
+            secs[FLEX_SLACK_DICT_DELETE] = timeUtilMonotonicSec() - t0;
+        }
+
+        {
+            /* Rows {key, count, count} arriving in scattered key order */
+            const databox one = databoxNewSigned(1);
+            bool metered = ctestHeapMeterStart();
+            cleaner(multimapFree) multimap *m = multimapNew(3);
+            double t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, perfScatter(i));
+                const databox *row[3] = {&k, &one, &one};
+                sink += multimapInsert(&m, row);
+            }
+            secs[FLEX_SLACK_MAP_INSERT] = timeUtilMonotonicSec() - t0;
+            heap[FLEX_SLACK_MAP_INSERT] = metered ? ctestHeapMeterStop() : 0;
+            heap[FLEX_SLACK_MAP_FIND] = heap[FLEX_SLACK_MAP_INSERT];
+            t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, i);
+                sink += multimapExists(m, &k);
+            }
+            secs[FLEX_SLACK_MAP_FIND] = timeUtilMonotonicSec() - t0;
+        }
+
+        {
+            /* The same rows by ascending key: every node but the last
+             * fills and is never written again */
+            const databox one = databoxNewSigned(1);
+            bool metered = ctestHeapMeterStart();
+            cleaner(multimapFree) multimap *m = multimapNew(3);
+            double t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = databoxNewUnsigned(i);
+                const databox *row[3] = {&k, &one, &one};
+                sink += multimapInsert(&m, row);
+            }
+            secs[FLEX_SLACK_MAP_APPEND] = timeUtilMonotonicSec() - t0;
+            heap[FLEX_SLACK_MAP_APPEND] = metered ? ctestHeapMeterStop() : 0;
+        }
+
+        {
+            cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+            bool metered = ctestHeapMeterStart();
+            cleaner(multilistFree) multilist *ml =
+                multilistNewLimit(dkTierDefaultLimit(DK_TIER_MULTILIST), 0);
+            double t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox k = perfContainerKey(keys, i);
+                multilistPushByTypeTail(&ml, state, &k);
+            }
+            secs[FLEX_SLACK_LIST_PUSH] = timeUtilMonotonicSec() - t0;
+            heap[FLEX_SLACK_LIST_PUSH] = metered ? ctestHeapMeterStop() : 0;
+        }
+
+        {
+            bool metered = ctestHeapMeterStart();
+            cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                multiOrderedSetNew();
+            double t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const databox score = databoxNewSigned(perfScatter(i));
+                const databox member = perfContainerKey(keys, i);
+                sink += multiOrderedSetAdd(&mos, &score, &member);
+            }
+            secs[FLEX_SLACK_SET_ADD] = timeUtilMonotonicSec() - t0;
+            heap[FLEX_SLACK_SET_ADD] = metered ? ctestHeapMeterStop() : 0;
+        }
+
+        for (int op = 0; op < FLEX_SLACK_OP_COUNT; op++) {
+            snprintf(name, sizeof(name), "%s%" PRIu32, flexSlackOpNames[op],
+                     percent);
+            emitRow("flexSlackLimits", name,
+                    heap[op] > 0 ? (size_t)heap[op] : 0, n, secs[op]);
+        }
+    }
+
+    flexSetGrowthSlack(savedPercent, savedMin, savedMax);
+    perfContainerSink = sink;
+}
+
 /* Score updates of existing members and nothing else (run by name, for
  * profiling the write path): a 100k-member Full-tier set, 20 passes of
  * IncrBy over every member */
@@ -2547,6 +2697,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfNamed("multidictLimits")) {
             benchMultidictLimits();
+        }
+
+        if (perfNamed("flexSlackLimits")) {
+            benchFlexSlackLimits();
         }
 
         if (perfNamed("multidictSeeds")) {

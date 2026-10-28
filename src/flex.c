@@ -87,7 +87,10 @@
 #include "flex.h"
 
 #include "cleaner.h"
+#include "jebuf.h"
 #include "str.h"
+
+#include <stdatomic.h>
 
 #include "multimapAtom.h"
 
@@ -654,6 +657,87 @@ flexVarintSplitFullNoZeroLenEmbedded_(size_t len) {
     return 1 + width;
 }
 
+/* Room an allocator's size classes leave anyway (16-byte classes are the
+ * smallest step of the supported allocators): never worth a realloc */
+static constexpr size_t FLEX_ALLOCATOR_GRAIN = 16;
+
+/* Growth slack, the room a flex that outgrows its allocation asks for
+ * beyond its need: 'percent' of the bytes it needs, at least 'minBytes'
+ * and at most 'maxBytes'.  One word (percent in bits 0-15, minBytes in
+ * 16-31, maxBytes in 32-63) so a reader sees all three from one setting. */
+static _Atomic uint64_t flexGrowthSlack_ =
+    FLEX_GROWTH_SLACK_PERCENT | ((uint64_t)FLEX_GROWTH_SLACK_MIN_BYTES << 16) |
+    ((uint64_t)FLEX_GROWTH_SLACK_MAX_BYTES << 32);
+
+bool flexSetGrowthSlack(const uint32_t percent, const uint32_t minBytes,
+                        const uint32_t maxBytes) {
+    if (percent > FLEX_GROWTH_SLACK_PERCENT_MAX ||
+        minBytes > FLEX_GROWTH_SLACK_BYTES_MAX ||
+        maxBytes > FLEX_GROWTH_SLACK_BYTES_MAX || minBytes > maxBytes) {
+        return false;
+    }
+
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&flexGrowthSlack_,
+                          percent | ((uint64_t)minBytes << 16) |
+                              ((uint64_t)maxBytes << 32),
+                          memory_order_relaxed);
+    return true;
+}
+
+void flexGrowthSlack(uint32_t *percent, uint32_t *minBytes,
+                     uint32_t *maxBytes) {
+    /* @sync: relaxed hint */
+    const uint64_t slack =
+        atomic_load_explicit(&flexGrowthSlack_, memory_order_relaxed);
+    *percent = (uint32_t)(slack & UINT16_MAX);
+    *minBytes = (uint32_t)((slack >> 16) & UINT16_MAX);
+    *maxBytes = (uint32_t)(slack >> 32);
+}
+
+/* The flex at 'f' resized to hold 'bytes'.  Every request is a jemalloc
+ * size class (jebufSizeAllocation): the allocation jemalloc gives such a
+ * request anyway, so asking for the whole class costs nothing there, and
+ * growth inside the class then needs no realloc.  With an allocator that
+ * reports usable sizes:
+ *   - a flex that fits its allocation stays where it is, unless the
+ *     allocation holds more than twice the slack beyond its need (then it
+ *     shrinks to the class of its need plus the slack);
+ *   - a flex that outgrows it moves to the class of its need plus the
+ *     slack.
+ * Without usable sizes every resize asks for the class of its need. */
+DK_STATIC flex *flexFitAllocation_(flex *f, const size_t bytes) {
+    const size_t usable = zusablesize(f);
+    if (!usable) {
+        /* @own: caller; free=flexFree */
+        return zrealloc(f, jebufSizeAllocation(bytes));
+    }
+
+    /* Past FLEX_GROWTH_SLACK_UNTIL_BYTES the allocators' size classes are
+     * hundreds of bytes apart: growth already moves once per many rows,
+     * and slack would only push a flex into the next wide class */
+    size_t slack = 0;
+    if (bytes < FLEX_GROWTH_SLACK_UNTIL_BYTES) {
+        uint32_t percent;
+        uint32_t minBytes;
+        uint32_t maxBytes;
+        flexGrowthSlack(&percent, &minBytes, &maxBytes);
+        const size_t byPercent = bytes * percent / 100;
+        /* A percent of 0 takes no slack at all */
+        slack = !percent               ? 0
+                : byPercent < minBytes ? minBytes
+                : byPercent > maxBytes ? maxBytes
+                                       : byPercent;
+    }
+
+    if (bytes <= usable && usable - bytes <= 2 * slack + FLEX_ALLOCATOR_GRAIN) {
+        return f;
+    }
+
+    /* @own: caller; free=flexFree */
+    return zrealloc(f, jebufSizeAllocation(bytes + slack));
+}
+
 /* This function gets called for every insert and delete into the flex
  * since every insert and delete adjusts both the byte length of the flex
  * and the count of elements in the flex. */
@@ -726,28 +810,23 @@ DK_STATIC int_fast8_t flexSetTotalBytesCount_(flex **const _f,
 
         /* If we are growing, realloc *then* memmove data up. */
         if (growBy > 0) {
-            /* @own: caller; free=flexFree */
-            *_f = zrealloc(*_f, newTotalBytes);
+            *_f = flexFitAllocation_(*_f, newTotalBytes);
             f = *_f;
             memmove(f + newDataStartOffset, f + currentDataStartOffset,
                     moveBytes);
         } else {
-            /* else, shrinking: memmove data down *then* realloc to fit. */
-            /* note: smart allocators will try to shrink allocations in-place
-             * so this realloc ideally won't invoke a new memcpy. */
+            /* else, shrinking: memmove data down *then* fit the allocation */
             memmove(f + newDataStartOffset, f + currentDataStartOffset,
                     moveBytes);
             if (!drain) {
-                /* @own: caller; free=flexFree */
-                *_f = zrealloc(*_f, newTotalBytes);
+                *_f = flexFitAllocation_(*_f, newTotalBytes);
                 f = *_f;
             }
         }
     } else {
         /* else, this is a regular resize with no varint grow/shrink */
         if (!drain) {
-            /* @own: caller; free=flexFree */
-            *_f = zrealloc(*_f, newBytes);
+            *_f = flexFitAllocation_(*_f, newBytes);
             f = *_f;
         }
     }
@@ -8875,6 +8954,77 @@ static int32_t flexTestEntryWalk(void) {
     return err;
 }
 
+/* Growth slack: a run of small pushes into a small flex changes the
+ * allocation's size class less than half as often with a 25% slack as
+ * with none, the
+ * allocation always holds the flex, deletes give the room back past twice
+ * the slack, and the setting refuses values past its bounds */
+static int32_t flexTestGrowthSlack(void) {
+    int err = 0;
+    uint32_t savedPercent;
+    uint32_t savedMin;
+    uint32_t savedMax;
+    flexGrowthSlack(&savedPercent, &savedMin, &savedMax);
+    if (flexSetGrowthSlack(FLEX_GROWTH_SLACK_PERCENT_MAX + 1, 0, 0) ||
+        flexSetGrowthSlack(0, 0, FLEX_GROWTH_SLACK_BYTES_MAX + 1) ||
+        flexSetGrowthSlack(0, 64, 32)) {
+        ERR("a slack past its bounds was accepted");
+    }
+
+    cleaner(flexFree) flex *probe = flexNew();
+    if (!zusablesize(probe)) {
+        /* No usable sizes: every resize is exact, nothing to measure */
+        return err;
+    }
+
+    const uint32_t settings[2][3] = {
+        {0, 0, 0},
+        {25, FLEX_GROWTH_SLACK_MIN_BYTES, FLEX_GROWTH_SLACK_MAX_BYTES}};
+    size_t changes[2] = {};
+    for (size_t s = 0; s < countof(settings); s++) {
+        flexSetGrowthSlack(settings[s][0], settings[s][1], settings[s][2]);
+        cleaner(flexFree) flex *f = flexNew();
+        size_t usable = zusablesize(f);
+        /* About 1 KB of entries: the small-allocation range, whose size
+         * classes are 16 bytes apart, where unslacked growth moves most */
+        constexpr int64_t pushes = 200;
+        for (int64_t i = 0; i < pushes; i++) {
+            flexPushSigned(&f, i * 7919, FLEX_ENDPOINT_TAIL);
+            const size_t now = zusablesize(f);
+            if (now < flexBytes(f)) {
+                ERR("setting %zu: %zu usable bytes hold a %zu-byte flex", s,
+                    now, flexBytes(f));
+            }
+
+            changes[s] += now != usable;
+            usable = now;
+        }
+
+        /* Down to 10 entries: the room goes back */
+        flexEntry *fe = flexHead(f);
+        flexDeleteCount(&f, &fe, (uint32_t)(pushes - 10));
+        /* The slack is at most its cap */
+        if (zusablesize(f) > flexBytes(f) + 2 * settings[s][2] + 512) {
+            ERR("setting %zu: %zu usable bytes kept for a %zu-byte flex", s,
+                zusablesize(f), flexBytes(f));
+        }
+
+        int64_t first = 0;
+        if (flexCount(f) != 10 || !flexGetSigned(flexHead(f), &first) ||
+            first != (pushes - 10) * 7919) {
+            ERR("setting %zu: the entries left are wrong", s);
+        }
+    }
+
+    flexSetGrowthSlack(savedPercent, savedMin, savedMax);
+    if (changes[1] * 2 > changes[0]) {
+        ERR("size class changes: %zu with slack, %zu without", changes[1],
+            changes[0]);
+    }
+
+    return err;
+}
+
 /* Every typed find against an oracle of entry positions, in a flex holding
  * one entry of each kind. */
 static int32_t flexTestTypedFind(void) {
@@ -10759,6 +10909,10 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     TEST("entry sizes step every encoding forward and back") {
         err += flexTestEntryWalk();
+    }
+
+    TEST("growth slack moves the block less and gives room back") {
+        err += flexTestGrowthSlack();
     }
 
     TEST("the exact push path stores values as given") {

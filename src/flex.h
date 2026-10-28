@@ -26,6 +26,48 @@ void flexReset(flex **ff);
 [[nodiscard]] flex *flexDuplicate(const flex *f);
 void flexFree(flex *f);
 
+/* Growth slack.  A flex that outgrows its allocation reallocates to its
+ * need plus a slack of 'percent' of that need, at least 'minBytes' and at
+ * most 'maxBytes'; a flex that still fits its allocation does not
+ * reallocate, and one that shrinks gives room back only past twice the
+ * slack (or past the 16 bytes an allocator class may hold anyway, with
+ * no slack: a percent of 0 takes none, whatever the byte bounds).  A run
+ * of small inserts into a small flex then moves its block
+ * once per slack instead of at every allocator size class.  Larger flexes
+ * (FLEX_GROWTH_SLACK_UNTIL_BYTES and up) take no slack: their size
+ * classes are wide enough to batch growth already.  The
+ * slack is heap the flex holds unused (seen by a heap meter, not by
+ * flexBytes).  It applies only when the allocator reports usable sizes
+ * (datakitConfig.localUsableSize); without them every resize is exact.
+ * flexSetGrowthSlack sets the process's setting (percent up to
+ * FLEX_GROWTH_SLACK_PERCENT_MAX, the byte bounds up to
+ * FLEX_GROWTH_SLACK_BYTES_MAX with minBytes <= maxBytes; false, changing
+ * nothing, otherwise); the compiled default may be overridden at build
+ * time. */
+/* Default 0 (no slack beyond the jemalloc size class every resize asks
+ * for): a write-heavy process may set a few percent and measure it with
+ * dktools tune --families flexSlack */
+#ifndef FLEX_GROWTH_SLACK_PERCENT
+#define FLEX_GROWTH_SLACK_PERCENT 0
+#endif
+#ifndef FLEX_GROWTH_SLACK_MIN_BYTES
+#define FLEX_GROWTH_SLACK_MIN_BYTES 16
+#endif
+#ifndef FLEX_GROWTH_SLACK_MAX_BYTES
+#define FLEX_GROWTH_SLACK_MAX_BYTES 128
+#endif
+/* Slack applies to flexes below this size: past it the allocators' size
+ * classes are hundreds of bytes apart (macOS: 512 above 1 KB; glibc: bins
+ * widen past 1 KB), so growth already moves once per many rows and a
+ * slack would only push a flex into the next wide class */
+#ifndef FLEX_GROWTH_SLACK_UNTIL_BYTES
+#define FLEX_GROWTH_SLACK_UNTIL_BYTES 1024
+#endif
+#define FLEX_GROWTH_SLACK_PERCENT_MAX 100
+#define FLEX_GROWTH_SLACK_BYTES_MAX 4096
+bool flexSetGrowthSlack(uint32_t percent, uint32_t minBytes, uint32_t maxBytes);
+void flexGrowthSlack(uint32_t *percent, uint32_t *minBytes, uint32_t *maxBytes);
+
 /* Validators for untrusted input.
  *
  * flexValidateBuffer, flexValidateBufferDeep and flexPeekTotalBytes
