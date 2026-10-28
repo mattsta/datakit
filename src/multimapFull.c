@@ -860,6 +860,90 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
 /* ====================================================================
  * Range Box Searching
  * ==================================================================== */
+/* A box's value as an unsigned 64-bit number, when it reads as one:
+ * UNSIGNED_64, PTR, CONTAINER_REFERENCE_EXTERNAL or a non-negative
+ * SIGNED_64 (databoxCompare orders all of these by that value) */
+DK_INLINE_ALWAYS bool rangeBoxUnsigned_(const databox *box, uint64_t *value) {
+    if (box->type == DATABOX_UNSIGNED_64 || box->type == DATABOX_PTR ||
+        box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL ||
+        (box->type == DATABOX_SIGNED_64 && box->data.i64 >= 0)) {
+        *value = box->data.u64;
+        return true;
+    }
+
+    return false;
+}
+
+/* Integer keys of a map often spread evenly (dense ids): a few probes
+ * placed by the key's position between two known range boxes narrow the
+ * search before halving takes over.  Only for maps, whose range boxes are
+ * unique (so a box equal to the key answers exactly), and only while the
+ * key and the boxes probed read as unsigned (any other box ends the
+ * guessing; halving copes with every type).  The answer, the number of
+ * range boxes at or below the key, is in [*min, *max] afterwards; true
+ * with it in '*found' when a probe lands on the key. */
+DK_INLINE_ALWAYS bool multimapFullInterpolate_(const multimapFull *m,
+                                               const databox *key,
+                                               multimapFullIdx *min,
+                                               multimapFullIdx *max,
+                                               multimapFullIdx *found) {
+    uint64_t k;
+    uint64_t vLo;
+    uint64_t vHi;
+    if (m->mapIsSet || m->count < 3 || !rangeBoxUnsigned_(key, &k)) {
+        return false;
+    }
+
+    multimapFullIdx lo = 0;
+    multimapFullIdx hi = m->count - 2; /* the last range box */
+    if (!rangeBoxUnsigned_(getRangeBox(m, lo), &vLo) ||
+        !rangeBoxUnsigned_(getRangeBox(m, hi), &vHi)) {
+        return false;
+    }
+
+    if (k <= vLo || k >= vHi) {
+        if (k == vLo || k == vHi) {
+            *found = (k == vLo ? lo : hi) + 1;
+            return true;
+        }
+
+        /* Below every range box: map 0; above every one: the last map */
+        *min = *max = k < vLo ? 0 : hi + 1;
+        return false;
+    }
+
+    /* Box lo is below the key and box hi above it, so a probe at
+     * lo + 1 + (k - vLo) * (hi - lo - 1) / (vHi - vLo) falls strictly
+     * between them */
+    for (int probe = 0; probe < 4 && hi - lo > 1; probe++) {
+        const multimapFullIdx g =
+            lo + 1 +
+            (multimapFullIdx)(((unsigned __int128)(k - vLo) * (hi - lo - 1)) /
+                              (vHi - vLo));
+        uint64_t v;
+        if (!rangeBoxUnsigned_(getRangeBox(m, g), &v)) {
+            break;
+        }
+
+        if (v == k) {
+            *found = g + 1;
+            return true;
+        }
+
+        if (v < k) {
+            lo = g;
+            vLo = v;
+        } else {
+            hi = g;
+            vHi = v;
+        }
+    }
+
+    *min = lo + 1;
+    *max = hi;
+    return false;
+}
+
 DK_STATIC multimapFullIdx multimapFullBinarySearch(const multimapFull *m,
                                                    const databox *key) {
     multimapFullIdx min = 0;
@@ -870,13 +954,19 @@ DK_STATIC multimapFullIdx multimapFullBinarySearch(const multimapFull *m,
      * We always have m->count >= 1. */
     multimapFullIdx max = m->count - 1;
 
+    multimapFullIdx found;
+    if (multimapFullInterpolate_(m, key, &min, &max, &found)) {
+        return found;
+    }
+
     while (min < max) {
         const size_t mid = (min + max) >> 1;
 
         const databox *got = getRangeBox(m, mid);
-#if 1
-        __builtin_prefetch(got->data.bytes.start, 0, 3);
-#endif
+        if (got->type >= DATABOX_BYTES) {
+            /* The compare reads the bytes next */
+            __builtin_prefetch(got->data.bytes.start, 0, 3);
+        }
 
         const int compared = databoxCompareQuick(got, key);
 #if 0
@@ -3280,6 +3370,105 @@ int multimapFullTest(int, char *[]) {
             printf("dump carried %zu entries, inserted %zu\n", dumped,
                    inserted);
             ERR("dump lost entries across the >64-submap merge");
+        }
+    }
+
+    TEST("range box search: guessed probes route as halving does") {
+        /* Maps of integer keys spread evenly, with holes, skewed, and
+         * mixed with reals, negatives, 128-bit values and bytes; every
+         * probe on, beside and beyond each key must route to the number
+         * of range boxes ordered at or below it (the oracle scans them
+         * all with databoxCompare) */
+        typedef enum mfTestSpread {
+            MF_TEST_SPREAD_DENSE = 0,
+            MF_TEST_SPREAD_HOLES,
+            MF_TEST_SPREAD_CUBIC,
+            MF_TEST_SPREAD_MIXED,
+            MF_TEST_SPREAD_COUNT
+        } mfTestSpread;
+        constexpr int64_t keys = 6000;
+        static __uint128_t wide[keys];
+        static char text[keys][16];
+        databox probes[6];
+        for (int spread = 0; spread < MF_TEST_SPREAD_COUNT; spread++) {
+            cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
+            m->maxSize = 256;
+            for (int64_t i = 0; i < keys; i++) {
+                databox key;
+                switch ((mfTestSpread)spread) {
+                case MF_TEST_SPREAD_DENSE:
+                    key = databoxNewUnsigned((uint64_t)i);
+                    break;
+                case MF_TEST_SPREAD_HOLES:
+                    key = databoxNewUnsigned((uint64_t)(i * 3 + (i % 7)));
+                    break;
+                case MF_TEST_SPREAD_CUBIC:
+                    key = databoxNewUnsigned((uint64_t)(i * i * i));
+                    break;
+                default:
+                    switch (i % 5) {
+                    case 0:
+                        key = DATABOX_DOUBLE((double)i + 0.5);
+                        break;
+                    case 1:
+                        key = databoxNewSigned(-i);
+                        break;
+                    case 2:
+                        wide[i] = ((__uint128_t)1 << 70) + (uint64_t)i;
+                        key = (databox){.type = DATABOX_UNSIGNED_128,
+                                        .big = true,
+                                        .data.u128 = &wide[i]};
+                        break;
+                    case 3:
+                        snprintf(text[i], sizeof(text[i]), "k%05" PRId64, i);
+                        key = databoxNewBytesString(text[i]);
+                        break;
+                    default:
+                        key = databoxNewUnsigned((uint64_t)i * 11);
+                        break;
+                    }
+                    break;
+                }
+
+                const databox val = databoxNewUnsigned((uint64_t)i);
+                const databox *row[2] = {&key, &val};
+                multimapFullInsert(m, row);
+            }
+
+            if (m->count < 40) {
+                ERR("spread %d built only %" PRIu32 " maps", spread, m->count);
+            }
+
+            for (multimapFullIdx b = 0; b + 1 < m->count; b++) {
+                const databox *rb = getRangeBox(m, b);
+                const uint64_t v = rb->data.u64;
+                size_t n = 0;
+                probes[n++] = *rb;
+                if (rb->type == DATABOX_UNSIGNED_64) {
+                    probes[n++] = databoxNewUnsigned(v + 1);
+                    probes[n++] = databoxNewUnsigned(v ? v - 1 : 0);
+                    probes[n++] = databoxNewSigned(v ? (int64_t)(v - 1) : 0);
+                    probes[n++] =
+                        (databox){.data.u64 = v + 2,
+                                  .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+                }
+                probes[n++] = databoxNewUnsigned(UINT64_MAX);
+                for (size_t p = 0; p < n; p++) {
+                    multimapFullIdx want = 0;
+                    for (multimapFullIdx r = 0; r + 1 < m->count; r++) {
+                        want +=
+                            databoxCompare(getRangeBox(m, r), &probes[p]) <= 0;
+                    }
+
+                    const multimapFullIdx got =
+                        multimapFullBinarySearch(m, &probes[p]);
+                    if (got != want) {
+                        ERR("spread %d box %" PRIu32 " probe %zu (type %d): "
+                            "map %" PRIu32 ", want %" PRIu32,
+                            spread, b, p, (int)probes[p].type, got, want);
+                    }
+                }
+            }
         }
     }
 
