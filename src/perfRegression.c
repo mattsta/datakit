@@ -25,6 +25,7 @@
 #include "hmac.h"
 #include "hmacKeyring.h"
 #include "idRows.h"
+#include "jebuf.h"
 #include "membound.h"
 #include "mflex.h"
 #include "multiFenwick.h"
@@ -2050,6 +2051,24 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
     perfContainerSink = sink;
 }
 
+/* A population of small containers' bytes, as two rows of 'module' (no
+ * time): their data (each one's Bytes) and what jemalloc holds for them
+ * (each one's bytes rounded up to its jemalloc size class, jebuf; a
+ * header-free container is that one allocation), so the production
+ * allocator's cost reads on any development allocator */
+#define PERF_MANY_BYTES_(module, many, count, bytesOf)                         \
+    do {                                                                       \
+        uint64_t data_ = 0;                                                    \
+        uint64_t classed_ = 0;                                                 \
+        for (uint32_t i_ = 0; i_ < (count); i_++) {                            \
+            const size_t b_ = bytesOf(many[i_]);                               \
+            data_ += b_;                                                       \
+            classed_ += jebufSizeAllocation(b_);                               \
+        }                                                                      \
+        emitRow(module, "manySmallData", data_, (count), 0.0);                 \
+        emitRow(module, "manySmallJemalloc", classed_, (count), 0.0);          \
+    } while (0)
+
 /* Many small sets, as a store of one set per key holds them: 25000 sets
  * of 4 members each made (bytes: their metered heap), every member's
  * score read with the sets visited in scattered order, then the sets
@@ -2077,6 +2096,7 @@ static void benchMultiOrderedSetMany(void) {
     const double addSecs = timeUtilMonotonicSec() - t0;
     emitRow("multiOrderedSet", "manySmallAdd", perfHeapStop(metered),
             sets * per, addSecs);
+    PERF_MANY_BYTES_("multiOrderedSet", many, sets, multiOrderedSetBytes);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < sets; i++) {
@@ -2202,6 +2222,7 @@ static void benchMultimapMany(void) {
     const double addSecs = timeUtilMonotonicSec() - t0;
     emitRow("multimap", "manySmallInsert", perfHeapStop(metered), maps * per,
             addSecs);
+    PERF_MANY_BYTES_("multimap", many, maps, multimapBytes);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < maps; i++) {
@@ -2250,6 +2271,7 @@ static void benchMultilistMany(void) {
     const double addSecs = timeUtilMonotonicSec() - t0;
     emitRow("multilist", "manySmallPush", perfHeapStop(metered), lists * per,
             addSecs);
+    PERF_MANY_BYTES_("multilist", many, lists, multilistBytes);
 
     t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < lists; i++) {
