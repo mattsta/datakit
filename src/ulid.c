@@ -4,6 +4,7 @@
 #include "timeUtil.h"
 #include "util.h"
 
+#include <math.h> /* ldexp: a variant's range in years */
 #include <string.h>
 
 /* SIMD includes */
@@ -146,7 +147,6 @@ static uint64_t ulidGenNextNs(ulidGen *g) {
     uint64_t now = ulidGenNowNs(g);
 
     if (now <= g->lastEmittedNs) {
-        g->collisionCount++;
         now = g->lastEmittedNs + 1;
         /* Saturate instead of wrapping: epoch-ns reaches UINT64_MAX in
          * the year 2554, and a wrapped watermark would silently break
@@ -154,8 +154,6 @@ static uint64_t ulidGenNextNs(ulidGen *g) {
         if (now == 0) {
             now = UINT64_MAX;
         }
-    } else {
-        g->collisionCount = 0;
     }
 
     g->lastEmittedNs = now;
@@ -969,37 +967,108 @@ void ulidCopy(ulid_t *dst, const ulid_t *src) {
  * ULID Variants Implementation
  * ==================================================================== */
 
-/* Every 64- and 32-bit variant is a time field above a low field (random
- * bits, a counter, a nanosecond delta, or machine + sequence); the time
- * field takes the rest of the word. Widths of the low fields: */
-static constexpr int ULID_EPOCH_LOW_BITS = 16;
-static constexpr int ULID_NS_LOW_BITS = 12;
-static constexpr int ULID_US_LOW_BITS = 18;
-static constexpr int ULID_MS_LOW_BITS = 22;
-static constexpr int ULID_NSCOUNT_LOW_BITS = 24;
-static constexpr int ULID_HYBRID_LOW_BITS = 20;
+/* Every 64- and 32-bit variant is a time field above a low field; the
+ * time field counts units of 'unitNs' from an epoch.  One row per
+ * variant, read by generation, extraction, the metadata and the range
+ * checks alike, so they cannot disagree. */
+typedef enum ulidLowKind_ {
+    ULID_LOW_RANDOM_,    /* random bits */
+    ULID_LOW_COUNTER_,   /* a count from 0 within each time unit */
+    ULID_LOW_SUBUNIT_,   /* the nanoseconds within the time unit */
+    ULID_LOW_SNOWFLAKE_, /* machine id above a per-ms sequence */
+    ULID_LOW_DUAL_,      /* 128-bit dual timestamps: no 64-bit layout */
+} ulidLowKind_;
+
+typedef struct ulidLayout_ {
+    const char *name;
+    const char *description;
+    uint8_t width;    /* bits in the id: 32, 64 or 128 */
+    uint8_t timeBits; /* the time field */
+    uint8_t lowBits;  /* the low field below it */
+    ulidLowKind_ low;
+    uint64_t unitNs;  /* one step of the time field */
+    uint64_t epochNs; /* what it counts from (EPOCHCUSTOM: the config's) */
+} ulidLayout_;
+
 static constexpr int ULID_SNOWFLAKE_SEQUENCE_BITS = 13;
 static constexpr int ULID_SNOWFLAKE_MACHINE_BITS = 10;
-static constexpr int ULID_SNOWFLAKE_LOW_BITS =
-    ULID_SNOWFLAKE_MACHINE_BITS + ULID_SNOWFLAKE_SEQUENCE_BITS;
-static constexpr int ULID_32MS_LOW_BITS = 6;
-static constexpr int ULID_32S_LOW_BITS = 10;
-static constexpr int ULID_DUALNS_LOW_BITS = 32;
+static constexpr uint64_t ULID_MS_NS_ = 1'000'000;
+
+static const ulidLayout_ ulidLayouts_[ULID_VARIANT_COUNT] = {
+    [ULID_VARIANT_EPOCH2020] = {"EPOCH2020",
+                                "48-bit ms since 2020 + 16-bit random", 64, 48,
+                                16, ULID_LOW_RANDOM_, ULID_MS_NS_,
+                                ULID_EPOCH_2020_NS},
+    [ULID_VARIANT_EPOCH2024] = {"EPOCH2024",
+                                "48-bit ms since 2024 + 16-bit random", 64, 48,
+                                16, ULID_LOW_RANDOM_, ULID_MS_NS_,
+                                ULID_EPOCH_2024_NS},
+    [ULID_VARIANT_EPOCHCUSTOM] = {"EPOCHCUSTOM",
+                                  "48-bit ms since a configured epoch + "
+                                  "16-bit random",
+                                  64, 48, 16, ULID_LOW_RANDOM_, ULID_MS_NS_, 0},
+    [ULID_VARIANT_NS] = {"NS", "62-bit ns + 2-bit random", 64, 62, 2,
+                         ULID_LOW_RANDOM_, 1, 0},
+    [ULID_VARIANT_US] = {"US", "52-bit us + 12-bit random", 64, 52, 12,
+                         ULID_LOW_RANDOM_, 1000, 0},
+    [ULID_VARIANT_MS] = {"MS", "42-bit ms + 22-bit random", 64, 42, 22,
+                         ULID_LOW_RANDOM_, ULID_MS_NS_, 0},
+    [ULID_VARIANT_DUALNS] = {"DUALNS",
+                             "64-bit ns + 64-bit ns (128-bit dual timestamp)",
+                             128, 64, 64, ULID_LOW_DUAL_, 1, 0},
+    [ULID_VARIANT_DUALNS_INTERLEAVED] =
+        {"DUALNS_INTERLEAVED",
+         "128-bit bit-interleaved dual ns timestamps (sortable)", 128, 64, 64,
+         ULID_LOW_DUAL_, 1, 0},
+    [ULID_VARIANT_MSCOUNT] = {"MSCOUNT",
+                              "42-bit ms + 22-bit counter from 0 each ms", 64,
+                              42, 22, ULID_LOW_COUNTER_, ULID_MS_NS_, 0},
+    [ULID_VARIANT_HYBRID] = {"HYBRID", "44-bit ms + 20-bit ns within the ms",
+                             64, 44, 20, ULID_LOW_SUBUNIT_, ULID_MS_NS_, 0},
+    [ULID_VARIANT_SNOWFLAKE] = {"SNOWFLAKE",
+                                "41-bit ms since 2020 + 10-bit machine + "
+                                "13-bit sequence",
+                                64, 41,
+                                ULID_SNOWFLAKE_MACHINE_BITS +
+                                    ULID_SNOWFLAKE_SEQUENCE_BITS,
+                                ULID_LOW_SNOWFLAKE_, ULID_MS_NS_,
+                                ULID_EPOCH_2020_NS},
+    [ULID_VARIANT_32MS] = {"32MS",
+                           "26-bit ms (an 18.6-hour window) + 6-bit random", 32,
+                           26, 6, ULID_LOW_RANDOM_, ULID_MS_NS_, 0},
+    [ULID_VARIANT_32S] = {"32S", "22-bit s (a 48.5-day window) + 10-bit random",
+                          32, 22, 10, ULID_LOW_RANDOM_, 1'000'000'000, 0},
+};
+
+/* The layout of 'type' when it is a variant of 'width' bits (0: any),
+ * else NULL */
+static const ulidLayout_ *ulidLayoutOf_(ulidVariantType type, int width) {
+    if ((unsigned)type >= ULID_VARIANT_COUNT || !ulidLayouts_[type].name ||
+        (width && ulidLayouts_[type].width != width)) {
+        return nullptr;
+    }
+    return &ulidLayouts_[type];
+}
 
 /* The low 'bits' bits of v */
 DK_INLINE_ALWAYS uint64_t ulidLow_(uint64_t v, int bits) {
-    return v & ((UINT64_C(1) << bits) - 1);
+    return bits >= 64 ? v : v & ((UINT64_C(1) << bits) - 1);
 }
 
-/* time above a 'lowBits'-bit low field; time's bits past the word drop */
+/* time above a 'lowBits'-bit low field (time must fit the rest) */
 DK_INLINE_ALWAYS uint64_t ulidPack64_(uint64_t time, uint64_t low,
                                       int lowBits) {
     return (time << lowBits) | ulidLow_(low, lowBits);
 }
 
-DK_INLINE_ALWAYS uint32_t ulidPack32_(uint64_t time, uint64_t low,
-                                      int lowBits) {
-    return (uint32_t)ulidLow_(ulidPack64_(time, low, lowBits), 32);
+/* The span of a layout's time field in ns, saturating at UINT64_MAX */
+static uint64_t ulidLayoutSpanNs_(const ulidLayout_ *l) {
+    uint64_t span = 0;
+    if (l->timeBits >= 64 ||
+        ckd_mul(&span, UINT64_C(1) << l->timeBits, l->unitNs)) {
+        return UINT64_MAX;
+    }
+    return span;
 }
 
 /* ====================================================================
@@ -1153,151 +1222,137 @@ bool ulidVariantConfigValidate(const ulidVariantConfig *config) {
  * Variant Generation
  * ==================================================================== */
 
-void ulid64Generate(ulidGen *g, ulid64_t *out, ulidVariantType type) {
+bool ulid64Generate(ulidGen *g, ulid64_t *out, ulidVariantType type) {
     ulidVariantConfig config;
     ulidVariantConfigInit(&config, type);
-    ulid64GenerateWithConfig(g, out, &config);
+    return ulid64GenerateWithConfig(g, out, &config);
 }
 
-void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
-                              const ulidVariantConfig *config) {
-    if (!g || !out || !config) {
-        return;
-    }
-
-    uint64_t timestampNs = ulidGenNextNs(g);
-    uint64_t random = ulidGenRandom(g);
-
-    switch (config->type) {
-    case ULID_VARIANT_EPOCH2020: {
-        /* 48-bit ns offset from 2020 + 16-bit random */
-        out->data = ulidPack64_(timestampNs - ULID_EPOCH_2020_NS, random,
-                                ULID_EPOCH_LOW_BITS);
-        break;
-    }
-
-    case ULID_VARIANT_EPOCH2024: {
-        /* 48-bit ns offset from 2024 + 16-bit random */
-        out->data = ulidPack64_(timestampNs - ULID_EPOCH_2024_NS, random,
-                                ULID_EPOCH_LOW_BITS);
-        break;
-    }
-
-    case ULID_VARIANT_EPOCHCUSTOM: {
-        /* 48-bit ns offset from custom epoch + 16-bit random */
-        out->data = ulidPack64_(timestampNs - config->customEpochNs, random,
-                                ULID_EPOCH_LOW_BITS);
-        break;
-    }
-
-    case ULID_VARIANT_NS:
-        /* 52-bit ns + 12-bit random */
-        out->data = ulidPack64_(timestampNs, random, ULID_NS_LOW_BITS);
-        break;
-
-    case ULID_VARIANT_US:
-        /* 46-bit us + 18-bit random */
-        out->data = ulidPack64_(timestampNs / 1000, random, ULID_US_LOW_BITS);
-        break;
-
-    case ULID_VARIANT_MS:
-        /* 42-bit ms + 22-bit random */
-        out->data =
-            ulidPack64_(timestampNs / 1'000'000, random, ULID_MS_LOW_BITS);
-        break;
-
-    case ULID_VARIANT_DUALNS:
-        /* DUALNS should use ulidGenerateDualNs (128-bit), not ulid64Generate */
-        out->data = 0;
-        break;
-
-    case ULID_VARIANT_NSCOUNT:
-        /* 40-bit ns + 24-bit counter: the same-instant burst position
-         * from the generator */
-        out->data =
-            ulidPack64_(timestampNs, g->collisionCount, ULID_NSCOUNT_LOW_BITS);
-        break;
-
-    case ULID_VARIANT_HYBRID:
-        /* 44-bit us + 20-bit ns delta */
-        out->data = ulidPack64_(timestampNs / 1000, timestampNs % 1000,
-                                ULID_HYBRID_LOW_BITS);
-        break;
-
-    case ULID_VARIANT_SNOWFLAKE: {
-        /* 41-bit ms + 10-bit machine + 13-bit sequence */
-        uint64_t timestampMs = timestampNs / 1'000'000;
-
-        /* Handle sequence counter.  The ms never goes backwards (emission
-         * times strictly increase), and one already past this clock's (see
-         * below) is used as is. */
-        if (timestampMs <= g->snowflakeLastMs) {
-            timestampMs = g->snowflakeLastMs;
-            g->snowflakeSeq++;
-            if (g->snowflakeSeq >= (1U << ULID_SNOWFLAKE_SEQUENCE_BITS)) {
-                /* The ms is out of sequence numbers: take the next ms
-                 * now rather than wait for it, and move the emission
-                 * watermark there so later ids sort after this one */
-                timestampMs++;
-                g->snowflakeLastMs = timestampMs;
-                g->snowflakeSeq = 0;
-                const uint64_t msStart = timestampMs * 1'000'000;
-                if (g->lastEmittedNs < msStart) {
-                    g->lastEmittedNs = msStart;
-                }
-            }
-        } else {
-            g->snowflakeLastMs = timestampMs;
+/* SNOWFLAKE's machine id and sequence for millisecond '*ms' (moved to the
+ * next ms when this one's sequence is spent) */
+static uint64_t ulidSnowflakeLow_(ulidGen *g, uint64_t *ms, uint16_t machine,
+                                  uint64_t epochNs) {
+    /* The ms never goes backwards (emission times strictly increase), and
+     * one already past this clock's (see below) is used as is */
+    if (*ms <= g->snowflakeLastMs) {
+        *ms = g->snowflakeLastMs;
+        g->snowflakeSeq++;
+        if (g->snowflakeSeq >= (1U << ULID_SNOWFLAKE_SEQUENCE_BITS)) {
+            /* Out of sequence numbers: take the next ms now rather than
+             * wait for it, and move the emission watermark there so later
+             * ids sort after this one */
+            (*ms)++;
+            g->snowflakeLastMs = *ms;
             g->snowflakeSeq = 0;
+            const uint64_t msStart = epochNs + *ms * ULID_MS_NS_;
+            if (g->lastEmittedNs < msStart) {
+                g->lastEmittedNs = msStart;
+            }
         }
-        const uint64_t machineAndSequence = ulidPack64_(
-            config->machineId, g->snowflakeSeq, ULID_SNOWFLAKE_SEQUENCE_BITS);
-        out->data = ulidPack64_(timestampMs, machineAndSequence,
-                                ULID_SNOWFLAKE_LOW_BITS);
+    } else {
+        g->snowflakeLastMs = *ms;
+        g->snowflakeSeq = 0;
+    }
+    return ulidPack64_(machine, g->snowflakeSeq, ULID_SNOWFLAKE_SEQUENCE_BITS);
+}
+
+bool ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
+                              const ulidVariantConfig *config) {
+    if (out) {
+        out->data = 0;
+    }
+    const ulidLayout_ *l = config ? ulidLayoutOf_(config->type, 64) : nullptr;
+    if (!g || !out || !l ||
+        (l->low == ULID_LOW_SNOWFLAKE_ &&
+         config->machineId >> ULID_SNOWFLAKE_MACHINE_BITS)) {
+        return false; /* (a machine id past its field) */
+    }
+
+    const uint64_t epochNs = config->type == ULID_VARIANT_EPOCHCUSTOM
+                                 ? config->customEpochNs
+                                 : l->epochNs;
+    const uint64_t now = ulidGenNextNs(g);
+    if (now < epochNs) {
+        return false; /* before the variant's epoch */
+    }
+    const uint64_t sinceNs = now - epochNs;
+    uint64_t unit = sinceNs / l->unitNs;
+    if (unit >> l->timeBits) {
+        return false; /* past what the time field holds */
+    }
+
+    uint64_t low = 0;
+    switch (l->low) {
+    case ULID_LOW_RANDOM_:
+        low = ulidGenRandom(g);
+        break;
+    case ULID_LOW_SUBUNIT_:
+        low = sinceNs % l->unitNs;
+        break;
+    case ULID_LOW_SNOWFLAKE_:
+        low = ulidSnowflakeLow_(g, &unit, config->machineId, epochNs);
+        if (unit >> l->timeBits) {
+            return false;
+        }
+        break;
+    case ULID_LOW_COUNTER_: /* from 0 in a new unit; see below */
+    case ULID_LOW_DUAL_:
         break;
     }
 
-    case ULID_VARIANT_32MS:
-    case ULID_VARIANT_32S:
-        /* These should use ulid32Generate, not ulid64Generate */
-        out->data = 0;
-        break;
+    uint64_t id = ulidPack64_(unit, low, l->lowBits);
 
-    default:
-        out->data = 0;
-        break;
+    /* Within the last id's time unit (or behind it, after a unit was
+     * borrowed) a random or counted id is the last one plus one, as
+     * ULID's monotonic rule has it: ids of one variant from one generator
+     * strictly increase, and a unit's random start bounds how many it
+     * holds.  Spending the low field carries into the time field,
+     * borrowing the next unit. */
+    const uint8_t key = (uint8_t)(config->type + 1);
+    if ((l->low == ULID_LOW_RANDOM_ || l->low == ULID_LOW_COUNTER_) &&
+        g->last64Type == key && unit <= g->last64 >> l->lowBits) {
+        id = g->last64 + 1;
+        if (id == 0 || (id >> l->lowBits) >> l->timeBits) {
+            return false; /* the time field is spent */
+        }
     }
+
+    g->last64 = id;
+    g->last64Type = key;
+    out->data = id;
+    return true;
 }
 
 /* ====================================================================
  * 32-bit Variant Generation
  * ==================================================================== */
 
-void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
-    if (!g || !out) {
-        return;
-    }
-
-    uint64_t timestampNs = ulidGenNextNs(g);
-    uint64_t random = ulidGenRandom(g);
-
-    switch (type) {
-    case ULID_VARIANT_32MS:
-        /* 26-bit ms + 6-bit random */
-        out->data =
-            ulidPack32_(timestampNs / 1'000'000, random, ULID_32MS_LOW_BITS);
-        break;
-
-    case ULID_VARIANT_32S:
-        /* 22-bit s + 10-bit random */
-        out->data =
-            ulidPack32_(timestampNs / 1'000'000'000, random, ULID_32S_LOW_BITS);
-        break;
-
-    default:
+bool ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
+    if (out) {
         out->data = 0;
-        break;
     }
+    const ulidLayout_ *l = ulidLayoutOf_(type, 32);
+    if (!g || !out || !l) {
+        return false;
+    }
+
+    /* The time field is a window: the Unix time modulo its span */
+    const uint64_t unit = ulidLow_(ulidGenNextNs(g) / l->unitNs, l->timeBits);
+    uint32_t id = (uint32_t)ulidPack64_(unit, ulidGenRandom(g), l->lowBits);
+
+    /* Within the last id's time unit, the last one plus one while the low
+     * field has room (a window wraps, so no unit is borrowed: past the
+     * room the id is random again) */
+    const uint8_t key = (uint8_t)(type + 1);
+    if (g->last32Type == key && unit == g->last32 >> l->lowBits &&
+        ulidLow_(g->last32, l->lowBits) != ulidLow_(UINT64_MAX, l->lowBits)) {
+        id = g->last32 + 1;
+    }
+
+    g->last32 = id;
+    g->last32Type = key;
+    out->data = id;
+    return true;
 }
 
 /* ====================================================================
@@ -1666,86 +1721,32 @@ uint64_t ulidGetSecondTimestampNsInterleaved(const ulid_t *id) {
  * Timestamp Extraction
  * ==================================================================== */
 
+/* The time an id of layout 'l' names, from its time field and (HYBRID)
+ * its sub-unit nanoseconds: ns since the layout's epoch */
+static uint64_t ulidLayoutSinceNs_(const ulidLayout_ *l, uint64_t bits) {
+    uint64_t since = (bits >> l->lowBits) * l->unitNs;
+    if (l->low == ULID_LOW_SUBUNIT_) {
+        since += ulidLow_(bits, l->lowBits);
+    }
+    return since;
+}
+
 uint64_t ulid64GetTimestampNs(const ulid64_t *id, ulidVariantType type) {
-    if (!id) {
+    const ulidLayout_ *l = ulidLayoutOf_(type, 64);
+    if (!id || !l) {
         return 0;
     }
-
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-        return ULID_EPOCH_2020_NS + (id->data >> ULID_EPOCH_LOW_BITS);
-
-    case ULID_VARIANT_EPOCH2024:
-        return ULID_EPOCH_2024_NS + (id->data >> ULID_EPOCH_LOW_BITS);
-
-    case ULID_VARIANT_EPOCHCUSTOM:
-        /* Just the offset: the epoch lives in the generating config, so
-         * the caller adds it. */
-        return id->data >> ULID_EPOCH_LOW_BITS;
-
-    case ULID_VARIANT_NS:
-        return id->data >> ULID_NS_LOW_BITS;
-
-    case ULID_VARIANT_US:
-        return (id->data >> ULID_US_LOW_BITS) * 1000;
-
-    case ULID_VARIANT_MS:
-        return (id->data >> ULID_MS_LOW_BITS) * 1'000'000;
-
-    case ULID_VARIANT_DUALNS:
-        return id->data >> ULID_DUALNS_LOW_BITS; /* first timestamp */
-
-    case ULID_VARIANT_NSCOUNT:
-        return id->data >> ULID_NSCOUNT_LOW_BITS;
-
-    case ULID_VARIANT_HYBRID:
-        return (id->data >> ULID_HYBRID_LOW_BITS) * 1000 +
-               ulidLow_(id->data, ULID_HYBRID_LOW_BITS);
-
-    case ULID_VARIANT_SNOWFLAKE:
-        return (id->data >> ULID_SNOWFLAKE_LOW_BITS) * 1'000'000;
-
-    default:
-        return 0;
-    }
+    /* EPOCHCUSTOM: since its epoch (the config holds it; the caller adds
+     * it) */
+    return l->epochNs + ulidLayoutSinceNs_(l, id->data);
 }
 
 uint64_t ulid64GetRandom(const ulid64_t *id, ulidVariantType type) {
-    if (!id) {
+    const ulidLayout_ *l = ulidLayoutOf_(type, 64);
+    if (!id || !l) {
         return 0;
     }
-
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-    case ULID_VARIANT_EPOCH2024:
-    case ULID_VARIANT_EPOCHCUSTOM:
-        return ulidLow_(id->data, ULID_EPOCH_LOW_BITS);
-
-    case ULID_VARIANT_NS:
-        return ulidLow_(id->data, ULID_NS_LOW_BITS);
-
-    case ULID_VARIANT_US:
-        return ulidLow_(id->data, ULID_US_LOW_BITS);
-
-    case ULID_VARIANT_MS:
-        return ulidLow_(id->data, ULID_MS_LOW_BITS);
-
-    case ULID_VARIANT_DUALNS:
-        return ulidLow_(id->data, ULID_DUALNS_LOW_BITS); /* 2nd timestamp */
-
-    case ULID_VARIANT_NSCOUNT:
-        return ulidLow_(id->data, ULID_NSCOUNT_LOW_BITS); /* Counter */
-
-    case ULID_VARIANT_HYBRID:
-        return ulidLow_(id->data, ULID_HYBRID_LOW_BITS); /* ns delta */
-
-    case ULID_VARIANT_SNOWFLAKE:
-        /* Machine ID + Sequence */
-        return ulidLow_(id->data, ULID_SNOWFLAKE_LOW_BITS);
-
-    default:
-        return 0;
-    }
+    return ulidLow_(id->data, l->lowBits);
 }
 
 /* ====================================================================
@@ -1753,10 +1754,7 @@ uint64_t ulid64GetRandom(const ulid64_t *id, ulidVariantType type) {
  * ==================================================================== */
 
 uint32_t ulid64GetCounter(const ulid64_t *id) {
-    if (!id) {
-        return 0;
-    }
-    return (uint32_t)ulidLow_(id->data, ULID_NSCOUNT_LOW_BITS);
+    return (uint32_t)ulid64GetRandom(id, ULID_VARIANT_MSCOUNT);
 }
 
 uint16_t ulid64GetSnowflakeMachineId(const ulid64_t *id) {
@@ -1775,10 +1773,7 @@ uint16_t ulid64GetSnowflakeSequence(const ulid64_t *id) {
 }
 
 uint32_t ulid64GetNsDelta(const ulid64_t *id) {
-    if (!id) {
-        return 0;
-    }
-    return (uint32_t)ulidLow_(id->data, ULID_HYBRID_LOW_BITS);
+    return (uint32_t)ulid64GetRandom(id, ULID_VARIANT_HYBRID);
 }
 
 /* ====================================================================
@@ -1786,37 +1781,19 @@ uint32_t ulid64GetNsDelta(const ulid64_t *id) {
  * ==================================================================== */
 
 uint64_t ulid32GetTimestampNs(const ulid32_t *id, ulidVariantType type) {
-    if (!id) {
+    const ulidLayout_ *l = ulidLayoutOf_(type, 32);
+    if (!id || !l) {
         return 0;
     }
-
-    switch (type) {
-    case ULID_VARIANT_32MS:
-        return (uint64_t)(id->data >> ULID_32MS_LOW_BITS) * 1'000'000;
-
-    case ULID_VARIANT_32S:
-        return (uint64_t)(id->data >> ULID_32S_LOW_BITS) * 1'000'000'000;
-
-    default:
-        return 0;
-    }
+    return ulidLayoutSinceNs_(l, id->data);
 }
 
 uint32_t ulid32GetRandom(const ulid32_t *id, ulidVariantType type) {
-    if (!id) {
+    const ulidLayout_ *l = ulidLayoutOf_(type, 32);
+    if (!id || !l) {
         return 0;
     }
-
-    switch (type) {
-    case ULID_VARIANT_32MS:
-        return (uint32_t)ulidLow_(id->data, ULID_32MS_LOW_BITS);
-
-    case ULID_VARIANT_32S:
-        return (uint32_t)ulidLow_(id->data, ULID_32S_LOW_BITS);
-
-    default:
-        return 0;
-    }
+    return (uint32_t)ulidLow_(id->data, l->lowBits);
 }
 
 /* ====================================================================
@@ -1830,7 +1807,9 @@ size_t ulid64GenerateAndEncode(ulidGen *g, char *out, size_t outLen,
     }
 
     ulid64_t id;
-    ulid64Generate(g, &id, type);
+    if (!ulid64Generate(g, &id, type)) {
+        return 0;
+    }
     return ulid64Encode(&id, out, outLen);
 }
 
@@ -1896,143 +1875,46 @@ void ulid32Copy(ulid32_t *dst, const ulid32_t *src) {
  * Metadata API
  * ==================================================================== */
 
-/* Each variant's name and layout, one row per variant */
-static const struct {
-    const char *name;
-    const char *description;
-} ulidVariantInfo_[ULID_VARIANT_COUNT] = {
-    [ULID_VARIANT_EPOCH2020] = {"EPOCH2020",
-                                "48-bit ns offset from 2020 + 16-bit random"},
-    [ULID_VARIANT_EPOCH2024] = {"EPOCH2024",
-                                "48-bit ns offset from 2024 + 16-bit random"},
-    [ULID_VARIANT_EPOCHCUSTOM] =
-        {"EPOCHCUSTOM", "48-bit ns offset from custom epoch + 16-bit random"},
-    [ULID_VARIANT_NS] = {"NS", "52-bit ns + 12-bit random"},
-    [ULID_VARIANT_US] = {"US", "46-bit us + 18-bit random"},
-    [ULID_VARIANT_MS] = {"MS", "42-bit ms + 22-bit random"},
-    [ULID_VARIANT_DUALNS] = {"DUALNS",
-                             "64-bit ns + 64-bit ns (128-bit dual timestamp)"},
-    [ULID_VARIANT_DUALNS_INTERLEAVED] =
-        {"DUALNS_INTERLEAVED",
-         "128-bit bit-interleaved dual ns timestamps (sortable)"},
-    [ULID_VARIANT_NSCOUNT] = {"NSCOUNT", "40-bit ns + 24-bit counter"},
-    [ULID_VARIANT_HYBRID] = {"HYBRID", "44-bit us + 20-bit ns delta"},
-    [ULID_VARIANT_SNOWFLAKE] = {"SNOWFLAKE",
-                                "41-bit ms + 10-bit machine + 13-bit sequence"},
-    [ULID_VARIANT_32MS] = {"32MS", "26-bit ms + 6-bit random (32-bit)"},
-    [ULID_VARIANT_32S] = {"32S", "22-bit s + 10-bit random (32-bit)"},
-};
-
 const char *ulid64GetVariantName(ulidVariantType type) {
-    if ((size_t)type >= countof(ulidVariantInfo_) ||
-        !ulidVariantInfo_[type].name) {
-        return "UNKNOWN";
-    }
-
-    return ulidVariantInfo_[type].name;
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    return l ? l->name : "UNKNOWN";
 }
 
 const char *ulid64GetVariantDescription(ulidVariantType type) {
-    if ((size_t)type >= countof(ulidVariantInfo_) ||
-        !ulidVariantInfo_[type].description) {
-        return "Unknown variant";
-    }
-
-    return ulidVariantInfo_[type].description;
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    return l ? l->description : "Unknown variant";
 }
 
 double ulid64GetVariantRangeYears(ulidVariantType type) {
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-    case ULID_VARIANT_EPOCH2024:
-    case ULID_VARIANT_EPOCHCUSTOM:
-        /* 48 bits of nanoseconds = ~8925 years */
-        return 8925.0;
-    case ULID_VARIANT_NS:
-        /* 52 bits of nanoseconds = ~142.8 years */
-        return 142.8;
-    case ULID_VARIANT_US:
-        /* 46 bits of microseconds = ~2236 years */
-        return 2236.0;
-    case ULID_VARIANT_MS:
-        /* 42 bits of milliseconds = ~139,364 years */
-        return 139364.0;
-    case ULID_VARIANT_DUALNS:
-    case ULID_VARIANT_DUALNS_INTERLEAVED:
-        /* 64 bits of nanoseconds = ~585 years */
-        return 585.0;
-    case ULID_VARIANT_NSCOUNT:
-        /* 40 bits of nanoseconds = ~18.3 minutes */
-        return 18.3 / (365.25 * 24 * 60);
-    case ULID_VARIANT_HYBRID:
-        /* 44 bits of microseconds = ~558 years */
-        return 558.0;
-    case ULID_VARIANT_SNOWFLAKE:
-        /* 41 bits of milliseconds = ~69.7 years */
-        return 69.7;
-    case ULID_VARIANT_32MS:
-        /* 26 bits of milliseconds = ~776 days */
-        return 776.0 / 365.25;
-    case ULID_VARIANT_32S:
-        /* 22 bits of seconds = ~48.5 days */
-        return 48.5 / 365.25;
-    default:
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    if (!l) {
         return 0.0;
     }
+    /* A Julian year of nanoseconds; the span exactly, in double */
+    constexpr double nsPerYear = 365.25 * 86400.0 * 1e9;
+    return ldexp((double)l->unitNs, l->timeBits) / nsPerYear;
 }
 
 uint8_t ulid64GetVariantRandomBits(ulidVariantType type) {
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-    case ULID_VARIANT_EPOCH2024:
-    case ULID_VARIANT_EPOCHCUSTOM:
-        return ULID_EPOCH_LOW_BITS;
-    case ULID_VARIANT_NS:
-        return ULID_NS_LOW_BITS;
-    case ULID_VARIANT_US:
-        return ULID_US_LOW_BITS;
-    case ULID_VARIANT_MS:
-        return ULID_MS_LOW_BITS;
-    case ULID_VARIANT_DUALNS:
-        return 0; /* No random, dual timestamp */
-    case ULID_VARIANT_DUALNS_INTERLEAVED:
-        return 0; /* No random, interleaved dual timestamp */
-    case ULID_VARIANT_NSCOUNT:
-        return ULID_NSCOUNT_LOW_BITS; /* Counter, not random */
-    case ULID_VARIANT_HYBRID:
-        return ULID_HYBRID_LOW_BITS; /* NS delta */
-    case ULID_VARIANT_SNOWFLAKE:
-        return ULID_SNOWFLAKE_SEQUENCE_BITS; /* Sequence */
-    case ULID_VARIANT_32MS:
-        return ULID_32MS_LOW_BITS;
-    case ULID_VARIANT_32S:
-        return ULID_32S_LOW_BITS;
-    default:
-        return 0;
-    }
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    return l && l->low == ULID_LOW_RANDOM_ ? l->lowBits : 0;
 }
 
 const char *ulid64GetVariantPrecision(ulidVariantType type) {
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-    case ULID_VARIANT_EPOCH2024:
-    case ULID_VARIANT_EPOCHCUSTOM:
-    case ULID_VARIANT_NS:
-    case ULID_VARIANT_DUALNS:
-    case ULID_VARIANT_DUALNS_INTERLEAVED:
-    case ULID_VARIANT_NSCOUNT:
-    case ULID_VARIANT_HYBRID:
-        return "ns";
-    case ULID_VARIANT_US:
-        return "us";
-    case ULID_VARIANT_MS:
-    case ULID_VARIANT_SNOWFLAKE:
-    case ULID_VARIANT_32MS:
-        return "ms";
-    case ULID_VARIANT_32S:
-        return "s";
-    default:
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    if (!l) {
         return "unknown";
+    }
+    /* HYBRID's low field carries the nanoseconds below its unit */
+    switch (l->low == ULID_LOW_SUBUNIT_ ? 1 : l->unitNs) {
+    case 1:
+        return "ns";
+    case 1000:
+        return "us";
+    case 1'000'000:
+        return "ms";
+    default:
+        return "s";
     }
 }
 
@@ -2045,42 +1927,33 @@ bool ulid64IsValidVariantType(ulidVariantType type) {
 }
 
 bool ulid64ValidateTimestamp(uint64_t timestampNs, ulidVariantType type) {
-    /* The epoch variants store timestamp - epoch: an earlier timestamp
-     * would underflow into a garbage offset. */
-    if ((type == ULID_VARIANT_EPOCH2020 && timestampNs < ULID_EPOCH_2020_NS) ||
-        (type == ULID_VARIANT_EPOCH2024 && timestampNs < ULID_EPOCH_2024_NS)) {
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    if (!l) {
         return false;
     }
-    uint64_t maxTs = ulid64GetMaxTimestamp(type);
-    return timestampNs <= maxTs;
+    if (l->width != 64) {
+        return true; /* a window, or a full 64-bit dual timestamp */
+    }
+    return timestampNs >= l->epochNs &&
+           timestampNs <= ulid64GetMaxTimestamp(type);
 }
 
 uint64_t ulid64GetMaxTimestamp(ulidVariantType type) {
-    switch (type) {
-    case ULID_VARIANT_EPOCH2020:
-        return ULID_EPOCH_2020_NS + (0xFFFFFFFFFFFFULL);
-    case ULID_VARIANT_EPOCH2024:
-        return ULID_EPOCH_2024_NS + (0xFFFFFFFFFFFFULL);
-    case ULID_VARIANT_EPOCHCUSTOM:
-        /* Cannot determine without knowing the custom epoch */
-        return 0xFFFFFFFFFFFFULL; /* Just return the offset range */
-    case ULID_VARIANT_NS:
-        return 0xFFFFFFFFFFFFFULL; /* 52 bits */
-    case ULID_VARIANT_US:
-        return (0x3FFFFFFFFFFFULL) * 1000; /* 46 bits in us */
-    case ULID_VARIANT_MS:
-        return (0x3FFFFFFFFFFULL) * 1'000'000; /* 42 bits in ms */
-    case ULID_VARIANT_DUALNS:
-        return 0xFFFFFFFFFFFFFFFFULL; /* 64 bits */
-    case ULID_VARIANT_NSCOUNT:
-        return 0xFFFFFFFFFFULL; /* 40 bits */
-    case ULID_VARIANT_HYBRID:
-        return (0xFFFFFFFFFFFULL) * 1000; /* 44 bits in us */
-    case ULID_VARIANT_SNOWFLAKE:
-        return (0x1FFFFFFFFFFULL) * 1'000'000; /* 41 bits in ms */
-    default:
+    const ulidLayout_ *l = ulidLayoutOf_(type, 0);
+    if (!l) {
         return 0;
     }
+    if (l->width == 128) {
+        return UINT64_MAX;
+    }
+    /* The time field's last nanosecond after its epoch (a 32-bit
+     * variant's epoch is 0: its window) */
+    const uint64_t span = ulidLayoutSpanNs_(l);
+    uint64_t last = 0;
+    if (span == UINT64_MAX || ckd_add(&last, l->epochNs, span - 1)) {
+        return UINT64_MAX; /* past what 64-bit Unix ns holds */
+    }
+    return last;
 }
 
 /* ====================================================================
@@ -2140,7 +2013,7 @@ static int ulidTestSign(int v) {
 
 /* Generate one id of `type` with the generator's clock steered to about
  * `atNs`; *before / *after bracket the instant it read. */
-static void ulidTestGenerateAt(ulid64_t *out, ulidVariantType type,
+static bool ulidTestGenerateAt(ulid64_t *out, ulidVariantType type,
                                uint64_t atNs, uint64_t *before,
                                uint64_t *after) {
     ulidGen g;
@@ -2148,9 +2021,38 @@ static void ulidTestGenerateAt(ulid64_t *out, ulidVariantType type,
     /* Unsigned arithmetic: monotonic + offset is atNs modulo 2^64 */
     g.clockOffsetNs = atNs - timeUtilMonotonicNs();
     *before = timeUtilMonotonicNs() + g.clockOffsetNs;
-    ulid64Generate(&g, out, type);
+    const bool made = ulid64Generate(&g, out, type);
     *after = timeUtilMonotonicNs() + g.clockOffsetNs;
+    return made;
 }
+
+/* Each 64- and 32-bit variant's layout as the header states it, apart
+ * from the code's table: epoch, time-field bits, unit, low-field bits,
+ * random bits, precision and range in years */
+static const struct ulidTestLayout {
+    ulidVariantType type;
+    uint64_t epochNs;
+    uint8_t timeBits;
+    uint64_t unitNs;
+    uint8_t lowBits;
+    uint8_t randomBits;
+    const char *precision;
+    double years;
+} ulidTestLayouts_[] = {
+    {ULID_VARIANT_EPOCH2020, ULID_EPOCH_2020_NS, 48, 1'000'000, 16, 16, "ms",
+     8919.4},
+    {ULID_VARIANT_EPOCH2024, ULID_EPOCH_2024_NS, 48, 1'000'000, 16, 16, "ms",
+     8919.4},
+    {ULID_VARIANT_NS, 0, 62, 1, 2, 2, "ns", 146.14},
+    {ULID_VARIANT_US, 0, 52, 1000, 12, 12, "us", 142.71},
+    {ULID_VARIANT_MS, 0, 42, 1'000'000, 22, 22, "ms", 139.37},
+    {ULID_VARIANT_MSCOUNT, 0, 42, 1'000'000, 22, 0, "ms", 139.37},
+    {ULID_VARIANT_HYBRID, 0, 44, 1'000'000, 20, 0, "ns", 557.46},
+    {ULID_VARIANT_SNOWFLAKE, ULID_EPOCH_2020_NS, 41, 1'000'000, 23, 0, "ms",
+     69.68},
+    {ULID_VARIANT_32MS, 0, 26, 1'000'000, 6, 6, "ms", 0.0021266},
+    {ULID_VARIANT_32S, 0, 22, 1'000'000'000, 10, 10, "s", 0.13291},
+};
 
 typedef __uint128_t ulidInterleaveFn(uint64_t ts1, uint64_t ts2);
 typedef void ulidDeinterleaveFn(__uint128_t interleaved, uint64_t *ts1,
@@ -2426,10 +2328,10 @@ int ulidTest(int, char *[]) {
             ulidVariantConfigValidate(nullptr)) {
             ERR("config validation");
         }
+        /* EPOCHCUSTOM's bound is an offset: 2^48 ms, past 64-bit ns */
         if (ulid64GetMaxTimestamp(ULID_VARIANT_DUALNS) != UINT64_MAX ||
             ulid64GetMaxTimestamp(ULID_VARIANT_COUNT) != 0 ||
-            ulid64GetMaxTimestamp(ULID_VARIANT_EPOCHCUSTOM) !=
-                0xFFFFFFFFFFFFULL) {
+            ulid64GetMaxTimestamp(ULID_VARIANT_EPOCHCUSTOM) != UINT64_MAX) {
             ERR("max timestamps");
         }
     }
@@ -2454,41 +2356,32 @@ int ulidTest(int, char *[]) {
          * the extracted timestamp is the generation instant to the
          * variant's precision, the random/sequence part fits its bits,
          * and the range check agrees */
-        static const struct {
-            ulidVariantType type;
-            uint64_t lowNs;
-            uint64_t precisionNs;
-        } variants[] = {
-            {ULID_VARIANT_EPOCH2020, ULID_EPOCH_2020_NS, 1},
-            {ULID_VARIANT_EPOCH2024, ULID_EPOCH_2024_NS, 1},
-            {ULID_VARIANT_NS, 0, 1},
-            {ULID_VARIANT_US, 0, 1000},
-            {ULID_VARIANT_MS, 0, 1'000'000},
-            {ULID_VARIANT_NSCOUNT, 0, 1},
-            {ULID_VARIANT_HYBRID, 0, 1},
-            {ULID_VARIANT_SNOWFLAKE, 0, 1'000'000},
-        };
-        for (size_t v = 0; v < countof(variants); v++) {
-            const ulidVariantType type = variants[v].type;
-            const uint64_t lo = variants[v].lowNs;
+        for (size_t v = 0; v < countof(ulidTestLayouts_); v++) {
+            const struct ulidTestLayout *t = &ulidTestLayouts_[v];
+            if (t->type == ULID_VARIANT_32MS || t->type == ULID_VARIANT_32S) {
+                continue;
+            }
+            const ulidVariantType type = t->type;
+            const uint64_t lo = t->epochNs;
             const uint64_t hi = ulid64GetMaxTimestamp(type);
-            const uint64_t prec = variants[v].precisionNs;
+            const uint64_t prec = strcmp(t->precision, "ns") ? t->unitNs : 1;
             const uint64_t points[2] = {lo + (hi - lo) / 2, hi - 10'000'000};
             for (size_t p = 0; p < 2; p++) {
                 ulid64_t id;
                 uint64_t before = 0;
                 uint64_t after = 0;
-                ulidTestGenerateAt(&id, type, points[p], &before, &after);
+                const bool made =
+                    ulidTestGenerateAt(&id, type, points[p], &before, &after);
                 const uint64_t got = ulid64GetTimestampNs(&id, type);
-                const uint8_t bits = ulid64GetVariantRandomBits(type);
                 const uint64_t rnd = ulid64GetRandom(&id, type);
-                if (got < before / prec * prec || got > after / prec * prec ||
-                    !ulid64ValidateTimestamp(got, type) ||
-                    (bits < 64 && rnd >> bits) || bits == 0) {
+                /* At precision: the instant less its sub-unit part */
+                const uint64_t floorBefore = lo + (before - lo) / prec * prec;
+                if (!made || got < floorBefore || got > after ||
+                    !ulid64ValidateTimestamp(got, type) || rnd >> t->lowBits) {
                     ERR("%s at %" PRIu64 ": got %" PRIu64 " outside [%" PRIu64
-                        ", %" PRIu64 "], random %" PRIu64 " of %u bits",
+                        ", %" PRIu64 "], low field %" PRIu64 " of %u bits",
                         ulid64GetVariantName(type), points[p], got, before,
-                        after, rnd, bits);
+                        after, rnd, t->lowBits);
                 }
             }
             if (!ulid64ValidateTimestamp(hi, type) ||
@@ -2512,6 +2405,192 @@ int ulidTest(int, char *[]) {
         }
     }
 
+    TEST(
+        "every 64-bit variant holds the real clock: its timestamp reads back") {
+        /* Generated now, with the wall clock: each id is made, its
+         * timestamp is the generation instant to the variant's precision
+         * (EPOCHCUSTOM's offset plus its epoch), and now is in range */
+        for (size_t v = 0; v < countof(ulidTestLayouts_); v++) {
+            const struct ulidTestLayout *t = &ulidTestLayouts_[v];
+            if (t->type == ULID_VARIANT_32MS || t->type == ULID_VARIANT_32S) {
+                continue;
+            }
+            ulidGen gen;
+            ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+            const uint64_t before = timeUtilNs();
+            ulid64_t id;
+            const bool made = ulid64Generate(&gen, &id, t->type);
+            const uint64_t after = timeUtilNs();
+            const uint64_t prec = strcmp(t->precision, "ns") ? t->unitNs : 1;
+            const uint64_t got = ulid64GetTimestampNs(&id, t->type);
+            const uint64_t floorBefore =
+                t->epochNs + (before - t->epochNs) / prec * prec;
+            if (!made || got < floorBefore || got > after ||
+                !ulid64ValidateTimestamp(before, t->type)) {
+                ERR("%s now: made %d, timestamp %" PRIu64 " not in [%" PRIu64
+                    ", %" PRIu64 "]",
+                    ulid64GetVariantName(t->type), made, got, floorBefore,
+                    after);
+            }
+        }
+
+        ulidGen gen;
+        ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+        const ulidVariantConfig custom = {.type = ULID_VARIANT_EPOCHCUSTOM,
+                                          .customEpochNs = ULID_EPOCH_2020_NS};
+        const uint64_t before = timeUtilNs();
+        ulid64_t id;
+        const bool made = ulid64GenerateWithConfig(&gen, &id, &custom);
+        const uint64_t after = timeUtilNs();
+        const uint64_t at = ULID_EPOCH_2020_NS +
+                            ulid64GetTimestampNs(&id, ULID_VARIANT_EPOCHCUSTOM);
+        if (!made || at + 1'000'000 <= before || at > after) {
+            ERR("EPOCHCUSTOM now: offset plus epoch %" PRIu64
+                " not the generation instant",
+                at);
+        }
+    }
+
+    TEST("variant metadata matches the stated layouts") {
+        /* Name, range in years (to 0.1%), random bits, precision, and the
+         * range bounds: the epoch is the first instant held, the epoch
+         * plus the span less 1 ns the last */
+        for (size_t v = 0; v < countof(ulidTestLayouts_); v++) {
+            const struct ulidTestLayout *t = &ulidTestLayouts_[v];
+            const double years = ulid64GetVariantRangeYears(t->type);
+            const uint64_t max = ulid64GetMaxTimestamp(t->type);
+            const bool is64 =
+                t->type != ULID_VARIANT_32MS && t->type != ULID_VARIANT_32S;
+            /* Saturating at UINT64_MAX: 2^48 ms of EPOCH runs past what a
+             * 64-bit Unix-ns timestamp holds (the year 2554) */
+            const __uint128_t last128 =
+                (__uint128_t)t->epochNs +
+                ((__uint128_t)1 << t->timeBits) * t->unitNs - 1;
+            const uint64_t wantMax =
+                last128 > UINT64_MAX ? UINT64_MAX : (uint64_t)last128;
+            if (fabs(years - t->years) > t->years * 0.001 ||
+                ulid64GetVariantRandomBits(t->type) != t->randomBits ||
+                strcmp(ulid64GetVariantPrecision(t->type), t->precision) ||
+                max != wantMax ||
+                (is64 && (!ulid64ValidateTimestamp(max, t->type) ||
+                          ulid64ValidateTimestamp(max + 1, t->type)))) {
+                ERR("%s: %.6f years (want %.6f), %u random bits, %s, max "
+                    "%" PRIu64 " (want %" PRIu64 ")",
+                    ulid64GetVariantName(t->type), years, t->years,
+                    ulid64GetVariantRandomBits(t->type),
+                    ulid64GetVariantPrecision(t->type), max, wantMax);
+            }
+        }
+        if (fabs(ulid64GetVariantRangeYears(ULID_VARIANT_DUALNS) - 584.55) >
+                0.6 ||
+            ulid64GetVariantRandomBits(ULID_VARIANT_DUALNS) != 0 ||
+            ulid64GetMaxTimestamp(ULID_VARIANT_DUALNS) != UINT64_MAX ||
+            ulid64GetVariantRangeYears(ULID_VARIANT_COUNT) != 0.0) {
+            ERR("dual-timestamp or unknown-type metadata");
+        }
+    }
+
+    TEST("ids of one variant strictly increase within one time unit, and "
+         "a spent low field borrows the next unit") {
+        /* The watermark set to a ms boundary a second ahead: 70,000 ids
+         * land in one ms (1 ns apart).  Every random or counted variant
+         * gives strictly increasing ids; MSCOUNT's counter is the id's
+         * position; EPOCH2024's 16 random bits run out after 65,536 and
+         * the ids go on into the next ms */
+        static const ulidVariantType burst[] = {
+            ULID_VARIANT_EPOCH2024, ULID_VARIANT_NS,      ULID_VARIANT_US,
+            ULID_VARIANT_MS,        ULID_VARIANT_MSCOUNT, ULID_VARIANT_HYBRID};
+        for (size_t v = 0; v < countof(burst); v++) {
+            ulidGen gen;
+            ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+            gen.lastEmittedNs = (timeUtilNs() / 1'000'000 + 1000) * 1'000'000;
+            ulid64_t first = {};
+            ulid64_t prev = {};
+            for (uint32_t i = 0; i < 70'000; i++) {
+                ulid64_t id;
+                if (!ulid64Generate(&gen, &id, burst[v]) ||
+                    (i && ulid64Compare(&prev, &id) >= 0) ||
+                    (burst[v] == ULID_VARIANT_MSCOUNT &&
+                     ulid64GetCounter(&id) != i)) {
+                    ERR("%s burst id %" PRIu32 " made or ordered wrong",
+                        ulid64GetVariantName(burst[v]), i);
+                    break;
+                }
+                if (!i) {
+                    first = id;
+                }
+                prev = id;
+            }
+            if (burst[v] == ULID_VARIANT_EPOCH2024 &&
+                ulid64GetTimestampNs(&prev, ULID_VARIANT_EPOCH2024) !=
+                    ulid64GetTimestampNs(&first, ULID_VARIANT_EPOCH2024) +
+                        1'000'000) {
+                ERR("EPOCH2024 did not borrow the next ms once its low "
+                    "field was spent");
+            }
+        }
+
+        /* 32-bit: within one unit, each id follows the last while the low
+         * field has room above it (a window wraps: no unit is borrowed) */
+        ulidGen gen;
+        ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+        gen.lastEmittedNs = (timeUtilNs() / 1'000'000'000 + 10) * 1'000'000'000;
+        ulid32_t prev32 = {};
+        uint32_t followed = 0;
+        for (uint32_t i = 0; i < 64; i++) {
+            ulid32_t id;
+            const bool room = i && ulid32GetRandom(&prev32, ULID_VARIANT_32S) <
+                                       (1u << 10) - 1;
+            if (!ulid32Generate(&gen, &id, ULID_VARIANT_32S) ||
+                (room && id.data != prev32.data + 1)) {
+                ERR("32S burst id %" PRIu32 " made or ordered wrong", i);
+                break;
+            }
+            followed += room;
+            prev32 = id;
+        }
+        if (!followed) {
+            ERR("no 32S id followed the one before");
+        }
+    }
+
+    TEST("a clock outside a variant's range generates no id") {
+        /* Before EPOCH2024's epoch, one unit past NS's and MSCOUNT's
+         * last instant, and SNOWFLAKE with a machine id past 10 bits:
+         * false, and the id is zero */
+        static const struct {
+            ulidVariantType type;
+            bool beforeEpoch;
+        } outside[] = {{ULID_VARIANT_EPOCH2024, true},
+                       {ULID_VARIANT_NS, false},
+                       {ULID_VARIANT_MSCOUNT, false},
+                       {ULID_VARIANT_SNOWFLAKE, false}};
+        for (size_t o = 0; o < countof(outside); o++) {
+            const ulidVariantType type = outside[o].type;
+            const uint64_t at = outside[o].beforeEpoch
+                                    ? ULID_EPOCH_2024_NS - 1'000'000'000
+                                    : ulid64GetMaxTimestamp(type) + 2'000'000;
+            ulid64_t id = {.data = 7};
+            uint64_t before = 0;
+            uint64_t after = 0;
+            if (ulidTestGenerateAt(&id, type, at, &before, &after) ||
+                !ulid64IsZero(&id)) {
+                ERR("%s generated outside its range",
+                    ulid64GetVariantName(type));
+            }
+        }
+        ulidGen gen;
+        ulidGenInit(&gen, ULID_CLOCK_REALTIME);
+        const ulidVariantConfig wide = {.type = ULID_VARIANT_SNOWFLAKE,
+                                        .machineId = 1024};
+        ulid64_t id = {.data = 7};
+        if (ulid64GenerateWithConfig(&gen, &id, &wide) || !ulid64IsZero(&id) ||
+            ulid64Generate(&gen, &id, ULID_VARIANT_DUALNS) ||
+            ulid32Generate(&gen, &(ulid32_t){}, ULID_VARIANT_MS)) {
+            ERR("a bad machine id or a wrong-width type generated an id");
+        }
+    }
+
     /* Shared generator for tests that don't exercise state itself */
     ulidGen g;
     ulidGenInit(&g, ULID_CLOCK_REALTIME);
@@ -2530,15 +2609,17 @@ int ulidTest(int, char *[]) {
     TEST("64/32-bit accessors: fields fit their layouts; zero/copy/clear") {
         ulid64_t a;
         ulid64_t b;
-        ulid64Generate(&g, &a, ULID_VARIANT_NSCOUNT);
-        ulid64Generate(&g, &b, ULID_VARIANT_NSCOUNT);
-        /* NSCOUNT: 40-bit ns + 24-bit counter, ids rising */
-        if (ulid64GetCounter(&a) >> 24 || ulid64Compare(&a, &b) >= 0) {
-            ERR("NSCOUNT counter outside 24 bits or ids not rising");
+        ulid64Generate(&g, &a, ULID_VARIANT_MSCOUNT);
+        ulid64Generate(&g, &b, ULID_VARIANT_MSCOUNT);
+        /* MSCOUNT: 42-bit ms + 22-bit counter, ids rising */
+        if (ulid64GetCounter(&a) >> 22 || ulid64Compare(&a, &b) >= 0) {
+            ERR("MSCOUNT counter outside 22 bits or ids not rising");
         }
         ulid64Generate(&g, &a, ULID_VARIANT_HYBRID);
-        if (ulid64GetNsDelta(&a) >> 20) {
-            ERR("HYBRID ns delta outside 20 bits");
+        if (ulid64GetNsDelta(&a) >= 1'000'000 ||
+            ulid64GetTimestampNs(&a, ULID_VARIANT_HYBRID) % 1'000'000 !=
+                ulid64GetNsDelta(&a)) {
+            ERR("HYBRID's ns within the ms is not the timestamp's sub-ms part");
         }
         ulid64Generate(&g, &a, ULID_VARIANT_MS);
         if (ulid64GetRandom(&a, ULID_VARIANT_MS) >> 22) {
@@ -3455,13 +3536,13 @@ int ulidTest(int, char *[]) {
     }
 
     TEST("ulid64 collision resistance") {
-        /* Test NSCOUNT variant which has monotonic counter guarantees */
+        /* MSCOUNT counts within each ms: no two ids collide */
         const int32_t numIds = 10000;
         cleanerName(zfree, Ulid64s) ulid64_t *ids =
             zcalloc(numIds, sizeof(ulid64_t));
 
         for (int32_t i = 0; i < numIds; i++) {
-            ulid64Generate(&g, &ids[i], ULID_VARIANT_NSCOUNT);
+            ulid64Generate(&g, &ids[i], ULID_VARIANT_MSCOUNT);
         }
 
         int32_t collisions = 0;
@@ -3475,7 +3556,7 @@ int ulidTest(int, char *[]) {
         }
 
         if (collisions > 0) {
-            ERR("Found %d collisions in %d IDs (NSCOUNT should have zero)",
+            ERR("Found %d collisions in %d IDs (MSCOUNT should have zero)",
                 collisions, numIds);
         }
     }
@@ -3871,7 +3952,7 @@ int ulidTest(int, char *[]) {
         ulidVariantType variants[] = {
             ULID_VARIANT_EPOCH2020, ULID_VARIANT_EPOCH2024,
             ULID_VARIANT_NS,        ULID_VARIANT_US,
-            ULID_VARIANT_MS,        ULID_VARIANT_NSCOUNT,
+            ULID_VARIANT_MS,        ULID_VARIANT_MSCOUNT,
             ULID_VARIANT_HYBRID,    ULID_VARIANT_SNOWFLAKE};
 
         for (size_t v = 0; v < countof(variants); v++) {
@@ -3928,13 +4009,18 @@ int ulidTest(int, char *[]) {
         }
 
         ulid64_t id;
-        ulid64GenerateWithConfig(&g, &id, &config);
+        const uint64_t before = timeUtilNs();
+        const bool made = ulid64GenerateWithConfig(&g, &id, &config);
+        const uint64_t after = timeUtilNs();
 
-        uint64_t extractedOffset =
+        /* The offset from the custom epoch, to the ms */
+        const uint64_t offset =
             ulid64GetTimestampNs(&id, ULID_VARIANT_EPOCHCUSTOM);
-        /* Note: extractedOffset is just the offset, not the full timestamp */
-        if (extractedOffset > 0xFFFFFFFFFFFFULL) {
-            ERR("Custom epoch offset overflow: %" PRIu64, extractedOffset);
+        if (!made || offset % 1'000'000 ||
+            ULID_EPOCH_2020_NS + offset + 1'000'000 <= before ||
+            ULID_EPOCH_2020_NS + offset > after) {
+            ERR("custom epoch offset %" PRIu64 " is not the time since 2020",
+                offset);
         }
     }
 

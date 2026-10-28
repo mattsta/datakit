@@ -82,10 +82,16 @@ typedef struct ulidGen {
     uint64_t rng[2];          /* xoroshiro128+ state; {0,0} = unseeded */
     uint64_t lastEmittedNs;   /* emission watermark: next id > this */
     uint64_t clockOffsetNs;   /* realtime - monotonic, captured at init */
-    uint32_t collisionCount;  /* same-instant burst length (NSCOUNT) */
     uint32_t clockSource;     /* ulidClockSource */
     uint64_t snowflakeLastMs; /* SNOWFLAKE per-ms sequence state */
     uint16_t snowflakeSeq;
+    /* The last 64- and 32-bit variant ids and their types (+1; 0: none),
+     * so ids of one variant from one generator strictly increase even
+     * within one unit of their time field */
+    uint8_t last64Type;
+    uint8_t last32Type;
+    uint32_t last32;
+    uint64_t last64;
 } ulidGen;
 
 /* Seed the RNG and configure the clock source. Returns false only on
@@ -215,29 +221,42 @@ void ulidCopy(ulid_t *dst, const ulid_t *src);
  * ULID Variants - Compact Time-Ordered IDs
  * ==================================================================== */
 
-/* Variant type enumeration */
+/* Variant type enumeration.  Every 64-bit variant is a time field above
+ * a low field; the time counts units from an epoch (the Unix epoch unless
+ * named), and the range is how long that field lasts from its epoch.
+ * Ids of one variant from one generator strictly increase: within one
+ * unit of the time field a random low field takes the last id plus one
+ * (a counter counts), and a field spent borrows the next unit.  A clock
+ * outside a variant's range generates no id (false, the id zero).
+ * ulid64GetVariant* reports each layout. */
 typedef enum ulidVariantType {
-    /* Epoch-offset variants (extended range) */
-    ULID_VARIANT_EPOCH2020,   /* 48-bit ns offset from 2020 + 16-bit random */
-    ULID_VARIANT_EPOCH2024,   /* 48-bit ns offset from 2024 + 16-bit random */
-    ULID_VARIANT_EPOCHCUSTOM, /* 48-bit ns offset from custom + 16-bit random */
+    /* Epoch-offset variants: ms since an epoch, about 8,925 years */
+    ULID_VARIANT_EPOCH2020,   /* 48-bit ms since 2020 + 16-bit random */
+    ULID_VARIANT_EPOCH2024,   /* 48-bit ms since 2024 + 16-bit random */
+    ULID_VARIANT_EPOCHCUSTOM, /* 48-bit ms since a configured epoch +
+                                 16-bit random */
 
-    /* Precision trade-off variants */
-    ULID_VARIANT_NS, /* 52-bit ns + 12-bit random */
-    ULID_VARIANT_US, /* 46-bit us + 18-bit random */
-    ULID_VARIANT_MS, /* 42-bit ms + 22-bit random */
+    /* Precision trade-off variants (since 1970) */
+    ULID_VARIANT_NS, /* 62-bit ns + 2-bit random: to 2116 (one generator's
+                        ids are unique; across generators use 128 bits) */
+    ULID_VARIANT_US, /* 52-bit us + 12-bit random: to 2112 */
+    ULID_VARIANT_MS, /* 42-bit ms + 22-bit random: to 2109 */
 
-    /* Creative/specialized variants */
+    /* Specialized variants */
     ULID_VARIANT_DUALNS, /* 64-bit ns + 64-bit ns (128-bit dual timestamp) */
     ULID_VARIANT_DUALNS_INTERLEAVED, /* 128-bit bit-interleaved dual ns
                                         timestamps */
-    ULID_VARIANT_NSCOUNT,            /* 40-bit ns + 24-bit counter */
-    ULID_VARIANT_HYBRID,             /* 44-bit us + 20-bit ns delta */
-    ULID_VARIANT_SNOWFLAKE, /* 41-bit ms + 10-bit machine + 13-bit seq */
+    ULID_VARIANT_MSCOUNT,   /* 42-bit ms + 22-bit counter from 0 each ms:
+                               to 2109, no random bits */
+    ULID_VARIANT_HYBRID,    /* 44-bit ms + 20-bit ns within the ms: ns
+                               precision to 2527 */
+    ULID_VARIANT_SNOWFLAKE, /* 41-bit ms since 2020 + 10-bit machine +
+                               13-bit sequence: to 2089 */
 
-    /* 32-bit compact variants */
-    ULID_VARIANT_32MS, /* 26-bit ms + 6-bit random */
-    ULID_VARIANT_32S,  /* 22-bit s + 10-bit random */
+    /* 32-bit compact variants: their time field is a window that wraps,
+     * so ids sort only within one window */
+    ULID_VARIANT_32MS, /* 26-bit ms (18.6-hour window) + 6-bit random */
+    ULID_VARIANT_32S,  /* 22-bit s (48.5-day window) + 10-bit random */
 
     ULID_VARIANT_COUNT
 } ulidVariantType;
@@ -264,11 +283,12 @@ typedef struct ulidVariantConfig {
  * 64-bit Variant API
  * ==================================================================== */
 
-/* Generate ULID64 with specific variant type (uses defaults) */
-void ulid64Generate(ulidGen *g, ulid64_t *out, ulidVariantType type);
-
-/* Generate ULID64 with custom configuration */
-void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
+/* Generate a ULID64 of 'type' (default configuration) or as 'config'
+ * says.  False, with '*out' zero, for a type that is not a 64-bit
+ * variant, or a clock outside the variant's range (before its epoch or
+ * past what its time field holds). */
+bool ulid64Generate(ulidGen *g, ulid64_t *out, ulidVariantType type);
+bool ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
                               const ulidVariantConfig *config);
 
 /* Encode ULID64 to Base36 string (13 chars + null terminator) */
@@ -280,14 +300,17 @@ size_t ulid64Encode(const ulid64_t *id, char *out, size_t outLen);
  * then left unwritten. */
 bool ulid64Decode(const char *str, ulid64_t *out);
 
-/* Extract timestamp from ULID64 (returns nanoseconds since Unix epoch) */
+/* The id's timestamp: nanoseconds since the Unix epoch, to the variant's
+ * precision (EPOCHCUSTOM: since its epoch, which the caller adds) */
 uint64_t ulid64GetTimestampNs(const ulid64_t *id, ulidVariantType type);
 
-/* Extract random/sequence component from ULID64 */
+/* The id's low field: its random bits, MSCOUNT's counter, HYBRID's ns
+ * within the ms, or SNOWFLAKE's machine id and sequence */
 uint64_t ulid64GetRandom(const ulid64_t *id, ulidVariantType type);
 
 /* Convenience: generate and encode in one call; returns the encoded
- * length, 0 without a generator or with too small a buffer */
+ * length, 0 without a generator, with too small a buffer, or when no id
+ * is generated */
 size_t ulid64GenerateAndEncode(ulidGen *g, char *out, size_t outLen,
                                ulidVariantType type);
 
@@ -350,7 +373,7 @@ uint64_t ulidGetSecondTimestampNsInterleaved(const ulid_t *id);
  * Variant-Specific Extraction APIs (64-bit variants)
  * ==================================================================== */
 
-/* Extract counter from NSCOUNT variant */
+/* MSCOUNT's counter: the id's position among its ms (from 0) */
 uint32_t ulid64GetCounter(const ulid64_t *id);
 
 /* Extract machine ID from SNOWFLAKE variant */
@@ -359,7 +382,7 @@ uint16_t ulid64GetSnowflakeMachineId(const ulid64_t *id);
 /* Extract sequence number from SNOWFLAKE variant */
 uint16_t ulid64GetSnowflakeSequence(const ulid64_t *id);
 
-/* Extract nanosecond delta from HYBRID variant */
+/* HYBRID's nanoseconds within its millisecond (0..999,999) */
 uint32_t ulid64GetNsDelta(const ulid64_t *id);
 
 /* ====================================================================
@@ -398,21 +421,25 @@ const char *ulid64GetVariantName(ulidVariantType type);
 /* Get detailed description of variant type */
 const char *ulid64GetVariantDescription(ulidVariantType type);
 
-/* Get maximum timestamp range in years for variant */
+/* How long the variant's time field lasts from its epoch, in years (a
+ * 32-bit variant's window) */
 double ulid64GetVariantRangeYears(ulidVariantType type);
 
-/* Get number of random bits for variant */
+/* The random bits in an id (0 for MSCOUNT, HYBRID, SNOWFLAKE and the dual
+ * timestamps, whose low fields are counted or exact) */
 uint8_t ulid64GetVariantRandomBits(ulidVariantType type);
 
-/* Get timestamp precision for variant (ns, us, ms, s) */
+/* The timestamp's precision: "ns", "us", "ms" or "s" */
 const char *ulid64GetVariantPrecision(ulidVariantType type);
 
 /* ====================================================================
  * 32-bit Compact Variant API
  * ==================================================================== */
 
-/* Generate ULID32 with specific variant type */
-void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type);
+/* Generate a ULID32 of 'type'.  The time field is a window that wraps
+ * (any clock is in range); ids of one generator increase within one unit
+ * of it.  False, '*out' zero, for a type that is not a 32-bit variant. */
+bool ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type);
 
 /* Encode ULID32 to Base36 string (7 chars + null terminator) */
 size_t ulid32Encode(const ulid32_t *id, char *out, size_t outLen);
@@ -423,7 +450,8 @@ size_t ulid32Encode(const ulid32_t *id, char *out, size_t outLen);
  * left unwritten. */
 bool ulid32Decode(const char *str, ulid32_t *out);
 
-/* Extract timestamp from ULID32 (returns nanoseconds since Unix epoch) */
+/* The id's time within its window, in nanoseconds (the Unix time modulo
+ * the window: 32MS 2^26 ms, 32S 2^22 s) */
 uint64_t ulid32GetTimestampNs(const ulid32_t *id, ulidVariantType type);
 
 /* Extract random component from ULID32 */
@@ -448,10 +476,14 @@ void ulid32Copy(ulid32_t *dst, const ulid32_t *src);
 /* Check if variant type is valid */
 bool ulid64IsValidVariantType(ulidVariantType type);
 
-/* Check if timestamp would overflow for given variant type */
+/* Whether the variant holds 'timestampNs' (Unix ns; EPOCHCUSTOM: ns
+ * since its epoch): from its epoch to ulid64GetMaxTimestamp.  Any time
+ * fits a 32-bit variant's window and a dual timestamp. */
 bool ulid64ValidateTimestamp(uint64_t timestampNs, ulidVariantType type);
 
-/* Get maximum safe timestamp for variant (nanoseconds since Unix epoch) */
+/* The last nanosecond the variant's time field holds (Unix ns;
+ * EPOCHCUSTOM: since its epoch; a 32-bit variant: its window's last
+ * nanosecond); 0 for an unknown type */
 uint64_t ulid64GetMaxTimestamp(ulidVariantType type);
 
 #ifdef DATAKIT_TEST
