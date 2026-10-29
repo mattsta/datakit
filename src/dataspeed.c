@@ -20,6 +20,7 @@
 
 #include "cleaner.h"
 #include "dj.h"
+#include "dkRandom.h"
 #include "perf.h"
 #include "strDoubleFormat.h"
 
@@ -584,10 +585,84 @@ static void bandwidth_copy_opt(uint64_t *dst, const uint64_t *src,
 /* Note: memcpy/memset already use SIMD internally on modern systems,
  * so there's no need for separate SIMD bandwidth measurements. */
 
+/* ============================================================================
+ * Run settings
+ * ============================================================================
+ */
+
+/* 'config', or the defaults for NULL */
+static dataspeedConfig dataspeedConfigOf_(const dataspeedConfig *config) {
+    return config ? *config : dataspeedDefaultConfig();
+}
+
+/* Progress output, only when the run is verbose */
+#define DS_SAY(c, ...)                                                         \
+    do {                                                                       \
+        if ((c)->verbose) {                                                    \
+            printf(__VA_ARGS__);                                               \
+        }                                                                      \
+    } while (0)
+
+/* How long each measurement runs */
+static uint64_t dataspeedTargetNs_(const dataspeedConfig *c) {
+    return (uint64_t)(c->min_duration_ms ? c->min_duration_ms : 1) * 1'000'000;
+}
+
+/* 'n' kept within [1, max_iterations] */
+static size_t dataspeedClampIterations_(const dataspeedConfig *c, double n) {
+    const double cap = c->max_iterations ? (double)c->max_iterations : 1e18;
+    return n < 1 ? 1 : n > cap ? (size_t)cap : (size_t)n;
+}
+
+typedef enum dataspeedLevel_ {
+    DS_L1 = 0,
+    DS_L2,
+    DS_L3,
+    DS_RAM,
+    DS_LEVELS,
+} dataspeedLevel_;
+
+static const char *const dataspeedLevelNames_[DS_LEVELS] = {"L1", "L2", "L3",
+                                                            "RAM"};
+
+/* The working set that sits in each level (see dataspeed.h): half the
+ * level's size, at least twice the level below, in 64-byte units */
+static void dataspeedWorkingSets_(const dataspeedCacheInfo *cache,
+                                  size_t sets[DS_LEVELS]) {
+    const size_t l1 = cache->l1d_size ? cache->l1d_size : 32 * 1024;
+    const size_t l2 = cache->l2_size > 2 * l1 ? cache->l2_size : 8 * l1;
+    sets[DS_L1] = l1 / 2;
+    sets[DS_L2] = l2 / 2 > 2 * l1 ? l2 / 2 : 2 * l1;
+    sets[DS_L3] = cache->l3_size / 2 > 2 * l2 ? cache->l3_size / 2 : 2 * l2;
+    const size_t largest = cache->l3_size > l2 ? cache->l3_size : l2;
+    sets[DS_RAM] =
+        4 * largest > ((size_t)64 << 20) ? 4 * largest : (size_t)64 << 20;
+    for (size_t i = 0; i < DS_LEVELS; i++) {
+        sets[i] &= ~(size_t)63;
+    }
+}
+
+/* The working sets of this machine ('system', or detected for NULL) */
+static void dataspeedSystemSets_(const dataspeedSystemInfo *system,
+                                 size_t sets[DS_LEVELS]) {
+    dataspeedSystemInfo detected;
+    if (!system) {
+        dataspeedGetSystemInfo(&detected);
+        system = &detected;
+    }
+
+    dataspeedWorkingSets_(&system->cache, sets);
+}
+
+/* Bandwidth of 'func' over 'size_bytes': passes are grouped so one sample
+ * takes about a hundredth of the target time, and samples are taken
+ * until the target time and at least ten (at most a hundred) */
 static void benchmark_bandwidth(const char *name, size_t size_bytes,
                                 void (*func)(uint64_t *, size_t, uint64_t *),
                                 dataspeedBandwidthResult *result,
-                                bool verbose) {
+                                const dataspeedConfig *c) {
+    memset(result, 0, sizeof(*result));
+    result->working_set_bytes = size_bytes;
     const size_t count = size_bytes / sizeof(uint64_t);
     uint64_t *data = nullptr;
     uint64_t *data2 = nullptr; /* For copy */
@@ -599,39 +674,42 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
     memset(data, 0xAB, size_bytes);
     memset(data2, 0xCD, size_bytes);
 
-    /* Warmup */
-    for (int i = 0; i < 3; i++) {
+    for (size_t i = 0; i < c->warmup_iterations; i++) {
         func(data, count, data2);
     }
 
-    /* Collect samples */
-    const size_t max_samples = 100;
-    double samples[100];
+    const uint64_t target = dataspeedTargetNs_(c);
+    const uint64_t oneStart = timeUtilMonotonicNs();
+    func(data, count, data2);
+    const uint64_t one = timeUtilMonotonicNs() - oneStart;
+    const size_t reps =
+        dataspeedClampIterations_(c, (double)target / 100 / (one ? one : 1));
+
+    constexpr size_t max_samples = 100;
+    double samples[max_samples];
     size_t sample_count = 0;
-
-    uint64_t total_start = timeUtilMonotonicNs();
-    uint64_t min_duration_ns = 500000000; /* 500ms */
-
+    const uint64_t total_start = timeUtilMonotonicNs();
     while (sample_count < max_samples) {
         TIMING_BARRIER(); /* Ensure timing is accurate */
         uint64_t start = timeUtilMonotonicNs();
         uint64_t start_tsc = dataspeed_rdtsc();
         TIMING_BARRIER();
 
-        func(data, count, data2);
+        for (size_t r = 0; r < reps; r++) {
+            func(data, count, data2);
+        }
 
         TIMING_BARRIER();
         uint64_t end_tsc = dataspeed_rdtsc();
         uint64_t end = timeUtilMonotonicNs();
         TIMING_BARRIER();
 
-        double elapsed_s = (end - start) / 1e9;
-        samples[sample_count++] = size_bytes / elapsed_s / 1e9; /* GB/s */
+        const double bytes = (double)size_bytes * (double)reps;
+        const uint64_t elapsed = end > start ? end - start : 1;
+        samples[sample_count++] = bytes / (double)elapsed; /* bytes/ns = GB/s */
+        result->cycles_per_byte = (double)(end_tsc - start_tsc) / bytes;
 
-        /* Store cycles for last sample */
-        result->cycles_per_byte = (double)(end_tsc - start_tsc) / size_bytes;
-
-        if (timeUtilMonotonicNs() - total_start > min_duration_ns &&
+        if (timeUtilMonotonicNs() - total_start > target &&
             sample_count >= 10) {
             break;
         }
@@ -640,10 +718,10 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
     compute_stats(samples, sample_count, &result->stats);
     result->bandwidth_gbs = result->stats.median;
 
-    if (verbose) {
-        printf("  %-20s %6.2f GB/s (%.4f cycles/byte)\n", name,
-               result->bandwidth_gbs, result->cycles_per_byte);
-    }
+    char buf[32];
+    DS_SAY(c, "  %-6s %-10s %8.2f GB/s (%.4f ticks/byte)\n", name,
+           format_bytes(size_bytes, buf, sizeof(buf)), result->bandwidth_gbs,
+           result->cycles_per_byte);
 
     zfree(data);
     zfree(data2);
@@ -660,22 +738,29 @@ static void bw_copy(uint64_t *d, size_t c, uint64_t *d2) {
     bandwidth_copy_opt(d, d2, c);
 }
 
-void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb) {
+void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb,
+                              const dataspeedConfig *config) {
+    const dataspeedConfig c = dataspeedConfigOf_(config);
     memset(results, 0, sizeof(*results));
 
-    size_t size_bytes = size_mb * (1ULL << 20);
-    bool verbose = true;
+    size_t size_bytes;
+    if (size_mb || c.memory_mb) {
+        size_bytes = (size_mb ? size_mb : c.memory_mb) << 20;
+    } else {
+        size_t sets[DS_LEVELS];
+        dataspeedSystemSets_(nullptr, sets);
+        size_bytes = sets[DS_RAM];
+    }
 
-    printf("=== Memory Bandwidth (%zu MB working set) ===\n", size_mb);
+    char buf[32];
+    DS_SAY(&c, "=== Memory Bandwidth (%s working set) ===\n",
+           format_bytes(size_bytes, buf, sizeof(buf)));
 
-    benchmark_bandwidth("Sequential Read", size_bytes, bw_read,
-                        &results->seq_read, verbose);
-    benchmark_bandwidth("Sequential Write", size_bytes, bw_write,
-                        &results->seq_write, verbose);
-    benchmark_bandwidth("Sequential Copy", size_bytes, bw_copy,
-                        &results->seq_copy, verbose);
+    benchmark_bandwidth("Read", size_bytes, bw_read, &results->seq_read, &c);
+    benchmark_bandwidth("Write", size_bytes, bw_write, &results->seq_write, &c);
+    benchmark_bandwidth("Copy", size_bytes, bw_copy, &results->seq_copy, &c);
 
-    printf("\n");
+    DS_SAY(&c, "\n");
 }
 
 /* ============================================================================
@@ -699,8 +784,9 @@ static void **create_pointer_chain(size_t size_bytes) {
     for (size_t i = 0; i < count; i++) {
         indices[i] = i;
     }
+    uint64_t rng = 0xda7a5eed;
     for (size_t i = count - 1; i > 0; i--) {
-        size_t j = rand() % (i + 1);
+        const size_t j = (size_t)dkSplitmix64Bounded(&rng, i + 1);
         size_t tmp = indices[i];
         indices[i] = indices[j];
         indices[j] = tmp;
@@ -730,29 +816,35 @@ static size_t chase_pointers(void **start, size_t iterations) {
     return (size_t)p; /* Return value prevents optimization */
 }
 
+/* Latency through a chain over 'size_bytes': 'max_samples' samples (at
+ * most 20) whose chases together take about the target time */
 static void benchmark_latency_at_size(size_t size_bytes,
                                       dataspeedLatencyResult *result,
-                                      bool verbose) {
+                                      const dataspeedConfig *c,
+                                      size_t max_samples) {
+    memset(result, 0, sizeof(*result));
+    result->working_set_bytes = size_bytes;
     void **chain = create_pointer_chain(size_bytes);
 
-    /* Warmup */
-    chase_pointers(chain, 10000);
-
-    /* Determine iteration count for ~100ms */
+    /* One sample's chases: a hundred thousand timed, scaled to the
+     * sample's share of the target */
     size_t iterations = 100'000;
     uint64_t start = timeUtilMonotonicNs();
     chase_pointers(chain, iterations);
     uint64_t elapsed = timeUtilMonotonicNs() - start;
+    const double perSample =
+        (double)dataspeedTargetNs_(c) / (double)max_samples;
+    iterations = dataspeedClampIterations_(
+        c, (double)iterations * perSample / (double)(elapsed ? elapsed : 1));
 
-    /* Scale to ~100ms */
-    iterations = (size_t)((double)iterations * 100'000'000.0 / elapsed);
-    if (iterations < 10000) {
-        iterations = 10000;
+    for (size_t w = 0; w < c->warmup_iterations; w++) {
+        chase_pointers(chain, iterations);
     }
 
-    /* Collect samples */
-    const size_t max_samples = 20;
     double samples[20];
+    if (max_samples > countof(samples)) {
+        max_samples = countof(samples);
+    }
 
     for (size_t s = 0; s < max_samples; s++) {
         TIMING_BARRIER();
@@ -775,32 +867,30 @@ static void benchmark_latency_at_size(size_t size_bytes,
     compute_stats(samples, max_samples, &result->stats);
     result->latency_ns = result->stats.median;
 
-    char buf[32];
-    if (verbose) {
-        printf("  %-12s %6.2f ns (%5.1f cycles)\n",
-               format_bytes(size_bytes, buf, sizeof(buf)), result->latency_ns,
-               result->cycles);
-    }
-
     zfree(chain);
 }
 
-void dataspeedBenchmarkLatency(dataspeedLatencyResults *results) {
+void dataspeedBenchmarkLatency(dataspeedLatencyResults *results,
+                               const dataspeedSystemInfo *system,
+                               const dataspeedConfig *config) {
+    const dataspeedConfig c = dataspeedConfigOf_(config);
     memset(results, 0, sizeof(*results));
+    size_t sets[DS_LEVELS];
+    dataspeedSystemSets_(system, sets);
 
-    printf("=== Memory Latency (pointer chasing) ===\n");
+    DS_SAY(&c, "=== Memory Latency (pointer chasing) ===\n");
+    dataspeedLatencyResult *const targets[DS_LEVELS] = {
+        &results->l1_latency, &results->l2_latency, &results->l3_latency,
+        &results->mem_latency};
+    for (size_t i = 0; i < DS_LEVELS; i++) {
+        benchmark_latency_at_size(sets[i], targets[i], &c, 20);
+        char buf[32];
+        DS_SAY(&c, "  %-6s %-10s %8.2f ns (%5.1f ticks)\n",
+               dataspeedLevelNames_[i], format_bytes(sets[i], buf, sizeof(buf)),
+               targets[i]->latency_ns, targets[i]->cycles);
+    }
 
-    /* Test at sizes targeting each cache level */
-    benchmark_latency_at_size(32 * 1024, &results->l1_latency,
-                              true); /* 32 KB - L1 */
-    benchmark_latency_at_size(256 * 1024, &results->l2_latency,
-                              true); /* 256 KB - L2 */
-    benchmark_latency_at_size(8 * 1024 * 1024, &results->l3_latency,
-                              true); /* 8 MB - L3 */
-    benchmark_latency_at_size(64 * 1024 * 1024, &results->mem_latency,
-                              true); /* 64 MB - RAM */
-
-    printf("\n");
+    DS_SAY(&c, "\n");
 }
 
 /* ============================================================================
@@ -808,30 +898,83 @@ void dataspeedBenchmarkLatency(dataspeedLatencyResults *results) {
  * ============================================================================
  */
 
-void dataspeedBenchmarkCacheHierarchy(dataspeedCacheResults *results) {
-    memset(results, 0, sizeof(*results));
+/* The cache levels a latency curve over growing working sets shows:
+ * walking up, a step is a latency at least 1.3 times the previous one's,
+ * steps on consecutive points are one level's edge, and each edge's level
+ * is the largest set before it.  Fills up to three levels (the rest 0);
+ * returns how many it found. */
+static size_t dataspeedCacheSteps_(const size_t *sizes, const double *ns,
+                                   size_t n, size_t levels[3]) {
+    levels[0] = levels[1] = levels[2] = 0;
+    size_t found = 0;
+    bool inStep = false;
+    for (size_t i = 1; i < n && found < 3; i++) {
+        const bool step = ns[i] >= 1.3 * ns[i - 1];
+        if (step && !inStep) {
+            levels[found++] = sizes[i - 1];
+        }
 
-    printf("=== Cache Bandwidth by Level ===\n");
-
-    /* Test bandwidth at different sizes to see cache effects */
-    size_t sizes[] = {
-        32 * 1024,       /* L1 (~32KB) */
-        256 * 1024,      /* L2 (~256KB) */
-        4 * 1024 * 1024, /* L3 (~4MB per core) */
-        64 * 1024 * 1024 /* Main memory */
-    };
-
-    dataspeedBandwidthResult *targets[] = {
-        &results->l1_bandwidth, &results->l2_bandwidth, &results->l3_bandwidth,
-        &results->mem_bandwidth};
-
-    const char *names[] = {"L1 (32KB)", "L2 (256KB)", "L3 (4MB)", "RAM (64MB)"};
-
-    for (int i = 0; i < 4; i++) {
-        benchmark_bandwidth(names[i], sizes[i], bw_read, targets[i], true);
+        inStep = step;
     }
 
-    printf("\n");
+    return found;
+}
+
+/* Latency at every power of two from 4 KB to the RAM working set, briefly
+ * (an eighth of the target time each), and the levels its steps show */
+static void dataspeedCacheSweep_(dataspeedCacheResults *results,
+                                 const size_t sets[DS_LEVELS],
+                                 const dataspeedConfig *c) {
+    dataspeedConfig brief = *c;
+    brief.min_duration_ms = c->min_duration_ms / 8 ? c->min_duration_ms / 8 : 1;
+    brief.warmup_iterations = 1;
+
+    size_t sizes[40];
+    double ns[40];
+    size_t n = 0;
+    for (size_t size = 4096; size <= sets[DS_RAM] && n < countof(sizes);
+         size *= 2) {
+        dataspeedLatencyResult r;
+        benchmark_latency_at_size(size, &r, &brief, 5);
+        sizes[n] = size;
+        ns[n++] = r.latency_ns;
+    }
+
+    size_t levels[3];
+    dataspeedCacheSteps_(sizes, ns, n, levels);
+    results->detected_l1_size = levels[0];
+    results->detected_l2_size = levels[1];
+    results->detected_l3_size = levels[2];
+
+    char b1[32], b2[32], b3[32];
+    DS_SAY(c, "  Latency steps after: %s, %s, %s\n",
+           levels[0] ? format_bytes(levels[0], b1, sizeof(b1)) : "-",
+           levels[1] ? format_bytes(levels[1], b2, sizeof(b2)) : "-",
+           levels[2] ? format_bytes(levels[2], b3, sizeof(b3)) : "-");
+}
+
+void dataspeedBenchmarkCacheHierarchy(dataspeedCacheResults *results,
+                                      const dataspeedSystemInfo *system,
+                                      const dataspeedConfig *config) {
+    const dataspeedConfig c = dataspeedConfigOf_(config);
+    memset(results, 0, sizeof(*results));
+    size_t sets[DS_LEVELS];
+    dataspeedSystemSets_(system, sets);
+
+    DS_SAY(&c, "=== Cache Bandwidth by Level ===\n");
+    dataspeedBandwidthResult *const targets[DS_LEVELS] = {
+        &results->l1_bandwidth, &results->l2_bandwidth, &results->l3_bandwidth,
+        &results->mem_bandwidth};
+    for (size_t i = 0; i < DS_LEVELS; i++) {
+        benchmark_bandwidth(dataspeedLevelNames_[i], sets[i], bw_read,
+                            targets[i], &c);
+    }
+
+    if (c.include_latency) {
+        dataspeedCacheSweep_(results, sets, &c);
+    }
+
+    DS_SAY(&c, "\n");
 }
 
 /* ============================================================================
@@ -931,6 +1074,61 @@ static double bench_float_fma(size_t iterations) {
     return result;
 }
 
+DATASPEED_BENCHMARK_FUNC
+static uint64_t bench_int_div(size_t iterations) {
+    /* Each divisor is odd and above 1, and each dividend is refilled, so
+     * no chain reaches zero */
+    uint64_t a = UINT64_MAX, b = UINT64_MAX - 2, c = UINT64_MAX - 4,
+             d = UINT64_MAX - 6;
+    COMPILER_BARRIER();
+    for (size_t i = 0; i < iterations; i++) {
+        a = a / 3 + 0x9E3779B97F4A7C15ULL;
+        b = b / 5 + 0x9E3779B97F4A7C15ULL;
+        c = c / 7 + 0x9E3779B97F4A7C15ULL;
+        d = d / 9 + 0x9E3779B97F4A7C15ULL;
+    }
+    COMPILER_BARRIER();
+    uint64_t result = a + b + c + d;
+    DO_NOT_OPTIMIZE(result);
+    return result;
+}
+
+DATASPEED_BENCHMARK_FUNC
+static double bench_float_div(size_t iterations) {
+    /* Divisors just below 1 and refills keep every value normal */
+    double a = 1.5, b = 2.5, c = 3.5, d = 4.5;
+    COMPILER_BARRIER();
+    for (size_t i = 0; i < iterations; i++) {
+        a = a / 0.9999 - 0.0001;
+        b = b / 0.9998 - 0.0002;
+        c = c / 0.9997 - 0.0003;
+        d = d / 0.9996 - 0.0004;
+    }
+    COMPILER_BARRIER();
+    double result = a + b + c + d;
+    DO_NOT_OPTIMIZE(result);
+    return result;
+}
+
+/* A conditional branch per element of 'pattern' (4096 entries, cycled) */
+DATASPEED_BENCHMARK_FUNC
+static uint64_t bench_branch(const uint8_t *pattern, size_t iterations) {
+    uint64_t taken = 0;
+    uint64_t other = 0;
+    COMPILER_BARRIER();
+    for (size_t i = 0; i < iterations; i++) {
+        if (pattern[i & 4095]) {
+            taken++;
+        } else {
+            other += i;
+        }
+    }
+    COMPILER_BARRIER();
+    uint64_t result = taken ^ other;
+    DO_NOT_OPTIMIZE(result);
+    return result;
+}
+
 /* Function call overhead measurement */
 DATASPEED_BENCHMARK_FUNC
 static size_t dummy_call(void) {
@@ -938,92 +1136,116 @@ static size_t dummy_call(void) {
     return 42;
 }
 
-void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
+static double bench_calls(size_t iterations) {
+    size_t total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        total += dummy_call();
+    }
+    DO_NOT_OPTIMIZE(total);
+    return (double)total;
+}
+
+/* The branch patterns: alternating (predicted) and random bits */
+static uint8_t dataspeedBranchAlternate_[4096];
+static uint8_t dataspeedBranchRandom_[4096];
+
+static double bench_branch_alternate(size_t iterations) {
+    return (double)bench_branch(dataspeedBranchAlternate_, iterations);
+}
+
+static double bench_branch_random(size_t iterations) {
+    return (double)bench_branch(dataspeedBranchRandom_, iterations);
+}
+
+static double bench_int_add_d(size_t n) {
+    return (double)bench_int_add(n);
+}
+static double bench_int_mul_d(size_t n) {
+    return (double)bench_int_mul(n);
+}
+static double bench_int_div_d(size_t n) {
+    return (double)bench_int_div(n);
+}
+
+/* Nanoseconds per iteration of 'fn': the count grows fourfold until a run
+ * takes a tenth of the target (the growing runs are the warmup), is
+ * scaled to the target, and that run is timed */
+static double dataspeedTimeLoop_(double (*fn)(size_t),
+                                 const dataspeedConfig *c) {
+    const uint64_t target = dataspeedTargetNs_(c);
+    size_t n = 1000;
+    uint64_t elapsed = 0;
+    for (;;) {
+        const uint64_t start = timeUtilMonotonicNs();
+        double r = fn(n);
+        DO_NOT_OPTIMIZE(r);
+        elapsed = timeUtilMonotonicNs() - start;
+        const size_t next = dataspeedClampIterations_(c, (double)n * 4);
+        if (elapsed >= target / 10 || next == n) {
+            break;
+        }
+
+        n = next;
+    }
+
+    n = dataspeedClampIterations_(c, (double)n * (double)target /
+                                         (double)(elapsed ? elapsed : 1));
+    TIMING_BARRIER();
+    const uint64_t start = timeUtilMonotonicNs();
+    TIMING_BARRIER();
+    double r = fn(n);
+    DO_NOT_OPTIMIZE(r);
+    TIMING_BARRIER();
+    elapsed = timeUtilMonotonicNs() - start;
+    TIMING_BARRIER();
+    return (double)elapsed / (double)n;
+}
+
+void dataspeedBenchmarkCPU(dataspeedCPUResults *results,
+                           const dataspeedConfig *config) {
+    const dataspeedConfig c = dataspeedConfigOf_(config);
     memset(results, 0, sizeof(*results));
 
-    printf("=== CPU Operations ===\n");
-
-    const size_t iterations = 100'000'000; /* 100M iterations */
-    uint64_t start, elapsed;
-    uint64_t r1;
-    double r3, r4, r5;
-
-    /* Integer add (8 ops per iteration) */
-    TIMING_BARRIER();
-    start = timeUtilMonotonicNs();
-    TIMING_BARRIER();
-    r1 = bench_int_add(iterations);
-    DO_NOT_OPTIMIZE(r1);
-    TIMING_BARRIER();
-    elapsed = timeUtilMonotonicNs() - start;
-    TIMING_BARRIER();
-    results->int_add_gops = (iterations * 8.0) / elapsed; /* ops/ns = Gops */
-    printf("  Int Add:     %6.2f Gops/s\n", results->int_add_gops);
-
-    /* Integer mul (4 ops per iteration) */
-    TIMING_BARRIER();
-    start = timeUtilMonotonicNs();
-    TIMING_BARRIER();
-    r1 = bench_int_mul(iterations / 10);
-    DO_NOT_OPTIMIZE(r1);
-    TIMING_BARRIER();
-    elapsed = timeUtilMonotonicNs() - start;
-    TIMING_BARRIER();
-    results->int_mul_gops = ((iterations / 10) * 4.0) / elapsed;
-    printf("  Int Mul:     %6.2f Gops/s\n", results->int_mul_gops);
-
-    /* Float add (8 ops per iteration) */
-    TIMING_BARRIER();
-    start = timeUtilMonotonicNs();
-    TIMING_BARRIER();
-    r3 = bench_float_add(iterations);
-    DO_NOT_OPTIMIZE(r3);
-    TIMING_BARRIER();
-    elapsed = timeUtilMonotonicNs() - start;
-    TIMING_BARRIER();
-    results->float_add_gops = (iterations * 8.0) / elapsed;
-    printf("  Float Add:   %6.2f Gops/s\n", results->float_add_gops);
-
-    /* Float mul (4 ops per iteration) */
-    TIMING_BARRIER();
-    start = timeUtilMonotonicNs();
-    TIMING_BARRIER();
-    r4 = bench_float_mul(iterations / 10);
-    DO_NOT_OPTIMIZE(r4);
-    TIMING_BARRIER();
-    elapsed = timeUtilMonotonicNs() - start;
-    TIMING_BARRIER();
-    results->float_mul_gops = ((iterations / 10) * 4.0) / elapsed;
-    printf("  Float Mul:   %6.2f Gops/s\n", results->float_mul_gops);
-
-    /* FMA (4 ops per iteration) */
-    TIMING_BARRIER();
-    start = timeUtilMonotonicNs();
-    TIMING_BARRIER();
-    r5 = bench_float_fma(iterations);
-    DO_NOT_OPTIMIZE(r5);
-    TIMING_BARRIER();
-    elapsed = timeUtilMonotonicNs() - start;
-    TIMING_BARRIER();
-    results->float_fma_gops = (iterations * 4.0) / elapsed;
-    printf("  Float FMA:   %6.2f Gops/s\n", results->float_fma_gops);
-
-    /* Function call overhead */
-    size_t call_iters = 10'000'000;
-    TIMING_BARRIER();
-    start = timeUtilMonotonicNs();
-    TIMING_BARRIER();
-    for (size_t i = 0; i < call_iters; i++) {
-        size_t x = dummy_call();
-        DO_NOT_OPTIMIZE(x);
+    uint64_t rng = 0xb7a2c4;
+    for (size_t i = 0; i < countof(dataspeedBranchRandom_); i++) {
+        dataspeedBranchAlternate_[i] = i & 1;
+        dataspeedBranchRandom_[i] = dkSplitmix64Next(&rng) & 1;
     }
-    TIMING_BARRIER();
-    elapsed = timeUtilMonotonicNs() - start;
-    TIMING_BARRIER();
-    results->call_overhead_ns = (double)elapsed / call_iters;
-    printf("  Call Overhead: %.2f ns\n", results->call_overhead_ns);
 
-    printf("\n");
+    /* Each loop and its operations per iteration; a 0 count reports
+     * nanoseconds per iteration */
+    const struct {
+        const char *name;
+        double (*fn)(size_t);
+        double opsPerIteration;
+        double *out;
+    } loops[] = {
+        {"Int Add", bench_int_add_d, 8, &results->int_add_gops},
+        {"Int Mul", bench_int_mul_d, 4, &results->int_mul_gops},
+        {"Int Div", bench_int_div_d, 4, &results->int_div_gops},
+        {"Float Add", bench_float_add, 8, &results->float_add_gops},
+        {"Float Mul", bench_float_mul, 4, &results->float_mul_gops},
+        {"Float Div", bench_float_div, 4, &results->float_div_gops},
+        {"Float FMA", bench_float_fma, 4, &results->float_fma_gops},
+        {"Call", bench_calls, 0, &results->call_overhead_ns},
+        {"Branch (predicted)", bench_branch_alternate, 0,
+         &results->branch_predictable_ns},
+        {"Branch (random)", bench_branch_random, 0, &results->branch_random_ns},
+    };
+
+    DS_SAY(&c, "=== CPU Operations ===\n");
+    for (size_t i = 0; i < countof(loops); i++) {
+        const double ns = dataspeedTimeLoop_(loops[i].fn, &c);
+        if (loops[i].opsPerIteration) {
+            *loops[i].out = loops[i].opsPerIteration / ns; /* ops/ns = Gops */
+            DS_SAY(&c, "  %-20s %6.2f Gops/s\n", loops[i].name, *loops[i].out);
+        } else {
+            *loops[i].out = ns;
+            DS_SAY(&c, "  %-20s %6.2f ns\n", loops[i].name, ns);
+        }
+    }
+
+    DS_SAY(&c, "\n");
 }
 
 /* ============================================================================
@@ -1031,34 +1253,36 @@ void dataspeedBenchmarkCPU(dataspeedCPUResults *results) {
  * ============================================================================
  */
 
-void dataspeedRunAll(dataspeedReport *report, bool verbose) {
+void dataspeedRunWithConfig(dataspeedReport *report,
+                            const dataspeedConfig *config) {
+    const dataspeedConfig c = dataspeedConfigOf_(config);
     memset(report, 0, sizeof(*report));
 
     uint64_t start = timeUtilMonotonicNs();
     report->timestamp = (uint64_t)time(nullptr);
 
-    /* System info */
     dataspeedGetSystemInfo(&report->system);
-    if (verbose) {
+    if (c.verbose) {
         dataspeedPrintSystemInfo(&report->system);
     }
 
-    /* CPU benchmark */
-    dataspeedBenchmarkCPU(&report->cpu);
+    dataspeedBenchmarkCPU(&report->cpu, &c);
+    dataspeedBenchmarkCacheHierarchy(&report->cache, &report->system, &c);
+    if (c.include_latency) {
+        dataspeedBenchmarkLatency(&report->latency, &report->system, &c);
+    }
 
-    /* Cache hierarchy */
-    dataspeedBenchmarkCacheHierarchy(&report->cache);
-
-    /* Memory latency */
-    dataspeedBenchmarkLatency(&report->latency);
-
-    /* Memory bandwidth (use 64MB to exceed L3) */
-    dataspeedBenchmarkMemory(&report->memory, 64);
+    dataspeedBenchmarkMemory(&report->memory, 0, &c);
 
     report->total_duration_s = (timeUtilMonotonicNs() - start) / 1e9;
-
-    printf("=== Benchmark Complete (%.1f seconds) ===\n",
+    DS_SAY(&c, "=== Benchmark Complete (%.1f seconds) ===\n",
            report->total_duration_s);
+}
+
+void dataspeedRunAll(dataspeedReport *report, bool verbose) {
+    dataspeedConfig c = dataspeedDefaultConfig();
+    c.verbose = verbose;
+    dataspeedRunWithConfig(report, &c);
 }
 
 /* ============================================================================
@@ -1157,14 +1381,25 @@ void dataspeedPrintReport(const dataspeedReport *report) {
     /* Cache Bandwidth */
     report_hline(BOX_ML, BOX_MR);
     report_row("CACHE BANDWIDTH");
-    report_row(
-        "  L1: %s   L2: %s",
-        fmt_bw(report->cache.l1_bandwidth.bandwidth_gbs, b1, sizeof(b1)),
-        fmt_bw(report->cache.l2_bandwidth.bandwidth_gbs, b2, sizeof(b2)));
-    report_row(
-        "  L3: %s   RAM: %s",
-        fmt_bw(report->cache.l3_bandwidth.bandwidth_gbs, b1, sizeof(b1)),
-        fmt_bw(report->cache.mem_bandwidth.bandwidth_gbs, b2, sizeof(b2)));
+    const dataspeedBandwidthResult *const levels[DS_LEVELS] = {
+        &report->cache.l1_bandwidth, &report->cache.l2_bandwidth,
+        &report->cache.l3_bandwidth, &report->cache.mem_bandwidth};
+    for (size_t i = 0; i < DS_LEVELS; i++) {
+        report_row("  %-4s %-10s %s", dataspeedLevelNames_[i],
+                   format_bytes(levels[i]->working_set_bytes, b1, sizeof(b1)),
+                   fmt_bw(levels[i]->bandwidth_gbs, b2, sizeof(b2)));
+    }
+    if (report->cache.detected_l1_size) {
+        report_row(
+            "  Latency steps after %s, %s, %s",
+            format_bytes(report->cache.detected_l1_size, b1, sizeof(b1)),
+            report->cache.detected_l2_size
+                ? format_bytes(report->cache.detected_l2_size, b2, sizeof(b2))
+                : "-",
+            report->cache.detected_l3_size
+                ? format_bytes(report->cache.detected_l3_size, b3, sizeof(b3))
+                : "-");
+    }
 
     /* Memory Latency */
     report_hline(BOX_ML, BOX_MR);
@@ -1178,7 +1413,9 @@ void dataspeedPrintReport(const dataspeedReport *report) {
 
     /* Memory Bandwidth */
     report_hline(BOX_ML, BOX_MR);
-    report_row("MEMORY BANDWIDTH (64 MB working set)");
+    report_row("MEMORY BANDWIDTH (%s working set)",
+               format_bytes(report->memory.seq_read.working_set_bytes, b1,
+                            sizeof(b1)));
     report_row("  Read: %s   Write: %s   Copy: %s",
                fmt_bw(report->memory.seq_read.bandwidth_gbs, b1, sizeof(b1)),
                fmt_bw(report->memory.seq_write.bandwidth_gbs, b2, sizeof(b2)),
@@ -1193,9 +1430,15 @@ void dataspeedPrintReport(const dataspeedReport *report) {
     report_row("  FP Add:  %s   FP Mul:  %s",
                fmt_ops(report->cpu.float_add_gops, b1, sizeof(b1)),
                fmt_ops(report->cpu.float_mul_gops, b2, sizeof(b2)));
+    report_row("  Int Div: %s   FP Div:  %s",
+               fmt_ops(report->cpu.int_div_gops, b1, sizeof(b1)),
+               fmt_ops(report->cpu.float_div_gops, b2, sizeof(b2)));
     report_row("  FP FMA:  %s   Call:    %s",
                fmt_ops(report->cpu.float_fma_gops, b1, sizeof(b1)),
                fmt_lat(report->cpu.call_overhead_ns, b2, sizeof(b2)));
+    report_row("  Branch:  %s predicted, %s random",
+               fmt_lat(report->cpu.branch_predictable_ns, b1, sizeof(b1)),
+               fmt_lat(report->cpu.branch_random_ns, b2, sizeof(b2)));
 
     /* Footer */
     report_hline(BOX_ML, BOX_MR);
@@ -1204,25 +1447,43 @@ void dataspeedPrintReport(const dataspeedReport *report) {
 }
 
 void dataspeedPrintReportCSV(const dataspeedReport *report) {
+    const struct {
+        const char *metric;
+        double value;
+        const char *unit;
+    } rows[] = {
+        {"cpu_freq_mhz", report->system.cpu_freq_mhz, "MHz"},
+        {"cpu_cores", (double)report->system.cpu_count, "count"},
+        {"l1_bandwidth", report->cache.l1_bandwidth.bandwidth_gbs, "GB/s"},
+        {"l2_bandwidth", report->cache.l2_bandwidth.bandwidth_gbs, "GB/s"},
+        {"l3_bandwidth", report->cache.l3_bandwidth.bandwidth_gbs, "GB/s"},
+        {"mem_bandwidth", report->cache.mem_bandwidth.bandwidth_gbs, "GB/s"},
+        {"detected_l1", (double)report->cache.detected_l1_size, "bytes"},
+        {"detected_l2", (double)report->cache.detected_l2_size, "bytes"},
+        {"detected_l3", (double)report->cache.detected_l3_size, "bytes"},
+        {"l1_latency", report->latency.l1_latency.latency_ns, "ns"},
+        {"l2_latency", report->latency.l2_latency.latency_ns, "ns"},
+        {"l3_latency", report->latency.l3_latency.latency_ns, "ns"},
+        {"mem_latency", report->latency.mem_latency.latency_ns, "ns"},
+        {"seq_read", report->memory.seq_read.bandwidth_gbs, "GB/s"},
+        {"seq_write", report->memory.seq_write.bandwidth_gbs, "GB/s"},
+        {"seq_copy", report->memory.seq_copy.bandwidth_gbs, "GB/s"},
+        {"int_add", report->cpu.int_add_gops, "Gops"},
+        {"int_mul", report->cpu.int_mul_gops, "Gops"},
+        {"int_div", report->cpu.int_div_gops, "Gops"},
+        {"float_add", report->cpu.float_add_gops, "Gops"},
+        {"float_mul", report->cpu.float_mul_gops, "Gops"},
+        {"float_div", report->cpu.float_div_gops, "Gops"},
+        {"float_fma", report->cpu.float_fma_gops, "Gops"},
+        {"call_overhead", report->cpu.call_overhead_ns, "ns"},
+        {"branch_predictable", report->cpu.branch_predictable_ns, "ns"},
+        {"branch_random", report->cpu.branch_random_ns, "ns"},
+    };
+
     printf("metric,value,unit\n");
-    printf("cpu_freq_mhz,%.0f,MHz\n", report->system.cpu_freq_mhz);
-    printf("cpu_cores,%zu,count\n", report->system.cpu_count);
-    printf("l1_bandwidth,%.2f,GB/s\n",
-           report->cache.l1_bandwidth.bandwidth_gbs);
-    printf("l2_bandwidth,%.2f,GB/s\n",
-           report->cache.l2_bandwidth.bandwidth_gbs);
-    printf("l3_bandwidth,%.2f,GB/s\n",
-           report->cache.l3_bandwidth.bandwidth_gbs);
-    printf("mem_bandwidth,%.2f,GB/s\n",
-           report->cache.mem_bandwidth.bandwidth_gbs);
-    printf("l1_latency,%.2f,ns\n", report->latency.l1_latency.latency_ns);
-    printf("l2_latency,%.2f,ns\n", report->latency.l2_latency.latency_ns);
-    printf("l3_latency,%.2f,ns\n", report->latency.l3_latency.latency_ns);
-    printf("mem_latency,%.2f,ns\n", report->latency.mem_latency.latency_ns);
-    printf("seq_read,%.2f,GB/s\n", report->memory.seq_read.bandwidth_gbs);
-    printf("seq_write,%.2f,GB/s\n", report->memory.seq_write.bandwidth_gbs);
-    printf("int_add,%.2f,Gops\n", report->cpu.int_add_gops);
-    printf("float_add,%.2f,Gops\n", report->cpu.float_add_gops);
+    for (size_t i = 0; i < countof(rows); i++) {
+        printf("%s,%.2f,%s\n", rows[i].metric, rows[i].value, rows[i].unit);
+    }
 }
 
 /* Helper to add a double as JSON */
@@ -1279,6 +1540,13 @@ static mds *dataspeedReportToJSON(const dataspeedReport *report) {
     dj_double(&dj, "l2_gbs", report->cache.l2_bandwidth.bandwidth_gbs);
     dj_double(&dj, "l3_gbs", report->cache.l3_bandwidth.bandwidth_gbs);
     dj_double(&dj, "ram_gbs", report->cache.mem_bandwidth.bandwidth_gbs);
+    dj_size(&dj, "l1_bytes", report->cache.l1_bandwidth.working_set_bytes);
+    dj_size(&dj, "l2_bytes", report->cache.l2_bandwidth.working_set_bytes);
+    dj_size(&dj, "l3_bytes", report->cache.l3_bandwidth.working_set_bytes);
+    dj_size(&dj, "ram_bytes", report->cache.mem_bandwidth.working_set_bytes);
+    dj_size(&dj, "detected_l1_bytes", report->cache.detected_l1_size);
+    dj_size(&dj, "detected_l2_bytes", report->cache.detected_l2_size);
+    dj_size(&dj, "detected_l3_bytes", report->cache.detected_l3_size);
     djMapCloseElement(&dj);
 
     /* Memory latency */
@@ -1296,6 +1564,8 @@ static mds *dataspeedReportToJSON(const dataspeedReport *report) {
     dj_double(&dj, "seq_read_gbs", report->memory.seq_read.bandwidth_gbs);
     dj_double(&dj, "seq_write_gbs", report->memory.seq_write.bandwidth_gbs);
     dj_double(&dj, "seq_copy_gbs", report->memory.seq_copy.bandwidth_gbs);
+    dj_size(&dj, "working_set_bytes",
+            report->memory.seq_read.working_set_bytes);
     djMapCloseElement(&dj);
 
     /* CPU throughput */
@@ -1305,8 +1575,12 @@ static mds *dataspeedReportToJSON(const dataspeedReport *report) {
     dj_double(&dj, "int_mul_gops", report->cpu.int_mul_gops);
     dj_double(&dj, "float_add_gops", report->cpu.float_add_gops);
     dj_double(&dj, "float_mul_gops", report->cpu.float_mul_gops);
+    dj_double(&dj, "int_div_gops", report->cpu.int_div_gops);
+    dj_double(&dj, "float_div_gops", report->cpu.float_div_gops);
     dj_double(&dj, "float_fma_gops", report->cpu.float_fma_gops);
     dj_double(&dj, "call_overhead_ns", report->cpu.call_overhead_ns);
+    dj_double(&dj, "branch_predictable_ns", report->cpu.branch_predictable_ns);
+    dj_double(&dj, "branch_random_ns", report->cpu.branch_random_ns);
     djMapCloseElement(&dj);
 
     /* Metadata */
@@ -1332,21 +1606,16 @@ void dataspeedPrintReportJSON(const dataspeedReport *report) {
 dataspeedConfig dataspeedDefaultConfig(void) {
     return (dataspeedConfig){
         .min_duration_ms = 100,
-        .max_iterations = 1'000'000,
-        .warmup_iterations = 10,
+        .max_iterations = 1'000'000'000,
+        .warmup_iterations = 3,
+        .memory_mb = 0,
         .verbose = true,
         .include_latency = true,
     };
 }
 
-void dataspeedRunWithConfig(dataspeedReport *report,
-                            const dataspeedConfig *config) {
-    /* TODO: Use config to customize benchmarks */
-    dataspeedRunAll(report, config->verbose);
-}
-
 /* ============================================================================
- * Original API (preserved for compatibility)
+ * Command-line run
  * ============================================================================
  */
 
@@ -1365,9 +1634,9 @@ DK_FN_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
     dataspeedReport report;
     dataspeedRunAll(&report, true);
 
-    /* Also run the legacy memory test if requested */
+    /* The memset loop, when asked for */
     if (MB > 0 && iterations > 0) {
-        printf("=== Legacy Memory Test (%.0f MB x %zu iterations) ===\n", MB,
+        printf("=== Memset Loop (%.0f MB x %zu iterations) ===\n", MB,
                iterations);
 
         size_t sizeBytes = (size_t)(MB * (1 << 20));
@@ -1425,37 +1694,78 @@ int dataspeedTest(int, char *[]) {
                info.cpu_freq_mhz);
     }
 
+    /* Short measurements: these check that every result is filled and
+     * sane, not the machine's speed */
+    dataspeedConfig quick = dataspeedDefaultConfig();
+    quick.min_duration_ms = 5;
+    quick.warmup_iterations = 1;
+    quick.verbose = false;
+
     TEST("Memory bandwidth measurement") {
         dataspeedMemoryResults results;
-        dataspeedBenchmarkMemory(&results, 4); /* 4 MB - small for quick test */
-
-        /* Should get reasonable bandwidth */
-        assert(results.seq_read.bandwidth_gbs > 0.1);
-        assert(results.seq_write.bandwidth_gbs > 0.1);
-        assert(results.seq_copy.bandwidth_gbs > 0.1);
+        dataspeedBenchmarkMemory(&results, 4, &quick);
+        if (results.seq_read.bandwidth_gbs <= 0.1 ||
+            results.seq_write.bandwidth_gbs <= 0.1 ||
+            results.seq_copy.bandwidth_gbs <= 0.1 ||
+            results.seq_read.working_set_bytes != (size_t)4 << 20 ||
+            results.seq_read.stats.samples < 10) {
+            ERR("bandwidth %f / %f / %f over %zu bytes, %zu samples",
+                results.seq_read.bandwidth_gbs, results.seq_write.bandwidth_gbs,
+                results.seq_copy.bandwidth_gbs,
+                results.seq_read.working_set_bytes,
+                results.seq_read.stats.samples);
+        }
     }
 
     TEST("Memory latency measurement") {
         dataspeedLatencyResults results;
-        dataspeedBenchmarkLatency(&results);
-
-        /* L1 should be faster than RAM */
-        assert(results.l1_latency.latency_ns < results.mem_latency.latency_ns);
-
-        /* Should get reasonable latencies */
-        assert(results.l1_latency.latency_ns > 0.1);
-        assert(results.l1_latency.latency_ns < 100); /* L1 should be < 100ns */
+        dataspeedBenchmarkLatency(&results, nullptr, &quick);
+        if (!(results.l1_latency.latency_ns > 0.1 &&
+              results.l1_latency.latency_ns < 100 &&
+              results.l1_latency.latency_ns < results.mem_latency.latency_ns &&
+              results.l1_latency.working_set_bytes <
+                  results.mem_latency.working_set_bytes)) {
+            ERR("latency L1 %f ns, RAM %f ns", results.l1_latency.latency_ns,
+                results.mem_latency.latency_ns);
+        }
     }
 
-    TEST("CPU operations measurement") {
-        dataspeedCPUResults results;
-        dataspeedBenchmarkCPU(&results);
+    TEST("CPU operations measurement: every loop measured") {
+        dataspeedCPUResults r;
+        dataspeedBenchmarkCPU(&r, &quick);
+        const double rates[] = {r.int_add_gops,   r.int_mul_gops,
+                                r.int_div_gops,   r.float_add_gops,
+                                r.float_mul_gops, r.float_div_gops,
+                                r.float_fma_gops};
+        for (size_t i = 0; i < countof(rates); i++) {
+            if (!(rates[i] > 0.01)) {
+                ERR("rate %zu is %f Gops", i, rates[i]);
+            }
+        }
 
-        /* Should get reasonable throughput */
-        assert(results.int_add_gops > 0.1);
-        assert(results.float_add_gops > 0.1);
-        assert(results.call_overhead_ns > 0);
-        assert(results.call_overhead_ns < 1000); /* Should be < 1us */
+        if (!(r.call_overhead_ns > 0 && r.call_overhead_ns < 1000 &&
+              r.branch_predictable_ns > 0 && r.branch_random_ns > 0)) {
+            ERR("call %f ns, branches %f / %f ns", r.call_overhead_ns,
+                r.branch_predictable_ns, r.branch_random_ns);
+        }
+    }
+
+    TEST("A run without latency leaves latency and the sweep empty") {
+        dataspeedConfig noLatency = quick;
+        noLatency.include_latency = false;
+        noLatency.memory_mb = 8;
+        dataspeedReport report;
+        dataspeedRunWithConfig(&report, &noLatency);
+        if (report.latency.l1_latency.latency_ns != 0 ||
+            report.cache.detected_l1_size != 0 ||
+            report.memory.seq_read.working_set_bytes != (size_t)8 << 20 ||
+            !(report.cache.l1_bandwidth.bandwidth_gbs > 0) ||
+            !(report.cpu.int_add_gops > 0)) {
+            ERR("latency %f, detected %zu, memory set %zu",
+                report.latency.l1_latency.latency_ns,
+                report.cache.detected_l1_size,
+                report.memory.seq_read.working_set_bytes);
+        }
     }
 
     TEST_FINAL_RESULT;
@@ -1667,6 +1977,82 @@ int dataspeedParseTest(int, char *[]) {
         const dataspeedCacheInfo want = {
             .l3_size = 33554432, .line_size = DATASPEED_DEFAULT_LINE_SIZE};
         err += dataspeedCheckCache_("odd sysctls", &got, &want);
+    }
+
+    TEST("working sets: half each level, above the level below, RAM past "
+         "the caches") {
+        static const struct {
+            const char *what;
+            dataspeedCacheInfo cache;
+            size_t want[DS_LEVELS];
+        } cases[] = {
+            {"x86 48K/2M/36M",
+             {.l1d_size = 48 << 10, .l2_size = 2 << 20, .l3_size = 36 << 20},
+             {24 << 10, 1 << 20, 18 << 20, 144 << 20}},
+            {"no L3 (16M L2)",
+             {.l1d_size = 128 << 10, .l2_size = 16 << 20},
+             {64 << 10, 8 << 20, 32 << 20, 64 << 20}},
+            {"nothing reported",
+             {},
+             {16 << 10, 128 << 10, 512 << 10, 64 << 20}},
+            {"an L3 no larger than the L2",
+             {.l1d_size = 32 << 10, .l2_size = 1 << 20, .l3_size = 1 << 20},
+             {16 << 10, 512 << 10, 2 << 20, 64 << 20}},
+        };
+        for (size_t i = 0; i < countof(cases); i++) {
+            size_t sets[DS_LEVELS];
+            dataspeedWorkingSets_(&cases[i].cache, sets);
+            for (size_t l = 0; l < DS_LEVELS; l++) {
+                if (sets[l] != cases[i].want[l]) {
+                    ERR("%s: %s set %zu, want %zu", cases[i].what,
+                        dataspeedLevelNames_[l], sets[l], cases[i].want[l]);
+                }
+            }
+        }
+    }
+
+    TEST("cache steps: each run of rises is one edge, at the set before it") {
+        size_t sizes[16];
+        for (size_t i = 0; i < countof(sizes); i++) {
+            sizes[i] = (size_t)4096 << i; /* 4K .. 128M */
+        }
+
+        static const struct {
+            const char *what;
+            double ns[16];
+            size_t found;
+            size_t levels[3]; /* indices into sizes, or 99 for none */
+        } cases[] = {
+            {"two levels, the second a ramp",
+             {1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 10, 25, 60, 90},
+             2,
+             {4, 11, 99}},
+            {"three levels",
+             {1, 1, 1.1, 1, 4, 4, 4.2, 4, 12, 12, 12, 12, 80, 85, 85, 85},
+             3,
+             {3, 7, 11}},
+            {"flat: noise under 1.3x is no step",
+             {5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10, 10, 10, 10, 10},
+             0,
+             {99, 99, 99}},
+        };
+        for (size_t i = 0; i < countof(cases); i++) {
+            size_t levels[3];
+            const size_t found =
+                dataspeedCacheSteps_(sizes, cases[i].ns, 16, levels);
+            for (size_t l = 0; l < 3; l++) {
+                const size_t want =
+                    cases[i].levels[l] == 99 ? 0 : sizes[cases[i].levels[l]];
+                if (levels[l] != want) {
+                    ERR("%s: level %zu at %zu, want %zu", cases[i].what, l + 1,
+                        levels[l], want);
+                }
+            }
+            if (found != cases[i].found) {
+                ERR("%s: found %zu, want %zu", cases[i].what, found,
+                    cases[i].found);
+            }
+        }
     }
 
     TEST_FINAL_RESULT;

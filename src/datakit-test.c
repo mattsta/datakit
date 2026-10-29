@@ -12474,6 +12474,7 @@ static const TestEntry testRegistry[] = {
 static const TestEntry benchRegistry[] = {
     {"mdsbench", nullptr, mdsBenchWrapper, false, nullptr},
     {"mdscbench", nullptr, mdscBenchWrapper, false, nullptr},
+    {"dataspeed", nullptr, dataspeedTest, false, nullptr},
     T_END};
 
 /* Pseudo-tests (special multi-test runners) */

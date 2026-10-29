@@ -111,6 +111,8 @@ dropped from the CTest list otherwise.
 - [OSRegulate](modules/system/OS_REGULATE.md) - OS resource limiting
 - [setproctitle](modules/system/SETPROCTITLE.md) - Process title manipulation
 - [versionOSRuntime](modules/system/VERSION_OS_RUNTIME.md) - OS/runtime detection
+- [dataspeed](modules/system/DATASPEED.md) - Machine measurement: cache and memory bandwidth, latency,
+  detected cache sizes, CPU throughput
 - [fastmutex](modules/system/FASTMUTEX.md) - High-performance mutex
 - [ownedState](modules/system/OWNED_STATE.md) - Single-writer publication without reader locks, and deferred reclamation of what it replaces
 - [clusterRing](modules/system/CLUSTER_RING.md) - Replica placement by consistent hashing: strategies, quorums, topology affinity, health and rebalance plans

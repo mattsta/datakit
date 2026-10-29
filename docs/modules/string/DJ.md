@@ -50,14 +50,27 @@ The rules:
 
 | Call                            | Writes                                                                   |
 | ------------------------------- | ------------------------------------------------------------------------ |
-| `djString(&st, p, len, true)`   | a quoted, escaped string (`"`, `\` and control bytes escaped)            |
+| `djString(&st, p, len, true)`   | a quoted, escaped string, UTF-8 kept (`false`: ASCII-only, `\uXXXX`)     |
 | `djStringDirect(&st, p, len)`   | a quoted string copied as is: for text you know needs no escaping        |
 | `djNumericDirect(&st, p, len)`  | bytes copied unquoted (a number you formatted); quoted when it is a key  |
 | `djTrue` / `djFalse` / `djNULL` | `true` / `false` / `null`                                                |
 | `djBox(&st, &box)`              | a databox: numbers, escaped bytes, true/false/null (false: no JSON form) |
 
-`djString` copies bytes from 0x80 up as they are, so valid UTF-8 input gives valid JSON; its last argument
-does not change the output. `djBox` refuses (writes nothing, returns false) what JSON cannot hold: a
+`djString` always writes valid JSON text, whatever the bytes:
+
+- `"`, `\` and control bytes are escaped (`\"`, `\\`, `\n`, `\t`, ..., `\u0001`).
+- With `true`, valid UTF-8 is copied as it is (the usual choice: compact, and every JSON reader takes it).
+- With `false` the output is pure ASCII: `é` becomes `é`, and a character above U+FFFF a surrogate
+  pair (`😀` is `😀`), for transports or logs that must stay 7-bit.
+- A byte that is not part of valid UTF-8 (a stray byte, a cut-off sequence, an overlong form, an encoded
+  surrogate) becomes U+FFFD, one per byte, so binary or mis-encoded input cannot break the document.
+
+Cost (Apple M-series, clang 22; `perfRegression` module `dj`): ASCII text about 0.3 ns a byte either way;
+valid UTF-8 kept as UTF-8 is checked in one vector pass and copied (a 58-byte string with ten non-ASCII
+characters, 54 ns); escaped to ASCII, or invalid, each non-ASCII character is decoded on its own (about 5
+ns each).
+
+`djBox` refuses (writes nothing, returns false) what JSON cannot hold: a
 non-finite float, VOID, ERROR, a container or a reference; in key position it writes every scalar as a
 string key.
 

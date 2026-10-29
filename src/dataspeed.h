@@ -4,16 +4,39 @@
 #include <stdint.h>
 
 /* ============================================================================
- * Dataspeed - High-Performance System Benchmarking
+ * Dataspeed - System Benchmarking
  * ============================================================================
- * Comprehensive CPU and memory performance measurement with:
- * - Cache hierarchy detection and bandwidth measurement
- * - Memory latency analysis via pointer chasing
- * - SIMD vs scalar throughput comparison
- * - Adaptive iteration calibration for accurate results
- * - Statistical reporting with confidence intervals
+ * Measures this machine: cache and memory bandwidth at working sets sized
+ * from the detected caches, memory latency by pointer chasing, the cache
+ * sizes the latency curve shows, and CPU operation throughput.  Every
+ * measurement runs for a configured minimum time and reports statistics
+ * over its samples.  Results are for comparing machines and builds, not
+ * for scheduling decisions: they move with load, frequency scaling and
+ * thermal state.
  * ============================================================================
  */
+
+/* ----------------------------------------------------------------------------
+ * Configuration
+ * ----------------------------------------------------------------------------
+ */
+typedef struct dataspeedConfig {
+    /* Each measurement runs at least this long (default 100 ms) */
+    size_t min_duration_ms;
+    /* Cap on any calibrated loop's iteration count (default 10^9) */
+    size_t max_iterations;
+    /* Untimed runs of each bandwidth pass and latency sample before
+     * timing (default 3); CPU loops warm up while they calibrate */
+    size_t warmup_iterations;
+    /* Working set of the memory bandwidth test; 0 sizes it past the
+     * largest cache (at least 64 MB) */
+    size_t memory_mb;
+    bool verbose;         /* print each result as it is measured */
+    bool include_latency; /* run the latency tests and the cache sweep */
+} dataspeedConfig;
+
+/* The defaults above, verbose and with latency */
+dataspeedConfig dataspeedDefaultConfig(void);
 
 /* ----------------------------------------------------------------------------
  * System Information
@@ -41,10 +64,8 @@ typedef struct dataspeedSystemInfo {
     size_t page_size;    /* System page size in bytes */
 } dataspeedSystemInfo;
 
-/* Get system information */
+/* What the OS reports (sysctl on macOS, sysfs on Linux) */
 void dataspeedGetSystemInfo(dataspeedSystemInfo *info);
-
-/* Print system information summary */
 void dataspeedPrintSystemInfo(const dataspeedSystemInfo *info);
 
 /* ----------------------------------------------------------------------------
@@ -62,41 +83,45 @@ typedef struct dataspeedStats {
 } dataspeedStats;
 
 typedef struct dataspeedBandwidthResult {
-    double bandwidth_gbs; /* Bandwidth in GB/s */
+    double bandwidth_gbs; /* median over the samples, GB/s */
     double cycles_per_byte;
+    size_t working_set_bytes;
     dataspeedStats stats;
 } dataspeedBandwidthResult;
 
 typedef struct dataspeedLatencyResult {
-    double latency_ns; /* Latency in nanoseconds */
-    double cycles;     /* Latency in CPU cycles */
+    double latency_ns; /* median over the samples */
+    double cycles;     /* counter ticks per load (the TSC or CNTVCT) */
+    size_t working_set_bytes;
     dataspeedStats stats;
 } dataspeedLatencyResult;
 
 /* ----------------------------------------------------------------------------
- * Cache Hierarchy Benchmark
+ * Benchmarks.  A NULL 'system' detects it; a NULL 'config' takes the
+ * defaults.  Working sets: L1 half the L1D, L2 half the L2, L3 half the L3
+ * (each at least twice the level below; twice the L2 when no L3 is
+ * reported), RAM four times the largest cache and at least 64 MB.
  * ----------------------------------------------------------------------------
  */
 typedef struct dataspeedCacheResults {
-    /* Bandwidth at different working set sizes */
-    dataspeedBandwidthResult l1_bandwidth;  /* In-L1 bandwidth */
-    dataspeedBandwidthResult l2_bandwidth;  /* In-L2 bandwidth */
-    dataspeedBandwidthResult l3_bandwidth;  /* In-L3 bandwidth */
-    dataspeedBandwidthResult mem_bandwidth; /* Main memory bandwidth */
+    /* Read bandwidth with the working set in each level */
+    dataspeedBandwidthResult l1_bandwidth;
+    dataspeedBandwidthResult l2_bandwidth;
+    dataspeedBandwidthResult l3_bandwidth;
+    dataspeedBandwidthResult mem_bandwidth;
 
-    /* Detected cache sizes from latency cliff analysis */
+    /* The levels the latency sweep shows: the largest working set before
+     * each step up in latency (0: no step found, or include_latency
+     * false) */
     size_t detected_l1_size;
     size_t detected_l2_size;
     size_t detected_l3_size;
 } dataspeedCacheResults;
 
-/* Run cache hierarchy benchmark */
-void dataspeedBenchmarkCacheHierarchy(dataspeedCacheResults *results);
+void dataspeedBenchmarkCacheHierarchy(dataspeedCacheResults *results,
+                                      const dataspeedSystemInfo *system,
+                                      const dataspeedConfig *config);
 
-/* ----------------------------------------------------------------------------
- * Memory Latency Benchmark (Pointer Chasing)
- * ----------------------------------------------------------------------------
- */
 typedef struct dataspeedLatencyResults {
     dataspeedLatencyResult l1_latency;
     dataspeedLatencyResult l2_latency;
@@ -104,28 +129,24 @@ typedef struct dataspeedLatencyResults {
     dataspeedLatencyResult mem_latency;
 } dataspeedLatencyResults;
 
-/* Run memory latency benchmark using pointer chasing */
-void dataspeedBenchmarkLatency(dataspeedLatencyResults *results);
+/* Load-to-load latency: a pointer chain in random order through each
+ * working set */
+void dataspeedBenchmarkLatency(dataspeedLatencyResults *results,
+                               const dataspeedSystemInfo *system,
+                               const dataspeedConfig *config);
 
-/* ----------------------------------------------------------------------------
- * Memory Bandwidth Benchmark
- * ----------------------------------------------------------------------------
- */
 typedef struct dataspeedMemoryResults {
-    dataspeedBandwidthResult seq_read;  /* Sequential read (memcpy) */
+    dataspeedBandwidthResult seq_read;  /* Sequential read */
     dataspeedBandwidthResult seq_write; /* Sequential write (memset) */
     dataspeedBandwidthResult seq_copy;  /* Sequential copy (memcpy) */
 } dataspeedMemoryResults;
 
-/* Run memory bandwidth benchmark */
-void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb);
+/* Over 'size_mb' megabytes (0: config->memory_mb, or past the caches) */
+void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb,
+                              const dataspeedConfig *config);
 
-/* ----------------------------------------------------------------------------
- * CPU Operations Benchmark
- * ----------------------------------------------------------------------------
- */
 typedef struct dataspeedCPUResults {
-    /* Operations per second (billions) */
+    /* Dependent-chain throughput, billions of operations a second */
     double int_add_gops;
     double int_mul_gops;
     double int_div_gops;
@@ -134,16 +155,17 @@ typedef struct dataspeedCPUResults {
     double float_div_gops;
     double float_fma_gops; /* Fused multiply-add */
 
-    /* Function call overhead */
+    /* A call to a function that is not inlined */
     double call_overhead_ns;
 
-    /* Branch prediction */
+    /* A conditional branch per element over a fixed pattern (predicted)
+     * and over random bits (half mispredicted) */
     double branch_predictable_ns;
     double branch_random_ns;
 } dataspeedCPUResults;
 
-/* Run CPU operations benchmark */
-void dataspeedBenchmarkCPU(dataspeedCPUResults *results);
+void dataspeedBenchmarkCPU(dataspeedCPUResults *results,
+                           const dataspeedConfig *config);
 
 /* ----------------------------------------------------------------------------
  * Comprehensive Report
@@ -155,48 +177,31 @@ typedef struct dataspeedReport {
     dataspeedLatencyResults latency;
     dataspeedMemoryResults memory;
     dataspeedCPUResults cpu;
-    uint64_t timestamp;      /* When benchmark was run */
+    uint64_t timestamp;      /* Unix seconds at the start */
     double total_duration_s; /* Total benchmark time */
 } dataspeedReport;
 
-/* Run all benchmarks and generate comprehensive report */
+/* Every benchmark under 'config' (NULL: the defaults) */
+void dataspeedRunWithConfig(dataspeedReport *report,
+                            const dataspeedConfig *config);
+
+/* The defaults, printing progress only when 'verbose' */
 void dataspeedRunAll(dataspeedReport *report, bool verbose);
 
-/* Print comprehensive report */
+/* The report as a table, as CSV (metric,value,unit) or as JSON */
 void dataspeedPrintReport(const dataspeedReport *report);
-
-/* Print report in machine-readable format (CSV or JSON) */
 void dataspeedPrintReportCSV(const dataspeedReport *report);
 void dataspeedPrintReportJSON(const dataspeedReport *report);
 
-/* ----------------------------------------------------------------------------
- * Original API (preserved for compatibility)
- * ----------------------------------------------------------------------------
- */
+/* The command-line run: every benchmark with progress and the report;
+ * then, when 'MB' and 'iterations' are positive, 'iterations' memsets of
+ * 'MB' megabytes with running throughput (SIGINT stops them) */
 size_t dataspeed(double MB, size_t iterations);
-
-/* ----------------------------------------------------------------------------
- * Configuration
- * ----------------------------------------------------------------------------
- */
-typedef struct dataspeedConfig {
-    size_t min_duration_ms;   /* Minimum test duration (default: 100ms) */
-    size_t max_iterations;    /* Maximum iterations per test */
-    size_t warmup_iterations; /* Warmup iterations (default: 10) */
-    bool verbose;             /* Print progress during benchmarks */
-    bool include_latency;     /* Include latency benchmarks (slower) */
-} dataspeedConfig;
-
-/* Get default configuration */
-dataspeedConfig dataspeedDefaultConfig(void);
-
-/* Run benchmarks with custom configuration */
-void dataspeedRunWithConfig(dataspeedReport *report,
-                            const dataspeedConfig *config);
 
 #ifdef DATAKIT_TEST
 /* The benchmarks themselves: timing-sensitive, so not in ctest */
 int dataspeedTest(int argc, char *argv[]);
-/* Deterministic: cache-layout and number parsing on sample input */
+/* Deterministic: cache layout, number parsing, working sets and the cache
+ * sweep's steps on sample input */
 int dataspeedParseTest(int argc, char *argv[]);
 #endif

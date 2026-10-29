@@ -94,6 +94,38 @@ if (StrAtoi64(str, &value, strlen(str), STR_UTF8, false) == STR_INT64_FITS) {
 }
 ```
 
+### Other Integer Readers, Hex, Checked Arithmetic
+
+| Call                                               | Does                                                                                             |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --- | ------------------------------------ |
+| `StrDecOrHexToInt64(z, &v)`                        | decimal or `0x` hex (zero-terminated) to `int64_t`; hex is the bits (`0xffffffffffffffff` is -1) |
+| `StrGetInt32(z, &v)`                               | decimal or `0x` hex to `int32_t`; true when it fits (text after the number is ignored)           |
+| `StrAtoi(z)`                                       | the same value, or 0 when it does not fit                                                        |
+| `StrHexToInt(c)`                                   | one hex digit's value (`0-9`, `a-f`, `A-F` only)                                                 |
+| `StrHexToBytes(hex, hexLen, out, outLen)`          | exactly `2 * outLen` hex digits to bytes; false on a wrong length or non-digit                   |
+| `StrHexToBlob(z, n)`                               | `n` hex digits to a zero-terminated `zmalloc` buffer (the caller `zfree`s)                       |
+| `StrBytesToHex(in, n, out)`                        | `n` bytes to `2n` lowercase digits and a zero (`out` holds `2n + 1`)                             |
+| `StrAddInt64(&a, b)`, `StrSubInt64`, `StrMulInt64` | `a op= b` when the result fits `int64_t`; false, `a` unchanged, on overflow                      |
+| `StrAbsInt32(x)`                                   | `                                                                                                | x   | `, with `INT32_MIN`giving`INT32_MAX` |
+| `StrDequote(z)`                                    | removes SQL-style quotes in place: `'a''b'` to `a'b`; `"x"`, `` `x` ``, `[x]` alike              |
+
+```c
+uint8_t key[32];
+if (!StrHexToBytes(argHex, strlen(argHex), key, sizeof(key))) {
+    return false; /* not 64 hex digits */
+}
+
+char hex[2 * sizeof(key) + 1];
+StrBytesToHex(key, sizeof(key), hex);
+
+int64_t total = 0;
+for (size_t i = 0; i < n; i++) {
+    if (!StrAddInt64(&total, amounts[i])) {
+        return false; /* the sum left int64_t */
+    }
+}
+```
+
 ### String to Double (SQLite-based)
 
 ```c
@@ -531,11 +563,17 @@ uint64_t StrPopCntAligned(const void *data, size_t len);
 uint64_t StrPopCntExact(const void *data, size_t len);
 uint64_t StrPopCntScalar(const void *data, size_t len);  /* baseline */
 
-uint32_t StrBitmapGetSetPositionsExact8/16/32(const void *data, size_t len,
-                                              /* uintN_t */ position[]);
-uint64_t StrBitmapGetSetPositionsExact64(const void *data, size_t len,
-                                         uint64_t position[]);
-/* ...and the matching GetUnsetPositionsExact* set */
+/* The indices of the set (or clear) bits of 'len' bytes into position[],
+ * returning how many; the width names the index type, so the 8-bit form
+ * reads up to 32 bytes, the 16-bit up to 8 KB */
+uint32_t StrBitmapGetSetPositionsExact8(const void *data, size_t len, uint8_t position[]);
+uint32_t StrBitmapGetSetPositionsExact16(const void *data, size_t len, uint16_t position[]);
+uint32_t StrBitmapGetSetPositionsExact32(const void *data, size_t len, uint32_t position[]);
+uint64_t StrBitmapGetSetPositionsExact64(const void *data, size_t len, uint64_t position[]);
+uint32_t StrBitmapGetUnsetPositionsExact8(const void *data, size_t len, uint8_t position[]);
+uint32_t StrBitmapGetUnsetPositionsExact16(const void *data, size_t len, uint16_t position[]);
+uint32_t StrBitmapGetUnsetPositionsExact32(const void *data, size_t len, uint32_t position[]);
+uint64_t StrBitmapGetUnsetPositionsExact64(const void *data, size_t len, uint64_t position[]);
 
 uint64_t splitmix64(uint64_t *x);
 uint64_t xoroshiro128plus(uint64_t s[2]);
