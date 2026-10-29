@@ -52,7 +52,7 @@ typedef struct shardedCache {
 
 /* multilru calls this immediately BEFORE it frees an evicted entry, so
  * this is where the storage side of the eviction happens. */
-static void cacheOnEvict(size_t evictedPtr, void *userData) {
+static void cacheOnEvict(multilruPtr evictedPtr, void *userData) {
     cacheShard *s = userData;
 
     const databox lruBox = databoxNewUnsigned(evictedPtr);

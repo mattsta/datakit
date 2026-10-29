@@ -132,9 +132,8 @@ struct multilru {
 
     /* Eviction control */
     bool autoEvict; /* Auto-evict on insert when over limits (default: true) */
-    void (*evictCallback)(size_t evictedPtr,
-                          void *userData); /* Called on true eviction */
-    void *evictCallbackData;               /* User data passed to callback */
+    multilruEvictFn *evictCallback; /* Called on true eviction */
+    void *evictCallbackData;        /* User data passed to callback */
 
     /* State */
     uint64_t capacity; /* Allocated entry slots */
@@ -1462,9 +1461,7 @@ bool multilruGetAutoEvict(const multilru *mlru) {
     return mlru->autoEvict;
 }
 
-void multilruSetEvictCallback(multilru *mlru,
-                              void (*callback)(size_t evictedPtr,
-                                               void *userData),
+void multilruSetEvictCallback(multilru *mlru, multilruEvictFn *callback,
                               void *userData) {
     mlru->evictCallback = callback;
     mlru->evictCallbackData = userData;
@@ -1667,7 +1664,7 @@ static size_t zipfian(uint64_t *seed, size_t n, double skew) {
 static size_t testEvictedPtrs[100];
 static size_t testEvictCount;
 
-static void testEvictionCallback(size_t ptr, void *) {
+static void testEvictionCallback(multilruPtr ptr, void *) {
     if (testEvictCount < 100) {
         testEvictedPtrs[testEvictCount++] = ptr;
     }

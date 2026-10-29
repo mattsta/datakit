@@ -525,7 +525,7 @@ uint64_t multilruGetMaxWeight(const multilru *mlru);
  * The cache automatically evicts entries when limits are exceeded.
  * Register a callback to be notified of evictions for cleanup.
  *
- *   void onEvict(size_t ptr, void *data) {
+ *   void onEvict(multilruPtr ptr, void *data) {
  *       MyHashMap *map = data;
  *       myHashMapDeleteByLruPtr(map, ptr);  // Clean up external data
  *   }
@@ -564,12 +564,11 @@ void multilruSetAutoEvict(multilru *mlru, bool autoEvict);
 /* Get current auto-eviction setting */
 bool multilruGetAutoEvict(const multilru *mlru);
 
-/* Register callback for eviction notification.
- * Called with entry pointer BEFORE the entry is freed.
- * Set callback to NULL to disable notifications. */
-void multilruSetEvictCallback(multilru *mlru,
-                              void (*callback)(size_t evictedPtr,
-                                               void *userData),
+/* Told of each true eviction (level 0), BEFORE the entry's slot is freed */
+typedef void multilruEvictFn(multilruPtr evicted, void *userData);
+
+/* Register callback for eviction notification (NULL disables it) */
+void multilruSetEvictCallback(multilru *mlru, multilruEvictFn *callback,
                               void *userData);
 
 /* Check if cache exceeds configured limits (count or weight).

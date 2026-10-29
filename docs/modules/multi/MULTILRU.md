@@ -503,11 +503,11 @@ while (multilruNeedsEviction(cache)) {
 void multilruSetAutoEvict(multilru *mlru, bool autoEvict);
 bool multilruGetAutoEvict(const multilru *mlru);
 
-/* Called with the entry handle BEFORE the slot is released.
- * Pass NULL to disable. */
-void multilruSetEvictCallback(multilru *mlru,
-                              void (*callback)(size_t evictedPtr,
-                                               void *userData),
+/* Told of each true eviction (level 0), BEFORE the slot is released */
+typedef void multilruEvictFn(multilruPtr evicted, void *userData);
+
+/* Pass NULL to disable */
+void multilruSetEvictCallback(multilru *mlru, multilruEvictFn *callback,
                               void *userData);
 
 /* True when the cache currently exceeds its configured limits */
@@ -517,7 +517,7 @@ bool multilruNeedsEviction(const multilru *mlru);
 ### Workflow 1: Automatic Eviction with Callback (default)
 
 ```c
-static void onEvict(size_t ptr, void *data) {
+static void onEvict(multilruPtr ptr, void *data) {
     MyHashMap *map = data;
     myHashMapDeleteByLruPtr(map, ptr);  /* drop the stale handle mapping */
 }
@@ -689,7 +689,7 @@ typedef struct cache {
     size_t dataLen; /* tracks multilruCapacity(lru) */
 } cache;
 
-static void onEvict(size_t ptr, void *userData) {
+static void onEvict(multilruPtr ptr, void *userData) {
     cache *c = userData;
     if (ptr < c->dataLen) {
         free(c->data[ptr]);
