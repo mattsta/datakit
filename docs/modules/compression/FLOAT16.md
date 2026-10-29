@@ -143,7 +143,12 @@ slotted in later without touching callers.
 The `_`-suffixed function forms (`float16Encode_`, `float16Decode_`,
 `bfloat16Encode_`, `bfloat16Decode_`) are always available regardless of
 which path the macros take — use them when you need a real function pointer,
-or when you need the portable result specifically.
+or when you need the portable result specifically. The portable float16
+codec gives the hardware result bit for bit: encode rounds to nearest, ties
+to even, as F16C and NEON do, and decode is exact, both in integer
+operations that no floating-point mode affects. Its tests compare it with
+the compiler's binary16 conversions on every half pattern, every rounding
+midpoint and a million random floats.
 
 ## Usage Examples
 

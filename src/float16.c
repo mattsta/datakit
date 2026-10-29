@@ -3,55 +3,19 @@
 #include <string.h>
 
 /* The portable IEEE 754 binary16 codec, used where the CPU has no
- * conversion instructions.  Encode rounds to nearest, ties to even, as
- * the F16C and NEON conversions do, so every platform stores the same
- * half for the same float; decode is exact (it follows the public-domain
- * code at https://stackoverflow.com/questions/1659440).  The tests check
- * both against the compiler's binary16 conversions: every half pattern,
- * every rounding midpoint and a million random floats. */
+ * conversion instructions.  Both directions work on the bit patterns with
+ * integer operations only, so no floating-point mode (rounding,
+ * flush-to-zero) changes a result.  Encode rounds to nearest, ties to
+ * even, as the F16C and NEON conversions do, so every platform stores the
+ * same half for the same float; decode is exact.  The tests check both
+ * against the compiler's binary16 conversions: every half pattern, every
+ * rounding midpoint and a million random floats.
+ *
+ * binary16: 1 sign bit, 5 exponent bits (bias 15), 10 mantissa bits;
+ * binary32: 1, 8 (bias 127), 23.  The 65536 halves are 63488 finite
+ * values (signed zeros and subnormals included), two infinities and 2046
+ * NaNs. */
 
-/* An alternative table-based implementation is presented in:
- * ftp://ftp.fox-toolkit.org/pub/fasthalffloatconversion.pdf
- * but it requires about 1500 bytes of tables for full functionality */
-
-/* This encoding has:
- * 49152  fractional representations (yay! more than just trunc regular floats)
- * 14336  integer representations (boo; WE WANT FLOATS)
- *     1  inf
- *     1  -inf
- *  2046  NaN
- * =========================================
- * 65536  total representations, as expected */
-
-typedef union Bits {
-    float f;
-    int32_t si;
-    uint32_t ui;
-} Bits;
-
-#define shift 13
-static constexpr int shiftSign = 16;
-
-static constexpr int infN = 0x7F800000;       // flt32 infinity
-static constexpr int maxN = 0x477FE000;       // max flt16 normal as a flt32
-static constexpr int minN = 0x38800000;       // min flt16 normal as a flt32
-static constexpr unsigned signN = 0x80000000; // flt32 sign bit
-
-#define infC (infN >> shift)
-#define maxC (maxN >> shift)
-#define minC (minN >> shift)
-#define signC (signN >> shiftSign) // flt16 sign bit
-
-static constexpr int mulC = 0x33800000; // minN / (1 << (23 - shift))
-
-static constexpr int subC = 0x003FF; // max flt32 subnormal down shifted
-static constexpr int norC = 0x00400; // min flt32 normal down shifted
-
-#define maxD (infC - maxC - 1)
-#define minD (minC - subC - 1)
-
-/* Integer-only, so the result does not depend on the floating-point
- * environment (rounding mode, flush-to-zero) */
 uint16_t float16Encode_(const float value) {
     uint32_t bits;
     memcpy(&bits, &value, sizeof(bits));
@@ -91,26 +55,35 @@ uint16_t float16Encode_(const float value) {
     return sign | (uint16_t)half;
 }
 
-[[gnu::no_sanitize("shift")]] float float16Decode_(const uint16_t value) {
-    Bits v = {.ui = value};
-    int32_t sign = v.si & signC;
-    Bits s = {.si = mulC};
-
-    v.si ^= sign;
-    sign <<= shiftSign;
-    v.si ^= ((v.si + minD) ^ v.si) & -(v.si > subC);
-    v.si ^= ((v.si + maxD) ^ v.si) & -(v.si > maxC);
-
-    s.f *= v.si;
-    const int32_t mask = -(norC > v.si);
-    v.si <<= shift;
-    v.si ^= (s.si ^ v.si) & mask;
-    v.si |= sign;
-
-    return v.f;
+float float16Decode_(const uint16_t value) {
+    const uint32_t sign = (uint32_t)(value & 0x8000) << 16;
+    const uint32_t exponent = (value >> 10) & 0x1F;
+    uint32_t mantissa = value & 0x03FF;
+    uint32_t bits;
+    if (exponent == 0x1F) {
+        /* Infinity, or a NaN with its payload kept */
+        bits = sign | 0x7F800000u | (mantissa << 13);
+    } else if (exponent != 0) {
+        /* Normal: rebias the exponent from 15 to 127 */
+        bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+    } else if (mantissa == 0) {
+        bits = sign; /* zero */
+    } else {
+        /* Subnormal, mantissa * 2^-24: shift its leading one up to the
+         * implicit bit's place, the exponent starting at 2^-14's (113)
+         * and dropping one per shift */
+        uint32_t biased = 113;
+        while (!(mantissa & 0x0400)) {
+            mantissa <<= 1;
+            biased--;
+        }
+        bits = sign | (biased << 23) | ((mantissa & 0x03FF) << 13);
+    }
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
 }
 
-#include <string.h>
 uint16_t bfloat16Encode_(const float value) {
     /* bfloat16 is the high half of the float's bit pattern.  memcpy reads
      * the bits without an aliasing violation, and the shift picks the high
