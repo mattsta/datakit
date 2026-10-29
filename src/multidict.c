@@ -6682,6 +6682,13 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
     return err;
 }
 
+/* An integer value doubled */
+static bool mdTestDoubleValue_(void *, const databox *current,
+                               databox *replacement) {
+    *replacement = databoxNewSigned(current->data.i64 * 2);
+    return true;
+}
+
 int multidictTest(int, char *[]) {
     int err = 0;
 
@@ -8907,6 +8914,92 @@ int multidictTest(int, char *[]) {
         if (multidictSlotCount(after) < 2 * multidictSlotCount(before)) {
             ERR("200%% default: %" PRIu64 " slots, 800%%: %" PRIu64,
                 multidictSlotCount(after), multidictSlotCount(before));
+        }
+    }
+
+    TEST("12.5c slots grown into multimaps take every write path as bare "
+         "slots do") {
+        /* At the largest load factor a slot holds hundreds of keys and
+         * becomes a multimap: insert-if-absent, value updates and
+         * counters (new and present keys) give what a dict of small bare
+         * slots gives, key for key */
+        cleaner(multidictMmClassFree) multidictClass *qdcSlots =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dense =
+            multidictNew(&multidictTypeExactKey, qdcSlots, 7);
+        cleaner(multidictFree) multidict *sparse =
+            multidictNew(&multidictTypeExactKey, qdcSlots, 7);
+        if (!multidictSetLoadFactors(dense, 65535, 10)) {
+            ERR("the largest load factor was refused");
+        }
+
+        multidict *const both[2] = {dense, sparse};
+        char keyBuf[32];
+        constexpr int keys = 20000;
+        for (int j = 0; j < keys; j++) {
+            snprintf(keyBuf, sizeof(keyBuf), "slot-key-%05d", j);
+            const databox key = databoxNewBytesString(keyBuf);
+            const databox val = databoxNewSigned(j);
+            multidictResult results[2][2] = {};
+            for (int w = 0; w < 2; w++) {
+                /* Even keys by AddNX (each twice: the second is present),
+                 * odd keys as counters created by IncrBy */
+                if (j % 2 == 0) {
+                    results[w][0] = multidictAddNX(both[w], &key, &val);
+                    results[w][1] = multidictAddNX(both[w], &key, &key);
+                } else {
+                    int64_t out = 0;
+                    results[w][0] = multidictIncrBy(both[w], &key, j, &out);
+                }
+            }
+            if (memcmp(results[0], results[1], sizeof(results[0])) != 0) {
+                ERR("key %d: the dicts answered differently", j);
+                break;
+            }
+        }
+
+        if (multidictSlotCount(dense) * 100 > (uint64_t)keys) {
+            ERR("dense slots %" PRIu64 " hold too few keys to grow",
+                multidictSlotCount(dense));
+        }
+
+        for (int j = 0; j < keys; j++) {
+            snprintf(keyBuf, sizeof(keyBuf), "slot-key-%05d", j);
+            const databox key = databoxNewBytesString(keyBuf);
+            for (int w = 0; w < 2; w++) {
+                int64_t out = 0;
+                const bool did =
+                    j % 2 ? multidictIncrBy(both[w], &key, 1, &out) !=
+                                MULTIDICT_ERR /* present */
+                          : multidictUpdateValue(both[w], &key,
+                                                 mdTestDoubleValue_, nullptr) ==
+                                MULTIDICT_UPDATE_REWRITTEN;
+                if (!did) {
+                    ERR("key %d: dict %d did not rewrite it", j, w);
+                }
+            }
+            const databox absent = databoxNewBytesString("never-added");
+            if (multidictUpdateValue(dense, &absent, mdTestDoubleValue_,
+                                     nullptr) != MULTIDICT_UPDATE_ABSENT) {
+                ERR("an absent key was updated");
+                break;
+            }
+
+            databox a = {};
+            databox b = {};
+            if (!multidictFind(dense, &key, &a) ||
+                !multidictFind(sparse, &key, &b) || !databoxEqual(&a, &b) ||
+                a.data.i64 != (j % 2 ? j + 1 : 2 * j)) {
+                ERR("key %d: dense %" PRIdMAX ", sparse %" PRIdMAX, j, a.data.i,
+                    b.data.i);
+                break;
+            }
+        }
+
+        if (multidictCount(dense) != multidictCount(sparse) ||
+            multidictCount(dense) != (uint64_t)keys) {
+            ERR("counts %" PRIu64 " and %" PRIu64, multidictCount(dense),
+                multidictCount(sparse));
         }
     }
 
