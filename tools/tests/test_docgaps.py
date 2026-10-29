@@ -41,7 +41,59 @@ class DocGaps(unittest.TestCase):
 
     def report(self) -> list[docgaps.HeaderGaps]:
         headers = docgaps.collect_headers(self.repo)
-        return docgaps.gaps(headers, docgaps.doc_words(self.repo))
+        return docgaps.gaps(headers, docgaps.doc_index(self.repo))
+
+    def test_typed_families_are_documented_by_pattern_or_by_a_sibling(self) -> None:
+        (self.repo / "src" / "fw.h").write_text(
+            "#pragma once\nint fenwickI64Query(void);\nint fenwickU32Query(void);\n"
+            "int fenwickU32Bytes(void);\nint fenwick2dU16Get(void);\n"
+            "int segmentU16NewFromArray(void);\nint segmentWideFoo(void);\n"
+        )
+        (self.repo / "docs" / "modules" / "F.md").write_text(
+            "`fenwick<T>` trees: fenwickI64Query sums.  "
+            "`segment<T>NewFromArray(op, v, n)` builds.\n"
+        )
+        by = {g.header: g for g in self.report()}
+        # U32Query by its I64 sibling, NewFromArray by its pattern; Bytes has
+        # no documented sibling, a 2d name is not of the fenwick<T> family,
+        # and 'Wide' is not a type tag
+        self.assertEqual(
+            by["src/fw.h"].undocumented,
+            ("fenwick2dU16Get", "fenwickU32Bytes", "segmentWideFoo"),
+        )
+
+    def test_tier_headers_are_summed_apart_unless_named(self) -> None:
+        (self.repo / "src" / "mm.h").write_text("#pragma once\nvoid mmGet(void);\n")
+        (self.repo / "src" / "mmSmall.h").write_text(
+            "#pragma once\nvoid mmSmallGet(void);\nvoid mmSmallPut(void);\n"
+        )
+        # no umbrella: an ordinary header
+        (self.repo / "src" / "lonelyFull.h").write_text(
+            "#pragma once\nvoid lonelyFullGo(void);\n"
+        )
+        report = self.report()
+        by = {g.header: g for g in report}
+        self.assertTrue(by["src/mmSmall.h"].tier)
+        self.assertFalse(by["src/lonelyFull.h"].tier)
+        text = docgaps.render(report, names=False)
+        self.assertNotIn("src/mmSmall.h", text)
+        self.assertIn(
+            "  tier headers (used through their umbrella, not counted): "
+            "1 headers, 2 functions no doc names",
+            text,
+        )
+        # a.h 2, mm.h 1, lonelyFull.h 1 undocumented; b.h complete
+        self.assertTrue(
+            text.splitlines()[-1].startswith(
+                "docgaps: 4 of 6 public functions undocumented; "
+                "1 of 4 headers fully documented"
+            )
+        )
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            docgaps.run(self.repo, ("src/mmSmall.h",), False)
+        self.assertIn("    2 of    2  src/mmSmall.h", out.getvalue())
 
     def test_whole_words_in_docs_and_readme_count_as_documented(self) -> None:
         by = {g.header: g for g in self.report()}

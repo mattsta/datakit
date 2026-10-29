@@ -8,6 +8,18 @@ a whole word, in the user-level docs: ``docs/**/*.md`` and ``README.md``
 (suite and benchmark entry points, ``fooTest`` / ``fooBench``, and
 declarations under ``#ifdef DATAKIT_TEST`` are not API and are not
 counted).
+Typed families are documented once: a doc that writes ``prefix<T>rest``
+(``segment<T>NewFromArray``) documents ``prefix`` + every type + ``rest``,
+and one that writes ``prefix<T>`` (``fenwick<T>``) lets a type's function
+count as documented when the same function of another type is
+(``fenwickU32Query`` by ``fenwickI64Query``).  The types are the integer
+widths (``I8``..``I128``, ``U8``..``U128``), ``Float`` and ``Double``.
+
+A tier header (``fooSmall.h``, ``fooMedium.h``, ``fooLarge.h`` or
+``fooFull.h`` beside a public ``foo.h``) is used through its umbrella, so
+it is left out of the list and the totals and summed on a line of its
+own; naming one as a HEADER reports it like any other.
+
 Prints one line per header with undocumented functions, most undocumented
 first, then the totals; ``--names`` (or naming HEADERs) lists each
 header's undocumented functions too.  Without HEADERs it also names the
@@ -29,28 +41,81 @@ _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: A suite's or benchmark's entry point (``fooTest(argc, argv)``), not API
 _ENTRY_POINT = re.compile(r"(Test|Bench)$")
 
+#: ``prefix<T>rest`` in a doc: a typed family's name pattern
+_FAMILY = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)<T>([A-Za-z0-9_]*)")
+
+#: The type tags a typed family's names carry after their prefix
+_TYPE_TAG = re.compile(r"(?:[IU](?:8|16|32|64|128)|Float|Double)")
+_TYPE_TAGS = tuple(
+    [f"{s}{w}" for s in "IU" for w in (8, 16, 32, 64, 128)] + ["Float", "Double"]
+)
+
+#: A tier header's name: its umbrella's stem and the tier
+_TIER = re.compile(r"^(.*?)(Small|Medium|Large|Full)\.h$")
+
 
 @dataclass(frozen=True)
 class HeaderGaps:
     header: str
     declared: int
     undocumented: tuple[str, ...]
+    tier: bool = False
 
     @property
     def documented(self) -> int:
         return self.declared - len(self.undocumented)
 
 
-def doc_words(repo: Path) -> set[str]:
-    """Every identifier-shaped word of the user-level docs."""
+@dataclass(frozen=True)
+class DocIndex:
+    """What the user-level docs name: whole words, and typed families
+    (``prefix<T>rest`` patterns; a bare ``prefix<T>`` has rest '')."""
+
+    words: frozenset[str]
+    families: frozenset[tuple[str, str]] = frozenset()
+
+    def names(self, name: str) -> bool:
+        """Whether the docs document 'name': as a word, through a
+        ``prefix<T>rest`` pattern, or as a sibling of a documented type
+        of a ``prefix<T>`` family."""
+        if name in self.words:
+            return True
+        for prefix, rest in self.families:
+            if not name.startswith(prefix):
+                continue
+            tag = _TYPE_TAG.match(name, len(prefix))
+            if not tag:
+                continue
+            suffix = name[tag.end() :]
+            if rest and suffix == rest:
+                return True
+            if not rest and any(
+                prefix + t + suffix in self.words or (prefix, suffix) in self.families
+                for t in _TYPE_TAGS
+            ):
+                return True
+        return False
+
+
+def doc_index(repo: Path) -> DocIndex:
+    """The words and typed families of the user-level docs."""
     paths = sorted((repo / "docs").rglob("*.md"))
     readme = repo / "README.md"
     if readme.exists():
         paths.append(readme)
     words: set[str] = set()
+    families: set[tuple[str, str]] = set()
     for path in paths:
-        words.update(_WORD.findall(path.read_text(encoding="utf-8", errors="replace")))
-    return words
+        text = path.read_text(encoding="utf-8", errors="replace")
+        words.update(_WORD.findall(text))
+        families.update(_FAMILY.findall(text))
+    return DocIndex(frozenset(words), frozenset(families))
+
+
+def is_tier(path: str, headers: dict[str, str]) -> bool:
+    """Whether 'path' is a tier of a public umbrella header."""
+    m = _TIER.match(path)
+    return bool(m) and f"{m.group(1)}.h" in headers
 
 
 def api_text(header_text: str) -> str:
@@ -62,9 +127,12 @@ def api_text(header_text: str) -> str:
     )
 
 
-def gaps(headers: dict[str, str], words: set[str]) -> list[HeaderGaps]:
+def gaps(
+    headers: dict[str, str], index: DocIndex, tiers: bool = True
+) -> list[HeaderGaps]:
     """Per header with declarations: its functions no doc names, sorted
-    most undocumented first (then by path)."""
+    most undocumented first (then by path); with 'tiers', tier headers
+    are marked as such."""
     out = []
     for path, text in headers.items():
         names = sorted(
@@ -75,8 +143,9 @@ def gaps(headers: dict[str, str], words: set[str]) -> list[HeaderGaps]:
             }
         )
         if names:
-            missing = tuple(n for n in names if n not in words)
-            out.append(HeaderGaps(path, len(names), missing))
+            missing = tuple(n for n in names if not index.names(n))
+            tier = tiers and is_tier(path, headers)
+            out.append(HeaderGaps(path, len(names), missing, tier))
     return sorted(out, key=lambda g: (-len(g.undocumented), g.header))
 
 
@@ -94,18 +163,26 @@ def unindexed(repo: Path) -> list[str]:
 
 def render(report: list[HeaderGaps], names: bool, loose: list[str] = ()) -> str:
     lines = [f"  not in docs/INDEX.md: {path}" for path in loose]
-    for g in report:
+    api = [g for g in report if not g.tier]
+    tiers = [g for g in report if g.tier]
+    for g in api:
         if not g.undocumented:
             continue
         lines.append(f"{len(g.undocumented):5d} of {g.declared:4d}  {g.header}")
         if names:
             lines += [f"        {n}" for n in g.undocumented]
-    declared = sum(g.declared for g in report)
-    missing = sum(len(g.undocumented) for g in report)
-    complete = sum(1 for g in report if not g.undocumented)
+    if tiers:
+        lines.append(
+            f"  tier headers (used through their umbrella, not counted): "
+            f"{len(tiers)} headers, "
+            f"{sum(len(g.undocumented) for g in tiers)} functions no doc names"
+        )
+    declared = sum(g.declared for g in api)
+    missing = sum(len(g.undocumented) for g in api)
+    complete = sum(1 for g in api if not g.undocumented)
     lines.append(
         f"docgaps: {missing} of {declared} public functions undocumented; "
-        f"{complete} of {len(report)} headers fully documented; "
+        f"{complete} of {len(api)} headers fully documented; "
         f"{len(loose)} module docs not in docs/INDEX.md"
     )
     return "\n".join(lines)
@@ -120,5 +197,6 @@ def run(repo: Path, wanted: tuple[str, ...], names: bool) -> int:
             return 2
         headers = {h: headers[h] for h in wanted}
     loose = [] if wanted else unindexed(repo)
-    print(render(gaps(headers, doc_words(repo)), names or bool(wanted), loose))
+    report = gaps(headers, doc_index(repo), tiers=not wanted)
+    print(render(report, names or bool(wanted), loose))
     return 0
