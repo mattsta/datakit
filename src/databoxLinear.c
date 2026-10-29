@@ -1136,6 +1136,88 @@ int databoxLinearTest(int, char *[]) {
         }
     }
 
+    TEST("special floats and doubles round-trip bit for bit") {
+        /* The sign of zero, infinities, NaN payloads and subnormals are
+         * part of the value: '==' would pass a lost sign or any NaN */
+        const uint32_t floats[] = {
+            0x00000000u, 0x80000000u, 0x7F800000u, 0xFF800000u, 0x7FC00000u,
+            0xFFC00001u, 0x7F800001u, 0x00000001u, 0x807FFFFFu, 0x3C000000u};
+        for (size_t i = 0; i < countof(floats); i++) {
+            databox a = {.type = DATABOX_FLOAT_32};
+            memcpy(&a.data.f32, &floats[i], sizeof(float));
+            databoxLinear dl = {};
+            databox b = {};
+            uint32_t got = 0;
+            const bool ok = databoxLinearEncode(&a, &dl) >= 0 &&
+                            databoxLinearDecode(&dl, &b) &&
+                            b.type == DATABOX_FLOAT_32;
+            memcpy(&got, &b.data.f32, sizeof(got));
+            if (!ok || got != floats[i]) {
+                ERR("float 0x%08" PRIx32 " came back as type %d, 0x%08" PRIx32,
+                    floats[i], (int)b.type, got);
+            }
+        }
+        const uint64_t doubles[] = {
+            0x0000000000000000ull, 0x8000000000000000ull, 0x7FF0000000000000ull,
+            0xFFF0000000000000ull, 0x7FF8000000000000ull, 0xFFF8000000000001ull,
+            0x7FF0000000000001ull, 0x0000000000000001ull, 0x800FFFFFFFFFFFFFull,
+            0x3F80000000000000ull};
+        for (size_t i = 0; i < countof(doubles); i++) {
+            databox a = {.type = DATABOX_DOUBLE_64};
+            memcpy(&a.data.d64, &doubles[i], sizeof(double));
+            databoxLinear dl = {};
+            databox b = {};
+            uint64_t got = 0;
+            const bool ok = databoxLinearEncode(&a, &dl) >= 0 &&
+                            databoxLinearDecode(&dl, &b);
+            /* A double may come back narrower (it downgrades losslessly) */
+            double back = b.type == DATABOX_DOUBLE_64  ? b.data.d64
+                          : b.type == DATABOX_FLOAT_32 ? (double)b.data.f32
+                                                       : 0.0;
+            memcpy(&got, &back, sizeof(got));
+            if (!ok || got != doubles[i]) {
+                ERR("double 0x%016" PRIx64
+                    " came back as type %d, 0x%016" PRIx64,
+                    doubles[i], (int)b.type, got);
+            }
+        }
+    }
+
+    TEST("byte strings through the encode and decode macros") {
+        const char text[] = "linear bytes";
+        const databox a = databoxNewBytesString(text);
+        databoxLinear scratch = {};
+        size_t encodedLength = 0;
+        const void *encodedValue = nullptr;
+        uint_fast8_t encodedType = 0;
+        DATABOX_LINEAR_PARTS_ENCODE(&a, encodedLength, encodedValue,
+                                    encodedType, &scratch);
+        databox parts = {};
+        DATABOX_LINEAR_PARTS_DECODE(encodedType, encodedValue, encodedLength,
+                                    &parts);
+        databoxLinear whole = {.type = DATABOX_LINEAR_TYPE_BYTES};
+        whole.data.bytes.custart = encodedValue;
+        databox decoded = {};
+        DATABOX_LINEAR_DECODE(&whole, &decoded, encodedLength + 1);
+        if (encodedType != DATABOX_LINEAR_TYPE_BYTES ||
+            encodedLength != strlen(text) || parts.type != DATABOX_BYTES ||
+            parts.len != strlen(text) ||
+            memcmp(parts.data.bytes.custart, text, strlen(text)) ||
+            decoded.type != DATABOX_BYTES || decoded.len != strlen(text) ||
+            decoded.data.bytes.custart != encodedValue) {
+            ERR("%s", "byte strings did not pass through the macros");
+        }
+        /* A fixed-width value through the same two macros */
+        const databox n = databoxNewSigned(-77);
+        DATABOX_LINEAR_PARTS_ENCODE(&n, encodedLength, encodedValue,
+                                    encodedType, &scratch);
+        databox nBack = {};
+        DATABOX_LINEAR_DECODE(&scratch, &nBack, encodedLength + 1);
+        if (nBack.type != DATABOX_SIGNED_64 || nBack.data.i != -77) {
+            ERR("%s", "a signed value did not pass through the macros");
+        }
+    }
+
     TEST("PARTS_DECODE macro - fixed types") {
         databox a = databoxNewUnsigned(999);
         databoxLinear dl = {};
