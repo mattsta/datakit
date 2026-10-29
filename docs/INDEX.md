@@ -29,6 +29,8 @@ utility functions).
 - [dks String Buffers](modules/string/DKS.md) - Template-based string buffers (mds/mdsc)
 - [strDoubleFormat](modules/string/STR_DOUBLE_FORMAT.md) - Fast double-to-string conversion
 - [String Utilities](modules/string/STR_UTILS.md) - Extended string operations
+- [dj](modules/string/DJ.md) - Streaming JSON writer: separators tracked, chunked output, parts joined
+  without copying
 
 ### Flexible Arrays
 

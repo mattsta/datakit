@@ -93,9 +93,44 @@ The 32-bit variants keep only a window of time: their time field is the Unix tim
 sort only within one window (`ulid32GetTimestampNs` is the time within it). Within one unit an id follows
 the previous one while its low field has room.
 
-The dual-timestamp variants (`DUALNS`, `DUALNS_INTERLEAVED`) are 128-bit: two nanosecond timestamps,
-ordered by the first then the second, or in Z-order (bit-interleaved), through `ulidGenerateDualNs*`,
-`ulidFromDualNs*` and `ulidGet{First,Second}TimestampNs*`.
+`ulid32Generate(&gen, &id, ULID_VARIANT_32MS)` makes one (false, id zero, for a type that is not 32-bit);
+`ulid32GetRandom` reads its low field.
+
+Compact ids are plain integers in a struct (`ulid64_t.data`, `ulid32_t.data`), so they sort, hash and store
+as integers. `ulid64Compare` / `ulid32Compare` (memcmp-style -1, 0, 1), `ulid64IsZero` / `ulid32IsZero`,
+`ulid64Clear` / `ulid32Clear` and `ulid64Copy` / `ulid32Copy` mirror the 128-bit utilities.
+`ulid64GenerateAndEncode(&gen, text, sizeof(text), type)` makes and writes one in a call (0 when no id is
+made or the buffer is short), and `ulid64IsValidVariantType` says whether a value names a variant at all.
+
+## Two timestamps in one id
+
+The dual-timestamp variants are 128-bit ids made of two 64-bit nanosecond timestamps: an event's time and
+the time it was recorded, a start and an end, a version and the time it was written.
+
+- **`DUALNS`**: the first timestamp in the high half, the second in the low half. Ids sort by the first,
+  then by the second: a range scan over the first timestamp finds its ids together.
+- **`DUALNS_INTERLEAVED`**: the two timestamps' bits alternate (bit i of the first at bit 2i, of the
+  second at 2i + 1), so ids sort in Z-order: ids close in both timestamps sort near each other, and neither
+  timestamp alone orders them. Use it for two-dimensional range queries.
+
+```c
+/* An event that happened at 'occurredNs' and arrived at 'receivedNs' */
+ulid_t id;
+ulidFromDualNsInterleaved(&id, occurredNs, receivedNs);
+const uint64_t occurred = ulidGetFirstTimestampNsInterleaved(&id);
+const uint64_t received = ulidGetSecondTimestampNsInterleaved(&id);
+
+/* DUALNS from two times: the first in the high 64 bits */
+ulidFromDualNsU128(&id, ((__uint128_t)occurredNs << 64) | receivedNs);
+const uint64_t first = ulidGetFirstTimestampNs(&id);    /* occurredNs */
+const uint64_t second = ulidGetSecondTimestampNs(&id);  /* receivedNs */
+```
+
+`ulidToDualNsU128` / `ulidToDualNsInterleavedU128` return the id as one integer (the interleaved one still
+interleaved) and `ulidFromDualNsInterleavedU128` takes one back. `ulidGenerateDualNs` and
+`ulidGenerateDualNsInterleaved` take both timestamps from the generator: two successive emission times, the
+second always later than the first. `ulidGenerateDualNsU128` and `ulidGenerateDualNsInterleavedU128` return
+the same as one integer.
 
 ## Choosing
 
@@ -111,8 +146,18 @@ ordered by the first then the second, or in Z-order (bit-interleaved), through `
 ## Encoding
 
 `ulidEncode` / `ulidDecode` pick the fastest implementation available (scalar, SWAR, SSE2, AVX2, NEON);
-`ulidSetEncodeImpl` forces one (for any thread: a process-wide setting) and `ulidIsImplAvailable` /
-`ulidGetImplName` report them. All give the same characters and ids. Every implementation splits the
+`ulidSetEncodeImpl` forces one (for any thread: a process-wide setting), `ulidGetEncodeImpl` reports the one
+in use, and `ulidIsImplAvailable` / `ulidGetImplName` report them all. Each is also callable by name, for
+tests and benchmarks that compare them (the vector ones are declared only where the target has them):
+
+| Implementation | Encode             | Decode             |
+| -------------- | ------------------ | ------------------ | --------------------------------------------------------------------- |
+| scalar         | `ulidEncodeScalar` | `ulidDecodeScalar` |
+| SWAR           | `ulidEncodeSWAR`   | `ulidDecodeSWAR`   |
+| SSE2           | `ulidEncodeSSE2`   | `ulidDecodeSSE2`   |
+| AVX2           | `ulidEncodeAVX2`   | `ulidDecodeAVX2`   |
+| NEON           | `ulidEncodeNEON`   | `ulidDecodeNEON`   | All give the same characters and ids. Every implementation splits the |
+
 128-bit value with native 128-bit arithmetic into four independent 6-digit chains; they differ in how
 digits become characters (a table, eight per 64-bit word, or vector lanes). Measured (perf preset, clang
 22, Apple M-series; `perfRegression` module `ulid`): encode 29 ns scalar, 26 ns NEON, 35 ns SWAR; decode

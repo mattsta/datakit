@@ -187,12 +187,17 @@ static_assert(DJ_MAP == 1, "MAP must be 1!");
 /* ====================================================================
  * DJ Implementation
  * ==================================================================== */
+/* An empty buffer with DEFAULT_LEN bytes of room */
+static mds *djFreshBuffer_(void) {
+    /* @own: caller; free=mdsfree */
+    mds *s = mdsemptylen(DEFAULT_LEN);
+    mdsclear(s); /* the length is room, not content */
+    return s;
+}
+
 void djInit(djState *state) {
     /* @own: container; free=mdsfree */
-    djInitWithBuffer(state, mdsemptylen(DEFAULT_LEN));
-
-    /* Mark "preallocated length" as all free space. */
-    mdsclear(state->s);
+    djInitWithBuffer(state, djFreshBuffer_());
 }
 
 void djInitWithBuffer(djState *state, mds *buf) {
@@ -263,34 +268,38 @@ void djAppend(djState *dst, djState *src) {
     memset(src, 0, sizeof(*src));
 }
 
-DK_INLINE_ALWAYS void djTrailingCommaCleanup(djState *state) {
+/* Remove the separator every element leaves after itself; true when there
+ * was one */
+DK_INLINE_ALWAYS bool djTrailingCommaCleanup(djState *state) {
     const ssize_t last = mdslen(state->s) - 1;
     if (last >= 0 && state->s[last] == ',') {
         mdsIncrLen(state->s, -1);
         state->s[last] = '\0';
+        return true;
     }
+
+    return false;
 }
 
-/* During generation, you could consume the buffer to receive
- * the current output and return it to the user incrementally
- * until you reach a point to use djFinalize() */
-/* Note: this will need a little more work before it works in
- *       the middle of live generations, because the auto-trailing-comma
- *       removal will do the wrong thing if we are mid-element and you
- *       get the output (which will have an IMPORTANT comma probably
- *       removed).
- *       Fix by doing depth checks maybe? */
+/* The output so far, without its trailing separator.  With 'reset' the
+ * state writes on into a fresh buffer that starts with the separator held
+ * back, so the next element follows it and a close replaces it, exactly
+ * as in one buffer: the chunks joined are the document. */
 mds *djConsumeBuffer(djState *state, const bool reset) {
-    /* We maybe left a trailing comma,
-     * so when stopping JSON writing, remove
-     * the trailing comma! */
+    assert(state->ssCount == 0 && "Can't consume one of multiple buffers!");
+    const bool separator = djTrailingCommaCleanup(state);
 
-    djTrailingCommaCleanup(state);
+    mds *out = state->s;
+    state->s = nullptr;
+    if (reset) {
+        /* @own: container; free=mdsfree */
+        state->s = djFreshBuffer_();
+        if (separator) {
+            state->s = mdscatlen(state->s, ",", 1);
+        }
+    }
 
-    mds *hollaback = state->s;
-    /* @own: container; free=mdsfree */
-    state->s = reset ? mdsemptylen(DEFAULT_LEN) : nullptr;
-    return hollaback;
+    return out;
 }
 
 mds *djFinalize(djState *state) {
@@ -690,7 +699,7 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
 
 #define DJ_16_Z 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 void djString(djState *state, const void *data_, size_t len,
-              const bool supportUTF8) {
+              [[maybe_unused]] const bool supportUTF8) {
     static constexpr uint8_t hexDigits[16] = {'0', '1', '2', '3', '4', '5',
                                               '6', '7', '8', '9', 'A', 'B',
                                               'C', 'D', 'E', 'F'};
@@ -760,13 +769,11 @@ void djString(djState *state, const void *data_, size_t len,
         data += processedLen;
         len -= processedLen;
 
+        /* The scan stops only at control bytes, '"' and '\\': bytes from
+         * 0x80 up are copied as they are */
         const uint8_t next = data[0];
         const uint8_t escapeCharacter = esc(next);
-        if (!supportUTF8 && next >= 0x80) {
-            /* Skipping UTF8 validation here. Assuming sequence is just okay. */
-            cstr("\\u");
-            assert(false && "Unicode expansion validation not supported yet!");
-        } else if (escapeCharacter) {
+        if (escapeCharacter) {
             /* Verify we can write up to 6 bytes without overflowing splat */
             SPLAT_ENSURE(6);
 
@@ -917,6 +924,46 @@ static bool djTestIs(const mds *out, const char *want) {
     return mdslen(out) == strlen(want) && memcmp(out, want, mdslen(out)) == 0;
 }
 
+/* Step 'step' of writing [1,2,{"k":"v"},[],3] */
+static constexpr size_t djTestStreamSteps = 11;
+static void djTestStreamStep_(djState *st, const size_t step) {
+    switch (step) {
+    case 0:
+        djArrayOpen(st);
+        break;
+    case 1:
+        djNumericDirect(st, "1", 1);
+        break;
+    case 2:
+        djNumericDirect(st, "2", 1);
+        break;
+    case 3:
+        djMapOpen(st);
+        break;
+    case 4:
+        djStringDirect(st, "k", 1);
+        break;
+    case 5:
+        djStringDirect(st, "v", 1);
+        break;
+    case 6:
+        djMapCloseElement(st);
+        break;
+    case 7:
+        djArrayOpen(st);
+        break;
+    case 8:
+        djArrayCloseElement(st);
+        break;
+    case 9:
+        djNumericDirect(st, "3", 1);
+        break;
+    default:
+        djArrayCloseFinal(st);
+        break;
+    }
+}
+
 /* Write the integers [from, to) as values */
 static void djTestNumbers(djState *state, int from, int to) {
     for (int i = from; i < to; i++) {
@@ -1029,6 +1076,23 @@ int djTest(int, char *[]) {
         cleaner(mdsfree) mds *out = djFinalize(testA);
         if (!djTestIs(out, "\"hello\"")) {
             ERR("escaped string wrote %s", out);
+        }
+    }
+
+    TEST("escaped strings copy bytes from 0x80 up as they are") {
+        /* "héllo ☃ \U0001F600" as UTF-8, then 0xFF */
+        static const char in[] =
+            "h\xc3\xa9llo \xe2\x98\x83 \xf0\x9f\x98\x80\xff";
+        for (int utf8 = 0; utf8 < 2; utf8++) {
+            djState st = {};
+            djInit(&st);
+            djString(&st, in, sizeof(in) - 1, utf8);
+            cleaner(mdsfree) mds *out = djFinalize(&st);
+            if (mdslen(out) != sizeof(in) + 1 || out[0] != '"' ||
+                memcmp(out + 1, in, sizeof(in) - 1) != 0 ||
+                out[sizeof(in)] != '"') {
+                ERR("flag %d: wrote %s", utf8, out);
+            }
         }
     }
 
@@ -1784,6 +1848,36 @@ int djTest(int, char *[]) {
 
         mdsfree(single[0]);
         zfree(single);
+    }
+
+    TEST("djConsumeBuffer mid-document: the chunks join to the document") {
+        static const char *const want = "[1,2,{\"k\":\"v\"},[],3]";
+        /* cut < steps: consume after that step only; cut == steps: after
+         * every step */
+        for (size_t cut = 0; cut <= djTestStreamSteps; cut++) {
+            djState st = {};
+            djInit(&st);
+            cleaner(mdsfree) mds *joined = mdsempty();
+            for (size_t step = 0; step < djTestStreamSteps; step++) {
+                djTestStreamStep_(&st, step);
+                if (cut == step || cut == djTestStreamSteps) {
+                    mds *chunk = djConsumeBuffer(&st, true);
+                    if (mdslen(chunk) != strlen(chunk)) {
+                        ERR("cut %zu step %zu: a chunk holds a NUL byte", cut,
+                            step);
+                    }
+                    joined = mdscatlen(joined, chunk, mdslen(chunk));
+                    mdsfree(chunk);
+                }
+            }
+
+            mds *rest = djFinalize(&st);
+            joined = mdscatlen(joined, rest, mdslen(rest));
+            mdsfree(rest);
+            if (!djTestIs(joined, want)) {
+                ERR("cut %zu: chunks joined to %s", cut, joined);
+            }
+        }
     }
 
     TEST("djFree: frees every appended buffer and leaves a zeroed state") {

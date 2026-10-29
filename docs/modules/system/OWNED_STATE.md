@@ -80,6 +80,138 @@ void configTeardown(void) { /* after every reader thread is joined */
 }
 ```
 
+## Arenas without cells
+
+A cell retires what it replaces by itself. Anything else readers can reach (a node unlinked from a
+lock-free list, a table replaced by a resize) is retired directly once it is unreachable:
+
+```c
+ownedArenaRetire(&arena, oldTable, tableRelease, tableDescribe, OWNED_OOM_FREE);
+ownedArenaDrain(&arena);
+```
+
+`describe` (may be NULL) labels a cargo in hold reports. The OOM policy says what happens when the arena
+cannot record the row: `OWNED_OOM_FREE` releases at once (only safe when no reader can hold it),
+`OWNED_OOM_LEAK` leaks it. `ownedArenaDepth` is the number of readers inside the arena right now, for tests
+and diagnostics.
+
+## Inline cells
+
+An `OWNED_CELL_INLINE` cell publishes a `uint64_t` (a generation number, a packed small struct, a handle):
+`ownedCellStore` is a release store (with the writer check) and `ownedCellLoad` an acquire load. Nothing
+is retired, so no arena or reader scope is needed.
+
+```c
+static const ownedCellDecl epochDecl = {.name = "epoch", .form = OWNED_CELL_INLINE};
+static ownedCell epoch;
+
+ownedCellInit(&epoch, &epochDecl, nullptr, nullptr);
+ownedCellStore(&epoch, 42);                 /* the writer */
+const uint64_t now = ownedCellLoad(&epoch); /* any thread */
+```
+
+## Slots: one cargo, claimed or retired
+
+An `ownedSlot` is one atomic state word beside fields the caller owns (a connection's buffers, a timer's
+payload). A thread claims the slot to work on the fields; another may retire the slot at any moment (a
+shutdown, a cancel). Whatever the interleaving, the cargo is released exactly once:
+
+| Retire found | Who releases the cargo                                                     |
+| ------------ | -------------------------------------------------------------------------- |
+| `EMPTY`      | nobody (no cargo)                                                          |
+| `ARMED`      | the retiring call                                                          |
+| `CLAIMED`    | the claimant: its `ownedSlotPublish` fails against RETIRED and releases it |
+| `RETIRED`    | nobody (an earlier retire did)                                             |
+
+```c
+static const ownedSlotDecl jobDecl = {.name = "job"};
+
+typedef struct job {
+    ownedSlot state;
+    char *payload; /* set before the job is shared, never changed after */
+} job;
+
+void jobInit(job *j, char *payload) {
+    ownedSlotInit(&j->state, &jobDecl);
+    ownedSlotState prior;
+    ownedSlotClaim(&j->state, &prior);           /* EMPTY -> CLAIMED */
+    j->payload = payload;
+    ownedSlotPublish(&j->state, true, nullptr, nullptr); /* -> ARMED */
+}
+
+/* Workers */
+void jobRun(job *j) {
+    ownedSlotState prior;
+    if (!ownedSlotClaim(&j->state, &prior)) {
+        return; /* another worker has it, or it was cancelled */
+    }
+    work(j->payload);
+    /* Back to ARMED; false when a cancel came meanwhile, and then the
+     * payload is released here, since the cancel could not */
+    ownedSlotPublish(&j->state, true, zfree, j->payload);
+}
+
+/* Any thread */
+void jobCancel(job *j) { ownedSlotRetire(&j->state, zfree, j->payload); }
+```
+
+`ownedSlotLoad` reads the state (acquire). A zero-filled slot is EMPTY, and `OWNED_SLOT_INIT(&decl)`
+initialises a static one. With a row in the declaration, `ownedSlotClaimRefusedTotal`,
+`ownedSlotRetireMetClaimedTotal` and `ownedSlotReleaseByClaimantTotal` count the races.
+
+## Sequence rings: copy-out versions
+
+An `ownedSeq` keeps the last N publications of a small fixed-size value in caller storage. A reader asks
+for publication n and copies it out; the copy is checked against the version's stamp before and after, so
+it is either whole or reported as lost. No pointer into a version is returned, so nothing needs
+reclaiming. N = 1 is the classic seqlock; a larger N lets a slow reader still find a recent version.
+
+```c
+typedef struct quote { uint64_t bid, ask; } quote;
+static const ownedSeqDecl quoteDecl = {
+    .name = "quote", .versions = 4, .version_bytes = sizeof(quote)};
+static _Atomic uint64_t quoteStorage[OWNED_SEQ_STORAGE_WORDS(4, sizeof(quote))];
+static ownedSeq quotes = OWNED_SEQ_INIT(&quoteDecl, quoteStorage);
+
+/* The writer */
+ownedSeqPublish(&quotes, &(quote){.bid = 100, .ask = 101}, sizeof(quote));
+
+/* A reader: the newest whole publication */
+bool latestQuote(quote *out) {
+    for (;;) {
+        const uint64_t want = ownedSeqCursor(&quotes);
+        if (want == 0) {
+            return false; /* nothing published yet */
+        }
+        size_t len = 0;
+        switch (ownedSeqReadAt(&quotes, want, out, sizeof(*out), &len)) {
+        case OWNED_SEQ_VALID:
+            return true;
+        case OWNED_SEQ_CAPACITY:
+            return false; /* 'out' is smaller than the publication */
+        case OWNED_SEQ_TORN:
+        case OWNED_SEQ_OVERWRITTEN:
+            break; /* a newer publication landed: read the cursor again */
+        }
+    }
+}
+```
+
+- A reader after one particular publication n retries TORN while `ownedSeqReadCanSucceed(&s, before)`
+  (with `before = ownedSeqAssigned(&s)` taken when it began) says the version can still hold it.
+- `ownedSeqInit(&s, &decl, owner, storage)` sets up a runtime instance over `ownedSeqStorageBytes(&decl)`
+  bytes (it zeroes them); `ownedSeqDestruct` clears it once every reader and writer has stopped (the
+  storage stays the caller's).
+- `ownedSeqPublishWith(&s, len, fill, ctx)` writes in place through `ownedSeqPutWord` /
+  `ownedSeqPutBytes` instead of copying from a buffer; the fill must write all `len` bytes.
+- With `version_bytes` 8, `ownedSeqReadWordAt` reads one word inline; `ownedSeqReadMissed` is its
+  out-of-line half, which counts the misses.
+- `ownedSeqCursor` is the highest completed publication, `ownedSeqAssigned` the highest number handed out,
+  `ownedSeqVersions` N.
+- Counters: `ownedSeqPublishedTotal`, `ownedSeqTornReadsTotal`, `ownedSeqOverwrittenReadsTotal`,
+  `ownedSeqPublishAbandonedTotal` and `ownedSeqPublishRefusedOversizeTotal` over the process;
+  `ownedSeqColumnTotal(&decl, column)` for one declaration's row.
+
 ## Release rules
 
 - `OWNED_RELEASE_GRACE_AND_READERS` (the default): a retired object is freed once `graceUs` has passed
@@ -90,7 +222,19 @@ void configTeardown(void) { /* after every reader thread is joined */
 
 `ownedArenaDrain` never waits; call it from the writer's loop. Counters for monitoring:
 `ownedArenaDeferredTotal`, `ownedArenaRetiredTotal`, `ownedArenaLiveRows`, `ownedArenaGraceHeldTotal`,
-`ownedArenaHeldReadersNeverLeftTotal`; per-name rows via `ownedStateRowEnrol` / `ownedStateRowAt`.
+`ownedArenaHeldReadersNeverLeftTotal`.
+
+Per-name counters: a declaration that points at a static `ownedStateRow` enrols it on first use
+(`ownedStateRowEnrol` enrols one by hand). `ownedStateRowCount` and `ownedStateRowAt(i)` walk every
+enrolled row (newest first) and `ownedStateKindName` names a row's kind, for a metrics exporter:
+
+```c
+for (size_t i = 0; i < ownedStateRowCount(); i++) {
+    const ownedStateRow *row = ownedStateRowAt(i);
+    printf("%s %s %" PRIu64 "\n", ownedStateKindName(row->kind), row->name,
+           atomic_load_explicit(&row->c[0], memory_order_relaxed));
+}
+```
 
 ## Costs and cautions
 

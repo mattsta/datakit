@@ -52,6 +52,12 @@ static_assert(sizeof(djState) == 64, "Did you grow or shrink djState?");
  * no-op. */
 void djInit(djState *state);
 void djInitWithBuffer(djState *state, mds *buf);
+
+/* Take the output written so far (single-buffer state; the caller frees
+ * it with mdsfree).  With 'reset', writing continues into a fresh buffer
+ * and the chunks taken, joined in order with what djFinalize returns, are
+ * the whole document: a document can be streamed out as it is written.
+ * Without 'reset' the state has no buffer left (djFree it). */
 mds *djConsumeBuffer(djState *state, bool reset);
 
 /* Move every buffer of 'src' to the end of 'dst' without copying; 'dst'
@@ -88,9 +94,16 @@ void djArrayCloseFinal(djState *state);
 void djTrue(djState *state);
 void djFalse(djState *state);
 void djNULL(djState *state);
+/* A quoted string, escaped: '"', '\\' and control bytes become \" \\ \b
+ * \t \n \f \r or \u00XX; bytes from 0x80 up are copied as they are (valid
+ * UTF-8 in, valid JSON out), whatever 'supportUTF8' says. */
 void djString(djState *state, const void *data_, size_t len,
               const bool supportUTF8);
+/* A quoted string copied without escaping: the caller guarantees it holds
+ * no '"', '\\' or control byte */
 void djStringDirect(djState *state, const void *data, size_t len);
+/* Bytes copied unquoted as a value (a number already formatted); quoted
+ * in key position, since JSON keys are strings */
 void djNumericDirect(djState *state, const void *data, size_t len);
 
 /* Bonus: for generating python-style sets */
