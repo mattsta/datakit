@@ -541,16 +541,6 @@ typedef bool mxOp(mxCtx *x, size_t i);
 
 defcleanerName(size_t *, zfree, Sizes);
 
-/* Fisher-Yates over order[0, n) */
-static void mxShuffle(size_t *order, size_t n, uint64_t *seed) {
-    for (size_t i = n; i > 1; i--) {
-        const size_t j = (size_t)dkSplitmix64Bounded(seed, i);
-        const size_t swap = order[i - 1];
-        order[i - 1] = order[j];
-        order[j] = swap;
-    }
-}
-
 /* 'op' on elements order[0, n); false (counting) for any refused one */
 static double mxTime(mxCtx *x, mxOp *op, const size_t *order, size_t n,
                      size_t *failed) {
@@ -583,20 +573,20 @@ static size_t mxMeasure(const mxDriver *d, mxKind kind, size_t n,
 
     /* Create: keyed containers in a shuffled order */
     if (!sequence) {
-        mxShuffle(order, n, &seed);
+        DK_SHUFFLE(order, n, &seed);
     }
     const double createSecs = mxTime(&x, d->create, order, n, &failed);
     const double perElement = n ? (double)d->bytes(&x) / (double)n : 0;
     failed += d->count(&x) != n;
     if (sequence) {
-        mxShuffle(order, n, &seed);
+        DK_SHUFFLE(order, n, &seed);
     }
     mxRow(d, kind, n, "create", createSecs, perElement);
 
     mxRow(d, kind, n, "read", mxTime(&x, d->read, order, n, &failed),
           perElement);
     if (d->update) {
-        mxShuffle(order, n, &seed);
+        DK_SHUFFLE(order, n, &seed);
         mxRow(d, kind, n, "update", mxTime(&x, d->update, order, n, &failed),
               perElement);
         /* Untimed: every element reads back as its update */
@@ -605,7 +595,7 @@ static size_t mxMeasure(const mxDriver *d, mxKind kind, size_t n,
             failed += !d->read(&x, i);
         }
     }
-    mxShuffle(order, n, &seed);
+    DK_SHUFFLE(order, n, &seed);
     mxRow(d, kind, n, "delete", mxTime(&x, d->remove, order, n, &failed),
           perElement);
     failed += d->count(&x) != 0;

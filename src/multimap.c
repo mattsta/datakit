@@ -2603,12 +2603,7 @@ static void mwShuffle(size_t *order, const size_t n, uint64_t *rng) {
         order[i] = i;
     }
 
-    for (size_t i = n; i > 1; i--) {
-        const size_t j = dkXorshift64Next(rng) % i;
-        const size_t t = order[i - 1];
-        order[i - 1] = order[j];
-        order[j] = t;
-    }
+    DK_SHUFFLE(order, n, rng);
 }
 
 static void mwInsert(multimap **m, mwRow *r) {

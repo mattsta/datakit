@@ -1434,12 +1434,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
     for (size_t i = 0; i < n; i++) {
         order[i] = i;
     }
-    for (size_t i = n; i > 1; i--) {
-        const size_t j = xorshift64star(&mosWideRng_) % i;
-        const size_t t = order[i - 1];
-        order[i - 1] = order[j];
-        order[j] = t;
-    }
+    DK_SHUFFLE(order, n, &mosWideRng_);
 
     cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
     for (size_t i = 0; i < n; i++) {

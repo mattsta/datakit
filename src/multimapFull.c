@@ -3843,22 +3843,14 @@ int multimapFullTest(int, char *[]) {
         char keybuf[16];
         char valbuf[16];
 
-        /* Build a deterministic shuffle of [0, howMany) using a
-         * linear-congruential walk so the test is reproducible
-         * across runs but exercises non-sorted insert order. */
+        /* A seeded shuffle of [0, howMany): reproducible across runs,
+         * and a non-sorted insert order */
         size_t order[60];
         for (size_t i = 0; i < howMany; i++) {
             order[i] = i;
         }
-        /* Fisher-Yates with fixed seed for reproducibility. */
         uint64_t rng = 0xdeadbeefcafebabeULL;
-        for (size_t i = howMany - 1; i > 0; i--) {
-            dkLcg64Next(&rng);
-            const size_t j = (size_t)(rng >> 32) % (i + 1);
-            const size_t tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
+        DK_SHUFFLE(order, howMany, &rng);
 
         for (size_t k = 0; k < howMany; k++) {
             const size_t i = order[k];
@@ -3977,13 +3969,7 @@ int multimapFullTest(int, char *[]) {
             order[i] = i;
         }
         uint64_t rng = 0xA5A5A5A5DEADBEEFULL;
-        for (size_t i = howMany - 1; i > 0; i--) {
-            dkLcg64Next(&rng);
-            const size_t j = (size_t)(rng >> 32) % (i + 1);
-            const size_t tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
+        DK_SHUFFLE(order, howMany, &rng);
 
         for (size_t step = 0; step < howMany; step++) {
             const size_t i = order[step];
@@ -4050,13 +4036,7 @@ int multimapFullTest(int, char *[]) {
                 order[i] = i;
             }
             uint64_t rng = 0x9E3779B97F4A7C15ULL + r * 0xBF58476D1CE4E5B9ULL;
-            for (size_t i = keysPerRound - 1; i > 0; i--) {
-                dkLcg64Next(&rng);
-                const size_t j = (size_t)(rng >> 32) % (i + 1);
-                const size_t tmp = order[i];
-                order[i] = order[j];
-                order[j] = tmp;
-            }
+            DK_SHUFFLE(order, keysPerRound, &rng);
 
             bool round_ok = true;
             for (size_t step = 0; step < keysPerRound; step++) {

@@ -790,12 +790,7 @@ static void **create_pointer_chain(size_t size_bytes) {
         indices[i] = i;
     }
     uint64_t rng = 0xda7a5eed;
-    for (size_t i = count - 1; i > 0; i--) {
-        const size_t j = (size_t)dkSplitmix64Bounded(&rng, i + 1);
-        size_t tmp = indices[i];
-        indices[i] = indices[j];
-        indices[j] = tmp;
-    }
+    DK_SHUFFLE(indices, count, &rng);
 
     /* Build chain */
     for (size_t i = 0; i < count - 1; i++) {

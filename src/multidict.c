@@ -8233,15 +8233,8 @@ int multidictTest(int, char *[]) {
         }
         assert(multidictCount(rd) == total);
 
-        testRandSeed(64);
-        for (int32_t i = total - 1; i > 0; i--) {
-            const int32_t j =
-                (int32_t)(((uint32_t)testRand() << 15 | testRand()) %
-                          (uint32_t)(i + 1));
-            const int32_t t = order[i];
-            order[i] = order[j];
-            order[j] = t;
-        }
+        uint64_t shuffleSeed = 64;
+        DK_SHUFFLE(order, (size_t)total, &shuffleSeed);
 
         uint32_t picks = 0, picksRehashing = 0;
         for (int32_t n = 0; n < deleted; n++) {

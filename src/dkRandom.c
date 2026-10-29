@@ -709,6 +709,57 @@ int dkRandomTest(int, char *[]) {
         }
     }
 
+    TEST("DK_SHUFFLE: a permutation, replayable, every order about as "
+         "likely") {
+        /* 1000 elements: each once after the shuffle, and the same seed
+         * gives the same order */
+        uint32_t a[1000];
+        uint32_t b[1000];
+        for (uint32_t i = 0; i < 1000; i++) {
+            a[i] = b[i] = i;
+        }
+        uint64_t seedA = 42;
+        uint64_t seedB = 42;
+        DK_SHUFFLE(a, 1000, &seedA);
+        DK_SHUFFLE(b, 1000, &seedB);
+        bool seen[1000] = {};
+        size_t moved = 0;
+        for (uint32_t i = 0; i < 1000; i++) {
+            if (a[i] >= 1000 || seen[a[i]] || a[i] != b[i]) {
+                ERR("element %u: %u (replay %u)", i, a[i], b[i]);
+                break;
+            }
+            seen[a[i]] = true;
+            moved += a[i] != i;
+        }
+        if (moved < 900) {
+            ERR("only %zu of 1000 elements moved", moved);
+        }
+
+        /* Three elements, 60000 shuffles: each of the six orders about a
+         * sixth of the time (within 5%) */
+        size_t counts[6] = {};
+        uint64_t seed = 7;
+        for (int round = 0; round < 60000; round++) {
+            int three[3] = {0, 1, 2};
+            DK_SHUFFLE(three, 3, &seed);
+            counts[three[0] * 2 + (three[1] > three[2])]++;
+        }
+        for (size_t k = 0; k < 6; k++) {
+            if (counts[k] < 9500 || counts[k] > 10500) {
+                ERR("order %zu came %zu times in 60000", k, counts[k]);
+            }
+        }
+
+        /* Zero and one element: nothing to do */
+        int one[1] = {9};
+        DK_SHUFFLE(one, 1, &seed);
+        DK_SHUFFLE(one, 0, &seed);
+        if (one[0] != 9) {
+            ERR("a one-element shuffle changed it");
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

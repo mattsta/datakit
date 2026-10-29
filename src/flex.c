@@ -8347,12 +8347,7 @@ static int32_t flexTestWideSorted(void) {
         order[i] = i;
     }
 
-    for (size_t i = KEYS - 1; i > 0; i--) {
-        const size_t j = dkXorshift64StarNext(&state) % (i + 1);
-        const size_t t = order[i];
-        order[i] = order[j];
-        order[j] = t;
-    }
+    DK_SHUFFLE(order, KEYS, &state);
 
     cleaner(flexFree) flex *f = flexNew();
     for (size_t i = 0; i < KEYS; i++) {

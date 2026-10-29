@@ -126,6 +126,21 @@ static inline uint64_t dkSplitmix64Next(uint64_t *state) {
  * unpredictable. */
 uint64_t dkSplitmix64Bounded(uint64_t *state, uint64_t bound);
 
+/* Shuffle 'array[0, n)' in place (Fisher-Yates) with the splitmix64
+ * stream at the uint64_t '*state': every order equally likely, and the
+ * same seed gives the same order on every platform.  Any element type
+ * (swapped whole).  Reproducible data only, as dkSplitmix64Bounded. */
+#define DK_SHUFFLE(array, n, state)                                            \
+    do {                                                                       \
+        for (size_t dkShuffleI_ = (n); dkShuffleI_ > 1; dkShuffleI_--) {       \
+            const size_t dkShuffleJ_ =                                         \
+                (size_t)dkSplitmix64Bounded((state), dkShuffleI_);             \
+            const typeof((array)[0]) dkShuffleT_ = (array)[dkShuffleI_ - 1];   \
+            (array)[dkShuffleI_ - 1] = (array)[dkShuffleJ_];                   \
+            (array)[dkShuffleJ_] = dkShuffleT_;                                \
+        }                                                                      \
+    } while (0)
+
 #ifdef DATAKIT_TEST
 int dkRandomTest(int argc, char *argv[]);
 #endif
