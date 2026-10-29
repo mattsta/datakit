@@ -161,6 +161,12 @@ valueFromBucketOffset(const databoxBig *restrict const bucket,
 
 #define boxPtrToU32(box) (intsetU32 *)(box.data.ptr)
 
+/* The bucket index's node limit.  A multimap searches each node's packed
+ * rows in turn, and a bucket row is a small integer key and a pointer, so
+ * the index's lookups (one per add, find and remove) scan a node's worth
+ * of rows: a smaller node than the family default keeps that scan short. */
+static constexpr flexCapSizeLimit INTSET_BIG_INDEX_LIMIT = FLEX_CAP_LEVEL_256;
+
 intsetBig *intsetBigNew(void) {
     /* Create map of bucketIndex -> intsetU32 */
     /* @own: caller; free=intsetBigFree */
@@ -170,7 +176,7 @@ intsetBig *intsetBigNew(void) {
      * (key+value), so when the intsetU32 pointer changes after resize, the
      * replace operation fails to find the existing entry. */
     /* @own: container; free=multimapFree */
-    isb->i = multimapNew(2);
+    isb->i = multimapNewLimit(2, INTSET_BIG_INDEX_LIMIT);
     return isb;
 }
 
@@ -204,7 +210,7 @@ intsetBig *intsetBigCopy(const intsetBig *const isb) {
     intsetBig *result = zmalloc(sizeof(*result));
     result->count = isb->count;
     /* @own: container; free=multimapFree */
-    result->i = multimapNew(2);
+    result->i = multimapNewLimit(2, INTSET_BIG_INDEX_LIMIT);
 
     multimapIterator iter;
     multimapIteratorInit(isb->i, &iter, true);
@@ -490,10 +496,9 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
     intsetBig *isb = intsetBigNew();
     multimapFree(isb->i);
     /* The rows ascend by key (checked above), so this never refuses.  The
-     * family's default limit, as intsetBigNew's multimapNew has. */
+     * index's own limit, as intsetBigNew's has. */
     /* @own: container; free=multimapFree */
-    isb->i = multimapNewFromDump(2, false, false,
-                                 dkTierDefaultLimit(DK_TIER_MULTIMAP), rows);
+    isb->i = multimapNewFromDump(2, false, false, INTSET_BIG_INDEX_LIMIT, rows);
     isb->count = total;
     return isb;
 
