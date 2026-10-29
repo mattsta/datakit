@@ -1,0 +1,10 @@
+# Struct bodies a public header shows on purpose though no public call
+# names them or a call returns them by pointer (dktools structs): PATH NAME REASON
+src/databox.h databoxStr a layout callers allocate themselves: a box with its bytes inline
+src/multidict.h multidictClass a call table: a slot class implements it and multidict calls it
+src/multidict.h multidictType a call table callers fill with their hash and compare functions
+src/perf.h perfState the state perf.h's timing macros keep in each including file
+src/perf.h perfStateGlobal the per-clock totals inside perfState
+src/persist.h persistStore a call table: each storage backend implements it
+src/persist/contract/persistContract.h persistContractType a call table: each type's persistence contract implements it
+src/ulid.h ulidGen caller-owned generator state: on the stack or heap, zero-initialized is valid

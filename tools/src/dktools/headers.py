@@ -18,7 +18,10 @@ the list stays true.
 
 Every handle in the public headers is also checked for its ``@handle``
 tag (``dktools handles``: whether a call can move it), so the gate fails
-on an untagged handle or one whose calls contradict its tag.
+on an untagged handle or one whose calls contradict its tag; and every
+struct body in them for whether callers use its fields (``dktools
+structs``), so a handle's or an unnamed struct's body fails unless
+tools/structs-allow.txt names it.
 
 The compile database is DIR's ``compile_commands.json`` (``--build``,
 e.g. a verify tree's binary dir), else ``build/PRESET``'s.  Exits 0 when
@@ -34,7 +37,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import handles, irdups, procs
+from . import handles, irdups, procs, structs
 from .gitutil import ToolError
 from .retoken import VENDORED, sources
 
@@ -180,10 +183,14 @@ def run(
     untagged = [p for h in found for p in h.problems()]
     for p in untagged:
         print(p)
+    shown, bodies = structs.gate(repo, paths)
+    for p in shown:
+        print(p)
 
     print(
         f"headers: {len(bad)} to fix, {len(failed) - len(bad)} allowed, "
         f"{len(stale)} stale allow lines, of {len(files)} headers; "
-        f"{len(untagged)} of {len(found)} handles to fix"
+        f"{len(untagged)} of {len(found)} handles to fix; "
+        f"{len(shown)} of {bodies} struct bodies to fix"
     )
-    return 1 if bad or stale or untagged else 0
+    return 1 if bad or stale or untagged or shown else 0

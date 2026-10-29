@@ -296,6 +296,18 @@ class Coverage(unittest.TestCase):
         )
         self.assertFalse(coverage.PRIVATE_HEADER.search("src/multimap.h"))
 
+    def test_test_support_headers_are_not_api(self) -> None:
+        for path in (
+            "src/ctest.h",
+            "src/dkTestTmp.h",
+            "src/hash/sha256TestVectors.h",
+            "src/persist/persistTestCommon.h",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(coverage.PRIVATE_HEADER.search(path))
+        # A module whose name holds 'test' is still API
+        self.assertFalse(coverage.PRIVATE_HEADER.search("src/memtest.h"))
+
 
 SHOW = """\
     1|       |/* widget.c */

@@ -769,8 +769,11 @@ uv run --project tools dktools headers [--build DIR | --preset P] [-j N] [FILE .
   macros); a line without a reason is an input error (exit 2), and a line
   whose header compiles on its own now, or names no checked header,
   fails, so the list stays true.
-- Also checks every handle's `@handle` tag (see `handles`); the summary
-  line counts the handles to fix.
+- Also checks every handle's `@handle` tag (see `handles`) and every
+  struct body in a public header (see `structs`: a handle's or unnamed
+  struct's body fails unless a `PATH NAME REASON` line in
+  `tools/structs-allow.txt` names it, and a line naming no such body
+  fails); the summary line counts the handles and bodies to fix.
 - Runs in `verify` and `validate` after the build (the `headers` line).
   Exits 0 clean, 1 for a failing header, a stale allow line or a handle
   to fix.
@@ -811,7 +814,12 @@ uv run --project tools dktools structs [HEADER ...] [--all]
   iterators). Public calls are the prototypes, inline definitions and
   function pointers of every public header.
 - Lists the `handle` and `unnamed` ones (`--all`: every one) and the
-  totals. A report: exit 0, 2 for a header that is not public.
+  totals. A report: exit 0, 2 for a header that is not public; `headers`
+  runs it as a gate against `tools/structs-allow.txt`.
+- Public headers are every `src/` header but a module's `*Internal.h` /
+  `*Impl.h`, the vendored allocator's own, and test support (`ctest.h`,
+  `dkTest*.h`, `*TestVectors.h`, `*TestCommon.h`), for every tool that
+  reads the public API (`coverage`, `docgaps`, `handles`, `structs`).
 
 ## testchecks — TEST blocks that check nothing
 

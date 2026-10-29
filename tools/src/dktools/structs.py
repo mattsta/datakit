@@ -18,6 +18,11 @@ Public calls are the prototypes, inline definitions and function
 pointers of every public header (test-only code aside).  ``--all`` also
 lists the data structs.  A report: exit 0, 2 for a header that is not
 public.
+
+``dktools headers`` runs the same sort as a gate: a handle or unnamed
+body fails unless a ``PATH NAME REASON`` line in tools/structs-allow.txt
+names it (call tables callers implement, caller-allocated state), and
+an allow line naming no such body fails, so the list stays true.
 """
 
 from __future__ import annotations
@@ -28,8 +33,11 @@ from pathlib import Path
 
 from .coverage import code_text, collect_headers
 from .docgaps import api_text
+from .gitutil import ToolError
 from .handles import calls_in
 from .retoken import VENDORED
+
+ALLOW_FILE = Path("tools/structs-allow.txt")
 
 #: 'struct tag {' or 'typedef struct [tag] {' at the start of a line
 _BODY = re.compile(r"^\s*(?:typedef\s+)?struct\s+(\w+)?\s*\{", re.MULTILINE)
@@ -101,12 +109,13 @@ def classify(structs: list[Struct], headers: dict[str, str]) -> None:
     for text in headers.values():
         for func, sig in public_calls(text):
             named |= set(_IDENT.findall(sig)) & by_name.keys()
+            # A 'const T *' return is read-only data (a getter), not a handle
             ret = re.match(
-                rf"^(?:[\w\[\]]+\s+)*?(?:struct\s+)?(\w+)\s*\*\s*{re.escape(func)}\s*\(",
+                rf"^((?:[\w\[\]]+\s+)*?)(?:struct\s+)?(\w+)\s*\*\s*{re.escape(func)}\s*\(",
                 sig,
             )
-            if ret and ret.group(1) in by_name:
-                returned.add(ret.group(1))
+            if ret and ret.group(2) in by_name and "const" not in ret.group(1).split():
+                returned.add(ret.group(2))
     # A struct a named struct holds (by value or pointer) is named too
     reached = {id(by_name[n]) for n in named}
     todo = [by_name[n] for n in named]
@@ -149,6 +158,47 @@ def render(structs: list[Struct], show_all: bool) -> str:
         + ", ".join(f"{counts[k]} {k}" for k in KINDS)
     )
     return "\n".join(lines)
+
+
+def parse_allow(text: str) -> dict[tuple[str, str], str]:
+    """The allow file's (path, struct) -> reason entries; ToolError for a
+    line without a reason."""
+    allowed: dict[tuple[str, str], str] = {}
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            raise ToolError(f"{ALLOW_FILE}:{n}: PATH NAME REASON needs a reason")
+        allowed[(parts[0], parts[1])] = parts[2]
+    return allowed
+
+
+def gate(repo: Path, wanted: tuple[str, ...] = ()) -> tuple[list[str], int]:
+    """The problem lines for the headers gate: each handle or unnamed body
+    the allow file does not name, and (on a whole-tree run) each allow
+    line naming no such body; and how many bodies were checked."""
+    allow_path = repo / ALLOW_FILE
+    allowed = parse_allow(
+        allow_path.read_text(encoding="utf-8") if allow_path.exists() else ""
+    )
+    found = collect(repo, wanted)
+    flagged = {(s.header, s.name): s for s in found if s.kind != "data"}
+    lines = [
+        f"{s.header}: {s.name}: {s.kind} struct body in a public header "
+        f"(move it behind an opaque typedef, or add it to {ALLOW_FILE})"
+        for key, s in flagged.items()
+        if key not in allowed
+    ]
+    if not wanted:
+        lines += [
+            f"{ALLOW_FILE}: {path} {name}: allowed but not a handle or "
+            "unnamed body in a public header"
+            for path, name in allowed
+            if (path, name) not in flagged
+        ]
+    return lines, len(found)
 
 
 def run(repo: Path, wanted: tuple[str, ...], show_all: bool) -> int:

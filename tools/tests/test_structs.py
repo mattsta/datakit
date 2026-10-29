@@ -7,9 +7,12 @@ Run from the repository root::
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from dktools import structs
+from dktools.gitutil import ToolError
 
 
 def kinds(*headers: tuple[str, str]) -> dict[str, str]:
@@ -73,6 +76,36 @@ class Kinds(unittest.TestCase):
             ),
             {"pt": "data"},
         )
+
+
+class Gate(unittest.TestCase):
+    def tree(self, header: str, allow: str) -> Path:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (root / "src").mkdir()
+        (root / "src" / "box.h").write_text(header)
+        (root / "tools").mkdir()
+        (root / "tools" / "structs-allow.txt").write_text(allow)
+        return root
+
+    HANDLE = "typedef struct box { int n; } box;\nbox *boxNew(void);\n"
+
+    def test_a_handle_body_fails_unless_allowed(self) -> None:
+        lines, bodies = structs.gate(self.tree(self.HANDLE, ""))
+        self.assertEqual(bodies, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("src/box.h: box: handle struct body", lines[0])
+        allowed = self.tree(self.HANDLE, "src/box.h box callers size it\n")
+        self.assertEqual(structs.gate(allowed), ([], 1))
+
+    def test_a_stale_allow_line_fails(self) -> None:
+        header = "typedef struct stats { int n; } stats;\nvoid f(stats *s);\n"
+        lines, _ = structs.gate(self.tree(header, "src/box.h stats old reason\n"))
+        self.assertEqual(len(lines), 1)
+        self.assertIn("allowed but not a handle", lines[0])
+
+    def test_an_allow_line_needs_a_reason(self) -> None:
+        with self.assertRaises(ToolError):
+            structs.parse_allow("src/box.h box\n")
 
 
 if __name__ == "__main__":

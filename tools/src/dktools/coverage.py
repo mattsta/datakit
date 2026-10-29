@@ -45,8 +45,12 @@ IGNORE_FILES = r"(^|/)deps/|Test\.c$|Bench\.c$|(^|/)datakit-test\.c$"
 
 #: Headers that are not public API: internal and implementation headers
 #: and memshard's allocator internals (its public header is mimalloc.h).
+#: Not API: a module's internals, the vendored allocator's own headers,
+#: and test support (the test harness, scratch directories, test vectors,
+#: shared test helpers)
 PRIVATE_HEADER = re.compile(
     r"(Internal|Impl)\.h$|(^|/)memshard/(src|include/mimalloc)/"
+    r"|(^|/)(ctest|dkTest\w+|\w+TestVectors|\w+TestCommon)\.h$"
 )
 
 #: Identifiers that look like a function name before '(' but are not:

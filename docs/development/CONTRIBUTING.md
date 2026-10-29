@@ -477,6 +477,23 @@ its calls contradict: `moves` with no `T **` call, `returns` with no call
 returning one, `fixed` with a `T **` parameter. `dktools handles --list`
 prints every handle with its tag and its `T **` calls.
 
+### Public Headers Show Data, Not Internals
+
+A public header shows a struct's fields only when callers fill or read
+them: configurations, results, statistics, iterators callers declare.
+A handle's fields (anything a public call returns by pointer, such as
+`multimapP *multimapNewP(...)`) and structs no public call names are the
+module's own: they live in its `.c`, or in a `<module>Internal.h` its
+family's files include when several need them (`multimapSmallInternal.h`,
+`intsetFullInternal.h`), behind `typedef struct T T;` in the public
+header. Test support goes in test-named headers (`dkTest*.h`,
+`*TestVectors.h`, `*TestCommon.h`), which are not API.
+
+**The gate.** `dktools headers` fails on a handle's or unnamed struct's
+body in a public header unless `tools/structs-allow.txt` names it with
+a reason (a call table callers implement, caller-allocated state such
+as `ulidGen`). `dktools structs` lists them.
+
 ### Error Handling
 
 **Return values:**
