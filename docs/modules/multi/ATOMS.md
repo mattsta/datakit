@@ -7,11 +7,11 @@ interned values is comparing two ids.
 datakit has three interning types. They share one model: a value is interned once, every holder takes a
 reference, and the value is freed when the last reference goes (unless the table is permanent).
 
-| Type           | Header           | What it is                                                                                             |
-| -------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
-| `stringPool`   | `stringPool.h`   | Hash table value -> id plus an array id -> value: fastest by id                                        |
-| `multimapAtom` | `multimapAtom.h` | Compact table: an index (hashed, ordered or dict) plus id rows; reusing, permanent or lowest-first ids |
-| `atomPool`     | `atomPool.h`     | One interface over `stringPool` (HASH) or `multimapAtom` (TREE)                                        |
+| Type           | Header           | What it is                                                                                              |
+| -------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `stringPool`   | `stringPool.h`   | Hash table value -> id plus an array id -> value: fastest by id                                         |
+| `multimapAtom` | `multimapAtom.h` | Compact table: an index (hashed, ordered or slots) plus id rows; reusing, permanent or lowest-first ids |
+| `atomPool`     | `atomPool.h`     | One interface over `stringPool` (HASH) or `multimapAtom` (TREE)                                         |
 
 ## Choosing
 
@@ -27,7 +27,7 @@ reference, and the value is freed when the last reference goes (unless the table
 STRING_POOL_IDS_PERMANENT)`, `multimapAtomNewConfig` with `.ids = MULTIMAP_ATOM_IDS_PERMANENT`). An atom lives until Reset or Free; retain
   and release do nothing; an id is never reused, so a bare id stays valid for the table's life.
 
-`multimapAtom`'s own index kinds (HASHED, the default; ORDERED; DICT) are compared in
+`multimapAtom`'s own index kinds (HASHED, the default; ORDERED; SLOTS) are compared in
 [multimap VARIANTS](../multimap/VARIANTS.md#multimapatom).
 
 ## Ids and references

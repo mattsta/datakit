@@ -470,7 +470,7 @@ Each range box is a 16-byte `databox`. A 96/128-bit head key points at a
 
 `multimapAtom` is **not a multimap tier**. It is a string-interning and
 reference-counting table built from two multimaps, letting callers store a small
-integer reference wherever a repeated byte string would otherwise go.
+integer reference wherever a repeated value would otherwise go.
 
 **Header**: `multimapAtom.h` **Source**: `multimapAtom.c`
 
@@ -480,10 +480,11 @@ integer reference wherever a repeated byte string would otherwise go.
 struct multimapAtom {
     idRows *forward; /* {Key, Refcount} rows addressed by ID */
     union {          /* the reverse index (multimapAtomIndex) */
-        multimap *mapAtomReverse;   /* ORDERED, HASHED */
-        multidict *dictAtomReverse; /* DICT */
+        multimap *mapAtomReverse;     /* ORDERED, HASHED */
+        atomSlots_ *slotsAtomReverse; /* SLOTS: NULL until the first atom */
     };
-    uint64_t highest; /* next ID; bit 63: permanent, 61-62: index */
+    uint64_t highest; /* next ID; bits 59-60: ids, 61-62: index */
+    multiroar *holes; /* LOWEST: freed IDs below the next; NULL when none */
 };
 ```
 
@@ -511,54 +512,51 @@ creation (`multimapAtomNewConfig()`, `.index`) and read back by
   `multimapInsertWithSurrogateKey()` so they sort by the _resolved_ key. Every
   comparison in a find reads an ID's key from the forward rows by position
   (about log n comparisons). The smallest index.
-- `MULTIMAP_ATOM_INDEX_DICT`: a `multidict` from each key to its ID. A find is
-  one hash and one slot search, with no forward lookup, but every key is
-  stored a second time and the dict adds a slot table and a slot allocation
-  per few atoms. Any change that starts a dict rehash finishes it before
-  returning, so lookups never modify the table (`multidictFind` would
-  otherwise step the rehash), at the cost of an occasional whole rehash
-  inside an add.
+- `MULTIMAP_ATOM_INDEX_SLOTS`: an open-addressed table of IDs, 9 bytes a slot
+  (the ID and a control byte holding 7 bits of the key's hash), kept between
+  3/8 and 3/4 full and shrunk when under 1/8. A find is one hash and a probe
+  from its slot; a slot whose hash bits match resolves its ID in the forward
+  rows (normally one). Keys are held once, by the forward rows, so the index
+  costs the same whatever the key's length.
 
 Equality is `databoxCompare()`'s under every kind (5, 5.0 and a 128-bit 5 are
-one key). A snapshot records the kind but never the index; restore rebuilds
-it.
+one key). HASHED and SLOTS hash with a per-process random seed, so colliding
+keys cannot be computed offline. A snapshot records the kind but never the
+index; restore rebuilds it.
 
 ### Choosing an index
 
-Measured 2026-10-27 on Apple silicon, clang 22 `perf` preset, 100k atoms of
-16-byte keys (`perfRegression` module `multimapAtom`; ns per operation,
-medians of 5 runs). Heap bytes come from the `multimapAtom` test "index kinds:
-heap bytes per atom", which meters the allocator over 20k atoms.
+Measured 2026-10-29 on Apple silicon, clang 22 `perf` preset, 100k atoms of
+16-byte keys (`perfRegression` modules `multimapAtom`, `multimapAtomOrdered`
+and `multimapAtomSlots`; ns per operation, medians of 5 runs). Heap bytes come
+from the `multimapAtom` test "index kinds: heap bytes per atom", which meters
+the allocator over 20k atoms.
 
-| per atom                    | ORDERED | HASHED | DICT  |
+| per atom                    | ORDERED | HASHED | SLOTS |
 | --------------------------- | ------- | ------ | ----- |
-| find, scattered order       | 1210    | 591    | 112   |
-| intern a present key        | 827     | 426    | 88    |
-| intern a new key            | 1358    | 1207   | 577   |
-| retain by key               | 912     | 496    | 263   |
-| release by key              | 971     | 520    | 277   |
-| delete by ID                | 1414    | 936    | 512   |
-| read an ID back, scattered  | 165     | 167    | 150   |
-| heap bytes, 11-byte strings | 24.8    | 31.0   | 39.4  |
-| heap bytes, 48-byte strings | 74.0    | 79.6   | 131.0 |
-| heap bytes, integers        | 15.7    | 22.1   | 22.3  |
+| find, scattered order       | 652     | 415    | 110   |
+| intern a present key        | 410     | 305    | 52    |
+| intern a new key            | 773     | 599    | 292   |
+| retain by key               | 530     | 429    | 182   |
+| release by key              | 444     | 340    | 80    |
+| delete by ID                | 748     | 725    | 211   |
+| read an ID back, scattered  | 32      | 30     | 33    |
+| heap bytes, 11-byte strings | 25.8    | 32.0   | 35.0  |
+| heap bytes, 48-byte strings | 70.4    | 76.0   | 79.0  |
+| heap bytes, integers        | 17.6    | 24.0   | 27.0  |
 
-- HASHED (default): half to two thirds of ORDERED's time on every key
-  operation for 6 to 7 more bytes per atom.
+- HASHED (default): two thirds to three quarters of ORDERED's time on key
+  operations for 6 more bytes per atom.
 - ORDERED: the least memory. For large tables of rarely searched keys, where
   references are mostly read back by ID (the same cost under every kind).
-- DICT: about 5 times faster than HASHED on finds, at 1.0 to 1.7 times its
-  memory (multidict's default 800% load factor; its 200% setting is faster
-  and larger). The key is stored twice, so the cost grows with key length:
-  it suits tables
-  of short keys searched far more often than they are added, and not tables
-  kept to share long values.
+- SLOTS: 2.5 to 6 times faster than HASHED on every key operation for 3 more
+  bytes per atom: for tables whose keys are looked up often.
 
 ### API
 
 ```c
 typedef struct multimapAtomConfig {
-    multimapAtomIndex index; /* HASHED (0), ORDERED, DICT */
+    multimapAtomIndex index; /* HASHED (0), ORDERED, SLOTS */
     multimapAtomIds ids;     /* REUSE (0), PERMANENT, LOWEST */
 } multimapAtomConfig;
 

@@ -2952,7 +2952,7 @@ static void benchMultimapAtom(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
     benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
     benchAtomTable("multimapAtomOrdered", MULTIMAP_ATOM_INDEX_ORDERED, keys);
-    benchAtomTable("multimapAtomDict", MULTIMAP_ATOM_INDEX_DICT, keys);
+    benchAtomTable("multimapAtomSlots", MULTIMAP_ATOM_INDEX_SLOTS, keys);
     benchAtomPool("atomPoolHash", ATOM_POOL_HASH, keys);
     benchAtomPool("atomPoolTree", ATOM_POOL_TREE, keys);
 

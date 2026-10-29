@@ -6,7 +6,7 @@
  * forward {id -> value, refcount} rows addressed by id (idRows.h: a read
  * by id is positional, with no search), and a reverse index from value to
  * id (multimapAtomIndex below: ids sorted by value, value hashes with
- * ids, or a multidict).
+ * ids, or a table of id slots probed by hash).
  *
  * REFERENCES
  * - An Insert creates the atom with one reference.  Retain adds one;
@@ -71,17 +71,21 @@ typedef enum multimapAtomIds {
  * - HASHED: the reverse rows are {hash of the value, id}, sorted by hash.
  *   A find is an integer search for the hash, then one forward lookup per
  *   candidate (normally one): about log n.  About 5 more bytes per atom.
- * - DICT: a multidict from each value to its id.  A find is one hash and
- *   one slot search, with no forward lookup, but every value is stored a
- *   second time (in the dict) and the dict adds its slot table: the
- *   largest index, for tables of short values that are found far more
- *   often than they are added.
+ * - SLOTS: an open-addressed table of ids, 9 bytes a slot (the id and a
+ *   control byte holding 7 bits of the value's hash), kept between 3/8
+ *   and 3/4 full.  A find is one hash and a probe from its slot; a slot
+ *   whose hash bits match resolves its id in the forward rows (normally
+ *   one).  Constant time, the fastest finds, and about 12-24 bytes per
+ *   atom whatever the value's length: values are held once, by the
+ *   forward rows.
  * Equality is databoxCompare's in all three (5, 5.0 and a 128-bit 5 are
- * one value), and no index reaches a snapshot: restore rebuilds it. */
+ * one value).  HASHED and SLOTS hash with a per-process random seed, so
+ * colliding values cannot be computed offline.  No index reaches a
+ * snapshot: restore rebuilds it. */
 typedef enum multimapAtomIndex {
     MULTIMAP_ATOM_INDEX_HASHED = 0,
     MULTIMAP_ATOM_INDEX_ORDERED = 1,
-    MULTIMAP_ATOM_INDEX_DICT = 2,
+    MULTIMAP_ATOM_INDEX_SLOTS = 2,
 } multimapAtomIndex;
 
 typedef struct multimapAtomResult {
@@ -91,8 +95,8 @@ typedef struct multimapAtomResult {
 
 /* A table's settings: a zeroed config is the default (HASHED, REUSE) */
 typedef struct multimapAtomConfig {
-    multimapAtomIndex index;
-    multimapAtomIds ids;
+    multimapAtomIndex index; /* HASHED (the zero value), ORDERED, SLOTS */
+    multimapAtomIds ids;     /* REUSE (the zero value), PERMANENT, LOWEST */
 } multimapAtomConfig;
 
 /* A default table (HASHED index, REUSE ids) */
@@ -184,7 +188,7 @@ typedef struct multimapAtomStats {
     int64_t savedBytes;      /* inlineBytes - (tableBytes + referenceBytes) */
     uint32_t unitLimit;      /* bytes per node of the table's multimap index
                                 (the atom family's limit when made:
-                                dkTierLimit.h); 0 for a DICT index */
+                                dkTierLimit.h); 0 for a SLOTS index */
 } multimapAtomStats;
 
 /* Fill 'stats' for 'ma': one pass over the atoms */

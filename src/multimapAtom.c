@@ -14,14 +14,23 @@ defcleanerName(void *, zfree, Void);
  * row's second field */
 static constexpr uint32_t ATOM_ROW_COUNT_ = 1;
 
+/* A SLOTS index: 'mask + 1' slots (a power of two), each an id in 'ids'
+ * and a control byte in the bytes after them (ATOM_SLOT_* below) */
+typedef struct atomSlots_ {
+    uint64_t mask;
+    uint64_t used; /* live plus deleted slots */
+    uint64_t live;
+    uint64_t ids[];
+} atomSlots_;
+
 struct multimapAtom {
     /* {value, count} by id: a read by id is positional (idRows.h) */
     idRows *forward;
     /* The reverse index (multimapAtomIndex): a multimap for ORDERED and
-     * HASHED, a multidict for DICT */
+     * HASHED; for SLOTS its slot table (NULL until the first atom) */
     union {
         multimap *mapAtomReverse;
-        multidict *dictAtomReverse;
+        atomSlots_ *slotsAtomReverse;
     };
     /* The next generated id, with the table's settings above it, so none
      * costs a byte: the id behaviour (multimapAtomIds, bits 59-60) and the
@@ -124,23 +133,6 @@ static uint32_t atomTestHashMask_ = UINT32_MAX;
 /* ====================================================================
  * Create
  * ==================================================================== */
-/* A DICT index: a multidict with a class of its own (reached again through
- * multidictGetClass), keys matched as multidict matches them */
-static multidict *atomDictNew_(void) {
-    /* @own: container; free=atomDictFree_ */
-    multidictClass *qdc = multidictDefaultClassNew();
-    /* @own: container; free=atomDictFree_ */
-    return multidictNew(&multidictTypeExactKey, qdc, multidictRandomSeed());
-}
-
-static void atomDictFree_(multidict *d) {
-    if (d) {
-        multidictClass *qdc = multidictGetClass(d);
-        multidictFree(d);
-        multidictDefaultClassFree(qdc);
-    }
-}
-
 static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
                       const multimapAtomIds ids) {
     /* Every multimap of the table takes the atom family's node limit */
@@ -151,7 +143,7 @@ static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
     ma->forward = idRowsNew(2);
 
     /* ORDERED: {id} by value (resolved through the forward rows); HASHED:
-     * the set of {hash, id}; DICT: value -> id */
+     * the set of {hash, id}; SLOTS: a slot table made with the first atom */
     switch (index) {
     case MULTIMAP_ATOM_INDEX_ORDERED:
         /* @own: container; free=multimapAtomFree */
@@ -161,9 +153,8 @@ static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
         /* @own: container; free=multimapAtomFree */
         ma->mapAtomReverse = multimapNewConfigure(2, true, false, limit);
         break;
-    case MULTIMAP_ATOM_INDEX_DICT:
-        /* @own: container; free=multimapAtomFree */
-        ma->dictAtomReverse = atomDictNew_();
+    case MULTIMAP_ATOM_INDEX_SLOTS:
+        ma->slotsAtomReverse = nullptr;
         break;
     }
 
@@ -174,7 +165,7 @@ static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
 multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config) {
     const multimapAtomConfig settings =
         config ? *config : (multimapAtomConfig){};
-    if (settings.index > MULTIMAP_ATOM_INDEX_DICT ||
+    if (settings.index > MULTIMAP_ATOM_INDEX_SLOTS ||
         settings.ids > MULTIMAP_ATOM_IDS_LOWEST) {
         return nullptr;
     }
@@ -201,8 +192,8 @@ multimapAtom *multimapAtomNew(void) {
 void multimapAtomFree(multimapAtom *ma) {
     if (ma) {
         idRowsFree(ma->forward);
-        if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_DICT) {
-            atomDictFree_(ma->dictAtomReverse);
+        if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
+            zfree(ma->slotsAtomReverse);
         } else {
             multimapFree(ma->mapAtomReverse);
         }
@@ -225,16 +216,27 @@ static databox atomRefBox_(const uint64_t id) {
 
 /* A HASHED row's hash of 'value': databoxHashBytes, so values
  * databoxCompare calls equal share it */
-static databox atomHashBox_(const databox *value) {
+/* The hash of 'value' over the bytes databoxCompare equates (so 5, 5.0
+ * and a 128-bit 5 hash alike), seeded per process: colliding values
+ * cannot be computed offline */
+static uint64_t atomHash_(const databox *value) {
     uint64_t scratch;
     const uint8_t *bytes;
     size_t len;
     databoxHashBytes(value, &scratch, &bytes, &len);
-    uint32_t h = (uint32_t)rapidhash(bytes, len);
+    uint64_t h = rapidhashWithSeed(bytes, len,
+                                   (uint64_t)(uint32_t)multidictRandomSeed());
 #ifdef DATAKIT_TEST
-    h &= atomTestHashMask_;
+    if (atomTestHashMask_ != UINT32_MAX) {
+        h &= atomTestHashMask_;
+    }
 #endif
-    return DATABOX_UNSIGNED(h);
+    return h;
+}
+
+/* HASHED: the hash a row is sorted by */
+static databox atomHashBox_(const databox *value) {
+    return DATABOX_UNSIGNED((uint32_t)atomHash_(value));
 }
 
 /* The forward row of 'ref' into 'elements' (value, count) */
@@ -350,31 +352,172 @@ static bool atomHashedFindFrom_(const multimapAtom *ma, const databox *value,
     }
 }
 
-/* DICT: the id of 'value'.  No forward lookup: the dict holds the value
- * itself. */
-static bool atomDictFind_(const multimapAtom *ma, const databox *value,
-                          databox *ref) {
-    databox id = {};
-    if (!multidictFind(ma->dictAtomReverse, value, &id)) {
+/* ====================================================================
+ * SLOTS: open addressing over ids
+ * ====================================================================
+ * Each slot is an id and a control byte: ATOM_SLOT_EMPTY_,
+ * ATOM_SLOT_DELETED_, or a live slot's 0x80 | the top 7 bits of its
+ * value's hash.
+ * Probing is linear from the hash's low bits; a live slot whose bits
+ * match is compared through the forward rows.  The table is rebuilt at
+ * under half load when live plus deleted slots would pass 3/4, and when
+ * live slots fall under 1/8 (never below ATOM_SLOTS_MIN_). */
+static constexpr uint8_t ATOM_SLOT_EMPTY_ = 0;
+static constexpr uint8_t ATOM_SLOT_DELETED_ = 1;
+static constexpr uint64_t ATOM_SLOTS_MIN_ = 16;
+
+static inline uint8_t *atomSlotsCtrl_(const atomSlots_ *s) {
+    return (uint8_t *)&s->ids[s->mask + 1];
+}
+
+static inline uint8_t atomSlotTag_(const uint64_t hash) {
+    return (uint8_t)(0x80 | (hash >> 57));
+}
+
+static size_t atomSlotsBytes_(const atomSlots_ *s) {
+    return s ? sizeof(*s) + (s->mask + 1) * (sizeof(uint64_t) + 1) : 0;
+}
+
+/* The hash of the atom 'id''s value (which the forward rows hold) */
+static uint64_t atomHashOfId_(const multimapAtom *ma, const uint64_t id) {
+    databoxBig held;
+    databox *const out = (databox *)&held;
+    *out = (databox){};
+    DATABOX_BIG_INIT(&held);
+    databox count = {};
+    databox *elements[2] = {out, &count};
+    const databox ref = atomRefBox_(id);
+    [[maybe_unused]] const bool held_ = atomForwardLookup_(ma, &ref, elements);
+    assert(held_);
+    held.big =
+        held.type == DATABOX_SIGNED_128 || held.type == DATABOX_UNSIGNED_128;
+    return atomHash_(out);
+}
+
+/* 'id' (its value hashing to 'hash') into the first slot of its probe
+ * path that holds no live atom */
+static void atomSlotsPut_(atomSlots_ *s, const uint64_t id,
+                          const uint64_t hash) {
+    uint8_t *ctrl = atomSlotsCtrl_(s);
+    uint64_t i = hash & s->mask;
+    while (ctrl[i] & 0x80) {
+        i = (i + 1) & s->mask;
+    }
+
+    s->used += ctrl[i] == ATOM_SLOT_EMPTY_;
+    s->live++;
+    ctrl[i] = atomSlotTag_(hash);
+    s->ids[i] = id;
+}
+
+/* The table rebuilt for 'live' atoms at under half load, every live id
+ * placed again (its hash taken from its forward row) and deleted slots
+ * dropped */
+static void atomSlotsResize_(multimapAtom *ma, const uint64_t live) {
+    uint64_t slots = ATOM_SLOTS_MIN_;
+    while (slots / 2 < live) {
+        slots *= 2;
+    }
+
+    /* @own: container; free=multimapAtomFree */
+    atomSlots_ *s = zcalloc(1, sizeof(*s) + slots * (sizeof(uint64_t) + 1));
+    s->mask = slots - 1;
+    atomSlots_ *old = ma->slotsAtomReverse;
+    if (old) {
+        const uint8_t *ctrl = atomSlotsCtrl_(old);
+        for (uint64_t i = 0; i <= old->mask; i++) {
+            if (ctrl[i] & 0x80) {
+                atomSlotsPut_(s, old->ids[i], atomHashOfId_(ma, old->ids[i]));
+            }
+        }
+
+        zfree(old);
+    }
+
+    ma->slotsAtomReverse = s;
+}
+
+/* The slot of the atom holding 'value' (which hashes to 'hash'); false
+ * when no atom holds it */
+static bool atomSlotsFind_(const multimapAtom *ma, const databox *value,
+                           const uint64_t hash, uint64_t *slot) {
+    const atomSlots_ *s = ma->slotsAtomReverse;
+    if (!s) {
         return false;
     }
 
-    *ref = atomRefBox_(id.data.u);
-    return true;
+    const uint8_t *ctrl = atomSlotsCtrl_(s);
+    const uint8_t tag = atomSlotTag_(hash);
+    for (uint64_t i = hash & s->mask;; i = (i + 1) & s->mask) {
+        if (ctrl[i] == ATOM_SLOT_EMPTY_) {
+            return false;
+        }
+
+        if (ctrl[i] == tag) {
+            const databox candidate = atomRefBox_(s->ids[i]);
+            if (atomHolds_(ma, &candidate, value)) {
+                *slot = i;
+                return true;
+            }
+        }
+    }
 }
 
-/* DICT: finish any rehash a change started, so the dict's lookups (which
- * step an unfinished rehash) never change it: a table's lookups stay
- * reads, as under the other kinds */
-static void atomDictSettle_(multimapAtom *ma) {
-    while (multidictRehash(ma->dictAtomReverse, 1024)) {
+/* A new atom 'id' whose value hashes to 'hash', the table grown first
+ * when it would pass 3/4 */
+static void atomSlotsAdd_(multimapAtom *ma, const uint64_t id,
+                          const uint64_t hash) {
+    const atomSlots_ *s = ma->slotsAtomReverse;
+    if (!s || (s->used + 1) * 4 > (s->mask + 1) * 3) {
+        atomSlotsResize_(ma, (s ? s->live : 0) + 1);
     }
+
+    atomSlotsPut_(ma->slotsAtomReverse, id, hash);
+}
+
+/* Slot 'i' no longer holds an atom.  With an empty slot after it no probe
+ * runs through it: it empties, with any deleted slots directly before it;
+ * else it is marked deleted.  A table under 1/8 live shrinks. */
+static void atomSlotsVacate_(multimapAtom *ma, const uint64_t i) {
+    atomSlots_ *s = ma->slotsAtomReverse;
+    uint8_t *ctrl = atomSlotsCtrl_(s);
+    s->live--;
+    if (ctrl[(i + 1) & s->mask] == ATOM_SLOT_EMPTY_) {
+        ctrl[i] = ATOM_SLOT_EMPTY_;
+        s->used--;
+        for (uint64_t j = (i - 1) & s->mask; ctrl[j] == ATOM_SLOT_DELETED_;
+             j = (j - 1) & s->mask) {
+            ctrl[j] = ATOM_SLOT_EMPTY_;
+            s->used--;
+        }
+    } else {
+        ctrl[i] = ATOM_SLOT_DELETED_;
+    }
+
+    if (s->mask + 1 > ATOM_SLOTS_MIN_ && s->live * 8 < s->mask + 1) {
+        atomSlotsResize_(ma, s->live);
+    }
+}
+
+/* The slot of the atom 'id' whose value hashes to 'hash' (it is live) */
+static uint64_t atomSlotsOfId_(const atomSlots_ *s, const uint64_t id,
+                               const uint64_t hash) {
+    const uint8_t *ctrl = atomSlotsCtrl_(s);
+    const uint8_t tag = atomSlotTag_(hash);
+    uint64_t i = hash & s->mask;
+    while (ctrl[i] != tag || s->ids[i] != id) {
+        assert(ctrl[i] != ATOM_SLOT_EMPTY_);
+        i = (i + 1) & s->mask;
+    }
+
+    return i;
 }
 
 /* The index's rows (one per atom) */
 static size_t atomIndexCount_(const multimapAtom *ma) {
-    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_DICT) {
-        return (size_t)multidictCount(ma->dictAtomReverse);
+    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
+        const atomSlots_ *s = ma->slotsAtomReverse;
+        return s ? (size_t)s->live : 0;
     }
 
     const multimap *index = ma->mapAtomReverse;
@@ -383,8 +526,8 @@ static size_t atomIndexCount_(const multimapAtom *ma) {
 
 /* The index's bytes */
 static size_t atomIndexBytes_(const multimapAtom *ma) {
-    return multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_DICT
-               ? (size_t)multidictBytes(ma->dictAtomReverse)
+    return multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS
+               ? atomSlotsBytes_(ma->slotsAtomReverse)
                : multimapBytes(ma->mapAtomReverse);
 }
 
@@ -396,8 +539,15 @@ static bool atomIndexFind_(const multimapAtom *ma, const databox *value,
         const databox hash = atomHashBox_(value);
         return atomHashedFind_(ma, value, &hash, ref);
     }
-    case MULTIMAP_ATOM_INDEX_DICT:
-        return atomDictFind_(ma, value, ref);
+    case MULTIMAP_ATOM_INDEX_SLOTS: {
+        uint64_t slot;
+        if (!atomSlotsFind_(ma, value, atomHash_(value), &slot)) {
+            return false;
+        }
+
+        *ref = atomRefBox_(ma->slotsAtomReverse->ids[slot]);
+        return true;
+    }
     case MULTIMAP_ATOM_INDEX_ORDERED:
         break;
     }
@@ -416,14 +566,9 @@ static void atomIndexInsert_(multimapAtom *ma, const databox *value,
         multimapInsertFullWidth(&ma->mapAtomReverse, row);
         return;
     }
-    case MULTIMAP_ATOM_INDEX_DICT: {
-        const databox id = DATABOX_UNSIGNED(ref->data.u);
-        [[maybe_unused]] const multidictResult added =
-            multidictAdd(ma->dictAtomReverse, value, &id);
-        assert(added == MULTIDICT_OK_INSERTED);
-        atomDictSettle_(ma);
+    case MULTIMAP_ATOM_INDEX_SLOTS:
+        atomSlotsAdd_(ma, ref->data.u, atomHash_(value));
         return;
-    }
     case MULTIMAP_ATOM_INDEX_ORDERED:
         break;
     }
@@ -455,15 +600,14 @@ static bool atomIndexDeleteValue_(multimapAtom *ma, const databox *value,
         assert(deleted);
         return true;
     }
-    case MULTIMAP_ATOM_INDEX_DICT: {
-        /* The removed id is a number: its box holds it whole */
-        databox id = {};
-        if (!multidictGetAndDelete(ma->dictAtomReverse, value, &id)) {
+    case MULTIMAP_ATOM_INDEX_SLOTS: {
+        uint64_t slot;
+        if (!atomSlotsFind_(ma, value, atomHash_(value), &slot)) {
             return false;
         }
 
-        atomDictSettle_(ma);
-        *foundRef = atomRefBox_(id.data.u);
+        *foundRef = atomRefBox_(ma->slotsAtomReverse->ids[slot]);
+        atomSlotsVacate_(ma, slot);
         return true;
     }
     case MULTIMAP_ATOM_INDEX_ORDERED:
@@ -484,14 +628,11 @@ static void atomIndexDeleteHeld_(multimapAtom *ma, const databox *value,
         assert(deleted);
         return;
     }
-    case MULTIMAP_ATOM_INDEX_DICT: {
-        databox id = {};
-        [[maybe_unused]] const bool deleted =
-            multidictGetAndDelete(ma->dictAtomReverse, value, &id);
-        assert(deleted && id.data.u == ref->data.u);
-        atomDictSettle_(ma);
+    case MULTIMAP_ATOM_INDEX_SLOTS:
+        /* The slot is found by its id: no value compare */
+        atomSlotsVacate_(ma, atomSlotsOfId_(ma->slotsAtomReverse, ref->data.u,
+                                            atomHash_(value)));
         return;
-    }
     case MULTIMAP_ATOM_INDEX_ORDERED:
         break;
     }
@@ -570,16 +711,20 @@ static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
         *ref = atomId;
         return false;
     }
-    case MULTIMAP_ATOM_INDEX_DICT:
-        /* A find (the common case: present), then a new atom's add */
-        if (atomDictFind_(ma, key, ref)) {
+    case MULTIMAP_ATOM_INDEX_SLOTS: {
+        /* One hash serves the find and, for a new atom, its slot */
+        const uint64_t hash = atomHash_(key);
+        uint64_t slot;
+        if (atomSlotsFind_(ma, key, hash, &slot)) {
+            *ref = atomRefBox_(ma->slotsAtomReverse->ids[slot]);
             return true;
         }
 
         atomCreateForward_(&create);
-        atomIndexInsert_(ma, key, &atomId);
+        atomSlotsAdd_(ma, id, hash);
         *ref = atomId;
         return false;
+    }
     case MULTIMAP_ATOM_INDEX_ORDERED:
         break;
     }
@@ -903,7 +1048,7 @@ bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
     /* The count is updated by id.  ORDERED: the reverse row found here is
-     * the one a last release deletes where it is.  HASHED and DICT: a last
+     * the one a last release deletes where it is.  HASHED and SLOTS: a last
      * release removes the index row by its value. */
     if (multimapAtomGetIndex(ma) != MULTIMAP_ATOM_INDEX_ORDERED) {
         databox foundRef = {};
@@ -1022,7 +1167,7 @@ static uint64_t atomEntryBytes_(const databox *box) {
 
 void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats) {
     uint32_t unitLimit = 0;
-    if (multimapAtomGetIndex(ma) != MULTIMAP_ATOM_INDEX_DICT) {
+    if (multimapAtomGetIndex(ma) != MULTIMAP_ATOM_INDEX_SLOTS) {
         dkTierStats index;
         multimapStats(ma->mapAtomReverse, &index);
         unitLimit = index.unitLimit;
@@ -1219,17 +1364,20 @@ static multimap *atomPersistHashedIndex_(const databoxBig *values,
                                dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM), f);
 }
 
-/* DICT: each value -> its id, added to the empty dict 'd' sized for them
- * up front; false when a value is bound twice */
-static bool atomPersistDictIndex_(multidict *d, const databoxBig *values,
-                                  const uint64_t *ids, size_t atoms) {
-    multidictExpand(d, atoms);
+/* SLOTS: each atom's slot, the table sized once for them; false when a
+ * value is bound twice (the forward rows hold every value) */
+static bool atomPersistSlotsIndex_(multimapAtom *ma, const databoxBig *values,
+                                   const uint64_t *ids, size_t atoms) {
+    atomSlotsResize_(ma, atoms);
     for (size_t r = 0; r < atoms; r++) {
-        const databox id = DATABOX_UNSIGNED(ids[r]);
-        if (multidictAddNX(d, (const databox *)&values[r], &id) !=
-            MULTIDICT_OK_INSERTED) {
+        const databox *value = (const databox *)&values[r];
+        const uint64_t hash = atomHash_(value);
+        uint64_t slot;
+        if (atomSlotsFind_(ma, value, hash, &slot)) {
             return false;
         }
+
+        atomSlotsPut_(ma->slotsAtomReverse, ids[r], hash);
     }
 
     return true;
@@ -1332,12 +1480,10 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     /* The index built straight from the rows (every builder refuses a
      * value bound to two ids) */
     const multimapAtomIndex index = multimapAtomGetIndex(ma);
-    if (index == MULTIMAP_ATOM_INDEX_DICT) {
-        if (!atomPersistDictIndex_(ma->dictAtomReverse, values, ids, atoms)) {
+    if (index == MULTIMAP_ATOM_INDEX_SLOTS) {
+        if (!atomPersistSlotsIndex_(ma, values, ids, atoms)) {
             return nullptr;
         }
-
-        atomDictSettle_(ma);
     } else {
         /* @own: container; free=multimapFree */
         multimap *reverse =
@@ -1491,14 +1637,15 @@ void multimapAtomRepr(const multimapAtom *ma) {
     }
 
     printf("Reverse Maps:\n");
-    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_DICT) {
-        multidictPrintStats(ma->dictAtomReverse);
+    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
+        const atomSlots_ *s = ma->slotsAtomReverse;
+        printf("  slots %" PRIu64 ", live %" PRIu64 ", used %" PRIu64 "\n",
+               s ? s->mask + 1 : 0, s ? s->live : 0, s ? s->used : 0);
     } else {
         multimapRepr(ma->mapAtomReverse);
     }
 }
 
-/* Callback for iterator */
 /* A table with 'index' and 'ids' */
 static multimapAtom *atomTestNew_(multimapAtomIndex index,
                                   multimapAtomIds ids) {
@@ -1507,6 +1654,7 @@ static multimapAtom *atomTestNew_(multimapAtomIndex index,
         &(multimapAtomConfig){.index = index, .ids = ids});
 }
 
+/* Callback for iterator */
 static bool populateSet(void *userData, const databox *elements[]) {
     multimap **setMap = userData;
 
@@ -1523,19 +1671,17 @@ static bool populateSetHashedIds(void *userData, const databox *elements[]) {
 /* Every id the reverse index holds, inserted into the set 'ids' (a
  * duplicate id shows as fewer set members than index rows) */
 static void atomTestIndexIds_(const multimapAtom *ma, multimap **ids) {
-    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_DICT) {
-        multidictIterator iter;
-        if (!multidictIteratorInit(ma->dictAtomReverse, &iter)) {
-            return;
+    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
+        const atomSlots_ *s = ma->slotsAtomReverse;
+        const uint8_t *ctrl = s ? atomSlotsCtrl_(s) : nullptr;
+        for (uint64_t i = 0; s && i <= s->mask; i++) {
+            if (ctrl[i] & 0x80) {
+                const databox id = DATABOX_UNSIGNED(s->ids[i]);
+                const databox *row[1] = {&id};
+                multimapInsert(ids, row);
+            }
         }
 
-        multidictEntry e;
-        while (multidictIteratorNext(&iter, &e)) {
-            const databox *id[1] = {&e.val};
-            multimapInsert(ids, id);
-        }
-
-        multidictIteratorRelease(&iter);
         return;
     }
 
@@ -2763,10 +2909,10 @@ static int atomTestSuite_(void) {
 
             if (pass == 1) {
                 /* An iterator records the tier of the map it walks (a
-                 * DICT index is no multimap); the forward rows span
+                 * SLOTS index is no multimap); the forward rows span
                  * several pages */
                 bool reverseFull = true;
-                if (multimapAtomGetIndex(ma) != MULTIMAP_ATOM_INDEX_DICT) {
+                if (multimapAtomGetIndex(ma) != MULTIMAP_ATOM_INDEX_SLOTS) {
                     multimapIterator reverseIter;
                     multimapIteratorInit(ma->mapAtomReverse, &reverseIter,
                                          true);
@@ -3250,7 +3396,7 @@ static int atomTestSuite_(void) {
                 multimapAtomInsertIfNewConvert(ma, &k);
             }
 
-            if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_DICT) {
+            if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
                 /* No multimap tiers: every check below still runs */
                 sawTier[MULTIMAP_TYPE_SMALL] = sawTier[MULTIMAP_TYPE_MEDIUM] =
                     sawTier[MULTIMAP_TYPE_FULL] = true;
@@ -3573,7 +3719,7 @@ typedef struct atomTestKind_ {
 static const atomTestKind_ atomTestKinds_[] = {
     {MULTIMAP_ATOM_INDEX_ORDERED, "ordered"},
     {MULTIMAP_ATOM_INDEX_HASHED, "hashed"},
-    {MULTIMAP_ATOM_INDEX_DICT, "dict"},
+    {MULTIMAP_ATOM_INDEX_SLOTS, "slots"},
 };
 
 #define ATOM_TEST_KINDS countof(atomTestKinds_)
@@ -4075,7 +4221,7 @@ int multimapAtomTest(int, char *[]) {
          * pointer arrays, slots, allocator slack) metered: a kind's
          * memory cost as the process pays it, beside the bytes
          * multimapAtomBytes reports (map contents only).  ORDERED is the
-         * smallest index and DICT the largest, for every value shape. */
+         * smallest index and SLOTS the largest, for every value shape. */
         typedef enum atomTestShape {
             ATOM_TEST_SHAPE_SHORT = 0, /* 11-byte strings */
             ATOM_TEST_SHAPE_LONG,      /* 48-byte strings */
@@ -4141,12 +4287,12 @@ int multimapAtomTest(int, char *[]) {
                 (perAtom[MULTIMAP_ATOM_INDEX_ORDERED] >=
                      perAtom[MULTIMAP_ATOM_INDEX_HASHED] ||
                  perAtom[MULTIMAP_ATOM_INDEX_HASHED] >=
-                     perAtom[MULTIMAP_ATOM_INDEX_DICT])) {
-                ERR("%s: heap per atom ordered %.1f, hashed %.1f, dict %.1f "
+                     perAtom[MULTIMAP_ATOM_INDEX_SLOTS])) {
+                ERR("%s: heap per atom ordered %.1f, hashed %.1f, slots %.1f "
                     "(want rising)",
                     shapeNames[shape], perAtom[MULTIMAP_ATOM_INDEX_ORDERED],
                     perAtom[MULTIMAP_ATOM_INDEX_HASHED],
-                    perAtom[MULTIMAP_ATOM_INDEX_DICT]);
+                    perAtom[MULTIMAP_ATOM_INDEX_SLOTS]);
             }
         }
     }
