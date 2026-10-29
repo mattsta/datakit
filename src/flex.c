@@ -192,7 +192,8 @@ typedef enum flexType {
     FLEX_REAL_32B,  /* float32 (IEEE 754-2008 binary32) */
     FLEX_REAL_64B,  /* float64 (IEEE 754-2008 binary64) */
 
-    /* TODO */
+    /* Reserved type bytes with no encoding: validation refuses entries
+     * of these types */
     FLEX_REAL_32D, /* IEEE 32 bit float decimal */
     FLEX_REAL_64D, /* IEEE 64 bit float decimal */
 
@@ -1053,7 +1054,8 @@ DK_FN_CONST DK_STATIC flexEncoding flexEncodingUnsignedBig(__uint128_t value) {
 
 DK_FN_CONST
 DK_STATIC uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
-    /* TODO: we could rearrange this to be binary search */
+    /* Smallest range first: most references are small and leave at the
+     * first test, where a binary search would always take three */
     if (value <= REFERENCE_MAX_8) {
         return value;
     }
@@ -2709,15 +2711,8 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
          *       so we use the scratch space to store our altered value,
          *       *then* we just point our temporary copyBox ('box') to the
          *       scratch space for future reading.
-         *       The scratch space will be cleaned up external to us here. */
-        /* MAYBE TODO:
-         *   - we could get rid of all these scratch allocations if we moved
-         *     'flexPrepareSigned[Big] down to the actual insert function.
-         *     But, the insert function would probably need to reconstruct
-         *     the data, do its subtraction, then reassemble the data back
-         *     into bytes for the insert, *BUT* it would be much cleaner
-         *     (and less trouble on allocators/stack) doing it there instead
-         *     of needing to drag "scratch space" into here all the time. */
+         *       The scratch space is the caller's (a stack array, one slot
+         *       per box), so preparing a wide value allocates nothing. */
         c->encoding = flexEncodingSignedBig(*box->data.i128);
         scratchBuf[idx] = flexPrepareSignedBig(*box->data.i128);
         box->data.i128 = &scratchBuf[idx];
@@ -2873,8 +2868,8 @@ static bool flexReplaceInteger__(flex **const ff, flexEntry *const fe,
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
 
-    /* TODO: Also allow replace of non-integers, but integer-storage types.
-     */
+    /* 64-bit integer entries only, as flex.h states: any other entry is
+     * refused (flexReplaceByType replaces entries of every type) */
     if (!flexEntryIsIntegerNarrow_(fe)) {
         return false;
     }
@@ -4093,7 +4088,8 @@ void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const multimapAtom *referenceContainer) {
     if (FLEX_IS_REF_EXTERNAL(
             flexDecode_(fe, box, nullptr, FLEX_WIDE_STORE_IN_BAND_))) {
-        /* TODO: make copying version here if atom map is compressed? */
+        /* The value borrows from the atom table, as a decode borrows from
+         * its flex */
         multimapAtomLookupConvert(referenceContainer, box);
     }
 }
@@ -5144,22 +5140,12 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
                                   CONVERSION_OVERRIDE_NONE, 0, bigBuffer);
         } else if (newKeysBecomeShared) {
             copyBox[0] = *box[0];
-            /* TODO: allow parameterization of conversion override option?
-             *       We have multiple override options, but no way for users
-             *       to access them unless we surface the option higher. */
+            /* A shared key over 12 bytes becomes an allocation the row
+             * holds a pointer to; a shorter key is stored in place */
             if (insertContentsFromBox(
                     &copyBox[0], &content[0],
                     CONVERSION_OVERRIDE_BECOME_MDSC_BYTES_GT12, 0, bigBuffer)) {
                 *keyAsAllocation = copyBox[0].data.ptr;
-            } else {
-#if 0
-            /* NOTE: for signed integers this will report one higher than the
-             *       expected value due to integer encoding.
-             *       (e.g. -12345 will report -12344 because we offset all
-             *        negative numbers by 1 since we don't need to store
-             *        a signed zero (so, -1 is stored as 0, -2 as -1, ...) */
-            databoxReprSay("Did not convert on insert for:", &copyBox[0]);
-#endif
             }
         } else {
             copyBox[0] = *box[0];
@@ -5167,20 +5153,13 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
                                   CONVERSION_OVERRIDE_NONE, 0, bigBuffer);
         }
     } else {
-        /* If we aren't setting zero, we need to zero out the zero data. */
-        /* TODO: fix flexInsert* common macros to not assume content[0] will
-         *       be populated when we are doing an offset-replace */
+        /* An offset replace writes no key: its slot is an empty content */
         content[0] = (flexInsertContents){};
     }
 
-    /* Now assemble remaining common insert contents */
-    /* We need to populate contents[0] because of commonality
-     * inside commonFlexInsertCalculatePreconditions_() whether it
-     * gets used or not. TODO: refactor commonFlexInsertCalculatePreconditions_
-     * to not require always checking content[0] because we don't need it
-     * for things like replace() from here. */
-    /* TODO: move contents[0] inside the if statement above after we
-     *       refactor commonFlexInsertCalculatePreconditions_() */
+    /* Every slot points at a content, the key's included:
+     * commonFlexInsertCalculatePreconditions_() reads all of them, and an
+     * empty one adds nothing */
     contents[0] = &content[0];
     for (int_fast32_t i = 1; i < elementsPerEntry; i++) {
         copyBox[i] = *box[i];
@@ -6307,8 +6286,7 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
 
         /* Get number of bytes required to encoded 'compressedLen' */
         varintWidth encodedLen;
-        /* TODO: we have an internal one of these... try it with
-         *       performance comparisons */
+        /* Once per compressed buffer: the width is no hot path */
         varintSplitFullNoZeroLength_(encodedLen, compressedLen);
 
         /* If 'encodedLen' *isn't* two bytes, we need to move all our
