@@ -499,6 +499,11 @@ bool multimapSmallDeleteByPosition(multimapSmall *m, int64_t keyIndex) {
 
 int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
                                uint32_t fieldOffset, int64_t incrBy) {
+    /* Only a value of a row: 0 is the key, and past the last value the
+     * walk would leave the row */
+    if (fieldOffset == 0 || fieldOffset >= m->elementsPerEntry) {
+        return 0;
+    }
     flexEntry *current = multimapSmallFindKey_(m, key, false, nullptr);
     if (!current) {
         /* No such key: return 0 rather than walking flexNext from NULL.
@@ -506,7 +511,6 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
         return 0;
     }
 
-    assert(fieldOffset);
     while (fieldOffset--) {
         current = flexNext(m->map, current);
     }

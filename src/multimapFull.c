@@ -1411,6 +1411,11 @@ bool multimapFullDeleteByPosition(multimapFull *m, int64_t keyIndex) {
 
 int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
                               uint32_t fieldOffset, int64_t incrBy) {
+    /* Only a value of a row: 0 is the key, and past the last value the
+     * walk would leave the row */
+    if (fieldOffset == 0 || fieldOffset >= m->elementsPerEntry) {
+        return 0;
+    }
     uint32_t mapIdx = multimapFullKeyMap_(m, key, false, nullptr);
 
     flex **map = getMapPtr(m, mapIdx);

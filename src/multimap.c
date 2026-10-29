@@ -1144,7 +1144,10 @@ static bool multimapFieldIncrAt_(multimap **m, multimapEntry row,
     multimapEntry me = row;
     databox field;
     int64_t current = 0;
-    if (MM_SET_REWRITE_REFUSED_(*m) ||
+    /* Only a value of the row: 0 is its key, and an offset past its last
+     * value would walk into the next row or off the map */
+    if (fieldOffset == 0 || fieldOffset >= multimapElementsPerEntry(*m) ||
+        MM_SET_REWRITE_REFUSED_(*m) ||
         !multimapFieldCounter_(fieldOffset, &me, &field, &current)) {
         if (newValue) {
             *newValue = 0;
@@ -5776,6 +5779,9 @@ int multimapTest(int, char *[]) {
             multimapVerify(m);
             assert(multimapSmallFieldIncr(mms(m), &missing, 1, 5) == 0);
             assert(multimapFieldIncr(&m, &missing, 1, 5) == 0);
+            /* Not a value of the row: the key, or past the last value */
+            assert(multimapSmallFieldIncr(mms(m), &key, 0, 5) == 0);
+            assert(multimapSmallFieldIncr(mms(m), &key, 2, 5) == 0);
             multimapVerify(m);
         }
 
@@ -5806,6 +5812,8 @@ int multimapTest(int, char *[]) {
             multimapVerify(m);
             multimapRepr(m); /* the Medium tier's dump */
             assert(multimapMediumFieldIncr(mmm(m), &missing, 1, 5) == 0);
+            assert(multimapMediumFieldIncr(mmm(m), &key, 0, 5) == 0);
+            assert(multimapMediumFieldIncr(mmm(m), &key, 2, 5) == 0);
             multimapVerify(m);
 
             while (multimapType_(m) == MULTIMAP_TYPE_MEDIUM && i < 50000) {
@@ -5819,8 +5827,7 @@ int multimapTest(int, char *[]) {
 
             assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
 
-            /* This path previously terminated in
-             * assert(NULL && "Not correctly implemented yet!") */
+            /* A Full map increments in place too */
             assert(multimapFullFieldIncr(mmf(m), &key, 1, 5) == 20);
             multimapVerify(m);
             assert(multimapFullFieldIncr(mmf(m), &key, 1, INT64_C(1) << 40) ==
@@ -5833,6 +5840,8 @@ int multimapTest(int, char *[]) {
                    (INT64_C(1) << 40) + 10);
             multimapVerify(m);
             assert(multimapFullFieldIncr(mmf(m), &missing, 1, 5) == 0);
+            assert(multimapFullFieldIncr(mmf(m), &key, 0, 5) == 0);
+            assert(multimapFullFieldIncr(mmf(m), &key, 2, 5) == 0);
             multimapVerify(m);
         }
     }
@@ -9051,6 +9060,43 @@ int multimapTest(int, char *[]) {
             multimapFieldIncrBy(&m, &kMissing, 1, 1, nullptr) ||
             multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
             ERR("a non-counter field or missing key was not refused");
+        }
+    }
+
+    TEST("FieldIncrBy: an offset outside the row's values is refused") {
+        /* Offset 0 is the key (keys never change in place); an offset
+         * past the row's last value would be the next row's key, or past
+         * the map's end after the last row */
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        const databox k1 = databoxNewSigned(1);
+        const databox k2 = databoxNewSigned(2);
+        const databox v = databoxNewSigned(5);
+        const databox *row1[] = {&k1, &v};
+        const databox *row2[] = {&k2, &v};
+        multimapInsert(&m, row1);
+        multimapInsert(&m, row2);
+        const size_t bytes = multimapBytes(m);
+        const uint32_t offsets[] = {0, 2, 3, UINT32_MAX};
+        size_t accepted = 0;
+        for (size_t i = 0; i < countof(offsets); i++) {
+            int64_t got = 42;
+            accepted += multimapFieldIncrBy(&m, &k1, offsets[i], 1, &got);
+            accepted += multimapFieldIncrBy(&m, &k2, offsets[i], 1, &got);
+            multimapEntry row;
+            if (multimapGetUnderlyingEntry(m, &k2, &row)) {
+                accepted +=
+                    multimapFieldIncrEntry(&m, &row, offsets[i], 1, nullptr);
+            }
+        }
+        databox got1 = {};
+        databox got2 = {};
+        databox *found1[] = {&got1};
+        databox *found2[] = {&got2};
+        if (accepted || multimapBytes(m) != bytes || multimapCount(m) != 2 ||
+            !multimapLookup(m, &k1, found1) ||
+            !multimapLookup(m, &k2, found2) || got1.data.i != 5 ||
+            got2.data.i != 5) {
+            ERR("%zu increments outside the values applied", accepted);
         }
     }
 

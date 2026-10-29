@@ -756,6 +756,11 @@ bool multimapMediumDeleteByPosition(multimapMedium *m, int64_t keyIndex) {
 
 int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
                                 uint32_t fieldOffset, int64_t incrBy) {
+    /* Only a value of a row: 0 is the key, and past the last value the
+     * walk would leave the row */
+    if (fieldOffset == 0 || fieldOffset >= m->elementsPerEntry) {
+        return 0;
+    }
     size_t mapIdx;
     flexEntry *current =
         multimapMediumFindKey_(m, key, false, nullptr, &mapIdx);

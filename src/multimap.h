@@ -222,8 +222,10 @@ bool multimapDeleteRandomValue(multimap **m, bool fromTail, databox **deleted);
  * stays boolean while the result is 0 or 1).  The sum is exact.
  *
  * multimapFieldIncrBy returns true with the new value in '*newValue' (if
- * non-NULL); it returns false, changing nothing, for a missing key, a field
- * that is not such a counter, a result outside int64, or a set (a set's
+ * non-NULL); it returns false, changing nothing, for a missing key, an
+ * offset that is not one of the row's values (0, the key, or past the
+ * last value), a field that is not such a counter, a result outside
+ * int64, or a set (a set's
  * values order its rows, so changing one in place would misplace the row;
  * delete the row and insert the new one instead).
  *
