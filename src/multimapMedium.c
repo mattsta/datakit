@@ -1023,7 +1023,8 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
         multimapMediumConform_(m, 0);
         return true;
     default:
-        /* We don't support the other predicate types yet */
+        /* A tier trims a prefix (<=) only; multimapDeleteByPredicate
+         * handles every other condition */
         assert(false && "Not Implemented!");
         return false;
     }

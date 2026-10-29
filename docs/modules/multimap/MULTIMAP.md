@@ -625,9 +625,19 @@ empty Small.
 bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p);
 ```
 
-**Only `MULTIMAP_CONDITION_LESS_THAN_EQUAL` is implemented.** All three variants
-assert on any other condition. The call is a sorted-prefix trim: every row whose
-key is `<= compareAgainst` is removed in one shot, without a per-row walk.
+Every row whose key meets the condition is removed; the result is true when any
+was. Keys sort, so each condition removes one run of rows:
+
+| Condition                            | Removes                              | Cost                                      |
+| ------------------------------------ | ------------------------------------ | ----------------------------------------- |
+| `LESS_THAN_EQUAL`                    | the prefix `<= compareAgainst`       | one pass (whole inner maps freed at once) |
+| `LESS_THAN`                          | the prefix `< compareAgainst`        | one search per row removed                |
+| `GREATER_THAN`, `GREATER_THAN_EQUAL` | the suffix `>` / `>= compareAgainst` | one search per row removed                |
+| `EQUAL`                              | the key's row (a set: all its rows)  | one search per row                        |
+| `ALL`                                | every row (the map is reset)         | one reset                                 |
+| `NONE`                               | nothing                              | none                                      |
+
+In a set, the rows of a key are all removed together under each condition.
 
 ```c
 databox limit = databoxNewSigned(100);
@@ -639,8 +649,9 @@ if (multimapDeleteByPredicate(&m, &pred)) {
 }
 ```
 
-For any other condition, iterate and delete explicitly, collecting keys first
-(copying byte keys) because deletion invalidates iterator position.
+To remove rows by a test the conditions can't express, iterate and delete
+explicitly, collecting keys first (copying byte keys), because a delete
+invalidates the iterator's position.
 
 ## Iteration
 

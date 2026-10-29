@@ -1305,9 +1305,12 @@ bool multimapLast(multimap *m, databox *elements[]) {
 
 bool multimapProcessPredicate(const multimapPredicate *p,
                               const databox *value) {
-    /* Short circuit ALL condition so we don't waste time in databoxCompare() */
+    /* ALL and NONE need no compare (a NONE predicate may carry no value) */
     if (p->condition == MULTIMAP_CONDITION_ALL) {
         return true;
+    }
+    if (p->condition == MULTIMAP_CONDITION_NONE) {
+        return false;
     }
 
     int compared = databoxCompare(value, &p->compareAgainst);
@@ -1340,6 +1343,8 @@ bool multimapProcessPredicate(const multimapPredicate *p,
             return true;
         }
         break;
+    case MULTIMAP_CONDITION_NONE:
+        return false; /* no value meets it */
     default:
         assert(false);
         unreachable();
@@ -1348,8 +1353,117 @@ bool multimapProcessPredicate(const multimapPredicate *p,
     return false;
 }
 
-bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p) {
+/* The row 'it' reads next, when its key meets 'p': deleted, and true;
+ * false when there is no row or its key does not.  The row is read with
+ * its wide values and copied (owned) before the delete, so the delete
+ * never searches with bytes inside the map it changes. */
+static bool multimapDeleteNextRowIf_(multimap **m, multimapIterator *it,
+                                     const multimapPredicate *p) {
+    const multimapElements epe = multimapElementsPerEntry_(*m);
+    constexpr multimapElements stackRow = 8;
+    /* Wide slots first: the one heap block keeps their alignment */
+    databoxWide slotsS[stackRow];
+    databox gotS[stackRow];
+    databox ownedS[stackRow];
+    databox *gotPS[stackRow];
+    const databox *rowS[stackRow];
+    cleanerName(zfree, Void) void *heap =
+        epe > stackRow
+            ? zcalloc(epe, sizeof(databoxWide) + 2 * sizeof(databox) +
+                               2 * sizeof(databox *))
+            : nullptr;
+    databoxWide *slots = heap ? (databoxWide *)heap : slotsS;
+    databox *got = heap ? (databox *)(slots + epe) : gotS;
+    databox *owned = heap ? got + epe : ownedS;
+    databox **gotP = heap ? (databox **)(owned + epe) : gotPS;
+    const databox **row = heap ? (const databox **)(gotP + epe) : rowS;
+    for (multimapElements i = 0; i < epe; i++) {
+        got[i] = (databox){};
+        gotP[i] = &got[i];
+    }
+
+    if (!multimapIteratorNextWithSlots(it, gotP, slots) ||
+        !multimapProcessPredicate(p, gotP[0])) {
+        return false;
+    }
+
+    for (multimapElements i = 0; i < epe; i++) {
+        owned[i] = databoxCopy(gotP[i]);
+        row[i] = &owned[i];
+    }
+
+    if (multimapIsSet(*m)) {
+        multimapDeleteFullWidth(m, row);
+    } else {
+        multimapDelete(m, row[0]);
+    }
+
+    for (multimapElements i = 0; i < epe; i++) {
+        databoxFreeData(&owned[i]);
+    }
+
+    return true;
+}
+
+/* The tiers' one-pass trim of every row with a key at or below the bound
+ * (as far as one row with the bound itself) */
+static bool multimapDeleteByPredicateTier_(multimap **m,
+                                           const multimapPredicate *p) {
     MULTIMAP_DELETE_(m, DeleteByPredicate, p);
+}
+
+bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p) {
+    bool any = false;
+    multimapIterator it;
+    switch (p->condition) {
+    case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
+        /* The tiers trim a sorted prefix in one pass.  It ends at one row
+         * whose key equals the bound; a set may hold more rows with that
+         * key, and they are the head now. */
+        if (multimapIsSet(*m)) {
+            any = multimapDeleteByPredicateTier_(m, p);
+            for (;;) {
+                multimapIteratorInit(*m, &it, true);
+                if (!multimapDeleteNextRowIf_(m, &it, p)) {
+                    return any;
+                }
+                any = true;
+            }
+        }
+        return multimapDeleteByPredicateTier_(m, p);
+    case MULTIMAP_CONDITION_ALL:
+        if (!multimapCount(*m)) {
+            return false;
+        }
+        multimapReset(m);
+        return true;
+    case MULTIMAP_CONDITION_LESS_THAN:
+    case MULTIMAP_CONDITION_GREATER_THAN:
+    case MULTIMAP_CONDITION_GREATER_THAN_EQUAL:
+        /* Keys sort, so the rows that meet the condition are those at one
+         * end: they leave from it, one search each */
+        for (;;) {
+            multimapIteratorInit(*m, &it,
+                                 p->condition == MULTIMAP_CONDITION_LESS_THAN);
+            if (!multimapDeleteNextRowIf_(m, &it, p)) {
+                return any;
+            }
+            any = true;
+        }
+    case MULTIMAP_CONDITION_EQUAL:
+        /* One row in a map; in a set every row with the key, together
+         * from the first at the key */
+        if (!multimapIsSet(*m)) {
+            return multimapDelete(m, &p->compareAgainst);
+        }
+        while (multimapIteratorInitAt(*m, &it, true, &p->compareAgainst) &&
+               multimapDeleteNextRowIf_(m, &it, p)) {
+            any = true;
+        }
+        return any;
+    default:
+        return false; /* NONE: no row meets it */
+    }
 }
 
 bool multimapIteratorInitAt(const multimap *m, multimapIterator *iter,
@@ -4734,6 +4848,84 @@ int multimapTest(int, char *[]) {
         err += multimapDeleteEntrySweep_();
     }
 
+    TEST("DeleteByPredicate: every condition removes exactly the rows whose "
+         "key meets it, in maps and sets of every tier") {
+        /* Maps [key, value] and sets [key, member] (keys repeated three
+         * times in a set) at 20, 300 and 3000 rows under a small limit,
+         * some keys 128-bit: the rows left are exactly those whose key
+         * fails the predicate, the result says whether any went, and the
+         * map verifies */
+        static const multimapCondition conds[] = {
+            MULTIMAP_CONDITION_NONE,
+            MULTIMAP_CONDITION_ALL,
+            MULTIMAP_CONDITION_LESS_THAN,
+            MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+            MULTIMAP_CONDITION_EQUAL,
+            MULTIMAP_CONDITION_GREATER_THAN,
+            MULTIMAP_CONDITION_GREATER_THAN_EQUAL};
+        const int64_t sizes[] = {20, 300, 3000};
+        for (int set = 0; set < 2 && !err; set++) {
+            for (size_t s = 0; s < countof(sizes) && !err; s++) {
+                for (size_t c = 0; c < countof(conds) && !err; c++) {
+                    const int64_t rows = sizes[s];
+                    cleaner(multimapFree) multimap *m =
+                        multimapNewConfigure(2, set, false, FLEX_CAP_LEVEL_512);
+                    databoxBig wide[1];
+                    for (int64_t r = 0; r < rows; r++) {
+                        /* Every 16th key 128-bit (sorting past the rest) */
+                        const int64_t k = set ? r / 3 : r;
+                        databox key = databoxNewSigned(k * 2);
+                        if (k % 16 == 15) {
+                            DATABOX_BIG_SIGNED_128(&wide[0],
+                                                   ((__int128_t)1 << 100) + k);
+                            key = *(databox *)&wide[0];
+                        }
+                        const databox val = databoxNewSigned(r);
+                        const databox *row[2] = {&key, &val};
+                        multimapInsert(&m, row);
+                    }
+
+                    /* The boundary: a key present in the middle */
+                    const int64_t mid = (set ? rows / 3 : rows) / 2;
+                    const multimapPredicate p = {
+                        .condition = conds[c],
+                        .compareAgainst = databoxNewSigned(
+                            (mid % 16 == 15 ? mid - 1 : mid) * 2)};
+
+                    /* What must stay: every row, read now, that fails p */
+                    size_t keep = 0;
+                    size_t before = multimapCount(m);
+                    multimapIterator it;
+                    multimapIteratorInit(m, &it, true);
+                    databox kb = {};
+                    databox vb = {};
+                    databox *got[2] = {&kb, &vb};
+                    databoxWide slots[2];
+                    while (multimapIteratorNextWithSlots(&it, got, slots)) {
+                        keep += !multimapProcessPredicate(&p, &kb);
+                    }
+
+                    const bool any = multimapDeleteByPredicate(&m, &p);
+                    multimapVerify(m);
+                    size_t left = 0;
+                    bool wrong = false;
+                    multimapIteratorInit(m, &it, true);
+                    while (multimapIteratorNextWithSlots(&it, got, slots)) {
+                        left++;
+                        wrong |= multimapProcessPredicate(&p, &kb);
+                    }
+                    if (left != keep || wrong || any != (keep < before) ||
+                        multimapCount(m) != left) {
+                        ERR("%s size %" PRId64 " condition %d: %zu of %zu "
+                            "left, want %zu (deleted %d)",
+                            set ? "set" : "map", rows, (int)conds[c], left,
+                            before, keep, any);
+                    }
+                }
+            }
+        }
+    }
+
     TEST("FieldIncr through every integer width keeps every tier's search "
          "state right") {
         /* Maps of [key, a, b] rows at 20, 300 and 3000 rows under a small
@@ -5595,6 +5787,12 @@ int multimapTest(int, char *[]) {
             multimapVerify(m);
             assert(multimapFullFieldIncr(mmf(m), &key, 1, INT64_C(1) << 40) ==
                    (INT64_C(1) << 40) + 20);
+            multimapVerify(m);
+            /* key00000's count is 8 bytes wide since the Medium steps (a
+             * shrink keeps the width): a fresh key grows from one byte */
+            const databox fresh = databoxNewBytesString("key00007");
+            assert(multimapFullFieldIncr(mmf(m), &fresh, 1, INT64_C(1) << 40) ==
+                   (INT64_C(1) << 40) + 10);
             multimapVerify(m);
             assert(multimapFullFieldIncr(mmf(m), &missing, 1, 5) == 0);
             multimapVerify(m);

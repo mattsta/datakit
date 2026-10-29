@@ -2760,7 +2760,8 @@ bool multimapFullIteratorNextWithSlots(multimapIterator *iter,
 bool multimapFullDeleteByPredicate(multimapFull *m,
                                    const multimapPredicate *p) {
     if (p->condition != MULTIMAP_CONDITION_LESS_THAN_EQUAL) {
-        /* We don't support the other predicate types yet */
+        /* A tier trims a prefix (<=) only; multimapDeleteByPredicate
+         * handles every other condition */
         assert(false && "Not Implemented!");
         return false;
     }

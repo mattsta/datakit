@@ -577,10 +577,11 @@ void exampleLeaderboard(void) {
 
 ## Example 5: Retention Trim and Key Set Algebra
 
-`multimapDeleteByPredicate()` is a **sorted-prefix trim**: it drops everything
-at or below a boundary in one operation instead of walking rows. Only
-`MULTIMAP_CONDITION_LESS_THAN_EQUAL` is implemented; every other condition
-asserts.
+`multimapDeleteByPredicate()` with `MULTIMAP_CONDITION_LESS_THAN_EQUAL` is a
+**sorted-prefix trim**: it drops everything at or below a boundary in one
+operation instead of walking rows. The other conditions remove the matching
+prefix, suffix or key a row at a time (MULTIMAP.md, "Predicate-Based
+Deletion").
 
 ```c
 /* Drop every event whose timestamp key is <= cutoff. */
@@ -594,8 +595,7 @@ bool eventsTrimOlderThan(multimap **events, int64_t cutoff) {
 }
 
 /* Counting walk. multimapProcessUntil STOPS at the first row whose key fails
- * the predicate, so it is a prefix walk, not a filter. Unlike the trim, it
- * accepts every multimapCondition. */
+ * the predicate, so it is a prefix walk, not a filter. */
 static bool countRow(void *userData, const databox *elements[]) {
     uint64_t *seen = userData;
     (void)elements;
