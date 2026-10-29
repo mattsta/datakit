@@ -361,6 +361,17 @@ static bool testApply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
+/* A restore that refuses every payload */
+static void *replicatorRefuseRestore(const uint8_t *, size_t) {
+    return nullptr;
+}
+
+/* A snapshot that fails */
+static uint8_t *replicatorNoSnapshot(const void *, size_t *len) {
+    *len = 0;
+    return nullptr;
+}
+
 int clusterReplicatorTest(int, char *[]) {
     int err = 0;
 
@@ -590,6 +601,110 @@ int clusterReplicatorTest(int, char *[]) {
         if (app_ctx.count != 0) {
             ERR("no apply must fire on unknown type");
         }
+        clusterReplicatorFree(rep);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("missing arguments, failing snapshots and refused payloads") {
+        const uint8_t key[32] = {0xEF};
+        hmacKeyring *ring = hmacKeyringCreate();
+        const hmacKeyId KID = 1u;
+        hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        replicatorTestCtx app_ctx = {};
+        cleaner(flexFree) flex *src = flexNew();
+        flexPushUnsigned(&src, 5u, FLEX_ENDPOINT_TAIL);
+
+        /* Construction refuses each missing argument, and a table entry
+         * with no free (it would leak every refused structure) */
+        static persistOps noFree;
+        noFree = persistOpsFlex;
+        noFree.free = nullptr;
+        static const persistOps *freeless[1] = {&noFree};
+        const flexEnvelopeAlgo algo = FLEX_ENV_ALGO_HMAC_SHA256;
+        const uint32_t none = CLUSTER_MAILBOX_FLAG_NONE;
+        if (clusterReplicatorCreate(nullptr, algo, none, type_table, 256u,
+                                    testApply, &app_ctx) ||
+            clusterReplicatorCreate(ring, algo, none, nullptr, 256u, testApply,
+                                    &app_ctx) ||
+            clusterReplicatorCreate(ring, algo, none, type_table, 0u, testApply,
+                                    &app_ctx) ||
+            clusterReplicatorCreate(ring, algo, none, type_table, 256u, nullptr,
+                                    &app_ctx) ||
+            clusterReplicatorCreate(ring, algo, none, freeless, 1u, testApply,
+                                    &app_ctx)) {
+            ERR("a construction with a missing argument succeeded");
+        }
+
+        /* No replicator: every reader is empty, every writer refuses */
+        uint8_t byte = 0;
+        size_t written = 0;
+        clusterReplicatorFree(nullptr);
+        if (clusterReplicatorDroppedCount(nullptr) ||
+            clusterReplicatorFormatRefusedCount(nullptr) ||
+            clusterReplicatorMailbox(nullptr) ||
+            clusterReplicatorSnapshotSize(nullptr, &persistOpsFlex, src) ||
+            clusterReplicatorSeal(nullptr, &persistOpsFlex, src, 1u, 1u, KID,
+                                  &byte, 1, &written) ||
+            clusterReplicatorIngest(nullptr, &byte, 1, KID) !=
+                CLUSTER_MAILBOX_ERR_PARAM) {
+            ERR("a NULL replicator did not refuse");
+        }
+
+        /* Ops with no snapshot, one that fails, a NULL structure, and a
+         * type that does not fit the frame's type byte */
+        clusterReplicator *rep = clusterReplicatorCreate(
+            ring, algo, none, type_table, 256u, testApply, &app_ctx);
+        persistOps noSnapshot = persistOpsFlex;
+        noSnapshot.snapshot = nullptr;
+        persistOps failing = persistOpsFlex;
+        failing.snapshot = replicatorNoSnapshot;
+        persistOps wide = persistOpsFlex;
+        wide.type = (persistType)(UINT8_MAX + 1);
+        if (clusterReplicatorSnapshotSize(rep, nullptr, src) ||
+            clusterReplicatorSnapshotSize(rep, &noSnapshot, src) ||
+            clusterReplicatorSnapshotSize(rep, &persistOpsFlex, nullptr) ||
+            clusterReplicatorSnapshotSize(rep, &failing, src) ||
+            clusterReplicatorSeal(rep, nullptr, src, 1u, 1u, KID, &byte, 1,
+                                  &written) ||
+            clusterReplicatorSeal(rep, &failing, src, 1u, 1u, KID, &byte, 1,
+                                  &written) ||
+            clusterReplicatorSeal(rep, &wide, src, 1u, 1u, KID, &byte, 1,
+                                  &written)) {
+            ERR("a snapshot that cannot be taken was sized or sealed");
+        }
+
+        /* A sealed flex: a receiver whose table ends before the flex
+         * type, and one whose restore refuses the payload, apply
+         * nothing */
+        const size_t cap =
+            clusterReplicatorSnapshotSize(rep, &persistOpsFlex, src);
+        cleanerName(zfree, Wire) uint8_t *wire = zmalloc(cap);
+        if (!clusterReplicatorSeal(rep, &persistOpsFlex, src, 7u, 1u, KID, wire,
+                                   cap, &written)) {
+            ERR("seal");
+        }
+
+        static persistOps refusing;
+        refusing = persistOpsFlex;
+        refusing.restore = replicatorRefuseRestore;
+        static const persistOps *refusingTable[256];
+        refusingTable[PERSIST_TYPE_FLEX] = &refusing;
+        clusterReplicator *shortTable =
+            clusterReplicatorCreate(ring, algo, none, type_table,
+                                    PERSIST_TYPE_FLEX, testApply, &app_ctx);
+        clusterReplicator *refuser = clusterReplicatorCreate(
+            ring, algo, none, refusingTable, 256u, testApply, &app_ctx);
+        if (clusterReplicatorIngest(shortTable, wire, written, KID) ==
+                CLUSTER_MAILBOX_OK ||
+            clusterReplicatorIngest(refuser, wire, written, KID) ==
+                CLUSTER_MAILBOX_OK ||
+            app_ctx.count != 0) {
+            ERR("a payload no table entry restores was applied");
+        }
+
+        clusterReplicatorFree(shortTable);
+        clusterReplicatorFree(refuser);
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);
     }

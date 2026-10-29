@@ -15,11 +15,14 @@
 #include "../cleaner.h"
 #include "../ctest.h"
 #include "../datakit.h"
+#include "../flex.h"
+#include "../persist.h"
 #include "segmentDouble.h"
 #include "segmentFloat.h"
 #include "segmentI16.h"
 #include "segmentI32.h"
 #include "segmentI64.h"
+#include "segmentPersist.h"
 #include "segmentU16.h"
 #include "segmentU32.h"
 #include "segmentU64.h"
@@ -33,6 +36,7 @@
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
+defcleaner(flex *, flexFree);
 
 /* Mostly small indexes; sometimes a jump past the end or across the
  * Small tier's limit */
@@ -233,6 +237,163 @@ SGT_BULK(I128, __int128_t, 0)
 SGT_BULK(U128, __uint128_t, 0)
 #endif
 
+/* The Small and Full tier functions (public in segmentCore.h), the
+ * dispatch API and the persist descriptor at their edges: a NULL tree
+ * reads empty and refuses writes; an empty array builds an empty tree;
+ * reads outside the tree give the identity (0 for SUM); RangeUpdate
+ * never extends the tree and clamps its right end; a Full update whose
+ * capacity would overflow is refused; restore and applyOp refuse bodies
+ * that are not theirs. */
+#define SGT_TIER_EDGES(T, VT)                                                  \
+    static int sgtTierEdges##T(void) {                                         \
+        int err = 0;                                                           \
+        typedef typeof(segment##T##FullCount(nullptr)) FullIdx;                \
+        bool ok = true;                                                        \
+                                                                               \
+        if (segment##T##SmallQuery(nullptr, 0, 1) != 0 ||                      \
+            segment##T##SmallGet(nullptr, 0) != 0 ||                           \
+            segment##T##SmallCount(nullptr) != 0 ||                            \
+            segment##T##SmallBytes(nullptr) != 0 ||                            \
+            segment##T##SmallShouldUpgrade(nullptr) ||                         \
+            segment##T##SmallUpdate(nullptr, 0, 1, &ok) || ok) {               \
+            ERR(#T ": a NULL Small tree did not read empty");                  \
+        }                                                                      \
+                                                                               \
+        ok = true;                                                             \
+        if (segment##T##FullQuery(nullptr, 0, 1) != 0 ||                       \
+            segment##T##FullGet(nullptr, 0) != 0 ||                            \
+            segment##T##FullCount(nullptr) != 0 ||                             \
+            segment##T##FullBytes(nullptr) != 0 ||                             \
+            segment##T##FullUpdate(nullptr, 0, 1, &ok) || ok) {                \
+            ERR(#T ": a NULL Full tree did not read empty");                   \
+        }                                                                      \
+                                                                               \
+        segment##T##SmallRangeUpdate(nullptr, 0, 1, 1);                        \
+        segment##T##FullRangeUpdate(nullptr, 0, 1, 1);                         \
+        segment##T##Free(nullptr);                                             \
+        segment##T##CopyTo(nullptr, nullptr);                                  \
+        segment##T##Update(nullptr, 0, 1);                                     \
+        if (segment##T##Count(nullptr) != 0 ||                                 \
+            segment##T##Query(nullptr, 0, 1) != 0 ||                           \
+            segment##T##Get(nullptr, 0) != 0 ||                                \
+            segment##T##Bytes(nullptr) != 0) {                                 \
+            ERR(#T ": a NULL tree did not read empty through the API");        \
+        }                                                                      \
+                                                                               \
+        /* Empty arrays, and a Full tree from no Small one */                  \
+        const VT three[3] = {(VT)1, (VT)2, (VT)3};                             \
+        segment##T##Small *emptySmall =                                        \
+            segment##T##SmallNewFromArray(nullptr, 3, SEGMENT_OP_SUM);         \
+        segment##T##Full *emptyFull =                                          \
+            segment##T##FullNewFromArray(three, 0, SEGMENT_OP_SUM);            \
+        segment##T##Full *fromNone = segment##T##FullFromSmall(nullptr);       \
+        segment##T##SmallRangeUpdate(emptySmall, 0, 1, 1);                     \
+        segment##T##FullRangeUpdate(emptyFull, 0, 1, 1);                       \
+        if (!emptySmall || segment##T##SmallCount(emptySmall) != 0 ||          \
+            !emptyFull || segment##T##FullCount(emptyFull) != 0 ||             \
+            !fromNone || segment##T##FullCount(fromNone) != 0) {               \
+            ERR(#T ": an empty array did not build an empty tree");            \
+        }                                                                      \
+        segment##T##SmallFree(emptySmall);                                     \
+        segment##T##FullFree(emptyFull);                                       \
+        segment##T##FullFree(fromNone);                                        \
+                                                                               \
+        segment##T##Small *small =                                             \
+            segment##T##SmallNewFromArray(three, 3, SEGMENT_OP_SUM);           \
+        segment##T##Full *full =                                               \
+            segment##T##FullNewFromArray(three, 3, SEGMENT_OP_SUM);            \
+        if (segment##T##SmallQuery(small, 0, 2) != (VT)6 ||                    \
+            segment##T##FullQuery(full, 0, 2) != (VT)6 ||                      \
+            segment##T##SmallQuery(small, 2, 1) != 0 ||                        \
+            segment##T##SmallQuery(small, 0, 3) != 0 ||                        \
+            segment##T##SmallGet(small, 3) != 0 ||                             \
+            segment##T##FullQuery(full, 2, 1) != 0 ||                          \
+            segment##T##FullQuery(full, 0, 3) != 0 ||                          \
+            segment##T##FullGet(full, 3) != 0) {                               \
+            ERR(#T ": a fold or read outside the tree was not the identity");  \
+        }                                                                      \
+                                                                               \
+        /* RangeUpdate: an inverted range or one past the count changes        \
+         * nothing; one running past the count stops at the last element */    \
+        segment##T##SmallRangeUpdate(small, 2, 1, 9);                          \
+        segment##T##SmallRangeUpdate(small, 3, 5, 9);                          \
+        segment##T##SmallRangeUpdate(small, 1, 99, 5);                         \
+        segment##T##FullRangeUpdate(full, 2, 1, 9);                            \
+        segment##T##FullRangeUpdate(full, 3, 5, 9);                            \
+        segment##T##FullRangeUpdate(full, 1, 99, 5);                           \
+        if (segment##T##SmallCount(small) != 3 ||                              \
+            segment##T##SmallQuery(small, 0, 2) != (VT)11 ||                   \
+            segment##T##FullCount(full) != 3 ||                                \
+            segment##T##FullQuery(full, 0, 2) != (VT)11) {                     \
+            ERR(#T ": RangeUpdate past the edges changed the wrong elements"); \
+        }                                                                      \
+                                                                               \
+        /* A capacity past the index type's range is refused, unchanged */     \
+        ok = true;                                                             \
+        full = segment##T##FullUpdate(full, (FullIdx) - 1, (VT)1, &ok);        \
+        if (ok || segment##T##FullCount(full) != 3 ||                          \
+            segment##T##FullGet(full, 2) != (VT)5) {                           \
+            ERR(#T ": an update at the last Full index was not refused");      \
+        }                                                                      \
+        segment##T##SmallFree(small);                                          \
+        segment##T##FullFree(full);                                            \
+                                                                               \
+        /* Through the API: a NULL tree pointer becomes a SUM tree, Bytes      \
+         * covers both tiers, Get past the count is the identity */            \
+        void *seg = nullptr;                                                   \
+        segment##T##Update(&seg, 2, (VT)7);                                    \
+        const size_t smallBytes = segment##T##Bytes(seg);                      \
+        segment##T##Update(&seg, 1 << 17, (VT)1);                              \
+        if (segment##T##Count(seg) != (1 << 17) + 1 ||                         \
+            segment##T##Get(seg, 2) != (VT)7 ||                                \
+            segment##T##Get(seg, (1 << 17) + 9) != 0 || smallBytes == 0 ||     \
+            segment##T##Bytes(seg) <= smallBytes) {                            \
+            ERR(#T ": Update from NULL, Bytes or Get past the count");         \
+        }                                                                      \
+        segment##T##Free(seg);                                                 \
+                                                                               \
+        /* Persist: no operation byte, a wrong op or operand count, and a      \
+         * signed index are refused */                                         \
+        const persistOps *ops = &persistOpsSegment##T;                         \
+        cleaner(flexFree) flex *none = flexNew();                              \
+        const databox one = databoxNewUnsigned(1);                             \
+        const databox negative = databoxNewSigned(-1);                         \
+        const databox value = databoxNewUnsigned(2);                           \
+        const databox *lone[] = {&one};                                        \
+        const databox *signedIdx[] = {&negative, &value};                      \
+        size_t loneLen = 0;                                                    \
+        size_t signedLen = 0;                                                  \
+        size_t badLen = 0;                                                     \
+        cleaner(zfree) void *loneBody =                                        \
+            persistOpEncodeBoxes(lone, 1, &loneLen);                           \
+        cleaner(zfree) void *signedBody =                                      \
+            persistOpEncodeBoxes(signedIdx, 2, &signedLen);                    \
+        void *target = segment##T##New(SEGMENT_OP_SUM);                        \
+        if (ops->restore((const uint8_t *)none, flexBytes(none)) ||            \
+            ops->encodeOp(PERSIST_OP_INSERT, signedIdx, 2, &badLen) ||         \
+            ops->encodeOp(PERSIST_OP_UPDATE, lone, 1, &badLen) ||              \
+            ops->applyOp(&target, PERSIST_OP_UPDATE, loneBody, loneLen) ||     \
+            ops->applyOp(&target, PERSIST_OP_UPDATE, signedBody, signedLen) || \
+            segment##T##Count(target) != 0) {                                  \
+            ERR(#T ": persist accepted a body that is not its own");           \
+        }                                                                      \
+        segment##T##Free(target);                                              \
+        return err;                                                            \
+    }
+
+SGT_TIER_EDGES(I16, int16_t)
+SGT_TIER_EDGES(I32, int32_t)
+SGT_TIER_EDGES(I64, int64_t)
+SGT_TIER_EDGES(U16, uint16_t)
+SGT_TIER_EDGES(U32, uint32_t)
+SGT_TIER_EDGES(U64, uint64_t)
+#ifdef __SIZEOF_INT128__
+SGT_TIER_EDGES(I128, __int128_t)
+SGT_TIER_EDGES(U128, __uint128_t)
+#endif
+SGT_TIER_EDGES(Float, float)
+SGT_TIER_EDGES(Double, double)
+
 int segmentTypesTest(int, char *[]) {
     int err = 0;
 
@@ -253,6 +414,9 @@ int segmentTypesTest(int, char *[]) {
         err += sgtBulk##T(SEGMENT_OP_SUM, 31);                                 \
         err += sgtBulk##T(SEGMENT_OP_MIN, 32);                                 \
         err += sgtBulk##T(SEGMENT_OP_MAX, 33);                                 \
+    }                                                                          \
+    TEST("tiers, API and persist at their edges: segment" #T) {                \
+        err += sgtTierEdges##T();                                              \
     }                                                                          \
     TEST("Repr: segment" #T " nil, Small and Full") {                          \
         segment##T##Repr(nullptr);                                             \

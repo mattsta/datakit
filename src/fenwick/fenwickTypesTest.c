@@ -369,6 +369,132 @@ FWT_BULK(U128, __uint128_t, 0)
 FWT_BULK(Float, float, 1)
 FWT_BULK(Double, double, 1)
 
+/* The Small and Full tier functions (public in fenwickCore.h) at their
+ * edges: a NULL tree gives every reader its empty answer and every
+ * writer refuses; an index or range past the count reads 0; an empty
+ * array builds an empty tree and a float tree refuses a non-finite one;
+ * a Full update whose capacity would overflow is refused; LowerBound on
+ * each tier agrees with a scan of prefix sums. */
+#define FWT_TIER_EDGES(T, VT, FLOATING)                                        \
+    static int fwtTierEdges##T(void) {                                         \
+        int err = 0;                                                           \
+        typedef typeof(fenwick##T##SmallCount(nullptr)) SmallIdx;              \
+        typedef typeof(fenwick##T##FullCount(nullptr)) FullIdx;                \
+        bool ok = true;                                                        \
+                                                                               \
+        if (fenwick##T##SmallQuery(nullptr, 0) != 0 ||                         \
+            fenwick##T##SmallGet(nullptr, 0) != 0 ||                           \
+            fenwick##T##SmallRangeQuery(nullptr, 0, 1) != 0 ||                 \
+            fenwick##T##SmallCount(nullptr) != 0 ||                            \
+            fenwick##T##SmallBytes(nullptr) != 0 ||                            \
+            fenwick##T##SmallShouldUpgrade(nullptr) ||                         \
+            fenwick##T##SmallLowerBound(nullptr, 1) != (SmallIdx) - 1 ||       \
+            fenwick##T##SmallSet(nullptr, 0, 1, &ok) || ok) {                  \
+            ERR(#T ": a NULL Small tree did not read empty");                  \
+        }                                                                      \
+                                                                               \
+        ok = true;                                                             \
+        if (fenwick##T##FullQuery(nullptr, 0) != 0 ||                          \
+            fenwick##T##FullGet(nullptr, 0) != 0 ||                            \
+            fenwick##T##FullRangeQuery(nullptr, 0, 1) != 0 ||                  \
+            fenwick##T##FullCount(nullptr) != 0 ||                             \
+            fenwick##T##FullBytes(nullptr) != 0 ||                             \
+            fenwick##T##FullLowerBound(nullptr, 1) != (FullIdx) - 1 ||         \
+            fenwick##T##FullSet(nullptr, 0, 1, &ok) || ok) {                   \
+            ERR(#T ": a NULL Full tree did not read empty");                   \
+        }                                                                      \
+                                                                               \
+        fenwick##T##SmallClear(nullptr);                                       \
+        fenwick##T##FullClear(nullptr);                                        \
+                                                                               \
+        /* Empty arrays build empty trees; Clear of a Full tree with no        \
+         * cells does nothing */                                               \
+        const VT three[3] = {(VT)1, (VT)2, (VT)3};                             \
+        fenwick##T##Small *emptySmall =                                        \
+            fenwick##T##SmallNewFromArray(nullptr, 3);                         \
+        fenwick##T##Full *emptyFull = fenwick##T##FullNewFromArray(three, 0);  \
+        fenwick##T##FullClear(emptyFull);                                      \
+        if (!emptySmall || fenwick##T##SmallCount(emptySmall) != 0 ||          \
+            !emptyFull || fenwick##T##FullCount(emptyFull) != 0) {             \
+            ERR(#T ": an empty array did not build an empty tree");            \
+        }                                                                      \
+        fenwick##T##SmallFree(emptySmall);                                     \
+        fenwick##T##FullFree(emptyFull);                                       \
+                                                                               \
+        if (FLOATING) {                                                        \
+            const VT bad[2] = {(VT)1, (VT)INFINITY};                           \
+            fenwick##T##Small *s = fenwick##T##SmallNewFromArray(bad, 2);      \
+            fenwick##T##Full *f = fenwick##T##FullNewFromArray(bad, 2);        \
+            if (s || f) {                                                      \
+                ERR(#T ": an array holding infinity built a tree");            \
+            }                                                                  \
+            fenwick##T##SmallFree(s);                                          \
+            fenwick##T##FullFree(f);                                           \
+        }                                                                      \
+                                                                               \
+        /* Past the count, and an inverted or overlong range: 0 */             \
+        fenwick##T##Small *small = fenwick##T##SmallNewFromArray(three, 3);    \
+        fenwick##T##Full *full = fenwick##T##FullNewFromArray(three, 3);       \
+        if (fenwick##T##SmallQuery(small, 3) != 0 ||                           \
+            fenwick##T##SmallGet(small, 5) != 0 ||                             \
+            fenwick##T##SmallRangeQuery(small, 2, 1) != 0 ||                   \
+            fenwick##T##SmallRangeQuery(small, 0, 3) != 0 ||                   \
+            fenwick##T##FullQuery(full, 3) != 0 ||                             \
+            fenwick##T##FullGet(full, 5) != 0 ||                               \
+            fenwick##T##FullRangeQuery(full, 2, 1) != 0 ||                     \
+            fenwick##T##FullRangeQuery(full, 0, 3) != 0) {                     \
+            ERR(#T ": a read past the count was not 0");                       \
+        }                                                                      \
+                                                                               \
+        /* A capacity past the index type's range is refused, unchanged */     \
+        ok = true;                                                             \
+        full = fenwick##T##FullUpdate(full, (FullIdx) - 1, (VT)1, &ok);        \
+        if (ok || fenwick##T##FullCount(full) != 3 ||                          \
+            fenwick##T##FullGet(full, 2) != (VT)3) {                           \
+            ERR(#T ": an update at the last Full index was not refused");      \
+        }                                                                      \
+                                                                               \
+        /* LowerBound: the first index whose prefix sum reaches the target     \
+         * (prefix sums 1, 3, 6), none past the total */                       \
+        const VT targets[] = {                                                 \
+            (VT)0, (VT)1, (VT)2, (VT)3, (VT)4, (VT)6, (VT)7};                  \
+        for (size_t t = 0; t < countof(targets); t++) {                        \
+            SmallIdx want = (SmallIdx) - 1;                                    \
+            VT sum = 0;                                                        \
+            for (SmallIdx i = 0; i < 3; i++) {                                 \
+                sum += three[i];                                               \
+                if (sum >= targets[t]) {                                       \
+                    want = i;                                                  \
+                    break;                                                     \
+                }                                                              \
+            }                                                                  \
+                                                                               \
+            const FullIdx wantFull =                                           \
+                want == (SmallIdx) - 1 ? (FullIdx) - 1 : (FullIdx)want;        \
+            if (fenwick##T##SmallLowerBound(small, targets[t]) != want ||      \
+                fenwick##T##FullLowerBound(full, targets[t]) != wantFull) {    \
+                ERR(#T ": LowerBound of target %zu differs from the scan", t); \
+            }                                                                  \
+        }                                                                      \
+                                                                               \
+        fenwick##T##SmallFree(small);                                          \
+        fenwick##T##FullFree(full);                                            \
+        return err;                                                            \
+    }
+
+FWT_TIER_EDGES(I16, int16_t, 0)
+FWT_TIER_EDGES(I32, int32_t, 0)
+FWT_TIER_EDGES(I64, int64_t, 0)
+FWT_TIER_EDGES(U16, uint16_t, 0)
+FWT_TIER_EDGES(U32, uint32_t, 0)
+FWT_TIER_EDGES(U64, uint64_t, 0)
+#ifdef __SIZEOF_INT128__
+FWT_TIER_EDGES(I128, __int128_t, 0)
+FWT_TIER_EDGES(U128, __uint128_t, 0)
+#endif
+FWT_TIER_EDGES(Float, float, 1)
+FWT_TIER_EDGES(Double, double, 1)
+
 int fenwickTypesTest(int, char *[]) {
     int err = 0;
 
@@ -385,6 +511,9 @@ int fenwickTypesTest(int, char *[]) {
     }                                                                          \
     TEST("NewFromArray and CopyTo: fenwick" #T) {                              \
         err += fwtBulk##T(11);                                                 \
+    }                                                                          \
+    TEST("Small and Full tiers at their edges: fenwick" #T) {                  \
+        err += fwtTierEdges##T();                                              \
     }                                                                          \
     TEST("Repr: fenwick" #T " nil, Small and Full") {                          \
         fenwick##T##Repr(nullptr);                                             \
