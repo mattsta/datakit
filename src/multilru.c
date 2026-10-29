@@ -579,17 +579,6 @@ do_grow:
         }
         /* @own: container; free=multilruFree */
         mlru->entries = zcalloc(actualNewCapacity, mlru->entryWidth);
-        if (mlru->weights) {
-            /* weights might be the marker value (1) - allocate fresh */
-            // cppcheck-suppress intToPointerCast - checking for disabled
-            // sentinel value
-            if (mlru->weights == (uint64_t *)1) {
-                mlru->weights = nullptr;
-            }
-            zfree(mlru->weights);
-            /* @own: container; free=multilruFree */
-            mlru->weights = zcalloc(actualNewCapacity, sizeof(uint64_t));
-        }
     } else {
         /* @own: container; free=multilruFree */
         mlru->entries = zrealloc(mlru->entries,
@@ -809,7 +798,28 @@ multilru *multilruNewWithLevelsCapacity(size_t maxLevels,
     return multilruNewWithConfig(&config);
 }
 
+/* Whether a policy or strategy reads entry weights */
+DK_STATIC bool mlruWantsWeights_(multilruPolicy policy,
+                                 multilruEvictStrategy strategy) {
+    return policy == MLRU_POLICY_SIZE || policy == MLRU_POLICY_HYBRID ||
+           strategy == MLRU_EVICT_SIZE_WEIGHTED ||
+           strategy == MLRU_EVICT_SIZE_LRU;
+}
+
+/* Weight tracking on: every entry held so far weighs 0 */
+DK_STATIC void mlruEnsureWeights_(multilru *mlru) {
+    if (!mlru->weights) {
+        /* @own: container; free=multilruFree */
+        mlru->weights = zcalloc(mlru->capacity, sizeof(uint64_t));
+    }
+}
+
 multilru *multilruNewWithConfig(const multilruConfig *config) {
+    const multilruConfig defaults = {};
+    if (!config) {
+        config = &defaults;
+    }
+
     /* @own: caller; free=multilruFree */
     multilru *mlru = zcalloc(1, sizeof(*mlru));
 
@@ -832,26 +842,11 @@ multilru *multilruNewWithConfig(const multilruConfig *config) {
     mlru->entryWidth = selectWidth(initialCapacity);
     mlru->targetCapacity = initialCapacity;
 
-    /* Enable weight tracking if requested */
-    if (config->enableWeights || config->policy == MLRU_POLICY_SIZE ||
-        config->policy == MLRU_POLICY_HYBRID ||
-        config->evictStrategy == MLRU_EVICT_SIZE_WEIGHTED ||
-        config->evictStrategy == MLRU_EVICT_SIZE_LRU) {
-        /* Will be allocated during grow() */
-        // cppcheck-suppress intToPointerCast - sentinel value marks weights for
-        // deferred allocation
-        mlru->weights = (uint64_t *)1; /* Non-NULL marker */
-    }
-
-    /* Initial allocation */
+    /* Initial allocation, then the weights when asked for or needed */
     grow(mlru);
-
-    /* Fix weights pointer after grow */
-    // cppcheck-suppress intToPointerCast - checking for deferred allocation
-    // sentinel
-    if (mlru->weights == (uint64_t *)1) {
-        /* @own: container; free=multilruFree */
-        mlru->weights = zcalloc(mlru->capacity, sizeof(uint64_t));
+    if (config->enableWeights ||
+        mlruWantsWeights_(config->policy, config->evictStrategy)) {
+        mlruEnsureWeights_(mlru);
     }
 
     /* Initialize level head markers */
@@ -1323,10 +1318,16 @@ void multilruGetNHighest(const multilru *mlru, multilruPtr out[], size_t n) {
  * ==================================================================== */
 
 void multilruSetPolicy(multilru *mlru, multilruPolicy policy) {
+    if (mlruWantsWeights_(policy, MLRU_EVICT_LRU)) {
+        mlruEnsureWeights_(mlru);
+    }
     mlru->policy = policy;
 }
 
 void multilruSetEvictStrategy(multilru *mlru, multilruEvictStrategy strategy) {
+    if (mlruWantsWeights_(MLRU_POLICY_COUNT, strategy)) {
+        mlruEnsureWeights_(mlru);
+    }
     mlru->evictStrategy = strategy;
 }
 
@@ -4047,6 +4048,48 @@ int multilruTest(int, char *[]) {
         if (multilruPeekMinimum(mlru) != first) {
             ERR("window victim %zu, want %zu", multilruPeekMinimum(mlru),
                 first);
+        }
+    }
+
+    TEST("a size policy or strategy chosen later turns weights on") {
+        cleaner(multilruFree) multilru *bySize = multilruNew();
+        multilruPtr h[3];
+        for (size_t i = 0; i < countof(h); i++) {
+            h[i] = multilruInsert(bySize);
+        }
+        const size_t bytesBefore = multilruBytes(bySize);
+        const bool before = multilruHasWeights(bySize);
+        multilruSetPolicy(bySize, MLRU_POLICY_SIZE);
+        multilruUpdateWeight(bySize, h[0], 40);
+        multilruUpdateWeight(bySize, h[1], 40);
+        multilruSetMaxWeight(bySize, 50);
+        if (before || !multilruHasWeights(bySize) ||
+            multilruGetWeight(bySize, h[2]) != 0 ||
+            multilruTotalWeight(bySize) != 80 ||
+            !multilruNeedsEviction(bySize) ||
+            multilruBytes(bySize) !=
+                bytesBefore + multilruCapacity(bySize) * sizeof(uint64_t)) {
+            ERR("weights %d -> %d, total %" PRIu64 ", needs eviction %d",
+                before, multilruHasWeights(bySize), multilruTotalWeight(bySize),
+                multilruNeedsEviction(bySize));
+        }
+
+        cleaner(multilruFree) multilru *byStrategy = multilruNew();
+        multilruSetEvictStrategy(byStrategy, MLRU_EVICT_SIZE_LRU);
+        cleaner(multilruFree) multilru *byCount = multilruNew();
+        multilruSetPolicy(byCount, MLRU_POLICY_COUNT);
+        if (!multilruHasWeights(byStrategy) || multilruHasWeights(byCount)) {
+            ERR("%s", "weights follow the strategy, not a count policy");
+        }
+    }
+
+    TEST("a NULL configuration is the default one") {
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(nullptr);
+        if (multilruMaxLevels(mlru) != 7 ||
+            multilruGetPolicy(mlru) != MLRU_POLICY_COUNT ||
+            multilruGetEvictStrategy(mlru) != MLRU_EVICT_LRU ||
+            multilruHasWeights(mlru) || !multilruInsert(mlru)) {
+            ERR("%s", "NULL configuration differs from multilruNew");
         }
     }
 

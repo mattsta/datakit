@@ -61,14 +61,14 @@
  *
  * PERFORMANCE
  * -----------
- * All core operations are O(1):
- *   - Insert:   ~1 billion ops/sec
- *   - Promote:  ~1 billion ops/sec
- *   - Remove:   ~1.5 billion ops/sec
- *   - Query:    ~1 billion ops/sec
+ * All core operations are O(1).  perfRegression's multilru rows measure
+ * them (100K entries, clang 22 perf build, development machine): insert
+ * ~10 ns, promote
+ * ~14 ns, delete ~9 ns, an eviction step ~25 ns (~29 ns under
+ * MLRU_EVICT_SIZE_WEIGHTED, which weighs 8 candidates).
  *
- * The levelMask bitmap enables O(1) lowest-entry lookup regardless of
- * how many levels are configured.
+ * The levelMask bitmap finds the lowest populated level in O(1)
+ * regardless of how many levels are configured.
  *
  * THREAD SAFETY
  * -------------
@@ -133,7 +133,8 @@
  *
  * ERROR HANDLING
  * --------------
- * - multilruInsert() returns 0 on allocation failure
+ * - multilruInsert() returns 0 when the cache cannot grow or its own
+ *   automatic eviction took the new entry
  * - Functions accepting multilruPtr silently ignore invalid/out-of-bounds
  * pointers
  * - multilruRemoveMinimum() returns false when cache is empty
@@ -147,7 +148,7 @@
  *
  * Policy:
  *   - MLRU_POLICY_COUNT: Simple entry count limit
- *   - MLRU_POLICY_SIZE: Total weight/size limit (requires enableWeights)
+ *   - MLRU_POLICY_SIZE: Total weight/size limit
  *   - MLRU_POLICY_HYBRID: Both limits enforced
  *
  * Evict Strategy:
@@ -156,44 +157,13 @@
  *   - MLRU_EVICT_SIZE_LRU: The coldest of those that covers the excess
  *     weight (multilruEvictStrategy)
  *
- * FUTURE WORK (TODO)
- * ------------------
- * The following optimizations are planned for future implementation:
+ * The size policies and strategies read entry weights: choosing one, at
+ * creation or later through the setters, turns weight tracking on (8
+ * bytes per slot; entries held before then weigh 0).
  *
- * 1. SHRINK COMPACTION
- *    When many entries are deleted, the free list accumulates "holes" (recycled
- *    slot indices) scattered throughout the entry array. This is fine for
- * memory usage since the slots are reused, but it means:
- *    - nextFresh stays high even with few active entries
- *    - The entry array may be oversized relative to actual usage
- *
- *    Future feature: multilruCompact() would:
- *    - Relocate entries to fill holes, creating a dense array
- *    - Update all prev/next pointers during relocation
- *    - Reset nextFresh to (maxLevels + 1 + count)
- *    - Allow shrinking the entry array via realloc
- *    - Return a mapping of old->new indices for caller's hash table updates
- *
- *    Architecture considerations:
- *    - Must pause operations during compaction (or use copy-on-write)
- *    - Could track fragmentation ratio: freeCount / (nextFresh - maxLevels - 1)
- *    - Trigger compaction when fragmentation > threshold (e.g., 50%)
- *    - Alternative: background incremental compaction
- *
- * 2. WIDTH DOWNGRADE
- *    Currently width only upgrades (5→6→7→...→16). After mass deletion, entries
- *    might fit in a smaller width. Downgrade would:
- *    - Save memory per entry (e.g., 8 bytes → 6 bytes per entry)
- *    - Require compaction first to ensure all indices fit in smaller width
- *    - Only practical after significant deletions (e.g., 90% reduction)
- *
- * 3. TIERED STORAGE (alternative to migration)
- *    Instead of uniform width with migration, use separate arrays per tier:
- *    - Tier 0: indices 1-64K use 5-byte entries
- *    - Tier 1: indices 64K-1M use 6-byte entries
- *    - etc.
- *    Eliminates migration entirely but adds tier lookup overhead per access.
- *    See tiered-multilru-analysis.md for detailed design.
+ * Recycled slots stay allocated: after many deletes the entry array keeps
+ * its high-water size (multilruStats nextFresh / freeCount show it) and
+ * new inserts reuse the holes.
  */
 
 /* @handle: fixed: its address holds from creation to free */
@@ -283,7 +253,8 @@ typedef struct multilruConfig {
 [[nodiscard]] multilru *multilruNewWithLevelsCapacity(size_t maxLevels,
                                                       size_t startCapacity);
 
-/* Create with full configuration control */
+/* Create with full configuration control (NULL: the defaults, as
+ * multilruNew) */
 [[nodiscard]] multilru *multilruNewWithConfig(const multilruConfig *config);
 
 /* Free all resources. Safe to call with NULL. */
@@ -294,12 +265,13 @@ void multilruFree(multilru *mlru);
  * ==================================================================== */
 
 /* Insert new entry at level 0.
- * Returns: Entry handle (non-zero), or 0 on allocation failure.
- * Note: If policy limits are set, may trigger automatic eviction. */
+ * Returns: Entry handle (non-zero), or 0 when the cache cannot grow or
+ * the automatic eviction an over-limit insert triggers took the new
+ * entry itself. */
 multilruPtr multilruInsert(multilru *mlru);
 
-/* Insert with associated weight for size-based eviction.
- * Requires: enableWeights=true or MLRU_POLICY_SIZE/HYBRID. */
+/* Insert with associated weight for size-based eviction (the weight is
+ * dropped without weight tracking: multilruHasWeights). */
 multilruPtr multilruInsertWeighted(multilru *mlru, uint64_t weight);
 
 /* Promote entry to next level (call on cache hit).
@@ -415,9 +387,8 @@ bool multilruIsPopulated(const multilru *mlru, multilruPtr ptr);
  *   nextFresh=1000, freeCount=500 -> Fragmented: 500 active, 500 holes
  *   nextFresh=1000, freeCount=900 -> Very sparse: only 100 active entries
  *
- * High fragmentation is normal after many deletes. Memory is still
- * efficiently reused (holes get recycled). Future compaction feature
- * will allow shrinking the underlying array if needed.
+ * High fragmentation is normal after many deletes: inserts reuse the
+ * holes before taking fresh slots.
  */
 
 typedef struct multilruStats {
@@ -506,10 +477,12 @@ void multilruGetNHighest(const multilru *mlru, multilruPtr out[], size_t n);
  *   size_t remaining = current > limit ? current - limit : 0;
  */
 
-/* Change eviction trigger policy */
+/* Change eviction trigger policy (a size policy turns weight tracking on;
+ * entries held until then weigh 0) */
 void multilruSetPolicy(multilru *mlru, multilruPolicy policy);
 
-/* Change victim selection strategy */
+/* Change victim selection strategy (a size-aware one turns weight
+ * tracking on, as multilruSetPolicy does) */
 void multilruSetEvictStrategy(multilru *mlru, multilruEvictStrategy strategy);
 multilruPolicy multilruGetPolicy(const multilru *mlru);
 multilruEvictStrategy multilruGetEvictStrategy(const multilru *mlru);
