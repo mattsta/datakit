@@ -116,9 +116,10 @@ typedef enum multilruPolicy {
 } multilruPolicy;
 
 typedef enum multilruEvictStrategy {
-    MLRU_EVICT_LRU = 0,       /* Pure LRU: lowest level, oldest entry */
-    MLRU_EVICT_SIZE_WEIGHTED, /* Prefer evicting large cold items */
-    MLRU_EVICT_SIZE_LRU,      /* LRU but account for size freed */
+    MLRU_EVICT_LRU = 0,       /* The oldest entry of the lowest level */
+    MLRU_EVICT_SIZE_WEIGHTED, /* The heaviest of its 8 oldest */
+    MLRU_EVICT_SIZE_LRU,      /* Over maxWeight: the oldest of those 8 that
+                                 covers the excess, else the heaviest */
 } multilruEvictStrategy;
 
 typedef enum multilruEntryWidth {
@@ -142,6 +143,20 @@ Weight tracking is allocated when **any** of these is true: `enableWeights`,
 `policy` is `MLRU_POLICY_SIZE` or `MLRU_POLICY_HYBRID`, or `evictStrategy` is
 `MLRU_EVICT_SIZE_WEIGHTED` or `MLRU_EVICT_SIZE_LRU`. You do not have to set
 `enableWeights` by hand when the policy already implies it.
+
+The strategy picks the entry each eviction step takes (`multilruPeekMinimum`
+names it; at level > 0 the step demotes it, at level 0 it evicts it). The
+size-aware strategies look only at the 8 oldest entries of the lowest
+populated level, so a step stays O(1):
+
+| Strategy                   | Takes                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `MLRU_EVICT_LRU`           | the oldest entry of the lowest level                                                                                |
+| `MLRU_EVICT_SIZE_WEIGHTED` | the heaviest of the 8 (the oldest of equals): the most weight freed per step                                        |
+| `MLRU_EVICT_SIZE_LRU`      | over `maxWeight`, the oldest of the 8 whose weight alone covers the excess, else the heaviest; otherwise the oldest |
+
+Without weights (a strategy set at runtime on a cache created without them)
+both size-aware strategies take the oldest entry.
 
 ### Statistics
 

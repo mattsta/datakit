@@ -424,6 +424,7 @@ void multilruGetStatsP(const multilruP *mlru, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+#include "../dkRandom.h"
 #include "../str.h"
 #include "persistTestCommon.h"
 
@@ -1278,6 +1279,74 @@ static int test_multilruP_auto_evict_crash_before_compact(int, char *[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multilruP_size_strategies(int, char *[]) {
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multilruPTest_strategies", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multilruP size-aware eviction replays to the same entries")
+
+    /* Each strategy evicts weighted entries over a weight limit; a reopen
+     * from the WAL alone must hold the same entries at the same levels */
+    const multilruEvictStrategy strategies[] = {MLRU_EVICT_SIZE_WEIGHTED,
+                                                MLRU_EVICT_SIZE_LRU};
+    for (size_t s = 0; s < countof(strategies); s++) {
+        ptestCleanupFiles(basePath);
+        const multilruConfig config = {.maxLevels = 4,
+                                       .policy = MLRU_POLICY_SIZE,
+                                       .maxWeight = 600,
+                                       .evictStrategy = strategies[s]};
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
+        multilruP *mlru = multilruNewWithConfigP(ctx, &config);
+        constexpr int INSERTED = 80;
+        multilruPtr handles[INSERTED];
+        uint64_t seed = 0x5851F42D4C957F2DULL + s;
+        for (int i = 0; i < INSERTED; i++) {
+            handles[i] = mlruTestInsert(mlru, 1 + dkSplitmix64Next(&seed) % 90);
+            if (i >= 3 && handles[i - 3] &&
+                multilruIncreaseP(mlru, handles[i - 3]) ==
+                    PERSIST_LOG_REFUSED) {
+                ERR("promotion %d refused", i - 3);
+            }
+        }
+        bool live[INSERTED];
+        size_t level[INSERTED];
+        size_t evicted = 0;
+        for (int i = 0; i < INSERTED; i++) {
+            live[i] = handles[i] && multilruIsPopulatedP(mlru, handles[i]);
+            level[i] = live[i] ? multilruGetLevelP(mlru, handles[i]) : 0;
+            evicted += !live[i];
+        }
+        multilruCloseP(mlru);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxNew(basePath, nullptr);
+        mlru = multilruOpenP(ctx);
+        size_t differ = 0;
+        for (int i = 0; mlru && i < INSERTED; i++) {
+            const bool now =
+                handles[i] && multilruIsPopulatedP(mlru, handles[i]);
+            differ += now != live[i] ||
+                      (now && multilruGetLevelP(mlru, handles[i]) != level[i]);
+        }
+        if (!mlru || !evicted || differ ||
+            multilruTotalWeightP(mlru) > config.maxWeight) {
+            ERR("strategy %d: %zu evicted, %zu entries differ after replay",
+                (int)strategies[s], evicted, differ);
+        }
+        multilruCloseP(mlru);
+        persistCtxFree(ctx);
+    }
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 static int test_multilruP_level_promotion(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
@@ -1747,6 +1816,7 @@ int multilruPTest(int argc, char *argv[]) {
     err += test_multilruP_weight_extremes(argc, argv);
     err += test_multilruP_auto_evict(argc, argv);
     err += test_multilruP_auto_evict_crash_before_compact(argc, argv);
+    err += test_multilruP_size_strategies(argc, argv);
     err += test_multilruP_level_promotion(argc, argv);
 
     /* Stress tests */

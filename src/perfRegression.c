@@ -2453,6 +2453,22 @@ static void benchMultilru(const uint32_t n) {
     }
     emitRow("multilru", "removeMinimum", n, (uint32_t)left,
             timeUtilMonotonicSec() - t0);
+
+    /* The same drain choosing the heaviest of each step's window */
+    const multilruConfig sized = {.maxLevels = 7,
+                                  .enableWeights = true,
+                                  .evictStrategy = MLRU_EVICT_SIZE_WEIGHTED};
+    cleaner(multilruFree) multilru *weighted = multilruNewWithConfig(&sized);
+    for (uint32_t i = 0; i < n; i++) {
+        (void)multilruInsertWeighted(weighted,
+                                     1 + (uint64_t)i * 2654435761u % 1000);
+    }
+    t0 = timeUtilMonotonicSec();
+    while (multilruRemoveMinimum(weighted, &out)) {
+        sink += out;
+    }
+    emitRow("multilru", "removeMinimumSizeWeighted", n, n,
+            timeUtilMonotonicSec() - t0);
     perfContainerSink = sink;
 }
 

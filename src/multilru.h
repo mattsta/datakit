@@ -152,8 +152,9 @@
  *
  * Evict Strategy:
  *   - MLRU_EVICT_LRU: Pure LRU (coldest first)
- *   - MLRU_EVICT_SIZE_WEIGHTED: Prefer evicting large cold items
- *   - MLRU_EVICT_SIZE_LRU: Balance of recency and size
+ *   - MLRU_EVICT_SIZE_WEIGHTED: The heaviest of the 8 coldest
+ *   - MLRU_EVICT_SIZE_LRU: The coldest of those that covers the excess
+ *     weight (multilruEvictStrategy)
  *
  * FUTURE WORK (TODO)
  * ------------------
@@ -229,11 +230,19 @@ typedef enum multilruPolicy {
     MLRU_POLICY_HYBRID,    /* Evict when either limit exceeded */
 } multilruPolicy;
 
-/* Victim selection strategy - determines WHAT to evict */
+/* Victim selection strategy - determines WHAT the next eviction step
+ * takes (multilruPeekMinimum names it; a level > 0 victim is demoted, a
+ * level 0 one evicted).  The size-aware strategies choose among the 8
+ * oldest entries of the lowest populated level, so a step stays O(1); they
+ * need weights (a size policy or enableWeights turns them on) and act as
+ * MLRU_EVICT_LRU without them. */
 typedef enum multilruEvictStrategy {
-    MLRU_EVICT_LRU = 0,       /* Pure LRU: lowest level, oldest entry */
-    MLRU_EVICT_SIZE_WEIGHTED, /* Prefer evicting large cold items */
-    MLRU_EVICT_SIZE_LRU,      /* LRU but account for size freed */
+    MLRU_EVICT_LRU = 0,       /* The oldest entry of the lowest level */
+    MLRU_EVICT_SIZE_WEIGHTED, /* The heaviest of those 8 (oldest of equals):
+                                 frees the most weight per step */
+    MLRU_EVICT_SIZE_LRU,      /* Over maxWeight: the oldest of those 8 whose
+                                 weight alone covers the excess, else the
+                                 heaviest; otherwise the oldest entry */
 } multilruEvictStrategy;
 
 /* Entry width modes (selected automatically based on capacity) */
@@ -302,7 +311,8 @@ void multilruIncrease(multilru *mlru, multilruPtr ptr);
  * Requires weight tracking enabled. Safe to call with invalid pointer. */
 void multilruUpdateWeight(multilru *mlru, multilruPtr ptr, uint64_t newWeight);
 
-/* Remove and return the LRU entry with S4LRU demotion.
+/* Take one eviction step on the entry the strategy picks (the LRU entry
+ * under MLRU_EVICT_LRU), with S4LRU demotion.
  * If entry is at level > 0: demotes to level-1 (second chance)
  * If entry is at level 0: true eviction, handle becomes invalid
  * Returns: true if entry was found and processed, false if cache empty.
@@ -321,9 +331,10 @@ void multilruDelete(multilru *mlru, multilruPtr ptr);
  * invalid pointer.  For replaying a logged demotion. */
 void multilruDecrease(multilru *mlru, multilruPtr ptr);
 
-/* The entry multilruRemoveMinimum would take next (0 when empty): it
- * demotes it when multilruGetLevel > 0 and evicts it at level 0.  Lets a
- * writer log an eviction step before taking it. */
+/* The entry multilruRemoveMinimum would take next under the current
+ * strategy and limits (0 when empty): it demotes it when multilruGetLevel
+ * > 0 and evicts it at level 0.  Lets a writer log an eviction step before
+ * taking it. */
 multilruPtr multilruPeekMinimum(const multilru *mlru);
 
 /* The handle the next insert will return: the most recently freed slot,

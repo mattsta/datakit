@@ -139,7 +139,6 @@ struct multilru {
     /* State */
     uint64_t capacity; /* Allocated entry slots */
     uint64_t count;    /* Active entries */
-    uint64_t lowest;   /* Current LRU entry index */
     uint64_t
         targetCapacity; /* Initial capacity target (cleared after first grow) */
 
@@ -653,20 +652,6 @@ DK_STATIC void insertAtLevelHead(multilru *mlru, uint64_t idx, size_t level) {
     if (mlru->levels[level].tail == 0) {
         mlru->levels[level].tail = idx;
     }
-
-    /* Update global lowest if necessary */
-    if (mlru->lowest == 0) {
-        mlru->lowest = idx;
-    } else {
-        /* New entry might be new lowest if at level 0 */
-        if (level == 0) {
-            /* Check if we should update lowest */
-            size_t lowestLevel = E_LEVEL(mlru, mlru->lowest);
-            if (lowestLevel > 0) {
-                mlru->lowest = idx;
-            }
-        }
-    }
 }
 
 /* Remove entry from its current position in the list */
@@ -709,20 +694,56 @@ DK_STATIC void removeFromList(multilru *mlru, uint64_t idx) {
     }
 }
 
-/* Find and update the lowest entry pointer */
-DK_STATIC void updateLowest(multilru *mlru) {
-    mlru->lowest = 0;
-
-    /* Use levelMask to find first populated level in O(1) */
+/* The oldest entry of the lowest level holding any (0 when empty): the
+ * levelMask's lowest set bit names that level in O(1) */
+DK_INLINE_ALWAYS uint64_t mlruColdest_(const multilru *mlru) {
     if (mlru->levelMask == 0) {
-        return; /* No entries in any level */
+        return 0;
+    }
+    return mlru->levels[stdc_trailing_zeros(mlru->levelMask)].tail;
+}
+
+/* The size-aware strategies choose among this many of the oldest entries
+ * of the lowest level, so one eviction step stays O(1) */
+#define MLRU_STRATEGY_WINDOW 8
+
+/* The entry the next eviction step takes (0 when empty): the coldest
+ * entry under MLRU_EVICT_LRU (and without weights); under
+ * MLRU_EVICT_SIZE_WEIGHTED the heaviest of the window (the oldest of
+ * equals); under MLRU_EVICT_SIZE_LRU, while the total weight is over
+ * maxWeight, the oldest of the window whose weight alone covers the
+ * excess, else the window's heaviest; with no excess, the coldest */
+DK_STATIC uint64_t mlruVictim_(const multilru *mlru) {
+    const uint64_t coldest = mlruColdest_(mlru);
+    if (!coldest || !mlru->weights ||
+        (mlru->evictStrategy != MLRU_EVICT_SIZE_WEIGHTED &&
+         mlru->evictStrategy != MLRU_EVICT_SIZE_LRU)) {
+        return coldest;
     }
 
-    /* Find lowest set bit = lowest populated level */
-    size_t level = stdc_trailing_zeros(mlru->levelMask);
-    if (level < mlru->maxLevels) {
-        mlru->lowest = mlru->levels[level].tail;
+    const uint64_t excess =
+        mlru->maxWeight && mlru->totalWeight > mlru->maxWeight
+            ? mlru->totalWeight - mlru->maxWeight
+            : 0;
+    if (mlru->evictStrategy == MLRU_EVICT_SIZE_LRU && !excess) {
+        return coldest;
     }
+
+    /* From the tail (oldest) toward the level's head marker */
+    uint64_t heaviest = coldest;
+    uint64_t idx = coldest;
+    for (size_t seen = 0;
+         seen < MLRU_STRATEGY_WINDOW && idx && !E_HEAD(mlru, idx); seen++) {
+        const uint64_t weight = mlru->weights[idx];
+        if (mlru->evictStrategy == MLRU_EVICT_SIZE_LRU && weight >= excess) {
+            return idx;
+        }
+        if (weight > mlru->weights[heaviest]) {
+            heaviest = idx;
+        }
+        idx = E_NEXT(mlru, idx);
+    }
+    return heaviest;
 }
 
 /* ====================================================================
@@ -933,54 +954,23 @@ multilruPtr multilruInsertWeighted(multilru *mlru, uint64_t weight) {
 }
 
 void multilruIncrease(multilru *mlru, multilruPtr ptr) {
-    uint64_t idx = ptr;
-
-    /* Bounds check */
-    if (idx == 0 || idx >= mlru->capacity) {
-        return;
-    }
-
-    if (!E_POPULATED(mlru, idx) || E_HEAD(mlru, idx)) {
+    const uint64_t idx = ptr;
+    if (idx == 0 || idx >= mlru->capacity || !E_POPULATED(mlru, idx) ||
+        E_HEAD(mlru, idx)) {
         return; /* Invalid entry */
     }
 
-    size_t currentLevel = E_LEVEL(mlru, idx);
-    size_t targetLevel = currentLevel + 1;
-    if (targetLevel >= mlru->maxLevels) {
-        targetLevel = mlru->maxLevels - 1;
-    }
-
-    /* Count promotion if actually moving up */
+    /* To the head of the next level up; at the top level, back to its
+     * head */
+    const size_t currentLevel = E_LEVEL(mlru, idx);
+    const size_t targetLevel =
+        currentLevel + 1 < mlru->maxLevels ? currentLevel + 1 : currentLevel;
     if (targetLevel > currentLevel) {
         mlru->statPromotions++;
     }
 
-    /* Update lowest if we're moving it */
-    bool wasLowest = (idx == mlru->lowest);
-
-    /* Save weight before removal */
-    uint64_t entryWeight = mlru->weights ? mlru->weights[idx] : 0;
-
-    /* Remove from current position */
     removeFromList(mlru, idx);
-
-    /* If we were lowest and there are other entries, find new lowest */
-    if (wasLowest && mlru->count > 1) {
-        updateLowest(mlru);
-    }
-
-    /* Restore weight (removeFromList decremented it) */
-    if (mlru->weights) {
-        mlru->weights[idx] = entryWeight;
-    }
-
-    /* Insert at head of target level */
     insertAtLevelHead(mlru, idx, targetLevel);
-
-    /* Fix lowest if we're still the only entry or now at lower level */
-    if (mlru->count == 1 || (wasLowest && mlru->lowest == 0)) {
-        mlru->lowest = idx;
-    }
 }
 
 void multilruUpdateWeight(multilru *mlru, multilruPtr ptr, uint64_t newWeight) {
@@ -1020,21 +1010,15 @@ void multilruDecrease(multilru *mlru, multilruPtr ptr) {
         return;
     }
 
-    /* Remove from the current level (which subtracts the weight), then
-     * restore the weight for the re-insertion at the head of level - 1
-     * (second chance) */
-    const uint64_t entryWeight = mlru->weights ? mlru->weights[idx] : 0;
+    /* To the head of level - 1 (second chance); the move carries the
+     * weight from one level's total to the other's */
     removeFromList(mlru, idx);
-    if (mlru->weights) {
-        mlru->weights[idx] = entryWeight;
-    }
     insertAtLevelHead(mlru, idx, level - 1);
-    updateLowest(mlru);
     mlru->statDemotions++;
 }
 
 multilruPtr multilruPeekMinimum(const multilru *mlru) {
-    return mlru->count ? mlru->lowest : 0;
+    return mlruVictim_(mlru);
 }
 
 multilruPtr multilruPeekNextHandle(const multilru *mlru) {
@@ -1051,12 +1035,12 @@ size_t multilruFreeHandles(const multilru *mlru, multilruPtr out[], size_t n) {
 }
 
 bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out) {
-    if (mlru->count == 0 || mlru->lowest == 0) {
+    const uint64_t idx = mlruVictim_(mlru);
+    if (idx == 0) {
         return false;
     }
 
-    uint64_t idx = mlru->lowest;
-    size_t level = E_LEVEL(mlru, idx);
+    const size_t level = E_LEVEL(mlru, idx);
 
     if (out) {
         *out = idx;
@@ -1076,13 +1060,6 @@ bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out) {
     if (mlru->weights) {
         mlru->totalWeight -= mlru->weights[idx];
         mlru->weights[idx] = 0;
-    }
-
-    /* Update lowest */
-    if (mlru->count > 1) {
-        updateLowest(mlru);
-    } else {
-        mlru->lowest = 0;
     }
 
     /* Notify callback BEFORE freeing (so caller can clean up external data) */
@@ -1111,24 +1088,12 @@ void multilruDelete(multilru *mlru, multilruPtr ptr) {
         return;
     }
 
-    bool wasLowest = (idx == mlru->lowest);
-
-    /* Remove from list */
     removeFromList(mlru, idx);
 
     /* Update weight tracking */
     if (mlru->weights) {
         mlru->totalWeight -= mlru->weights[idx];
         mlru->weights[idx] = 0;
-    }
-
-    /* Update lowest if needed */
-    if (wasLowest) {
-        if (mlru->count > 1) {
-            updateLowest(mlru);
-        } else {
-            mlru->lowest = 0;
-        }
     }
 
     /* Add to free list */
@@ -1438,26 +1403,38 @@ bool multilruHasWeights(const multilru *mlru) {
  * ==================================================================== */
 #ifdef DATAKIT_TEST
 ssize_t multilruTraverseSize(const multilru *mlru) {
-    size_t count = 0;
-
+    size_t total = 0;
     for (size_t level = 0; level < mlru->maxLevels; level++) {
-        count += mlru->levels[level].count;
+        /* From the tail (oldest) along next links to the level's head
+         * marker, each entry live and at this level */
+        size_t seen = 0;
+        uint64_t idx = mlru->levels[level].tail;
+        for (; idx && !E_HEAD(mlru, idx); idx = E_NEXT(mlru, idx)) {
+            if (seen++ > mlru->capacity || !E_POPULATED(mlru, idx) ||
+                E_LEVEL(mlru, idx) != level) {
+                return -1;
+            }
+        }
+        if (seen != mlru->levels[level].count ||
+            (seen && idx != mlru->levels[level].head)) {
+            return -1;
+        }
+        total += seen;
     }
-
-    return count;
+    return (ssize_t)total;
 }
 
 #include "ctest.h"
 #include <stdio.h>
 void multilruRepr(const multilru *mlru) {
-    printf("{count {used %" PRIu64 "} {capacity %" PRIu64 "}} {lowest %" PRIu64
-           "} {bytes {allocated %zu}}"
+    const uint64_t coldest = mlruColdest_(mlru);
+    printf("{count {used %" PRIu64 "} {capacity %" PRIu64 "}} {coldest %" PRIu64
+           "} {victim %" PRIu64 "} {bytes {allocated %zu}}"
            " {width %u}\n",
-           mlru->count, mlru->capacity, mlru->lowest, multilruBytes(mlru),
-           mlru->entryWidth);
+           mlru->count, mlru->capacity, coldest, mlruVictim_(mlru),
+           multilruBytes(mlru), mlru->entryWidth);
 
     /* Print level pointers */
-    printf("{%" PRIu64 "} ", mlru->lowest);
     for (size_t i = 0; i < mlru->maxLevels; i++) {
         printf("[%zu] -> h%" PRIu64 " t%" PRIu64 " c%" PRIu64 "; ", i,
                mlru->levels[i].head, mlru->levels[i].tail,
@@ -1467,7 +1444,7 @@ void multilruRepr(const multilru *mlru) {
 
     /* Print linked list */
     printf("(");
-    uint64_t current = mlru->lowest;
+    uint64_t current = coldest;
     size_t safety = 0;
     while (current && safety++ < mlru->capacity + mlru->maxLevels + 10) {
         if (E_HEAD(mlru, current)) {
@@ -1529,10 +1506,22 @@ static bool verifyInvariants(multilru *mlru, const char *context) {
         }
     }
 
-    /* Invariant 3: If count > 0, lowest must be valid */
-    if (mlru->count > 0 && mlru->lowest == 0) {
-        printf("INVARIANT FAILED [%s]: count %" PRIu64 " but lowest is 0\n",
-               context, mlru->count);
+    /* Invariant 3: the next eviction step takes a live entry exactly when
+     * there is one, and the peek names it */
+    const uint64_t victim = mlruVictim_(mlru);
+    if ((mlru->count > 0) != (victim != 0) ||
+        (victim && !multilruIsPopulated(mlru, victim)) ||
+        multilruPeekMinimum(mlru) != victim) {
+        printf("INVARIANT FAILED [%s]: count %" PRIu64 " but victim %" PRIu64
+               "\n",
+               context, mlru->count, victim);
+        ok = false;
+    }
+
+    /* Invariant 3b: every level's links hold exactly its count */
+    if (multilruTraverseSize(mlru) != (ssize_t)mlru->count) {
+        printf("INVARIANT FAILED [%s]: walk %zd != count %" PRIu64 "\n",
+               context, multilruTraverseSize(mlru), mlru->count);
         ok = false;
     }
 
@@ -2542,7 +2531,7 @@ int multilruTest(int, char *[]) {
         int64_t insertNs = timeUtilMonotonicNs() - startNs;
 
         /* Benchmark increase */
-        multilruPtr testPtr = mlru->lowest;
+        multilruPtr testPtr = multilruPeekMinimum(mlru);
         startNs = timeUtilMonotonicNs();
         for (size_t i = 0; i < 100'000 && testPtr; i++) {
             multilruIncrease(mlru, testPtr);
@@ -3825,7 +3814,7 @@ int multilruTest(int, char *[]) {
             int64_t insertNs = timeUtilMonotonicNs() - startNs;
 
             /* Benchmark promote */
-            multilruPtr testPtr = mlru->lowest;
+            multilruPtr testPtr = multilruPeekMinimum(mlru);
             startNs = timeUtilMonotonicNs();
             size_t promoteCount = scale < 100'000 ? scale : 100'000;
             for (size_t i = 0; i < promoteCount; i++) {
@@ -4021,6 +4010,148 @@ int multilruTest(int, char *[]) {
         assert(smallSurvived > largeSurvived);
 
         printf("\nweighted eviction effectiveness: PASSED\n");
+    }
+
+    TEST("size-weighted eviction takes the heaviest of the oldest entries") {
+        multilruConfig config = {.maxLevels = 3,
+                                 .enableWeights = true,
+                                 .evictStrategy = MLRU_EVICT_SIZE_WEIGHTED};
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
+        const uint64_t weights[] = {5, 40, 7, 40, 3};
+        multilruPtr h[countof(weights)];
+        for (size_t i = 0; i < countof(weights); i++) {
+            h[i] = multilruInsertWeighted(mlru, weights[i]);
+        }
+        /* Heaviest first, the oldest of equals, then the rest by weight */
+        const size_t order[] = {1, 3, 2, 0, 4};
+        for (size_t i = 0; i < countof(order); i++) {
+            multilruPtr out = 0;
+            const multilruPtr peeked = multilruPeekMinimum(mlru);
+            if (!multilruRemoveMinimum(mlru, &out) || out != h[order[i]] ||
+                peeked != out || multilruIsPopulated(mlru, out)) {
+                ERR("step %zu took %zu (peeked %zu), want %zu", i, out, peeked,
+                    h[order[i]]);
+            }
+        }
+
+        /* Only the oldest MLRU_STRATEGY_WINDOW count: a heavier newer
+         * entry waits its turn */
+        multilruPtr first = 0;
+        for (size_t i = 0; i <= MLRU_STRATEGY_WINDOW; i++) {
+            const multilruPtr p = multilruInsertWeighted(
+                mlru, i == MLRU_STRATEGY_WINDOW ? 1000 : 1 + (i == 2));
+            if (i == 2) {
+                first = p;
+            }
+        }
+        if (multilruPeekMinimum(mlru) != first) {
+            ERR("window victim %zu, want %zu", multilruPeekMinimum(mlru),
+                first);
+        }
+    }
+
+    TEST("size-LRU eviction takes the oldest entry that covers the excess") {
+        multilruConfig config = {.maxLevels = 3,
+                                 .policy = MLRU_POLICY_SIZE,
+                                 .maxWeight = 100,
+                                 .evictStrategy = MLRU_EVICT_SIZE_LRU};
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
+        multilruSetAutoEvict(mlru, false);
+        const uint64_t weights[] = {10, 10, 50, 10, 60};
+        multilruPtr h[countof(weights)];
+        for (size_t i = 0; i < countof(weights); i++) {
+            h[i] = multilruInsertWeighted(mlru, weights[i]);
+        }
+        /* 140 over 100: the oldest weighing at least 40 */
+        const multilruPtr covering = multilruPeekMinimum(mlru);
+        multilruPtr out = 0;
+        multilruRemoveMinimum(mlru, &out);
+        /* 90, under the limit: plain LRU order */
+        const multilruPtr underLimit = multilruPeekMinimum(mlru);
+        /* 90 over 20: nothing covers 70, so the heaviest */
+        multilruSetMaxWeight(mlru, 20);
+        const multilruPtr uncovered = multilruPeekMinimum(mlru);
+        if (covering != h[2] || out != h[2] || underLimit != h[0] ||
+            uncovered != h[4]) {
+            ERR("victims %zu %zu %zu, want %zu %zu %zu", covering, underLimit,
+                uncovered, h[2], h[0], h[4]);
+        }
+    }
+
+    TEST("every strategy's eviction steps match a public-API prediction") {
+        /* Random weighted inserts, promotions and limit changes; before each
+         * step the victim is predicted from CollectLowest's oldest entries
+         * of the lowest level and their weights, and the peek and the
+         * step itself must both be that entry */
+        const multilruEvictStrategy strategies[] = {
+            MLRU_EVICT_LRU, MLRU_EVICT_SIZE_WEIGHTED, MLRU_EVICT_SIZE_LRU};
+        for (size_t s = 0; s < countof(strategies); s++) {
+            multilruConfig config = {.maxLevels = 4,
+                                     .policy = MLRU_POLICY_SIZE,
+                                     .maxWeight = 2000,
+                                     .evictStrategy = strategies[s]};
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithConfig(&config);
+            multilruSetAutoEvict(mlru, false);
+            uint64_t seed[2] = {0x243F6A8885A308D3ULL + s,
+                                0x13198A2E03707344ULL};
+            multilruPtr live[64] = {};
+            size_t mismatches = 0;
+            for (size_t op = 0; op < 3000; op++) {
+                const uint64_t r = xoroshiro128plus(seed);
+                const size_t slot = (r >> 8) % countof(live);
+                if (r % 4 == 0 && !live[slot]) {
+                    live[slot] =
+                        multilruInsertWeighted(mlru, 1 + (r >> 20) % 100);
+                } else if (r % 4 == 1 && live[slot]) {
+                    multilruIncrease(mlru, live[slot]);
+                } else if (r % 4 == 2) {
+                    multilruSetMaxWeight(mlru, (r >> 24) % 3000);
+                } else if (multilruCount(mlru)) {
+                    multilruPtr window[MLRU_STRATEGY_WINDOW];
+                    const size_t got =
+                        multilruCollectLowest(mlru, window, countof(window));
+                    size_t k = 0;
+                    while (k < got && multilruGetLevel(mlru, window[k]) ==
+                                          multilruGetLevel(mlru, window[0])) {
+                        k++;
+                    }
+                    const uint64_t total = multilruTotalWeight(mlru);
+                    const uint64_t limit = multilruGetMaxWeight(mlru);
+                    const uint64_t excess =
+                        limit && total > limit ? total - limit : 0;
+                    multilruPtr want = window[0];
+                    if (strategies[s] != MLRU_EVICT_LRU &&
+                        !(strategies[s] == MLRU_EVICT_SIZE_LRU && !excess)) {
+                        bool covered = false;
+                        for (size_t i = 0; i < k && !covered; i++) {
+                            if (strategies[s] == MLRU_EVICT_SIZE_LRU &&
+                                multilruGetWeight(mlru, window[i]) >= excess) {
+                                want = window[i];
+                                covered = true;
+                            } else if (multilruGetWeight(mlru, window[i]) >
+                                       multilruGetWeight(mlru, want)) {
+                                want = window[i];
+                            }
+                        }
+                    }
+                    multilruPtr out = 0;
+                    const multilruPtr peeked = multilruPeekMinimum(mlru);
+                    multilruRemoveMinimum(mlru, &out);
+                    mismatches += peeked != want || out != want;
+                    if (!multilruIsPopulated(mlru, out)) {
+                        for (size_t i = 0; i < countof(live); i++) {
+                            live[i] = live[i] == out ? 0 : live[i];
+                        }
+                    }
+                }
+            }
+            if (mismatches ||
+                !verifyInvariants(mlru, "strategy differential")) {
+                ERR("strategy %d: %zu steps took another entry than predicted",
+                    (int)strategies[s], mismatches);
+            }
+        }
     }
 
     /* ================================================================
