@@ -48,6 +48,7 @@ import dataclasses
 import itertools
 import math
 import re
+import shutil
 import statistics
 import sys
 import tempfile
@@ -402,19 +403,28 @@ class Side:
 
 
 def working_side(
-    repo: Path, root: Path, kind: str, name: str, config: toolchain.BuildConfig
+    repo: Path,
+    root: Path,
+    kind: str,
+    name: str,
+    config: toolchain.BuildConfig,
+    keep: bool = False,
 ) -> tuple[Side, Path]:
     """HEAD plus every changed tracked path and every new file under src/,
-    exported as one perf build under ROOT/<kind>/<name> (tune and matrix
-    measure the working tree this way); the side and its work directory"""
+    exported as one build under ROOT/<kind>/<name> (tune, matrix and fuzz
+    build the working tree this way); the side and its work directory.
+    With `keep`, only the export is replaced and the rest of the work
+    directory (fuzz's corpus) stays."""
     head = gitutil.git_text(repo, "rev-parse", "HEAD")
     with tempfile.TemporaryDirectory(prefix=f"dktools-{kind}-") as tmp:
         tree = gitutil.build_tree(
             repo, Path(tmp) / "index", [(p, None) for p in gitutil.working_paths(repo)]
         )
     config.compiler.check()
-    work = buildstore.fresh_build(repo, root, kind, name, head, kind)
+    work = buildstore.fresh_build(repo, root, kind, name, head, kind, keep=keep)
     side = Side(kind, tree, work / "src", config)
+    if side.src.exists():
+        shutil.rmtree(side.src)
     gitutil.export_tree(repo, tree, side.src)
     config.check_presets_file(side.src)
     return side, work

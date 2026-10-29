@@ -30,6 +30,7 @@ option(EnableUBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(EnableMSAN "Enable MemorySanitizer (Clang only)" OFF)
 option(EnableTSAN "Enable ThreadSanitizer" OFF)
 option(EnableCoverage "Instrument for clang source coverage (dktools coverage)" OFF)
+option(EnableFuzz "Build the libFuzzer targets in src/fuzz (Clang only; dktools fuzz)" OFF)
 
 include(CheckCSourceRuns)
 include(CheckCSourceCompiles)
@@ -456,6 +457,17 @@ if(EnableCoverage)
             "${CMAKE_SHARED_LINKER_FLAGS} -fprofile-instr-generate")
     else()
         message(WARNING "EnableCoverage requires Clang - ignoring")
+    endif()
+endif()
+
+# libFuzzer coverage feedback: every object gets the counters the fuzz
+# targets' driver reads (the targets themselves are defined at the end).
+if(EnableFuzz)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(STATUS "Fuzz: libFuzzer instrumentation enabled")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=fuzzer-no-link")
+    else()
+        message(WARNING "EnableFuzz requires Clang - ignoring")
     endif()
 endif()
 
@@ -1045,5 +1057,22 @@ target_include_directories(memshardConfigTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/memshard/include)
 target_link_libraries(memshardConfigTest PRIVATE datakit-static memshard Threads::Threads)
+
+# libFuzzer targets (src/fuzz, clang only): one executable per decoder
+# of outside bytes, all built by the datakit-fuzz target and run by
+# `dktools fuzz`.  The library is instrumented for coverage feedback
+# (fuzzer-no-link) and each target links libFuzzer's driver.
+if(EnableFuzz AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    file(GLOB FUZZ_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz*.c)
+    add_custom_target(datakit-fuzz)
+    foreach(fuzzSource ${FUZZ_SOURCES})
+        get_filename_component(fuzzName ${fuzzSource} NAME_WE)
+        add_executable(${fuzzName} ${fuzzSource})
+        target_include_directories(${fuzzName} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(${fuzzName} PRIVATE datakit-static)
+        target_link_options(${fuzzName} PRIVATE -fsanitize=fuzzer)
+        add_dependencies(datakit-fuzz ${fuzzName})
+    endforeach()
+endif()
 
 # vi:ai et sw=4 ts=4:

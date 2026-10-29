@@ -447,6 +447,32 @@ accepted). A new descriptor adds a generator under `src/persist/contract/` and
 an entry in the registry; a type that cannot meet the contract is fixed, never
 excused.
 
+### Fuzzing (dktools fuzz)
+
+`src/fuzz` holds one libFuzzer target per decoder of bytes from outside the
+process, each asserting the decoder's contract:
+
+| Target               | Input                                                                  | Contract                                                                                                |
+| -------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `fuzzPersistRestore` | a type byte, then a snapshot body                                      | restore refuses it, or gives a structure `validate()` accepts whose snapshot restores to the same count |
+| `fuzzPersistApplyOp` | a type byte, then op, 16-bit length, body entries                      | every entry goes to `applyOp` on `newEmpty()`; the result validates and round-trips                     |
+| `fuzzPersistRecover` | a type byte, a 32-bit snapshot length, the snapshot file, the WAL file | `persistRecover` fails, or gives a structure `validate()` accepts                                       |
+| `fuzzFlexValidate`   | a putative flex                                                        | a buffer the deep check accepts passes the shallow one and walks with every entry decoding              |
+| `fuzzFlexEnvelope`   | a putative envelope                                                    | verify and open keep the payload and output inside their buffers                                        |
+| `fuzzDataboxLinear`  | a type byte, value bytes                                               | a decoded box encodes and decodes to the same value                                                     |
+
+The type byte picks a descriptor from the persist registry, so every
+registered type is fuzzed. `dktools fuzz NAME` ([tools/README.md](../../tools/README.md))
+builds them under ASan and UBSan, seeds the persist targets from the
+persistence contract's structures, runs each for a while over a corpus kept
+between runs, and prints the command that reproduces any finding. A finding is
+fixed at its cause and gets a unit test.
+
+`fuzzPersistApplyOp` skips two kinds of op whose cost grows with a number the
+op names: a bit range wider than 2^24 bits (one row per 8192-bit chunk), and an
+index that would take a fenwick, multiFenwick or segment tree past 2^16 cells
+(those trees are arrays as long as their largest index).
+
 ### Manual Testing Patterns
 
 Datakit tests follow comprehensive patterns:

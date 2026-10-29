@@ -6,13 +6,15 @@ configures into its own `build/<name>/` directory so they coexist.
 
 ## Available presets
 
-| Preset  | Build type     | Sanitizers      | CPU tuning     | Use when                                                                                       |
-| ------- | -------------- | --------------- | -------------- | ---------------------------------------------------------------------------------------------- |
-| `debug` | Debug          | ASAN + UBSAN    | default        | You want the loudest diagnostics, full debug symbols, no optimizer-eaten variables. Slowest.   |
-| `dev`   | Release (-O3)  | ASAN + UBSAN    | default        | Day-to-day development. Catches memory bugs at near-prod speed. Default for the repo.          |
-| `perf`  | Release (-O3)  | **none**        | `-mcpu=native` | Benchmarks and performance measurement only. Do NOT rely on this build to find memory bugs.    |
-| `safe`  | Release (-O3)  | ASAN + UBSAN    | default        | Intended for CI — strict correctness at acceptable speed.                                      |
-| `tsan`  | RelWithDebInfo | ThreadSanitizer | default        | Data races in the concurrency code. Several times slower; single-threaded suites gain nothing. |
+| Preset     | Build type     | Sanitizers      | CPU tuning     | Use when                                                                                                         |
+| ---------- | -------------- | --------------- | -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `debug`    | Debug          | ASAN + UBSAN    | default        | You want the loudest diagnostics, full debug symbols, no optimizer-eaten variables. Slowest.                     |
+| `dev`      | Release (-O3)  | ASAN + UBSAN    | default        | Day-to-day development. Catches memory bugs at near-prod speed. Default for the repo.                            |
+| `perf`     | Release (-O3)  | **none**        | `-mcpu=native` | Benchmarks and performance measurement only. Do NOT rely on this build to find memory bugs.                      |
+| `safe`     | Release (-O3)  | ASAN + UBSAN    | default        | Intended for CI — strict correctness at acceptable speed.                                                        |
+| `tsan`     | RelWithDebInfo | ThreadSanitizer | default        | Data races in the concurrency code. Several times slower; single-threaded suites gain nothing.                   |
+| `coverage` | Release        | **none**        | default        | What `dktools coverage` builds: clang source coverage counters on every function.                                |
+| `fuzz`     | RelWithDebInfo | ASAN + UBSAN    | default        | What `dktools fuzz` builds: the library instrumented for libFuzzer, and the `src/fuzz` targets (`datakit-fuzz`). |
 
 Through dktools (which always builds with clang 22 and LLVM's archiver,
 never the system compiler): `dktools verify --preset dev|debug|tsan|perf`
@@ -47,6 +49,7 @@ Every build lives under one directory, `build/` (gitignored):
 | `build/dktools/validate/<rev>-<configs>/`     | `dktools validate`         |
 | `build/dktools/coverage/<rev>/` (and `.prev`) | `dktools coverage`         |
 | `build/dktools/perfcompare/<name>/`           | `dktools perfcompare NAME` |
+| `build/dktools/fuzz/<name>/` (corpus kept)    | `dktools fuzz NAME`        |
 
 A dktools work directory carries a manifest (`.dkbuild.json`: kind, name,
 revision, created, last used, size) and, while a run is using it, a lock

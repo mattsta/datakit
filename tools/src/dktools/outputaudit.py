@@ -20,7 +20,8 @@ stdout and stderr.  This audit finds every call that writes to them in
                benchmark reports, memtest's interactive run): the caller
                runs it to read what it prints
   test         in a test-only file (``*Test.c``, ``*Bench.c``,
-               datakit-test.c, perfRegression.c, ctest.h), outside
+               datakit-test.c, perfRegression.c, ctest.h, the fuzz
+               targets in src/fuzz), outside
                DATAKIT_TEST guards but never part of an application's use
                of the API
 
@@ -73,6 +74,7 @@ REQUESTED_RE = re.compile(r"Repr|Print|Dump|Say|Show|REPR|PRINT|DUMP")
 #: Test-only files compiled outside DATAKIT_TEST guards.
 TEST_FILE_RE = re.compile(
     r"(?:Test|Bench)\.c$|(?:^|/)(?:datakit-test|perfRegression)\.c$|(?:^|/)ctest\.h$"
+    r"|(?:^|/)src/fuzz/[^/]+\.[ch]$"
 )
 
 #: Operator tools: library modules whose output is what the caller runs them

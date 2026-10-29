@@ -26,6 +26,7 @@ from . import (
     enumconst,
     formatting,
     fusionscan,
+    fuzz,
     gitutil,
     handles,
     headers,
@@ -914,6 +915,28 @@ def main(argv: list[str] | None = None) -> int:
     mx.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(mx)
 
+    fz = sub.add_parser(
+        "fuzz",
+        help="build the libFuzzer targets in src/fuzz (fuzz preset) and run "
+        "each for a while over its kept corpus and the persist seeds",
+    )
+    fz.add_argument("name", help="work-dir name under ROOT/fuzz (keeps the corpus)")
+    fz.add_argument(
+        "targets", nargs="*", help="fuzz targets to run (default: every one built)"
+    )
+    fz.add_argument(
+        "--seconds", type=int, default=60, help="seconds per target (default 60)"
+    )
+    fz.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
+    )
+    fz.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(fz)
+
     lc = sub.add_parser(
         "leakcheck",
         help="leakage gate over the staged diff, a range, or the tree "
@@ -1290,6 +1313,19 @@ def _dispatch(args: argparse.Namespace) -> int:
                 write=args.write,
                 reuse=args.reuse,
                 compiler=toolchain.from_args(args.compiler, args),
+                root=args.root,
+                jobs=args.jobs,
+            ),
+        )
+
+    if args.command == "fuzz":
+        return fuzz.run(
+            args.repo,
+            fuzz.FuzzOptions(
+                name=args.name,
+                targets=tuple(args.targets),
+                seconds=args.seconds,
+                compiler=toolchain.from_args("clang22", args),
                 root=args.root,
                 jobs=args.jobs,
             ),

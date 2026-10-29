@@ -26,6 +26,8 @@ Build presets (``PRESETS``):
            sanitizers), clang22; opt-in, for benchmark numbers.
   coverage ``cmake --preset coverage`` (Release + clang source coverage,
            no sanitizers), clang22; what ``dktools coverage`` builds.
+  fuzz     ``cmake --preset fuzz`` (RelWithDebInfo + ASan/UBSan and the
+           libFuzzer targets), clang22; what ``dktools fuzz`` builds.
   release  no preset, ``-DCMAKE_BUILD_TYPE=Release``; the only build
            gcc15 runs (GCC on macOS has no sanitizer runtimes).
 
@@ -65,12 +67,13 @@ PRESETS: dict[str, str | None] = {
     "tsan": "tsan",
     "perf": "perf",
     "coverage": "coverage",
+    "fuzz": "fuzz",
     "release": None,
 }
 
 #: compiler name -> the presets it builds, default first.
 COMPILER_PRESETS: dict[str, tuple[str, ...]] = {
-    "clang22": ("dev", "debug", "tsan", "perf", "coverage"),
+    "clang22": ("dev", "debug", "tsan", "perf", "coverage", "fuzz"),
     "gcc15": ("release",),
 }
 

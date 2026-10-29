@@ -67,6 +67,17 @@
       }
     },
     {
+      "name": "fuzz",
+      "inherits": "_base",
+      "displayName": "Release + ASAN/UBSAN + libFuzzer targets (dktools fuzz)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "EnableASAN": "ON",
+        "EnableUBSAN": "ON",
+        "EnableFuzz": "ON"
+      }
+    },
+    {
       "name": "coverage",
       "inherits": "_base",
       "displayName": "Release + clang source coverage, NO sanitizers (dktools coverage)",
@@ -99,6 +110,10 @@
     {
       "name": "tsan", "configurePreset": "tsan",
       "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    },
+    {
+      "name": "fuzz", "configurePreset": "fuzz",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library", "datakit-fuzz"]
     },
     {
       "name": "coverage", "configurePreset": "coverage",

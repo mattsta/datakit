@@ -531,6 +531,30 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   otherwise (the report is still written once the build succeeded), 2
   on an input error.
 
+## fuzz — the libFuzzer targets over outside bytes
+
+```sh
+uv run --project tools dktools fuzz NAME [TARGET ...] [--seconds N] [--root DIR] [-j N]
+```
+
+- Exports HEAD plus the working tree to `ROOT/fuzz/NAME/src` and builds
+  the `fuzz` preset (clang 22, ASan and UBSan, the library instrumented
+  for libFuzzer) with its `datakit-test` and `datakit-fuzz` targets.
+- Seeds the persist targets: `datakit-test test persistContract` with
+  `DK_FUZZ_SEEDS` writes every registered type's snapshots, op logs and
+  persisted snapshot files as inputs.
+- Runs each target (every `fuzz*` program in `src/fuzz`, or the TARGETs
+  named) for N seconds (default 60), one after another, over its corpus
+  `ROOT/fuzz/NAME/corpus/TARGET` (kept, so a later run with the same
+  NAME starts from what earlier runs found) and its seeds. One input
+  running over 10 seconds is a finding.
+- A finding (crash, sanitizer report, leak, timeout, out of memory, or a
+  contract the target asserts) stops that target and is written under
+  `ROOT/fuzz/NAME/artifacts/TARGET`; the result line prints the command
+  that reproduces it (the target's program run on that file).
+- Exits 0 when every target ran clean, 1 on a finding or a failed build,
+  2 for an input error.
+
 ## commit — commit exactly what a passing verify built
 
 ```sh

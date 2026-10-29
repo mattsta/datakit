@@ -9,6 +9,7 @@
 #include "../../ctest.h"
 #include "../../datakit.h"
 #include "../../dkC23.h" /* stdc_bit_width */
+#include "../../dkEndian.h"
 #include "../../str.h"
 #include "../../timeUtil.h"
 
@@ -302,6 +303,103 @@ static void pcExpect(pcRow *row, const persistOps *ops, void *s,
     ops->free(s);
 }
 
+/* One seed for the src/fuzz target 'target': the type's registry index
+ * byte (as fuzzPickOps reads it), then 'body', in a new file under
+ * 'dir'/'target' (dktools fuzz makes the directories) */
+static void pcSeedWrite(const char *dir, const char *target,
+                        const persistOps *ops, const uint8_t *body,
+                        size_t len) {
+    static uint64_t serial;
+    const persistOps *const *registered;
+    const size_t types = persistRegistry(&registered);
+    size_t index = 0;
+    while (index < types && registered[index] != ops) {
+        index++;
+    }
+
+    if (index == types) {
+        return;
+    }
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s/%s-%" PRIu64, dir, target, ops->name,
+             serial++);
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        return;
+    }
+
+    const uint8_t pick = (uint8_t)index;
+    fwrite(&pick, 1, 1, f);
+    if (len) {
+        fwrite(body, 1, len, f);
+    }
+
+    fclose(f);
+}
+
+/* With DK_FUZZ_SEEDS naming a directory (dktools fuzz), a row's snapshot,
+ * log and persisted snapshot file become seeds for the src/fuzz targets,
+ * each in the input its target reads: the snapshot (fuzzPersistRestore);
+ * the log's entries as op byte, 16-bit length and body
+ * (fuzzPersistApplyOp; a body over 64 KiB is left out); a 32-bit length
+ * and the snapshot file persist writes (fuzzPersistRecover). */
+static void pcSeeds(const persistOps *ops, const void *live,
+                    const uint8_t *snap, size_t snapLen,
+                    const persistContractLog *log) {
+    const char *dir = getenv("DK_FUZZ_SEEDS");
+    if (!dir) {
+        return;
+    }
+
+    pcSeedWrite(dir, "fuzzPersistRestore", ops, snap, snapLen);
+
+    if (ops->applyOp && log->count) {
+        size_t total = 0;
+        for (size_t i = 0; i < log->count; i++) {
+            total += 3 + log->entries[i].len;
+        }
+
+        cleanerName(zfree, Bytes) uint8_t *entries = zmalloc(total);
+        size_t used = 0;
+        for (size_t i = 0; i < log->count; i++) {
+            const pcEntry *e = &log->entries[i];
+            if (e->len > UINT16_MAX) {
+                continue;
+            }
+
+            entries[used++] = (uint8_t)e->op;
+            entries[used++] = (uint8_t)e->len;
+            entries[used++] = (uint8_t)(e->len >> 8);
+            if (e->len) {
+                memcpy(entries + used, e->data, e->len);
+            }
+
+            used += e->len;
+        }
+
+        pcSeedWrite(dir, "fuzzPersistApplyOp", ops, entries, used);
+    }
+
+    const persistConfig config = persistDefaultConfig();
+    persist *p = persistCreate(ops, &config);
+    persistStore *store = persistStoreMemory(0);
+    persistAttachSnapshot(p, store);
+    if (persistSnapshot(p, live)) {
+        size_t fileLen = 0;
+        const uint8_t *file = persistStoreMemoryBuffer(store, &fileLen);
+        cleanerName(zfree, Bytes) uint8_t *seed = zmalloc(4 + fileLen);
+        dkStoreLe32(seed, (uint32_t)fileLen);
+        if (fileLen) {
+            memcpy(seed + 4, file, fileLen);
+        }
+
+        pcSeedWrite(dir, "fuzzPersistRecover", ops, seed, 4 + fileLen);
+    }
+
+    persistClose(p);
+}
+
 /* Contract 2 */
 static void pcWal(pcRow *row, const persistOps *ops,
                   const persistContractLog *log, const uint8_t *live,
@@ -564,6 +662,8 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
     uint8_t *snap = nullptr;
     size_t snapLen = 0;
     if (pcRoundTrip(row, ops, live, "round trip", &snap, &snapLen)) {
+        pcSeeds(ops, live, snap, snapLen, &log);
+
         /* The restored structure has the settings the live one was built
          * with (a setting the snapshot does not carry leaves both
          * snapshots equal, so only a direct comparison sees it) */

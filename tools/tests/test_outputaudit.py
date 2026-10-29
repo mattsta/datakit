@@ -140,7 +140,13 @@ class Sorting(unittest.TestCase):
 
     def test_test_only_files(self) -> None:
         src = 'void bench(void) { printf("t"); }\n'
-        for path in ("src/intsetTest.c", "src/memboundBench.c", "src/datakit-test.c"):
+        for path in (
+            "src/intsetTest.c",
+            "src/memboundBench.c",
+            "src/datakit-test.c",
+            "src/fuzz/fuzzCommon.h",
+            "src/fuzz/fuzzFlexValidate.c",
+        ):
             with self.subTest(path=path):
                 self.assertEqual(scan(src, path), [("printf", "bench", "test")])
 
