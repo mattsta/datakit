@@ -56,12 +56,17 @@ void multilistStats(const multilist *m, dkTierStats *out);
  * opening compressed Full-tier nodes; Small and Medium ignore it. */
 flex *multilistDump(const multilist *m, mflexState *state);
 
-/* TODO: add multi-argument versions so we can, e.g. append
- *       40 databoxes at once as efficiently as possible. */
 void multilistPushByTypeHead(multilist **m, mflexState *state,
                              const databox *box);
 void multilistPushByTypeTail(multilist **m, mflexState *state,
                              const databox *box);
+
+/* The 'count' boxes at 'boxes' pushed onto the tail in order: the same
+ * list 'count' PushByTypeTail calls give, element for element, with the
+ * batch encoded once and appended a node at a time (a batch under one
+ * node goes into the tail node as pushes do). */
+void multilistBulkPushByTypeTail(multilist **m, mflexState *state,
+                                 const databox *boxes, size_t count);
 
 #if 1
 void multilistInsertByTypeAfter(multilist **m, mflexState *state[2],

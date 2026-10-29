@@ -275,6 +275,10 @@ void mflexPushByTypeExact(mflex **mm, mflexState *state, const databox *box,
     MFLEX_GROW(flexPushByTypeExact, box, where);
 }
 
+void mflexBulkAppendFlex(mflex **mm, mflexState *state, const flex *elements) {
+    MFLEX_GROW(flexBulkAppendFlex, elements);
+}
+
 /* ====================================================================
  * Simple deleting
  * ==================================================================== */
@@ -760,6 +764,41 @@ int mflexTest(int, char *[]) {
         const size_t preferred = mflexStatePreferredLen(st);
         if (preferred < 1000 || preferred > 2048) {
             ERR("preferred length %zu for 1000", preferred);
+        }
+    }
+
+    TEST("BulkAppendFlex appends what a flex append does, compressed or "
+         "not") {
+        /* 3000 repetitive strings (compressible) appended in batches of
+         * 500 to a compressing and a never-compressing mflex: each reads
+         * back as one flex holding every batch in order */
+        cleaner(mflexStateFree) mflexState *st = mflexStateCreate();
+        cleaner(mflexFree) mflex *compressing = mflexNew();
+        cleaner(mflexFree) mflex *plain = mflexNewNoCompress();
+        mflex **both[2] = {&compressing, &plain};
+        cleaner(flexFree) flex *oracle = flexNew();
+        for (int batch = 0; batch < 6; batch++) {
+            cleaner(flexFree) flex *part = flexNew();
+            for (int i = 0; i < 500; i++) {
+                flexPushBytes(&part, "repeated-element-bytes", 22,
+                              FLEX_ENDPOINT_TAIL);
+                flexPushSigned(&part, batch * 1000 + i, FLEX_ENDPOINT_TAIL);
+            }
+            flexBulkAppendFlex(&oracle, part);
+            for (int k = 0; k < 2; k++) {
+                mflexBulkAppendFlex(both[k], st, part);
+            }
+        }
+
+        for (int k = 0; k < 2; k++) {
+            if (mflexCount(*both[k]) != flexCount(oracle) ||
+                !flexEqual(mflexOpenReadOnly(*both[k], st), oracle)) {
+                ERR("mflex %d differs from the appended flex", k);
+            }
+        }
+        if (!mflexIsCompressed(compressing) || mflexIsCompressed(plain)) {
+            ERR("compressed %d / %d", mflexIsCompressed(compressing),
+                mflexIsCompressed(plain));
         }
     }
 

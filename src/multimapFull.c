@@ -614,8 +614,8 @@ static multimapFull *multimapFullNewFromManyGrow_(
              * then updating it after. */
             reallocIncrCount(m, i, map[i], useMiddle, rangeBoxNull);
 
-            /* TODO: need reference container for creating range boxes */
-            /* Range boxes **always** have full values, no references. */
+            /* Range boxes **always** have full values, no references: a
+             * reference map resolves its first key through the container */
             if (useReference) {
                 updateRangeBoxForIdxWithReference(m, i, map[i],
                                                   referenceContainer);
@@ -1429,13 +1429,16 @@ int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
     }
 
     int64_t newVal = 0;
+    const size_t bytesBefore = flexBytes(*map);
     if (flexIncrbySigned(map, current, incrBy, &newVal)) {
-        /* The incr may have re-encoded the entry at a different width
-         * (and possibly realloc'd the flex), so the cached middle byte
-         * offset is stale — rescan, same as ResizeEntry/ReplaceEntry —
-         * and the rangeBox may be stranded by the realloc — refresh. */
-        SET_MIDDLE_FORCE(m, mapIdx, *map);
-        updateRangeBoxForIdxAfterInMapMutation(m, mapIdx, *map);
+        /* An entry re-encoded at a different width moves the entries
+         * after it and may realloc the flex: the middle is found again
+         * and the rangeBox refreshed.  A map of the same size was written
+         * in place, every entry where it was. */
+        if (flexBytes(*map) != bytesBefore) {
+            SET_MIDDLE_FORCE(m, mapIdx, *map);
+            updateRangeBoxForIdxAfterInMapMutation(m, mapIdx, *map);
+        }
         return newVal;
     }
 
@@ -2035,18 +2038,31 @@ bool multimapFullGetUnderlyingEntryWithReference(
  * from a pre-mutation offset is sound), and the rangeBox must be
  * refreshed (the mutation may realloc the flex, stranding a rangeBox
  * that references head-key bytes inside the old allocation). */
+/* After an entry of 'me's map was rewritten in place: a map that changed
+ * size has moved entries (the middle is found again); the range box
+ * (the map's first key, which the rewrite may have been) is refreshed
+ * either way */
+static void multimapFullRewrote_(multimapFull *m, const multimapEntry *me,
+                                 const size_t bytesBefore) {
+    if (flexBytes(*me->map) != bytesBefore) {
+        SET_MIDDLE_FORCE(m, me->mapIdx, *me->map);
+    }
+
+    updateRangeBoxForIdxAfterInMapMutation(m, me->mapIdx, *me->map);
+}
+
 void multimapFullResizeEntry(multimapFull *m, multimapEntry *me,
                              size_t newLen) {
+    const size_t bytesBefore = flexBytes(*me->map);
     flexResizeEntry(me->map, me->fe, newLen);
-    SET_MIDDLE_FORCE(m, me->mapIdx, *me->map);
-    updateRangeBoxForIdxAfterInMapMutation(m, me->mapIdx, *me->map);
+    multimapFullRewrote_(m, me, bytesBefore);
 }
 
 void multimapFullReplaceEntry(multimapFull *m, multimapEntry *me,
                               const databox *box) {
+    const size_t bytesBefore = flexBytes(*me->map);
     flexReplaceByType(me->map, me->fe, box);
-    SET_MIDDLE_FORCE(m, me->mapIdx, *me->map);
-    updateRangeBoxForIdxAfterInMapMutation(m, me->mapIdx, *me->map);
+    multimapFullRewrote_(m, me, bytesBefore);
 }
 
 /* Split only when the map holds MORE THAN ONE ROW (flexCount counts
@@ -2506,7 +2522,9 @@ bool multimapFullDeleteRandomValue(multimapFull *m, const bool deleteFromTail,
 /* ====================================================================
  * Reset API
  * ==================================================================== */
-/* TODO: reset-with-reference to release all retained atoms */
+/* A reference map's rows hold their referents' ids without retaining
+ * them (the referents' owner, as multimapAtom for its index, keeps their
+ * counts), so a reset or free releases nothing */
 void multimapFullReset(multimapFull *m) {
     /* Collapse back to a single empty map. Emptied maps cannot keep
      * their search metadata: range boxes reference bytes inside the
@@ -2530,7 +2548,6 @@ void multimapFullReset(multimapFull *m) {
 /* ====================================================================
  * Free / Release API
  * ==================================================================== */
-/* TODO: free-with-reference to release all retained atoms */
 void multimapFullFree(multimapFull *const m) {
     if (m) {
         /* Free each map */

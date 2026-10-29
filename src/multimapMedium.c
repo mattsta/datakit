@@ -418,14 +418,21 @@ bool multimapMediumGetUnderlyingEntryFullWidth(multimapMedium *m,
 void multimapMediumResizeEntry(multimapMedium *m, multimapEntry *me,
                                size_t newLen) {
     assert(m->map[me->mapIdx] == *me->map);
+    const size_t bytesBefore = flexBytes(*me->map);
     flexResizeEntry(me->map, me->fe, newLen);
-    SET_MIDDLE_FORCE(m, me->mapIdx);
+    /* Same size: every entry where it was (see multimapSmallResizeEntry) */
+    if (flexBytes(*me->map) != bytesBefore) {
+        SET_MIDDLE_FORCE(m, me->mapIdx);
+    }
 }
 
 void multimapMediumReplaceEntry(multimapMedium *m, multimapEntry *me,
                                 const databox *box) {
+    const size_t bytesBefore = flexBytes(*me->map);
     flexReplaceByType(me->map, me->fe, box);
-    SET_MIDDLE_FORCE(m, me->mapIdx);
+    if (flexBytes(*me->map) != bytesBefore) {
+        SET_MIDDLE_FORCE(m, me->mapIdx);
+    }
 }
 
 bool multimapMediumExists(multimapMedium *m, const databox *key) {
@@ -763,11 +770,13 @@ int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
     }
 
     int64_t newVal = 0;
+    const size_t bytesBefore = flexBytes(m->map[mapIdx]);
     if (flexIncrbySigned(&m->map[mapIdx], current, incrBy, &newVal)) {
-        /* if incremented, return new value */
-        /* TODO: update flexIncrbySigned() to report if allocation changed
-         *       so we only conditionally update the mapIdx */
-        SET_MIDDLE_FORCE(m, mapIdx);
+        /* A map of the same size kept every entry where it was (the
+         * entry kept its width); otherwise the middle is found again */
+        if (flexBytes(m->map[mapIdx]) != bytesBefore) {
+            SET_MIDDLE_FORCE(m, mapIdx);
+        }
         return newVal;
     }
 

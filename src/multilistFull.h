@@ -75,6 +75,11 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
  * ownership of 'fl': an empty 'fl' is freed and adds nothing, and on an
  * empty list 'fl' becomes the list's only node. */
 void multilistFullAppendFlex(multilistFull *ml, flex *fl);
+/* Every element of 'fl' (not consumed) onto the tail: into the tail node
+ * when it has room for all of them (as many pushes would fill it), else
+ * as a new tail node */
+void multilistFullAppendIntoTail(multilistFull *ml, mflexState *state,
+                                 const flex *fl);
 void multilistFullAppendFlexWithState(multilistFull *ml, mflexState *state,
                                       flex *fl);
 /* Push every element of 'fl' (not consumed) onto the tail, one by one;

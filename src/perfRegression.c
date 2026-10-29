@@ -2248,6 +2248,44 @@ static void benchMultilist(void) {
     PERF_ROW("multilist", "deleteScattered", n,
              sink +=
              multilistDelRange(&ml, s, (int64_t)((i * 7919u) % (n - i)), 1));
+
+    /* A queue held in the Medium tier: 1500 small counts (about 4 KB at
+     * the 2 KB limit), then a tail push and a head pop per operation */
+    {
+        cleaner(multilistFree) multilist *queue =
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
+        for (uint32_t i = 0; i < 1500; i++) {
+            const databox b = databoxNewSigned((int64_t)(i % 1000));
+            multilistPushByTypeTail(&queue, s, &b);
+        }
+        PERF_ROW("multilist", "mediumQueue", n,
+                 const databox b = databoxNewSigned((int64_t)(i % 1000));
+                 multilistPushByTypeTail(&queue, s, &b); databox got = {};
+                 sink += multilistPopHead(&queue, s, &got);
+                 databoxFreeData(&got));
+        dkTierStats st = {};
+        multilistStats(queue, &st);
+        sink += st.tier;
+    }
+
+    /* The pushTail elements again, 64 to a bulk push (ns per element) */
+    {
+        constexpr uint32_t per = 64;
+        cleaner(multilistFree) multilist *bulk =
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
+        databox batch[per];
+        const double t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i += per) {
+            const uint32_t take = n - i < per ? n - i : per;
+            for (uint32_t j = 0; j < take; j++) {
+                batch[j] = databoxNewSigned((int64_t)(i + j) * 1000003);
+            }
+            multilistBulkPushByTypeTail(&bulk, s, batch, take);
+        }
+        emitRow("multilist", "bulkPushTail64", 0, n,
+                timeUtilMonotonicSec() - t0);
+        sink += multilistCount(bulk);
+    }
     perfContainerSink = sink;
 }
 
@@ -2315,6 +2353,12 @@ static void benchMultimapMany(void) {
              const databox v = databoxNewSigned((int64_t)i * 3);
              const databox *values[3] = {&v, &v, &v};
              multimapEntryReplace(&wide, &k, values));
+
+    /* The same map's first value field counted up by one, in scattered
+     * order (counts stay at their width) */
+    PERF_ROW("multimap", "fieldIncr", rows,
+             const databox k = databoxNewSigned(perfScatter(i));
+             sink += (uint64_t)multimapFieldIncr(&wide, &k, 1, 1));
 
     perfContainerSink = sink;
 }

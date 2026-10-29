@@ -215,17 +215,24 @@ void multimapSmallDeleteEntryWithReference(
  * entry offset reads a misaligned position and poisons the cached
  * middle for the map's remaining lifetime (sorted finds trust it
  * blindly and insert/delete only ever maintain it incrementally).
- * The full rescan is the only computation correct in all cases. */
+ * The full rescan is the only computation correct in all cases where the
+ * map's size changed; a map of the same size kept every entry in place. */
 void multimapSmallResizeEntry(multimapSmall *m, multimapEntry *me,
                               size_t newLen) {
+    const size_t bytesBefore = flexBytes(*me->map);
     flexResizeEntry(me->map, me->fe, newLen);
-    SET_MIDDLE_FORCE(m);
+    if (flexBytes(*me->map) != bytesBefore) {
+        SET_MIDDLE_FORCE(m);
+    }
 }
 
 void multimapSmallReplaceEntry(multimapSmall *m, multimapEntry *me,
                                const databox *box) {
+    const size_t bytesBefore = flexBytes(*me->map);
     flexReplaceByType(me->map, me->fe, box);
-    SET_MIDDLE_FORCE(m);
+    if (flexBytes(*me->map) != bytesBefore) {
+        SET_MIDDLE_FORCE(m);
+    }
 }
 
 bool multimapSmallExists(multimapSmall *m, const databox *key) {
@@ -505,13 +512,15 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
     }
 
     int64_t newVal = 0;
+    const size_t bytesBefore = flexBytes(m->map);
     if (flexIncrbySigned(&m->map, current, incrBy, &newVal)) {
-        /* flexIncrbySigned may re-encode the entry at a different width
-         * (its own contract: "the caller must ALSO update their middle
-         * or future searching will break"), and a total-size varint
-         * boundary crossing shifts every entry — rescan, same argument
-         * as ResizeEntry/ReplaceEntry above. */
-        SET_MIDDLE_FORCE(m);
+        /* An entry re-encoded at a different width shifts every entry
+         * after it (and a total-size varint crossing shifts them all), so
+         * the middle is found again; a map of the same size kept every
+         * entry where it was, as nearly every increment does. */
+        if (flexBytes(m->map) != bytesBefore) {
+            SET_MIDDLE_FORCE(m);
+        }
         /* if incremented, return new value */
         return newVal;
     }

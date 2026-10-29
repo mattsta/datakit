@@ -547,6 +547,23 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
     ml->values++;
 }
 
+void multilistFullAppendIntoTail(multilistFull *ml, mflexState *state,
+                                 const flex *fl) {
+    const size_t n = flexCount(fl);
+    if (!n) {
+        return;
+    }
+
+    if (mflexAllowInsert_(ml, mlTailIdx(ml), flexBytes(fl))) {
+        mflexBulkAppendFlex(mlTailPtr(ml), state, fl);
+        ml->values += n;
+        return;
+    }
+
+    /* @own: container; free=flexFree */
+    multilistFullAppendFlexWithState(ml, state, flexDuplicate(fl));
+}
+
 /* Append 'fl' as a new never-compress tail node, keeping 'fl' itself
  * as the node's memory.  The depth rule is not re-applied: the caller
  * does that.  An empty 'fl' is freed and adds no node, and on an empty

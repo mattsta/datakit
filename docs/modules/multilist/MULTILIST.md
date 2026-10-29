@@ -341,6 +341,25 @@ variant upgrade and the pointer-carried metadata can be written back.
 your buffer; the push copies the bytes into the flex, so a stack buffer is safe
 and no ownership transfers.
 
+### Bulk Push
+
+```c
+/* The 'count' boxes pushed onto the tail in order */
+void multilistBulkPushByTypeTail(multilist **m, mflexState *state,
+                                 const databox *boxes, size_t count);
+
+databox rows[64];
+for (size_t i = 0; i < 64; i++) {
+    rows[i] = databoxNewSigned(readings[i]);
+}
+multilistBulkPushByTypeTail(&list, state, rows, 64);
+```
+
+The list afterwards is element for element the one `count` single pushes
+give. The batch is encoded once: a batch of a node or more goes in as whole
+nodes, a smaller one into the tail node as pushes do, and a Small or Medium
+list it would push past Medium is rebuilt once as a Full list.
+
 ### Insert at Position
 
 ```c

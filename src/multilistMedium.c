@@ -21,6 +21,23 @@
         F1 = tmp;                                                              \
     } while (0)
 
+/* F0 drained while F1 holds elements: F0 must hold elements whenever the
+ * list does, so F1 is split between the two.  Head pops and deletes after
+ * it then shift half the elements, not all of them (one copy per drain,
+ * against a shift per pop). */
+static void multilistMediumRefillHead_(multilistMedium *ml) {
+    assert(flexCount(F0) == 0 && flexCount(F1) > 0);
+    if (flexCount(F1) < 2) {
+        swapF(); /* a split of one element would leave F0 empty */
+        return;
+    }
+
+    flexFree(F0);
+    F0 = F1;
+    /* @own: container; free=flexFree */
+    F1 = flexSplit(&F0, 1);
+}
+
 /* ====================================================================
  * Create
  * ==================================================================== */
@@ -113,12 +130,12 @@ void multilistMediumAppendFlex(multilistMedium *ml, const flex *fl) {
         /* @own: container; free=flexFree */
         F0 = flexDuplicate(fl);
         F1 = flexSplit(&F0, 1);
+        if (flexCount(F0) == 0 && flexCount(F1) > 0) {
+            swapF(); /* one element: F0 must hold it */
+        }
     } else {
-        /* else, append 'fl' to tail. */
-        /* TODO:
-         *   - can optimize for re-balancing F0 and F1
-         *     after this to make sure F1 didn't just get
-         *     100 elements while F0 may have 1 element. */
+        /* Onto F1, the tail; a lopsided F0 and F1 even out when F0
+         * drains (multilistMediumRefillHead_) */
         flexBulkAppendFlex(&F1, fl);
     }
 }
@@ -325,10 +342,9 @@ bool multilistMediumDelRange(multilistMedium *ml, const mlOffsetId start,
         }
 
         /* Preserve the F0-nonempty invariant (see the countF0 == 0
-         * early return above): if F0 drained but F1 still has data,
-         * F1 becomes the new F0 */
+         * early return above) */
         if (flexCount(F0) == 0 && flexCount(F1) > 0) {
-            swapF();
+            multilistMediumRefillHead_(ml);
         }
     }
 
@@ -596,9 +612,8 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
         flexGetByTypeDetached(fe, box);
         flexDeleteRange(ffl, flIdx, 1);
 
-        /* F0 must hold elements whenever the list is nonempty */
         if (flexCount(F0) == 0 && flexCount(F1) > 0) {
-            swapF();
+            multilistMediumRefillHead_(ml);
         }
 
         return true;
@@ -611,8 +626,9 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
  * Insert by endpoint
  * ==================================================================== */
 void multilistMediumPushByTypeHead(multilistMedium *ml, const databox *box) {
+    /* Into F0 whatever its size: moving elements to F1's head would shift
+     * F1 instead (a drained F0 is refilled by splitting F1, on pops) */
     flexPushByTypeExact(&F0, box, FLEX_ENDPOINT_HEAD);
-    /* todo: rebalance */
 }
 
 void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {

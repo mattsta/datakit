@@ -30,6 +30,7 @@
 #include "cleaner.h"
 
 defcleanerName(flex **, zfree, Flexes);
+defcleanerName(databox *, zfree, Boxes);
 
 typedef enum multilistType {
     MULTILIST_TYPE_INVALID = 0,
@@ -272,6 +273,32 @@ static void multilistUpgradeIfNecessary(multilist **m, mflexState *state,
     } /* else, is FULL and no grow necessary. */
 }
 
+/* 'elements' (consumed) cut into whole-element chunks of about
+ * 'chunkBytes' each, in order: a new array (zfree it) of '*chunksOut'
+ * flexes.  Cuts are taken from the tail, so each only shortens the
+ * remainder. */
+static flex **mlCutChunks_(flex *elements, const size_t chunkBytes,
+                           size_t *chunksOut) {
+    const size_t bytes = flexBytes(elements);
+    const size_t count = flexCount(elements);
+    size_t perChunk = bytes ? (count * chunkBytes) / bytes : count;
+    perChunk = perChunk ? perChunk : 1;
+    const size_t chunks = count ? dkDivCeil(count, perChunk) : 1;
+    /* @own: caller; free=zfree */
+    flex **chunk = zcalloc(chunks, sizeof(flex *));
+    for (size_t i = chunks - 1; i > 0; i--) {
+        const size_t end =
+            (i + 1) * perChunk < count ? (i + 1) * perChunk : count;
+        const size_t entries = end - i * perChunk;
+        /* @own: container; free=flexFree */
+        chunk[i] =
+            flexSplitRange(&elements, -(int32_t)entries, (uint32_t)entries);
+    }
+    chunk[0] = elements;
+    *chunksOut = chunks;
+    return chunk;
+}
+
 multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
                                 mflexState *state, flex *elements) {
     const size_t bytes = flexBytes(elements);
@@ -285,23 +312,11 @@ multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
         return ml;
     }
 
-    /* Larger: cut whole elements into chunks of about two nodes (tail
-     * first, so each cut only shortens the dump); Full splits each chunk
-     * into two nodes and applies the compression depth once */
-    const size_t count = flexCount(elements);
-    size_t perChunk = (count * 2 * nodeBytes) / bytes;
-    perChunk = perChunk ? perChunk : 1;
-    const size_t chunks = dkDivCeil(count, perChunk);
-    cleanerName(zfree, Flexes) flex **chunk = zcalloc(chunks, sizeof(flex *));
-    for (size_t i = chunks - 1; i > 0; i--) {
-        const size_t end =
-            (i + 1) * perChunk < count ? (i + 1) * perChunk : count;
-        const size_t entries = end - i * perChunk;
-        /* @own: container; free=flexFree */
-        chunk[i] =
-            flexSplitRange(&elements, -(int32_t)entries, (uint32_t)entries);
-    }
-    chunk[0] = elements;
+    /* Larger: chunks of about two nodes; Full splits each chunk into two
+     * nodes and applies the compression depth once */
+    size_t chunks = 0;
+    cleanerName(zfree, Flexes) flex **chunk =
+        mlCutChunks_(elements, 2 * nodeBytes, &chunks);
 
     /* @own: caller; free=multilistFree */
     multilistFull *full = multilistFullNewFromFlexConsumeGrow(
@@ -327,6 +342,72 @@ void multilistPushByTypeTail(multilist **ml, mflexState *state,
     const uint32_t depth = COMPRESS_DEPTH(*ml);
     const uint32_t limit = COMPRESS_LIMIT(*ml);
     multilistUpgradeIfNecessary(ml, state, depth, limit);
+}
+
+void multilistBulkPushByTypeTail(multilist **ml, mflexState *state,
+                                 const databox *boxes, size_t count) {
+    if (!count) {
+        return;
+    }
+
+    const uint32_t depth = COMPRESS_DEPTH(*ml);
+    const uint32_t limit = COMPRESS_LIMIT(*ml);
+    const size_t nodeBytes = flexOptimizationSizeLimit[limit];
+    /* The bytes count pushes would write: each box exactly as given */
+    /* @own: local; free=flexFree */
+    flex *batch = flexNewFromDataboxesExact(boxes, count);
+
+    switch (_multilistType(*ml)) {
+    case MULTILIST_TYPE_FULL: {
+        multilistFull *full = mlf(*ml);
+        if (flexBytes(batch) < nodeBytes) {
+            /* Under a node: into the tail node in one append when it has
+             * room, else a new tail node that later pushes fill */
+            multilistFullAppendIntoTail(full, state, batch);
+            flexFree(batch);
+            return;
+        }
+
+        /* A node or more: whole nodes of it, each appended once */
+        size_t chunks = 0;
+        cleanerName(zfree, Flexes) flex **chunk =
+            mlCutChunks_(batch, nodeBytes, &chunks);
+        for (size_t i = 0; i < chunks; i++) {
+            multilistFullAppendFlexWithState(full, state, chunk[i]);
+        }
+        return;
+    }
+    case MULTILIST_TYPE_SMALL:
+    case MULTILIST_TYPE_MEDIUM:
+        if (multilistBytes(*ml) + flexBytes(batch) <= 3 * nodeBytes) {
+            /* Still Small or Medium: one append, then the tier rule */
+            if (_multilistType(*ml) == MULTILIST_TYPE_SMALL) {
+                multilistSmall v = {.fl = _MULTILIST_USE(*ml)};
+                multilistSmallAppendFlex(&v, batch);
+                *ml = mlSmallPack_(v.fl, *ml);
+            } else {
+                multilistMediumAppendFlex(mlm(*ml), batch);
+            }
+
+            flexFree(batch);
+            multilistUpgradeIfNecessary(ml, state, depth, limit);
+            return;
+        }
+
+        /* Past Medium: the elements and the batch, rebuilt as a dump is
+         * (at most three nodes' worth is copied) */
+        {
+            flex *all = multilistDump(*ml, state);
+            flexBulkAppendFlex(&all, batch);
+            flexFree(batch);
+            multilistFree(*ml);
+            *ml = multilistNewFromDump(limit, depth, state, all);
+        }
+        return;
+    default:
+        assert(false);
+        unreachable();
+    }
 }
 
 void multilistInsertByTypeAfter(multilist **ml, mflexState *state[2],
@@ -3267,9 +3348,9 @@ int multilistTest(int, char *[]) {
     }
 
     TEST("MEDIUM: unbalanced head-only push through tier") {
-        /* Push only to head - F0 grows large, F1 stays empty.
-         * This tests the unbalanced scenario where rebalancing TODO
-         * is not yet implemented (multilistMedium.c lines 143, 156, 479).
+        /* Push only to head - F0 grows large, F1 stays empty: head
+         * pushes go to F0 whatever its size (moving elements to F1 would
+         * shift F1 instead); only a drained F0 is refilled by splitting.
          * Use limit=6 (2048 bytes) so Medium→Full is at 6144 bytes,
          * giving room to stay in Medium with ~100 small integers. */
         cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
@@ -3358,6 +3439,62 @@ int multilistTest(int, char *[]) {
 
         printf("  verified unbalanced head-only push (%zu elements)\n",
                targetCount);
+    }
+
+    TEST("MEDIUM: a queue's drained head half is refilled with half the "
+         "tail") {
+        /* 1500 small counts at the 2 KB limit (Medium), then 6000 tail
+         * pushes each followed by a head pop: values come out in FIFO
+         * order, the list stays Medium, F0 is never empty, and every
+         * refill leaves F0 at most one more than half the list */
+        cleaner(multilistFree) multilist *ml =
+            multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
+        int64_t nextIn = 0;
+        int64_t nextOut = 0;
+        for (; nextIn < 1500; nextIn++) {
+            const databox box = databoxNewSigned(nextIn % 1000);
+            multilistPushByTypeTail(&ml, s0, &box);
+        }
+
+        size_t refills = 0;
+        for (int round = 0; round < 6000 && !err; round++, nextIn++) {
+            const databox box = databoxNewSigned(nextIn % 1000);
+            multilistPushByTypeTail(&ml, s0, &box);
+            const size_t headBefore =
+                _multilistType(ml) == MULTILIST_TYPE_MEDIUM
+                    ? flexCount(mlm(ml)->fl[0])
+                    : 0;
+            databox got = {};
+            if (!multilistPopHead(&ml, s0, &got) ||
+                got.data.i != nextOut % 1000) {
+                ERR("round %d: popped %" PRIdMAX ", want %" PRId64, round,
+                    got.data.i, nextOut % 1000);
+            }
+            nextOut++;
+
+            if (_multilistType(ml) != MULTILIST_TYPE_MEDIUM) {
+                ERR("round %d: the queue left Medium", round);
+                break;
+            }
+
+            const multilistMedium *md = mlm(ml);
+            const size_t f0 = flexCount(md->fl[0]);
+            const size_t total = f0 + flexCount(md->fl[1]);
+            if (!f0) {
+                ERR("round %d: F0 empty with %zu elements", round, total);
+            }
+            if (headBefore == 1) { /* this pop drained F0: a refill */
+                refills++;
+                if (f0 > total / 2 + 1) {
+                    ERR("round %d: refilled F0 holds %zu of %zu", round, f0,
+                        total);
+                }
+            }
+        }
+
+        if (refills < 4) {
+            ERR("only %zu refills", refills);
+        }
     }
 
     TEST("MEDIUM: unbalanced tail-only push through tier") {
@@ -5115,6 +5252,95 @@ int multilistTest(int, char *[]) {
                         const databox v = DATABOX_SIGNED(k * 1000);
                         multilistPushByTypeHead(&orig, scratch, &v);
                         multilistPushByTypeHead(&rebuilt, scratch, &v);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST("BulkPushByTypeTail gives the list single pushes give, from every "
+         "tier, at every batch size") {
+        /* Lists in Small, Medium and Full (with and without compression)
+         * take batches of ints, strings of varied length and wide ints
+         * in bulk and one push at a time: the dumps match byte for byte,
+         * the bulk list has no more nodes than the pushed one plus one,
+         * and later pops and pushes agree */
+        static constexpr int64_t startSizes[] = {0, 5, 120, 400, 5000};
+        static constexpr size_t batchSizes[] = {0, 1, 7, 150, 4000};
+        static constexpr uint32_t compressDepths[] = {0, 2};
+        static const char letters[] = "a string longer than any inline bytes";
+        cleaner(mflexStateFree) mflexState *scratch = mflexStateCreate();
+        char text[48];
+        cleanerName(zfree, Boxes) databox *batch =
+            zcalloc(4000, sizeof(databox));
+        for (size_t di = 0; di < countof(compressDepths) && !err; di++) {
+            const uint32_t zDepth = compressDepths[di];
+            for (size_t si = 0; si < countof(startSizes) && !err; si++) {
+                for (size_t bi = 0; bi < countof(batchSizes) && !err; bi++) {
+                    const int64_t had = startSizes[si];
+                    const size_t n = batchSizes[bi];
+                    cleaner(multilistFree) multilist *one =
+                        multilistNewLimit(FLEX_CAP_LEVEL_512, zDepth);
+                    cleaner(multilistFree) multilist *bulk =
+                        multilistNewLimit(FLEX_CAP_LEVEL_512, zDepth);
+                    for (int64_t i = 0; i < had; i++) {
+                        const databox v = DATABOX_SIGNED(i * 7 - 3000);
+                        multilistPushByTypeTail(&one, scratch, &v);
+                        multilistPushByTypeTail(&bulk, scratch, &v);
+                    }
+
+                    /* Strings are prefixes of one static literal */
+                    for (size_t i = 0; i < n; i++) {
+                        switch (i % 3) {
+                        case 0:
+                            batch[i] = DATABOX_SIGNED((int64_t)i * 31 - 77);
+                            break;
+                        case 1:
+                            batch[i] = databoxNewBytes(letters, 1 + i % 36);
+                            break;
+                        default:
+                            batch[i] = DATABOX_UNSIGNED(UINT64_MAX - i);
+                            break;
+                        }
+                    }
+
+                    for (size_t i = 0; i < n; i++) {
+                        multilistPushByTypeTail(&one, scratch, &batch[i]);
+                    }
+                    multilistBulkPushByTypeTail(&bulk, scratch, batch, n);
+
+                    cleaner(flexFree) flex *a = multilistDump(one, scratch);
+                    cleaner(flexFree) flex *c = multilistDump(bulk, scratch);
+                    dkTierStats oneStats = {};
+                    dkTierStats bulkStats = {};
+                    multilistStats(one, &oneStats);
+                    multilistStats(bulk, &bulkStats);
+                    if (flexBytes(a) != flexBytes(c) ||
+                        memcmp(a, c, flexBytes(a)) != 0 ||
+                        multilistCount(one) != multilistCount(bulk) ||
+                        bulkStats.units > oneStats.units + 1) {
+                        ERR("depth %u start %" PRId64 " batch %zu: lists "
+                            "differ (nodes %u pushed, %u bulk)",
+                            zDepth, had, n, oneStats.units, bulkStats.units);
+                        break;
+                    }
+
+                    for (int64_t k = 0; k < 20; k++) {
+                        databox x = {};
+                        databox y = {};
+                        const bool px = multilistPop(&one, scratch, &x, k & 1);
+                        const bool py = multilistPop(&bulk, scratch, &y, k & 1);
+                        if (px != py || (px && !databoxEqual(&x, &y))) {
+                            ERR("start %" PRId64 " batch %zu: pop %" PRId64
+                                " differs",
+                                had, n, k);
+                        }
+                        databoxFreeData(&x);
+                        databoxFreeData(&y);
+                        snprintf(text, sizeof(text), "after %" PRId64, k);
+                        const databox v = databoxNewBytesString(text);
+                        multilistPushByTypeTail(&one, scratch, &v);
+                        multilistPushByTypeTail(&bulk, scratch, &v);
                     }
                 }
             }

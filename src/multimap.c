@@ -4734,6 +4734,104 @@ int multimapTest(int, char *[]) {
         err += multimapDeleteEntrySweep_();
     }
 
+    TEST("FieldIncr through every integer width keeps every tier's search "
+         "state right") {
+        /* Maps of [key, a, b] rows at 20, 300 and 3000 rows under a small
+         * limit: field b of rows spread over the map (before and after
+         * each middle) steps through 1-, 2-, 4- and 8-byte counts and back
+         * to zero; after each step every row reads back its count and the
+         * map verifies (middles, range boxes) */
+        static const int64_t steps[] = {
+            1, 200, 70000, INT64_C(1) << 40, -(INT64_C(1) << 40), -70000, -201};
+        const int64_t sizes[] = {20, 300, 3000};
+        for (size_t s = 0; s < countof(sizes) && !err; s++) {
+            const int64_t rows = sizes[s];
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(3, FLEX_CAP_LEVEL_512);
+            for (int64_t k = 0; k < rows; k++) {
+                const databox key = databoxNewSigned(k);
+                const databox a = databoxNewSigned(k * 3);
+                const databox b = databoxNewSigned(0);
+                const databox *row[3] = {&key, &a, &b};
+                multimapInsert(&m, row);
+            }
+
+            int64_t counted = 0; /* the count every stepped row holds */
+            for (size_t st = 0; st < countof(steps) && !err; st++) {
+                for (int64_t k = 0; k < rows; k += 7) {
+                    const databox key = databoxNewSigned(k);
+                    const int64_t now =
+                        multimapFieldIncr(&m, &key, 2, steps[st]);
+                    if (now != counted + steps[st]) {
+                        ERR("size %" PRId64 " step %zu: row %" PRId64
+                            " counted to %" PRId64,
+                            rows, st, k, now);
+                        break;
+                    }
+                }
+                counted += steps[st];
+
+                for (int64_t k = 0; k < rows && !err; k++) {
+                    const databox key = databoxNewSigned(k);
+                    databox a = {};
+                    databox b = {};
+                    databox *got[2] = {&a, &b};
+                    const int64_t want = k % 7 ? 0 : counted;
+                    if (!multimapLookup(m, &key, got) || a.data.i != k * 3 ||
+                        b.data.i != want) {
+                        ERR("size %" PRId64 " step %zu: row %" PRId64
+                            " reads wrong",
+                            rows, st, k);
+                    }
+                }
+
+                multimapVerify(m); /* asserts on a stale middle or range box */
+            }
+
+            /* ReplaceEntry and ResizeEntry at the same size write in
+             * place: field a gets another 8-byte value, then bytes of one
+             * length rewritten at that length */
+            for (int64_t k = 0; k < rows && !err; k++) {
+                const databox key = databoxNewSigned(k);
+                multimapEntry me = {};
+                if (!multimapGetUnderlyingEntry(m, &key, &me)) {
+                    ERR("size %" PRId64 ": row %" PRId64 " lost", rows, k);
+                    break;
+                }
+                me.fe = flexNext(*me.map, me.fe);
+                const databox wide = databoxNewSigned(INT64_MIN + k);
+                multimapReplaceEntry(&m, &me, &wide);
+                multimapVerify(m);
+            }
+            for (int pass = 0; pass < 2 && !err; pass++) {
+                for (int64_t k = 0; k < rows; k += 3) {
+                    const databox key = databoxNewSigned(k);
+                    multimapEntry me = {};
+                    multimapGetUnderlyingEntry(m, &key, &me);
+                    me.fe = flexNext(*me.map, me.fe);
+                    const databox text = databoxNewBytesString(
+                        pass ? "the same length...." : "nineteen bytes ....");
+                    multimapReplaceEntry(&m, &me, &text);
+                }
+                multimapVerify(m);
+            }
+            for (int64_t k = 0; k < rows && !err; k++) {
+                const databox key = databoxNewSigned(k);
+                databox a = {};
+                databox b = {};
+                databox *got[2] = {&a, &b};
+                const bool text = k % 3 == 0;
+                if (!multimapLookup(m, &key, got) ||
+                    (text ? a.len != 19 || memcmp(a.data.bytes.start,
+                                                  "the same length....", 19)
+                          : a.data.i != INT64_MIN + k)) {
+                    ERR("size %" PRId64 ": row %" PRId64 " field a wrong", rows,
+                        k);
+                }
+            }
+        }
+    }
+
     TEST("EntryReplace rewrites every value field of a row, in every tier "
          "and row width") {
         /* Maps of 4- and 10-element rows (3 and 9 values: the stack and

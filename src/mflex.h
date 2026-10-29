@@ -54,6 +54,9 @@ void mflexPushByType(mflex **mm, mflexState *state, const databox *box,
  * and mflexPushBytes auto-convert numeral bytes like flexPushByType. */
 void mflexPushByTypeExact(mflex **mm, mflexState *state, const databox *box,
                           flexEndpoint where);
+/* Every element of 'elements' (not consumed) appended, its bytes copied
+ * as they are (flexBulkAppendFlex) */
+void mflexBulkAppendFlex(mflex **mm, mflexState *state, const flex *elements);
 
 /* mflex delete by position */
 void mflexDeleteOffsetCount(mflex **mm, mflexState *state, int32_t offset,
