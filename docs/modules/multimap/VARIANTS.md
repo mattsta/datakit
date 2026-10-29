@@ -503,8 +503,8 @@ The reverse index finds a key's ID. It is one of three kinds, chosen at
 creation (`multimapAtomNewIndexed()`) and read back by
 `multimapAtomGetIndex()`:
 
-- `MULTIMAP_ATOM_INDEX_HASHED` (the default for `multimapAtomNew()`,
-  `multimapAtomNewPermanent()` and `multimapAtomInit()`): a set of
+- `MULTIMAP_ATOM_INDEX_HASHED` (the default for `multimapAtomNew()` and
+  `multimapAtomNewPermanent()`): a set of
   `{hash of the key, ID}` rows sorted by hash. A find is one keyed search for
   the hash, then one forward lookup per candidate (normally one).
 - `MULTIMAP_ATOM_INDEX_ORDERED`: rows holding only the ID, inserted through
@@ -561,7 +561,6 @@ multimapAtom *multimapAtomNew(void);
 multimapAtom *multimapAtomNewPermanent(void);
 multimapAtom *multimapAtomNewIndexed(multimapAtomIndex index, bool permanent);
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
-void multimapAtomInit(multimapAtom *ma);
 void multimapAtomFree(multimapAtom *ma);
 
 void multimapAtomInsert(multimapAtom *ma, const databox *box);

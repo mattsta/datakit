@@ -74,7 +74,6 @@ typedef struct multimapAtomResult {
     uint64_t refcount;
 } multimapAtomResult;
 
-void multimapAtomInit(multimapAtom *ma);
 multimapAtom *multimapAtomNew(void);
 /* A permanent table (see ID BEHAVIOURS above) */
 multimapAtom *multimapAtomNewPermanent(void);

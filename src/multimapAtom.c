@@ -112,10 +112,6 @@ static void atomInitIndexed_(multimapAtom *ma, const multimapAtomIndex index,
                   ((uint64_t)index << ATOM_INDEX_SHIFT_);
 }
 
-void multimapAtomInit(multimapAtom *ma) {
-    atomInitIndexed_(ma, MULTIMAP_ATOM_INDEX_HASHED, false);
-}
-
 multimapAtom *multimapAtomNewIndexed(const multimapAtomIndex index,
                                      const bool permanent) {
     /* @own: caller; free=multimapAtomFree */
