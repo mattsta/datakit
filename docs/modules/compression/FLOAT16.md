@@ -107,7 +107,9 @@ values: they amortize the SIMD setup and convert several lanes per
 instruction.
 
 There is no batch form for bfloat16 — its encode is a truncation and its
-decode a zero-fill, so a plain loop already vectorizes.
+decode a zero-fill, so a plain loop already vectorizes. A NaN whose payload
+lies only in the float's low half would truncate to infinity, so it encodes
+as the quiet NaN of its sign instead.
 
 ### Hardware Acceleration
 

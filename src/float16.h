@@ -48,6 +48,9 @@ static inline float float16DecodeNeon_(uint16_t value) {
 uint16_t float16Encode_(float value);
 float float16Decode_(uint16_t value);
 
+/* bfloat16 is the float's high half: encode truncates (towards zero), and a
+ * NaN whose payload is only in the low half encodes as the quiet NaN of its
+ * sign rather than truncating to infinity.  Decode is exact. */
 uint16_t bfloat16Encode_(float value);
 float bfloat16Decode_(uint16_t value);
 
