@@ -1,21 +1,21 @@
 {
- "commit": "f3e3ad350f568bf89c3c35b53e37f156bb750d02",
+ "commit": "dec6d342f3c9fae7e02ae27baf3f8223fc0c0b18",
  "files": {
   "src/OSRegulate.c": {
-   "lines": 243,
-   "branches": 190
+   "lines": 240,
+   "branches": 184
   },
   "src/aeadNonceLog.c": {
    "lines": 32,
-   "branches": 34
+   "branches": 33
   },
   "src/aeadNonceLog.h": {
    "lines": 0,
    "branches": 0
   },
   "src/aesGcm.c": {
-   "lines": 31,
-   "branches": 31
+   "lines": 26,
+   "branches": 26
   },
   "src/aesGcm.h": {
    "lines": 0,
@@ -27,26 +27,26 @@
   },
   "src/atomPool.c": {
    "lines": 28,
-   "branches": 46
+   "branches": 44
   },
   "src/bbits.c": {
    "lines": 15,
-   "branches": 24
+   "branches": 22
   },
   "src/bigmath-imath.c": {
    "lines": 0,
    "branches": 6
   },
   "src/blake3.c": {
-   "lines": 128,
-   "branches": 63
+   "lines": 32,
+   "branches": 32
   },
   "src/blake3.h": {
    "lines": 0,
    "branches": 0
   },
   "src/chacha20poly1305.c": {
-   "lines": 50,
+   "lines": 46,
    "branches": 58
   },
   "src/chacha20poly1305.h": {
@@ -55,7 +55,7 @@
   },
   "src/cleaner.h": {
    "lines": 0,
-   "branches": 0
+   "branches": 1
   },
   "src/clusterMailbox.c": {
    "lines": 90,
@@ -74,8 +74,8 @@
    "branches": 0
   },
   "src/clusterRing.c": {
-   "lines": 214,
-   "branches": 278
+   "lines": 212,
+   "branches": 280
   },
   "src/clusterRing.h": {
    "lines": 0,
@@ -85,29 +85,25 @@
    "lines": 0,
    "branches": 0
   },
-  "src/conformLittleEndian.h": {
-   "lines": 8,
-   "branches": 2
-  },
   "src/ctest.h": {
-   "lines": 24,
-   "branches": 19
+   "lines": 41,
+   "branches": 30
   },
   "src/ctmem.h": {
    "lines": 0,
    "branches": 0
   },
   "src/databox.c": {
-   "lines": 39,
+   "lines": 45,
    "branches": 28
   },
   "src/databox.h": {
    "lines": 2,
-   "branches": 13
+   "branches": 14
   },
   "src/databoxLinear.c": {
    "lines": 6,
-   "branches": 15
+   "branches": 6
   },
   "src/databoxLinear.h": {
    "lines": 10,
@@ -118,20 +114,28 @@
    "branches": 0
   },
   "src/datakit.h": {
-   "lines": 1,
-   "branches": 4
+   "lines": 0,
+   "branches": 5
   },
   "src/dataspeed.c": {
-   "lines": 761,
-   "branches": 215
+   "lines": 216,
+   "branches": 158
   },
   "src/dj.c": {
-   "lines": 15,
-   "branches": 99
+   "lines": 10,
+   "branches": 113
   },
   "src/dj.h": {
    "lines": 0,
    "branches": 0
+  },
+  "src/dkBits.h": {
+   "lines": 0,
+   "branches": 0
+  },
+  "src/dkC23.h": {
+   "lines": 0,
+   "branches": 2
   },
   "src/dkDiag.c": {
    "lines": 11,
@@ -140,6 +144,10 @@
   "src/dkDiag.h": {
    "lines": 1,
    "branches": 2
+  },
+  "src/dkEndian.h": {
+   "lines": 4,
+   "branches": 4
   },
   "src/dkFormat.c": {
    "lines": 0,
@@ -165,13 +173,25 @@
    "lines": 0,
    "branches": 0
   },
+  "src/dkSort.h": {
+   "lines": 0,
+   "branches": 0
+  },
   "src/dkTestTmp.h": {
    "lines": 19,
    "branches": 27
   },
+  "src/dkTierLimit.c": {
+   "lines": 0,
+   "branches": 0
+  },
+  "src/dkTierLimit.h": {
+   "lines": 0,
+   "branches": 0
+  },
   "src/dks.c": {
-   "lines": 37,
-   "branches": 56
+   "lines": 36,
+   "branches": 54
   },
   "src/dks.h": {
    "lines": 0,
@@ -179,15 +199,15 @@
   },
   "src/dksCompact.h": {
    "lines": 6,
-   "branches": 9
+   "branches": 10
   },
   "src/dksFull.h": {
    "lines": 6,
-   "branches": 15
+   "branches": 16
   },
   "src/dod.c": {
-   "lines": 12,
-   "branches": 34
+   "lines": 11,
+   "branches": 33
   },
   "src/dod.h": {
    "lines": 0,
@@ -199,7 +219,7 @@
   },
   "src/fastmutex.c": {
    "lines": 21,
-   "branches": 25
+   "branches": 23
   },
   "src/fastmutex.h": {
    "lines": 2,
@@ -235,7 +255,7 @@
   },
   "src/fenwick/fenwick2dTypedImpl.h": {
    "lines": 22,
-   "branches": 43
+   "branches": 41
   },
   "src/fenwick/fenwick2dU128.c": {
    "lines": 0,
@@ -267,7 +287,7 @@
   },
   "src/fenwick/fenwickCoreDispatchImpl.h": {
    "lines": 29,
-   "branches": 27
+   "branches": 23
   },
   "src/fenwick/fenwickCoreFullImpl.h": {
    "lines": 25,
@@ -410,20 +430,20 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 138,
-   "branches": 371
+   "lines": 121,
+   "branches": 325
   },
   "src/flex.h": {
    "lines": 0,
-   "branches": 1
+   "branches": 2
   },
   "src/flexCapacityManagement.h": {
    "lines": 0,
    "branches": 0
   },
   "src/flexEnvelope.c": {
-   "lines": 175,
-   "branches": 183
+   "lines": 154,
+   "branches": 174
   },
   "src/flexEnvelope.h": {
    "lines": 0,
@@ -442,23 +462,35 @@
    "branches": 15
   },
   "src/hash/aesGcmArmCrypto.c": {
-   "lines": 16,
-   "branches": 16
+   "lines": 12,
+   "branches": 14
   },
   "src/hash/aesGcmNi.c": {
    "lines": 0,
    "branches": 0
   },
   "src/hash/blake3AVX2.c": {
-   "lines": 12,
-   "branches": 2
+   "lines": 0,
+   "branches": 0
+  },
+  "src/hash/blake3AVX2.h": {
+   "lines": 0,
+   "branches": 0
   },
   "src/hash/blake3Neon.c": {
    "lines": 0,
    "branches": 0
   },
+  "src/hash/blake3Neon.h": {
+   "lines": 0,
+   "branches": 0
+  },
   "src/hash/blake3SSE41.c": {
-   "lines": 3,
+   "lines": 0,
+   "branches": 0
+  },
+  "src/hash/blake3SSE41.h": {
+   "lines": 0,
    "branches": 0
   },
   "src/hash/blake3TestVectors.h": {
@@ -466,8 +498,12 @@
    "branches": 0
   },
   "src/hash/chacha20AVX2.c": {
-   "lines": 7,
-   "branches": 4
+   "lines": 3,
+   "branches": 0
+  },
+  "src/hash/chacha20AVX2.h": {
+   "lines": 0,
+   "branches": 1
   },
   "src/hash/chacha20Neon.c": {
    "lines": 0,
@@ -478,8 +514,16 @@
    "branches": 0
   },
   "src/hash/poly1305AVX2.c": {
-   "lines": 52,
-   "branches": 2
+   "lines": 8,
+   "branches": 0
+  },
+  "src/hash/poly1305AVX2.h": {
+   "lines": 0,
+   "branches": 1
+  },
+  "src/hash/poly1305Limbs.h": {
+   "lines": 0,
+   "branches": 0
   },
   "src/hash/poly1305Neon.c": {
    "lines": 0,
@@ -490,8 +534,8 @@
    "branches": 47
   },
   "src/hash/sha256ShaNi.c": {
-   "lines": 5,
-   "branches": 2
+   "lines": 0,
+   "branches": 0
   },
   "src/hash/sha256TestVectors.h": {
    "lines": 0,
@@ -502,7 +546,7 @@
    "branches": 31
   },
   "src/hmacKeyring.c": {
-   "lines": 52,
+   "lines": 54,
    "branches": 55
   },
   "src/hmacKeyring.h": {
@@ -510,8 +554,16 @@
    "branches": 0
   },
   "src/hyperloglog.c": {
-   "lines": 32,
-   "branches": 64
+   "lines": 29,
+   "branches": 63
+  },
+  "src/idRows.c": {
+   "lines": 27,
+   "branches": 45
+  },
+  "src/idRows.h": {
+   "lines": 0,
+   "branches": 0
   },
   "src/inflightGate.c": {
    "lines": 2,
@@ -522,7 +574,7 @@
    "branches": 0
   },
   "src/intersectInt.c": {
-   "lines": 12,
+   "lines": 11,
    "branches": 15
   },
   "src/intersectInt.h": {
@@ -530,12 +582,12 @@
    "branches": 0
   },
   "src/intset.c": {
-   "lines": 38,
-   "branches": 40
+   "lines": 42,
+   "branches": 48
   },
   "src/intsetBig.c": {
-   "lines": 36,
-   "branches": 40
+   "lines": 29,
+   "branches": 34
   },
   "src/intsetBig.h": {
    "lines": 0,
@@ -546,16 +598,16 @@
    "branches": 2
   },
   "src/intsetFull.c": {
-   "lines": 30,
-   "branches": 55
+   "lines": 27,
+   "branches": 54
   },
   "src/intsetFull.h": {
    "lines": 0,
    "branches": 1
   },
   "src/intsetMedium.c": {
-   "lines": 43,
-   "branches": 46
+   "lines": 40,
+   "branches": 45
   },
   "src/intsetMedium.h": {
    "lines": 0,
@@ -595,19 +647,19 @@
   },
   "src/membound.c": {
    "lines": 290,
-   "branches": 304
+   "branches": 305
   },
   "src/memboundInternal.h": {
-   "lines": 39,
+   "lines": 38,
    "branches": 14
   },
   "src/memtest.c": {
-   "lines": 86,
-   "branches": 49
+   "lines": 74,
+   "branches": 44
   },
   "src/mflex.c": {
    "lines": 5,
-   "branches": 27
+   "branches": 28
   },
   "src/monotonicCond.h": {
    "lines": 4,
@@ -615,7 +667,7 @@
   },
   "src/multiFenwick.c": {
    "lines": 35,
-   "branches": 44
+   "branches": 42
   },
   "src/multiFenwick.h": {
    "lines": 0,
@@ -623,7 +675,7 @@
   },
   "src/multiFenwick2d.c": {
    "lines": 20,
-   "branches": 38
+   "branches": 36
   },
   "src/multiFenwickCells.h": {
    "lines": 1,
@@ -631,31 +683,27 @@
   },
   "src/multiFenwickCommon.h": {
    "lines": 18,
-   "branches": 33
+   "branches": 34
   },
   "src/multiFenwickFlat.c": {
    "lines": 13,
-   "branches": 30
+   "branches": 28
   },
   "src/multiFenwickFlat.h": {
    "lines": 0,
    "branches": 0
   },
   "src/multiOrderedSet.c": {
-   "lines": 13,
-   "branches": 68
+   "lines": 16,
+   "branches": 66
   },
   "src/multiOrderedSetCommon.h": {
    "lines": 26,
    "branches": 20
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 76,
-   "branches": 114
-  },
-  "src/multiOrderedSetFullInternal.h": {
-   "lines": 0,
-   "branches": 0
+   "lines": 80,
+   "branches": 129
   },
   "src/multiOrderedSetMedium.c": {
    "lines": 33,
@@ -663,27 +711,27 @@
   },
   "src/multiOrderedSetSmall.c": {
    "lines": 29,
-   "branches": 30
+   "branches": 29
   },
   "src/multiTimer.c": {
    "lines": 27,
    "branches": 19
   },
   "src/multiarray.c": {
-   "lines": 11,
-   "branches": 8
+   "lines": 26,
+   "branches": 21
   },
   "src/multiarray.h": {
-   "lines": 13,
+   "lines": 11,
    "branches": 12
   },
   "src/multiarrayLarge.c": {
    "lines": 9,
-   "branches": 12
+   "branches": 13
   },
   "src/multiarrayMedium.c": {
-   "lines": 1,
-   "branches": 18
+   "lines": 3,
+   "branches": 22
   },
   "src/multiarrayMediumLarge.h": {
    "lines": 0,
@@ -702,8 +750,8 @@
    "branches": 0
   },
   "src/multidict.c": {
-   "lines": 132,
-   "branches": 163
+   "lines": 142,
+   "branches": 171
   },
   "src/multidict.h": {
    "lines": 0,
@@ -711,11 +759,11 @@
   },
   "src/multiheap.h": {
    "lines": 0,
-   "branches": 4
+   "branches": 5
   },
   "src/multilist.c": {
-   "lines": 6,
-   "branches": 41
+   "lines": 11,
+   "branches": 36
   },
   "src/multilist.h": {
    "lines": 0,
@@ -727,39 +775,39 @@
   },
   "src/multilistCommon.h": {
    "lines": 0,
-   "branches": 1
+   "branches": 0
   },
   "src/multilistFull.c": {
-   "lines": 26,
-   "branches": 89
+   "lines": 32,
+   "branches": 98
   },
   "src/multilistFull.h": {
    "lines": 0,
    "branches": 1
   },
   "src/multilistMedium.c": {
-   "lines": 15,
-   "branches": 26
+   "lines": 9,
+   "branches": 23
   },
   "src/multilistSmall.c": {
    "lines": 4,
-   "branches": 6
+   "branches": 5
   },
   "src/multilru.c": {
-   "lines": 49,
-   "branches": 73
+   "lines": 36,
+   "branches": 54
   },
   "src/multimap.c": {
-   "lines": 41,
-   "branches": 109
+   "lines": 35,
+   "branches": 114
   },
   "src/multimap.h": {
    "lines": 0,
    "branches": 4
   },
   "src/multimapAtom.c": {
-   "lines": 23,
-   "branches": 55
+   "lines": 29,
+   "branches": 63
   },
   "src/multimapAtom.h": {
    "lines": 0,
@@ -767,27 +815,31 @@
   },
   "src/multimapAtomDense.c": {
    "lines": 17,
-   "branches": 24
+   "branches": 23
   },
   "src/multimapFull.c": {
-   "lines": 38,
-   "branches": 194
+   "lines": 44,
+   "branches": 211
   },
   "src/multimapInternal.h": {
    "lines": 0,
-   "branches": 1
+   "branches": 0
   },
   "src/multimapMedium.c": {
-   "lines": 26,
-   "branches": 60
+   "lines": 31,
+   "branches": 64
   },
   "src/multimapSmall.c": {
-   "lines": 21,
+   "lines": 19,
    "branches": 38
   },
+  "src/multimapSmallInternal.h": {
+   "lines": 0,
+   "branches": 1
+  },
   "src/multiroar.c": {
-   "lines": 156,
-   "branches": 290
+   "lines": 154,
+   "branches": 274
   },
   "src/multiroar.h": {
    "lines": 0,
@@ -803,7 +855,7 @@
   },
   "src/ownedState.c": {
    "lines": 71,
-   "branches": 100
+   "branches": 99
   },
   "src/ownedState.h": {
    "lines": 4,
@@ -815,51 +867,55 @@
   },
   "src/persist.c": {
    "lines": 277,
-   "branches": 303
+   "branches": 325
   },
   "src/persist.h": {
    "lines": 0,
    "branches": 0
   },
   "src/persist/flexP.c": {
-   "lines": 7,
-   "branches": 20
+   "lines": 0,
+   "branches": 16
   },
   "src/persist/intsetP.c": {
-   "lines": 9,
-   "branches": 17
+   "lines": 0,
+   "branches": 12
   },
   "src/persist/multiOrderedSetP.c": {
    "lines": 14,
-   "branches": 42
+   "branches": 40
   },
   "src/persist/multidictP.c": {
-   "lines": 11,
-   "branches": 32
+   "lines": 8,
+   "branches": 28
   },
   "src/persist/multilistP.c": {
-   "lines": 21,
-   "branches": 22
+   "lines": 14,
+   "branches": 17
   },
   "src/persist/multilistP.h": {
    "lines": 0,
    "branches": 1
   },
   "src/persist/multilruP.c": {
-   "lines": 19,
-   "branches": 56
+   "lines": 15,
+   "branches": 52
   },
   "src/persist/multimapP.c": {
-   "lines": 15,
-   "branches": 29
+   "lines": 10,
+   "branches": 25
   },
   "src/persist/multiroarP.c": {
-   "lines": 3,
+   "lines": 0,
    "branches": 30
   },
   "src/persist/persistCtx.c": {
-   "lines": 11,
-   "branches": 28
+   "lines": 5,
+   "branches": 29
+  },
+  "src/persistRegistry.c": {
+   "lines": 0,
+   "branches": 0
   },
   "src/portableRandom.c": {
    "lines": 19,
@@ -877,13 +933,17 @@
    "lines": 0,
    "branches": 0
   },
+  "src/ptrlibBare.h": {
+   "lines": 0,
+   "branches": 1
+  },
   "src/ptrlibCompress.h": {
    "lines": 0,
    "branches": 0
   },
   "src/rapidhash.c": {
-   "lines": 53,
-   "branches": 15
+   "lines": 42,
+   "branches": 9
   },
   "src/rapidhash.h": {
    "lines": 0,
@@ -899,11 +959,11 @@
   },
   "src/segment/segmentCoreAlgo.h": {
    "lines": 0,
-   "branches": 2
+   "branches": 3
   },
   "src/segment/segmentCoreDispatchImpl.h": {
    "lines": 35,
-   "branches": 26
+   "branches": 24
   },
   "src/segment/segmentCoreFullImpl.h": {
    "lines": 24,
@@ -1051,7 +1111,7 @@
   },
   "src/str.c": {
    "lines": 0,
-   "branches": 7
+   "branches": 6
   },
   "src/str.h": {
    "lines": 0,
@@ -1063,7 +1123,7 @@
   },
   "src/str/strCountDigits.c": {
    "lines": 0,
-   "branches": 1
+   "branches": 0
   },
   "src/str/strDigitsVerify.c": {
    "lines": 0,
@@ -1098,8 +1158,8 @@
    "branches": 30
   },
   "src/str/strToBufFast.c": {
-   "lines": 3,
-   "branches": 9
+   "lines": 1,
+   "branches": 2
   },
   "src/str/strToBufSplat.c": {
    "lines": 0,
@@ -1107,15 +1167,15 @@
   },
   "src/str/strToBufTable.c": {
    "lines": 4,
-   "branches": 3
+   "branches": 2
   },
   "src/str/strToNative.c": {
    "lines": 6,
-   "branches": 8
+   "branches": 6
   },
   "src/str/strUTF8.c": {
-   "lines": 10,
-   "branches": 5
+   "lines": 2,
+   "branches": 3
   },
   "src/str/strUTF8Case.c": {
    "lines": 0,
@@ -1130,8 +1190,8 @@
    "branches": 13
   },
   "src/str/strUTF8Grapheme.c": {
-   "lines": 36,
-   "branches": 17
+   "lines": 33,
+   "branches": 16
   },
   "src/str/strUTF8Search.c": {
    "lines": 20,
@@ -1142,8 +1202,8 @@
    "branches": 2
   },
   "src/str/strUTF8Valid.c": {
-   "lines": 32,
-   "branches": 31
+   "lines": 18,
+   "branches": 20
   },
   "src/str/strUTF8Width.c": {
    "lines": 2,
@@ -1159,27 +1219,31 @@
   },
   "src/stringPool.c": {
    "lines": 50,
-   "branches": 71
+   "branches": 68
   },
   "src/timeUtil.c": {
    "lines": 0,
    "branches": 0
   },
+  "src/timeUtil.h": {
+   "lines": 0,
+   "branches": 0
+  },
   "src/timerWheel.c": {
    "lines": 50,
-   "branches": 42
+   "branches": 41
   },
   "src/ulid.c": {
-   "lines": 108,
-   "branches": 68
+   "lines": 52,
+   "branches": 71
   },
   "src/ulid.h": {
    "lines": 0,
    "branches": 0
   },
   "src/util.c": {
-   "lines": 28,
-   "branches": 34
+   "lines": 24,
+   "branches": 32
   },
   "src/versionOSRuntime.c": {
    "lines": 0,
@@ -1194,7 +1258,7 @@
    "branches": 0
   },
   "src/xof.c": {
-   "lines": 10,
+   "lines": 9,
    "branches": 3
   }
  },
