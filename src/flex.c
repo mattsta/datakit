@@ -14615,12 +14615,12 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
     }
 
-    TEST("flexValidateBufferDeep rejects unimplemented fixed-width "
+    TEST("flexValidateBufferDeep rejects the reserved fixed-width "
          "encodings (REAL_32D / REAL_64D)") {
-        /* FLEX_REAL_32D / FLEX_REAL_64D are declared but unimplemented;
-         * the helper's switch has no case for them and falls through
-         * to assert(NULL).  Without the validator guard these would
-         * tunnel through. */
+        /* FLEX_REAL_32D / FLEX_REAL_64D are reserved type bytes with no
+         * encoding: the helper's switch has no case for them and falls
+         * through to assert(NULL), so the validator refuses them before
+         * any decode sees one. */
         const uint8_t bad_tags[] = {(uint8_t)FLEX_REAL_32D,
                                     (uint8_t)FLEX_REAL_64D};
         for (size_t i = 0; i < countof(bad_tags); i++) {

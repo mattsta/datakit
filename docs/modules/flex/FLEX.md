@@ -117,8 +117,8 @@ typedef enum flexType {
     FLEX_REAL_16B,        /* 222 - IEEE 754-2008 binary16 */
     FLEX_REAL_32B,        /* 223 - IEEE 754-2008 binary32 */
     FLEX_REAL_64B,        /* 224 - IEEE 754-2008 binary64 */
-    FLEX_REAL_32D,        /* 225 - decimal32 (reserved, unimplemented) */
-    FLEX_REAL_64D,        /* 226 - decimal64 (reserved, unimplemented) */
+    FLEX_REAL_32D,        /* 225 - decimal32 (reserved type byte) */
+    FLEX_REAL_64D,        /* 226 - decimal64 (reserved type byte) */
 
     /* 2 mdsc pointer types (227-228) */
     FLEX_EXTERNAL_MDSC_48B,  /* 227 - pointer with top 16 bits dropped */

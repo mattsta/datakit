@@ -1388,8 +1388,8 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
         return 0;
     }
 
-    /* A walk made inside a callback sees the slot being processed
-     * detached and repeats not yet re-inserted, so its answer is not
+    /* During a callback the slot being processed is detached and its
+     * repeating timers wait to be re-inserted, so a walk made then is not
      * the wheel's minimum and must not outlive the callback: only a
      * query made outside processing is cached. */
     if (tw->context != TIMER_WHEEL_CONTEXT_TIMER) {

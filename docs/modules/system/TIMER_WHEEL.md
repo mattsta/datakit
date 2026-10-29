@@ -350,8 +350,8 @@ entries of a few slots rather than every stored timer, which keeps the
 process-then-query event loop cheap.
 
 The result is 0 only when no live timer is stored. A query made from inside a
-callback is answered but not cached, because the slot being processed is
-detached and repeats are not yet re-inserted while the callback runs.
+callback is answered but not cached: while a callback runs, the slot being
+processed is detached and its repeating timers wait to be re-inserted.
 
 ### Statistics
 
