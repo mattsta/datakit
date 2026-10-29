@@ -345,6 +345,27 @@ persistLogResult multilruDeleteP(multilruP *mlru, multilruPtr ptr) {
     return logged;
 }
 
+persistLogResult multilruRepackP(multilruP *mlru, multilruMovedFn *moved,
+                                 void *ctx) {
+    if (!mlru || !mlru->mlru || !mlru->ctx) {
+        return PERSIST_LOG_REFUSED;
+    }
+
+    /* [count]: replay repacks the same entries the same way, so later
+     * records name the moved handles; the count checks it is the same
+     * structure */
+    const multilruPtr count = multilruCount(mlru->mlru);
+    const void *args[1] = {&count};
+    const persistLogResult logged =
+        persistCtxLogOp(mlru->ctx, PERSIST_OP_TRIM, args, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
+    }
+    multilruRepack(mlru->mlru, moved, ctx);
+    persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
+    return logged;
+}
+
 /* ============================================================================
  * Configuration
  * ============================================================================
@@ -1347,6 +1368,95 @@ static int test_multilruP_size_strategies(int, char *[]) {
     TEST_FINAL_RESULT;
 }
 
+static void mlruPTestMoved_(multilruPtr from, multilruPtr to, void *ctx) {
+    multilruPtr *map = ctx;
+    map[from] = to;
+}
+
+static int test_multilruP_repack(int, char *[]) {
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multilruPTest_repack", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multilruP repack replays to the same handles")
+
+    /* Repack after deletes, then insert on the repacked slots; a reopen
+     * from the WAL alone and one from a snapshot both hold every entry at
+     * its moved handle, level and weight */
+    ptestCleanupFiles(basePath);
+    const multilruConfig config = {.maxLevels = 4, .enableWeights = true};
+    persistCtx *ctx = persistCtxNew(basePath, nullptr);
+    multilruP *mlru = multilruNewWithConfigP(ctx, &config);
+    constexpr int INSERTED = 300;
+    constexpr int LATER = 5;
+    multilruPtr handles[INSERTED + LATER] = {};
+    for (int i = 0; i < INSERTED; i++) {
+        handles[i] = mlruTestInsert(mlru, (uint64_t)i + 1);
+        if (i % 7 == 0 &&
+            multilruIncreaseP(mlru, handles[i]) == PERSIST_LOG_REFUSED) {
+            ERR("promotion %d refused", i);
+        }
+    }
+    for (int i = 0; i < INSERTED; i++) {
+        if (i % 6 && multilruDeleteP(mlru, handles[i]) == PERSIST_LOG_REFUSED) {
+            ERR("delete %d refused", i);
+        }
+        handles[i] = i % 6 ? 0 : handles[i];
+    }
+    multilruPtr map[INSERTED + 64] = {};
+    if (multilruRepackP(mlru, mlruPTestMoved_, map) == PERSIST_LOG_REFUSED) {
+        ERR("%s", "repack refused");
+    }
+    size_t moved = 0;
+    for (int i = 0; i < INSERTED; i++) {
+        if (handles[i] && map[handles[i]]) {
+            handles[i] = map[handles[i]];
+            moved++;
+        }
+    }
+    for (int i = INSERTED; i < INSERTED + LATER; i++) {
+        handles[i] = mlruTestInsert(mlru, 1000 + (uint64_t)i);
+    }
+    size_t level[INSERTED + LATER];
+    uint64_t weight[INSERTED + LATER];
+    for (int i = 0; i < INSERTED + LATER; i++) {
+        level[i] = handles[i] ? multilruGetLevelP(mlru, handles[i]) : 0;
+        weight[i] = handles[i] ? multilruGetWeightP(mlru, handles[i]) : 0;
+    }
+    const size_t count = multilruCountP(mlru);
+
+    for (int reopen = 0; reopen < 2; reopen++) {
+        if (reopen == 1 && !multilruCompactP(mlru)) {
+            ERR("%s", "compaction failed");
+        }
+        multilruCloseP(mlru);
+        persistCtxFree(ctx);
+        ctx = persistCtxNew(basePath, nullptr);
+        mlru = multilruOpenP(ctx);
+        size_t differ = 0;
+        for (int i = 0; mlru && i < INSERTED + LATER; i++) {
+            differ += handles[i] &&
+                      (!multilruIsPopulatedP(mlru, handles[i]) ||
+                       multilruGetLevelP(mlru, handles[i]) != level[i] ||
+                       multilruGetWeightP(mlru, handles[i]) != weight[i]);
+        }
+        if (!mlru || !moved || differ || multilruCountP(mlru) != count) {
+            ERR("reopen %d: %zu moved, %zu entries differ", reopen, moved,
+                differ);
+        }
+    }
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 static int test_multilruP_level_promotion(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
@@ -1817,6 +1927,7 @@ int multilruPTest(int argc, char *argv[]) {
     err += test_multilruP_auto_evict(argc, argv);
     err += test_multilruP_auto_evict_crash_before_compact(argc, argv);
     err += test_multilruP_size_strategies(argc, argv);
+    err += test_multilruP_repack(argc, argv);
     err += test_multilruP_level_promotion(argc, argv);
 
     /* Stress tests */

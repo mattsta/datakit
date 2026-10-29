@@ -163,7 +163,7 @@
  *
  * Recycled slots stay allocated: after many deletes the entry array keeps
  * its high-water size (multilruStats nextFresh / freeCount show it) and
- * new inserts reuse the holes.
+ * new inserts reuse the holes; multilruRepack gives the memory back.
  */
 
 /* @handle: fixed: its address holds from creation to free */
@@ -321,6 +321,25 @@ multilruPtr multilruPeekNextHandle(const multilru *mlru);
 size_t multilruFreeHandles(const multilru *mlru, multilruPtr out[], size_t n);
 
 /* ====================================================================
+ * Repacking
+ * ====================================================================
+ * Deletes and evictions leave holes the next inserts reuse; the arrays
+ * keep their high-water size.  Repacking moves every live entry into the
+ * lowest slots, then shrinks the arrays to fit them, at the narrowest
+ * entry width their handles allow. */
+
+/* Told once per entry a repack moves: its handle was 'from' and is 'to'
+ * from now on.  It must not call into the multilru being repacked. */
+typedef void multilruMovedFn(multilruPtr from, multilruPtr to, void *ctx);
+
+/* Repack: recency order, levels, weights, limits and counters are kept;
+ * handles of moved entries change (reported through 'moved', which may be
+ * NULL when the caller keeps no handles); no recycled slots remain, so the
+ * next insert takes the slot after the last entry.  O(slots used).
+ * Returns how many entries moved. */
+size_t multilruRepack(multilru *mlru, multilruMovedFn *moved, void *ctx);
+
+/* ====================================================================
  * Bulk Eviction Operations
  * ==================================================================== */
 
@@ -388,7 +407,7 @@ bool multilruIsPopulated(const multilru *mlru, multilruPtr ptr);
  *   nextFresh=1000, freeCount=900 -> Very sparse: only 100 active entries
  *
  * High fragmentation is normal after many deletes: inserts reuse the
- * holes before taking fresh slots.
+ * holes before taking fresh slots, and multilruRepack removes them.
  */
 
 typedef struct multilruStats {

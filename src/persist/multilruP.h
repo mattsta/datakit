@@ -107,6 +107,11 @@ persistLogResult multilruRemoveMinimumP(multilruP *mlru, multilruPtr *out);
 /* Delete specific entry immediately */
 persistLogResult multilruDeleteP(multilruP *mlru, multilruPtr ptr);
 
+/* multilruRepack, logged: moved entries' new handles go to 'moved' (NULL
+ * when the caller keeps no handles); replay repacks the same way */
+persistLogResult multilruRepackP(multilruP *mlru, multilruMovedFn *moved,
+                                 void *ctx);
+
 /* ============================================================================
  * Configuration: a new limit is applied, evicted to at once (each step
  * logged) and made durable by a snapshot (NOT_DURABLE when that fails);

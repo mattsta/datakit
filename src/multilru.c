@@ -476,19 +476,18 @@ DK_STATIC void entryReadByWidth(const void *entries, uint8_t width,
         *isHead = mlruFlagIs_(flags, MLRU_FLAG_HEAD));
 }
 
-/* Upgrade entry width to support more entries */
-DK_STATIC bool upgradeWidth(multilru *mlru, uint8_t newWidth) {
-    if (newWidth <= mlru->entryWidth) {
-        return true; /* Already at this width or larger */
-    }
-
+/* The entry array rebuilt at 'newWidth' with 'newCapacity' slots, the
+ * first min(old, new capacity) entries migrated field by field (every
+ * index they hold must fit the new width) */
+DK_STATIC bool mlruRewidth_(multilru *mlru, uint8_t newWidth,
+                            uint64_t newCapacity) {
     void *oldEntries = mlru->entries;
-    uint8_t oldWidth = mlru->entryWidth;
-    uint64_t oldCapacity = mlru->capacity;
+    const uint8_t oldWidth = mlru->entryWidth;
+    const uint64_t kept =
+        newCapacity < mlru->capacity ? newCapacity : mlru->capacity;
 
-    /* Allocate new entries array with new width */
     /* @own: container; free=multilruFree */
-    void *newEntries = zcalloc(oldCapacity, newWidth);
+    void *newEntries = zcalloc(newCapacity, newWidth);
     if (!newEntries) {
         return false;
     }
@@ -496,9 +495,10 @@ DK_STATIC bool upgradeWidth(multilru *mlru, uint8_t newWidth) {
     /* Switch to new width so E_SET macros work correctly */
     mlru->entries = newEntries;
     mlru->entryWidth = newWidth;
+    mlru->capacity = newCapacity;
 
-    /* Migrate all entries */
-    for (uint64_t i = 0; i < oldCapacity; i++) {
+    /* Migrate the kept entries */
+    for (uint64_t i = 0; i < kept; i++) {
         uint64_t prev, next;
         uint8_t level;
         bool populated, isHead;
@@ -518,6 +518,14 @@ DK_STATIC bool upgradeWidth(multilru *mlru, uint8_t newWidth) {
 
     zfree(oldEntries);
     return true;
+}
+
+/* Upgrade entry width to support more entries */
+DK_STATIC bool upgradeWidth(multilru *mlru, uint8_t newWidth) {
+    if (newWidth <= mlru->entryWidth) {
+        return true; /* Already at this width or larger */
+    }
+    return mlruRewidth_(mlru, newWidth, mlru->capacity);
 }
 
 /* ====================================================================
@@ -1151,6 +1159,93 @@ size_t multilruEvictToSize(multilru *mlru, uint64_t targetWeight,
 }
 
 /* ====================================================================
+ * Repacking
+ * ==================================================================== */
+
+DK_INLINE_ALWAYS bool mlruIsLive_(const multilru *mlru, uint64_t idx) {
+    return E_POPULATED(mlru, idx) && !E_HEAD(mlru, idx);
+}
+
+/* The live entry at 'from' moved to the free slot 'to': its neighbours
+ * and its level's tail point at 'to', and 'from' is cleared */
+DK_STATIC void mlruMoveEntry_(multilru *mlru, uint64_t from, uint64_t to) {
+    const uint64_t prev = E_PREV(mlru, from);
+    const uint64_t next = E_NEXT(mlru, from);
+    const size_t level = E_LEVEL(mlru, from);
+    memcpy(entryPtr(mlru, to), entryPtr(mlru, from), mlru->entryWidth);
+    if (mlru->weights) {
+        mlru->weights[to] = mlru->weights[from];
+        mlru->weights[from] = 0;
+    }
+    if (prev) {
+        E_SET_NEXT(mlru, prev, to);
+    }
+    if (next) {
+        E_SET_PREV(mlru, next, to);
+    }
+    if (mlru->levels[level].tail == from) {
+        mlru->levels[level].tail = to;
+    }
+    entryClear(mlru, from);
+}
+
+size_t multilruRepack(multilru *mlru, multilruMovedFn *moved, void *ctx) {
+    /* The last live entry into the first free slot until every live entry
+     * sits below every free one */
+    const uint64_t first = mlru->maxLevels + 1;
+    uint64_t lo = first;
+    uint64_t hi = mlru->nextFresh;
+    size_t movedCount = 0;
+    for (;;) {
+        while (lo < hi && mlruIsLive_(mlru, lo)) {
+            lo++;
+        }
+        while (hi > lo && !mlruIsLive_(mlru, hi - 1)) {
+            hi--;
+        }
+        if (hi <= lo) {
+            break;
+        }
+        hi--;
+        mlruMoveEntry_(mlru, hi, lo);
+        if (moved) {
+            moved(hi, lo, ctx);
+        }
+        movedCount++;
+    }
+
+    /* No holes left: the slots in use are the reserved ones and the
+     * entries, and the arrays shrink to the size class holding them at the
+     * narrowest width their indices fit */
+    mlru->nextFresh = first + mlru->count;
+    mlru->freeHead = 0;
+    mlru->freeCount = 0;
+    const uint8_t width = selectWidth(mlru->nextFresh);
+    uint64_t capacity =
+        jebufSizeAllocation((size_t)mlru->nextFresh * width) / width;
+    if (capacity > maxEntriesForWidth(width)) {
+        capacity = maxEntriesForWidth(width);
+    }
+    if (capacity > mlru->capacity) {
+        capacity = mlru->capacity; /* never grows: it holds nextFresh */
+    }
+    if (width != mlru->entryWidth) {
+        mlruRewidth_(mlru, width, capacity);
+    } else if (capacity < mlru->capacity) {
+        /* @own: container; free=multilruFree */
+        mlru->entries = zrealloc(mlru->entries, (size_t)capacity * width);
+        mlru->capacity = capacity;
+    }
+    if (mlru->weights) {
+        /* @own: container; free=multilruFree */
+        mlru->weights =
+            zrealloc(mlru->weights, mlru->capacity * sizeof(uint64_t));
+    }
+    mlru->targetCapacity = 0;
+    return movedCount;
+}
+
+/* ====================================================================
  * Queries
  * ==================================================================== */
 
@@ -1689,6 +1784,88 @@ static int multilruTestEntryLayouts(void) {
                 multilruCount(mlru), sum_, (size_t)(n));                       \
         }                                                                      \
     } while (0)
+
+/* A repack's reported moves: map[from] = to, and whether every move went
+ * down into a slot no other move used */
+typedef struct mlruTestMoves_ {
+    multilruPtr *map;
+    size_t limit; /* map's slots */
+    size_t calls;
+    bool bad;
+} mlruTestMoves_;
+
+static void mlruTestMoved_(multilruPtr from, multilruPtr to, void *ctx) {
+    mlruTestMoves_ *moves = ctx;
+    moves->calls++;
+    if (from >= moves->limit || to >= from || moves->map[from]) {
+        moves->bad = true;
+        return;
+    }
+    moves->map[from] = to;
+}
+
+/* ERR unless a repack with 'moves' recorded kept the recency order
+ * 'order' (n entries, before) with each entry's level and weight, and
+ * left no holes */
+static int mlruTestRepackKept_(const multilru *mlru, const multilruPtr *order,
+                               const size_t *levels, const uint64_t *weights,
+                               size_t n, const mlruTestMoves_ *moves) {
+    int err = 0;
+    cleanerName(zfree, Ptrs) multilruPtr *now = zcalloc(n + 1, sizeof(*now));
+    multilruStats stats;
+    multilruGetStats(mlru, &stats);
+    if (moves->bad || multilruCollectLowest(mlru, now, n + 1) != n ||
+        multilruCount(mlru) != n || stats.freeCount != 0 ||
+        stats.nextFresh != multilruMaxLevels(mlru) + 1 + n ||
+        multilruTraverseSize(mlru) != (ssize_t)n) {
+        ERR("repack left %zu entries, %" PRIu64 " free, next %" PRIu64
+            ", bad move %d",
+            multilruCount(mlru), stats.freeCount, stats.nextFresh, moves->bad);
+        return err;
+    }
+    for (size_t i = 0; i < n; i++) {
+        const multilruPtr want =
+            moves->map[order[i]] ? moves->map[order[i]] : order[i];
+        if (now[i] != want || multilruGetLevel(mlru, want) != levels[i] ||
+            multilruGetWeight(mlru, want) != weights[i]) {
+            ERR("position %zu: %zu at level %zu weight %" PRIu64
+                ", want %zu at %zu weight %" PRIu64,
+                i, now[i], multilruGetLevel(mlru, now[i]),
+                multilruGetWeight(mlru, now[i]), want, levels[i], weights[i]);
+            break;
+        }
+    }
+    return err;
+}
+
+/* Records 'mlru''s full recency order with each entry's level and weight,
+ * repacks it recording the moves, and checks what it kept; returns the
+ * moved count through *movedOut */
+static int mlruTestRepack_(multilru *mlru, size_t *movedOut) {
+    int err = 0;
+    const size_t n = multilruCount(mlru);
+    multilruStats before;
+    multilruGetStats(mlru, &before);
+    cleanerName(zfree, Ptrs) multilruPtr *order =
+        zcalloc(n + 1, sizeof(*order));
+    cleanerName(zfree, Ptrs) multilruPtr *map =
+        zcalloc(before.nextFresh + 1, sizeof(*map));
+    cleanerName(zfree, U64s) uint64_t *weights =
+        zcalloc(n + 1, sizeof(*weights));
+    cleanerName(zfree, Ptrs) size_t *levels = zcalloc(n + 1, sizeof(*levels));
+    multilruCollectLowest(mlru, order, n);
+    for (size_t i = 0; i < n; i++) {
+        levels[i] = multilruGetLevel(mlru, order[i]);
+        weights[i] = multilruGetWeight(mlru, order[i]);
+    }
+    mlruTestMoves_ moves = {.map = map, .limit = before.nextFresh + 1};
+    *movedOut = multilruRepack(mlru, mlruTestMoved_, &moves);
+    if (*movedOut != moves.calls) {
+        ERR("repack returned %zu moves, reported %zu", *movedOut, moves.calls);
+    }
+    err += mlruTestRepackKept_(mlru, order, levels, weights, n, &moves);
+    return err;
+}
 
 int multilruTest(int, char *[]) {
     int err = 0;
@@ -4080,6 +4257,83 @@ int multilruTest(int, char *[]) {
         multilruSetPolicy(byCount, MLRU_POLICY_COUNT);
         if (!multilruHasWeights(byStrategy) || multilruHasWeights(byCount)) {
             ERR("%s", "weights follow the strategy, not a count policy");
+        }
+    }
+
+    TEST("repack keeps order, levels and weights and gives memory back") {
+        const multilruConfig config = {.maxLevels = 4, .enableWeights = true};
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
+        constexpr size_t N = 2000;
+        cleanerName(zfree, Ptrs) multilruPtr *h = zcalloc(N, sizeof(*h));
+        for (size_t i = 0; i < N; i++) {
+            h[i] = multilruInsertWeighted(mlru, i + 1);
+            for (size_t up = 0; up < i % 4; up++) {
+                multilruIncrease(mlru, h[i / 2]);
+            }
+        }
+        for (size_t i = 0; i < N; i++) {
+            if (i % 10) {
+                multilruDelete(mlru, h[i]);
+            }
+        }
+        const size_t bytesBefore = multilruBytes(mlru);
+        const uint64_t weightBefore = multilruTotalWeight(mlru);
+        size_t moved = 0;
+        err += mlruTestRepack_(mlru, &moved);
+        if (!moved || multilruBytes(mlru) * 4 > bytesBefore ||
+            multilruTotalWeight(mlru) != weightBefore ||
+            !verifyInvariants(mlru, "repack")) {
+            ERR("moved %zu, bytes %zu -> %zu", moved, bytesBefore,
+                multilruBytes(mlru));
+        }
+
+        /* The cache works on: inserts take the slots after the entries */
+        const multilruPtr next = multilruPeekNextHandle(mlru);
+        if (next != multilruMaxLevels(mlru) + 1 + multilruCount(mlru) ||
+            multilruInsertWeighted(mlru, 7) != next ||
+            !verifyInvariants(mlru, "insert after repack")) {
+            ERR("insert after repack took %zu", next);
+        }
+    }
+
+    TEST("repack narrows the entry width when the entries fit") {
+        cleaner(multilruFree) multilru *mlru = multilruNewWithLevels(3);
+        constexpr size_t N = 70000;
+        cleanerName(zfree, Ptrs) multilruPtr *h = zcalloc(N, sizeof(*h));
+        for (size_t i = 0; i < N; i++) {
+            h[i] = multilruInsert(mlru);
+        }
+        const multilruEntryWidth wide = multilruGetEntryWidth(mlru);
+        for (size_t i = 0; i < N; i++) {
+            if (i % 1000) {
+                multilruDelete(mlru, h[i]);
+            } else if (i % 3000 == 0) {
+                multilruIncrease(mlru, h[i]);
+            }
+        }
+        size_t moved = 0;
+        err += mlruTestRepack_(mlru, &moved);
+        if (wide != MLRU_WIDTH_6 ||
+            multilruGetEntryWidth(mlru) != MLRU_WIDTH_5 ||
+            moved != N / 1000 - 1 || !verifyInvariants(mlru, "narrowed")) {
+            ERR("width %d -> %d, moved %zu", (int)wide,
+                (int)multilruGetEntryWidth(mlru), moved);
+        }
+    }
+
+    TEST("repack of a dense or empty cache moves nothing") {
+        cleaner(multilruFree) multilru *dense = multilruNew();
+        multilruPtr h[50];
+        for (size_t i = 0; i < countof(h); i++) {
+            h[i] = multilruInsert(dense);
+        }
+        cleaner(multilruFree) multilru *empty = multilruNew();
+        size_t moved = 1;
+        err += mlruTestRepack_(dense, &moved);
+        if (moved || multilruRepack(empty, nullptr, nullptr) ||
+            !multilruIsPopulated(dense, h[49]) || multilruCount(empty) ||
+            !multilruInsert(empty) || !verifyInvariants(empty, "empty")) {
+            ERR("dense repack moved %zu", moved);
         }
     }
 

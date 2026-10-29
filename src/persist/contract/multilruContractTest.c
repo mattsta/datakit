@@ -1,9 +1,9 @@
 /* multilruContractTest.c - persistOpsMultiLRU in the persistence contract
  *
  * The ops and argument shapes are multilruP's: INSERT [&handle, &weight],
- * CUSTOM (promote) [&handle], UPDATE [&handle, &weight], DELETE [&handle];
- * an eviction step is the DELETE of the evicted handle or, for an entry
- * above level 0, NUM_DECR_F0 (its demotion). */
+ * CUSTOM (promote) [&handle], UPDATE [&handle, &weight], DELETE [&handle],
+ * TRIM (repack) [&count]; an eviction step is the DELETE of the evicted
+ * handle or, for an entry above level 0, NUM_DECR_F0 (its demotion). */
 
 #include "persistContract.h"
 
@@ -21,6 +21,27 @@ static void pcLruDelete(multilru *lru, const persistContractBuild *b,
     const void *args[1] = {&handle};
     multilruDelete(lru, handle);
     persistContractRecord(b->log, PERSIST_OP_DELETE, args, 1);
+}
+
+static void pcLruMoved(multilruPtr from, multilruPtr to, void *ctx) {
+    multilruPtr *map = ctx;
+    map[from] = to;
+}
+
+/* A repack, with the live handles it moved renamed */
+static void pcLruRepack(multilru *lru, const persistContractBuild *b,
+                        multilruPtr *live, size_t liveCount) {
+    multilruStats stats;
+    multilruGetStats(lru, &stats);
+    cleanerName(zfree, LruHandles) multilruPtr *map =
+        zcalloc(stats.nextFresh + 1, sizeof(multilruPtr));
+    multilruPtr count = multilruCount(lru);
+    const void *args[1] = {&count};
+    multilruRepack(lru, pcLruMoved, map);
+    persistContractRecord(b->log, PERSIST_OP_TRIM, args, 1);
+    for (size_t j = 0; j < liveCount; j++) {
+        live[j] = map[live[j]] ? map[live[j]] : live[j];
+    }
 }
 
 static void *pcLruBuild(const persistContractBuild *b) {
@@ -47,6 +68,10 @@ static void *pcLruBuild(const persistContractBuild *b) {
         zcalloc(b->size + 1, sizeof(multilruPtr));
     size_t liveCount = 0;
     for (size_t i = 0; i < b->size; i++) {
+        if (i % 97 == 96) {
+            pcLruRepack(lru, b, live, liveCount);
+            continue;
+        }
         const uint64_t roll = splitmix64(&rng) % 16;
         const size_t pick =
             liveCount ? (size_t)(splitmix64(&rng) % liveCount) : 0;

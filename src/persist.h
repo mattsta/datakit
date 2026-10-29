@@ -252,7 +252,9 @@ typedef enum persistOp {
     PERSIST_OP_TRIM = 16,      /* List trim; operand is the NORMALIZED
                                 * [head_cut, tail_cut] element counts
                                 * (2-elem flex) so replay applies the
-                                * exact effect the origin computed */
+                                * exact effect the origin computed.
+                                * multilru: repack to the live entries;
+                                * operand is their count */
     PERSIST_OP_ROTATE = 17,    /* Same-list tail->head rotate; no
                                 * operand.  NOT idempotent — WAL-local
                                 * exactly-once replay only */

@@ -2469,6 +2469,23 @@ static void benchMultilru(const uint32_t n) {
     }
     emitRow("multilru", "removeMinimumSizeWeighted", n, n,
             timeUtilMonotonicSec() - t0);
+
+    /* A repack after three of every four entries are deleted: per entry
+     * moved */
+    cleaner(multilruFree) multilru *holed = multilruNew();
+    for (uint32_t i = 0; i < n; i++) {
+        ptrs[i] = multilruInsert(holed);
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (i % 4) {
+            multilruDelete(holed, ptrs[i]);
+        }
+    }
+    t0 = timeUtilMonotonicSec();
+    const size_t moved = multilruRepack(holed, nullptr, nullptr);
+    emitRow("multilru", "repack", n, (uint32_t)(moved ? moved : 1),
+            timeUtilMonotonicSec() - t0);
+    sink += moved;
     perfContainerSink = sink;
 }
 

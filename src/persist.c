@@ -5620,8 +5620,10 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
     case PERSIST_OP_DELETE:
     case PERSIST_OP_CUSTOM:      /* PROMOTE */
     case PERSIST_OP_NUM_DECR_F0: /* DEMOTE: level - 1, floor 0 */
+    case PERSIST_OP_TRIM:        /* REPACK: the operand is the count */
     {
-        /* DELETE/PROMOTE/DEMOTE: [handle (self-describing varint)] */
+        /* DELETE/PROMOTE/DEMOTE: [handle (self-describing varint)];
+         * REPACK: [count] */
         /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(9);
         varintWidth handleWidth = varintTaggedPut64(buf, handle);
@@ -5732,6 +5734,18 @@ static bool multilruPersistApplyOp(void *structure, persistOp op,
             return false;
         }
         multilruUpdateWeight(*mlru, (multilruPtr)handle, newWeight);
+        return true;
+    }
+
+    case PERSIST_OP_TRIM: {
+        /* REPACK [count]: the writer's repack, on the same entries */
+        size_t at = 0;
+        uint64_t count;
+        if (!mlruPersistVarint_(data, len, &at, &count) || at != len ||
+            count != multilruCount(*mlru)) {
+            return false;
+        }
+        multilruRepack(*mlru, nullptr, nullptr);
         return true;
     }
 

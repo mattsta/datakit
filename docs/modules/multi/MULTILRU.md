@@ -590,8 +590,42 @@ Fragmentation ratio is `freeCount / (nextFresh - maxLevels - 1)`:
 | `nextFresh=1000, freeCount=900` | Very sparse: only 100 active entries |
 
 High fragmentation after heavy churn is normal and harmless — holes are
-reused before any fresh slot is taken. There is currently **no compaction and
-no width downgrade**, so the entry array never shrinks; it only stops growing.
+reused before any fresh slot is taken — but the arrays keep their high-water
+size until a repack.
+
+### Repacking
+
+```c
+typedef void multilruMovedFn(multilruPtr from, multilruPtr to, void *ctx);
+size_t multilruRepack(multilru *mlru, multilruMovedFn *moved, void *ctx);
+```
+
+`multilruRepack` moves the last live entry into the first hole until no hole
+is left below an entry, then shrinks the entry and weight arrays to the size
+class that holds them, at the narrowest entry width their handles fit. Recency
+order, levels, weights, limits and counters are unchanged; `nextFresh` becomes
+`maxLevels + 1 + count` and the free list is empty. It runs in O(slots used)
+and returns how many entries moved.
+
+A moved entry's handle changes. `moved(from, to, ctx)` is called once per
+move so a caller can rename what it stored (it must not call into the
+multilru being repacked); pass `NULL` only when the caller keeps no handles.
+
+```c
+static void renameHandle(multilruPtr from, multilruPtr to, void *ctx) {
+    MyHashMap *map = ctx;
+    myHashMapRenameLruPtr(map, from, to);
+}
+
+multilruStats s;
+multilruGetStats(cache, &s);
+if (s.freeCount > s.count) { /* more holes than entries */
+    multilruRepack(cache, renameHandle, myHashMap);
+}
+```
+
+A persisted cache repacks through `multilruRepackP`, which logs the repack
+so replay moves the same entries to the same handles.
 
 ## Performance Characteristics
 
@@ -611,6 +645,7 @@ no width downgrade**, so the entry array never shrinks; it only stops growing.
 | LevelCount/Weight | O(1)             | Per-level totals are maintained                |
 | Collect/GetN      | O(n + levels)    | Walks the level lists                          |
 | Width migration   | O(capacity)      | One-time cost per tier boundary                |
+| Repack            | O(slots used)    | Moves entries down, shrinks the arrays         |
 
 ### Space Complexity
 
