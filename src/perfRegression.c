@@ -26,6 +26,7 @@
 #include "hmac.h"
 #include "hmacKeyring.h"
 #include "idRows.h"
+#include "intsetBig.h"
 #include "jebuf.h"
 #include "membound.h"
 #include "mflex.h"
@@ -612,6 +613,7 @@ defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(idRows *, idRowsFree);
 defcleaner(intset *, intsetFree);
+defcleaner(intsetBig *, intsetBigFree);
 defcleaner(multilru *, multilruFree);
 defcleanerName(multilruPtr *, zfree, PerfLruPtrs);
 defcleanerName(multiOrderedSet **, zfree, PerfSets);
@@ -1641,6 +1643,27 @@ static void benchMultiroar(void) {
     emitRow("multiroar", "setRangeWholeFull", 0, n,
             timeUtilMonotonicSec() - t0);
     perfContainerSink = multiroarBitCount(r) + multiroarBitCount(b);
+}
+
+/* intsetBig: PERF_CONTAINER_N values added one at a time over 16 per
+ * bucket, then 10k members over 625 buckets drained by random deletes (a
+ * random pick walks the buckets) */
+static void benchIntsetBig(void) {
+    const uint32_t n = PERF_CONTAINER_N;
+    uint64_t sink = 0;
+    cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+    PERF_ROW("intsetBig", "add", n,
+             const databoxBig v = DATABOX_BIG_SIGNED((int64_t)i << 28);
+             sink += intsetBigAdd(isb, &v));
+
+    cleaner(intsetBigFree) intsetBig *drain = intsetBigNew();
+    for (uint32_t i = 0; i < 10'000; i++) {
+        const databoxBig v = DATABOX_BIG_SIGNED((int64_t)i << 28);
+        intsetBigAdd(drain, &v);
+    }
+    PERF_ROW("intsetBig", "randomDelete", 10'000, databoxBig gone;
+             sink += intsetBigRandomDelete(drain, &gone));
+    perfContainerSink = sink;
 }
 
 /* numeric: the two paths dk_float_extended serves (floatExtended.h), timed
@@ -3183,6 +3206,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("numeric")) {
             benchNumeric();
+        }
+
+        if (perfWanted("intsetBig")) {
+            benchIntsetBig();
         }
 
         if (perfWanted("fenwick")) {
