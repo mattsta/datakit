@@ -3738,6 +3738,96 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
     /* ====================================================================
      * UTF-8 Validation Tests
      * ==================================================================== */
+    TEST("StrUtf8Valid agrees with the scalar validator: every 1- and 2-byte "
+         "pattern, multibyte leads, at every block boundary") {
+        /* Each pattern sits in ASCII at offsets 0 and 11..17 (straddling
+         * the 16-byte block boundary), at the very end, and before a
+         * second 16-byte block of ASCII or of a 3-byte character */
+        static const uint8_t tails[] = {0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90,
+                                        0x9F, 0xA0, 0xBF, 0xC0, 0xF0, 0xFF};
+        uint8_t buf[64];
+        uint64_t checked = 0;
+        for (uint32_t b0 = 0; b0 < 256 && !err; b0++) {
+            /* 4-byte leads take the boundary second bytes only */
+            const size_t seconds = b0 >= 0xF0 ? countof(tails) : 256;
+            for (size_t j = 0; j < seconds && !err; j++) {
+                const uint32_t b1 = b0 >= 0xF0 ? tails[j] : (uint32_t)j;
+                const bool lead3 = b0 >= 0xE0;
+                const size_t nt = lead3 ? countof(tails) : 1;
+                for (size_t t2 = 0; t2 < nt && !err; t2++) {
+                    for (size_t t3 = 0; t3 < (b0 >= 0xF0 ? nt : 1) && !err;
+                         t3++) {
+                        const uint8_t pat[4] = {(uint8_t)b0, (uint8_t)b1,
+                                                tails[t2], tails[t3]};
+                        const size_t pl = b0 >= 0xF0 ? 4 : lead3 ? 3 : 2;
+                        static const size_t offsets[] = {0,  11, 12, 13, 14,
+                                                         15, 16, 17, 30};
+                        for (size_t o = 0; o < countof(offsets); o++) {
+                            const size_t at = offsets[o];
+                            for (int after = 0; after < 3; after++) {
+                                memset(buf, 'a', sizeof(buf));
+                                memcpy(buf + at, pat, pl);
+                                size_t len = at + pl;
+                                if (after == 1) {
+                                    len += 16; /* an ASCII block follows */
+                                } else if (after == 2) {
+                                    memcpy(buf + len, "\xe2\x82\xac", 3);
+                                    len += 16;
+                                }
+
+                                const bool want = StrUtf8ValidScalar(buf, len);
+                                checked++;
+                                if (StrUtf8Valid(buf, len) != want) {
+                                    ERR("%02" PRIx32 " %02" PRIx32
+                                        " %02x %02x at %zu after %d: want %d",
+                                        b0, b1, tails[t2], tails[t3], at, after,
+                                        want);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Random strings of valid and invalid pieces, every length */
+        static const char *const pieces[] = {"a",
+                                             "\xc3\xa9",
+                                             "\xe2\x82\xac",
+                                             "\xf0\x9f\x98\x80",
+                                             "\xff",
+                                             "\xc3",
+                                             "\x80",
+                                             "\xed\xa0\x80",
+                                             "\xc0\xaf",
+                                             "\xf4\x90\x80\x80",
+                                             "\xe0\x9f\xbf",
+                                             "zz"};
+        uint64_t rng = 0x0717;
+        for (int iter = 0; iter < 20000 && !err; iter++) {
+            uint8_t s[96];
+            size_t L = 0;
+            dkLcg64Next(&rng);
+            const size_t count = (size_t)((rng >> 33) % 24);
+            for (size_t k = 0; k < count; k++) {
+                dkLcg64Next(&rng);
+                const char *p = pieces[(rng >> 40) % countof(pieces)];
+                const size_t pl = strlen(p);
+                memcpy(s + L, p, pl);
+                L += pl;
+            }
+
+            if (StrUtf8Valid(s, L) != StrUtf8ValidScalar(s, L)) {
+                ERR("iter %d: %zu bytes disagree", iter, L);
+            }
+        }
+
+        if (checked < 1000000) {
+            ERR("only %" PRIu64 " placements checked", checked);
+        }
+    }
+
     TEST("StrUtf8Valid: Valid ASCII strings") {
         /* Empty string is valid */
         assert(StrUtf8Valid("", 0) == true);

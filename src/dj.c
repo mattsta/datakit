@@ -494,10 +494,12 @@ static_assert(
         *splatWritten += len;                                                  \
     } while (0)
 
-/* Whether the scan stops at byte 'p': '"', '\\', control bytes, and every
- * byte from 0x80 up (decoded as UTF-8 by the caller) */
-DK_INLINE_ALWAYS bool djScanStops_(const uint8_t p) {
-    return p < 0x20 || p == '\"' || p == '\\' || p >= 0x80;
+/* Whether the scan stops at byte 'p': '"', '\\' and control bytes always;
+ * bytes from 0x80 up (decoded as UTF-8 by the caller) when 'high' is
+ * 0x80, never when it is 0 (text already known to be valid UTF-8, copied
+ * as it is) */
+DK_INLINE_ALWAYS bool djScanStops_(const uint8_t p, const uint8_t high) {
+    return p < 0x20 || p == '\"' || p == '\\' || (p & high);
 }
 
 /* The stops among the 16 bytes at 'p' as a mask (0: none), and the index
@@ -506,15 +508,16 @@ DK_INLINE_ALWAYS bool djScanStops_(const uint8_t p) {
  * never on the previous block's mask. */
 #if __SSE2__ || __SSE4_2__
 #define DJ_SCAN_BLOCK 16
-DK_INLINE_ALWAYS uint64_t djBlockStops_(const uint8_t *p) {
+DK_INLINE_ALWAYS uint64_t djBlockStops_(const uint8_t *p, const uint8_t high) {
     const __m128i s = _mm_loadu_si128((const __m128i *)p);
-    /* s < 0x20 <=> max(s, 0x1F) == 0x1F; a byte's own top bit marks
-     * 0x80 and up for the movemask */
+    /* s < 0x20 <=> max(s, 0x1F) == 0x1F; a byte's own top bit, kept by
+     * 'high', marks 0x80 and up for the movemask */
     const __m128i sp = _mm_set1_epi8(0x1F);
     const __m128i x =
         _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(s, _mm_set1_epi8('\"')),
                                   _mm_cmpeq_epi8(s, _mm_set1_epi8('\\'))),
-                     _mm_or_si128(_mm_cmpeq_epi8(_mm_max_epu8(s, sp), sp), s));
+                     _mm_or_si128(_mm_cmpeq_epi8(_mm_max_epu8(s, sp), sp),
+                                  _mm_and_si128(s, _mm_set1_epi8((char)high))));
     return (uint32_t)_mm_movemask_epi8(x);
 }
 
@@ -523,12 +526,12 @@ DK_INLINE_ALWAYS uint32_t djFirstStop_(const uint64_t stops) {
 }
 #elif DJ_USE_NEON
 #define DJ_SCAN_BLOCK 16
-DK_INLINE_ALWAYS uint64_t djBlockStops_(const uint8_t *p) {
+DK_INLINE_ALWAYS uint64_t djBlockStops_(const uint8_t *p, const uint8_t high) {
     const uint8x16_t s = vld1q_u8(p);
     uint8x16_t x = vceqq_u8(s, vdupq_n_u8('"'));
     x = vorrq_u8(x, vceqq_u8(s, vdupq_n_u8('\\')));
     x = vorrq_u8(x, vcltq_u8(s, vdupq_n_u8(0x20)));
-    x = vorrq_u8(x, vcgeq_u8(s, vdupq_n_u8(0x80)));
+    x = vorrq_u8(x, vtstq_u8(s, vdupq_n_u8(high)));
     /* Four bits per byte, in byte order */
     return vget_lane_u64(
         vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(x), 4)), 0);
@@ -548,12 +551,13 @@ DK_INLINE_ALWAYS bool findNextEscapeByteSIMD(djState *state, const void *data_,
                                              size_t len,
                                              size_t *const processedLen,
                                              uint8_t maxSplatWrite[SPLATLEN],
-                                             size_t *const splatWritten) {
+                                             size_t *const splatWritten,
+                                             const uint8_t high) {
     const uint8_t *data = data_;
     size_t done = 0;
 #if DJ_SCAN_BLOCK
     while (len - done >= DJ_SCAN_BLOCK) {
-        const uint64_t stops = djBlockStops_(data + done);
+        const uint64_t stops = djBlockStops_(data + done, high);
         /* The whole block is copied (one fixed-size store); only its
          * clean bytes count */
         SPLAT_ENSURE(DJ_SCAN_BLOCK);
@@ -571,7 +575,7 @@ DK_INLINE_ALWAYS bool findNextEscapeByteSIMD(djState *state, const void *data_,
 #endif
 
     while (done < len) {
-        if (djScanStops_(data[done])) {
+        if (djScanStops_(data[done], high)) {
             *processedLen = done;
             return true;
         }
@@ -656,11 +660,18 @@ void djString(djState *state, const void *data_, size_t len,
         SPLAT(hexDigits[(unit) & 0x0F]);                                       \
     } while (0)
 
+    /* Bytes from 0x80 up stop the scan.  Kept as UTF-8, the first one
+     * validates the rest of the text in one vector pass, and valid text is
+     * then copied without stopping; otherwise each stops for the decode
+     * below.  ASCII text never pays the validation. */
+    uint8_t high = 0x80;
+    bool validated = !supportUTF8;
+
     /* Open quote for string */
     SPLAT('"');
 
     while (findNextEscapeByteSIMD(state, data, len, &processedLen,
-                                  maxSplatWrite, splatWritten)) {
+                                  maxSplatWrite, splatWritten, high)) {
         assert(processedLen <= len);
         data += processedLen;
         len -= processedLen;
@@ -668,6 +679,14 @@ void djString(djState *state, const void *data_, size_t len,
         const uint8_t next = data[0];
         const uint8_t escapeCharacter = esc(next);
         size_t consumed = 1;
+        if (next >= 0x80 && !validated) {
+            validated = true;
+            if (StrUtf8Valid(data, len)) {
+                high = 0;
+                continue; /* scan on from this byte, copying */
+            }
+        }
+
         if (next >= 0x80) {
             /* The decode is the validation: a whole valid sequence is one
              * character, copied or escaped; any other byte is one U+FFFD.

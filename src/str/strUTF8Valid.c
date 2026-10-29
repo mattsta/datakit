@@ -1,8 +1,8 @@
 /* strUTF8Valid.c - UTF-8 Validation with SIMD/SWAR optimizations
  *
  * Provides fast UTF-8 validation using:
- *   - SSE2 on x86-64
- *   - NEON on ARM64
+ *   - lookup tables over 16-byte blocks with SSSE3 or NEON
+ *   - an ASCII scan with SSE2 alone
  *   - SWAR (SIMD Within A Register) fallback
  *
  * UTF-8 encoding rules (RFC 3629):
@@ -194,7 +194,195 @@ bool StrUtf8ValidCStrScalar(const char *str) {
  * For long ASCII runs, this provides significant speedup. For heavily
  * non-ASCII text, we fall back to careful scalar checking. */
 
-#if defined(__SSE2__)
+#if defined(__SSSE3__) || defined(__ARM_NEON)
+/* Lookup-table validation (Keiser and Lemire, "Validating UTF-8 In Less
+ * Than One Instruction Per Byte", 2021): each 16-byte block is checked
+ * whole.  Three table lookups, on the previous byte's high and low nibbles
+ * and this byte's high nibble, each give the error classes the pair could
+ * belong to; their AND is the classes the pair does belong to.  A byte two
+ * or three after a 3- or 4-byte lead must continue it: that requirement
+ * cancels the "two continuations" class, and anything else left over is
+ * an error.  An ASCII block costs one test, and a sequence cut off at the
+ * end of the input, or before an ASCII block, is an error. */
+#if defined(__SSSE3__)
+#include <tmmintrin.h>
+typedef __m128i utf8Vec;
+#define UTF8_LOAD(p) _mm_loadu_si128((const __m128i *)(p))
+#define UTF8_SPLAT(b) _mm_set1_epi8((char)(b))
+#define UTF8_AND(a, b) _mm_and_si128(a, b)
+#define UTF8_OR(a, b) _mm_or_si128(a, b)
+#define UTF8_XOR(a, b) _mm_xor_si128(a, b)
+#define UTF8_SUBSAT(a, b) _mm_subs_epu8(a, b)
+#define UTF8_HIGH_NIBBLE(v)                                                    \
+    _mm_and_si128(_mm_srli_epi16(v, 4), UTF8_SPLAT(0x0F))
+#define UTF8_LOW_NIBBLE(v) _mm_and_si128(v, UTF8_SPLAT(0x0F))
+#define UTF8_LOOKUP(table, idx) _mm_shuffle_epi8(table, idx)
+/* The 16 bytes ending 'n' before the end of 'cur', 'prev' before it */
+#define UTF8_PREV(cur, prev, n) _mm_alignr_epi8(cur, prev, 16 - (n))
+#define UTF8_IS_ASCII(v) (_mm_movemask_epi8(v) == 0)
+#define UTF8_ANY(v)                                                            \
+    (_mm_movemask_epi8(_mm_cmpeq_epi8(v, UTF8_SPLAT(0))) != 0xFFFF)
+#else
+#include <arm_neon.h>
+typedef uint8x16_t utf8Vec;
+#define UTF8_LOAD(p) vld1q_u8((const uint8_t *)(p))
+#define UTF8_SPLAT(b) vdupq_n_u8(b)
+#define UTF8_AND(a, b) vandq_u8(a, b)
+#define UTF8_OR(a, b) vorrq_u8(a, b)
+#define UTF8_XOR(a, b) veorq_u8(a, b)
+#define UTF8_SUBSAT(a, b) vqsubq_u8(a, b)
+#define UTF8_HIGH_NIBBLE(v) vshrq_n_u8(v, 4)
+#define UTF8_LOW_NIBBLE(v) vandq_u8(v, vdupq_n_u8(0x0F))
+#define UTF8_LOOKUP(table, idx) vqtbl1q_u8(table, idx)
+#define UTF8_PREV(cur, prev, n) vextq_u8(prev, cur, 16 - (n))
+#define UTF8_IS_ASCII(v) (vmaxvq_u8(v) < 0x80)
+#define UTF8_ANY(v) (vmaxvq_u8(v) != 0)
+#endif
+
+/* Error classes of a byte pair (previous byte, this byte) */
+enum {
+    UTF8_TOO_SHORT = 1 << 0,      /* a lead not followed by a continuation */
+    UTF8_TOO_LONG = 1 << 1,       /* ASCII followed by a continuation */
+    UTF8_OVERLONG_3 = 1 << 2,     /* E0 80..9F */
+    UTF8_TOO_LARGE = 1 << 3,      /* F4 90..BF, or F5 and up */
+    UTF8_SURROGATE = 1 << 4,      /* ED A0..BF */
+    UTF8_OVERLONG_2 = 1 << 5,     /* C0 or C1 */
+    UTF8_TOO_LARGE_1000 = 1 << 6, /* F5..FF 80..8F */
+    UTF8_OVERLONG_4 = 1 << 6,     /* F0 80..8F (never with the above) */
+    UTF8_TWO_CONTS = 1 << 7,      /* two continuations in a row */
+    UTF8_CARRY = UTF8_TOO_SHORT | UTF8_TOO_LONG | UTF8_TWO_CONTS,
+};
+
+/* By the previous byte's high nibble */
+static constexpr uint8_t utf8Prev1High_[16] = {
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TOO_LONG,
+    UTF8_TWO_CONTS,
+    UTF8_TWO_CONTS,
+    UTF8_TWO_CONTS,
+    UTF8_TWO_CONTS,
+    UTF8_TOO_SHORT | UTF8_OVERLONG_2,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT | UTF8_OVERLONG_3 | UTF8_SURROGATE,
+    UTF8_TOO_SHORT | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000 | UTF8_OVERLONG_4,
+};
+
+/* By the previous byte's low nibble */
+static constexpr uint8_t utf8Prev1Low_[16] = {
+    UTF8_CARRY | UTF8_OVERLONG_3 | UTF8_OVERLONG_2 | UTF8_OVERLONG_4,
+    UTF8_CARRY | UTF8_OVERLONG_2,
+    UTF8_CARRY,
+    UTF8_CARRY,
+    UTF8_CARRY | UTF8_TOO_LARGE,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000 | UTF8_SURROGATE,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+    UTF8_CARRY | UTF8_TOO_LARGE | UTF8_TOO_LARGE_1000,
+};
+
+/* By this byte's high nibble */
+static constexpr uint8_t utf8CurHigh_[16] = {
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_LONG | UTF8_OVERLONG_2 | UTF8_TWO_CONTS | UTF8_OVERLONG_3 |
+        UTF8_TOO_LARGE_1000 | UTF8_OVERLONG_4,
+    UTF8_TOO_LONG | UTF8_OVERLONG_2 | UTF8_TWO_CONTS | UTF8_OVERLONG_3 |
+        UTF8_TOO_LARGE,
+    UTF8_TOO_LONG | UTF8_OVERLONG_2 | UTF8_TWO_CONTS | UTF8_SURROGATE |
+        UTF8_TOO_LARGE,
+    UTF8_TOO_LONG | UTF8_OVERLONG_2 | UTF8_TWO_CONTS | UTF8_SURROGATE |
+        UTF8_TOO_LARGE,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+    UTF8_TOO_SHORT,
+};
+
+/* A block's last three bytes leave a sequence open when the third from
+ * the end starts a 4-byte one, the second a 3- or 4-byte one, or the last
+ * any multibyte one */
+static constexpr uint8_t utf8OpenAtEnd_[16] = {
+    255, 255, 255, 255, 255, 255,      255,      255,
+    255, 255, 255, 255, 255, 0xF0 - 1, 0xE0 - 1, 0xC0 - 1,
+};
+
+/* The errors of block 'cur' after block 'prev' (nonzero: invalid) */
+DK_INLINE_ALWAYS utf8Vec utf8BlockErrors_(const utf8Vec cur,
+                                          const utf8Vec prev) {
+    const utf8Vec prev1 = UTF8_PREV(cur, prev, 1);
+    const utf8Vec classes = UTF8_AND(
+        UTF8_AND(
+            UTF8_LOOKUP(UTF8_LOAD(utf8Prev1High_), UTF8_HIGH_NIBBLE(prev1)),
+            UTF8_LOOKUP(UTF8_LOAD(utf8Prev1Low_), UTF8_LOW_NIBBLE(prev1))),
+        UTF8_LOOKUP(UTF8_LOAD(utf8CurHigh_), UTF8_HIGH_NIBBLE(cur)));
+
+    /* Only E0..FF two back, or F0..FF three back, reach 0x80 here */
+    const utf8Vec third =
+        UTF8_SUBSAT(UTF8_PREV(cur, prev, 2), UTF8_SPLAT(0xE0 - 0x80));
+    const utf8Vec fourth =
+        UTF8_SUBSAT(UTF8_PREV(cur, prev, 3), UTF8_SPLAT(0xF0 - 0x80));
+    const utf8Vec mustContinue =
+        UTF8_AND(UTF8_OR(third, fourth), UTF8_SPLAT(0x80));
+    return UTF8_XOR(mustContinue, classes);
+}
+
+bool StrUtf8Valid(const void *_str, size_t len) {
+    const uint8_t *s = (const uint8_t *)_str;
+    const utf8Vec zero = UTF8_SPLAT(0);
+    utf8Vec prev = zero;
+    utf8Vec errors = zero;
+    utf8Vec open = zero; /* the last block left a sequence open */
+    size_t i = 0;
+    for (; i + 16 <= len; i += 16) {
+        const utf8Vec cur = UTF8_LOAD(s + i);
+        if (UTF8_IS_ASCII(cur)) {
+            errors = UTF8_OR(errors, open);
+            open = zero;
+        } else {
+            errors = UTF8_OR(errors, utf8BlockErrors_(cur, prev));
+            open = UTF8_SUBSAT(cur, UTF8_LOAD(utf8OpenAtEnd_));
+        }
+
+        prev = cur;
+    }
+
+    if (i < len) {
+        /* The tail, padded with NULs: a sequence it leaves open is cut
+         * short by the padding */
+        uint8_t tail[16] = {};
+        memcpy(tail, s + i, len - i);
+        errors = UTF8_OR(errors, utf8BlockErrors_(UTF8_LOAD(tail), prev));
+    } else {
+        errors = UTF8_OR(errors, open);
+    }
+
+    return !UTF8_ANY(errors);
+}
+
+bool StrUtf8ValidCStr(const char *str) {
+    return StrUtf8ValidCStrScalar(str);
+}
+
+#elif defined(__SSE2__)
 #include <emmintrin.h>
 
 /* SSE2 optimized validation - fast ASCII scanning with scalar fallback */
@@ -303,67 +491,6 @@ bool StrUtf8ValidCStr(const char *str) {
 
         s += expectedLen;
     }
-}
-
-#elifdef __ARM_NEON
-#include <arm_neon.h>
-
-/* ARM NEON optimized validation - fast ASCII scanning with scalar fallback */
-bool StrUtf8Valid(const void *_str, size_t len) {
-    const uint8_t *s = (const uint8_t *)_str;
-
-    /* Process 16 bytes at a time while we have ASCII data */
-    while (len >= 16) {
-        uint8x16_t chunk = vld1q_u8(s);
-
-        /* Check if any byte has high bit set (non-ASCII) */
-        /* Using vget_high/vget_low to check all 16 bytes */
-        uint8x16_t highBits = vshrq_n_u8(chunk, 7);
-        uint64_t hiSum = vaddlvq_u8(highBits);
-
-        if (hiSum == 0) {
-            /* All 16 bytes are ASCII - fast path */
-            s += 16;
-            len -= 16;
-        } else {
-            /* Found non-ASCII - process byte by byte until we clear it */
-            while (len > 0 && *s < 0x80) {
-                s++;
-                len--;
-            }
-
-            if (len == 0) {
-                return true;
-            }
-
-            /* Validate the multibyte sequence at this position */
-            const size_t consumed = utf8ValidateSequence(s, len);
-            if (consumed == 0) {
-                return false;
-            }
-            s += consumed;
-            len -= consumed;
-        }
-    }
-
-    /* Handle remaining bytes with scalar code */
-    while (len > 0) {
-        const size_t consumed = utf8ValidateSequence(s, len);
-        if (consumed == 0) {
-            return false;
-        }
-        s += consumed;
-        len -= consumed;
-    }
-
-    return true;
-}
-
-/* Null-terminated string validation with NEON */
-bool StrUtf8ValidCStr(const char *str) {
-    /* Use the scalar implementation for null-terminated strings
-     * since we need to check for NUL terminator anyway */
-    return StrUtf8ValidCStrScalar(str);
 }
 
 #else
