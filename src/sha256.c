@@ -5,7 +5,7 @@
  * decoding via byte-by-byte load; no unaligned-access assumptions and no
  * dependence on host byte order. */
 
-#include "sha256.h"
+#include "sha256Internal.h"
 
 #include "ctmem.h"    /* dkSecureZero */
 #include "dkC23.h"    /* stdc_rotate_right */

@@ -12,6 +12,7 @@
  *   - ARMv8 AES + PMULL on AArch64 (hash/aesGcmArmCrypto.c) */
 
 #include "aesGcm.h"
+#include "aesGcmInternal.h"
 
 #include "ctmem.h" /* dkCtMemEq16, dkSecureZero */
 #include "dkC23.h" /* stdc_rotate_left */

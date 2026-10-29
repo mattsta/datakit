@@ -6,17 +6,16 @@
  * always 12 bytes (96 bits) per RFC 5116; tag is always 16 bytes.
  * AAD is authenticated but not encrypted.
  *
- * Implementation is portable scalar C.  AES round work uses S-box +
- * MixColumns tables; GHASH uses shift-and-XOR over GF(2^128).
+ * Backends, chosen at runtime (aesGcmActiveBackend): AES-NI + PCLMUL on
+ * x86 and AESE/AESMC + PMULL on ARMv8 when the CPU has them, else
+ * portable scalar C (S-box + MixColumns tables, shift-and-XOR GHASH).
  *
- * SECURITY NOTE — portable AES has CACHE-timing exposure: the T-table
- * approach reads memory at indices derived from key+round-state, so an
- * attacker co-resident on the same CPU can in principle recover round
- * keys via cache-side-channel.  This implementation is intended for
- * envelope-style data-at-rest / data-in-transit protection where the
- * threat model does NOT include a co-resident adversary.  For hostile
- * shared-tenant environments switch to a hardware AES path (AES-NI on
- * x86, AESE/AESMC on ARMv8) — a follow-up task. */
+ * SECURITY NOTE — the scalar backend has CACHE-timing exposure: its
+ * table reads index on key and round state, so an attacker co-resident
+ * on the same CPU can in principle recover round keys through the
+ * cache.  The hardware backends do not.  On a CPU without AES
+ * instructions, where a co-resident adversary is in the threat model,
+ * use ChaCha20-Poly1305 instead (constant-time in every backend). */
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,14 +54,6 @@ static_assert(alignof(aesGcmKey) >= 16 && sizeof(aesGcmKey) % 16 == 0,
 /* Initialise from raw key bytes.  Valid key lengths: 16 (AES-128) or
  * 32 (AES-256).  Returns false on any other length. */
 bool aesGcmInit(aesGcmKey *out, const uint8_t *key, size_t key_len);
-
-/* The AES key schedule (FIPS-197 5.2) in byte order: 11 round keys of 16
- * bytes for a 16-byte key, 15 for a 32-byte key (the caller checked the
- * length).  A backend whose instructions take round keys as byte vectors
- * fills them from here, so every backend expands keys one way. */
-static constexpr size_t AES_GCM_ROUND_KEY_BYTES = 240;
-void aesGcmKeyScheduleBytes(const uint8_t *key, size_t key_len,
-                            uint8_t out[AES_GCM_ROUND_KEY_BYTES]);
 
 /* Encrypt + authenticate.  Returns false if `plaintext_len` exceeds
  * AES_GCM_MAX_PAYLOAD.  `ciphertext` may alias `plaintext`. */

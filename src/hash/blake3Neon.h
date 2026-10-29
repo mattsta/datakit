@@ -14,7 +14,7 @@
 
 #include <stdint.h>
 
-#include "blake3.h"
+#include "blake3Internal.h"
 
 #ifdef __cplusplus
 extern "C" {

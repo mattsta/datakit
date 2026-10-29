@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-#include "blake3.h"
+#include "blake3Internal.h"
 
 /* Number of independent chunks processed per blake3AVX2Compress8 call.
  * Tied at compile time to BLAKE3_BATCH_AVX2_CHUNKS in blake3.c via

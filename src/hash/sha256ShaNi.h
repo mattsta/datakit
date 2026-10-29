@@ -10,7 +10,7 @@
  * portable reference flow). Runtime CPUID detection lets callers cleanly fall
  * back to the portable scalar path on unsupported hardware. */
 
-#include "sha256.h"
+#include "sha256Internal.h"
 
 #include <stddef.h>
 #include <stdint.h>

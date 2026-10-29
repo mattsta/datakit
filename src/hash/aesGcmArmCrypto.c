@@ -39,6 +39,7 @@
 
 #include "aesGcmArmCrypto.h"
 
+#include "../aesGcmInternal.h"
 #include "../ctmem.h"    /* dkCtMemEq16, dkSecureZero */
 #include "../dkEndian.h" /* dkLoadBe32, dkStoreBe32 */
 

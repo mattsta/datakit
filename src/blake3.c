@@ -21,7 +21,7 @@
  * (4) dispatch table entry in simd_batch_ready, (5) a
  * BLAKE3_BACKEND_FOO enum value in blake3.h. */
 
-#include "blake3.h"
+#include "blake3Internal.h"
 
 #include "ctmem.h"
 #include "dkEndian.h" /* dkLoadLe32, dkStoreLe32 */

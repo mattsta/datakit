@@ -46,7 +46,7 @@
 #include "persist/multiroarP.h"
 #include "persist/persistCtx.h"
 #include "rapidhash.h"
-#include "sha256.h"
+#include "sha256Internal.h"
 #include "str.h" /* StrScanScanReliable */
 #include "stringPool.h"
 #include "timeUtil.h"

@@ -8,7 +8,7 @@
  * caller is responsible for buffering and length-padding.  Targets
  * Apple Silicon and other aarch64 cores exposing FEAT_SHA256. */
 
-#include "sha256.h"
+#include "sha256Internal.h"
 
 #include <stddef.h>
 #include <stdint.h>
