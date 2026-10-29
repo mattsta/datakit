@@ -3441,6 +3441,25 @@ int multilistTest(int, char *[]) {
                targetCount);
     }
 
+    TEST("MEDIUM: an append to an empty Medium fills the head half first") {
+        /* One element goes to F0 (which must hold elements whenever the
+         * list does); six are split three and three */
+        for (int n = 1; n <= 6; n += 5) {
+            cleaner(multilistMediumFree) multilistMedium *md =
+                multilistMediumNew(0, 0);
+            cleaner(flexFree) flex *items = flexNew();
+            for (int i = 0; i < n; i++) {
+                flexPushSigned(&items, i, FLEX_ENDPOINT_TAIL);
+            }
+            multilistMediumAppendFlex(md, items);
+            const size_t f0 = flexCount(md->fl[0]);
+            const size_t f1 = flexCount(md->fl[1]);
+            if (f0 + f1 != (size_t)n || !f0 || (n == 6 && f0 != 3)) {
+                ERR("%d appended: F0 %zu, F1 %zu", n, f0, f1);
+            }
+        }
+    }
+
     TEST("MEDIUM: a queue's drained head half is refilled with half the "
          "tail") {
         /* 1500 small counts at the 2 KB limit (Medium), then 6000 tail
@@ -5265,7 +5284,8 @@ int multilistTest(int, char *[]) {
          * in bulk and one push at a time: the dumps match byte for byte,
          * the bulk list has no more nodes than the pushed one plus one,
          * and later pops and pushes agree */
-        static constexpr int64_t startSizes[] = {0, 5, 120, 400, 5000};
+        /* 250 is Medium at this limit; 400 has just become Full */
+        static constexpr int64_t startSizes[] = {0, 5, 120, 250, 400, 5000};
         static constexpr size_t batchSizes[] = {0, 1, 7, 150, 4000};
         static constexpr uint32_t compressDepths[] = {0, 2};
         static const char letters[] = "a string longer than any inline bytes";

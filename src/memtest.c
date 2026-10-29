@@ -955,6 +955,41 @@ static int memtest_run_unit_tests(void) {
         free(run.mem);
     }
 
+    TEST("a preserving test of an odd page count retests the last page; a "
+         "region of partial pages is refused") {
+        /* Three pages: chunks take an even page count, so the last page
+         * is tested with the one before it; progress reports between
+         * chunks and the contents survive */
+        constexpr size_t bytes = 3 * 4096;
+        uint64_t *mem = aligned_alloc(4096, bytes);
+        assert(mem);
+        for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+            mem[i] = ~i;
+        }
+
+        mtProgressLog log = {};
+        memtestResult r = {};
+        memtestWithProgress(mem, bytes, 1, true, mtProgressNote_, &log, &r);
+        bool kept = true;
+        for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+            kept &= mem[i] == ~i;
+        }
+        if (r.errors_found || r.bytes_tested != bytes || !kept || log.bad ||
+            log.phases != 1) {
+            ERR("errors %zu, tested %zu, kept %d, progress bad %d phases %zu",
+                r.errors_found, r.bytes_tested, kept, log.bad, log.phases);
+        }
+
+        /* Not whole pages: nothing tested, a zeroed result */
+        r.bytes_tested = 99;
+        memtestWithResult(mem, bytes - 8, 1, true, &r);
+        if (r.bytes_tested != 0 || r.passes_complete != 0 ||
+            memtest(mem, 4096, 1, true) != 0) {
+            ERR("a partial-page region was tested (%zu bytes)", r.bytes_tested);
+        }
+        free(mem);
+    }
+
     TEST("a process walk leaves its backup and the caller's stack alone") {
         /* Addresses only: a backup at 1 MB-aligned 0x10000000, a stack
          * address at 0x7f0000001000 */

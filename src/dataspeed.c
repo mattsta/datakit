@@ -556,19 +556,23 @@ static volatile uint64_t sink;
 
 /* Simple bandwidth functions using libc memcpy/memset for accurate measurement
  */
+/* Read every word and sum them: four independent sums the compiler
+ * vectorizes, so the loop is bound by loads alone (a copy would add a
+ * store per load) */
 DATASPEED_NOINLINE
 static void bandwidth_read_opt(const uint64_t *data, size_t count) {
-    /* Read by copying to a temp buffer - memcpy is highly optimized */
-    static uint64_t temp[64]; /* Small buffer to copy into */
-    size_t bytes = count * sizeof(uint64_t);
-    size_t chunk = sizeof(temp);
-    const char *src = (const char *)data;
-
-    for (size_t i = 0; i < bytes; i += chunk) {
-        size_t n = (bytes - i < chunk) ? (bytes - i) : chunk;
-        memcpy(temp, src + i, n);
+    uint64_t a = 0, b = 0, c = 0, d = 0;
+    size_t i = 0;
+    for (; i + 4 <= count; i += 4) {
+        a += data[i];
+        b += data[i + 1];
+        c += data[i + 2];
+        d += data[i + 3];
     }
-    sink = temp[0]; /* Prevent optimization */
+    for (; i < count; i++) {
+        a += data[i];
+    }
+    sink = a + b + c + d; /* Prevent optimization */
 }
 
 DATASPEED_NOINLINE
@@ -2007,6 +2011,43 @@ int dataspeedParseTest(int, char *[]) {
                     ERR("%s: %s set %zu, want %zu", cases[i].what,
                         dataspeedLevelNames_[l], sets[l], cases[i].want[l]);
                 }
+            }
+        }
+    }
+
+    TEST("a quiet 1 ms run fills every CPU and memory result") {
+        /* Not the machine's speed: that each measurement ran and gave a
+         * positive figure, quietly, under a tiny config */
+        dataspeedConfig quick = dataspeedDefaultConfig();
+        quick.min_duration_ms = 1;
+        quick.warmup_iterations = 0;
+        quick.verbose = false;
+
+        dataspeedCPUResults cpu;
+        dataspeedBenchmarkCPU(&cpu, &quick);
+        const double cpuFigures[] = {
+            cpu.int_add_gops,          cpu.int_mul_gops,
+            cpu.int_div_gops,          cpu.float_add_gops,
+            cpu.float_mul_gops,        cpu.float_div_gops,
+            cpu.float_fma_gops,        cpu.call_overhead_ns,
+            cpu.branch_predictable_ns, cpu.branch_random_ns};
+        for (size_t i = 0; i < countof(cpuFigures); i++) {
+            if (!(cpuFigures[i] > 0)) {
+                ERR("CPU figure %zu is %f", i, cpuFigures[i]);
+            }
+        }
+
+        dataspeedMemoryResults mem;
+        dataspeedBenchmarkMemory(&mem, 2, &quick);
+        const dataspeedBandwidthResult *const rows[] = {
+            &mem.seq_read, &mem.seq_write, &mem.seq_copy};
+        for (size_t i = 0; i < countof(rows); i++) {
+            if (!(rows[i]->bandwidth_gbs > 0) ||
+                rows[i]->working_set_bytes != (size_t)2 << 20 ||
+                rows[i]->stats.samples < 10) {
+                ERR("memory row %zu: %f GB/s over %zu bytes, %zu samples", i,
+                    rows[i]->bandwidth_gbs, rows[i]->working_set_bytes,
+                    rows[i]->stats.samples);
             }
         }
     }

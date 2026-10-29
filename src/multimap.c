@@ -5536,6 +5536,14 @@ int multimapTest(int, char *[]) {
                 m = mmBareSettle_(small, m);
             }
             multimapVerify(m);
+            /* Wider counts move the entries after it: the middle follows */
+            small = mms(m);
+            assert(multimapSmallFieldIncr(small, &key, 1, INT64_C(1) << 40) ==
+                   (INT64_C(1) << 40) + 15);
+            if (MULTIMAP_IS_BARE(m)) {
+                m = mmBareSettle_(small, m);
+            }
+            multimapVerify(m);
             assert(multimapSmallFieldIncr(mms(m), &missing, 1, 5) == 0);
             assert(multimapFieldIncr(&m, &missing, 1, 5) == 0);
             multimapVerify(m);
@@ -5560,6 +5568,12 @@ int multimapTest(int, char *[]) {
             databox key = databoxNewBytesString("key00000");
             assert(multimapMediumFieldIncr(mmm(m), &key, 1, 5) == 15);
             multimapVerify(m);
+            assert(multimapMediumFieldIncr(mmm(m), &key, 1, INT64_C(1) << 40) ==
+                   (INT64_C(1) << 40) + 15);
+            multimapVerify(m);
+            assert(multimapMediumFieldIncr(mmm(m), &key, 1,
+                                           -(INT64_C(1) << 40)) == 15);
+            multimapVerify(m);
             assert(multimapMediumFieldIncr(mmm(m), &missing, 1, 5) == 0);
             multimapVerify(m);
 
@@ -5577,6 +5591,9 @@ int multimapTest(int, char *[]) {
             /* This path previously terminated in
              * assert(NULL && "Not correctly implemented yet!") */
             assert(multimapFullFieldIncr(mmf(m), &key, 1, 5) == 20);
+            multimapVerify(m);
+            assert(multimapFullFieldIncr(mmf(m), &key, 1, INT64_C(1) << 40) ==
+                   (INT64_C(1) << 40) + 20);
             multimapVerify(m);
             assert(multimapFullFieldIncr(mmf(m), &missing, 1, 5) == 0);
             multimapVerify(m);

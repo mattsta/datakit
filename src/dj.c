@@ -1116,6 +1116,11 @@ int djTest(int, char *[]) {
              "d\xef\xbf\xbd\xef\xbf\xbd\"",
              "\"a\\uFFFDb\\uFFFD\\uFFFD\\uFFFDc\\uFFFD\\uFFFDd\\uFFFD\\uFFFD"
              "\""},
+            /* Invalid text with valid characters in it: U+00E9 with four
+             * or more bytes after it, U+20AC ending the input */
+            {"\xff\xc3\xa9xyz\xe2\x82\xac",
+             "\"\xef\xbf\xbd\xc3\xa9xyz\xe2\x82\xac\"",
+             "\"\\uFFFD\\u00E9xyz\\u20AC\""},
             /* U+10FFFF, the highest codepoint */
             {"\xf4\x8f\xbf\xbf", "\"\xf4\x8f\xbf\xbf\"", "\"\\uDBFF\\uDFFF\""},
         };
