@@ -308,6 +308,11 @@ class Coverage(unittest.TestCase):
         # A module whose name holds 'test' is still API
         self.assertFalse(coverage.PRIVATE_HEADER.search("src/memtest.h"))
 
+    def test_hash_kernels_are_not_api(self) -> None:
+        self.assertTrue(coverage.PRIVATE_HEADER.search("src/hash/blake3Neon.h"))
+        self.assertTrue(coverage.PRIVATE_HEADER.search("src/hash/poly1305Limbs.h"))
+        self.assertFalse(coverage.PRIVATE_HEADER.search("src/blake3.h"))
+
 
 SHOW = """\
     1|       |/* widget.c */

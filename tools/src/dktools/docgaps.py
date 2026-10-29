@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .coverage import collect_headers, declared_functions, test_lines
+from .retoken import VENDORED
 
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -211,7 +212,10 @@ def render(report: list[HeaderGaps], names: bool, loose: list[str] = ()) -> str:
 
 
 def run(repo: Path, wanted: tuple[str, ...], names: bool) -> int:
-    headers = collect_headers(repo)
+    # The vendored allocator documents its own API upstream
+    headers = {
+        p: t for p, t in collect_headers(repo).items() if not p.startswith(VENDORED)
+    }
     if wanted:
         unknown = [h for h in wanted if h not in headers]
         if unknown:
