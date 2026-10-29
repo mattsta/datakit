@@ -182,8 +182,8 @@ size_t StrLenUtf8(const void *_ss, size_t len) {
 
     /* Handle complete blocks of 4 or 8 bytes at once. */
     while (len >= STRLEN_UTF8_STEP_SIZE) {
-        /* Process 4 or 8 bytes in one go. */
-        /* TODO: attempt with SSE2 streaming 16 byte optimization. */
+        /* Process 4 or 8 bytes in one go (builds with SSE2 or NEON take
+         * the 16-byte paths above instead) */
         STRLEN_UTF8_STEP u = *(STRLEN_UTF8_STEP *)(s);
 
 #if STRLEN_UTF8_CHECK_NULL

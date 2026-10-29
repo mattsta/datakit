@@ -436,13 +436,11 @@ void multimapMediumReplaceEntry(multimapMedium *m, multimapEntry *me,
 }
 
 bool multimapMediumExists(multimapMedium *m, const databox *key) {
-    size_t mapIdx = multimapMediumBinarySearch(m, key);
-
-    return !!flexFindByTypeSortedWithMiddle(m->map[mapIdx], m->elementsPerEntry,
-                                            key, GET_MIDDLE(m, mapIdx));
+    size_t mapIdx;
+    return !!multimapMediumFindKey_(m, key, false, nullptr, &mapIdx);
 }
 
-/* TODO: abstract x 4 */
+/* Searched by the whole row (a set's rows), not by the key alone */
 bool multimapMediumExistsFullWidth(multimapMedium *m,
                                    const databox *elements[]) {
     size_t mapIdx = multimapMediumBinarySearchFullWidth(m, elements);
@@ -454,13 +452,9 @@ bool multimapMediumExistsFullWidth(multimapMedium *m,
 bool multimapMediumExistsWithReference(multimapMedium *m, const databox *key,
                                        databox *foundRef,
                                        const multimapAtom *referenceContainer) {
-    size_t mapIdx =
-        multimapMediumBinarySearchWithReference(m, key, referenceContainer);
-
-    const flexEntry *found = flexFindByTypeSortedWithMiddleWithReference(
-        m->map[mapIdx], m->elementsPerEntry, key, GET_MIDDLE(m, mapIdx),
-        referenceContainer);
-
+    size_t mapIdx;
+    const flexEntry *found =
+        multimapMediumFindKey_(m, key, true, referenceContainer, &mapIdx);
     if (found) {
         flexGetByType(found, foundRef);
         return true;

@@ -7,15 +7,10 @@
 #include "multilistCommon.h"
 #include <stddef.h>
 
-/* TODO:
- *   - define common multilist iterator / entry struct.
- *      - use with small/full too.
- *   - flesh out functions
- *   - flesh out tests
- *   - how to induce compression on promotion?  explicit extra config param on
- * insert? */
-
-/* opaque multilist type; there's no user accessible data here. */
+/* opaque multilist type; there's no user accessible data here.  Every
+ * tier shares the iterator and entry (multilistCommon.h), and the
+ * compression depth given at creation is carried through every promotion
+ * to the tier that compresses (Full). */
 /* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multilist multilist;
 

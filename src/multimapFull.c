@@ -218,9 +218,11 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
         SET_MIDDLE(m, idx, flexMiddle(map, (m)->elementsPerEntry), map);       \
     } while (0)
 
+/* Refreshed after every write that can move a map's head: the refresh
+ * decodes one head entry and reuses the box's payload in place, so no
+ * caller tracks whether the head changed */
 #define updateRangeBoxForIdx(m, idx, map_)                                     \
     do {                                                                       \
-        /* TODO: optimize rangeBox to only update if head changed? */          \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
             /* rangeBox[idx - 1] is for map[idx]; a wide payload it owns is    \
              * reused in place */                                              \
@@ -233,11 +235,8 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
  * for the range box to hold because the underlying data can go away at any */
 #define updateRangeBoxForIdxWithReference(m, idx, map_, ref)                   \
     do {                                                                       \
-        /* TODO: optimize rangeBox to only update if head changed? */          \
-        /* We also only update if map has elements BECAUSE if this map reaches \
-         * zero elements, we automatically delete the map after this update,   \
-         * so don't bother updating a rangebox we are just going to elete      \
-         * after this update. */                                               \
+        /* Only a map with rows: a map that reaches zero rows is deleted       \
+         * after this update, so its range box goes with it. */                \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
             /* rangeBox[idx - 1] is for map[idx].  It keeps its own copy of    \
              * the resolved key (BYTES on the heap, a wide key in its owned    \
@@ -757,11 +756,8 @@ flex *multimapFullDump(const multimapFull *m) {
     const flex **useMaps;
     cleanerName(zfree, MapPtrs) const flex **heapMaps = nullptr;
 
-    /* TODO:
-     *   could do abstraction breakage here and check if
-     *   multiarray for maps is native (max 8192 instead of 64),
-     *   then just pass it directly to flexBulkMergeFlex()
-     *   (else, allocate local) */
+    /* The sub-maps' pointers, gathered for one flexBulkMergeFlex: on the
+     * stack up to 64 maps, past that on the heap */
     if (m->count <= countof(localMaps)) {
         useMaps = localMaps;
     } else {
@@ -1578,9 +1574,9 @@ abstractInsert(multimapFull *m, const databox *elements[],
 
     if ((mapBytes <= m->maxSize) || mapElementCount == 0 ||
         wouldBeReplaceInThisMap) {
-        /* TODO: better (any) size checking on the incoming elements.
-         * We could be inserting 1 GB of elements
-         * and we don't seem to care at the moment. */
+        /* A row goes in whole, whatever its size: a map under the limit
+         * takes it, and a map it leaves over the limit splits on the next
+         * insert (a map of one row is never split). */
 
         /* Step 3a: If map has room, insert directly. */
         if (useSurrogateKey) {
@@ -1720,13 +1716,11 @@ abstractInsert(multimapFull *m, const databox *elements[],
              *           map. If our insert element is smaller than HIGH,
              *           insert into LOW.
              *           Else, insert into HIGH. */
-            /* TODO: formalize all this getRangeBox() math justification */
-            /* if mapIdx is 0, then the rangebox is INVALID! */
-
-            /* This weird addition is because we just split 'mapIdx' into
-             * 'mapIdx' and 'mapIdx + 1' and we need to discover
-             * 'currentPositionLargerThanNewKey' based on the HIGHER map,
-             * so use higher map index for range box compare. */
+            /* The index arithmetic: map i (i > 0) has its head key in
+             * rangeBox[i - 1], and map 0 has none (no key is below it).
+             * The split made 'mapIdx' the low half and 'mapIdx + 1' the
+             * high half, so the high half's head is
+             * rangeBox[mapIdx], always present. */
             const size_t mapIdxHigh = mapIdx + 1;
 
 #if NOISY_MAPPING
@@ -2106,7 +2100,7 @@ bool multimapFullRegularizeMapWithReference(
 #define MULTIMAP_EXISTS_MISS_DUMP 0
 #endif
 bool multimapFullExists(multimapFull *m, const databox *key) {
-    /* TODO: bloom filter */
+    /* Two searches: the sub-map by its range box, then the row in it */
     const multimapFullIdx mapIdx = multimapFullBinarySearch(m, key);
     const flex *map = getMap(m, mapIdx);
     bool found = !!flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, key,

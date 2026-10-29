@@ -73,13 +73,8 @@ mrWrongMode_(const char *function, int line, const char *what) {
      mrWrongMode_(__func__, __LINE__,                                          \
                   "a bit operation was given a value-mode roar"))
 
-/* Overall file todo:
- *   - Finish flexing out grow/shrink operations.
- *   - Write bitmap combining functions (and, or, xor, etc)
- *   - Cleanup unused things warnings
- *   - Add optional mode for auto sparse/dense general value matrices */
-
-/* TODO: make BITMAP_SIZE_IN_BITS configurable?  Include it in metadata? */
+/* Each chunk covers 8192 positions: a fixed width, part of the stored
+ * format (snapshots and every chunk key assume it) */
 #define BITMAP_SIZE_IN_BITS 8192
 
 #define BITMAP_SIZE_IN_BYTES (BITMAP_SIZE_IN_BITS / 8)
@@ -581,9 +576,9 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
                 D("CONVERTING TO FULL BITMAP!\n");
                 convertPositionPackedArrayToBitmap(r, &key, &value, &me);
             }
-            /* TODO: Re-order this so we immediate convert to bitmap then
-             * set the new proper bit instead of setting new position
-             * then throwing away all positions by upgrading to a bitmap. */
+            /* The insert that fills the list converts it, the new
+             * position included: once per chunk, so the one extra list
+             * insert costs nothing measurable */
             break;
         }
         case CHUNK_TYPE_FULL_BITMAP: {

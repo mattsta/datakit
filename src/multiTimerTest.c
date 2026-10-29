@@ -210,6 +210,44 @@ int multiTimerTest(int, char *[]) {
         }
     }
 
+    TEST("multiTimer: an emptied timer re-bases its times; later timers "
+         "still fire on time") {
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+        const multiTimerSystemMonotonicUs base = t->initialStartTime;
+
+        multiTimerRegister(t, 2000, 0, testCountingCallback, &state);
+        sleepUs(5000);
+        multiTimerProcessTimerEvents(t); /* fires; nothing stays stored */
+        if (state.callCount != 1 || multiTimerCount(t) != 0 ||
+            t->initialStartTime <= base) {
+            ERR("emptied timer: %d calls, %zu stored, base moved %" PRIu64,
+                state.callCount, multiTimerCount(t),
+                (uint64_t)(t->initialStartTime - base));
+        }
+
+        /* A timer registered after the move fires once its delay passes,
+         * and not before */
+        multiTimerRegister(t, 5000, 0, testCountingCallback, &state);
+        const multiTimerSystemMonotonicUs next =
+            multiTimerNextTimerEventStartUs(t);
+        const multiTimerSystemMonotonicUs now =
+            (multiTimerSystemMonotonicUs)timeUtilMonotonicUs();
+        if (next < now + 3000 || next > now + 6000) {
+            ERR("next event %" PRId64 " us from now, want about 5000",
+                (int64_t)(next - now));
+        }
+        multiTimerProcessTimerEvents(t);
+        if (state.callCount != 1) {
+            ERR("the new timer fired early");
+        }
+        sleepUs(8000);
+        multiTimerProcessTimerEvents(t);
+        if (state.callCount != 2) {
+            ERR("the new timer did not fire after its delay");
+        }
+    }
+
     TEST("multiTimer: repeating timer") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};

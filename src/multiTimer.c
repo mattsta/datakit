@@ -45,9 +45,8 @@ bool multiTimerInit(multiTimer *t) {
         return false;
     }
 
-    /* TODO: if we have no active timers, we can re-base our start time
-     *       during timer maintenance to a newer time so our timer offsets
-     *       are smaller as they march ever onward into the future */
+    /* Stored times are offsets from this base; processing moves it to the
+     * present whenever no timer is stored */
     t->initialStartTime = timeUtilMonotonicUs();
     return true;
 }
@@ -512,7 +511,10 @@ void multiTimerProcessTimerEvents(multiTimer *t) {
     rescheduleTimers(t);
 
     /* Once no timers are stored anywhere, every remaining stop entry
-     * is stale (a stop of an already-fired id) - purge them */
+     * is stale (a stop of an already-fired id) - purge them - and no
+     * stored time depends on the base: it moves to now, so the times the
+     * next timers store (offsets from it, as varints) stay small however
+     * long the process runs */
     if (multimapCount(t->scheduled) == 0 &&
         multimapCount(t->pendingScheduling) == 0) {
         if (multimapCount(t->stopEvents) > 0) {
@@ -522,6 +524,7 @@ void multiTimerProcessTimerEvents(multiTimer *t) {
         t->stopHighest = 0;
         t->stopPending = 0;
         t->stopsMaybeStale = false;
+        t->initialStartTime = timeUtilMonotonicUs();
     } else if (t->stopsMaybeStale) {
         reconcileStops(t);
     }
