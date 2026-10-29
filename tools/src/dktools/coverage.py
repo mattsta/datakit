@@ -126,6 +126,9 @@ class PublicApi:
 # ---------------------------------------------------------------------------
 
 
+_EXTERN_C = re.compile(r'\bextern\s+"C"\s*\{')
+
+
 def code_text(text: str) -> str:
     """'text' without its comments and preprocessor lines."""
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
@@ -158,7 +161,9 @@ def declared_prototypes(
 ) -> list[tuple[str, str]]:
     """(name, the whole prototype on one line) for each function
     declared_functions names, in order."""
-    text = code_text(header_text)
+    # A C++ linkage block ('extern "C" {' under #ifdef __cplusplus, its
+    # '}' under another) wraps declarations, not a body
+    text = _EXTERN_C.sub(" ", code_text(header_text))
     statements: list[str] = []
     depth = 0
     parens = 0

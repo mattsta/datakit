@@ -230,6 +230,15 @@ class Coverage(unittest.TestCase):
             ],
         )
 
+    def test_a_cplusplus_linkage_block_holds_declarations(self) -> None:
+        header = (
+            '#ifdef __cplusplus\nextern "C" {\n#endif\n'
+            "typedef struct ctx { int n; } ctx;\n"
+            "void ctxInit(ctx *c);\nint ctxCount(const ctx *c);\n"
+            "#ifdef __cplusplus\n}\n#endif\n"
+        )
+        self.assertEqual(coverage.declared_functions(header), ["ctxInit", "ctxCount"])
+
     def test_profile_counts_keep_static_names_apart(self) -> None:
         self.assertEqual(
             coverage.parse_profile_counts(PROFILE),
