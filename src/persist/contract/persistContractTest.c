@@ -10,6 +10,8 @@
 #include "../../datakit.h"
 #include "../../dkC23.h" /* stdc_bit_width */
 #include "../../dkEndian.h"
+#include "../../dkRandom.h"
+#include "../../flex.h"
 #include "../../str.h"
 #include "../../timeUtil.h"
 
@@ -18,6 +20,7 @@
 #include <string.h>
 
 defcleanerName(uint8_t *, zfree, Bytes);
+defcleaner(flex *, flexFree);
 
 /* ====================================================================
  * Registry: one entry per persistOps descriptor (declared in
@@ -485,8 +488,59 @@ static void pcDamaged(pcRow *row, const persistOps *ops, const uint8_t *data,
     ops->free(r);
 }
 
+/* Contract 3 with the flex intact: a snapshot that is a flex (after a
+ * header of 0, 4 or 8 bytes) has its entries replaced one at a time by
+ * values of other types and ranges (every entry of up to 32, a seeded 32
+ * otherwise), so the damage reaches restore's own value checks rather
+ * than the flex validation in front of them */
+static void pcDamageEntries(pcRow *row, const persistOps *ops,
+                            const uint8_t *snap, size_t len, uint64_t seed) {
+    size_t header = 0;
+    while (header <= 8 && (header > len || !flexValidateBufferDeep(
+                                               snap + header, len - header))) {
+        header += 4;
+    }
+
+    if (header > 8) {
+        return;
+    }
+
+    static const uint8_t junk[9] = {'n', 'o', 't', ' ', 'a',
+                                    ' ', 'v', 'a', 'l'};
+    const databoxBig hostile[] = {
+        {.data.u64 = 0, .type = DATABOX_UNSIGNED_64},
+        {.data.u64 = UINT64_MAX, .type = DATABOX_UNSIGNED_64},
+        {.data.i64 = -1, .type = DATABOX_SIGNED_64},
+        {.data.i64 = INT64_MIN, .type = DATABOX_SIGNED_64},
+        {.data.d64 = 0.5, .type = DATABOX_DOUBLE_64},
+        {.data.bytes.custart = junk,
+         .len = sizeof(junk),
+         .type = DATABOX_BYTES},
+    };
+    const flex *f = (const flex *)(snap + header);
+    const size_t count = flexCount(f);
+    const size_t positions = count <= 32 ? count : 32;
+    uint64_t rng = seed;
+    for (size_t p = 0; p < positions; p++) {
+        const size_t idx =
+            count <= 32 ? p : (size_t)dkSplitmix64Bounded(&rng, count);
+        for (size_t h = 0; h < countof(hostile); h++) {
+            cleaner(flexFree) flex *entries =
+                flexTestReplaceEntry(f, idx, &hostile[h]);
+            const size_t entriesLen = flexBytes(entries);
+            cleanerName(zfree, Bytes) uint8_t *damaged =
+                zmalloc(header + entriesLen);
+            memcpy(damaged, snap, header);
+            memcpy(damaged + header, entries, entriesLen);
+            pcDamaged(row, ops, damaged, header + entriesLen, "entry replaced",
+                      idx);
+        }
+    }
+}
+
 static void pcDamage(pcRow *row, const persistOps *ops, const uint8_t *snap,
                      size_t len, uint64_t seed) {
+    pcDamageEntries(row, ops, snap, len, seed);
     for (size_t t = 0; t < len; t++) {
         pcDamaged(row, ops, snap, t, "truncated", t);
     }

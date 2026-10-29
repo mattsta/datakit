@@ -642,23 +642,28 @@ for (uint64_t i = 8100; i < 8192; i++) {
 
 ### Time Complexity
 
-| Operation     | Chunk Lookup    | Within Chunk                 | Total           |
-| ------------- | --------------- | ---------------------------- | --------------- |
-| Set           | multimap seek   | O(n) worst                   | seek + O(n)     |
-| Get           | multimap seek   | O(1) bitmap, O(log n) packed | seek + O(log n) |
-| Remove        | multimap seek   | O(n) worst                   | seek + O(n)     |
-| AND/OR/XOR    | O(chunks)       | O(1) bitmap, O(n) packed     | O(chunks x n)   |
-| BitCount      | O(chunks)       | popcount over 1024 bytes     | O(chunks)       |
-| Min / Max     | O(chunks) worst | O(1) bitmap, O(1) packed     | O(chunks)       |
-| Rank          | O(chunks)       | popcount + partial word      | O(chunks)       |
-| Select        | O(chunks)       | popcount scan                | O(chunks)       |
-| Iterator Next | amortized O(1)  | O(1)                         | amortized O(1)  |
-| N-way ops     | O(chunks)       | O(N) per chunk               | O(chunks x N)   |
+| Operation            | Chunk Lookup                      | Within Chunk                         | Total                      |
+| -------------------- | --------------------------------- | ------------------------------------ | -------------------------- |
+| Set                  | multimap seek                     | O(n) worst                           | seek + O(n)                |
+| Get                  | multimap seek                     | O(1) bitmap, O(log n) packed         | seek + O(log n)            |
+| Remove               | multimap seek                     | O(n) worst                           | seek + O(n)                |
+| AND/OR/XOR           | O(chunks)                         | O(1) bitmap, O(n) packed             | O(chunks x n)              |
+| BitCount             | O(chunks)                         | popcount over 1024 bytes             | O(chunks)                  |
+| Min / Max            | O(chunks) worst                   | O(1) bitmap, O(1) packed             | O(chunks)                  |
+| Rank                 | O(chunks)                         | popcount + partial word              | O(chunks)                  |
+| Select               | O(chunks)                         | popcount scan                        | O(chunks)                  |
+| Iterator Next        | amortized O(1)                    | O(1)                                 | amortized O(1)             |
+| N-way ops            | O(chunks)                         | O(N) per chunk                       | O(chunks x N)              |
+| SetRange / FlipRange | one row per chunk the range spans | O(1) whole chunk, bitmap at the ends | O(chunks spanned)          |
+| ClearRange           | present chunks only               | delete whole, bitmap at the ends     | O(present chunks in range) |
 
 **Notes**:
 
 - n = number of set positions in a chunk (at most 629 for the packed forms)
 - "chunks" = number of non-empty chunks
+- A set or flip writes a row for every 8192-bit chunk the range spans, empty
+  ones included (a range of 2^40 bits is 2^27 rows); a clear visits only the
+  chunks present, so clearing empty space costs nothing
 - Chunk lookup cost is whatever the backing multimap charges for a sorted
   key seek at its current size class; it is not a fixed O(log n) tree walk
 - Bitmap operations within a chunk use word-at-a-time popcount / SIMD helpers

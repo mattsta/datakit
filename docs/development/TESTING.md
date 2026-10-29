@@ -428,7 +428,9 @@ configuration, and holds it to one frozen contract:
 2. **WAL**: the recorded ops, applied through `applyOp` to the starting
    snapshot, to `newEmpty()` (when it matches), and to a mid-point snapshot,
    all give the live structure's snapshot bytes.
-3. **Damage**: every truncation and a seeded set of single-byte corruptions
+3. **Damage**: every truncation, a seeded set of single-byte corruptions, and
+   (for a snapshot that is a flex, after a header of up to 8 bytes) each entry
+   replaced by values of other types and ranges with the flex kept valid,
    either make restore return NULL or give a structure that itself meets (1).
    Never a crash, and never an allocation the snapshot's length does not
    bound.
