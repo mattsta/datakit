@@ -494,212 +494,100 @@ static_assert(
         *splatWritten += len;                                                  \
     } while (0)
 
+/* Whether the scan stops at byte 'p': '"', '\\', control bytes, and every
+ * byte from 0x80 up (decoded as UTF-8 by the caller) */
+DK_INLINE_ALWAYS bool djScanStops_(const uint8_t p) {
+    return p < 0x20 || p == '\"' || p == '\\' || p >= 0x80;
+}
+
+/* The stops among the 16 bytes at 'p' as a mask (0: none), and the index
+ * of the first stop in a nonzero mask.  The scan tests the mask before it
+ * uses the index, so each block's load waits only on a predicted branch,
+ * never on the previous block's mask. */
 #if __SSE2__ || __SSE4_2__
-static bool findNextEscapeByteSIMD(djState *state, const void *data_,
-                                   size_t len, size_t *const processedLen,
-                                   uint8_t maxSplatWrite[SPLATLEN],
-                                   size_t *const splatWritten) {
-    if (len < 16) {
-        *processedLen = 0;
-        return len != 0;
-    }
-
-    const uint8_t *data = data_;
-    const void *end = data + len;
-    const void *nextAligned =
-        (void *)(((uintptr_t)data + 15) & (uintptr_t)(~15));
-    const void *endAligned = (void *)(((uintptr_t)end) & (uintptr_t)(~15));
-
-    if (nextAligned > end) {
-        *processedLen = 0;
-        return true;
-    }
-
-    /* zero out to allow incrementing */
-    *processedLen = 0;
-
-    SPLAT_ENSURE(16);
-    while (data != nextAligned) {
-        const uint8_t p = *data++;
-        /* If weird character, return parsed length so we format externally. */
-        if (p < 0x20 || p == '\"' || p == '\\') {
-            return true;
-        }
-
-        /* else, byte is okay, so plop it directly. */
-        SPLAT(p);
-        (*processedLen)++;
-    }
-
-    /* Verify we are 16-byte aligned... */
-    assert(((uintptr_t)data & 15) == 0);
-
-    /* Now we are aligned and can do big things... */
-    const __m128i dq = _mm_set1_epi8('\"');
-    const __m128i bs = _mm_set1_epi8('\\');
+#define DJ_SCAN_BLOCK 16
+DK_INLINE_ALWAYS uint64_t djBlockStops_(const uint8_t *p) {
+    const __m128i s = _mm_loadu_si128((const __m128i *)p);
+    /* s < 0x20 <=> max(s, 0x1F) == 0x1F; a byte's own top bit marks
+     * 0x80 and up for the movemask */
     const __m128i sp = _mm_set1_epi8(0x1F);
+    const __m128i x =
+        _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(s, _mm_set1_epi8('\"')),
+                                  _mm_cmpeq_epi8(s, _mm_set1_epi8('\\'))),
+                     _mm_or_si128(_mm_cmpeq_epi8(_mm_max_epu8(s, sp), sp), s));
+    return (uint32_t)_mm_movemask_epi8(x);
+}
 
-    for (; data != endAligned; data += 16) {
-        const __m128i s = _mm_load_si128((__m128i *)data);
-        const __m128i t1 = _mm_cmpeq_epi8(s, dq);
-        const __m128i t2 = _mm_cmpeq_epi8(s, bs);
-
-        /* s < 0x20 <=> max(s, 0x1F) == 0x1F */
-        const __m128i t3 = _mm_cmpeq_epi8(_mm_max_epu8(s, sp), sp);
-        const __m128i x = _mm_or_si128(_mm_or_si128(t1, t2), t3);
-        const uint16_t r = _mm_movemask_epi8(x);
-
-        /* If mask populated, some elements require escaping... */
-        if (r) {
-            size_t okayLen = stdc_trailing_zeros(r);
-
-            SPLAT_ENSURE(okayLen);
-            SPLAT_LEN(data, okayLen);
-
-            *processedLen += okayLen;
-            break;
-        }
-
-        /* If we get here, none of the 16 bytes tested have forbidden
-         * characters, so we can write them directly to the buffer. */
-
-        /* Manually dump the 16 byte vector into splat then update splat length
-         * ourselves since this isn't a common enough operation to warrant its
-         * own macro. */
-        SPLAT_ENSURE(16);
-        _mm_storeu_si128((__m128i *)SPLAT_OFFSET, s);
-        *splatWritten += 16;
-
-        *processedLen += 16;
-    }
-
-    assert(*processedLen <= len);
-    return *processedLen != len;
+DK_INLINE_ALWAYS uint32_t djFirstStop_(const uint64_t stops) {
+    return (uint32_t)stdc_trailing_zeros(stops);
 }
 #elif DJ_USE_NEON
-static bool findNextEscapeByteSIMD(djState *state, const void *data_,
-                                   size_t len, size_t *const processedLen,
-                                   uint8_t maxSplatWrite[SPLATLEN],
-                                   size_t *const splatWritten) {
-    if (len < 16) {
-        *processedLen = 0;
-        return len != 0;
-    }
+#define DJ_SCAN_BLOCK 16
+DK_INLINE_ALWAYS uint64_t djBlockStops_(const uint8_t *p) {
+    const uint8x16_t s = vld1q_u8(p);
+    uint8x16_t x = vceqq_u8(s, vdupq_n_u8('"'));
+    x = vorrq_u8(x, vceqq_u8(s, vdupq_n_u8('\\')));
+    x = vorrq_u8(x, vcltq_u8(s, vdupq_n_u8(0x20)));
+    x = vorrq_u8(x, vcgeq_u8(s, vdupq_n_u8(0x80)));
+    /* Four bits per byte, in byte order */
+    return vget_lane_u64(
+        vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(x), 4)), 0);
+}
 
-    const uint8_t *data = data_;
-    const void *end = data + len;
-    const void *nextAligned =
-        (void *)(((uintptr_t)data + 15) & (uintptr_t)(~15));
-    const void *endAligned = (void *)(((uintptr_t)end) & (uintptr_t)(~15));
-
-    if (nextAligned > end) {
-        *processedLen = 0;
-        return true;
-    }
-
-    /* zero out to allow incrementing */
-    *processedLen = 0;
-
-    SPLAT_ENSURE(16);
-    while (data != nextAligned) {
-        const uint8_t p = *data++;
-        /* If weird character, return parsed length so we format externally. */
-        if (p < 0x20 || p == '\"' || p == '\\') {
-            return true;
-        }
-
-        /* else, byte is okay, so plop it directly. */
-        SPLAT(p);
-        (*processedLen)++;
-    }
-
-    /* Verify we are 16-byte aligned... */
-    assert(((uintptr_t)data & 15) == 0);
-
-    /* Now we are aligned and can do big things... */
-    /* Characters that need escaping: '"', '\\', and control chars < 0x20 */
-    const uint8x16_t dq = vdupq_n_u8('"');
-    const uint8x16_t bs = vdupq_n_u8('\\');
-    const uint8x16_t sp = vdupq_n_u8(0x20); /* space = 32 */
-
-    for (; data != endAligned; data += 16) {
-        const uint8x16_t s = vld1q_u8(data);
-
-        /* Check for '"' or '\\' */
-        uint8x16_t x = vceqq_u8(s, dq);
-        x = vorrq_u8(x, vceqq_u8(s, bs));
-
-        /* Check for control characters: s < 0x20 */
-        x = vorrq_u8(x, vcltq_u8(s, sp));
-
-        /* Quick check: if no escape chars in this block, continue */
-        if (vmaxvq_u8(x) == 0) {
-            /* No escaping needed - copy all 16 bytes directly */
-            SPLAT_ENSURE(16);
-            vst1q_u8(SPLAT_OFFSET, s);
-            *splatWritten += 16;
-            *processedLen += 16;
-            continue;
-        }
-
-        /* Found escape char - need to find exact position.
-         * Reverse bytes within each 64-bit lane so we can use CLZ
-         * to find the first set byte from the beginning. */
-        x = vrev64q_u8(x);
-        uint64_t low = vgetq_lane_u64(vreinterpretq_u64_u8(x), 0);
-        uint64_t high = vgetq_lane_u64(vreinterpretq_u64_u8(x), 1);
-
-        size_t okayLen;
-        if (low != 0) {
-            /* Escape char in first 8 bytes */
-            uint32_t lz = stdc_leading_zeros(low);
-            okayLen = lz >> 3; /* Convert bit position to byte position */
-        } else {
-            /* Escape char in second 8 bytes */
-            uint32_t lz = stdc_leading_zeros(high);
-            okayLen = 8 + (lz >> 3);
-        }
-
-        SPLAT_ENSURE(okayLen);
-        SPLAT_LEN(data, okayLen);
-        *processedLen += okayLen;
-        break;
-    }
-
-    assert(*processedLen <= len);
-    return *processedLen != len;
+DK_INLINE_ALWAYS uint32_t djFirstStop_(const uint64_t stops) {
+    return (uint32_t)stdc_trailing_zeros(stops) / 4;
 }
 #else
-/* else, no SIMD available, so use scalar loop to check bytes. */
-static bool findNextEscapeByteSIMD(djState *state, const void *data_,
-                                   size_t len, size_t *const processedLen,
-                                   uint8_t maxSplatWrite[SPLATLEN],
-                                   size_t *const splatWritten) {
+#define DJ_SCAN_BLOCK 0
+#endif
+
+/* Copy the bytes at 'data_' that need no escaping into the splat, up to
+ * the first that does or the end: '*processedLen' bytes; true when it
+ * stopped at one */
+DK_INLINE_ALWAYS bool findNextEscapeByteSIMD(djState *state, const void *data_,
+                                             size_t len,
+                                             size_t *const processedLen,
+                                             uint8_t maxSplatWrite[SPLATLEN],
+                                             size_t *const splatWritten) {
     const uint8_t *data = data_;
-    *processedLen = 0;
-
-    while (*processedLen < len) {
-        const uint8_t p = data[*processedLen];
-
-        /* If character needs escaping, return so caller handles it. */
-        if (p < 0x20 || p == '\"' || p == '\\') {
+    size_t done = 0;
+#if DJ_SCAN_BLOCK
+    while (len - done >= DJ_SCAN_BLOCK) {
+        const uint64_t stops = djBlockStops_(data + done);
+        /* The whole block is copied (one fixed-size store); only its
+         * clean bytes count */
+        SPLAT_ENSURE(DJ_SCAN_BLOCK);
+        memcpy(SPLAT_OFFSET, data + done, DJ_SCAN_BLOCK);
+        if (stops) {
+            const uint32_t clean = djFirstStop_(stops);
+            *splatWritten += clean;
+            *processedLen = done + clean;
             return true;
         }
 
-        /* Byte is okay, copy to splat buffer if space available. */
+        *splatWritten += DJ_SCAN_BLOCK;
+        done += DJ_SCAN_BLOCK;
+    }
+#endif
+
+    while (done < len) {
+        if (djScanStops_(data[done])) {
+            *processedLen = done;
+            return true;
+        }
+
         SPLAT_ENSURE(1);
-        SPLAT(p);
-        (*processedLen)++;
+        SPLAT(data[done]);
+        done++;
     }
 
-    /* Processed all bytes without finding escape character. */
+    *processedLen = done;
     return false;
 }
-#endif
 
 #define DJ_16_Z 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 void djString(djState *state, const void *data_, size_t len,
-              [[maybe_unused]] const bool supportUTF8) {
+              const bool supportUTF8) {
     static constexpr uint8_t hexDigits[16] = {'0', '1', '2', '3', '4', '5',
                                               '6', '7', '8', '9', 'A', 'B',
                                               'C', 'D', 'E', 'F'};
@@ -757,43 +645,81 @@ void djString(djState *state, const void *data_, size_t len,
     size_t splatWritten_ = 0;
     size_t *const splatWritten = &splatWritten_;
 
+    /* \uXXXX for the UTF-16 code unit 'unit' */
+#define DJ_SPLAT_U16_(unit)                                                    \
+    do {                                                                       \
+        SPLAT('\\');                                                           \
+        SPLAT('u');                                                            \
+        SPLAT(hexDigits[((unit) >> 12) & 0x0F]);                               \
+        SPLAT(hexDigits[((unit) >> 8) & 0x0F]);                                \
+        SPLAT(hexDigits[((unit) >> 4) & 0x0F]);                                \
+        SPLAT(hexDigits[(unit) & 0x0F]);                                       \
+    } while (0)
+
     /* Open quote for string */
     SPLAT('"');
 
     while (findNextEscapeByteSIMD(state, data, len, &processedLen,
                                   maxSplatWrite, splatWritten)) {
-#if 0
-        printf("Returned processedLen: %zu (len: %zu)\n", processedLen, len);
-#endif
         assert(processedLen <= len);
         data += processedLen;
         len -= processedLen;
 
-        /* The scan stops only at control bytes, '"' and '\\': bytes from
-         * 0x80 up are copied as they are */
         const uint8_t next = data[0];
         const uint8_t escapeCharacter = esc(next);
-        if (escapeCharacter) {
-            /* Verify we can write up to 6 bytes without overflowing splat */
-            SPLAT_ENSURE(6);
+        size_t consumed = 1;
+        if (next >= 0x80) {
+            /* The decode is the validation: a whole valid sequence is one
+             * character, copied or escaped; any other byte is one U+FFFD.
+             * A run of characters from 0x80 up is decoded here. */
+            consumed = 0;
+            do {
+                const uint8_t *at = data + consumed;
+                uint32_t cp = 0;
+                const size_t seq = StrUtf8DecodeOne(at, len - consumed, &cp);
+                if (!seq) {
+                    cp = 0xFFFD;
+                }
 
-            SPLAT('\\');
-            SPLAT(escapeCharacter);
-            if (escapeCharacter == 'u') {
-                SPLAT_LEN("00", 2);
-                SPLAT(hexDigits[next >> 4]);
-                SPLAT(hexDigits[next & 0x0F]);
-            }
+                SPLAT_ENSURE(12);
+                if (supportUTF8) {
+                    if (seq && len - consumed >= 4) {
+                        /* One fixed-size copy; the sequence's bytes count */
+                        memcpy(SPLAT_OFFSET, at, 4);
+                        *splatWritten += seq;
+                    } else if (seq) {
+                        SPLAT_LEN(at, seq);
+                    } else {
+                        SPLAT_LEN("\xef\xbf\xbd", 3);
+                    }
+                } else if (cp < 0x10000) {
+                    DJ_SPLAT_U16_(cp);
+                } else {
+                    /* Above the BMP: a surrogate pair */
+                    const uint32_t v = cp - 0x10000;
+                    DJ_SPLAT_U16_(0xD800 + (v >> 10));
+                    DJ_SPLAT_U16_(0xDC00 + (v & 0x3FF));
+                }
+
+                consumed += seq ? seq : 1;
+            } while (consumed < len && data[consumed] >= 0x80);
         } else {
-            /* okay... nothing to escape found... */
-            SPLAT_ENSURE(1);
-            SPLAT(data[0]);
+            /* The scan stops below 0x80 only at bytes with an escape */
+            assert(escapeCharacter);
+            SPLAT_ENSURE(6);
+            if (escapeCharacter == 'u') {
+                DJ_SPLAT_U16_(next);
+            } else {
+                SPLAT('\\');
+                SPLAT(escapeCharacter);
+            }
         }
 
         /* Next! */
-        data++;
-        len--;
+        data += consumed;
+        len -= consumed;
     }
+#undef DJ_SPLAT_U16_
 
     /* Open space for our final three splat characters if necessary... */
     SPLAT_ENSURE(3);
@@ -904,6 +830,7 @@ writeNumberBytesDirectly:
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "ctest.h"
+#include "dkRandom.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
@@ -922,6 +849,72 @@ static mds *djTestJoin(mds *const *parts, size_t count) {
 
 static bool djTestIs(const mds *out, const char *want) {
     return mdslen(out) == strlen(want) && memcmp(out, want, mdslen(out)) == 0;
+}
+
+/* The four hex digits at 'p' */
+static uint32_t djTestHex4_(const char *p) {
+    uint32_t u = 0;
+    for (size_t h = 0; h < 4; h++) {
+        const char c = p[h];
+        u = u * 16 + (uint32_t)(c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10);
+    }
+
+    return u;
+}
+
+/* The bytes the JSON string literal 'lit' (quotes included) stands for:
+ * every escape read back, surrogate pairs joined, as UTF-8; NULL for a
+ * malformed literal */
+static mds *djTestUnescape_(const mds *lit) {
+    const size_t n = mdslen(lit);
+    if (n < 2 || lit[0] != '"' || lit[n - 1] != '"') {
+        return nullptr;
+    }
+
+    /* @own: caller; free=mdsfree */
+    mds *out = mdsempty();
+    for (size_t i = 1; i + 1 < n; i++) {
+        if (lit[i] != '\\') {
+            out = mdscatlen(out, &lit[i], 1);
+            continue;
+        }
+
+        if (i + 2 >= n) {
+            mdsfree(out);
+            return nullptr;
+        }
+
+        const char e = lit[++i];
+        static const char simple[] = "\"\\/bfnrt";
+        static const char meant[] = "\"\\/\b\f\n\r\t";
+        const char *at = strchr(simple, e);
+        if (at && e) {
+            out = mdscatlen(out, &meant[at - simple], 1);
+            continue;
+        }
+
+        if (e != 'u' || i + 4 >= n) {
+            mdsfree(out);
+            return nullptr;
+        }
+
+        uint32_t cp = djTestHex4_(&lit[i + 1]);
+        i += 4;
+        /* A high surrogate and the low one after it are one codepoint */
+        if (cp >= 0xD800 && cp < 0xDC00 && i + 6 < n && lit[i + 1] == '\\' &&
+            lit[i + 2] == 'u') {
+            const uint32_t low = djTestHex4_(&lit[i + 3]);
+            if (low >= 0xDC00 && low < 0xE000) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                i += 6;
+            }
+        }
+
+        uint8_t enc[4];
+        out = mdscatlen(out, enc, StrUtf8Encode(enc, cp));
+    }
+
+    return out;
 }
 
 /* Step 'step' of writing [1,2,{"k":"v"},[],3] */
@@ -1079,19 +1072,94 @@ int djTest(int, char *[]) {
         }
     }
 
-    TEST("escaped strings copy bytes from 0x80 up as they are") {
-        /* "héllo ☃ \U0001F600" as UTF-8, then 0xFF */
-        static const char in[] =
-            "h\xc3\xa9llo \xe2\x98\x83 \xf0\x9f\x98\x80\xff";
-        for (int utf8 = 0; utf8 < 2; utf8++) {
-            djState st = {};
-            djInit(&st);
-            djString(&st, in, sizeof(in) - 1, utf8);
-            cleaner(mdsfree) mds *out = djFinalize(&st);
-            if (mdslen(out) != sizeof(in) + 1 || out[0] != '"' ||
-                memcmp(out + 1, in, sizeof(in) - 1) != 0 ||
-                out[sizeof(in)] != '"') {
-                ERR("flag %d: wrote %s", utf8, out);
+    TEST("escaped strings: UTF-8 copied or escaped to ASCII; bad bytes "
+         "become U+FFFD") {
+        static const struct {
+            const char *in;
+            const char *utf8;
+            const char *ascii;
+        } cases[] = {
+            /* U+00E9, U+2603, U+1F600 */
+            {"h\xc3\xa9llo \xe2\x98\x83 \xf0\x9f\x98\x80",
+             "\"h\xc3\xa9llo \xe2\x98\x83 \xf0\x9f\x98\x80\"",
+             "\"h\\u00E9llo \\u2603 \\uD83D\\uDE00\""},
+            {"tab\there \"q\" \\ \x01", "\"tab\\there \\\"q\\\" \\\\ \\u0001\"",
+             "\"tab\\there \\\"q\\\" \\\\ \\u0001\""},
+            /* a stray 0xFF, an encoded surrogate, an overlong '/', and a
+             * sequence cut short at the end: one U+FFFD per byte */
+            {"a\xff"
+             "b\xed\xa0\x80"
+             "c\xc0\xaf"
+             "d\xe2\x98",
+             "\"a\xef\xbf\xbd"
+             "b\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd"
+             "c\xef\xbf\xbd\xef\xbf\xbd"
+             "d\xef\xbf\xbd\xef\xbf\xbd\"",
+             "\"a\\uFFFDb\\uFFFD\\uFFFD\\uFFFDc\\uFFFD\\uFFFDd\\uFFFD\\uFFFD"
+             "\""},
+            /* U+10FFFF, the highest codepoint */
+            {"\xf4\x8f\xbf\xbf", "\"\xf4\x8f\xbf\xbf\"", "\"\\uDBFF\\uDFFF\""},
+        };
+        for (size_t c = 0; c < countof(cases); c++) {
+            for (int utf8 = 0; utf8 < 2; utf8++) {
+                djState st = {};
+                djInit(&st);
+                djString(&st, cases[c].in, strlen(cases[c].in), utf8);
+                cleaner(mdsfree) mds *out = djFinalize(&st);
+                if (!djTestIs(out, utf8 ? cases[c].utf8 : cases[c].ascii)) {
+                    ERR("case %zu flag %d: wrote %s", c, utf8, out);
+                }
+            }
+        }
+    }
+
+    TEST("escaped strings of random codepoints read back exactly, in both "
+         "forms") {
+        uint64_t rng = 0x5eedd17a11ULL;
+        for (int round = 0; round < 400; round++) {
+            /* Lengths across the 16-byte blocks and the 128-byte splat */
+            const size_t cps = dkSplitmix64Bounded(&rng, 120);
+            cleaner(mdsfree) mds *in = mdsempty();
+            for (size_t i = 0; i < cps; i++) {
+                const uint64_t pick = dkSplitmix64Bounded(&rng, 8);
+                uint32_t cp;
+                if (pick < 3) {
+                    cp = (uint32_t)dkSplitmix64Bounded(&rng, 0x80);
+                } else if (pick < 5) {
+                    cp = 0x80 + (uint32_t)dkSplitmix64Bounded(&rng, 0x780);
+                } else if (pick < 7) {
+                    cp = 0x800 + (uint32_t)dkSplitmix64Bounded(&rng, 0xF800);
+                    if (cp >= 0xD800 && cp < 0xE000) {
+                        cp -= 0x800; /* surrogates are not characters */
+                    }
+                } else {
+                    cp =
+                        0x10000 + (uint32_t)dkSplitmix64Bounded(&rng, 0x100000);
+                }
+
+                uint8_t enc[4];
+                const size_t encLen = StrUtf8Encode(enc, cp);
+                in = mdscatlen(in, enc, encLen);
+            }
+
+            for (int utf8 = 0; utf8 < 2; utf8++) {
+                djState st = {};
+                djInit(&st);
+                djString(&st, in, mdslen(in), utf8);
+                cleaner(mdsfree) mds *out = djFinalize(&st);
+                bool ascii = true;
+                for (size_t i = 0; i < mdslen(out); i++) {
+                    ascii &= (uint8_t)out[i] < 0x80;
+                }
+
+                cleaner(mdsfree) mds *back = djTestUnescape_(out);
+                if (!back || mdslen(back) != mdslen(in) ||
+                    memcmp(back, in, mdslen(in)) != 0 || (!utf8 && !ascii)) {
+                    ERR("round %d flag %d: %zu codepoints did not read back "
+                        "(ascii %d)",
+                        round, utf8, cps, ascii);
+                    break;
+                }
             }
         }
     }

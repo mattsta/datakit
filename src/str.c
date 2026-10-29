@@ -755,6 +755,58 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         }
     }
 
+    TEST("StrUtf8DecodeOne agrees with a bit-layout oracle over every lead "
+         "and second byte") {
+        /* The oracle reads the length from the lead byte's high bits and
+         * the payload from the continuation bytes' low six, then accepts
+         * only the shortest form (StrUtf8CodepointLen) of a codepoint up
+         * to U+10FFFF that is not a surrogate */
+        static const uint8_t tails[] = {0x00, 0x7F, 0x80, 0x9F,
+                                        0xA0, 0xBF, 0xC0, 0xFF};
+        for (uint32_t b0 = 0; b0 < 256 && !err; b0++) {
+            for (uint32_t b1 = 0; b1 < 256 && !err; b1++) {
+                for (size_t t2 = 0; t2 < countof(tails) && !err; t2++) {
+                    for (size_t t3 = 0; t3 < countof(tails); t3++) {
+                        const uint8_t s[4] = {(uint8_t)b0, (uint8_t)b1,
+                                              tails[t2], tails[t3]};
+                        const size_t n = b0 < 0x80             ? 1
+                                         : (b0 & 0xE0) == 0xC0 ? 2
+                                         : (b0 & 0xF0) == 0xE0 ? 3
+                                         : (b0 & 0xF8) == 0xF0 ? 4
+                                                               : 0;
+                        uint32_t want = n == 1   ? b0
+                                        : n == 2 ? b0 & 0x1F
+                                        : n == 3 ? b0 & 0x0F
+                                                 : b0 & 0x07;
+                        bool ok = n != 0;
+                        for (size_t k = 1; ok && k < n; k++) {
+                            ok = (s[k] & 0xC0) == 0x80;
+                            want = (want << 6) | (s[k] & 0x3F);
+                        }
+                        ok = ok && want <= 0x10FFFF &&
+                             !(want >= 0xD800 && want < 0xE000) &&
+                             StrUtf8CodepointLen(want) == n;
+
+                        /* Every length from the whole 4 bytes down */
+                        for (size_t len = 4; len > 0; len--) {
+                            uint32_t cp = 0xA5A5A5A5;
+                            const size_t took = StrUtf8DecodeOne(s, len, &cp);
+                            const bool fits = ok && n <= len;
+                            if (took != (fits ? n : 0) ||
+                                cp != (fits ? want : 0)) {
+                                ERR("%02" PRIx32 " %02" PRIx32 " %02x %02x len "
+                                    "%zu: took %zu cp 0x%" PRIx32,
+                                    b0, b1, tails[t2], tails[t3], len, took,
+                                    cp);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     TEST("StrUtf8 width functions agree with each other, invalid bytes too") {
         /* Random strings of narrow, wide, zero-width and invalid pieces
          * (each invalid byte is one cell).  The whole width is the same

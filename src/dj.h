@@ -95,8 +95,11 @@ void djTrue(djState *state);
 void djFalse(djState *state);
 void djNULL(djState *state);
 /* A quoted string, escaped: '"', '\\' and control bytes become \" \\ \b
- * \t \n \f \r or \u00XX; bytes from 0x80 up are copied as they are (valid
- * UTF-8 in, valid JSON out), whatever 'supportUTF8' says. */
+ * \t \n \f \r or \u00XX.  With 'supportUTF8' valid UTF-8 is copied as it
+ * is; without it the output is ASCII: each other character is \uXXXX (a
+ * surrogate pair above U+FFFF).  Either way each byte that is not part
+ * of a valid UTF-8 sequence becomes U+FFFD, so the output is always valid
+ * JSON text. */
 void djString(djState *state, const void *data_, size_t len,
               const bool supportUTF8);
 /* A quoted string copied without escaping: the caller guarantees it holds

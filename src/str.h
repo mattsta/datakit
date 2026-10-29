@@ -220,19 +220,59 @@ uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining);
 
 /* The codepoint the 'len' bytes at 's' start with in '*cp', returning the
  * bytes it takes; 0, with '*cp' = 0, when they do not start with a whole
- * valid sequence (an empty 'len' included) */
+ * valid sequence (an empty 'len' included).  Valid means RFC 3629: no
+ * overlong form, no surrogate (U+D800..U+DFFF), nothing above U+10FFFF. */
 static inline size_t StrUtf8DecodeOne(const uint8_t *s, size_t len,
                                       uint32_t *cp) {
-    const uint8_t *pos = s;
-    size_t remaining = len;
-    const uint32_t decoded = StrUtf8Decode(&pos, &remaining);
-    if (decoded == STR_UTF8_INVALID) {
-        *cp = 0;
+    *cp = 0;
+    if (!len) {
         return 0;
     }
 
-    *cp = decoded;
-    return (size_t)(pos - s);
+    const uint8_t b0 = s[0];
+    if (b0 < 0x80) {
+        *cp = b0;
+        return 1;
+    }
+
+    /* 0x80..0xC1 continue a sequence or start an overlong 2-byte one */
+    if (b0 < 0xC2) {
+        return 0;
+    }
+
+    if (b0 < 0xE0) {
+        if (len < 2 || !StrUtf8IsContinuation(s[1])) {
+            return 0;
+        }
+
+        *cp = ((uint32_t)(b0 & 0x1F) << 6) | (s[1] & 0x3F);
+        return 2;
+    }
+
+    if (b0 < 0xF0) {
+        /* E0 needs A0.. (else overlong); ED needs ..9F (else surrogate) */
+        if (len < 3 || !StrUtf8IsContinuation(s[1]) ||
+            !StrUtf8IsContinuation(s[2]) || (b0 == 0xE0 && s[1] < 0xA0) ||
+            (b0 == 0xED && s[1] > 0x9F)) {
+            return 0;
+        }
+
+        *cp = ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(s[1] & 0x3F) << 6) |
+              (s[2] & 0x3F);
+        return 3;
+    }
+
+    /* F0 needs 90.. (else overlong); F4 needs ..8F (else past U+10FFFF);
+     * F5 and up start nothing */
+    if (b0 > 0xF4 || len < 4 || !StrUtf8IsContinuation(s[1]) ||
+        !StrUtf8IsContinuation(s[2]) || !StrUtf8IsContinuation(s[3]) ||
+        (b0 == 0xF0 && s[1] < 0x90) || (b0 == 0xF4 && s[1] > 0x8F)) {
+        return 0;
+    }
+
+    *cp = ((uint32_t)(b0 & 0x07) << 18) | ((uint32_t)(s[1] & 0x3F) << 12) |
+          ((uint32_t)(s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+    return 4;
 }
 /* Encode a Unicode codepoint to UTF-8. Returns bytes written (1-4) or 0. */
 size_t StrUtf8Encode(uint8_t *dst, uint32_t codepoint);

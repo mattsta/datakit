@@ -18,6 +18,7 @@
 #include "clusterMailbox.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "dj.h"
 #include "dkTestTmp.h"
 #include "dkTierLimit.h"
 #include "fenwick/fenwickI64.h"
@@ -2605,6 +2606,55 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
 /* ULIDs: 128-bit generation, then encoding and decoding under each
  * implementation this build has (the row names the implementation), then
  * a 64-bit variant's generation, encoding and decoding */
+/* djString over one text, n times into one array (ns per string): plain
+ * ASCII, and UTF-8 with accents, CJK, a symbol and an emoji; 'AsAscii'
+ * rows ask for ASCII-only output */
+static void benchDj(void) {
+    constexpr uint32_t n = 100'000;
+    static const char ascii[] =
+        "the quick brown fox jumps over the lazy dog, then naps: 0123456789";
+    /* U+00F6 U+00DF, U+20AC, U+2014, U+6771 U+4EAC, U+2603, U+00EF,
+     * U+00E9, U+1F600 among words */
+    static const char utf8[] = "size \xc3\xb6\xc3\x9f over 10 \xe2\x82\xac "
+                               "\xe2\x80\x94 \xe6\x9d\xb1\xe4\xba\xac "
+                               "\xe2\x98\x83 the \xc3\xaf and \xc3\xa9 "
+                               "\xf0\x9f\x98\x80 done";
+    /* 1 KB of the ASCII text: the per-byte scan, apart from each call's
+     * fixed cost */
+    char asciiLong[1024];
+    for (size_t i = 0; i < sizeof(asciiLong); i++) {
+        asciiLong[i] = ascii[i % (sizeof(ascii) - 1)];
+    }
+
+    const struct {
+        const char *row;
+        const char *text;
+        size_t len;
+        bool utf8;
+        uint32_t count;
+    } rows[] = {
+        {"stringAscii", ascii, sizeof(ascii) - 1, true, n},
+        {"stringAsciiAsAscii", ascii, sizeof(ascii) - 1, false, n},
+        {"stringAsciiLong", asciiLong, sizeof(asciiLong), true, n / 16},
+        {"stringUtf8", utf8, sizeof(utf8) - 1, true, n},
+        {"stringUtf8AsAscii", utf8, sizeof(utf8) - 1, false, n},
+    };
+
+    uint64_t sink = 0;
+    for (size_t r = 0; r < countof(rows); r++) {
+        djState st = {};
+        djInit(&st);
+        djArrayOpen(&st);
+        PERF_ROW("dj", rows[r].row, rows[r].count,
+                 djString(&st, rows[r].text, rows[r].len, rows[r].utf8));
+        mds *out = djFinalize(&st);
+        sink += mdslen(out);
+        mdsfree(out);
+    }
+
+    perfContainerSink = sink;
+}
+
 static void benchUlid(void) {
     constexpr uint32_t n = 100'000;
     uint64_t sink = 0;
@@ -3130,6 +3180,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("ulid")) {
             benchUlid();
+        }
+
+        if (perfWanted("dj")) {
+            benchDj();
         }
 
         if (perfWanted("multiarray")) {
