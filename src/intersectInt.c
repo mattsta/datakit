@@ -982,13 +982,13 @@ size_t v1_avx2(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
     const uint64_t kFreqSpace = 2 * 4 * (0 + 1) - 1;
     const uint64_t kRareSpace = 0;
 
+    /* The vector loop's bounds: stopFreq leaves room for one 8-wide load
+     * at 'freq' (kFreqSpace, 7 values past it), so no load reads past
+     * freq's end, and stopRare is rare's end (kRareSpace 0), so the next
+     * rare value is read only while one remains; the scalar tail takes
+     * whatever is left at either stop */
     const uint32_t *stopFreq = &freq[lenFreq] - kFreqSpace;
     const uint32_t *stopRare = &rare[lenRare] - kRareSpace;
-
-#if 0
-    printf("StopFreq: %p, Freq: %p, END: %p\n", stopFreq, freq, freq + lenFreq);
-    printf("StopRare: %p, Rare: %p, END: %p\n", stopRare, rare, rare + lenRare);
-#endif
 
     if (unlikely((rare >= stopRare) || (freq >= stopFreq))) {
         goto FINISH_SCALAR;
@@ -1007,9 +1007,7 @@ ADVANCE_RARE:
     do {
         *matchOut = valRare;
 
-        /* TODO: refactor all this offset math to use more logical logic than
-         * this poor 'stopRare' and 'stopFreq' measurement. Make sure we don't
-         * read ahead of the stop condition. */
+        /* No next rare value to read: the scalar tail finishes */
         if (unlikely((rare + 1) >= stopRare)) {
             goto FINISH_SCALAR;
         }

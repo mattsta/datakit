@@ -75,17 +75,10 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
         return false;
     }
 
-    /* TODO: we could also early bail out here if the buffer is clearly too big
-     *       to be a number (20 digits is max [U]INT64, plus doubles have max
-     *       of 15 digits lossless precision, so the largest size here is,
-     *       generously (20 + 1 + 15) */
-
-    /* TODO:
-     *  Compare current implementation against up-front early termination:
-     *      - memchr of '.' in string with below
-     *  - vs -
-     *      - checking if all digits using StrIsDigitsFast() then converting
-     *        to {signed/unsigned}{64,128} directly. */
+    /* No up-front length bound is needed: the integer digits stop at the
+     * first 64-bit overflow, and a fraction is kept only when its double
+     * prints back as exactly the input, so a long numeral fails without
+     * being read whole. */
 
     /* NOTE: This function converts _reasonable_ floats to native types.
      *       If you provide DBL_MAX as a string (300+ digits), the parse
@@ -131,11 +124,8 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
 
             double potentialResult;
             if (StrAtoFReliable(x, sign, p, &potentialResult, len - dig)) {
-                /* Extra assertive check: verify forward and reverse string
-                 * conversion matches exactly! */
-                /* We could potentially remove this double check once we get on
-                 * board with __float128 in a supported compiler
-                 * Or, potentially use decimal64 / decimal128 encodings too */
+                /* The double is kept only when it prints back as exactly
+                 * the input bytes */
                 uint8_t buf[64];
                 const size_t convertedLength =
                     StrDoubleFormatToBufNice(buf, sizeof(buf), potentialResult);
@@ -1874,42 +1864,7 @@ DK_FN_NO_OPTIMIZE int strTest(int, char *[]) {
         for (size_t i = 0; i < loopers; i++) {
             for (size_t numericLength = 1; numericLength < 16;
                  numericLength++) {
-                result = 0;
-                if (0) { // numericLength == 1) {
-                    if (numeristr[0] >= '0' && numeristr[0] <= '9') {
-                        /* Fast path for lengths <= 9 */
-                        result = numeristr[0] - '0';
-                    } else {
-                        /* else, not a number! */
-                        result = -1;
-                    }
-                } else {
-                    /* TODO: for reasonable lengths (< 10 digits) we could
-                     *       just do an inline while loop to consume digits too
-                     */
-#if 0
-                    if (!StrBufToUInt64(numeristr, numericLength, &result)) {
-                        result = -1;
-                    }
-#else
-#if 1
-#if 0
-                    if (numericLength <= 15) {
-                        result = StrBufToUInt64Fast(numeristr, numericLength);
-                    } else {
-                        result = -1;
-                    }
-#else
-                    result = StrBufToUInt64Fast(numeristr, numericLength);
-#endif
-#else
-                    if (!StrBufToUInt64FastCheckNumeric(
-                            numeristr, numericLength, &result)) {
-                        result = -1;
-                    }
-#endif
-#endif
-                }
+                result = StrBufToUInt64Fast(numeristr, numericLength);
             }
         }
 

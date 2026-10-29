@@ -342,55 +342,39 @@ DK_INLINE_ALWAYS bool setFromInput(const intsetBig *isb, const databoxBig *val,
     return false;
 }
 
-/* TODO: write multi-add function so if we are, for example, adding a million
- * elements (sorted!) we can just add/merge in chunks so we don't need to run
- * the multimapLookup() inside setFromInput() a million times for adding. */
-bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
-    databoxBig lookup;
-    databox found;
-    uint32_t offset;
-    intsetU32 *orig = nullptr;
-    bool added;
-    bool isNegative;
+/* The set of the bucket keyed 'key', made (and its row added) when the
+ * bucket is new.  A set grows in place, so its row never changes after. */
+static intsetU32 *intsetBigBucketFor_(intsetBig *isb, const databoxBig *key) {
+#if !USE_128_BIT_BUCKETS
+    assert(!key->big);
+#endif
 
+    databox found;
+    databox *ptr[] = {&found};
+    if (multimapLookup(isb->i, (const databox *)key, ptr)) {
+        return boxPtrToU32(found);
+    }
+
+    found = (databox){.type = DATABOX_PTR};
+    /* @own: container; free=intsetU32Free */
+    found.data.ptr = intsetU32NewLen(1);
+    const databox *row[] = {(const databox *)key, &found};
+    multimapInsert(&isb->i, row);
+    return boxPtrToU32(found);
+}
+
+bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
     /* The bucket key and offset; a value that is not an integer has none
      * and is refused */
-    if (!bucketKeyFromInput(val, &offset, &isNegative, &lookup)) {
+    databoxBig key;
+    uint32_t offset;
+    bool isNegative;
+    if (!bucketKeyFromInput(val, &offset, &isNegative, &key)) {
         return false;
     }
 
-    /* Fetch the bucket's set, or create it below */
-    databox *ptr[] = {&found};
-    if (multimapLookup(isb->i, (databox *)&lookup, ptr)) {
-        orig = boxPtrToU32(found);
-        added = intsetU32Add(boxPtrToU32(found), offset);
-    } else {
-        /* Existing bucket not found, so create a new set and add it */
-        found.type = DATABOX_PTR;
-        /* @own: container; free=intsetU32Free */
-        found.data.ptr = intsetU32NewLen(1);
-        added = intsetU32Add(boxPtrToU32(found), offset);
-
-        /* 'added' must be true here because we're inserting into empty set */
-        assert(added);
-    }
-
-#if !USE_128_BIT_BUCKETS
-    assert(!lookup.big);
-#endif
-
-    /* Add intsetU32 back to isb for bucket */
-    if (orig != boxPtrToU32(found)) {
-        /* Need to update multimap bucket again since the set pointer changed */
-        const databox *insert[] = {(databox *)&lookup, &found};
-        multimapInsert(&isb->i, insert);
-    }
-
-    /* At this point we've encountered no errors and did something. */
-    if (added) {
-        isb->count++;
-    }
-
+    const bool added = intsetU32Add(intsetBigBucketFor_(isb, &key), offset);
+    isb->count += added;
     return added;
 }
 
@@ -519,42 +503,31 @@ refuse:
     return nullptr;
 }
 
-bool intsetBigRemove(intsetBig *isb, const databoxBig *val) {
-    /* Steps:
-     *  - lookup
-     *    - if bucket exists, remove against bucket
-     *      - if set now empty, free and delete bucket
-     */
+/* Remove 'offset' from the set 'set' of the bucket keyed 'bucket', and the
+ * bucket itself when that empties it (a set grows and shrinks in place, so
+ * the bucket's row changes only then); true when 'offset' was there */
+static bool intsetBigRemoveAt_(intsetBig *isb, const databoxBig *bucket,
+                               intsetU32 *set, const uint32_t offset) {
+    if (!intsetU32Remove(set, offset)) {
+        return false;
+    }
 
+    isb->count--;
+    if (intsetU32Count(set) == 0) {
+        intsetU32Free(set);
+        multimapDelete(&isb->i, (const databox *)bucket);
+    }
+
+    return true;
+}
+
+bool intsetBigRemove(intsetBig *isb, const databoxBig *val) {
     databoxBig lookup;
     databox found;
     uint32_t offset;
-    intsetU32 *orig = nullptr;
-    bool removed = false;
     bool isNegative;
-
-    /* Create lookup/storage criteria and attempt to fetch a set */
-    if (setFromInput(isb, val, &offset, &isNegative, &lookup, &found)) {
-        orig = boxPtrToU32(found);
-        removed = intsetU32Remove(boxPtrToU32(found), offset);
-        if (removed) {
-            isb->count--;
-
-            if (intsetU32Count(boxPtrToU32(found)) == 0) {
-                /* no more elements, free this and delete from map */
-                intsetU32Free(boxPtrToU32(found));
-                multimapDelete(&isb->i, (databox *)&lookup);
-            } else {
-                /* removal caused intsetU32 to move, so we need to update map */
-                if (orig != boxPtrToU32(found)) {
-                    const databox *insert[] = {(databox *)&lookup, &found};
-                    multimapInsert(&isb->i, insert);
-                }
-            }
-        }
-    }
-
-    return removed;
+    return setFromInput(isb, val, &offset, &isNegative, &lookup, &found) &&
+           intsetBigRemoveAt_(isb, &lookup, boxPtrToU32(found), offset);
 }
 
 bool intsetBigExists(const intsetBig *isb, const databoxBig *val) {
@@ -946,33 +919,27 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
     }
 }
 
-bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
-    /* Failure method: */
-    /* Step 1: get random bucket
-     * Step 2: get random element inside bucket */
-    /* Using the above will improperly weight smaller buckets with higher
-     * returns because we would have equal picks between buckets without
-     * considering how many elements they contain. */
-
-    /* Successful method: */
-    /* Step 1: pick random position index from count of all elements
-     * Step 2: return value for random position. */
+/* A uniformly random member into 'val', with the bucket it lives in: its
+ * key into 'bucket' (the caller's storage, so a 128-bit key's payload
+ * stays valid), its set and the member's offset in it.  Picking a random
+ * bucket and then a random member would favour members of small buckets:
+ * a random position over every member is weighted correctly. */
+static bool intsetBigRandomPick_(const intsetBig *isb, databoxBig *val,
+                                 databoxBig *bucket, intsetU32 **set,
+                                 uint32_t *offset) {
     if (isb->count == 0) {
         return false;
     }
 
     /* A uniform position from the per-thread generator */
     const uint64_t selectedIndex = dkRandomBounded(isb->count);
-
-    /* Set up initial conditions */
     intsetBigIterator isbIter;
-    databoxBig bucket;
     databox pval;
     uint64_t currentCount = 0;
 
     intsetBigIteratorInit(isb, &isbIter);
-    while (intsetBigIteratorNextBucket(&isbIter, &bucket, &pval)) {
-        const intsetU32 *use = boxPtrToU32(pval);
+    while (intsetBigIteratorNextBucket(&isbIter, bucket, &pval)) {
+        intsetU32 *use = boxPtrToU32(pval);
         const size_t localCount = intsetU32Count(use);
         currentCount += localCount;
 
@@ -981,16 +948,15 @@ bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
          * index equal to currentCount belongs to the NEXT bucket (and
          * would compute a -1 offset here). */
         if (currentCount > selectedIndex) {
-            /* random element is INSIDE THE HOUSE */
             const ssize_t useOffset = currentCount - selectedIndex - 1;
             assert(useOffset >= 0);
 
-            uint32_t localIVAL;
             [[maybe_unused]] const bool got =
-                intsetU32Get(use, useOffset, &localIVAL);
+                intsetU32Get(use, useOffset, offset);
             assert(got);
 
-            valueFromBucketOffset(&bucket, localIVAL, val);
+            valueFromBucketOffset(bucket, *offset, val);
+            *set = use;
             return true;
         }
     }
@@ -998,21 +964,27 @@ bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
     return false;
 }
 
-bool intsetBigRandomDelete(intsetBig *isb, databoxBig *deleted) {
-    /* We are basically doing a double fetch of the bucket and intsetU32 here
-     * (once for Random() and once for Remove()), but it's okay for now (not
-     * perf tested though). */
+bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
+    databoxBig bucket;
+    intsetU32 *set;
+    uint32_t offset;
+    return intsetBigRandomPick_(isb, val, &bucket, &set, &offset);
+}
 
-    if (!intsetBigRandom(isb, deleted)) {
+bool intsetBigRandomDelete(intsetBig *isb, databoxBig *deleted) {
+    /* The pick's own bucket and set: no second lookup */
+    databoxBig bucket;
+    intsetU32 *set;
+    uint32_t offset;
+    if (!intsetBigRandomPick_(isb, deleted, &bucket, &set, &offset)) {
         /* empty set: nothing to delete, 'deleted' is not populated */
         return false;
     }
 
-    /* TODO: we could improve the performance here by making 'delete' a special
-     * case of intsetBigRandom() itself since intsetBigRandom() already has the
-     * bucket and intsetU32 values directly when it creates the return value
-     * 'deleted' here. */
-    return intsetBigRemove(isb, deleted);
+    [[maybe_unused]] const bool removed =
+        intsetBigRemoveAt_(isb, &bucket, set, offset);
+    assert(removed);
+    return true;
 }
 
 #ifdef DATAKIT_TEST
@@ -3000,6 +2972,63 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         cleaner(intsetBigFree) intsetBig *bad2 = intsetBigNewFromMembers(wide);
         if (bad1 || bad2) {
             ERR("Disordered or out-of-range members were accepted");
+        }
+    }
+
+    TEST("RandomDelete drains exactly the members, a bucket at a time") {
+        /* Sorted runs, scattered 64-bit values, duplicates, 128-bit values
+         * and a refused non-integer, added to two sets: every random
+         * delete from one takes a member of the other (the oracle), until
+         * both are empty */
+        constexpr size_t n = 4000;
+        cleaner(intsetBigFree) intsetBig *drain = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *oracle = intsetBigNew();
+        uint64_t rng = 7;
+        databoxBig earlier[3] = {};
+        size_t added = 0;
+        for (size_t i = 0; i < n; i++) {
+            databoxBig v;
+            switch (i % 5) {
+            case 0:
+            case 1: /* a run through neighbouring buckets */
+                v = DATABOX_BIG_SIGNED((int64_t)i * 3 - 6000);
+                break;
+            case 2: /* scattered across the 64-bit range */
+                v = DATABOX_BIG_SIGNED((int64_t)dkSplitmix64Next(&rng));
+                break;
+            case 3: /* a duplicate of an earlier member */
+                v = earlier[0];
+                break;
+            default: /* 128-bit (its payload is its own) */
+                DATABOX_BIG_SIGNED_128(&v, INTSET_BIG_INT128_MIN +
+                                               (__int128_t)i * 1000);
+                break;
+            }
+            if (i == 17) {
+                v = (databoxBig){};
+                v.type = DATABOX_BYTES; /* refused: not an integer */
+            }
+
+            added += intsetBigAdd(drain, &v);
+            intsetBigAdd(oracle, &v);
+            if (i % 5 == 0) {
+                earlier[0] = v;
+            }
+        }
+
+        size_t drained = 0;
+        databoxBig deleted;
+        while (intsetBigRandomDelete(drain, &deleted)) {
+            if (!intsetBigRemove(oracle, &deleted)) {
+                ERR("delete %zu took a value that was not a member", drained);
+                break;
+            }
+            drained++;
+        }
+
+        if (drained != added || intsetBigCountElements(drain) != 0 ||
+            intsetBigCountElements(oracle) != 0) {
+            ERR("RandomDelete drained %zu of %zu", drained, added);
         }
     }
 

@@ -76,9 +76,9 @@ defcleaner(mdsc *, mdscfree);
  *
  * The mdsc itself caches the total length of the HLL external to this struct,
  * so we don't need to maintain length of registers[] in the header. */
-/* TODO:
- *   - when clang adds support, add:
- *     - __attribute__ ((scalar_storage_order("little-endian"))) */
+/* The header is read and written in host byte order with the compilers'
+ * bitfield layout (clang and gcc agree on it); every platform datakit
+ * builds for is little-endian, and a big-endian build warns below. */
 typedef struct [[gnu::packed]] hyperloglogHeader {
     uint64_t cardinality : 61;     /* Cached cardinality */
     uint64_t cardinalityValid : 1; /* Boolean, is cardinality valid? */
@@ -94,9 +94,10 @@ static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t),
 #warning "not a little-endian system: persisted HLLs may not read back"
 #endif
 
-/* This needs to be configurable later, but it's a holdover from when
- * integration was baked directly into the server config. */
-static constexpr uint64_t serverSparseMaxBytes = 4096;
+/* A sparse HLL that would grow past this many bytes converts to dense
+ * (HLL_DENSE_SIZE, about 12 KB): a third of the dense size, where the
+ * sparse form's run decoding starts costing more than its bytes save */
+static constexpr uint64_t hllSparseMaxBytes = 4096;
 
 /* This HyperLogLog implementation is based on the following ideas:
  *
@@ -226,7 +227,7 @@ static constexpr uint64_t serverSparseMaxBytes = 4096;
  * involved in updating the sparse representation is not justified by the
  * memory savings. The exact maximum length of the sparse representation
  * when this implementation switches to the dense representation is
- * configured via the define server.hyperloglogSparseMaxBytes.
+ * hllSparseMaxBytes.
  */
 
 #define toHLL(mdsc_) ((hyperloglog *)(mdsc_))
@@ -678,7 +679,7 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
  * As a side effect the function may promote the HLL representation from
  * sparse to dense: this happens when a register requires to be set to a value
  * not representable with the sparse representation, or when the resulting
- * size would be greater than serverSparseMaxBytes. */
+ * size would be greater than hllSparseMaxBytes. */
 DK_STATIC hyperloglogAddResult hyperloglogSparseSet(hyperloglog **inHll,
                                                     int64_t index,
                                                     uint_fast8_t count) {
@@ -879,7 +880,7 @@ DK_STATIC hyperloglogAddResult hyperloglogSparseSet(hyperloglog **inHll,
     const int32_t oldlen = isXzero ? 2 : 1;
     const int32_t deltalen = seqlen - oldlen;
 
-    if (deltalen > 0 && mdsclen(hmdsc) + deltalen > serverSparseMaxBytes) {
+    if (deltalen > 0 && mdsclen(hmdsc) + deltalen > hllSparseMaxBytes) {
         goto promote;
     }
 
@@ -1719,7 +1720,7 @@ int hyperloglogTest(int, char *[]) {
             hyperloglogAdd(&h, &ele, sizeof(ele));
 
             /* Make sure for small cardinalities we use sparse encoding. */
-            if (j == checkpoint && j < serverSparseMaxBytes / 2) {
+            if (j == checkpoint && j < hllSparseMaxBytes / 2) {
                 hdr2 = h;
                 if (hdr2->encoding != HLL_SPARSE) {
                     ERR("sparse encoding not used at %" PRIu64, j);

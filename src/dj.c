@@ -454,13 +454,11 @@ void djNULL(djState *state) {
 /* ====================================================================
  * Write properly escaped strings
  * ==================================================================== */
-/* TODO: we could potentially move SPLAT into djState so ALL writer functions
- *       can take advantage of the pre-mds buffer space.
- *       But we need to be careful of an edge case where we need to remove a
- *       trailing comma from the buffer, but the buffer was flushed to mds,
- *       so we can't see the comma in the buffer—it's over in the tail of the
- *       mds—so we'd have to check two places? (if splatWritten == 0, check tail
- *       of mds?) */
+/* An escaped string is built in a stack buffer of SPLATLEN bytes (the
+ * "splat") and appended to the output in chunks, one append per buffer
+ * rather than per byte.  The other writers append whole tokens, and the
+ * trailing-comma fixups read the output's tail, so only the escaper
+ * needs the buffer. */
 static constexpr int SPLATLEN = 128;
 static_assert(
     SPLATLEN >= 16,
@@ -613,32 +611,10 @@ void djString(djState *state, const void *data_, size_t len,
         DJ_16_Z, // 30~4F
         0,       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   '\\',
     };
-#if 0
-  0,       0,       0, // 50
-        DJ_16_Z, DJ_16_Z, DJ_16_Z, DJ_16_Z, DJ_16_Z, DJ_16_Z,
-        DJ_16_Z, DJ_16_Z, DJ_16_Z, DJ_16_Z // 60~FF
-#endif
 
-    /* Access 'escape_' with a full byte without overflowing */
+    /* Bytes past the table ('\\' is its last) need no escape: esc() reads
+     * them as 0 without indexing past it */
 #define esc(x) ((x < sizeof(escape_)) ? escape_[x] : 0)
-
-    /* We don't need this optimization at the moment. If profiling shows
-     * mdscatlen is too slow, then re-visit allocating everything up front then
-     * using just memory writes in-place. */
-#if 0
-    /* TODO: this up-front gross growing allocation means
-     *       we can use "dirty writes" to the mds buffer, but we
-     *       need to track the mds offset and mds total length
-     *       for final update at the end.
-     *
-     *       Much better than calling "mdscatlen" for EACH byte
-     *       write though. */
-    if (supportUTF8) {
-        state->s = mdsexpandby(state->s, 2 + len * 6); /* "\uxxxx..." */
-    } else {
-        state->s = mdsexpandby(state->s, 2 + len * 12); /* "\uxxxx\uyyyy..." */
-    }
-#endif
 
     const uint8_t *data = data_;
     size_t processedLen = 0;
@@ -766,11 +742,7 @@ void djStringDirect(djState *state, const void *data, size_t len) {
 
 void djNumericDirect(djState *state, const void *data, size_t len) {
     if (IS_KEY) {
-        /* JSON requires keys to be quoted strings, so add annoying
-         * quotes to the number here. */
-        /* TODO: parameterize something to still output unquoted
-         * numbers for other json-adjacent formats allowing integer
-         * keys like python format output, etc */
+        /* JSON keys are strings: a numeric key is written quoted */
         state->s = mdscatlenquoteraw(state->s, data, len, ':');
     } else {
         /* Place 'data' without quotes but with a trailing comma... */
