@@ -144,3 +144,26 @@ class Spell(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Markers(unittest.TestCase):
+    def test_markers_in_sources_and_docs_outside_code_spans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "a.c").write_text("int x; /* TODO: later */\n/* NOTE: fine */\n")
+            (repo / "b.h").write_text("/* todo: rebalance */\nint y; /* XXX */\n")
+            (repo / "c.md").write_text(
+                "Writes `TODO` markers are refused.\nFIXME here\n"
+            )
+            (repo / "d.py").write_text("# TODO in a tool is not scanned\n")
+            found = spell.markers(repo, ["a.c", "b.h", "c.md", "d.py"])
+            self.assertEqual(
+                [line.split(" ==> ")[0] for line in found],
+                ["a.c:1: TODO", "b.h:1: todo:", "b.h:2: XXX", "c.md:2: FIXME"],
+            )
+
+    def test_words_that_contain_a_marker_are_not_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "a.c").write_text("/* TODOS XXXL HACKER todos */\n")
+            self.assertEqual(spell.markers(repo, ["a.c"]), [])

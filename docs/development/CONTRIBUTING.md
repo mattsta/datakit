@@ -552,12 +552,12 @@ count++; // Include the terminating entry
  * important behavior */
 ```
 
-**TODO comments:**
+**No pending-work markers:** comments state what the code is and why. Fix
+a gap before committing, or keep it in your own notes; the `spell` gate
+refuses `TODO`, `FIXME`, `XXX` and `HACK` markers in sources and docs.
 
 ```c
-// TODO: Optimize this loop
-// FIXME: Handle edge case where n == 0
-// NOTE: This must be called before moduleInit()
+/* NOTE: This must be called before moduleInit() */
 ```
 
 **Documentation:**

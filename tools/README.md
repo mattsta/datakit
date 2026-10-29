@@ -859,6 +859,10 @@ uv run --project tools dktools spell [--write] [FILE ...]
   `CMakeLists.txt`, `docs/**/*.md`, the root README and the tools'
   sources, tests and README, or over the files given. Prints each
   finding as `path:line: wrong ==> right`.
+- Also flags pending-work markers (`TODO`, `FIXME`, `XXX`, `HACK`,
+  `todo:`) in the C sources and Markdown docs, outside Markdown inline
+  code: sources and docs state what is, and a gap is fixed before it is
+  committed (or kept in the author's own notes).
 - Words that are right here although codespell flags them
   (identifiers such as `aCount`, test strings, constant bytes such as
   ChaCha's `"nd 3"`) go one per line, lowercase, in

@@ -5,7 +5,9 @@ Runs codespell (a locked tools dependency) over the tracked C sources
 Markdown, the root README and the tools' own sources, tests and README,
 or over the files given.  Words that are right here although codespell
 flags them (identifiers, domain terms) go one per line, lowercase, in
-``tools/spell-words.txt``.
+``tools/spell-words.txt``.  It also flags pending-work markers (TODO,
+FIXME, XXX, HACK, "todo:") in the C sources and Markdown docs (outside
+Markdown inline code): sources and docs state what is.
 
 Reports by default.  ``--write`` applies codespell's fix wherever it
 has exactly one suggestion and leaves the rest flagged; run it only
@@ -19,6 +21,7 @@ a bad path or a codespell failure.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -102,6 +105,29 @@ def scan(repo: Path, paths: list[str], write: bool = False) -> list[str]:
     return flagged(proc.stdout)
 
 
+#: Pending-work markers: sources and docs state what is, never what is
+#: left to do (a gap is fixed, or kept in the author's own notes)
+_MARKER = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b|\btodo:")
+#: Inline code in Markdown (a doc may name a marker in backticks)
+_CODE_SPAN = re.compile(r"`[^`]*`")
+
+
+def markers(repo: Path, paths: list[str]) -> list[str]:
+    """'path:line: marker' for every pending-work marker in the C sources
+    and Markdown docs among 'paths' (Markdown inline code skipped)"""
+    found: list[str] = []
+    for path in paths:
+        if not path.endswith((".c", ".h", ".md")):
+            continue
+        text = (repo / path).read_text(encoding="utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), 1):
+            if path.endswith(".md"):
+                line = _CODE_SPAN.sub("", line)
+            if m := _MARKER.search(line):
+                found.append(f"{path}:{number}: {m.group(0)} ==> state what is")
+    return found
+
+
 def run(repo: Path, paths: tuple[str, ...], write: bool = False) -> int:
     chosen = list(paths) or targets(repo)
     for path in chosen:
@@ -110,11 +136,11 @@ def run(repo: Path, paths: tuple[str, ...], write: bool = False) -> int:
     if not chosen:
         print("spell: no files")
         return 0
-    found = scan(repo, chosen)
+    found = scan(repo, chosen) + markers(repo, chosen)
     if write and found:
         before = len(found)
         scan(repo, chosen, write=True)
-        found = scan(repo, chosen)
+        found = scan(repo, chosen) + markers(repo, chosen)
         print(f"spell: fixed {before - len(found)}")
     for line in found:
         print(f"  {line}")
