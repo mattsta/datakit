@@ -54,12 +54,11 @@ import math
 import re
 import statistics
 import sys
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import buildstore, gitutil, perfcompare, perfdiff, procs, steps, toolchain
+from . import gitutil, perfcompare, perfdiff, procs, steps, toolchain
 from .gitutil import ToolError
 
 #: The families whose setting is a dkTierFamily size limit (dkTierLimit.h)
@@ -585,7 +584,7 @@ def cache_sizes(
 # -- report --------------------------------------------------------------
 
 
-def _human(n: int) -> str:
+def human_bytes(n: int) -> str:
     for unit, scale in (("MB", 1 << 20), ("KB", 1 << 10)):
         if n >= scale and n % scale == 0:
             return f"{n // scale} {unit}"
@@ -744,7 +743,7 @@ def render(
     lines = []
     if caches:
         lines.append(
-            "caches    " + ", ".join(f"{label} {_human(n)}" for label, n in caches)
+            "caches    " + ", ".join(f"{label} {human_bytes(n)}" for label, n in caches)
         )
     runs = min((s.runs() for s in found.values()), default=0)
     lines.extend(legend(mixes, baselines, runs, slower))
@@ -979,20 +978,11 @@ def run(repo: Path, opts: TuneOptions) -> int:
     )
     size = procs.sizing(opts.jobs)
 
-    head = gitutil.git_text(repo, "rev-parse", "HEAD")
-    with tempfile.TemporaryDirectory(prefix="dktools-tune-") as tmp:
-        tree = gitutil.build_tree(
-            repo, Path(tmp) / "index", [(p, None) for p in gitutil.working_paths(repo)]
-        )
-    config.compiler.check()
-
-    work = buildstore.fresh_build(repo, root, "tune", name, head, "tune")
+    side, work = perfcompare.working_side(repo, root, "tune", name, config)
+    tree = side.tree
     (work / "meta.json").write_text(
         json.dumps({"config": config.label, "tree": tree}, indent=2) + "\n"
     )
-    side = perfcompare.Side("tune", tree, work / "src", config)
-    gitutil.export_tree(repo, tree, side.src)
-    config.check_presets_file(side.src)
     step = perfcompare.build_side(side, work, size)
     if not step.ok:
         sys.stdout.write(

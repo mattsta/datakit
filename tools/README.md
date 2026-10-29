@@ -1186,6 +1186,35 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   `multidictSetDefaultLoadFactors`
   (`src/multidict.h`), which `multidictNew` reads.
 
+## matrix — every container's throughput and bytes per element
+
+```sh
+uv run --project tools dktools matrix NAME [--runs N] [--write] [--reuse]
+```
+
+- Builds HEAD plus the changed tracked paths and new files under src/
+  with the perf preset under `ROOT/matrix/NAME`, then runs
+  `datakit-test test containerMatrix` `--runs` times (default 3) with
+  `DK_MATRIX=full`. Each container, element kind (small integers,
+  integers across the 64-bit range, 16- and 256-byte strings) and size
+  (1K, 100K and 1M; 256-byte strings to 100K) is measured phase by phase:
+  create, read, update, delete. The test checks every result, so a wrong
+  answer fails the run.
+- Per container, kind, size and phase: operations per second at the
+  median seconds over the runs, and the container's bytes per element
+  after create. One markdown table per kind and size compares the
+  containers, the fastest per phase and the smallest in bold.
+- The report goes to `result.md` in the work directory and to stdout;
+  `--write` also writes `docs/PERFORMANCE_MATRIX.md`, the generated
+  companion of the hand-written `docs/CHOOSING_A_CONTAINER.md`.
+  `--reuse` reports again on the runs an earlier matrix of the same NAME
+  left, without building.
+- A container joins the matrix as one driver in `src/containerMatrix.c`:
+  make, create, read, update (optional), delete, bytes and count, and
+  the kinds and largest size it takes. As a plain test,
+  `containerMatrix` measures 100 elements of every kind and checks every
+  result.
+
 ## perfcompare — a change's performance against a base revision
 
 Builds a base revision and the working tree side by side and times them

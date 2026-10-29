@@ -32,6 +32,7 @@ from . import (
     idioms,
     irdups,
     leakcheck,
+    matrix,
     objdiff,
     outputaudit,
     perfcompare,
@@ -853,6 +854,41 @@ def main(argv: list[str] | None = None) -> int:
     tu.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(tu)
 
+    mx = sub.add_parser(
+        "matrix",
+        help="measure every container's create, read, update and delete "
+        "throughput and bytes per element per element kind and size, as a "
+        "markdown report (docs/PERFORMANCE_MATRIX.md)",
+    )
+    mx.add_argument("name", help="work-dir name under ROOT/matrix")
+    mx.add_argument("--runs", type=int, default=3, help="measuring runs (default 3)")
+    mx.add_argument(
+        "--write",
+        action="store_true",
+        help=f"also write the report to {matrix.DOC}",
+    )
+    mx.add_argument(
+        "--reuse",
+        action="store_true",
+        help="report again on the runs an earlier matrix NAME measured, "
+        "without building or measuring",
+    )
+    mx.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    mx.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: build/dktools in the "
+        "repository)",
+    )
+    mx.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(mx)
+
     lc = sub.add_parser(
         "leakcheck",
         help="leakage gate over the staged diff, a range, or the tree "
@@ -1215,6 +1251,20 @@ def _dispatch(args: argparse.Namespace) -> int:
                 root=args.root,
                 jobs=args.jobs,
                 reuse=args.reuse,
+            ),
+        )
+
+    if args.command == "matrix":
+        return matrix.run(
+            args.repo,
+            matrix.MatrixOptions(
+                name=args.name,
+                runs=args.runs,
+                write=args.write,
+                reuse=args.reuse,
+                compiler=toolchain.from_args(args.compiler, args),
+                root=args.root,
+                jobs=args.jobs,
             ),
         )
 

@@ -95,6 +95,7 @@ auto-discovers CTest targets from it.
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Build instructions and first examples
 - **[Architecture Overview](docs/ARCHITECTURE.md)** - Design patterns and philosophy
 - **[API Quick Reference](docs/API_QUICK_REFERENCE.md)** - Common operations at a glance
+- **[Choosing a Container](docs/CHOOSING_A_CONTAINER.md)** - Memory against compute: which container for which job, measured
 - **[Documentation Index](docs/INDEX.md)** - Complete module listing
 - **[Hashes, HMAC, and the flex envelope](docs/HASH_AND_ENVELOPE.md)** - Integrity, MAC, and AEAD guide
 
@@ -190,6 +191,7 @@ auto-discovers CTest targets from it.
 
 ### Performance
 
+- [Container Performance Matrix](docs/PERFORMANCE_MATRIX.md) - Operations per second and bytes per element for every container, element kind and size (`dktools matrix`)
 - [Performance Baselines Ledger](docs/PERFORMANCE_BASELINES.md) - Dated benchmark captures
 - [Hash / Envelope Performance](docs/HASH_PERFORMANCE.md) - Hash and envelope throughput reference
 

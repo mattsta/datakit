@@ -317,6 +317,25 @@ class Side:
         return self.config.binary_dir(self.src) / "src" / "datakit-test"
 
 
+def working_side(
+    repo: Path, root: Path, kind: str, name: str, config: toolchain.BuildConfig
+) -> tuple[Side, Path]:
+    """HEAD plus every changed tracked path and every new file under src/,
+    exported as one perf build under ROOT/<kind>/<name> (tune and matrix
+    measure the working tree this way); the side and its work directory"""
+    head = gitutil.git_text(repo, "rev-parse", "HEAD")
+    with tempfile.TemporaryDirectory(prefix=f"dktools-{kind}-") as tmp:
+        tree = gitutil.build_tree(
+            repo, Path(tmp) / "index", [(p, None) for p in gitutil.working_paths(repo)]
+        )
+    config.compiler.check()
+    work = buildstore.fresh_build(repo, root, kind, name, head, kind)
+    side = Side(kind, tree, work / "src", config)
+    gitutil.export_tree(repo, tree, side.src)
+    config.check_presets_file(side.src)
+    return side, work
+
+
 def build_side(side: Side, work: Path, size: procs.Sizing) -> steps.Step:
     """Configure and build `side`'s datakit-test; the failing step or the
     build step."""

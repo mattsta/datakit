@@ -656,6 +656,7 @@ if(DatakitTestMode)
         linearBloomTest.c
         multiTimerTest.c
         perfRegression.c
+        containerMatrix.c
         dkC23Test.c
         dkEndianTest.c
         dkBitsTest.c

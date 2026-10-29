@@ -451,8 +451,12 @@ multiarrayLarge *sequential = multiarrayLargeNew(sizeof(T), 1024);
 
 ### multimap Variant Performance
 
-There is no in-tree benchmark comparing the multimap variants, so no
-figures are given. For random inserts, the shape is:
+No in-tree benchmark pins one multimap variant against another. The
+[container matrix](../PERFORMANCE_MATRIX.md) measures the multimap as
+callers use it, through its variants from 1K to 1M rows: about 0.5-3M
+operations per second at every size (see
+[Choosing a Container](../CHOOSING_A_CONTAINER.md)). For random
+inserts, the shape is:
 
 - **Small** (one flex) moves the whole flex for each mid-map insert.
 - **Medium** splits the data across two flexes, so each memmove is smaller.

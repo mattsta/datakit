@@ -20,6 +20,7 @@
 #include "clusterReplicator.h"
 #include "clusterRing.h"
 #include "compressionBench.h"
+#include "containerMatrix.h"
 #include "ctest.h"
 #include "ctmem.h"
 #include "databox.h"
@@ -12365,9 +12366,10 @@ static const TestEntry testRegistry[] = {
     T_A(aeadNonceLog, "noncelog,nonce-log"), T_A(dkFormat, "format"),
     T_A(x25519, "ecdh"), T_A(rapidhash, "rh,rapid"), T_A(aesGcm, "aes,aesgcm"),
     T_A(clusterMailbox, "mailbox,mb"), T_A(clusterReplicator, "replicator,rep"),
-    T_A(perfRegression, "perf-baseline,perfbase"), T(mflex),
-    T_A(multilist, "ml"), T(multilistFull), T(multidict), T_ADJ(multimap),
-    T(multimapFull), T(multimapMedium), T_A_ADJ(multimapAtom, "atom"),
+    T_A(perfRegression, "perf-baseline,perfbase"),
+    T_A(containerMatrix, "matrix"), T(mflex), T_A(multilist, "ml"),
+    T(multilistFull), T(multidict), T_ADJ(multimap), T(multimapFull),
+    T(multimapMedium), T_A_ADJ(multimapAtom, "atom"),
     T_A(multimapAtomDense, "atomdense"), T_A_ADJ(stringPool, "sp,strpool"),
     T_A_ADJ(atomPool, "ap,apool"), T_ADJ(multiarray), T_ADJ(multiarraySmall),
     T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge), T_ADJ(multiroar),

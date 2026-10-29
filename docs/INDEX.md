@@ -7,6 +7,7 @@
 - [Getting Started Guide](GETTING_STARTED.md) - Build instructions and first steps
 - [Architecture Overview](ARCHITECTURE.md) - Design patterns and philosophy
 - [API Quick Reference](API_QUICK_REFERENCE.md) - Common operations across modules
+- [Choosing a Container](CHOOSING_A_CONTAINER.md) - Which container for which job, by measured throughput and bytes per element ([matrix](PERFORMANCE_MATRIX.md))
 - [Hashes, HMAC, and the flex envelope](HASH_AND_ENVELOPE.md) - Integrity and AEAD usage guide
 
 ## Module Documentation
@@ -155,6 +156,7 @@ installed. They carry their own upstream documentation:
 
 - [Performance Tuning](advanced/PERFORMANCE.md) - Optimization guidelines
 - [Performance Baselines Ledger](PERFORMANCE_BASELINES.md) - Dated benchmark captures and the decisions they support
+- [Container Performance Matrix](PERFORMANCE_MATRIX.md) - Create, read, update and delete per second and bytes per element, every container, kind and size (generated)
 - [Memory Efficiency](advanced/MEMORY.md) - Understanding memory patterns
 - [Scale-Aware Collections](advanced/SCALE_AWARE.md) - Choosing the right size variant
 - [Thread Safety](advanced/THREAD_SAFETY.md) - Concurrent usage patterns
