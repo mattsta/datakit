@@ -11523,6 +11523,18 @@ int multidictTest(int, char *[]) {
         }
     }
 
+    TEST("LRU repack of a dict with no LRU moves nothing") {
+        cleaner(multidictMmClassFree) multidictClass *plainClass =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *plain =
+            multidictNew(&multidictTypeExactKey, plainClass, 7);
+        const databox key = databoxNewSigned(1);
+        if (multidictAdd(plain, &key, &key) != MULTIDICT_OK_INSERTED ||
+            multidictLRURepack(plain) != 0 || multidictCount(plain) != 1) {
+            ERR("a repack without LRU moved entries or changed the dict");
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 

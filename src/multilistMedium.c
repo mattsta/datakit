@@ -65,7 +65,7 @@ static void multilistMediumBalance_(multilistMedium *ml) {
     const uint32_t count1 = (uint32_t)flexCount(F1);
     const uint32_t move =
         tailBig ? (count1 - count0) / 2 : (count0 - count1) / 2;
-    if (move == 0 || (tailBig && count0 == 0)) {
+    if (move == 0) {
         return;
     }
 

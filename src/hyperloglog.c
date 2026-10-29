@@ -1168,9 +1168,9 @@ DK_FN_PURE static double hllTau(double x) {
  * mean of the registers values. 'hdr' points to the sketch (its header
  * followed by its registers).
  *
- * If the sketch is not valid (a corrupt sparse representation, or an
- * encoding none of these), '*invalid' (when given) is set and the count is
- * 0; otherwise it is left untouched.
+ * If the sketch is not valid (a corrupt sparse representation, a register
+ * past HLL_Q + 1, or an encoding none of these), '*invalid' (required) is
+ * set and the count is 0; otherwise it is left untouched.
  *
  * Besides the dense and sparse encodings this reads the internal HLL_RAW
  * one, whose registers are a uint8_t array of HLL_REGISTERS entries: a
@@ -1196,17 +1196,13 @@ DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
     } else {
         /* No representation this code reads: the sketch is invalid, and
          * has no cardinality to report */
-        if (invalid) {
-            *invalid = true;
-        }
+        *invalid = true;
         return 0;
     }
 
     for (int_fast32_t j = HLL_Q + 2; j <= HLL_REGISTER_MAX; j++) {
         if (reghisto[j]) {
-            if (invalid) {
-                *invalid = true;
-            }
+            *invalid = true;
             return 0;
         }
     }
@@ -1553,12 +1549,15 @@ uint64_t hyperloglogCountUnion(const hyperloglog *const *hlls, size_t n,
     hyperloglog *raw = toHLL(max);
     raw->encoding = HLL_RAW; /* Special internal-only encoding. */
 
+    /* A sketch that folds but holds a register no hash gives makes the
+     * count invalid too */
     bool anyDense = false;
-    const bool ok = hyperloglogFoldAll_(raw, hlls, n, &anyDense);
+    bool bad = !hyperloglogFoldAll_(raw, hlls, n, &anyDense);
+    const uint64_t count = bad ? 0 : hyperloglogCount_(raw, &bad);
     if (invalid) {
-        *invalid = !ok;
+        *invalid = bad;
     }
-    return ok ? hyperloglogCount_(raw, nullptr) : 0;
+    return count;
 }
 
 hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense) {
@@ -2003,6 +2002,17 @@ approximationDone:
                         ", invalid %d",
                         places[p], value, hyperloglogDetect(bad), count,
                         invalid);
+                }
+
+                /* A union over it counts 0 and reports it invalid */
+                cleaner(hyperloglogFree) hyperloglog *fine =
+                    hyperloglogNewDense();
+                const hyperloglog *both[2] = {fine, bad};
+                bool unionInvalid = false;
+                if (hyperloglogCountUnion(both, 2, &unionInvalid) != 0 ||
+                    !unionInvalid) {
+                    ERR("register %u = %" PRIu64 ": a union counted it",
+                        places[p], value);
                 }
             }
         }
