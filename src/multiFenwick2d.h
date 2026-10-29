@@ -41,6 +41,7 @@
  *
  * Not thread-safe. */
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multiFenwick2d multiFenwick2d;
 
 [[nodiscard]] multiFenwick2d *multiFenwick2dNew(void);

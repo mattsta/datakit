@@ -105,6 +105,7 @@ typedef struct clusterFrame {
  * can re-deliver it. */
 typedef bool (*clusterApplyFn)(const clusterFrame *frame, void *ctx);
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct clusterMailbox clusterMailbox;
 
 /* Construct a mailbox. `ring` is borrowed — caller is responsible

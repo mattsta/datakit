@@ -4,6 +4,7 @@
 #include "dkFormat.h"
 #include "multimap.h"
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiroar multiroar;
 
 [[nodiscard]] multiroar *multiroarBitNew(void);
@@ -117,15 +118,16 @@ void multiroarNot(multiroar *r);
 [[nodiscard]] multiroar *multiroarNewOr(const multiroar *r, const multiroar *b);
 [[nodiscard]] multiroar *multiroarNewNot(const multiroar *r);
 
-/* N-way set operations (N >= 2) - modify first roar in array in place */
-void multiroarAndN(uint64_t n, multiroar **roars);
-void multiroarOrN(uint64_t n, multiroar **roars);
-void multiroarXorN(uint64_t n, multiroar **roars);
+/* N-way set operations (N >= 2) over the array roars[0..n): roars[0]
+ * changes in place (its address holds); the rest are read */
+void multiroarAndN(uint64_t n, multiroar *const *roars);
+void multiroarOrN(uint64_t n, multiroar *const *roars);
+void multiroarXorN(uint64_t n, multiroar *const *roars);
 
-/* N-way set operations - return new multiroar */
-[[nodiscard]] multiroar *multiroarNewAndN(uint64_t n, multiroar **roars);
-[[nodiscard]] multiroar *multiroarNewOrN(uint64_t n, multiroar **roars);
-[[nodiscard]] multiroar *multiroarNewXorN(uint64_t n, multiroar **roars);
+/* N-way set operations into a new multiroar; every input is read */
+[[nodiscard]] multiroar *multiroarNewAndN(uint64_t n, multiroar *const *roars);
+[[nodiscard]] multiroar *multiroarNewOrN(uint64_t n, multiroar *const *roars);
+[[nodiscard]] multiroar *multiroarNewXorN(uint64_t n, multiroar *const *roars);
 
 /* Iterator for efficient traversal */
 typedef struct multiroarIterator {

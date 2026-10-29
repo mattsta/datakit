@@ -2,6 +2,7 @@
 
 #include "multiarraySmall.h"
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiarrayMedium multiarrayMedium;
 
 multiarrayMedium *multiarrayMediumNew(int16_t len, int16_t rowMax);

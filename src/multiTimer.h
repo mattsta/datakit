@@ -39,6 +39,7 @@
 #include "datakit.h"
 #include <stdint.h>
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiTimer multiTimer;
 
 typedef uint64_t multiTimerId;

@@ -16,10 +16,15 @@ macros); the reason is required, and a line naming a header that now
 compiles on its own, or one that is not a checked header, fails too, so
 the list stays true.
 
+Every handle in the public headers is also checked for its ``@handle``
+tag (``dktools handles``: whether a call can move it), so the gate fails
+on an untagged handle or one whose calls contradict its tag.
+
 The compile database is DIR's ``compile_commands.json`` (``--build``,
 e.g. a verify tree's binary dir), else ``build/PRESET``'s.  Exits 0 when
-every header compiles or is allowed and no allow line is stale, 1
-otherwise, 2 for a missing database or a malformed allow line.
+every header compiles or is allowed, no allow line is stale and every
+handle is tagged to match its calls, 1 otherwise, 2 for a missing
+database or a malformed allow line.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import irdups, procs
+from . import handles, irdups, procs
 from .gitutil import ToolError
 from .retoken import VENDORED, sources
 
@@ -171,8 +176,14 @@ def run(
     for p in stale:
         print(f"{ALLOW_FILE}: {p}: allowed but compiles on its own or is no header")
 
+    found = handles.collect(repo, paths)
+    untagged = [p for h in found for p in h.problems()]
+    for p in untagged:
+        print(p)
+
     print(
         f"headers: {len(bad)} to fix, {len(failed) - len(bad)} allowed, "
-        f"{len(stale)} stale allow lines, of {len(files)} headers"
+        f"{len(stale)} stale allow lines, of {len(files)} headers; "
+        f"{len(untagged)} of {len(found)} handles to fix"
     )
-    return 1 if bad or stale else 0
+    return 1 if bad or stale or untagged else 0

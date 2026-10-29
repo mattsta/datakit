@@ -81,7 +81,7 @@ typedef enum atomPoolIds {
     ATOM_POOL_IDS_LOWEST,
 } atomPoolIds;
 
-/* Forward declaration */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct atomPool atomPool;
 
 /* ====================================================================

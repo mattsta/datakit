@@ -5,7 +5,8 @@
 /* A compact arena of {atomIndex, prev, next} entries of any size_t values,
  * each stored in 2 to 9 bytes per field.  An entry is named by a
  * ptrPrevNextPtr, which stays valid (also across the arena's growth)
- * until that entry is updated to a new pointer or released. */
+ * until that entry is updated to a new pointer or released.
+ * @handle: fixed: its address holds from creation to free */
 typedef struct ptrPrevNext ptrPrevNext;
 typedef size_t ptrPrevNextPtr;
 

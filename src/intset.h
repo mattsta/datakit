@@ -15,6 +15,7 @@
  */
 
 /* Opaque pointer type - actual tier determined by pointer tagging */
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct intset intset;
 
 /* The byte width a value needs (intsetCommon.h picks it per value) */

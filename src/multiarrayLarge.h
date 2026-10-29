@@ -4,6 +4,7 @@
 #include "multiarrayMedium.h"
 #include <stdint.h>
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiarrayLarge multiarrayLarge;
 
 multiarrayLarge *multiarrayLargeNew(uint16_t len, uint16_t rowMax);

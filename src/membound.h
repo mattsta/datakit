@@ -295,6 +295,7 @@
  *
  */
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct membound membound;
 
 /* ====================================================================

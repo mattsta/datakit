@@ -63,6 +63,7 @@
  *   stringPoolFree(pool);
  */
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct stringPool stringPool;
 
 /* The id behaviour, fixed at creation.  None adds a byte per string. */

@@ -118,7 +118,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-/* Forward declarations */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct persist persist;
 typedef struct persistStore persistStore;
 typedef struct persistOps persistOps;

@@ -23,6 +23,7 @@
 
 #include "multilistCommon.h"
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multilistMedium multilistMedium;
 
 /* Create */

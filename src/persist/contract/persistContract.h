@@ -35,6 +35,7 @@
 #include "../../databox.h"
 #include "../../persist.h"
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct persistContractLog persistContractLog;
 
 /* What the harness asks a generator to build. */

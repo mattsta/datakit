@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct fenwick2dU16 fenwick2dU16;
 
 [[nodiscard]] fenwick2dU16 *fenwick2dU16New(void);

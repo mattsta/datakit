@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct hyperloglogHeader hyperloglog;
 
 [[nodiscard]] hyperloglog *hyperloglogNew(void);

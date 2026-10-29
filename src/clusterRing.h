@@ -60,10 +60,11 @@ __BEGIN_DECLS
  * Forward Declarations (Opaque Types)
  * ==================================================================== */
 
-typedef struct clusterRing clusterRing;
-typedef struct clusterNode clusterNode;
-typedef struct clusterKeySpace clusterKeySpace;
-typedef struct clusterRebalancePlan clusterRebalancePlan;
+/* Each handle's address holds from creation to free */
+typedef struct clusterRing clusterRing;                   /* @handle: fixed */
+typedef struct clusterNode clusterNode;                   /* @handle: fixed */
+typedef struct clusterKeySpace clusterKeySpace;           /* @handle: fixed */
+typedef struct clusterRebalancePlan clusterRebalancePlan; /* @handle: fixed */
 
 /* ====================================================================
  * Result Codes

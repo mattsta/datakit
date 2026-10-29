@@ -2,7 +2,7 @@
 
 #include "multimapCommon.h"
 
-/* Opaque data type; no user visible data here */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multimapSmall multimapSmall;
 
 [[nodiscard]] multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,

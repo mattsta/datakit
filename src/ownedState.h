@@ -507,7 +507,8 @@ typedef enum ownedSeqColumn {
 } ownedSeqColumn;
 
 /* Opaque handle to the version a fill callback is writing. Writes go
- * through the two setters, which ignore out-of-range input. */
+ * through the two setters, which ignore out-of-range input.
+ * @handle: fixed: its address holds for the callback's run */
 typedef struct ownedSeqVersionRef ownedSeqVersionRef;
 void ownedSeqPutWord(ownedSeqVersionRef *v, size_t wordIndex, uint64_t w);
 void ownedSeqPutBytes(ownedSeqVersionRef *v, size_t offset, const void *src,

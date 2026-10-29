@@ -3,7 +3,7 @@
 #include "databox.h"
 #include "multimapCommon.h"
 
-/* Opaque data type; no user visible data here */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multimapFull multimapFull;
 typedef void(multimapFullMapDeleter)(const flex *map, void *data);
 

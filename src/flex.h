@@ -16,9 +16,11 @@ typedef enum flexEndpoint {
 /* That's right, an empty 'flex' is just 2 bytes! */
 #define FLEX_EMPTY_SIZE 2
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef uint8_t flex;
 typedef uint8_t flexEntry;
 
+/* @handle: fixed: its address holds from creation to free */
 typedef uint8_t cflex;
 
 [[nodiscard]] flex *flexNew(void);

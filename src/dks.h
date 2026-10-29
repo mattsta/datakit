@@ -24,9 +24,11 @@
 __BEGIN_DECLS
 
 #if defined(DATAKIT_DKS_FULL) || defined(DATAKIT_DKS_FULL_HEADER)
+/* @handle: returns: a call that can move it returns the new address */
 typedef char mds;
 #define DKS_TYPE mds
 #elif defined(DATAKIT_DKS_COMPACT) || defined(DATAKIT_DKS_COMPACT_HEADER)
+/* @handle: returns: a call that can move it returns the new address */
 typedef char mdsc;
 #define DKS_TYPE mdsc
 #else

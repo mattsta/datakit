@@ -26,6 +26,7 @@ from . import (
     formatting,
     fusionscan,
     gitutil,
+    handles,
     headers,
     historyscrub,
     idioms,
@@ -358,6 +359,16 @@ def main(argv: list[str] | None = None) -> int:
         "(exit 0, 1 for hits not in tools/idioms-allow.txt or stale allow lines)",
     )
     idm.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    hnd = sub.add_parser(
+        "handles",
+        help="check every handle type is tagged @handle: moves, returns or "
+        "fixed, and that its calls agree (exit 1 for a problem)",
+    )
+    hnd.add_argument("headers", nargs="*", help="repo-relative public headers")
+    hnd.add_argument(
+        "--list", action="store_true", help="list every handle, tag and T ** call"
+    )
 
     dg = sub.add_parser(
         "docgaps",
@@ -1359,6 +1370,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return idioms.run(args.repo, tuple(args.paths))
     if args.command == "docgaps":
         return docgaps.run(args.repo, tuple(args.headers), args.names)
+    if args.command == "handles":
+        return handles.run(args.repo, tuple(args.headers), args.list)
     if args.command == "headers":
         return headers.run(
             args.repo, tuple(args.paths), args.build, args.preset, args.jobs

@@ -36,6 +36,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct aeadNonceLog aeadNonceLog;
 
 /* AEAD nonce width covered by this module — sized for ChaCha20-Poly1305

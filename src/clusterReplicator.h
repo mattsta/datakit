@@ -40,6 +40,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct clusterReplicator clusterReplicator;
 
 /* Callback fired for every successfully restored structure on the

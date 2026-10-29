@@ -26,6 +26,7 @@
 
 #define IDROWS_PAGE 64u
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct idRows idRows;
 
 [[nodiscard]] idRows *idRowsNew(uint32_t elementsPerRow);

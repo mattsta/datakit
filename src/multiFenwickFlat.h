@@ -62,6 +62,7 @@
  */
 
 /* Opaque flat multiFenwick tree type */
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multiFenwickFlat multiFenwickFlat;
 
 /* ====================================================================

@@ -12,6 +12,7 @@
 /* ====================================================================
  * Container / Function API
  * ==================================================================== */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiarraySmall multiarraySmall;
 
 multiarraySmall *multiarraySmallNew(uint16_t len, uint16_t rowMax);

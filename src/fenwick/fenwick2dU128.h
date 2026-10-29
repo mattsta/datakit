@@ -10,6 +10,7 @@
 
 #ifdef __SIZEOF_INT128__
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct fenwick2dU128 fenwick2dU128;
 
 [[nodiscard]] fenwick2dU128 *fenwick2dU128New(void);

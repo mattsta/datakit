@@ -460,15 +460,15 @@ inside the 8192-bit windows that set has touched. For set difference, use
 ### N-Way Operations
 
 ```c
-/* Fold N roars into roars[0] (N >= 2) */
-void multiroarAndN(uint64_t n, multiroar **roars);
-void multiroarOrN(uint64_t n, multiroar **roars);
-void multiroarXorN(uint64_t n, multiroar **roars);
+/* Fold N roars into roars[0] (N >= 2); the array is only read */
+void multiroarAndN(uint64_t n, multiroar *const *roars);
+void multiroarOrN(uint64_t n, multiroar *const *roars);
+void multiroarXorN(uint64_t n, multiroar *const *roars);
 
 /* Fold N roars into a fresh result, leaving inputs untouched */
-multiroar *multiroarNewAndN(uint64_t n, multiroar **roars);
-multiroar *multiroarNewOrN(uint64_t n, multiroar **roars);
-multiroar *multiroarNewXorN(uint64_t n, multiroar **roars);
+multiroar *multiroarNewAndN(uint64_t n, multiroar *const *roars);
+multiroar *multiroarNewOrN(uint64_t n, multiroar *const *roars);
+multiroar *multiroarNewXorN(uint64_t n, multiroar *const *roars);
 
 /* Example: intersect four posting lists in one pass */
 multiroar *lists[4] = {a, b, c, d};

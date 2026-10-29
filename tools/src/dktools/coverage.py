@@ -126,7 +126,8 @@ class PublicApi:
 # ---------------------------------------------------------------------------
 
 
-def _strip_comments_and_preprocessor(text: str) -> str:
+def code_text(text: str) -> str:
+    """'text' without its comments and preprocessor lines."""
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
     text = re.sub(r"//[^\n]*", " ", text)
     out: list[str] = []
@@ -149,7 +150,15 @@ def declared_functions(header_text: str, templates: bool = False) -> list[str]:
     expand to the real names (``DKS_NEW``; `templates` keeps them for
     template_functions), and ``deprecated`` declarations exist only to
     stop callers using a libc function."""
-    text = _strip_comments_and_preprocessor(header_text)
+    return [name for name, _ in declared_prototypes(header_text, templates)]
+
+
+def declared_prototypes(
+    header_text: str, templates: bool = False
+) -> list[tuple[str, str]]:
+    """(name, the whole prototype on one line) for each function
+    declared_functions names, in order."""
+    text = code_text(header_text)
     statements: list[str] = []
     depth = 0
     parens = 0
@@ -176,7 +185,7 @@ def declared_functions(header_text: str, templates: bool = False) -> list[str]:
                 if re.fullmatch(r"[A-Z_][A-Z0-9_]*\s*\(.*\)", so_far, re.DOTALL):
                     statements.append(so_far)
                     current = []
-    names: list[str] = []
+    found: list[tuple[str, str]] = []
     for statement in statements:
         flat = " ".join(statement.split())
         if not flat or flat.startswith(("typedef", "static", 'extern "C"')):
@@ -191,8 +200,8 @@ def declared_functions(header_text: str, templates: bool = False) -> list[str]:
             continue
         if not re.search(r"[a-z]", name) and not templates:
             continue
-        names.append(name)
-    return names
+        found.append((name, flat))
+    return found
 
 
 _DK_NAME_RE = re.compile(
@@ -204,18 +213,30 @@ _DEFINE_WORD_RE = re.compile(
 )
 
 
+def template_types(
+    header_text: str,
+) -> tuple[dict[str, tuple[str, str]], dict[str, list[str]]]:
+    """A template header's naming: each ``#define NAME DK_NAME(TYPE,
+    suffix)`` as NAME -> (TYPE, suffix), and each one-word ``#define``
+    as macro -> its values (``DKS_TYPE`` -> ``mds``, ``mdsc``).  Both
+    are empty for a header with no DK_NAME macro."""
+    macros = {
+        m.group(1): (m.group(2), m.group(3)) for m in _DK_NAME_RE.finditer(header_text)
+    }
+    values: dict[str, list[str]] = {}
+    if macros:
+        for m in _DEFINE_WORD_RE.finditer(header_text):
+            values.setdefault(m.group(1), []).append(m.group(2))
+    return macros, values
+
+
 def template_functions(header_text: str) -> list[str]:
     """The real names of the functions a template header declares through
     ``#define NAME DK_NAME(TYPE, suffix)``: one per value the header gives
     TYPE (``#define DKS_TYPE mds`` and ``mdsc``: ``mdsnew``, ``mdscnew``)."""
-    macros = {
-        m.group(1): (m.group(2), m.group(3)) for m in _DK_NAME_RE.finditer(header_text)
-    }
+    macros, values = template_types(header_text)
     if not macros:
         return []
-    values: dict[str, list[str]] = {}
-    for m in _DEFINE_WORD_RE.finditer(header_text):
-        values.setdefault(m.group(1), []).append(m.group(2))
     out: list[str] = []
     for name in declared_functions(header_text, templates=True):
         if name in macros:
@@ -235,7 +256,7 @@ INLINE_DEFINITION = re.compile(
 def inline_functions(header_text: str) -> list[str]:
     """Names of the functions a header defines inline (macro bodies are
     left out with the rest of the preprocessor lines)."""
-    text = _strip_comments_and_preprocessor(header_text)
+    text = code_text(header_text)
     names = {m.group(1) for m in INLINE_DEFINITION.finditer(text)}
     return sorted(names - NOT_A_NAME)
 

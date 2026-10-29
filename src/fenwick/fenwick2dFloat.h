@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct fenwick2dFloat fenwick2dFloat;
 
 [[nodiscard]] fenwick2dFloat *fenwick2dFloatNew(void);

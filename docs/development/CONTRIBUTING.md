@@ -438,6 +438,45 @@ void moduleFree(module *m) {
 }
 ```
 
+### Handles: Can a Call Move It?
+
+A handle is a type callers hold only by pointer: an opaque struct
+(`typedef struct multimap multimap;`) or a byte-buffer typedef
+(`typedef uint8_t flex;`). Some handles live at an address that can
+change during an ordinary call (the object grows, shrinks or changes
+tier). Each handle's typedef says which kind it is, in a comment on its
+line or directly above it:
+
+```c
+/* @handle: moves: a call that can move it takes its address ('**') */
+typedef struct multimap multimap;
+
+/* @handle: returns: a call that can move it returns the new address */
+typedef char mds;
+
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multilru multilru;
+```
+
+- `moves`: every call that can relocate it takes `T **` and writes the
+  new address back (`multimapInsert(&m, ...)`); a `T *` call never moves
+  it. Hold one owner variable and pass its address, and never keep a
+  second copy of the pointer across a moving call. flex, mflex,
+  multimap, multilist, multiOrderedSet, multiarray, intset, hyperloglog,
+  the multiFenwick family and the typed 2D Fenwick trees are `moves`.
+- `returns`: calls that can relocate it return the new address, and the
+  caller stores it (`s = mdscatlen(s, ...)`). The `mds`/`mdsc` strings.
+- `fixed`: the address holds from creation to free; no call takes
+  `T **` except to hand out a new handle (a parameter named `out`,
+  `*Out` or `*Ptr`). An array of handles that is only read is
+  `T *const *`, not `T **`.
+
+**The gate.** `dktools headers` (the `headers` line of `verify` and
+`validate`) fails on an untagged handle in a public header and on a tag
+its calls contradict: `moves` with no `T **` call, `returns` with no call
+returning one, `fixed` with a `T **` parameter. `dktools handles --list`
+prints every handle with its tag and its `T **` calls.
+
 ### Error Handling
 
 **Return values:**

@@ -8,6 +8,7 @@
 #include <assert.h>
 
 /* opaque multimap type; there's no user accessible data here. */
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multimap multimap;
 
 [[nodiscard]] multimap *multimapNew(multimapElements elementsPerEntry);

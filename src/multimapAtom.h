@@ -42,6 +42,7 @@
 
 #include "multimap.h"
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multimapAtom multimapAtom;
 
 /* Ids are below this (the counter's top three bits record the id

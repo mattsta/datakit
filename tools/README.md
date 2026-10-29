@@ -769,8 +769,33 @@ uv run --project tools dktools headers [--build DIR | --preset P] [-j N] [FILE .
   macros); a line without a reason is an input error (exit 2), and a line
   whose header compiles on its own now, or names no checked header,
   fails, so the list stays true.
+- Also checks every handle's `@handle` tag (see `handles`); the summary
+  line counts the handles to fix.
 - Runs in `verify` and `validate` after the build (the `headers` line).
-  Exits 0 clean, 1 for a failing header or a stale allow line.
+  Exits 0 clean, 1 for a failing header, a stale allow line or a handle
+  to fix.
+
+## handles — whether a call can move each handle
+
+```sh
+uv run --project tools dktools handles [HEADER ...] [--list]
+```
+
+- A handle is an opaque struct typedef in a public header (no body
+  there) or a typedef carrying a tag. The tag, `@handle: moves`,
+  `returns` or `fixed`, sits in the comment on the typedef's line or the
+  comment block just above it (docs/development/CONTRIBUTING.md,
+  "Handles: Can a Call Move It?").
+- Each tag is checked against every public call: prototypes, template
+  prototypes under each type their type macro stands for (`DKS_TYPE` as
+  `mds` and `mdsc`), and function pointers (a class's call table).
+  `moves` needs a `T **` parameter; `returns` a call returning a `T`
+  that takes one; `fixed` no `T **` parameter except an `out`, `*Out` or
+  `*Ptr` one. `const T **`, `T *const *` and a `T **` return type are
+  array reads, not moves.
+- `--list` prints each handle with its tag and `T **` calls. Exits 0
+  when every handle is tagged and consistent, 1 otherwise, 2 for a
+  header that is not public. `headers` runs the same check.
 
 ## testchecks — TEST blocks that check nothing
 

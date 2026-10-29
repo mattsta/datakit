@@ -3,7 +3,8 @@
 #include "databox.h"
 
 /* Forward-declare multidict because
- * multidict depends on multidictType and multidictType depends on multidict */
+ * multidict depends on multidictType and multidictType depends on multidict.
+ * @handle: fixed: its address holds from creation to free */
 typedef struct multidict multidict;
 
 /* ====================================================================
@@ -105,6 +106,7 @@ typedef struct multidictType {
                           const uint32_t key2_sz);
 } multidictType;
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef void multidictSlot;
 struct multidictEntry;
 struct multidictSlotIterator;

@@ -4,7 +4,7 @@
 #include "multiOrderedSet.h"
 #include "multiOrderedSetCommon.h"
 
-/* Forward declarations */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiOrderedSetFull multiOrderedSetFull;
 struct multiOrderedSetMedium;
 

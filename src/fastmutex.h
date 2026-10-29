@@ -18,6 +18,7 @@ typedef struct fastMutex {
     _Atomic uint64_t word;
 } fastMutex;
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct fastWaiter fastWaiter;
 
 typedef struct fastCond {

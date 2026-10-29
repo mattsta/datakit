@@ -240,6 +240,7 @@
  *     score converts to the nearest double there.
  * ==================================================================== */
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multiOrderedSet multiOrderedSet;
 
 /* ====================================================================

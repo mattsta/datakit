@@ -195,6 +195,7 @@
  *    See tiered-multilru-analysis.md for detailed design.
  */
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multilru multilru;
 
 /* Entry pointer type - used to reference entries in the LRU.

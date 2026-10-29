@@ -34,6 +34,7 @@
  *
  * Not thread-safe. */
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multimapAtomDense multimapAtomDense;
 
 multimapAtomDense *multimapAtomDenseNew(void);

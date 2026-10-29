@@ -5,7 +5,9 @@
 
 #include "flex.h"
 
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct mflex mflex;
+/* @handle: fixed: its address holds from creation to free */
 typedef struct mflexState mflexState;
 
 /* State Management */

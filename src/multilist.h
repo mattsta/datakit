@@ -16,6 +16,7 @@
  * insert? */
 
 /* opaque multilist type; there's no user accessible data here. */
+/* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multilist multilist;
 
 /* multilistNew: the process default limit for multilists (dkTierLimit.h),

@@ -20,6 +20,7 @@
 /* Whether intsetBig holds the value in 'box' (intsetBigCanHold, below) */
 #define INTSET_BIG_RANGECHECK(box) intsetBigCanHold(box)
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct intsetBigSet intsetBig;
 
 [[nodiscard]] intsetBig *intsetBigNew(void);

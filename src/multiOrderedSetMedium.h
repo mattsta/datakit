@@ -3,7 +3,7 @@
 #include "multiOrderedSet.h"
 #include "multiOrderedSetCommon.h"
 
-/* Forward declaration */
+/* @handle: fixed: its address holds from creation to free */
 typedef struct multiOrderedSetMedium multiOrderedSetMedium;
 
 /* ====================================================================

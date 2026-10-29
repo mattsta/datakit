@@ -208,6 +208,7 @@
 #include "datakit.h"
 #include <stdint.h>
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct timerWheel timerWheel;
 
 typedef uint64_t timerWheelId;

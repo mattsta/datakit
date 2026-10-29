@@ -200,6 +200,7 @@ typedef uint32_t hmacKeyId;
  * tampered snapshot cannot drive an attacker-controlled allocation. */
 #define HMAC_KEYRING_MAX_KEY_BYTES ((size_t)256)
 
+/* @handle: fixed: its address holds from creation to free */
 typedef struct hmacKeyring hmacKeyring;
 
 /* Construct an empty keyring. Returns NULL on allocation failure. */

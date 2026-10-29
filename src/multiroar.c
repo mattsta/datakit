@@ -3553,7 +3553,7 @@ DK_STATIC bool mrAnyValueMode_(uint64_t n, multiroar *const *roars) {
  * ==================================================================== */
 
 /* Helper: Collect all unique chunk IDs across N multiroars */
-DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
+DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar *const *roars,
                                         uint64_t *outCount) {
     if (n == 0 || !roars) {
         *outCount = 0;
@@ -3613,7 +3613,7 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
 }
 
 /* N-way AND: Modifies first roar in array */
-void multiroarAndN(uint64_t n, multiroar **roars) {
+void multiroarAndN(uint64_t n, multiroar *const *roars) {
     if (n < 2 || !roars || !roars[0] || mrAnyValueMode_(n, roars)) {
         return;
     }
@@ -3684,7 +3684,7 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
 }
 
 /* N-way OR: Modifies first roar in array */
-void multiroarOrN(uint64_t n, multiroar **roars) {
+void multiroarOrN(uint64_t n, multiroar *const *roars) {
     if (n < 2 || !roars || !roars[0] || mrAnyValueMode_(n, roars)) {
         return;
     }
@@ -3747,7 +3747,7 @@ void multiroarOrN(uint64_t n, multiroar **roars) {
 }
 
 /* N-way XOR: Modifies first roar in array */
-void multiroarXorN(uint64_t n, multiroar **roars) {
+void multiroarXorN(uint64_t n, multiroar *const *roars) {
     if (n < 2 || !roars || !roars[0] || mrAnyValueMode_(n, roars)) {
         return;
     }
@@ -3804,8 +3804,8 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
 
 /* N-way operations returning new multiroar: a copy of roars[0] with the
  * in-place N-way form applied across the rest */
-static multiroar *mrNewFromOpN_(uint64_t n, multiroar **roars,
-                                void (*opN)(uint64_t, multiroar **)) {
+static multiroar *mrNewFromOpN_(uint64_t n, multiroar *const *roars,
+                                void (*opN)(uint64_t, multiroar *const *)) {
     if (roars && mrAnyValueMode_(n, roars)) {
         return nullptr;
     }
@@ -3832,15 +3832,15 @@ static multiroar *mrNewFromOpN_(uint64_t n, multiroar **roars,
     return result;
 }
 
-multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
+multiroar *multiroarNewAndN(uint64_t n, multiroar *const *roars) {
     return mrNewFromOpN_(n, roars, multiroarAndN);
 }
 
-multiroar *multiroarNewOrN(uint64_t n, multiroar **roars) {
+multiroar *multiroarNewOrN(uint64_t n, multiroar *const *roars) {
     return mrNewFromOpN_(n, roars, multiroarOrN);
 }
 
-multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
+multiroar *multiroarNewXorN(uint64_t n, multiroar *const *roars) {
     return mrNewFromOpN_(n, roars, multiroarXorN);
 }
 
