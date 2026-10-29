@@ -1,5 +1,5 @@
 {
- "commit": "dec6d342f3c9fae7e02ae27baf3f8223fc0c0b18",
+ "commit": "aa61cb60c9d07008be04d8f68b180b374af20eea",
  "files": {
   "src/OSRegulate.c": {
    "lines": 240,
@@ -7,7 +7,7 @@
   },
   "src/aeadNonceLog.c": {
    "lines": 32,
-   "branches": 33
+   "branches": 30
   },
   "src/aeadNonceLog.h": {
    "lines": 0,
@@ -55,15 +55,19 @@
   },
   "src/clusterMailbox.c": {
    "lines": 90,
-   "branches": 75
+   "branches": 74
   },
   "src/clusterMailbox.h": {
    "lines": 0,
    "branches": 0
   },
+  "src/clusterMailboxInternal.h": {
+   "lines": 0,
+   "branches": 0
+  },
   "src/clusterReplicator.c": {
-   "lines": 27,
-   "branches": 29
+   "lines": 5,
+   "branches": 7
   },
   "src/clusterReplicator.h": {
    "lines": 0,
@@ -71,7 +75,7 @@
   },
   "src/clusterRing.c": {
    "lines": 212,
-   "branches": 280
+   "branches": 279
   },
   "src/clusterRing.h": {
    "lines": 0,
@@ -98,11 +102,11 @@
    "branches": 14
   },
   "src/databoxLinear.c": {
-   "lines": 6,
-   "branches": 6
+   "lines": 3,
+   "branches": 3
   },
   "src/databoxLinear.h": {
-   "lines": 10,
+   "lines": 0,
    "branches": 3
   },
   "src/datakit.c": {
@@ -114,7 +118,7 @@
    "branches": 5
   },
   "src/dataspeed.c": {
-   "lines": 216,
+   "lines": 211,
    "branches": 158
   },
   "src/dj.c": {
@@ -167,7 +171,7 @@
   },
   "src/dkRandom.h": {
    "lines": 0,
-   "branches": 0
+   "branches": 1
   },
   "src/dkSort.h": {
    "lines": 0,
@@ -214,8 +218,8 @@
    "branches": 0
   },
   "src/fastmutex.c": {
-   "lines": 21,
-   "branches": 23
+   "lines": 23,
+   "branches": 24
   },
   "src/fastmutex.h": {
    "lines": 2,
@@ -250,8 +254,8 @@
    "branches": 0
   },
   "src/fenwick/fenwick2dTypedImpl.h": {
-   "lines": 22,
-   "branches": 41
+   "lines": 20,
+   "branches": 33
   },
   "src/fenwick/fenwick2dU128.c": {
    "lines": 0,
@@ -282,16 +286,16 @@
    "branches": 1
   },
   "src/fenwick/fenwickCoreDispatchImpl.h": {
-   "lines": 29,
-   "branches": 23
+   "lines": 27,
+   "branches": 21
   },
   "src/fenwick/fenwickCoreFullImpl.h": {
-   "lines": 25,
-   "branches": 31
+   "lines": 0,
+   "branches": 8
   },
   "src/fenwick/fenwickCoreImpl.h": {
-   "lines": 20,
-   "branches": 24
+   "lines": 0,
+   "branches": 6
   },
   "src/fenwick/fenwickDouble.c": {
    "lines": 0,
@@ -427,7 +431,7 @@
   },
   "src/flex.c": {
    "lines": 121,
-   "branches": 325
+   "branches": 312
   },
   "src/flex.h": {
    "lines": 0,
@@ -438,8 +442,8 @@
    "branches": 0
   },
   "src/flexEnvelope.c": {
-   "lines": 154,
-   "branches": 174
+   "lines": 101,
+   "branches": 142
   },
   "src/flexEnvelope.h": {
    "lines": 0,
@@ -538,12 +542,12 @@
    "branches": 0
   },
   "src/hmac.c": {
-   "lines": 25,
-   "branches": 31
+   "lines": 19,
+   "branches": 30
   },
   "src/hmacKeyring.c": {
    "lines": 54,
-   "branches": 55
+   "branches": 51
   },
   "src/hmacKeyring.h": {
    "lines": 0,
@@ -554,8 +558,8 @@
    "branches": 63
   },
   "src/idRows.c": {
-   "lines": 27,
-   "branches": 45
+   "lines": 25,
+   "branches": 40
   },
   "src/idRows.h": {
    "lines": 0,
@@ -578,12 +582,12 @@
    "branches": 0
   },
   "src/intset.c": {
-   "lines": 42,
+   "lines": 39,
    "branches": 48
   },
   "src/intsetBig.c": {
-   "lines": 29,
-   "branches": 34
+   "lines": 24,
+   "branches": 32
   },
   "src/intsetBig.h": {
    "lines": 0,
@@ -594,28 +598,28 @@
    "branches": 2
   },
   "src/intsetFull.c": {
-   "lines": 27,
-   "branches": 54
+   "lines": 11,
+   "branches": 44
   },
-  "src/intsetFull.h": {
+  "src/intsetFullInternal.h": {
    "lines": 0,
-   "branches": 1
+   "branches": 0
   },
   "src/intsetMedium.c": {
-   "lines": 40,
-   "branches": 45
+   "lines": 15,
+   "branches": 35
   },
-  "src/intsetMedium.h": {
+  "src/intsetMediumInternal.h": {
    "lines": 0,
-   "branches": 1
+   "branches": 0
   },
   "src/intsetSmall.c": {
-   "lines": 24,
-   "branches": 30
+   "lines": 8,
+   "branches": 18
   },
-  "src/intsetSmall.h": {
+  "src/intsetSmallInternal.h": {
    "lines": 2,
-   "branches": 2
+   "branches": 1
   },
   "src/intsetU32.c": {
    "lines": 3,
@@ -632,14 +636,6 @@
   "src/linearBloomCount.h": {
    "lines": 45,
    "branches": 16
-  },
-  "src/list.c": {
-   "lines": 30,
-   "branches": 18
-  },
-  "src/list.h": {
-   "lines": 0,
-   "branches": 0
   },
   "src/membound.c": {
    "lines": 290,
@@ -662,16 +658,16 @@
    "branches": 2
   },
   "src/multiFenwick.c": {
-   "lines": 35,
-   "branches": 42
+   "lines": 33,
+   "branches": 40
   },
   "src/multiFenwick.h": {
    "lines": 0,
    "branches": 0
   },
   "src/multiFenwick2d.c": {
-   "lines": 20,
-   "branches": 36
+   "lines": 13,
+   "branches": 30
   },
   "src/multiFenwickCells.h": {
    "lines": 1,
@@ -682,8 +678,8 @@
    "branches": 34
   },
   "src/multiFenwickFlat.c": {
-   "lines": 13,
-   "branches": 28
+   "lines": 11,
+   "branches": 26
   },
   "src/multiFenwickFlat.h": {
    "lines": 0,
@@ -691,15 +687,15 @@
   },
   "src/multiOrderedSet.c": {
    "lines": 16,
-   "branches": 66
+   "branches": 65
   },
   "src/multiOrderedSetCommon.h": {
    "lines": 26,
    "branches": 20
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 80,
-   "branches": 129
+   "lines": 78,
+   "branches": 127
   },
   "src/multiOrderedSetMedium.c": {
    "lines": 33,
@@ -746,8 +742,8 @@
    "branches": 0
   },
   "src/multidict.c": {
-   "lines": 142,
-   "branches": 171
+   "lines": 153,
+   "branches": 180
   },
   "src/multidict.h": {
    "lines": 0,
@@ -759,7 +755,7 @@
   },
   "src/multilist.c": {
    "lines": 11,
-   "branches": 36
+   "branches": 35
   },
   "src/multilist.h": {
    "lines": 0,
@@ -791,19 +787,19 @@
   },
   "src/multilru.c": {
    "lines": 36,
-   "branches": 54
+   "branches": 49
   },
   "src/multimap.c": {
-   "lines": 35,
-   "branches": 114
+   "lines": 33,
+   "branches": 113
   },
   "src/multimap.h": {
    "lines": 0,
    "branches": 4
   },
   "src/multimapAtom.c": {
-   "lines": 29,
-   "branches": 63
+   "lines": 31,
+   "branches": 66
   },
   "src/multimapAtom.h": {
    "lines": 0,
@@ -811,7 +807,7 @@
   },
   "src/multimapFull.c": {
    "lines": 44,
-   "branches": 211
+   "branches": 201
   },
   "src/multimapInternal.h": {
    "lines": 0,
@@ -823,7 +819,7 @@
   },
   "src/multimapSmall.c": {
    "lines": 19,
-   "branches": 38
+   "branches": 37
   },
   "src/multimapSmallInternal.h": {
    "lines": 0,
@@ -858,8 +854,8 @@
    "branches": 33
   },
   "src/persist.c": {
-   "lines": 277,
-   "branches": 325
+   "lines": 273,
+   "branches": 304
   },
   "src/persist.h": {
    "lines": 0,
@@ -891,11 +887,11 @@
   },
   "src/persist/multilruP.c": {
    "lines": 15,
-   "branches": 52
+   "branches": 54
   },
   "src/persist/multimapP.c": {
-   "lines": 10,
-   "branches": 25
+   "lines": 8,
+   "branches": 23
   },
   "src/persist/multiroarP.c": {
    "lines": 0,
@@ -954,16 +950,16 @@
    "branches": 3
   },
   "src/segment/segmentCoreDispatchImpl.h": {
-   "lines": 35,
-   "branches": 24
+   "lines": 2,
+   "branches": 7
   },
   "src/segment/segmentCoreFullImpl.h": {
-   "lines": 24,
-   "branches": 21
+   "lines": 0,
+   "branches": 5
   },
   "src/segment/segmentCoreImpl.h": {
-   "lines": 23,
-   "branches": 21
+   "lines": 0,
+   "branches": 5
   },
   "src/segment/segmentDouble.c": {
    "lines": 0,
@@ -1219,7 +1215,7 @@
   },
   "src/timerWheel.c": {
    "lines": 50,
-   "branches": 41
+   "branches": 42
   },
   "src/ulid.c": {
    "lines": 52,
