@@ -465,9 +465,11 @@ static size_t memtest_destructive(void *mem, size_t bytes, int passes,
 #define MEMTEST_BACKUP_WORDS (1024 * 1024 / sizeof(uint64_t))
 #define MEMTEST_DECACHE_SIZE (1024 * 8)
 
+/* 'backup' holds MEMTEST_BACKUP_WORDS words outside [mem, mem + bytes):
+ * each chunk is saved there while it is tested */
 static size_t memtest_preserving(void *mem, size_t bytes, int passes,
-                                 memtestContext *ctx, memtestResult *result) {
-    uint64_t backup[MEMTEST_BACKUP_WORDS];
+                                 memtestContext *ctx, memtestResult *result,
+                                 uint64_t *backup) {
     uint64_t *p = mem;
     /* The last decache window, only formed when the buffer holds one (a
      * pointer before the buffer's start would be undefined) */
@@ -502,7 +504,8 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
             p -= 4096 / sizeof(uint64_t);
         }
 
-        size_t len = (left > sizeof(backup)) ? sizeof(backup) : left;
+        constexpr size_t backupBytes = MEMTEST_BACKUP_WORDS * sizeof(uint64_t);
+        size_t len = left > backupBytes ? backupBytes : left;
         if ((len / 4096) % 2) {
             len -= 4096;
         }
@@ -567,6 +570,48 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
     return errors;
 }
 
+/* The backup a preserving test saves chunks in: on the heap, not the
+ * stack, so a thread with a small stack can run it (MEMTEST_BACKUP_WORDS
+ * is 1 MB).  NULL when it cannot be had. */
+static uint64_t *memtestBackupNew_(void) {
+    return malloc(MEMTEST_BACKUP_WORDS * sizeof(uint64_t));
+}
+
+/* memtest_preserving with a backup of its own; nothing tested (a zeroed
+ * result) when there is no memory for one */
+static size_t memtestPreservingOwnBackup_(void *mem, size_t bytes, int passes,
+                                          memtestContext *ctx,
+                                          memtestResult *result) {
+    uint64_t *backup = memtestBackupNew_();
+    if (!backup) {
+        if (result) {
+            *result = (memtestResult){};
+        }
+
+        return 0;
+    }
+
+    const size_t errors =
+        memtest_preserving(mem, bytes, passes, ctx, result, backup);
+    free(backup);
+    return errors;
+}
+
+/* Whether a process-memory walk must leave the region [start, start +
+ * size) alone: it overlaps the walk's own backup (at 'backup') or holds
+ * the calling thread's stack (the address 'stack'), which the test would
+ * overwrite while they are in use */
+[[maybe_unused]] static bool memtestRegionInUse_(const uintptr_t start,
+                                                 const size_t size,
+                                                 const uintptr_t backup,
+                                                 const uintptr_t stack) {
+    constexpr size_t backupBytes = MEMTEST_BACKUP_WORDS * sizeof(uint64_t);
+    const bool overlapsBackup =
+        start < backup + backupBytes && backup < start + size;
+    const bool holdsStack = stack >= start && stack - start < size;
+    return overlapsBackup || holdsStack;
+}
+
 /* ============================================================================
  * Public API
  * ============================================================================
@@ -574,7 +619,8 @@ static size_t memtest_preserving(void *mem, size_t bytes, int passes,
 
 size_t memtest(void *mem, size_t bytes, int passes, bool preserving) {
     if (preserving) {
-        return memtest_preserving(mem, bytes, passes, nullptr, nullptr);
+        return memtestPreservingOwnBackup_(mem, bytes, passes, nullptr,
+                                           nullptr);
     } else {
         return memtest_destructive(mem, bytes, passes, nullptr, nullptr);
     }
@@ -583,7 +629,7 @@ size_t memtest(void *mem, size_t bytes, int passes, bool preserving) {
 void memtestWithResult(void *mem, size_t bytes, int passes, bool preserving,
                        memtestResult *result) {
     if (preserving) {
-        memtest_preserving(mem, bytes, passes, nullptr, result);
+        memtestPreservingOwnBackup_(mem, bytes, passes, nullptr, result);
     } else {
         memtest_destructive(mem, bytes, passes, nullptr, result);
     }
@@ -597,7 +643,7 @@ void memtestWithProgress(void *mem, size_t bytes, int passes, bool preserving,
     ctx_set_callback(&ctx, progress_fn, userdata);
 
     if (preserving) {
-        memtest_preserving(mem, bytes, passes, &ctx, result);
+        memtestPreservingOwnBackup_(mem, bytes, passes, &ctx, result);
     } else {
         memtest_destructive(mem, bytes, passes, &ctx, result);
     }
@@ -664,8 +710,16 @@ void memtestInteractive(size_t megabytes, int passes, memtestResult *result) {
 static constexpr int MEMTEST_MAX_REGIONS = 128;
 
 size_t memtestProcessMemory(int passes) {
+    /* Allocated before the maps are read, so its region is among them */
+    uint64_t *backup = memtestBackupNew_();
+    if (!backup) {
+        return 0;
+    }
+
+    const int stackMarker = 0;
     FILE *fp = fopen("/proc/self/maps", "r");
     if (!fp) {
+        free(backup);
         return 0;
     }
 
@@ -705,6 +759,12 @@ size_t memtestProcessMemory(int passes) {
             continue;
         }
 
+        if (memtestRegionInUse_((uintptr_t)startAddr,
+                                (size_t)(endAddr - startAddr),
+                                (uintptr_t)backup, (uintptr_t)&stackMarker)) {
+            continue;
+        }
+
         start_vect[regions] = (size_t)startAddr;
         size_vect[regions] = (size_t)(endAddr - startAddr);
         regions++;
@@ -715,9 +775,10 @@ size_t memtestProcessMemory(int passes) {
     size_t errors = 0;
     for (int i = 0; i < regions; i++) {
         errors += memtest_preserving((void *)start_vect[i], size_vect[i],
-                                     passes, nullptr, nullptr);
+                                     passes, nullptr, nullptr, backup);
     }
 
+    free(backup);
     return errors;
 }
 
@@ -734,12 +795,20 @@ size_t memtestProcessMemory(int) {
 
 /* BSD: Try /proc if mounted, otherwise not supported */
 size_t memtestProcessMemory(int passes) {
+    /* Allocated before the map is read, so its region is among them */
+    uint64_t *backup = memtestBackupNew_();
+    if (!backup) {
+        return 0;
+    }
+
+    const int stackMarker = 0;
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/map", (int)getpid());
 
     FILE *fp = fopen(path, "r");
     if (!fp) {
         /* procfs not mounted - can't enumerate memory regions */
+        free(backup);
         return 0;
     }
 
@@ -764,13 +833,16 @@ size_t memtestProcessMemory(int passes) {
         }
 
         size_t size = end_addr - start_addr;
-        if (size >= 8192) {
+        if (size >= 8192 &&
+            !memtestRegionInUse_(start_addr, size, (uintptr_t)backup,
+                                 (uintptr_t)&stackMarker)) {
             errors += memtest_preserving((void *)start_addr, size, passes,
-                                         nullptr, nullptr);
+                                         nullptr, nullptr, backup);
         }
     }
 
     fclose(fp);
+    free(backup);
     return errors;
 }
 
@@ -789,6 +861,8 @@ size_t memtestProcessMemory(int) {
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"
+
+#include <pthread.h>
 
 static void memtest_print_usage(void) {
     printf("Usage: datakit-test test memtest [options]\n\n");
@@ -832,8 +906,84 @@ static void mtProgressNote_(const char *phase, double progress, void *ud) {
     }
 }
 
+/* A preserving test of 'mem' on a thread with a small stack */
+typedef struct mtSmallStackRun {
+    uint64_t *mem;
+    size_t bytes;
+    memtestResult result;
+} mtSmallStackRun;
+
+static void *mtSmallStackBody_(void *arg) {
+    mtSmallStackRun *run = arg;
+    memtestWithResult(run->mem, run->bytes, 1, true, &run->result);
+    return nullptr;
+}
+
 static int memtest_run_unit_tests(void) {
     int err = 0;
+
+    TEST("a preserving test runs on a thread with a 256 KB stack") {
+        constexpr size_t bytes = 64 * 1024;
+        mtSmallStackRun run = {.mem = aligned_alloc(4096, bytes),
+                               .bytes = bytes};
+        assert(run.mem);
+        for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+            run.mem[i] = i * 0x9E3779B97F4A7C15ULL;
+        }
+
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256 * 1024);
+        pthread_t thread;
+        if (pthread_create(&thread, &attr, mtSmallStackBody_, &run) != 0) {
+            ERR("could not start the test thread");
+        } else {
+            pthread_join(thread, nullptr);
+            bool kept = true;
+            for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+                kept &= run.mem[i] == i * 0x9E3779B97F4A7C15ULL;
+            }
+
+            if (run.result.errors_found || run.result.bytes_tested != bytes ||
+                !kept) {
+                ERR("errors %zu, tested %zu bytes, contents kept %d",
+                    run.result.errors_found, run.result.bytes_tested, kept);
+            }
+        }
+
+        pthread_attr_destroy(&attr);
+        free(run.mem);
+    }
+
+    TEST("a process walk leaves its backup and the caller's stack alone") {
+        /* Addresses only: a backup at 1 MB-aligned 0x10000000, a stack
+         * address at 0x7f0000001000 */
+        constexpr uintptr_t backup = 0x10000000;
+        constexpr uintptr_t backupEnd =
+            backup + MEMTEST_BACKUP_WORDS * sizeof(uint64_t);
+        constexpr uintptr_t stack = 0x7f0000001000;
+        static const struct {
+            uintptr_t start;
+            size_t size;
+            bool inUse;
+        } regions[] = {
+            {backup - 8192, 4096, false},    /* below the backup */
+            {backup - 4096, 4096 + 8, true}, /* over its start */
+            {backup + 4096, 4096, true},     /* inside it */
+            {backupEnd - 8, 4096, true},     /* over its end */
+            {backupEnd, 4096, false},        /* just past it */
+            {backup - 4096, 1 << 22, true},  /* around all of it */
+            {stack - 16, 64, true},          /* the stack */
+            {stack + 64, 4096, false},       /* above the stack */
+        };
+        for (size_t i = 0; i < countof(regions); i++) {
+            if (memtestRegionInUse_(regions[i].start, regions[i].size, backup,
+                                    stack) != regions[i].inUse) {
+                ERR("region %zu judged %s", i,
+                    regions[i].inUse ? "free" : "in use");
+            }
+        }
+    }
 
     /* Test addressing on small buffer */
     TEST("addressing - 64KB") {

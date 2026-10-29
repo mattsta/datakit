@@ -884,6 +884,43 @@ Files: `strSqliteLog.c`, `strSqliteNumeric.c`, `strSqliteStr.c`
 
 Functions adapted from SQLite for database-style operations (covered in [STR.md](STR.md)).
 
+## Patterns, Human Units and Random Ids (`util.h`)
+
+**Glob matching**: `stringmatch(pattern, string, nocase)` and
+`stringmatchlen(pattern, patternLen, string, stringLen, nocase)` (lengths
+given, no NUL needed) match a glob: `*` any run, `?` one byte, `[...]` a
+class (`^` negates it, `a-z` a range, `\` escapes), `\x` a literal `x`.
+Nonzero `nocase` folds ASCII case. A pattern whose stars nest past 1000 deep
+matches nothing, and runs of stars cost polynomial, not exponential, time.
+
+```c
+if (stringmatch("user:*:session", key, 0)) { /* ... */ }
+```
+
+**Human units**:
+
+- `humanToBytes(text, len, &err)` reads `"512"`, `"64kb"`, `"1.5g"`,
+  `"2gib"`: k/kb, m/mb, g/gb, t/tb, p/pb, e/eb are powers of 1000; kib
+  through eib powers of 1024; no unit is bytes. It returns 0 with `err` true
+  for a missing number, an unknown unit, or a result past `UINT64_MAX`.
+- `bytesToHuman(buf, len, n)` writes `"512 B"`, or five decimals in the
+  largest binary unit that keeps the value at least 1 (`"1.50000 GiB"`).
+- `secondsToHuman(buf, len, sec)` writes four decimals in ns, us, ms,
+  seconds, minutes, hours or days, whichever fits.
+
+**Paths**: `pathIsBaseName(path)` is true for a name with no `/` or `\`.
+
+**Random ids** (identifiers and seeds, not key material; for secrets see
+[Random numbers](../utils/RANDOM.md)):
+
+- `getRandomBytes(p, len)` fills from the OS source, falling back to a
+  predictable time and pid mix only when that source fails;
+  `getRandomHexChars(p, len)` writes `len` lowercase hex characters.
+- `getRandomHexCharsCounterInit(seed, SHA1_DIGEST_LENGTH)` draws a seed once;
+  `getRandomHexCharsCounter(seed, &counter, p, len)` then writes `len` hex
+  characters per call by hashing the seed with a counter: cheap, never
+  repeating for one seed, and not secret.
+
 ## Real-World Examples
 
 ### Example 1: Fast Batch Integer Conversion

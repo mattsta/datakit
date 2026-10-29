@@ -101,6 +101,7 @@ dropped from the CTest list otherwise.
 ### Memory Management
 
 - [membound](modules/memory/MEMBOUND.md) - Bounded arena allocator (locking varies by tier)
+- [memtest](modules/memory/MEMTEST.md) - RAM testing from inside a process: regions, fresh allocations, the process's own memory
 - [fibbuf](modules/memory/FIBBUF.md) - Fibonacci buffer sizing
 - [jebuf](modules/memory/JEBUF.md) - Jemalloc-aligned buffer management
 - [ptrPrevNext](modules/memory/PTR_PREV_NEXT.md) - Efficient pointer linking

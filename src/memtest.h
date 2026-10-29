@@ -82,13 +82,15 @@ void memtestInteractive(size_t megabytes, int passes, memtestResult *result);
 
 /* Test all writable memory regions of current process
  * Uses non-destructive (preserving) mode to avoid data loss.
- * Returns count of errors detected.
+ * Returns count of errors detected.  The regions holding the calling
+ * thread's stack and the test's own backup are left out; other threads
+ * must not touch memory while it runs.
  *
  * Platform support:
  * - Linux: /proc/self/maps
- * - macOS: Mach VM APIs
  * - FreeBSD/NetBSD/OpenBSD/DragonFly: /proc if mounted
- * - Other: Returns 0 (not supported)
+ * - macOS and others: returns 0 (not supported: guard pages and
+ *   protected regions make a walk unsafe)
  */
 size_t memtestProcessMemory(int passes);
 

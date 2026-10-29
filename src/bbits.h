@@ -1,7 +1,15 @@
+#pragma once
+
 #include "dod.h"
 #include "xof.h"
 
 #include <unistd.h> /* ssize_t */
+
+/* Paired time series: a delta-of-delta key stream (timestamps, ids)
+ * with a value stream beside it, delta-of-delta for integers
+ * (bbitsDodDod) or xor-of-float for doubles (bbitsDodXof).  A
+ * zero-initialised struct is empty; Append grows segments as needed;
+ * Free releases them. */
 
 /* DoD needs two initial values to start writing. */
 typedef struct bbitsDodDod {

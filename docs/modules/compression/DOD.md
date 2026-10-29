@@ -282,6 +282,42 @@ void exampleReadStream(dod *stream, size_t count) {
 }
 ```
 
+### Paired Series (`bbits.h`)
+
+`bbits` pairs a delta-of-delta key stream (timestamps, ids) with a value
+stream: delta-of-delta integers in `bbitsDodDod`, xor-of-float doubles
+([XOF](XOF.md)) in `bbitsDodXof`. A zero-initialised struct is empty, and
+appends grow segments as they fill.
+
+```c
+#include "bbits.h"
+
+bbitsDodXof temps = {};
+for (size_t i = 0; i < n; i++) {
+    bbitsDodXofAppend(&temps, timestampMs[i], celsius[i]);
+}
+
+/* The last 60 readings, with their statistics */
+ssize_t count = 60;
+uint64_t *ts;
+double *vals;
+double mean, variance, stddev;
+if (bbitsDodXofGetOffsetCount(&temps, -60, &count, &ts, &vals, &mean,
+                              &variance, &stddev)) {
+    /* 'count' pairs read; zfree both arrays */
+    zfree(ts);
+    zfree(vals);
+}
+bbitsDodXofFree(&temps);
+```
+
+`bbitsDodDodAppend`, `bbitsDodDodGetOffsetCount` and `bbitsDodDodFree` are
+the integer-valued forms. A read takes `*count` pairs from `offset` (negative:
+from the end; a negative or too-large count reads to the end, and `*count`
+reports what was read) into new arrays, with the population mean, variance
+and standard deviation when all three pointers are given; it is false,
+allocating nothing, when there is nothing to read.
+
 ### Resumable Reader (O(1) Sequential Access)
 
 `dodRead` is a **random**-access call: it replays the stream from the start
