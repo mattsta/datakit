@@ -435,8 +435,6 @@ and `capacity * 8` more when weights are allocated.
 ```c
 size_t multilruCollectLowest(multilru *mlru, multilruPtr out[], size_t n);
 size_t multilruCollectHighest(multilru *mlru, multilruPtr out[], size_t n);
-void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n);
-void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n);
 
 /* Example: inspect up to 10 eviction candidates */
 multilruPtr candidates[10];
@@ -447,14 +445,9 @@ for (size_t i = 0; i < got; i++) {
 }
 ```
 
-The `Collect` forms return how many entries they wrote and leave the slots
-past that count untouched. The `GetN` forms fill all `n` slots: the entries
-found, then `0` (never a live entry) in every slot past the last one, so a
-`0` marks the end when the cache holds fewer than `n` entries.
-
-`CollectLowest`/`GetNLowest` walk levels upward from 0, oldest-first within
-each level. `CollectHighest`/`GetNHighest` walk levels downward from the top,
-newest-first.
+Both return how many entries they wrote and leave the slots past that count
+untouched. `CollectLowest` walks levels upward from 0, oldest-first within
+each level; `CollectHighest` walks levels downward from the top, newest-first.
 
 ## Runtime Configuration
 
@@ -643,7 +636,7 @@ so replay moves the same entries to the same handles.
 | Count / Bytes     | O(1)             | Cached values                                  |
 | GetStats          | O(1)             | Counters maintained incrementally              |
 | LevelCount/Weight | O(1)             | Per-level totals are maintained                |
-| Collect/GetN      | O(n + levels)    | Walks the level lists                          |
+| Collect           | O(n + levels)    | Walks the level lists                          |
 | Width migration   | O(capacity)      | One-time cost per tier boundary                |
 | Repack            | O(slots used)    | Moves entries down, shrinks the arrays         |
 
@@ -958,17 +951,16 @@ A reader-writer lock buys nothing here because there is no read-only path.
 - You need exact frequency counts (use an LFU structure)
 - You are extremely memory constrained (use CLOCK)
 
-## Known Limitations
+## Memory After Deletes and Eviction Steps
 
-- **No compaction**: the entry array never shrinks. After mass deletion the
-  holes are reused, but the allocation stays at its high water mark.
-- **No width downgrade**: entry width only increases. A cache that once grew
-  large keeps its wider entries.
-- **`RemoveMinimum` may only demote**: callers that expect one call to free
-  one entry must use `multilruEvictN()` instead.
-- **`GetNLowest`/`GetNHighest` do not report a fill count**: they mark the
-  end with `0` slots instead. Use `multilruCollectLowest()` /
-  `multilruCollectHighest()` when you need the count.
+- Deleted entries leave holes that later inserts reuse, so the entry array
+  holds its high-water mark until `multilruRepack()` packs the live entries
+  down, narrows their width to what the count needs and returns the rest of
+  the memory (moved handles are reported through its callback).
+- `multilruRemoveMinimum()` takes one S4LRU step: an entry above level 0 is
+  demoted (a second chance) and only a level-0 entry is evicted.
+  `multilruEvictN()` takes steps until it has evicted up to the `n` entries
+  asked for, and reports how many it evicted.
 
 ## See Also
 

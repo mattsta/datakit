@@ -1392,21 +1392,6 @@ size_t multilruCollectHighest(const multilru *mlru, multilruPtr out[],
     return found;
 }
 
-/* Slots past the last entry found are set to 0, which no live entry uses */
-void multilruGetNLowest(const multilru *mlru, multilruPtr out[], size_t n) {
-    const size_t found = multilruCollectLowest(mlru, out, n);
-    for (size_t i = found; i < n; i++) {
-        out[i] = 0;
-    }
-}
-
-void multilruGetNHighest(const multilru *mlru, multilruPtr out[], size_t n) {
-    const size_t found = multilruCollectHighest(mlru, out, n);
-    for (size_t i = found; i < n; i++) {
-        out[i] = 0;
-    }
-}
-
 /* ====================================================================
  * Runtime Configuration
  * ==================================================================== */
@@ -2154,7 +2139,7 @@ int multilruTest(int, char *[]) {
         printf("free list reuse: PASSED\n");
     }
 
-    TEST("GetNLowest and GetNHighest") {
+    TEST("CollectLowest and CollectHighest") {
         cleaner(multilruFree) multilru *mlru = multilruNew();
 
         multilruPtr ptrs[20];
@@ -2171,7 +2156,7 @@ int multilruTest(int, char *[]) {
 
         /* Get lowest 5 */
         multilruPtr lowest[5] = {};
-        multilruGetNLowest(mlru, lowest, 5);
+        multilruCollectLowest(mlru, lowest, 5);
         for (int i = 0; i < 5; i++) {
             assert(lowest[i] != 0);
             assert(multilruGetLevel(mlru, lowest[i]) == 0);
@@ -2179,13 +2164,13 @@ int multilruTest(int, char *[]) {
 
         /* Get highest 5 */
         multilruPtr highest[5] = {};
-        multilruGetNHighest(mlru, highest, 5);
+        multilruCollectHighest(mlru, highest, 5);
         for (int i = 0; i < 5; i++) {
             assert(highest[i] != 0);
             /* Should be from higher levels */
         }
 
-        printf("GetNLowest and GetNHighest: PASSED\n");
+        printf("CollectLowest and CollectHighest: PASSED\n");
     }
 
     TEST("stress test") {
@@ -2522,7 +2507,7 @@ int multilruTest(int, char *[]) {
         cleaner(multilruFree) multilru *mlru = multilruNew();
         const multilruPtr sentinel = (multilruPtr)0xDEADBEEF;
 
-        /* Empty cache: nothing written, GetN zero-fills */
+        /* Empty cache: nothing written, every slot untouched */
         multilruPtr out[10];
         for (size_t i = 0; i < 10; i++) {
             out[i] = sentinel;
@@ -2564,20 +2549,6 @@ int multilruTest(int, char *[]) {
 
             /* Coldest first vs hottest first */
             assert(got[0] == (highest ? e[2] : e[0]));
-
-            multilruPtr filled[10];
-            for (size_t i = 0; i < 10; i++) {
-                filled[i] = sentinel;
-            }
-            if (highest) {
-                multilruGetNHighest(mlru, filled, 10);
-            } else {
-                multilruGetNLowest(mlru, filled, 10);
-            }
-
-            for (size_t i = 0; i < 10; i++) {
-                assert(filled[i] == (i < n ? got[i] : 0));
-            }
         }
 
         /* n smaller than the population stops at n */
@@ -2595,9 +2566,9 @@ int multilruTest(int, char *[]) {
         multilruPtr ptr;
         assert(!multilruRemoveMinimum(mlru, &ptr));
 
-        /* GetNLowest from empty */
+        /* CollectLowest from empty */
         multilruPtr lowest[5] = {};
-        multilruGetNLowest(mlru, lowest, 5);
+        multilruCollectLowest(mlru, lowest, 5);
         for (int i = 0; i < 5; i++) {
             assert(lowest[i] == 0);
         }
@@ -2901,14 +2872,14 @@ int multilruTest(int, char *[]) {
         n = multilruEvictToSize(mlru, 500, evicted, 50);
         assert(multilruTotalWeight(mlru) <= 500);
 
-        /* Test GetNLowest */
+        /* Test CollectLowest */
         multilruPtr lowest[10] = {};
-        multilruGetNLowest(mlru, lowest, 10);
+        multilruCollectLowest(mlru, lowest, 10);
         for (int i = 0; i < 10 && lowest[i] != 0; i++) {
             assert(multilruGetLevel(mlru, lowest[i]) == 0);
         }
 
-        /* Test GetNHighest - promote some entries first */
+        /* Test CollectHighest - promote some entries first */
         for (size_t i = 0; i < multilruCount(mlru) && i < 10; i++) {
             if (lowest[i] != 0) {
                 for (int j = 0; j < 3; j++) {
@@ -2916,8 +2887,8 @@ int multilruTest(int, char *[]) {
                 }
             }
         }
-        multilruPtr highest[10];
-        multilruGetNHighest(mlru, highest, 10);
+        multilruPtr highest[10] = {};
+        multilruCollectHighest(mlru, highest, 10);
         /* Highest should be at level 3 */
         for (int i = 0; i < 10 && highest[i] != 0; i++) {
             assert(multilruGetLevel(mlru, highest[i]) >= 1);
@@ -2975,13 +2946,13 @@ int multilruTest(int, char *[]) {
         assert(!multilruRemoveMinimum(mlru, &ptr));
 
         multilruPtr lowest[5] = {};
-        multilruGetNLowest(mlru, lowest, 5);
+        multilruCollectLowest(mlru, lowest, 5);
         for (int i = 0; i < 5; i++) {
             assert(lowest[i] == 0);
         }
 
         multilruPtr highest[5] = {};
-        multilruGetNHighest(mlru, highest, 5);
+        multilruCollectHighest(mlru, highest, 5);
         for (int i = 0; i < 5; i++) {
             assert(highest[i] == 0);
         }
@@ -3009,13 +2980,13 @@ int multilruTest(int, char *[]) {
         }
         assert(multilruGetLevel(mlru, p) == 6); /* Max is 6 for 7 levels */
 
-        /* GetNLowest/Highest should return the single entry */
+        /* CollectLowest/Highest should return the single entry */
         multilruPtr lowest[5] = {};
-        multilruGetNLowest(mlru, lowest, 5);
+        multilruCollectLowest(mlru, lowest, 5);
         assert(lowest[0] == p);
 
         multilruPtr highest[5] = {};
-        multilruGetNHighest(mlru, highest, 5);
+        multilruCollectHighest(mlru, highest, 5);
         assert(highest[0] == p);
 
         /* Remove the single entry - needs multiple calls due to S4LRU demotion
@@ -3085,7 +3056,7 @@ int multilruTest(int, char *[]) {
 
         /* Promote entries */
         multilruPtr lowest[10] = {};
-        multilruGetNLowest(mlru, lowest, 10);
+        multilruCollectLowest(mlru, lowest, 10);
         for (int i = 0; i < 10; i++) {
             if (lowest[i] != 0) {
                 multilruIncrease(mlru, lowest[i]);

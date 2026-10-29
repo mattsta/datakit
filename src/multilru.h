@@ -453,13 +453,6 @@ size_t multilruCollectLowest(const multilru *mlru, multilruPtr out[], size_t n);
 size_t multilruCollectHighest(const multilru *mlru, multilruPtr out[],
                               size_t n);
 
-/* Fill all n slots of out[]: entries as multilruCollectLowest finds them,
- * then 0 (never a live entry) in every slot past the last one found. */
-void multilruGetNLowest(const multilru *mlru, multilruPtr out[], size_t n);
-
-/* As multilruGetNLowest, from hottest (multilruCollectHighest order) */
-void multilruGetNHighest(const multilru *mlru, multilruPtr out[], size_t n);
-
 /* ====================================================================
  * Runtime Configuration (can be changed after creation)
  * ====================================================================
