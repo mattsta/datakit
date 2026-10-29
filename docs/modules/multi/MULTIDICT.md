@@ -897,6 +897,9 @@ void multidictDisableLRU(multidict *d);
 bool multidictHasLRU(multidict *d);
 size_t multidictLRULevels(const multidict *d); /* 0 when LRU is off */
 
+/* Give back the LRU memory of removed entries; returns entries moved */
+size_t multidictLRURepack(multidict *d);
+
 /* Presence without a use: an inspector for a caller about to name the
  * key in the operation it decides on */
 bool multidictExistsNoTouch(multidict *d, const databox *keybox);
@@ -914,7 +917,11 @@ multidictSetMaxMemory(d, 256ULL * 1024 * 1024);
 ```
 
 The LRU levels are backed by [multilru](MULTILRU.md), so the level count
-here means the same thing it does there.
+here means the same thing it does there. The LRU keeps a slot per entry ever
+tracked at once (reused by later inserts); after deletes or evictions leave
+far fewer entries than that, `multidictLRURepack` repacks the LRU and the
+dict's handle index down to the entries tracked now, keeping their recency
+order and levels.
 
 A new key is tracked at the coldest level, and a delete stops tracking it.
 Usage follows the **named-key rule**: every call that names an existing key

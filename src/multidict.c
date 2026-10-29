@@ -2788,6 +2788,44 @@ static bool multidictLRUKeyOf(multidict *d, multilruPtr ptr, databox *keybox,
     return false;
 }
 
+/* A repack's move, mirrored in the dict's LRU index: the key tracked
+ * under 'from' is tracked under 'to'.  Moves go from the highest handle
+ * to the lowest free one, so 'from' is never a handle an earlier move
+ * gave out and the key-to-handle lookup finds the right key. */
+static void mdLRUMoved_(multilruPtr from, multilruPtr to, void *ctx) {
+    multidict *d = ctx;
+    databox keybox = {};
+    databoxWide wide;
+    [[maybe_unused]] const bool found =
+        multidictLRUKeyOf(d, from, &keybox, &wide);
+    assert(found); /* every live handle is a tracked key's */
+    const databox ptrBox = DATABOX_UNSIGNED(to);
+    [[maybe_unused]] const multidictResult renamed =
+        multidictReplace(d->lruKeyToPtr, &keybox, &ptrBox);
+    assert(renamed == MULTIDICT_OK_REPLACED);
+    lruKeyRef *refs = (lruKeyRef *)d->lruPtrToKey;
+    refs[to] = refs[from];
+    refs[from].valid = 0;
+}
+
+size_t multidictLRURepack(multidict *d) {
+    if (!d->lruEnabled || !d->lru) {
+        return 0;
+    }
+    const size_t moved = multilruRepack(d->lru, mdLRUMoved_, d);
+
+    /* The handle-indexed hash array shrinks to the handles in use */
+    multilruStats stats;
+    multilruGetStats(d->lru, &stats);
+    const size_t used = (size_t)stats.nextFresh;
+    if (used < d->lruPtrToKeySize) {
+        /* @own: container; free=multidictDisableLRU */
+        d->lruPtrToKey = zrealloc(d->lruPtrToKey, used * sizeof(lruKeyRef));
+        d->lruPtrToKeySize = used;
+    }
+    return moved;
+}
+
 /* Internal: Select victim using LRU policy (called from eviction).  The
  * victim stays tracked; multidictDelete untracks it if the eviction
  * commits, and otherwise the caller counts it in cands->skip. */
@@ -10574,6 +10612,78 @@ int multidictTest(int, char *[]) {
         assert(multidictCount(hd) == keys - evict);
         assert(multidictGetLRULevel(hd, &key0) == 1);
         assert(testLruTrackingExact_(hd));
+    }
+
+    TEST("20.11b an LRU repack keeps order and levels and shrinks the index") {
+        /* Same-hash keys, so every handle lookup during the repack must
+         * tell keys apart by handle, not hash; most keys are deleted so
+         * most handles move */
+        cleaner(multidictMmClassFree) multidictClass *hqdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *hd =
+            multidictNew(&testConstHashType_, hqdc, 17);
+        const bool lruOn = multidictEnableLRU(hd, 4);
+        assert(lruOn);
+        multidictSetEvictPolicy(hd, MULTIDICT_EVICT_LRU);
+        enum { keys = 40 };
+        for (int32_t i = 0; i < keys; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "samehash-%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i * 2);
+            MULTIDICT_TEST_OK(multidictAdd(hd, &key, &val));
+        }
+        databox key0 = databoxNewBytesString("samehash-00000");
+        multidictTouch(hd, &key0);
+        for (int32_t i = 1; i < keys; i++) {
+            if (i % 4) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "samehash-%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+                const bool deleted = multidictDelete(hd, &key);
+                assert(deleted);
+            }
+        }
+        const size_t indexBefore = hd->lruPtrToKeySize;
+        const size_t moved = multidictLRURepack(hd);
+        multilruStats stats;
+        multilruGetStats(hd->lru, &stats);
+        if (!moved || !testLruTrackingExact_(hd) ||
+            multidictGetLRULevel(hd, &key0) != 1 ||
+            hd->lruPtrToKeySize != stats.nextFresh ||
+            hd->lruPtrToKeySize >= indexBefore || stats.freeCount != 0) {
+            ERR("repack moved %zu, index %zu -> %zu", moved, indexBefore,
+                hd->lruPtrToKeySize);
+        }
+
+        /* Evicting all but the promoted key 0 takes keys 4, 8, ..., 36
+         * coldest first, each under its own key */
+        const uint64_t count = multidictCount(hd);
+        const uint64_t bytes = multidictKeyBytes(hd) + multidictValBytes(hd);
+        const uint64_t entryBytes = bytes / count;
+        assert(entryBytes * count == bytes);
+        testLruOrderLog log = {.prefix = {"samehash-", "SAMEHASH-"}};
+        multidictSetEvictionCallback(hd, lruOrderCb_, &log);
+        multidictSetMaxMemory(hd, entryBytes);
+        const uint32_t evicted = multidictEvictToLimit(hd);
+        assert(evicted == count - 1 && log.bad == 0);
+        for (int32_t n = 0; n < (int32_t)evicted; n++) {
+            const int32_t expect = (n + 1) * 4 * 2; /* keys 4, 8, ... */
+            if (log.order[n] != expect) {
+                ERR("repacked victim %d is code %d, expected %d", n,
+                    log.order[n], expect);
+            }
+        }
+        multidictSetMaxMemory(hd, 0);
+
+        /* Tracking goes on after the repack */
+        databox fresh = databoxNewBytesString("samehash-99999");
+        databox freshVal = databoxNewSigned(7);
+        MULTIDICT_TEST_OK(multidictAdd(hd, &fresh, &freshVal));
+        if (!testLruTrackingExact_(hd) ||
+            multidictGetLRULevel(hd, &fresh) != 0) {
+            ERR("%s", "an insert after the repack is not tracked");
+        }
     }
 
     TEST("20.12 reads do not promote, accesses promote once") {

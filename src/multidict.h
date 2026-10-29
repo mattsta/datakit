@@ -553,6 +553,12 @@ void multidictDisableLRU(multidict *d);
 bool multidictHasLRU(multidict *d);
 /* The LRU's level count, 0 when LRU tracking is off */
 size_t multidictLRULevels(const multidict *d);
+/* Give back the LRU memory of deleted and evicted entries: repacks the
+ * LRU (multilruRepack) and its handle index to the entries tracked now.
+ * Recency order and levels are kept.  O(LRU handles ever used); worth it
+ * once far more entries were removed than remain.  Returns how many
+ * entries' handles moved (0 without LRU tracking). */
+size_t multidictLRURepack(multidict *d);
 void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy);
 multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
 void multidictTouch(multidict *d, const databox *keybox);
