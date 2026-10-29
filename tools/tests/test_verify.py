@@ -709,7 +709,7 @@ class VerifyRun(unittest.TestCase):
         self.assertIn(" + the index, 2 changed)\n", out)
         self.assertIn("  changed   M src/a.c\n  changed   A src/new.c\n", out)
 
-    def test_all_changed_builds_every_changed_tracked_path(self) -> None:
+    def test_all_changed_builds_every_changed_path_and_new_source(self) -> None:
         self.repo.write("src/gone.c", "int gone;\n")
         self.repo.write("src/same.c", "int same;\n")
         self.repo.commit("more", "src/gone.c", "src/same.c")
@@ -717,7 +717,10 @@ class VerifyRun(unittest.TestCase):
         (self.repo.path / "src" / "gone.c").unlink()
         self.repo.write("src/added.c", "int added;\n")
         self.repo.git("add", "--", "src/added.c")
-        self.repo.write("src/stray.c", "int stray;\n")
+        # An untracked file under src/ is part of the change (a new
+        # header a changed file includes); one elsewhere is not
+        self.repo.write("src/fresh.h", "int fresh;\n")
+        self.repo.write("scratch/draft.md", "draft\n")
         code, out = self.run_verify(
             FakeRunner({}, self.PASSING), specs=[], all_changed=True
         )
@@ -725,10 +728,11 @@ class VerifyRun(unittest.TestCase):
         self.assertEqual(self.exported("src/a.c").read_text(), "int worktree;\n")
         self.assertTrue(self.exported("src/added.c").exists())
         self.assertTrue(self.exported("src/same.c").exists())
+        self.assertTrue(self.exported("src/fresh.h").exists())
         self.assertFalse(self.exported("src/gone.c").exists())
-        self.assertFalse(self.exported("src/stray.c").exists())
-        self.assertIn(" + all changed paths, 3 changed)\n", out)
-        for line in ("M src/a.c", "A src/added.c", "D src/gone.c"):
+        self.assertFalse(self.exported("scratch/draft.md").exists())
+        self.assertIn(" + all changed paths, 4 changed)\n", out)
+        for line in ("M src/a.c", "A src/added.c", "A src/fresh.h", "D src/gone.c"):
             self.assertIn(f"  changed   {line}\n", out)
         self.assertNotIn("same.c", out)
 
@@ -756,10 +760,10 @@ class VerifyRun(unittest.TestCase):
         self.assertEqual((self.repo.path / "src" / "a.c").read_text(), "int  staged;\n")
 
     def test_staged_and_all_changed_refuse_plain_head(self) -> None:
-        self.repo.write("src/stray.c", "int stray;\n")  # untracked: not a change
+        self.repo.write("scratch/stray.md", "stray\n")  # outside src/: not a change
         for kw, why in (
             ({"staged": True}, "--staged: index matches HEAD, nothing to verify"),
-            ({"all_changed": True}, "--all-changed: no tracked changes, nothing"),
+            ({"all_changed": True}, "--all-changed: no changes, nothing"),
         ):
             with self.subTest(kw=kw), self.assertRaisesRegex(ToolError, f"^{why}"):
                 self.run_verify(FakeRunner({}, self.PASSING), specs=[], **kw)

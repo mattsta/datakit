@@ -13,9 +13,10 @@ with FILE's content staged at PATH for ``PATH=FILE``.  Instead of
 PATHs, ``--staged`` takes exactly the current index (HEAD plus what
 is staged), and ``--all-changed`` takes HEAD plus every tracked path
 that differs in the working tree (modified, added to the index, or
-deleted); untracked files never take part.  Either flag refuses (exit
+deleted) and every untracked, unignored file under src/ (a new header
+or source); untracked files elsewhere never take part.  Either flag refuses (exit
 2) when the result would be plain HEAD ("index matches HEAD", "no
-tracked changes"): name an unchanged PATH to build HEAD on purpose.
+changes"): name an unchanged PATH to build HEAD on purpose.
 A refused run, like any input error found while building the tree,
 leaves an earlier result under NAME untouched.  Nothing else from the working tree leaks in,
 and the real index is never touched: the tree is written through a
@@ -154,13 +155,13 @@ def build_source_tree(
     if source == "staged":
         tree = gitutil.index_tree(repo, index_file)
     elif source == "all-changed":
-        paths = gitutil.changed_paths(repo)
+        paths = gitutil.working_paths(repo)
         tree = gitutil.build_tree(repo, index_file, [(p, None) for p in paths])
     else:
         tree = gitutil.build_tree(repo, index_file, specs)
     changes = gitutil.tree_changes(repo, "HEAD", tree)
     if not changes and source != "paths":
-        why = "index matches HEAD" if source == "staged" else "no tracked changes"
+        why = "index matches HEAD" if source == "staged" else "no changes"
         raise ToolError(
             f"--{source}: {why}, nothing to verify "
             "(name an unchanged PATH to build HEAD on purpose)"
@@ -180,7 +181,7 @@ def format_taken(
     if source == "paths":
         taken = [path for path, file in specs if file is None]
     else:
-        taken = gitutil.changed_paths(repo)
+        taken = gitutil.working_paths(repo)
     report = formatting.write(repo, [p for p in taken if (repo / p).is_file()])
     lines = report.lines("rewrote")
     for line in lines:

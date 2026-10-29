@@ -982,7 +982,7 @@ def run(repo: Path, opts: TuneOptions) -> int:
     head = gitutil.git_text(repo, "rev-parse", "HEAD")
     with tempfile.TemporaryDirectory(prefix="dktools-tune-") as tmp:
         tree = gitutil.build_tree(
-            repo, Path(tmp) / "index", [(p, None) for p in gitutil.changed_paths(repo)]
+            repo, Path(tmp) / "index", [(p, None) for p in gitutil.working_paths(repo)]
         )
     config.compiler.check()
 

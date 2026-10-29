@@ -8,8 +8,9 @@ Usage::
 
 Two trees are built under ``ROOT/perfcompare/NAME``:
 
-- ``current``: HEAD plus every changed tracked path (as ``verify
-  --all-changed``; plain HEAD when nothing changed), or with
+- ``current``: HEAD plus every changed tracked path and every new file
+  under src/ (as ``verify --all-changed``; plain HEAD when nothing
+  changed), or with
   ``--current REV`` that revision plus the benchmark sources, so two
   commits are timed apart from whatever else the working tree holds;
 - ``base``: REV with the benchmark sources (``--bench-path``, default
@@ -375,7 +376,7 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         index = Path(tmp) / "index"
         if current_commit is None:
             current_tree = gitutil.build_tree(
-                repo, index, [(p, None) for p in gitutil.changed_paths(repo)]
+                repo, index, [(p, None) for p in gitutil.working_paths(repo)]
             )
         else:
             current_tree = gitutil.build_tree(repo, index, bench, base=current_commit)

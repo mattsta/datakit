@@ -245,6 +245,18 @@ def changed_paths(repo: Path, base: str = "HEAD") -> list[str]:
     return split_z(out)
 
 
+def working_paths(repo: Path, base: str = "HEAD") -> list[str]:
+    """The working tree's change against `base`: changed_paths, plus the
+    untracked files git does not ignore under src/ (a new header or
+    source belongs to the change: nothing builds or includes it
+    otherwise).  Untracked files elsewhere (notes, scratch) are left
+    out."""
+    untracked = split_z(
+        git(repo, "ls-files", "-z", "--others", "--exclude-standard", "--", "src")
+    )
+    return changed_paths(repo, base) + untracked
+
+
 def tree_changes(repo: Path, base: str, tree: str) -> list[tuple[str, str]]:
     """(status letter, path) for each path that differs from `base` to
     `tree` (A added, D deleted, M modified, T type changed)."""

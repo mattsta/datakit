@@ -327,11 +327,12 @@ gate before a milestone.
   (HEAD plus what is staged, written from a copy of the index), so a
   64-file vendored re-land staged by `vendorsync --stage` needs no path
   list. `--all-changed` builds HEAD plus every tracked path that
-  differs in the working tree: modified, added to the index, or
-  deleted. Untracked files never take part. The two flags exclude each
-  other and `PATH` arguments.
+  differs in the working tree (modified, added to the index, or
+  deleted) and every untracked, unignored file under `src/` (a new
+  header or source); untracked files elsewhere never take part. The
+  two flags exclude each other and `PATH` arguments.
 - Either flag refuses (exit 2) when the tree would be plain HEAD
-  (`index matches HEAD`, `no tracked changes`): an empty change set
+  (`index matches HEAD`, `no changes`): an empty change set
   there is a mistake, not a request. To build HEAD on purpose, name an
   unchanged `PATH`. A refused run, like any other input error found
   while building the tree, leaves the previous result under `NAME`
@@ -1196,8 +1197,8 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
     [--bench-path PATH ...] [--compiler clang22|gcc15] [--root DIR] [-j N]
 ```
 
-- `current` is HEAD plus every changed tracked path (as `verify
---all-changed`), or with `--current REV` that revision plus the
+- `current` is HEAD plus every changed tracked path and every new file
+  under `src/` (as `verify --all-changed`), or with `--current REV` that revision plus the
   benchmark sources: a commit timed against its parent while the working
   tree holds the next change. `base` is REV with the benchmark sources
   (`--bench-path`, default `src/perfRegression.c` and `.h`) taken from

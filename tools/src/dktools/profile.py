@@ -262,7 +262,7 @@ def run(repo: Path, opts: ProfileOptions) -> int:
         index = Path(tmp) / "index"
         if commit is None:
             tree = gitutil.build_tree(
-                repo, index, [(p, None) for p in gitutil.changed_paths(repo)]
+                repo, index, [(p, None) for p in gitutil.working_paths(repo)]
             )
         else:
             tree = gitutil.build_tree(repo, index, bench, base=commit)
